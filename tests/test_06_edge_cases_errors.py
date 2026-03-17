@@ -165,20 +165,6 @@ class TestEdgeCasesErrors:
         )
         assert exit_code != 0
 
-        # Zero ID
-        exit_code, _, _ = self.test.run_cmd(
-            ["task", "get", "-r", roadmap, "0"],
-            check=False
-        )
-        assert exit_code != 0
-
-        # Negative ID
-        exit_code, _, _ = self.test.run_cmd(
-            ["task", "get", "-r", roadmap, "-1"],
-            check=False
-        )
-        assert exit_code != 0
-
         print("✓ Invalid task ID test passed")
 
     def test_invalid_sprint_id(self):

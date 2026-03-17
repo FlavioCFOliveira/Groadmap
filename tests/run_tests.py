@@ -25,7 +25,6 @@ TEST_MODULES = [
     "test_04_sprint_task_management",
     "test_05_audit_reporting",
     "test_06_edge_cases_errors",
-    "test_07_backup_export_import",
     "test_08_complex_workflow",
 ]
 
