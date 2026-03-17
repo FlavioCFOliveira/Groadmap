@@ -1,0 +1,23 @@
+{
+  "skill_name": "doc-manager",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Gera a documentação do projeto a partir do código e das especificações",
+      "expected_output": "README.md atualizado na raiz e ficheiros markdown em DOCS/commands/ para cada comando CLI (roadmap, task, sprint, audit)",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Atualiza a documentação dos comandos da CLI para refletir as mudanças recentes no código",
+      "expected_output": "Ficheiros de documentação sincronizados com a estrutura atual de comandos/subcomandos, pedindo confirmação antes de sobrescrever ficheiros existentes",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Cria documentação apenas para o comando 'roadmap' e os seus subcomandos",
+      "expected_output": "Ficheiro DOCS/commands/roadmap.md com documentação completa dos subcomandos (create, list, update, delete, show)",
+      "files": []
+    }
+  ]
+}
