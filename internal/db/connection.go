@@ -61,9 +61,7 @@ func retryWithBackoff(operation string, fn func() error) error {
 			return err
 		}
 
-		// Log retry attempt using structured logging
 		if attempt < maxRetries-1 {
-			utils.LogRetry(operation, attempt+1, maxRetries, delay.String())
 			time.Sleep(delay)
 			// Exponential backoff with cap
 			delay *= 2

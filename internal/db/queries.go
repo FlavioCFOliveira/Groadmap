@@ -25,7 +25,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/FlavioCFOliveira/Groadmap/internal/metrics"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
@@ -34,9 +33,6 @@ import (
 
 // CreateTask inserts a new task and returns its ID.
 func (db *DB) CreateTask(task *models.Task) (int, error) {
-	timer := metrics.StartOperation("db.create_task")
-	defer metrics.EndOperation(timer)
-
 	var taskID int
 	err := retryWithBackoff("create task", func() error {
 		result, err := db.Exec(
@@ -73,9 +69,6 @@ func (db *DB) CreateTask(task *models.Task) (int, error) {
 
 // GetTask retrieves a task by ID.
 func (db *DB) GetTask(id int) (*models.Task, error) {
-	timer := metrics.StartOperation("db.get_task")
-	defer metrics.EndOperation(timer)
-
 	var task models.Task
 	var specialists sql.NullString
 	var completedAt sql.NullString
@@ -145,8 +138,6 @@ func (db *DB) GetTasks(ids []int) ([]models.Task, error) {
 
 // ListTasks retrieves tasks with optional filters.
 func (db *DB) ListTasks(status *models.TaskStatus, minPriority, minSeverity *int, limit *int) ([]models.Task, error) {
-	timer := metrics.StartOperation("db.list_tasks")
-	defer metrics.EndOperation(timer)
 	query := `SELECT id, priority, severity, status, description, specialists, action, expected_result, created_at, completed_at
 		      FROM tasks WHERE 1=1`
 	args := []interface{}{}
@@ -193,9 +184,6 @@ var allowedTaskUpdateFields = map[string]bool{
 // UpdateTask updates a task's fields.
 // Only whitelisted fields can be updated. Use dedicated methods for status changes.
 func (db *DB) UpdateTask(id int, updates map[string]interface{}) error {
-	timer := metrics.StartOperation("db.update_task")
-	defer metrics.EndOperation(timer)
-
 	if len(updates) == 0 {
 		return nil
 	}
@@ -390,9 +378,6 @@ func scanTasks(rows *sql.Rows) ([]models.Task, error) {
 
 // CreateSprint inserts a new sprint and returns its ID.
 func (db *DB) CreateSprint(sprint *models.Sprint) (int, error) {
-	timer := metrics.StartOperation("db.create_sprint")
-	defer metrics.EndOperation(timer)
-
 	var sprintID int
 	err := retryWithBackoff("create sprint", func() error {
 		result, err := db.Exec(
@@ -423,9 +408,6 @@ func (db *DB) CreateSprint(sprint *models.Sprint) (int, error) {
 
 // GetSprint retrieves a sprint by ID.
 func (db *DB) GetSprint(id int) (*models.Sprint, error) {
-	timer := metrics.StartOperation("db.get_sprint")
-	defer metrics.EndOperation(timer)
-
 	var sprint models.Sprint
 	var startedAt sql.NullString
 	var closedAt sql.NullString
@@ -469,9 +451,6 @@ func (db *DB) GetSprint(id int) (*models.Sprint, error) {
 
 // ListSprints retrieves all sprints with optional status filter.
 func (db *DB) ListSprints(status *models.SprintStatus) ([]models.Sprint, error) {
-	timer := metrics.StartOperation("db.list_sprints")
-	defer metrics.EndOperation(timer)
-
 	query := `SELECT id, status, description, created_at, started_at, closed_at FROM sprints WHERE 1=1`
 	args := []interface{}{}
 
@@ -744,16 +723,7 @@ func (db *DB) RemoveTasksFromSprint(taskIDs []int) error {
 // ==================== AUDIT QUERIES ====================
 
 // LogAuditEntry inserts a new audit entry.
-// This operation is rate limited to 100 entries per minute per roadmap.
 func (db *DB) LogAuditEntry(entry *models.AuditEntry) (int, error) {
-	timer := metrics.StartOperation("db.log_audit")
-	defer metrics.EndOperation(timer)
-
-	// Check rate limit before logging
-	if err := checkAuditRateLimit(db.roadmapName); err != nil {
-		return 0, err
-	}
-
 	var auditID int
 	err := retryWithBackoff("log audit entry", func() error {
 		result, err := db.Exec(
@@ -785,9 +755,6 @@ func (db *DB) LogAuditEntry(entry *models.AuditEntry) (int, error) {
 
 // GetAuditEntries retrieves audit entries with filters.
 func (db *DB) GetAuditEntries(operation, entityType *string, entityID *int, since, until *string, limit, offset int) ([]models.AuditEntry, error) {
-	timer := metrics.StartOperation("db.get_audit_entries")
-	defer metrics.EndOperation(timer)
-
 	query := `SELECT id, operation, entity_type, entity_id, performed_at FROM audit WHERE 1=1`
 	args := []interface{}{}
 

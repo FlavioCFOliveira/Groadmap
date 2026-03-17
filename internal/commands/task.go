@@ -180,29 +180,6 @@ func taskCreate(args []string) error {
 		return fmt.Errorf("%w: missing required parameter: --expected-result", utils.ErrRequired)
 	}
 
-	// Sanitize text inputs
-	description, err = utils.SanitizeString(description)
-	if err != nil {
-		return fmt.Errorf("%w: invalid description: %w", utils.ErrInvalidInput, err)
-	}
-
-	action, err = utils.SanitizeString(action)
-	if err != nil {
-		return fmt.Errorf("%w: invalid action: %w", utils.ErrInvalidInput, err)
-	}
-
-	expectedResult, err = utils.SanitizeString(expectedResult)
-	if err != nil {
-		return fmt.Errorf("%w: invalid expected-result: %w", utils.ErrInvalidInput, err)
-	}
-
-	if specialists != "" {
-		specialists, err = utils.SanitizeString(specialists)
-		if err != nil {
-			return fmt.Errorf("%w: invalid specialists: %w", utils.ErrInvalidInput, err)
-		}
-	}
-
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {
 		return err
@@ -281,10 +258,6 @@ func taskGet(args []string) error {
 		if err != nil {
 			return fmt.Errorf("%w: invalid task ID: %s", utils.ErrInvalidInput, s)
 		}
-		// Validate ID is positive and within bounds
-		if err := utils.ValidateID(id, "task"); err != nil {
-			return err
-		}
 		ids = append(ids, id)
 	}
 
@@ -316,10 +289,6 @@ func taskEdit(args []string) error {
 	taskID, err := strconv.Atoi(remaining[0])
 	if err != nil {
 		return fmt.Errorf("%w: invalid task ID: %s", utils.ErrInvalidInput, remaining[0])
-	}
-	// Validate ID is positive and within bounds
-	if err := utils.ValidateID(taskID, "task"); err != nil {
-		return err
 	}
 
 	// Parse optional fields
@@ -386,20 +355,6 @@ func taskEdit(args []string) error {
 		}
 	}
 
-	// Sanitize text inputs
-	textFields := []string{"description", "action", "expected_result", "specialists"}
-	for _, field := range textFields {
-		if value, ok := updates[field]; ok {
-			if str, ok := value.(string); ok {
-				sanitized, err := utils.SanitizeString(str)
-				if err != nil {
-					return fmt.Errorf("%w: invalid %s: %w", utils.ErrInvalidInput, field, err)
-				}
-				updates[field] = sanitized
-			}
-		}
-	}
-
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {
 		return err
@@ -458,10 +413,6 @@ func taskRemove(args []string) error {
 		id, err := strconv.Atoi(strings.TrimSpace(s))
 		if err != nil {
 			return fmt.Errorf("%w: invalid task ID: %s", utils.ErrInvalidInput, s)
-		}
-		// Validate ID is positive and within bounds
-		if err := utils.ValidateID(id, "task"); err != nil {
-			return err
 		}
 		ids = append(ids, id)
 	}

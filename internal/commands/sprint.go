@@ -172,11 +172,6 @@ func sprintGet(args []string) error {
 	if err != nil {
 		return fmt.Errorf("%w: invalid sprint ID: %s", utils.ErrInvalidInput, remaining[0])
 	}
-	// Validate ID is positive and within bounds
-	if err := utils.ValidateID(sprintID, "sprint"); err != nil {
-		return err
-	}
-
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {
 		return err
@@ -205,10 +200,6 @@ func sprintUpdate(args []string) error {
 	sprintID, err := strconv.Atoi(remaining[0])
 	if err != nil {
 		return fmt.Errorf("%w: invalid sprint ID: %s", utils.ErrInvalidInput, remaining[0])
-	}
-	// Validate ID is positive and within bounds
-	if err := utils.ValidateID(sprintID, "sprint"); err != nil {
-		return err
 	}
 
 	// Parse description
@@ -274,11 +265,6 @@ func sprintRemove(args []string) error {
 	if err != nil {
 		return fmt.Errorf("%w: invalid sprint ID: %s", utils.ErrInvalidInput, remaining[0])
 	}
-	// Validate ID is positive and within bounds
-	if err := utils.ValidateID(sprintID, "sprint"); err != nil {
-		return err
-	}
-
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {
 		return err
@@ -363,11 +349,6 @@ func sprintLifecycle(args []string, newStatus models.SprintStatus, op models.Aud
 	if err != nil {
 		return fmt.Errorf("%w: invalid sprint ID: %s", utils.ErrInvalidInput, remaining[0])
 	}
-	// Validate ID is positive and within bounds
-	if err := utils.ValidateID(sprintID, "sprint"); err != nil {
-		return err
-	}
-
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {
 		return err
@@ -488,11 +469,6 @@ func sprintStats(args []string) error {
 	if err != nil {
 		return fmt.Errorf("%w: invalid sprint ID: %s", utils.ErrInvalidInput, remaining[0])
 	}
-	// Validate ID is positive and within bounds
-	if err := utils.ValidateID(sprintID, "sprint"); err != nil {
-		return err
-	}
-
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {
 		return err
@@ -664,18 +640,10 @@ func sprintMoveTasks(args []string) error {
 	if err != nil {
 		return fmt.Errorf("%w: invalid from sprint ID: %s", utils.ErrInvalidInput, remaining[0])
 	}
-	// Validate ID is positive and within bounds
-	if err := utils.ValidateID(fromID, "from sprint"); err != nil {
-		return err
-	}
 
 	toID, err := strconv.Atoi(remaining[1])
 	if err != nil {
 		return fmt.Errorf("%w: invalid to sprint ID: %s", utils.ErrInvalidInput, remaining[1])
-	}
-	// Validate ID is positive and within bounds
-	if err := utils.ValidateID(toID, "to sprint"); err != nil {
-		return err
 	}
 
 	// Parse task IDs

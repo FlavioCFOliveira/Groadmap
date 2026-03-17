@@ -375,48 +375,6 @@ func TestTaskEdit_InvalidPriority(t *testing.T) {
 	}
 }
 
-func TestTaskGet_ZeroID(t *testing.T) {
-	testName := "testtaskgetzeroid"
-	_, cleanup := setupTestTaskRoadmap(t, testName)
-	defer cleanup()
-
-	err := HandleTask([]string{"get", "0"})
-	if err == nil {
-		t.Error("taskGet with ID 0 expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "must be positive") {
-		t.Errorf("expected 'must be positive' error, got: %v", err)
-	}
-}
-
-func TestTaskGet_NegativeID(t *testing.T) {
-	testName := "testtaskgetnegativeid"
-	_, cleanup := setupTestTaskRoadmap(t, testName)
-	defer cleanup()
-
-	err := HandleTask([]string{"get", "-1"})
-	if err == nil {
-		t.Error("taskGet with negative ID expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "must be positive") {
-		t.Errorf("expected 'must be positive' error, got: %v", err)
-	}
-}
-
-func TestTaskEdit_ZeroID(t *testing.T) {
-	testName := "testtaskeditzeroid"
-	_, cleanup := setupTestTaskRoadmap(t, testName)
-	defer cleanup()
-
-	err := HandleTask([]string{"edit", "0", "-d", "test"})
-	if err == nil {
-		t.Error("taskEdit with ID 0 expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "must be positive") {
-		t.Errorf("expected 'must be positive' error, got: %v", err)
-	}
-}
-
 func TestTaskEdit_EmptyDescription(t *testing.T) {
 	testName := "testtaskeditemptydesc"
 	_, cleanup := setupTestTaskRoadmap(t, testName)

@@ -36,12 +36,6 @@ func HandleRoadmap(args []string) error {
 		return roadmapRemove(args[1:])
 	case "use":
 		return roadmapUse(args[1:])
-	case "backup":
-		return HandleBackup(args[1:])
-	case "export":
-		return exportRoadmap(args[1:])
-	case "import":
-		return importRoadmap(args[1:])
 	default:
 		return fmt.Errorf("unknown roadmap subcommand: %s", subcommand)
 	}
@@ -246,9 +240,6 @@ Commands:
   create, new <name>    Create a new roadmap
   remove, rm <name>     Remove a roadmap
   use <name>            Set default roadmap
-  backup                Backup management commands
-  export <name>         Export roadmap to JSON
-  import <file.json>    Import roadmap from JSON
 
 Options:
   -h, --help            Show this help message
@@ -257,9 +248,5 @@ Examples:
   rmp roadmap list
   rmp roadmap create myproject
   rmp roadmap use myproject
-  rmp roadmap backup create myproject
-  rmp roadmap backup list myproject
-  rmp roadmap export myproject
-  rmp roadmap import myproject.json
 `)
 }

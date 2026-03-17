@@ -150,34 +150,6 @@ func TestSprintGet_InvalidID(t *testing.T) {
 	}
 }
 
-func TestSprintGet_ZeroID(t *testing.T) {
-	testName := "testsprintgetzeroid"
-	_, cleanup := setupTestTaskRoadmap(t, testName)
-	defer cleanup()
-
-	err := HandleSprint([]string{"get", "0"})
-	if err == nil {
-		t.Error("sprintGet with ID 0 expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "must be positive") {
-		t.Errorf("expected 'must be positive' error, got: %v", err)
-	}
-}
-
-func TestSprintGet_NegativeID(t *testing.T) {
-	testName := "testsprintgetnegativeid"
-	_, cleanup := setupTestTaskRoadmap(t, testName)
-	defer cleanup()
-
-	err := HandleSprint([]string{"get", "-1"})
-	if err == nil {
-		t.Error("sprintGet with negative ID expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "must be positive") {
-		t.Errorf("expected 'must be positive' error, got: %v", err)
-	}
-}
-
 func TestSprintGet_NotFound(t *testing.T) {
 	testName := "testsprintgetnotfound"
 	_, cleanup := setupTestTaskRoadmap(t, testName)
