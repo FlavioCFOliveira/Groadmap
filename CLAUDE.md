@@ -81,6 +81,29 @@ Antes de qualquer commit/merge:
 - **Erros/Help**: Plain text para stderr
 - **Datas**: ISO 8601 UTC
 
+### Rule 5: Commit Standards (Strict)
+
+#### Proibido
+- **NENHUMA referência ao Claude** nas mensagens de commit
+- **NENHUM `Co-Author`** ou similar nos commits
+- **NENHUMA menção** a assistentes AI, ferramentas externas, ou origem do código
+
+#### Obrigatório
+- **Descrição detalhada** do que foi alterado
+- **Motivo da alteração** (porquê, não apenas o quê)
+- **Contexto técnico** relevante (structs, funções, packages afetados)
+- **Impacto** das mudanças (breaking changes, dependências, etc.)
+
+#### Formato
+```
+type(scope): subject
+
+- Detailed explanation of what changed
+- Technical reasoning for the change
+- Impact on existing code
+- References to SPEC/ if applicable
+```
+
 ---
 
 ## Project Structure
@@ -176,6 +199,8 @@ go vet ./...
 - NUNCA ignorar falhas em `go vet` ou `go test`
 - NUNCA fazer operações Git destrutivas sem confirmação
 - NUNCA comprometer segurança (input validation, SQL injection)
+- NUNCA referenciar Claude/AI em commits (mensagens devem ser técnicas e neutras)
+- NUNCA adicionar Co-Author em commits (o utilizador é o único autor)
 
 ---
 

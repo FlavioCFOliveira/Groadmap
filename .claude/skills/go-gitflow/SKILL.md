@@ -30,6 +30,31 @@ Before executing any workflow, you must:
 
 ## 2. Detailed Commit Standards
 
+### Strict Rules (MANDATORY)
+
+#### Proibido (NEVER)
+- **NENHUMA referência ao Claude, Anthropic, ou qualquer assistente AI** nas mensagens de commit
+- **NENHUM `Co-Author`, `Co-Authored-By`, ou similar** nos commits
+- **NENHUMA menção** a ferramentas externas, origem do código, ou processo de desenvolvimento
+- **NENHUMA referência** a "gerado por", "assistido por", ou similar
+
+#### Obrigatório (ALWAYS)
+- **Descrição detalhada** do que foi alterado (o quê mudou especificamente)
+- **Motivo da alteração** (porquê foi feito, não apenas o quê)
+- **Contexto técnico** relevante (structs, interfaces, funções, packages afetados)
+- **Impacto** das mudanças (breaking changes, novas dependências, alterações de API)
+- **Referências a SPEC/** quando aplicável (ex: "Implements sprint state machine per SPEC/STATE_MACHINE.md")
+
+### Format
+```
+type(scope): subject
+
+- Detailed explanation of what changed (file/function level)
+- Technical reasoning for the change (why this approach)
+- Impact on existing code (breaking changes, migrations)
+- References to SPEC/ or related documentation
+```
+
 - **Format:** `type(scope): subject`
 - **Types:** feat, fix, refactor, test, docs, perf, chore
 - **Body Requirement:** Analyze `git diff` to explain the technical reasoning.
