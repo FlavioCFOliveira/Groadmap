@@ -1,0 +1,200 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Pre-release Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run go fmt
+        run: |
+          go fmt ./...
+          git diff --exit-code
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run tests
+        run: go test -v -race ./...
+
+  build:
+    name: Build Release Binaries
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          version="${{ steps.get_version.outputs.VERSION }}"
+          output_name="rmp"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            output_name="rmp.exe"
+          fi
+
+          ldflags="-s -w -X main.version=${version}"
+          go build -ldflags="${ldflags}" -o "dist/${output_name}" ./cmd/rmp
+
+          echo "Built ${{ matrix.goos }}/${{ matrix.goarch }}: ${output_name}"
+
+      - name: Create archive
+        id: create_archive
+        run: |
+          version="${{ steps.get_version.outputs.VERSION }}"
+          goos="${{ matrix.goos }}"
+          goarch="${{ matrix.goarch }}"
+          binary_name="rmp"
+
+          if [ "${goos}" = "windows" ]; then
+            binary_name="rmp.exe"
+            archive_name="rmp-${version}-${goos}-${goarch}.zip"
+            (cd dist && zip "${archive_name}" "${binary_name}")
+          else
+            archive_name="rmp-${version}-${goos}-${goarch}.tar.gz"
+            tar -czf "dist/${archive_name}" -C dist "${binary_name}"
+          fi
+
+          echo "ARCHIVE=${archive_name}" >> $GITHUB_OUTPUT
+
+      - name: Generate checksum
+        run: |
+          cd dist
+          sha256sum ${{ steps.create_archive.outputs.ARCHIVE }} > ${{ steps.create_archive.outputs.ARCHIVE }}.sha256
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            dist/${{ steps.create_archive.outputs.ARCHIVE }}
+            dist/${{ steps.create_archive.outputs.ARCHIVE }}.sha256
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: release-*
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release
+          find dist -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.sha256" \) -exec cp {} release/ \;
+          ls -la release/
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          version="${{ steps.get_version.outputs.VERSION }}"
+          cat > release_notes.md << EOF
+          ## Groadmap ${version}
+
+          ### Binários Disponíveis
+
+          | Plataforma | Arquitetura | Ficheiro |
+          |------------|-------------|----------|
+          | Linux | amd64 | rmp-${version}-linux-amd64.tar.gz |
+          | Linux | arm64 | rmp-${version}-linux-arm64.tar.gz |
+          | macOS | amd64 | rmp-${version}-darwin-amd64.tar.gz |
+          | macOS | arm64 | rmp-${version}-darwin-arm64.tar.gz |
+          | Windows | amd64 | rmp-${version}-windows-amd64.zip |
+          | Windows | arm64 | rmp-${version}-windows-arm64.zip |
+
+          ### Verificação de Integridade
+
+          Verifique os checksums SHA256 nos ficheiros `.sha256` correspondentes.
+
+          ### Instalação
+
+          **Linux/macOS:**
+          \`\`\`bash
+          tar -xzf rmp-${version}-<os>-<arch>.tar.gz
+          sudo mv rmp /usr/local/bin/
+          \`\`\`
+
+          **Windows:**
+          Extraia o ZIP e adicione o diretório ao PATH.
+
+          ### Verificação
+
+          \`\`\`bash
+          rmp --version
+          \`\`\`
+          EOF
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Groadmap ${{ steps.get_version.outputs.VERSION }}
+          body_path: release_notes.md
+          files: release/*
+          draft: false
+          prerelease: ${{ contains(steps.get_version.outputs.VERSION, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
