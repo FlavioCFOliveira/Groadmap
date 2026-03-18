@@ -80,6 +80,8 @@ func retryWithBackoff(operation string, fn func() error) error {
 type DB struct {
 	*sql.DB
 	roadmapName string
+	queryCache  *QueryCache
+	batchProc   *BatchProcessor
 }
 
 // Open opens a connection to a roadmap database.
@@ -129,6 +131,8 @@ func Open(roadmapName string) (*DB, error) {
 	db := &DB{
 		DB:          sqlDB,
 		roadmapName: roadmapName,
+		queryCache:  NewQueryCache(),
+		batchProc:   NewBatchProcessor(100),
 	}
 
 	// Create schema if new database with retry logic
