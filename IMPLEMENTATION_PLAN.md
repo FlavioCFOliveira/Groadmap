@@ -156,13 +156,13 @@ Implement connection caching for the CLI process lifetime:
 - Maintain backward compatibility with existing `Open()` function
 
 **Validation Requirements:**
-- [ ] Second command reuses existing connection (verified with logging)
-- [ ] Connection health check validates liveness
-- [ ] Dead connections are removed from cache and recreated
-- [ ] Process exit closes all cached connections
-- [ ] Concurrent access to cache is thread-safe
-- [ ] Memory usage remains stable (no connection leaks)
-- [ ] All existing tests pass
+- [x] Second command reuses existing connection (verified with logging)
+- [x] Connection health check validates liveness
+- [x] Dead connections are removed from cache and recreated
+- [x] Process exit closes all cached connections
+- [x] Concurrent access to cache is thread-safe
+- [x] Memory usage remains stable (no connection leaks)
+- [x] All existing tests pass
 
 **Affected Files:**
 - `internal/db/connection.go` (add caching logic)
@@ -506,7 +506,7 @@ Optimize sprint task retrieval to avoid N+1 queries:
   - [x] TASK-P001: Add Composite Database Indexes
   - [x] TASK-P002: Implement Prepared Statement Caching
   - [x] TASK-P003: Optimize Connection Pool
-  - [ ] TASK-P004: Implement Database Connection Caching
+  - [x] TASK-P004: Implement Database Connection Caching
   - [ ] TASK-P005: Optimize scanTasks Memory Allocations
   - [ ] TASK-P006: Replace Map-Based Updates
   - [ ] TASK-P007: Optimize Task Status Validation
