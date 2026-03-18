@@ -1,5 +1,16 @@
 # CLAUDE.md
 
+## CRITICAL POLICY REMINDER
+
+**SPECIFICATION FIRST IS MANDATORY AND NON-NEGOTIABLE**
+
+- NO code implementation shall begin without a complete specification in `SPEC/`
+- When ANY implementation is requested, invoke `spec-orchestrator` FIRST
+- This rule has ZERO exceptions - urgency, simplicity, or user preference do not override it
+- **WHEN IN DOUBT: SPEC FIRST. ALWAYS.**
+
+---
+
 ## Project Identity
 
 **Groadmap** is a CLI tool in Go for managing technical roadmaps, using SQLite as backend.
@@ -35,15 +46,17 @@
 ## Agent Responsibilities (Strict Ownership)
 
 ### spec-orchestrator
-**Exclusive authority** for technical specification.
+**Exclusive authority** for technical specification. **THIS AGENT MUST BE INVOKED BEFORE ANY IMPLEMENTATION.**
+- **MANDATORY FIRST STEP** for all new features and changes
 - Creates and maintains all documents in `SPEC/`
 - Produces specifications ONLY from user input
 - NEVER derives specifications from existing code
 - ALWAYS asks the user for decisions (the user is the single source of truth)
-- Acts as gatekeeper: no implementation without clear specification
+- **Acts as gatekeeper: NO implementation without clear specification**
 
 ### go-elite-developer
-**Exclusive authority** for Go code development.
+**Exclusive authority** for Go code development. **ONLY TO BE INVOKED AFTER spec-orchestrator.**
+- **MUST NOT be invoked without prior specification in SPEC/**
 - Implements features according to technical specification
 - Ensures idiomatic, efficient, and secure code
 - Performs validation: `go build`, `go test`, `go vet`, `go fmt`
@@ -80,12 +93,29 @@
 
 ## Execution Rules
 
-### Rule 1: Specification First
+### Rule 1: Specification First (MANDATORY - ZERO EXCEPTIONS)
+
+**THIS RULE IS ABSOLUTE AND NON-NEGOTIABLE. NO EXCEPTIONS EXIST.**
+
 ```
 User Request → spec-orchestrator → SPEC/ → go-elite-developer → Implementation
 ```
-- NO implementation starts without specification in `SPEC/`
+
+#### ABSOLUTE REQUIREMENTS:
+- **NO implementation starts without specification in `SPEC/`** - This is MANDATORY
+- **ALWAYS invoke spec-orchestrator FIRST** when specification is missing
+- **NEVER write code directly** in response to feature requests
+- **NEVER bypass** this rule due to urgency, simplicity, or user insistence
 - Requirement questions → ALWAYS ask the user
+
+#### VIOLATION PROTOCOL:
+If code is requested without specification:
+1. STOP immediately
+2. Inform user: "Vou primeiro invocar o spec-orchestrator para criar a especificação técnica, conforme a política Specification First."
+3. Invoke spec-orchestrator
+4. ONLY proceed to go-elite-developer after specification exists
+
+**WHEN IN DOUBT: SPEC FIRST. ALWAYS.**
 
 ### Rule 2: Skill Delegation
 - Code tasks → `go-elite-developer`
@@ -129,6 +159,24 @@ type(scope): subject
 - Impact on existing code
 - References to SPEC/ if applicable
 ```
+
+### Rule 6: Task Lifecycle and Specification Binding (MANDATORY)
+
+#### Task Creation:
+- **NO task can be created without a corresponding specification in `SPEC/`**
+- Before creating any task, verify that the functionality is documented in the appropriate SPEC/ file
+- Tasks must reference the specific specification document they implement
+
+#### Task Completion:
+- **Before marking any task as complete, VALIDATE that the specification exists in `SPEC/`**
+- If the specification is missing, the task CANNOT be validated or marked as complete
+- The task must remain open until the specification is created and the implementation aligns with it
+
+#### Task Validation Protocol:
+1. Review the task requirements
+2. Locate the corresponding specification in `SPEC/`
+3. If specification is MISSING → STOP and invoke spec-orchestrator
+4. Only validate completion when specification exists and implementation matches it
 
 ---
 
@@ -206,7 +254,8 @@ go vet ./...
 
 | Situation | Action |
 |-----------|--------|
-| User requests new feature | Invoke `spec-orchestrator` first |
+| **User requests new feature** | **MANDATORY: Invoke `spec-orchestrator` FIRST - NO EXCEPTIONS** |
+| **User requests code changes** | **MANDATORY: Verify SPEC/ exists first, else invoke `spec-orchestrator`** |
 | Specification exists, implement | Invoke `go-elite-developer` |
 | Git operations (commit, branch, PR) | Invoke `go-gitflow` |
 | Exhaustive testing needed | Invoke `exhaustive-qa-engineer` |
@@ -217,11 +266,14 @@ go vet ./...
 
 ---
 
-## Anti-Patterns (Forbidden)
+## Anti-Patterns (FORBIDDEN - ZERO TOLERANCE)
 
-- NEVER implement without specification
-- NEVER derive specification from existing code
-- NEVER make product decisions (always ask the user)
+### CRITICAL VIOLATIONS (Will Result in Immediate Rejection):
+- **NEVER implement without specification** - THIS IS THE #1 RULE. NO EXCEPTIONS.
+- **NEVER derive specification from existing code** - Specifications come ONLY from user input via spec-orchestrator
+- **NEVER make product decisions** - Always ask the user
+
+### Other Forbidden Patterns:
 - NEVER ignore failures in `go vet` or `go test`
 - NEVER perform destructive Git operations without confirmation
 - NEVER compromise security (input validation, SQL injection)
