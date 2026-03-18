@@ -192,12 +192,12 @@ func configureConnection(db *sql.DB) error {
 		return fmt.Errorf("setting busy timeout: %w", err)
 	}
 
-	// Configure connection pool for SQLite
-	// SQLite handles concurrency via WAL mode, so we use a single connection
-	db.SetMaxOpenConns(1)    // SQLite only supports one writer at a time
-	db.SetMaxIdleConns(1)    // Keep one idle connection
-	db.SetConnMaxLifetime(0) // No limit - connections are reused indefinitely
-	db.SetConnMaxIdleTime(0) // No idle timeout
+	// Configure connection pool for SQLite with WAL mode
+	// WAL mode allows concurrent readers, so we can use multiple connections
+	db.SetMaxOpenConns(10)                  // Allow concurrent readers
+	db.SetMaxIdleConns(5)                   // Keep warm connections
+	db.SetConnMaxLifetime(1 * time.Hour)    // Recycle connections after 1 hour
+	db.SetConnMaxIdleTime(10 * time.Minute) // Close idle connections after 10 min
 
 	return nil
 }

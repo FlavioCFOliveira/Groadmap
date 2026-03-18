@@ -29,15 +29,22 @@ WAL mode provides:
 
 ### Connection Pooling
 
-Groadmap uses a single connection pool with the following settings:
+Groadmap uses a connection pool optimized for concurrent read access:
 
 ```go
-db.SetMaxOpenConns(1)    // SQLite only supports one writer at a time
-db.SetMaxIdleConns(1)    // Keep one idle connection
-db.SetConnMaxLifetime(0) // No limit - connections are reused indefinitely
+db.SetMaxOpenConns(10)        // Allow concurrent readers (WAL mode supports this)
+db.SetMaxIdleConns(5)         // Keep warm connections for frequent access
+db.SetConnMaxLifetime(time.Hour)   // Recycle connections after 1 hour
+db.SetConnMaxIdleTime(10 * time.Minute) // Close idle connections after 10 min
 ```
 
-**Rationale**: SQLite handles concurrency via WAL mode, but only supports one writer at a time. Using a single connection prevents "database is locked" errors.
+**Rationale**:
+- **MaxOpenConns(10)**: WAL mode allows multiple concurrent readers. While SQLite only supports one writer at a time, reads can proceed in parallel.
+- **MaxIdleConns(5)**: Maintains warm connections to avoid connection establishment overhead for read-heavy workloads.
+- **ConnMaxLifetime(1 hour)**: Periodically recycles connections to prevent resource leaks and handle potential SQLite memory growth.
+- **ConnMaxIdleTime(10 min)**: Closes unused connections to free resources while keeping connections alive during active use periods.
+
+**Note**: Write operations remain serialized at the SQLite level regardless of connection pool size.
 
 ### Busy Timeout
 
