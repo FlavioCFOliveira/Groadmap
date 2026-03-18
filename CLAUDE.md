@@ -192,8 +192,15 @@ type(scope): subject
 │   └── utils/               # JSON, ISO 8601 dates, paths
 ├── bin/                     # Build output
 ├── SPEC/                    # Technical specifications (spec-orchestrator only)
+├── IMPLEMENTATION_PLAN.md   # Project implementation plan
 └── CLAUDE.md               # This file
 ```
+
+### IMPLEMENTATION_PLAN.md
+
+The `/IMPLEMENTATION_PLAN.md` file stores the project implementation plan and is divided into two sections:
+- **Pending Tasks**: Tasks yet to be implemented
+- **Completed Tasks**: Tasks that have been finished
 
 ---
 

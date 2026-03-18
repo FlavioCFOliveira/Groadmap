@@ -14,7 +14,6 @@ This directory contains the complete technical specification for Groadmap - a CL
 | [DATA_FORMATS.md](./DATA_FORMATS.md) | JSON output formats, ISO 8601 date conventions, and data types |
 | [HELP_EXAMPLES.md](./HELP_EXAMPLES.md) | Help output format examples for all commands and error messages |
 | [MODELS.md](./MODELS.md) | Go structures and enums mapping |
-| [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md) | Step-by-step roadmap for implementation |
 
 ## Technology Stack
 
