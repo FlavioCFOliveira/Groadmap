@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: write
+
 jobs:
   test:
     name: Test
@@ -79,17 +82,123 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
         run: |
           output_name="rmp"
           if [ "${{ matrix.goos }}" = "windows" ]; then
             output_name="rmp.exe"
           fi
-          go build -ldflags="-s -w -X main.version=${{ github.sha }}" -o "bin/${output_name}" ./cmd/rmp
+
+          # Base ldflags for all platforms
+          ldflags="-s -w -X main.version=dev-${{ github.sha }}"
+
+          # Platform-specific optimizations
+          if [ "${{ matrix.goos }}" = "linux" ]; then
+            ldflags="${ldflags} -extldflags '-static'"
+          fi
+
+          go build -trimpath -ldflags="${ldflags}" -o "dist/${output_name}" ./cmd/rmp
           echo "Built ${{ matrix.goos }}/${{ matrix.goarch }}: ${output_name}"
+
+      - name: Create archive
+        id: create_archive
+        run: |
+          sha_short=$(echo "${{ github.sha }}" | cut -c1-7)
+          goos="${{ matrix.goos }}"
+          goarch="${{ matrix.goarch }}"
+          binary_name="rmp"
+
+          if [ "${goos}" = "windows" ]; then
+            binary_name="rmp.exe"
+            archive_name="rmp-dev-${sha_short}-${goos}-${goarch}.zip"
+            (cd dist && zip "${archive_name}" "${binary_name}")
+          else
+            archive_name="rmp-dev-${sha_short}-${goos}-${goarch}.tar.gz"
+            tar -czf "dist/${archive_name}" -C dist "${binary_name}"
+          fi
+
+          echo "ARCHIVE=${archive_name}" >> $GITHUB_OUTPUT
+
+      - name: Generate checksum
+        run: |
+          cd dist
+          sha256sum ${{ steps.create_archive.outputs.ARCHIVE }} > ${{ steps.create_archive.outputs.ARCHIVE }}.sha256
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rmp-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: bin/rmp*
-          retention-days: 1
+          name: dev-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            dist/${{ steps.create_archive.outputs.ARCHIVE }}
+            dist/${{ steps.create_archive.outputs.ARCHIVE }}.sha256
+
+  dev-release:
+    name: Create Dev Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get short SHA
+        id: get_sha
+        run: echo "SHA_SHORT=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: dev-*
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release
+          find dist -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.sha256" \) -exec cp {} release/ \;
+          ls -la release/
+
+      - name: Delete previous dev release
+        run: |
+          gh release delete dev --yes || true
+          git push --delete origin dev || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create dev release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: dev
+          name: Development Build (${{ steps.get_sha.outputs.SHA_SHORT }})
+          body: |
+            ## Development Build
+
+            This is an automated development build from commit `${{ steps.get_sha.outputs.SHA_SHORT }}`.
+
+            **Warning:** This build is not stable and is intended for testing purposes only.
+
+            ### Available Binaries
+
+            | Platform | Architecture | File |
+            |----------|-------------|------|
+            | Linux | amd64 | rmp-dev-${{ steps.get_sha.outputs.SHA_SHORT }}-linux-amd64.tar.gz |
+            | Linux | arm64 | rmp-dev-${{ steps.get_sha.outputs.SHA_SHORT }}-linux-arm64.tar.gz |
+            | macOS | amd64 | rmp-dev-${{ steps.get_sha.outputs.SHA_SHORT }}-darwin-amd64.tar.gz |
+            | macOS | arm64 | rmp-dev-${{ steps.get_sha.outputs.SHA_SHORT }}-darwin-arm64.tar.gz |
+            | Windows | amd64 | rmp-dev-${{ steps.get_sha.outputs.SHA_SHORT }}-windows-amd64.zip |
+            | Windows | arm64 | rmp-dev-${{ steps.get_sha.outputs.SHA_SHORT }}-windows-arm64.zip |
+
+            ### Installation
+
+            **Linux/macOS:**
+            ```bash
+            tar -xzf rmp-dev-*-<os>-<arch>.tar.gz
+            sudo mv rmp /usr/local/bin/
+            ```
+
+            **Windows:**
+            Extract the ZIP and add the directory to PATH.
+          files: release/*
+          draft: false
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

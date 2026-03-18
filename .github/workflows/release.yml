@@ -87,8 +87,23 @@ jobs:
             output_name="rmp.exe"
           fi
 
+          # Base ldflags for all platforms: strip debug info, set version
           ldflags="-s -w -X main.version=${version}"
-          go build -ldflags="${ldflags}" -o "dist/${output_name}" ./cmd/rmp
+
+          # Platform-specific optimizations
+          if [ "${{ matrix.goos }}" = "linux" ]; then
+            # Static linking for Linux (fully static binary)
+            ldflags="${ldflags} -extldflags '-static'"
+          elif [ "${{ matrix.goos }}" = "darwin" ]; then
+            # macOS: -s is sufficient, OS handles dynamic linking
+            : # No additional flags needed
+          elif [ "${{ matrix.goos }}" = "windows" ]; then
+            # Windows: strip debug info
+            : # No additional flags needed
+          fi
+
+          # -trimpath removes build paths for reproducible builds
+          go build -trimpath -ldflags="${ldflags}" -o "dist/${output_name}" ./cmd/rmp
 
           echo "Built ${{ matrix.goos }}/${{ matrix.goarch }}: ${output_name}"
 
@@ -168,7 +183,7 @@ jobs:
 
           ### Verificação de Integridade
 
-          Verifique os checksums SHA256 nos ficheiros `.sha256` correspondentes.
+          Verifique os checksums SHA256 nos ficheiros \`.sha256\` correspondentes.
 
           ### Instalação
 
