@@ -334,7 +334,43 @@ func sprintReopen(args []string) error {
 	}, "cannot reopen sprint with status %s")
 }
 
-// sprintLifecycle handles sprint lifecycle transitions.
+// sprintLifecycle handles sprint lifecycle state transitions (start, close, reopen).
+//
+// Parameters:
+//   - args: Command-line arguments including sprint ID
+//   - newStatus: The target status to transition to (OPEN, CLOSED)
+//   - op: The audit operation type to log (OpSprintStart, OpSprintClose, OpSprintReopen)
+//   - canTransition: Function that validates if the transition is allowed from current status
+//   - errorMsg: Error message template if transition is not allowed
+//
+// Required arguments:
+//   - sprint ID: The ID of the sprint to transition (first positional argument)
+//
+// Valid status transitions:
+//   - PENDING → OPEN (start sprint)
+//   - OPEN → CLOSED (close sprint)
+//   - CLOSED → OPEN (reopen sprint)
+//
+// Error conditions:
+//   - Returns utils.ErrRequired if sprint ID is missing
+//   - Returns utils.ErrNotFound if sprint doesn't exist
+//   - Returns utils.ErrInvalidInput if transition is not allowed
+//
+// Side effects:
+//   - Updates sprint status in database
+//   - Sets started_at timestamp when transitioning to OPEN from PENDING
+//   - Sets closed_at timestamp when transitioning to CLOSED
+//   - Clears closed_at when reopening (transitioning CLOSED → OPEN)
+//   - Logs audit entry for the operation
+//   - Outputs updated sprint as JSON to stdout
+//
+// Complexity: O(1) - single database transaction
+//
+// Example usage:
+//
+//	sprintLifecycle(args, models.SprintOpen, models.OpSprintStart,
+//	    func(s models.SprintStatus) bool { return s == models.SprintPending },
+//	    "cannot start sprint with status %s")
 func sprintLifecycle(args []string, newStatus models.SprintStatus, op models.AuditOperation, canTransition func(models.SprintStatus) bool, errorMsg string) error {
 	roadmapName, remaining, err := requireRoadmap(args)
 	if err != nil {
@@ -485,7 +521,38 @@ func sprintStats(args []string) error {
 	return utils.PrintJSON(stats)
 }
 
-// sprintAddTasks adds tasks to a sprint.
+// sprintAddTasks adds one or more tasks to a sprint and updates their status.
+//
+// Parameters:
+//   - args: Command-line arguments including sprint ID and task IDs
+//
+// Required arguments:
+//   - sprint ID: The ID of the sprint to add tasks to (first positional argument)
+//   - task IDs: Comma-separated list of task IDs to add (second positional argument)
+//
+// Optional flags:
+//   - -r, --roadmap: Roadmap name (uses current if not specified)
+//
+// Preconditions:
+//   - Sprint must exist
+//   - Tasks must exist and be in BACKLOG status
+//
+// Error conditions:
+//   - Returns utils.ErrRequired if sprint ID or task IDs missing
+//   - Returns utils.ErrNotFound if sprint or tasks don't exist
+//   - Returns utils.ErrInvalidInput if task IDs are invalid
+//
+// Side effects:
+//   - Creates sprint_tasks junction records linking tasks to sprint
+//   - Updates task status from BACKLOG to SPRINT
+//   - Logs TASK_ADDED_TO_SPRINT audit entries for each task
+//   - Outputs added task IDs as JSON to stdout
+//
+// Complexity: O(n) where n is the number of tasks being added
+//
+// Example:
+//
+//	rmp sprint add-tasks -r myproject 1 10,11,12
 func sprintAddTasks(args []string) error {
 	roadmapName, remaining, err := requireRoadmap(args)
 	if err != nil {

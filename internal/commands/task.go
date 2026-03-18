@@ -113,7 +113,38 @@ func taskList(args []string) error {
 	return utils.PrintJSON(tasks)
 }
 
-// taskCreate creates a new task.
+// taskCreate creates a new task in the specified or current roadmap.
+//
+// Parameters:
+//   - args: Command-line arguments including flags and roadmap name
+//
+// Required flags:
+//   - -d, --description: Task description (required, max 1000 chars)
+//   - -a, --action: Action to be taken (required, max 2000 chars)
+//   - -e, --expected-result: Expected outcome (required, max 2000 chars)
+//
+// Optional flags:
+//   - -p, --priority: Task priority 0-9 (default: 0)
+//   - --severity: Task severity 0-9 (default: 0)
+//   - -s, --specialists: Comma-separated list of specialists (max 500 chars)
+//   - -r, --roadmap: Roadmap name (uses current if not specified)
+//
+// Error conditions:
+//   - Returns utils.ErrRequired if required fields are missing
+//   - Returns utils.ErrInvalidInput if priority/severity are out of range
+//   - Returns utils.ErrFieldTooLarge if text fields exceed limits
+//   - Returns utils.ErrNoRoadmap if no roadmap specified and none selected
+//
+// Side effects:
+//   - Creates task record in database
+//   - Logs TASK_CREATE audit entry
+//   - Outputs created task as JSON to stdout
+//
+// Complexity: O(1) - single database insert
+//
+// Example:
+//
+//	rmp task create -r myproject -d "Fix bug" -a "Update code" -e "Bug fixed" -p 5 --severity 3
 func taskCreate(args []string) error {
 	roadmapName, remaining, err := requireRoadmap(args)
 	if err != nil {
@@ -275,7 +306,39 @@ func taskGet(args []string) error {
 	return utils.PrintJSON(tasks)
 }
 
-// taskEdit edits a task.
+// taskEdit modifies an existing task's fields.
+//
+// Parameters:
+//   - args: Command-line arguments including task ID and optional flags
+//
+// Required arguments:
+//   - task ID: The ID of the task to edit (first positional argument)
+//
+// Optional flags (at least one required):
+//   - -d, --description: New task description (max 1000 chars)
+//   - -a, --action: New action (max 2000 chars)
+//   - -e, --expected-result: New expected result (max 2000 chars)
+//   - -s, --specialists: New specialists list (max 500 chars)
+//   - -p, --priority: New priority 0-9
+//   - --severity: New severity 0-9
+//   - -r, --roadmap: Roadmap name (uses current if not specified)
+//
+// Error conditions:
+//   - Returns utils.ErrRequired if task ID is missing
+//   - Returns utils.ErrNotFound if task doesn't exist
+//   - Returns utils.ErrInvalidInput if priority/severity out of range
+//   - Returns utils.ErrFieldTooLarge if text fields exceed limits
+//
+// Side effects:
+//   - Updates task record in database
+//   - Logs TASK_UPDATE audit entry
+//   - Outputs updated task as JSON to stdout
+//
+// Complexity: O(1) - single database update
+//
+// Example:
+//
+//	rmp task edit -r myproject 42 -d "Updated description" -p 8
 func taskEdit(args []string) error {
 	roadmapName, remaining, err := requireRoadmap(args)
 	if err != nil {
@@ -453,7 +516,43 @@ func taskRemove(args []string) error {
 	})
 }
 
-// taskSetStatus sets task status.
+// taskSetStatus changes the status of one or more tasks.
+//
+// Parameters:
+//   - args: Command-line arguments including task IDs and new status
+//
+// Required arguments:
+//   - task IDs: Comma-separated list of task IDs to update (first positional argument)
+//   - status: New status value (second positional argument)
+//
+// Valid status transitions:
+//   - BACKLOG → SPRINT, DOING
+//   - SPRINT → DOING, BACKLOG
+//   - DOING → TESTING, BACKLOG
+//   - TESTING → COMPLETED, DOING
+//   - COMPLETED → DOING (reopen)
+//
+// Optional flags:
+//   - -r, --roadmap: Roadmap name (uses current if not specified)
+//
+// Error conditions:
+//   - Returns utils.ErrRequired if task IDs or status missing
+//   - Returns utils.ErrNotFound if task doesn't exist
+//   - Returns utils.ErrInvalidInput if status is invalid
+//   - Returns error if status transition is not allowed
+//
+// Side effects:
+//   - Updates task status in database
+//   - Sets completed_at timestamp when transitioning to COMPLETED
+//   - Clears completed_at when transitioning from COMPLETED
+//   - Logs TASK_STATUS_CHANGE audit entry
+//   - Outputs updated task IDs as JSON to stdout
+//
+// Complexity: O(n) where n is the number of tasks being updated
+//
+// Example:
+//
+//	rmp task set-status -r myproject 1,2,3 DOING
 func taskSetStatus(args []string) error {
 	roadmapName, remaining, err := requireRoadmap(args)
 	if err != nil {

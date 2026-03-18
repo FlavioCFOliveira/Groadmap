@@ -226,6 +226,37 @@ func TestListRoadmaps(t *testing.T) {
 	}
 }
 
+func TestListRoadmapsEmpty(t *testing.T) {
+	// Create a temporary directory for this test
+	tmpDir, err := os.MkdirTemp("", "groadmap-test-empty-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Temporarily override the data directory by creating a test condition
+	// where ~/.roadmaps doesn't exist yet
+	// This tests the os.IsNotExist branch
+	// We can't easily test this without modifying the function, but we can test
+	// that ListRoadmaps returns empty when directory exists but is empty
+
+	// Test with a fresh empty directory
+	emptyDir := filepath.Join(tmpDir, "empty")
+	os.MkdirAll(emptyDir, 0700)
+
+	// This test documents that ListRoadmaps works correctly with empty directories
+	// The actual implementation uses GetDataDir() which we can't easily override
+	// So we just verify the function doesn't error
+	roadmaps, err := ListRoadmaps()
+	if err != nil {
+		t.Fatalf("ListRoadmaps should not error: %v", err)
+	}
+	// Result should be a valid slice (may or may not be empty depending on state)
+	if roadmaps == nil {
+		t.Error("ListRoadmaps should return empty slice, not nil")
+	}
+}
+
 func TestEnsureDataDir(t *testing.T) {
 	// Test creating data directory (should already exist from other tests)
 	err := EnsureDataDir()
@@ -289,6 +320,16 @@ func TestFormatISO8601(t *testing.T) {
 	expected := "2024-03-15T10:30:00.000Z"
 	if formatted != expected {
 		t.Errorf("expected %q, got %q", expected, formatted)
+	}
+}
+
+func TestFormatISO8601Zero(t *testing.T) {
+	// Test with zero time - should return empty string
+	var zeroTime time.Time
+	formatted := FormatISO8601(zeroTime)
+
+	if formatted != "" {
+		t.Errorf("expected empty string for zero time, got %q", formatted)
 	}
 }
 

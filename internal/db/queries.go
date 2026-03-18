@@ -181,8 +181,31 @@ var allowedTaskUpdateFields = map[string]bool{
 	"severity":        true,
 }
 
-// UpdateTask updates a task's fields.
-// Only whitelisted fields can be updated. Use dedicated methods for status changes.
+// UpdateTask updates a task's fields with the provided values.
+//
+// Parameters:
+//   - id: The unique identifier of the task to update
+//   - updates: A map of field names to new values. Only whitelisted fields can be updated.
+//
+// Allowed fields (whitelisted):
+//   - "description": Task description (string, max 1000 chars)
+//   - "action": Action to be taken (string, max 2000 chars)
+//   - "expected_result": Expected outcome (string, max 2000 chars)
+//   - "specialists": Comma-separated list of specialists (string, max 500 chars)
+//   - "priority": Task priority 0-9 (int)
+//   - "severity": Task severity 0-9 (int)
+//
+// Error conditions:
+//   - Returns utils.ErrInvalidUpdate if a non-whitelisted field is specified
+//   - Returns utils.ErrNotFound if task with given ID doesn't exist
+//   - Returns wrapped database errors for connection/query failures
+//
+// Side effects:
+//   - Updates task record in database
+//   - Does NOT update status (use UpdateTaskStatus for that)
+//   - Does NOT create audit entries (caller should log changes)
+//
+// Complexity: O(n) where n is the number of fields being updated
 func (db *DB) UpdateTask(id int, updates map[string]interface{}) error {
 	if len(updates) == 0 {
 		return nil
@@ -753,7 +776,37 @@ func (db *DB) LogAuditEntry(entry *models.AuditEntry) (int, error) {
 	return auditID, nil
 }
 
-// GetAuditEntries retrieves audit entries with filters.
+// GetAuditEntries retrieves audit entries with optional filters and pagination.
+//
+// Parameters (all optional, use nil to skip filter):
+//   - operation: Filter by operation type (e.g., "TASK_CREATE", "TASK_UPDATE")
+//   - entityType: Filter by entity type (e.g., "TASK", "SPRINT")
+//   - entityID: Filter by specific entity ID
+//   - since: Filter entries from this timestamp (ISO 8601 format)
+//   - until: Filter entries up to this timestamp (ISO 8601 format)
+//   - limit: Maximum number of entries to return (0 = no limit)
+//   - offset: Number of entries to skip for pagination (0 = start from beginning)
+//
+// Returns:
+//   - Slice of AuditEntry structs, ordered by performed_at DESC (newest first)
+//   - Error if database query fails
+//
+// Error conditions:
+//   - Returns wrapped database errors for connection/query failures
+//   - Returns empty slice (not error) if no entries match filters
+//
+// Side effects: None (read-only operation)
+//
+// Complexity: O(n) where n is the number of entries returned
+//
+// Example:
+//
+//	entries, err := db.GetAuditEntries(
+//	    strPtr("TASK_CREATE"),  // operation filter
+//	    strPtr("TASK"),         // entity type filter
+//	    nil, nil, nil,          // no entity ID, since, until filters
+//	    100, 0,                 // limit 100, offset 0
+//	)
 func (db *DB) GetAuditEntries(operation, entityType *string, entityID *int, since, until *string, limit, offset int) ([]models.AuditEntry, error) {
 	query := `SELECT id, operation, entity_type, entity_id, performed_at FROM audit WHERE 1=1`
 	args := []interface{}{}
@@ -824,7 +877,36 @@ func (db *DB) GetEntityHistory(entityType string, entityID int) ([]models.AuditE
 	return db.GetAuditEntries(nil, &entityType, &entityID, nil, nil, 0, 0)
 }
 
-// GetAuditStats retrieves statistics for audit entries in a date range.
+// GetAuditStats retrieves aggregated statistics for audit entries in a date range.
+//
+// Parameters (all optional, use nil to skip):
+//   - since: Start of date range (ISO 8601 format, inclusive)
+//   - until: End of date range (ISO 8601 format, inclusive)
+//
+// Returns:
+//   - AuditStats struct containing:
+//     - TotalEntries: Total count of audit entries in range
+//     - ByOperation: Map of operation type to count (e.g., {"TASK_CREATE": 10, "TASK_UPDATE": 5})
+//     - ByEntityType: Map of entity type to count (e.g., {"TASK": 15, "SPRINT": 3})
+//
+// Error conditions:
+//   - Returns wrapped database errors for connection/query failures
+//   - Returns empty stats (zeros) if no entries match the date range
+//
+// Side effects: None (read-only operation)
+//
+// Complexity: O(n) where n is the number of unique operations/entity types
+//
+// Example:
+//
+//	stats, err := db.GetAuditStats(
+//	    strPtr("2024-01-01T00:00:00.000Z"),
+//	    strPtr("2024-12-31T23:59:59.999Z"),
+//	)
+//	fmt.Printf("Total operations: %d\n", stats.TotalEntries)
+//	for op, count := range stats.ByOperation {
+//	    fmt.Printf("  %s: %d\n", op, count)
+//	}
 func (db *DB) GetAuditStats(since, until *string) (*models.AuditStats, error) {
 	stats := &models.AuditStats{
 		ByOperation:  make(map[string]int),

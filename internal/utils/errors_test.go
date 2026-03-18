@@ -138,6 +138,36 @@ func TestIsValidation(t *testing.T) {
 	}
 }
 
+func TestIsFieldTooLarge(t *testing.T) {
+	if !IsFieldTooLarge(ErrFieldTooLarge) {
+		t.Error("IsFieldTooLarge(ErrFieldTooLarge) should return true")
+	}
+
+	wrapped := fmt.Errorf("wrapped: %w", ErrFieldTooLarge)
+	if !IsFieldTooLarge(wrapped) {
+		t.Error("IsFieldTooLarge(wrapped ErrFieldTooLarge) should return true")
+	}
+
+	if IsFieldTooLarge(ErrNotFound) {
+		t.Error("IsFieldTooLarge(ErrNotFound) should return false")
+	}
+}
+
+func TestIsInvalidUpdate(t *testing.T) {
+	if !IsInvalidUpdate(ErrInvalidUpdate) {
+		t.Error("IsInvalidUpdate(ErrInvalidUpdate) should return true")
+	}
+
+	wrapped := fmt.Errorf("wrapped: %w", ErrInvalidUpdate)
+	if !IsInvalidUpdate(wrapped) {
+		t.Error("IsInvalidUpdate(wrapped ErrInvalidUpdate) should return true")
+	}
+
+	if IsInvalidUpdate(ErrNotFound) {
+		t.Error("IsInvalidUpdate(ErrNotFound) should return false")
+	}
+}
+
 func TestErrorsIs(t *testing.T) {
 	// Test that errors.Is works correctly with sentinel errors
 	tests := []struct {

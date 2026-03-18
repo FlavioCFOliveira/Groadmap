@@ -1,7 +1,10 @@
 package utils
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
+	"os"
 	"strings"
 	"testing"
 )
@@ -45,5 +48,97 @@ func TestHTMLEscapingDisabled(t *testing.T) {
 	}
 	if decoded["ampersand"] != data["ampersand"] {
 		t.Errorf("Ampersand content mismatch: got %q, want %q", decoded["ampersand"], data["ampersand"])
+	}
+}
+
+// TestPrintJSONError tests error handling in PrintJSON
+func TestPrintJSONError(t *testing.T) {
+	// Test with a channel (cannot be marshaled to JSON)
+	ch := make(chan int)
+	err := PrintJSON(ch)
+	if err == nil {
+		t.Error("PrintJSON should return error for unmarshalable data")
+	}
+}
+
+// TestPrintJSONIndentError tests error handling in PrintJSONIndent
+func TestPrintJSONIndentError(t *testing.T) {
+	// Test with a channel (cannot be marshaled to JSON)
+	ch := make(chan int)
+	err := PrintJSONIndent(ch)
+	if err == nil {
+		t.Error("PrintJSONIndent should return error for unmarshalable data")
+	}
+}
+
+// TestToJSONError tests error handling in ToJSON
+func TestToJSONError(t *testing.T) {
+	// Test with a channel (cannot be marshaled to JSON)
+	ch := make(chan int)
+	_, err := ToJSON(ch)
+	if err == nil {
+		t.Error("ToJSON should return error for unmarshalable data")
+	}
+}
+
+// TestPrintJSONOutput tests the actual output of PrintJSON
+func TestPrintJSONOutput(t *testing.T) {
+	// Capture stdout
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	input := map[string]string{"key": "value"}
+	err := PrintJSON(input)
+
+	// Restore stdout
+	w.Close()
+	os.Stdout = oldStdout
+
+	if err != nil {
+		t.Fatalf("PrintJSON failed: %v", err)
+	}
+
+	// Read output
+	var buf bytes.Buffer
+	io.Copy(&buf, r)
+	output := buf.String()
+
+	expected := `{"key":"value"}`
+	if !strings.Contains(output, expected) {
+		t.Errorf("expected output to contain %q, got %q", expected, output)
+	}
+}
+
+// TestPrintJSONIndentOutput tests the actual output of PrintJSONIndent
+func TestPrintJSONIndentOutput(t *testing.T) {
+	// Capture stdout
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	input := map[string]string{"key": "value"}
+	err := PrintJSONIndent(input)
+
+	// Restore stdout
+	w.Close()
+	os.Stdout = oldStdout
+
+	if err != nil {
+		t.Fatalf("PrintJSONIndent failed: %v", err)
+	}
+
+	// Read output
+	var buf bytes.Buffer
+	io.Copy(&buf, r)
+	output := buf.String()
+
+	// Should contain indentation
+	if !strings.Contains(output, "\n") {
+		t.Error("expected indented output to contain newlines")
+	}
+
+	if !strings.Contains(output, "key") {
+		t.Error("expected output to contain 'key'")
 	}
 }
