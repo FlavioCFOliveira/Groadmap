@@ -5,23 +5,20 @@ Local Roadmap Manager CLI for agentic workflows. Groadmap is a CLI tool in Go fo
 ## Features
 
 - **Roadmap Management**: Create, list, select, and remove roadmaps
-- **Task Management**: Create, edit, list tasks with status, priority, and severity
-- **Sprint Management**: Organize tasks into sprints with complete lifecycle
-- **Audit Trail**: Automatic logging of all operations
-- **Backup/Restore**: Create and restore roadmap backups
-- **Export/Import**: Export and import roadmaps in JSON format
-- **Metrics**: Monitor operations and performance
+- **Task Management**: Create, edit, list tasks with status, priority, and severity tracking
+- **Sprint Management**: Organize tasks into sprints with complete lifecycle (PENDING, OPEN, CLOSED)
+- **Audit Trail**: Automatic logging of all operations for traceability
+- **State Machine**: Validated task and sprint status transitions
+- **Bulk Operations**: Support for multiple task IDs in single commands
 
 ## Available Commands
 
 | Command | Description | Documentation |
 |---------|-------------|---------------|
-| `roadmap` | Roadmap management (create, list, select) | [DOCS/commands/roadmap.md](DOCS/commands/roadmap.md) |
-| `task` | Task management | [DOCS/commands/task.md](DOCS/commands/task.md) |
-| `sprint` | Sprint management | [DOCS/commands/sprint.md](DOCS/commands/sprint.md) |
-| `audit` | Audit log | [DOCS/commands/audit.md](DOCS/commands/audit.md) |
-| `user` | User management | [DOCS/commands/user.md](DOCS/commands/user.md) |
-| `metrics` | Metrics and monitoring | [DOCS/commands/metrics.md](DOCS/commands/metrics.md) |
+| `roadmap` | Roadmap management (create, list, select, remove) | [DOCS/commands/roadmap.md](DOCS/commands/roadmap.md) |
+| `task` | Task management (create, edit, list, status, priority, severity) | [DOCS/commands/task.md](DOCS/commands/task.md) |
+| `sprint` | Sprint management with lifecycle control | [DOCS/commands/sprint.md](DOCS/commands/sprint.md) |
+| `audit` | Audit log and entity history | [DOCS/commands/audit.md](DOCS/commands/audit.md) |
 
 ## Installation
 
