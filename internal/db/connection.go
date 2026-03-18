@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -54,11 +53,6 @@ func retryWithBackoff(operation string, fn func() error) error {
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		err := fn()
 		if err == nil {
-			if attempt > 0 {
-				slog.Debug("operation succeeded after retry",
-					"operation", operation,
-					"attempts", attempt+1)
-			}
 			return nil
 		}
 
@@ -70,11 +64,6 @@ func retryWithBackoff(operation string, fn func() error) error {
 		}
 
 		if attempt < maxRetries-1 {
-			slog.Warn("database locked, retrying",
-				"operation", operation,
-				"attempt", attempt+1,
-				"max_retries", maxRetries,
-				"delay_ms", delay.Milliseconds())
 			time.Sleep(delay)
 			// Exponential backoff with cap
 			delay *= 2
@@ -84,10 +73,6 @@ func retryWithBackoff(operation string, fn func() error) error {
 		}
 	}
 
-	slog.Error("operation failed after max retries",
-		"operation", operation,
-		"attempts", maxRetries,
-		"error", lastErr)
 	return fmt.Errorf("%s: failed after %d attempts: %w", operation, maxRetries, lastErr)
 }
 
@@ -100,17 +85,13 @@ type DB struct {
 // Open opens a connection to a roadmap database.
 // Creates the database file if it doesn't exist.
 func Open(roadmapName string) (*DB, error) {
-	slog.Debug("opening database", "roadmap", roadmapName)
-
 	// Validate roadmap name
 	if err := utils.ValidateRoadmapName(roadmapName); err != nil {
-		slog.Error("invalid roadmap name", "roadmap", roadmapName, "error", err)
 		return nil, err
 	}
 
 	// Ensure data directory exists
 	if err := utils.EnsureDataDir(); err != nil {
-		slog.Error("failed to ensure data directory", "error", err)
 		return nil, err
 	}
 
@@ -152,31 +133,24 @@ func Open(roadmapName string) (*DB, error) {
 
 	// Create schema if new database with retry logic
 	if isNew {
-		slog.Info("creating new database", "roadmap", roadmapName)
 		if err := retryWithBackoff("creating schema", func() error {
 			return db.CreateSchema()
 		}); err != nil {
 			db.Close()
-			slog.Error("failed to create schema", "roadmap", roadmapName, "error", err)
 			return nil, fmt.Errorf("creating schema: %w", err)
 		}
 
 		// Set file permissions to 0600 (owner only)
 		if err := os.Chmod(dbPath, utils.DBFilePerm); err != nil {
 			db.Close()
-			slog.Error("failed to set database permissions", "path", dbPath, "error", err)
 			return nil, fmt.Errorf("setting database permissions: %w", err)
 		}
 
 		// Verify permissions were set correctly (umask may have interfered)
 		if err := utils.VerifyPermissions(dbPath, utils.DBFilePerm); err != nil {
 			db.Close()
-			slog.Error("database permissions verification failed", "path", dbPath, "error", err)
 			return nil, fmt.Errorf("verifying database permissions: %w", err)
 		}
-		slog.Info("database created successfully", "roadmap", roadmapName, "path", dbPath)
-	} else {
-		slog.Debug("opened existing database", "roadmap", roadmapName)
 	}
 
 	return db, nil

@@ -30,23 +30,6 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
-// ==================== PAGINATION TYPES ====================
-
-// PaginationMeta contains metadata for paginated results.
-type PaginationMeta struct {
-	Total  int `json:"total"`  // Total number of items
-	Page   int `json:"page"`   // Current page number (1-based)
-	Limit  int `json:"limit"`  // Items per page
-	Offset int `json:"offset"` // Current offset
-}
-
-// PaginatedResult is a generic container for paginated results.
-type PaginatedResult struct {
-	Data    interface{}    `json:"data"`
-	Meta    PaginationMeta `json:"meta"`
-	HasMore bool           `json:"has_more"`
-}
-
 // ==================== TASK QUERIES ====================
 
 // CreateTask inserts a new task and returns its ID.
@@ -154,59 +137,17 @@ func (db *DB) GetTasks(ctx context.Context, ids []int) ([]models.Task, error) {
 	return scanTasks(rows)
 }
 
-// ListTasks retrieves tasks with optional filters and pagination.
-// Returns tasks, total count, and error.
-// Filters: status, minPriority, minSeverity, createdAfter, createdBefore, searchText
-func (db *DB) ListTasks(ctx context.Context, status *models.TaskStatus, minPriority, minSeverity *int, createdAfter, createdBefore, searchText *string, page, limit int) ([]models.Task, int, error) {
-	// Validate pagination parameters
-	if page < 1 {
-		page = 1
-	}
+// ListTasks retrieves tasks with optional filters.
+// Returns tasks and error.
+// Filters: status, minPriority, minSeverity
+func (db *DB) ListTasks(ctx context.Context, status *models.TaskStatus, minPriority, minSeverity *int, limit int) ([]models.Task, error) {
 	if limit < 1 {
-		limit = 20
+		limit = 100
 	}
 	if limit > 100 {
 		limit = 100
 	}
-	offset := (page - 1) * limit
 
-	// Build count query
-	countQuery := `SELECT COUNT(*) FROM tasks WHERE 1=1`
-	countArgs := []interface{}{}
-
-	if status != nil {
-		countQuery += " AND status = ?"
-		countArgs = append(countArgs, string(*status))
-	}
-	if minPriority != nil {
-		countQuery += " AND priority >= ?"
-		countArgs = append(countArgs, *minPriority)
-	}
-	if minSeverity != nil {
-		countQuery += " AND severity >= ?"
-		countArgs = append(countArgs, *minSeverity)
-	}
-	if createdAfter != nil {
-		countQuery += " AND created_at >= ?"
-		countArgs = append(countArgs, *createdAfter)
-	}
-	if createdBefore != nil {
-		countQuery += " AND created_at <= ?"
-		countArgs = append(countArgs, *createdBefore)
-	}
-	if searchText != nil && *searchText != "" {
-		countQuery += " AND (description LIKE ? OR action LIKE ? OR expected_result LIKE ?)"
-		searchPattern := "%" + *searchText + "%"
-		countArgs = append(countArgs, searchPattern, searchPattern, searchPattern)
-	}
-
-	var total int
-	err := db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total)
-	if err != nil {
-		return nil, 0, fmt.Errorf("counting tasks: %w", err)
-	}
-
-	// Build data query
 	query := `SELECT id, priority, severity, status, description, specialists, action, expected_result, created_at, completed_at
 		      FROM tasks WHERE 1=1`
 	args := []interface{}{}
@@ -223,36 +164,18 @@ func (db *DB) ListTasks(ctx context.Context, status *models.TaskStatus, minPrior
 		query += " AND severity >= ?"
 		args = append(args, *minSeverity)
 	}
-	if createdAfter != nil {
-		query += " AND created_at >= ?"
-		args = append(args, *createdAfter)
-	}
-	if createdBefore != nil {
-		query += " AND created_at <= ?"
-		args = append(args, *createdBefore)
-	}
-	if searchText != nil && *searchText != "" {
-		query += " AND (description LIKE ? OR action LIKE ? OR expected_result LIKE ?)"
-		searchPattern := "%" + *searchText + "%"
-		args = append(args, searchPattern, searchPattern, searchPattern)
-	}
 
 	query += " ORDER BY priority DESC, created_at ASC"
-	query += " LIMIT ? OFFSET ?"
-	args = append(args, limit, offset)
+	query += " LIMIT ?"
+	args = append(args, limit)
 
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, 0, fmt.Errorf("listing tasks: %w", err)
+		return nil, fmt.Errorf("listing tasks: %w", err)
 	}
 	defer rows.Close()
 
-	tasks, err := scanTasks(rows)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	return tasks, total, nil
+	return scanTasks(rows)
 }
 
 // allowedTaskUpdateFields contains the whitelist of fields that can be updated via UpdateTask.

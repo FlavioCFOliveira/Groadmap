@@ -47,19 +47,17 @@ func HandleTask(args []string) error {
 	}
 }
 
-// taskList lists tasks with optional filters and pagination.
+// taskList lists tasks with optional filters.
 func taskList(args []string) error {
 	roadmapName, remaining, err := requireRoadmap(args)
 	if err != nil {
 		return err
 	}
 
-	// Parse filters and pagination
+	// Parse filters
 	var status *models.TaskStatus
 	var minPriority, minSeverity *int
-	var createdAfter, createdBefore, searchText *string
-	page := 1
-	limit := 20
+	limit := 100 // Default limit per SPEC
 
 	for i := 0; i < len(remaining); i++ {
 		switch remaining[i] {
@@ -90,45 +88,6 @@ func taskList(args []string) error {
 				minSeverity = &s
 				i++
 			}
-		case "--created-after":
-			if i+1 < len(remaining) {
-				dateStr := remaining[i+1]
-				if !utils.IsValidISO8601(dateStr) {
-					return fmt.Errorf("%w: invalid created-after date format, expected ISO 8601", utils.ErrInvalidInput)
-				}
-				createdAfter = &dateStr
-				i++
-			}
-		case "--created-before":
-			if i+1 < len(remaining) {
-				dateStr := remaining[i+1]
-				if !utils.IsValidISO8601(dateStr) {
-					return fmt.Errorf("%w: invalid created-before date format, expected ISO 8601", utils.ErrInvalidInput)
-				}
-				createdBefore = &dateStr
-				i++
-			}
-		case "--search":
-			if i+1 < len(remaining) {
-				search := remaining[i+1]
-				if len(search) < 2 {
-					return fmt.Errorf("%w: search text must be at least 2 characters", utils.ErrInvalidInput)
-				}
-				searchText = &search
-				i++
-			}
-		case "--page":
-			if i+1 < len(remaining) {
-				p, err := strconv.Atoi(remaining[i+1])
-				if err != nil {
-					return fmt.Errorf("%w: invalid page: %s", utils.ErrInvalidInput, remaining[i+1])
-				}
-				if p < 1 {
-					return fmt.Errorf("%w: page must be >= 1", utils.ErrInvalidInput)
-				}
-				page = p
-				i++
-			}
 		case "-l", "--limit":
 			if i+1 < len(remaining) {
 				l, err := strconv.Atoi(remaining[i+1])
@@ -153,29 +112,13 @@ func taskList(args []string) error {
 	ctx, cancel := db.WithDefaultTimeout()
 	defer cancel()
 
-	tasks, total, err := database.ListTasks(ctx, status, minPriority, minSeverity, createdAfter, createdBefore, searchText, page, limit)
+	tasks, err := database.ListTasks(ctx, status, minPriority, minSeverity, limit)
 	if err != nil {
 		return err
 	}
 
-	// Build paginated response
-	hasMore := (page * limit) < total
-	response := struct {
-		Data    []models.Task     `json:"data"`
-		Meta    db.PaginationMeta `json:"meta"`
-		HasMore bool              `json:"has_more"`
-	}{
-		Data: tasks,
-		Meta: db.PaginationMeta{
-			Total:  total,
-			Page:   page,
-			Limit:  limit,
-			Offset: (page - 1) * limit,
-		},
-		HasMore: hasMore,
-	}
-
-	return utils.PrintJSON(response)
+	// Return array of tasks directly (per SPEC)
+	return utils.PrintJSON(tasks)
 }
 
 // taskCreate creates a new task in the specified or current roadmap.

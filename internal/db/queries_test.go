@@ -184,8 +184,8 @@ func TestListTasks(t *testing.T) {
 		db.CreateTask(testContext(), task)
 	}
 
-	// Test list all tasks (page 1, limit 10)
-	tasks, total, err := db.ListTasks(testContext(), nil, nil, nil, nil, nil, nil, 1, 10)
+	// Test list all tasks (limit 10)
+	tasks, err := db.ListTasks(testContext(), nil, nil, nil, 10)
 	if err != nil {
 		t.Fatalf("failed to list tasks: %v", err)
 	}
@@ -193,13 +193,10 @@ func TestListTasks(t *testing.T) {
 	if len(tasks) != 3 {
 		t.Errorf("expected 3 tasks, got %d", len(tasks))
 	}
-	if total != 3 {
-		t.Errorf("expected total 3, got %d", total)
-	}
 
 	// Test filter by status
 	backlogStatus := models.StatusBacklog
-	tasks, total, err = db.ListTasks(testContext(), &backlogStatus, nil, nil, nil, nil, nil, 1, 10)
+	tasks, err = db.ListTasks(testContext(), &backlogStatus, nil, nil, 10)
 	if err != nil {
 		t.Fatalf("failed to list tasks by status: %v", err)
 	}
@@ -207,13 +204,10 @@ func TestListTasks(t *testing.T) {
 	if len(tasks) != 2 {
 		t.Errorf("expected 2 tasks with BACKLOG status, got %d", len(tasks))
 	}
-	if total != 2 {
-		t.Errorf("expected total 2 for BACKLOG, got %d", total)
-	}
 
 	// Test filter by min priority
 	minPriority := 1
-	tasks, total, err = db.ListTasks(testContext(), nil, &minPriority, nil, nil, nil, nil, 1, 10)
+	tasks, err = db.ListTasks(testContext(), nil, &minPriority, nil, 10)
 	if err != nil {
 		t.Fatalf("failed to list tasks by priority: %v", err)
 	}
@@ -221,34 +215,15 @@ func TestListTasks(t *testing.T) {
 	if len(tasks) != 2 {
 		t.Errorf("expected 2 tasks with priority >= 1, got %d", len(tasks))
 	}
-	if total != 2 {
-		t.Errorf("expected total 2 for priority >= 1, got %d", total)
-	}
 
-	// Test with pagination (page 1, limit 2)
-	tasks, total, err = db.ListTasks(testContext(), nil, nil, nil, nil, nil, nil, 1, 2)
+	// Test with limit
+	tasks, err = db.ListTasks(testContext(), nil, nil, nil, 2)
 	if err != nil {
 		t.Fatalf("failed to list tasks with limit: %v", err)
 	}
 
 	if len(tasks) != 2 {
 		t.Errorf("expected 2 tasks with limit, got %d", len(tasks))
-	}
-	if total != 3 {
-		t.Errorf("expected total 3, got %d", total)
-	}
-
-	// Test pagination (page 2, should get remaining 1)
-	tasks, total, err = db.ListTasks(testContext(), nil, nil, nil, nil, nil, nil, 2, 2)
-	if err != nil {
-		t.Fatalf("failed to list tasks page 2: %v", err)
-	}
-
-	if len(tasks) != 1 {
-		t.Errorf("expected 1 task on page 2, got %d", len(tasks))
-	}
-	if total != 3 {
-		t.Errorf("expected total 3, got %d", total)
 	}
 }
 
@@ -828,7 +803,7 @@ func TestWithTransaction_Commit(t *testing.T) {
 	}
 
 	// Verify task was created
-	tasks, _, _ := db.ListTasks(testContext(), nil, nil, nil, nil, nil, nil, 1, 10)
+	tasks, _ := db.ListTasks(testContext(), nil, nil, nil, 10)
 	if len(tasks) != 1 {
 		t.Errorf("expected 1 task after commit, got %d", len(tasks))
 	}
@@ -857,7 +832,7 @@ func TestWithTransaction_Rollback(t *testing.T) {
 	}
 
 	// Verify no tasks were created (rolled back)
-	tasks, _, _ := db.ListTasks(testContext(), nil, nil, nil, nil, nil, nil, 1, 10)
+	tasks, _ := db.ListTasks(testContext(), nil, nil, nil, 10)
 	if len(tasks) != 0 {
 		t.Errorf("expected 0 tasks after rollback, got %d", len(tasks))
 	}
