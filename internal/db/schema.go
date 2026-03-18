@@ -30,6 +30,10 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
 CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
+
+-- Composite indexes for multi-criteria queries (TASK-P001)
+CREATE INDEX IF NOT EXISTS idx_tasks_status_priority ON tasks(status, priority DESC);
+CREATE INDEX IF NOT EXISTS idx_tasks_priority_created ON tasks(priority DESC, created_at ASC);
 `
 
 	// Sprints table
@@ -59,6 +63,9 @@ CREATE TABLE IF NOT EXISTS sprint_tasks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sprint_tasks_task_id ON sprint_tasks(task_id);
+
+-- Composite index for sprint task lookups (TASK-P001)
+CREATE INDEX IF NOT EXISTS idx_sprint_tasks_lookup ON sprint_tasks(sprint_id, task_id);
 `
 
 	// Audit table
@@ -74,6 +81,9 @@ CREATE TABLE IF NOT EXISTS audit (
 CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit(entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS idx_audit_operation ON audit(operation);
 CREATE INDEX IF NOT EXISTS idx_audit_performed_at ON audit(performed_at);
+
+-- Composite index for audit date range queries (TASK-P001)
+CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 `
 
 	// Metadata table
