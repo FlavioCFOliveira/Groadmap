@@ -1,32 +1,32 @@
 # sprint
 
-## Descrição
+## Description
 
-Gestão de sprints dentro de um roadmap. Os sprints agrupam tarefas em iterações time-boxed com gestão de ciclo de vida (PENDING → OPEN → CLOSED).
+Sprint management within a roadmap. Sprints group tasks into time-boxed iterations with lifecycle management (PENDING → OPEN → CLOSED).
 
-## Sinopse
+## Synopsis
 
 ```
-rmp sprint [subcommand] [argumentos] [flags]
+rmp sprint [subcommand] [arguments] [flags]
 ```
 
-## Subcomandos
+## Subcommands
 
 ### list
 
-Lista os sprints no roadmap selecionado.
+Lists sprints in the selected roadmap.
 
-**Uso:** `rmp sprint list [OPTIONS]` ou `rmp sprint ls [OPTIONS]`
+**Usage:** `rmp sprint list [OPTIONS]` or `rmp sprint ls [OPTIONS]`
 
 **Flags:**
-| Flag Curta | Flag Longa | Tipo | Padrão | Descrição |
-|------------|------------|------|--------|-----------|
-| `-r` | `--roadmap` | string | - | Nome do roadmap (obrigatório se não houver padrão) |
-| `-s` | `--status` | string | - | Filtrar por status: PENDING, OPEN, CLOSED |
+| Short Flag | Long Flag | Type | Default | Description |
+|------------|------------|------|--------|-------------|
+| `-r` | `--roadmap` | string | - | Roadmap name (required if no default set) |
+| `-s` | `--status` | string | - | Filter by status: PENDING, OPEN, CLOSED |
 
-**Output:** JSON array de objetos Sprint
+**Output:** JSON array of Sprint objects
 
-**Exemplos:**
+**Examples:**
 ```bash
 rmp sprint list -r project1
 rmp sprint ls -r project1 -s OPEN
@@ -36,25 +36,25 @@ rmp sprint ls -r project1 -s OPEN
 
 ### create
 
-Cria um novo sprint no roadmap especificado.
+Creates a new sprint in the specified roadmap.
 
-**Uso:** `rmp sprint create [OPTIONS]` ou `rmp sprint new [OPTIONS]`
+**Usage:** `rmp sprint create [OPTIONS]` or `rmp sprint new [OPTIONS]`
 
 **Flags:**
-| Flag Curta | Flag Longa | Tipo | Padrão | Descrição |
-|------------|------------|------|--------|-----------|
-| `-r` | `--roadmap` | string | - | Nome do roadmap (obrigatório) |
-| `-d` | `--description` | string | - | Descrição do sprint (obrigatório) |
+| Short Flag | Long Flag | Type | Default | Description |
+|------------|------------|------|--------|-------------|
+| `-r` | `--roadmap` | string | - | Roadmap name (required) |
+| `-d` | `--description` | string | - | Sprint description (required) |
 
-**Output:** JSON object com o ID do sprint criado
+**Output:** JSON object with the created sprint ID
 
-**Exemplos:**
+**Examples:**
 ```bash
 rmp sprint create -r project1 -d "Sprint 1 - Initial Setup"
 rmp sprint new -r project1 -d "Sprint 2 - Features"
 ```
 
-**Output exemplo:**
+**Example output:**
 ```json
 {"id": 1}
 ```
@@ -63,23 +63,23 @@ rmp sprint new -r project1 -d "Sprint 2 - Features"
 
 ### get
 
-Obtém informação detalhada sobre um sprint específico.
+Gets detailed information about a specific sprint.
 
-**Uso:** `rmp sprint get [OPTIONS] <id>`
+**Usage:** `rmp sprint get [OPTIONS] <id>`
 
-**Argumentos:**
-| Argumento | Obrigatório | Descrição |
-|-----------|-------------|-----------|
-| `id` | Sim | ID do sprint |
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `id` | Yes | Sprint ID |
 
 **Flags:**
-| Flag Curta | Flag Longa | Tipo | Descrição |
+| Short Flag | Long Flag | Type | Description |
 |------------|------------|------|-----------|
-| `-r` | `--roadmap` | string | Nome do roadmap (obrigatório) |
+| `-r` | `--roadmap` | string | Roadmap name (required) |
 
-**Output:** JSON object Sprint
+**Output:** JSON Sprint object
 
-**Exemplo:**
+**Example:**
 ```bash
 rmp sprint get -r project1 1
 ```
@@ -88,24 +88,24 @@ rmp sprint get -r project1 1
 
 ### tasks
 
-Lista as tarefas atribuídas a um sprint específico.
+Lists tasks assigned to a specific sprint.
 
-**Uso:** `rmp sprint tasks [OPTIONS] <sprint-id>`
+**Usage:** `rmp sprint tasks [OPTIONS] <sprint-id>`
 
-**Argumentos:**
-| Argumento | Obrigatório | Descrição |
-|-----------|-------------|-----------|
-| `sprint-id` | Sim | ID do sprint |
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `sprint-id` | Yes | Sprint ID |
 
 **Flags:**
-| Flag Curta | Flag Longa | Tipo | Padrão | Descrição |
-|------------|------------|------|--------|-----------|
-| `-r` | `--roadmap` | string | - | Nome do roadmap (obrigatório) |
-| `-s` | `--status` | string | - | Filtrar por status da tarefa |
+| Short Flag | Long Flag | Type | Default | Description |
+|------------|------------|------|--------|-------------|
+| `-r` | `--roadmap` | string | - | Roadmap name (required) |
+| `-s` | `--status` | string | - | Filter by task status |
 
-**Output:** JSON array de objetos Task
+**Output:** JSON array of Task objects
 
-**Exemplos:**
+**Examples:**
 ```bash
 rmp sprint tasks -r project1 1
 rmp sprint tasks -r project1 1 -s DOING
@@ -115,28 +115,28 @@ rmp sprint tasks -r project1 1 -s DOING
 
 ### stats
 
-Mostra estatísticas de um sprint incluindo contagens de tarefas por status.
+Shows statistics for a sprint including task counts by status.
 
-**Uso:** `rmp sprint stats [OPTIONS] <id>`
+**Usage:** `rmp sprint stats [OPTIONS] <id>`
 
-**Argumentos:**
-| Argumento | Obrigatório | Descrição |
-|-----------|-------------|-----------|
-| `id` | Sim | ID do sprint |
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `id` | Yes | Sprint ID |
 
 **Flags:**
-| Flag Curta | Flag Longa | Tipo | Descrição |
+| Short Flag | Long Flag | Type | Description |
 |------------|------------|------|-----------|
-| `-r` | `--roadmap` | string | Nome do roadmap (obrigatório) |
+| `-r` | `--roadmap` | string | Roadmap name (required) |
 
-**Output:** JSON object com estatísticas
+**Output:** JSON statistics object
 
-**Exemplo:**
+**Example:**
 ```bash
 rmp sprint stats -r project1 1
 ```
 
-**Output exemplo:**
+**Example output:**
 ```json
 {
   "sprint_id": 1,
@@ -156,21 +156,21 @@ rmp sprint stats -r project1 1
 
 ### start
 
-Inicia um sprint, alterando o seu status de PENDING para OPEN.
+Starts a sprint, changing its status from PENDING to OPEN.
 
-**Uso:** `rmp sprint start [OPTIONS] <id>`
+**Usage:** `rmp sprint start [OPTIONS] <id>`
 
-**Argumentos:**
-| Argumento | Obrigatório | Descrição |
-|-----------|-------------|-----------|
-| `id` | Sim | ID do sprint a iniciar |
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `id` | Yes | Sprint ID to start |
 
 **Flags:**
-| Flag Curta | Flag Longa | Tipo | Descrição |
+| Short Flag | Long Flag | Type | Description |
 |------------|------------|------|-----------|
-| `-r` | `--roadmap` | string | Nome do roadmap (obrigatório) |
+| `-r` | `--roadmap` | string | Roadmap name (required) |
 
-**Exemplo:**
+**Example:**
 ```bash
 rmp sprint start -r project1 1
 ```
@@ -179,21 +179,21 @@ rmp sprint start -r project1 1
 
 ### close
 
-Fecha um sprint, alterando o seu status de OPEN para CLOSED.
+Closes a sprint, changing its status from OPEN to CLOSED.
 
-**Uso:** `rmp sprint close [OPTIONS] <id>`
+**Usage:** `rmp sprint close [OPTIONS] <id>`
 
-**Argumentos:**
-| Argumento | Obrigatório | Descrição |
-|-----------|-------------|-----------|
-| `id` | Sim | ID do sprint a fechar |
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `id` | Yes | Sprint ID to close |
 
 **Flags:**
-| Flag Curta | Flag Longa | Tipo | Descrição |
+| Short Flag | Long Flag | Type | Description |
 |------------|------------|------|-----------|
-| `-r` | `--roadmap` | string | Nome do roadmap (obrigatório) |
+| `-r` | `--roadmap` | string | Roadmap name (required) |
 
-**Exemplo:**
+**Example:**
 ```bash
 rmp sprint close -r project1 1
 ```
@@ -202,21 +202,21 @@ rmp sprint close -r project1 1
 
 ### reopen
 
-Reabre um sprint fechado, alterando o seu status de CLOSED para OPEN.
+Reopens a closed sprint, changing its status from CLOSED to OPEN.
 
-**Uso:** `rmp sprint reopen [OPTIONS] <id>`
+**Usage:** `rmp sprint reopen [OPTIONS] <id>`
 
-**Argumentos:**
-| Argumento | Obrigatório | Descrição |
-|-----------|-------------|-----------|
-| `id` | Sim | ID do sprint a reabrir |
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `id` | Yes | Sprint ID to reopen |
 
 **Flags:**
-| Flag Curta | Flag Longa | Tipo | Descrição |
+| Short Flag | Long Flag | Type | Description |
 |------------|------------|------|-----------|
-| `-r` | `--roadmap` | string | Nome do roadmap (obrigatório) |
+| `-r` | `--roadmap` | string | Roadmap name (required) |
 
-**Exemplo:**
+**Example:**
 ```bash
 rmp sprint reopen -r project1 1
 ```
@@ -225,22 +225,22 @@ rmp sprint reopen -r project1 1
 
 ### add-tasks
 
-Adiciona tarefas a um sprint. As tarefas devem estar em status BACKLOG.
+Adds tasks to a sprint. Tasks must be in BACKLOG status.
 
-**Uso:** `rmp sprint add-tasks [OPTIONS] <sprint-id> <task-ids>` ou `rmp sprint add [OPTIONS] <sprint-id> <task-ids>`
+**Usage:** `rmp sprint add-tasks [OPTIONS] <sprint-id> <task-ids>` or `rmp sprint add [OPTIONS] <sprint-id> <task-ids>`
 
-**Argumentos:**
-| Argumento | Obrigatório | Descrição |
-|-----------|-------------|-----------|
-| `sprint-id` | Sim | ID do sprint para adicionar tarefas |
-| `task-ids` | Sim | IDs das tarefas separados por vírgula (sem espaços) |
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `sprint-id` | Yes | Sprint ID to add tasks to |
+| `task-ids` | Yes | Task IDs separated by commas (no spaces) |
 
 **Flags:**
-| Flag Curta | Flag Longa | Tipo | Descrição |
+| Short Flag | Long Flag | Type | Description |
 |------------|------------|------|-----------|
-| `-r` | `--roadmap` | string | Nome do roadmap (obrigatório) |
+| `-r` | `--roadmap` | string | Roadmap name (required) |
 
-**Exemplos:**
+**Examples:**
 ```bash
 rmp sprint add-tasks -r project1 1 10,11,12
 rmp sprint add -r project1 2 5,6,7,8
@@ -250,22 +250,22 @@ rmp sprint add -r project1 2 5,6,7,8
 
 ### remove-tasks
 
-Remove tarefas de um sprint. As tarefas voltam ao status BACKLOG.
+Removes tasks from a sprint. Tasks return to BACKLOG status.
 
-**Uso:** `rmp sprint remove-tasks [OPTIONS] <sprint-id> <task-ids>` ou `rmp sprint rm-tasks [OPTIONS] <sprint-id> <task-ids>`
+**Usage:** `rmp sprint remove-tasks [OPTIONS] <sprint-id> <task-ids>` or `rmp sprint rm-tasks [OPTIONS] <sprint-id> <task-ids>`
 
-**Argumentos:**
-| Argumento | Obrigatório | Descrição |
-|-----------|-------------|-----------|
-| `sprint-id` | Sim | ID do sprint para remover tarefas |
-| `task-ids` | Sim | IDs das tarefas separados por vírgula |
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `sprint-id` | Yes | Sprint ID to remove tasks from |
+| `task-ids` | Yes | Task IDs separated by commas |
 
 **Flags:**
-| Flag Curta | Flag Longa | Tipo | Descrição |
+| Short Flag | Long Flag | Type | Description |
 |------------|------------|------|-----------|
-| `-r` | `--roadmap` | string | Nome do roadmap (obrigatório) |
+| `-r` | `--roadmap` | string | Roadmap name (required) |
 
-**Exemplos:**
+**Examples:**
 ```bash
 rmp sprint remove-tasks -r project1 1 10,11,12
 rmp sprint rm-tasks -r project1 1 5,6
@@ -275,23 +275,23 @@ rmp sprint rm-tasks -r project1 1 5,6
 
 ### move-tasks
 
-Move tarefas entre sprints.
+Moves tasks between sprints.
 
-**Uso:** `rmp sprint move-tasks [OPTIONS] <from-sprint> <to-sprint> <task-ids>` ou `rmp sprint mv-tasks [OPTIONS] <from-sprint> <to-sprint> <task-ids>`
+**Usage:** `rmp sprint move-tasks [OPTIONS] <from-sprint> <to-sprint> <task-ids>` or `rmp sprint mv-tasks [OPTIONS] <from-sprint> <to-sprint> <task-ids>`
 
-**Argumentos:**
-| Argumento | Obrigatório | Descrição |
-|-----------|-------------|-----------|
-| `from-sprint` | Sim | ID do sprint de origem |
-| `to-sprint` | Sim | ID do sprint de destino |
-| `task-ids` | Sim | IDs das tarefas separados por vírgula |
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `from-sprint` | Yes | Source sprint ID |
+| `to-sprint` | Yes | Destination sprint ID |
+| `task-ids` | Yes | Task IDs separated by commas |
 
 **Flags:**
-| Flag Curta | Flag Longa | Tipo | Descrição |
+| Short Flag | Long Flag | Type | Description |
 |------------|------------|------|-----------|
-| `-r` | `--roadmap` | string | Nome do roadmap (obrigatório) |
+| `-r` | `--roadmap` | string | Roadmap name (required) |
 
-**Exemplos:**
+**Examples:**
 ```bash
 rmp sprint move-tasks -r project1 1 2 10,11,12
 rmp sprint mv-tasks -r project1 2 3 5,6,7
@@ -301,22 +301,22 @@ rmp sprint mv-tasks -r project1 2 3 5,6,7
 
 ### update
 
-Atualiza a descrição de um sprint.
+Updates a sprint's description.
 
-**Uso:** `rmp sprint update [OPTIONS] <id>` ou `rmp sprint upd [OPTIONS] <id>`
+**Usage:** `rmp sprint update [OPTIONS] <id>` or `rmp sprint upd [OPTIONS] <id>`
 
-**Argumentos:**
-| Argumento | Obrigatório | Descrição |
-|-----------|-------------|-----------|
-| `id` | Sim | ID do sprint |
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `id` | Yes | Sprint ID |
 
 **Flags:**
-| Flag Curta | Flag Longa | Tipo | Descrição |
+| Short Flag | Long Flag | Type | Description |
 |------------|------------|------|-----------|
-| `-r` | `--roadmap` | string | Nome do roadmap (obrigatório) |
-| `-d` | `--description` | string | Nova descrição (obrigatório) |
+| `-r` | `--roadmap` | string | Roadmap name (required) |
+| `-d` | `--description` | string | New description (required) |
 
-**Exemplos:**
+**Examples:**
 ```bash
 rmp sprint update -r project1 1 -d "Sprint 1 - Setup and Config"
 rmp sprint upd -r project1 1 -d "Updated description"
@@ -326,21 +326,21 @@ rmp sprint upd -r project1 1 -d "Updated description"
 
 ### remove
 
-Remove um sprint permanentemente. As tarefas no sprint não são eliminadas.
+Removes a sprint permanently. Tasks in the sprint are not deleted.
 
-**Uso:** `rmp sprint remove [OPTIONS] <id>` ou `rmp sprint rm [OPTIONS] <id>`
+**Usage:** `rmp sprint remove [OPTIONS] <id>` or `rmp sprint rm [OPTIONS] <id>`
 
-**Argumentos:**
-| Argumento | Obrigatório | Descrição |
-|-----------|-------------|-----------|
-| `id` | Sim | ID do sprint a remover |
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `id` | Yes | Sprint ID to remove |
 
 **Flags:**
-| Flag Curta | Flag Longa | Tipo | Descrição |
+| Short Flag | Long Flag | Type | Description |
 |------------|------------|------|-----------|
-| `-r` | `--roadmap` | string | Nome do roadmap (obrigatório) |
+| `-r` | `--roadmap` | string | Roadmap name (required) |
 
-**Exemplos:**
+**Examples:**
 ```bash
 rmp sprint remove -r project1 1
 rmp sprint rm -r project1 2
@@ -348,7 +348,7 @@ rmp sprint rm -r project1 2
 
 ## Aliases
 
-| Comando | Alias |
+| Command | Alias |
 |---------|-------|
 | `sprint` | `s` |
 | `list` | `ls` |
@@ -359,7 +359,7 @@ rmp sprint rm -r project1 2
 | `remove-tasks` | `rm-tasks` |
 | `move-tasks` | `mv-tasks` |
 
-## Ciclo de Vida do Sprint
+## Sprint Lifecycle
 
 ```
 PENDING → OPEN → CLOSED
@@ -367,9 +367,9 @@ PENDING → OPEN → CLOSED
    └──────────────┘ (reopen)
 ```
 
-## Notas
+## Notes
 
-- Sprints são criados com status `PENDING` por padrão
-- As transições de estado são validadas (não é possível fechar um sprint já fechado)
-- Ao remover um sprint, as tarefas associadas voltam ao status `BACKLOG`
-- Ao adicionar tarefas a um sprint, o status das tarefas muda para `SPRINT`
+- Sprints are created with `PENDING` status by default
+- State transitions are validated (cannot close an already closed sprint)
+- When removing a sprint, associated tasks return to `BACKLOG` status
+- When adding tasks to a sprint, the task status changes to `SPRINT`

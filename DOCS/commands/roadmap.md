@@ -1,32 +1,32 @@
 # roadmap
 
-## Descrição
+## Description
 
-Gestão de roadmaps - os contentores de topo para tarefas e sprints. Cada roadmap é armazenado como uma base de dados SQLite independente em `~/.roadmaps/`.
+Roadmap management - the top-level containers for tasks and sprints. Each roadmap is stored as an independent SQLite database in `~/.roadmaps/`.
 
-## Sinopse
+## Synopsis
 
 ```
-rmp roadmap [subcommand] [argumentos] [flags]
+rmp roadmap [subcommand] [arguments] [flags]
 ```
 
-## Subcomandos
+## Subcommands
 
 ### list
 
-Lista todos os roadmaps existentes.
+Lists all existing roadmaps.
 
-**Uso:** `rmp roadmap list` ou `rmp road ls`
+**Usage:** `rmp roadmap list` or `rmp road ls`
 
-**Output:** JSON array de objetos roadmap
+**Output:** JSON array of roadmap objects
 
-**Exemplo:**
+**Example:**
 ```bash
 rmp roadmap list
 rmp road ls
 ```
 
-**Output exemplo:**
+**Example output:**
 ```json
 [
   {"name": "project1", "path": "~/.roadmaps/project1.db", "size": 24576},
@@ -38,29 +38,29 @@ rmp road ls
 
 ### create
 
-Cria um novo roadmap.
+Creates a new roadmap.
 
-**Uso:** `rmp roadmap create <name>` ou `rmp road new <name>`
+**Usage:** `rmp roadmap create <name>` or `rmp road new <name>`
 
-**Argumentos:**
-| Argumento | Obrigatório | Descrição |
-|-----------|-------------|-----------|
-| `name` | Sim | Nome do roadmap (alfanumérico, hífenes, underscores) |
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `name` | Yes | Roadmap name (alphanumeric, hyphens, underscores) |
 
 **Flags:**
-| Flag Curta | Flag Longa | Tipo | Padrão | Descrição |
-|------------|------------|------|--------|-----------|
-| N/A | `--force` | bool | false | Sobrescrever se o roadmap já existir |
+| Short Flag | Long Flag | Type | Default | Description |
+|------------|------------|------|--------|-------------|
+| N/A | `--force` | bool | false | Overwrite if roadmap already exists |
 
-**Output:** JSON object com o nome do roadmap criado
+**Output:** JSON object with the created roadmap name
 
-**Exemplos:**
+**Examples:**
 ```bash
 rmp roadmap create myproject
 rmp road new myproject --force
 ```
 
-**Output exemplo:**
+**Example output:**
 ```json
 {"name": "myproject"}
 ```
@@ -69,16 +69,16 @@ rmp road new myproject --force
 
 ### remove
 
-Remove um roadmap permanentemente. Esta ação não pode ser desfeita.
+Removes a roadmap permanently. This action cannot be undone.
 
-**Uso:** `rmp roadmap remove <name>` ou `rmp road rm <name>`
+**Usage:** `rmp roadmap remove <name>` or `rmp road rm <name>`
 
-**Argumentos:**
-| Argumento | Obrigatório | Descrição |
-|-----------|-------------|-----------|
-| `name` | Sim | Nome do roadmap a remover |
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `name` | Yes | Name of the roadmap to remove |
 
-**Exemplos:**
+**Examples:**
 ```bash
 rmp roadmap remove myproject
 rmp road rm oldproject
@@ -88,16 +88,16 @@ rmp road rm oldproject
 
 ### use
 
-Seleciona um roadmap como o padrão para comandos subsequentes. Evita repetir a flag `--roadmap` em cada comando.
+Selects a roadmap as the default for subsequent commands. Avoids repeating the `--roadmap` flag in every command.
 
-**Uso:** `rmp roadmap use <name>` ou `rmp road use <name>`
+**Usage:** `rmp roadmap use <name>` or `rmp road use <name>`
 
-**Argumentos:**
-| Argumento | Obrigatório | Descrição |
-|-----------|-------------|-----------|
-| `name` | Sim | Nome do roadmap a selecionar |
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `name` | Yes | Name of the roadmap to select |
 
-**Exemplos:**
+**Examples:**
 ```bash
 rmp roadmap use myproject
 rmp road use myproject
@@ -105,15 +105,15 @@ rmp road use myproject
 
 ## Aliases
 
-| Comando | Alias |
+| Command | Alias |
 |---------|-------|
 | `roadmap` | `road` |
 | `list` | `ls` |
 | `create` | `new` |
 | `remove` | `rm`, `delete` |
 
-## Notas
+## Notes
 
-- Os roadmaps são armazenados em `~/.roadmaps/<name>.db`
-- O diretório `~/.roadmaps/` tem permissões `0700` (apenas o proprietário)
-- O ficheiro `.current` em `~/.roadmaps/` guarda o roadmap selecionado por `use`
+- Roadmaps are stored in `~/.roadmaps/<name>.db`
+- The `~/.roadmaps/` directory has permissions `0700` (owner only)
+- The `.current` file in `~/.roadmaps/` stores the roadmap selected by `use`

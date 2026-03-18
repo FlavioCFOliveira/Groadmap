@@ -3,7 +3,6 @@ package commands
 import (
 	"database/sql"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
@@ -83,7 +82,10 @@ func sprintList(args []string) error {
 	}
 	defer database.Close()
 
-	sprints, err := database.ListSprints(status)
+	ctx, cancel := db.WithQuickTimeout()
+	defer cancel()
+
+	sprints, err := database.ListSprints(ctx, status)
 	if err != nil {
 		return err
 	}
@@ -123,6 +125,10 @@ func sprintCreate(args []string) error {
 		Status:      models.SprintPending,
 		Description: description,
 		CreatedAt:   utils.NowISO8601(),
+	}
+
+	if err := sprint.Validate(); err != nil {
+		return err
 	}
 
 	// Create within transaction with audit
@@ -168,9 +174,9 @@ func sprintGet(args []string) error {
 		return fmt.Errorf("%w: sprint ID required", utils.ErrRequired)
 	}
 
-	sprintID, err := strconv.Atoi(remaining[0])
+	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
 	if err != nil {
-		return fmt.Errorf("%w: invalid sprint ID: %s", utils.ErrInvalidInput, remaining[0])
+		return err
 	}
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {
@@ -178,7 +184,10 @@ func sprintGet(args []string) error {
 	}
 	defer database.Close()
 
-	sprint, err := database.GetSprint(sprintID)
+	ctx, cancel := db.WithQuickTimeout()
+	defer cancel()
+
+	sprint, err := database.GetSprint(ctx, sprintID)
 	if err != nil {
 		return err
 	}
@@ -197,9 +206,9 @@ func sprintUpdate(args []string) error {
 		return fmt.Errorf("%w: sprint ID required", utils.ErrRequired)
 	}
 
-	sprintID, err := strconv.Atoi(remaining[0])
+	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
 	if err != nil {
-		return fmt.Errorf("%w: invalid sprint ID: %s", utils.ErrInvalidInput, remaining[0])
+		return err
 	}
 
 	// Parse description
@@ -215,6 +224,11 @@ func sprintUpdate(args []string) error {
 
 	if description == "" {
 		return fmt.Errorf("%w: missing required parameter: --description", utils.ErrRequired)
+	}
+
+	// Validate description length
+	if len(description) > models.MaxSprintDescription {
+		return fmt.Errorf("%w: description exceeds maximum length of %d characters", utils.ErrFieldTooLarge, models.MaxSprintDescription)
 	}
 
 	database, err := db.OpenExisting(roadmapName)
@@ -261,9 +275,9 @@ func sprintRemove(args []string) error {
 		return fmt.Errorf("%w: sprint ID required", utils.ErrRequired)
 	}
 
-	sprintID, err := strconv.Atoi(remaining[0])
+	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
 	if err != nil {
-		return fmt.Errorf("%w: invalid sprint ID: %s", utils.ErrInvalidInput, remaining[0])
+		return err
 	}
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {
@@ -381,9 +395,9 @@ func sprintLifecycle(args []string, newStatus models.SprintStatus, op models.Aud
 		return fmt.Errorf("%w: sprint ID required", utils.ErrRequired)
 	}
 
-	sprintID, err := strconv.Atoi(remaining[0])
+	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
 	if err != nil {
-		return fmt.Errorf("%w: invalid sprint ID: %s", utils.ErrInvalidInput, remaining[0])
+		return err
 	}
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {
@@ -391,8 +405,11 @@ func sprintLifecycle(args []string, newStatus models.SprintStatus, op models.Aud
 	}
 	defer database.Close()
 
+	ctx, cancel := db.WithQuickTimeout()
+	defer cancel()
+
 	// Get current sprint to validate transition
-	sprint, err := database.GetSprint(sprintID)
+	sprint, err := database.GetSprint(ctx, sprintID)
 	if err != nil {
 		return err
 	}
@@ -458,9 +475,9 @@ func sprintTasks(args []string) error {
 		return fmt.Errorf("%w: sprint ID required", utils.ErrRequired)
 	}
 
-	sprintID, err := strconv.Atoi(remaining[0])
+	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
 	if err != nil {
-		return fmt.Errorf("%w: invalid sprint ID: %s", utils.ErrInvalidInput, remaining[0])
+		return err
 	}
 
 	// Parse optional status filter
@@ -482,7 +499,10 @@ func sprintTasks(args []string) error {
 	}
 	defer database.Close()
 
-	tasks, err := database.GetSprintTasksFull(sprintID, status)
+	ctx, cancel := db.WithQuickTimeout()
+	defer cancel()
+
+	tasks, err := database.GetSprintTasksFull(ctx, sprintID, status)
 	if err != nil {
 		return err
 	}
@@ -501,9 +521,9 @@ func sprintStats(args []string) error {
 		return fmt.Errorf("%w: sprint ID required", utils.ErrRequired)
 	}
 
-	sprintID, err := strconv.Atoi(remaining[0])
+	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
 	if err != nil {
-		return fmt.Errorf("%w: invalid sprint ID: %s", utils.ErrInvalidInput, remaining[0])
+		return err
 	}
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {
@@ -511,8 +531,11 @@ func sprintStats(args []string) error {
 	}
 	defer database.Close()
 
+	ctx, cancel := db.WithQuickTimeout()
+	defer cancel()
+
 	// Get sprint tasks
-	tasks, err := database.GetSprintTasksFull(sprintID, nil)
+	tasks, err := database.GetSprintTasksFull(ctx, sprintID, nil)
 	if err != nil {
 		return err
 	}
@@ -563,18 +586,18 @@ func sprintAddTasks(args []string) error {
 		return fmt.Errorf("%w: sprint ID and task ID(s) required", utils.ErrRequired)
 	}
 
-	sprintID, err := strconv.Atoi(remaining[0])
+	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
 	if err != nil {
-		return fmt.Errorf("%w: invalid sprint ID: %s", utils.ErrInvalidInput, remaining[0])
+		return err
 	}
 
-	// Parse task IDs
+	// Parse and validate task IDs
 	idStrs := strings.Split(remaining[1], ",")
 	var taskIDs []int
 	for _, s := range idStrs {
-		id, err := strconv.Atoi(strings.TrimSpace(s))
+		id, err := utils.ValidateIDString(strings.TrimSpace(s), "task")
 		if err != nil {
-			return fmt.Errorf("%w: invalid task ID: %s", utils.ErrInvalidInput, s)
+			return err
 		}
 		taskIDs = append(taskIDs, id)
 	}
@@ -585,8 +608,11 @@ func sprintAddTasks(args []string) error {
 	}
 	defer database.Close()
 
+	ctx, cancel := db.WithQuickTimeout()
+	defer cancel()
+
 	// Verify sprint exists
-	_, err = database.GetSprint(sprintID)
+	_, err = database.GetSprint(ctx, sprintID)
 	if err != nil {
 		return err
 	}
@@ -636,18 +662,18 @@ func sprintRemoveTasks(args []string) error {
 		return fmt.Errorf("%w: sprint ID and task ID(s) required", utils.ErrRequired)
 	}
 
-	sprintID, err := strconv.Atoi(remaining[0])
+	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
 	if err != nil {
-		return fmt.Errorf("%w: invalid sprint ID: %s", utils.ErrInvalidInput, remaining[0])
+		return err
 	}
 
-	// Parse task IDs
+	// Parse and validate task IDs
 	idStrs := strings.Split(remaining[1], ",")
 	var taskIDs []int
 	for _, s := range idStrs {
-		id, err := strconv.Atoi(strings.TrimSpace(s))
+		id, err := utils.ValidateIDString(strings.TrimSpace(s), "task")
 		if err != nil {
-			return fmt.Errorf("%w: invalid task ID: %s", utils.ErrInvalidInput, s)
+			return err
 		}
 		taskIDs = append(taskIDs, id)
 	}
@@ -658,8 +684,11 @@ func sprintRemoveTasks(args []string) error {
 	}
 	defer database.Close()
 
+	ctx, cancel := db.WithQuickTimeout()
+	defer cancel()
+
 	// Verify sprint exists
-	_, err = database.GetSprint(sprintID)
+	_, err = database.GetSprint(ctx, sprintID)
 	if err != nil {
 		return err
 	}
@@ -703,23 +732,23 @@ func sprintMoveTasks(args []string) error {
 		return fmt.Errorf("%w: from sprint ID, to sprint ID, and task ID(s) required", utils.ErrRequired)
 	}
 
-	fromID, err := strconv.Atoi(remaining[0])
+	fromID, err := utils.ValidateIDString(remaining[0], "sprint")
 	if err != nil {
-		return fmt.Errorf("%w: invalid from sprint ID: %s", utils.ErrInvalidInput, remaining[0])
+		return err
 	}
 
-	toID, err := strconv.Atoi(remaining[1])
+	toID, err := utils.ValidateIDString(remaining[1], "sprint")
 	if err != nil {
-		return fmt.Errorf("%w: invalid to sprint ID: %s", utils.ErrInvalidInput, remaining[1])
+		return err
 	}
 
-	// Parse task IDs
+	// Parse and validate task IDs
 	idStrs := strings.Split(remaining[2], ",")
 	var taskIDs []int
 	for _, s := range idStrs {
-		id, err := strconv.Atoi(strings.TrimSpace(s))
+		id, err := utils.ValidateIDString(strings.TrimSpace(s), "task")
 		if err != nil {
-			return fmt.Errorf("%w: invalid task ID: %s", utils.ErrInvalidInput, s)
+			return err
 		}
 		taskIDs = append(taskIDs, id)
 	}
@@ -730,12 +759,15 @@ func sprintMoveTasks(args []string) error {
 	}
 	defer database.Close()
 
+	ctx, cancel := db.WithQuickTimeout()
+	defer cancel()
+
 	// Verify both sprints exist
-	_, err = database.GetSprint(fromID)
+	_, err = database.GetSprint(ctx, fromID)
 	if err != nil {
 		return fmt.Errorf("%w: from sprint: %v", utils.ErrNotFound, err)
 	}
-	_, err = database.GetSprint(toID)
+	_, err = database.GetSprint(ctx, toID)
 	if err != nil {
 		return fmt.Errorf("%w: to sprint: %v", utils.ErrNotFound, err)
 	}

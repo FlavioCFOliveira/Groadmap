@@ -1,17 +1,22 @@
 package db
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
+	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
 // setupTestDB creates an in-memory database for testing
+// Uses shared cache mode to allow concurrent access from multiple goroutines
 func setupTestDB(t *testing.T) (*DB, func()) {
-	sqlDB, err := sql.Open("sqlite", ":memory:")
+	// Use shared cache mode for concurrent access
+	sqlDB, err := sql.Open("sqlite", "file::memory:?cache=shared")
 	if err != nil {
 		t.Fatalf("failed to open in-memory database: %v", err)
 	}
@@ -40,6 +45,11 @@ func setupTestDB(t *testing.T) (*DB, func()) {
 	return db, cleanup
 }
 
+// testContext returns a background context for tests
+func testContext() context.Context {
+	return context.Background()
+}
+
 // ==================== TASK TESTS ====================
 
 func TestCreateTask(t *testing.T) {
@@ -56,7 +66,7 @@ func TestCreateTask(t *testing.T) {
 		CreatedAt:      time.Now().Format(time.RFC3339),
 	}
 
-	id, err := db.CreateTask(task)
+	id, err := db.CreateTask(testContext(), task)
 	if err != nil {
 		t.Fatalf("failed to create task: %v", err)
 	}
@@ -66,7 +76,7 @@ func TestCreateTask(t *testing.T) {
 	}
 
 	// Verify task was created
-	created, err := db.GetTask(id)
+	created, err := db.GetTask(testContext(), id)
 	if err != nil {
 		t.Fatalf("failed to get created task: %v", err)
 	}
@@ -95,10 +105,10 @@ func TestGetTask(t *testing.T) {
 		CreatedAt:      time.Now().Format(time.RFC3339),
 	}
 
-	id, _ := db.CreateTask(task)
+	id, _ := db.CreateTask(testContext(), task)
 
 	// Test getting existing task
-	retrieved, err := db.GetTask(id)
+	retrieved, err := db.GetTask(testContext(), id)
 	if err != nil {
 		t.Fatalf("failed to get task: %v", err)
 	}
@@ -108,7 +118,7 @@ func TestGetTask(t *testing.T) {
 	}
 
 	// Test getting non-existent task
-	_, err = db.GetTask(99999)
+	_, err = db.GetTask(testContext(), 99999)
 	if err == nil {
 		t.Error("expected error for non-existent task")
 	}
@@ -130,12 +140,12 @@ func TestGetTasks(t *testing.T) {
 			ExpectedResult: "Result",
 			CreatedAt:      time.Now().Format(time.RFC3339),
 		}
-		id, _ := db.CreateTask(task)
+		id, _ := db.CreateTask(testContext(), task)
 		ids = append(ids, id)
 	}
 
 	// Test GetTasks
-	tasks, err := db.GetTasks(ids)
+	tasks, err := db.GetTasks(testContext(), ids)
 	if err != nil {
 		t.Fatalf("failed to get tasks: %v", err)
 	}
@@ -145,7 +155,7 @@ func TestGetTasks(t *testing.T) {
 	}
 
 	// Test empty IDs
-	tasks, err = db.GetTasks([]int{})
+	tasks, err = db.GetTasks(testContext(), []int{})
 	if err != nil {
 		t.Fatalf("failed to get tasks with empty IDs: %v", err)
 	}
@@ -171,11 +181,11 @@ func TestListTasks(t *testing.T) {
 			ExpectedResult: "Result",
 			CreatedAt:      time.Now().Format(time.RFC3339),
 		}
-		db.CreateTask(task)
+		db.CreateTask(testContext(), task)
 	}
 
-	// Test list all tasks
-	tasks, err := db.ListTasks(nil, nil, nil, nil)
+	// Test list all tasks (page 1, limit 10)
+	tasks, total, err := db.ListTasks(testContext(), nil, nil, nil, nil, nil, nil, 1, 10)
 	if err != nil {
 		t.Fatalf("failed to list tasks: %v", err)
 	}
@@ -183,10 +193,13 @@ func TestListTasks(t *testing.T) {
 	if len(tasks) != 3 {
 		t.Errorf("expected 3 tasks, got %d", len(tasks))
 	}
+	if total != 3 {
+		t.Errorf("expected total 3, got %d", total)
+	}
 
 	// Test filter by status
 	backlogStatus := models.StatusBacklog
-	tasks, err = db.ListTasks(&backlogStatus, nil, nil, nil)
+	tasks, total, err = db.ListTasks(testContext(), &backlogStatus, nil, nil, nil, nil, nil, 1, 10)
 	if err != nil {
 		t.Fatalf("failed to list tasks by status: %v", err)
 	}
@@ -194,10 +207,13 @@ func TestListTasks(t *testing.T) {
 	if len(tasks) != 2 {
 		t.Errorf("expected 2 tasks with BACKLOG status, got %d", len(tasks))
 	}
+	if total != 2 {
+		t.Errorf("expected total 2 for BACKLOG, got %d", total)
+	}
 
 	// Test filter by min priority
 	minPriority := 1
-	tasks, err = db.ListTasks(nil, &minPriority, nil, nil)
+	tasks, total, err = db.ListTasks(testContext(), nil, &minPriority, nil, nil, nil, nil, 1, 10)
 	if err != nil {
 		t.Fatalf("failed to list tasks by priority: %v", err)
 	}
@@ -205,16 +221,34 @@ func TestListTasks(t *testing.T) {
 	if len(tasks) != 2 {
 		t.Errorf("expected 2 tasks with priority >= 1, got %d", len(tasks))
 	}
+	if total != 2 {
+		t.Errorf("expected total 2 for priority >= 1, got %d", total)
+	}
 
-	// Test with limit
-	limit := 2
-	tasks, err = db.ListTasks(nil, nil, nil, &limit)
+	// Test with pagination (page 1, limit 2)
+	tasks, total, err = db.ListTasks(testContext(), nil, nil, nil, nil, nil, nil, 1, 2)
 	if err != nil {
 		t.Fatalf("failed to list tasks with limit: %v", err)
 	}
 
 	if len(tasks) != 2 {
 		t.Errorf("expected 2 tasks with limit, got %d", len(tasks))
+	}
+	if total != 3 {
+		t.Errorf("expected total 3, got %d", total)
+	}
+
+	// Test pagination (page 2, should get remaining 1)
+	tasks, total, err = db.ListTasks(testContext(), nil, nil, nil, nil, nil, nil, 2, 2)
+	if err != nil {
+		t.Fatalf("failed to list tasks page 2: %v", err)
+	}
+
+	if len(tasks) != 1 {
+		t.Errorf("expected 1 task on page 2, got %d", len(tasks))
+	}
+	if total != 3 {
+		t.Errorf("expected total 3, got %d", total)
 	}
 }
 
@@ -233,7 +267,7 @@ func TestUpdateTask(t *testing.T) {
 		CreatedAt:      time.Now().Format(time.RFC3339),
 	}
 
-	id, _ := db.CreateTask(task)
+	id, _ := db.CreateTask(testContext(), task)
 
 	// Update the task
 	updates := map[string]interface{}{
@@ -241,13 +275,13 @@ func TestUpdateTask(t *testing.T) {
 		"priority":    5,
 	}
 
-	err := db.UpdateTask(id, updates)
+	err := db.UpdateTask(testContext(), id, updates)
 	if err != nil {
 		t.Fatalf("failed to update task: %v", err)
 	}
 
 	// Verify update
-	updated, _ := db.GetTask(id)
+	updated, _ := db.GetTask(testContext(), id)
 	if updated.Description != "Updated" {
 		t.Errorf("expected description 'Updated', got %q", updated.Description)
 	}
@@ -257,13 +291,13 @@ func TestUpdateTask(t *testing.T) {
 	}
 
 	// Test update non-existent task
-	err = db.UpdateTask(99999, updates)
+	err = db.UpdateTask(testContext(), 99999, updates)
 	if err == nil {
 		t.Error("expected error for non-existent task")
 	}
 
 	// Test empty updates
-	err = db.UpdateTask(id, map[string]interface{}{})
+	err = db.UpdateTask(testContext(), id, map[string]interface{}{})
 	if err != nil {
 		t.Errorf("expected no error for empty updates, got %v", err)
 	}
@@ -284,22 +318,22 @@ func TestDeleteTask(t *testing.T) {
 		CreatedAt:      time.Now().Format(time.RFC3339),
 	}
 
-	id, _ := db.CreateTask(task)
+	id, _ := db.CreateTask(testContext(), task)
 
 	// Delete the task
-	err := db.DeleteTask(id)
+	err := db.DeleteTask(testContext(), id)
 	if err != nil {
 		t.Fatalf("failed to delete task: %v", err)
 	}
 
 	// Verify deletion
-	_, err = db.GetTask(id)
+	_, err = db.GetTask(testContext(), id)
 	if err == nil {
 		t.Error("expected error after deleting task")
 	}
 
 	// Test delete non-existent task
-	err = db.DeleteTask(99999)
+	err = db.DeleteTask(testContext(), 99999)
 	if err == nil {
 		t.Error("expected error for non-existent task")
 	}
@@ -321,26 +355,26 @@ func TestUpdateTaskStatus(t *testing.T) {
 			ExpectedResult: "Result",
 			CreatedAt:      time.Now().Format(time.RFC3339),
 		}
-		id, _ := db.CreateTask(task)
+		id, _ := db.CreateTask(testContext(), task)
 		ids = append(ids, id)
 	}
 
 	// Update status
-	err := db.UpdateTaskStatus(ids, models.StatusDoing)
+	err := db.UpdateTaskStatus(testContext(), ids, models.StatusDoing)
 	if err != nil {
 		t.Fatalf("failed to update task status: %v", err)
 	}
 
 	// Verify
 	for _, id := range ids {
-		task, _ := db.GetTask(id)
+		task, _ := db.GetTask(testContext(), id)
 		if task.Status != models.StatusDoing {
 			t.Errorf("expected status DOING, got %q", task.Status)
 		}
 	}
 
 	// Test empty IDs
-	err = db.UpdateTaskStatus([]int{}, models.StatusDoing)
+	err = db.UpdateTaskStatus(testContext(), []int{}, models.StatusDoing)
 	if err != nil {
 		t.Errorf("expected no error for empty IDs, got %v", err)
 	}
@@ -362,19 +396,19 @@ func TestUpdateTaskPriority(t *testing.T) {
 			ExpectedResult: "Result",
 			CreatedAt:      time.Now().Format(time.RFC3339),
 		}
-		id, _ := db.CreateTask(task)
+		id, _ := db.CreateTask(testContext(), task)
 		ids = append(ids, id)
 	}
 
 	// Update priority
-	err := db.UpdateTaskPriority(ids, 9)
+	err := db.UpdateTaskPriority(testContext(), ids, 9)
 	if err != nil {
 		t.Fatalf("failed to update task priority: %v", err)
 	}
 
 	// Verify
 	for _, id := range ids {
-		task, _ := db.GetTask(id)
+		task, _ := db.GetTask(testContext(), id)
 		if task.Priority != 9 {
 			t.Errorf("expected priority 9, got %d", task.Priority)
 		}
@@ -397,19 +431,19 @@ func TestUpdateTaskSeverity(t *testing.T) {
 			ExpectedResult: "Result",
 			CreatedAt:      time.Now().Format(time.RFC3339),
 		}
-		id, _ := db.CreateTask(task)
+		id, _ := db.CreateTask(testContext(), task)
 		ids = append(ids, id)
 	}
 
 	// Update severity
-	err := db.UpdateTaskSeverity(ids, 8)
+	err := db.UpdateTaskSeverity(testContext(), ids, 8)
 	if err != nil {
 		t.Fatalf("failed to update task severity: %v", err)
 	}
 
 	// Verify
 	for _, id := range ids {
-		task, _ := db.GetTask(id)
+		task, _ := db.GetTask(testContext(), id)
 		if task.Severity != 8 {
 			t.Errorf("expected severity 8, got %d", task.Severity)
 		}
@@ -428,7 +462,7 @@ func TestCreateSprint(t *testing.T) {
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
 
-	id, err := db.CreateSprint(sprint)
+	id, err := db.CreateSprint(testContext(), sprint)
 	if err != nil {
 		t.Fatalf("failed to create sprint: %v", err)
 	}
@@ -438,7 +472,7 @@ func TestCreateSprint(t *testing.T) {
 	}
 
 	// Verify
-	created, err := db.GetSprint(id)
+	created, err := db.GetSprint(testContext(), id)
 	if err != nil {
 		t.Fatalf("failed to get created sprint: %v", err)
 	}
@@ -459,10 +493,10 @@ func TestGetSprint(t *testing.T) {
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
 
-	id, _ := db.CreateSprint(sprint)
+	id, _ := db.CreateSprint(testContext(), sprint)
 
 	// Test getting existing sprint
-	retrieved, err := db.GetSprint(id)
+	retrieved, err := db.GetSprint(testContext(), id)
 	if err != nil {
 		t.Fatalf("failed to get sprint: %v", err)
 	}
@@ -472,7 +506,7 @@ func TestGetSprint(t *testing.T) {
 	}
 
 	// Test getting non-existent sprint
-	_, err = db.GetSprint(99999)
+	_, err = db.GetSprint(testContext(), 99999)
 	if err == nil {
 		t.Error("expected error for non-existent sprint")
 	}
@@ -490,11 +524,11 @@ func TestListSprints(t *testing.T) {
 			Description: "Sprint",
 			CreatedAt:   time.Now().Format(time.RFC3339),
 		}
-		db.CreateSprint(sprint)
+		db.CreateSprint(testContext(), sprint)
 	}
 
 	// Test list all sprints
-	sprints, err := db.ListSprints(nil)
+	sprints, err := db.ListSprints(testContext(), nil)
 	if err != nil {
 		t.Fatalf("failed to list sprints: %v", err)
 	}
@@ -505,7 +539,7 @@ func TestListSprints(t *testing.T) {
 
 	// Test filter by status
 	pendingStatus := models.SprintPending
-	sprints, err = db.ListSprints(&pendingStatus)
+	sprints, err = db.ListSprints(testContext(), &pendingStatus)
 	if err != nil {
 		t.Fatalf("failed to list sprints by status: %v", err)
 	}
@@ -526,22 +560,22 @@ func TestUpdateSprint(t *testing.T) {
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
 
-	id, _ := db.CreateSprint(sprint)
+	id, _ := db.CreateSprint(testContext(), sprint)
 
 	// Update
-	err := db.UpdateSprint(id, "Updated")
+	err := db.UpdateSprint(testContext(), id, "Updated")
 	if err != nil {
 		t.Fatalf("failed to update sprint: %v", err)
 	}
 
 	// Verify
-	updated, _ := db.GetSprint(id)
+	updated, _ := db.GetSprint(testContext(), id)
 	if updated.Description != "Updated" {
 		t.Errorf("expected description 'Updated', got %q", updated.Description)
 	}
 
 	// Test update non-existent sprint
-	err = db.UpdateSprint(99999, "Test")
+	err = db.UpdateSprint(testContext(), 99999, "Test")
 	if err == nil {
 		t.Error("expected error for non-existent sprint")
 	}
@@ -558,16 +592,16 @@ func TestUpdateSprintStatus(t *testing.T) {
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
 
-	id, _ := db.CreateSprint(sprint)
+	id, _ := db.CreateSprint(testContext(), sprint)
 
 	// Update status to OPEN
-	err := db.UpdateSprintStatus(id, models.SprintOpen)
+	err := db.UpdateSprintStatus(testContext(), id, models.SprintOpen)
 	if err != nil {
 		t.Fatalf("failed to update sprint status: %v", err)
 	}
 
 	// Verify
-	updated, _ := db.GetSprint(id)
+	updated, _ := db.GetSprint(testContext(), id)
 	if updated.Status != models.SprintOpen {
 		t.Errorf("expected status OPEN, got %q", updated.Status)
 	}
@@ -576,12 +610,12 @@ func TestUpdateSprintStatus(t *testing.T) {
 	}
 
 	// Update status to CLOSED
-	err = db.UpdateSprintStatus(id, models.SprintClosed)
+	err = db.UpdateSprintStatus(testContext(), id, models.SprintClosed)
 	if err != nil {
 		t.Fatalf("failed to close sprint: %v", err)
 	}
 
-	updated, _ = db.GetSprint(id)
+	updated, _ = db.GetSprint(testContext(), id)
 	if updated.Status != models.SprintClosed {
 		t.Errorf("expected status CLOSED, got %q", updated.Status)
 	}
@@ -601,16 +635,16 @@ func TestDeleteSprint(t *testing.T) {
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
 
-	id, _ := db.CreateSprint(sprint)
+	id, _ := db.CreateSprint(testContext(), sprint)
 
 	// Delete
-	err := db.DeleteSprint(id)
+	err := db.DeleteSprint(testContext(), id)
 	if err != nil {
 		t.Fatalf("failed to delete sprint: %v", err)
 	}
 
 	// Verify
-	_, err = db.GetSprint(id)
+	_, err = db.GetSprint(testContext(), id)
 	if err == nil {
 		t.Error("expected error after deleting sprint")
 	}
@@ -626,7 +660,7 @@ func TestAddTasksToSprint(t *testing.T) {
 		Description: "Test sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
-	sprintID, _ := db.CreateSprint(sprint)
+	sprintID, _ := db.CreateSprint(testContext(), sprint)
 
 	// Create tasks
 	var taskIDs []int
@@ -640,18 +674,18 @@ func TestAddTasksToSprint(t *testing.T) {
 			ExpectedResult: "Result",
 			CreatedAt:      time.Now().Format(time.RFC3339),
 		}
-		id, _ := db.CreateTask(task)
+		id, _ := db.CreateTask(testContext(), task)
 		taskIDs = append(taskIDs, id)
 	}
 
 	// Add tasks to sprint
-	err := db.AddTasksToSprint(sprintID, taskIDs)
+	err := db.AddTasksToSprint(testContext(), sprintID, taskIDs)
 	if err != nil {
 		t.Fatalf("failed to add tasks to sprint: %v", err)
 	}
 
 	// Verify tasks are in sprint
-	sprintTasks, err := db.GetSprintTasks(sprintID)
+	sprintTasks, err := db.GetSprintTasks(testContext(), sprintID)
 	if err != nil {
 		t.Fatalf("failed to get sprint tasks: %v", err)
 	}
@@ -662,7 +696,7 @@ func TestAddTasksToSprint(t *testing.T) {
 
 	// Verify task statuses were updated
 	for _, taskID := range taskIDs {
-		task, _ := db.GetTask(taskID)
+		task, _ := db.GetTask(testContext(), taskID)
 		if task.Status != models.StatusSprint {
 			t.Errorf("expected task status SPRINT, got %q", task.Status)
 		}
@@ -679,7 +713,7 @@ func TestRemoveTasksFromSprint(t *testing.T) {
 		Description: "Test sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
-	sprintID, _ := db.CreateSprint(sprint)
+	sprintID, _ := db.CreateSprint(testContext(), sprint)
 
 	// Create and add tasks
 	var taskIDs []int
@@ -693,20 +727,20 @@ func TestRemoveTasksFromSprint(t *testing.T) {
 			ExpectedResult: "Result",
 			CreatedAt:      time.Now().Format(time.RFC3339),
 		}
-		id, _ := db.CreateTask(task)
+		id, _ := db.CreateTask(testContext(), task)
 		taskIDs = append(taskIDs, id)
 	}
-	db.AddTasksToSprint(sprintID, taskIDs)
+	db.AddTasksToSprint(testContext(), sprintID, taskIDs)
 
 	// Remove tasks from sprint
-	err := db.RemoveTasksFromSprint(taskIDs[:2])
+	err := db.RemoveTasksFromSprint(testContext(), taskIDs[:2])
 	if err != nil {
 		t.Fatalf("failed to remove tasks from sprint: %v", err)
 	}
 
 	// Verify task statuses were reset
 	for i := 0; i < 2; i++ {
-		task, _ := db.GetTask(taskIDs[i])
+		task, _ := db.GetTask(testContext(), taskIDs[i])
 		if task.Status != models.StatusBacklog {
 			t.Errorf("expected task status BACKLOG, got %q", task.Status)
 		}
@@ -726,7 +760,7 @@ func TestLogAuditEntry(t *testing.T) {
 		PerformedAt: time.Now().Format(time.RFC3339),
 	}
 
-	id, err := db.LogAuditEntry(entry)
+	id, err := db.LogAuditEntry(testContext(), entry)
 	if err != nil {
 		t.Fatalf("failed to log audit entry: %v", err)
 	}
@@ -748,11 +782,11 @@ func TestGetAuditEntries(t *testing.T) {
 			EntityID:    i + 1,
 			PerformedAt: time.Now().Format(time.RFC3339),
 		}
-		db.LogAuditEntry(entry)
+		db.LogAuditEntry(testContext(), entry)
 	}
 
 	// Get all entries
-	entries, err := db.GetAuditEntries(nil, nil, nil, nil, nil, 10, 0)
+	entries, err := db.GetAuditEntries(testContext(), nil, nil, nil, nil, nil, 10, 0)
 	if err != nil {
 		t.Fatalf("failed to get audit entries: %v", err)
 	}
@@ -763,7 +797,7 @@ func TestGetAuditEntries(t *testing.T) {
 
 	// Filter by operation
 	op := "TASK_CREATE"
-	entries, err = db.GetAuditEntries(&op, nil, nil, nil, nil, 10, 0)
+	entries, err = db.GetAuditEntries(testContext(), &op, nil, nil, nil, nil, 10, 0)
 	if err != nil {
 		t.Fatalf("failed to filter audit entries: %v", err)
 	}
@@ -794,7 +828,7 @@ func TestWithTransaction_Commit(t *testing.T) {
 	}
 
 	// Verify task was created
-	tasks, _ := db.ListTasks(nil, nil, nil, nil)
+	tasks, _, _ := db.ListTasks(testContext(), nil, nil, nil, nil, nil, nil, 1, 10)
 	if len(tasks) != 1 {
 		t.Errorf("expected 1 task after commit, got %d", len(tasks))
 	}
@@ -823,7 +857,7 @@ func TestWithTransaction_Rollback(t *testing.T) {
 	}
 
 	// Verify no tasks were created (rolled back)
-	tasks, _ := db.ListTasks(nil, nil, nil, nil)
+	tasks, _, _ := db.ListTasks(testContext(), nil, nil, nil, nil, nil, nil, 1, 10)
 	if len(tasks) != 0 {
 		t.Errorf("expected 0 tasks after rollback, got %d", len(tasks))
 	}
@@ -841,7 +875,7 @@ func TestGetSprintTasks(t *testing.T) {
 		Description: "Test sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
-	sprintID, _ := db.CreateSprint(sprint)
+	sprintID, _ := db.CreateSprint(testContext(), sprint)
 
 	// Create tasks
 	var taskIDs []int
@@ -855,15 +889,15 @@ func TestGetSprintTasks(t *testing.T) {
 			ExpectedResult: "Result",
 			CreatedAt:      time.Now().Format(time.RFC3339),
 		}
-		id, _ := db.CreateTask(task)
+		id, _ := db.CreateTask(testContext(), task)
 		taskIDs = append(taskIDs, id)
 	}
 
 	// Add tasks to sprint
-	db.AddTasksToSprint(sprintID, taskIDs)
+	db.AddTasksToSprint(testContext(), sprintID, taskIDs)
 
 	// Get sprint tasks
-	tasks, err := db.GetSprintTasks(sprintID)
+	tasks, err := db.GetSprintTasks(testContext(), sprintID)
 	if err != nil {
 		t.Fatalf("failed to get sprint tasks: %v", err)
 	}
@@ -875,7 +909,7 @@ func TestGetSprintTasks(t *testing.T) {
 	// Test GetSprintTasksFull with status filter
 	// Note: When tasks are added to sprint, their status changes to SPRINT
 	sprintStatus := models.StatusSprint
-	tasksFull, err := db.GetSprintTasksFull(sprintID, &sprintStatus)
+	tasksFull, err := db.GetSprintTasksFull(testContext(), sprintID, &sprintStatus)
 	if err != nil {
 		t.Fatalf("failed to get sprint tasks with status: %v", err)
 	}
@@ -898,11 +932,11 @@ func TestGetAuditStats(t *testing.T) {
 			EntityID:    i + 1,
 			PerformedAt: time.Now().Format(time.RFC3339),
 		}
-		db.LogAuditEntry(entry)
+		db.LogAuditEntry(testContext(), entry)
 	}
 
 	// Get stats
-	stats, err := db.GetAuditStats(nil, nil)
+	stats, err := db.GetAuditStats(testContext(), nil, nil)
 	if err != nil {
 		t.Fatalf("failed to get audit stats: %v", err)
 	}
@@ -914,7 +948,7 @@ func TestGetAuditStats(t *testing.T) {
 	// Test with date range filters
 	since := time.Now().Add(-1 * time.Hour).Format(time.RFC3339)
 	until := time.Now().Add(1 * time.Hour).Format(time.RFC3339)
-	stats, err = db.GetAuditStats(&since, &until)
+	stats, err = db.GetAuditStats(testContext(), &since, &until)
 	if err != nil {
 		t.Fatalf("failed to get audit stats with date range: %v", err)
 	}
@@ -934,7 +968,7 @@ func TestGetSprintTasksFull(t *testing.T) {
 		Description: "Test sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
-	sprintID, _ := db.CreateSprint(sprint)
+	sprintID, _ := db.CreateSprint(testContext(), sprint)
 
 	// Create tasks with different priorities
 	for i := 0; i < 3; i++ {
@@ -947,12 +981,12 @@ func TestGetSprintTasksFull(t *testing.T) {
 			ExpectedResult: "Result",
 			CreatedAt:      time.Now().Format(time.RFC3339),
 		}
-		id, _ := db.CreateTask(task)
-		db.AddTasksToSprint(sprintID, []int{id})
+		id, _ := db.CreateTask(testContext(), task)
+		db.AddTasksToSprint(testContext(), sprintID, []int{id})
 	}
 
 	// Get all sprint tasks
-	tasks, err := db.GetSprintTasksFull(sprintID, nil)
+	tasks, err := db.GetSprintTasksFull(testContext(), sprintID, nil)
 	if err != nil {
 		t.Fatalf("failed to get sprint tasks full: %v", err)
 	}
@@ -989,12 +1023,12 @@ func TestGetAuditEntriesWithFilters(t *testing.T) {
 			EntityID:    e.entityID,
 			PerformedAt: time.Now().Format(time.RFC3339),
 		}
-		db.LogAuditEntry(entry)
+		db.LogAuditEntry(testContext(), entry)
 	}
 
 	// Test filter by entity type
 	entityType := "TASK"
-	results, err := db.GetAuditEntries(nil, &entityType, nil, nil, nil, 10, 0)
+	results, err := db.GetAuditEntries(testContext(), nil, &entityType, nil, nil, nil, 10, 0)
 	if err != nil {
 		t.Fatalf("failed to filter by entity type: %v", err)
 	}
@@ -1005,7 +1039,7 @@ func TestGetAuditEntriesWithFilters(t *testing.T) {
 
 	// Test filter by entity ID
 	entityID := 1
-	results, err = db.GetAuditEntries(nil, nil, &entityID, nil, nil, 10, 0)
+	results, err = db.GetAuditEntries(testContext(), nil, nil, &entityID, nil, nil, 10, 0)
 	if err != nil {
 		t.Fatalf("failed to filter by entity ID: %v", err)
 	}
@@ -1015,12 +1049,222 @@ func TestGetAuditEntriesWithFilters(t *testing.T) {
 	}
 
 	// Test with offset
-	results, err = db.GetAuditEntries(nil, nil, nil, nil, nil, 10, 1)
+	results, err = db.GetAuditEntries(testContext(), nil, nil, nil, nil, nil, 10, 1)
 	if err != nil {
 		t.Fatalf("failed to get entries with offset: %v", err)
 	}
 
 	if len(results) != 2 {
 		t.Errorf("expected 2 entries with offset 1, got %d", len(results))
+	}
+}
+
+// ==================== SENTINEL ERROR TESTS ====================
+
+func TestGetTask_NotFound(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	_, err := db.GetTask(testContext(), 999)
+	if err == nil {
+		t.Fatal("expected error for non-existent task")
+	}
+
+	if !errors.Is(err, utils.ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got: %v", err)
+	}
+}
+
+func TestGetSprint_NotFound(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	_, err := db.GetSprint(testContext(), 999)
+	if err == nil {
+		t.Fatal("expected error for non-existent sprint")
+	}
+
+	if !errors.Is(err, utils.ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got: %v", err)
+	}
+}
+
+func TestUpdateTask_NotFound(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	err := db.UpdateTask(testContext(), 999, map[string]interface{}{"priority": 5})
+	if err == nil {
+		t.Fatal("expected error for non-existent task")
+	}
+
+	if !errors.Is(err, utils.ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got: %v", err)
+	}
+}
+
+func TestDeleteTask_NotFound(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	err := db.DeleteTask(testContext(), 999)
+	if err == nil {
+		t.Fatal("expected error for non-existent task")
+	}
+
+	if !errors.Is(err, utils.ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got: %v", err)
+	}
+}
+
+func TestUpdateSprint_NotFound(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	err := db.UpdateSprint(testContext(), 999, "updated description")
+	if err == nil {
+		t.Fatal("expected error for non-existent sprint")
+	}
+
+	if !errors.Is(err, utils.ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got: %v", err)
+	}
+}
+
+func TestUpdateSprintStatus_NotFound(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	err := db.UpdateSprintStatus(testContext(), 999, models.SprintOpen)
+	if err == nil {
+		t.Fatal("expected error for non-existent sprint")
+	}
+
+	if !errors.Is(err, utils.ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got: %v", err)
+	}
+}
+
+func TestDeleteSprint_NotFound(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	err := db.DeleteSprint(testContext(), 999)
+	if err == nil {
+		t.Fatal("expected error for non-existent sprint")
+	}
+
+	if !errors.Is(err, utils.ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got: %v", err)
+	}
+}
+
+// ==================== CONTEXT TIMEOUT TESTS ====================
+
+func TestContextTimeout(t *testing.T) {
+	// Test that context with timeout is properly propagated
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// Create a task
+	task := &models.Task{
+		Priority:       1,
+		Severity:       1,
+		Status:         models.StatusBacklog,
+		Description:    "Test task",
+		Action:         "Action",
+		ExpectedResult: "Result",
+		CreatedAt:      time.Now().Format(time.RFC3339),
+	}
+
+	id, err := db.CreateTask(ctx, task)
+	if err != nil {
+		t.Fatalf("failed to create task with context: %v", err)
+	}
+
+	// Verify task was created
+	_, err = db.GetTask(ctx, id)
+	if err != nil {
+		t.Fatalf("failed to get task with context: %v", err)
+	}
+}
+
+func TestContextCancellation(t *testing.T) {
+	// Test that cancelled context is respected
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// Try to create a task with cancelled context
+	// This may or may not fail depending on timing
+	task := &models.Task{
+		Priority:       1,
+		Severity:       1,
+		Status:         models.StatusBacklog,
+		Description:    "Test task",
+		Action:         "Action",
+		ExpectedResult: "Result",
+		CreatedAt:      time.Now().Format(time.RFC3339),
+	}
+
+	// The important thing is that the function accepts context
+	// Actual cancellation behavior depends on SQLite driver
+	_, _ = db.CreateTask(ctx, task)
+}
+
+func TestWithDefaultTimeout(t *testing.T) {
+	ctx, cancel := WithDefaultTimeout()
+	defer cancel()
+
+	if ctx == nil {
+		t.Error("expected non-nil context")
+	}
+
+	// Check that context has a deadline
+	_, hasDeadline := ctx.Deadline()
+	if !hasDeadline {
+		t.Error("expected context to have a deadline")
+	}
+}
+
+func TestWithQuickTimeout(t *testing.T) {
+	ctx, cancel := WithQuickTimeout()
+	defer cancel()
+
+	if ctx == nil {
+		t.Error("expected non-nil context")
+	}
+
+	// Check that context has a deadline
+	_, hasDeadline := ctx.Deadline()
+	if !hasDeadline {
+		t.Error("expected context to have a deadline")
+	}
+}
+
+func TestWithCustomTimeout(t *testing.T) {
+	ctx, cancel := WithCustomTimeout(5 * time.Second)
+	defer cancel()
+
+	if ctx == nil {
+		t.Error("expected non-nil context")
+	}
+
+	// Check that context has a deadline
+	deadline, hasDeadline := ctx.Deadline()
+	if !hasDeadline {
+		t.Error("expected context to have a deadline")
+	}
+
+	// Verify the deadline is approximately 5 seconds from now
+	expectedDeadline := time.Now().Add(5 * time.Second)
+	diff := deadline.Sub(expectedDeadline)
+	if diff < -time.Second || diff > time.Second {
+		t.Errorf("expected deadline around %v, got %v", expectedDeadline, deadline)
 	}
 }

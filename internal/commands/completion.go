@@ -90,8 +90,11 @@ func CompleteTaskIDs() []string {
 	}
 	defer dbConn.Close()
 
+	ctx, cancel := db.WithQuickTimeout()
+	defer cancel()
+
 	// Get all tasks
-	tasks, err := dbConn.ListTasks(nil, nil, nil, nil)
+	tasks, _, err := dbConn.ListTasks(ctx, nil, nil, nil, nil, nil, nil, 1, 1000)
 	if err != nil {
 		return nil
 	}
@@ -118,8 +121,11 @@ func CompleteSprintIDs() []string {
 	}
 	defer dbConn.Close()
 
+	ctx, cancel := db.WithQuickTimeout()
+	defer cancel()
+
 	// Get all sprints
-	sprints, err := dbConn.ListSprints(nil)
+	sprints, err := dbConn.ListSprints(ctx, nil)
 	if err != nil {
 		return nil
 	}

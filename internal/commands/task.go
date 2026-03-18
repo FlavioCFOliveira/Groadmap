@@ -47,16 +47,19 @@ func HandleTask(args []string) error {
 	}
 }
 
-// taskList lists tasks with optional filters.
+// taskList lists tasks with optional filters and pagination.
 func taskList(args []string) error {
 	roadmapName, remaining, err := requireRoadmap(args)
 	if err != nil {
 		return err
 	}
 
-	// Parse filters
+	// Parse filters and pagination
 	var status *models.TaskStatus
-	var minPriority, minSeverity, limit *int
+	var minPriority, minSeverity *int
+	var createdAfter, createdBefore, searchText *string
+	page := 1
+	limit := 20
 
 	for i := 0; i < len(remaining); i++ {
 		switch remaining[i] {
@@ -87,13 +90,55 @@ func taskList(args []string) error {
 				minSeverity = &s
 				i++
 			}
+		case "--created-after":
+			if i+1 < len(remaining) {
+				dateStr := remaining[i+1]
+				if !utils.IsValidISO8601(dateStr) {
+					return fmt.Errorf("%w: invalid created-after date format, expected ISO 8601", utils.ErrInvalidInput)
+				}
+				createdAfter = &dateStr
+				i++
+			}
+		case "--created-before":
+			if i+1 < len(remaining) {
+				dateStr := remaining[i+1]
+				if !utils.IsValidISO8601(dateStr) {
+					return fmt.Errorf("%w: invalid created-before date format, expected ISO 8601", utils.ErrInvalidInput)
+				}
+				createdBefore = &dateStr
+				i++
+			}
+		case "--search":
+			if i+1 < len(remaining) {
+				search := remaining[i+1]
+				if len(search) < 2 {
+					return fmt.Errorf("%w: search text must be at least 2 characters", utils.ErrInvalidInput)
+				}
+				searchText = &search
+				i++
+			}
+		case "--page":
+			if i+1 < len(remaining) {
+				p, err := strconv.Atoi(remaining[i+1])
+				if err != nil {
+					return fmt.Errorf("%w: invalid page: %s", utils.ErrInvalidInput, remaining[i+1])
+				}
+				if p < 1 {
+					return fmt.Errorf("%w: page must be >= 1", utils.ErrInvalidInput)
+				}
+				page = p
+				i++
+			}
 		case "-l", "--limit":
 			if i+1 < len(remaining) {
 				l, err := strconv.Atoi(remaining[i+1])
 				if err != nil {
-					return fmt.Errorf("invalid limit: %s", remaining[i+1])
+					return fmt.Errorf("%w: invalid limit: %s", utils.ErrInvalidInput, remaining[i+1])
 				}
-				limit = &l
+				if l < 1 || l > 100 {
+					return fmt.Errorf("%w: limit must be between 1 and 100", utils.ErrInvalidInput)
+				}
+				limit = l
 				i++
 			}
 		}
@@ -105,12 +150,32 @@ func taskList(args []string) error {
 	}
 	defer database.Close()
 
-	tasks, err := database.ListTasks(status, minPriority, minSeverity, limit)
+	ctx, cancel := db.WithDefaultTimeout()
+	defer cancel()
+
+	tasks, total, err := database.ListTasks(ctx, status, minPriority, minSeverity, createdAfter, createdBefore, searchText, page, limit)
 	if err != nil {
 		return err
 	}
 
-	return utils.PrintJSON(tasks)
+	// Build paginated response
+	hasMore := (page * limit) < total
+	response := struct {
+		Data    []models.Task     `json:"data"`
+		Meta    db.PaginationMeta `json:"meta"`
+		HasMore bool              `json:"has_more"`
+	}{
+		Data: tasks,
+		Meta: db.PaginationMeta{
+			Total:  total,
+			Page:   page,
+			Limit:  limit,
+			Offset: (page - 1) * limit,
+		},
+		HasMore: hasMore,
+	}
+
+	return utils.PrintJSON(response)
 }
 
 // taskCreate creates a new task in the specified or current roadmap.
@@ -281,13 +346,13 @@ func taskGet(args []string) error {
 		return fmt.Errorf("%w: task ID(s) required", utils.ErrRequired)
 	}
 
-	// Parse IDs (comma-separated)
+	// Parse and validate IDs (comma-separated)
 	idStrs := strings.Split(remaining[0], ",")
 	var ids []int
 	for _, s := range idStrs {
-		id, err := strconv.Atoi(strings.TrimSpace(s))
+		id, err := utils.ValidateIDString(strings.TrimSpace(s), "task")
 		if err != nil {
-			return fmt.Errorf("%w: invalid task ID: %s", utils.ErrInvalidInput, s)
+			return err
 		}
 		ids = append(ids, id)
 	}
@@ -298,7 +363,10 @@ func taskGet(args []string) error {
 	}
 	defer database.Close()
 
-	tasks, err := database.GetTasks(ids)
+	ctx, cancel := db.WithQuickTimeout()
+	defer cancel()
+
+	tasks, err := database.GetTasks(ctx, ids)
 	if err != nil {
 		return err
 	}
@@ -349,9 +417,9 @@ func taskEdit(args []string) error {
 		return fmt.Errorf("%w: task ID required", utils.ErrRequired)
 	}
 
-	taskID, err := strconv.Atoi(remaining[0])
+	taskID, err := utils.ValidateIDString(remaining[0], "task")
 	if err != nil {
-		return fmt.Errorf("%w: invalid task ID: %s", utils.ErrInvalidInput, remaining[0])
+		return err
 	}
 
 	// Parse optional fields
@@ -469,13 +537,13 @@ func taskRemove(args []string) error {
 		return fmt.Errorf("%w: task ID(s) required", utils.ErrRequired)
 	}
 
-	// Parse IDs (comma-separated)
+	// Parse and validate IDs (comma-separated)
 	idStrs := strings.Split(remaining[0], ",")
 	var ids []int
 	for _, s := range idStrs {
-		id, err := strconv.Atoi(strings.TrimSpace(s))
+		id, err := utils.ValidateIDString(strings.TrimSpace(s), "task")
 		if err != nil {
-			return fmt.Errorf("%w: invalid task ID: %s", utils.ErrInvalidInput, s)
+			return err
 		}
 		ids = append(ids, id)
 	}
@@ -586,9 +654,12 @@ func taskSetStatus(args []string) error {
 	}
 	defer database.Close()
 
+	ctx, cancel := db.WithDefaultTimeout()
+	defer cancel()
+
 	// Validate status transitions
 	for _, id := range ids {
-		task, err := database.GetTask(id)
+		task, err := database.GetTask(ctx, id)
 		if err != nil {
 			return err
 		}

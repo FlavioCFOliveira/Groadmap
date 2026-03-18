@@ -109,7 +109,10 @@ func auditList(args []string) error {
 	}
 	defer database.Close()
 
-	entries, err := database.GetAuditEntries(operation, entityType, entityID, since, until, limit, 0)
+	ctx, cancel := db.WithDefaultTimeout()
+	defer cancel()
+
+	entries, err := database.GetAuditEntries(ctx, operation, entityType, entityID, since, until, limit, 0)
 	if err != nil {
 		return err
 	}
@@ -146,7 +149,10 @@ func auditHistory(args []string) error {
 	}
 	defer database.Close()
 
-	entries, err := database.GetEntityHistory(entityType, entityID)
+	ctx, cancel := db.WithQuickTimeout()
+	defer cancel()
+
+	entries, err := database.GetEntityHistory(ctx, entityType, entityID)
 	if err != nil {
 		return err
 	}
@@ -190,7 +196,10 @@ func auditStats(args []string) error {
 	}
 	defer database.Close()
 
-	stats, err := database.GetAuditStats(since, until)
+	ctx, cancel := db.WithQuickTimeout()
+	defer cancel()
+
+	stats, err := database.GetAuditStats(ctx, since, until)
 	if err != nil {
 		return err
 	}

@@ -1,35 +1,35 @@
 # task
 
-## Descrição
+## Description
 
-Gestão de tarefas dentro de um roadmap. As tarefas seguem o trabalho com status, prioridade, severidade e descrições detalhadas.
+Task management within a roadmap. Tasks track work with status, priority, severity, and detailed descriptions.
 
-## Sinopse
+## Synopsis
 
 ```
-rmp task [subcommand] [argumentos] [flags]
+rmp task [subcommand] [arguments] [flags]
 ```
 
-## Subcomandos
+## Subcommands
 
 ### list
 
-Lista as tarefas no roadmap selecionado.
+Lists tasks in the selected roadmap.
 
-**Uso:** `rmp task list [OPTIONS]` ou `rmp task ls [OPTIONS]`
+**Usage:** `rmp task list [OPTIONS]` or `rmp task ls [OPTIONS]`
 
 **Flags:**
-| Flag Curta | Flag Longa | Tipo | Padrão | Descrição |
-|------------|------------|------|--------|-----------|
-| `-r` | `--roadmap` | string | - | Nome do roadmap (obrigatório se não houver padrão) |
-| `-s` | `--status` | string | - | Filtrar por status: BACKLOG, SPRINT, DOING, TESTING, COMPLETED |
-| `-p` | `--priority` | int | - | Filtrar por prioridade mínima (0-9) |
-| N/A | `--severity` | int | - | Filtrar por severidade mínima (0-9) |
-| `-l` | `--limit` | int | - | Limitar número de resultados |
+| Short Flag | Long Flag | Type | Default | Description |
+|------------|------------|------|--------|-------------|
+| `-r` | `--roadmap` | string | - | Roadmap name (required if no default set) |
+| `-s` | `--status` | string | - | Filter by status: BACKLOG, SPRINT, DOING, TESTING, COMPLETED |
+| `-p` | `--priority` | int | - | Filter by minimum priority (0-9) |
+| N/A | `--severity` | int | - | Filter by minimum severity (0-9) |
+| `-l` | `--limit` | int | - | Limit number of results |
 
-**Output:** JSON array de objetos Task
+**Output:** JSON array of Task objects
 
-**Exemplos:**
+**Examples:**
 ```bash
 rmp task list -r project1
 rmp task ls -r project1 -s DOING
@@ -40,34 +40,34 @@ rmp task ls -r project1 -p 5 -l 20
 
 ### create
 
-Cria uma nova tarefa no roadmap especificado.
+Creates a new task in the specified roadmap.
 
-**Uso:** `rmp task create [OPTIONS]` ou `rmp task new [OPTIONS]`
+**Usage:** `rmp task create [OPTIONS]` or `rmp task new [OPTIONS]`
 
-**Flags Obrigatórias:**
-| Flag Curta | Flag Longa | Tipo | Descrição |
+**Required Flags:**
+| Short Flag | Long Flag | Type | Description |
 |------------|------------|------|-----------|
-| `-r` | `--roadmap` | string | Nome do roadmap |
-| `-d` | `--description` | string | Descrição da tarefa |
-| `-a` | `--action` | string | Ação técnica a realizar |
-| `-e` | `--expected-result` | string | Resultado esperado |
+| `-r` | `--roadmap` | string | Roadmap name |
+| `-d` | `--description` | string | Task description |
+| `-a` | `--action` | string | Technical action to perform |
+| `-e` | `--expected-result` | string | Expected outcome |
 
-**Flags Opcionais:**
-| Flag Curta | Flag Longa | Tipo | Padrão | Descrição |
-|------------|------------|------|--------|-----------|
-| `-p` | `--priority` | int | 0 | Prioridade 0-9 |
-| N/A | `--severity` | int | 0 | Severidade 0-9 |
-| `-sp` | `--specialists` | string | - | Lista de especialistas separados por vírgula |
+**Optional Flags:**
+| Short Flag | Long Flag | Type | Default | Description |
+|------------|------------|------|--------|-------------|
+| `-p` | `--priority` | int | 0 | Priority 0-9 |
+| N/A | `--severity` | int | 0 | Severity 0-9 |
+| `-sp` | `--specialists` | string | - | Comma-separated list of specialists |
 
-**Output:** JSON object com o ID da tarefa criada
+**Output:** JSON object with the created task ID
 
-**Exemplos:**
+**Examples:**
 ```bash
 rmp task create -r project1 -d "Fix login bug" -a "Debug auth" -e "Login works"
 rmp task new -r project1 -d "Update docs" -a "Write README" -e "Docs complete" -p 5
 ```
 
-**Output exemplo:**
+**Example output:**
 ```json
 {"id": 42}
 ```
@@ -76,23 +76,23 @@ rmp task new -r project1 -d "Update docs" -a "Write README" -e "Docs complete" -
 
 ### get
 
-Obtém informação detalhada sobre uma ou mais tarefas.
+Gets detailed information about one or more tasks.
 
-**Uso:** `rmp task get [OPTIONS] <ids>`
+**Usage:** `rmp task get [OPTIONS] <ids>`
 
-**Argumentos:**
-| Argumento | Obrigatório | Descrição |
-|-----------|-------------|-----------|
-| `ids` | Sim | IDs das tarefas separados por vírgula (sem espaços) |
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `ids` | Yes | Task IDs separated by commas (no spaces) |
 
 **Flags:**
-| Flag Curta | Flag Longa | Tipo | Descrição |
+| Short Flag | Long Flag | Type | Description |
 |------------|------------|------|-----------|
-| `-r` | `--roadmap` | string | Nome do roadmap (obrigatório) |
+| `-r` | `--roadmap` | string | Roadmap name (required) |
 
-**Output:** JSON array de objetos Task
+**Output:** JSON array of Task objects
 
-**Exemplos:**
+**Examples:**
 ```bash
 rmp task get -r project1 42
 rmp task get -r project1 1,2,3,10
@@ -102,27 +102,27 @@ rmp task get -r project1 1,2,3,10
 
 ### set-status (stat)
 
-Altera o status de uma ou mais tarefas.
+Changes the status of one or more tasks.
 
-**Uso:** `rmp task set-status [OPTIONS] <ids> <state>` ou `rmp task stat [OPTIONS] <ids> <state>`
+**Usage:** `rmp task set-status [OPTIONS] <ids> <state>` or `rmp task stat [OPTIONS] <ids> <state>`
 
-**Argumentos:**
-| Argumento | Obrigatório | Descrição |
-|-----------|-------------|-----------|
-| `ids` | Sim | IDs das tarefas separados por vírgula |
-| `state` | Sim | Novo status: BACKLOG, SPRINT, DOING, TESTING, COMPLETED |
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `ids` | Yes | Task IDs separated by commas |
+| `state` | Yes | New status: BACKLOG, SPRINT, DOING, TESTING, COMPLETED |
 
 **Flags:**
-| Flag Curta | Flag Longa | Tipo | Descrição |
+| Short Flag | Long Flag | Type | Description |
 |------------|------------|------|-----------|
-| `-r` | `--roadmap` | string | Nome do roadmap (obrigatório) |
+| `-r` | `--roadmap` | string | Roadmap name (required) |
 
-**Fluxo de Status:**
+**Status Flow:**
 ```
 BACKLOG ↔ SPRINT ↔ DOING ↔ TESTING → COMPLETED
 ```
 
-**Exemplos:**
+**Examples:**
 ```bash
 rmp task set-status -r project1 42 DOING
 rmp task stat -r project1 1,2,3 COMPLETED
@@ -132,26 +132,26 @@ rmp task stat -r project1 1,2,3 COMPLETED
 
 ### set-priority (prio)
 
-Altera a prioridade de uma ou mais tarefas.
+Changes the priority of one or more tasks.
 
-**Uso:** `rmp task set-priority [OPTIONS] <ids> <priority>` ou `rmp task prio [OPTIONS] <ids> <priority>`
+**Usage:** `rmp task set-priority [OPTIONS] <ids> <priority>` or `rmp task prio [OPTIONS] <ids> <priority>`
 
-**Argumentos:**
-| Argumento | Obrigatório | Descrição |
-|-----------|-------------|-----------|
-| `ids` | Sim | IDs das tarefas separados por vírgula |
-| `priority` | Sim | Valor de prioridade 0-9 |
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `ids` | Yes | Task IDs separated by commas |
+| `priority` | Yes | Priority value 0-9 |
 
 **Flags:**
-| Flag Curta | Flag Longa | Tipo | Descrição |
+| Short Flag | Long Flag | Type | Description |
 |------------|------------|------|-----------|
-| `-r` | `--roadmap` | string | Nome do roadmap (obrigatório) |
+| `-r` | `--roadmap` | string | Roadmap name (required) |
 
-**Escala de Prioridade:**
-- 0 = baixa urgência
-- 9 = urgência máxima (perspetiva do Product Owner)
+**Priority Scale:**
+- 0 = low urgency
+- 9 = maximum urgency (Product Owner perspective)
 
-**Exemplos:**
+**Examples:**
 ```bash
 rmp task set-priority -r project1 42 9
 rmp task prio -r project1 1,2,3 5
@@ -161,26 +161,26 @@ rmp task prio -r project1 1,2,3 5
 
 ### set-severity (sev)
 
-Altera a severidade de uma ou mais tarefas.
+Changes the severity of one or more tasks.
 
-**Uso:** `rmp task set-severity [OPTIONS] <ids> <severity>` ou `rmp task sev [OPTIONS] <ids> <severity>`
+**Usage:** `rmp task set-severity [OPTIONS] <ids> <severity>` or `rmp task sev [OPTIONS] <ids> <severity>`
 
-**Argumentos:**
-| Argumento | Obrigatório | Descrição |
-|-----------|-------------|-----------|
-| `ids` | Sim | IDs das tarefas separados por vírgula |
-| `severity` | Sim | Valor de severidade 0-9 |
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `ids` | Yes | Task IDs separated by commas |
+| `severity` | Yes | Severity value 0-9 |
 
 **Flags:**
-| Flag Curta | Flag Longa | Tipo | Descrição |
+| Short Flag | Long Flag | Type | Description |
 |------------|------------|------|-----------|
-| `-r` | `--roadmap` | string | Nome do roadmap (obrigatório) |
+| `-r` | `--roadmap` | string | Roadmap name (required) |
 
-**Escala de Severidade:**
-- 0 = impacto mínimo
-- 9 = impacto crítico (perspetiva da Equipa de Dev)
+**Severity Scale:**
+- 0 = minimal impact
+- 9 = critical impact (Dev Team perspective)
 
-**Exemplos:**
+**Examples:**
 ```bash
 rmp task set-severity -r project1 42 5
 rmp task sev -r project1 1,2,3 9
@@ -190,27 +190,27 @@ rmp task sev -r project1 1,2,3 9
 
 ### edit
 
-Edita as propriedades de uma tarefa existente. Apenas os campos especificados são atualizados.
+Edits an existing task's properties. Only specified fields are updated.
 
-**Uso:** `rmp task edit [OPTIONS] <id>`
+**Usage:** `rmp task edit [OPTIONS] <id>`
 
-**Argumentos:**
-| Argumento | Obrigatório | Descrição |
-|-----------|-------------|-----------|
-| `id` | Sim | ID da tarefa a editar |
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `id` | Yes | Task ID to edit |
 
 **Flags:**
-| Flag Curta | Flag Longa | Tipo | Descrição |
+| Short Flag | Long Flag | Type | Description |
 |------------|------------|------|-----------|
-| `-r` | `--roadmap` | string | Nome do roadmap (obrigatório) |
-| `-d` | `--description` | string | Nova descrição |
-| `-a` | `--action` | string | Nova ação |
-| `-e` | `--expected-result` | string | Novo resultado esperado |
-| `-p` | `--priority` | int | Nova prioridade (0-9) |
-| N/A | `--severity` | int | Nova severidade (0-9) |
-| `-sp` | `--specialists` | string | Novos especialistas |
+| `-r` | `--roadmap` | string | Roadmap name (required) |
+| `-d` | `--description` | string | New description |
+| `-a` | `--action` | string | New action |
+| `-e` | `--expected-result` | string | New expected result |
+| `-p` | `--priority` | int | New priority (0-9) |
+| N/A | `--severity` | int | New severity (0-9) |
+| `-sp` | `--specialists` | string | New specialists |
 
-**Exemplos:**
+**Examples:**
 ```bash
 rmp task edit -r project1 42 -d "New description" -p 7
 rmp task edit -r project1 1 --specialists "go-developer"
@@ -220,21 +220,21 @@ rmp task edit -r project1 1 --specialists "go-developer"
 
 ### remove
 
-Remove uma ou mais tarefas permanentemente. Esta ação não pode ser desfeita.
+Removes one or more tasks permanently. This action cannot be undone.
 
-**Uso:** `rmp task remove [OPTIONS] <ids>` ou `rmp task rm [OPTIONS] <ids>`
+**Usage:** `rmp task remove [OPTIONS] <ids>` or `rmp task rm [OPTIONS] <ids>`
 
-**Argumentos:**
-| Argumento | Obrigatório | Descrição |
-|-----------|-------------|-----------|
-| `ids` | Sim | IDs das tarefas separados por vírgula |
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `ids` | Yes | Task IDs separated by commas |
 
 **Flags:**
-| Flag Curta | Flag Longa | Tipo | Descrição |
+| Short Flag | Long Flag | Type | Description |
 |------------|------------|------|-----------|
-| `-r` | `--roadmap` | string | Nome do roadmap (obrigatório) |
+| `-r` | `--roadmap` | string | Roadmap name (required) |
 
-**Exemplos:**
+**Examples:**
 ```bash
 rmp task remove -r project1 42
 rmp task rm -r project1 1,2,3
@@ -242,7 +242,7 @@ rmp task rm -r project1 1,2,3
 
 ## Aliases
 
-| Comando | Alias |
+| Command | Alias |
 |---------|-------|
 | `task` | `t` |
 | `list` | `ls` |
@@ -252,9 +252,9 @@ rmp task rm -r project1 1,2,3
 | `set-priority` | `prio` |
 | `set-severity` | `sev` |
 
-## Notas
+## Notes
 
-- As tarefas são criadas com status `BACKLOG` por padrão
-- A transição de status é validada (não é possível ir de `COMPLETED` para `BACKLOG` diretamente)
-- Quando uma tarefa é marcada como `COMPLETED`, o campo `completed_at` é preenchido automaticamente
-- A flag `-r`/`--roadmap` pode ser omitida se um roadmap padrão tiver sido definido com `rmp roadmap use`
+- Tasks are created with `BACKLOG` status by default
+- Status transitions are validated (cannot go from `COMPLETED` to `BACKLOG` directly)
+- When a task is marked as `COMPLETED`, the `completed_at` field is automatically populated
+- The `-r`/`--roadmap` flag can be omitted if a default roadmap has been set with `rmp roadmap use`

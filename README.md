@@ -1,101 +1,101 @@
 # Groadmap
 
-Local Roadmap Manager CLI for agentic workflows. Groadmap é uma ferramenta CLI em Go para gestão de roadmaps técnicos, utilizando SQLite como backend.
+Local Roadmap Manager CLI for agentic workflows. Groadmap is a CLI tool in Go for managing technical roadmaps, using SQLite as backend.
 
-## Funcionalidades
+## Features
 
-- **Gestão de Roadmaps**: Criar, listar, selecionar e remover roadmaps
-- **Gestão de Tarefas**: Criar, editar, listar tarefas com status, prioridade e severidade
-- **Gestão de Sprints**: Organizar tarefas em sprints com ciclo de vida completo
-- **Audit Trail**: Registo automático de todas as operações
-- **Backup/Restore**: Criar e restaurar backups dos roadmaps
-- **Export/Import**: Exportar e importar roadmaps em formato JSON
-- **Métricas**: Monitorização de operações e performance
+- **Roadmap Management**: Create, list, select, and remove roadmaps
+- **Task Management**: Create, edit, list tasks with status, priority, and severity
+- **Sprint Management**: Organize tasks into sprints with complete lifecycle
+- **Audit Trail**: Automatic logging of all operations
+- **Backup/Restore**: Create and restore roadmap backups
+- **Export/Import**: Export and import roadmaps in JSON format
+- **Metrics**: Monitor operations and performance
 
-## Comandos Disponíveis
+## Available Commands
 
-| Comando | Descrição | Documentação |
-|---------|-----------|--------------|
-| `roadmap` | Gestão de roadmaps (criar, listar, selecionar) | [DOCS/commands/roadmap.md](DOCS/commands/roadmap.md) |
-| `task` | Gestão de tarefas | [DOCS/commands/task.md](DOCS/commands/task.md) |
-| `sprint` | Gestão de sprints | [DOCS/commands/sprint.md](DOCS/commands/sprint.md) |
-| `audit` | Registo de auditoria | [DOCS/commands/audit.md](DOCS/commands/audit.md) |
-| `user` | Gestão de utilizadores | [DOCS/commands/user.md](DOCS/commands/user.md) |
-| `metrics` | Métricas e monitorização | [DOCS/commands/metrics.md](DOCS/commands/metrics.md) |
+| Command | Description | Documentation |
+|---------|-------------|---------------|
+| `roadmap` | Roadmap management (create, list, select) | [DOCS/commands/roadmap.md](DOCS/commands/roadmap.md) |
+| `task` | Task management | [DOCS/commands/task.md](DOCS/commands/task.md) |
+| `sprint` | Sprint management | [DOCS/commands/sprint.md](DOCS/commands/sprint.md) |
+| `audit` | Audit log | [DOCS/commands/audit.md](DOCS/commands/audit.md) |
+| `user` | User management | [DOCS/commands/user.md](DOCS/commands/user.md) |
+| `metrics` | Metrics and monitoring | [DOCS/commands/metrics.md](DOCS/commands/metrics.md) |
 
-## Instalação
+## Installation
 
-### Compilar a partir do código fonte
+### Build from Source
 
 ```bash
-# Clonar o repositório
+# Clone the repository
 git clone https://github.com/FlavioCFOliveira/Groadmap.git
 cd Groadmap
 
-# Compilar
+# Build
 go build -o ./bin/ ./cmd/rmp
 
-# Adicionar ao PATH (opcional)
+# Add to PATH (optional)
 cp ./bin/rmp /usr/local/bin/
 ```
 
-## Uso Rápido
+## Quick Start
 
 ```bash
-# Criar um novo roadmap
+# Create a new roadmap
 rmp roadmap create myproject
 
-# Selecionar roadmap por omissão
+# Select default roadmap
 rmp roadmap use myproject
 
-# Criar uma tarefa
-rmp task create -d "Implementar feature X" -a "Desenvolver código" -e "Feature funcional"
+# Create a task
+rmp task create -d "Implement feature X" -a "Develop code" -e "Feature working"
 
-# Listar tarefas
+# List tasks
 rmp task list
 
-# Criar um sprint
+# Create a sprint
 rmp sprint create -d "Sprint 1 - Setup"
 
-# Adicionar tarefas ao sprint
+# Add tasks to sprint
 rmp sprint add-tasks 1 1,2,3
 
-# Iniciar sprint
+# Start sprint
 rmp sprint start 1
 ```
 
-## Estrutura do Projeto
+## Project Structure
 
 ```
 .
-├── cmd/rmp/main.go          # Ponto de entrada CLI
+├── cmd/rmp/main.go          # CLI entry point
 ├── internal/
-│   ├── commands/            # Subcomandos (roadmap, task, sprint, audit)
-│   ├── db/                  # SQLite, schema, queries parametrizadas
-│   ├── models/              # Structs e enums
-│   └── utils/               # JSON, datas ISO 8601, paths
-├── bin/                     # Output de build
-├── SPEC/                    # Especificações técnicas
-└── DOCS/                    # Documentação de comandos
+│   ├── commands/            # Subcommands (roadmap, task, sprint, audit)
+│   ├── db/                  # SQLite, schema, parameterized queries
+│   ├── models/              # Structs and enums
+│   └── utils/               # JSON, ISO 8601 dates, paths
+├── bin/                     # Build output
+├── SPEC/                    # Technical specifications
+└── DOCS/                    # Command documentation
 ```
 
-## Convenções
+## Conventions
 
-- **Output sucesso**: JSON para stdout
-- **Output erro**: Plain text para stderr
-- **Datas**: ISO 8601 UTC
-- **Roadmaps**: Armazenados em `~/.roadmaps/` com permissões `0700`
+- **Success output**: JSON to stdout
+- **Error output**: Plain text to stderr
+- **Dates**: ISO 8601 UTC
+- **Roadmaps**: Stored in `~/.roadmaps/` with permissions `0700`
 
-## Documentação Técnica
+## Technical Documentation
 
-Consulte a pasta `SPEC/` para documentação técnica detalhada:
-- `SPEC/ARCHITECTURE.md` - Design do sistema
-- `SPEC/COMMANDS.md` - Hierarquia CLI e aliases
-- `SPEC/DATABASE.md` - Schema SQLite
-- `SPEC/DATA_FORMATS.md` - Schema JSON outputs
-- `SPEC/MODELS.md` - Definição de modelos
-- `SPEC/STATE_MACHINE.md` - Máquinas de estado
+See the `SPEC/` folder for detailed technical documentation:
+- `SPEC/ARCHITECTURE.md` - System design
+- `SPEC/COMMANDS.md` - CLI hierarchy and aliases
+- `SPEC/DATABASE.md` - SQLite schema
+- `SPEC/DATA_FORMATS.md` - JSON output schema
+- `SPEC/MODELS.md` - Model definitions
+- `SPEC/STATE_MACHINE.md` - State machines
 
-## Licença
+## License
 
-MIT License - ver [LICENSE](LICENSE) para detalhes.
+MIT License - see [LICENSE](LICENSE) for details.

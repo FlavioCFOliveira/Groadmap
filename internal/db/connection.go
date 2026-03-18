@@ -2,6 +2,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log/slog"
@@ -189,7 +190,7 @@ func OpenExisting(roadmapName string) (*DB, error) {
 		return nil, err
 	}
 	if !exists {
-		return nil, fmt.Errorf("roadmap %q not found", roadmapName)
+		return nil, fmt.Errorf("%w: roadmap %q", utils.ErrNotFound, roadmapName)
 	}
 
 	return Open(roadmapName)
@@ -264,4 +265,29 @@ func (db *DB) WithTransaction(fn func(*sql.Tx) error) error {
 
 		return nil
 	})
+}
+
+// ==================== CONTEXT TIMEOUT HELPERS ====================
+
+const (
+	// DefaultQueryTimeout is the default timeout for database queries (30 seconds).
+	DefaultQueryTimeout = 30 * time.Second
+
+	// QuickQueryTimeout is the timeout for simple read operations (5 seconds).
+	QuickQueryTimeout = 5 * time.Second
+)
+
+// WithDefaultTimeout returns a context with the default query timeout.
+func WithDefaultTimeout() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), DefaultQueryTimeout)
+}
+
+// WithQuickTimeout returns a context with the quick query timeout.
+func WithQuickTimeout() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), QuickQueryTimeout)
+}
+
+// WithCustomTimeout returns a context with a custom timeout.
+func WithCustomTimeout(timeout time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), timeout)
 }

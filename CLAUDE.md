@@ -2,7 +2,7 @@
 
 ## Project Identity
 
-**Groadmap** é uma ferramenta CLI em Go para gestão de roadmaps técnicos, utilizando SQLite como backend.
+**Groadmap** is a CLI tool in Go for managing technical roadmaps, using SQLite as backend.
 
 ---
 
@@ -35,46 +35,46 @@
 ## Agent Responsibilities (Strict Ownership)
 
 ### spec-orchestrator
-**Autoridade exclusiva** para especificação técnica.
-- Cria e mantém todos os documentos em `SPEC/`
-- Produz especificações APENAS a partir do input do utilizador
-- NUNCA deriva especificações do código existente
-- SEMPRE pergunta ao utilizador para decisões (o utilizador é a única fonte de verdade)
-- Atua como gatekeeper: nenhuma implementação sem especificação clara
+**Exclusive authority** for technical specification.
+- Creates and maintains all documents in `SPEC/`
+- Produces specifications ONLY from user input
+- NEVER derives specifications from existing code
+- ALWAYS asks the user for decisions (the user is the single source of truth)
+- Acts as gatekeeper: no implementation without clear specification
 
 ### go-elite-developer
-**Autoridade exclusiva** para desenvolvimento de código Go.
-- Implementa features conforme especificação técnica
-- Garante código idiomático, eficiente e seguro
-- Realiza validação: `go build`, `go test`, `go vet`, `go fmt`
-- NUNCA implementa sem especificação aprovada
-- SEMPRE segue padrões do projeto em `SPEC/`
+**Exclusive authority** for Go code development.
+- Implements features according to technical specification
+- Ensures idiomatic, efficient, and secure code
+- Performs validation: `go build`, `go test`, `go vet`, `go fmt`
+- NEVER implements without approved specification
+- ALWAYS follows project patterns in `SPEC/`
 
 ### go-gitflow
-**Autoridade exclusiva** para operações Git.
-- Cria branches, commits, merges, PRs
-- Valida estado do repositório antes de operações
-- Garante mensagens de commit técnicas e descritivas
-- Requer confirmação explícita do utilizador para operações destrutivas
-- SEMPRE verifica `go fmt`, `go vet`, `go test` antes de commits
+**Exclusive authority** for Git operations.
+- Creates branches, commits, merges, PRs
+- Validates repository state before operations
+- Ensures technical and descriptive commit messages
+- Requires explicit user confirmation for destructive operations
+- ALWAYS checks `go fmt`, `go vet`, `go test` before commits
 
 ### exhaustive-qa-engineer
-**Autoridade exclusiva** para testes e validação.
-- Executa testes exaustivos, fuzzing, análise de edge cases
-- Valida segurança e robustez
-- Atua em: features críticas, validação pré-release, alterações de schema
+**Exclusive authority** for testing and validation.
+- Executes exhaustive tests, fuzzing, edge case analysis
+- Validates security and robustness
+- Acts on: critical features, pre-release validation, schema changes
 
 ### red-team-hacker
-**Autoridade exclusiva** para segurança ofensiva.
-- Realiza auditorias de segurança, penetration testing
-- Identifica vulnerabilidades e cadeias de exploit
-- Atua em: features de segurança, validação de input, operações críticas
+**Exclusive authority** for offensive security.
+- Performs security audits, penetration testing
+- Identifies vulnerabilities and exploit chains
+- Acts on: security features, input validation, critical operations
 
 ### go-performance-advisor
-**Autoridade exclusiva** para análise de performance.
-- Análise estática e dinâmica de código Go
-- Identifica bottlenecks, problemas de memória, concorrência
-- Fornece recomendações de otimização
+**Exclusive authority** for performance analysis.
+- Static and dynamic analysis of Go code
+- Identifies bottlenecks, memory issues, concurrency problems
+- Provides optimization recommendations
 
 ---
 
@@ -82,45 +82,45 @@
 
 ### Rule 1: Specification First
 ```
-Utilizador Request → spec-orchestrator → SPEC/ → go-elite-developer → Implementação
+User Request → spec-orchestrator → SPEC/ → go-elite-developer → Implementation
 ```
-- NENHUMA implementação começa sem especificação em `SPEC/`
-- Dúvidas de requisitos → SEMPRE perguntar ao utilizador
+- NO implementation starts without specification in `SPEC/`
+- Requirement questions → ALWAYS ask the user
 
 ### Rule 2: Skill Delegation
-- Tarefas de código → `go-elite-developer`
-- Tarefas Git → `go-gitflow`
-- Tarefas de especificação → `spec-orchestrator`
-- Tarefas de testes exaustivos → `exhaustive-qa-engineer`
-- Tarefas de segurança → `red-team-hacker`
-- Tarefas de performance → `go-performance-advisor`
+- Code tasks → `go-elite-developer`
+- Git tasks → `go-gitflow`
+- Specification tasks → `spec-orchestrator`
+- Exhaustive testing tasks → `exhaustive-qa-engineer`
+- Security tasks → `red-team-hacker`
+- Performance tasks → `go-performance-advisor`
 
 ### Rule 3: Validation Gates
-Antes de qualquer commit/merge:
-1. `go fmt ./...` (formato)
-2. `go vet ./...` (análise estática)
-3. `go test ./...` (testes)
+Before any commit/merge:
+1. `go fmt ./...` (format)
+2. `go vet ./...` (static analysis)
+3. `go test ./...` (tests)
 4. `go build -o ./bin/ ./cmd/rmp` (build)
 
 ### Rule 4: Output Standards
-- **Sucesso**: JSON para stdout
-- **Erros/Help**: Plain text para stderr
-- **Datas**: ISO 8601 UTC
+- **Success**: JSON to stdout
+- **Errors/Help**: Plain text to stderr
+- **Dates**: ISO 8601 UTC
 
 ### Rule 5: Commit Standards (Strict)
 
-#### Proibido
-- **NENHUMA referência ao Claude** nas mensagens de commit
-- **NENHUM `Co-Author`** ou similar nos commits
-- **NENHUMA menção** a assistentes AI, ferramentas externas, ou origem do código
+#### Forbidden
+- **NO reference to Claude** in commit messages
+- **NO `Co-Author`** or similar in commits
+- **NO mention** of AI assistants, external tools, or code origin
 
-#### Obrigatório
-- **Descrição detalhada** do que foi alterado
-- **Motivo da alteração** (porquê, não apenas o quê)
-- **Contexto técnico** relevante (structs, funções, packages afetados)
-- **Impacto** das mudanças (breaking changes, dependências, etc.)
+#### Required
+- **Detailed description** of what was changed
+- **Reason for the change** (why, not just what)
+- **Technical context** relevant (structs, functions, affected packages)
+- **Impact** of changes (breaking changes, dependencies, etc.)
 
-#### Formato
+#### Format
 ```
 type(scope): subject
 
@@ -138,13 +138,13 @@ type(scope): subject
 /Users/flaviocfo/dev/github.com/FlavioCFOliveira/Groadmap/
 ├── cmd/rmp/main.go          # Entry point CLI
 ├── internal/
-│   ├── commands/            # Subcomandos (roadmap, task, sprint, audit)
-│   ├── db/                  # SQLite, schema, queries parametrizadas
-│   ├── models/              # Structs e enums
-│   └── utils/               # JSON, datas ISO 8601, paths
-├── bin/                     # Output de build
-├── SPEC/                    # Especificações técnicas (spec-orchestrator only)
-└── CLAUDE.md               # Este ficheiro
+│   ├── commands/            # Subcommands (roadmap, task, sprint, audit)
+│   ├── db/                  # SQLite, schema, parameterized queries
+│   ├── models/              # Structs and enums
+│   └── utils/               # JSON, ISO 8601 dates, paths
+├── bin/                     # Build output
+├── SPEC/                    # Technical specifications (spec-orchestrator only)
+└── CLAUDE.md               # This file
 ```
 
 ---
@@ -152,16 +152,16 @@ type(scope): subject
 ## Development Commands
 
 ```bash
-# Build (output para ./bin/)
+# Build (output to ./bin/)
 go build -o ./bin/ ./cmd/rmp
 
 # Test
 go test ./...
 
-# Run (desenvolvimento)
+# Run (development)
 go run ./cmd/rmp [args]        # ex: go run ./cmd/rmp roadmap list
 
-# Format e Vet
+# Format and Vet
 go fmt ./...
 go vet ./...
 ```
@@ -171,73 +171,73 @@ go vet ./...
 ## Technical Constraints
 
 ### Security
-- Input validation obrigatória para todos os argumentos CLI
-- SQL queries parametrizadas (prepared statements)
-- Permissões de filesystem: `0700` para diretório de dados (`~/.roadmaps/`)
+- Mandatory input validation for all CLI arguments
+- Parameterized SQL queries (prepared statements)
+- Filesystem permissions: `0700` for data directory (`~/.roadmaps/`)
 
 ### Data Standards
-- Todas as datas: ISO 8601 UTC
-- Output sucesso: JSON
-- Output erro: Plain text para stderr
+- All dates: ISO 8601 UTC
+- Success output: JSON
+- Error output: Plain text to stderr
 
 ### SQLite
-- Ficheiros `.db` individuais em `~/.roadmaps/`
-- Schema versionado
-- Migrations quando necessário
+- Individual `.db` files in `~/.roadmaps/`
+- Versioned schema
+- Migrations when necessary
 
 ---
 
 ## SPEC Directory Reference
 
-| Ficheiro | Conteúdo | Owner |
-|----------|----------|-------|
-| `SPEC/ARCHITECTURE.md` | Design do sistema, estrutura | spec-orchestrator |
-| `SPEC/COMMANDS.md` | Hierarquia CLI, aliases | spec-orchestrator |
-| `SPEC/DATABASE.md` | Schema SQLite, relações | spec-orchestrator |
-| `SPEC/DATA_FORMATS.md` | Schema JSON outputs | spec-orchestrator |
-| `SPEC/HELP_EXAMPLES.md` | Mensagens de ajuda/erro | spec-orchestrator |
-| `SPEC/IMPLEMENTATION_PLAN.md` | Plano de implementação | spec-orchestrator |
-| `SPEC/MODELS.md` | Definição de modelos | spec-orchestrator |
-| `SPEC/STATE_MACHINE.md` | Máquinas de estado | spec-orchestrator |
+| File | Content | Owner |
+|------|---------|-------|
+| `SPEC/ARCHITECTURE.md` | System design, structure | spec-orchestrator |
+| `SPEC/COMMANDS.md` | CLI hierarchy, aliases | spec-orchestrator |
+| `SPEC/DATABASE.md` | SQLite schema, relationships | spec-orchestrator |
+| `SPEC/DATA_FORMATS.md` | JSON output schema | spec-orchestrator |
+| `SPEC/HELP_EXAMPLES.md` | Help/error messages | spec-orchestrator |
+| `SPEC/IMPLEMENTATION_PLAN.md` | Implementation plan | spec-orchestrator |
+| `SPEC/MODELS.md` | Model definitions | spec-orchestrator |
+| `SPEC/STATE_MACHINE.md` | State machines | spec-orchestrator |
 
 ---
 
 ## Decision Matrix
 
-| Situação | Ação |
-|----------|------|
-| Utilizador pede nova feature | Invocar `spec-orchestrator` primeiro |
-| Especificação existe, implementar | Invocar `go-elite-developer` |
-| Operações Git (commit, branch, PR) | Invocar `go-gitflow` |
-| Testes exaustivos necessários | Invocar `exhaustive-qa-engineer` |
-| Auditoria de segurança | Invocar `red-team-hacker` |
-| Análise de performance | Invocar `go-performance-advisor` |
-| Dúvida de requisitos | PERGUNTAR ao utilizador |
-| Código vs Especificação divergem | Seguir especificação, perguntar ao utilizador |
+| Situation | Action |
+|-----------|--------|
+| User requests new feature | Invoke `spec-orchestrator` first |
+| Specification exists, implement | Invoke `go-elite-developer` |
+| Git operations (commit, branch, PR) | Invoke `go-gitflow` |
+| Exhaustive testing needed | Invoke `exhaustive-qa-engineer` |
+| Security audit | Invoke `red-team-hacker` |
+| Performance analysis | Invoke `go-performance-advisor` |
+| Requirement question | ASK the user |
+| Code vs Specification diverge | Follow specification, ask the user |
 
 ---
 
-## Anti-Patterns (Proibido)
+## Anti-Patterns (Forbidden)
 
-- NUNCA implementar sem especificação
-- NUNCA derivar especificação do código existente
-- NUNCA tomar decisões de produto (sempre perguntar ao utilizador)
-- NUNCA ignorar falhas em `go vet` ou `go test`
-- NUNCA fazer operações Git destrutivas sem confirmação
-- NUNCA comprometer segurança (input validation, SQL injection)
-- NUNCA referenciar Claude/AI em commits (mensagens devem ser técnicas e neutras)
-- NUNCA adicionar Co-Author em commits (o utilizador é o único autor)
-- NUNCA criar documentação do projeto em português (sempre em inglês, conforme Documentation Standards)
-- NUNCA usar emojis ou caracteres ornamentais em documentação técnica
+- NEVER implement without specification
+- NEVER derive specification from existing code
+- NEVER make product decisions (always ask the user)
+- NEVER ignore failures in `go vet` or `go test`
+- NEVER perform destructive Git operations without confirmation
+- NEVER compromise security (input validation, SQL injection)
+- NEVER reference Claude/AI in commits (messages must be technical and neutral)
+- NEVER add Co-Author in commits (the user is the only author)
+- NEVER create project documentation in Portuguese (always in English, per Documentation Standards)
+- NEVER use emojis or ornamental characters in technical documentation
 
 ---
 
 ## Communication Protocol
 
-1. **Entender**: Analisar pedido do utilizador
-2. **Roteamento**: Identificar skill/agente correto
-3. **Delegação**: Invocar skill com contexto completo
-4. **Validação**: Verificar gates obrigatórios
-5. **Entrega**: Apresentar resultado ao utilizador
+1. **Understand**: Analyze user request
+2. **Routing**: Identify correct skill/agent
+3. **Delegation**: Invoke skill with complete context
+4. **Validation**: Verify mandatory gates
+5. **Delivery**: Present result to user
 
-Quando múltiplos agents são necessários, orquestrar sequencialmente conforme dependências.
+When multiple agents are needed, orchestrate sequentially according to dependencies.

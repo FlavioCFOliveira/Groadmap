@@ -1,236 +1,236 @@
 ---
 name: doc-manager
 description: |
-  Gestão automática de documentação para projetos CLI em Go.
+  Automated documentation management for Go CLI projects.
 
-  USE esta skill quando o utilizador pedir para:
-  - "gerar documentação", "criar docs", "atualizar documentação"
-  - "sincronizar docs com o código"
-  - "documentar comandos CLI"
-  - Qualquer pedido relacionado com documentação do projeto, README, ou docs de comandos
+  USE this skill when the user asks for:
+  - "generate documentation", "create docs", "update documentation"
+  - "sync docs with code"
+  - "document CLI commands"
+  - Any request related to project documentation, README, or command docs
 
-  Esta skill é EXCLUSIVA para projetos Go com estrutura CLI (comandos/subcomandos).
-  NÃO use para documentação de APIs REST, bibliotecas, ou projetos não-CLI.
+  This skill is EXCLUSIVE for Go projects with CLI structure (commands/subcommands).
+  DO NOT use for REST API documentation, libraries, or non-CLI projects.
 ---
 
 # doc-manager
 
-Skill para gerir automaticamente a documentação de projetos CLI em Go.
+Skill for automatically managing documentation for Go CLI projects.
 
-## Objetivo
+## Objective
 
-Manter a documentação do projeto sincronizada com o código fonte e as especificações técnicas, gerando automaticamente:
+Maintain project documentation synchronized with source code and technical specifications, automatically generating:
 
-1. **README.md** na raiz do projeto com índice de comandos
-2. **Ficheiros markdown** por comando em `./DOCS/commands/`
+1. **README.md** at project root with command index
+2. **Markdown files** per command in `./DOCS/commands/`
 
-## Quando Usar
+## When to Use
 
-- Ao adicionar novos comandos/subcomandos
-- Quando alterar argumentos, flags ou comportamento de comandos
-- Para manter documentação consistente com o código
-- Para gerar documentação inicial de um projeto CLI
+- When adding new commands/subcommands
+- When changing arguments, flags, or command behavior
+- To keep documentation consistent with code
+- To generate initial documentation for a CLI project
 
-## Processo de Execução
+## Execution Process
 
-### Passo 1: Análise do Estado Atual
+### Step 1: Analysis of Current State
 
-1. Verificar existência da pasta `./DOCS/` e `./DOCS/commands/`
-2. Ler `README.md` existente (se houver)
-3. Identificar documentação de comandos existente
-4. Comparar com estrutura atual do código
+1. Check existence of `./DOCS/` and `./DOCS/commands/` folders
+2. Read existing `README.md` (if any)
+3. Identify existing command documentation
+4. Compare with current code structure
 
-### Passo 2: Análise da Fonte de Verdade
+### Step 2: Analysis of Source of Truth
 
-Extrair informação de:
+Extract information from:
 
-1. **Código fonte** (`internal/commands/`):
-   - Nome dos comandos
-   - Subcomandos disponíveis
-   - Argumentos (posicionais)
-   - Flags (curtas `-f` e longas `--flag`)
-   - Descrições das flags
-   - Valores padrão
-   - Comandos obrigatórios vs opcionais
+1. **Source code** (`internal/commands/`):
+   - Command names
+   - Available subcommands
+   - Arguments (positional)
+   - Flags (short `-f` and long `--flag`)
+   - Flag descriptions
+   - Default values
+   - Required vs optional commands
 
-2. **Especificação técnica** (`SPEC/COMMANDS.md`):
-   - Hierarquia de comandos
+2. **Technical specification** (`SPEC/COMMANDS.md`):
+   - Command hierarchy
    - Aliases
-   - Descrições formais
-   - Exemplos de uso
+   - Formal descriptions
+   - Usage examples
 
-### Passo 3: Geração de Documentação
+### Step 3: Documentation Generation
 
-#### README.md (raiz do projeto)
+#### README.md (project root)
 
-Estrutura obrigatória:
+Required structure:
 ```markdown
-# [Nome do Projeto]
+# [Project Name]
 
-[Breve descrição do projeto]
+[Brief project description]
 
-## Comandos Disponíveis
+## Available Commands
 
-| Comando | Descrição | Documentação |
-|---------|-----------|--------------|
-| `[comando]` | [Descrição curta] | [DOCS/commands/comando.md](DOCS/commands/comando.md) |
+| Command | Description | Documentation |
+|---------|-------------|---------------|
+| `[command]` | [Short description] | [DOCS/commands/command.md](DOCS/commands/command.md) |
 
-## Instalação
+## Installation
 
-[Instruções de instalação]
+[Installation instructions]
 
-## Uso Rápido
+## Quick Start
 
-[Exemplo básico de uso]
+[Basic usage example]
 ```
 
-#### Ficheiros por Comando (`DOCS/commands/{comando}.md`)
+#### Files per Command (`DOCS/commands/{command}.md`)
 
-Template por comando:
+Template per command:
 
 ```markdown
-# [Nome do Comando]
+# [Command Name]
 
-## Descrição
+## Description
 
-[Descrição completa extraída do SPEC/código]
+[Full description extracted from SPEC/code]
 
-## Sinopse
+## Synopsis
 
 ```
-[comando] [subcomando] [argumentos] [flags]
+[command] [subcommand] [arguments] [flags]
 ```
 
-## Subcomandos
+## Subcommands
 
-### [subcomando-1]
+### [subcommand-1]
 
-**Uso:** `[comando] [subcomando-1] [args] [flags]`
+**Usage:** `[command] [subcommand-1] [args] [flags]`
 
-**Argumentos:**
-| Argumento | Obrigatório | Descrição |
-|-----------|-------------|-----------|
-| `arg1` | Sim | Descrição |
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `arg1` | Yes | Description |
 
 **Flags:**
-| Flag Curta | Flag Longa | Tipo | Padrão | Descrição |
-|------------|------------|------|--------|-----------|
-| `-f` | `--flag` | string | "" | Descrição |
+| Short Flag | Long Flag | Type | Default | Description |
+|------------|-----------|------|---------|-------------|
+| `-f` | `--flag` | string | "" | Description |
 
-**Exemplos:**
+**Examples:**
 ```bash
-# Exemplo 1
-[comando] [subcomando-1] --flag valor
+# Example 1
+[command] [subcommand-1] --flag value
 
-# Exemplo 2
-[comando] [subcomando-1] arg1 -v
+# Example 2
+[command] [subcommand-1] arg1 -v
 ```
 
-### [subcomando-2]
+### [subcommand-2]
 ...
 
 ## Aliases
 
-- `[alias1]` → `[comando]`
+- `[alias1]` → `[command]`
 
-## Notas
+## Notes
 
-[Notas adicionais relevantes]
+[Additional relevant notes]
 ```
 
-### Passo 4: Gestão de Conflitos
+### Step 4: Conflict Management
 
-**ANTES de escrever qualquer ficheiro:**
+**BEFORE writing any file:**
 
-1. Verificar se ficheiro já existe
-2. Se existir, mostrar diff entre versão existente e nova
-3. **PERGUNTAR ao utilizador**:
-   - "Sobrescrever [ficheiro]? (s/n)"
-   - "Mostrar diff completo antes? (s/n)"
-4. Só escrever após confirmação explícita
+1. Check if file already exists
+2. If exists, show diff between existing and new version
+3. **ASK the user**:
+   - "Overwrite [file]? (y/n)"
+   - "Show full diff first? (y/n)"
+4. Only write after explicit confirmation
 
-### Passo 5: Validação
+### Step 5: Validation
 
-Após geração:
+After generation:
 
-1. Verificar todos os links no README.md apontam para ficheiros existentes
-2. Verificar formatação markdown válida
-3. Confirmar estrutura de diretórios está correta
+1. Verify all links in README.md point to existing files
+2. Verify valid markdown formatting
+3. Confirm directory structure is correct
 
-## Formato de Output
+## Output Format
 
-Para cada operação, reportar:
+For each operation, report:
 
 ```
-=== Documentação Gerada ===
+=== Generated Documentation ===
 
-✓ README.md atualizado
-  - 5 comandos indexados
-  - Todos os links verificados
+✓ README.md updated
+  - 5 commands indexed
+  - All links verified
 
-✓ DOCS/commands/roadmap.md criado
-  - 4 subcomandos documentados
-  - 12 flags catalogadas
+✓ DOCS/commands/roadmap.md created
+  - 4 subcommands documented
+  - 12 flags cataloged
 
-⚠ DOCS/commands/task.md modificado
-  - Aguardando confirmação do utilizador
+⚠ DOCS/commands/task.md modified
+  - Awaiting user confirmation
 
-=== Resumo ===
-Criados: 2 | Atualizados: 1 | Inalterados: 2
+=== Summary ===
+Created: 2 | Updated: 1 | Unchanged: 2
 ```
 
-## Extração de Informação
+## Information Extraction
 
-### Do Código Go
+### From Go Code
 
-Procurar em `internal/commands/*.go`:
+Search in `internal/commands/*.go`:
 
 ```go
-// Comando principal
-var [Nome]Cmd = &cobra.Command{
-    Use:   "[uso]",
-    Short: "[descrição curta]",
-    Long:  "[descrição longa]",
+// Main command
+var [Name]Cmd = &cobra.Command{
+    Use:   "[usage]",
+    Short: "[short description]",
+    Long:  "[long description]",
 }
 
-// Subcomando
-var [Nome]SubCmd = &cobra.Command{...}
+// Subcommand
+var [Name]SubCmd = &cobra.Command{...}
 
 // Flags
-[Nome]Cmd.Flags().StringP("[long]", "[short]", "[default]", "[description]")
-[Nome]Cmd.Flags().BoolP("[long]", "[short]", [default], "[description]")
+[Name]Cmd.Flags().StringP("[long]", "[short]", "[default]", "[description]")
+[Name]Cmd.Flags().BoolP("[long]", "[short]", [default], "[description]")
 ```
 
-### Do SPEC
+### From SPEC
 
-Ler `SPEC/COMMANDS.md` e `SPEC/HELP_EXAMPLES.md` para:
-- Descrições formais
-- Exemplos de uso
-- Aliases documentados
+Read `SPEC/COMMANDS.md` and `SPEC/HELP_EXAMPLES.md` for:
+- Formal descriptions
+- Usage examples
+- Documented aliases
 
-## Convenções
+## Conventions
 
-1. **Nomes de ficheiros**: lowercase, sem espaços, `.md`
+1. **File names**: lowercase, no spaces, `.md`
    - Ex: `roadmap.md`, `task-create.md`
 
-2. **Links relativos**: usar paths relativos à raiz
+2. **Relative links**: use paths relative to root
    - `[docs](DOCS/commands/roadmap.md)`
 
-3. **Tabelas**: usar formato GitHub-flavored markdown
+3. **Tables**: use GitHub-flavored markdown format
 
-4. **Exemplos de código**: sempre com linguagem especificada
+4. **Code examples**: always specify language
    - ` ```bash `, ` ```go `
 
-5. **Datas**: não incluir datas de geração (documentação é "timeless")
+5. **Dates**: do not include generation dates (documentation is "timeless")
 
-## Limitações
+## Limitations
 
-- Apenas documenta comandos CLI (não APIs, bibliotecas, etc.)
-- Requer estrutura Cobra ou similar para extração automática
-- Exemplos complexos podem requerer input manual
+- Only documents CLI commands (not APIs, libraries, etc.)
+- Requires Cobra or similar structure for automatic extraction
+- Complex examples may require manual input
 
-## Tratamento de Erros
+## Error Handling
 
-- Se `SPEC/` não existir: usar apenas código como fonte
-- Se comando não tiver descrição: usar placeholder `[descrição pendente]`
-- Se flag não tiver documentação: extrair do nome + tipo
+- If `SPEC/` does not exist: use only code as source
+- If command has no description: use placeholder `[description pending]`
+- If flag has no documentation: extract from name + type

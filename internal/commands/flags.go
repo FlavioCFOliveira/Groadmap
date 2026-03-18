@@ -1,0 +1,244 @@
+package commands
+
+import (
+	"fmt"
+	"reflect"
+	"strconv"
+	"strings"
+
+	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
+)
+
+// FlagDef defines a command-line flag.
+type FlagDef struct {
+	Name      string                  // Long name (e.g., "--description")
+	Short     string                  // Short name (e.g., "-d")
+	Field     string                  // Struct field name to populate
+	Type      string                  // "string", "int", "bool"
+	Required  bool                    // Whether the flag is required
+	Default   string                  // Default value (as string)
+	Validator func(interface{}) error // Optional validation function
+}
+
+// ParseResult holds the result of flag parsing.
+type ParseResult struct {
+	Flags   map[string]interface{}
+	Args    []string // Positional arguments
+	Roadmap string   // Roadmap name if specified
+}
+
+// FlagParser is a generic flag parser for commands.
+type FlagParser struct {
+	defs []FlagDef
+}
+
+// NewFlagParser creates a new flag parser with the given flag definitions.
+func NewFlagParser(defs []FlagDef) *FlagParser {
+	return &FlagParser{defs: defs}
+}
+
+// Parse parses command-line arguments according to the flag definitions.
+// Returns a map of parsed values and any remaining positional arguments.
+func (fp *FlagParser) Parse(args []string) (*ParseResult, error) {
+	result := &ParseResult{
+		Flags: make(map[string]interface{}),
+		Args:  make([]string, 0),
+	}
+
+	// Initialize with defaults
+	for _, def := range fp.defs {
+		if def.Default != "" {
+			val, err := fp.parseValue(def.Default, def.Type)
+			if err != nil {
+				return nil, fmt.Errorf("%w: invalid default value for %s: %v", utils.ErrInvalidInput, def.Name, err)
+			}
+			result.Flags[def.Field] = val
+		}
+	}
+
+	// Parse arguments
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+
+		// Handle roadmap flag specially
+		if arg == "-r" || arg == "--roadmap" {
+			if i+1 < len(args) {
+				result.Roadmap = args[i+1]
+				i++
+				continue
+			}
+			return nil, fmt.Errorf("%w: %s requires a value", utils.ErrRequired, arg)
+		}
+
+		// Check if it's a flag
+		if !strings.HasPrefix(arg, "-") {
+			// Positional argument
+			result.Args = append(result.Args, arg)
+			continue
+		}
+
+		// Find matching flag definition
+		def := fp.findDef(arg)
+		if def == nil {
+			return nil, fmt.Errorf("%w: unknown flag: %s", utils.ErrInvalidInput, arg)
+		}
+
+		// Handle boolean flags (no value required)
+		if def.Type == "bool" {
+			result.Flags[def.Field] = true
+			continue
+		}
+
+		// Get value for non-boolean flags
+		if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+			return nil, fmt.Errorf("%w: %s requires a value", utils.ErrRequired, arg)
+		}
+
+		value := args[i+1]
+		i++
+
+		// Parse and validate value
+		parsed, err := fp.parseValue(value, def.Type)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid value for %s: %v", utils.ErrInvalidInput, def.Name, err)
+		}
+
+		// Run custom validator if provided
+		if def.Validator != nil {
+			if err := def.Validator(parsed); err != nil {
+				return nil, err
+			}
+		}
+
+		result.Flags[def.Field] = parsed
+	}
+
+	// Check required flags
+	for _, def := range fp.defs {
+		if def.Required {
+			if _, ok := result.Flags[def.Field]; !ok {
+				return nil, fmt.Errorf("%w: missing required flag: %s", utils.ErrRequired, def.Name)
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// findDef finds a flag definition by name or short name.
+func (fp *FlagParser) findDef(arg string) *FlagDef {
+	for i := range fp.defs {
+		if fp.defs[i].Name == arg || fp.defs[i].Short == arg {
+			return &fp.defs[i]
+		}
+	}
+	return nil
+}
+
+// parseValue parses a string value into the appropriate type.
+func (fp *FlagParser) parseValue(value string, typ string) (interface{}, error) {
+	switch typ {
+	case "string":
+		return value, nil
+	case "int":
+		return strconv.Atoi(value)
+	case "bool":
+		return strconv.ParseBool(value)
+	default:
+		return nil, fmt.Errorf("unknown type: %s", typ)
+	}
+}
+
+// Bind binds the parsed result to a target struct using reflection.
+// The target struct must have exported fields matching the Field names in FlagDef.
+func (fp *FlagParser) Bind(result *ParseResult, target interface{}) error {
+	v := reflect.ValueOf(target)
+	if v.Kind() != reflect.Ptr || v.Elem().Kind() != reflect.Struct {
+		return fmt.Errorf("target must be a pointer to a struct")
+	}
+
+	v = v.Elem()
+	t := v.Type()
+
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		fieldValue := v.Field(i)
+
+		// Skip unexported fields
+		if !fieldValue.CanSet() {
+			continue
+		}
+
+		// Find matching flag value
+		if val, ok := result.Flags[field.Name]; ok {
+			if err := fp.setField(fieldValue, val); err != nil {
+				return fmt.Errorf("cannot set field %s: %w", field.Name, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// setField sets a struct field from an interface{} value.
+func (fp *FlagParser) setField(field reflect.Value, value interface{}) error {
+	switch field.Kind() {
+	case reflect.String:
+		if s, ok := value.(string); ok {
+			field.SetString(s)
+			return nil
+		}
+		return fmt.Errorf("expected string, got %T", value)
+	case reflect.Int:
+		if i, ok := value.(int); ok {
+			field.SetInt(int64(i))
+			return nil
+		}
+		return fmt.Errorf("expected int, got %T", value)
+	case reflect.Bool:
+		if b, ok := value.(bool); ok {
+			field.SetBool(b)
+			return nil
+		}
+		return fmt.Errorf("expected bool, got %T", value)
+	}
+	return fmt.Errorf("unsupported field type: %s", field.Kind())
+}
+
+// Common flag definitions for reuse
+var (
+	// TaskCreateFlags defines flags for task creation
+	TaskCreateFlags = []FlagDef{
+		{Name: "--description", Short: "-d", Field: "Description", Type: "string", Required: true},
+		{Name: "--action", Short: "-a", Field: "Action", Type: "string", Required: true},
+		{Name: "--expected-result", Short: "-e", Field: "ExpectedResult", Type: "string", Required: true},
+		{Name: "--priority", Short: "-p", Field: "Priority", Type: "int", Default: "0"},
+		{Name: "--severity", Short: "", Field: "Severity", Type: "int", Default: "0"},
+		{Name: "--specialists", Short: "-sp", Field: "Specialists", Type: "string"},
+	}
+
+	// TaskEditFlags defines flags for task editing
+	TaskEditFlags = []FlagDef{
+		{Name: "--description", Short: "-d", Field: "Description", Type: "string"},
+		{Name: "--action", Short: "-a", Field: "Action", Type: "string"},
+		{Name: "--expected-result", Short: "-e", Field: "ExpectedResult", Type: "string"},
+		{Name: "--priority", Short: "-p", Field: "Priority", Type: "int"},
+		{Name: "--severity", Short: "", Field: "Severity", Type: "int"},
+		{Name: "--specialists", Short: "-sp", Field: "Specialists", Type: "string"},
+	}
+
+	// SprintCreateFlags defines flags for sprint creation
+	SprintCreateFlags = []FlagDef{
+		{Name: "--description", Short: "-d", Field: "Description", Type: "string", Required: true},
+	}
+
+	// AuditListFlags defines flags for audit listing
+	AuditListFlags = []FlagDef{
+		{Name: "--operation", Short: "-o", Field: "Operation", Type: "string"},
+		{Name: "--entity-type", Short: "-e", Field: "EntityType", Type: "string"},
+		{Name: "--entity-id", Short: "", Field: "EntityID", Type: "int"},
+		{Name: "--since", Short: "", Field: "Since", Type: "string"},
+		{Name: "--until", Short: "", Field: "Until", Type: "string"},
+		{Name: "--limit", Short: "-l", Field: "Limit", Type: "int", Default: "100"},
+	}
+)

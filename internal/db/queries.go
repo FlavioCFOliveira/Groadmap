@@ -21,6 +21,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -29,13 +30,30 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
+// ==================== PAGINATION TYPES ====================
+
+// PaginationMeta contains metadata for paginated results.
+type PaginationMeta struct {
+	Total  int `json:"total"`  // Total number of items
+	Page   int `json:"page"`   // Current page number (1-based)
+	Limit  int `json:"limit"`  // Items per page
+	Offset int `json:"offset"` // Current offset
+}
+
+// PaginatedResult is a generic container for paginated results.
+type PaginatedResult struct {
+	Data    interface{}    `json:"data"`
+	Meta    PaginationMeta `json:"meta"`
+	HasMore bool           `json:"has_more"`
+}
+
 // ==================== TASK QUERIES ====================
 
 // CreateTask inserts a new task and returns its ID.
-func (db *DB) CreateTask(task *models.Task) (int, error) {
+func (db *DB) CreateTask(ctx context.Context, task *models.Task) (int, error) {
 	var taskID int
 	err := retryWithBackoff("create task", func() error {
-		result, err := db.Exec(
+		result, err := db.ExecContext(ctx,
 			`INSERT INTO tasks (priority, severity, description, specialists, action, expected_result, created_at, status)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			task.Priority,
@@ -68,12 +86,12 @@ func (db *DB) CreateTask(task *models.Task) (int, error) {
 }
 
 // GetTask retrieves a task by ID.
-func (db *DB) GetTask(id int) (*models.Task, error) {
+func (db *DB) GetTask(ctx context.Context, id int) (*models.Task, error) {
 	var task models.Task
 	var specialists sql.NullString
 	var completedAt sql.NullString
 
-	err := db.QueryRow(
+	err := db.QueryRowContext(ctx,
 		`SELECT id, priority, severity, status, description, specialists, action, expected_result, created_at, completed_at
 		 FROM tasks WHERE id = ?`,
 		id,
@@ -92,7 +110,7 @@ func (db *DB) GetTask(id int) (*models.Task, error) {
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("task %d not found", id)
+			return nil, fmt.Errorf("%w: task %d", utils.ErrNotFound, id)
 		}
 		return nil, fmt.Errorf("querying task: %w", err)
 	}
@@ -108,7 +126,7 @@ func (db *DB) GetTask(id int) (*models.Task, error) {
 }
 
 // GetTasks retrieves multiple tasks by IDs.
-func (db *DB) GetTasks(ids []int) ([]models.Task, error) {
+func (db *DB) GetTasks(ctx context.Context, ids []int) ([]models.Task, error) {
 	if len(ids) == 0 {
 		return []models.Task{}, nil
 	}
@@ -127,7 +145,7 @@ func (db *DB) GetTasks(ids []int) ([]models.Task, error) {
 		strings.Join(placeholders, ","),
 	)
 
-	rows, err := db.Query(query, args...)
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying tasks: %w", err)
 	}
@@ -136,8 +154,59 @@ func (db *DB) GetTasks(ids []int) ([]models.Task, error) {
 	return scanTasks(rows)
 }
 
-// ListTasks retrieves tasks with optional filters.
-func (db *DB) ListTasks(status *models.TaskStatus, minPriority, minSeverity *int, limit *int) ([]models.Task, error) {
+// ListTasks retrieves tasks with optional filters and pagination.
+// Returns tasks, total count, and error.
+// Filters: status, minPriority, minSeverity, createdAfter, createdBefore, searchText
+func (db *DB) ListTasks(ctx context.Context, status *models.TaskStatus, minPriority, minSeverity *int, createdAfter, createdBefore, searchText *string, page, limit int) ([]models.Task, int, error) {
+	// Validate pagination parameters
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	offset := (page - 1) * limit
+
+	// Build count query
+	countQuery := `SELECT COUNT(*) FROM tasks WHERE 1=1`
+	countArgs := []interface{}{}
+
+	if status != nil {
+		countQuery += " AND status = ?"
+		countArgs = append(countArgs, string(*status))
+	}
+	if minPriority != nil {
+		countQuery += " AND priority >= ?"
+		countArgs = append(countArgs, *minPriority)
+	}
+	if minSeverity != nil {
+		countQuery += " AND severity >= ?"
+		countArgs = append(countArgs, *minSeverity)
+	}
+	if createdAfter != nil {
+		countQuery += " AND created_at >= ?"
+		countArgs = append(countArgs, *createdAfter)
+	}
+	if createdBefore != nil {
+		countQuery += " AND created_at <= ?"
+		countArgs = append(countArgs, *createdBefore)
+	}
+	if searchText != nil && *searchText != "" {
+		countQuery += " AND (description LIKE ? OR action LIKE ? OR expected_result LIKE ?)"
+		searchPattern := "%" + *searchText + "%"
+		countArgs = append(countArgs, searchPattern, searchPattern, searchPattern)
+	}
+
+	var total int
+	err := db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("counting tasks: %w", err)
+	}
+
+	// Build data query
 	query := `SELECT id, priority, severity, status, description, specialists, action, expected_result, created_at, completed_at
 		      FROM tasks WHERE 1=1`
 	args := []interface{}{}
@@ -154,21 +223,36 @@ func (db *DB) ListTasks(status *models.TaskStatus, minPriority, minSeverity *int
 		query += " AND severity >= ?"
 		args = append(args, *minSeverity)
 	}
-
-	query += " ORDER BY priority DESC, created_at ASC"
-
-	if limit != nil {
-		query += " LIMIT ?"
-		args = append(args, *limit)
+	if createdAfter != nil {
+		query += " AND created_at >= ?"
+		args = append(args, *createdAfter)
+	}
+	if createdBefore != nil {
+		query += " AND created_at <= ?"
+		args = append(args, *createdBefore)
+	}
+	if searchText != nil && *searchText != "" {
+		query += " AND (description LIKE ? OR action LIKE ? OR expected_result LIKE ?)"
+		searchPattern := "%" + *searchText + "%"
+		args = append(args, searchPattern, searchPattern, searchPattern)
 	}
 
-	rows, err := db.Query(query, args...)
+	query += " ORDER BY priority DESC, created_at ASC"
+	query += " LIMIT ? OFFSET ?"
+	args = append(args, limit, offset)
+
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("listing tasks: %w", err)
+		return nil, 0, fmt.Errorf("listing tasks: %w", err)
 	}
 	defer rows.Close()
 
-	return scanTasks(rows)
+	tasks, err := scanTasks(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return tasks, total, nil
 }
 
 // allowedTaskUpdateFields contains the whitelist of fields that can be updated via UpdateTask.
@@ -184,6 +268,7 @@ var allowedTaskUpdateFields = map[string]bool{
 // UpdateTask updates a task's fields with the provided values.
 //
 // Parameters:
+//   - ctx: Context for timeout and cancellation
 //   - id: The unique identifier of the task to update
 //   - updates: A map of field names to new values. Only whitelisted fields can be updated.
 //
@@ -206,7 +291,7 @@ var allowedTaskUpdateFields = map[string]bool{
 //   - Does NOT create audit entries (caller should log changes)
 //
 // Complexity: O(n) where n is the number of fields being updated
-func (db *DB) UpdateTask(id int, updates map[string]interface{}) error {
+func (db *DB) UpdateTask(ctx context.Context, id int, updates map[string]interface{}) error {
 	if len(updates) == 0 {
 		return nil
 	}
@@ -230,7 +315,7 @@ func (db *DB) UpdateTask(id int, updates map[string]interface{}) error {
 		args = append(args, id)
 		query := fmt.Sprintf("UPDATE tasks SET %s WHERE id = ?", strings.Join(setParts, ", "))
 
-		result, err := db.Exec(query, args...)
+		result, err := db.ExecContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("updating task: %w", err)
 		}
@@ -240,7 +325,7 @@ func (db *DB) UpdateTask(id int, updates map[string]interface{}) error {
 			return fmt.Errorf("checking rows affected: %w", err)
 		}
 		if affected == 0 {
-			return fmt.Errorf("task %d not found", id)
+			return fmt.Errorf("%w: task %d", utils.ErrNotFound, id)
 		}
 
 		return nil
@@ -248,7 +333,7 @@ func (db *DB) UpdateTask(id int, updates map[string]interface{}) error {
 }
 
 // UpdateTaskStatus updates task status and optionally sets completed_at.
-func (db *DB) UpdateTaskStatus(ids []int, status models.TaskStatus) error {
+func (db *DB) UpdateTaskStatus(ctx context.Context, ids []int, status models.TaskStatus) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -278,7 +363,7 @@ func (db *DB) UpdateTaskStatus(ids []int, status models.TaskStatus) error {
 			strings.Join(placeholders, ","),
 		)
 
-		_, err := db.Exec(query, args...)
+		_, err := db.ExecContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("updating task status: %w", err)
 		}
@@ -288,7 +373,7 @@ func (db *DB) UpdateTaskStatus(ids []int, status models.TaskStatus) error {
 }
 
 // UpdateTaskPriority updates task priority.
-func (db *DB) UpdateTaskPriority(ids []int, priority int) error {
+func (db *DB) UpdateTaskPriority(ctx context.Context, ids []int, priority int) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -303,7 +388,7 @@ func (db *DB) UpdateTaskPriority(ids []int, priority int) error {
 		}
 
 		query := fmt.Sprintf("UPDATE tasks SET priority = ? WHERE id IN (%s)", strings.Join(placeholders, ","))
-		_, err := db.Exec(query, args...)
+		_, err := db.ExecContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("updating task priority: %w", err)
 		}
@@ -312,7 +397,7 @@ func (db *DB) UpdateTaskPriority(ids []int, priority int) error {
 }
 
 // UpdateTaskSeverity updates task severity.
-func (db *DB) UpdateTaskSeverity(ids []int, severity int) error {
+func (db *DB) UpdateTaskSeverity(ctx context.Context, ids []int, severity int) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -327,7 +412,7 @@ func (db *DB) UpdateTaskSeverity(ids []int, severity int) error {
 		}
 
 		query := fmt.Sprintf("UPDATE tasks SET severity = ? WHERE id IN (%s)", strings.Join(placeholders, ","))
-		_, err := db.Exec(query, args...)
+		_, err := db.ExecContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("updating task severity: %w", err)
 		}
@@ -336,9 +421,9 @@ func (db *DB) UpdateTaskSeverity(ids []int, severity int) error {
 }
 
 // DeleteTask deletes a task by ID.
-func (db *DB) DeleteTask(id int) error {
+func (db *DB) DeleteTask(ctx context.Context, id int) error {
 	return retryWithBackoff("delete task", func() error {
-		result, err := db.Exec("DELETE FROM tasks WHERE id = ?", id)
+		result, err := db.ExecContext(ctx, "DELETE FROM tasks WHERE id = ?", id)
 		if err != nil {
 			return fmt.Errorf("deleting task: %w", err)
 		}
@@ -348,7 +433,7 @@ func (db *DB) DeleteTask(id int) error {
 			return fmt.Errorf("checking rows affected: %w", err)
 		}
 		if affected == 0 {
-			return fmt.Errorf("task %d not found", id)
+			return fmt.Errorf("%w: task %d", utils.ErrNotFound, id)
 		}
 
 		return nil
@@ -400,10 +485,10 @@ func scanTasks(rows *sql.Rows) ([]models.Task, error) {
 // ==================== SPRINT QUERIES ====================
 
 // CreateSprint inserts a new sprint and returns its ID.
-func (db *DB) CreateSprint(sprint *models.Sprint) (int, error) {
+func (db *DB) CreateSprint(ctx context.Context, sprint *models.Sprint) (int, error) {
 	var sprintID int
 	err := retryWithBackoff("create sprint", func() error {
-		result, err := db.Exec(
+		result, err := db.ExecContext(ctx,
 			`INSERT INTO sprints (status, description, created_at) VALUES (?, ?, ?)`,
 			sprint.Status,
 			sprint.Description,
@@ -430,12 +515,12 @@ func (db *DB) CreateSprint(sprint *models.Sprint) (int, error) {
 }
 
 // GetSprint retrieves a sprint by ID.
-func (db *DB) GetSprint(id int) (*models.Sprint, error) {
+func (db *DB) GetSprint(ctx context.Context, id int) (*models.Sprint, error) {
 	var sprint models.Sprint
 	var startedAt sql.NullString
 	var closedAt sql.NullString
 
-	err := db.QueryRow(
+	err := db.QueryRowContext(ctx,
 		`SELECT id, status, description, created_at, started_at, closed_at FROM sprints WHERE id = ?`,
 		id,
 	).Scan(
@@ -449,7 +534,7 @@ func (db *DB) GetSprint(id int) (*models.Sprint, error) {
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("sprint %d not found", id)
+			return nil, fmt.Errorf("%w: sprint %d", utils.ErrNotFound, id)
 		}
 		return nil, fmt.Errorf("querying sprint: %w", err)
 	}
@@ -462,7 +547,7 @@ func (db *DB) GetSprint(id int) (*models.Sprint, error) {
 	}
 
 	// Load tasks
-	tasks, err := db.GetSprintTasks(id)
+	tasks, err := db.GetSprintTasks(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -473,7 +558,7 @@ func (db *DB) GetSprint(id int) (*models.Sprint, error) {
 }
 
 // ListSprints retrieves all sprints with optional status filter.
-func (db *DB) ListSprints(status *models.SprintStatus) ([]models.Sprint, error) {
+func (db *DB) ListSprints(ctx context.Context, status *models.SprintStatus) ([]models.Sprint, error) {
 	query := `SELECT id, status, description, created_at, started_at, closed_at FROM sprints WHERE 1=1`
 	args := []interface{}{}
 
@@ -484,7 +569,7 @@ func (db *DB) ListSprints(status *models.SprintStatus) ([]models.Sprint, error) 
 
 	query += " ORDER BY created_at DESC"
 
-	rows, err := db.Query(query, args...)
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("listing sprints: %w", err)
 	}
@@ -526,9 +611,9 @@ func (db *DB) ListSprints(status *models.SprintStatus) ([]models.Sprint, error) 
 }
 
 // UpdateSprint updates a sprint's description.
-func (db *DB) UpdateSprint(id int, description string) error {
+func (db *DB) UpdateSprint(ctx context.Context, id int, description string) error {
 	return retryWithBackoff("update sprint", func() error {
-		result, err := db.Exec(
+		result, err := db.ExecContext(ctx,
 			"UPDATE sprints SET description = ? WHERE id = ?",
 			description, id,
 		)
@@ -541,7 +626,7 @@ func (db *DB) UpdateSprint(id int, description string) error {
 			return fmt.Errorf("checking rows affected: %w", err)
 		}
 		if affected == 0 {
-			return fmt.Errorf("sprint %d not found", id)
+			return fmt.Errorf("%w: sprint %d", utils.ErrNotFound, id)
 		}
 
 		return nil
@@ -549,7 +634,7 @@ func (db *DB) UpdateSprint(id int, description string) error {
 }
 
 // UpdateSprintStatus updates sprint status and timestamps.
-func (db *DB) UpdateSprintStatus(id int, status models.SprintStatus) error {
+func (db *DB) UpdateSprintStatus(ctx context.Context, id int, status models.SprintStatus) error {
 	return retryWithBackoff("update sprint status", func() error {
 		var query string
 		var args []interface{}
@@ -569,7 +654,7 @@ func (db *DB) UpdateSprintStatus(id int, status models.SprintStatus) error {
 			args = []interface{}{status, id}
 		}
 
-		result, err := db.Exec(query, args...)
+		result, err := db.ExecContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("updating sprint status: %w", err)
 		}
@@ -579,7 +664,7 @@ func (db *DB) UpdateSprintStatus(id int, status models.SprintStatus) error {
 			return fmt.Errorf("checking rows affected: %w", err)
 		}
 		if affected == 0 {
-			return fmt.Errorf("sprint %d not found", id)
+			return fmt.Errorf("%w: sprint %d", utils.ErrNotFound, id)
 		}
 
 		return nil
@@ -587,10 +672,10 @@ func (db *DB) UpdateSprintStatus(id int, status models.SprintStatus) error {
 }
 
 // DeleteSprint deletes a sprint by ID.
-func (db *DB) DeleteSprint(id int) error {
+func (db *DB) DeleteSprint(ctx context.Context, id int) error {
 	return retryWithBackoff("delete sprint", func() error {
 		// First reset task status for tasks in this sprint
-		_, err := db.Exec(
+		_, err := db.ExecContext(ctx,
 			`UPDATE tasks SET status = 'BACKLOG' WHERE id IN (
 				SELECT task_id FROM sprint_tasks WHERE sprint_id = ?
 			)`,
@@ -601,7 +686,7 @@ func (db *DB) DeleteSprint(id int) error {
 		}
 
 		// Delete sprint (cascade will remove sprint_tasks entries)
-		result, err := db.Exec("DELETE FROM sprints WHERE id = ?", id)
+		result, err := db.ExecContext(ctx, "DELETE FROM sprints WHERE id = ?", id)
 		if err != nil {
 			return fmt.Errorf("deleting sprint: %w", err)
 		}
@@ -611,7 +696,7 @@ func (db *DB) DeleteSprint(id int) error {
 			return fmt.Errorf("checking rows affected: %w", err)
 		}
 		if affected == 0 {
-			return fmt.Errorf("sprint %d not found", id)
+			return fmt.Errorf("%w: sprint %d", utils.ErrNotFound, id)
 		}
 
 		return nil
@@ -619,8 +704,8 @@ func (db *DB) DeleteSprint(id int) error {
 }
 
 // GetSprintTasks retrieves all tasks in a sprint.
-func (db *DB) GetSprintTasks(sprintID int) ([]int, error) {
-	rows, err := db.Query(
+func (db *DB) GetSprintTasks(ctx context.Context, sprintID int) ([]int, error) {
+	rows, err := db.QueryContext(ctx,
 		`SELECT task_id FROM sprint_tasks WHERE sprint_id = ? ORDER BY task_id`,
 		sprintID,
 	)
@@ -646,7 +731,7 @@ func (db *DB) GetSprintTasks(sprintID int) ([]int, error) {
 }
 
 // GetSprintTasksFull retrieves full task objects for a sprint.
-func (db *DB) GetSprintTasksFull(sprintID int, status *models.TaskStatus) ([]models.Task, error) {
+func (db *DB) GetSprintTasksFull(ctx context.Context, sprintID int, status *models.TaskStatus) ([]models.Task, error) {
 	query := `SELECT t.id, t.priority, t.severity, t.status, t.description, t.specialists,
 		         t.action, t.expected_result, t.created_at, t.completed_at
 		      FROM tasks t
@@ -661,7 +746,7 @@ func (db *DB) GetSprintTasksFull(sprintID int, status *models.TaskStatus) ([]mod
 
 	query += " ORDER BY t.priority DESC, t.severity DESC"
 
-	rows, err := db.Query(query, args...)
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying sprint tasks: %w", err)
 	}
@@ -671,7 +756,7 @@ func (db *DB) GetSprintTasksFull(sprintID int, status *models.TaskStatus) ([]mod
 }
 
 // AddTasksToSprint adds tasks to a sprint.
-func (db *DB) AddTasksToSprint(sprintID int, taskIDs []int) error {
+func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int) error {
 	if len(taskIDs) == 0 {
 		return nil
 	}
@@ -680,7 +765,7 @@ func (db *DB) AddTasksToSprint(sprintID int, taskIDs []int) error {
 		now := utils.NowISO8601()
 
 		for _, taskID := range taskIDs {
-			_, err := db.Exec(
+			_, err := db.ExecContext(ctx,
 				`INSERT INTO sprint_tasks (sprint_id, task_id, added_at) VALUES (?, ?, ?)
 				 ON CONFLICT(task_id) DO UPDATE SET sprint_id = excluded.sprint_id, added_at = excluded.added_at`,
 				sprintID, taskID, now,
@@ -702,7 +787,7 @@ func (db *DB) AddTasksToSprint(sprintID int, taskIDs []int) error {
 			"UPDATE tasks SET status = 'SPRINT' WHERE id IN (%s)",
 			strings.Join(placeholders, ","),
 		)
-		_, err := db.Exec(query, args...)
+		_, err := db.ExecContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("updating task statuses: %w", err)
 		}
@@ -712,7 +797,7 @@ func (db *DB) AddTasksToSprint(sprintID int, taskIDs []int) error {
 }
 
 // RemoveTasksFromSprint removes tasks from a sprint.
-func (db *DB) RemoveTasksFromSprint(taskIDs []int) error {
+func (db *DB) RemoveTasksFromSprint(ctx context.Context, taskIDs []int) error {
 	if len(taskIDs) == 0 {
 		return nil
 	}
@@ -727,14 +812,14 @@ func (db *DB) RemoveTasksFromSprint(taskIDs []int) error {
 
 		// Delete from sprint_tasks
 		query := fmt.Sprintf("DELETE FROM sprint_tasks WHERE task_id IN (%s)", strings.Join(placeholders, ","))
-		_, err := db.Exec(query, args...)
+		_, err := db.ExecContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("removing tasks from sprint: %w", err)
 		}
 
 		// Update task status to BACKLOG
 		query = fmt.Sprintf("UPDATE tasks SET status = 'BACKLOG' WHERE id IN (%s)", strings.Join(placeholders, ","))
-		_, err = db.Exec(query, args...)
+		_, err = db.ExecContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("updating task statuses: %w", err)
 		}
@@ -746,10 +831,10 @@ func (db *DB) RemoveTasksFromSprint(taskIDs []int) error {
 // ==================== AUDIT QUERIES ====================
 
 // LogAuditEntry inserts a new audit entry.
-func (db *DB) LogAuditEntry(entry *models.AuditEntry) (int, error) {
+func (db *DB) LogAuditEntry(ctx context.Context, entry *models.AuditEntry) (int, error) {
 	var auditID int
 	err := retryWithBackoff("log audit entry", func() error {
-		result, err := db.Exec(
+		result, err := db.ExecContext(ctx,
 			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
 			entry.Operation,
 			entry.EntityType,
@@ -779,6 +864,7 @@ func (db *DB) LogAuditEntry(entry *models.AuditEntry) (int, error) {
 // GetAuditEntries retrieves audit entries with optional filters and pagination.
 //
 // Parameters (all optional, use nil to skip filter):
+//   - ctx: Context for timeout and cancellation
 //   - operation: Filter by operation type (e.g., "TASK_CREATE", "TASK_UPDATE")
 //   - entityType: Filter by entity type (e.g., "TASK", "SPRINT")
 //   - entityID: Filter by specific entity ID
@@ -801,13 +887,13 @@ func (db *DB) LogAuditEntry(entry *models.AuditEntry) (int, error) {
 //
 // Example:
 //
-//	entries, err := db.GetAuditEntries(
+//	entries, err := db.GetAuditEntries(ctx,
 //	    strPtr("TASK_CREATE"),  // operation filter
 //	    strPtr("TASK"),         // entity type filter
 //	    nil, nil, nil,          // no entity ID, since, until filters
 //	    100, 0,                 // limit 100, offset 0
 //	)
-func (db *DB) GetAuditEntries(operation, entityType *string, entityID *int, since, until *string, limit, offset int) ([]models.AuditEntry, error) {
+func (db *DB) GetAuditEntries(ctx context.Context, operation, entityType *string, entityID *int, since, until *string, limit, offset int) ([]models.AuditEntry, error) {
 	query := `SELECT id, operation, entity_type, entity_id, performed_at FROM audit WHERE 1=1`
 	args := []interface{}{}
 
@@ -843,7 +929,7 @@ func (db *DB) GetAuditEntries(operation, entityType *string, entityID *int, sinc
 		args = append(args, offset)
 	}
 
-	rows, err := db.Query(query, args...)
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying audit entries: %w", err)
 	}
@@ -873,21 +959,22 @@ func (db *DB) GetAuditEntries(operation, entityType *string, entityID *int, sinc
 }
 
 // GetEntityHistory retrieves audit history for a specific entity.
-func (db *DB) GetEntityHistory(entityType string, entityID int) ([]models.AuditEntry, error) {
-	return db.GetAuditEntries(nil, &entityType, &entityID, nil, nil, 0, 0)
+func (db *DB) GetEntityHistory(ctx context.Context, entityType string, entityID int) ([]models.AuditEntry, error) {
+	return db.GetAuditEntries(ctx, nil, &entityType, &entityID, nil, nil, 0, 0)
 }
 
 // GetAuditStats retrieves aggregated statistics for audit entries in a date range.
 //
 // Parameters (all optional, use nil to skip):
+//   - ctx: Context for timeout and cancellation
 //   - since: Start of date range (ISO 8601 format, inclusive)
 //   - until: End of date range (ISO 8601 format, inclusive)
 //
 // Returns:
 //   - AuditStats struct containing:
-//     - TotalEntries: Total count of audit entries in range
-//     - ByOperation: Map of operation type to count (e.g., {"TASK_CREATE": 10, "TASK_UPDATE": 5})
-//     - ByEntityType: Map of entity type to count (e.g., {"TASK": 15, "SPRINT": 3})
+//   - TotalEntries: Total count of audit entries in range
+//   - ByOperation: Map of operation type to count (e.g., {"TASK_CREATE": 10, "TASK_UPDATE": 5})
+//   - ByEntityType: Map of entity type to count (e.g., {"TASK": 15, "SPRINT": 3})
 //
 // Error conditions:
 //   - Returns wrapped database errors for connection/query failures
@@ -899,7 +986,7 @@ func (db *DB) GetEntityHistory(entityType string, entityID int) ([]models.AuditE
 //
 // Example:
 //
-//	stats, err := db.GetAuditStats(
+//	stats, err := db.GetAuditStats(ctx,
 //	    strPtr("2024-01-01T00:00:00.000Z"),
 //	    strPtr("2024-12-31T23:59:59.999Z"),
 //	)
@@ -907,7 +994,7 @@ func (db *DB) GetEntityHistory(entityType string, entityID int) ([]models.AuditE
 //	for op, count := range stats.ByOperation {
 //	    fmt.Printf("  %s: %d\n", op, count)
 //	}
-func (db *DB) GetAuditStats(since, until *string) (*models.AuditStats, error) {
+func (db *DB) GetAuditStats(ctx context.Context, since, until *string) (*models.AuditStats, error) {
 	stats := &models.AuditStats{
 		ByOperation:  make(map[string]int),
 		ByEntityType: make(map[string]int),
@@ -926,7 +1013,7 @@ func (db *DB) GetAuditStats(since, until *string) (*models.AuditStats, error) {
 		countArgs = append(countArgs, *until)
 	}
 
-	err := db.QueryRow(countQuery, countArgs...).Scan(&stats.TotalEntries)
+	err := db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&stats.TotalEntries)
 	if err != nil {
 		return nil, fmt.Errorf("counting audit entries: %w", err)
 	}
@@ -945,7 +1032,7 @@ func (db *DB) GetAuditStats(since, until *string) (*models.AuditStats, error) {
 	}
 
 	var firstEntry, lastEntry sql.NullString
-	err = db.QueryRow(dateQuery, dateArgs...).Scan(&firstEntry, &lastEntry)
+	err = db.QueryRowContext(ctx, dateQuery, dateArgs...).Scan(&firstEntry, &lastEntry)
 	if err != nil {
 		return nil, fmt.Errorf("getting date range: %w", err)
 	}
@@ -971,7 +1058,7 @@ func (db *DB) GetAuditStats(since, until *string) (*models.AuditStats, error) {
 	}
 	opQuery += " GROUP BY operation"
 
-	opRows, err := db.Query(opQuery, opArgs...)
+	opRows, err := db.QueryContext(ctx, opQuery, opArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("counting by operation: %w", err)
 	}
@@ -1000,7 +1087,7 @@ func (db *DB) GetAuditStats(since, until *string) (*models.AuditStats, error) {
 	}
 	entQuery += " GROUP BY entity_type"
 
-	entRows, err := db.Query(entQuery, entArgs...)
+	entRows, err := db.QueryContext(ctx, entQuery, entArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("counting by entity type: %w", err)
 	}

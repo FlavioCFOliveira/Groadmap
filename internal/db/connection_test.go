@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"testing"
 	"time"
@@ -260,7 +261,7 @@ func TestGetEntityHistory(t *testing.T) {
 		CreatedAt:      time.Now().Format(time.RFC3339),
 	}
 
-	taskID, err := db.CreateTask(task)
+	taskID, err := db.CreateTask(context.Background(), task)
 	if err != nil {
 		t.Fatalf("failed to create task: %v", err)
 	}
@@ -272,13 +273,13 @@ func TestGetEntityHistory(t *testing.T) {
 		EntityID:    taskID,
 		PerformedAt: time.Now().Format(time.RFC3339),
 	}
-	_, err = db.LogAuditEntry(entry)
+	_, err = db.LogAuditEntry(context.Background(), entry)
 	if err != nil {
 		t.Fatalf("failed to log audit entry: %v", err)
 	}
 
 	// Get entity history
-	history, err := db.GetEntityHistory("TASK", taskID)
+	history, err := db.GetEntityHistory(context.Background(), "TASK", taskID)
 	if err != nil {
 		t.Fatalf("failed to get entity history: %v", err)
 	}

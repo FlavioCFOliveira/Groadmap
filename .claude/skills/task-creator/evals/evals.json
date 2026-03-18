@@ -1,0 +1,35 @@
+{
+  "skill_name": "task-creator",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Cria uma tarefa para implementar validação de email nos formulários de registo",
+      "expected_output": "Task with functional description explaining email validation need, technical description with regex/validation logic, acceptance criteria covering valid/invalid emails, edge cases, and error messages",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Preciso de uma tarefa para o plano de implementação: adicionar suporte a exportação CSV dos roadmaps",
+      "expected_output": "Task following IMPLEMENTATION_PLAN.md format with priority, dependencies, complexity, functional and technical descriptions, validation requirements, affected files, and specialists",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Add a task to fix the race condition in database connections",
+      "expected_output": "Task describing race condition problem, technical solution with mutex or channels, acceptance criteria including concurrent tests, assigned to go-elite-developer",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "Create task: implementar autenticação JWT para proteger as APIs",
+      "expected_output": "Security-focused task with P0/P1 priority, assigned to red-team-hacker and go-elite-developer, covering token generation, validation, refresh, and security considerations",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "New task - optimize the task listing query that's taking too long with many records",
+      "expected_output": "Performance task assigned to go-performance-advisor with benchmarking requirements, query optimization, index analysis, and performance validation criteria",
+      "files": []
+    }
+  ]
+}

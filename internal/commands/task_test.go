@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -288,6 +289,48 @@ func TestTaskGet_InvalidID(t *testing.T) {
 	}
 }
 
+func TestTaskGet_ZeroID(t *testing.T) {
+	testName := "testtaskgetzeroid"
+	_, cleanup := setupTestTaskRoadmap(t, testName)
+	defer cleanup()
+
+	err := HandleTask([]string{"get", "0"})
+	if err == nil {
+		t.Error("taskGet with zero ID expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "must be positive") {
+		t.Errorf("expected 'must be positive' error, got: %v", err)
+	}
+}
+
+func TestTaskGet_NegativeID(t *testing.T) {
+	testName := "testtaskgetnegativeid"
+	_, cleanup := setupTestTaskRoadmap(t, testName)
+	defer cleanup()
+
+	err := HandleTask([]string{"get", "-1"})
+	if err == nil {
+		t.Error("taskGet with negative ID expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "must be positive") {
+		t.Errorf("expected 'must be positive' error, got: %v", err)
+	}
+}
+
+func TestTaskGet_OverflowID(t *testing.T) {
+	testName := "testtaskgetoverflowid"
+	_, cleanup := setupTestTaskRoadmap(t, testName)
+	defer cleanup()
+
+	err := HandleTask([]string{"get", "99999999999999999"})
+	if err == nil {
+		t.Error("taskGet with overflow ID expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "exceeds maximum") {
+		t.Errorf("expected 'exceeds maximum' error, got: %v", err)
+	}
+}
+
 func TestTaskGet_MultipleIDs(t *testing.T) {
 	testName := "testtaskgetmulti"
 	db, cleanup := setupTestTaskRoadmap(t, testName)
@@ -295,7 +338,7 @@ func TestTaskGet_MultipleIDs(t *testing.T) {
 
 	// Create some tasks first
 	for i := 0; i < 3; i++ {
-		_, err := db.CreateTask(&models.Task{
+		_, err := db.CreateTask(context.Background(), &models.Task{
 			Priority:       1,
 			Severity:       1,
 			Status:         models.StatusBacklog,

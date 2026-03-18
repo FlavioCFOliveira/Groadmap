@@ -66,7 +66,7 @@ CREATE INDEX IF NOT EXISTS idx_sprint_tasks_task_id ON sprint_tasks(task_id);
 CREATE TABLE IF NOT EXISTS audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     operation TEXT NOT NULL,
-    entity_type TEXT NOT NULL,
+    entity_type TEXT NOT NULL CHECK(entity_type IN ('TASK', 'SPRINT')),
     entity_id INTEGER NOT NULL,
     performed_at TEXT NOT NULL
 );
