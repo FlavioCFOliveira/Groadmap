@@ -6,6 +6,32 @@
 
 ---
 
+## Documentation Standards
+
+### Language and Tone
+- **All project documentation must be in English**
+- Use clear, technical language
+- Maintain a professional tone
+- **No emojis or ornamental characters allowed**
+
+### Scope
+- All documentation in `SPEC/`
+- All skill definitions and agent configurations
+- This CLAUDE.md file
+- Code comments and docstrings
+- README files
+- Help text and CLI documentation
+
+---
+
+## User Interaction Language
+
+- **Preferred language for user interactions**: Portuguese (Portugal) - PT-pt
+- Responses to the user should be in Portuguese
+- Technical terms may remain in English when appropriate
+
+---
+
 ## Agent Responsibilities (Strict Ownership)
 
 ### spec-orchestrator
@@ -201,6 +227,8 @@ go vet ./...
 - NUNCA comprometer segurança (input validation, SQL injection)
 - NUNCA referenciar Claude/AI em commits (mensagens devem ser técnicas e neutras)
 - NUNCA adicionar Co-Author em commits (o utilizador é o único autor)
+- NUNCA criar documentação do projeto em português (sempre em inglês, conforme Documentation Standards)
+- NUNCA usar emojis ou caracteres ornamentais em documentação técnica
 
 ---
 
