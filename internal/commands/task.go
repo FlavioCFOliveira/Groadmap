@@ -130,9 +130,9 @@ func taskList(args []string) error {
 //
 // Required flags:
 //   - -t, --title: Task title/summary (required, max 500 chars)
-//   - -f, --functional-requirements: Functional requirements - "Why?" (required, max 1000 chars)
-//   - -h, --technical-requirements: Technical requirements - "How?" (required, max 1000 chars)
-//   - -a, --acceptance-criteria: Acceptance criteria - "How to verify?" (required, max 1000 chars)
+//   - -fr, --functional-requirements: Functional requirements - "Why?" (required, max 1000 chars)
+//   - -tr, --technical-requirements: Technical requirements - "How?" (required, max 1000 chars)
+//   - -ac, --acceptance-criteria: Acceptance criteria - "How to verify?" (required, max 1000 chars)
 //
 // Optional flags:
 //   - -p, --priority: Task priority 0-9 (default: 0)
@@ -155,7 +155,7 @@ func taskList(args []string) error {
 //
 // Example:
 //
-//	rmp task create -r myproject -t "Fix bug" -f "User can login" -h "Update auth" -a "Login works" -p 5 --severity 3
+//	rmp task create -r myproject -t "Fix bug" -fr "User can login" -tr "Update auth" -ac "Login works" -p 5 --severity 3
 func taskCreate(args []string) error {
 	roadmapName, remaining, err := requireRoadmap(args)
 	if err != nil {
@@ -175,17 +175,17 @@ func taskCreate(args []string) error {
 				title = remaining[i+1]
 				i++
 			}
-		case "-f", "--functional-requirements":
+		case "-fr", "--functional-requirements":
 			if i+1 < len(remaining) {
 				functionalReqs = remaining[i+1]
 				i++
 			}
-		case "-h", "--technical-requirements":
+		case "-tr", "--technical-requirements":
 			if i+1 < len(remaining) {
 				technicalReqs = remaining[i+1]
 				i++
 			}
-		case "-a", "--acceptance-criteria":
+		case "-ac", "--acceptance-criteria":
 			if i+1 < len(remaining) {
 				acceptanceCriteria = remaining[i+1]
 				i++
@@ -242,6 +242,7 @@ func taskCreate(args []string) error {
 	task := &models.Task{
 		Title:                  title,
 		Status:                 models.StatusBacklog,
+		Type:                   models.TypeTask,
 		FunctionalRequirements: functionalReqs,
 		TechnicalRequirements:  technicalReqs,
 		AcceptanceCriteria:     acceptanceCriteria,
@@ -263,9 +264,9 @@ func taskCreate(args []string) error {
 	err = database.WithTransaction(func(tx *sql.Tx) error {
 		// Insert task
 		result, err := tx.Exec(
-			`INSERT INTO tasks (title, status, functional_requirements, technical_requirements, acceptance_criteria, created_at, specialists, priority, severity)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			task.Title, task.Status, task.FunctionalRequirements, task.TechnicalRequirements,
+			`INSERT INTO tasks (title, status, type, functional_requirements, technical_requirements, acceptance_criteria, created_at, specialists, priority, severity)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			task.Title, task.Status, task.Type, task.FunctionalRequirements, task.TechnicalRequirements,
 			task.AcceptanceCriteria, task.CreatedAt, task.Specialists, task.Priority, task.Severity,
 		)
 		if err != nil {
@@ -398,9 +399,9 @@ func taskGet(args []string) error {
 //
 // Optional flags (at least one required):
 //   - -t, --title: New task title (max 500 chars)
-//   - -f, --functional-requirements: New functional requirements (max 1000 chars)
-//   - -h, --technical-requirements: New technical requirements (max 1000 chars)
-//   - -a, --acceptance-criteria: New acceptance criteria (max 1000 chars)
+//   - -fr, --functional-requirements: New functional requirements (max 1000 chars)
+//   - -tr, --technical-requirements: New technical requirements (max 1000 chars)
+//   - -ac, --acceptance-criteria: New acceptance criteria (max 1000 chars)
 //   - -s, --specialists: New specialists list (max 500 chars)
 //   - -p, --priority: New priority 0-9
 //   - --severity: New severity 0-9
@@ -447,17 +448,17 @@ func taskEdit(args []string) error {
 				updates["title"] = remaining[i+1]
 				i++
 			}
-		case "-f", "--functional-requirements":
+		case "-fr", "--functional-requirements":
 			if i+1 < len(remaining) {
 				updates["functional_requirements"] = remaining[i+1]
 				i++
 			}
-		case "-h", "--technical-requirements":
+		case "-tr", "--technical-requirements":
 			if i+1 < len(remaining) {
 				updates["technical_requirements"] = remaining[i+1]
 				i++
 			}
-		case "-a", "--acceptance-criteria":
+		case "-ac", "--acceptance-criteria":
 			if i+1 < len(remaining) {
 				updates["acceptance_criteria"] = remaining[i+1]
 				i++
@@ -937,16 +938,16 @@ Options:
   -p, --priority <n>              Filter/set priority (0-9)
   --severity <n>                  Filter/set severity (0-9)
   -t, --title <text>              Task title
-  -f, --functional-requirements <text>  Functional requirements (Why?)
-  -h, --technical-requirements <text>   Technical requirements (How?)
-  -a, --acceptance-criteria <text>      Acceptance criteria (How to verify?)
+  -fr, --functional-requirements <text> Functional requirements (Why?)
+  -tr, --technical-requirements <text>  Technical requirements (How?)
+  -ac, --acceptance-criteria <text>     Acceptance criteria (How to verify?)
   -sp, --specialists <list>       Comma-separated specialists
   -l, --limit <n>                 Limit results
   --help                          Show this help message
 
 Examples:
   rmp task list -r myproject
-  rmp task create -r myproject -t "Fix bug" -f "User can login" -h "Update auth" -a "Login works"
+  rmp task create -r myproject -t "Fix bug" -fr "User can login" -tr "Update auth" -ac "Login works"
   rmp task stat 1,2,3 DOING
 `)
 }
