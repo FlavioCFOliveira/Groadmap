@@ -70,6 +70,8 @@
 - Ensures technical and descriptive commit messages
 - Requires explicit user confirmation for destructive operations
 - ALWAYS checks `go fmt`, `go vet`, `go test` before commits
+- **MANDATORY: ALL tests must pass without failures before any git push**
+- **MANDATORY: Explicit user authorization required after tests pass and before git push**
 
 ### exhaustive-qa-engineer
 **Exclusive authority** for testing and validation.

@@ -1,6 +1,6 @@
 ---
 name: go-gitflow
-description: Safe Gitflow for Go with mandatory human approval and detailed technical commit messages. Use this skill whenever you need to create branches (feature, hotfix, release), merge changes, or manage git operations in a Go project. This skill ensures proper workflow validation, Go-specific checks (go fmt, go vet, go test), and explicit user confirmation for all operations.
+description: Safe Gitflow for Go with mandatory human approval, detailed technical commit messages, and STRICT git push requirements. Use this skill whenever you need to create branches (feature, hotfix, release), merge changes, or manage git operations in a Go project. This skill ensures proper workflow validation, Go-specific checks (go fmt, go vet, go test), explicit user confirmation for all operations, and MANDATORY test execution before any git push with zero exceptions.
 commands:
   - name: /feature-start
     description: Start a new feature branch from develop with validation
@@ -19,6 +19,11 @@ commands:
 ## 1. Approval Policy (MANDATORY)
 
 **No destructive or branching operations (checkout, merge, commit, delete, tag) shall be executed without explicit user confirmation.**
+
+**GIT PUSH REQUIREMENTS (ZERO EXCEPTIONS):**
+1. **ALL tests MUST pass without failures before any git push** - Run `go test ./...` and verify zero failures
+2. **Explicit user authorization REQUIRED after tests pass** - Even if tests pass, user must explicitly approve the push
+3. **If ANY test fails, push is ABORTED immediately** - No exceptions, no partial pushes
 
 Before executing any workflow, you must:
 
@@ -344,8 +349,18 @@ When working with roadmap-manager skill:
 | Uncommitted changes | Ask user to commit or stash |
 | Merge conflicts | Show conflicts, ask user to resolve |
 | Test failures | Stop, show failures, wait for fix |
+| **Git push with test failures** | **ABORT push - ALL tests MUST pass before pushing** |
 | Push rejected | Offer to pull and retry or force (with approval) |
 | Branch exists | Offer to delete or use existing |
+
+### Git Push Test Failure Protocol
+
+**When `go test ./...` fails before push:**
+
+1. **ABORT push operation immediately** - do not proceed
+2. **Display test failures** with full output
+3. **Inform user:** "Push aborted due to test failures. Fix tests before pushing."
+4. **Wait for user fix** and restart push flow from step 1
 
 ## 11. System Instruction
 
@@ -419,14 +434,47 @@ Plan:
 
 **Usage:** Send changes to remote.
 
-Presented plan:
-```
-Plan:
-1. Validate (go fmt, go vet)
-2. Push to <remote>/<branch>
+**MANDATORY PRE-PUSH VALIDATION (ZERO EXCEPTIONS):**
+
+1. **Run ALL tests:** `go test ./...`
+2. **If ANY test fails:** ABORT push immediately, display failures to user
+3. **If ALL tests pass:** Display results and request explicit user authorization
+4. **Only proceed with push after user explicitly confirms**
+
+**Execution Flow:**
+```bash
+# Step 1: Run all tests
+go test ./...
+
+# Step 2: Check results
+# If exit code != 0 → ABORT, show failures
+# If exit code == 0 → Continue to authorization
+
+# Step 3: Format and vet checks
+go fmt ./...
+go vet ./...
 ```
 
-If push is rejected, offer:
+**Presented plan:**
+```
+Plan:
+1. Run ALL tests (go test ./...)
+2. If tests pass: proceed to authorization
+3. If tests fail: ABORT and report failures
+
+Test Results:
+- Passed: X/Y packages
+- Failed: Z packages (if any)
+- Duration: Xs
+
+Authorization Required:
+Push <branch> to <remote>/<branch>?
+```
+
+**User Authorization Required:** After tests pass, explicitly ask:
+> "All tests passed. Shall I proceed with git push to <remote>/<branch>?"
+
+**If push is rejected, offer:**
 - `git pull --rebase` (if appropriate)
 - Force push only with explicit approval (`--force-with-lease`)
 
