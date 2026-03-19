@@ -147,7 +147,7 @@ func TestTaskCreate_NoRoadmap(t *testing.T) {
 	// Clear current
 	utils.EnsureDataDir()
 
-	err := HandleTask([]string{"create", "-t", "test", "-f", "functional", "-h", "technical", "-a", "criteria"})
+	err := HandleTask([]string{"create", "-t", "test", "-fr", "functional", "-tr", "technical", "-ac", "criteria"})
 	if err == nil {
 		t.Error("taskCreate with no roadmap expected error, got nil")
 	}
@@ -158,7 +158,7 @@ func TestTaskCreate_MissingTitle(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"create", "-f", "functional", "-h", "technical", "-a", "criteria"})
+	err := HandleTask([]string{"create", "-fr", "functional", "-tr", "technical", "-ac", "criteria"})
 	if err == nil {
 		t.Error("taskCreate without title expected error, got nil")
 	}
@@ -172,7 +172,7 @@ func TestTaskCreate_MissingFunctionalRequirements(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"create", "-t", "title", "-h", "technical", "-a", "criteria"})
+	err := HandleTask([]string{"create", "-t", "title", "-tr", "technical", "-ac", "criteria"})
 	if err == nil {
 		t.Error("taskCreate without functional requirements expected error, got nil")
 	}
@@ -186,7 +186,7 @@ func TestTaskCreate_MissingTechnicalRequirements(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"create", "-t", "title", "-f", "functional", "-a", "criteria"})
+	err := HandleTask([]string{"create", "-t", "title", "-fr", "functional", "-ac", "criteria"})
 	if err == nil {
 		t.Error("taskCreate without technical requirements expected error, got nil")
 	}
@@ -200,7 +200,7 @@ func TestTaskCreate_MissingAcceptanceCriteria(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"create", "-t", "title", "-f", "functional", "-h", "technical"})
+	err := HandleTask([]string{"create", "-t", "title", "-fr", "functional", "-tr", "technical"})
 	if err == nil {
 		t.Error("taskCreate without acceptance criteria expected error, got nil")
 	}
@@ -214,7 +214,7 @@ func TestTaskCreate_InvalidPriority(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"create", "-t", "title", "-f", "functional", "-h", "technical", "-a", "criteria", "-p", "invalid"})
+	err := HandleTask([]string{"create", "-t", "title", "-fr", "functional", "-tr", "technical", "-ac", "criteria", "-p", "invalid"})
 	if err == nil {
 		t.Error("taskCreate with invalid priority expected error, got nil")
 	}
@@ -225,7 +225,7 @@ func TestTaskCreate_InvalidSeverity(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"create", "-t", "title", "-f", "functional", "-h", "technical", "-a", "criteria", "--severity", "invalid"})
+	err := HandleTask([]string{"create", "-t", "title", "-fr", "functional", "-tr", "technical", "-ac", "criteria", "--severity", "invalid"})
 	if err == nil {
 		t.Error("taskCreate with invalid severity expected error, got nil")
 	}
@@ -239,9 +239,9 @@ func TestTaskCreate_Success(t *testing.T) {
 	err := HandleTask([]string{
 		"create",
 		"-t", "Test task title",
-		"-f", "Functional requirements",
-		"-h", "Technical requirements",
-		"-a", "Acceptance criteria",
+		"-fr", "Functional requirements",
+		"-tr", "Technical requirements",
+		"-ac", "Acceptance criteria",
 		"-p", "5",
 		"--severity", "3",
 	})
@@ -258,9 +258,9 @@ func TestTaskCreate_WithSpecialists(t *testing.T) {
 	err := HandleTask([]string{
 		"create",
 		"-t", "Task with specialists",
-		"-f", "Functional",
-		"-h", "Technical",
-		"-a", "Criteria",
+		"-fr", "Functional",
+		"-tr", "Technical",
+		"-ac", "Criteria",
 		"-sp", "developer,tester",
 	})
 	if err != nil {
@@ -454,7 +454,7 @@ func TestTaskEdit_EmptyFunctionalRequirements(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"edit", "1", "-f", ""})
+	err := HandleTask([]string{"edit", "1", "-fr", ""})
 	if err == nil {
 		t.Error("taskEdit with empty functional requirements expected error, got nil")
 	}
@@ -468,7 +468,7 @@ func TestTaskEdit_EmptyTechnicalRequirements(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"edit", "1", "-h", ""})
+	err := HandleTask([]string{"edit", "1", "-tr", ""})
 	if err == nil {
 		t.Error("taskEdit with empty technical requirements expected error, got nil")
 	}
@@ -482,7 +482,7 @@ func TestTaskEdit_EmptyAcceptanceCriteria(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"edit", "1", "-a", ""})
+	err := HandleTask([]string{"edit", "1", "-ac", ""})
 	if err == nil {
 		t.Error("taskEdit with empty acceptance criteria expected error, got nil")
 	}

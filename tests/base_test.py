@@ -123,24 +123,26 @@ class GroadmapTestBase:
         """Set the default roadmap."""
         self.run_cmd(["roadmap", "use", name])
 
-    def create_task(self, roadmap: str, description: str, action: str,
-                    expected_result: str, **kwargs) -> int:
+    def create_task(self, roadmap: str, title: str, functional_requirements: str,
+                    technical_requirements: str, acceptance_criteria: str, **kwargs) -> int:
         """
         Create a task and return its ID.
 
         Args:
             roadmap: Roadmap name
-            description: Task description
-            action: Action to take
-            expected_result: Expected result
+            title: Task title
+            functional_requirements: Functional requirements (Why?)
+            technical_requirements: Technical requirements (How?)
+            acceptance_criteria: Acceptance criteria (How to verify?)
             **kwargs: Optional fields (priority, severity, specialists)
         """
         cmd = [
             "task", "create",
             "-r", roadmap,
-            "-d", description,
-            "-a", action,
-            "-e", expected_result
+            "-t", title,
+            "-fr", functional_requirements,
+            "-tr", technical_requirements,
+            "-ac", acceptance_criteria
         ]
 
         if "priority" in kwargs:

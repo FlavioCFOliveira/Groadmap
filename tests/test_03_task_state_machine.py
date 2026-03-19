@@ -26,7 +26,7 @@ class TestTaskStateMachine:
         roadmap = self.test.create_roadmap()
 
         task_id = self.test.create_task(
-            roadmap, "Test task", "Action", "Result"
+            roadmap, "Test task", "Functional requirements", "Technical requirements", "Acceptance criteria"
         )
         self.test.assert_task_status(roadmap, task_id, "BACKLOG")
 
@@ -44,7 +44,7 @@ class TestTaskStateMachine:
         """Test SPRINT -> DOING transition."""
         roadmap = self.test.create_roadmap()
 
-        task_id = self.test.create_task(roadmap, "Test task", "Action", "Result")
+        task_id = self.test.create_task(roadmap, "Test task", "Functional", "Technical", "Criteria")
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1")
 
         self.test.run_cmd([
@@ -61,7 +61,7 @@ class TestTaskStateMachine:
         """Test DOING -> TESTING transition."""
         roadmap = self.test.create_roadmap()
 
-        task_id = self.test.create_task(roadmap, "Test task", "Action", "Result")
+        task_id = self.test.create_task(roadmap, "Test task", "Functional", "Technical", "Criteria")
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1")
 
         self.test.run_cmd([
@@ -79,7 +79,7 @@ class TestTaskStateMachine:
         """Test TESTING -> COMPLETED transition."""
         roadmap = self.test.create_roadmap()
 
-        task_id = self.test.create_task(roadmap, "Test task", "Action", "Result")
+        task_id = self.test.create_task(roadmap, "Test task", "Functional", "Technical", "Criteria")
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1")
 
         self.test.run_cmd([
@@ -92,9 +92,9 @@ class TestTaskStateMachine:
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED"])
         self.test.assert_task_status(roadmap, task_id, "COMPLETED")
 
-        # Verify completed_at is set
+        # Verify closed_at is set
         result = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])
-        assert result[0]["completed_at"] is not None
+        assert result[0]["closed_at"] is not None
 
         print("✓ TESTING to COMPLETED transition test passed")
 
@@ -102,7 +102,7 @@ class TestTaskStateMachine:
         """Test COMPLETED -> BACKLOG transition (reopen)."""
         roadmap = self.test.create_roadmap()
 
-        task_id = self.test.create_task(roadmap, "Test task", "Action", "Result")
+        task_id = self.test.create_task(roadmap, "Test task", "Functional", "Technical", "Criteria")
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1")
 
         # Complete the task
@@ -117,9 +117,9 @@ class TestTaskStateMachine:
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "BACKLOG"])
         self.test.assert_task_status(roadmap, task_id, "BACKLOG")
 
-        # Verify completed_at is cleared
+        # Verify closed_at is cleared
         result = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])
-        assert result[0]["completed_at"] is None
+        assert result[0]["closed_at"] is None
 
         print("✓ COMPLETED to BACKLOG transition test passed")
 
@@ -127,7 +127,7 @@ class TestTaskStateMachine:
         """Test DOING -> SPRINT transition (pause)."""
         roadmap = self.test.create_roadmap()
 
-        task_id = self.test.create_task(roadmap, "Test task", "Action", "Result")
+        task_id = self.test.create_task(roadmap, "Test task", "Functional", "Technical", "Criteria")
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1")
 
         self.test.run_cmd([
@@ -145,7 +145,7 @@ class TestTaskStateMachine:
         """Test TESTING -> DOING transition (failed test)."""
         roadmap = self.test.create_roadmap()
 
-        task_id = self.test.create_task(roadmap, "Test task", "Action", "Result")
+        task_id = self.test.create_task(roadmap, "Test task", "Functional", "Technical", "Criteria")
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1")
 
         self.test.run_cmd([
@@ -164,7 +164,7 @@ class TestTaskStateMachine:
         """Test SPRINT -> BACKLOG transition (remove from sprint)."""
         roadmap = self.test.create_roadmap()
 
-        task_id = self.test.create_task(roadmap, "Test task", "Action", "Result")
+        task_id = self.test.create_task(roadmap, "Test task", "Functional", "Technical", "Criteria")
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1")
 
         self.test.run_cmd([
@@ -183,7 +183,7 @@ class TestTaskStateMachine:
         """Test invalid state transitions are rejected."""
         roadmap = self.test.create_roadmap()
 
-        task_id = self.test.create_task(roadmap, "Test task", "Action", "Result")
+        task_id = self.test.create_task(roadmap, "Test task", "Functional", "Technical", "Criteria")
 
         # BACKLOG cannot go directly to DOING
         exit_code, _, _ = self.test.run_cmd(
@@ -236,6 +236,7 @@ class TestTaskStateMachine:
         task_id = self.test.create_task(
             roadmap,
             "Implement feature X",
+            "Need feature X for user workflow",
             "Write code and tests",
             "Feature X working in production"
         )
@@ -283,7 +284,7 @@ class TestTaskStateMachine:
         task_ids = []
         for i in range(5):
             task_id = self.test.create_task(
-                roadmap, f"Task {i+1}", f"Action {i+1}", f"Result {i+1}"
+                roadmap, f"Task {i+1}", f"Functional {i+1}", f"Technical {i+1}", f"Result {i+1}"
             )
             task_ids.append(task_id)
 

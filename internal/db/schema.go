@@ -7,22 +7,23 @@ import (
 )
 
 // SchemaVersion is the current database schema version.
-const SchemaVersion = "1.1.0"
+const SchemaVersion = "1.2.0"
 
 // CreateSchema creates all database tables and indexes.
 // This implements the DDL from SPEC/DATABASE.md.
 func (db *DB) CreateSchema() error {
-	// Tasks table - aligned with SPEC/DATABASE.md
+	// Tasks table - aligned with SPEC/DATABASE.md v1.2.0
 	tasksDDL := `
 CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
 
     -- Group 1: Content fields (TEXT) - frequently accessed together
-    title TEXT NOT NULL,
+    title TEXT NOT NULL CHECK(length(title) <= 255),
     status TEXT NOT NULL DEFAULT 'BACKLOG' CHECK(status IN ('BACKLOG', 'SPRINT', 'DOING', 'TESTING', 'COMPLETED')),
-    functional_requirements TEXT NOT NULL,
-    technical_requirements TEXT NOT NULL,
-    acceptance_criteria TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'TASK' CHECK(type IN ('USER_STORY', 'TASK', 'BUG', 'SUB_TASK', 'EPIC', 'REFACTOR', 'CHORE', 'SPIKE', 'DESIGN_UX', 'IMPROVEMENT')),
+    functional_requirements TEXT NOT NULL CHECK(length(functional_requirements) <= 4096),
+    technical_requirements TEXT NOT NULL CHECK(length(technical_requirements) <= 4096),
+    acceptance_criteria TEXT NOT NULL CHECK(length(acceptance_criteria) <= 4096),
     created_at TEXT NOT NULL,
 
     -- Group 2: Nullable tracking fields - lifecycle timestamps
@@ -37,6 +38,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_type ON tasks(type);
 CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
 CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
 

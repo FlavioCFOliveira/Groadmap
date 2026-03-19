@@ -49,9 +49,9 @@ rmp roadmap use myproject
 
 # Create a task
 rmp task create -t "Implement feature X" \
-  -f "User can perform X action" \
-  -h "Develop code using Go" \
-  -a "Feature working in production"
+  -fr "User can perform X action" \
+  -tr "Develop code using Go" \
+  -ac "Feature working in production"
 
 # List tasks
 rmp task list

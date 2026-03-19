@@ -168,10 +168,10 @@ class TestSprintLifecycle:
 
         # Create tasks
         task1 = self.test.create_task(
-            roadmap, "Task 1", "Action 1", "Result 1", priority=5
+            roadmap, "Task 1", "Functional 1", "Technical 1", "Criteria 1", priority=5
         )
         task2 = self.test.create_task(
-            roadmap, "Task 2", "Action 2", "Result 2", priority=3
+            roadmap, "Task 2", "Functional 2", "Technical 2", "Criteria 2", priority=3
         )
 
         # Create sprint

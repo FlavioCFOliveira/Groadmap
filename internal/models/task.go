@@ -20,6 +20,65 @@ const (
 	StatusCompleted TaskStatus = "COMPLETED"
 )
 
+// TaskType represents the classification of a task.
+type TaskType string
+
+// Task type constants as defined in SPEC/MODELS.md.
+const (
+	TypeUserStory   TaskType = "USER_STORY"
+	TypeTask        TaskType = "TASK"
+	TypeBug         TaskType = "BUG"
+	TypeSubTask     TaskType = "SUB_TASK"
+	TypeEpic        TaskType = "EPIC"
+	TypeRefactor    TaskType = "REFACTOR"
+	TypeChore       TaskType = "CHORE"
+	TypeSpike       TaskType = "SPIKE"
+	TypeDesignUX    TaskType = "DESIGN_UX"
+	TypeImprovement TaskType = "IMPROVEMENT"
+)
+
+// ValidTaskTypes contains all valid task types.
+var ValidTaskTypes = []TaskType{
+	TypeUserStory,
+	TypeTask,
+	TypeBug,
+	TypeSubTask,
+	TypeEpic,
+	TypeRefactor,
+	TypeChore,
+	TypeSpike,
+	TypeDesignUX,
+	TypeImprovement,
+}
+
+// validTypeMap provides O(1) lookup for type validation.
+var validTypeMap = map[string]TaskType{
+	"USER_STORY":  TypeUserStory,
+	"TASK":        TypeTask,
+	"BUG":         TypeBug,
+	"SUB_TASK":    TypeSubTask,
+	"EPIC":        TypeEpic,
+	"REFACTOR":    TypeRefactor,
+	"CHORE":       TypeChore,
+	"SPIKE":       TypeSpike,
+	"DESIGN_UX":   TypeDesignUX,
+	"IMPROVEMENT": TypeImprovement,
+}
+
+// IsValidTaskType checks if a string is a valid task type.
+func IsValidTaskType(s string) bool {
+	_, ok := validTypeMap[s]
+	return ok
+}
+
+// ParseTaskType parses a string into a TaskType.
+func ParseTaskType(s string) (TaskType, error) {
+	if taskType, ok := validTypeMap[s]; ok {
+		return taskType, nil
+	}
+	return "", fmt.Errorf("invalid task type: %q", s)
+}
+
 // ValidTaskStatuses contains all valid task statuses.
 var ValidTaskStatuses = []TaskStatus{
 	StatusBacklog,
@@ -134,20 +193,21 @@ func GetValidTransitions(status TaskStatus) []TaskStatus {
 
 // Task field size limits
 const (
-	MaxTaskTitle                  = 500
-	MaxTaskFunctionalRequirements = 1000
-	MaxTaskTechnicalRequirements  = 1000
-	MaxTaskAcceptanceCriteria     = 1000
+	MaxTaskTitle                  = 255
+	MaxTaskFunctionalRequirements = 4096
+	MaxTaskTechnicalRequirements  = 4096
+	MaxTaskAcceptanceCriteria     = 4096
 	MaxTaskSpecialists            = 500
 )
 
 // Task represents a task in the roadmap.
-// Field order optimized for memory layout (152 bytes, zero padding on 64-bit systems).
+// Field order optimized for memory layout (168 bytes, zero padding on 64-bit systems).
 // Groups: Content fields (strings), Tracking fields (pointers), Metadata (ints).
 type Task struct {
-	// Group 1: Content fields - frequently accessed together (96 bytes total)
+	// Group 1: Content fields - frequently accessed together (112 bytes total)
 	Title                  string     `json:"title"`                   // Task title/summary
 	Status                 TaskStatus `json:"status"`                  // Current status
+	Type                   TaskType   `json:"type"`                    // Task classification
 	FunctionalRequirements string     `json:"functional_requirements"` // Why: functional requirements
 	TechnicalRequirements  string     `json:"technical_requirements"`  // How: technical description
 	AcceptanceCriteria     string     `json:"acceptance_criteria"`     // How to verify: completion criteria
@@ -202,6 +262,9 @@ func (t *Task) Validate() error {
 	}
 	if !IsValidTaskStatus(string(t.Status)) {
 		return fmt.Errorf("invalid status: %q", t.Status)
+	}
+	if !IsValidTaskType(string(t.Type)) {
+		return fmt.Errorf("invalid type: %q", t.Type)
 	}
 
 	// Validate dates

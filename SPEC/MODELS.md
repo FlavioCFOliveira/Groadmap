@@ -17,6 +17,39 @@ const (
 )
 ```
 
+### Task Type
+```go
+type TaskType string
+
+const (
+    TypeUserStory TaskType = "USER_STORY"
+    TypeTask      TaskType = "TASK"
+    TypeBug       TaskType = "BUG"
+    TypeSubTask   TaskType = "SUB_TASK"
+    TypeEpic      TaskType = "EPIC"
+    TypeRefactor  TaskType = "REFACTOR"
+    TypeChore     TaskType = "CHORE"
+    TypeSpike     TaskType = "SPIKE"
+    TypeDesignUX  TaskType = "DESIGN_UX"
+    TypeImprovement TaskType = "IMPROVEMENT"
+)
+```
+
+**Descriptions:**
+
+| Type | Description |
+|------|-------------|
+| `USER_STORY` | New feature from end user's perspective. Focuses on "who", "what", and "why". |
+| `TASK` | Internal work units that don't deliver direct value but are necessary (e.g., configure database). |
+| `BUG` | Report of something not working as expected in existing code. |
+| `SUB_TASK` | Decomposition of a Story or Task into smaller steps for easier tracking. |
+| `EPIC` | Large body of work grouping multiple related Stories and Tasks. Spans multiple sprints. |
+| `REFACTOR` | Improvement of internal code structure without changing external behavior. Reduces technical debt. |
+| `CHORE` | Necessary maintenance that doesn't add features or fix bugs (e.g., update dependencies). |
+| `SPIKE` | Research or prototyping task to reduce technical uncertainties before development. |
+| `DESIGN_UX` | Tasks focused on creating prototypes, wireframes, or interface flows. |
+| `IMPROVEMENT` | Refinement of an existing working feature that can be optimized. |
+
 ### Sprint Status
 ```go
 type SprintStatus string
@@ -35,17 +68,26 @@ const (
 ### Task
 Maps to the `tasks` table and `Task` JSON object.
 
+**Field Length Constraints:**
+- `Title`: Maximum 255 characters
+- `FunctionalRequirements`: Maximum 4096 characters
+- `TechnicalRequirements`: Maximum 4096 characters
+- `AcceptanceCriteria`: Maximum 4096 characters
+
 ```go
 // Task represents a task in the roadmap.
-// Field order optimized for memory layout (152 bytes, zero padding on 64-bit systems).
+// Field order optimized for memory layout (168 bytes, zero padding on 64-bit systems).
 // Groups: Content fields (strings), Tracking fields (pointers), Metadata (ints).
+// All content fields are mandatory (NOT NULL) with enforced maximum lengths.
 type Task struct {
-    // Group 1: Content fields - frequently accessed together (96 bytes total)
-    Title                  string     `json:"title"`                    // Task title/summary
+    // Group 1: Content fields - frequently accessed together (112 bytes total)
+    // All fields are mandatory (NOT NULL) with length constraints enforced by application
+    Title                  string     `json:"title"`                    // Task title/summary, max 255 chars
     Status                 TaskStatus `json:"status"`                   // Current status
-    FunctionalRequirements string     `json:"functional_requirements"`  // Why: functional requirements
-    TechnicalRequirements  string     `json:"technical_requirements"`   // How: technical description
-    AcceptanceCriteria     string     `json:"acceptance_criteria"`      // How to verify: completion criteria
+    Type                   TaskType   `json:"type"`                     // Task type classification
+    FunctionalRequirements string     `json:"functional_requirements"`  // Why: functional requirements, max 4096 chars
+    TechnicalRequirements  string     `json:"technical_requirements"`   // How: technical description, max 4096 chars
+    AcceptanceCriteria     string     `json:"acceptance_criteria"`      // How to verify: completion criteria, max 4096 chars
     CreatedAt              string     `json:"created_at"`               // ISO 8601 UTC, auto-set on creation
 
     // Group 2: Nullable tracking fields - lifecycle timestamps (32 bytes total)

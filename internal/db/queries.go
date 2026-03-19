@@ -37,11 +37,18 @@ import (
 func (db *DB) CreateTask(ctx context.Context, task *models.Task) (int, error) {
 	var taskID int
 	err := retryWithBackoff("create task", func() error {
+		// Default type to TASK if not specified
+		taskType := task.Type
+		if taskType == "" {
+			taskType = models.TypeTask
+		}
+
 		result, err := db.ExecContext(ctx,
-			`INSERT INTO tasks (title, status, functional_requirements, technical_requirements, acceptance_criteria, created_at, specialists, priority, severity)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO tasks (title, status, type, functional_requirements, technical_requirements, acceptance_criteria, created_at, specialists, priority, severity)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			task.Title,
 			task.Status,
+			taskType,
 			task.FunctionalRequirements,
 			task.TechnicalRequirements,
 			task.AcceptanceCriteria,
@@ -79,7 +86,7 @@ func (db *DB) GetTask(ctx context.Context, id int) (*models.Task, error) {
 	var closedAt sql.NullString
 
 	err := db.QueryRowContext(ctx,
-		`SELECT id, title, status, functional_requirements, technical_requirements, acceptance_criteria,
+		`SELECT id, title, status, type, functional_requirements, technical_requirements, acceptance_criteria,
 		        created_at, specialists, started_at, tested_at, closed_at, priority, severity
 		 FROM tasks WHERE id = ?`,
 		id,
@@ -87,6 +94,7 @@ func (db *DB) GetTask(ctx context.Context, id int) (*models.Task, error) {
 		&task.ID,
 		&task.Title,
 		&task.Status,
+		&task.Type,
 		&task.FunctionalRequirements,
 		&task.TechnicalRequirements,
 		&task.AcceptanceCriteria,
@@ -136,7 +144,7 @@ func (db *DB) GetTasks(ctx context.Context, ids []int) ([]models.Task, error) {
 	}
 
 	query := fmt.Sprintf(
-		`SELECT id, title, status, functional_requirements, technical_requirements, acceptance_criteria,
+		`SELECT id, title, status, type, functional_requirements, technical_requirements, acceptance_criteria,
 		        created_at, specialists, started_at, tested_at, closed_at, priority, severity
 		 FROM tasks WHERE id IN (%s) ORDER BY id`,
 		placeholders,
@@ -162,7 +170,7 @@ func (db *DB) ListTasks(ctx context.Context, status *models.TaskStatus, minPrior
 		limit = 100
 	}
 
-	query := `SELECT id, title, status, functional_requirements, technical_requirements, acceptance_criteria,
+	query := `SELECT id, title, status, type, functional_requirements, technical_requirements, acceptance_criteria,
 		        created_at, specialists, started_at, tested_at, closed_at, priority, severity
 		      FROM tasks WHERE 1=1`
 	args := []interface{}{}
@@ -520,6 +528,7 @@ func scanTasks(rows *sql.Rows) ([]models.Task, error) {
 			&task.ID,
 			&task.Title,
 			&task.Status,
+			&task.Type,
 			&task.FunctionalRequirements,
 			&task.TechnicalRequirements,
 			&task.AcceptanceCriteria,
@@ -643,7 +652,7 @@ func (db *DB) GetNextTasks(ctx context.Context, limit int) ([]models.Task, error
 	}
 
 	// Get open tasks from the sprint, ordered by severity DESC, priority DESC
-	query := `SELECT t.id, t.title, t.status, t.functional_requirements, t.technical_requirements,
+	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
 		         t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
 		         t.closed_at, t.priority, t.severity
 		      FROM tasks t
@@ -961,7 +970,7 @@ func (db *DB) GetSprintTasks(ctx context.Context, sprintID int) ([]int, error) {
 
 // GetSprintTasksFull retrieves full task objects for a sprint.
 func (db *DB) GetSprintTasksFull(ctx context.Context, sprintID int, status *models.TaskStatus) ([]models.Task, error) {
-	query := `SELECT t.id, t.title, t.status, t.functional_requirements, t.technical_requirements,
+	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
 		         t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
 		         t.closed_at, t.priority, t.severity
 		      FROM tasks t

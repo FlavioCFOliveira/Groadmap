@@ -26,9 +26,9 @@ class TestSprintTaskManagement:
         roadmap = self.test.create_roadmap()
 
         # Create tasks
-        task1 = self.test.create_task(roadmap, "Task 1", "Action 1", "Result 1")
-        task2 = self.test.create_task(roadmap, "Task 2", "Action 2", "Result 2")
-        task3 = self.test.create_task(roadmap, "Task 3", "Action 3", "Result 3")
+        task1 = self.test.create_task(roadmap, "Task 1", "Action 1", "Technical", "Result 1")
+        task2 = self.test.create_task(roadmap, "Task 2", "Action 2", "Technical", "Result 2")
+        task3 = self.test.create_task(roadmap, "Task 3", "Action 3", "Technical", "Result 3")
 
         # Create sprint
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1")
@@ -59,9 +59,9 @@ class TestSprintTaskManagement:
         roadmap = self.test.create_roadmap()
 
         # Create tasks
-        task1 = self.test.create_task(roadmap, "Task 1", "Action 1", "Result 1")
-        task2 = self.test.create_task(roadmap, "Task 2", "Action 2", "Result 2")
-        task3 = self.test.create_task(roadmap, "Task 3", "Action 3", "Result 3")
+        task1 = self.test.create_task(roadmap, "Task 1", "Action 1", "Technical", "Result 1")
+        task2 = self.test.create_task(roadmap, "Task 2", "Action 2", "Technical", "Result 2")
+        task3 = self.test.create_task(roadmap, "Task 3", "Action 3", "Technical", "Result 3")
 
         # Create sprint and add all tasks
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1")
@@ -101,8 +101,8 @@ class TestSprintTaskManagement:
         roadmap = self.test.create_roadmap()
 
         # Create tasks
-        task1 = self.test.create_task(roadmap, "Task 1", "Action 1", "Result 1")
-        task2 = self.test.create_task(roadmap, "Task 2", "Action 2", "Result 2")
+        task1 = self.test.create_task(roadmap, "Task 1", "Action 1", "Technical", "Result 1")
+        task2 = self.test.create_task(roadmap, "Task 2", "Action 2", "Technical", "Result 2")
 
         # Create two sprints
         sprint1 = self.test.create_sprint(roadmap, "Sprint 1")
@@ -139,9 +139,9 @@ class TestSprintTaskManagement:
         roadmap = self.test.create_roadmap()
 
         # Create tasks
-        task1 = self.test.create_task(roadmap, "Task 1", "Action 1", "Result 1")
-        task2 = self.test.create_task(roadmap, "Task 2", "Action 2", "Result 2")
-        task3 = self.test.create_task(roadmap, "Task 3", "Action 3", "Result 3")
+        task1 = self.test.create_task(roadmap, "Task 1", "Action 1", "Technical", "Result 1")
+        task2 = self.test.create_task(roadmap, "Task 2", "Action 2", "Technical", "Result 2")
+        task3 = self.test.create_task(roadmap, "Task 3", "Action 3", "Technical", "Result 3")
 
         # Create sprint and add all tasks
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1")
@@ -195,10 +195,10 @@ class TestSprintTaskManagement:
         roadmap = self.test.create_roadmap()
 
         # Create tasks with different priorities
-        task1 = self.test.create_task(roadmap, "Task 1", "Action", "Result", priority=9)
-        task2 = self.test.create_task(roadmap, "Task 2", "Action", "Result", priority=5)
-        task3 = self.test.create_task(roadmap, "Task 3", "Action", "Result", priority=3)
-        task4 = self.test.create_task(roadmap, "Task 4", "Action", "Result", priority=1)
+        task1 = self.test.create_task(roadmap, "Task 1", "Action", "Technical", "Result", priority=9)
+        task2 = self.test.create_task(roadmap, "Task 2", "Action", "Technical", "Result", priority=5)
+        task3 = self.test.create_task(roadmap, "Task 3", "Action", "Technical", "Result", priority=3)
+        task4 = self.test.create_task(roadmap, "Task 4", "Action", "Technical", "Result", priority=1)
 
         # Create sprint and add all tasks
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1")
@@ -250,7 +250,7 @@ class TestSprintTaskManagement:
         """Test reassigning task from one sprint to another."""
         roadmap = self.test.create_roadmap()
 
-        task_id = self.test.create_task(roadmap, "Shared task", "Action", "Result")
+        task_id = self.test.create_task(roadmap, "Shared task", "Action", "Technical", "Result")
 
         sprint1 = self.test.create_sprint(roadmap, "Sprint 1")
         sprint2 = self.test.create_sprint(roadmap, "Sprint 2")
@@ -284,8 +284,8 @@ class TestSprintTaskManagement:
         roadmap = self.test.create_roadmap()
 
         # Create tasks
-        task1 = self.test.create_task(roadmap, "Task 1", "Action 1", "Result 1")
-        task2 = self.test.create_task(roadmap, "Task 2", "Action 2", "Result 2")
+        task1 = self.test.create_task(roadmap, "Task 1", "Action 1", "Technical", "Result 1")
+        task2 = self.test.create_task(roadmap, "Task 2", "Action 2", "Technical", "Result 2")
 
         # Create sprint and add tasks
         sprint_id = self.test.create_sprint(roadmap, "Sprint to remove")

@@ -26,6 +26,37 @@ When errors are related to inputs (misuse of commands or subcommands), the **spe
 
 ---
 
+## Field Validation
+
+### Task Field Constraints
+
+The following fields have mandatory length constraints enforced by the application:
+
+| Field | Required | Max Length | Description |
+|-------|----------|------------|-------------|
+| `title` | Yes | 255 chars | Task title/summary |
+| `functional_requirements` | Yes | 4096 chars | Why: functional requirements |
+| `technical_requirements` | Yes | 4096 chars | How: technical description |
+| `acceptance_criteria` | Yes | 4096 chars | How to verify: completion criteria |
+
+### Validation Behavior
+
+- **Whitespace trimming:** Leading and trailing whitespace is trimmed before validation
+- **Empty strings:** Treated as missing for required fields
+- **Error format:** Plain text to stderr with descriptive message
+- **Exit code:** 1 for validation errors
+
+### Validation Error Messages
+
+| Scenario | Error Message (stderr) |
+|----------|------------------------|
+| Title exceeds 255 chars | "Error: Title must not exceed 255 characters (got N)" |
+| Title is empty | "Error: Title is required" |
+| Requirements exceed 4096 chars | "Error: {Field} must not exceed 4096 characters (got N)" |
+| Requirements are empty | "Error: {Field} is required" |
+
+---
+
 ## Global Commands
 
 ### Help
@@ -133,15 +164,25 @@ rmp task new -r <name> -t <title> -fr <fr> -tr <tr> -ac <ac>
 ```
 
 **Options:**
-- `-t, --title <text>` - Task title (required)
-- `-fr, --functional-requirements <text>` - Functional requirements (Why?)
-- `-tr, --technical-requirements <text>` - Technical requirements (How?)
-- `-ac, --acceptance-criteria <text>` - Acceptance criteria (How to verify?)
+- `-t, --title <text>` - Task title (required), maximum 255 characters
+- `-fr, --functional-requirements <text>` - Functional requirements (required), maximum 4096 characters
+- `-tr, --technical-requirements <text>` - Technical requirements (required), maximum 4096 characters
+- `-ac, --acceptance-criteria <text>` - Acceptance criteria (required), maximum 4096 characters
 - `-p, --priority <0-9>` - Priority (default: 0)
 - `--severity <0-9>` - Severity (default: 0)
 - `-sp, --specialists <list>` - Comma-separated specialists
 
+**Validation Rules:**
+| Field | Constraint | Error Message |
+|-------|------------|---------------|
+| `title` | Required, max 255 chars | "Title is required and must not exceed 255 characters" |
+| `functional-requirements` | Required, max 4096 chars | "Functional requirements are required and must not exceed 4096 characters" |
+| `technical-requirements` | Required, max 4096 chars | "Technical requirements are required and must not exceed 4096 characters" |
+| `acceptance-criteria` | Required, max 4096 chars | "Acceptance criteria are required and must not exceed 4096 characters" |
+
 **Output (success):** `{"id": 42}`, exit code 0.
+
+**Error Output:** Validation errors written to stderr with exit code 1.
 
 ### Get Task(s)
 
@@ -287,15 +328,26 @@ rmp task edit --roadmap <name> <id> [OPTIONS]
 **Description:** Edits an existing task's properties. Only specified fields are updated.
 
 **Options:**
-- `-t, --title <text>`
-- `-fr, --functional-requirements <text>`
-- `-tr, --technical-requirements <text>`
-- `-ac, --acceptance-criteria <text>`
+- `-t, --title <text>` - Maximum 255 characters
+- `-fr, --functional-requirements <text>` - Maximum 4096 characters
+- `-tr, --technical-requirements <text>` - Maximum 4096 characters
+- `-ac, --acceptance-criteria <text>` - Maximum 4096 characters
 - `-p, --priority <0-9>`
 - `--severity <0-9>`
 - `-sp, --specialists <list>`
 
+**Validation Rules:**
+When specified, the following fields must meet length constraints:
+| Field | Constraint | Error Message |
+|-------|------------|---------------|
+| `title` | Max 255 chars | "Title must not exceed 255 characters" |
+| `functional-requirements` | Max 4096 chars | "Functional requirements must not exceed 4096 characters" |
+| `technical-requirements` | Max 4096 chars | "Technical requirements must not exceed 4096 characters" |
+| `acceptance-criteria` | Max 4096 chars | "Acceptance criteria must not exceed 4096 characters" |
+
 **Output (success):** No output, exit code 0.
+
+**Error Output:** Validation errors written to stderr with exit code 1.
 
 ### Remove Task
 

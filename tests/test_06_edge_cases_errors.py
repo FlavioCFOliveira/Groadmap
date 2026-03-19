@@ -58,23 +58,30 @@ class TestEdgeCasesErrors:
         """Test creating task without required fields fails."""
         roadmap = self.test.create_roadmap()
 
-        # Missing description
+        # Missing title
         exit_code, _, _ = self.test.run_cmd(
-            ["task", "create", "-r", roadmap, "-a", "Action", "-e", "Result"],
+            ["task", "create", "-r", roadmap, "-fr", "Functional", "-tr", "Technical", "-ac", "Criteria"],
             check=False
         )
         assert exit_code != 0
 
-        # Missing action
+        # Missing functional requirements
         exit_code, _, _ = self.test.run_cmd(
-            ["task", "create", "-r", roadmap, "-d", "Description", "-e", "Result"],
+            ["task", "create", "-r", roadmap, "-t", "Title", "-tr", "Technical", "-ac", "Criteria"],
             check=False
         )
         assert exit_code != 0
 
-        # Missing expected result
+        # Missing technical requirements
         exit_code, _, _ = self.test.run_cmd(
-            ["task", "create", "-r", roadmap, "-d", "Description", "-a", "Action"],
+            ["task", "create", "-r", roadmap, "-t", "Title", "-fr", "Functional", "-ac", "Criteria"],
+            check=False
+        )
+        assert exit_code != 0
+
+        # Missing acceptance criteria
+        exit_code, _, _ = self.test.run_cmd(
+            ["task", "create", "-r", roadmap, "-t", "Title", "-fr", "Functional", "-tr", "Technical"],
             check=False
         )
         assert exit_code != 0
@@ -98,7 +105,7 @@ class TestEdgeCasesErrors:
         roadmap = self.test.create_roadmap()
 
         exit_code, _, _ = self.test.run_cmd(
-            ["task", "edit", "-r", roadmap, "99999", "-d", "New description"],
+            ["task", "edit", "-r", roadmap, "99999", "-t", "New title"],
             check=False
         )
         assert exit_code == 4, "Should fail with exit code 4 (not found)"
@@ -108,7 +115,7 @@ class TestEdgeCasesErrors:
     def test_invalid_priority_values(self):
         """Test invalid priority values are rejected."""
         roadmap = self.test.create_roadmap()
-        task_id = self.test.create_task(roadmap, "Task", "Action", "Result")
+        task_id = self.test.create_task(roadmap, "Task", "Functional", "Technical", "Criteria")
 
         # Negative priority
         exit_code, _, _ = self.test.run_cmd(
@@ -136,7 +143,7 @@ class TestEdgeCasesErrors:
     def test_invalid_severity_values(self):
         """Test invalid severity values are rejected."""
         roadmap = self.test.create_roadmap()
-        task_id = self.test.create_task(roadmap, "Task", "Action", "Result")
+        task_id = self.test.create_task(roadmap, "Task", "Functional", "Technical", "Criteria")
 
         # Negative severity
         exit_code, _, _ = self.test.run_cmd(
@@ -207,7 +214,7 @@ class TestEdgeCasesErrors:
     def test_add_tasks_to_nonexistent_sprint(self):
         """Test adding tasks to non-existent sprint fails."""
         roadmap = self.test.create_roadmap()
-        task_id = self.test.create_task(roadmap, "Task", "Action", "Result")
+        task_id = self.test.create_task(roadmap, "Task", "Functional", "Technical", "Criteria")
 
         exit_code, _, _ = self.test.run_cmd(
             ["sprint", "add-tasks", "-r", roadmap, "99999", str(task_id)],
@@ -267,7 +274,7 @@ class TestEdgeCasesErrors:
 
         # Try to create task without -r flag and no default
         exit_code, _, _ = self.test.run_cmd(
-            ["task", "create", "-d", "Task", "-a", "Action", "-e", "Result"],
+            ["task", "create", "-t", "Task", "-fr", "Functional", "-tr", "Technical", "-ac", "Criteria"],
             check=False
         )
         assert exit_code == 3, "Should fail with exit code 3 (no roadmap selected)"
@@ -277,7 +284,7 @@ class TestEdgeCasesErrors:
     def test_boundary_priority_values(self):
         """Test boundary priority values (0 and 9)."""
         roadmap = self.test.create_roadmap()
-        task_id = self.test.create_task(roadmap, "Task", "Action", "Result")
+        task_id = self.test.create_task(roadmap, "Task", "Functional", "Technical", "Criteria")
 
         # Minimum priority
         self.test.run_cmd(["task", "prio", "-r", roadmap, str(task_id), "0"])
@@ -294,7 +301,7 @@ class TestEdgeCasesErrors:
     def test_boundary_severity_values(self):
         """Test boundary severity values (0 and 9)."""
         roadmap = self.test.create_roadmap()
-        task_id = self.test.create_task(roadmap, "Task", "Action", "Result")
+        task_id = self.test.create_task(roadmap, "Task", "Functional", "Technical", "Criteria")
 
         # Minimum severity
         self.test.run_cmd(["task", "sev", "-r", roadmap, str(task_id), "0"])
@@ -312,8 +319,8 @@ class TestEdgeCasesErrors:
         """Test bulk operations with mix of valid and invalid IDs."""
         roadmap = self.test.create_roadmap()
 
-        task1 = self.test.create_task(roadmap, "Task 1", "Action", "Result")
-        task2 = self.test.create_task(roadmap, "Task 2", "Action", "Result")
+        task1 = self.test.create_task(roadmap, "Task 1", "Functional 1", "Technical 1", "Criteria 1")
+        task2 = self.test.create_task(roadmap, "Task 2", "Functional 2", "Technical 2", "Criteria 2")
 
         # Set priority with one invalid ID - valid tasks are updated
         self.test.run_cmd(
@@ -331,7 +338,7 @@ class TestEdgeCasesErrors:
     def test_remove_already_removed_task(self):
         """Test removing an already removed task fails."""
         roadmap = self.test.create_roadmap()
-        task_id = self.test.create_task(roadmap, "Task", "Action", "Result")
+        task_id = self.test.create_task(roadmap, "Task", "Functional", "Technical", "Criteria")
 
         # Remove task
         self.test.run_cmd(["task", "remove", "-r", roadmap, str(task_id)])
@@ -348,7 +355,7 @@ class TestEdgeCasesErrors:
     def test_edit_with_no_changes(self):
         """Test editing task with no changes fails."""
         roadmap = self.test.create_roadmap()
-        task_id = self.test.create_task(roadmap, "Task", "Action", "Result")
+        task_id = self.test.create_task(roadmap, "Task", "Functional", "Technical", "Criteria")
 
         # Try to edit with no fields
         exit_code, _, _ = self.test.run_cmd(

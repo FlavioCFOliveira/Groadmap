@@ -49,9 +49,9 @@ Creates a new task in the specified roadmap.
 |------------|------------|------|-----------|
 | `-r` | `--roadmap` | string | Roadmap name |
 | `-t` | `--title` | string | Task title/summary |
-| `-f` | `--functional-requirements` | string | Functional requirements (Why?) |
-| `-h` | `--technical-requirements` | string | Technical requirements (How?) |
-| `-a` | `--acceptance-criteria` | string | Acceptance criteria (How to verify?) |
+| `-fr` | `--functional-requirements` | string | Functional requirements (Why?) |
+| `-tr` | `--technical-requirements` | string | Technical requirements (How?) |
+| `-ac` | `--acceptance-criteria` | string | Acceptance criteria (How to verify?) |
 
 **Optional Flags:**
 | Short Flag | Long Flag | Type | Default | Description |
@@ -64,8 +64,8 @@ Creates a new task in the specified roadmap.
 
 **Examples:**
 ```bash
-rmp task create -r project1 -t "Fix login bug" -f "User can login" -h "Update auth" -a "Login works"
-rmp task new -r project1 -t "Update docs" -f "Docs needed" -h "Write README" -a "Docs complete" -p 5
+rmp task create -r project1 -t "Fix login bug" -fr "User can login" -tr "Update auth" -ac "Login works"
+rmp task new -r project1 -t "Update docs" -fr "Docs needed" -tr "Write README" -ac "Docs complete" -p 5
 ```
 
 **Example output:**
@@ -256,9 +256,9 @@ Edits an existing task's properties. Only specified fields are updated.
 |------------|------------|------|-----------|
 | `-r` | `--roadmap` | string | Roadmap name (required) |
 | `-t` | `--title` | string | New title |
-| `-f` | `--functional-requirements` | string | New functional requirements |
-| `-h` | `--technical-requirements` | string | New technical requirements |
-| `-a` | `--acceptance-criteria` | string | New acceptance criteria |
+| `-fr` | `--functional-requirements` | string | New functional requirements |
+| `-tr` | `--technical-requirements` | string | New technical requirements |
+| `-ac` | `--acceptance-criteria` | string | New acceptance criteria |
 | `-p` | `--priority` | int | New priority (0-9) |
 | N/A | `--severity` | int | New severity (0-9) |
 | `-sp` | `--specialists` | string | New specialists |

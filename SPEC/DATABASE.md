@@ -19,6 +19,7 @@ Each roadmap is stored in an individual SQLite file. The schema is designed to b
 |  - id (PK, AUTOINCREMENT)              |
 |  - title (TEXT)                        |
 |  - status (TEXT)                       |
+|  - type (TEXT)                         |
 |  - functional_requirements (TEXT)      |
 |  - technical_requirements (TEXT)       |
 |  - acceptance_criteria (TEXT)          |
@@ -69,11 +70,13 @@ CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
 
     -- Group 1: Content fields (TEXT) - frequently accessed together
-    title TEXT NOT NULL,                    -- Task title/summary
+    -- Length constraints enforced by application (255 chars for title, 4096 for requirements/criteria)
+    title TEXT NOT NULL CHECK(length(title) <= 255),                    -- Task title/summary, max 255 chars
     status TEXT NOT NULL DEFAULT 'BACKLOG' CHECK(status IN ('BACKLOG', 'SPRINT', 'DOING', 'TESTING', 'COMPLETED')),
-    functional_requirements TEXT NOT NULL,    -- Why: functional requirements, objective
-    technical_requirements TEXT NOT NULL,   -- How: technical description
-    acceptance_criteria TEXT NOT NULL,      -- How to verify: completion criteria
+    type TEXT NOT NULL DEFAULT 'TASK' CHECK(type IN ('USER_STORY', 'TASK', 'BUG', 'SUB_TASK', 'EPIC', 'REFACTOR', 'CHORE', 'SPIKE', 'DESIGN_UX', 'IMPROVEMENT')),
+    functional_requirements TEXT NOT NULL CHECK(length(functional_requirements) <= 4096),    -- Why: functional requirements, max 4096 chars
+    technical_requirements TEXT NOT NULL CHECK(length(technical_requirements) <= 4096),   -- How: technical description, max 4096 chars
+    acceptance_criteria TEXT NOT NULL CHECK(length(acceptance_criteria) <= 4096),      -- How to verify: completion criteria, max 4096 chars
     created_at TEXT NOT NULL,               -- ISO 8601 UTC, set on task creation
 
     -- Group 2: Nullable tracking fields - lifecycle timestamps
@@ -89,6 +92,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 -- Indexes for frequent queries
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_type ON tasks(type);
 CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
 CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
 
@@ -173,6 +177,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 - `TASK_CREATE` - New task created
 - `TASK_DELETE` - Task deleted
 - `TASK_STATUS_CHANGE` - Status change (BACKLOG → SPRINT → DOING → TESTING → COMPLETED)
+- `TASK_TYPE_CHANGE` - Type change (USER_STORY, TASK, BUG, SUB_TASK, EPIC, REFACTOR, CHORE, SPIKE, DESIGN_UX, IMPROVEMENT)
 - `TASK_PRIORITY_CHANGE` - Priority change (0-9)
 - `TASK_SEVERITY_CHANGE` - Severity change (0-9)
 - `TASK_UPDATE` - Generic update (description, action, expected_result, specialists)
@@ -205,7 +210,7 @@ CREATE TABLE IF NOT EXISTS _metadata (
 
 -- Insert schema version on creation
 INSERT INTO _metadata (key, value) VALUES
-    ('schema_version', '1.0.0'),
+    ('schema_version', '1.1.0'),
     ('created_at', '2026-03-12T14:30:00.000Z'),
     ('application', 'Groadmap');
 ```
@@ -219,8 +224,8 @@ INSERT INTO _metadata (key, value) VALUES
 #### Insert Task
 
 ```sql
-INSERT INTO tasks (title, status, functional_requirements, technical_requirements, acceptance_criteria, created_at, specialists, priority, severity)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);  -- created_at set by application (ISO 8601 UTC)
+INSERT INTO tasks (title, status, type, functional_requirements, technical_requirements, acceptance_criteria, created_at, specialists, priority, severity)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);  -- created_at set by application (ISO 8601 UTC)
 ```
 
 #### List All
@@ -696,11 +701,12 @@ ORDER BY count DESC;
 | Column | Type | Constraints | Group |
 |--------|------|-------------|-------|
 | id | INTEGER | PK, AUTOINCREMENT | Key |
-| title | TEXT | NOT NULL, task title/summary | Content |
+| title | TEXT | NOT NULL, CHECK length <= 255 chars, task title/summary | Content |
 | status | TEXT | NOT NULL, DEFAULT 'BACKLOG', CHECK enum values | Content |
-| functional_requirements | TEXT | NOT NULL, answers "Why?" | Content |
-| technical_requirements | TEXT | NOT NULL, answers "How?" | Content |
-| acceptance_criteria | TEXT | NOT NULL, answers "How to verify?" | Content |
+| type | TEXT | NOT NULL, DEFAULT 'TASK', CHECK enum values | Content |
+| functional_requirements | TEXT | NOT NULL, CHECK length <= 4096 chars, answers "Why?" | Content |
+| technical_requirements | TEXT | NOT NULL, CHECK length <= 4096 chars, answers "How?" | Content |
+| acceptance_criteria | TEXT | NOT NULL, CHECK length <= 4096 chars, answers "How to verify?" | Content |
 | created_at | TEXT | NOT NULL, ISO 8601 format | Content |
 | specialists | TEXT | NULLABLE, comma-separated | Tracking |
 | started_at | TEXT | NULLABLE, ISO 8601 format | Tracking |
@@ -718,12 +724,12 @@ Fields are organized to match the optimized Go struct layout:
 
 **Memory Layout Optimization:**
 
-On 64-bit systems, the Task struct occupies exactly 152 bytes with zero padding:
+On 64-bit systems, the Task struct occupies exactly 168 bytes with zero padding:
 - String fields: 16 bytes each (ptr + len), 8-byte aligned
 - Pointer fields: 8 bytes each, 8-byte aligned
 - Integer fields: 8 bytes each, 8-byte aligned
 
-Total: 152 bytes (6×16 + 4×8 + 3×8 = 96 + 32 + 24)
+Total: 168 bytes (7×16 + 4×8 + 3×8 = 112 + 32 + 24)
 
 ### Sprints
 
@@ -757,7 +763,7 @@ Total: 152 bytes (6×16 + 4×8 + 3×8 = 96 + 32 + 24)
 | performed_at | TEXT | NOT NULL, ISO 8601 format |
 
 **Valid values (validated by application):**
-- `operation`: TASK_CREATE, TASK_UPDATE, TASK_DELETE, TASK_STATUS_CHANGE, TASK_PRIORITY_CHANGE, TASK_SEVERITY_CHANGE, SPRINT_CREATE, SPRINT_UPDATE, SPRINT_DELETE, SPRINT_START, SPRINT_CLOSE, SPRINT_REOPEN, SPRINT_ADD_TASK, SPRINT_REMOVE_TASK, SPRINT_MOVE_TASK
+- `operation`: TASK_CREATE, TASK_UPDATE, TASK_DELETE, TASK_STATUS_CHANGE, TASK_TYPE_CHANGE, TASK_PRIORITY_CHANGE, TASK_SEVERITY_CHANGE, SPRINT_CREATE, SPRINT_UPDATE, SPRINT_DELETE, SPRINT_START, SPRINT_CLOSE, SPRINT_REOPEN, SPRINT_ADD_TASK, SPRINT_REMOVE_TASK, SPRINT_MOVE_TASK
 - `entity_type`: TASK, SPRINT
 
 ---
@@ -810,6 +816,24 @@ EXPLAIN QUERY PLAN SELECT * FROM tasks WHERE status = 'BACKLOG' ORDER BY priorit
 
 ---
 
+## Field Length Validation
+
+The following length constraints are enforced at the database level using CHECK constraints:
+
+| Field | Maximum Length | Constraint |
+|-------|----------------|------------|
+| `title` | 255 characters | `CHECK(length(title) <= 255)` |
+| `functional_requirements` | 4096 characters | `CHECK(length(functional_requirements) <= 4096)` |
+| `technical_requirements` | 4096 characters | `CHECK(length(technical_requirements) <= 4096)` |
+| `acceptance_criteria` | 4096 characters | `CHECK(length(acceptance_criteria) <= 4096)` |
+
+**Application-Level Validation:**
+- Validate inputs BEFORE database insertion to provide clear error messages
+- Trim whitespace before length checking
+- Return specific error messages indicating which field exceeded the limit
+
+---
+
 ## SQLite Validation
 
 To verify if a file is valid SQLite:
@@ -827,10 +851,126 @@ Or check magic bytes: SQLite files start with `"SQLite format 3\x00"`
 
 The `_metadata` table enables future schema versioning:
 
+### Schema Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.0.0 | 2026-03-12 | Initial schema |
+| 1.1.0 | 2026-03-19 | Added CHECK constraints for field length validation (title: 255 chars, requirements/criteria: 4096 chars) |
+| 1.2.0 | 2026-03-19 | Added `type` column to tasks table with enum constraint for task classification |
+
+### Migration Commands
+
 ```sql
 -- Check current version
 SELECT value FROM _metadata WHERE key = 'schema_version';
 
 -- Update version after migration
 UPDATE _metadata SET value = '1.1.0' WHERE key = 'schema_version';
+```
+
+### Migrating from 1.0.0 to 1.1.0
+
+To add length constraints to an existing database:
+
+```sql
+-- Note: SQLite has limited ALTER TABLE support.
+-- For existing databases, recreate the table with constraints:
+
+BEGIN TRANSACTION;
+
+-- Create new table with constraints
+CREATE TABLE tasks_new (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL CHECK(length(title) <= 255),
+    status TEXT NOT NULL DEFAULT 'BACKLOG' CHECK(status IN ('BACKLOG', 'SPRINT', 'DOING', 'TESTING', 'COMPLETED')),
+    functional_requirements TEXT NOT NULL CHECK(length(functional_requirements) <= 4096),
+    technical_requirements TEXT NOT NULL CHECK(length(technical_requirements) <= 4096),
+    acceptance_criteria TEXT NOT NULL CHECK(length(acceptance_criteria) <= 4096),
+    created_at TEXT NOT NULL,
+    specialists TEXT,
+    started_at TEXT,
+    tested_at TEXT,
+    closed_at TEXT,
+    priority INTEGER NOT NULL DEFAULT 0 CHECK(priority >= 0 AND priority <= 9),
+    severity INTEGER NOT NULL DEFAULT 0 CHECK(severity >= 0 AND severity <= 9)
+);
+
+-- Copy data
+INSERT INTO tasks_new SELECT * FROM tasks;
+
+-- Replace tables
+DROP TABLE tasks;
+ALTER TABLE tasks_new RENAME TO tasks;
+
+-- Recreate indexes
+CREATE INDEX idx_tasks_status ON tasks(status);
+CREATE INDEX idx_tasks_type ON tasks(type);
+CREATE INDEX idx_tasks_priority ON tasks(priority);
+CREATE INDEX idx_tasks_created_at ON tasks(created_at);
+CREATE INDEX idx_tasks_status_priority ON tasks(status, priority DESC);
+CREATE INDEX idx_tasks_priority_created ON tasks(priority DESC, created_at ASC);
+
+-- Update version
+UPDATE _metadata SET value = '1.1.0' WHERE key = 'schema_version';
+
+COMMIT;
+```
+
+### Migrating from 1.1.0 to 1.2.0
+
+To add the `type` column to an existing database:
+
+```sql
+-- Note: SQLite has limited ALTER TABLE support.
+-- For existing databases, recreate the table with the new column:
+
+BEGIN TRANSACTION;
+
+-- Create new table with type column
+CREATE TABLE tasks_new (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL CHECK(length(title) <= 255),
+    status TEXT NOT NULL DEFAULT 'BACKLOG' CHECK(status IN ('BACKLOG', 'SPRINT', 'DOING', 'TESTING', 'COMPLETED')),
+    type TEXT NOT NULL DEFAULT 'TASK' CHECK(type IN ('USER_STORY', 'TASK', 'BUG', 'SUB_TASK', 'EPIC', 'REFACTOR', 'CHORE', 'SPIKE', 'DESIGN_UX', 'IMPROVEMENT')),
+    functional_requirements TEXT NOT NULL CHECK(length(functional_requirements) <= 4096),
+    technical_requirements TEXT NOT NULL CHECK(length(technical_requirements) <= 4096),
+    acceptance_criteria TEXT NOT NULL CHECK(length(acceptance_criteria) <= 4096),
+    created_at TEXT NOT NULL,
+    specialists TEXT,
+    started_at TEXT,
+    tested_at TEXT,
+    closed_at TEXT,
+    priority INTEGER NOT NULL DEFAULT 0 CHECK(priority >= 0 AND priority <= 9),
+    severity INTEGER NOT NULL DEFAULT 0 CHECK(severity >= 0 AND severity <= 9)
+);
+
+-- Copy data (set default type 'TASK' for existing tasks)
+INSERT INTO tasks_new (
+    id, title, status, type, functional_requirements, technical_requirements,
+    acceptance_criteria, created_at, specialists, started_at, tested_at,
+    closed_at, priority, severity
+)
+SELECT
+    id, title, status, 'TASK', functional_requirements, technical_requirements,
+    acceptance_criteria, created_at, specialists, started_at, tested_at,
+    closed_at, priority, severity
+FROM tasks;
+
+-- Replace tables
+DROP TABLE tasks;
+ALTER TABLE tasks_new RENAME TO tasks;
+
+-- Recreate indexes
+CREATE INDEX idx_tasks_status ON tasks(status);
+CREATE INDEX idx_tasks_type ON tasks(type);
+CREATE INDEX idx_tasks_priority ON tasks(priority);
+CREATE INDEX idx_tasks_created_at ON tasks(created_at);
+CREATE INDEX idx_tasks_status_priority ON tasks(status, priority DESC);
+CREATE INDEX idx_tasks_priority_created ON tasks(priority DESC, created_at ASC);
+
+-- Update version
+UPDATE _metadata SET value = '1.2.0' WHERE key = 'schema_version';
+
+COMMIT;
 ```

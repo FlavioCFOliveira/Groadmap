@@ -147,9 +147,9 @@ func TestIntegration_TaskLifecycle(t *testing.T) {
 		err := HandleTask([]string{
 			"create",
 			"-t", "Integration test task",
-			"-f", "Perform integration test",
-			"-h", "Task created successfully",
-			"-a", "Acceptance criteria met",
+			"-fr", "Perform integration test",
+			"-tr", "Task created successfully",
+			"-ac", "Acceptance criteria met",
 			"-p", "5",
 			"--severity", "3",
 		})
@@ -354,9 +354,9 @@ func TestIntegration_AuditQuery(t *testing.T) {
 	err = HandleTask([]string{
 		"create",
 		"-t", "Audit test task",
-		"-f", "Test functional",
-		"-h", "Test technical",
-		"-a", "Test acceptance",
+		"-fr", "Test functional",
+		"-tr", "Test technical",
+		"-ac", "Test acceptance",
 	})
 	if err != nil {
 		t.Fatalf("failed to create task: %v", err)

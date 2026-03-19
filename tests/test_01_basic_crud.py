@@ -53,9 +53,10 @@ class TestBasicCRUD:
         # Create task without specifying roadmap (should use default)
         result = self.test.run_cmd_json([
             "task", "create",
-            "-d", "Test task",
-            "-a", "Do something",
-            "-e", "Result achieved"
+            "-t", "Test task",
+            "-fr", "Functional requirements",
+            "-tr", "Technical requirements",
+            "-ac", "Acceptance criteria"
         ])
         assert "id" in result
 
@@ -68,9 +69,10 @@ class TestBasicCRUD:
         # Create task
         task_id = self.test.create_task(
             roadmap=roadmap,
-            description="Implement user authentication",
-            action="Create login and signup endpoints",
-            expected_result="Users can authenticate successfully"
+            title="Implement user authentication",
+            functional_requirements="Users need to authenticate to access the system",
+            technical_requirements="Create login and signup endpoints using JWT tokens",
+            acceptance_criteria="Users can login, logout and access protected resources"
         )
         assert task_id > 0
 
@@ -78,10 +80,12 @@ class TestBasicCRUD:
         result = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])
         assert len(result) == 1
         assert result[0]["id"] == task_id
-        assert result[0]["description"] == "Implement user authentication"
-        assert result[0]["action"] == "Create login and signup endpoints"
-        assert result[0]["expected_result"] == "Users can authenticate successfully"
+        assert result[0]["title"] == "Implement user authentication"
+        assert result[0]["functional_requirements"] == "Users need to authenticate to access the system"
+        assert result[0]["technical_requirements"] == "Create login and signup endpoints using JWT tokens"
+        assert result[0]["acceptance_criteria"] == "Users can login, logout and access protected resources"
         assert result[0]["status"] == "BACKLOG"
+        assert result[0]["type"] == "TASK"
 
         print("✓ Create and get task test passed")
 
@@ -91,9 +95,10 @@ class TestBasicCRUD:
 
         task_id = self.test.create_task(
             roadmap=roadmap,
-            description="Fix critical security vulnerability",
-            action="Patch SQL injection in user query",
-            expected_result="No more SQL injection vulnerabilities",
+            title="Fix critical security vulnerability",
+            functional_requirements="Prevent SQL injection attacks",
+            technical_requirements="Patch user query validation",
+            acceptance_criteria="No more SQL injection vulnerabilities",
             priority=9,
             severity=9,
             specialists="security-team,backend-dev"
@@ -114,32 +119,35 @@ class TestBasicCRUD:
 
         task_id = self.test.create_task(
             roadmap=roadmap,
-            description="Original description",
-            action="Original action",
-            expected_result="Original result"
+            title="Original title",
+            functional_requirements="Original functional requirements",
+            technical_requirements="Original technical requirements",
+            acceptance_criteria="Original acceptance criteria"
         )
 
-        # Edit description
+        # Edit title
         self.test.run_cmd([
             "task", "edit", "-r", roadmap, str(task_id),
-            "-d", "Updated description"
+            "-t", "Updated title"
         ])
 
         result = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])
-        assert result[0]["description"] == "Updated description"
-        assert result[0]["action"] == "Original action"  # Unchanged
+        assert result[0]["title"] == "Updated title"
+        assert result[0]["functional_requirements"] == "Original functional requirements"  # Unchanged
 
         # Edit multiple fields
         self.test.run_cmd([
             "task", "edit", "-r", roadmap, str(task_id),
-            "-a", "Updated action",
-            "-e", "Updated result",
+            "-fr", "Updated functional requirements",
+            "-tr", "Updated technical requirements",
+            "-ac", "Updated acceptance criteria",
             "-p", "5"
         ])
 
         result = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])
-        assert result[0]["action"] == "Updated action"
-        assert result[0]["expected_result"] == "Updated result"
+        assert result[0]["functional_requirements"] == "Updated functional requirements"
+        assert result[0]["technical_requirements"] == "Updated technical requirements"
+        assert result[0]["acceptance_criteria"] == "Updated acceptance criteria"
         assert result[0]["priority"] == 5
 
         print("✓ Edit task test passed")
@@ -150,9 +158,10 @@ class TestBasicCRUD:
 
         task_id = self.test.create_task(
             roadmap=roadmap,
-            description="Task to be removed",
-            action="Do something",
-            expected_result="Done"
+            title="Task to be removed",
+            functional_requirements="Requirements",
+            technical_requirements="Technical details",
+            acceptance_criteria="Criteria"
         )
 
         # Verify task exists
@@ -181,9 +190,10 @@ class TestBasicCRUD:
         for i in range(5):
             task_id = self.test.create_task(
                 roadmap=roadmap,
-                description=f"Task {i+1}",
-                action=f"Action {i+1}",
-                expected_result=f"Result {i+1}"
+                title=f"Task {i+1}",
+                functional_requirements=f"Functional requirements {i+1}",
+                technical_requirements=f"Technical requirements {i+1}",
+                acceptance_criteria=f"Acceptance criteria {i+1}"
             )
             task_ids.append(task_id)
 
@@ -223,8 +233,8 @@ class TestBasicCRUD:
         roadmap = self.test.create_roadmap()
 
         # Create some tasks
-        self.test.create_task(roadmap, "Task 1", "Action 1", "Result 1")
-        self.test.create_task(roadmap, "Task 2", "Action 2", "Result 2")
+        self.test.create_task(roadmap, "Task 1", "Functional 1", "Technical 1", "Criteria 1")
+        self.test.create_task(roadmap, "Task 2", "Functional 2", "Technical 2", "Criteria 2")
 
         # Remove roadmap
         self.test.run_cmd(["roadmap", "remove", roadmap])
@@ -242,15 +252,15 @@ class TestBasicCRUD:
 
         # Create tasks with different properties
         task1 = self.test.create_task(
-            roadmap, "High priority task", "Action", "Result",
+            roadmap, "High priority task", "Functional", "Technical", "Criteria",
             priority=8, severity=3
         )
         task2 = self.test.create_task(
-            roadmap, "Medium priority task", "Action", "Result",
+            roadmap, "Medium priority task", "Functional", "Technical", "Criteria",
             priority=5, severity=5
         )
         task3 = self.test.create_task(
-            roadmap, "Low priority task", "Action", "Result",
+            roadmap, "Low priority task", "Functional", "Technical", "Criteria",
             priority=2, severity=7
         )
 
