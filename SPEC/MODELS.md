@@ -36,17 +36,28 @@ const (
 Maps to the `tasks` table and `Task` JSON object.
 
 ```go
+// Task represents a task in the roadmap.
+// Field order optimized for memory layout (152 bytes, zero padding on 64-bit systems).
+// Groups: Content fields (strings), Tracking fields (pointers), Metadata (ints).
 type Task struct {
-    ID             int        `json:"id"`
-    Priority       int        `json:"priority"`
-    Severity       int        `json:"severity"`
-    Status         TaskStatus `json:"status"`
-    Description    string     `json:"description"`
-    Specialists    *string    `json:"specialists"` // Nullable in DB
-    Action         string     `json:"action"`
-    ExpectedResult string     `json:"expected_result"`
-    CreatedAt      string     `json:"created_at"`   // ISO 8601 UTC
-    CompletedAt    *string    `json:"completed_at"` // ISO 8601 UTC, nullable
+    // Group 1: Content fields - frequently accessed together (96 bytes total)
+    Title                  string     `json:"title"`                    // Task title/summary
+    Status                 TaskStatus `json:"status"`                   // Current status
+    FunctionalRequirements string     `json:"functional_requirements"`  // Why: functional requirements
+    TechnicalRequirements  string     `json:"technical_requirements"`   // How: technical description
+    AcceptanceCriteria     string     `json:"acceptance_criteria"`      // How to verify: completion criteria
+    CreatedAt              string     `json:"created_at"`               // ISO 8601 UTC, auto-set on creation
+
+    // Group 2: Nullable tracking fields - lifecycle timestamps (32 bytes total)
+    Specialists *string `json:"specialists"`  // Comma-separated specialists
+    StartedAt   *string `json:"started_at"`   // ISO 8601 UTC, auto-set on DOING transition
+    TestedAt    *string `json:"tested_at"`    // ISO 8601 UTC, auto-set on TESTING transition
+    ClosedAt    *string `json:"closed_at"`    // ISO 8601 UTC, auto-set on COMPLETED transition
+
+    // Group 3: Numeric metadata fields (24 bytes total)
+    ID       int `json:"id"`       // Primary key
+    Priority int `json:"priority"` // 0-9 priority level
+    Severity int `json:"severity"` // 0-9 severity level
 }
 ```
 

@@ -59,14 +59,47 @@ Tasks can be in one of the following states:
 
 ## Transition Rules
 
-1. **BACKLOG → SPRINT**: Task is assigned to a sprint
-2. **SPRINT → BACKLOG**: Task is removed from sprint (back to backlog)
-3. **SPRINT → DOING**: Work begins on the task
-4. **DOING → SPRINT**: Task is paused/returned to sprint
-5. **DOING → TESTING**: Task is ready for testing
-6. **TESTING → DOING**: Testing failed, return to development
-7. **TESTING → COMPLETED**: Testing passed, task is complete
-8. **COMPLETED → BACKLOG**: Task is reopened (e.g., for rework)
+| Transition | Description | Date Tracking Behavior |
+|------------|-------------|----------------------|
+| **BACKLOG → SPRINT** | Task is assigned to a sprint | No date changes |
+| **SPRINT → BACKLOG** | Task is removed from sprint | No date changes |
+| **SPRINT → DOING** | Work begins on the task | Set `started_at` to current timestamp |
+| **DOING → SPRINT** | Task is paused/returned to sprint | No date changes |
+| **DOING → TESTING** | Task is ready for testing | Set `tested_at` to current timestamp |
+| **TESTING → DOING** | Testing failed, return to development | No date changes |
+| **TESTING → COMPLETED** | Testing passed, task is complete | Set `closed_at` to current timestamp |
+| **COMPLETED → BACKLOG** | Task is reopened for rework | Clear `started_at`, `tested_at`, `closed_at` to NULL |
+
+## Date Tracking Fields
+
+### Lifecycle Tracking
+
+The following fields track the task lifecycle and are managed automatically by the application:
+
+| Field | Set On | Description |
+|-------|--------|-------------|
+| `created_at` | Task creation | Initial timestamp when task is created |
+| `started_at` | SPRINT → DOING transition | When work begins on the task |
+| `tested_at` | DOING → TESTING transition | When task enters testing phase |
+| `closed_at` | TESTING → COMPLETED transition | When task is marked complete |
+
+### Rules
+
+1. **created_at**: Set once on task creation, never changes
+2. **started_at**: Set on first transition to DOING, cleared on COMPLETED → BACKLOG
+3. **tested_at**: Set on first transition to TESTING, cleared on COMPLETED → BACKLOG
+4. **closed_at**: Set on transition to COMPLETED, cleared on COMPLETED → BACKLOG
+
+### Reopening Behavior
+
+When a task is reopened (COMPLETED → BACKLOG):
+- All lifecycle dates (`started_at`, `tested_at`, `closed_at`) are reset to NULL
+- `created_at` is preserved (original creation time)
+- This allows the task to go through the full lifecycle again
+
+### Date Format
+
+All timestamps follow ISO 8601 UTC format: `YYYY-MM-DDTHH:MM:SS.000Z`
 
 ## Implementation
 

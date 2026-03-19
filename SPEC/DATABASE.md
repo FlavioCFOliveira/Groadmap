@@ -17,15 +17,18 @@ Each roadmap is stored in an individual SQLite file. The schema is designed to b
 +----------------------------------------+
 |           tasks                        |
 |  - id (PK, AUTOINCREMENT)              |
+|  - title (TEXT)                        |
+|  - status (TEXT)                       |
+|  - functional_requirements (TEXT)      |
+|  - technical_requirements (TEXT)       |
+|  - acceptance_criteria (TEXT)          |
+|  - created_at (TEXT ISO8601)           |
+|  - specialists (TEXT, NULL)            |
+|  - started_at (TEXT ISO8601, NULL)     |
+|  - tested_at (TEXT ISO8601, NULL)      |
+|  - closed_at (TEXT ISO8601, NULL)      |
 |  - priority (INTEGER 0-9)              |
 |  - severity (INTEGER 0-9)              |
-|  - status (TEXT)                       |
-|  - description (TEXT)                  |
-|  - specialists (TEXT)                  |
-|  - action (TEXT)                       |
-|  - expected_result (TEXT)              |
-|  - created_at (TEXT ISO8601)           |
-|  - completed_at (TEXT ISO8601, NULL) |
 +----------------------------------------+
 |           sprints                      |
 |  - id (PK, AUTOINCREMENT)              |
@@ -62,16 +65,26 @@ Each roadmap is stored in an individual SQLite file. The schema is designed to b
 
 ```sql
 CREATE TABLE IF NOT EXISTS tasks (
+    -- Primary key
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    priority INTEGER NOT NULL DEFAULT 0 CHECK(priority >= 0 AND priority <= 9),
-    severity INTEGER NOT NULL DEFAULT 0 CHECK(severity >= 0 AND severity <= 9),
+
+    -- Group 1: Content fields (TEXT) - frequently accessed together
+    title TEXT NOT NULL,                    -- Task title/summary
     status TEXT NOT NULL DEFAULT 'BACKLOG' CHECK(status IN ('BACKLOG', 'SPRINT', 'DOING', 'TESTING', 'COMPLETED')),
-    description TEXT NOT NULL,
-    specialists TEXT,
-    action TEXT NOT NULL,
-    expected_result TEXT NOT NULL,
-    created_at TEXT NOT NULL,  -- ISO 8601 UTC
-    completed_at TEXT          -- ISO 8601 UTC, NULL if not complete
+    functional_requirements TEXT NOT NULL,    -- Why: functional requirements, objective
+    technical_requirements TEXT NOT NULL,   -- How: technical description
+    acceptance_criteria TEXT NOT NULL,      -- How to verify: completion criteria
+    created_at TEXT NOT NULL,               -- ISO 8601 UTC, set on task creation
+
+    -- Group 2: Nullable tracking fields - lifecycle timestamps
+    specialists TEXT,                       -- Comma-separated specialists (nullable)
+    started_at TEXT,                        -- ISO 8601 UTC, set when task moves to DOING
+    tested_at TEXT,                         -- ISO 8601 UTC, set when task moves to TESTING
+    closed_at TEXT,                         -- ISO 8601 UTC, set when task moves to COMPLETED
+
+    -- Group 3: Numeric metadata fields
+    priority INTEGER NOT NULL DEFAULT 0 CHECK(priority >= 0 AND priority <= 9),
+    severity INTEGER NOT NULL DEFAULT 0 CHECK(severity >= 0 AND severity <= 9)
 );
 
 -- Indexes for frequent queries
@@ -206,8 +219,8 @@ INSERT INTO _metadata (key, value) VALUES
 #### Insert Task
 
 ```sql
-INSERT INTO tasks (priority, severity, description, specialists, action, expected_result, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?);
+INSERT INTO tasks (title, status, functional_requirements, technical_requirements, acceptance_criteria, created_at, specialists, priority, severity)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);  -- created_at set by application (ISO 8601 UTC)
 ```
 
 #### List All
@@ -249,9 +262,32 @@ ORDER BY t.priority DESC, t.severity DESC;
 
 #### Update Status
 
+Date tracking fields are automatically managed by the application based on state transitions:
+
 ```sql
+-- When transitioning to DOING: set started_at
 UPDATE tasks
-SET status = ?, completed_at = CASE WHEN ? = 'COMPLETED' THEN ? ELSE completed_at END
+SET status = 'DOING', started_at = ?
+WHERE id = ?;
+
+-- When transitioning to TESTING: set tested_at
+UPDATE tasks
+SET status = 'TESTING', tested_at = ?
+WHERE id = ?;
+
+-- When transitioning to COMPLETED: set closed_at
+UPDATE tasks
+SET status = 'COMPLETED', closed_at = ?
+WHERE id = ?;
+
+-- When reopening (COMPLETED → BACKLOG): clear tracking dates
+UPDATE tasks
+SET status = 'BACKLOG', started_at = NULL, tested_at = NULL, closed_at = NULL
+WHERE id = ?;
+
+-- Generic status update without date tracking changes
+UPDATE tasks
+SET status = ?
 WHERE id IN (?, ?, ...);
 ```
 
@@ -657,17 +693,37 @@ ORDER BY count DESC;
 
 ### Tasks
 
-| Column | Type | Constraints |
-|--------|------|-------------|
-| id | INTEGER | PK, AUTOINCREMENT |
-| priority | INTEGER | NOT NULL, DEFAULT 0, CHECK 0-9 |
-| severity | INTEGER | NOT NULL, DEFAULT 0, CHECK 0-9 |
-| status | TEXT | NOT NULL, DEFAULT 'BACKLOG', CHECK enum values |
-| description | TEXT | NOT NULL |
-| action | TEXT | NOT NULL |
-| expected_result | TEXT | NOT NULL |
-| created_at | TEXT | NOT NULL, ISO 8601 format |
-| completed_at | TEXT | NULLABLE, ISO 8601 format |
+| Column | Type | Constraints | Group |
+|--------|------|-------------|-------|
+| id | INTEGER | PK, AUTOINCREMENT | Key |
+| title | TEXT | NOT NULL, task title/summary | Content |
+| status | TEXT | NOT NULL, DEFAULT 'BACKLOG', CHECK enum values | Content |
+| functional_requirements | TEXT | NOT NULL, answers "Why?" | Content |
+| technical_requirements | TEXT | NOT NULL, answers "How?" | Content |
+| acceptance_criteria | TEXT | NOT NULL, answers "How to verify?" | Content |
+| created_at | TEXT | NOT NULL, ISO 8601 format | Content |
+| specialists | TEXT | NULLABLE, comma-separated | Tracking |
+| started_at | TEXT | NULLABLE, ISO 8601 format | Tracking |
+| tested_at | TEXT | NULLABLE, ISO 8601 format | Tracking |
+| closed_at | TEXT | NULLABLE, ISO 8601 format | Tracking |
+| priority | INTEGER | NOT NULL, DEFAULT 0, CHECK 0-9 | Metadata |
+| severity | INTEGER | NOT NULL, DEFAULT 0, CHECK 0-9 | Metadata |
+
+**Field Grouping Rationale:**
+
+Fields are organized to match the optimized Go struct layout:
+- **Content fields**: Frequently accessed together for display purposes (96 bytes)
+- **Tracking fields**: Nullable lifecycle timestamps, often queried together (32 bytes)
+- **Metadata fields**: Small integers used for filtering and sorting (24 bytes)
+
+**Memory Layout Optimization:**
+
+On 64-bit systems, the Task struct occupies exactly 152 bytes with zero padding:
+- String fields: 16 bytes each (ptr + len), 8-byte aligned
+- Pointer fields: 8 bytes each, 8-byte aligned
+- Integer fields: 8 bytes each, 8-byte aligned
+
+Total: 152 bytes (6×16 + 4×8 + 3×8 = 96 + 32 + 24)
 
 ### Sprints
 

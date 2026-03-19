@@ -60,14 +60,14 @@ func TestCreateTask(t *testing.T) {
 	defer cleanup()
 
 	task := &models.Task{
-		Priority:       5,
-		Severity:       3,
-		Status:         models.StatusBacklog,
+		Priority:               5,
+		Severity:               3,
+		Status:                 models.StatusBacklog,
 		Title:                  "Test task",
 		FunctionalRequirements: "Test functional requirements",
 		TechnicalRequirements:  "Test technical requirements",
-				AcceptanceCriteria:     "Test acceptance criteria",
-		CreatedAt:      time.Now().Format(time.RFC3339),
+		AcceptanceCriteria:     "Test acceptance criteria",
+		CreatedAt:              time.Now().Format(time.RFC3339),
 	}
 
 	id, err := db.CreateTask(testContext(), task)
@@ -100,14 +100,14 @@ func TestGetTask(t *testing.T) {
 
 	// Create a task first
 	task := &models.Task{
-		Priority:       1,
-		Severity:       1,
-		Status:         models.StatusBacklog,
+		Priority:               1,
+		Severity:               1,
+		Status:                 models.StatusBacklog,
 		Title:                  "Test task",
 		FunctionalRequirements: "Action",
 		TechnicalRequirements:  "Result",
 		AcceptanceCriteria:     "Acceptance",
-		CreatedAt:      time.Now().Format(time.RFC3339),
+		CreatedAt:              time.Now().Format(time.RFC3339),
 	}
 
 	id, _ := db.CreateTask(testContext(), task)
@@ -137,14 +137,14 @@ func TestGetTasks(t *testing.T) {
 	var ids []int
 	for i := 0; i < 3; i++ {
 		task := &models.Task{
-			Priority:       i,
-			Severity:       i,
-			Status:         models.StatusBacklog,
+			Priority:               i,
+			Severity:               i,
+			Status:                 models.StatusBacklog,
 			Title:                  "Task",
 			FunctionalRequirements: "Action",
 			TechnicalRequirements:  "Result",
-		AcceptanceCriteria:     "Acceptance",
-			CreatedAt:      time.Now().Format(time.RFC3339),
+			AcceptanceCriteria:     "Acceptance",
+			CreatedAt:              time.Now().Format(time.RFC3339),
 		}
 		id, _ := db.CreateTask(testContext(), task)
 		ids = append(ids, id)
@@ -179,14 +179,14 @@ func TestListTasks(t *testing.T) {
 	statuses := []models.TaskStatus{models.StatusBacklog, models.StatusBacklog, models.StatusDoing}
 	for i, status := range statuses {
 		task := &models.Task{
-			Priority:       i,
-			Severity:       i,
-			Status:         status,
+			Priority:               i,
+			Severity:               i,
+			Status:                 status,
 			Title:                  "Task",
 			FunctionalRequirements: "Action",
 			TechnicalRequirements:  "Result",
-		AcceptanceCriteria:     "Acceptance",
-			CreatedAt:      time.Now().Format(time.RFC3339),
+			AcceptanceCriteria:     "Acceptance",
+			CreatedAt:              time.Now().Format(time.RFC3339),
 		}
 		db.CreateTask(testContext(), task)
 	}
@@ -240,14 +240,14 @@ func TestUpdateTask(t *testing.T) {
 
 	// Create a task
 	task := &models.Task{
-		Priority:       1,
-		Severity:       1,
-		Status:         models.StatusBacklog,
+		Priority:               1,
+		Severity:               1,
+		Status:                 models.StatusBacklog,
 		Title:                  "Original",
 		FunctionalRequirements: "Action",
 		TechnicalRequirements:  "Result",
 		AcceptanceCriteria:     "Acceptance",
-		CreatedAt:      time.Now().Format(time.RFC3339),
+		CreatedAt:              time.Now().Format(time.RFC3339),
 	}
 
 	id, _ := db.CreateTask(testContext(), task)
@@ -292,14 +292,14 @@ func TestUpdateTaskStruct(t *testing.T) {
 
 	// Create a task
 	task := &models.Task{
-		Priority:       1,
-		Severity:       1,
-		Status:         models.StatusBacklog,
+		Priority:               1,
+		Severity:               1,
+		Status:                 models.StatusBacklog,
 		Title:                  "Original",
 		FunctionalRequirements: "Action",
 		TechnicalRequirements:  "Result",
 		AcceptanceCriteria:     "Acceptance",
-		CreatedAt:      time.Now().Format(time.RFC3339),
+		CreatedAt:              time.Now().Format(time.RFC3339),
 	}
 
 	id, _ := db.CreateTask(testContext(), task)
@@ -402,14 +402,14 @@ func TestDeleteTask(t *testing.T) {
 
 	// Create a task
 	task := &models.Task{
-		Priority:       1,
-		Severity:       1,
-		Status:         models.StatusBacklog,
+		Priority:               1,
+		Severity:               1,
+		Status:                 models.StatusBacklog,
 		Title:                  "To delete",
 		FunctionalRequirements: "Action",
 		TechnicalRequirements:  "Result",
 		AcceptanceCriteria:     "Acceptance",
-		CreatedAt:      time.Now().Format(time.RFC3339),
+		CreatedAt:              time.Now().Format(time.RFC3339),
 	}
 
 	id, _ := db.CreateTask(testContext(), task)
@@ -441,14 +441,14 @@ func TestUpdateTaskStatus(t *testing.T) {
 	var ids []int
 	for i := 0; i < 2; i++ {
 		task := &models.Task{
-			Priority:       1,
-			Severity:       1,
-			Status:         models.StatusBacklog,
+			Priority:               1,
+			Severity:               1,
+			Status:                 models.StatusBacklog,
 			Title:                  "Task",
 			FunctionalRequirements: "Action",
 			TechnicalRequirements:  "Result",
-		AcceptanceCriteria:     "Acceptance",
-			CreatedAt:      time.Now().Format(time.RFC3339),
+			AcceptanceCriteria:     "Acceptance",
+			CreatedAt:              time.Now().Format(time.RFC3339),
 		}
 		id, _ := db.CreateTask(testContext(), task)
 		ids = append(ids, id)
@@ -483,14 +483,14 @@ func TestUpdateTaskPriority(t *testing.T) {
 	var ids []int
 	for i := 0; i < 2; i++ {
 		task := &models.Task{
-			Priority:       1,
-			Severity:       1,
-			Status:         models.StatusBacklog,
+			Priority:               1,
+			Severity:               1,
+			Status:                 models.StatusBacklog,
 			Title:                  "Task",
 			FunctionalRequirements: "Action",
 			TechnicalRequirements:  "Result",
-		AcceptanceCriteria:     "Acceptance",
-			CreatedAt:      time.Now().Format(time.RFC3339),
+			AcceptanceCriteria:     "Acceptance",
+			CreatedAt:              time.Now().Format(time.RFC3339),
 		}
 		id, _ := db.CreateTask(testContext(), task)
 		ids = append(ids, id)
@@ -519,14 +519,14 @@ func TestUpdateTaskSeverity(t *testing.T) {
 	var ids []int
 	for i := 0; i < 2; i++ {
 		task := &models.Task{
-			Priority:       1,
-			Severity:       1,
-			Status:         models.StatusBacklog,
+			Priority:               1,
+			Severity:               1,
+			Status:                 models.StatusBacklog,
 			Title:                  "Task",
 			FunctionalRequirements: "Action",
 			TechnicalRequirements:  "Result",
-		AcceptanceCriteria:     "Acceptance",
-			CreatedAt:      time.Now().Format(time.RFC3339),
+			AcceptanceCriteria:     "Acceptance",
+			CreatedAt:              time.Now().Format(time.RFC3339),
 		}
 		id, _ := db.CreateTask(testContext(), task)
 		ids = append(ids, id)
@@ -586,7 +586,7 @@ func TestGetSprint(t *testing.T) {
 	// Create sprint
 	sprint := &models.Sprint{
 		Status:      models.SprintPending,
-		Description:                  "Test sprint",
+		Description: "Test sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
 
@@ -618,7 +618,7 @@ func TestListSprints(t *testing.T) {
 	for _, status := range statuses {
 		sprint := &models.Sprint{
 			Status:      status,
-			Description:                  "Sprint",
+			Description: "Sprint",
 			CreatedAt:   time.Now().Format(time.RFC3339),
 		}
 		db.CreateSprint(testContext(), sprint)
@@ -653,7 +653,7 @@ func TestUpdateSprint(t *testing.T) {
 	// Create sprint
 	sprint := &models.Sprint{
 		Status:      models.SprintPending,
-		Description:                  "Original",
+		Description: "Original",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
 
@@ -688,7 +688,7 @@ func TestUpdateSprintStatus(t *testing.T) {
 	// Create sprint
 	sprint := &models.Sprint{
 		Status:      models.SprintPending,
-		Description:                  "Test",
+		Description: "Test",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
 
@@ -757,7 +757,7 @@ func TestAddTasksToSprint(t *testing.T) {
 	// Create sprint
 	sprint := &models.Sprint{
 		Status:      models.SprintPending,
-		Description:                  "Test sprint",
+		Description: "Test sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
 	sprintID, _ := db.CreateSprint(testContext(), sprint)
@@ -766,14 +766,14 @@ func TestAddTasksToSprint(t *testing.T) {
 	var taskIDs []int
 	for i := 0; i < 3; i++ {
 		task := &models.Task{
-			Priority:       1,
-			Severity:       1,
-			Status:         models.StatusBacklog,
+			Priority:               1,
+			Severity:               1,
+			Status:                 models.StatusBacklog,
 			Title:                  "Task",
 			FunctionalRequirements: "Action",
 			TechnicalRequirements:  "Result",
-		AcceptanceCriteria:     "Acceptance",
-			CreatedAt:      time.Now().Format(time.RFC3339),
+			AcceptanceCriteria:     "Acceptance",
+			CreatedAt:              time.Now().Format(time.RFC3339),
 		}
 		id, _ := db.CreateTask(testContext(), task)
 		taskIDs = append(taskIDs, id)
@@ -811,7 +811,7 @@ func TestRemoveTasksFromSprint(t *testing.T) {
 	// Create sprint
 	sprint := &models.Sprint{
 		Status:      models.SprintPending,
-		Description:                  "Test sprint",
+		Description: "Test sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
 	sprintID, _ := db.CreateSprint(testContext(), sprint)
@@ -820,14 +820,14 @@ func TestRemoveTasksFromSprint(t *testing.T) {
 	var taskIDs []int
 	for i := 0; i < 3; i++ {
 		task := &models.Task{
-			Priority:       1,
-			Severity:       1,
-			Status:         models.StatusBacklog,
+			Priority:               1,
+			Severity:               1,
+			Status:                 models.StatusBacklog,
 			Title:                  "Task",
 			FunctionalRequirements: "Action",
 			TechnicalRequirements:  "Result",
-		AcceptanceCriteria:     "Acceptance",
-			CreatedAt:      time.Now().Format(time.RFC3339),
+			AcceptanceCriteria:     "Acceptance",
+			CreatedAt:              time.Now().Format(time.RFC3339),
 		}
 		id, _ := db.CreateTask(testContext(), task)
 		taskIDs = append(taskIDs, id)
@@ -974,7 +974,7 @@ func TestGetSprintTasks(t *testing.T) {
 	// Create sprint
 	sprint := &models.Sprint{
 		Status:      models.SprintPending,
-		Description:                  "Test sprint",
+		Description: "Test sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
 	sprintID, _ := db.CreateSprint(testContext(), sprint)
@@ -983,14 +983,14 @@ func TestGetSprintTasks(t *testing.T) {
 	var taskIDs []int
 	for i := 0; i < 3; i++ {
 		task := &models.Task{
-			Priority:       1,
-			Severity:       1,
-			Status:         models.StatusBacklog,
+			Priority:               1,
+			Severity:               1,
+			Status:                 models.StatusBacklog,
 			Title:                  "Task",
 			FunctionalRequirements: "Action",
 			TechnicalRequirements:  "Result",
-		AcceptanceCriteria:     "Acceptance",
-			CreatedAt:      time.Now().Format(time.RFC3339),
+			AcceptanceCriteria:     "Acceptance",
+			CreatedAt:              time.Now().Format(time.RFC3339),
 		}
 		id, _ := db.CreateTask(testContext(), task)
 		taskIDs = append(taskIDs, id)
@@ -1068,7 +1068,7 @@ func TestGetSprintTasksFull(t *testing.T) {
 	// Create sprint
 	sprint := &models.Sprint{
 		Status:      models.SprintPending,
-		Description:                  "Test sprint",
+		Description: "Test sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
 	sprintID, _ := db.CreateSprint(testContext(), sprint)
@@ -1076,14 +1076,14 @@ func TestGetSprintTasksFull(t *testing.T) {
 	// Create tasks with different priorities
 	for i := 0; i < 3; i++ {
 		task := &models.Task{
-			Priority:       i,
-			Severity:       1,
-			Status:         models.StatusBacklog,
+			Priority:               i,
+			Severity:               1,
+			Status:                 models.StatusBacklog,
 			Title:                  "Task",
 			FunctionalRequirements: "Action",
 			TechnicalRequirements:  "Result",
-		AcceptanceCriteria:     "Acceptance",
-			CreatedAt:      time.Now().Format(time.RFC3339),
+			AcceptanceCriteria:     "Acceptance",
+			CreatedAt:              time.Now().Format(time.RFC3339),
 		}
 		id, _ := db.CreateTask(testContext(), task)
 		db.AddTasksToSprint(testContext(), sprintID, []int{id})
@@ -1275,14 +1275,14 @@ func TestContextTimeout(t *testing.T) {
 
 	// Create a task
 	task := &models.Task{
-		Priority:       1,
-		Severity:       1,
-		Status:         models.StatusBacklog,
+		Priority:               1,
+		Severity:               1,
+		Status:                 models.StatusBacklog,
 		Title:                  "Test task",
 		FunctionalRequirements: "Action",
 		TechnicalRequirements:  "Result",
 		AcceptanceCriteria:     "Acceptance",
-		CreatedAt:      time.Now().Format(time.RFC3339),
+		CreatedAt:              time.Now().Format(time.RFC3339),
 	}
 
 	id, err := db.CreateTask(ctx, task)
@@ -1308,14 +1308,14 @@ func TestContextCancellation(t *testing.T) {
 	// Try to create a task with cancelled context
 	// This may or may not fail depending on timing
 	task := &models.Task{
-		Priority:       1,
-		Severity:       1,
-		Status:         models.StatusBacklog,
+		Priority:               1,
+		Severity:               1,
+		Status:                 models.StatusBacklog,
 		Title:                  "Test task",
 		FunctionalRequirements: "Action",
 		TechnicalRequirements:  "Result",
 		AcceptanceCriteria:     "Acceptance",
-		CreatedAt:      time.Now().Format(time.RFC3339),
+		CreatedAt:              time.Now().Format(time.RFC3339),
 	}
 
 	// The important thing is that the function accepts context

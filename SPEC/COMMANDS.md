@@ -128,11 +128,15 @@ rmp task ls -r <name> [OPTIONS]
 ### Create Task
 
 ```bash
-rmp task create --roadmap <name> --description <desc> --action <a> --expected-result <e> [OPTIONS]
-rmp task new -r <name> -d <desc> -a <a> -e <e>
+rmp task create --roadmap <name> --title <title> --functional-requirements <fr> --technical-requirements <tr> --acceptance-criteria <ac> [OPTIONS]
+rmp task new -r <name> -t <title> -fr <fr> -tr <tr> -ac <ac>
 ```
 
 **Options:**
+- `-t, --title <text>` - Task title (required)
+- `-fr, --functional-requirements <text>` - Functional requirements (Why?)
+- `-tr, --technical-requirements <text>` - Technical requirements (How?)
+- `-ac, --acceptance-criteria <text>` - Acceptance criteria (How to verify?)
 - `-p, --priority <0-9>` - Priority (default: 0)
 - `--severity <0-9>` - Severity (default: 0)
 - `-sp, --specialists <list>` - Comma-separated specialists
@@ -148,6 +152,102 @@ rmp task get --roadmap <name> <id1,id2>
 **Description:** Retrieves one or more tasks by ID. Multiple IDs must be comma-separated without spaces.
 
 **JSON Output:** Array of Task objects.
+
+### Get Next Tasks (next)
+
+```bash
+rmp task next [num]
+rmp t next [num]
+```
+
+**Description:** Returns the next N open tasks from the currently open sprint. Tasks are ordered by severity (descending) and then by priority (descending), returning the most critical and highest priority tasks first.
+
+**Arguments:**
+- `num` (optional) - Number of tasks to return. If not provided, defaults to 1.
+
+**JSON Output:** Array of Task objects.
+
+**Output Examples:**
+
+Success (tasks available):
+```json
+[
+  {
+    "id": 42,
+    "title": "Implement user authentication",
+    "functional_requirements": "Users must be able to authenticate securely",
+    "technical_requirements": "Create login endpoint with JWT tokens",
+    "acceptance_criteria": "Users can log in with valid credentials; tokens expire after 24h",
+    "priority": 9,
+    "severity": 9,
+    "status": "SPRINT",
+    "specialists": "backend,security",
+    "sprint_id": 5,
+    "created_at": "2026-03-15T10:30:00.000Z",
+    "started_at": null,
+    "tested_at": null,
+    "closed_at": null
+  }
+]
+```
+
+Success (fewer tasks than requested):
+```json
+[
+  {
+    "id": 42,
+    "title": "Implement user authentication",
+    "functional_requirements": "Users must be able to authenticate securely",
+    "technical_requirements": "Create login endpoint with JWT tokens",
+    "acceptance_criteria": "Users can log in with valid credentials; tokens expire after 24h",
+    "priority": 9,
+    "severity": 9,
+    "status": "SPRINT",
+    "specialists": "backend,security",
+    "sprint_id": 5,
+    "created_at": "2026-03-15T10:30:00.000Z",
+    "started_at": null,
+    "tested_at": null,
+    "closed_at": null
+  },
+  {
+    "id": 43,
+    "title": "Add input validation",
+    "functional_requirements": "Prevent invalid data from entering the system",
+    "technical_requirements": "Validate all user inputs using validator library",
+    "acceptance_criteria": "All inputs validated; proper error messages returned",
+    "priority": 8,
+    "severity": 9,
+    "status": "SPRINT",
+    "specialists": "backend",
+    "sprint_id": 5,
+    "created_at": "2026-03-15T11:00:00.000Z",
+    "started_at": null,
+    "tested_at": null,
+    "closed_at": null
+  }
+]
+```
+
+Success (no open tasks in sprint):
+```json
+[]
+```
+
+**Error Cases:**
+
+| Scenario | Exit Code | stderr Output |
+|----------|-----------|---------------|
+| No sprint is currently open | 1 | "No sprint is currently open. Use 'rmp sprint start' to open a sprint first." |
+| Invalid num argument (not a positive integer) | 1 | "Invalid argument: num must be a positive integer" |
+| Roadmap not specified and no default set | 1 | "Roadmap not specified. Use -r flag or set a default with 'rmp roadmap use'" |
+
+**Behavior Notes:**
+- Only returns tasks with status `SPRINT`, `DOING`, or `TESTING` (open tasks)
+- Tasks are ordered first by severity (highest first), then by priority (highest first)
+- If the requested number exceeds available open tasks, all remaining open tasks are returned
+- If no open sprint exists, an error is returned indicating a sprint needs to be opened
+- If the sprint has no open tasks, an empty array is returned (success, exit code 0)
 
 ### Change Status (stat)
 
@@ -187,9 +287,10 @@ rmp task edit --roadmap <name> <id> [OPTIONS]
 **Description:** Edits an existing task's properties. Only specified fields are updated.
 
 **Options:**
-- `-d, --description <text>`
-- `-a, --action <text>`
-- `-e, --expected-result <text>`
+- `-t, --title <text>`
+- `-fr, --functional-requirements <text>`
+- `-tr, --technical-requirements <text>`
+- `-ac, --acceptance-criteria <text>`
 - `-p, --priority <0-9>`
 - `--severity <0-9>`
 - `-sp, --specialists <list>`
@@ -266,6 +367,82 @@ rmp sprint stats -r <name> <id>
   }
 }
 ```
+
+### Show Sprint Status Report
+
+```bash
+rmp sprint show -r <name> <id>
+```
+
+**Description:** Displays a comprehensive status report of a sprint, including task statistics and distribution by severity and criticality. Provides a quick overview for sprint stand-up meetings and progress tracking.
+
+**JSON Output:**
+```json
+{
+  "sprint_id": 5,
+  "sprint_description": "Sprint 12 - March 2026",
+  "status": "OPEN",
+  "summary": {
+    "total_tasks": 20,
+    "pending": 8,
+    "in_progress": 6,
+    "completed": 6
+  },
+  "progress": {
+    "pending_percentage": 40.0,
+    "in_progress_percentage": 30.0,
+    "completed_percentage": 30.0
+  },
+  "severity_distribution": {
+    "0-2": {"count": 2, "percentage": 10.0},
+    "3-5": {"count": 5, "percentage": 25.0},
+    "6-7": {"count": 8, "percentage": 40.0},
+    "8-9": {"count": 5, "percentage": 25.0}
+  },
+  "criticality_distribution": {
+    "low": {"count": 4, "percentage": 20.0},
+    "medium": {"count": 8, "percentage": 40.0},
+    "high": {"count": 6, "percentage": 30.0},
+    "critical": {"count": 2, "percentage": 10.0}
+  }
+}
+```
+
+**Output Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `sprint_id` | integer | Sprint identifier |
+| `sprint_description` | string | Sprint description/name |
+| `status` | string | Sprint status (OPEN, CLOSED) |
+| `summary.total_tasks` | integer | Total number of tasks in sprint |
+| `summary.pending` | integer | Tasks with status BACKLOG or SPRINT |
+| `summary.in_progress` | integer | Tasks with status DOING or TESTING |
+| `summary.completed` | integer | Tasks with status COMPLETED |
+| `progress.pending_percentage` | float | Percentage of pending tasks |
+| `progress.in_progress_percentage` | float | Percentage of tasks in progress |
+| `progress.completed_percentage` | float | Percentage of completed tasks |
+| `severity_distribution` | object | Task distribution by severity ranges |
+| `criticality_distribution` | object | Task distribution by criticality levels |
+
+**Severity Ranges:**
+- `0-2`: Low severity
+- `3-5`: Medium severity
+- `6-7`: High severity
+- `8-9`: Critical severity
+
+**Criticality Levels:**
+- `low`: Severity 0-2
+- `medium`: Severity 3-5
+- `high`: Severity 6-7
+- `critical`: Severity 8-9
+
+**Error Cases:**
+
+| Scenario | Exit Code | stderr Output |
+|----------|-----------|---------------|
+| Sprint not found | 1 | "Sprint not found" |
+| Roadmap not specified and no default set | 1 | "Roadmap not specified. Use -r flag or set a default with 'rmp roadmap use'" |
 
 ### Sprint Lifecycle
 

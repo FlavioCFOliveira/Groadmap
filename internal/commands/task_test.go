@@ -358,7 +358,7 @@ func TestTaskGet_MultipleIDs(t *testing.T) {
 			Priority:               1,
 			Severity:               1,
 			Status:                 models.StatusBacklog,
-			Title:                  "Task " + string(rune('0' + i)),
+			Title:                  "Task " + string(rune('0'+i)),
 			FunctionalRequirements: "Action",
 			TechnicalRequirements:  "Result",
 			AcceptanceCriteria:     "Criteria",

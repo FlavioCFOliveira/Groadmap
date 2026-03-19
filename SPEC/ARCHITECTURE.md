@@ -104,6 +104,39 @@ Groadmap/
     └── HELP_EXAMPLES.md
 ```
 
+## Memory Layout Optimization
+
+### Struct Field Ordering
+
+All Go structs are organized to minimize memory padding and maximize cache locality. Fields are grouped by size and access patterns:
+
+**Task Struct (152 bytes, zero padding on 64-bit):**
+```
+Group 1: Content fields (strings) - 96 bytes
+  Title, Status, FunctionalRequirements, TechnicalRequirements,
+  AcceptanceCriteria, CreatedAt
+
+Group 2: Tracking fields (pointers) - 32 bytes
+  Specialists, StartedAt, TestedAt, ClosedAt
+
+Group 3: Metadata fields (integers) - 24 bytes
+  ID, Priority, Severity
+```
+
+**Rationale:**
+- String fields (16 bytes each) are grouped for cache locality when displaying task content
+- Pointer fields (8 bytes each) are grouped as they're often accessed together during lifecycle transitions
+- Integer fields (8 bytes each) are grouped as they're frequently used for filtering/sorting
+
+**Field Sizes on 64-bit Systems:**
+- `string`: 16 bytes (pointer + length), 8-byte aligned
+- `*T` (pointer): 8 bytes, 8-byte aligned
+- `int`: 8 bytes, 8-byte aligned
+
+### Cache Line Considerations
+
+The Task struct (152 bytes) spans approximately 2-3 cache lines (64 bytes each). Field grouping ensures that commonly accessed fields together (e.g., all content fields) fit within the same cache lines, reducing cache misses during task display operations.
+
 ## Modules and Responsibilities
 
 ### 1. cmd/rmp/main.go

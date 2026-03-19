@@ -36,14 +36,14 @@ func TestConcurrentTaskCreation(t *testing.T) {
 
 			for j := 0; j < tasksPerGoroutine; j++ {
 				task := &models.Task{
-					Priority:       goroutineID,
-					Severity:       j,
-					Status:         models.StatusBacklog,
+					Priority:               goroutineID,
+					Severity:               j,
+					Status:                 models.StatusBacklog,
 					Title:                  "Concurrent task",
 					FunctionalRequirements: "Action",
 					TechnicalRequirements:  "Result",
-				AcceptanceCriteria:     "Acceptance",
-					CreatedAt:      time.Now().Format(time.RFC3339),
+					AcceptanceCriteria:     "Acceptance",
+					CreatedAt:              time.Now().Format(time.RFC3339),
 				}
 
 				_, err := db.CreateTask(context.Background(), task)
@@ -81,14 +81,14 @@ func TestConcurrentTaskReads(t *testing.T) {
 	// Create some initial tasks
 	for i := 0; i < 5; i++ {
 		task := &models.Task{
-			Priority:       1,
-			Severity:       1,
-			Status:         models.StatusBacklog,
+			Priority:               1,
+			Severity:               1,
+			Status:                 models.StatusBacklog,
 			Title:                  "Initial task",
 			FunctionalRequirements: "Action",
 			TechnicalRequirements:  "Result",
-				AcceptanceCriteria:     "Acceptance",
-			CreatedAt:      time.Now().Format(time.RFC3339),
+			AcceptanceCriteria:     "Acceptance",
+			CreatedAt:              time.Now().Format(time.RFC3339),
 		}
 		if _, err := db.CreateTask(context.Background(), task); err != nil {
 			t.Fatalf("failed to create initial task: %v", err)
@@ -125,14 +125,14 @@ func TestConcurrentTaskReads(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < 10; j++ {
 				task := &models.Task{
-					Priority:       writerID,
-					Severity:       j,
-					Status:         models.StatusBacklog,
+					Priority:               writerID,
+					Severity:               j,
+					Status:                 models.StatusBacklog,
 					Title:                  "Writer task",
 					FunctionalRequirements: "Action",
 					TechnicalRequirements:  "Result",
-				AcceptanceCriteria:     "Acceptance",
-					CreatedAt:      time.Now().Format(time.RFC3339),
+					AcceptanceCriteria:     "Acceptance",
+					CreatedAt:              time.Now().Format(time.RFC3339),
 				}
 				db.CreateTask(context.Background(), task)
 				time.Sleep(time.Millisecond)
@@ -155,14 +155,14 @@ func TestConcurrentTaskUpdates(t *testing.T) {
 	var taskIDs []int
 	for i := 0; i < 5; i++ {
 		task := &models.Task{
-			Priority:       i,
-			Severity:       i,
-			Status:         models.StatusBacklog,
+			Priority:               i,
+			Severity:               i,
+			Status:                 models.StatusBacklog,
 			Title:                  "Task for update",
 			FunctionalRequirements: "Action",
 			TechnicalRequirements:  "Result",
-				AcceptanceCriteria:     "Acceptance",
-			CreatedAt:      time.Now().Format(time.RFC3339),
+			AcceptanceCriteria:     "Acceptance",
+			CreatedAt:              time.Now().Format(time.RFC3339),
 		}
 		id, err := db.CreateTask(context.Background(), task)
 		if err != nil {
@@ -261,14 +261,14 @@ func TestConcurrentSprintTaskOperations(t *testing.T) {
 	var taskIDs []int
 	for i := 0; i < 10; i++ {
 		task := &models.Task{
-			Priority:       1,
-			Severity:       1,
-			Status:         models.StatusBacklog,
+			Priority:               1,
+			Severity:               1,
+			Status:                 models.StatusBacklog,
 			Title:                  "Task",
 			FunctionalRequirements: "Action",
 			TechnicalRequirements:  "Result",
-				AcceptanceCriteria:     "Acceptance",
-			CreatedAt:      time.Now().Format(time.RFC3339),
+			AcceptanceCriteria:     "Acceptance",
+			CreatedAt:              time.Now().Format(time.RFC3339),
 		}
 		id, err := db.CreateTask(context.Background(), task)
 		if err != nil {
@@ -423,14 +423,14 @@ func TestHighConcurrencyStress(t *testing.T) {
 				switch j % 4 {
 				case 0: // Create task
 					task := &models.Task{
-						Priority:       workerID,
-						Severity:       j,
-						Status:         models.StatusBacklog,
+						Priority:               workerID,
+						Severity:               j,
+						Status:                 models.StatusBacklog,
 						Title:                  "Stress test task",
 						FunctionalRequirements: "Action",
 						TechnicalRequirements:  "Result",
-				AcceptanceCriteria:     "Acceptance",
-						CreatedAt:      time.Now().Format(time.RFC3339),
+						AcceptanceCriteria:     "Acceptance",
+						CreatedAt:              time.Now().Format(time.RFC3339),
 					}
 					_, err := db.CreateTask(context.Background(), task)
 					if err != nil {
