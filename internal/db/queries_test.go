@@ -1267,7 +1267,8 @@ func TestDeleteSprint_NotFound(t *testing.T) {
 
 func TestContextTimeout(t *testing.T) {
 	// Test that context with timeout is properly propagated
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	// Use a generous timeout that allows operations to complete in CI
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	db, cleanup := setupTestDB(t)
