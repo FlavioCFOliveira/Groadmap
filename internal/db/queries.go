@@ -558,6 +558,110 @@ func scanTasks(rows *sql.Rows) ([]models.Task, error) {
 	return tasks, nil
 }
 
+// GetOpenSprint retrieves the currently open sprint (status = OPEN).
+// Returns ErrNotFound if no sprint is currently open.
+func (db *DB) GetOpenSprint(ctx context.Context) (*models.Sprint, error) {
+	var sprint models.Sprint
+	var startedAt sql.NullString
+	var closedAt sql.NullString
+	var tasksJSON sql.NullString
+
+	// Single query using JSON aggregation to get sprint data and task IDs
+	err := db.QueryRowContext(ctx,
+		`SELECT
+			s.id, s.status, s.description, s.created_at, s.started_at, s.closed_at,
+			COALESCE(json_group_array(DISTINCT st.task_id), '[]') as tasks
+		 FROM sprints s
+		 LEFT JOIN sprint_tasks st ON s.id = st.sprint_id
+		 WHERE s.status = ?
+		 GROUP BY s.id
+		 LIMIT 1`,
+		models.SprintOpen,
+	).Scan(
+		&sprint.ID,
+		&sprint.Status,
+		&sprint.Description,
+		&sprint.CreatedAt,
+		&startedAt,
+		&closedAt,
+		&tasksJSON,
+	)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("%w: no sprint is currently open", utils.ErrNotFound)
+		}
+		return nil, fmt.Errorf("querying open sprint: %w", err)
+	}
+
+	if startedAt.Valid {
+		sprint.StartedAt = &startedAt.String
+	}
+	if closedAt.Valid {
+		sprint.ClosedAt = &closedAt.String
+	}
+
+	// Parse task IDs from JSON array
+	if tasksJSON.Valid && tasksJSON.String != "" && tasksJSON.String != "[]" {
+		tasks, err := parseJSONIntArray(tasksJSON.String)
+		if err != nil {
+			return nil, fmt.Errorf("parsing sprint tasks: %w", err)
+		}
+		sprint.Tasks = tasks
+		sprint.TaskCount = len(tasks)
+	} else {
+		sprint.Tasks = []int{}
+		sprint.TaskCount = 0
+	}
+
+	return &sprint, nil
+}
+
+// GetNextTasks retrieves the next N open tasks from the currently open sprint.
+// Tasks are ordered by severity DESC, then priority DESC.
+// Only returns tasks with status SPRINT, DOING, or TESTING.
+func (db *DB) GetNextTasks(ctx context.Context, limit int) ([]models.Task, error) {
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	// First, get the open sprint ID
+	var sprintID int
+	err := db.QueryRowContext(ctx,
+		"SELECT id FROM sprints WHERE status = ? LIMIT 1",
+		models.SprintOpen,
+	).Scan(&sprintID)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("%w: no sprint is currently open", utils.ErrNotFound)
+		}
+		return nil, fmt.Errorf("querying open sprint: %w", err)
+	}
+
+	// Get open tasks from the sprint, ordered by severity DESC, priority DESC
+	query := `SELECT t.id, t.title, t.status, t.functional_requirements, t.technical_requirements,
+		         t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
+		         t.closed_at, t.priority, t.severity
+		      FROM tasks t
+		      INNER JOIN sprint_tasks st ON t.id = st.task_id
+		      WHERE st.sprint_id = ?
+		        AND t.status IN ('SPRINT', 'DOING', 'TESTING')
+		      ORDER BY t.severity DESC, t.priority DESC
+		      LIMIT ?`
+
+	rows, err := db.QueryContext(ctx, query, sprintID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("querying next tasks: %w", err)
+	}
+	defer rows.Close()
+
+	return scanTasks(rows)
+}
+
 // ==================== SPRINT QUERIES ====================
 
 // CreateSprint inserts a new sprint and returns its ID.

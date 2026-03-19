@@ -32,6 +32,8 @@ func HandleTask(args []string) error {
 		return taskCreate(args[1:])
 	case "get":
 		return taskGet(args[1:])
+	case "next":
+		return taskNext(args[1:])
 	case "edit":
 		return taskEdit(args[1:])
 	case "remove", "rm":
@@ -289,6 +291,62 @@ func taskCreate(args []string) error {
 	}
 
 	return utils.PrintJSON(map[string]int{"id": taskID})
+}
+
+// taskNext retrieves the next N open tasks from the currently open sprint.
+//
+// Parameters:
+//   - args: Command-line arguments including optional num parameter
+//
+// Optional arguments:
+//   - num: Number of tasks to return (default: 1, max: 100)
+//
+// Error conditions:
+//   - Returns utils.ErrNotFound if no sprint is currently open
+//   - Returns utils.ErrInvalidInput if num is not a positive integer
+//
+// Output:
+//   - JSON array of Task objects ordered by severity DESC, then priority DESC
+//   - Empty array if sprint has no open tasks
+//
+// Example:
+//
+//	rmp task next        # Returns 1 task
+//	rmp task next 5      # Returns up to 5 tasks
+func taskNext(args []string) error {
+	roadmapName, remaining, err := requireRoadmap(args)
+	if err != nil {
+		return err
+	}
+
+	// Parse optional num argument (default: 1)
+	limit := 1
+	if len(remaining) > 0 {
+		num, err := strconv.Atoi(remaining[0])
+		if err != nil || num < 1 {
+			return fmt.Errorf("%w: num must be a positive integer", utils.ErrInvalidInput)
+		}
+		if num > 100 {
+			num = 100
+		}
+		limit = num
+	}
+
+	database, err := db.OpenExisting(roadmapName)
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+
+	ctx, cancel := db.WithDefaultTimeout()
+	defer cancel()
+
+	tasks, err := database.GetNextTasks(ctx, limit)
+	if err != nil {
+		return err
+	}
+
+	return utils.PrintJSON(tasks)
 }
 
 // taskGet retrieves tasks by IDs.
@@ -866,6 +924,7 @@ Commands:
   list, ls [OPTIONS]              List tasks
   create, new [OPTIONS]           Create a new task
   get <ids>                      Get tasks by ID(s)
+  next [num]                     Get next N tasks from open sprint
   edit <id> [OPTIONS]             Edit a task
   remove, rm <ids>               Remove task(s)
   stat, set-status <ids> <status>  Set task status

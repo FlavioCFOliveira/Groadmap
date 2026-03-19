@@ -203,3 +203,111 @@ func CalculateSprintStats(sprintID int, tasks []Task) SprintStats {
 
 	return stats
 }
+
+// SeverityRangeCount represents count and percentage for a severity range.
+type SeverityRangeCount struct {
+	Count      int     `json:"count"`
+	Percentage float64 `json:"percentage"`
+}
+
+// CriticalityDistribution represents task distribution by criticality level.
+type CriticalityDistribution struct {
+	Low      SeverityRangeCount `json:"low"`
+	Medium   SeverityRangeCount `json:"medium"`
+	High     SeverityRangeCount `json:"high"`
+	Critical SeverityRangeCount `json:"critical"`
+}
+
+// SeverityDistribution represents task distribution by severity ranges.
+type SeverityDistribution struct {
+	Range0To2 SeverityRangeCount `json:"0-2"`
+	Range3To5 SeverityRangeCount `json:"3-5"`
+	Range6To7 SeverityRangeCount `json:"6-7"`
+	Range8To9 SeverityRangeCount `json:"8-9"`
+}
+
+// SprintSummary represents the task count summary for a sprint.
+type SprintSummary struct {
+	TotalTasks int `json:"total_tasks"`
+	Pending    int `json:"pending"`
+	InProgress int `json:"in_progress"`
+	Completed  int `json:"completed"`
+}
+
+// SprintProgress represents the progress percentages for a sprint.
+type SprintProgress struct {
+	PendingPercentage    float64 `json:"pending_percentage"`
+	InProgressPercentage float64 `json:"in_progress_percentage"`
+	CompletedPercentage  float64 `json:"completed_percentage"`
+}
+
+// SprintShowResult represents a comprehensive sprint status report.
+// Used for the 'rmp sprint show' command.
+type SprintShowResult struct {
+	SprintID                int                     `json:"sprint_id"`
+	SprintDescription       string                  `json:"sprint_description"`
+	Status                  SprintStatus            `json:"status"`
+	Summary                 SprintSummary           `json:"summary"`
+	Progress                SprintProgress          `json:"progress"`
+	SeverityDistribution    SeverityDistribution    `json:"severity_distribution"`
+	CriticalityDistribution CriticalityDistribution `json:"criticality_distribution"`
+}
+
+// CalculateSprintShowResult calculates a comprehensive sprint report from tasks.
+func CalculateSprintShowResult(sprint *Sprint, tasks []Task) SprintShowResult {
+	result := SprintShowResult{
+		SprintID:          sprint.ID,
+		SprintDescription: sprint.Description,
+		Status:            sprint.Status,
+		Summary: SprintSummary{
+			TotalTasks: len(tasks),
+		},
+	}
+
+	// Severity counters
+	var severity0To2, severity3To5, severity6To7, severity8To9 int
+
+	for _, task := range tasks {
+		// Count by status category
+		switch task.Status {
+		case StatusBacklog, StatusSprint:
+			result.Summary.Pending++
+		case StatusDoing, StatusTesting:
+			result.Summary.InProgress++
+		case StatusCompleted:
+			result.Summary.Completed++
+		}
+
+		// Count by severity range
+		switch {
+		case task.Severity >= 0 && task.Severity <= 2:
+			severity0To2++
+		case task.Severity >= 3 && task.Severity <= 5:
+			severity3To5++
+		case task.Severity >= 6 && task.Severity <= 7:
+			severity6To7++
+		case task.Severity >= 8 && task.Severity <= 9:
+			severity8To9++
+		}
+	}
+
+	// Calculate percentages
+	total := result.Summary.TotalTasks
+	if total > 0 {
+		result.Progress.PendingPercentage = float64(result.Summary.Pending) * 100.0 / float64(total)
+		result.Progress.InProgressPercentage = float64(result.Summary.InProgress) * 100.0 / float64(total)
+		result.Progress.CompletedPercentage = float64(result.Summary.Completed) * 100.0 / float64(total)
+
+		result.SeverityDistribution.Range0To2 = SeverityRangeCount{Count: severity0To2, Percentage: float64(severity0To2) * 100.0 / float64(total)}
+		result.SeverityDistribution.Range3To5 = SeverityRangeCount{Count: severity3To5, Percentage: float64(severity3To5) * 100.0 / float64(total)}
+		result.SeverityDistribution.Range6To7 = SeverityRangeCount{Count: severity6To7, Percentage: float64(severity6To7) * 100.0 / float64(total)}
+		result.SeverityDistribution.Range8To9 = SeverityRangeCount{Count: severity8To9, Percentage: float64(severity8To9) * 100.0 / float64(total)}
+
+		result.CriticalityDistribution.Low = SeverityRangeCount{Count: severity0To2, Percentage: float64(severity0To2) * 100.0 / float64(total)}
+		result.CriticalityDistribution.Medium = SeverityRangeCount{Count: severity3To5, Percentage: float64(severity3To5) * 100.0 / float64(total)}
+		result.CriticalityDistribution.High = SeverityRangeCount{Count: severity6To7, Percentage: float64(severity6To7) * 100.0 / float64(total)}
+		result.CriticalityDistribution.Critical = SeverityRangeCount{Count: severity8To9, Percentage: float64(severity8To9) * 100.0 / float64(total)}
+	}
+
+	return result
+}

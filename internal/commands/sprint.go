@@ -31,6 +31,8 @@ func HandleSprint(args []string) error {
 		return sprintCreate(args[1:])
 	case "get":
 		return sprintGet(args[1:])
+	case "show":
+		return sprintShow(args[1:])
 	case "update", "upd":
 		return sprintUpdate(args[1:])
 	case "remove", "rm":
@@ -196,6 +198,65 @@ func sprintGet(args []string) error {
 	}
 
 	return utils.PrintJSON(sprint)
+}
+
+// sprintShow displays a comprehensive status report of a sprint.
+//
+// Parameters:
+//   - args: Command-line arguments including sprint ID
+//
+// Required arguments:
+//   - sprint ID: The ID of the sprint to show (first positional argument)
+//
+// Error conditions:
+//   - Returns utils.ErrRequired if sprint ID is missing
+//   - Returns utils.ErrNotFound if sprint doesn't exist
+//
+// Output:
+//   - JSON object with sprint summary, progress, severity distribution, and criticality distribution
+//
+// Example:
+//
+//	rmp sprint show -r myproject 1
+func sprintShow(args []string) error {
+	roadmapName, remaining, err := requireRoadmap(args)
+	if err != nil {
+		return err
+	}
+
+	if len(remaining) == 0 {
+		return fmt.Errorf("%w: sprint ID required", utils.ErrRequired)
+	}
+
+	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
+	if err != nil {
+		return err
+	}
+
+	database, err := db.OpenExisting(roadmapName)
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+
+	ctx, cancel := db.WithQuickTimeout()
+	defer cancel()
+
+	// Get sprint
+	sprint, err := database.GetSprint(ctx, sprintID)
+	if err != nil {
+		return err
+	}
+
+	// Get all tasks in sprint
+	tasks, err := database.GetSprintTasksFull(ctx, sprintID, nil)
+	if err != nil {
+		return err
+	}
+
+	// Calculate comprehensive report
+	result := models.CalculateSprintShowResult(sprint, tasks)
+	return utils.PrintJSON(result)
 }
 
 // sprintUpdate updates a sprint.
@@ -823,6 +884,7 @@ Commands:
   list, ls [OPTIONS]              List sprints
   create, new [OPTIONS]           Create a new sprint
   get <id>                        Get sprint details
+  show <id>                       Show comprehensive sprint report
   update, upd <id> [OPTIONS]       Update sprint description
   remove, rm <id>                 Remove sprint
   start <id>                      Start sprint
