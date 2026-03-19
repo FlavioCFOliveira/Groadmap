@@ -121,10 +121,13 @@ func sprintCreate(args []string) error {
 	}
 	defer database.Close()
 
+	// Capture timestamp once for the entire operation
+	now := utils.NowISO8601()
+
 	sprint := &models.Sprint{
 		Status:      models.SprintPending,
 		Description: description,
-		CreatedAt:   utils.NowISO8601(),
+		CreatedAt:   now,
 	}
 
 	if err := sprint.Validate(); err != nil {
@@ -148,10 +151,10 @@ func sprintCreate(args []string) error {
 		}
 		sprintID = int(id)
 
-		// Log audit
+		// Log audit with same timestamp
 		_, err = tx.Exec(
 			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-			models.OpSprintCreate, models.EntitySprint, sprintID, utils.NowISO8601(),
+			models.OpSprintCreate, models.EntitySprint, sprintID, now,
 		)
 		return err
 	})
@@ -237,6 +240,9 @@ func sprintUpdate(args []string) error {
 	}
 	defer database.Close()
 
+	// Capture timestamp once for the entire operation
+	now := utils.NowISO8601()
+
 	// Update within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
 		result, err := tx.Exec(
@@ -255,10 +261,10 @@ func sprintUpdate(args []string) error {
 			return fmt.Errorf("%w: sprint %d not found", utils.ErrNotFound, sprintID)
 		}
 
-		// Log audit
+		// Log audit with same timestamp
 		_, err = tx.Exec(
 			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-			models.OpSprintUpdate, models.EntitySprint, sprintID, utils.NowISO8601(),
+			models.OpSprintUpdate, models.EntitySprint, sprintID, now,
 		)
 		return err
 	})
@@ -284,6 +290,9 @@ func sprintRemove(args []string) error {
 		return err
 	}
 	defer database.Close()
+
+	// Capture timestamp once for the entire operation
+	now := utils.NowISO8601()
 
 	// Delete within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
@@ -318,10 +327,10 @@ func sprintRemove(args []string) error {
 			return fmt.Errorf("%w: sprint %d not found", utils.ErrNotFound, sprintID)
 		}
 
-		// Log audit
+		// Log audit with same timestamp
 		_, err = tx.Exec(
 			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-			models.OpSprintDelete, models.EntitySprint, sprintID, utils.NowISO8601(),
+			models.OpSprintDelete, models.EntitySprint, sprintID, now,
 		)
 		return err
 	})
@@ -418,6 +427,9 @@ func sprintLifecycle(args []string, newStatus models.SprintStatus, op models.Aud
 		return fmt.Errorf("%w: "+errorMsg, utils.ErrInvalidInput, sprint.Status)
 	}
 
+	// Capture timestamp once for the entire operation
+	now := utils.NowISO8601()
+
 	// Update within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
 		var query string
@@ -431,11 +443,11 @@ func sprintLifecycle(args []string, newStatus models.SprintStatus, op models.Aud
 			} else {
 				// Starting - set started_at
 				query = "UPDATE sprints SET status = ?, started_at = ? WHERE id = ?"
-				args = []interface{}{newStatus, utils.NowISO8601(), sprintID}
+				args = []interface{}{newStatus, now, sprintID}
 			}
 		case models.SprintClosed:
 			query = "UPDATE sprints SET status = ?, closed_at = ? WHERE id = ?"
-			args = []interface{}{newStatus, utils.NowISO8601(), sprintID}
+			args = []interface{}{newStatus, now, sprintID}
 		}
 
 		if len(args) == 0 {
@@ -455,10 +467,10 @@ func sprintLifecycle(args []string, newStatus models.SprintStatus, op models.Aud
 			return fmt.Errorf("%w: sprint %d not found", utils.ErrNotFound, sprintID)
 		}
 
-		// Log audit
+		// Log audit with same timestamp
 		_, err = tx.Exec(
 			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-			op, models.EntitySprint, sprintID, utils.NowISO8601(),
+			op, models.EntitySprint, sprintID, now,
 		)
 		return err
 	})
@@ -693,6 +705,9 @@ func sprintRemoveTasks(args []string) error {
 		return err
 	}
 
+	// Capture timestamp once for the entire operation
+	now := utils.NowISO8601()
+
 	// Remove within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
 		for _, taskID := range taskIDs {
@@ -708,10 +723,10 @@ func sprintRemoveTasks(args []string) error {
 				return err
 			}
 
-			// Log audit
+			// Log audit with same timestamp
 			_, err = tx.Exec(
 				`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-				models.OpSprintRemoveTask, models.EntitySprint, sprintID, utils.NowISO8601(),
+				models.OpSprintRemoveTask, models.EntitySprint, sprintID, now,
 			)
 			if err != nil {
 				return err

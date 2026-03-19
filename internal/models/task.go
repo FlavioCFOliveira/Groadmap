@@ -29,22 +29,30 @@ var ValidTaskStatuses = []TaskStatus{
 	StatusCompleted,
 }
 
+// validStatusMap provides O(1) lookup for status validation.
+// Initialized once at package initialization for performance.
+var validStatusMap = map[string]TaskStatus{
+	"BACKLOG":   StatusBacklog,
+	"SPRINT":    StatusSprint,
+	"DOING":     StatusDoing,
+	"TESTING":   StatusTesting,
+	"COMPLETED": StatusCompleted,
+}
+
 // IsValidTaskStatus checks if a string is a valid task status.
+// Uses O(1) map lookup instead of O(n) slice iteration.
 func IsValidTaskStatus(s string) bool {
-	for _, status := range ValidTaskStatuses {
-		if string(status) == s {
-			return true
-		}
-	}
-	return false
+	_, ok := validStatusMap[s]
+	return ok
 }
 
 // ParseTaskStatus parses a string into a TaskStatus.
+// Uses O(1) map lookup for validation.
 func ParseTaskStatus(s string) (TaskStatus, error) {
-	if !IsValidTaskStatus(s) {
-		return "", fmt.Errorf("invalid task status: %q", s)
+	if status, ok := validStatusMap[s]; ok {
+		return status, nil
 	}
-	return TaskStatus(s), nil
+	return "", fmt.Errorf("invalid task status: %q", s)
 }
 
 // CanTransitionTo checks if a status transition is valid according to the state machine.
@@ -133,17 +141,22 @@ const (
 )
 
 // Task represents a task in the roadmap.
+// Field order optimized for memory alignment (largest fields first).
+// Layout: 16-byte fields, then 8-byte fields to minimize padding.
 type Task struct {
-	ID             int        `json:"id"`
-	Priority       int        `json:"priority"`
-	Severity       int        `json:"severity"`
-	Status         TaskStatus `json:"status"`
+	// 16-byte fields (string header: data pointer + length)
 	Description    string     `json:"description"`
-	Specialists    *string    `json:"specialists"` // Nullable
 	Action         string     `json:"action"`
 	ExpectedResult string     `json:"expected_result"`
-	CreatedAt      string     `json:"created_at"`   // ISO 8601 UTC
-	CompletedAt    *string    `json:"completed_at"` // ISO 8601 UTC, nullable
+	CreatedAt      string     `json:"created_at"` // ISO 8601 UTC
+	Status         TaskStatus `json:"status"`     // string underlying type
+
+	// 8-byte fields (pointers and integers)
+	Specialists *string `json:"specialists"`  // Nullable
+	CompletedAt *string `json:"completed_at"` // ISO 8601 UTC, nullable
+	ID          int     `json:"id"`
+	Priority    int     `json:"priority"`
+	Severity    int     `json:"severity"`
 }
 
 // Validate checks if the task data is valid.
@@ -247,4 +260,46 @@ func FormatSpecialists(specialists []string) string {
 		return ""
 	}
 	return strings.Join(specialists, ",")
+}
+
+// TaskUpdate represents a type-safe update operation for tasks.
+// Use pointer fields to indicate which fields should be updated (nil = no change).
+// This provides compile-time type safety and deterministic SQL generation
+// compared to map[string]interface{}.
+type TaskUpdate struct {
+	Description    *string
+	Action         *string
+	ExpectedResult *string
+	Specialists    *string
+	Priority       *int
+	Severity       *int
+}
+
+// HasChanges returns true if any field is set to be updated.
+func (u *TaskUpdate) HasChanges() bool {
+	return u.Description != nil || u.Action != nil || u.ExpectedResult != nil ||
+		u.Specialists != nil || u.Priority != nil || u.Severity != nil
+}
+
+// Validate checks if the update values are valid.
+func (u *TaskUpdate) Validate() error {
+	if u.Description != nil && len(*u.Description) > MaxTaskDescription {
+		return fmt.Errorf("description exceeds maximum length of %d characters", MaxTaskDescription)
+	}
+	if u.Action != nil && len(*u.Action) > MaxTaskAction {
+		return fmt.Errorf("action exceeds maximum length of %d characters", MaxTaskAction)
+	}
+	if u.ExpectedResult != nil && len(*u.ExpectedResult) > MaxTaskExpectedResult {
+		return fmt.Errorf("expected_result exceeds maximum length of %d characters", MaxTaskExpectedResult)
+	}
+	if u.Specialists != nil && len(*u.Specialists) > MaxTaskSpecialists {
+		return fmt.Errorf("specialists exceeds maximum length of %d characters", MaxTaskSpecialists)
+	}
+	if u.Priority != nil && (*u.Priority < 0 || *u.Priority > 9) {
+		return fmt.Errorf("priority must be between 0 and 9, got %d", *u.Priority)
+	}
+	if u.Severity != nil && (*u.Severity < 0 || *u.Severity > 9) {
+		return fmt.Errorf("severity must be between 0 and 9, got %d", *u.Severity)
+	}
+	return nil
 }

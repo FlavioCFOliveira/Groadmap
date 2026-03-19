@@ -62,15 +62,19 @@ const (
 )
 
 // Sprint represents a sprint in the roadmap.
+// Field order optimized for memory alignment (largest fields first).
 type Sprint struct {
-	ID          int          `json:"id"`
-	Status      SprintStatus `json:"status"`
+	// 16-byte fields
 	Description string       `json:"description"`
-	Tasks       []int        `json:"tasks"`      // Computed from sprint_tasks
-	TaskCount   int          `json:"task_count"` // Computed
 	CreatedAt   string       `json:"created_at"` // ISO 8601 UTC
-	StartedAt   *string      `json:"started_at"` // ISO 8601 UTC, nullable
-	ClosedAt    *string      `json:"closed_at"`  // ISO 8601 UTC, nullable
+	Status      SprintStatus `json:"status"`     // string underlying type
+
+	// 8-byte fields (slice header, then pointers, then integers)
+	Tasks     []int   `json:"tasks"`      // Computed from sprint_tasks
+	StartedAt *string `json:"started_at"` // ISO 8601 UTC, nullable
+	ClosedAt  *string `json:"closed_at"`  // ISO 8601 UTC, nullable
+	ID        int     `json:"id"`
+	TaskCount int     `json:"task_count"` // Computed
 }
 
 // Validate checks if the sprint data is valid.

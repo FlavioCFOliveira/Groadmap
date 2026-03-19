@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +31,8 @@ func setupTestDB(t *testing.T) (*DB, func()) {
 	db := &DB{
 		DB:          sqlDB,
 		roadmapName: "test",
+		queryCache:  NewQueryCache(),
+		batchProc:   NewBatchProcessor(100),
 	}
 
 	// Create schema
@@ -275,6 +278,115 @@ func TestUpdateTask(t *testing.T) {
 	err = db.UpdateTask(testContext(), id, map[string]interface{}{})
 	if err != nil {
 		t.Errorf("expected no error for empty updates, got %v", err)
+	}
+}
+
+func TestUpdateTaskStruct(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// Create a task
+	task := &models.Task{
+		Priority:       1,
+		Severity:       1,
+		Status:         models.StatusBacklog,
+		Description:    "Original",
+		Action:         "Action",
+		ExpectedResult: "Result",
+		CreatedAt:      time.Now().Format(time.RFC3339),
+	}
+
+	id, _ := db.CreateTask(testContext(), task)
+
+	// Test update single field
+	desc := "Updated Description"
+	update := &models.TaskUpdate{
+		Description: &desc,
+	}
+
+	err := db.UpdateTaskStruct(testContext(), id, update)
+	if err != nil {
+		t.Fatalf("failed to update task: %v", err)
+	}
+
+	// Verify update
+	updated, _ := db.GetTask(testContext(), id)
+	if updated.Description != "Updated Description" {
+		t.Errorf("expected description 'Updated Description', got %q", updated.Description)
+	}
+	// Other fields should remain unchanged
+	if updated.Priority != 1 {
+		t.Errorf("expected priority unchanged (1), got %d", updated.Priority)
+	}
+
+	// Test update multiple fields
+	newPriority := 5
+	newSeverity := 3
+	newAction := "New Action"
+	update2 := &models.TaskUpdate{
+		Priority: &newPriority,
+		Severity: &newSeverity,
+		Action:   &newAction,
+	}
+
+	err = db.UpdateTaskStruct(testContext(), id, update2)
+	if err != nil {
+		t.Fatalf("failed to update task: %v", err)
+	}
+
+	// Verify updates
+	updated, _ = db.GetTask(testContext(), id)
+	if updated.Priority != 5 {
+		t.Errorf("expected priority 5, got %d", updated.Priority)
+	}
+	if updated.Severity != 3 {
+		t.Errorf("expected severity 3, got %d", updated.Severity)
+	}
+	if updated.Action != "New Action" {
+		t.Errorf("expected action 'New Action', got %q", updated.Action)
+	}
+	// Description should remain from previous update
+	if updated.Description != "Updated Description" {
+		t.Errorf("expected description 'Updated Description', got %q", updated.Description)
+	}
+
+	// Test update non-existent task
+	err = db.UpdateTaskStruct(testContext(), 99999, update)
+	if err == nil {
+		t.Error("expected error for non-existent task")
+	}
+
+	// Test nil update
+	err = db.UpdateTaskStruct(testContext(), id, nil)
+	if err == nil {
+		t.Error("expected error for nil update")
+	}
+
+	// Test empty update (no fields set)
+	emptyUpdate := &models.TaskUpdate{}
+	err = db.UpdateTaskStruct(testContext(), id, emptyUpdate)
+	if err == nil {
+		t.Error("expected error for empty update (no fields set)")
+	}
+
+	// Test validation - invalid priority
+	invalidPriority := 15
+	invalidUpdate := &models.TaskUpdate{
+		Priority: &invalidPriority,
+	}
+	err = db.UpdateTaskStruct(testContext(), id, invalidUpdate)
+	if err == nil {
+		t.Error("expected error for invalid priority")
+	}
+
+	// Test validation - description too long
+	longDesc := strings.Repeat("a", models.MaxTaskDescription+1)
+	invalidUpdate2 := &models.TaskUpdate{
+		Description: &longDesc,
+	}
+	err = db.UpdateTaskStruct(testContext(), id, invalidUpdate2)
+	if err == nil {
+		t.Error("expected error for description too long")
 	}
 }
 
@@ -544,7 +656,10 @@ func TestUpdateSprint(t *testing.T) {
 	}
 
 	// Verify
-	updated, _ := db.GetSprint(testContext(), id)
+	updated, err := db.GetSprint(testContext(), id)
+	if err != nil {
+		t.Fatalf("failed to get sprint: %v", err)
+	}
 	if updated.Description != "Updated" {
 		t.Errorf("expected description 'Updated', got %q", updated.Description)
 	}

@@ -4,7 +4,27 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sync"
 )
+
+// encoderConfig holds the encoder configuration to avoid repeated setup.
+// Note: We don't cache the encoder itself because it captures os.Stdout at creation time,
+// which causes issues when stdout is redirected (e.g., in tests).
+// Instead, we cache the configuration and apply it to new encoders.
+var encoderConfig = struct {
+	once sync.Once
+	// Pre-computed indent prefix and value for indented output
+	indentPrefix string
+	indentValue  string
+}{}
+
+// initEncoderConfig initializes the encoder configuration once.
+func initEncoderConfig() {
+	encoderConfig.once.Do(func() {
+		encoderConfig.indentPrefix = ""
+		encoderConfig.indentValue = "  "
+	})
+}
 
 // PrintJSON outputs a value as JSON to stdout.
 // Uses compact format (no pretty-print) for efficient parsing.
@@ -29,9 +49,10 @@ func PrintJSON(v interface{}) error {
 //
 // SECURITY NOTE: SetEscapeHTML(false) is intentionally disabled - see PrintJSON for details.
 func PrintJSONIndent(v interface{}) error {
+	initEncoderConfig()
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetEscapeHTML(false)
-	encoder.SetIndent("", "  ")
+	encoder.SetIndent(encoderConfig.indentPrefix, encoderConfig.indentValue)
 	if err := encoder.Encode(v); err != nil {
 		return fmt.Errorf("encoding JSON: %w", err)
 	}

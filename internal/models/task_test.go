@@ -761,3 +761,57 @@ func TestCanTransitionTo_InvalidStatus(t *testing.T) {
 		t.Error("CanTransitionTo should return false for invalid target status")
 	}
 }
+
+// BenchmarkIsValidTaskStatus benchmarks the O(1) map lookup implementation.
+// This verifies TASK-P007: Optimize Task Status Validation with Map Lookup.
+func BenchmarkIsValidTaskStatus(b *testing.B) {
+	statuses := []string{"BACKLOG", "SPRINT", "DOING", "TESTING", "COMPLETED", "INVALID"}
+
+	b.Run("ValidStatus", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = IsValidTaskStatus("BACKLOG")
+		}
+	})
+
+	b.Run("InvalidStatus", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = IsValidTaskStatus("INVALID")
+		}
+	})
+
+	b.Run("MixedStatuses", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = IsValidTaskStatus(statuses[i%len(statuses)])
+		}
+	})
+}
+
+// BenchmarkParseTaskStatus benchmarks the O(1) map lookup implementation.
+func BenchmarkParseTaskStatus(b *testing.B) {
+	b.Run("ValidStatus", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_, _ = ParseTaskStatus("BACKLOG")
+		}
+	})
+
+	b.Run("InvalidStatus", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_, _ = ParseTaskStatus("INVALID")
+		}
+	})
+}
+
+// BenchmarkCanTransitionTo benchmarks status transition validation.
+func BenchmarkCanTransitionTo(b *testing.B) {
+	b.Run("ValidTransition", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = StatusBacklog.CanTransitionTo(StatusSprint)
+		}
+	})
+
+	b.Run("InvalidTransition", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = StatusBacklog.CanTransitionTo(StatusCompleted)
+		}
+	})
+}

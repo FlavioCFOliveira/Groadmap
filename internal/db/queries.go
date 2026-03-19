@@ -24,6 +24,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
@@ -114,18 +115,17 @@ func (db *DB) GetTasks(ctx context.Context, ids []int) ([]models.Task, error) {
 		return []models.Task{}, nil
 	}
 
-	// Build placeholders for IN clause
-	placeholders := make([]string, len(ids))
+	// Use cached placeholders for better performance
+	placeholders := db.queryCache.GetPlaceholders(len(ids))
 	args := make([]interface{}, len(ids))
 	for i, id := range ids {
-		placeholders[i] = "?"
 		args[i] = id
 	}
 
 	query := fmt.Sprintf(
 		`SELECT id, priority, severity, status, description, specialists, action, expected_result, created_at, completed_at
 		 FROM tasks WHERE id IN (%s) ORDER BY id`,
-		strings.Join(placeholders, ","),
+		placeholders,
 	)
 
 	rows, err := db.QueryContext(ctx, query, args...)
@@ -255,6 +255,84 @@ func (db *DB) UpdateTask(ctx context.Context, id int, updates map[string]interfa
 	})
 }
 
+// UpdateTaskStruct updates a task using the type-safe TaskUpdate struct.
+// This is the recommended approach over UpdateTask (map-based) as it provides:
+// - Compile-time type safety
+// - Deterministic SQL generation (fields always in same order)
+// - No interface{} boxing overhead
+// - Clear intent through pointer fields (nil = no change)
+//
+// Parameters:
+//   - ctx: Context for timeout and cancellation
+//   - id: The unique identifier of the task to update
+//   - update: TaskUpdate struct with pointer fields indicating which values to update
+//
+// Returns:
+//   - nil on success
+//   - utils.ErrNotFound if task doesn't exist
+//   - utils.ErrInvalidUpdate if no fields are set to update
+//   - Validation error if field values exceed limits
+//   - Wrapped database errors for connection/query failures
+func (db *DB) UpdateTaskStruct(ctx context.Context, id int, update *models.TaskUpdate) error {
+	if update == nil || !update.HasChanges() {
+		return fmt.Errorf("%w: no fields specified for update", utils.ErrInvalidUpdate)
+	}
+
+	if err := update.Validate(); err != nil {
+		return fmt.Errorf("%w: %v", utils.ErrInvalidUpdate, err)
+	}
+
+	return retryWithBackoff("update task struct", func() error {
+		// Build SQL with deterministic field ordering
+		// Fields are always in the same order: description, action, expected_result, specialists, priority, severity
+		var setParts []string
+		var args []interface{}
+
+		if update.Description != nil {
+			setParts = append(setParts, "description = ?")
+			args = append(args, *update.Description)
+		}
+		if update.Action != nil {
+			setParts = append(setParts, "action = ?")
+			args = append(args, *update.Action)
+		}
+		if update.ExpectedResult != nil {
+			setParts = append(setParts, "expected_result = ?")
+			args = append(args, *update.ExpectedResult)
+		}
+		if update.Specialists != nil {
+			setParts = append(setParts, "specialists = ?")
+			args = append(args, *update.Specialists)
+		}
+		if update.Priority != nil {
+			setParts = append(setParts, "priority = ?")
+			args = append(args, *update.Priority)
+		}
+		if update.Severity != nil {
+			setParts = append(setParts, "severity = ?")
+			args = append(args, *update.Severity)
+		}
+
+		args = append(args, id)
+		query := fmt.Sprintf("UPDATE tasks SET %s WHERE id = ?", strings.Join(setParts, ", "))
+
+		result, err := db.ExecContext(ctx, query, args...)
+		if err != nil {
+			return fmt.Errorf("updating task: %w", err)
+		}
+
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("checking rows affected: %w", err)
+		}
+		if affected == 0 {
+			return fmt.Errorf("%w: task %d", utils.ErrNotFound, id)
+		}
+
+		return nil
+	})
+}
+
 // UpdateTaskStatus updates task status and optionally sets completed_at.
 func (db *DB) UpdateTaskStatus(ctx context.Context, ids []int, status models.TaskStatus) error {
 	if len(ids) == 0 {
@@ -262,11 +340,10 @@ func (db *DB) UpdateTaskStatus(ctx context.Context, ids []int, status models.Tas
 	}
 
 	return retryWithBackoff("update task status", func() error {
-		// Build placeholders
-		placeholders := make([]string, len(ids))
+		// Use cached placeholders for better performance
+		placeholders := db.queryCache.GetPlaceholders(len(ids))
 		idArgs := make([]interface{}, len(ids))
 		for i, id := range ids {
-			placeholders[i] = "?"
 			idArgs[i] = id
 		}
 
@@ -283,7 +360,7 @@ func (db *DB) UpdateTaskStatus(ctx context.Context, ids []int, status models.Tas
 
 		query := fmt.Sprintf(
 			"UPDATE tasks SET status = ?, completed_at = ? WHERE id IN (%s)",
-			strings.Join(placeholders, ","),
+			placeholders,
 		)
 
 		_, err := db.ExecContext(ctx, query, args...)
@@ -302,15 +379,14 @@ func (db *DB) UpdateTaskPriority(ctx context.Context, ids []int, priority int) e
 	}
 
 	return retryWithBackoff("update task priority", func() error {
-		placeholders := make([]string, len(ids))
+		placeholders := db.queryCache.GetPlaceholders(len(ids))
 		args := make([]interface{}, len(ids)+1)
 		args[0] = priority
 		for i, id := range ids {
-			placeholders[i] = "?"
 			args[i+1] = id
 		}
 
-		query := fmt.Sprintf("UPDATE tasks SET priority = ? WHERE id IN (%s)", strings.Join(placeholders, ","))
+		query := fmt.Sprintf("UPDATE tasks SET priority = ? WHERE id IN (%s)", placeholders)
 		_, err := db.ExecContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("updating task priority: %w", err)
@@ -326,15 +402,14 @@ func (db *DB) UpdateTaskSeverity(ctx context.Context, ids []int, severity int) e
 	}
 
 	return retryWithBackoff("update task severity", func() error {
-		placeholders := make([]string, len(ids))
+		placeholders := db.queryCache.GetPlaceholders(len(ids))
 		args := make([]interface{}, len(ids)+1)
 		args[0] = severity
 		for i, id := range ids {
-			placeholders[i] = "?"
 			args[i+1] = id
 		}
 
-		query := fmt.Sprintf("UPDATE tasks SET severity = ? WHERE id IN (%s)", strings.Join(placeholders, ","))
+		query := fmt.Sprintf("UPDATE tasks SET severity = ? WHERE id IN (%s)", placeholders)
 		_, err := db.ExecContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("updating task severity: %w", err)
@@ -364,13 +439,21 @@ func (db *DB) DeleteTask(ctx context.Context, id int) error {
 }
 
 // scanTasks scans rows into a slice of Task.
+// Optimized for memory efficiency with pre-allocated slice and reusable scan variables.
 func scanTasks(rows *sql.Rows) ([]models.Task, error) {
-	var tasks []models.Task
+	// Pre-allocate with typical batch size to avoid repeated reallocations
+	tasks := make([]models.Task, 0, 100)
+
+	// Reusable scan variables to avoid allocations per iteration
+	var specialists sql.NullString
+	var completedAt sql.NullString
 
 	for rows.Next() {
 		var task models.Task
-		var specialists sql.NullString
-		var completedAt sql.NullString
+
+		// Reset scan variables for each row
+		specialists = sql.NullString{}
+		completedAt = sql.NullString{}
 
 		err := rows.Scan(
 			&task.ID,
@@ -438,13 +521,24 @@ func (db *DB) CreateSprint(ctx context.Context, sprint *models.Sprint) (int, err
 }
 
 // GetSprint retrieves a sprint by ID.
+// Optimized to use a single query with JSON aggregation for tasks (SQLite 3.38+).
+// This eliminates the N+1 query pattern by fetching sprint and task IDs in one round-trip.
 func (db *DB) GetSprint(ctx context.Context, id int) (*models.Sprint, error) {
 	var sprint models.Sprint
 	var startedAt sql.NullString
 	var closedAt sql.NullString
+	var tasksJSON sql.NullString
 
+	// Single query using JSON aggregation to get sprint data and task IDs
+	// json_group_array returns a JSON array of task IDs
 	err := db.QueryRowContext(ctx,
-		`SELECT id, status, description, created_at, started_at, closed_at FROM sprints WHERE id = ?`,
+		`SELECT
+			s.id, s.status, s.description, s.created_at, s.started_at, s.closed_at,
+			COALESCE(json_group_array(DISTINCT st.task_id), '[]') as tasks
+		 FROM sprints s
+		 LEFT JOIN sprint_tasks st ON s.id = st.sprint_id
+		 WHERE s.id = ?
+		 GROUP BY s.id`,
 		id,
 	).Scan(
 		&sprint.ID,
@@ -453,6 +547,7 @@ func (db *DB) GetSprint(ctx context.Context, id int) (*models.Sprint, error) {
 		&sprint.CreatedAt,
 		&startedAt,
 		&closedAt,
+		&tasksJSON,
 	)
 
 	if err != nil {
@@ -469,15 +564,52 @@ func (db *DB) GetSprint(ctx context.Context, id int) (*models.Sprint, error) {
 		sprint.ClosedAt = &closedAt.String
 	}
 
-	// Load tasks
-	tasks, err := db.GetSprintTasks(ctx, id)
-	if err != nil {
-		return nil, err
+	// Parse task IDs from JSON array
+	if tasksJSON.Valid && tasksJSON.String != "" && tasksJSON.String != "[]" {
+		tasks, err := parseJSONIntArray(tasksJSON.String)
+		if err != nil {
+			return nil, fmt.Errorf("parsing sprint tasks: %w", err)
+		}
+		sprint.Tasks = tasks
+		sprint.TaskCount = len(tasks)
+	} else {
+		sprint.Tasks = []int{}
+		sprint.TaskCount = 0
 	}
-	sprint.Tasks = tasks
-	sprint.TaskCount = len(tasks)
 
 	return &sprint, nil
+}
+
+// parseJSONIntArray parses a JSON array of integers into a Go []int.
+// Example: '[1,2,3]' -> []int{1, 2, 3}
+// Handles edge cases like '[null]' (empty result from json_group_array).
+func parseJSONIntArray(jsonStr string) ([]int, error) {
+	if jsonStr == "" || jsonStr == "[]" || jsonStr == "[null]" {
+		return []int{}, nil
+	}
+
+	// Remove brackets and split by comma
+	trimmed := strings.Trim(jsonStr, "[]")
+	if trimmed == "" || trimmed == "null" {
+		return []int{}, nil
+	}
+
+	parts := strings.Split(trimmed, ",")
+	result := make([]int, 0, len(parts))
+
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" || part == "null" {
+			continue
+		}
+		val, err := strconv.Atoi(part)
+		if err != nil {
+			return nil, fmt.Errorf("parsing integer %q: %w", part, err)
+		}
+		result = append(result, val)
+	}
+
+	return result, nil
 }
 
 // ListSprints retrieves all sprints with optional status filter.
@@ -698,17 +830,16 @@ func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int)
 			}
 		}
 
-		// Update task status to SPRINT
-		placeholders := make([]string, len(taskIDs))
+		// Update task status to SPRINT using cached placeholders
+		placeholders := db.queryCache.GetPlaceholders(len(taskIDs))
 		args := make([]interface{}, len(taskIDs))
 		for i, id := range taskIDs {
-			placeholders[i] = "?"
 			args[i] = id
 		}
 
 		query := fmt.Sprintf(
 			"UPDATE tasks SET status = 'SPRINT' WHERE id IN (%s)",
-			strings.Join(placeholders, ","),
+			placeholders,
 		)
 		_, err := db.ExecContext(ctx, query, args...)
 		if err != nil {
@@ -726,22 +857,22 @@ func (db *DB) RemoveTasksFromSprint(ctx context.Context, taskIDs []int) error {
 	}
 
 	return retryWithBackoff("remove tasks from sprint", func() error {
-		placeholders := make([]string, len(taskIDs))
+		// Use cached placeholders
+		placeholders := db.queryCache.GetPlaceholders(len(taskIDs))
 		args := make([]interface{}, len(taskIDs))
 		for i, id := range taskIDs {
-			placeholders[i] = "?"
 			args[i] = id
 		}
 
 		// Delete from sprint_tasks
-		query := fmt.Sprintf("DELETE FROM sprint_tasks WHERE task_id IN (%s)", strings.Join(placeholders, ","))
+		query := fmt.Sprintf("DELETE FROM sprint_tasks WHERE task_id IN (%s)", placeholders)
 		_, err := db.ExecContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("removing tasks from sprint: %w", err)
 		}
 
 		// Update task status to BACKLOG
-		query = fmt.Sprintf("UPDATE tasks SET status = 'BACKLOG' WHERE id IN (%s)", strings.Join(placeholders, ","))
+		query = fmt.Sprintf("UPDATE tasks SET status = 'BACKLOG' WHERE id IN (%s)", placeholders)
 		_, err = db.ExecContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("updating task statuses: %w", err)

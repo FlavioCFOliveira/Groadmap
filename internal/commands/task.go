@@ -225,6 +225,9 @@ func taskCreate(args []string) error {
 	}
 	defer database.Close()
 
+	// Capture timestamp once for the entire operation
+	now := utils.NowISO8601()
+
 	task := &models.Task{
 		Priority:       priority,
 		Severity:       severity,
@@ -232,7 +235,7 @@ func taskCreate(args []string) error {
 		Description:    description,
 		Action:         action,
 		ExpectedResult: expectedResult,
-		CreatedAt:      utils.NowISO8601(),
+		CreatedAt:      now,
 	}
 
 	if specialists != "" {
@@ -263,10 +266,10 @@ func taskCreate(args []string) error {
 		}
 		taskID = int(id)
 
-		// Log audit
+		// Log audit with same timestamp
 		_, err = tx.Exec(
 			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-			models.OpTaskCreate, models.EntityTask, taskID, utils.NowISO8601(),
+			models.OpTaskCreate, models.EntityTask, taskID, now,
 		)
 		return err
 	})
@@ -611,6 +614,9 @@ func taskSetStatus(args []string) error {
 		}
 	}
 
+	// Capture timestamp once for the entire operation
+	now := utils.NowISO8601()
+
 	// Update within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
 		// Update tasks
@@ -618,7 +624,7 @@ func taskSetStatus(args []string) error {
 		args := make([]interface{}, len(ids)+2)
 		args[0] = newStatus
 		if newStatus == models.StatusCompleted {
-			args[1] = utils.NowISO8601()
+			args[1] = now
 		} else {
 			args[1] = nil
 		}
@@ -641,11 +647,11 @@ func taskSetStatus(args []string) error {
 			return err
 		}
 
-		// Log audit
+		// Log audit with same timestamp
 		for _, id := range ids {
 			_, err = tx.Exec(
 				`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-				models.OpTaskStatusChange, models.EntityTask, id, utils.NowISO8601(),
+				models.OpTaskStatusChange, models.EntityTask, id, now,
 			)
 			if err != nil {
 				return err
@@ -689,6 +695,9 @@ func taskSetPriority(args []string) error {
 	}
 	defer database.Close()
 
+	// Capture timestamp once for the entire operation
+	now := utils.NowISO8601()
+
 	// Update within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
 		// Update tasks
@@ -706,11 +715,11 @@ func taskSetPriority(args []string) error {
 			return err
 		}
 
-		// Log audit
+		// Log audit with same timestamp
 		for _, id := range ids {
 			_, err = tx.Exec(
 				`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-				models.OpTaskPriorityChange, models.EntityTask, id, utils.NowISO8601(),
+				models.OpTaskPriorityChange, models.EntityTask, id, now,
 			)
 			if err != nil {
 				return err
@@ -754,6 +763,9 @@ func taskSetSeverity(args []string) error {
 	}
 	defer database.Close()
 
+	// Capture timestamp once for the entire operation
+	now := utils.NowISO8601()
+
 	// Update within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
 		// Update tasks
@@ -771,11 +783,11 @@ func taskSetSeverity(args []string) error {
 			return err
 		}
 
-		// Log audit
+		// Log audit with same timestamp
 		for _, id := range ids {
 			_, err = tx.Exec(
 				`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-				models.OpTaskSeverityChange, models.EntityTask, id, utils.NowISO8601(),
+				models.OpTaskSeverityChange, models.EntityTask, id, now,
 			)
 			if err != nil {
 				return err

@@ -142,3 +142,51 @@ func TestPrintJSONIndentOutput(t *testing.T) {
 		t.Error("expected output to contain 'key'")
 	}
 }
+
+// BenchmarkPrintJSON benchmarks the cached encoder implementation.
+// This verifies TASK-P008: Cache JSON Encoder Instance.
+func BenchmarkPrintJSON(b *testing.B) {
+	data := map[string]interface{}{
+		"id":          123,
+		"name":        "Test Task",
+		"description": "This is a test task with some content",
+		"priority":    5,
+		"severity":    3,
+		"status":      "BACKLOG",
+	}
+
+	// Redirect stdout to avoid cluttering benchmark output
+	oldStdout := os.Stdout
+	os.Stdout = os.NewFile(0, os.DevNull)
+	defer func() { os.Stdout = oldStdout }()
+
+	b.Run("CachedEncoder", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = PrintJSON(data)
+		}
+	})
+
+	b.Run("CachedEncoderIndent", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = PrintJSONIndent(data)
+		}
+	})
+}
+
+// BenchmarkToJSON benchmarks JSON marshaling.
+func BenchmarkToJSON(b *testing.B) {
+	data := map[string]interface{}{
+		"id":          123,
+		"name":        "Test Task",
+		"description": "This is a test task with some content",
+		"priority":    5,
+		"severity":    3,
+		"status":      "BACKLOG",
+	}
+
+	b.Run("ToJSON", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_, _ = ToJSON(data)
+		}
+	})
+}

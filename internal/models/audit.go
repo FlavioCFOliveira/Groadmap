@@ -89,12 +89,16 @@ func ParseEntityType(s string) (EntityType, error) {
 }
 
 // AuditEntry represents a single audit log entry.
+// Field order optimized for memory alignment (largest fields first).
 type AuditEntry struct {
-	ID          int    `json:"id"`
+	// 16-byte fields
 	Operation   string `json:"operation"`
 	EntityType  string `json:"entity_type"`
-	EntityID    int    `json:"entity_id"`
 	PerformedAt string `json:"performed_at"` // ISO 8601 UTC
+
+	// 8-byte fields
+	ID       int `json:"id"`
+	EntityID int `json:"entity_id"`
 }
 
 // Validate checks if the audit entry data is valid.

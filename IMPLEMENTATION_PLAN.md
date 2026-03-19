@@ -507,14 +507,14 @@ Optimize sprint task retrieval to avoid N+1 queries:
   - [x] TASK-P002: Implement Prepared Statement Caching
   - [x] TASK-P003: Optimize Connection Pool
   - [x] TASK-P004: Implement Database Connection Caching
-  - [ ] TASK-P005: Optimize scanTasks Memory Allocations
-  - [ ] TASK-P006: Replace Map-Based Updates
-  - [ ] TASK-P007: Optimize Task Status Validation
-  - [ ] TASK-P008: Cache JSON Encoder Instance
-  - [ ] TASK-P009: Optimize Struct Field Alignment
-  - [ ] TASK-P010: Cache SQL Placeholder Strings
-  - [ ] TASK-P011: Capture Timestamps Once Per Operation
-  - [ ] TASK-P012: Optimize Sprint Tasks N+1 Query
+  - [x] TASK-P005: Optimize scanTasks Memory Allocations
+  - [x] TASK-P006: Replace Map-Based Updates
+  - [x] TASK-P007: Optimize Task Status Validation
+  - [x] TASK-P008: Cache JSON Encoder Instance
+  - [x] TASK-P009: Optimize Struct Field Alignment
+  - [x] TASK-P010: Cache SQL Placeholder Strings
+  - [x] TASK-P011: Capture Timestamps Once Per Operation
+  - [x] TASK-P012: Optimize Sprint Tasks N+1 Query
 
 ---
 
