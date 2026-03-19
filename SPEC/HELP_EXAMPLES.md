@@ -144,6 +144,8 @@ Subcommands:
 
    get        Get detailed information about task(s)
 
+   next       Get next N tasks from open sprint
+
    set-status Change task status
               (alias: stat)
 
@@ -188,26 +190,48 @@ Examples:
 ### rmp task create --help
 
 ```
-usage: rmp task create [-h | --help] -r <name> -d <desc> -a <action> -e <result> [-p <n>] [--severity <n>] [--specialists <list>]
+usage: rmp task create [-h | --help] -r <name> -t <title> -f <fr> -h <tr> -a <ac> [-p <n>] [--severity <n>] [--specialists <list>]
 
 Create a new task in the specified roadmap.
 
 Required Options:
-   -r, --roadmap <name>           Roadmap name
-   -d, --description <desc>         Task description
-   -a, --action <action>            Technical action to perform
-   -e, --expected-result <result>   Expected outcome
+   -r, --roadmap <name>                  Roadmap name
+   -t, --title <title>                   Task title/summary
+   -f, --functional-requirements <fr>    Functional requirements (Why?)
+   -h, --technical-requirements <tr>     Technical requirements (How?)
+   -a, --acceptance-criteria <ac>        Acceptance criteria (How to verify?)
 
 Optional Options:
-   -p, --priority <n>               Priority 0-9 (default: 0)
-       --severity <n>               Severity 0-9 (default: 0)
-       --specialists <list>         Comma-separated specialist tags
+   -p, --priority <n>                    Priority 0-9 (default: 0)
+       --severity <n>                    Severity 0-9 (default: 0)
+       --specialists <list>                Comma-separated specialist tags
 
 Output: JSON object with task ID
 
 Examples:
-   rmp task create -r project1 -d "Fix login bug" -a "Debug auth" -e "Login works"
-   rmp task new -r project1 -d "Update docs" -a "Write README" -e "Docs complete" -p 5
+   rmp task create -r project1 -t "Fix login bug" -f "User can login" -h "Update auth" -a "Login works"
+   rmp task new -r project1 -t "Update docs" -f "Docs needed" -h "Write README" -a "Docs complete" -p 5
+```
+
+### rmp task next --help
+
+```
+usage: rmp task next [-h | --help] -r <name> [num]
+
+Get the next N open tasks from the currently open sprint.
+Tasks are ordered by severity DESC, then priority DESC.
+
+Options:
+   -r, --roadmap <name>   Roadmap name (required)
+
+Arguments:
+   [num]                  Number of tasks to return (default: 1, max: 100)
+
+Output: JSON array of task objects
+
+Examples:
+   rmp task next -r project1        # Returns 1 task
+   rmp task next -r project1 5      # Returns up to 5 tasks
 ```
 
 ### rmp task get --help
@@ -305,19 +329,20 @@ usage: rmp task edit [-h | --help] -r <name> <id> [OPTIONS]
 Edit an existing task's properties. Only specified fields are updated.
 
 Options:
-   -r, --roadmap <name>           Roadmap name (required)
-   -d, --description <text>       Update task description
-   -a, --action <text>            Update technical action
-   -e, --expected-result <text>   Update expected outcome
-   -p, --priority <n>             Update priority (0-9)
-       --severity <n>             Update severity (0-9)
-       --specialists <list>       Update comma-separated specialists
+   -r, --roadmap <name>                  Roadmap name (required)
+   -t, --title <text>                    Update task title
+   -f, --functional-requirements <text>  Update functional requirements
+   -h, --technical-requirements <text>   Update technical requirements
+   -a, --acceptance-criteria <text>    Update acceptance criteria
+   -p, --priority <n>                    Update priority (0-9)
+       --severity <n>                    Update severity (0-9)
+       --specialists <list>              Update comma-separated specialists
 
 Arguments:
-   <id>                           Task ID to edit
+   <id>                                  Task ID to edit
 
 Examples:
-   rmp task edit -r project1 42 -d "New description" -p 7
+   rmp task edit -r project1 42 -t "New title" -p 7
    rmp task edit -r project1 1 --specialists "go-developer"
 ```
 
@@ -354,6 +379,8 @@ Subcommands:
               (alias: ls)
 
    get        Get detailed information about a sprint
+
+   show       Show comprehensive sprint report
 
    tasks      List tasks assigned to a sprint
 
@@ -422,6 +449,26 @@ Output: JSON sprint object
 
 Example:
    rmp sprint get -r project1 1
+```
+
+### rmp sprint show --help
+
+```
+usage: rmp sprint show [-h | --help] -r <name> <id>
+
+Show comprehensive sprint status report including task statistics,
+progress percentages, severity distribution, and criticality distribution.
+
+Options:
+   -r, --roadmap <name>   Roadmap name (required)
+
+Arguments:
+   <id>                   Sprint ID
+
+Output: JSON report object
+
+Example:
+   rmp sprint show -r project1 1
 ```
 
 ### rmp sprint tasks --help
@@ -730,28 +777,29 @@ When a command is invoked incorrectly, an error message is shown followed by the
 
 ```
 $ rmp task create -r project1
-Error: Missing required options: --description, --action, --expected-result
+Error: Missing required options: --title, --functional-requirements, --technical-requirements, --acceptance-criteria
 
-usage: rmp task create [-h | --help] -r <name> -d <desc> -a <action> -e <result> [-p <n>] [--severity <n>] [--specialists <list>]
+usage: rmp task create [-h | --help] -r <name> -t <title> -f <fr> -h <tr> -a <ac> [-p <n>] [--severity <n>] [--specialists <list>]
 
 Create a new task in the specified roadmap.
 
 Required Options:
-   -r, --roadmap <name>           Roadmap name
-   -d, --description <desc>         Task description
-   -a, --action <action>            Technical action to perform
-   -e, --expected-result <result>   Expected outcome
+   -r, --roadmap <name>                  Roadmap name
+   -t, --title <title>                   Task title/summary
+   -f, --functional-requirements <fr>    Functional requirements (Why?)
+   -h, --technical-requirements <tr>   Technical requirements (How?)
+   -a, --acceptance-criteria <ac>        Acceptance criteria (How to verify?)
 
 Optional Options:
-   -p, --priority <n>               Priority 0-9 (default: 0)
-       --severity <n>               Severity 0-9 (default: 0)
-       --specialists <list>         Comma-separated specialist tags
+   -p, --priority <n>                    Priority 0-9 (default: 0)
+       --severity <n>                    Severity 0-9 (default: 0)
+       --specialists <list>              Comma-separated specialist tags
 
 Output: JSON object with task ID
 
 Examples:
-   rmp task create -r project1 -d "Fix login bug" -a "Debug auth" -e "Login works"
-   rmp task new -r project1 -d "Update docs" -a "Write README" -e "Docs complete" -p 5
+   rmp task create -r project1 -t "Fix login bug" -f "User can login" -h "Update auth" -a "Login works"
+   rmp task new -r project1 -t "Update docs" -f "Docs needed" -h "Write README" -a "Docs complete" -p 5
 ```
 
 ### Example: Unknown subcommand
@@ -773,6 +821,8 @@ Subcommands:
               (alias: new)
 
    get        Get detailed information about task(s)
+
+   next       Get next N tasks from open sprint
 
    set-status Change task status
               (alias: stat)

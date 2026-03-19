@@ -48,9 +48,10 @@ Creates a new task in the specified roadmap.
 | Short Flag | Long Flag | Type | Description |
 |------------|------------|------|-----------|
 | `-r` | `--roadmap` | string | Roadmap name |
-| `-d` | `--description` | string | Task description |
-| `-a` | `--action` | string | Technical action to perform |
-| `-e` | `--expected-result` | string | Expected outcome |
+| `-t` | `--title` | string | Task title/summary |
+| `-f` | `--functional-requirements` | string | Functional requirements (Why?) |
+| `-h` | `--technical-requirements` | string | Technical requirements (How?) |
+| `-a` | `--acceptance-criteria` | string | Acceptance criteria (How to verify?) |
 
 **Optional Flags:**
 | Short Flag | Long Flag | Type | Default | Description |
@@ -63,14 +64,65 @@ Creates a new task in the specified roadmap.
 
 **Examples:**
 ```bash
-rmp task create -r project1 -d "Fix login bug" -a "Debug auth" -e "Login works"
-rmp task new -r project1 -d "Update docs" -a "Write README" -e "Docs complete" -p 5
+rmp task create -r project1 -t "Fix login bug" -f "User can login" -h "Update auth" -a "Login works"
+rmp task new -r project1 -t "Update docs" -f "Docs needed" -h "Write README" -a "Docs complete" -p 5
 ```
 
 **Example output:**
 ```json
 {"id": 42}
 ```
+
+---
+
+### next
+
+Retrieves the next N open tasks from the currently open sprint. Tasks are ordered by severity (descending) and then by priority (descending), returning the most critical and highest priority tasks first.
+
+**Usage:** `rmp task next [num]`
+
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `num` | No | Number of tasks to return (default: 1, max: 100) |
+
+**Flags:**
+| Short Flag | Long Flag | Type | Description |
+|------------|------------|------|-----------|
+| `-r` | `--roadmap` | string | Roadmap name (required) |
+
+**Output:** JSON array of Task objects
+
+**Examples:**
+```bash
+rmp task next -r project1        # Returns 1 task
+rmp task next -r project1 5      # Returns up to 5 tasks
+```
+
+**Example output:**
+```json
+[
+  {
+    "id": 42,
+    "title": "Implement user authentication",
+    "functional_requirements": "Users must be able to authenticate securely",
+    "technical_requirements": "Create login endpoint with JWT tokens",
+    "acceptance_criteria": "Users can log in with valid credentials",
+    "priority": 9,
+    "severity": 9,
+    "status": "SPRINT",
+    "specialists": "backend,security",
+    "created_at": "2026-03-15T10:30:00.000Z",
+    "started_at": null,
+    "tested_at": null,
+    "closed_at": null
+  }
+]
+```
+
+**Error Cases:**
+- Returns error if no sprint is currently open
+- Returns empty array if sprint has no open tasks
 
 ---
 
@@ -203,16 +255,17 @@ Edits an existing task's properties. Only specified fields are updated.
 | Short Flag | Long Flag | Type | Description |
 |------------|------------|------|-----------|
 | `-r` | `--roadmap` | string | Roadmap name (required) |
-| `-d` | `--description` | string | New description |
-| `-a` | `--action` | string | New action |
-| `-e` | `--expected-result` | string | New expected result |
+| `-t` | `--title` | string | New title |
+| `-f` | `--functional-requirements` | string | New functional requirements |
+| `-h` | `--technical-requirements` | string | New technical requirements |
+| `-a` | `--acceptance-criteria` | string | New acceptance criteria |
 | `-p` | `--priority` | int | New priority (0-9) |
 | N/A | `--severity` | int | New severity (0-9) |
 | `-sp` | `--specialists` | string | New specialists |
 
 **Examples:**
 ```bash
-rmp task edit -r project1 42 -d "New description" -p 7
+rmp task edit -r project1 42 -t "New title" -p 7
 rmp task edit -r project1 1 --specialists "go-developer"
 ```
 
@@ -255,6 +308,9 @@ rmp task rm -r project1 1,2,3
 ## Notes
 
 - Tasks are created with `BACKLOG` status by default
-- Status transitions are validated (cannot go from `COMPLETED` to `BACKLOG` directly)
-- When a task is marked as `COMPLETED`, the `completed_at` field is automatically populated
+- Status transitions are validated according to the state machine (see SPEC/STATE_MACHINE.md)
+- When transitioning to `DOING`, the `started_at` field is automatically set
+- When transitioning to `TESTING`, the `tested_at` field is automatically set
+- When transitioning to `COMPLETED`, the `closed_at` field is automatically set
+- When reopening to `BACKLOG`, all tracking dates are cleared
 - The `-r`/`--roadmap` flag can be omitted if a default roadmap has been set with `rmp roadmap use`

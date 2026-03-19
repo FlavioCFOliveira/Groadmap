@@ -86,6 +86,80 @@ rmp sprint get -r project1 1
 
 ---
 
+### show
+
+Displays a comprehensive status report of a sprint, including task statistics, progress percentages, severity distribution, and criticality distribution. Ideal for sprint stand-up meetings and progress tracking.
+
+**Usage:** `rmp sprint show [OPTIONS] <id>`
+
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `id` | Yes | Sprint ID |
+
+**Flags:**
+| Short Flag | Long Flag | Type | Description |
+|------------|------------|------|-----------|
+| `-r` | `--roadmap` | string | Roadmap name (required) |
+
+**Output:** JSON object with comprehensive sprint report
+
+**Example:**
+```bash
+rmp sprint show -r project1 1
+```
+
+**Example output:**
+```json
+{
+  "sprint_id": 1,
+  "sprint_description": "Sprint 1 - Initial Setup",
+  "status": "OPEN",
+  "summary": {
+    "total_tasks": 20,
+    "pending": 8,
+    "in_progress": 6,
+    "completed": 6
+  },
+  "progress": {
+    "pending_percentage": 40.0,
+    "in_progress_percentage": 30.0,
+    "completed_percentage": 30.0
+  },
+  "severity_distribution": {
+    "0-2": {"count": 2, "percentage": 10.0},
+    "3-5": {"count": 5, "percentage": 25.0},
+    "6-7": {"count": 8, "percentage": 40.0},
+    "8-9": {"count": 5, "percentage": 25.0}
+  },
+  "criticality_distribution": {
+    "low": {"count": 4, "percentage": 20.0},
+    "medium": {"count": 8, "percentage": 40.0},
+    "high": {"count": 6, "percentage": 30.0},
+    "critical": {"count": 2, "percentage": 10.0}
+  }
+}
+```
+
+**Output Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `sprint_id` | integer | Sprint identifier |
+| `sprint_description` | string | Sprint description/name |
+| `status` | string | Sprint status (OPEN, CLOSED) |
+| `summary.total_tasks` | integer | Total number of tasks in sprint |
+| `summary.pending` | integer | Tasks with status BACKLOG or SPRINT |
+| `summary.in_progress` | integer | Tasks with status DOING or TESTING |
+| `summary.completed` | integer | Tasks with status COMPLETED |
+| `progress.pending_percentage` | float | Percentage of pending tasks |
+| `progress.in_progress_percentage` | float | Percentage of tasks in progress |
+| `progress.completed_percentage` | float | Percentage of completed tasks |
+| `severity_distribution` | object | Task distribution by severity ranges |
+| `criticality_distribution` | object | Task distribution by criticality levels |
+
+---
+
 ### tasks
 
 Lists tasks assigned to a specific sprint.

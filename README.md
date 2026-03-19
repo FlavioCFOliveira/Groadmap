@@ -6,9 +6,11 @@ Local Roadmap Manager CLI for agentic workflows. Groadmap is a CLI tool in Go fo
 
 - **Roadmap Management**: Create, list, select, and remove roadmaps
 - **Task Management**: Create, edit, list tasks with status, priority, and severity tracking
+- **Task Prioritization**: Get next tasks from open sprint ordered by severity and priority
 - **Sprint Management**: Organize tasks into sprints with complete lifecycle (PENDING, OPEN, CLOSED)
+- **Sprint Reporting**: Comprehensive sprint reports with progress and distribution metrics
 - **Audit Trail**: Automatic logging of all operations for traceability
-- **State Machine**: Validated task and sprint status transitions
+- **State Machine**: Validated task and sprint status transitions with automatic date tracking
 - **Bulk Operations**: Support for multiple task IDs in single commands
 
 ## Available Commands
@@ -16,8 +18,8 @@ Local Roadmap Manager CLI for agentic workflows. Groadmap is a CLI tool in Go fo
 | Command | Description | Documentation |
 |---------|-------------|---------------|
 | `roadmap` | Roadmap management (create, list, select, remove) | [DOCS/commands/roadmap.md](DOCS/commands/roadmap.md) |
-| `task` | Task management (create, edit, list, status, priority, severity) | [DOCS/commands/task.md](DOCS/commands/task.md) |
-| `sprint` | Sprint management with lifecycle control | [DOCS/commands/sprint.md](DOCS/commands/sprint.md) |
+| `task` | Task management (create, edit, list, status, priority, severity, next) | [DOCS/commands/task.md](DOCS/commands/task.md) |
+| `sprint` | Sprint management with lifecycle control and reporting | [DOCS/commands/sprint.md](DOCS/commands/sprint.md) |
 | `audit` | Audit log and entity history | [DOCS/commands/audit.md](DOCS/commands/audit.md) |
 
 ## Installation
@@ -46,10 +48,16 @@ rmp roadmap create myproject
 rmp roadmap use myproject
 
 # Create a task
-rmp task create -d "Implement feature X" -a "Develop code" -e "Feature working"
+rmp task create -t "Implement feature X" \
+  -f "User can perform X action" \
+  -h "Develop code using Go" \
+  -a "Feature working in production"
 
 # List tasks
 rmp task list
+
+# Get next task from open sprint (ordered by severity/priority)
+rmp task next
 
 # Create a sprint
 rmp sprint create -d "Sprint 1 - Setup"
@@ -59,6 +67,9 @@ rmp sprint add-tasks 1 1,2,3
 
 # Start sprint
 rmp sprint start 1
+
+# Show sprint report
+rmp sprint show 1
 ```
 
 ## Project Structure

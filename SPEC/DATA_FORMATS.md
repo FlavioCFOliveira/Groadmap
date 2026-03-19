@@ -6,7 +6,7 @@
 
 **JSON output is reserved for query operations and record creation.**
 
-- **Query operations (JSON)**: `list`, `ls`, `get`, `tasks`, `stats`, `history`, `hist`.
+- **Query operations (JSON)**: `list`, `ls`, `get`, `next`, `tasks`, `stats`, `show`, `history`, `hist`.
 - **Creation operations (JSON)**: `create`, `new`. These commands return a JSON object containing the ID of the newly created record (e.g., `{"id": 42}`).
 - **Other database modifications (No output)**: Commands that update, delete, or change the state of entities (status, priority, etc.) respond with **no content** on success, signaling completion via exit code `0`.
 - **Help commands (Plain text)**: When no command is provided, or when using `-h` and `--help` flags, the application displays information in **plain text**, following traditional CLI application formats (not JSON).
@@ -141,15 +141,18 @@ PENDING → OPEN → CLOSED
 ```json
 {
   "id": 1,
-  "priority": 9,
-  "severity": 0,
+  "title": "Implement JWT authentication system",
   "status": "BACKLOG",
-  "description": "Implement JWT authentication system",
-  "specialists": "go-elite-developer,security-expert",
-  "action": "Create authentication module with JWT token support",
-  "expected_result": "Functional login with 24h valid tokens",
+  "functional_requirements": "Users must be able to authenticate securely",
+  "technical_requirements": "Create authentication module with JWT token support",
+  "acceptance_criteria": "Functional login with 24h valid tokens; proper error handling",
   "created_at": "2026-03-12T10:00:00.000Z",
-  "completed_at": null
+  "specialists": "go-elite-developer,security-expert",
+  "started_at": null,
+  "tested_at": null,
+  "closed_at": null,
+  "priority": 9,
+  "severity": 0
 }
 ```
 
