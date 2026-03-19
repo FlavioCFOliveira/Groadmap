@@ -39,9 +39,10 @@ func TestConcurrentTaskCreation(t *testing.T) {
 					Priority:       goroutineID,
 					Severity:       j,
 					Status:         models.StatusBacklog,
-					Description:    "Concurrent task",
-					Action:         "Action",
-					ExpectedResult: "Result",
+					Title:                  "Concurrent task",
+					FunctionalRequirements: "Action",
+					TechnicalRequirements:  "Result",
+				AcceptanceCriteria:     "Acceptance",
 					CreatedAt:      time.Now().Format(time.RFC3339),
 				}
 
@@ -83,9 +84,10 @@ func TestConcurrentTaskReads(t *testing.T) {
 			Priority:       1,
 			Severity:       1,
 			Status:         models.StatusBacklog,
-			Description:    "Initial task",
-			Action:         "Action",
-			ExpectedResult: "Result",
+			Title:                  "Initial task",
+			FunctionalRequirements: "Action",
+			TechnicalRequirements:  "Result",
+				AcceptanceCriteria:     "Acceptance",
 			CreatedAt:      time.Now().Format(time.RFC3339),
 		}
 		if _, err := db.CreateTask(context.Background(), task); err != nil {
@@ -126,9 +128,10 @@ func TestConcurrentTaskReads(t *testing.T) {
 					Priority:       writerID,
 					Severity:       j,
 					Status:         models.StatusBacklog,
-					Description:    "Writer task",
-					Action:         "Action",
-					ExpectedResult: "Result",
+					Title:                  "Writer task",
+					FunctionalRequirements: "Action",
+					TechnicalRequirements:  "Result",
+				AcceptanceCriteria:     "Acceptance",
 					CreatedAt:      time.Now().Format(time.RFC3339),
 				}
 				db.CreateTask(context.Background(), task)
@@ -155,9 +158,10 @@ func TestConcurrentTaskUpdates(t *testing.T) {
 			Priority:       i,
 			Severity:       i,
 			Status:         models.StatusBacklog,
-			Description:    "Task for update",
-			Action:         "Action",
-			ExpectedResult: "Result",
+			Title:                  "Task for update",
+			FunctionalRequirements: "Action",
+			TechnicalRequirements:  "Result",
+				AcceptanceCriteria:     "Acceptance",
 			CreatedAt:      time.Now().Format(time.RFC3339),
 		}
 		id, err := db.CreateTask(context.Background(), task)
@@ -260,9 +264,10 @@ func TestConcurrentSprintTaskOperations(t *testing.T) {
 			Priority:       1,
 			Severity:       1,
 			Status:         models.StatusBacklog,
-			Description:    "Task",
-			Action:         "Action",
-			ExpectedResult: "Result",
+			Title:                  "Task",
+			FunctionalRequirements: "Action",
+			TechnicalRequirements:  "Result",
+				AcceptanceCriteria:     "Acceptance",
 			CreatedAt:      time.Now().Format(time.RFC3339),
 		}
 		id, err := db.CreateTask(context.Background(), task)
@@ -421,9 +426,10 @@ func TestHighConcurrencyStress(t *testing.T) {
 						Priority:       workerID,
 						Severity:       j,
 						Status:         models.StatusBacklog,
-						Description:    "Stress test task",
-						Action:         "Action",
-						ExpectedResult: "Result",
+						Title:                  "Stress test task",
+						FunctionalRequirements: "Action",
+						TechnicalRequirements:  "Result",
+				AcceptanceCriteria:     "Acceptance",
 						CreatedAt:      time.Now().Format(time.RFC3339),
 					}
 					_, err := db.CreateTask(context.Background(), task)

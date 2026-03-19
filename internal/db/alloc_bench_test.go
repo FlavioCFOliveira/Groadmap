@@ -23,13 +23,14 @@ func BenchmarkScanTasksAllocations(b *testing.B) {
 	// Create 100 tasks (max limit for ListTasks)
 	for i := 0; i < 100; i++ {
 		task := &models.Task{
-			Priority:       5,
-			Severity:       3,
-			Status:         models.StatusBacklog,
-			Description:    "Test task description",
-			Action:         "Test action",
-			ExpectedResult: "Test expected result",
-			CreatedAt:      "2026-03-18T10:00:00.000Z",
+			Priority:               5,
+			Severity:               3,
+			Status:                 models.StatusBacklog,
+			Title:                  "Test task title",
+			FunctionalRequirements: "Test functional requirements",
+			TechnicalRequirements:  "Test technical requirements",
+			AcceptanceCriteria:     "Test acceptance criteria",
+			CreatedAt:              "2026-03-18T10:00:00.000Z",
 		}
 		_, err := db.CreateTask(ctx, task)
 		if err != nil {
@@ -67,13 +68,14 @@ func BenchmarkScanTasksMemoryProfile(b *testing.B) {
 			ctx := testContext()
 			for i := 0; i < numTasks; i++ {
 				task := &models.Task{
-					Priority:       5,
-					Severity:       3,
-					Status:         models.StatusBacklog,
-					Description:    "Test task description",
-					Action:         "Test action",
-					ExpectedResult: "Test expected result",
-					CreatedAt:      "2026-03-18T10:00:00.000Z",
+					Priority:               5,
+					Severity:               3,
+					Status:                 models.StatusBacklog,
+					Title:                  "Test task title",
+					FunctionalRequirements: "Test functional requirements",
+					TechnicalRequirements:  "Test technical requirements",
+					AcceptanceCriteria:     "Test acceptance criteria",
+					CreatedAt:              "2026-03-18T10:00:00.000Z",
 				}
 				_, err := db.CreateTask(ctx, task)
 				if err != nil {

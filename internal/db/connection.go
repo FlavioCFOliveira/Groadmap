@@ -155,6 +155,14 @@ func Open(roadmapName string) (*DB, error) {
 			db.Close()
 			return nil, fmt.Errorf("verifying database permissions: %w", err)
 		}
+	} else {
+		// Run migrations for existing databases
+		if err := retryWithBackoff("running migrations", func() error {
+			return db.RunMigrations()
+		}); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("running migrations: %w", err)
+		}
 	}
 
 	return db, nil

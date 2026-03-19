@@ -63,9 +63,10 @@ func TestCreateTask(t *testing.T) {
 		Priority:       5,
 		Severity:       3,
 		Status:         models.StatusBacklog,
-		Description:    "Test task",
-		Action:         "Test action",
-		ExpectedResult: "Test result",
+		Title:                  "Test task",
+		FunctionalRequirements: "Test functional requirements",
+		TechnicalRequirements:  "Test technical requirements",
+				AcceptanceCriteria:     "Test acceptance criteria",
 		CreatedAt:      time.Now().Format(time.RFC3339),
 	}
 
@@ -84,8 +85,8 @@ func TestCreateTask(t *testing.T) {
 		t.Fatalf("failed to get created task: %v", err)
 	}
 
-	if created.Description != task.Description {
-		t.Errorf("expected description %q, got %q", task.Description, created.Description)
+	if created.Title != task.Title {
+		t.Errorf("expected title %q, got %q", task.Title, created.Title)
 	}
 
 	if created.Status != task.Status {
@@ -102,9 +103,10 @@ func TestGetTask(t *testing.T) {
 		Priority:       1,
 		Severity:       1,
 		Status:         models.StatusBacklog,
-		Description:    "Test task",
-		Action:         "Action",
-		ExpectedResult: "Result",
+		Title:                  "Test task",
+		FunctionalRequirements: "Action",
+		TechnicalRequirements:  "Result",
+		AcceptanceCriteria:     "Acceptance",
 		CreatedAt:      time.Now().Format(time.RFC3339),
 	}
 
@@ -138,9 +140,10 @@ func TestGetTasks(t *testing.T) {
 			Priority:       i,
 			Severity:       i,
 			Status:         models.StatusBacklog,
-			Description:    "Task",
-			Action:         "Action",
-			ExpectedResult: "Result",
+			Title:                  "Task",
+			FunctionalRequirements: "Action",
+			TechnicalRequirements:  "Result",
+		AcceptanceCriteria:     "Acceptance",
 			CreatedAt:      time.Now().Format(time.RFC3339),
 		}
 		id, _ := db.CreateTask(testContext(), task)
@@ -179,9 +182,10 @@ func TestListTasks(t *testing.T) {
 			Priority:       i,
 			Severity:       i,
 			Status:         status,
-			Description:    "Task",
-			Action:         "Action",
-			ExpectedResult: "Result",
+			Title:                  "Task",
+			FunctionalRequirements: "Action",
+			TechnicalRequirements:  "Result",
+		AcceptanceCriteria:     "Acceptance",
 			CreatedAt:      time.Now().Format(time.RFC3339),
 		}
 		db.CreateTask(testContext(), task)
@@ -239,9 +243,10 @@ func TestUpdateTask(t *testing.T) {
 		Priority:       1,
 		Severity:       1,
 		Status:         models.StatusBacklog,
-		Description:    "Original",
-		Action:         "Action",
-		ExpectedResult: "Result",
+		Title:                  "Original",
+		FunctionalRequirements: "Action",
+		TechnicalRequirements:  "Result",
+		AcceptanceCriteria:     "Acceptance",
 		CreatedAt:      time.Now().Format(time.RFC3339),
 	}
 
@@ -249,8 +254,8 @@ func TestUpdateTask(t *testing.T) {
 
 	// Update the task
 	updates := map[string]interface{}{
-		"description": "Updated",
-		"priority":    5,
+		"title":    "Updated",
+		"priority": 5,
 	}
 
 	err := db.UpdateTask(testContext(), id, updates)
@@ -260,8 +265,8 @@ func TestUpdateTask(t *testing.T) {
 
 	// Verify update
 	updated, _ := db.GetTask(testContext(), id)
-	if updated.Description != "Updated" {
-		t.Errorf("expected description 'Updated', got %q", updated.Description)
+	if updated.Title != "Updated" {
+		t.Errorf("expected title 'Updated', got %q", updated.Title)
 	}
 
 	if updated.Priority != 5 {
@@ -290,9 +295,10 @@ func TestUpdateTaskStruct(t *testing.T) {
 		Priority:       1,
 		Severity:       1,
 		Status:         models.StatusBacklog,
-		Description:    "Original",
-		Action:         "Action",
-		ExpectedResult: "Result",
+		Title:                  "Original",
+		FunctionalRequirements: "Action",
+		TechnicalRequirements:  "Result",
+		AcceptanceCriteria:     "Acceptance",
 		CreatedAt:      time.Now().Format(time.RFC3339),
 	}
 
@@ -301,7 +307,7 @@ func TestUpdateTaskStruct(t *testing.T) {
 	// Test update single field
 	desc := "Updated Description"
 	update := &models.TaskUpdate{
-		Description: &desc,
+		Title: &desc,
 	}
 
 	err := db.UpdateTaskStruct(testContext(), id, update)
@@ -311,8 +317,8 @@ func TestUpdateTaskStruct(t *testing.T) {
 
 	// Verify update
 	updated, _ := db.GetTask(testContext(), id)
-	if updated.Description != "Updated Description" {
-		t.Errorf("expected description 'Updated Description', got %q", updated.Description)
+	if updated.Title != "Updated Description" {
+		t.Errorf("expected title 'Updated Description', got %q", updated.Title)
 	}
 	// Other fields should remain unchanged
 	if updated.Priority != 1 {
@@ -324,9 +330,9 @@ func TestUpdateTaskStruct(t *testing.T) {
 	newSeverity := 3
 	newAction := "New Action"
 	update2 := &models.TaskUpdate{
-		Priority: &newPriority,
-		Severity: &newSeverity,
-		Action:   &newAction,
+		Priority:               &newPriority,
+		Severity:               &newSeverity,
+		FunctionalRequirements: &newAction,
 	}
 
 	err = db.UpdateTaskStruct(testContext(), id, update2)
@@ -342,12 +348,12 @@ func TestUpdateTaskStruct(t *testing.T) {
 	if updated.Severity != 3 {
 		t.Errorf("expected severity 3, got %d", updated.Severity)
 	}
-	if updated.Action != "New Action" {
-		t.Errorf("expected action 'New Action', got %q", updated.Action)
+	if updated.FunctionalRequirements != "New Action" {
+		t.Errorf("expected functional requirements 'New Action', got %q", updated.FunctionalRequirements)
 	}
 	// Description should remain from previous update
-	if updated.Description != "Updated Description" {
-		t.Errorf("expected description 'Updated Description', got %q", updated.Description)
+	if updated.Title != "Updated Description" {
+		t.Errorf("expected title 'Updated Description', got %q", updated.Title)
 	}
 
 	// Test update non-existent task
@@ -379,10 +385,10 @@ func TestUpdateTaskStruct(t *testing.T) {
 		t.Error("expected error for invalid priority")
 	}
 
-	// Test validation - description too long
-	longDesc := strings.Repeat("a", models.MaxTaskDescription+1)
+	// Test validation - title too long
+	longDesc := strings.Repeat("a", models.MaxTaskTitle+1)
 	invalidUpdate2 := &models.TaskUpdate{
-		Description: &longDesc,
+		Title: &longDesc,
 	}
 	err = db.UpdateTaskStruct(testContext(), id, invalidUpdate2)
 	if err == nil {
@@ -399,9 +405,10 @@ func TestDeleteTask(t *testing.T) {
 		Priority:       1,
 		Severity:       1,
 		Status:         models.StatusBacklog,
-		Description:    "To delete",
-		Action:         "Action",
-		ExpectedResult: "Result",
+		Title:                  "To delete",
+		FunctionalRequirements: "Action",
+		TechnicalRequirements:  "Result",
+		AcceptanceCriteria:     "Acceptance",
 		CreatedAt:      time.Now().Format(time.RFC3339),
 	}
 
@@ -437,9 +444,10 @@ func TestUpdateTaskStatus(t *testing.T) {
 			Priority:       1,
 			Severity:       1,
 			Status:         models.StatusBacklog,
-			Description:    "Task",
-			Action:         "Action",
-			ExpectedResult: "Result",
+			Title:                  "Task",
+			FunctionalRequirements: "Action",
+			TechnicalRequirements:  "Result",
+		AcceptanceCriteria:     "Acceptance",
 			CreatedAt:      time.Now().Format(time.RFC3339),
 		}
 		id, _ := db.CreateTask(testContext(), task)
@@ -478,9 +486,10 @@ func TestUpdateTaskPriority(t *testing.T) {
 			Priority:       1,
 			Severity:       1,
 			Status:         models.StatusBacklog,
-			Description:    "Task",
-			Action:         "Action",
-			ExpectedResult: "Result",
+			Title:                  "Task",
+			FunctionalRequirements: "Action",
+			TechnicalRequirements:  "Result",
+		AcceptanceCriteria:     "Acceptance",
 			CreatedAt:      time.Now().Format(time.RFC3339),
 		}
 		id, _ := db.CreateTask(testContext(), task)
@@ -513,9 +522,10 @@ func TestUpdateTaskSeverity(t *testing.T) {
 			Priority:       1,
 			Severity:       1,
 			Status:         models.StatusBacklog,
-			Description:    "Task",
-			Action:         "Action",
-			ExpectedResult: "Result",
+			Title:                  "Task",
+			FunctionalRequirements: "Action",
+			TechnicalRequirements:  "Result",
+		AcceptanceCriteria:     "Acceptance",
 			CreatedAt:      time.Now().Format(time.RFC3339),
 		}
 		id, _ := db.CreateTask(testContext(), task)
@@ -565,7 +575,7 @@ func TestCreateSprint(t *testing.T) {
 	}
 
 	if created.Description != sprint.Description {
-		t.Errorf("expected description %q, got %q", sprint.Description, created.Description)
+		t.Errorf("expected title %q, got %q", sprint.Description, created.Description)
 	}
 }
 
@@ -576,7 +586,7 @@ func TestGetSprint(t *testing.T) {
 	// Create sprint
 	sprint := &models.Sprint{
 		Status:      models.SprintPending,
-		Description: "Test sprint",
+		Description:                  "Test sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
 
@@ -608,7 +618,7 @@ func TestListSprints(t *testing.T) {
 	for _, status := range statuses {
 		sprint := &models.Sprint{
 			Status:      status,
-			Description: "Sprint",
+			Description:                  "Sprint",
 			CreatedAt:   time.Now().Format(time.RFC3339),
 		}
 		db.CreateSprint(testContext(), sprint)
@@ -643,7 +653,7 @@ func TestUpdateSprint(t *testing.T) {
 	// Create sprint
 	sprint := &models.Sprint{
 		Status:      models.SprintPending,
-		Description: "Original",
+		Description:                  "Original",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
 
@@ -678,7 +688,7 @@ func TestUpdateSprintStatus(t *testing.T) {
 	// Create sprint
 	sprint := &models.Sprint{
 		Status:      models.SprintPending,
-		Description: "Test",
+		Description:                  "Test",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
 
@@ -747,7 +757,7 @@ func TestAddTasksToSprint(t *testing.T) {
 	// Create sprint
 	sprint := &models.Sprint{
 		Status:      models.SprintPending,
-		Description: "Test sprint",
+		Description:                  "Test sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
 	sprintID, _ := db.CreateSprint(testContext(), sprint)
@@ -759,9 +769,10 @@ func TestAddTasksToSprint(t *testing.T) {
 			Priority:       1,
 			Severity:       1,
 			Status:         models.StatusBacklog,
-			Description:    "Task",
-			Action:         "Action",
-			ExpectedResult: "Result",
+			Title:                  "Task",
+			FunctionalRequirements: "Action",
+			TechnicalRequirements:  "Result",
+		AcceptanceCriteria:     "Acceptance",
 			CreatedAt:      time.Now().Format(time.RFC3339),
 		}
 		id, _ := db.CreateTask(testContext(), task)
@@ -800,7 +811,7 @@ func TestRemoveTasksFromSprint(t *testing.T) {
 	// Create sprint
 	sprint := &models.Sprint{
 		Status:      models.SprintPending,
-		Description: "Test sprint",
+		Description:                  "Test sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
 	sprintID, _ := db.CreateSprint(testContext(), sprint)
@@ -812,9 +823,10 @@ func TestRemoveTasksFromSprint(t *testing.T) {
 			Priority:       1,
 			Severity:       1,
 			Status:         models.StatusBacklog,
-			Description:    "Task",
-			Action:         "Action",
-			ExpectedResult: "Result",
+			Title:                  "Task",
+			FunctionalRequirements: "Action",
+			TechnicalRequirements:  "Result",
+		AcceptanceCriteria:     "Acceptance",
 			CreatedAt:      time.Now().Format(time.RFC3339),
 		}
 		id, _ := db.CreateTask(testContext(), task)
@@ -906,9 +918,9 @@ func TestWithTransaction_Commit(t *testing.T) {
 	// Create task within transaction
 	err := db.WithTransaction(func(tx *sql.Tx) error {
 		_, err := tx.Exec(
-			`INSERT INTO tasks (priority, severity, status, description, action, expected_result, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			1, 1, string(models.StatusBacklog), "Tx Task", "Action", "Result", time.Now().Format(time.RFC3339),
+			`INSERT INTO tasks (title, status, functional_requirements, technical_requirements, acceptance_criteria, created_at, priority, severity)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			"Tx Task", string(models.StatusBacklog), "Action", "Result", "Acceptance", time.Now().Format(time.RFC3339), 1, 1,
 		)
 		return err
 	})
@@ -931,9 +943,9 @@ func TestWithTransaction_Rollback(t *testing.T) {
 	// Create task within transaction that will fail
 	err := db.WithTransaction(func(tx *sql.Tx) error {
 		_, err := tx.Exec(
-			`INSERT INTO tasks (priority, severity, status, description, action, expected_result, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			1, 1, string(models.StatusBacklog), "Tx Task", "Action", "Result", time.Now().Format(time.RFC3339),
+			`INSERT INTO tasks (title, status, functional_requirements, technical_requirements, acceptance_criteria, created_at, priority, severity)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			"Tx Task", string(models.StatusBacklog), "Action", "Result", "Acceptance", time.Now().Format(time.RFC3339), 1, 1,
 		)
 		if err != nil {
 			return err
@@ -962,7 +974,7 @@ func TestGetSprintTasks(t *testing.T) {
 	// Create sprint
 	sprint := &models.Sprint{
 		Status:      models.SprintPending,
-		Description: "Test sprint",
+		Description:                  "Test sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
 	sprintID, _ := db.CreateSprint(testContext(), sprint)
@@ -974,9 +986,10 @@ func TestGetSprintTasks(t *testing.T) {
 			Priority:       1,
 			Severity:       1,
 			Status:         models.StatusBacklog,
-			Description:    "Task",
-			Action:         "Action",
-			ExpectedResult: "Result",
+			Title:                  "Task",
+			FunctionalRequirements: "Action",
+			TechnicalRequirements:  "Result",
+		AcceptanceCriteria:     "Acceptance",
 			CreatedAt:      time.Now().Format(time.RFC3339),
 		}
 		id, _ := db.CreateTask(testContext(), task)
@@ -1055,7 +1068,7 @@ func TestGetSprintTasksFull(t *testing.T) {
 	// Create sprint
 	sprint := &models.Sprint{
 		Status:      models.SprintPending,
-		Description: "Test sprint",
+		Description:                  "Test sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
 	sprintID, _ := db.CreateSprint(testContext(), sprint)
@@ -1066,9 +1079,10 @@ func TestGetSprintTasksFull(t *testing.T) {
 			Priority:       i,
 			Severity:       1,
 			Status:         models.StatusBacklog,
-			Description:    "Task",
-			Action:         "Action",
-			ExpectedResult: "Result",
+			Title:                  "Task",
+			FunctionalRequirements: "Action",
+			TechnicalRequirements:  "Result",
+		AcceptanceCriteria:     "Acceptance",
 			CreatedAt:      time.Now().Format(time.RFC3339),
 		}
 		id, _ := db.CreateTask(testContext(), task)
@@ -1264,9 +1278,10 @@ func TestContextTimeout(t *testing.T) {
 		Priority:       1,
 		Severity:       1,
 		Status:         models.StatusBacklog,
-		Description:    "Test task",
-		Action:         "Action",
-		ExpectedResult: "Result",
+		Title:                  "Test task",
+		FunctionalRequirements: "Action",
+		TechnicalRequirements:  "Result",
+		AcceptanceCriteria:     "Acceptance",
 		CreatedAt:      time.Now().Format(time.RFC3339),
 	}
 
@@ -1296,9 +1311,10 @@ func TestContextCancellation(t *testing.T) {
 		Priority:       1,
 		Severity:       1,
 		Status:         models.StatusBacklog,
-		Description:    "Test task",
-		Action:         "Action",
-		ExpectedResult: "Result",
+		Title:                  "Test task",
+		FunctionalRequirements: "Action",
+		TechnicalRequirements:  "Result",
+		AcceptanceCriteria:     "Acceptance",
 		CreatedAt:      time.Now().Format(time.RFC3339),
 	}
 

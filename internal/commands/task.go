@@ -127,9 +127,10 @@ func taskList(args []string) error {
 //   - args: Command-line arguments including flags and roadmap name
 //
 // Required flags:
-//   - -d, --description: Task description (required, max 1000 chars)
-//   - -a, --action: Action to be taken (required, max 2000 chars)
-//   - -e, --expected-result: Expected outcome (required, max 2000 chars)
+//   - -t, --title: Task title/summary (required, max 500 chars)
+//   - -f, --functional-requirements: Functional requirements - "Why?" (required, max 1000 chars)
+//   - -h, --technical-requirements: Technical requirements - "How?" (required, max 1000 chars)
+//   - -a, --acceptance-criteria: Acceptance criteria - "How to verify?" (required, max 1000 chars)
 //
 // Optional flags:
 //   - -p, --priority: Task priority 0-9 (default: 0)
@@ -152,7 +153,7 @@ func taskList(args []string) error {
 //
 // Example:
 //
-//	rmp task create -r myproject -d "Fix bug" -a "Update code" -e "Bug fixed" -p 5 --severity 3
+//	rmp task create -r myproject -t "Fix bug" -f "User can login" -h "Update auth" -a "Login works" -p 5 --severity 3
 func taskCreate(args []string) error {
 	roadmapName, remaining, err := requireRoadmap(args)
 	if err != nil {
@@ -160,26 +161,31 @@ func taskCreate(args []string) error {
 	}
 
 	// Parse flags
-	var description, action, expectedResult string
+	var title, functionalReqs, technicalReqs, acceptanceCriteria string
 	var specialists string
 	priority := 0
 	severity := 0
 
 	for i := 0; i < len(remaining); i++ {
 		switch remaining[i] {
-		case "-d", "--description":
+		case "-t", "--title":
 			if i+1 < len(remaining) {
-				description = remaining[i+1]
+				title = remaining[i+1]
 				i++
 			}
-		case "-a", "--action":
+		case "-f", "--functional-requirements":
 			if i+1 < len(remaining) {
-				action = remaining[i+1]
+				functionalReqs = remaining[i+1]
 				i++
 			}
-		case "-e", "--expected-result":
+		case "-h", "--technical-requirements":
 			if i+1 < len(remaining) {
-				expectedResult = remaining[i+1]
+				technicalReqs = remaining[i+1]
+				i++
+			}
+		case "-a", "--acceptance-criteria":
+			if i+1 < len(remaining) {
+				acceptanceCriteria = remaining[i+1]
 				i++
 			}
 		case "-p", "--priority":
@@ -209,14 +215,17 @@ func taskCreate(args []string) error {
 	}
 
 	// Validate required fields
-	if description == "" {
-		return fmt.Errorf("%w: missing required parameter: --description", utils.ErrRequired)
+	if title == "" {
+		return fmt.Errorf("%w: missing required parameter: --title", utils.ErrRequired)
 	}
-	if action == "" {
-		return fmt.Errorf("%w: missing required parameter: --action", utils.ErrRequired)
+	if functionalReqs == "" {
+		return fmt.Errorf("%w: missing required parameter: --functional-requirements", utils.ErrRequired)
 	}
-	if expectedResult == "" {
-		return fmt.Errorf("%w: missing required parameter: --expected-result", utils.ErrRequired)
+	if technicalReqs == "" {
+		return fmt.Errorf("%w: missing required parameter: --technical-requirements", utils.ErrRequired)
+	}
+	if acceptanceCriteria == "" {
+		return fmt.Errorf("%w: missing required parameter: --acceptance-criteria", utils.ErrRequired)
 	}
 
 	database, err := db.OpenExisting(roadmapName)
@@ -229,13 +238,14 @@ func taskCreate(args []string) error {
 	now := utils.NowISO8601()
 
 	task := &models.Task{
-		Priority:       priority,
-		Severity:       severity,
-		Status:         models.StatusBacklog,
-		Description:    description,
-		Action:         action,
-		ExpectedResult: expectedResult,
-		CreatedAt:      now,
+		Title:                  title,
+		Status:                 models.StatusBacklog,
+		FunctionalRequirements: functionalReqs,
+		TechnicalRequirements:  technicalReqs,
+		AcceptanceCriteria:     acceptanceCriteria,
+		CreatedAt:              now,
+		Priority:               priority,
+		Severity:               severity,
 	}
 
 	if specialists != "" {
@@ -251,10 +261,10 @@ func taskCreate(args []string) error {
 	err = database.WithTransaction(func(tx *sql.Tx) error {
 		// Insert task
 		result, err := tx.Exec(
-			`INSERT INTO tasks (priority, severity, description, specialists, action, expected_result, created_at, status)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			task.Priority, task.Severity, task.Description, task.Specialists,
-			task.Action, task.ExpectedResult, task.CreatedAt, task.Status,
+			`INSERT INTO tasks (title, status, functional_requirements, technical_requirements, acceptance_criteria, created_at, specialists, priority, severity)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			task.Title, task.Status, task.FunctionalRequirements, task.TechnicalRequirements,
+			task.AcceptanceCriteria, task.CreatedAt, task.Specialists, task.Priority, task.Severity,
 		)
 		if err != nil {
 			return err
@@ -329,9 +339,10 @@ func taskGet(args []string) error {
 //   - task ID: The ID of the task to edit (first positional argument)
 //
 // Optional flags (at least one required):
-//   - -d, --description: New task description (max 1000 chars)
-//   - -a, --action: New action (max 2000 chars)
-//   - -e, --expected-result: New expected result (max 2000 chars)
+//   - -t, --title: New task title (max 500 chars)
+//   - -f, --functional-requirements: New functional requirements (max 1000 chars)
+//   - -h, --technical-requirements: New technical requirements (max 1000 chars)
+//   - -a, --acceptance-criteria: New acceptance criteria (max 1000 chars)
 //   - -s, --specialists: New specialists list (max 500 chars)
 //   - -p, --priority: New priority 0-9
 //   - --severity: New severity 0-9
@@ -352,7 +363,7 @@ func taskGet(args []string) error {
 //
 // Example:
 //
-//	rmp task edit -r myproject 42 -d "Updated description" -p 8
+//	rmp task edit -r myproject 42 -t "Updated title" -p 8
 func taskEdit(args []string) error {
 	roadmapName, remaining, err := requireRoadmap(args)
 	if err != nil {
@@ -373,19 +384,24 @@ func taskEdit(args []string) error {
 
 	for i := 1; i < len(remaining); i++ {
 		switch remaining[i] {
-		case "-d", "--description":
+		case "-t", "--title":
 			if i+1 < len(remaining) {
-				updates["description"] = remaining[i+1]
+				updates["title"] = remaining[i+1]
 				i++
 			}
-		case "-a", "--action":
+		case "-f", "--functional-requirements":
 			if i+1 < len(remaining) {
-				updates["action"] = remaining[i+1]
+				updates["functional_requirements"] = remaining[i+1]
 				i++
 			}
-		case "-e", "--expected-result":
+		case "-h", "--technical-requirements":
 			if i+1 < len(remaining) {
-				updates["expected_result"] = remaining[i+1]
+				updates["technical_requirements"] = remaining[i+1]
+				i++
+			}
+		case "-a", "--acceptance-criteria":
+			if i+1 < len(remaining) {
+				updates["acceptance_criteria"] = remaining[i+1]
 				i++
 			}
 		case "-p", "--priority":
@@ -420,9 +436,10 @@ func taskEdit(args []string) error {
 
 	// Validate required fields are not empty
 	requiredFields := map[string]string{
-		"description":     "description",
-		"action":          "action",
-		"expected_result": "expected-result",
+		"title":                   "title",
+		"functional_requirements": "functional-requirements",
+		"technical_requirements":  "technical-requirements",
+		"acceptance_criteria":     "acceptance-criteria",
 	}
 	for field, flagName := range requiredFields {
 		if value, ok := updates[field]; ok {
@@ -544,7 +561,7 @@ func taskRemove(args []string) error {
 //   - SPRINT → DOING, BACKLOG
 //   - DOING → TESTING, BACKLOG
 //   - TESTING → COMPLETED, DOING
-//   - COMPLETED → DOING (reopen)
+//   - COMPLETED → BACKLOG (reopen)
 //
 // Optional flags:
 //   - -r, --roadmap: Roadmap name (uses current if not specified)
@@ -557,8 +574,10 @@ func taskRemove(args []string) error {
 //
 // Side effects:
 //   - Updates task status in database
-//   - Sets completed_at timestamp when transitioning to COMPLETED
-//   - Clears completed_at when transitioning from COMPLETED
+//   - Sets started_at when transitioning to DOING
+//   - Sets tested_at when transitioning to TESTING
+//   - Sets closed_at when transitioning to COMPLETED
+//   - Clears lifecycle dates when reopening to BACKLOG
 //   - Logs TASK_STATUS_CHANGE audit entry
 //   - Outputs updated task IDs as JSON to stdout
 //
@@ -619,30 +638,63 @@ func taskSetStatus(args []string) error {
 
 	// Update within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
-		// Update tasks
+		// Build update query based on target status for lifecycle date tracking
+		// Per SPEC/STATE_MACHINE.md:
+		// - DOING: set started_at
+		// - TESTING: set tested_at
+		// - COMPLETED: set closed_at
+		// - BACKLOG: clear all tracking dates
+		var query string
+		var args []interface{}
+
 		placeholders := make([]string, len(ids))
-		args := make([]interface{}, len(ids)+2)
-		args[0] = newStatus
-		if newStatus == models.StatusCompleted {
-			args[1] = now
-		} else {
-			args[1] = nil
-		}
-		for i, id := range ids {
+		for i := range ids {
 			placeholders[i] = "?"
-			args[i+2] = id
 		}
 
-		query := fmt.Sprintf(
-			"UPDATE tasks SET status = ?, completed_at = CASE WHEN ? = 'COMPLETED' THEN ? ELSE NULL END WHERE id IN (%s)",
-			strings.Join(placeholders, ","),
-		)
-		// args[0] = newStatus, args[1] = newStatus (for CASE), args[2] = completed_at or nil, args[3+] = ids
-		execArgs := []interface{}{newStatus, newStatus, args[1]}
-		for _, id := range ids {
-			execArgs = append(execArgs, id)
+		switch newStatus {
+		case models.StatusDoing:
+			// Transition to DOING: set started_at
+			query = fmt.Sprintf(
+				"UPDATE tasks SET status = ?, started_at = ? WHERE id IN (%s)",
+				strings.Join(placeholders, ","),
+			)
+			args = append([]interface{}{newStatus, now}, makeInterfaceSlice(ids)...)
+
+		case models.StatusTesting:
+			// Transition to TESTING: set tested_at
+			query = fmt.Sprintf(
+				"UPDATE tasks SET status = ?, tested_at = ? WHERE id IN (%s)",
+				strings.Join(placeholders, ","),
+			)
+			args = append([]interface{}{newStatus, now}, makeInterfaceSlice(ids)...)
+
+		case models.StatusCompleted:
+			// Transition to COMPLETED: set closed_at
+			query = fmt.Sprintf(
+				"UPDATE tasks SET status = ?, closed_at = ? WHERE id IN (%s)",
+				strings.Join(placeholders, ","),
+			)
+			args = append([]interface{}{newStatus, now}, makeInterfaceSlice(ids)...)
+
+		case models.StatusBacklog:
+			// Reopening to BACKLOG: clear all tracking dates
+			query = fmt.Sprintf(
+				"UPDATE tasks SET status = ?, started_at = NULL, tested_at = NULL, closed_at = NULL WHERE id IN (%s)",
+				strings.Join(placeholders, ","),
+			)
+			args = append([]interface{}{newStatus}, makeInterfaceSlice(ids)...)
+
+		default:
+			// Other status changes: just update status
+			query = fmt.Sprintf(
+				"UPDATE tasks SET status = ? WHERE id IN (%s)",
+				strings.Join(placeholders, ","),
+			)
+			args = append([]interface{}{newStatus}, makeInterfaceSlice(ids)...)
 		}
-		_, err := tx.Exec(query, execArgs...)
+
+		_, err := tx.Exec(query, args...)
 		if err != nil {
 			return err
 		}
@@ -659,6 +711,15 @@ func taskSetStatus(args []string) error {
 		}
 		return nil
 	})
+}
+
+// makeInterfaceSlice converts []int to []interface{}
+func makeInterfaceSlice(ids []int) []interface{} {
+	result := make([]interface{}, len(ids))
+	for i, id := range ids {
+		result[i] = id
+	}
+	return result
 }
 
 // taskSetPriority sets task priority.
@@ -816,16 +877,17 @@ Options:
   -s, --status <state>            Filter by status
   -p, --priority <n>              Filter/set priority (0-9)
   --severity <n>                  Filter/set severity (0-9)
-  -d, --description <text>        Task description
-  -a, --action <text>             Action to take
-  -e, --expected-result <text>    Expected result
+  -t, --title <text>              Task title
+  -f, --functional-requirements <text>  Functional requirements (Why?)
+  -h, --technical-requirements <text>   Technical requirements (How?)
+  -a, --acceptance-criteria <text>      Acceptance criteria (How to verify?)
   -sp, --specialists <list>       Comma-separated specialists
   -l, --limit <n>                 Limit results
-  -h, --help                      Show this help message
+  --help                          Show this help message
 
 Examples:
   rmp task list -r myproject
-  rmp task create -r myproject -d "Fix bug" -a "Debug" -e "No more bugs"
+  rmp task create -r myproject -t "Fix bug" -f "User can login" -h "Update auth" -a "Login works"
   rmp task stat 1,2,3 DOING
 `)
 }

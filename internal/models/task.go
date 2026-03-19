@@ -134,50 +134,62 @@ func GetValidTransitions(status TaskStatus) []TaskStatus {
 
 // Task field size limits
 const (
-	MaxTaskDescription    = 500
-	MaxTaskAction         = 1000
-	MaxTaskExpectedResult = 1000
-	MaxTaskSpecialists    = 500
+	MaxTaskTitle                  = 500
+	MaxTaskFunctionalRequirements = 1000
+	MaxTaskTechnicalRequirements  = 1000
+	MaxTaskAcceptanceCriteria     = 1000
+	MaxTaskSpecialists            = 500
 )
 
 // Task represents a task in the roadmap.
-// Field order optimized for memory alignment (largest fields first).
-// Layout: 16-byte fields, then 8-byte fields to minimize padding.
+// Field order optimized for memory layout (152 bytes, zero padding on 64-bit systems).
+// Groups: Content fields (strings), Tracking fields (pointers), Metadata (ints).
 type Task struct {
-	// 16-byte fields (string header: data pointer + length)
-	Description    string     `json:"description"`
-	Action         string     `json:"action"`
-	ExpectedResult string     `json:"expected_result"`
-	CreatedAt      string     `json:"created_at"` // ISO 8601 UTC
-	Status         TaskStatus `json:"status"`     // string underlying type
+	// Group 1: Content fields - frequently accessed together (96 bytes total)
+	Title                  string     `json:"title"`                   // Task title/summary
+	Status                 TaskStatus `json:"status"`                  // Current status
+	FunctionalRequirements string     `json:"functional_requirements"` // Why: functional requirements
+	TechnicalRequirements  string     `json:"technical_requirements"`  // How: technical description
+	AcceptanceCriteria     string     `json:"acceptance_criteria"`     // How to verify: completion criteria
+	CreatedAt              string     `json:"created_at"`              // ISO 8601 UTC, auto-set on creation
 
-	// 8-byte fields (pointers and integers)
-	Specialists *string `json:"specialists"`  // Nullable
-	CompletedAt *string `json:"completed_at"` // ISO 8601 UTC, nullable
-	ID          int     `json:"id"`
-	Priority    int     `json:"priority"`
-	Severity    int     `json:"severity"`
+	// Group 2: Nullable tracking fields - lifecycle timestamps (32 bytes total)
+	Specialists *string `json:"specialists"` // Comma-separated specialists
+	StartedAt   *string `json:"started_at"`  // ISO 8601 UTC, auto-set on DOING transition
+	TestedAt    *string `json:"tested_at"`   // ISO 8601 UTC, auto-set on TESTING transition
+	ClosedAt    *string `json:"closed_at"`   // ISO 8601 UTC, auto-set on COMPLETED transition
+
+	// Group 3: Numeric metadata fields (24 bytes total)
+	ID       int `json:"id"`       // Primary key
+	Priority int `json:"priority"` // 0-9 priority level
+	Severity int `json:"severity"` // 0-9 severity level
 }
 
 // Validate checks if the task data is valid.
 func (t *Task) Validate() error {
-	if t.Description == "" {
-		return fmt.Errorf("description is required")
+	if t.Title == "" {
+		return fmt.Errorf("title is required")
 	}
-	if len(t.Description) > MaxTaskDescription {
-		return fmt.Errorf("%w: description exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskDescription)
+	if len(t.Title) > MaxTaskTitle {
+		return fmt.Errorf("%w: title exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskTitle)
 	}
-	if t.Action == "" {
-		return fmt.Errorf("action is required")
+	if t.FunctionalRequirements == "" {
+		return fmt.Errorf("functional_requirements is required")
 	}
-	if len(t.Action) > MaxTaskAction {
-		return fmt.Errorf("%w: action exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskAction)
+	if len(t.FunctionalRequirements) > MaxTaskFunctionalRequirements {
+		return fmt.Errorf("%w: functional_requirements exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskFunctionalRequirements)
 	}
-	if t.ExpectedResult == "" {
-		return fmt.Errorf("expected_result is required")
+	if t.TechnicalRequirements == "" {
+		return fmt.Errorf("technical_requirements is required")
 	}
-	if len(t.ExpectedResult) > MaxTaskExpectedResult {
-		return fmt.Errorf("%w: expected_result exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskExpectedResult)
+	if len(t.TechnicalRequirements) > MaxTaskTechnicalRequirements {
+		return fmt.Errorf("%w: technical_requirements exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskTechnicalRequirements)
+	}
+	if t.AcceptanceCriteria == "" {
+		return fmt.Errorf("acceptance_criteria is required")
+	}
+	if len(t.AcceptanceCriteria) > MaxTaskAcceptanceCriteria {
+		return fmt.Errorf("%w: acceptance_criteria exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskAcceptanceCriteria)
 	}
 	if t.Specialists != nil && len(*t.Specialists) > MaxTaskSpecialists {
 		return fmt.Errorf("%w: specialists exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskSpecialists)
@@ -202,7 +214,9 @@ func (t *Task) Validate() error {
 
 // validateDates validates task date fields.
 // - created_at must not be in the future (with 1 minute tolerance)
-// - completed_at must not be before created_at
+// - closed_at must not be before created_at
+// - tested_at must not be before started_at
+// - started_at must not be before created_at
 func (t *Task) validateDates() error {
 	// Parse and validate created_at
 	if t.CreatedAt != "" {
@@ -216,16 +230,36 @@ func (t *Task) validateDates() error {
 			return fmt.Errorf("invalid created_at: %w", err)
 		}
 
-		// Parse and validate completed_at if present
-		if t.CompletedAt != nil && *t.CompletedAt != "" {
-			completedTime, err := utils.ParseISO8601(*t.CompletedAt)
+		// Parse and validate started_at if present
+		if t.StartedAt != nil && *t.StartedAt != "" {
+			startedTime, err := utils.ParseISO8601(*t.StartedAt)
 			if err != nil {
-				return fmt.Errorf("invalid completed_at: %w", err)
+				return fmt.Errorf("invalid started_at: %w", err)
 			}
+			if err := utils.ValidateDateOrder(createdTime, startedTime); err != nil {
+				return fmt.Errorf("invalid date order: started_at before created_at: %w", err)
+			}
+		}
 
-			// Validate completed_at is not before created_at
-			if err := utils.ValidateDateOrder(createdTime, completedTime); err != nil {
-				return fmt.Errorf("invalid date order: %w", err)
+		// Parse and validate tested_at if present
+		if t.TestedAt != nil && *t.TestedAt != "" {
+			testedTime, err := utils.ParseISO8601(*t.TestedAt)
+			if err != nil {
+				return fmt.Errorf("invalid tested_at: %w", err)
+			}
+			if err := utils.ValidateDateOrder(createdTime, testedTime); err != nil {
+				return fmt.Errorf("invalid date order: tested_at before created_at: %w", err)
+			}
+		}
+
+		// Parse and validate closed_at if present
+		if t.ClosedAt != nil && *t.ClosedAt != "" {
+			closedTime, err := utils.ParseISO8601(*t.ClosedAt)
+			if err != nil {
+				return fmt.Errorf("invalid closed_at: %w", err)
+			}
+			if err := utils.ValidateDateOrder(createdTime, closedTime); err != nil {
+				return fmt.Errorf("invalid date order: closed_at before created_at: %w", err)
 			}
 		}
 	}
@@ -267,30 +301,34 @@ func FormatSpecialists(specialists []string) string {
 // This provides compile-time type safety and deterministic SQL generation
 // compared to map[string]interface{}.
 type TaskUpdate struct {
-	Description    *string
-	Action         *string
-	ExpectedResult *string
-	Specialists    *string
-	Priority       *int
-	Severity       *int
+	Title                  *string
+	FunctionalRequirements *string
+	TechnicalRequirements  *string
+	AcceptanceCriteria     *string
+	Specialists            *string
+	Priority               *int
+	Severity               *int
 }
 
 // HasChanges returns true if any field is set to be updated.
 func (u *TaskUpdate) HasChanges() bool {
-	return u.Description != nil || u.Action != nil || u.ExpectedResult != nil ||
-		u.Specialists != nil || u.Priority != nil || u.Severity != nil
+	return u.Title != nil || u.FunctionalRequirements != nil || u.TechnicalRequirements != nil ||
+		u.AcceptanceCriteria != nil || u.Specialists != nil || u.Priority != nil || u.Severity != nil
 }
 
 // Validate checks if the update values are valid.
 func (u *TaskUpdate) Validate() error {
-	if u.Description != nil && len(*u.Description) > MaxTaskDescription {
-		return fmt.Errorf("description exceeds maximum length of %d characters", MaxTaskDescription)
+	if u.Title != nil && len(*u.Title) > MaxTaskTitle {
+		return fmt.Errorf("title exceeds maximum length of %d characters", MaxTaskTitle)
 	}
-	if u.Action != nil && len(*u.Action) > MaxTaskAction {
-		return fmt.Errorf("action exceeds maximum length of %d characters", MaxTaskAction)
+	if u.FunctionalRequirements != nil && len(*u.FunctionalRequirements) > MaxTaskFunctionalRequirements {
+		return fmt.Errorf("functional_requirements exceeds maximum length of %d characters", MaxTaskFunctionalRequirements)
 	}
-	if u.ExpectedResult != nil && len(*u.ExpectedResult) > MaxTaskExpectedResult {
-		return fmt.Errorf("expected_result exceeds maximum length of %d characters", MaxTaskExpectedResult)
+	if u.TechnicalRequirements != nil && len(*u.TechnicalRequirements) > MaxTaskTechnicalRequirements {
+		return fmt.Errorf("technical_requirements exceeds maximum length of %d characters", MaxTaskTechnicalRequirements)
+	}
+	if u.AcceptanceCriteria != nil && len(*u.AcceptanceCriteria) > MaxTaskAcceptanceCriteria {
+		return fmt.Errorf("acceptance_criteria exceeds maximum length of %d characters", MaxTaskAcceptanceCriteria)
 	}
 	if u.Specialists != nil && len(*u.Specialists) > MaxTaskSpecialists {
 		return fmt.Errorf("specialists exceeds maximum length of %d characters", MaxTaskSpecialists)

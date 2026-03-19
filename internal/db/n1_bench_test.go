@@ -41,13 +41,14 @@ func BenchmarkGetSprint_N1Optimization(b *testing.B) {
 			var taskIDs []int
 			for i := 0; i < numTasks; i++ {
 				task := &models.Task{
-					Priority:       5,
-					Severity:       3,
-					Status:         models.StatusSprint,
-					Description:    fmt.Sprintf("Task %d", i),
-					Action:         "Test action",
-					ExpectedResult: "Test result",
-					CreatedAt:      "2026-03-18T10:00:00.000Z",
+					Priority:               5,
+					Severity:               3,
+					Status:                 models.StatusSprint,
+					Title:                  fmt.Sprintf("Task %d", i),
+					FunctionalRequirements: "Test functional requirements",
+					TechnicalRequirements:  "Test technical requirements",
+					AcceptanceCriteria:     "Test acceptance criteria",
+					CreatedAt:              "2026-03-18T10:00:00.000Z",
 				}
 				taskID, err := db.CreateTask(ctx, task)
 				if err != nil {
@@ -106,13 +107,14 @@ func BenchmarkGetSprint_SimulatedOldApproach(b *testing.B) {
 			var taskIDs []int
 			for i := 0; i < numTasks; i++ {
 				task := &models.Task{
-					Priority:       5,
-					Severity:       3,
-					Status:         models.StatusSprint,
-					Description:    fmt.Sprintf("Task %d", i),
-					Action:         "Test action",
-					ExpectedResult: "Test result",
-					CreatedAt:      "2026-03-18T10:00:00.000Z",
+					Priority:               5,
+					Severity:               3,
+					Status:                 models.StatusSprint,
+					Title:                  fmt.Sprintf("Task %d", i),
+					FunctionalRequirements: "Test functional requirements",
+					TechnicalRequirements:  "Test technical requirements",
+					AcceptanceCriteria:     "Test acceptance criteria",
+					CreatedAt:              "2026-03-18T10:00:00.000Z",
 				}
 				taskID, err := db.CreateTask(ctx, task)
 				if err != nil {

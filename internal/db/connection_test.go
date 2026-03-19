@@ -252,13 +252,14 @@ func TestGetEntityHistory(t *testing.T) {
 
 	// Create a task first
 	task := &models.Task{
-		Priority:       1,
-		Severity:       1,
-		Status:         models.StatusBacklog,
-		Description:    "Test task",
-		Action:         "Test action",
-		ExpectedResult: "Test result",
-		CreatedAt:      time.Now().Format(time.RFC3339),
+		Priority:               1,
+		Severity:               1,
+		Status:                 models.StatusBacklog,
+		Title:                  "Test task",
+		FunctionalRequirements: "Test functional requirements",
+		TechnicalRequirements:  "Test technical requirements",
+		AcceptanceCriteria:     "Test acceptance criteria",
+		CreatedAt:              time.Now().Format(time.RFC3339),
 	}
 
 	taskID, err := db.CreateTask(context.Background(), task)

@@ -146,9 +146,10 @@ func TestIntegration_TaskLifecycle(t *testing.T) {
 	output := captureOutput(t, func() {
 		err := HandleTask([]string{
 			"create",
-			"-d", "Integration test task",
-			"-a", "Perform integration test",
-			"-e", "Task created successfully",
+			"-t", "Integration test task",
+			"-f", "Perform integration test",
+			"-h", "Task created successfully",
+			"-a", "Acceptance criteria met",
 			"-p", "5",
 			"--severity", "3",
 		})
@@ -181,8 +182,8 @@ func TestIntegration_TaskLifecycle(t *testing.T) {
 		t.Logf("get task output: %s", output)
 	} else if len(tasks) > 0 {
 		task := tasks[0]
-		if task["description"] != "Integration test task" {
-			t.Errorf("task description = %v, want %v", task["description"], "Integration test task")
+		if task["title"] != "Integration test task" {
+			t.Errorf("task title = %v, want %v", task["title"], "Integration test task")
 		}
 		if task["priority"] != float64(5) {
 			t.Errorf("task priority = %v, want %v", task["priority"], 5)
@@ -206,7 +207,7 @@ func TestIntegration_TaskLifecycle(t *testing.T) {
 	err = HandleTask([]string{
 		"edit",
 		string(rune('0' + taskID)),
-		"-d", "Updated integration test task",
+		"-t", "Updated integration test task",
 	})
 	if err != nil {
 		t.Errorf("failed to edit task: %v", err)
@@ -352,9 +353,10 @@ func TestIntegration_AuditQuery(t *testing.T) {
 	// Create a task to generate audit entry
 	err = HandleTask([]string{
 		"create",
-		"-d", "Audit test task",
-		"-a", "Test action",
-		"-e", "Test result",
+		"-t", "Audit test task",
+		"-f", "Test functional",
+		"-h", "Test technical",
+		"-a", "Test acceptance",
 	})
 	if err != nil {
 		t.Fatalf("failed to create task: %v", err)
@@ -431,7 +433,7 @@ func TestIntegration_ErrorHandling(t *testing.T) {
 	}
 
 	// Test 4: Create task without required fields
-	err = HandleTask([]string{"create", "-d", "test"})
+	err = HandleTask([]string{"create", "-t", "test"})
 	if err == nil {
 		t.Error("expected error when creating task without required fields")
 	}

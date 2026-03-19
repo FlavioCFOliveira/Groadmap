@@ -38,16 +38,17 @@ func (db *DB) CreateTask(ctx context.Context, task *models.Task) (int, error) {
 	var taskID int
 	err := retryWithBackoff("create task", func() error {
 		result, err := db.ExecContext(ctx,
-			`INSERT INTO tasks (priority, severity, description, specialists, action, expected_result, created_at, status)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO tasks (title, status, functional_requirements, technical_requirements, acceptance_criteria, created_at, specialists, priority, severity)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			task.Title,
+			task.Status,
+			task.FunctionalRequirements,
+			task.TechnicalRequirements,
+			task.AcceptanceCriteria,
+			task.CreatedAt,
+			task.Specialists,
 			task.Priority,
 			task.Severity,
-			task.Description,
-			task.Specialists,
-			task.Action,
-			task.ExpectedResult,
-			task.CreatedAt,
-			task.Status,
 		)
 		if err != nil {
 			return fmt.Errorf("inserting task: %w", err)
@@ -73,23 +74,29 @@ func (db *DB) CreateTask(ctx context.Context, task *models.Task) (int, error) {
 func (db *DB) GetTask(ctx context.Context, id int) (*models.Task, error) {
 	var task models.Task
 	var specialists sql.NullString
-	var completedAt sql.NullString
+	var startedAt sql.NullString
+	var testedAt sql.NullString
+	var closedAt sql.NullString
 
 	err := db.QueryRowContext(ctx,
-		`SELECT id, priority, severity, status, description, specialists, action, expected_result, created_at, completed_at
+		`SELECT id, title, status, functional_requirements, technical_requirements, acceptance_criteria,
+		        created_at, specialists, started_at, tested_at, closed_at, priority, severity
 		 FROM tasks WHERE id = ?`,
 		id,
 	).Scan(
 		&task.ID,
+		&task.Title,
+		&task.Status,
+		&task.FunctionalRequirements,
+		&task.TechnicalRequirements,
+		&task.AcceptanceCriteria,
+		&task.CreatedAt,
+		&specialists,
+		&startedAt,
+		&testedAt,
+		&closedAt,
 		&task.Priority,
 		&task.Severity,
-		&task.Status,
-		&task.Description,
-		&specialists,
-		&task.Action,
-		&task.ExpectedResult,
-		&task.CreatedAt,
-		&completedAt,
 	)
 
 	if err != nil {
@@ -102,8 +109,14 @@ func (db *DB) GetTask(ctx context.Context, id int) (*models.Task, error) {
 	if specialists.Valid {
 		task.Specialists = &specialists.String
 	}
-	if completedAt.Valid {
-		task.CompletedAt = &completedAt.String
+	if startedAt.Valid {
+		task.StartedAt = &startedAt.String
+	}
+	if testedAt.Valid {
+		task.TestedAt = &testedAt.String
+	}
+	if closedAt.Valid {
+		task.ClosedAt = &closedAt.String
 	}
 
 	return &task, nil
@@ -123,7 +136,8 @@ func (db *DB) GetTasks(ctx context.Context, ids []int) ([]models.Task, error) {
 	}
 
 	query := fmt.Sprintf(
-		`SELECT id, priority, severity, status, description, specialists, action, expected_result, created_at, completed_at
+		`SELECT id, title, status, functional_requirements, technical_requirements, acceptance_criteria,
+		        created_at, specialists, started_at, tested_at, closed_at, priority, severity
 		 FROM tasks WHERE id IN (%s) ORDER BY id`,
 		placeholders,
 	)
@@ -148,7 +162,8 @@ func (db *DB) ListTasks(ctx context.Context, status *models.TaskStatus, minPrior
 		limit = 100
 	}
 
-	query := `SELECT id, priority, severity, status, description, specialists, action, expected_result, created_at, completed_at
+	query := `SELECT id, title, status, functional_requirements, technical_requirements, acceptance_criteria,
+		        created_at, specialists, started_at, tested_at, closed_at, priority, severity
 		      FROM tasks WHERE 1=1`
 	args := []interface{}{}
 
@@ -180,12 +195,13 @@ func (db *DB) ListTasks(ctx context.Context, status *models.TaskStatus, minPrior
 
 // allowedTaskUpdateFields contains the whitelist of fields that can be updated via UpdateTask.
 var allowedTaskUpdateFields = map[string]bool{
-	"description":     true,
-	"action":          true,
-	"expected_result": true,
-	"specialists":     true,
-	"priority":        true,
-	"severity":        true,
+	"title":                   true,
+	"functional_requirements": true,
+	"technical_requirements":  true,
+	"acceptance_criteria":     true,
+	"specialists":             true,
+	"priority":                true,
+	"severity":                true,
 }
 
 // UpdateTask updates a task's fields with the provided values.
@@ -284,21 +300,25 @@ func (db *DB) UpdateTaskStruct(ctx context.Context, id int, update *models.TaskU
 
 	return retryWithBackoff("update task struct", func() error {
 		// Build SQL with deterministic field ordering
-		// Fields are always in the same order: description, action, expected_result, specialists, priority, severity
+		// Fields are always in the same order: title, functional_requirements, technical_requirements, acceptance_criteria, specialists, priority, severity
 		var setParts []string
 		var args []interface{}
 
-		if update.Description != nil {
-			setParts = append(setParts, "description = ?")
-			args = append(args, *update.Description)
+		if update.Title != nil {
+			setParts = append(setParts, "title = ?")
+			args = append(args, *update.Title)
 		}
-		if update.Action != nil {
-			setParts = append(setParts, "action = ?")
-			args = append(args, *update.Action)
+		if update.FunctionalRequirements != nil {
+			setParts = append(setParts, "functional_requirements = ?")
+			args = append(args, *update.FunctionalRequirements)
 		}
-		if update.ExpectedResult != nil {
-			setParts = append(setParts, "expected_result = ?")
-			args = append(args, *update.ExpectedResult)
+		if update.TechnicalRequirements != nil {
+			setParts = append(setParts, "technical_requirements = ?")
+			args = append(args, *update.TechnicalRequirements)
+		}
+		if update.AcceptanceCriteria != nil {
+			setParts = append(setParts, "acceptance_criteria = ?")
+			args = append(args, *update.AcceptanceCriteria)
 		}
 		if update.Specialists != nil {
 			setParts = append(setParts, "specialists = ?")
@@ -333,7 +353,12 @@ func (db *DB) UpdateTaskStruct(ctx context.Context, id int, update *models.TaskU
 	})
 }
 
-// UpdateTaskStatus updates task status and optionally sets completed_at.
+// UpdateTaskStatus updates task status and manages lifecycle timestamps.
+// Per SPEC/STATE_MACHINE.md:
+// - SPRINT → DOING: set started_at
+// - DOING → TESTING: set tested_at
+// - TESTING → COMPLETED: set closed_at
+// - COMPLETED → BACKLOG: clear started_at, tested_at, closed_at
 func (db *DB) UpdateTaskStatus(ctx context.Context, ids []int, status models.TaskStatus) error {
 	if len(ids) == 0 {
 		return nil
@@ -347,21 +372,53 @@ func (db *DB) UpdateTaskStatus(ctx context.Context, ids []int, status models.Tas
 			idArgs[i] = id
 		}
 
-		// Set completed_at based on status
-		var completedAt interface{}
-		if status == models.StatusCompleted {
-			completedAt = utils.NowISO8601()
-		} else {
-			completedAt = nil
+		now := utils.NowISO8601()
+
+		// Build query based on target status for lifecycle date tracking
+		var query string
+		var args []interface{}
+
+		switch status {
+		case models.StatusDoing:
+			// Transition to DOING: set started_at
+			query = fmt.Sprintf(
+				"UPDATE tasks SET status = ?, started_at = ? WHERE id IN (%s)",
+				placeholders,
+			)
+			args = append([]interface{}{status, now}, idArgs...)
+
+		case models.StatusTesting:
+			// Transition to TESTING: set tested_at
+			query = fmt.Sprintf(
+				"UPDATE tasks SET status = ?, tested_at = ? WHERE id IN (%s)",
+				placeholders,
+			)
+			args = append([]interface{}{status, now}, idArgs...)
+
+		case models.StatusCompleted:
+			// Transition to COMPLETED: set closed_at
+			query = fmt.Sprintf(
+				"UPDATE tasks SET status = ?, closed_at = ? WHERE id IN (%s)",
+				placeholders,
+			)
+			args = append([]interface{}{status, now}, idArgs...)
+
+		case models.StatusBacklog:
+			// Reopening to BACKLOG: clear all tracking dates
+			query = fmt.Sprintf(
+				"UPDATE tasks SET status = ?, started_at = NULL, tested_at = NULL, closed_at = NULL WHERE id IN (%s)",
+				placeholders,
+			)
+			args = append([]interface{}{status}, idArgs...)
+
+		default:
+			// Other status changes: just update status
+			query = fmt.Sprintf(
+				"UPDATE tasks SET status = ? WHERE id IN (%s)",
+				placeholders,
+			)
+			args = append([]interface{}{status}, idArgs...)
 		}
-
-		// Args: status, completed_at, then all IDs
-		args := append([]interface{}{status, completedAt}, idArgs...)
-
-		query := fmt.Sprintf(
-			"UPDATE tasks SET status = ?, completed_at = ? WHERE id IN (%s)",
-			placeholders,
-		)
 
 		_, err := db.ExecContext(ctx, query, args...)
 		if err != nil {
@@ -446,26 +503,33 @@ func scanTasks(rows *sql.Rows) ([]models.Task, error) {
 
 	// Reusable scan variables to avoid allocations per iteration
 	var specialists sql.NullString
-	var completedAt sql.NullString
+	var startedAt sql.NullString
+	var testedAt sql.NullString
+	var closedAt sql.NullString
 
 	for rows.Next() {
 		var task models.Task
 
 		// Reset scan variables for each row
 		specialists = sql.NullString{}
-		completedAt = sql.NullString{}
+		startedAt = sql.NullString{}
+		testedAt = sql.NullString{}
+		closedAt = sql.NullString{}
 
 		err := rows.Scan(
 			&task.ID,
+			&task.Title,
+			&task.Status,
+			&task.FunctionalRequirements,
+			&task.TechnicalRequirements,
+			&task.AcceptanceCriteria,
+			&task.CreatedAt,
+			&specialists,
+			&startedAt,
+			&testedAt,
+			&closedAt,
 			&task.Priority,
 			&task.Severity,
-			&task.Status,
-			&task.Description,
-			&specialists,
-			&task.Action,
-			&task.ExpectedResult,
-			&task.CreatedAt,
-			&completedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning task row: %w", err)
@@ -474,8 +538,14 @@ func scanTasks(rows *sql.Rows) ([]models.Task, error) {
 		if specialists.Valid {
 			task.Specialists = &specialists.String
 		}
-		if completedAt.Valid {
-			task.CompletedAt = &completedAt.String
+		if startedAt.Valid {
+			task.StartedAt = &startedAt.String
+		}
+		if testedAt.Valid {
+			task.TestedAt = &testedAt.String
+		}
+		if closedAt.Valid {
+			task.ClosedAt = &closedAt.String
 		}
 
 		tasks = append(tasks, task)
@@ -787,8 +857,9 @@ func (db *DB) GetSprintTasks(ctx context.Context, sprintID int) ([]int, error) {
 
 // GetSprintTasksFull retrieves full task objects for a sprint.
 func (db *DB) GetSprintTasksFull(ctx context.Context, sprintID int, status *models.TaskStatus) ([]models.Task, error) {
-	query := `SELECT t.id, t.priority, t.severity, t.status, t.description, t.specialists,
-		         t.action, t.expected_result, t.created_at, t.completed_at
+	query := `SELECT t.id, t.title, t.status, t.functional_requirements, t.technical_requirements,
+		         t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
+		         t.closed_at, t.priority, t.severity
 		      FROM tasks t
 		      INNER JOIN sprint_tasks st ON t.id = st.task_id
 		      WHERE st.sprint_id = ?`

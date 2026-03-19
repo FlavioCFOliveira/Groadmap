@@ -7,24 +7,33 @@ import (
 )
 
 // SchemaVersion is the current database schema version.
-const SchemaVersion = "1.0.0"
+const SchemaVersion = "1.1.0"
 
 // CreateSchema creates all database tables and indexes.
 // This implements the DDL from SPEC/DATABASE.md.
 func (db *DB) CreateSchema() error {
-	// Tasks table
+	// Tasks table - aligned with SPEC/DATABASE.md
 	tasksDDL := `
 CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    priority INTEGER NOT NULL DEFAULT 0 CHECK(priority >= 0 AND priority <= 9),
-    severity INTEGER NOT NULL DEFAULT 0 CHECK(severity >= 0 AND severity <= 9),
+
+    -- Group 1: Content fields (TEXT) - frequently accessed together
+    title TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'BACKLOG' CHECK(status IN ('BACKLOG', 'SPRINT', 'DOING', 'TESTING', 'COMPLETED')),
-    description TEXT NOT NULL,
-    specialists TEXT,
-    action TEXT NOT NULL,
-    expected_result TEXT NOT NULL,
+    functional_requirements TEXT NOT NULL,
+    technical_requirements TEXT NOT NULL,
+    acceptance_criteria TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    completed_at TEXT
+
+    -- Group 2: Nullable tracking fields - lifecycle timestamps
+    specialists TEXT,
+    started_at TEXT,
+    tested_at TEXT,
+    closed_at TEXT,
+
+    -- Group 3: Numeric metadata fields
+    priority INTEGER NOT NULL DEFAULT 0 CHECK(priority >= 0 AND priority <= 9),
+    severity INTEGER NOT NULL DEFAULT 0 CHECK(severity >= 0 AND severity <= 9)
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);

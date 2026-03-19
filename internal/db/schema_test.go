@@ -63,8 +63,8 @@ func TestSchemaVersion(t *testing.T) {
 		t.Fatalf("failed to get schema version: %v", err)
 	}
 
-	if version != "1.0.0" {
-		t.Errorf("expected schema version 1.0.0, got %s", version)
+	if version != "1.1.0" {
+		t.Errorf("expected schema version 1.1.0, got %s", version)
 	}
 }
 
@@ -98,8 +98,8 @@ func TestForeignKeyConstraints(t *testing.T) {
 
 	// Test 2: Insert a task
 	result, err = sqlDB.Exec(
-		"INSERT INTO tasks (priority, severity, status, description, action, expected_result, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-		0, 0, "BACKLOG", "Test Task", "Do something", "Result", "2024-01-15T10:00:00.000Z",
+		"INSERT INTO tasks (title, status, functional_requirements, technical_requirements, acceptance_criteria, created_at, priority, severity) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		"Test Task", "BACKLOG", "Do something", "Result", "Acceptance", "2024-01-15T10:00:00.000Z", 0, 0,
 	)
 	if err != nil {
 		t.Fatalf("failed to insert task: %v", err)
