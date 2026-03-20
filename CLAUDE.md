@@ -1,516 +1,270 @@
 # CLAUDE.md
 
-## CRITICAL POLICY REMINDER
+## 1. Critical Policy: Specification First
 
-**SPECIFICATION FIRST IS MANDATORY AND NON-NEGOTIABLE**
+**MANDATORY: No implementation without SPEC/**. Zero exceptions.
 
-- NO code implementation shall begin without a complete specification in `SPEC/`
-- When ANY implementation is requested, invoke `spec-orchestrator` FIRST
-- **Contextual Scope**: Always identify the functional area (VERSION.md, BUILD.md, COMMANDS.md, etc.) and update the relevant SPEC, not create task-specific documents
-- This rule has ZERO exceptions - urgency, simplicity, or user preference do not override it
-- **WHEN IN DOUBT: SPEC FIRST. ALWAYS.**
+```
+User Request → spec-orchestrator → SPEC/ → [task-creator → roadmap-coordinator] → go-elite-developer → Implementation
+```
+
+| Violation | Action |
+|-----------|--------|
+| Code requested without SPEC | STOP → Invoke spec-orchestrator |
+| SPEC incomplete | STOP → Update SPEC first |
+| Urgency cited | NO exceptions. SPEC first. ALWAYS. |
+
+**WHEN IN DOUBT: SPEC FIRST.**
 
 ---
 
-## Contextual Specification Scope
+## 2. Specification Scope
 
 ### Functional Area Mapping
 
-The spec-orchestrator operates on **functional areas**, not individual tasks. Every request must be mapped to the appropriate SPEC file based on its functional domain:
+| Area | SPEC File | Covers |
+|------|-----------|--------|
+| Version | `VERSION.md` | Version commands, logic, display |
+| Build | `BUILD.md` | Build process, CI/CD, targets |
+| Deploy | `DEPLOY.md` | Installation, distribution, releases |
+| CLI | `COMMANDS.md` | Commands, subcommands, aliases, flags |
+| Database | `DATABASE.md` | Schema, migrations, queries |
+| Data | `DATA_FORMATS.md` | JSON schemas, formats |
+| Models | `MODELS.md` | Structs, enums, domain models |
+| Architecture | `ARCHITECTURE.md` | System design, components |
+| State | `STATE_MACHINE.md` | State transitions, workflows |
+| Help | `HELP_EXAMPLES.md` | Help text, errors, examples |
 
-| Functional Area | SPEC File | Covers |
-|-----------------|-----------|--------|
-| Version management | `SPEC/VERSION.md` | Version commands, versioning logic, version display |
-| Build system | `SPEC/BUILD.md` | Build process, CI/CD, cross-compilation, targets |
-| Deployment | `SPEC/DEPLOY.md` | Installation, distribution, release process |
-| CLI commands | `SPEC/COMMANDS.md` | Command hierarchy, subcommands, aliases, flags |
-| Database | `SPEC/DATABASE.md` | Schema, migrations, queries, relationships |
-| Data formats | `SPEC/DATA_FORMATS.md` | JSON output schemas, input formats |
-| Models | `SPEC/MODELS.md` | Structs, enums, domain models |
-| Architecture | `SPEC/ARCHITECTURE.md` | System design, component structure |
-| State machines | `SPEC/STATE_MACHINE.md` | State transitions, workflows |
-| Help/UX | `SPEC/HELP_EXAMPLES.md` | Help text, error messages, examples |
+### Update Rules
 
-### Specification Update Rules
+- **Existing functionality** → Update relevant SPEC
+- **New subcommand** → Update `COMMANDS.md`
+- **Schema change** → Update `DATABASE.md`
+- **New functional area** → Create new SPEC only
 
-**ALWAYS update existing SPEC files** for changes to existing functionality:
-- Bug fixes → Update the relevant functional area SPEC
-- Enhancements → Update the relevant functional area SPEC
-- Refactoring → Update the relevant functional area SPEC
-- New subcommand → Update `SPEC/COMMANDS.md`
-- New build target → Update `SPEC/BUILD.md`
-- Schema change → Update `SPEC/DATABASE.md`
-
-**ONLY create new SPEC files** for entirely new functional areas not currently covered.
-
-### Task-to-Spec Mapping Examples
-
-| User Request | Functional Area | Action |
-|--------------|-----------------|--------|
-| "Add ARM build support" | BUILD.md | Update existing SPEC |
-| "Fix version command output" | VERSION.md | Update existing SPEC |
-| "Add task dependencies" | DATABASE.md, MODELS.md | Update existing SPECs |
-| "Create new export command" | COMMANDS.md | Update existing SPEC |
-| "Change JSON output format" | DATA_FORMATS.md | Update existing SPEC |
-| "Add entirely new plugin system" | New SPEC/PLUGINS.md | Create new SPEC only |
+**NEVER** create task-specific specs (e.g., "VERSION_RESET.md").
 
 ---
 
-## Project Identity
-
-**Groadmap** is a CLI tool in Go for managing technical roadmaps, using SQLite as backend.
-
----
-
-## Documentation Standards
-
-### Language and Tone
-- **All project documentation must be in English**
-- Use clear, technical language
-- Maintain a professional tone
-- **No emojis or ornamental characters allowed**
-
-### Scope
-- All documentation in `SPEC/`
-- All skill definitions and agent configurations
-- This CLAUDE.md file
-- Code comments and docstrings
-- README files
-- Help text and CLI documentation
-
----
-
-## User Interaction Language
-
-- **Preferred language for user interactions**: Portuguese (Portugal) - PT-pt
-- Responses to the user should be in Portuguese
-- Technical terms may remain in English when appropriate
-
----
-
-## Skill Responsibilities (Strict Ownership)
-
-### spec-orchestrator
-**Exclusive authority** for technical specification. **THIS AGENT MUST BE INVOKED BEFORE ANY IMPLEMENTATION.**
-- **MANDATORY FIRST STEP** for all new features and changes
-- Creates and maintains all documents in `SPEC/`
-- **FEATURE-ORIENTED, NOT TASK-ORIENTED**: Maps requests to functional areas (VERSION.md, BUILD.md, COMMANDS.md, etc.)
-- **Updates existing specifications** for changes to existing functionality
-- **Creates new specifications** only for entirely new functional areas
-- Produces specifications ONLY from user input
-- NEVER derives specifications from existing code
-- ALWAYS asks the user for decisions (the user is the single source of truth)
-- **Acts as gatekeeper: NO implementation without clear specification**
-
-### task-creator
-**Exclusive authority** for creating tasks and sprints.
-- **Collects ALL required data** for task/sprint creation (title, type, priority, description, criteria, dates, etc.)
-- **Prepares structured data** for the Groadmap CLI
-- **Delegates persistence** to roadmap-coordinator (never writes directly to database)
-- Validates data completeness before delegation (all required fields present)
-- Supports both tasks (USER_STORY, TASK, BUG, etc.) and sprints
-- **ALWAYS provides complete data package** to roadmap-coordinator for CLI execution
-
-### roadmap-coordinator
-**Exclusive authority** for task coordination via Groadmap CLI.
-- **Source of truth** for all task/sprint operations via `rmp` CLI commands
-- Retrieves tasks via CLI (`rmp task next`, `rmp task list`)
-- Manages state transitions (`rmp task stat`)
-- Creates tasks/sprints via CLI (`rmp task create`, `rmp sprint create`)
-- Delegates implementation to appropriate specialists
-- **NEVER implements directly** - only coordinates via CLI
-- Requires complete data from task-creator before executing CLI commands
-
-### go-elite-developer
-**Exclusive authority** for Go code development. **ONLY TO BE INVOKED AFTER spec-orchestrator.**
-- **MUST NOT be invoked without prior specification in SPEC/**
-- Implements features according to technical specification
-- Ensures idiomatic, efficient, and secure code
-- Performs validation: `go build`, `go test`, `go vet`, `go fmt`
-- NEVER implements without approved specification
-- ALWAYS follows project patterns in `SPEC/`
-
-### go-gitflow
-**Exclusive authority** for Git operations.
-- Creates branches, commits, merges, PRs
-- Validates repository state before operations
-- Ensures technical and descriptive commit messages
-- Requires explicit user confirmation for destructive operations
-- ALWAYS checks `go fmt`, `go vet`, `go test` before commits
-- **MANDATORY: ALL tests must pass without failures before any git push**
-- **MANDATORY: Explicit user authorization required after tests pass and before git push**
-
-### exhaustive-qa-engineer
-**Exclusive authority** for testing and validation.
-- Executes exhaustive tests, fuzzing, edge case analysis
-- Validates security and robustness
-- Acts on: critical features, pre-release validation, schema changes
-
-### red-team-hacker
-**Exclusive authority** for offensive security.
-- Performs security audits, penetration testing
-- Identifies vulnerabilities and exploit chains
-- Acts on: security features, input validation, critical operations
-
-### go-performance-advisor
-**Exclusive authority** for performance analysis.
-- Static and dynamic analysis of Go code
-- Identifies bottlenecks, memory issues, concurrency problems
-- Provides optimization recommendations
-
----
-
-## Execution Rules
-
-### Rule 1: Specification First (MANDATORY - ZERO EXCEPTIONS)
-
-**THIS RULE IS ABSOLUTE AND NON-NEGOTIABLE. NO EXCEPTIONS EXIST.**
+## 3. Skill Responsibilities
 
 ```
-User Request → spec-orchestrator → SPEC/ → go-elite-developer → Implementation
+┌─────────────────────────────────────────────────────────────────┐
+│                     RESPONSIBILITY FLOW                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│   spec-orchestrator          task-creator                      │
+│   ┌─────────────┐            ┌─────────────┐                  │
+│   │ SPEC/       │            │ Collects    │                  │
+│   │ creation    │            │ ALL data    │                  │
+│   └──────┬──────┘            └──────┬──────┘                  │
+│          │                         │                           │
+│          ▼                         ▼                           │
+│   go-elite-developer         roadmap-coordinator              │
+│   ┌─────────────┐            ┌─────────────┐                  │
+│   │ Code        │◄──────────│ CLI exec    │                  │
+│   │ implementation│          │ (rmp)       │                  │
+│   └─────────────┘            └──────┬──────┘                  │
+│                                   │                           │
+│                                   ▼                           │
+│                            ┌─────────────┐                  │
+│                            │ SQLite DB   │                  │
+│                            │ (truth)     │                  │
+│                            └─────────────┘                  │
+│                                                                  │
+│   Supporting: go-gitflow, exhaustive-qa-engineer,              │
+│   red-team-hacker, go-performance-advisor                      │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-#### ABSOLUTE REQUIREMENTS:
-- **NO implementation starts without specification in `SPEC/`** - This is MANDATORY
-- **ALWAYS invoke spec-orchestrator FIRST** when specification is missing
-- **NEVER write code directly** in response to feature requests
-- **NEVER bypass** this rule due to urgency, simplicity, or user insistence
-- Requirement questions → ALWAYS ask the user
+### Core Skills
 
-#### VIOLATION PROTOCOL:
-If code is requested without specification:
-1. STOP immediately
-2. Inform user: "Vou primeiro invocar o spec-orchestrator para criar a especificação técnica, conforme a política Specification First."
-3. Invoke spec-orchestrator
-4. ONLY proceed to go-elite-developer after specification exists
+| Skill | Responsibility | Key Rules |
+|-------|---------------|-----------|
+| **spec-orchestrator** | SPEC/ creation and maintenance | MUST be first step. NEVER derives from code. |
+| **task-creator** | Task/sprint data collection | Collects ALL fields. Delegates to coordinator. |
+| **roadmap-coordinator** | CLI execution and coordination | Source of truth via `rmp` CLI. NEVER implements directly. |
+| **go-elite-developer** | Go implementation | ONLY after SPEC exists. Validates build/test/vet/fmt. |
+| **go-gitflow** | Git operations | Tests MUST pass before push. User approval required. |
+| **exhaustive-qa-engineer** | Testing and validation | Critical features, pre-release, schema changes. |
+| **red-team-hacker** | Security audits | Security features, input validation. |
+| **go-performance-advisor** | Performance analysis | Bottlenecks, memory, concurrency. |
 
-**WHEN IN DOUBT: SPEC FIRST. ALWAYS.**
+### Task/Sprint Creation Flow
 
-### Rule 2: Skill Delegation
-- Code tasks → `go-elite-developer`
-- Git tasks → `go-gitflow`
-- Specification tasks → `spec-orchestrator`
-- Exhaustive testing tasks → `exhaustive-qa-engineer`
-- Security tasks → `red-team-hacker`
-- Performance tasks → `go-performance-advisor`
+**Step 1: task-creator** collects ALL required fields:
+- Tasks: title, type, priority, status, description, technical, criteria, specialists, time, complexity
+- Sprints: name, goal, start, end, status
 
-### Rule 3: Validation Gates
-Before any commit/merge:
+**Step 2: User confirmation** → task-creator delegates to roadmap-coordinator
+
+**Step 3: roadmap-coordinator** executes CLI commands:
+- `rmp task create --title "X" --type TASK --priority P1 ...`
+- `rmp sprint create --name "X" --goal "Y" ...`
+
+**Step 4: SQLite** stores as source of truth
+
+---
+
+## 4. Execution Rules
+
+### Rule 1: Skill Delegation
+
+| Task Type | Skill |
+|-----------|-------|
+| New feature/changes | `spec-orchestrator` FIRST |
+| Create task/sprint | `task-creator` → `roadmap-coordinator` |
+| Execute/coordinate tasks | `roadmap-coordinator` |
+| Code implementation | `go-elite-developer` |
+| Git operations | `go-gitflow` |
+| Testing | `exhaustive-qa-engineer` |
+| Security audit | `red-team-hacker` |
+| Performance | `go-performance-advisor` |
+
+### Rule 2: Validation Gates
+
+Before any commit:
 1. `go fmt ./...` (format)
 2. `go vet ./...` (static analysis)
-3. `go test ./...` (tests)
+3. `go test ./...` (tests - ALL must pass)
 4. `go build -o ./bin/ ./cmd/rmp` (build)
 
-### Rule 4: Output Standards
-- **Success**: JSON to stdout
-- **Errors/Help**: Plain text to stderr
-- **Dates**: ISO 8601 UTC
+### Rule 3: Commit Standards
 
-### Rule 5: Commit Standards (Strict)
+**Forbidden:**
+- NO reference to Claude/AI
+- NO `Co-Author`
+- NO external tools/origin mentions
 
-#### Forbidden
-- **NO reference to Claude** in commit messages
-- **NO `Co-Author`** or similar in commits
-- **NO mention** of AI assistants, external tools, or code origin
-
-#### Required
-- **Detailed description** of what was changed
-- **Reason for the change** (why, not just what)
-- **Technical context** relevant (structs, functions, affected packages)
-- **Impact** of changes (breaking changes, dependencies, etc.)
-
-#### Format
+**Required:**
 ```
 type(scope): subject
 
-- Detailed explanation of what changed
-- Technical reasoning for the change
+- What changed (file/function level)
+- Technical reasoning
 - Impact on existing code
-- References to SPEC/ if applicable
+- SPEC/ references
 ```
 
-### Rule 6: Task/Sprint Lifecycle and Specification Binding (MANDATORY)
+**Types:** feat, fix, refactor, test, docs, perf, chore
 
-#### Task/Sprint Creation Flow:
-```
-User Request → task-creator → roadmap-coordinator → Groadmap CLI (SQLite)
-     ↓              ↓                ↓                      ↓
-  Describes    Collects ALL    Executes rmp          Source of truth
-  requirement  required data   commands
-```
+### Rule 4: Output Standards
 
-1. **User describes** need → task-creator engages
-2. **task-creator** collects ALL required fields (title, type, priority, description, criteria, etc.)
-3. **task-creator** presents data to user for confirmation
-4. Upon confirmation, **task-creator delegates** to roadmap-coordinator
-5. **roadmap-coordinator** executes CLI commands (`rmp task create`, `rmp sprint create`)
-6. **SQLite database** stores the task/sprint as source of truth
-
-#### Task Creation Requirements:
-- **NO task/sprint can be created without a corresponding specification in `SPEC/`**
-- Before creating any task, **identify the functional area** (VERSION.md, BUILD.md, COMMANDS.md, etc.)
-- Tasks must reference the **specific functional area SPEC** they implement
-- **NEVER create task-specific spec files** (e.g., "VERSION_RESET.md", "RASPBERRY_PI_SUPPORT.md")
-- **ALWAYS map to existing functional area SPECs** and update them as needed
-- **task-creator MUST collect ALL required fields** before delegating to roadmap-coordinator
-- **roadmap-coordinator validates data completeness** before executing CLI commands
-
-#### Task Completion:
-- **Before marking any task as complete, VALIDATE that the specification exists in `SPEC/`**
-- Verify the implementation aligns with the **relevant functional area SPEC**
-- The task must remain open until the specification is updated and the implementation aligns with it
-
-#### Task Validation Protocol:
-1. Review the task requirements
-2. **Identify the functional area** affected by the task
-3. Locate the corresponding **functional area SPEC** in `SPEC/` (e.g., BUILD.md for build changes)
-4. If the relevant SPEC is MISSING or incomplete → STOP and invoke spec-orchestrator to update/create it
-5. Only validate completion when specification exists and implementation matches it
+- **Success:** JSON to stdout
+- **Errors/Help:** Plain text to stderr
+- **Dates:** ISO 8601 UTC
 
 ---
 
-## Project Structure
+## 5. Project Structure
 
 ```
 /Users/flaviocfo/dev/github.com/FlavioCFOliveira/Groadmap/
-├── cmd/rmp/main.go          # Entry point CLI
+├── cmd/rmp/main.go              # Entry point
 ├── internal/
-│   ├── commands/            # Subcommands (roadmap, task, sprint, audit)
-│   ├── db/                  # SQLite, schema, parameterized queries
-│   ├── models/              # Structs and enums
-│   └── utils/               # JSON, ISO 8601 dates, paths
-├── bin/                     # Build output
-├── SPEC/                    # Technical specifications (spec-orchestrator only)
-├── .claude/skills/          # Skill definitions
-│   ├── task-creator/        # Task/sprint creation skill
-│   ├── roadmap-coordinator/ # CLI coordination skill
-│   ├── spec-orchestrator/   # Specification authority
-│   ├── go-elite-developer/  # Go implementation skill
-│   └── go-gitflow/          # Git operations skill
-└── CLAUDE.md               # This file
+│   ├── commands/                # Subcommands
+│   ├── db/                    # SQLite, schema
+│   ├── models/                # Structs, enums
+│   └── utils/                 # JSON, dates, paths
+├── bin/                       # Build output
+├── SPEC/                      # Technical specifications
+└── .claude/skills/            # Skill definitions
+    ├── task-creator/
+    ├── roadmap-coordinator/
+    ├── spec-orchestrator/
+    ├── go-elite-developer/
+    └── go-gitflow/
 ```
-
-### Task Management Architecture
-
-**Groadmap uses SQLite as the source of truth for tasks and sprints.**
-
-```
-User Request → task-creator → roadmap-coordinator → Groadmap CLI → SQLite
-                     ↓                ↓
-              Collects ALL      Executes rmp
-              required data     commands
-```
-
-- **task-creator**: Prepares complete data packages for tasks/sprints
-- **roadmap-coordinator**: Executes CLI commands (`rmp task create`, `rmp sprint create`)
-- **SQLite**: Stores tasks, sprints, roadmaps in `~/.roadmaps/*.db`
 
 ---
 
-## Development Commands
+## 6. Decision Matrix
+
+| Situation | Action |
+|-----------|--------|
+| New feature | `spec-orchestrator` FIRST |
+| Code changes | Verify SPEC/ or invoke `spec-orchestrator` |
+| Create task/sprint | `task-creator` |
+| Execute tasks | `roadmap-coordinator` |
+| Git operations | `go-gitflow` |
+| Tests needed | `exhaustive-qa-engineer` |
+| Security audit | `red-team-hacker` |
+| Performance analysis | `go-performance-advisor` |
+| SPEC exists, implement | `go-elite-developer` |
+| Requirements unclear | ASK the user |
+| Code vs SPEC diverge | Follow SPEC, ask user |
+
+---
+
+## 7. Anti-Patterns (Zero Tolerance)
+
+### Critical Violations
+- Implement without SPEC/
+- Derive SPEC from existing code
+- Make product decisions without user
+- Create task-specific spec files
+- Duplicate functional areas
+
+### Other Forbidden
+- Ignore `go vet` or `go test` failures
+- Destructive Git operations without confirmation
+- Security compromises (SQL injection, etc.)
+- Reference Claude/AI in commits
+- Documentation in Portuguese
+- Emojis in technical documentation
+
+---
+
+## 8. Technical Constraints
+
+### Security
+- Input validation for all CLI arguments
+- Parameterized SQL queries
+- Filesystem permissions: `0700` for `~/.roadmaps/`
+
+### Data Standards
+- All dates: ISO 8601 UTC
+- Success: JSON to stdout
+- Errors: Plain text to stderr
+
+### SQLite
+- Individual `.db` files in `~/.roadmaps/`
+- Versioned schema with migrations
+
+---
+
+## 9. Development Commands
 
 ```bash
-# Build (output to ./bin/)
+# Build
 go build -o ./bin/ ./cmd/rmp
 
 # Test
 go test ./...
 
-# Run (development)
-go run ./cmd/rmp [args]        # ex: go run ./cmd/rmp roadmap list
+# Run (dev)
+go run ./cmd/rmp [args]
 
-# Format and Vet
+# Format/Vet
 go fmt ./...
 go vet ./...
 ```
 
 ---
 
-## Technical Constraints
+## 10. Documentation Standards
 
-### Security
-- Mandatory input validation for all CLI arguments
-- Parameterized SQL queries (prepared statements)
-- Filesystem permissions: `0700` for data directory (`~/.roadmaps/`)
+### Language
+- **SPEC/, skills, CLAUDE.md:** English
+- **User interaction:** Portuguese (PT-pt)
+- **Technical terms:** May remain in English
 
-### Data Standards
-- All dates: ISO 8601 UTC
-- Success output: JSON
-- Error output: Plain text to stderr
-
-### SQLite
-- Individual `.db` files in `~/.roadmaps/`
-- Versioned schema
-- Migrations when necessary
+### Tone
+- Clear, technical, professional
+- **NO emojis or ornamental characters**
 
 ---
 
-## SPEC Directory Reference
+## Project Identity
 
-The `SPEC/` directory contains **functional area specifications**, not task-specific documents. Each file represents a complete functional domain of the system.
-
-| File | Functional Area | Update When... |
-|------|-----------------|----------------|
-| `SPEC/ARCHITECTURE.md` | System design, structure | Adding new components, changing architecture |
-| `SPEC/BUILD.md` | Build system, CI/CD workflows | Modifying build process, adding targets, CI changes |
-| `SPEC/COMMANDS.md` | CLI hierarchy, aliases | Adding/modifying commands, flags, or subcommands |
-| `SPEC/DATABASE.md` | SQLite schema, relationships | Schema changes, migrations, new entities |
-| `SPEC/DATA_FORMATS.md` | JSON output schema | Changing output formats, input formats |
-| `SPEC/DEPLOY.md` | Deployment, installation | Release process, distribution, installation |
-| `SPEC/HELP_EXAMPLES.md` | Help/error messages | Modifying help text, error messages, examples |
-| `SPEC/MODELS.md` | Model definitions | Adding/modifying structs, enums, domain models |
-| `SPEC/STATE_MACHINE.md` | State machines | Adding new states, transitions, workflows |
-| `SPEC/VERSION.md` | Version management | Version commands, versioning logic, display |
-
-**Owner**: spec-orchestrator for all SPEC files.
-
----
-
-## Decision Matrix
-
-| Situation | Action |
-|-----------|--------|
-| **User requests new feature** | **MANDATORY: Invoke `spec-orchestrator` FIRST - NO EXCEPTIONS** |
-| **User requests code changes** | **MANDATORY: Verify SPEC/ exists first, else invoke `spec-orchestrator`** |
-| **Bug fix or enhancement to existing feature** | **Invoke `spec-orchestrator` to UPDATE relevant functional area SPEC** |
-| **New subcommand/flag** | **Invoke `spec-orchestrator` to UPDATE `SPEC/COMMANDS.md`** |
-| **Build/CI change** | **Invoke `spec-orchestrator` to UPDATE `SPEC/BUILD.md`** |
-| **Version-related change** | **Invoke `spec-orchestrator` to UPDATE `SPEC/VERSION.md`** |
-| **Database schema change** | **Invoke `spec-orchestrator` to UPDATE `SPEC/DATABASE.md`** |
-| **User wants to create task/sprint** | **Invoke `task-creator`** |
-| **User wants to execute/coordinate tasks** | **Invoke `roadmap-coordinator`** |
-| **User wants to implement/advance tasks** | **Invoke `roadmap-coordinator` → delegates to specialists** |
-| Specification exists, implement | Invoke `go-elite-developer` |
-| Git operations (commit, branch, PR) | Invoke `go-gitflow` |
-| Exhaustive testing needed | Invoke `exhaustive-qa-engineer` |
-| Security audit | Invoke `red-team-hacker` |
-| Performance analysis | Invoke `go-performance-advisor` |
-| Requirement question | ASK the user |
-| Code vs Specification diverge | Follow specification, ask the user |
-
----
-
-## Anti-Patterns (FORBIDDEN - ZERO TOLERANCE)
-
-### CRITICAL VIOLATIONS (Will Result in Immediate Rejection):
-- **NEVER implement without specification** - THIS IS THE #1 RULE. NO EXCEPTIONS.
-- **NEVER derive specification from existing code** - Specifications come ONLY from user input via spec-orchestrator
-- **NEVER make product decisions** - Always ask the user
-- **NEVER create task-specific spec files** (e.g., "VERSION_RESET.md", "RASPBERRY_PI_SUPPORT.md") - Update the relevant functional area SPEC instead
-- **NEVER duplicate functional areas** - If VERSION.md exists, update it; do not create new version-related specs
-
-### Other Forbidden Patterns:
-- NEVER ignore failures in `go vet` or `go test`
-- NEVER perform destructive Git operations without confirmation
-- NEVER compromise security (input validation, SQL injection)
-- NEVER reference Claude/AI in commits (messages must be technical and neutral)
-- NEVER add Co-Author in commits (the user is the only author)
-- NEVER create project documentation in Portuguese (always in English, per Documentation Standards)
-- NEVER use emojis or ornamental characters in technical documentation
-
----
-
-## Communication Protocol
-
-1. **Understand**: Analyze user request
-2. **Routing**: Identify correct skill/agent
-3. **Data Collection**: If task/sprint creation, ensure ALL required fields are collected
-4. **Validation**: Verify mandatory gates (SPEC exists, data complete)
-5. **Delegation**: Invoke skill with complete context
-6. **Execution**: For CLI operations, roadmap-coordinator executes via Groadmap CLI
-7. **Delivery**: Present result to user
-
-When multiple agents are needed, orchestrate sequentially according to dependencies.
-
----
-
-## Task-Creator and Roadmap-Coordinator Integration
-
-### Data Flow Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    TASK CREATION WORKFLOW                        │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌──────────────┐     ┌──────────────┐     ┌──────────────────┐│
-│  │   USER       │────▶│ task-creator │────▶│ roadmap-         ││
-│  │  (describes) │     │ (collects    │     │ coordinator      ││
-│  │              │     │  ALL data)   │     │ (CLI execution)  ││
-│  └──────────────┘     └──────────────┘     └──────────────────┘│
-│                               │                       │         │
-│                               ▼                       ▼         │
-│                        ┌──────────────┐     ┌──────────────────┐│
-│                        │  Presents    │     │   Groadmap       ││
-│                        │  to user     │     │   CLI (rmp)      ││
-│                        │  for confirm │     └──────────────────┘│
-│                        └──────────────┘              │         │
-│                                                       ▼         │
-│                                              ┌──────────────────┐│
-│                                              │   SQLite DB        ││
-│                                              │   (source of       ││
-│                                              │   truth)           ││
-│                                              └──────────────────┘│
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### task-creator Responsibilities
-
-**MUST collect ALL fields for task creation:**
-- **Required:** title, type, priority, status, description (functional requirements)
-- **Required for rich tasks:** technical requirements, acceptance criteria, specialists, estimated time, complexity
-- **Validation:** Ensure all enum values are valid (type, priority, status, complexity)
-- **Presentation:** Show complete data to user with "Dados para CLI" section
-- **Delegation:** Only delegates to roadmap-coordinator after user confirmation
-
-**MUST collect ALL fields for sprint creation:**
-- **Required:** name, goal, start date (YYYY-MM-DD), end date (YYYY-MM-DD), status
-- **Validation:** Ensure dates are valid and end > start
-- **Presentation:** Show complete sprint data to user
-
-### roadmap-coordinator Responsibilities
-
-**CLI-First Execution:**
-- **ALWAYS** uses CLI commands, never direct database access
-- Receives complete data package from task-creator
-- Executes `rmp task create` or `rmp sprint create` with all flags
-- Verifies creation via `rmp task get` or `rmp sprint show`
-- Reports back assigned ID to user
-
-**State Management:**
-- Manages task states: BACKLOG → SPRINT → DOING → TESTING → COMPLETED
-- Uses `rmp task stat` for ALL state transitions
-- Retrieves next tasks via `rmp task next [N]`
-
-**Delegation Chain:**
-```
-roadmap-coordinator → Analyze task → Delegate to specialist → Update state → Report
-        │                                              │
-        └─ task requires implementation ────────────────┘
-```
-
-### Integration Rules
-
-1. **task-creator NEVER writes directly to database** - only prepares data
-2. **roadmap-coordinator NEVER creates data structures** - only executes CLI
-3. **SQLite is always the source of truth** - accessed only via Groadmap CLI
-4. **Complete data validation** happens in task-creator before delegation
-5. **User confirmation** required before any CLI execution
-
-### Example Task Creation Command
-
-After task-creator collects data and user confirms, roadmap-coordinator executes:
-
-```bash
-rmp task create -r groadmap \
-  --title "Implement user authentication" \
-  --type TASK \
-  --priority P1 \
-  --status BACKLOG \
-  --description "Add login/logout functionality with secure password hashing" \
-  --technical "Implement bcrypt hashing, JWT tokens, middleware protection" \
-  --criteria "User can login,User can logout,Passwords are hashed,Tokens expire" \
-  --specialists "go-elite-developer,red-team-hacker" \
-  --time "5 days" \
-  --complexity HIGH
-```
+**Groadmap** is a CLI tool in Go for managing technical roadmaps, using SQLite as backend.
