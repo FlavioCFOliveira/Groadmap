@@ -222,7 +222,8 @@ rmp sprint stats -r project1 1
     "DOING": 2,
     "TESTING": 1,
     "COMPLETED": 3
-  }
+  },
+  "task_order": [5, 3, 8, 1, 9, 2, 7, 4, 6, 10]
 }
 ```
 
@@ -420,6 +421,184 @@ rmp sprint remove -r project1 1
 rmp sprint rm -r project1 2
 ```
 
+---
+
+## Task Ordering Commands
+
+Commands for managing the execution order of tasks within a sprint. Tasks are ordered by position (0-based), where position 0 is the first task in the sprint.
+
+### reorder
+
+Sets the exact order of all tasks in a sprint. The order of task IDs in the argument defines the new sequence.
+
+**Usage:** `rmp sprint reorder [OPTIONS] <sprint-id> <task-ids>` or `rmp sprint order [OPTIONS] <sprint-id> <task-ids>`
+
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `sprint-id` | Yes | Sprint ID |
+| `task-ids` | Yes | Comma-separated list of ALL task IDs in desired order |
+
+**Flags:**
+| Short Flag | Long Flag | Type | Description |
+|------------|------------|------|-----------|
+| `-r` | `--roadmap` | string | Roadmap name (required) |
+
+**Validation:**
+- All task IDs must belong to the specified sprint
+- No duplicate task IDs allowed
+- Must include ALL sprint tasks (partial reorder not supported)
+
+**Examples:**
+```bash
+rmp sprint reorder -r project1 1 5,3,1,4,2
+rmp sprint order -r project1 1 10,11,12,13,14
+```
+
+**Example output:**
+```json
+{
+  "success": true,
+  "sprint_id": 1,
+  "task_order": [5, 3, 1, 4, 2]
+}
+```
+
+---
+
+### move-to
+
+Moves a single task to a specific position within a sprint, shifting other tasks accordingly.
+
+**Usage:** `rmp sprint move-to [OPTIONS] <sprint-id> <task-id> <position>` or `rmp sprint mvto [OPTIONS] <sprint-id> <task-id> <position>`
+
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `sprint-id` | Yes | Sprint ID |
+| `task-id` | Yes | Task ID to move |
+| `position` | Yes | Target position (0-based). If >= task count, moves to end |
+
+**Flags:**
+| Short Flag | Long Flag | Type | Description |
+|------------|------------|------|-----------|
+| `-r` | `--roadmap` | string | Roadmap name (required) |
+
+**Behavior:**
+- Moving UP: Tasks between new position and current position-1 shift down by 1
+- Moving DOWN: Tasks between current position+1 and new position shift up by 1
+- Moving to same position: No-op
+- Moving to position >= task count: Task is placed at the end
+
+**Examples:**
+```bash
+rmp sprint move-to -r project1 1 5 0    # Move task 5 to position 0 (top)
+rmp sprint move-to -r project1 1 5 3    # Move task 5 to position 3
+rmp sprint mvto -r project1 1 10 5    # Move task 10 to position 5
+```
+
+**Example output:**
+```json
+{
+  "success": true,
+  "sprint_id": 1,
+  "task_id": 5,
+  "position": 0
+}
+```
+
+---
+
+### swap
+
+Swaps the positions of two tasks within a sprint.
+
+**Usage:** `rmp sprint swap [OPTIONS] <sprint-id> <task-id-1> <task-id-2>`
+
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `sprint-id` | Yes | Sprint ID |
+| `task-id-1` | Yes | First task ID |
+| `task-id-2` | Yes | Second task ID |
+
+**Flags:**
+| Short Flag | Long Flag | Type | Description |
+|------------|------------|------|-----------|
+| `-r` | `--roadmap` | string | Roadmap name (required) |
+
+**Validation:**
+- Both tasks must belong to the same sprint
+- Task IDs must be different
+
+**Examples:**
+```bash
+rmp sprint swap -r project1 1 5 3    # Swap positions of tasks 5 and 3
+```
+
+**Example output:**
+```json
+{
+  "success": true,
+  "sprint_id": 1,
+  "task_id_1": 5,
+  "task_id_2": 3
+}
+```
+
+---
+
+### top
+
+Moves a task to the top of the sprint (position 0).
+
+**Usage:** `rmp sprint top [OPTIONS] <sprint-id> <task-id>`
+
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `sprint-id` | Yes | Sprint ID |
+| `task-id` | Yes | Task ID to move |
+
+**Flags:**
+| Short Flag | Long Flag | Type | Description |
+|------------|------------|------|-----------|
+| `-r` | `--roadmap` | string | Roadmap name (required) |
+
+**Behavior:** Equivalent to `move-to <task-id> 0`
+
+**Examples:**
+```bash
+rmp sprint top -r project1 1 5    # Move task 5 to position 0
+```
+
+---
+
+### bottom
+
+Moves a task to the bottom of the sprint (last position).
+
+**Usage:** `rmp sprint bottom [OPTIONS] <sprint-id> <task-id>` or `rmp sprint btm [OPTIONS] <sprint-id> <task-id>`
+
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `sprint-id` | Yes | Sprint ID |
+| `task-id` | Yes | Task ID to move |
+
+**Flags:**
+| Short Flag | Long Flag | Type | Description |
+|------------|------------|------|-----------|
+| `-r` | `--roadmap` | string | Roadmap name (required) |
+
+**Behavior:** Equivalent to `move-to <task-id> <task_count>`
+
+**Examples:**
+```bash
+rmp sprint bottom -r project1 1 5    # Move task 5 to last position
+rmp sprint btm -r project1 1 10    # Move task 10 to last position
+```
+
 ## Aliases
 
 | Command | Alias |
@@ -432,6 +611,9 @@ rmp sprint rm -r project1 2
 | `add-tasks` | `add` |
 | `remove-tasks` | `rm-tasks` |
 | `move-tasks` | `mv-tasks` |
+| `reorder` | `order` |
+| `move-to` | `mvto` |
+| `bottom` | `btm` |
 
 ## Sprint Lifecycle
 
@@ -447,3 +629,5 @@ PENDING → OPEN → CLOSED
 - State transitions are validated (cannot close an already closed sprint)
 - When removing a sprint, associated tasks return to `BACKLOG` status
 - When adding tasks to a sprint, the task status changes to `SPRINT`
+- Task ordering commands maintain position consistency (0, 1, 2...n) automatically
+- The `stats` command shows the current `task_order` array for reference

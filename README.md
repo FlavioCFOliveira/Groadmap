@@ -17,6 +17,7 @@ This will detect your OS and architecture, download the latest release from GitH
 - **Task Prioritization**: Get next tasks from open sprint ordered by severity and priority
 - **Sprint Management**: Organize tasks into sprints with complete lifecycle (PENDING, OPEN, CLOSED)
 - **Sprint Reporting**: Comprehensive sprint reports with progress and distribution metrics
+- **Task Ordering**: Reorder, move-to-position, swap, top, and bottom commands for sprint task management
 - **Audit Trail**: Automatic logging of all operations for traceability
 - **State Machine**: Validated task and sprint status transitions with automatic date tracking
 - **Bulk Operations**: Support for multiple task IDs in single commands
@@ -27,7 +28,7 @@ This will detect your OS and architecture, download the latest release from GitH
 |---------|-------------|---------------|
 | `roadmap` | Roadmap management (create, list, select, remove) | [DOCS/commands/roadmap.md](DOCS/commands/roadmap.md) |
 | `task` | Task management (create, edit, list, status, priority, severity, next) | [DOCS/commands/task.md](DOCS/commands/task.md) |
-| `sprint` | Sprint management with lifecycle control and reporting | [DOCS/commands/sprint.md](DOCS/commands/sprint.md) |
+| `sprint` | Sprint management with lifecycle control, reporting, and task ordering | [DOCS/commands/sprint.md](DOCS/commands/sprint.md) |
 | `audit` | Audit log and entity history | [DOCS/commands/audit.md](DOCS/commands/audit.md) |
 
 ## Installation
@@ -75,6 +76,9 @@ rmp sprint add-tasks 1 1,2,3
 
 # Start sprint
 rmp sprint start 1
+
+# Reorder tasks in sprint
+rmp sprint reorder 1 3,1,2
 
 # Show sprint report
 rmp sprint show 1
