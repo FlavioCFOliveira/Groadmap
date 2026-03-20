@@ -14,7 +14,7 @@ This will detect your OS and architecture, download the latest release from GitH
 
 - **Roadmap Management**: Create, list, select, and remove roadmaps
 - **Task Management**: Create, edit, list tasks with status, priority, and severity tracking
-- **Task Prioritization**: Get next tasks from open sprint ordered by severity and priority
+- **Task Prioritization**: Get next tasks from open sprint ordered by sprint task order (or by priority with --order-by-priority flag)
 - **Sprint Management**: Organize tasks into sprints with complete lifecycle (PENDING, OPEN, CLOSED)
 - **Sprint Reporting**: Comprehensive sprint reports with progress and distribution metrics
 - **Task Ordering**: Reorder, move-to-position, swap, top, and bottom commands for sprint task management

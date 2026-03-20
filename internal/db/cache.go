@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
 // ConnectionCache manages database connections for the process lifetime.
@@ -50,7 +52,7 @@ func OpenCached(roadmapName string) (*DB, error) {
 // OpenCached returns a cached connection for the roadmap, or creates a new one.
 func (cc *ConnectionCache) OpenCached(roadmapName string) (*DB, error) {
 	// Validate roadmap name first
-	if err := validateRoadmapName(roadmapName); err != nil {
+	if err := utils.ValidateRoadmapName(roadmapName); err != nil {
 		return nil, err
 	}
 
@@ -238,16 +240,3 @@ func RunExitHandlers() {
 	defaultAtexit.Run()
 }
 
-// validateRoadmapName validates a roadmap name
-func validateRoadmapName(name string) error {
-	if name == "" {
-		return fmt.Errorf("roadmap name cannot be empty")
-	}
-	// Check for invalid characters
-	for _, r := range name {
-		if r == '/' || r == '\\' || r == ':' || r == '*' || r == '?' || r == '"' || r == '<' || r == '>' || r == '|' {
-			return fmt.Errorf("roadmap name contains invalid character: %c", r)
-		}
-	}
-	return nil
-}

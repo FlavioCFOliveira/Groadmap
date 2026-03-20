@@ -5,7 +5,7 @@
 | Component | Version | File |
 |-----------|---------|------|
 | Application | v1.1.0 | `cmd/rmp/main.go` |
-| Database Schema | v1.0.0 | `internal/db/schema.go` |
+| Database Schema | v1.1.0 | `internal/db/schema.go` |
 | Specification | v1.1.0 | `SPEC/` |
 
 ## Versioning Strategy
@@ -15,7 +15,7 @@
 The application version is defined in `cmd/rmp/main.go`:
 
 ```go
-const version = "1.0.0"
+const version = "1.1.0"
 ```
 
 This version is:
@@ -28,7 +28,7 @@ This version is:
 The database schema version is managed separately via `internal/db/schema.go`:
 
 ```go
-const SchemaVersion = "1.0.0"
+const SchemaVersion = "1.1.0"
 ```
 
 - Used for database migrations
@@ -75,13 +75,13 @@ This independence allows:
 1. Update version constant in `cmd/rmp/main.go`
 2. Update `SPEC/VERSION.md` with new version information
 3. Update `SPEC/README.md` version and date
-4. Create git tag: `git tag -a v1.0.0 -m "Release v1.0.0"`
-5. Push tag: `git push origin v1.0.0`
+4. Create git tag: `git tag -a v1.1.0 -m "Release v1.1.0"`
+5. Push tag: `git push origin v1.1.0`
 6. Workflow builds binaries and uploads artifacts
 
 ## Version History
 
 | Date | Application | Schema | Description |
 |------|-------------|--------|-------------|
-| 2026-03-20 | v1.1.0 | v1.0.0 | Added Claude Code skills documentation |
+| 2026-03-20 | v1.1.0 | v1.1.0 | Added sprint task ordering (position column) |
 | 2026-03-20 | v1.0.0 | v1.0.0 | Initial release |

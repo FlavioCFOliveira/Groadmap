@@ -86,11 +86,16 @@ Groadmap/
 │   ├── db/
 │   │   ├── connection.go  # SQLite connection management
 │   │   ├── schema.go      # DDL, structure creation
-│   │   └── queries.go     # Parameterized SQL queries
+│   │   ├── migrations.go  # Database schema migrations
+│   │   ├── queries.go     # Parameterized SQL queries
+│   │   ├── cache.go       # Connection caching
+│   │   └── query_cache.go # Query template caching
 │   ├── models/
 │   │   ├── task.go        # Task structs, enums
 │   │   ├── sprint.go      # Sprint structs, enums
-│   │   └── roadmap.go     # Roadmap structures
+│   │   ├── roadmap.go     # Roadmap structures
+│   │   ├── audit.go       # Audit log structures
+│   │   └── consts.go      # Constants (limits, defaults)
 │   └── utils/
 │       ├── json.go        # JSON serialization
 │       ├── time.go        # ISO 8601 date handling

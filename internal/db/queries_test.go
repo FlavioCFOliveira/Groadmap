@@ -1012,7 +1012,7 @@ func TestGetSprintTasks(t *testing.T) {
 	// Test GetSprintTasksFull with status filter
 	// Note: When tasks are added to sprint, their status changes to SPRINT
 	sprintStatus := models.StatusSprint
-	tasksFull, err := db.GetSprintTasksFull(testContext(), sprintID, &sprintStatus)
+	tasksFull, err := db.GetSprintTasksFull(testContext(), sprintID, &sprintStatus, false)
 	if err != nil {
 		t.Fatalf("failed to get sprint tasks with status: %v", err)
 	}
@@ -1090,7 +1090,7 @@ func TestGetSprintTasksFull(t *testing.T) {
 	}
 
 	// Get all sprint tasks
-	tasks, err := db.GetSprintTasksFull(testContext(), sprintID, nil)
+	tasks, err := db.GetSprintTasksFull(testContext(), sprintID, nil, false)
 	if err != nil {
 		t.Fatalf("failed to get sprint tasks full: %v", err)
 	}

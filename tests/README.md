@@ -16,8 +16,12 @@ This test suite validates all CLI functionality by invoking the actual `rmp` bin
 | `test_04_sprint_task_management.py` | Adding, removing, and moving tasks between sprints |
 | `test_05_audit_reporting.py` | Audit log functionality and reporting features |
 | `test_06_edge_cases_errors.py` | Error handling, boundary values, and edge cases |
-| `test_07_backup_export_import.py` | Backup/restore and export/import functionality |
 | `test_08_complex_workflow.py` | Realistic multi-sprint development scenarios |
+| `test_09_stress_load.py` | Performance tests with 10,000+ tasks and 200+ sprints |
+| `test_10_task_next.py` | Task retrieval and next task functionality |
+| `test_11_sprint_show.py` | Sprint details and task listing |
+| `test_12_sprint_stats.py` | Sprint statistics and metrics |
+| `test_13_sprint_task_ordering.py` | Sprint task ordering operations (reorder, move-to, swap, top, bottom) |
 | `test_09_stress_load.py` | Performance tests with 10,000+ tasks and 200+ sprints |
 
 ## Running Tests

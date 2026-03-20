@@ -23,8 +23,8 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
@@ -164,10 +164,10 @@ func (db *DB) GetTasks(ctx context.Context, ids []int) ([]models.Task, error) {
 // Filters: status, minPriority, minSeverity
 func (db *DB) ListTasks(ctx context.Context, status *models.TaskStatus, minPriority, minSeverity *int, limit int) ([]models.Task, error) {
 	if limit < 1 {
-		limit = 100
+		limit = models.DefaultTaskLimit
 	}
-	if limit > 100 {
-		limit = 100
+	if limit > models.MaxTaskLimit {
+		limit = models.MaxTaskLimit
 	}
 
 	query := `SELECT id, title, status, type, functional_requirements, technical_requirements, acceptance_criteria,
@@ -201,18 +201,8 @@ func (db *DB) ListTasks(ctx context.Context, status *models.TaskStatus, minPrior
 	return scanTasks(rows)
 }
 
-// allowedTaskUpdateFields contains the whitelist of fields that can be updated via UpdateTask.
-var allowedTaskUpdateFields = map[string]bool{
-	"title":                   true,
-	"functional_requirements": true,
-	"technical_requirements":  true,
-	"acceptance_criteria":     true,
-	"specialists":             true,
-	"priority":                true,
-	"severity":                true,
-}
-
 // UpdateTask updates a task's fields with the provided values.
+// Uses hardcoded field names to prevent SQL injection - no dynamic field names in SQL.
 //
 // Parameters:
 //   - ctx: Context for timeout and cancellation
@@ -220,9 +210,10 @@ var allowedTaskUpdateFields = map[string]bool{
 //   - updates: A map of field names to new values. Only whitelisted fields can be updated.
 //
 // Allowed fields (whitelisted):
-//   - "description": Task description (string, max 1000 chars)
-//   - "action": Action to be taken (string, max 2000 chars)
-//   - "expected_result": Expected outcome (string, max 2000 chars)
+//   - "title": Task title (string, max 255 chars)
+//   - "functional_requirements": Functional requirements (string, max 4096 chars)
+//   - "technical_requirements": Technical requirements (string, max 4096 chars)
+//   - "acceptance_criteria": Acceptance criteria (string, max 4096 chars)
 //   - "specialists": Comma-separated list of specialists (string, max 500 chars)
 //   - "priority": Task priority 0-9 (int)
 //   - "severity": Task severity 0-9 (int)
@@ -237,26 +228,48 @@ var allowedTaskUpdateFields = map[string]bool{
 //   - Does NOT update status (use UpdateTaskStatus for that)
 //   - Does NOT create audit entries (caller should log changes)
 //
-// Complexity: O(n) where n is the number of fields being updated
+// Security: Uses hardcoded field names in SQL to prevent injection attacks.
 func (db *DB) UpdateTask(ctx context.Context, id int, updates map[string]interface{}) error {
 	if len(updates) == 0 {
 		return nil
-	}
-
-	// Validate that only whitelisted fields are being updated
-	for field := range updates {
-		if !allowedTaskUpdateFields[field] {
-			return fmt.Errorf("%w: field %q cannot be updated via UpdateTask (use dedicated method)", utils.ErrInvalidUpdate, field)
-		}
 	}
 
 	return retryWithBackoff("update task", func() error {
 		setParts := []string{}
 		args := []interface{}{}
 
+		// Use hardcoded field names to prevent SQL injection
+		// Field names are never dynamically inserted into SQL
 		for field, value := range updates {
-			setParts = append(setParts, fmt.Sprintf("%s = ?", field))
-			args = append(args, value)
+			switch field {
+			case "title":
+				setParts = append(setParts, "title = ?")
+				args = append(args, value)
+			case "functional_requirements":
+				setParts = append(setParts, "functional_requirements = ?")
+				args = append(args, value)
+			case "technical_requirements":
+				setParts = append(setParts, "technical_requirements = ?")
+				args = append(args, value)
+			case "acceptance_criteria":
+				setParts = append(setParts, "acceptance_criteria = ?")
+				args = append(args, value)
+			case "specialists":
+				setParts = append(setParts, "specialists = ?")
+				args = append(args, value)
+			case "priority":
+				setParts = append(setParts, "priority = ?")
+				args = append(args, value)
+			case "severity":
+				setParts = append(setParts, "severity = ?")
+				args = append(args, value)
+			default:
+				return fmt.Errorf("%w: field %q cannot be updated via UpdateTask (use dedicated method)", utils.ErrInvalidUpdate, field)
+			}
+		}
+
+		if len(setParts) == 0 {
+			return fmt.Errorf("%w: no valid fields to update", utils.ErrInvalidUpdate)
 		}
 
 		args = append(args, id)
@@ -633,8 +646,8 @@ func (db *DB) GetNextTasks(ctx context.Context, limit int) ([]models.Task, error
 	if limit < 1 {
 		limit = 1
 	}
-	if limit > 100 {
-		limit = 100
+	if limit > models.MaxTaskLimit {
+		limit = models.MaxTaskLimit
 	}
 
 	// First, get the open sprint ID
@@ -771,25 +784,9 @@ func parseJSONIntArray(jsonStr string) ([]int, error) {
 		return []int{}, nil
 	}
 
-	// Remove brackets and split by comma
-	trimmed := strings.Trim(jsonStr, "[]")
-	if trimmed == "" || trimmed == "null" {
-		return []int{}, nil
-	}
-
-	parts := strings.Split(trimmed, ",")
-	result := make([]int, 0, len(parts))
-
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" || part == "null" {
-			continue
-		}
-		val, err := strconv.Atoi(part)
-		if err != nil {
-			return nil, fmt.Errorf("parsing integer %q: %w", part, err)
-		}
-		result = append(result, val)
+	var result []int
+	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
+		return nil, fmt.Errorf("parsing JSON array: %w", err)
 	}
 
 	return result, nil
@@ -968,8 +965,8 @@ func (db *DB) GetSprintTasks(ctx context.Context, sprintID int) ([]int, error) {
 	return tasks, nil
 }
 
-// GetSprintTasksFull retrieves full task objects for a sprint, ordered by position.
-func (db *DB) GetSprintTasksFull(ctx context.Context, sprintID int, status *models.TaskStatus) ([]models.Task, error) {
+// GetSprintTasksFull retrieves full task objects for a sprint, ordered by position or priority.
+func (db *DB) GetSprintTasksFull(ctx context.Context, sprintID int, status *models.TaskStatus, orderByPriority bool) ([]models.Task, error) {
 	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
 		         t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
 		         t.closed_at, t.priority, t.severity
@@ -983,7 +980,11 @@ func (db *DB) GetSprintTasksFull(ctx context.Context, sprintID int, status *mode
 		args = append(args, string(*status))
 	}
 
-	query += " ORDER BY st.position ASC"
+	if orderByPriority {
+		query += " ORDER BY t.priority DESC, st.position ASC"
+	} else {
+		query += " ORDER BY st.position ASC"
+	}
 
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -1120,6 +1121,38 @@ func (db *DB) LogAuditEntry(ctx context.Context, entry *models.AuditEntry) (int,
 	}
 
 	return auditID, nil
+}
+
+// LogAuditEntriesBatch inserts multiple audit entries using a prepared statement.
+// This is significantly faster than individual inserts for batch operations.
+func (db *DB) LogAuditEntriesBatch(ctx context.Context, entries []*models.AuditEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	return retryWithBackoff("log audit entries batch", func() error {
+		// Prepare the statement once for reuse
+		stmt, err := db.PrepareContext(ctx,
+			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`)
+		if err != nil {
+			return fmt.Errorf("preparing audit statement: %w", err)
+		}
+		defer stmt.Close()
+
+		// Execute for each entry using the prepared statement
+		for _, entry := range entries {
+			_, err = stmt.ExecContext(ctx,
+				entry.Operation,
+				entry.EntityType,
+				entry.EntityID,
+				entry.PerformedAt,
+			)
+			if err != nil {
+				return fmt.Errorf("executing audit insert: %w", err)
+			}
+		}
+		return nil
+	})
 }
 
 // GetAuditEntries retrieves audit entries with optional filters and pagination.

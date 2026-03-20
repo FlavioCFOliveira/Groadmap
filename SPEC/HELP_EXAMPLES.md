@@ -411,6 +411,19 @@ Subcommands:
    remove     Remove a sprint
               (alias: rm)
 
+   reorder    Reorder tasks in sprint
+              (alias: order)
+
+   move-to    Move task to specific position
+              (alias: mvto)
+
+   swap       Swap positions of two tasks
+
+   top        Move task to top of sprint
+
+   bottom     Move task to bottom of sprint
+              (alias: btm)
+
 See 'rmp sprint <subcommand> --help' for more information.
 ```
 
@@ -655,6 +668,123 @@ Output: JSON statistics object
 
 Example:
    rmp sprint stats -r project1 1
+```
+
+### rmp sprint reorder --help
+
+```
+usage: rmp sprint reorder [-h | --help] -r <name> <sprint-id> <task-ids>
+
+Set the exact order of tasks in a sprint. Tasks are ordered by position (0-based),
+where position 0 is the first task in the sprint.
+
+Options:
+   -r, --roadmap <name>   Roadmap name (required)
+
+Arguments:
+   <sprint-id>            Sprint ID
+   <task-ids>             Comma-separated task IDs in desired order (e.g., 5,3,1,4,2)
+
+Validation:
+   - All task IDs must belong to the specified sprint
+   - Duplicate task IDs are not allowed
+   - All sprint tasks must be included
+
+Example:
+   rmp sprint reorder -r project1 1 5,3,1,4,2
+   rmp sprint order -r project1 1 10,20,30
+```
+
+### rmp sprint move-to --help
+
+```
+usage: rmp sprint move-to [-h | --help] -r <name> <sprint-id> <task-id> <position>
+
+Move a task to a specific position in the sprint, shifting other tasks accordingly.
+
+Options:
+   -r, --roadmap <name>   Roadmap name (required)
+
+Arguments:
+   <sprint-id>            Sprint ID
+   <task-id>              Task to move
+   <position>             Target position (0-based). If >= task count, moves to end.
+
+Behavior:
+   - Moving UP: Tasks between new position and current position-1 shift down by 1
+   - Moving DOWN: Tasks between current position+1 and new position shift up by 1
+   - Moving to same position: No-op
+   - Moving to position >= task count: Task placed at the end
+
+Example:
+   rmp sprint move-to -r project1 1 5 0     # Move task 5 to top
+   rmp sprint mvto -r project1 1 10 3       # Move task 10 to position 3
+```
+
+### rmp sprint swap --help
+
+```
+usage: rmp sprint swap [-h | --help] -r <name> <sprint-id> <task-id-1> <task-id-2>
+
+Swap the positions of two tasks within a sprint.
+
+Options:
+   -r, --roadmap <name>   Roadmap name (required)
+
+Arguments:
+   <sprint-id>            Sprint ID
+   <task-id-1>            First task to swap
+   <task-id-2>            Second task to swap
+
+Behavior:
+   - Both tasks must belong to the same sprint
+   - Positions are exchanged between the two tasks
+   - No changes to other tasks
+
+Example:
+   rmp sprint swap -r project1 1 5 10       # Swap positions of tasks 5 and 10
+```
+
+### rmp sprint top --help
+
+```
+usage: rmp sprint top [-h | --help] -r <name> <sprint-id> <task-id>
+
+Move a task to the beginning (top) of the sprint task list.
+Equivalent to 'move-to <task-id> 0'.
+
+Options:
+   -r, --roadmap <name>   Roadmap name (required)
+
+Arguments:
+   <sprint-id>            Sprint ID
+   <task-id>              Task to move to top
+
+Example:
+   rmp sprint top -r project1 1 5           # Move task 5 to top
+```
+
+### rmp sprint bottom --help
+
+```
+usage: rmp sprint bottom [-h | --help] -r <name> <sprint-id> <task-id>
+
+Move a task to the end (bottom) of the sprint task list.
+Equivalent to 'move-to <task-id> <task_count>'.
+
+Options:
+   -r, --roadmap <name>   Roadmap name (required)
+
+Arguments:
+   <sprint-id>            Sprint ID
+   <task-id>              Task to move to bottom
+
+Aliases:
+   btm
+
+Example:
+   rmp sprint bottom -r project1 1 5        # Move task 5 to bottom
+   rmp sprint btm -r project1 1 10          # Move task 10 to bottom
 ```
 
 ### rmp sprint remove --help

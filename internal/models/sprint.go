@@ -23,22 +23,27 @@ var ValidSprintStatuses = []SprintStatus{
 	SprintClosed,
 }
 
+// validSprintStatusMap provides O(1) lookup for sprint status validation.
+var validSprintStatusMap = map[string]SprintStatus{
+	"PENDING": SprintPending,
+	"OPEN":    SprintOpen,
+	"CLOSED":  SprintClosed,
+}
+
 // IsValidSprintStatus checks if a string is a valid sprint status.
+// Uses O(1) map lookup instead of O(n) slice iteration.
 func IsValidSprintStatus(s string) bool {
-	for _, status := range ValidSprintStatuses {
-		if string(status) == s {
-			return true
-		}
-	}
-	return false
+	_, ok := validSprintStatusMap[s]
+	return ok
 }
 
 // ParseSprintStatus parses a string into a SprintStatus.
+// Uses O(1) map lookup for validation.
 func ParseSprintStatus(s string) (SprintStatus, error) {
-	if !IsValidSprintStatus(s) {
-		return "", fmt.Errorf("invalid sprint status: %q", s)
+	if status, ok := validSprintStatusMap[s]; ok {
+		return status, nil
 	}
-	return SprintStatus(s), nil
+	return "", fmt.Errorf("invalid sprint status: %q", s)
 }
 
 // CanStart checks if a sprint can be started (PENDING -> OPEN).

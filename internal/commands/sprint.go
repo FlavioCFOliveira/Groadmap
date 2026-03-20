@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strconv"
@@ -260,7 +261,7 @@ func sprintShow(args []string) error {
 	}
 
 	// Get all tasks in sprint
-	tasks, err := database.GetSprintTasksFull(ctx, sprintID, nil)
+	tasks, err := database.GetSprintTasksFull(ctx, sprintID, nil, false)
 	if err != nil {
 		return err
 	}
@@ -466,12 +467,48 @@ func sprintReopen(args []string) error {
 //	sprintLifecycle(args, models.SprintOpen, models.OpSprintStart,
 //	    func(s models.SprintStatus) bool { return s == models.SprintPending },
 //	    "cannot start sprint with status %s")
+// buildSprintUpdateQuery builds the UPDATE query and args for sprint status change.
+func buildSprintUpdateQuery(newStatus models.SprintStatus, currentStatus models.SprintStatus, now string, sprintID int) (string, []interface{}) {
+	switch newStatus {
+	case models.SprintOpen:
+		if currentStatus == models.SprintClosed {
+			return "UPDATE sprints SET status = ?, closed_at = NULL WHERE id = ?", []interface{}{newStatus, sprintID}
+		}
+		return "UPDATE sprints SET status = ?, started_at = ? WHERE id = ?", []interface{}{newStatus, now, sprintID}
+	case models.SprintClosed:
+		return "UPDATE sprints SET status = ?, closed_at = ? WHERE id = ?", []interface{}{newStatus, now, sprintID}
+	}
+	return "", nil
+}
+
+// execSprintUpdate executes the sprint update and audit logging in a transaction.
+func execSprintUpdate(tx *sql.Tx, query string, args []interface{}, sprintID int, op models.AuditOperation, now string) error {
+	if query == "" {
+		return fmt.Errorf("invalid sprint status")
+	}
+	result, err := tx.Exec(query, args...)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return fmt.Errorf("%w: sprint %d not found", utils.ErrNotFound, sprintID)
+	}
+	_, err = tx.Exec(
+		`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
+		op, models.EntitySprint, sprintID, now,
+	)
+	return err
+}
+
 func sprintLifecycle(args []string, newStatus models.SprintStatus, op models.AuditOperation, canTransition func(models.SprintStatus) bool, errorMsg string) error {
 	roadmapName, remaining, err := requireRoadmap(args)
 	if err != nil {
 		return err
 	}
-
 	if len(remaining) == 0 {
 		return fmt.Errorf("%w: sprint ID required", utils.ErrRequired)
 	}
@@ -489,62 +526,18 @@ func sprintLifecycle(args []string, newStatus models.SprintStatus, op models.Aud
 	ctx, cancel := db.WithQuickTimeout()
 	defer cancel()
 
-	// Get current sprint to validate transition
 	sprint, err := database.GetSprint(ctx, sprintID)
 	if err != nil {
 		return err
 	}
-
 	if !canTransition(sprint.Status) {
 		return fmt.Errorf("%w: "+errorMsg, utils.ErrInvalidInput, sprint.Status)
 	}
 
-	// Capture timestamp once for the entire operation
 	now := utils.NowISO8601()
-
-	// Update within transaction with audit
+	query, queryArgs := buildSprintUpdateQuery(newStatus, sprint.Status, now, sprintID)
 	return database.WithTransaction(func(tx *sql.Tx) error {
-		var query string
-		var args []interface{}
-
-		switch newStatus {
-		case models.SprintOpen:
-			if sprint.Status == models.SprintClosed {
-				// Reopening - clear closed_at
-				query = "UPDATE sprints SET status = ?, closed_at = NULL WHERE id = ?"
-			} else {
-				// Starting - set started_at
-				query = "UPDATE sprints SET status = ?, started_at = ? WHERE id = ?"
-				args = []interface{}{newStatus, now, sprintID}
-			}
-		case models.SprintClosed:
-			query = "UPDATE sprints SET status = ?, closed_at = ? WHERE id = ?"
-			args = []interface{}{newStatus, now, sprintID}
-		}
-
-		if len(args) == 0 {
-			args = []interface{}{newStatus, sprintID}
-		}
-
-		result, err := tx.Exec(query, args...)
-		if err != nil {
-			return err
-		}
-
-		affected, err := result.RowsAffected()
-		if err != nil {
-			return err
-		}
-		if affected == 0 {
-			return fmt.Errorf("%w: sprint %d not found", utils.ErrNotFound, sprintID)
-		}
-
-		// Log audit with same timestamp
-		_, err = tx.Exec(
-			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-			op, models.EntitySprint, sprintID, now,
-		)
-		return err
+		return execSprintUpdate(tx, query, queryArgs, sprintID, op, now)
 	})
 }
 
@@ -564,8 +557,9 @@ func sprintTasks(args []string) error {
 		return err
 	}
 
-	// Parse optional status filter
+	// Parse optional filters
 	var status *models.TaskStatus
+	orderByPriority := false
 	for i := 1; i < len(remaining); i++ {
 		if remaining[i] == "--status" && i+1 < len(remaining) {
 			s, err := models.ParseTaskStatus(remaining[i+1])
@@ -574,6 +568,8 @@ func sprintTasks(args []string) error {
 			}
 			status = &s
 			i++
+		} else if remaining[i] == "--order-by-priority" {
+			orderByPriority = true
 		}
 	}
 
@@ -586,7 +582,7 @@ func sprintTasks(args []string) error {
 	ctx, cancel := db.WithQuickTimeout()
 	defer cancel()
 
-	tasks, err := database.GetSprintTasksFull(ctx, sprintID, status)
+	tasks, err := database.GetSprintTasksFull(ctx, sprintID, status, orderByPriority)
 	if err != nil {
 		return err
 	}
@@ -619,7 +615,7 @@ func sprintStats(args []string) error {
 	defer cancel()
 
 	// Get sprint tasks
-	tasks, err := database.GetSprintTasksFull(ctx, sprintID, nil)
+	tasks, err := database.GetSprintTasksFull(ctx, sprintID, nil, false)
 	if err != nil {
 		return err
 	}
@@ -660,12 +656,44 @@ func sprintStats(args []string) error {
 // Example:
 //
 //	rmp sprint add-tasks -r myproject 1 10,11,12
+// parseTaskIDs parses comma-separated task IDs from a string.
+func parseTaskIDs(idStr string) ([]int, error) {
+	idStrs := strings.Split(idStr, ",")
+	taskIDs := make([]int, 0, len(idStrs))
+	for _, s := range idStrs {
+		id, err := utils.ValidateIDString(strings.TrimSpace(s), "task")
+		if err != nil {
+			return nil, err
+		}
+		taskIDs = append(taskIDs, id)
+	}
+	return taskIDs, nil
+}
+
+// logAuditForTasks logs audit entries for multiple tasks in a sprint using batch insert.
+func logAuditForTasks(ctx context.Context, database *db.DB, sprintID int, op models.AuditOperation, count int) error {
+	if count == 0 {
+		return nil
+	}
+
+	entries := make([]*models.AuditEntry, count)
+	now := utils.NowISO8601()
+	for i := 0; i < count; i++ {
+		entries[i] = &models.AuditEntry{
+			Operation:   string(op),
+			EntityType:  string(models.EntitySprint),
+			EntityID:    sprintID,
+			PerformedAt: now,
+		}
+	}
+	return database.LogAuditEntriesBatch(ctx, entries)
+}
+
 func sprintAddTasks(args []string) error {
 	roadmapName, remaining, err := requireRoadmap(args)
 	if err != nil {
 		return err
 	}
-
 	if len(remaining) < 2 {
 		return fmt.Errorf("%w: sprint ID and task ID(s) required", utils.ErrRequired)
 	}
@@ -675,15 +703,9 @@ func sprintAddTasks(args []string) error {
 		return err
 	}
 
-	// Parse and validate task IDs
-	idStrs := strings.Split(remaining[1], ",")
-	var taskIDs []int
-	for _, s := range idStrs {
-		id, err := utils.ValidateIDString(strings.TrimSpace(s), "task")
-		if err != nil {
-			return err
-		}
-		taskIDs = append(taskIDs, id)
+	taskIDs, err := parseTaskIDs(remaining[1])
+	if err != nil {
+		return err
 	}
 
 	database, err := db.OpenExisting(roadmapName)
@@ -695,32 +717,13 @@ func sprintAddTasks(args []string) error {
 	ctx, cancel := db.WithQuickTimeout()
 	defer cancel()
 
-	// Verify sprint exists
-	_, err = database.GetSprint(ctx, sprintID)
-	if err != nil {
+	if _, err = database.GetSprint(ctx, sprintID); err != nil {
 		return err
 	}
-
-	// Add tasks to sprint using the proper method that handles position assignment
-	err = database.AddTasksToSprint(ctx, sprintID, taskIDs)
-	if err != nil {
+	if err = database.AddTasksToSprint(ctx, sprintID, taskIDs); err != nil {
 		return err
 	}
-
-	// Log audit entries for each task
-	for range taskIDs {
-		_, err = database.LogAuditEntry(ctx, &models.AuditEntry{
-			Operation:   string(models.OpSprintAddTask),
-			EntityType:  string(models.EntitySprint),
-			EntityID:    sprintID,
-			PerformedAt: utils.NowISO8601(),
-		})
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return logAuditForTasks(ctx, database, sprintID, models.OpSprintAddTask, len(taskIDs))
 }
 
 // sprintRemoveTasks removes tasks from a sprint.
@@ -797,12 +800,22 @@ func sprintRemoveTasks(args []string) error {
 }
 
 // sprintMoveTasks moves tasks between sprints.
+// verifySprintsExist checks that both source and destination sprints exist.
+func verifySprintsExist(ctx context.Context, database *db.DB, fromID, toID int) error {
+	if _, err := database.GetSprint(ctx, fromID); err != nil {
+		return fmt.Errorf("%w: from sprint: %v", utils.ErrNotFound, err)
+	}
+	if _, err := database.GetSprint(ctx, toID); err != nil {
+		return fmt.Errorf("%w: to sprint: %v", utils.ErrNotFound, err)
+	}
+	return nil
+}
+
 func sprintMoveTasks(args []string) error {
 	roadmapName, remaining, err := requireRoadmap(args)
 	if err != nil {
 		return err
 	}
-
 	if len(remaining) < 3 {
 		return fmt.Errorf("%w: from sprint ID, to sprint ID, and task ID(s) required", utils.ErrRequired)
 	}
@@ -811,21 +824,14 @@ func sprintMoveTasks(args []string) error {
 	if err != nil {
 		return err
 	}
-
 	toID, err := utils.ValidateIDString(remaining[1], "sprint")
 	if err != nil {
 		return err
 	}
 
-	// Parse and validate task IDs
-	idStrs := strings.Split(remaining[2], ",")
-	var taskIDs []int
-	for _, s := range idStrs {
-		id, err := utils.ValidateIDString(strings.TrimSpace(s), "task")
-		if err != nil {
-			return err
-		}
-		taskIDs = append(taskIDs, id)
+	taskIDs, err := parseTaskIDs(remaining[2])
+	if err != nil {
+		return err
 	}
 
 	database, err := db.OpenExisting(roadmapName)
@@ -837,37 +843,13 @@ func sprintMoveTasks(args []string) error {
 	ctx, cancel := db.WithQuickTimeout()
 	defer cancel()
 
-	// Verify both sprints exist
-	_, err = database.GetSprint(ctx, fromID)
-	if err != nil {
-		return fmt.Errorf("%w: from sprint: %v", utils.ErrNotFound, err)
-	}
-	_, err = database.GetSprint(ctx, toID)
-	if err != nil {
-		return fmt.Errorf("%w: to sprint: %v", utils.ErrNotFound, err)
-	}
-
-	// Add tasks to destination sprint using the proper method that handles position assignment
-	// The ON CONFLICT clause will update sprint_id since task_id is UNIQUE
-	err = database.AddTasksToSprint(ctx, toID, taskIDs)
-	if err != nil {
+	if err = verifySprintsExist(ctx, database, fromID, toID); err != nil {
 		return err
 	}
-
-	// Log audit entries for each task
-	for range taskIDs {
-		_, err = database.LogAuditEntry(ctx, &models.AuditEntry{
-			Operation:   string(models.OpSprintMoveTask),
-			EntityType:  string(models.EntitySprint),
-			EntityID:    toID,
-			PerformedAt: utils.NowISO8601(),
-		})
-		if err != nil {
-			return err
-		}
+	if err = database.AddTasksToSprint(ctx, toID, taskIDs); err != nil {
+		return err
 	}
-
-	return nil
+	return logAuditForTasks(ctx, database, toID, models.OpSprintMoveTask, len(taskIDs))
 }
 
 // sprintReorder reorders tasks in a sprint by defining their exact positions.
@@ -1347,7 +1329,7 @@ Commands:
   start <id>                      Start sprint
   close <id>                      Close sprint
   reopen <id>                     Reopen sprint
-  tasks <id> [OPTIONS]            List tasks in sprint
+  tasks <id> [OPTIONS]            List tasks in sprint (use --order-by-priority for priority ordering)
   stats <id>                       Show sprint statistics
   add-tasks, add <sprint> <ids>  Add tasks to sprint
   remove-tasks, rm-tasks <sprint> <ids>  Remove tasks from sprint
@@ -1362,6 +1344,7 @@ Options:
   -r, --roadmap <name>           Roadmap name (or use default)
   -d, --description <text>      Sprint description
   --status <state>               Filter by status
+  --order-by-priority             Sort by priority (highest first)
   -h, --help                      Show this help message
 
 Examples:

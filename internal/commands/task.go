@@ -59,7 +59,7 @@ func taskList(args []string) error {
 	// Parse filters
 	var status *models.TaskStatus
 	var minPriority, minSeverity *int
-	limit := 100 // Default limit per SPEC
+	limit := models.DefaultTaskLimit // Default limit per SPEC
 
 	for i := 0; i < len(remaining); i++ {
 		switch remaining[i] {
@@ -96,8 +96,8 @@ func taskList(args []string) error {
 				if err != nil {
 					return fmt.Errorf("%w: invalid limit: %s", utils.ErrInvalidInput, remaining[i+1])
 				}
-				if l < 1 || l > 100 {
-					return fmt.Errorf("%w: limit must be between 1 and 100", utils.ErrInvalidInput)
+				if l < 1 || l > models.MaxTaskLimit {
+					return fmt.Errorf("%w: limit must be between 1 and %d", utils.ErrInvalidInput, models.MaxTaskLimit)
 				}
 				limit = l
 				i++
@@ -327,8 +327,8 @@ func taskNext(args []string) error {
 		if err != nil || num < 1 {
 			return fmt.Errorf("%w: num must be a positive integer", utils.ErrInvalidInput)
 		}
-		if num > 100 {
-			num = 100
+		if num > models.MaxTaskLimit {
+			num = models.MaxTaskLimit
 		}
 		limit = num
 	}
@@ -681,14 +681,17 @@ func taskSetStatus(args []string) error {
 	ctx, cancel := db.WithDefaultTimeout()
 	defer cancel()
 
-	// Validate status transitions
-	for _, id := range ids {
-		task, err := database.GetTask(ctx, id)
-		if err != nil {
-			return err
-		}
+	// Validate status transitions using batch query (O(1) vs N+1)
+	tasks, err := database.GetTasks(ctx, ids)
+	if err != nil {
+		return err
+	}
+	if len(tasks) != len(ids) {
+		return fmt.Errorf("%w: some tasks not found", utils.ErrNotFound)
+	}
+	for _, task := range tasks {
 		if !task.Status.CanTransitionTo(newStatus) {
-			return fmt.Errorf("%w: invalid status transition from %s to %s for task %d", utils.ErrInvalidInput, task.Status, newStatus, id)
+			return fmt.Errorf("%w: invalid status transition from %s to %s for task %d", utils.ErrInvalidInput, task.Status, newStatus, task.ID)
 		}
 	}
 

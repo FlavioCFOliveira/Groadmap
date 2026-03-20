@@ -46,7 +46,7 @@ func auditList(args []string) error {
 	var operation, entityType *string
 	var entityID *int
 	var since, until *string
-	limit := 100 // Default limit
+	limit := models.DefaultTaskLimit // Default limit
 
 	for i := 0; i < len(remaining); i++ {
 		switch remaining[i] {
