@@ -1002,17 +1002,32 @@ func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int)
 	}
 
 	return retryWithBackoff("add tasks to sprint", func() error {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning transaction: %w", err)
+		}
+		defer tx.Rollback()
+
 		now := utils.NowISO8601()
 
-		// Get current max position for this sprint
-		maxPos, err := db.getMaxPositionInternal(sprintID)
+		// Get current max position for this sprint within the transaction
+		var maxPos sql.NullInt64
+		err = tx.QueryRow(
+			"SELECT MAX(position) FROM sprint_tasks WHERE sprint_id = ?",
+			sprintID,
+		).Scan(&maxPos)
 		if err != nil {
-			return fmt.Errorf("getting max position: %w", err)
+			return fmt.Errorf("querying max position: %w", err)
+		}
+
+		startPos := -1
+		if maxPos.Valid {
+			startPos = int(maxPos.Int64)
 		}
 
 		for i, taskID := range taskIDs {
-			position := maxPos + i + 1
-			_, err := db.ExecContext(ctx,
+			position := startPos + i + 1
+			_, err := tx.Exec(
 				`INSERT INTO sprint_tasks (sprint_id, task_id, added_at, position) VALUES (?, ?, ?, ?)
 				 ON CONFLICT(task_id) DO UPDATE SET sprint_id = excluded.sprint_id, added_at = excluded.added_at, position = excluded.position`,
 				sprintID, taskID, now, position,
@@ -1033,12 +1048,12 @@ func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int)
 			"UPDATE tasks SET status = 'SPRINT' WHERE id IN (%s)",
 			placeholders,
 		)
-		_, err = db.ExecContext(ctx, query, args...)
+		_, err = tx.Exec(query, args...)
 		if err != nil {
 			return fmt.Errorf("updating task statuses: %w", err)
 		}
 
-		return nil
+		return tx.Commit()
 	})
 }
 

@@ -701,38 +701,26 @@ func sprintAddTasks(args []string) error {
 		return err
 	}
 
-	// Add within transaction with audit
-	return database.WithTransaction(func(tx *sql.Tx) error {
-		now := utils.NowISO8601()
+	// Add tasks to sprint using the proper method that handles position assignment
+	err = database.AddTasksToSprint(ctx, sprintID, taskIDs)
+	if err != nil {
+		return err
+	}
 
-		for _, taskID := range taskIDs {
-			// Add to sprint_tasks
-			_, err := tx.Exec(
-				`INSERT INTO sprint_tasks (sprint_id, task_id, added_at) VALUES (?, ?, ?)
-				 ON CONFLICT(task_id) DO UPDATE SET sprint_id = excluded.sprint_id, added_at = excluded.added_at`,
-				sprintID, taskID, now,
-			)
-			if err != nil {
-				return err
-			}
-
-			// Update task status
-			_, err = tx.Exec("UPDATE tasks SET status = 'SPRINT' WHERE id = ?", taskID)
-			if err != nil {
-				return err
-			}
-
-			// Log audit
-			_, err = tx.Exec(
-				`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-				models.OpSprintAddTask, models.EntitySprint, sprintID, now,
-			)
-			if err != nil {
-				return err
-			}
+	// Log audit entries for each task
+	for range taskIDs {
+		_, err = database.LogAuditEntry(ctx, &models.AuditEntry{
+			Operation:   string(models.OpSprintAddTask),
+			EntityType:  string(models.EntitySprint),
+			EntityID:    sprintID,
+			PerformedAt: utils.NowISO8601(),
+		})
+		if err != nil {
+			return err
 		}
-		return nil
-	})
+	}
+
+	return nil
 }
 
 // sprintRemoveTasks removes tasks from a sprint.
@@ -859,32 +847,27 @@ func sprintMoveTasks(args []string) error {
 		return fmt.Errorf("%w: to sprint: %v", utils.ErrNotFound, err)
 	}
 
-	// Move within transaction with audit
-	return database.WithTransaction(func(tx *sql.Tx) error {
-		now := utils.NowISO8601()
+	// Add tasks to destination sprint using the proper method that handles position assignment
+	// The ON CONFLICT clause will update sprint_id since task_id is UNIQUE
+	err = database.AddTasksToSprint(ctx, toID, taskIDs)
+	if err != nil {
+		return err
+	}
 
-		for _, taskID := range taskIDs {
-			// Update sprint_tasks
-			_, err := tx.Exec(
-				`INSERT INTO sprint_tasks (sprint_id, task_id, added_at) VALUES (?, ?, ?)
-				 ON CONFLICT(task_id) DO UPDATE SET sprint_id = excluded.sprint_id, added_at = excluded.added_at`,
-				toID, taskID, now,
-			)
-			if err != nil {
-				return err
-			}
-
-			// Log audit
-			_, err = tx.Exec(
-				`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-				models.OpSprintMoveTask, models.EntitySprint, toID, now,
-			)
-			if err != nil {
-				return err
-			}
+	// Log audit entries for each task
+	for range taskIDs {
+		_, err = database.LogAuditEntry(ctx, &models.AuditEntry{
+			Operation:   string(models.OpSprintMoveTask),
+			EntityType:  string(models.EntitySprint),
+			EntityID:    toID,
+			PerformedAt: utils.NowISO8601(),
+		})
+		if err != nil {
+			return err
 		}
-		return nil
-	})
+	}
+
+	return nil
 }
 
 // sprintReorder reorders tasks in a sprint by defining their exact positions.
