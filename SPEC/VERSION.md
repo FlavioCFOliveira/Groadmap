@@ -4,9 +4,9 @@
 
 | Component | Version | File |
 |-----------|---------|------|
-| Application | v1.0.0 | `cmd/rmp/main.go` |
+| Application | v1.1.0 | `cmd/rmp/main.go` |
 | Database Schema | v1.0.0 | `internal/db/schema.go` |
-| Specification | v1.0.0 | `SPEC/README.md` |
+| Specification | v1.1.0 | `SPEC/` |
 
 ## Versioning Strategy
 
@@ -83,4 +83,5 @@ This independence allows:
 
 | Date | Application | Schema | Description |
 |------|-------------|--------|-------------|
+| 2026-03-20 | v1.1.0 | v1.0.0 | Added Claude Code skills documentation |
 | 2026-03-20 | v1.0.0 | v1.0.0 | Initial release |
