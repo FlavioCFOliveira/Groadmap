@@ -847,6 +847,162 @@ Or check magic bytes: SQLite files start with `"SQLite format 3\x00"`
 
 ---
 
+## Query Caching
+
+The database layer implements prepared statement caching to eliminate query plan recompilation overhead for frequently executed batch operations with IN clauses.
+
+### Problem Statement
+
+Multiple database functions build SQL queries using `fmt.Sprintf` with `strings.Join`, creating unique query strings for each call. This prevents SQLite from caching query plans, forcing recompilation on every execution.
+
+**Affected Operations:**
+- `GetTasks` - IN clause for task IDs
+- `UpdateTaskStatus` - IN clause for task IDs
+- `UpdateTaskPriority` - IN clause for task IDs
+- `UpdateTaskSeverity` - IN clause for task IDs
+- `AddTasksToSprint` - IN clause for task IDs
+- `RemoveTasksFromSprint` - IN clause for task IDs
+
+**Current Overhead:** 20-30% on repeated batch operations.
+
+### Cache Strategy
+
+Pre-generate and cache query templates for common IN clause sizes to enable SQLite query plan reuse.
+
+**Cached Sizes:**
+- **Standard sizes:** 1-100 (individual caches)
+- **Large batches:** 250, 500, 1000
+
+Total cached templates: 103
+
+### Data Structures
+
+```go
+// QueryCache stores pre-generated query templates for batch operations
+type QueryCache struct {
+    templates    map[string]string
+    placeholders []string
+    mu           sync.RWMutex
+}
+
+// Operation types for cache keys
+const (
+    OpGetTasks              = "get_tasks"
+    OpUpdateTaskStatus      = "update_task_status"
+    OpUpdateTaskPriority    = "update_task_priority"
+    OpUpdateTaskSeverity    = "update_task_severity"
+    OpAddTasksToSprint      = "add_tasks_to_sprint"
+    OpRemoveTasksFromSprint = "remove_tasks_from_sprint"
+)
+```
+
+### Batch Processing
+
+```go
+// BatchProcessor handles chunking large ID lists into manageable batches
+type BatchProcessor struct {
+    batchSize int
+}
+
+// ProcessChunks splits a slice of IDs into chunks and executes fn for each
+func (bp *BatchProcessor) ProcessChunks(ids []int, fn func(chunk []int) error) error
+```
+
+### Performance Requirements
+
+- 20-30% improvement in batch update operations
+- Query plan cache hit rate above 90% for repeated operations
+- Batch processing handles 1000+ IDs efficiently
+- Thread-safe implementation verified with concurrent access
+
+---
+
+## Connection Caching
+
+The database layer implements connection caching to eliminate connection establishment overhead (10-50ms per command) by reusing database connections within the same process lifetime.
+
+### Problem Statement
+
+Every CLI command opens and closes the database connection, incurring:
+- **Connection establishment:** 5-20ms
+- **Schema validation:** 2-10ms
+- **File descriptor operations:** 3-10ms
+- **Total overhead:** 10-50ms per command
+
+### Cache Design
+
+A process-level connection cache that:
+- Keys connections by roadmap name
+- Returns existing connections when available
+- Validates connection health before reuse
+- Cleans up on process exit
+
+### Data Structures
+
+```go
+// ConnectionCache manages database connections for the process lifetime
+type ConnectionCache struct {
+    connections map[string]*CachedConnection
+    mu          sync.RWMutex
+    cleanupOnce sync.Once
+}
+
+// CachedConnection wraps a database connection with metadata
+type CachedConnection struct {
+    db          *DB
+    roadmapName string
+    createdAt   time.Time
+    lastUsed    time.Time
+    useCount    int
+}
+```
+
+### Cache Operations
+
+```go
+// OpenCached returns a cached connection for the roadmap, or creates a new one
+func (cc *ConnectionCache) OpenCached(roadmapName string) (*DB, error)
+
+// Get retrieves a cached connection without creating a new one
+func (cc *ConnectionCache) Get(roadmapName string) *DB
+
+// Store adds a connection to the cache
+func (cc *ConnectionCache) Store(roadmapName string, db *DB)
+
+// Remove deletes a connection from the cache
+func (cc *ConnectionCache) Remove(roadmapName string)
+
+// HealthCheck verifies a connection is still alive
+func (cc *ConnectionCache) HealthCheck(db *DB) error
+
+// CloseAll closes all cached connections
+func (cc *ConnectionCache) CloseAll() error
+```
+
+### Global Cache Instance
+
+```go
+// globalCache is the process-level connection cache
+var globalCache = NewConnectionCache()
+
+// OpenCached is a convenience function that uses the global cache
+func OpenCached(roadmapName string) (*DB, error)
+
+// CloseAllCached closes all cached connections
+func CloseAllCached() error
+```
+
+### Performance Requirements
+
+- Second command reuses existing connection
+- Connection health check validates liveness
+- Dead connections are removed from cache and recreated
+- Process exit closes all cached connections
+- Concurrent access to cache is thread-safe
+- Memory usage remains stable (no connection leaks)
+
+---
+
 ## Migrations
 
 The `_metadata` table enables future schema versioning.

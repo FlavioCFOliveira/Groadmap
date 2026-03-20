@@ -96,12 +96,15 @@ Groadmap/
 │       ├── time.go        # ISO 8601 date handling
 │       └── path.go        # Cross-platform path resolution
 └── SPEC/                  # Technical specification
-    ├── README.md
     ├── ARCHITECTURE.md
     ├── COMMANDS.md
     ├── DATABASE.md
     ├── DATA_FORMATS.md
-    └── HELP_EXAMPLES.md
+    ├── DEPLOY.md
+    ├── HELP_EXAMPLES.md
+    ├── MODELS.md
+    ├── STATE_MACHINE.md
+    └── VERSION.md
 ```
 
 ## Memory Layout Optimization
@@ -282,6 +285,122 @@ set -e
 rmp roadmap use myproject    # Exits 4 if not found
 rmp task add -d "New task"   # Exits 3 if no roadmap
 ```
+
+## Concurrency Model
+
+Groadmap uses SQLite as its database backend with a carefully designed concurrency model for safe concurrent access.
+
+### WAL Mode
+
+Groadmap enables SQLite's Write-Ahead Logging (WAL) mode for better concurrency:
+
+```sql
+PRAGMA journal_mode = WAL;
+```
+
+WAL mode provides:
+- **Readers don't block writers**: Multiple readers can access the database while a writer is active
+- **Writers don't block readers**: Readers see a consistent snapshot of the database
+- **Better performance**: Especially for read-heavy workloads
+
+### Connection Pooling
+
+Groadmap uses a connection pool optimized for concurrent read access:
+
+```go
+db.SetMaxOpenConns(10)        // Allow concurrent readers (WAL mode supports this)
+db.SetMaxIdleConns(5)         // Keep warm connections for frequent access
+db.SetConnMaxLifetime(time.Hour)   // Recycle connections after 1 hour
+db.SetConnMaxIdleTime(10 * time.Minute) // Close idle connections after 10 min
+```
+
+**Rationale**:
+- **MaxOpenConns(10)**: WAL mode allows multiple concurrent readers
+- **MaxIdleConns(5)**: Maintains warm connections to avoid connection establishment overhead
+- **ConnMaxLifetime(1 hour)**: Periodically recycles connections to prevent resource leaks
+- **ConnMaxIdleTime(10 min)**: Closes unused connections to free resources
+
+**Note**: Write operations remain serialized at the SQLite level regardless of connection pool size.
+
+### Busy Timeout
+
+A busy timeout is configured to prevent immediate failures when the database is locked:
+
+```sql
+PRAGMA busy_timeout = 10000;  -- 10 seconds
+```
+
+### Retry Logic
+
+Groadmap implements exponential backoff retry logic for database operations:
+
+- **Initial delay**: 100ms
+- **Maximum delay**: 1000ms
+- **Maximum retries**: 5
+- **Backoff pattern**: 100ms, 200ms, 400ms, 800ms, 1000ms
+
+**Retry Conditions:**
+- Only retry on SQLite busy/locked errors (`database is locked`, `SQLITE_BUSY`)
+- Do not retry on schema errors, constraint violations, syntax errors, or invalid input errors
+
+### Safe Concurrent Patterns
+
+**Pattern 1: Multiple Readers**
+Multiple goroutines can safely read from the database simultaneously.
+
+**Pattern 2: Single Writer**
+Only one goroutine should write at a time. Use a mutex if needed:
+
+```go
+var writeMutex sync.Mutex
+
+func safeWrite(db *DB, task *models.Task) (int, error) {
+    writeMutex.Lock()
+    defer writeMutex.Unlock()
+    return db.CreateTask(ctx, task)
+}
+```
+
+**Pattern 3: Read-While-Writing**
+Readers can safely read while a writer is active (WAL mode).
+
+**Pattern 4: Transaction Boundaries**
+Use transactions for atomic operations:
+
+```go
+db.WithTransaction(func(tx *sql.Tx) error {
+    // Multiple operations within a transaction
+    _, err := tx.Exec("INSERT INTO tasks ...")
+    if err != nil {
+        return err
+    }
+    _, err = tx.Exec("INSERT INTO audit ...")
+    return err
+})
+```
+
+### Anti-Patterns to Avoid
+
+- **Multiple Writers Without Coordination**: Multiple uncoordinated writers may fail with "database is locked"
+- **Long-Running Transactions**: Holding locks for too long blocks other operations
+- **Ignoring Context Cancellation**: Always pass context for proper timeout/cancellation handling
+
+### Race Condition Testing
+
+Run tests with the race detector:
+
+```bash
+go test -race ./internal/db/...
+```
+
+**Test Coverage:**
+- Concurrent task creation and reads
+- Concurrent task updates
+- Concurrent sprint operations
+- Concurrent audit logging
+- High concurrency stress testing
+
+---
 
 ## Performance Considerations
 
