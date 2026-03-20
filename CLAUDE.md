@@ -168,6 +168,7 @@ type(scope): subject
 │   ├── models/                # Structs, enums
 │   └── utils/                 # JSON, dates, paths
 ├── bin/                       # Build output
+├── tests/                     # E2E tests
 ├── SPEC/                      # Technical specifications
 └── .claude/skills/            # Skill definitions
     ├── task-creator/
@@ -254,7 +255,34 @@ go vet ./...
 
 ---
 
-## 10. Documentation Standards
+## 10. End-To-End (E2E) Testing
+
+### Test Location
+- All E2E tests are stored in the `/tests` directory at repository root
+
+### Test Execution
+- Tests must execute commands against the compiled binary at `/bin/rmp`
+- Binary must be built fresh before test execution (`go build -o ./bin/ ./cmd/rmp`)
+
+### Coverage Requirements
+- Tests must exhaustively cover all commands, subcommands, flags, and options
+- Tests must verify both success and failure paths
+- Tests must validate that failures produce expected error messages and contextual help
+
+### Data Standards
+- Tests must use realistic data that resembles production scenarios
+- Avoid placeholder values like "test1", "foo", "bar"
+- Use meaningful names, descriptions, and values
+
+### Assertion Requirements
+- Tests must validate outcomes, not just exit codes
+- Example: When testing task ordering, verify the actual order in database/output
+- Example: When testing task creation, verify the created task fields match input
+- Tests must fail when behavior deviates from specification
+
+---
+
+## 11. Documentation Standards
 
 ### Language
 - **SPEC/, skills, CLAUDE.md:** English

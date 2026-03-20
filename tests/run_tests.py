@@ -26,6 +26,10 @@ TEST_MODULES = [
     "test_05_audit_reporting",
     "test_06_edge_cases_errors",
     "test_08_complex_workflow",
+    "test_10_task_next",
+    "test_11_sprint_show",
+    "test_12_sprint_stats",
+    "test_13_sprint_task_ordering",
 ]
 
 # Stress tests (run separately due to time/data volume)

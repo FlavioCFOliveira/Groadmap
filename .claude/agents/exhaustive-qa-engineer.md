@@ -80,6 +80,14 @@ You specialize in three critical testing domains:
 - Test for goroutine leaks in long-running operations or during error scenarios.
 - Verify C interop safety if CGO is used (pointer passing rules).
 
+**E2E Testing Requirements (per CLAUDE.md):**
+- All E2E tests are stored in the `/tests` directory
+- Tests must execute commands against the compiled binary at `/bin/rmp`
+- Tests must exhaustively cover all commands, subcommands, flags, and options
+- Tests must verify both success and failure paths, including contextual help messages
+- Tests must use realistic data resembling production scenarios (no placeholders like "test1", "foo", "bar")
+- Tests must validate outcomes, not just exit codes - verify actual behavior matches expected results
+
 **Testing Workflow:**
 1. Analyze the code changes or feature under test to identify attack surfaces.
 2. Identify critical paths and trust boundaries (user input → database → filesystem).
