@@ -47,6 +47,31 @@ go build -o ./bin/ ./cmd/rmp
 cp ./bin/rmp /usr/local/bin/
 ```
 
+### Claude Code Skills
+
+Install the `roadmap-coordinator` skill to enable task coordination via Claude Code:
+
+**Project-level (current directory only):**
+```bash
+cp -r .claude/skills/roadmap-coordinator ~/.claude/skills/
+```
+
+**User-level (all projects):**
+```bash
+cp -r .claude/skills/roadmap-coordinator ~/.claude/skills/
+```
+
+**Global (system-wide):**
+```bash
+sudo cp -r .claude/skills/roadmap-coordinator /usr/local/share/claude/skills/
+```
+
+Or install directly from GitHub:
+```bash
+mkdir -p ~/.claude/skills/
+curl -fsSL https://raw.githubusercontent.com/FlavioCFOliveira/Groadmap/main/.claude/skills/roadmap-coordinator/roadmap-coordinator.md -o ~/.claude/skills/roadmap-coordinator/roadmap-coordinator.md
+```
+
 ## Quick Start
 
 ```bash
