@@ -7,12 +7,12 @@ import (
 )
 
 // SchemaVersion is the current database schema version.
-const SchemaVersion = "1.2.0"
+const SchemaVersion = "1.0.0"
 
 // CreateSchema creates all database tables and indexes.
 // This implements the DDL from SPEC/DATABASE.md.
 func (db *DB) CreateSchema() error {
-	// Tasks table - aligned with SPEC/DATABASE.md v1.2.0
+	// Tasks table - aligned with SPEC/DATABASE.md v1.0.0
 	tasksDDL := `
 CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

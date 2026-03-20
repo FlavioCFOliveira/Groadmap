@@ -5,8 +5,8 @@
 | Component | Version | File |
 |-----------|---------|------|
 | Application | v1.0.0 | `cmd/rmp/main.go` |
-| Database Schema | v1.2.0 | `internal/db/schema.go` |
-| Specification | v1.1.0 | `SPEC/README.md` |
+| Database Schema | v1.0.0 | `internal/db/schema.go` |
+| Specification | v1.0.0 | `SPEC/README.md` |
 
 ## Versioning Strategy
 
@@ -28,7 +28,7 @@ This version is:
 The database schema version is managed separately via `internal/db/schema.go`:
 
 ```go
-const SchemaVersion = "1.2.0"
+const SchemaVersion = "1.0.0"
 ```
 
 - Used for database migrations
@@ -61,7 +61,7 @@ Example: v1.0.0
 
 The three version numbers (application, schema, specification) are independent:
 
-- Application can be v1.0.0 while Schema is v1.2.0
+- Application can be v1.0.0 while Schema is v1.0.0
 - Schema changes follow database migration requirements
 - Specification changes track documentation evolution
 
@@ -83,4 +83,4 @@ This independence allows:
 
 | Date | Application | Schema | Description |
 |------|-------------|--------|-------------|
-| 2026-03-20 | v1.0.0 | v1.2.0 | First stable release |
+| 2026-03-20 | v1.0.0 | v1.0.0 | Initial release |

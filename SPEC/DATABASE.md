@@ -210,8 +210,8 @@ CREATE TABLE IF NOT EXISTS _metadata (
 
 -- Insert schema version on creation
 INSERT INTO _metadata (key, value) VALUES
-    ('schema_version', '1.1.0'),
-    ('created_at', '2026-03-12T14:30:00.000Z'),
+    ('schema_version', '1.0.0'),
+    ('created_at', '2026-03-20T00:00:00.000Z'),
     ('application', 'Groadmap');
 ```
 
@@ -849,15 +849,13 @@ Or check magic bytes: SQLite files start with `"SQLite format 3\x00"`
 
 ## Migrations
 
-The `_metadata` table enables future schema versioning:
+The `_metadata` table enables future schema versioning.
 
 ### Schema Version History
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 1.0.0 | 2026-03-12 | Initial schema |
-| 1.1.0 | 2026-03-19 | Added CHECK constraints for field length validation (title: 255 chars, requirements/criteria: 4096 chars) |
-| 1.2.0 | 2026-03-19 | Added `type` column to tasks table with enum constraint for task classification |
+| 1.0.0 | 2026-03-20 | Initial schema |
 
 ### Migration Commands
 
@@ -866,111 +864,5 @@ The `_metadata` table enables future schema versioning:
 SELECT value FROM _metadata WHERE key = 'schema_version';
 
 -- Update version after migration
-UPDATE _metadata SET value = '1.1.0' WHERE key = 'schema_version';
-```
-
-### Migrating from 1.0.0 to 1.1.0
-
-To add length constraints to an existing database:
-
-```sql
--- Note: SQLite has limited ALTER TABLE support.
--- For existing databases, recreate the table with constraints:
-
-BEGIN TRANSACTION;
-
--- Create new table with constraints
-CREATE TABLE tasks_new (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT NOT NULL CHECK(length(title) <= 255),
-    status TEXT NOT NULL DEFAULT 'BACKLOG' CHECK(status IN ('BACKLOG', 'SPRINT', 'DOING', 'TESTING', 'COMPLETED')),
-    functional_requirements TEXT NOT NULL CHECK(length(functional_requirements) <= 4096),
-    technical_requirements TEXT NOT NULL CHECK(length(technical_requirements) <= 4096),
-    acceptance_criteria TEXT NOT NULL CHECK(length(acceptance_criteria) <= 4096),
-    created_at TEXT NOT NULL,
-    specialists TEXT,
-    started_at TEXT,
-    tested_at TEXT,
-    closed_at TEXT,
-    priority INTEGER NOT NULL DEFAULT 0 CHECK(priority >= 0 AND priority <= 9),
-    severity INTEGER NOT NULL DEFAULT 0 CHECK(severity >= 0 AND severity <= 9)
-);
-
--- Copy data
-INSERT INTO tasks_new SELECT * FROM tasks;
-
--- Replace tables
-DROP TABLE tasks;
-ALTER TABLE tasks_new RENAME TO tasks;
-
--- Recreate indexes
-CREATE INDEX idx_tasks_status ON tasks(status);
-CREATE INDEX idx_tasks_type ON tasks(type);
-CREATE INDEX idx_tasks_priority ON tasks(priority);
-CREATE INDEX idx_tasks_created_at ON tasks(created_at);
-CREATE INDEX idx_tasks_status_priority ON tasks(status, priority DESC);
-CREATE INDEX idx_tasks_priority_created ON tasks(priority DESC, created_at ASC);
-
--- Update version
-UPDATE _metadata SET value = '1.1.0' WHERE key = 'schema_version';
-
-COMMIT;
-```
-
-### Migrating from 1.1.0 to 1.2.0
-
-To add the `type` column to an existing database:
-
-```sql
--- Note: SQLite has limited ALTER TABLE support.
--- For existing databases, recreate the table with the new column:
-
-BEGIN TRANSACTION;
-
--- Create new table with type column
-CREATE TABLE tasks_new (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT NOT NULL CHECK(length(title) <= 255),
-    status TEXT NOT NULL DEFAULT 'BACKLOG' CHECK(status IN ('BACKLOG', 'SPRINT', 'DOING', 'TESTING', 'COMPLETED')),
-    type TEXT NOT NULL DEFAULT 'TASK' CHECK(type IN ('USER_STORY', 'TASK', 'BUG', 'SUB_TASK', 'EPIC', 'REFACTOR', 'CHORE', 'SPIKE', 'DESIGN_UX', 'IMPROVEMENT')),
-    functional_requirements TEXT NOT NULL CHECK(length(functional_requirements) <= 4096),
-    technical_requirements TEXT NOT NULL CHECK(length(technical_requirements) <= 4096),
-    acceptance_criteria TEXT NOT NULL CHECK(length(acceptance_criteria) <= 4096),
-    created_at TEXT NOT NULL,
-    specialists TEXT,
-    started_at TEXT,
-    tested_at TEXT,
-    closed_at TEXT,
-    priority INTEGER NOT NULL DEFAULT 0 CHECK(priority >= 0 AND priority <= 9),
-    severity INTEGER NOT NULL DEFAULT 0 CHECK(severity >= 0 AND severity <= 9)
-);
-
--- Copy data (set default type 'TASK' for existing tasks)
-INSERT INTO tasks_new (
-    id, title, status, type, functional_requirements, technical_requirements,
-    acceptance_criteria, created_at, specialists, started_at, tested_at,
-    closed_at, priority, severity
-)
-SELECT
-    id, title, status, 'TASK', functional_requirements, technical_requirements,
-    acceptance_criteria, created_at, specialists, started_at, tested_at,
-    closed_at, priority, severity
-FROM tasks;
-
--- Replace tables
-DROP TABLE tasks;
-ALTER TABLE tasks_new RENAME TO tasks;
-
--- Recreate indexes
-CREATE INDEX idx_tasks_status ON tasks(status);
-CREATE INDEX idx_tasks_type ON tasks(type);
-CREATE INDEX idx_tasks_priority ON tasks(priority);
-CREATE INDEX idx_tasks_created_at ON tasks(created_at);
-CREATE INDEX idx_tasks_status_priority ON tasks(status, priority DESC);
-CREATE INDEX idx_tasks_priority_created ON tasks(priority DESC, created_at ASC);
-
--- Update version
-UPDATE _metadata SET value = '1.2.0' WHERE key = 'schema_version';
-
-COMMIT;
+UPDATE _metadata SET value = '1.0.0' WHERE key = 'schema_version';
 ```

@@ -6,14 +6,19 @@ This directory contains the complete technical specification for Groadmap - a CL
 
 ## Specification Structure
 
+Specifications are organized by **functional area**, not by task. Each file represents a capability of the system that evolves over time.
+
 | File | Description |
 |------|-------------|
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | System architecture, file structure, and design philosophy |
+| [BUILD.md](./BUILD.md) | Build system, cross-compilation, CI/CD workflow |
 | [COMMANDS.md](./COMMANDS.md) | CLI commands, subcommands, arguments, and options |
 | [DATABASE.md](./DATABASE.md) | SQLite schema, tables, indexes, and relationships |
 | [DATA_FORMATS.md](./DATA_FORMATS.md) | JSON output formats, ISO 8601 date conventions, and data types |
+| [DEPLOY.md](./DEPLOY.md) | Deployment, installation, and platform detection |
 | [HELP_EXAMPLES.md](./HELP_EXAMPLES.md) | Help output format examples for all commands and error messages |
 | [MODELS.md](./MODELS.md) | Go structures and enums mapping |
+| [VERSION.md](./VERSION.md) | Version management strategy and release process |
 
 ## Technology Stack
 
