@@ -32,5 +32,5 @@ This directory contains the complete technical specification for Groadmap - a CL
 
 ## Specification Versioning
 
-- Current version: 1.1.0 (Migrated to Go)
-- Date: 2026-03-16
+- Current version: 1.0.0
+- Date: 2026-03-20
