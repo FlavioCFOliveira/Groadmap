@@ -968,7 +968,7 @@ func (db *DB) GetSprintTasks(ctx context.Context, sprintID int) ([]int, error) {
 	return tasks, nil
 }
 
-// GetSprintTasksFull retrieves full task objects for a sprint.
+// GetSprintTasksFull retrieves full task objects for a sprint, ordered by position.
 func (db *DB) GetSprintTasksFull(ctx context.Context, sprintID int, status *models.TaskStatus) ([]models.Task, error) {
 	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
 		         t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
@@ -983,7 +983,7 @@ func (db *DB) GetSprintTasksFull(ctx context.Context, sprintID int, status *mode
 		args = append(args, string(*status))
 	}
 
-	query += " ORDER BY t.priority DESC, t.severity DESC"
+	query += " ORDER BY st.position ASC"
 
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -994,7 +994,8 @@ func (db *DB) GetSprintTasksFull(ctx context.Context, sprintID int, status *mode
 	return scanTasks(rows)
 }
 
-// AddTasksToSprint adds tasks to a sprint.
+// AddTasksToSprint adds tasks to a sprint with automatic position assignment.
+// Tasks are added at the end of the sprint task list (highest position + 1).
 func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int) error {
 	if len(taskIDs) == 0 {
 		return nil
@@ -1003,11 +1004,18 @@ func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int)
 	return retryWithBackoff("add tasks to sprint", func() error {
 		now := utils.NowISO8601()
 
-		for _, taskID := range taskIDs {
+		// Get current max position for this sprint
+		maxPos, err := db.getMaxPositionInternal(sprintID)
+		if err != nil {
+			return fmt.Errorf("getting max position: %w", err)
+		}
+
+		for i, taskID := range taskIDs {
+			position := maxPos + i + 1
 			_, err := db.ExecContext(ctx,
-				`INSERT INTO sprint_tasks (sprint_id, task_id, added_at) VALUES (?, ?, ?)
-				 ON CONFLICT(task_id) DO UPDATE SET sprint_id = excluded.sprint_id, added_at = excluded.added_at`,
-				sprintID, taskID, now,
+				`INSERT INTO sprint_tasks (sprint_id, task_id, added_at, position) VALUES (?, ?, ?, ?)
+				 ON CONFLICT(task_id) DO UPDATE SET sprint_id = excluded.sprint_id, added_at = excluded.added_at, position = excluded.position`,
+				sprintID, taskID, now, position,
 			)
 			if err != nil {
 				return fmt.Errorf("adding task %d to sprint: %w", taskID, err)
@@ -1025,7 +1033,7 @@ func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int)
 			"UPDATE tasks SET status = 'SPRINT' WHERE id IN (%s)",
 			placeholders,
 		)
-		_, err := db.ExecContext(ctx, query, args...)
+		_, err = db.ExecContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("updating task statuses: %w", err)
 		}
@@ -1341,4 +1349,256 @@ func (db *DB) GetAuditStats(ctx context.Context, since, until *string) (*models.
 	}
 
 	return stats, nil
+}
+
+// ==================== SPRINT TASK ORDERING QUERIES ====================
+
+// getMaxPositionInternal retrieves the maximum position value for a sprint.
+// Returns -1 if sprint has no tasks, meaning first task gets position 0.
+func (db *DB) getMaxPositionInternal(sprintID int) (int, error) {
+	var maxPos sql.NullInt64
+	err := db.QueryRow(
+		"SELECT MAX(position) FROM sprint_tasks WHERE sprint_id = ?",
+		sprintID,
+	).Scan(&maxPos)
+	if err != nil {
+		return -1, fmt.Errorf("querying max position: %w", err)
+	}
+	if maxPos.Valid {
+		return int(maxPos.Int64), nil
+	}
+	return -1, nil
+}
+
+// GetMaxPosition retrieves the maximum position value for a sprint.
+// Returns -1 if sprint has no tasks.
+func (db *DB) GetMaxPosition(sprintID int) (int, error) {
+	return db.getMaxPositionInternal(sprintID)
+}
+
+// ReorderSprintTasks sets the exact order of tasks in a sprint.
+// All task IDs must belong to the sprint, and the list must be complete.
+// Positions are assigned sequentially starting from 0.
+func (db *DB) ReorderSprintTasks(sprintID int, taskIDs []int) error {
+	if len(taskIDs) == 0 {
+		return nil
+	}
+
+	return retryWithBackoff("reorder sprint tasks", func() error {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning transaction: %w", err)
+		}
+		defer tx.Rollback()
+
+		// Verify all task IDs belong to this sprint
+		placeholders := make([]string, len(taskIDs))
+		args := make([]interface{}, len(taskIDs)+1)
+		args[0] = sprintID
+		for i, id := range taskIDs {
+			placeholders[i] = "?"
+			args[i+1] = id
+		}
+
+		countQuery := fmt.Sprintf(
+			"SELECT COUNT(*) FROM sprint_tasks WHERE sprint_id = ? AND task_id IN (%s)",
+			strings.Join(placeholders, ","),
+		)
+		var count int
+		err = tx.QueryRow(countQuery, args...).Scan(&count)
+		if err != nil {
+			return fmt.Errorf("verifying task membership: %w", err)
+		}
+		if count != len(taskIDs) {
+			return fmt.Errorf("some task IDs do not belong to sprint %d", sprintID)
+		}
+
+		// Update positions
+		for i, taskID := range taskIDs {
+			_, err := tx.Exec(
+				"UPDATE sprint_tasks SET position = ? WHERE sprint_id = ? AND task_id = ?",
+				i, sprintID, taskID,
+			)
+			if err != nil {
+				return fmt.Errorf("updating position for task %d: %w", taskID, err)
+			}
+		}
+
+		// Log audit entry
+		now := utils.NowISO8601()
+		_, err = tx.Exec(
+			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
+			models.OpSprintReorderTasks, models.EntitySprint, sprintID, now,
+		)
+		if err != nil {
+			return fmt.Errorf("logging audit entry: %w", err)
+		}
+
+		return tx.Commit()
+	})
+}
+
+// MoveTaskToPosition moves a single task to a specific position within a sprint,
+// shifting other tasks to maintain continuous positions (0, 1, 2...).
+// If position >= task count, the task is moved to the end.
+func (db *DB) MoveTaskToPosition(sprintID, taskID, newPosition int) error {
+	return retryWithBackoff("move task to position", func() error {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning transaction: %w", err)
+		}
+		defer tx.Rollback()
+
+		// Get current position of the task
+		var currentPos int
+		err = tx.QueryRow(
+			"SELECT position FROM sprint_tasks WHERE sprint_id = ? AND task_id = ?",
+			sprintID, taskID,
+		).Scan(&currentPos)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				return fmt.Errorf("task %d not found in sprint %d", taskID, sprintID)
+			}
+			return fmt.Errorf("getting current position: %w", err)
+		}
+
+		// Get task count to handle position beyond range
+		var taskCount int
+		err = tx.QueryRow(
+			"SELECT COUNT(*) FROM sprint_tasks WHERE sprint_id = ?",
+			sprintID,
+		).Scan(&taskCount)
+		if err != nil {
+			return fmt.Errorf("getting task count: %w", err)
+		}
+
+		// If position >= task count, move to end
+		if newPosition >= taskCount {
+			newPosition = taskCount - 1
+		}
+
+		// If position unchanged, nothing to do
+		if currentPos == newPosition {
+			return nil
+		}
+
+		if newPosition < currentPos {
+			// Moving UP: shift tasks between new_position and current_position-1 down by 1
+			_, err = tx.Exec(
+				`UPDATE sprint_tasks SET position = position + 1
+				 WHERE sprint_id = ? AND position >= ? AND position < ?`,
+				sprintID, newPosition, currentPos,
+			)
+		} else {
+			// Moving DOWN: shift tasks between current_position+1 and new_position up by 1
+			_, err = tx.Exec(
+				`UPDATE sprint_tasks SET position = position - 1
+				 WHERE sprint_id = ? AND position > ? AND position <= ?`,
+				sprintID, currentPos, newPosition,
+			)
+		}
+		if err != nil {
+			return fmt.Errorf("shifting task positions: %w", err)
+		}
+
+		// Update the moved task to the new position
+		_, err = tx.Exec(
+			"UPDATE sprint_tasks SET position = ? WHERE sprint_id = ? AND task_id = ?",
+			newPosition, sprintID, taskID,
+		)
+		if err != nil {
+			return fmt.Errorf("updating task position: %w", err)
+		}
+
+		// Log audit entry
+		now := utils.NowISO8601()
+		_, err = tx.Exec(
+			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
+			models.OpSprintTaskMovePosition, models.EntitySprint, sprintID, now,
+		)
+		if err != nil {
+			return fmt.Errorf("logging audit entry: %w", err)
+		}
+
+		return tx.Commit()
+	})
+}
+
+// SwapTasks exchanges the positions of two tasks in a sprint.
+// Both tasks must belong to the same sprint.
+func (db *DB) SwapTasks(sprintID, taskID1, taskID2 int) error {
+	if taskID1 == taskID2 {
+		return fmt.Errorf("cannot swap a task with itself")
+	}
+
+	return retryWithBackoff("swap tasks", func() error {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning transaction: %w", err)
+		}
+		defer tx.Rollback()
+
+		// Get positions of both tasks
+		var pos1, pos2 int
+		var count int
+
+		rows, err := tx.Query(
+			"SELECT task_id, position FROM sprint_tasks WHERE sprint_id = ? AND task_id IN (?, ?)",
+			sprintID, taskID1, taskID2,
+		)
+		if err != nil {
+			return fmt.Errorf("querying task positions: %w", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var id, pos int
+			if err := rows.Scan(&id, &pos); err != nil {
+				return fmt.Errorf("scanning task position: %w", err)
+			}
+			if id == taskID1 {
+				pos1 = pos
+			} else {
+				pos2 = pos
+			}
+			count++
+		}
+
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("iterating task positions: %w", err)
+		}
+
+		if count != 2 {
+			return fmt.Errorf("one or both tasks not found in sprint %d", sprintID)
+		}
+
+		// Swap positions
+		_, err = tx.Exec(
+			"UPDATE sprint_tasks SET position = ? WHERE sprint_id = ? AND task_id = ?",
+			pos2, sprintID, taskID1,
+		)
+		if err != nil {
+			return fmt.Errorf("updating position for task %d: %w", taskID1, err)
+		}
+
+		_, err = tx.Exec(
+			"UPDATE sprint_tasks SET position = ? WHERE sprint_id = ? AND task_id = ?",
+			pos1, sprintID, taskID2,
+		)
+		if err != nil {
+			return fmt.Errorf("updating position for task %d: %w", taskID2, err)
+		}
+
+		// Log audit entry
+		now := utils.NowISO8601()
+		_, err = tx.Exec(
+			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
+			models.OpSprintTaskSwap, models.EntitySprint, sprintID, now,
+		)
+		if err != nil {
+			return fmt.Errorf("logging audit entry: %w", err)
+		}
+
+		return tx.Commit()
+	})
 }

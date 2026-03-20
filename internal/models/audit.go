@@ -28,6 +28,11 @@ const (
 	OpSprintAddTask    AuditOperation = "SPRINT_ADD_TASK"
 	OpSprintRemoveTask AuditOperation = "SPRINT_REMOVE_TASK"
 	OpSprintMoveTask   AuditOperation = "SPRINT_MOVE_TASK"
+
+	// Sprint task ordering operations
+	OpSprintReorderTasks     AuditOperation = "SPRINT_REORDER_TASKS"
+	OpSprintTaskMovePosition AuditOperation = "SPRINT_TASK_MOVE_POSITION"
+	OpSprintTaskSwap         AuditOperation = "SPRINT_TASK_SWAP"
 )
 
 // ValidAuditOperations contains all valid audit operations.
@@ -48,6 +53,9 @@ var ValidAuditOperations = []AuditOperation{
 	OpSprintAddTask,
 	OpSprintRemoveTask,
 	OpSprintMoveTask,
+	OpSprintReorderTasks,
+	OpSprintTaskMovePosition,
+	OpSprintTaskSwap,
 }
 
 // IsValidAuditOperation checks if a string is a valid audit operation.

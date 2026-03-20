@@ -7,7 +7,7 @@ import (
 )
 
 // SchemaVersion is the current database schema version.
-const SchemaVersion = "1.0.0"
+const SchemaVersion = "1.1.0"
 
 // CreateSchema creates all database tables and indexes.
 // This implements the DDL from SPEC/DATABASE.md.
@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS sprint_tasks (
     sprint_id INTEGER NOT NULL,
     task_id INTEGER NOT NULL UNIQUE,
     added_at TEXT NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0,  -- 0-based position in sprint task order
     PRIMARY KEY (sprint_id, task_id),
     FOREIGN KEY (sprint_id) REFERENCES sprints(id) ON DELETE CASCADE,
     FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
@@ -77,6 +78,9 @@ CREATE INDEX IF NOT EXISTS idx_sprint_tasks_task_id ON sprint_tasks(task_id);
 
 -- Composite index for sprint task lookups (TASK-P001)
 CREATE INDEX IF NOT EXISTS idx_sprint_tasks_lookup ON sprint_tasks(sprint_id, task_id);
+
+-- Composite index for sprint task ordering (TASK-P001)
+CREATE INDEX IF NOT EXISTS idx_sprint_tasks_order ON sprint_tasks(sprint_id, position ASC);
 `
 
 	// Audit table

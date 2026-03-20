@@ -178,14 +178,17 @@ type SprintStats struct {
 	CompletedTasks     int            `json:"completed_tasks"`
 	ProgressPercentage float64        `json:"progress_percentage"`
 	StatusDistribution map[string]int `json:"status_distribution"`
+	TaskOrder          []int          `json:"task_order"` // Task IDs ordered by position
 }
 
 // CalculateSprintStats calculates statistics from a list of tasks.
+// The tasks slice must be ordered by position for correct task_order output.
 func CalculateSprintStats(sprintID int, tasks []Task) SprintStats {
 	stats := SprintStats{
 		SprintID:           sprintID,
 		TotalTasks:         len(tasks),
 		StatusDistribution: make(map[string]int),
+		TaskOrder:          make([]int, 0, len(tasks)),
 	}
 
 	for _, task := range tasks {
@@ -195,6 +198,9 @@ func CalculateSprintStats(sprintID int, tasks []Task) SprintStats {
 		if task.Status == StatusCompleted {
 			stats.CompletedTasks++
 		}
+
+		// Add task ID to order array (tasks should already be ordered by position)
+		stats.TaskOrder = append(stats.TaskOrder, task.ID)
 	}
 
 	if stats.TotalTasks > 0 {
@@ -251,14 +257,17 @@ type SprintShowResult struct {
 	Progress                SprintProgress          `json:"progress"`
 	SeverityDistribution    SeverityDistribution    `json:"severity_distribution"`
 	CriticalityDistribution CriticalityDistribution `json:"criticality_distribution"`
+	TaskOrder               []int                   `json:"task_order"` // Task IDs ordered by position
 }
 
 // CalculateSprintShowResult calculates a comprehensive sprint report from tasks.
+// The tasks slice must be ordered by position for correct task_order output.
 func CalculateSprintShowResult(sprint *Sprint, tasks []Task) SprintShowResult {
 	result := SprintShowResult{
 		SprintID:          sprint.ID,
 		SprintDescription: sprint.Description,
 		Status:            sprint.Status,
+		TaskOrder:         make([]int, 0, len(tasks)),
 		Summary: SprintSummary{
 			TotalTasks: len(tasks),
 		},
@@ -268,6 +277,9 @@ func CalculateSprintShowResult(sprint *Sprint, tasks []Task) SprintShowResult {
 	var severity0To2, severity3To5, severity6To7, severity8To9 int
 
 	for _, task := range tasks {
+		// Add task ID to order (tasks should already be ordered by position)
+		result.TaskOrder = append(result.TaskOrder, task.ID)
+
 		// Count by status category
 		switch task.Status {
 		case StatusBacklog, StatusSprint:

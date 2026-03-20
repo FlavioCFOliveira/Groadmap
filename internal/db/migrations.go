@@ -19,13 +19,11 @@ type Migration struct {
 // Each migration must be idempotent and safe to run multiple times.
 // NOTE: v1.0.0 is the initial schema version, no migrations needed.
 var migrations = []Migration{
-	// Future migrations will be added here
-	// Example:
-	// {
-	// 	Version: "1.1.0",
-	// 	Name:    "Add new feature",
-	// 	Apply:   migrateV1_0_0_toV1_1_0,
-	// },
+	{
+		Version: "1.1.0",
+		Name:    "Add sprint_tasks position column",
+		Apply:   migrateV1_0_0_toV1_1_0,
+	},
 }
 
 // RunMigrations executes all pending migrations in a transaction.
@@ -81,6 +79,44 @@ func (db *DB) runMigration(migration Migration) error {
 	// Commit transaction
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing migration: %w", err)
+	}
+
+	return nil
+}
+
+// migrateV1_0_0_toV1_1_0 adds the position column to sprint_tasks table.
+// It initializes existing tasks with sequential positions based on their order.
+func migrateV1_0_0_toV1_1_0(tx *sql.Tx) error {
+	// Add position column with DEFAULT 0
+	if _, err := tx.Exec(
+		`ALTER TABLE sprint_tasks ADD COLUMN position INTEGER NOT NULL DEFAULT 0`,
+	); err != nil {
+		return fmt.Errorf("adding position column: %w", err)
+	}
+
+	// Add index for sprint task ordering
+	if _, err := tx.Exec(
+		`CREATE INDEX IF NOT EXISTS idx_sprint_tasks_order ON sprint_tasks(sprint_id, position ASC)`,
+	); err != nil {
+		return fmt.Errorf("creating idx_sprint_tasks_order: %w", err)
+	}
+
+	// Initialize positions for existing sprint tasks
+	// Assign sequential positions (0, 1, 2...) based on added_at order within each sprint
+	if _, err := tx.Exec(`
+		UPDATE sprint_tasks
+		SET position = new_pos
+		FROM (
+			SELECT
+				sprint_id,
+				task_id,
+				ROW_NUMBER() OVER (PARTITION BY sprint_id ORDER BY added_at ASC) - 1 AS new_pos
+			FROM sprint_tasks
+		) AS ordered
+		WHERE sprint_tasks.sprint_id = ordered.sprint_id
+		  AND sprint_tasks.task_id = ordered.task_id
+	`); err != nil {
+		return fmt.Errorf("initializing task positions: %w", err)
 	}
 
 	return nil

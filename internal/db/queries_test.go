@@ -1099,9 +1099,15 @@ func TestGetSprintTasksFull(t *testing.T) {
 		t.Errorf("expected 3 tasks, got %d", len(tasks))
 	}
 
-	// Verify ordering by priority DESC
-	if tasks[0].Priority < tasks[1].Priority {
-		t.Error("expected tasks ordered by priority DESC")
+	// Verify ordering by position ASC (tasks are returned in position order)
+	// Tasks are added in order of creation, so positions 0, 1, 2
+	if len(tasks) < 3 {
+		t.Fatal("expected 3 tasks")
+	}
+	// With position-based ordering, tasks should maintain their add order
+	// (which corresponds to their ID order since we added them sequentially)
+	if tasks[0].Priority != 0 || tasks[1].Priority != 1 || tasks[2].Priority != 2 {
+		t.Error("expected tasks ordered by position ASC (add order)")
 	}
 }
 
