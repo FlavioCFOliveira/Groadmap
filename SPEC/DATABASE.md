@@ -122,13 +122,14 @@ CREATE INDEX IF NOT EXISTS idx_sprints_created_at ON sprints(created_at);
 
 ### `sprint_tasks` Table (N:M Relationship)
 
-Junction table for many-to-many relationship between sprints and tasks.
+Junction table for many-to-many relationship between sprints and tasks, with ordering support for sprint task priority.
 
 ```sql
 CREATE TABLE IF NOT EXISTS sprint_tasks (
     sprint_id INTEGER NOT NULL,
     task_id INTEGER NOT NULL UNIQUE,
     added_at TEXT NOT NULL,  -- ISO 8601 UTC
+    position INTEGER NOT NULL DEFAULT 0,  -- 0-based position in sprint task order
     PRIMARY KEY (sprint_id, task_id),
     FOREIGN KEY (sprint_id) REFERENCES sprints(id) ON DELETE CASCADE,
     FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
@@ -140,6 +141,10 @@ CREATE INDEX IF NOT EXISTS idx_sprint_tasks_task_id ON sprint_tasks(task_id);
 -- Composite index for sprint task lookups (TASK-P001)
 -- Covers: GetSprintTasks and sprint-task relationship queries
 CREATE INDEX IF NOT EXISTS idx_sprint_tasks_lookup ON sprint_tasks(sprint_id, task_id);
+
+-- Index for sprint task ordering (TASK-ORDER-001)
+-- Covers: Sprint task listing ordered by position
+CREATE INDEX IF NOT EXISTS idx_sprint_tasks_order ON sprint_tasks(sprint_id, position ASC);
 ```
 
 ### `audit` Table
@@ -192,6 +197,9 @@ CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 - `SPRINT_ADD_TASK` - Task added to sprint
 - `SPRINT_REMOVE_TASK` - Task removed from sprint
 - `SPRINT_MOVE_TASK` - Task moved between sprints
+- `SPRINT_REORDER_TASKS` - Sprint tasks reordered (set exact order)
+- `SPRINT_TASK_MOVE_POSITION` - Single task moved to specific position
+- `SPRINT_TASK_SWAP` - Two tasks swapped positions
 
 **Note:** Read operations (GET, STATS, LIST_TASKS) are NOT logged to audit as they do not modify state.
 
@@ -265,6 +273,40 @@ ORDER BY t.priority DESC, t.severity DESC;
 
 **Use case:** Sprint planning and execution view - tasks with highest urgency AND technical impact appear first.
 
+#### List Sprint Tasks Ordered by Position
+
+Returns all tasks in a sprint ordered by their position in the sprint task list.
+
+```sql
+SELECT t.*, st.position FROM tasks t
+INNER JOIN sprint_tasks st ON t.id = st.task_id
+WHERE st.sprint_id = ?
+ORDER BY st.position ASC;
+```
+
+**Ordering priority:**
+1. `position` ASC (lowest first: 0, 1, 2...)
+
+**Use case:** Sprint task sequence view - tasks appear in the order defined by the user for sprint execution.
+
+#### Add Task to Sprint with Position
+
+```sql
+-- Get max position for the sprint
+SELECT COALESCE(MAX(position), -1) + 1 AS next_position
+FROM sprint_tasks
+WHERE sprint_id = ?;
+
+-- Insert into junction table with calculated position
+INSERT INTO sprint_tasks (sprint_id, task_id, added_at, position)
+VALUES (?, ?, ?, ?);
+
+-- Update task status
+UPDATE tasks SET status = 'SPRINT' WHERE id IN (?, ?, ...);
+```
+
+**Use case:** New tasks are added to the end of the sprint task list (highest position).
+
 #### Update Status
 
 Date tracking fields are automatically managed by the application based on state transitions:
@@ -334,6 +376,88 @@ UPDATE tasks SET status = 'BACKLOG' WHERE id IN (
 );
 ```
 
+#### Get Max Position in Sprint
+
+Returns the highest current position value for a sprint. Used when adding tasks.
+
+```sql
+SELECT COALESCE(MAX(position), -1) AS max_position
+FROM sprint_tasks
+WHERE sprint_id = ?;
+```
+
+**Note:** Returns -1 if sprint has no tasks, meaning first task gets position 0.
+
+#### Reorder Sprint Tasks (Set Exact Order)
+
+Updates positions for all tasks in a sprint based on a provided ordered list of task IDs.
+
+```sql
+-- Transaction: Update positions for each task
+-- For each task ID in the ordered list at index i:
+UPDATE sprint_tasks SET position = ? WHERE sprint_id = ? AND task_id = ?;
+```
+
+**Validation:** All task IDs in the ordered list must belong to the sprint.
+
+#### Move Task to Position
+
+Moves a single task to a specific position, updating positions of other tasks accordingly.
+
+```sql
+-- Transaction:
+-- 1. Get current position of the task
+SELECT position FROM sprint_tasks WHERE sprint_id = ? AND task_id = ?;
+
+-- 2. If moving UP (new_position < current_position):
+--    Shift tasks between new_position and current_position-1 down by 1
+UPDATE sprint_tasks
+SET position = position + 1
+WHERE sprint_id = ?
+  AND position >= ?
+  AND position < ?;
+
+-- 3. If moving DOWN (new_position > current_position):
+--    Shift tasks between current_position+1 and new_position up by 1
+UPDATE sprint_tasks
+SET position = position - 1
+WHERE sprint_id = ?
+  AND position > ?
+  AND position <= ?;
+
+-- 4. Update the moved task to the new position
+UPDATE sprint_tasks SET position = ? WHERE sprint_id = ? AND task_id = ?;
+```
+
+**Behavior:**
+- Moving to position 0 places the task at the beginning
+- Moving to a position >= task count places the task at the end
+- Positions of other tasks are automatically adjusted to maintain continuity
+
+#### Swap Tasks
+
+Swaps positions between two tasks in the same sprint.
+
+```sql
+-- Transaction:
+-- 1. Get positions of both tasks
+SELECT task_id, position FROM sprint_tasks WHERE sprint_id = ? AND task_id IN (?, ?);
+
+-- 2. Swap positions
+UPDATE sprint_tasks SET position = ? WHERE sprint_id = ? AND task_id = ?;
+UPDATE sprint_tasks SET position = ? WHERE sprint_id = ? AND task_id = ?;
+```
+
+#### Move Task to Top/Bottom
+
+```sql
+-- Move to top (position 0)
+-- Transaction: same logic as Move Task to Position with target position 0
+
+-- Move to bottom (last position)
+-- Get current max position, then use Move Task to Position logic
+```
+
 #### Delete Task
 
 ```sql
@@ -351,12 +475,17 @@ INSERT INTO sprints (description, created_at) VALUES (?, ?);
 #### Add Tasks to Sprint
 
 ```sql
--- Insert into junction table
-INSERT INTO sprint_tasks (sprint_id, task_id, added_at) VALUES (?, ?, ?);
+-- Get max position for the sprint
+SELECT COALESCE(MAX(position), -1) AS max_position FROM sprint_tasks WHERE sprint_id = ?;
 
--- Update associated tasks
+-- Insert into junction table with incremental positions
+INSERT INTO sprint_tasks (sprint_id, task_id, added_at, position) VALUES (?, ?, ?, ?);
+
+-- Update task status
 UPDATE tasks SET status = 'SPRINT' WHERE id IN (?, ?, ...);
 ```
+
+**Note:** Tasks are added with positions starting from max_position + 1, ensuring they appear at the end of the sprint task list.
 
 #### Start Sprint
 
@@ -428,9 +557,17 @@ VALUES ('SPRINT_START', 'SPRINT', 1, '2026-03-12T16:00:00.000Z');
 INSERT INTO audit (operation, entity_type, entity_id, performed_at)
 VALUES ('SPRINT_ADD_TASK', 'SPRINT', 1, '2026-03-12T16:30:00.000Z');
 
--- Remove task from sprint
+-- Reorder sprint tasks
 INSERT INTO audit (operation, entity_type, entity_id, performed_at)
-VALUES ('SPRINT_REMOVE_TASK', 'SPRINT', 1, '2026-03-12T16:45:00.000Z');
+VALUES ('SPRINT_REORDER_TASKS', 'SPRINT', 1, '2026-03-12T17:00:00.000Z');
+
+-- Move task to position
+INSERT INTO audit (operation, entity_type, entity_id, performed_at)
+VALUES ('SPRINT_TASK_MOVE_POSITION', 'SPRINT', 1, '2026-03-12T17:15:00.000Z');
+
+-- Swap tasks
+INSERT INTO audit (operation, entity_type, entity_id, performed_at)
+VALUES ('SPRINT_TASK_SWAP', 'SPRINT', 1, '2026-03-12T17:30:00.000Z');
 ```
 
 #### Query Entity History
@@ -749,8 +886,9 @@ Total: 168 bytes (7×16 + 4×8 + 3×8 = 112 + 32 + 24)
 | sprint_id | INTEGER | NOT NULL, FK → sprints.id, ON DELETE CASCADE, part of PK |
 | task_id | INTEGER | NOT NULL, FK → tasks.id, ON DELETE CASCADE, part of PK |
 | added_at | TEXT | NOT NULL, ISO 8601 format |
+| position | INTEGER | NOT NULL, DEFAULT 0, position in sprint task order (0-based) |
 
-**Note:** Composite primary key `(sprint_id, task_id)`. A task can only be in one sprint at a time.
+**Note:** Composite primary key `(sprint_id, task_id)`. A task can only be in one sprint at a time. The `position` field enables sprint task ordering, with 0 being the first position.
 
 ### Audit
 
@@ -763,7 +901,7 @@ Total: 168 bytes (7×16 + 4×8 + 3×8 = 112 + 32 + 24)
 | performed_at | TEXT | NOT NULL, ISO 8601 format |
 
 **Valid values (validated by application):**
-- `operation`: TASK_CREATE, TASK_UPDATE, TASK_DELETE, TASK_STATUS_CHANGE, TASK_TYPE_CHANGE, TASK_PRIORITY_CHANGE, TASK_SEVERITY_CHANGE, SPRINT_CREATE, SPRINT_UPDATE, SPRINT_DELETE, SPRINT_START, SPRINT_CLOSE, SPRINT_REOPEN, SPRINT_ADD_TASK, SPRINT_REMOVE_TASK, SPRINT_MOVE_TASK
+- `operation`: TASK_CREATE, TASK_UPDATE, TASK_DELETE, TASK_STATUS_CHANGE, TASK_TYPE_CHANGE, TASK_PRIORITY_CHANGE, TASK_SEVERITY_CHANGE, SPRINT_CREATE, SPRINT_UPDATE, SPRINT_DELETE, SPRINT_START, SPRINT_CLOSE, SPRINT_REOPEN, SPRINT_ADD_TASK, SPRINT_REMOVE_TASK, SPRINT_MOVE_TASK, SPRINT_REORDER_TASKS, SPRINT_TASK_MOVE_POSITION, SPRINT_TASK_SWAP
 - `entity_type`: TASK, SPRINT
 
 ---

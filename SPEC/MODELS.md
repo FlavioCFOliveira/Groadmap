@@ -111,11 +111,11 @@ type Sprint struct {
     ID          int          `json:"id"`
     Status      SprintStatus `json:"status"`
     Description string       `json:"description"`
-    Tasks       []int        `json:"tasks"`      // Computed from sprint_tasks
-    TaskCount   int          `json:"task_count"` // Computed
+    Tasks       []int        `json:"tasks"`            // Computed from sprint_tasks (ordered by position)
+    TaskCount   int          `json:"task_count"`       // Computed
     CreatedAt   string       `json:"created_at"`
-    StartedAt   *string      `json:"started_at"` // Nullable
-    ClosedAt    *string      `json:"closed_at"`  // Nullable
+    StartedAt   *string      `json:"started_at"`       // Nullable
+    ClosedAt    *string      `json:"closed_at"`        // Nullable
 }
 ```
 
@@ -153,5 +153,38 @@ type SprintStats struct {
     CompletedTasks     int            `json:"completed_tasks"`
     ProgressPercentage float64        `json:"progress_percentage"`
     StatusDistribution map[string]int `json:"status_distribution"`
+}
+```
+
+### Sprint Task Order
+
+Represents the ordering of a task within a sprint. Used for sprint task sequence operations.
+
+```go
+type SprintTaskOrder struct {
+    TaskID   int `json:"task_id"`   // Task identifier
+    Position int `json:"position"` // 0-based position in sprint task order
+}
+```
+
+### Sprint Task with Order
+
+Represents a task within a sprint including its position. Used for sprint task listings.
+
+```go
+type SprintTask struct {
+    Task
+    Position int `json:"position"` // 0-based position in sprint task order
+}
+```
+
+### Sprint Task Reorder Request
+
+Represents a request to reorder sprint tasks.
+
+```go
+type SprintTaskReorderRequest struct {
+    SprintID int   `json:"sprint_id"` // Sprint identifier
+    TaskIDs  []int `json:"task_ids"`  // Ordered list of task IDs defining new sequence
 }
 ```

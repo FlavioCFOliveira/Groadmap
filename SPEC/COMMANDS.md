@@ -393,10 +393,14 @@ rmp sprint get -r <name> <id>
 ### List Sprint Tasks
 
 ```bash
-rmp sprint tasks -r <name> <id> [--status <state>]
+rmp sprint tasks -r <name> <id> [--status <state>] [--order-by-priority]
 ```
 
-**JSON Output:** Array of Task objects associated with the sprint.
+**JSON Output:** Array of Task objects associated with the sprint, ordered by position (default) or by priority if flag specified.
+
+**Options:**
+- `-s, --status <state>` - Filter by status
+- `--order-by-priority` - Order by priority DESC, severity DESC (legacy ordering)
 
 ### Sprint Statistics
 
@@ -416,9 +420,13 @@ rmp sprint stats -r <name> <id>
     "DOING": 2,
     "TESTING": 1,
     "COMPLETED": 3
-  }
+  },
+  "task_order": [5, 3, 8, 1, 9, 2, 7, 4, 6, 10]
 }
 ```
+
+**Fields:**
+- `task_order` - Array of task IDs ordered by position (first to last)
 
 ### Show Sprint Status Report
 
@@ -518,6 +526,129 @@ rmp sprint move-tasks -r <name> <from-id> <to-id> <task-ids>
 
 **Output (success):** No output, exit code 0.
 
+### Task Ordering
+
+Commands for managing sprint task order within a sprint. Tasks are ordered by position (0-based), where position 0 is the first task in the sprint.
+
+#### Reorder Tasks (Set Exact Order)
+
+```bash
+rmp sprint reorder -r <name> <sprint-id> <task-ids>
+rmp sprint order -r <name> <sprint-id> <task-ids>
+```
+
+**Description:** Sets the exact order of all tasks in a sprint. The order of task IDs in the argument defines the new sequence.
+
+**Arguments:**
+- `sprint-id` - Sprint identifier
+- `task-ids` - Comma-separated list of task IDs in the desired order (e.g., `5,3,1,4,2`)
+
+**Validation:**
+- All task IDs must belong to the specified sprint
+- Duplicate task IDs are not allowed
+- All sprint tasks must be included (partial reorder is not supported)
+
+**Behavior:**
+- Task at index 0 gets position 0 (first)
+- Task at index 1 gets position 1 (second)
+- And so on...
+
+**JSON Output (success):** No output, exit code 0.
+
+**Error Output:**
+
+| Scenario | Exit Code | stderr Output |
+|----------|-----------|---------------|
+| Sprint not found | 1 | "Sprint not found" |
+| Task ID not in sprint | 1 | "Task ID N is not in sprint" |
+| Duplicate task IDs | 1 | "Duplicate task ID: N" |
+| Missing task IDs | 1 | "Task list incomplete: expected N tasks, got M" |
+| Invalid task ID format | 1 | "Invalid task ID: X" |
+
+#### Move Task to Position
+
+```bash
+rmp sprint move-to -r <name> <sprint-id> <task-id> <position>
+rmp sprint mvto -r <name> <sprint-id> <task-id> <position>
+```
+
+**Description:** Moves a single task to a specific position, shifting other tasks accordingly.
+
+**Arguments:**
+- `sprint-id` - Sprint identifier
+- `task-id` - Task to move
+- `position` - Target position (0-based). If position >= task count, task is moved to the end.
+
+**Behavior:**
+- Moving UP: Tasks between new position and current position-1 shift down by 1
+- Moving DOWN: Tasks between current position+1 and new position shift up by 1
+- Moving to same position: No-op
+- Moving to position >= task count: Task is placed at the end
+
+**JSON Output (success):** No output, exit code 0.
+
+**Error Output:**
+
+| Scenario | Exit Code | stderr Output |
+|----------|-----------|---------------|
+| Sprint not found | 1 | "Sprint not found" |
+| Task not in sprint | 1 | "Task N is not in sprint" |
+| Invalid position | 1 | "Position must be a non-negative integer" |
+
+#### Swap Tasks
+
+```bash
+rmp sprint swap -r <name> <sprint-id> <task-id-1> <task-id-2>
+```
+
+**Description:** Swaps the positions of two tasks within a sprint.
+
+**Arguments:**
+- `sprint-id` - Sprint identifier
+- `task-id-1` - First task to swap
+- `task-id-2` - Second task to swap
+
+**Behavior:**
+- Both tasks must belong to the same sprint
+- Positions are exchanged between the two tasks
+- No changes to other tasks
+
+**JSON Output (success):** No output, exit code 0.
+
+**Error Output:**
+
+| Scenario | Exit Code | stderr Output |
+|----------|-----------|---------------|
+| Sprint not found | 1 | "Sprint not found" |
+| Task not in sprint | 1 | "Task N is not in sprint" |
+| Same task ID | 1 | "Cannot swap a task with itself" |
+
+#### Move Task to Top/Bottom
+
+```bash
+rmp sprint top -r <name> <sprint-id> <task-id>
+rmp sprint bottom -r <name> <sprint-id> <task-id>
+```
+
+**Description:** Quick commands to move a task to the beginning (top) or end (bottom) of the sprint task list.
+
+**Arguments:**
+- `sprint-id` - Sprint identifier
+- `task-id` - Task to move
+
+**Behavior:**
+- `top`: Equivalent to `move-to <task-id> 0`
+- `bottom`: Equivalent to `move-to <task-id> <task_count>`
+
+**JSON Output (success):** No output, exit code 0.
+
+**Error Output:**
+
+| Scenario | Exit Code | stderr Output |
+|----------|-----------|---------------|
+| Sprint not found | 1 | "Sprint not found" |
+| Task not in sprint | 1 | "Task N is not in sprint" |
+
 ### Update Sprint
 
 ```bash
@@ -599,3 +730,8 @@ rmp audit stats -r <name> [--since <date>] [--until <date>]
 | `add-tasks` | `add` |
 | `remove-tasks` | `rm-tasks` |
 | `move-tasks` | `mv-tasks` |
+| `reorder` | `order` |
+| `move-to` | `mvto` |
+| `swap` | - |
+| `top` | - |
+| `bottom` | `btm` |

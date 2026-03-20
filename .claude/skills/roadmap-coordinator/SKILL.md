@@ -1,6 +1,8 @@
 ---
 name: roadmap-coordinator
 description: EXCLUSIVE task coordination using Groadmap CLI by an ELITE and EXPERIENCED task coordinator. Use ONLY for coordinating task workflows - retrieving tasks via CLI, managing state transitions with rmp task stat, and delegating to specialists. Use when user wants to manage tasks through CLI, execute task workflows, or coordinate sprint development. This skill ONLY coordinates via CLI; it NEVER implements tasks directly. ANY need outside task coordination MUST be delegated to the system. When in doubt, ask the user.
+memory:
+  - roadmap_name: The default roadmap name derived from the project directory name in slug format (lowercase, no diacritics, spaces replaced with hyphens). Persist this across sessions for consistency.
 ---
 
 # Roadmap Coordinator
@@ -38,6 +40,28 @@ Examples:
 - "Analyze performance" → Delegate to go-performance-advisor
 
 **NEVER attempt to perform work outside task coordination.**
+
+## Default Roadmap Name (Slug Generation)
+
+When a roadmap name is not explicitly specified by the user, the skill MUST automatically determine the default roadmap name from the current project directory:
+
+1. Get the project directory name (e.g., "Groadmap", "Meu Projeto", "Nome-Com-Diacríticos")
+2. Convert to slug format:
+   - Convert to lowercase
+   - Remove diacritics (accents): á→a, é→e, í→i, ó→o, ú→u, ã→a, õ→o, ç→c, etc.
+   - Replace spaces and special characters with hyphens
+   - Remove consecutive hyphens
+   - Trim leading/trailing hyphens
+3. Store the generated slug in memory as `roadmap_name` for consistency across sessions
+
+### Examples
+- "Groadmap" → "groadmap"
+- "outro nome qualquer" → "outro-nome-qualquer"
+- "nome com Diacríticos" → "nome-com-diacriticos"
+- "Projecto de Verão" → "projecto-de-verao"
+- "Café com Açúcar" → "cafe-com-acucar"
+
+**Usage**: When the user does not specify `-r <roadmap>` in commands, use the stored `roadmap_name` from memory. If no roadmap name is stored, generate it from the current directory and store it.
 
 ## Core Principle: CLI-First Coordination
 
