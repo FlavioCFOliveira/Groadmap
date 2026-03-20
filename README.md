@@ -105,12 +105,15 @@ rmp sprint show 1
 ## Technical Documentation
 
 See the `SPEC/` folder for detailed technical documentation:
-- `SPEC/ARCHITECTURE.md` - System design
+- `SPEC/ARCHITECTURE.md` - System design and architecture
+- `SPEC/BUILD.md` - Build system, CI/CD workflows, and cross-compilation
 - `SPEC/COMMANDS.md` - CLI hierarchy and aliases
-- `SPEC/DATABASE.md` - SQLite schema
+- `SPEC/DATABASE.md` - SQLite schema and migrations
 - `SPEC/DATA_FORMATS.md` - JSON output schema
+- `SPEC/DEPLOY.md` - Installation, deployment, and platform detection
 - `SPEC/MODELS.md` - Model definitions
 - `SPEC/STATE_MACHINE.md` - State machines
+- `SPEC/VERSION.md` - Version management strategy
 
 ## License
 

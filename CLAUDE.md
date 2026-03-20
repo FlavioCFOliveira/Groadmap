@@ -249,13 +249,15 @@ go vet ./...
 | File | Content | Owner |
 |------|---------|-------|
 | `SPEC/ARCHITECTURE.md` | System design, structure | spec-orchestrator |
+| `SPEC/BUILD.md` | Build system, CI/CD workflows | spec-orchestrator |
 | `SPEC/COMMANDS.md` | CLI hierarchy, aliases | spec-orchestrator |
 | `SPEC/DATABASE.md` | SQLite schema, relationships | spec-orchestrator |
 | `SPEC/DATA_FORMATS.md` | JSON output schema | spec-orchestrator |
+| `SPEC/DEPLOY.md` | Deployment, installation | spec-orchestrator |
 | `SPEC/HELP_EXAMPLES.md` | Help/error messages | spec-orchestrator |
-| `SPEC/IMPLEMENTATION_PLAN.md` | Implementation plan | spec-orchestrator |
 | `SPEC/MODELS.md` | Model definitions | spec-orchestrator |
 | `SPEC/STATE_MACHINE.md` | State machines | spec-orchestrator |
+| `SPEC/VERSION.md` | Version management | spec-orchestrator |
 
 ---
 
