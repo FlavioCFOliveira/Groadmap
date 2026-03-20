@@ -97,6 +97,22 @@ rmp sprint show -r <roadmap> <id>
 rmp sprint start|close|reopen -r <roadmap> <id>
 ```
 
+### Sprint Task Ordering
+```bash
+# Reorder all tasks (set exact order)
+rmp sprint reorder -r <roadmap> <sprint-id> <task-ids>
+
+# Move task to specific position
+rmp sprint move-to -r <roadmap> <sprint-id> <task-id> <position>
+
+# Swap two tasks
+rmp sprint swap -r <roadmap> <sprint-id> <task-id-1> <task-id-2>
+
+# Quick position commands
+rmp sprint top -r <roadmap> <sprint-id> <task-id>
+rmp sprint bottom -r <roadmap> <sprint-id> <task-id>
+```
+
 ## Execution Rules
 
 1. **Retrieve**: Use `rmp task next [N]` to get tasks
@@ -152,6 +168,9 @@ Take task specialists field as a recommendation, but use your judgment to assign
 | list | ls |
 | create | new |
 | set-status | stat |
+| reorder | order |
+| move-to | mvto |
+| bottom | btm |
 
 ## Error Handling
 
@@ -178,6 +197,23 @@ Take task specialists field as a recommendation, but use your judgment to assign
 ## Next Actions
 [Recommendations]
 ```
+
+## Task Ordering Coordination
+
+When coordinating sprint execution, task ordering may be relevant for:
+
+1. **Prioritizing work**: Use `rmp sprint reorder` to set execution order based on priority/severity
+2. **Ad-hoc adjustments**: Use `move-to`, `swap`, `top`, `bottom` for quick repositioning
+
+**Ordering Commands are Coordination Tools:**
+- These commands affect task position, NOT task status
+- Status transitions still use `rmp task stat` following the state machine
+- Task ordering helps specialists understand priority but doesn't replace state management
+
+**Audit Operations for Task Ordering:**
+- `SPRINT_REORDER_TASKS` - Logged on reorder command
+- `SPRINT_TASK_MOVE_POSITION` - Logged on move-to, top, bottom commands
+- `SPRINT_TASK_SWAP` - Logged on swap command
 
 ## Task Types
 
