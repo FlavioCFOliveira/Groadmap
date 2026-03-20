@@ -1,33 +1,45 @@
 ---
 name: task-creator
 description: |
-  **ALWAYS use this skill when the user wants to create new tasks for the Groadmap project implementation plan.**
+  **ALWAYS use this skill when the user wants to create new tasks OR sprints for the Groadmap project.**
 
   This skill is triggered when:
-  - User asks to "create a task", "add a task", "new task" for the implementation plan
-  - User describes a feature or improvement that needs to be added to IMPLEMENTATION_PLAN.md
+  - User asks to "create a task", "add a task", "new task" for the roadmap
+  - User asks to "create a sprint", "new sprint", "start sprint" for the roadmap
+  - User describes a feature or improvement that needs to be added to the project
   - User mentions "tarefa" (Portuguese) in context of project planning
+  - User mentions "sprint" (Portuguese) in context of sprint planning
   - User describes requirements that need to be formalized as implementation tasks
-  - User wants to convert ideas, bugs, or features into structured implementation tasks
+  - User wants to convert ideas, bugs, or features into structured tasks
 
-  **Use this skill even if the user doesn't explicitly say "create task"** - whenever they describe
-  something that needs to be implemented, converted into a structured task format for the project roadmap.
+  **Use this skill even if the user doesn't explicitly say "create task" or "create sprint"** - whenever they describe
+  something that needs to be implemented, converted into a structured format for the project.
 
-  This skill creates professional, production-ready implementation tasks following the Groadmap project standards.
+  This skill creates professional, production-ready tasks and sprints following Groadmap project standards.
+  It collects ALL required data (title, type, priority, status, description, technical requirements,
+  acceptance criteria, specialists, dates for sprints, etc.) and delegates persistence to roadmap-coordinator
+  which uses the Groadmap CLI (`rmp task create`, `rmp sprint create`) as the source of truth.
+
+  **CRITICAL:** This skill ensures ALL fields required by the CLI are collected before delegating to
+  roadmap-coordinator. Never delegate incomplete data.
 ---
 
 # Task Creator Skill
 
 ## Purpose
 
-Create structured, professional implementation tasks for the Groadmap project that can be directly added to `IMPLEMENTATION_PLAN.md`. Each task follows the project's established format and includes all necessary information for developers to understand, implement, and validate the work.
+Create structured, professional tasks for the Groadmap project that are added via the Groadmap CLI (`rmp task create`). Each task follows the project's established format and includes all necessary information for developers to understand, implement, and validate the work.
+
+**Source of Truth:** The roadmap-coordinator skill and Groadmap CLI (`rmp` commands) are the exclusive source of truth for task management. This skill delegates task persistence to the roadmap-coordinator.
 
 ## When to Use
 
 **ALWAYS use this skill when:**
-- User wants to create new tasks for the implementation plan
+- User wants to create new tasks for the Groadmap project
+- User wants to create new sprints for the Groadmap project
 - User describes a feature, improvement, or bug fix that needs formalization
 - User says things like: "create task", "add task", "new task", "preciso de uma tarefa"
+- User says things like: "create sprint", "new sprint", "nova sprint", "start sprint"
 - User describes requirements in conversational form that need structure
 - Converting audit findings or review comments into actionable tasks
 
@@ -35,15 +47,47 @@ Create structured, professional implementation tasks for the Groadmap project th
 - Creating code TODOs or inline comments
 - Creating GitHub issues or external tickets
 - Simple reminders or notes
+- Task execution or implementation (use roadmap-coordinator or implementation-executor)
+
+## Data Requirements for Roadmap Coordinator
+
+When delegating to roadmap-coordinator, ALL fields below MUST be provided with valid values. The coordinator requires complete data to execute CLI commands successfully.
+
+### Required Fields for Task Creation
+
+| Field | CLI Flag | Required | Description |
+|-------|----------|----------|-------------|
+| Title | `--title` | YES | Task title (max 100 chars) |
+| Type | `--type` | YES | USER_STORY, TASK, BUG, SUB_TASK, EPIC, REFACTOR, CHORE, SPIKE, DESIGN_UX, IMPROVEMENT |
+| Priority | `--priority` | YES | P0, P1, P2, P3, P4 |
+| Status | `--status` | YES | BACKLOG, SPRINT, DOING, TESTING, COMPLETED |
+| Functional Requirements | `--description` | YES | Business problem description |
+| Technical Requirements | `--technical` | NO | Implementation approach |
+| Acceptance Criteria | `--criteria` | NO | Comma-separated list of criteria |
+| Specialists | `--specialists` | NO | Comma-separated specialist names |
+| Estimated Time | `--time` | NO | Time estimate (e.g., "3 days") |
+| Complexity | `--complexity` | NO | LOW, MEDIUM, HIGH, VERY_HIGH |
+| Sprint ID | `--sprint` | NO | Sprint to assign task to |
+
+### Required Fields for Sprint Creation
+
+| Field | CLI Flag | Required | Description |
+|-------|----------|----------|-------------|
+| Name | `--name` | YES | Sprint name (unique) |
+| Goal | `--goal` | YES | Sprint goal/objective |
+| Start Date | `--start` | YES | ISO 8601 date (YYYY-MM-DD) |
+| End Date | `--end` | YES | ISO 8601 date (YYYY-MM-DD) |
+| Status | `--status` | YES | PLANNED, ACTIVE, CLOSED |
 
 ## Task Structure Standards
 
-Every task created MUST follow this exact structure:
+Every task created MUST follow this exact structure (the ID will be auto-generated by the CLI):
 
 ```markdown
-### TASK-XXX: [Task Title]
+### [Task Title]
 
 **Priority:** [P0-Critical / P1-High / P2-Medium / P3-Low / P4-Optional]
+**Type:** [USER_STORY/TASK/BUG/SUB_TASK/EPIC/REFACTOR/CHORE/SPIKE/DESIGN_UX/IMPROVEMENT]
 **Dependencies:** [List of task IDs or "None"]
 **Complexity:** [Low / Medium / High / Very High]
 **Estimated Time:** [X days/weeks]
@@ -222,107 +266,183 @@ Modify `internal/commands/task.go` in `taskEdit` function:
 
 ## Execution Workflow
 
-### Step 1: Understand the Requirement
+### Task Creation Flow
+
+#### Step 1: Understand the Requirement
 
 1. Read the user's description carefully
-2. Ask clarifying questions if needed:
-   - What is the specific problem?
+2. Determine if user wants to create a TASK or a SPRINT
+3. Ask clarifying questions if needed:
+   - What is the specific problem? (for tasks)
+   - What is the sprint goal? (for sprints)
    - What is the expected outcome?
    - Are there any constraints?
-   - What is the priority?
-3. Check existing tasks in IMPLEMENTATION_PLAN.md to avoid duplicates
-4. Identify the next available task number
+   - What is the priority? (for tasks)
+   - What are the sprint dates? (for sprints)
 
-### Step 2: Determine Task Metadata
+#### Step 2: Collect ALL Required Data
 
-Based on the requirement, determine:
-- **Priority:** Use classification guidelines above
-- **Complexity:** Estimate based on scope
-- **Time:** Use complexity to estimate
-- **Dependencies:** Check if other tasks must be completed first
-- **Specialists:** Assign based on task type
+**For Tasks - Collect ALL fields:**
+- **Title:** Clear, concise task title (REQUIRED)
+- **Type:** One of USER_STORY, TASK, BUG, SUB_TASK, EPIC, REFACTOR, CHORE, SPIKE, DESIGN_UX, IMPROVEMENT (REQUIRED)
+- **Priority:** P0, P1, P2, P3, or P4 (REQUIRED - default to P2 if not specified)
+- **Status:** Default to BACKLOG for new tasks (REQUIRED)
+- **Functional Requirements:** The business problem/need (REQUIRED)
+- **Technical Requirements:** Implementation approach (fill even if user didn't specify)
+- **Acceptance Criteria:** Minimum 5 verifiable criteria
+- **Specialists:** At least one recommended specialist
+- **Estimated Time:** Duration estimate
+- **Complexity:** LOW, MEDIUM, HIGH, or VERY_HIGH
+- **Affected Files:** List of files to modify
+- **Files to Create:** List of new files needed
 
-### Step 3: Draft the Task
+**For Sprints - Collect ALL fields:**
+- **Name:** Sprint name/identifier (REQUIRED)
+- **Goal:** Sprint objective/description (REQUIRED)
+- **Start Date:** Sprint start in YYYY-MM-DD format (REQUIRED - ask if not provided)
+- **End Date:** Sprint end in YYYY-MM-DD format (REQUIRED - ask if not provided)
+- **Status:** PLANNED, ACTIVE, or CLOSED (default to PLANNED for new sprints)
 
-Create the task following the structure above:
-1. Write the functional description (why)
-2. Write the technical description (what/how)
-3. Define acceptance criteria (validation)
-4. Identify affected files
-5. List files to create
+#### Step 3: Validate Data Completeness
 
-### Step 4: Validate Completeness
-
-Before presenting to user, verify:
-- [ ] Functional description is clear and non-technical
-- [ ] Technical description has actionable details
+**For Tasks - Verify BEFORE delegating:**
+- [ ] Title is clear and under 100 characters
+- [ ] Type is one of the valid enum values
+- [ ] Priority is valid (P0-P4)
+- [ ] Status is valid (BACKLOG, SPRINT, DOING, TESTING, COMPLETED)
+- [ ] Functional requirements are complete
+- [ ] Technical requirements are detailed
 - [ ] At least 5 acceptance criteria defined
-- [ ] Criteria are objectively verifiable
-- [ ] Specialists are appropriate
-- [ ] Priority matches urgency
+- [ ] At least one specialist assigned
+- [ ] Complexity is valid (LOW, MEDIUM, HIGH, VERY_HIGH)
 - [ ] Time estimate is realistic
-- [ ] File paths follow project structure
+- [ ] All file paths follow project conventions
 
-### Step 5: Present to User
+**For Sprints - Verify BEFORE delegating:**
+- [ ] Name is unique and descriptive
+- [ ] Goal is clear and measurable
+- [ ] Start date is in YYYY-MM-DD format
+- [ ] End date is in YYYY-MM-DD format
+- [ ] End date is after start date
+- [ ] Status is valid (PLANNED, ACTIVE, CLOSED)
 
-Present the task in this format:
+#### Step 4: Present to User
 
+**Task Presentation Format:**
 ```
 ## Nova Tarefa Criada
 
 ### Resumo
-- **Código:** TASK-XXX
-- **Prioridade:** P[X]
-- **Complexidade:** [Low/Medium/High]
-- **Tempo Estimado:** [X dias]
-- **Especialistas:** [list]
+- **Título:** [Clear title]
+- **Tipo:** [USER_STORY/TASK/BUG/etc]
+- **Prioridade:** [P0-P4]
+- **Complexidade:** [LOW/MEDIUM/HIGH/VERY_HIGH]
+- **Tempo Estimado:** [X dias/semanas]
+- **Especialistas:** [comma-separated list]
+- **Status:** [BACKLOG/SPRINT/DOING/etc]
 
-### Descrição Funcional
-[Summary]
+### Requisitos Funcionais
+[Complete business problem description]
 
-### Descrição Técnica
-[Summary]
+### Requisitos Técnicos
+[Implementation approach]
 
 ### Critérios de Aceitação
-[Number of criteria]
+- [ ] Criterion 1
+- [ ] Criterion 2
+- [ ] Criterion 3
+- [ ] Criterion 4
+- [ ] Criterion 5
 
 ### Ficheiros Afetados
-[List]
+- `path/to/file.go` (description)
 
-**Deseja adicionar esta tarefa ao IMPLEMENTATION_PLAN.md?**
+### Ficheiros a Criar
+- `path/to/new/file.go` (purpose)
+
+**Deseja criar esta tarefa no Groadmap?** (sim/não/editar)
 ```
 
-### Step 6: Add to Implementation Plan (if requested)
+**Sprint Presentation Format:**
+```
+## Nova Sprint Criada
 
-If user confirms:
-1. Read current IMPLEMENTATION_PLAN.md
-2. Identify correct section based on priority
-3. Insert task in appropriate phase
-4. Update completion checklist
-5. Write updated file
+### Resumo
+- **Nome:** [Sprint name]
+- **Objetivo:** [Sprint goal]
+- **Data Início:** [YYYY-MM-DD]
+- **Data Fim:** [YYYY-MM-DD]
+- **Duração:** [X dias]
+- **Estado:** [PLANNED/ACTIVE/CLOSED]
+
+### Objetivo da Sprint
+[Clear, measurable goal]
+
+### Entregáveis Esperados
+[What should be completed]
+
+**Deseja criar esta sprint no Groadmap?** (sim/não/editar)
+```
+
+#### Step 5: Create via CLI (if confirmed)
+
+**For Tasks:**
+DELEGATE to roadmap-coordinator with COMPLETE data:
+```
+Task Data for CLI:
+- title: "[task title]"
+- type: "[TASK/BUG/etc]"
+- priority: "[P0-P4]"
+- status: "BACKLOG"
+- description: "[functional requirements]"
+- technical: "[technical requirements]"
+- criteria: "[criterion 1],[criterion 2],[criterion 3]..."
+- specialists: "[specialist1],[specialist2]"
+- time: "[X days]"
+- complexity: "[LOW/MEDIUM/HIGH/VERY_HIGH]"
+```
+
+**For Sprints:**
+DELEGATE to roadmap-coordinator with COMPLETE data:
+```
+Sprint Data for CLI:
+- name: "[sprint name]"
+- goal: "[sprint objective]"
+- start: "[YYYY-MM-DD]"
+- end: "[YYYY-MM-DD]"
+- status: "PLANNED"
+```
+
+The roadmap-coordinator will:
+1. Execute the appropriate CLI command (`rmp task create` or `rmp sprint create`)
+2. Verify creation via `rmp task get` or `rmp sprint show`
+3. Report the assigned ID back
 
 ## Examples
 
-### Example 1: Security Task
+### Example 1: Security Task (Complete Data)
 
 **User Input:** "Preciso de uma tarefa para verificar se há vulnerabilidades de SQL injection no código"
 
 **Output:**
 ```markdown
-### TASK-XXX: Security Audit - SQL Injection Vulnerability Assessment
+## Nova Tarefa Criada
 
-**Priority:** P0 - Critical
-**Dependencies:** None
-**Complexity:** Medium
-**Estimated Time:** 3 days
-**Specialists:** red-team-hacker, exhaustive-qa-engineer
+### Resumo
+- **Título:** Security Audit - SQL Injection Vulnerability Assessment
+- **Tipo:** TASK
+- **Prioridade:** P0 - Critical
+- **Complexidade:** HIGH
+- **Tempo Estimado:** 3 days
+- **Especialistas:** red-team-hacker,exhaustive-qa-engineer
+- **Status:** BACKLOG
 
-**Identified Problem:**
+### Requisitos Funcionais
 The application uses SQLite for data persistence. Without proper validation,
 dynamic SQL queries could be vulnerable to injection attacks, potentially allowing
 unauthorized data access, modification, or deletion.
 
-**Technical Description of Need:**
+### Requisitos Técnicos
 Conduct comprehensive security audit of all database operations:
 - Review all SQL query constructions in `internal/db/queries.go`
 - Verify all queries use parameterized statements (prepared queries)
@@ -332,72 +452,137 @@ Conduct comprehensive security audit of all database operations:
 - Verify whitelist validation for dynamic field updates
 - Check transaction boundaries for injection scenarios
 
-**Validation Requirements:**
-- [ ] All SQL queries use `?` placeholders, no string concatenation
-- [ ] Attempted SQL injection in task description returns error, not executed
-- [ ] Dynamic field updates validate against whitelist
-- [ ] No raw user input reaches SQL execution
-- [ ] Security report documents all findings with CVE references
-- [ ] Remediation steps provided for any vulnerabilities found
-- [ ] Regression tests prevent future SQL injection vulnerabilities
+### Critérios de Aceitação
+- All SQL queries use `?` placeholders, no string concatenation
+- Attempted SQL injection in task description returns error, not executed
+- Dynamic field updates validate against whitelist
+- No raw user input reaches SQL execution
+- Security report documents all findings with CVE references
+- Remediation steps provided for any vulnerabilities found
+- Regression tests prevent future SQL injection vulnerabilities
 
-**Affected Files:**
+### Ficheiros Afetados
 - `internal/db/queries.go` (audit all query functions)
 - `internal/db/connection.go` (verify transaction safety)
 - `internal/commands/task.go` (validate input handling)
 - `internal/commands/sprint.go` (validate input handling)
 
-**Files to Create:**
+### Ficheiros a Criar
 - `SECURITY/sql-injection-audit-XXXX-XX-XX.md` (security report)
+
+**Dados para CLI:**
+- title: "Security Audit - SQL Injection Vulnerability Assessment"
+- type: "TASK"
+- priority: "P0"
+- status: "BACKLOG"
+- description: "The application uses SQLite for data persistence..."
+- technical: "Conduct comprehensive security audit..."
+- criteria: "All SQL queries use placeholders,Injection returns error,Whitelist validation,No raw input in SQL,Security report with CVE,Remediation steps,Regression tests"
+- specialists: "red-team-hacker,exhaustive-qa-engineer"
+- time: "3 days"
+- complexity: "HIGH"
+
+**Deseja criar esta tarefa no Groadmap?**
 ```
 
-### Example 2: Feature Task
+### Example 2: Feature Task (Complete Data)
 
 **User Input:** "Cria uma tarefa para adicionar autocompletion na shell"
 
 **Output:**
 ```markdown
-### TASK-XXX: Add Shell Autocompletion Support
+## Nova Tarefa Criada
 
-**Priority:** P3 - Low
-**Dependencies:** None
-**Complexity:** Low
-**Estimated Time:** 1-2 days
-**Specialists:** go-elite-developer
+### Resumo
+- **Título:** Add Shell Autocompletion Support
+- **Tipo:** TASK
+- **Prioridade:** P3 - Low
+- **Complexidade:** LOW
+- **Tempo Estimado:** 1-2 days
+- **Especialistas:** go-elite-developer
+- **Status:** BACKLOG
 
-**Identified Problem:**
+### Requisitos Funcionais
 The CLI does not support shell autocompletion, reducing user experience and
 increasing likelihood of command errors. Users must remember exact command names,
 flags, and valid values without assistance.
 
-**Technical Description of Need:**
+### Requisitos Técnicos
 Implement shell autocompletion using Cobra's built-in support:
 - Add `completion` command that generates completion scripts
 - Support Bash, Zsh, Fish, and PowerShell
-- Implement custom completions for:
-  - Roadmap names (from `~/.roadmaps/`)
-  - Task IDs (from current roadmap)
-  - Sprint IDs (from current roadmap)
-  - Status values (BACKLOG, SPRINT, DOING, TESTING, COMPLETED)
+- Implement custom completions for roadmap names, task IDs, sprint IDs, status values
 - Use `ValidArgsFunction` in Cobra for dynamic completion
 - Document setup in README.md
 
-**Validation Requirements:**
-- [ ] `rmp completion bash` generates valid Bash script
-- [ ] `rmp completion zsh` generates valid Zsh script
-- [ ] Roadmap name completion lists existing roadmaps
-- [ ] Task ID completion lists tasks from current/default roadmap
-- [ ] Status completion suggests valid statuses
-- [ ] Completion scripts work after following setup instructions
-- [ ] Unit tests validate completion logic
+### Critérios de Aceitação
+- rmp completion bash generates valid Bash script
+- rmp completion zsh generates valid Zsh script
+- Roadmap name completion lists existing roadmaps
+- Task ID completion lists tasks from current/default roadmap
+- Status completion suggests valid statuses
+- Completion scripts work after following setup instructions
+- Unit tests validate completion logic
 
-**Affected Files:**
+### Ficheiros Afetados
 - `cmd/rmp/main.go` (add completion command)
 - `README.md` (add completion setup instructions)
 
-**Files to Create:**
+### Ficheiros a Criar
 - `internal/commands/completion.go` (completion logic)
 - `internal/commands/completion_test.go` (completion tests)
+
+**Dados para CLI:**
+- title: "Add Shell Autocompletion Support"
+- type: "TASK"
+- priority: "P3"
+- status: "BACKLOG"
+- description: "The CLI does not support shell autocompletion..."
+- technical: "Implement shell autocompletion using Cobra..."
+- criteria: "completion bash works,completion zsh works,Roadmap completion works,Task ID completion works,Status completion works,Setup instructions work,Unit tests pass"
+- specialists: "go-elite-developer"
+- time: "1-2 days"
+- complexity: "LOW"
+
+**Deseja criar esta tarefa no Groadmap?**
+```
+
+### Example 3: Sprint Creation (Complete Data)
+
+**User Input:** "Cria uma sprint para a próxima semana, objetivo é completar a funcionalidade de autenticação"
+
+**Output:**
+```markdown
+## Nova Sprint Criada
+
+### Resumo
+- **Nome:** Sprint 1 - Authentication Feature
+- **Objetivo:** Complete authentication functionality including login, logout, password reset, and session management
+- **Data Início:** 2026-03-23
+- **Data Fim:** 2026-04-05
+- **Duração:** 14 dias
+- **Estado:** PLANNED
+
+### Objetivo da Sprint
+Implement complete user authentication system that allows users to securely log in,
+log out, reset passwords, and maintain active sessions. The system must integrate
+with the existing SQLite database and provide secure token-based authentication.
+
+### Entregáveis Esperados
+- Login functionality with email/username and password
+- Logout functionality with session termination
+- Password reset with email verification
+- Session management with token refresh
+- Integration tests for all auth flows
+
+**Dados para CLI:**
+- name: "Sprint 1 - Authentication Feature"
+- goal: "Complete authentication functionality including login, logout, password reset, and session management"
+- start: "2026-03-23"
+- end: "2026-04-05"
+- status: "PLANNED"
+
+**Deseja criar esta sprint no Groadmap?**
 ```
 
 ## Language Guidelines
@@ -409,21 +594,78 @@ Implement shell autocompletion using Cobra's built-in support:
 
 ## Output Format
 
-**ALWAYS** present the task in a clear, structured format that:
-1. Shows the complete task structure
-2. Highlights key metadata (priority, time, specialists)
-3. Asks for confirmation before adding to IMPLEMENTATION_PLAN.md
-4. Provides option to edit before finalizing
+**ALWAYS** present the output in a clear, structured format that:
+1. Shows the complete structure (task OR sprint)
+2. Highlights ALL key metadata fields collected
+3. Displays the "Dados para CLI" section with all fields ready for delegation
+4. Asks for confirmation before delegating to roadmap-coordinator
+5. Provides option to edit before finalizing
 
 ## Success Criteria
 
-A task is successfully created when:
-- [ ] Functional description explains the "why" clearly
-- [ ] Technical description explains the "what" and "how"
+**For Tasks - ALL must be met:**
+- [ ] Title is clear, concise, and under 100 characters
+- [ ] Type is one of: USER_STORY, TASK, BUG, SUB_TASK, EPIC, REFACTOR, CHORE, SPIKE, DESIGN_UX, IMPROVEMENT
+- [ ] Priority is valid (P0-P4) and appropriate for urgency
+- [ ] Status is valid (BACKLOG, SPRINT, DOING, TESTING, COMPLETED)
+- [ ] Functional description explains the "why" clearly (non-technical)
+- [ ] Technical description explains the "what" and "how" in detail
 - [ ] At least 5 acceptance criteria are defined
-- [ ] Criteria are objectively verifiable
-- [ ] Specialists are appropriate for the task type
-- [ ] Priority reflects actual urgency
+- [ ] Criteria are objectively verifiable (pass/fail)
+- [ ] At least one specialist is assigned and appropriate
+- [ ] Complexity is valid (LOW, MEDIUM, HIGH, VERY_HIGH)
 - [ ] Time estimate is realistic
 - [ ] File paths follow project conventions
+- [ ] All data is formatted for CLI delegation ("Dados para CLI" section)
 - [ ] User confirms the task meets their needs
+
+**For Sprints - ALL must be met:**
+- [ ] Name is unique, descriptive, and under 100 characters
+- [ ] Goal is clear, measurable, and actionable
+- [ ] Start date is in YYYY-MM-DD format and valid
+- [ ] End date is in YYYY-MM-DD format and after start date
+- [ ] Status is valid (PLANNED, ACTIVE, CLOSED)
+- [ ] All data is formatted for CLI delegation ("Dados para CLI" section)
+- [ ] User confirms the sprint meets their needs
+
+## Integration with Roadmap Coordinator
+
+**CRITICAL:** This skill prepares data; roadmap-coordinator executes CLI commands.
+
+### Delegation Format
+
+When user confirms creation, invoke Skill: roadmap-coordinator with:
+
+**For Tasks:**
+```
+Create new task with following data:
+- title: "[exact title]"
+- type: "[TASK/BUG/etc]"
+- priority: "[P0-P4]"
+- status: "BACKLOG"
+- description: "[full functional requirements]"
+- technical: "[full technical requirements]"
+- criteria: "[criterion1],[criterion2],[criterion3]..."
+- specialists: "[spec1],[spec2]"
+- time: "[X days/weeks]"
+- complexity: "[LOW/MEDIUM/HIGH/VERY_HIGH]"
+```
+
+**For Sprints:**
+```
+Create new sprint with following data:
+- name: "[exact name]"
+- goal: "[full goal description]"
+- start: "[YYYY-MM-DD]"
+- end: "[YYYY-MM-DD]"
+- status: "PLANNED"
+```
+
+### Never Skip Validation
+
+Before delegating, ALWAYS verify:
+1. All required fields are present and non-empty
+2. Enum values match allowed values exactly (case-sensitive)
+3. Dates are in correct format (YYYY-MM-DD)
+4. No placeholder text like "[X]" or "[fill in]" remains
+5. Data is ready for immediate CLI use
