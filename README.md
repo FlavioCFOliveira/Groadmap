@@ -2,6 +2,14 @@
 
 Local Roadmap Manager CLI for agentic workflows. Groadmap is a CLI tool in Go for managing technical roadmaps, using SQLite as backend.
 
+## Quick Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/FlavioCFOliveira/Groadmap/main/install.sh | bash
+```
+
+This will detect your OS and architecture, download the latest release from GitHub, and install the `rmp` binary to `/usr/local/bin`. If `rmp` is already installed, it will be updated to the latest version.
+
 ## Features
 
 - **Roadmap Management**: Create, list, select, and remove roadmaps
