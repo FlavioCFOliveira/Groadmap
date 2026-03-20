@@ -129,15 +129,15 @@ func taskList(args []string) error {
 //   - args: Command-line arguments including flags and roadmap name
 //
 // Required flags:
-//   - -t, --title: Task title/summary (required, max 500 chars)
-//   - -fr, --functional-requirements: Functional requirements - "Why?" (required, max 1000 chars)
-//   - -tr, --technical-requirements: Technical requirements - "How?" (required, max 1000 chars)
-//   - -ac, --acceptance-criteria: Acceptance criteria - "How to verify?" (required, max 1000 chars)
+//   - -t, --title: Task title/summary (required, max 255 chars)
+//   - -fr, --functional-requirements: Functional requirements - "Why?" (required, max 4096 chars)
+//   - -tr, --technical-requirements: Technical requirements - "How?" (required, max 4096 chars)
+//   - -ac, --acceptance-criteria: Acceptance criteria - "How to verify?" (required, max 4096 chars)
 //
 // Optional flags:
 //   - -p, --priority: Task priority 0-9 (default: 0)
 //   - --severity: Task severity 0-9 (default: 0)
-//   - -s, --specialists: Comma-separated list of specialists (max 500 chars)
+//   - -sp, --specialists: Comma-separated list of specialists (max 500 chars)
 //   - -r, --roadmap: Roadmap name (uses current if not specified)
 //
 // Error conditions:
@@ -398,11 +398,11 @@ func taskGet(args []string) error {
 //   - task ID: The ID of the task to edit (first positional argument)
 //
 // Optional flags (at least one required):
-//   - -t, --title: New task title (max 500 chars)
-//   - -fr, --functional-requirements: New functional requirements (max 1000 chars)
-//   - -tr, --technical-requirements: New technical requirements (max 1000 chars)
-//   - -ac, --acceptance-criteria: New acceptance criteria (max 1000 chars)
-//   - -s, --specialists: New specialists list (max 500 chars)
+//   - -t, --title: New task title (max 255 chars)
+//   - -fr, --functional-requirements: New functional requirements (max 4096 chars)
+//   - -tr, --technical-requirements: New technical requirements (max 4096 chars)
+//   - -ac, --acceptance-criteria: New acceptance criteria (max 4096 chars)
+//   - -sp, --specialists: New specialists list (max 500 chars)
 //   - -p, --priority: New priority 0-9
 //   - --severity: New severity 0-9
 //   - -r, --roadmap: Roadmap name (uses current if not specified)

@@ -47,17 +47,12 @@ Creates a new roadmap.
 |----------|----------|-------------|
 | `name` | Yes | Roadmap name (alphanumeric, hyphens, underscores) |
 
-**Flags:**
-| Short Flag | Long Flag | Type | Default | Description |
-|------------|------------|------|--------|-------------|
-| N/A | `--force` | bool | false | Overwrite if roadmap already exists |
-
 **Output:** JSON object with the created roadmap name
 
 **Examples:**
 ```bash
 rmp roadmap create myproject
-rmp road new myproject --force
+rmp road new myproject
 ```
 
 **Example output:**
