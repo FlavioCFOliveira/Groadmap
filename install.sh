@@ -17,15 +17,15 @@ NC='\033[0m' # No Color
 
 # Print functions
 info() {
-    echo -e "${BLUE}INFO:${NC} $1"
+    echo -e "${BLUE}INFO:${NC} $1" >&2
 }
 
 success() {
-    echo -e "${GREEN}SUCCESS:${NC} $1"
+    echo -e "${GREEN}SUCCESS:${NC} $1" >&2
 }
 
 warn() {
-    echo -e "${YELLOW}WARNING:${NC} $1"
+    echo -e "${YELLOW}WARNING:${NC} $1" >&2
 }
 
 error() {
@@ -33,7 +33,7 @@ error() {
 }
 
 prompt() {
-    echo -e "${CYAN}PROMPT:${NC} $1"
+    echo -e "${CYAN}PROMPT:${NC} $1" >&2
 }
 
 # Detect OS
