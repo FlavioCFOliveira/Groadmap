@@ -88,7 +88,7 @@ The spec-orchestrator operates on **functional areas**, not individual tasks. Ev
 
 ---
 
-## Agent Responsibilities (Strict Ownership)
+## Skill Responsibilities (Strict Ownership)
 
 ### spec-orchestrator
 **Exclusive authority** for technical specification. **THIS AGENT MUST BE INVOKED BEFORE ANY IMPLEMENTATION.**
@@ -101,6 +101,25 @@ The spec-orchestrator operates on **functional areas**, not individual tasks. Ev
 - NEVER derives specifications from existing code
 - ALWAYS asks the user for decisions (the user is the single source of truth)
 - **Acts as gatekeeper: NO implementation without clear specification**
+
+### task-creator
+**Exclusive authority** for creating tasks and sprints.
+- **Collects ALL required data** for task/sprint creation (title, type, priority, description, criteria, dates, etc.)
+- **Prepares structured data** for the Groadmap CLI
+- **Delegates persistence** to roadmap-coordinator (never writes directly to database)
+- Validates data completeness before delegation (all required fields present)
+- Supports both tasks (USER_STORY, TASK, BUG, etc.) and sprints
+- **ALWAYS provides complete data package** to roadmap-coordinator for CLI execution
+
+### roadmap-coordinator
+**Exclusive authority** for task coordination via Groadmap CLI.
+- **Source of truth** for all task/sprint operations via `rmp` CLI commands
+- Retrieves tasks via CLI (`rmp task next`, `rmp task list`)
+- Manages state transitions (`rmp task stat`)
+- Creates tasks/sprints via CLI (`rmp task create`, `rmp sprint create`)
+- Delegates implementation to appropriate specialists
+- **NEVER implements directly** - only coordinates via CLI
+- Requires complete data from task-creator before executing CLI commands
 
 ### go-elite-developer
 **Exclusive authority** for Go code development. **ONLY TO BE INVOKED AFTER spec-orchestrator.**
@@ -210,14 +229,31 @@ type(scope): subject
 - References to SPEC/ if applicable
 ```
 
-### Rule 6: Task Lifecycle and Specification Binding (MANDATORY)
+### Rule 6: Task/Sprint Lifecycle and Specification Binding (MANDATORY)
 
-#### Task Creation:
-- **NO task can be created without a corresponding specification in `SPEC/`**
+#### Task/Sprint Creation Flow:
+```
+User Request → task-creator → roadmap-coordinator → Groadmap CLI (SQLite)
+     ↓              ↓                ↓                      ↓
+  Describes    Collects ALL    Executes rmp          Source of truth
+  requirement  required data   commands
+```
+
+1. **User describes** need → task-creator engages
+2. **task-creator** collects ALL required fields (title, type, priority, description, criteria, etc.)
+3. **task-creator** presents data to user for confirmation
+4. Upon confirmation, **task-creator delegates** to roadmap-coordinator
+5. **roadmap-coordinator** executes CLI commands (`rmp task create`, `rmp sprint create`)
+6. **SQLite database** stores the task/sprint as source of truth
+
+#### Task Creation Requirements:
+- **NO task/sprint can be created without a corresponding specification in `SPEC/`**
 - Before creating any task, **identify the functional area** (VERSION.md, BUILD.md, COMMANDS.md, etc.)
 - Tasks must reference the **specific functional area SPEC** they implement
 - **NEVER create task-specific spec files** (e.g., "VERSION_RESET.md", "RASPBERRY_PI_SUPPORT.md")
 - **ALWAYS map to existing functional area SPECs** and update them as needed
+- **task-creator MUST collect ALL required fields** before delegating to roadmap-coordinator
+- **roadmap-coordinator validates data completeness** before executing CLI commands
 
 #### Task Completion:
 - **Before marking any task as complete, VALIDATE that the specification exists in `SPEC/`**
@@ -245,15 +281,29 @@ type(scope): subject
 │   └── utils/               # JSON, ISO 8601 dates, paths
 ├── bin/                     # Build output
 ├── SPEC/                    # Technical specifications (spec-orchestrator only)
-├── IMPLEMENTATION_PLAN.md   # Project implementation plan
+├── .claude/skills/          # Skill definitions
+│   ├── task-creator/        # Task/sprint creation skill
+│   ├── roadmap-coordinator/ # CLI coordination skill
+│   ├── spec-orchestrator/   # Specification authority
+│   ├── go-elite-developer/  # Go implementation skill
+│   └── go-gitflow/          # Git operations skill
 └── CLAUDE.md               # This file
 ```
 
-### IMPLEMENTATION_PLAN.md
+### Task Management Architecture
 
-The `/IMPLEMENTATION_PLAN.md` file stores the project implementation plan and is divided into two sections:
-- **Pending Tasks**: Tasks yet to be implemented
-- **Completed Tasks**: Tasks that have been finished
+**Groadmap uses SQLite as the source of truth for tasks and sprints.**
+
+```
+User Request → task-creator → roadmap-coordinator → Groadmap CLI → SQLite
+                     ↓                ↓
+              Collects ALL      Executes rmp
+              required data     commands
+```
+
+- **task-creator**: Prepares complete data packages for tasks/sprints
+- **roadmap-coordinator**: Executes CLI commands (`rmp task create`, `rmp sprint create`)
+- **SQLite**: Stores tasks, sprints, roadmaps in `~/.roadmaps/*.db`
 
 ---
 
@@ -327,6 +377,9 @@ The `SPEC/` directory contains **functional area specifications**, not task-spec
 | **Build/CI change** | **Invoke `spec-orchestrator` to UPDATE `SPEC/BUILD.md`** |
 | **Version-related change** | **Invoke `spec-orchestrator` to UPDATE `SPEC/VERSION.md`** |
 | **Database schema change** | **Invoke `spec-orchestrator` to UPDATE `SPEC/DATABASE.md`** |
+| **User wants to create task/sprint** | **Invoke `task-creator`** |
+| **User wants to execute/coordinate tasks** | **Invoke `roadmap-coordinator`** |
+| **User wants to implement/advance tasks** | **Invoke `roadmap-coordinator` → delegates to specialists** |
 | Specification exists, implement | Invoke `go-elite-developer` |
 | Git operations (commit, branch, PR) | Invoke `go-gitflow` |
 | Exhaustive testing needed | Invoke `exhaustive-qa-engineer` |
@@ -361,8 +414,103 @@ The `SPEC/` directory contains **functional area specifications**, not task-spec
 
 1. **Understand**: Analyze user request
 2. **Routing**: Identify correct skill/agent
-3. **Delegation**: Invoke skill with complete context
-4. **Validation**: Verify mandatory gates
-5. **Delivery**: Present result to user
+3. **Data Collection**: If task/sprint creation, ensure ALL required fields are collected
+4. **Validation**: Verify mandatory gates (SPEC exists, data complete)
+5. **Delegation**: Invoke skill with complete context
+6. **Execution**: For CLI operations, roadmap-coordinator executes via Groadmap CLI
+7. **Delivery**: Present result to user
 
 When multiple agents are needed, orchestrate sequentially according to dependencies.
+
+---
+
+## Task-Creator and Roadmap-Coordinator Integration
+
+### Data Flow Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    TASK CREATION WORKFLOW                        │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌──────────────┐     ┌──────────────┐     ┌──────────────────┐│
+│  │   USER       │────▶│ task-creator │────▶│ roadmap-         ││
+│  │  (describes) │     │ (collects    │     │ coordinator      ││
+│  │              │     │  ALL data)   │     │ (CLI execution)  ││
+│  └──────────────┘     └──────────────┘     └──────────────────┘│
+│                               │                       │         │
+│                               ▼                       ▼         │
+│                        ┌──────────────┐     ┌──────────────────┐│
+│                        │  Presents    │     │   Groadmap       ││
+│                        │  to user     │     │   CLI (rmp)      ││
+│                        │  for confirm │     └──────────────────┘│
+│                        └──────────────┘              │         │
+│                                                       ▼         │
+│                                              ┌──────────────────┐│
+│                                              │   SQLite DB        ││
+│                                              │   (source of       ││
+│                                              │   truth)           ││
+│                                              └──────────────────┘│
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### task-creator Responsibilities
+
+**MUST collect ALL fields for task creation:**
+- **Required:** title, type, priority, status, description (functional requirements)
+- **Required for rich tasks:** technical requirements, acceptance criteria, specialists, estimated time, complexity
+- **Validation:** Ensure all enum values are valid (type, priority, status, complexity)
+- **Presentation:** Show complete data to user with "Dados para CLI" section
+- **Delegation:** Only delegates to roadmap-coordinator after user confirmation
+
+**MUST collect ALL fields for sprint creation:**
+- **Required:** name, goal, start date (YYYY-MM-DD), end date (YYYY-MM-DD), status
+- **Validation:** Ensure dates are valid and end > start
+- **Presentation:** Show complete sprint data to user
+
+### roadmap-coordinator Responsibilities
+
+**CLI-First Execution:**
+- **ALWAYS** uses CLI commands, never direct database access
+- Receives complete data package from task-creator
+- Executes `rmp task create` or `rmp sprint create` with all flags
+- Verifies creation via `rmp task get` or `rmp sprint show`
+- Reports back assigned ID to user
+
+**State Management:**
+- Manages task states: BACKLOG → SPRINT → DOING → TESTING → COMPLETED
+- Uses `rmp task stat` for ALL state transitions
+- Retrieves next tasks via `rmp task next [N]`
+
+**Delegation Chain:**
+```
+roadmap-coordinator → Analyze task → Delegate to specialist → Update state → Report
+        │                                              │
+        └─ task requires implementation ────────────────┘
+```
+
+### Integration Rules
+
+1. **task-creator NEVER writes directly to database** - only prepares data
+2. **roadmap-coordinator NEVER creates data structures** - only executes CLI
+3. **SQLite is always the source of truth** - accessed only via Groadmap CLI
+4. **Complete data validation** happens in task-creator before delegation
+5. **User confirmation** required before any CLI execution
+
+### Example Task Creation Command
+
+After task-creator collects data and user confirms, roadmap-coordinator executes:
+
+```bash
+rmp task create -r groadmap \
+  --title "Implement user authentication" \
+  --type TASK \
+  --priority P1 \
+  --status BACKLOG \
+  --description "Add login/logout functionality with secure password hashing" \
+  --technical "Implement bcrypt hashing, JWT tokens, middleware protection" \
+  --criteria "User can login,User can logout,Passwords are hashed,Tokens expire" \
+  --specialists "go-elite-developer,red-team-hacker" \
+  --time "5 days" \
+  --complexity HIGH
+```
