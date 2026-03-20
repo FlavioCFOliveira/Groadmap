@@ -201,7 +201,7 @@ rmp task next [num]
 rmp t next [num]
 ```
 
-**Description:** Returns the next N open tasks from the currently open sprint. Tasks are ordered by severity (descending) and then by priority (descending), returning the most critical and highest priority tasks first.
+**Description:** Returns the next N open tasks from the currently open sprint. Tasks are returned in the order defined by the sprint's `task_order` (set via `sprint reorder` or other ordering commands), allowing the team to define execution sequence independent of priority/severity.
 
 **Arguments:**
 - `num` (optional) - Number of tasks to return. If not provided, defaults to 1.
@@ -285,7 +285,7 @@ Success (no open tasks in sprint):
 
 **Behavior Notes:**
 - Only returns tasks with status `SPRINT`, `DOING`, or `TESTING` (open tasks)
-- Tasks are ordered first by severity (highest first), then by priority (highest first)
+- Tasks are returned in the order defined by the sprint's `task_order` (set via sprint reorder or other ordering commands)
 - If the requested number exceeds available open tasks, all remaining open tasks are returned
 - If no open sprint exists, an error is returned indicating a sprint needs to be opened
 - If the sprint has no open tasks, an empty array is returned (success, exit code 0)

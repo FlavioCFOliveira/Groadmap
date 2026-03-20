@@ -307,7 +307,7 @@ func taskCreate(args []string) error {
 //   - Returns utils.ErrInvalidInput if num is not a positive integer
 //
 // Output:
-//   - JSON array of Task objects ordered by severity DESC, then priority DESC
+//   - JSON array of Task objects ordered by sprint task position (task_order)
 //   - Empty array if sprint has no open tasks
 //
 // Example:

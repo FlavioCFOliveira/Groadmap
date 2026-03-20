@@ -219,7 +219,7 @@ Examples:
 usage: rmp task next [-h | --help] -r <name> [num]
 
 Get the next N open tasks from the currently open sprint.
-Tasks are ordered by severity DESC, then priority DESC.
+Tasks are returned in the sprint's defined task order (set via sprint reorder).
 
 Options:
    -r, --roadmap <name>   Roadmap name (required)

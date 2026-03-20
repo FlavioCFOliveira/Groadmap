@@ -627,7 +627,7 @@ func (db *DB) GetOpenSprint(ctx context.Context) (*models.Sprint, error) {
 }
 
 // GetNextTasks retrieves the next N open tasks from the currently open sprint.
-// Tasks are ordered by severity DESC, then priority DESC.
+// Tasks are ordered by sprint task position (task_order).
 // Only returns tasks with status SPRINT, DOING, or TESTING.
 func (db *DB) GetNextTasks(ctx context.Context, limit int) ([]models.Task, error) {
 	if limit < 1 {
@@ -651,7 +651,7 @@ func (db *DB) GetNextTasks(ctx context.Context, limit int) ([]models.Task, error
 		return nil, fmt.Errorf("querying open sprint: %w", err)
 	}
 
-	// Get open tasks from the sprint, ordered by severity DESC, priority DESC
+	// Get open tasks from the sprint, ordered by sprint task position
 	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
 		         t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
 		         t.closed_at, t.priority, t.severity
@@ -659,7 +659,7 @@ func (db *DB) GetNextTasks(ctx context.Context, limit int) ([]models.Task, error
 		      INNER JOIN sprint_tasks st ON t.id = st.task_id
 		      WHERE st.sprint_id = ?
 		        AND t.status IN ('SPRINT', 'DOING', 'TESTING')
-		      ORDER BY t.severity DESC, t.priority DESC
+		      ORDER BY st.position ASC
 		      LIMIT ?`
 
 	rows, err := db.QueryContext(ctx, query, sprintID, limit)

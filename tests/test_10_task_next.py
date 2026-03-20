@@ -178,8 +178,8 @@ class TestTaskNext:
 
         print("✓ Next multiple tasks test passed")
 
-    def test_next_priority_ordering(self):
-        """Test that tasks are ordered by severity then priority (highest first)."""
+    def test_next_task_ordering(self):
+        """Test that tasks are returned in sprint task_order (position ordering)."""
         roadmap = self.test.create_roadmap()
         self.test.use_roadmap(roadmap)
 
@@ -188,18 +188,17 @@ class TestTaskNext:
         self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint_id)])
 
         # Create tasks with varying priorities and severities
-        # Order should be: severity DESC, then priority DESC
+        # Note: task next now uses sprint task_order, not severity/priority
         tasks_config = [
-            {"title": "Fix critical SQL injection vulnerability", "priority": 9, "severity": 9, "expected_order": 1},
-            {"title": "Patch authentication bypass", "priority": 8, "severity": 9, "expected_order": 2},
-            {"title": "Implement password hashing", "priority": 9, "severity": 8, "expected_order": 3},
-            {"title": "Add session timeout handling", "priority": 7, "severity": 8, "expected_order": 4},
-            {"title": "Update security headers", "priority": 6, "severity": 7, "expected_order": 5},
-            {"title": "Review access control logs", "priority": 5, "severity": 6, "expected_order": 6},
+            {"title": "Fix critical SQL injection vulnerability", "priority": 9, "severity": 9},
+            {"title": "Patch authentication bypass", "priority": 8, "severity": 9},
+            {"title": "Implement password hashing", "priority": 9, "severity": 8},
+            {"title": "Add session timeout handling", "priority": 7, "severity": 8},
+            {"title": "Update security headers", "priority": 6, "severity": 7},
+            {"title": "Review access control logs", "priority": 5, "severity": 6},
         ]
 
         task_ids = []
-        task_id_to_config = {}
 
         for config in tasks_config:
             task_id = self.test.create_task(
@@ -212,12 +211,18 @@ class TestTaskNext:
                 severity=config["severity"]
             )
             task_ids.append(task_id)
-            task_id_to_config[task_id] = config
 
         # Add all tasks to sprint
         self.test.run_cmd([
             "sprint", "add-tasks", "-r", roadmap, str(sprint_id),
             ",".join(map(str, task_ids))
+        ])
+
+        # Define a custom order using sprint reorder (reverse order)
+        custom_order = list(reversed(task_ids))
+        self.test.run_cmd([
+            "sprint", "reorder", "-r", roadmap, str(sprint_id),
+            ",".join(map(str, custom_order))
         ])
 
         # Get all next tasks
@@ -226,32 +231,12 @@ class TestTaskNext:
         assert len(result) == len(tasks_config), \
                f"Expected {len(tasks_config)} tasks, got {len(result)}"
 
-        # Verify ordering: severity DESC, then priority DESC
-        for i in range(len(result) - 1):
-            current = result[i]
-            next_task = result[i + 1]
+        # Verify ordering matches custom task_order (reversed)
+        returned_ids = [task["id"] for task in result]
+        assert returned_ids == custom_order, \
+               f"Tasks not in expected order. Expected: {custom_order}, got: {returned_ids}"
 
-            # Either current has higher severity, or same severity with higher/equal priority
-            if current["severity"] > next_task["severity"]:
-                continue  # Correct ordering
-            elif current["severity"] == next_task["severity"]:
-                assert current["priority"] >= next_task["priority"], \
-                       f"Tasks not ordered correctly by priority: " \
-                       f"{current['title']} (sev={current['severity']}, pri={current['priority']}) " \
-                       f"should come before " \
-                       f"{next_task['title']} (sev={next_task['severity']}, pri={next_task['priority']})"
-            else:
-                assert False, \
-                       f"Tasks not ordered correctly by severity: " \
-                       f"{current['title']} (sev={current['severity']}) should come after " \
-                       f"{next_task['title']} (sev={next_task['severity']})"
-
-        # Verify highest priority task is first
-        assert result[0]["severity"] == 9, f"Expected severity 9 first, got {result[0]['severity']}"
-        assert result[0]["priority"] == 9, f"Expected priority 9 first, got {result[0]['priority']}"
-        assert "SQL injection" in result[0]["title"], f"Expected SQL injection task first, got {result[0]['title']}"
-
-        print("✓ Next task priority ordering test passed")
+        print("✓ Next task ordering by sprint task_order test passed")
 
     def test_next_exceeds_available_tasks(self):
         """Test requesting more tasks than available."""
