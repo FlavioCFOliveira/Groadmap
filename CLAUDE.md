@@ -6,8 +6,53 @@
 
 - NO code implementation shall begin without a complete specification in `SPEC/`
 - When ANY implementation is requested, invoke `spec-orchestrator` FIRST
+- **Contextual Scope**: Always identify the functional area (VERSION.md, BUILD.md, COMMANDS.md, etc.) and update the relevant SPEC, not create task-specific documents
 - This rule has ZERO exceptions - urgency, simplicity, or user preference do not override it
 - **WHEN IN DOUBT: SPEC FIRST. ALWAYS.**
+
+---
+
+## Contextual Specification Scope
+
+### Functional Area Mapping
+
+The spec-orchestrator operates on **functional areas**, not individual tasks. Every request must be mapped to the appropriate SPEC file based on its functional domain:
+
+| Functional Area | SPEC File | Covers |
+|-----------------|-----------|--------|
+| Version management | `SPEC/VERSION.md` | Version commands, versioning logic, version display |
+| Build system | `SPEC/BUILD.md` | Build process, CI/CD, cross-compilation, targets |
+| Deployment | `SPEC/DEPLOY.md` | Installation, distribution, release process |
+| CLI commands | `SPEC/COMMANDS.md` | Command hierarchy, subcommands, aliases, flags |
+| Database | `SPEC/DATABASE.md` | Schema, migrations, queries, relationships |
+| Data formats | `SPEC/DATA_FORMATS.md` | JSON output schemas, input formats |
+| Models | `SPEC/MODELS.md` | Structs, enums, domain models |
+| Architecture | `SPEC/ARCHITECTURE.md` | System design, component structure |
+| State machines | `SPEC/STATE_MACHINE.md` | State transitions, workflows |
+| Help/UX | `SPEC/HELP_EXAMPLES.md` | Help text, error messages, examples |
+
+### Specification Update Rules
+
+**ALWAYS update existing SPEC files** for changes to existing functionality:
+- Bug fixes → Update the relevant functional area SPEC
+- Enhancements → Update the relevant functional area SPEC
+- Refactoring → Update the relevant functional area SPEC
+- New subcommand → Update `SPEC/COMMANDS.md`
+- New build target → Update `SPEC/BUILD.md`
+- Schema change → Update `SPEC/DATABASE.md`
+
+**ONLY create new SPEC files** for entirely new functional areas not currently covered.
+
+### Task-to-Spec Mapping Examples
+
+| User Request | Functional Area | Action |
+|--------------|-----------------|--------|
+| "Add ARM build support" | BUILD.md | Update existing SPEC |
+| "Fix version command output" | VERSION.md | Update existing SPEC |
+| "Add task dependencies" | DATABASE.md, MODELS.md | Update existing SPECs |
+| "Create new export command" | COMMANDS.md | Update existing SPEC |
+| "Change JSON output format" | DATA_FORMATS.md | Update existing SPEC |
+| "Add entirely new plugin system" | New SPEC/PLUGINS.md | Create new SPEC only |
 
 ---
 
@@ -49,6 +94,9 @@
 **Exclusive authority** for technical specification. **THIS AGENT MUST BE INVOKED BEFORE ANY IMPLEMENTATION.**
 - **MANDATORY FIRST STEP** for all new features and changes
 - Creates and maintains all documents in `SPEC/`
+- **FEATURE-ORIENTED, NOT TASK-ORIENTED**: Maps requests to functional areas (VERSION.md, BUILD.md, COMMANDS.md, etc.)
+- **Updates existing specifications** for changes to existing functionality
+- **Creates new specifications** only for entirely new functional areas
 - Produces specifications ONLY from user input
 - NEVER derives specifications from existing code
 - ALWAYS asks the user for decisions (the user is the single source of truth)
@@ -166,19 +214,22 @@ type(scope): subject
 
 #### Task Creation:
 - **NO task can be created without a corresponding specification in `SPEC/`**
-- Before creating any task, verify that the functionality is documented in the appropriate SPEC/ file
-- Tasks must reference the specific specification document they implement
+- Before creating any task, **identify the functional area** (VERSION.md, BUILD.md, COMMANDS.md, etc.)
+- Tasks must reference the **specific functional area SPEC** they implement
+- **NEVER create task-specific spec files** (e.g., "VERSION_RESET.md", "RASPBERRY_PI_SUPPORT.md")
+- **ALWAYS map to existing functional area SPECs** and update them as needed
 
 #### Task Completion:
 - **Before marking any task as complete, VALIDATE that the specification exists in `SPEC/`**
-- If the specification is missing, the task CANNOT be validated or marked as complete
-- The task must remain open until the specification is created and the implementation aligns with it
+- Verify the implementation aligns with the **relevant functional area SPEC**
+- The task must remain open until the specification is updated and the implementation aligns with it
 
 #### Task Validation Protocol:
 1. Review the task requirements
-2. Locate the corresponding specification in `SPEC/`
-3. If specification is MISSING → STOP and invoke spec-orchestrator
-4. Only validate completion when specification exists and implementation matches it
+2. **Identify the functional area** affected by the task
+3. Locate the corresponding **functional area SPEC** in `SPEC/` (e.g., BUILD.md for build changes)
+4. If the relevant SPEC is MISSING or incomplete → STOP and invoke spec-orchestrator to update/create it
+5. Only validate completion when specification exists and implementation matches it
 
 ---
 
@@ -246,18 +297,22 @@ go vet ./...
 
 ## SPEC Directory Reference
 
-| File | Content | Owner |
-|------|---------|-------|
-| `SPEC/ARCHITECTURE.md` | System design, structure | spec-orchestrator |
-| `SPEC/BUILD.md` | Build system, CI/CD workflows | spec-orchestrator |
-| `SPEC/COMMANDS.md` | CLI hierarchy, aliases | spec-orchestrator |
-| `SPEC/DATABASE.md` | SQLite schema, relationships | spec-orchestrator |
-| `SPEC/DATA_FORMATS.md` | JSON output schema | spec-orchestrator |
-| `SPEC/DEPLOY.md` | Deployment, installation | spec-orchestrator |
-| `SPEC/HELP_EXAMPLES.md` | Help/error messages | spec-orchestrator |
-| `SPEC/MODELS.md` | Model definitions | spec-orchestrator |
-| `SPEC/STATE_MACHINE.md` | State machines | spec-orchestrator |
-| `SPEC/VERSION.md` | Version management | spec-orchestrator |
+The `SPEC/` directory contains **functional area specifications**, not task-specific documents. Each file represents a complete functional domain of the system.
+
+| File | Functional Area | Update When... |
+|------|-----------------|----------------|
+| `SPEC/ARCHITECTURE.md` | System design, structure | Adding new components, changing architecture |
+| `SPEC/BUILD.md` | Build system, CI/CD workflows | Modifying build process, adding targets, CI changes |
+| `SPEC/COMMANDS.md` | CLI hierarchy, aliases | Adding/modifying commands, flags, or subcommands |
+| `SPEC/DATABASE.md` | SQLite schema, relationships | Schema changes, migrations, new entities |
+| `SPEC/DATA_FORMATS.md` | JSON output schema | Changing output formats, input formats |
+| `SPEC/DEPLOY.md` | Deployment, installation | Release process, distribution, installation |
+| `SPEC/HELP_EXAMPLES.md` | Help/error messages | Modifying help text, error messages, examples |
+| `SPEC/MODELS.md` | Model definitions | Adding/modifying structs, enums, domain models |
+| `SPEC/STATE_MACHINE.md` | State machines | Adding new states, transitions, workflows |
+| `SPEC/VERSION.md` | Version management | Version commands, versioning logic, display |
+
+**Owner**: spec-orchestrator for all SPEC files.
 
 ---
 
@@ -267,6 +322,11 @@ go vet ./...
 |-----------|--------|
 | **User requests new feature** | **MANDATORY: Invoke `spec-orchestrator` FIRST - NO EXCEPTIONS** |
 | **User requests code changes** | **MANDATORY: Verify SPEC/ exists first, else invoke `spec-orchestrator`** |
+| **Bug fix or enhancement to existing feature** | **Invoke `spec-orchestrator` to UPDATE relevant functional area SPEC** |
+| **New subcommand/flag** | **Invoke `spec-orchestrator` to UPDATE `SPEC/COMMANDS.md`** |
+| **Build/CI change** | **Invoke `spec-orchestrator` to UPDATE `SPEC/BUILD.md`** |
+| **Version-related change** | **Invoke `spec-orchestrator` to UPDATE `SPEC/VERSION.md`** |
+| **Database schema change** | **Invoke `spec-orchestrator` to UPDATE `SPEC/DATABASE.md`** |
 | Specification exists, implement | Invoke `go-elite-developer` |
 | Git operations (commit, branch, PR) | Invoke `go-gitflow` |
 | Exhaustive testing needed | Invoke `exhaustive-qa-engineer` |
@@ -283,6 +343,8 @@ go vet ./...
 - **NEVER implement without specification** - THIS IS THE #1 RULE. NO EXCEPTIONS.
 - **NEVER derive specification from existing code** - Specifications come ONLY from user input via spec-orchestrator
 - **NEVER make product decisions** - Always ask the user
+- **NEVER create task-specific spec files** (e.g., "VERSION_RESET.md", "RASPBERRY_PI_SUPPORT.md") - Update the relevant functional area SPEC instead
+- **NEVER duplicate functional areas** - If VERSION.md exists, update it; do not create new version-related specs
 
 ### Other Forbidden Patterns:
 - NEVER ignore failures in `go vet` or `go test`
