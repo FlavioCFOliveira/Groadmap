@@ -54,6 +54,24 @@ detect_arch() {
     case "$(uname -m)" in
         x86_64|amd64)   arch="amd64" ;;
         arm64|aarch64)  arch="arm64" ;;
+        armv6l|armv6)   arch="armv6" ;;
+        armv7l|armv7)   arch="armv7" ;;
+        arm*)           # Fallback for generic ARM - try to detect version
+            if [ -f /proc/cpuinfo ]; then
+                if grep -q "ARMv7" /proc/cpuinfo 2>/dev/null || \
+                   grep -E "^CPU architecture:\s*7" /proc/cpuinfo 2>/dev/null; then
+                    arch="armv7"
+                elif grep -q "ARMv6" /proc/cpuinfo 2>/dev/null || \
+                     grep -E "^CPU architecture:\s*6" /proc/cpuinfo 2>/dev/null; then
+                    arch="armv6"
+                else
+                    # Default to armv6 for maximum compatibility (lowest common denominator)
+                    arch="armv6"
+                fi
+            else
+                arch="armv6"
+            fi
+            ;;
         i386|i686)      arch="386" ;;
         *)              arch="unknown" ;;
     esac
@@ -160,25 +178,36 @@ download_binary() {
     local os="$2"
     local arch="$3"
     local ext=""
+    local archive_ext=""
 
     if [ "$os" = "windows" ]; then
         ext=".exe"
+        archive_ext="zip"
+    else
+        archive_ext="tar.gz"
     fi
 
-    local filename="${BINARY_NAME}_${version}_${os}_${arch}${ext}"
-    local download_url="https://github.com/${REPO}/releases/download/${version}/${filename}"
+    # Archive filename follows pattern: rmp-${version}-${os}-${arch}.${ext}
+    local archive_name="${BINARY_NAME}-${version}-${os}-${arch}.${archive_ext}"
+    local download_url="https://github.com/${REPO}/releases/download/${version}/${archive_name}"
     local tmp_file="/tmp/${BINARY_NAME}${ext}"
+    local tmp_dir="/tmp/rmp_install_$$"
 
     info "Downloading ${BINARY_NAME} ${version} for ${os}/${arch}..."
 
+    # Create temp directory for extraction
+    mkdir -p "$tmp_dir"
+
     if command -v curl >/dev/null 2>&1; then
-        if ! curl -fsSL -o "$tmp_file" "$download_url" 2>/dev/null; then
+        if ! curl -fsSL -o "$tmp_dir/${archive_name}" "$download_url" 2>/dev/null; then
+            rm -rf "$tmp_dir"
             error "Failed to download from ${download_url}"
             error "Please check that the release exists for your platform"
             exit 1
         fi
     elif command -v wget >/dev/null 2>&1; then
-        if ! wget -qO "$tmp_file" "$download_url" 2>/dev/null; then
+        if ! wget -qO "$tmp_dir/${archive_name}" "$download_url" 2>/dev/null; then
+            rm -rf "$tmp_dir"
             error "Failed to download from ${download_url}"
             error "Please check that the release exists for your platform"
             exit 1
@@ -187,6 +216,33 @@ download_binary() {
         error "Neither curl nor wget is available. Please install one of them."
         exit 1
     fi
+
+    # Extract the binary from archive
+    if [ "$os" = "windows" ]; then
+        # For Windows, we would need unzip, but this script targets Linux/macOS primarily
+        # For now, just move the downloaded file (assuming it's the binary directly)
+        mv "$tmp_dir/${archive_name}" "$tmp_file" 2>/dev/null || {
+            rm -rf "$tmp_dir"
+            error "Failed to process downloaded archive"
+            exit 1
+        }
+    else
+        # Extract tar.gz
+        if ! tar -xzf "$tmp_dir/${archive_name}" -C "$tmp_dir" 2>/dev/null; then
+            rm -rf "$tmp_dir"
+            error "Failed to extract archive"
+            exit 1
+        fi
+        # Move binary to tmp_file location
+        mv "$tmp_dir/${BINARY_NAME}" "$tmp_file" 2>/dev/null || {
+            rm -rf "$tmp_dir"
+            error "Failed to extract binary from archive"
+            exit 1
+        }
+    fi
+
+    # Cleanup temp directory
+    rm -rf "$tmp_dir"
 
     echo "$tmp_file"
 }

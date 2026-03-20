@@ -46,6 +46,12 @@ jobs:
             goarch: amd64
           - goos: linux
             goarch: arm64
+          - goos: linux
+            goarch: arm
+            goarm: 6
+          - goos: linux
+            goarch: arm
+            goarm: 7
           - goos: darwin
             goarch: amd64
           - goos: darwin
@@ -71,6 +77,7 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
           CGO_ENABLED: 0
         run: |
           version="${{ steps.get_version.outputs.VERSION }}"
@@ -97,7 +104,12 @@ jobs:
           # -trimpath removes build paths for reproducible builds
           go build -trimpath -ldflags="${ldflags}" -o "dist/${output_name}" ./cmd/rmp
 
-          echo "Built ${{ matrix.goos }}/${{ matrix.goarch }}: ${output_name}"
+          # Display ARM version in build output if applicable
+          if [ -n "${{ matrix.goarm }}" ]; then
+            echo "Built ${{ matrix.goos }}/${{ matrix.goarch }}v${{ matrix.goarm }}: ${output_name}"
+          else
+            echo "Built ${{ matrix.goos }}/${{ matrix.goarch }}: ${output_name}"
+          fi
 
       - name: Create archive
         id: create_archive
@@ -105,14 +117,22 @@ jobs:
           version="${{ steps.get_version.outputs.VERSION }}"
           goos="${{ matrix.goos }}"
           goarch="${{ matrix.goarch }}"
+          goarm="${{ matrix.goarm }}"
           binary_name="rmp"
+
+          # Build archive name with ARM version suffix when applicable
+          if [ -n "${goarm}" ]; then
+            arch_suffix="${goarch}v${goarm}"
+          else
+            arch_suffix="${goarch}"
+          fi
 
           if [ "${goos}" = "windows" ]; then
             binary_name="rmp.exe"
-            archive_name="rmp-${version}-${goos}-${goarch}.zip"
+            archive_name="rmp-${version}-${goos}-${arch_suffix}.zip"
             (cd dist && zip "${archive_name}" "${binary_name}")
           else
-            archive_name="rmp-${version}-${goos}-${goarch}.tar.gz"
+            archive_name="rmp-${version}-${goos}-${arch_suffix}.tar.gz"
             tar -czf "dist/${archive_name}" -C dist "${binary_name}"
           fi
 
@@ -126,7 +146,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: release-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: release-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goarm && format('v{0}', matrix.goarm) || '' }}
           path: |
             dist/${{ steps.create_archive.outputs.ARCHIVE }}
             dist/${{ steps.create_archive.outputs.ARCHIVE }}.sha256
@@ -170,6 +190,8 @@ jobs:
           |------------|-------------|----------|
           | Linux | amd64 | rmp-${version}-linux-amd64.tar.gz |
           | Linux | arm64 | rmp-${version}-linux-arm64.tar.gz |
+          | Linux | armv6 | rmp-${version}-linux-armv6.tar.gz |
+          | Linux | armv7 | rmp-${version}-linux-armv7.tar.gz |
           | macOS | amd64 | rmp-${version}-darwin-amd64.tar.gz |
           | macOS | arm64 | rmp-${version}-darwin-arm64.tar.gz |
           | Windows | amd64 | rmp-${version}-windows-amd64.zip |
