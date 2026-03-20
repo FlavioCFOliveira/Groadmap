@@ -142,19 +142,78 @@ https://github.com/FlavioCFOliveira/Groadmap/releases/download/{version}/rmp-{ve
 
 ## Release Process
 
-### Manual Release Creation
+### Automated Release Creation
 
-Since automatic GitHub Release creation has been removed, releases are created manually:
+Releases are created automatically when a tag matching `v*` pattern is pushed:
 
-1. Build and test locally
-2. Push git tag: `git tag -a v1.0.0 -m "Release v1.0.0"`
-3. Push tag: `git push origin v1.0.0`
-4. Wait for CI/CD workflow to complete and upload artifacts
-5. Create GitHub Release manually via UI or CLI:
-   ```bash
-   gh release create v1.0.0 --title "Release v1.0.0" --generate-notes
-   ```
-6. Attach built binaries from workflow artifacts
+1. Push git tag: `git tag -a v1.0.0 -m "Release v1.0.0"`
+2. Push tag: `git push origin v1.0.0`
+3. GitHub Actions workflow triggers automatically
+4. Tests run, binaries are built for all platforms
+5. GitHub Release is created automatically with all assets attached
+
+### GitHub Actions Workflow
+
+**File:** `.github/workflows/release.yml`
+
+**Triggers:**
+- Push of tags matching `v*` (e.g., `v1.0.0`, `v1.1.0`)
+
+**Jobs:**
+
+1. **Pre-release Tests**
+   - Run on ubuntu-latest
+   - Execute: `go fmt`, `go vet`, `go test -race`
+   - Must pass before building
+
+2. **Build Release Binaries**
+   - Matrix builds for all platforms:
+     - Linux: amd64, arm64, armv6, armv7
+     - macOS: amd64, arm64
+     - Windows: amd64, arm64
+   - Build flags for production:
+     - `-s -w`: Strip debug info and DWARF tables
+     - `-trimpath`: Remove build paths for reproducible builds
+     - `-extldflags '-static'`: Static linking on Linux
+     - `-X main.version=${version}`: Embed version
+
+3. **Create GitHub Release**
+   - Runs after all builds complete
+   - Creates release using `gh release create`
+   - Generates release notes automatically
+   - Attaches all built binaries and checksums
+
+### Build Matrix
+
+| OS | Architecture | ARM Version | Output Format |
+|----|--------------|-------------|---------------|
+| Linux | amd64 | - | tar.gz |
+| Linux | arm64 | - | tar.gz |
+| Linux | arm | v6 | tar.gz |
+| Linux | arm | v7 | tar.gz |
+| macOS | amd64 | - | tar.gz |
+| macOS | arm64 | - | tar.gz |
+| Windows | amd64 | - | zip |
+| Windows | arm64 | - | zip |
+
+### Binary Naming Convention
+
+```
+rmp-{version}-{os}-{arch}.{ext}
+```
+
+**Examples:**
+- `rmp-v1.0.0-linux-amd64.tar.gz`
+- `rmp-v1.0.0-darwin-arm64.tar.gz`
+- `rmp-v1.0.0-windows-amd64.zip`
+- `rmp-v1.0.0-linux-armv6.tar.gz`
+
+### Release Assets
+
+Each release includes:
+- Binary archives for all supported platforms (8 total)
+- SHA256 checksums for each archive
+- Automatic release notes generated from commits
 
 ### Release Checklist
 
@@ -169,6 +228,7 @@ Since automatic GitHub Release creation has been removed, releases are created m
 | Date | Change | Description |
 |------|--------|-------------|
 | 2026-03-20 | Initial | Installation script with platform detection including Raspberry Pi |
+| 2026-03-20 | Update | Added automated GitHub Release creation workflow triggered on tag push |
 
 ## Acceptance Criteria
 

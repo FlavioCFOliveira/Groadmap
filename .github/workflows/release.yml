@@ -150,3 +150,40 @@ jobs:
           path: |
             dist/${{ steps.create_archive.outputs.ARCHIVE }}
             dist/${{ steps.create_archive.outputs.ARCHIVE }}.sha256
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: dist
+          pattern: release-*
+          merge-multiple: true
+
+      - name: List downloaded artifacts
+        run: ls -la dist/
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${{ steps.get_version.outputs.VERSION }}"
+
+          # Create release with auto-generated notes
+          gh release create "${version}" \
+            --title "Release ${version}" \
+            --generate-notes \
+            --verify-tag \
+            dist/*.{tar.gz,zip,sha256}
