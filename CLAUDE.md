@@ -73,7 +73,7 @@ User Request → spec-orchestrator → SPEC/ → [task-creator → roadmap-coord
 │                            └─────────────┘                  │
 │                                                                  │
 │   Supporting: go-gitflow, exhaustive-qa-engineer,              │
-│   red-team-hacker, go-performance-advisor                      │
+│   red-team-hacker, go-performance-advisor, doc-manager         │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -89,6 +89,7 @@ User Request → spec-orchestrator → SPEC/ → [task-creator → roadmap-coord
 | **exhaustive-qa-engineer** | Testing and validation | Critical features, pre-release, schema changes. |
 | **red-team-hacker** | Security audits | Security features, input validation. |
 | **go-performance-advisor** | Performance analysis | Bottlenecks, memory, concurrency. |
+| **doc-manager** | Documentation management | README, command docs, sync with code. |
 
 ### Task/Sprint Creation Flow
 
@@ -190,6 +191,7 @@ type(scope): subject
 | Tests needed | `exhaustive-qa-engineer` |
 | Security audit | `red-team-hacker` |
 | Performance analysis | `go-performance-advisor` |
+| Documentation needed | `doc-manager` |
 | SPEC exists, implement | `go-elite-developer` |
 | Requirements unclear | ASK the user |
 | Code vs SPEC diverge | Follow SPEC, ask user |
