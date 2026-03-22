@@ -74,7 +74,7 @@ func TestRunMigrations_UpToDate(t *testing.T) {
 	}
 
 	task := &models.Task{
-		Title:                   "Test task",
+		Title:                  "Test task",
 		FunctionalRequirements: "Functional",
 		TechnicalRequirements:  "Technical",
 		AcceptanceCriteria:     "Criteria",
@@ -132,7 +132,7 @@ func TestMigrateV1_0_0_toV1_1_0(t *testing.T) {
 	var taskIDs []int
 	for i := 0; i < 3; i++ {
 		task := &models.Task{
-			Title:                   "Test task",
+			Title:                  "Test task",
 			FunctionalRequirements: "Functional",
 			TechnicalRequirements:  "Technical",
 			AcceptanceCriteria:     "Criteria",

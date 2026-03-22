@@ -202,10 +202,10 @@ func configureConnection(db *sql.DB) error {
 
 	// Configure connection pool for SQLite with WAL mode
 	// SQLite only supports 1 writer at a time, so limit connections
-	db.SetMaxOpenConns(2)                    // One for reads, one for writes
-	db.SetMaxIdleConns(1)                    // Keep one warm connection
-	db.SetConnMaxLifetime(30 * time.Minute)   // Recycle connections more frequently
-	db.SetConnMaxIdleTime(10 * time.Minute)  // Close idle connections after 10 min
+	db.SetMaxOpenConns(2)                   // One for reads, one for writes
+	db.SetMaxIdleConns(1)                   // Keep one warm connection
+	db.SetConnMaxLifetime(30 * time.Minute) // Recycle connections more frequently
+	db.SetConnMaxIdleTime(10 * time.Minute) // Close idle connections after 10 min
 
 	return nil
 }

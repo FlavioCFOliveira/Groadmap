@@ -467,6 +467,7 @@ func sprintReopen(args []string) error {
 //	sprintLifecycle(args, models.SprintOpen, models.OpSprintStart,
 //	    func(s models.SprintStatus) bool { return s == models.SprintPending },
 //	    "cannot start sprint with status %s")
+//
 // buildSprintUpdateQuery builds the UPDATE query and args for sprint status change.
 func buildSprintUpdateQuery(newStatus models.SprintStatus, currentStatus models.SprintStatus, now string, sprintID int) (string, []interface{}) {
 	switch newStatus {
@@ -656,6 +657,7 @@ func sprintStats(args []string) error {
 // Example:
 //
 //	rmp sprint add-tasks -r myproject 1 10,11,12
+//
 // parseTaskIDs parses comma-separated task IDs from a string.
 func parseTaskIDs(idStr string) ([]int, error) {
 	idStrs := strings.Split(idStr, ",")

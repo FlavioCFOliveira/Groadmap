@@ -239,4 +239,3 @@ func RegisterExitHandler(f func()) {
 func RunExitHandlers() {
 	defaultAtexit.Run()
 }
-
