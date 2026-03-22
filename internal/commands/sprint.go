@@ -595,6 +595,11 @@ func sprintTasks(args []string) error {
 func sprintStats(args []string) error {
 	roadmapName, remaining, err := requireRoadmap(args)
 	if err != nil {
+		// Return exit code 1 for missing roadmap in sprint stats (per SPEC/COMMANDS.md)
+		// Using fmt.Errorf without sentinel error to get default exit code 1
+		if utils.IsNoRoadmap(err) {
+			return fmt.Errorf("Roadmap not specified. Use -r flag or set a default with 'rmp roadmap use'")
+		}
 		return err
 	}
 
@@ -1027,10 +1032,15 @@ func sprintMoveTo(args []string) error {
 		return err
 	}
 
-	// Verify task belongs to sprint
+	// Verify task belongs to sprint and get task count for position validation
 	currentTasks, err := database.GetSprintTasks(ctx, sprintID)
 	if err != nil {
 		return err
+	}
+
+	taskCount := len(currentTasks)
+	if position >= taskCount {
+		return fmt.Errorf("%w: position must be less than task count (%d)", utils.ErrInvalidInput, taskCount)
 	}
 
 	found := false

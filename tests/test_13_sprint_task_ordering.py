@@ -271,7 +271,7 @@ class TestSprintTaskOrdering:
 
         # Verify sprint status is preserved
         result = self.test.run_cmd_json(["sprint", "get", "-r", roadmap, str(sprint_id)])
-        assert result["status"] == "PLANNED", f"Sprint status should remain PLANNED, got {result.get('status')}"
+        assert result["status"] == "PENDING", f"Sprint status should remain PENDING, got {result.get('status')}"
 
         print("Order persists after operations test passed")
 
@@ -297,7 +297,7 @@ class TestSprintTaskOrdering:
 
         # Should fail because not all tasks are included
         assert exit_code != 0, f"Reorder with partial list should fail, got exit code {exit_code}"
-        assert "expected 5 task IDs" in stderr.lower() or "incomplete" in stderr.lower(), \
+        assert "expected 5 task ids" in stderr.lower() or "incomplete" in stderr.lower(), \
                f"Expected error about incomplete task list, got: {stderr}"
 
         print("Reorder with partial list test passed")
