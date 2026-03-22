@@ -112,3 +112,20 @@ rmp road use myproject
 - Roadmaps are stored in `~/.roadmaps/<name>.db`
 - The `~/.roadmaps/` directory has permissions `0700` (owner only)
 - The `.current` file in `~/.roadmaps/` stores the roadmap selected by `use`
+
+## Output Format
+
+All commands follow these conventions:
+- **Success**: JSON output to stdout, exit code 0
+- **Errors**: Plain text to stderr, non-zero exit code
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | General error |
+| 2 | Invalid arguments |
+| 3 | No roadmap selected |
+| 4 | Resource not found |
+| 5 | Resource already exists |

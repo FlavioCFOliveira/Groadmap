@@ -176,6 +176,7 @@ Lists tasks assigned to a specific sprint.
 |------------|------------|------|--------|-------------|
 | `-r` | `--roadmap` | string | - | Roadmap name (required) |
 | `-s` | `--status` | string | - | Filter by task status |
+| N/A | `--order-by-priority` | bool | false | Order by priority DESC, severity DESC instead of position |
 
 **Output:** JSON array of Task objects
 
@@ -183,6 +184,7 @@ Lists tasks assigned to a specific sprint.
 ```bash
 rmp sprint tasks -r project1 1
 rmp sprint tasks -r project1 1 -s DOING
+rmp sprint tasks -r project1 1 --order-by-priority
 ```
 
 ---
@@ -631,3 +633,41 @@ PENDING → OPEN → CLOSED
 - When adding tasks to a sprint, the task status changes to `SPRINT`
 - Task ordering commands maintain position consistency (0, 1, 2...n) automatically
 - The `stats` command shows the current `task_order` array for reference
+
+## Field Limits and Constraints
+
+| Field | Required | Max Length | Description |
+|-------|----------|------------|-------------|
+| `description` | Yes | 500 chars | Sprint description |
+
+### Sprint Status Values
+
+- `PENDING` - Sprint created but not started
+- `OPEN` - Sprint in progress
+- `CLOSED` - Sprint finished
+
+### Sprint Lifecycle
+
+```
+PENDING → OPEN → CLOSED
+   ↑              ↓
+   └──────────────┘ (reopen)
+```
+
+## Output Format
+
+All commands follow these conventions:
+- **Success**: JSON output to stdout, exit code 0
+- **Errors**: Plain text to stderr, non-zero exit code
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | General error |
+| 2 | Invalid arguments |
+| 3 | No roadmap selected |
+| 4 | Resource not found |
+| 5 | Resource already exists |
+| 6 | Invalid data |

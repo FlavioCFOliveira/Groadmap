@@ -77,7 +77,7 @@ rmp task new -r project1 -t "Update docs" -fr "Docs needed" -tr "Write README" -
 
 ### next
 
-Retrieves the next N open tasks from the currently open sprint. Tasks are ordered by severity (descending) and then by priority (descending), returning the most critical and highest priority tasks first.
+Retrieves the next N open tasks from the currently open sprint. Tasks are returned in the order defined by the sprint's `task_order` (set via sprint reorder commands), allowing the team to define execution sequence independent of priority/severity.
 
 **Usage:** `rmp task next [num]`
 
@@ -314,3 +314,54 @@ rmp task rm -r project1 1,2,3
 - When transitioning to `COMPLETED`, the `closed_at` field is automatically set
 - When reopening to `BACKLOG`, all tracking dates are cleared
 - The `-r`/`--roadmap` flag can be omitted if a default roadmap has been set with `rmp roadmap use`
+
+## Field Limits and Constraints
+
+| Field | Required | Max Length | Description |
+|-------|----------|------------|-------------|
+| `title` | Yes | 255 chars | Task title/summary |
+| `functional-requirements` | Yes | 4096 chars | Why: functional requirements |
+| `technical-requirements` | Yes | 4096 chars | How: technical description |
+| `acceptance-criteria` | Yes | 4096 chars | How to verify: completion criteria |
+| `specialists` | No | 500 chars | Comma-separated specialist tags |
+| `priority` | No | 0-9 | Priority level (default: 0) |
+| `severity` | No | 0-9 | Severity level (default: 0) |
+
+### Task Status Values
+
+- `BACKLOG` - Task not yet in a sprint
+- `SPRINT` - Task assigned to sprint
+- `DOING` - Task in progress
+- `TESTING` - Task being tested
+- `COMPLETED` - Task finished
+
+### Task Type Values
+
+- `USER_STORY` - User story
+- `TASK` - General task (default)
+- `BUG` - Bug fix
+- `SUB_TASK` - Sub-task
+- `EPIC` - Epic (collection of tasks)
+- `REFACTOR` - Code refactoring
+- `CHORE` - Maintenance task
+- `SPIKE` - Research/exploration
+- `DESIGN_UX` - Design/UX work
+- `IMPROVEMENT` - Enhancement
+
+## Output Format
+
+All commands follow these conventions:
+- **Success**: JSON output to stdout, exit code 0
+- **Errors**: Plain text to stderr, non-zero exit code
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | General error |
+| 2 | Invalid arguments |
+| 3 | No roadmap selected |
+| 4 | Resource not found |
+| 5 | Resource already exists |
+| 6 | Invalid data |

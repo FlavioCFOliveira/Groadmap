@@ -30,10 +30,31 @@ Lists audit log entries with optional filters.
 | `-l` | `--limit` | int | 100 | Limit number of results |
 
 **Operation Types:**
-- `TASK_CREATE`, `TASK_UPDATE`, `TASK_STATUS_CHANGE`, `TASK_PRIORITY_CHANGE`, `TASK_SEVERITY_CHANGE`, `TASK_DELETE`
-- `SPRINT_CREATE`, `SPRINT_UPDATE`, `SPRINT_START`, `SPRINT_CLOSE`, `SPRINT_REOPEN`, `SPRINT_DELETE`
-- `SPRINT_ADD_TASK`, `SPRINT_REMOVE_TASK`, `SPRINT_MOVE_TASK`
-- `SPRINT_REORDER_TASKS`, `SPRINT_TASK_MOVE_POSITION`, `SPRINT_TASK_SWAP`
+
+**Task Operations:**
+- `TASK_CREATE` - Task created
+- `TASK_UPDATE` - Task updated
+- `TASK_DELETE` - Task deleted
+- `TASK_STATUS_CHANGE` - Task status changed
+- `TASK_PRIORITY_CHANGE` - Task priority changed
+- `TASK_SEVERITY_CHANGE` - Task severity changed
+- `TASK_TYPE_CHANGE` - Task type changed
+
+**Sprint Operations:**
+- `SPRINT_CREATE` - Sprint created
+- `SPRINT_UPDATE` - Sprint updated
+- `SPRINT_DELETE` - Sprint deleted
+- `SPRINT_START` - Sprint started
+- `SPRINT_CLOSE` - Sprint closed
+- `SPRINT_REOPEN` - Sprint reopened
+- `SPRINT_ADD_TASK` - Task added to sprint
+- `SPRINT_REMOVE_TASK` - Task removed from sprint
+- `SPRINT_MOVE_TASK` - Task moved between sprints
+
+**Sprint Task Ordering Operations:**
+- `SPRINT_REORDER_TASKS` - Tasks reordered in sprint
+- `SPRINT_TASK_MOVE_POSITION` - Task moved to specific position
+- `SPRINT_TASK_SWAP` - Tasks swapped positions
 
 **Output:** JSON array of audit entries
 
@@ -55,8 +76,12 @@ Shows complete history for a specific entity (task or sprint).
 **Arguments:**
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `type` | Yes | Entity type: TASK, SPRINT |
+| `type` | Yes | Entity type (see Entity Types below) |
 | `id` | Yes | Entity ID |
+
+**Entity Types:**
+- `TASK` - Tasks in the roadmap
+- `SPRINT` - Sprints in the roadmap
 
 **Flags:**
 | Short Flag | Long Flag | Type | Description |
@@ -108,3 +133,21 @@ rmp audit stats -r project1 --since 2026-03-01T00:00:00.000Z
 - The audit log is stored in the `audit` table of the SQLite database
 - Each audit entry includes: operation, entity type, entity ID, timestamp
 - History allows tracking all changes made to a specific task or sprint
+
+## Output Format
+
+All commands follow these conventions:
+- **Success**: JSON output to stdout, exit code 0
+- **Errors**: Plain text to stderr, non-zero exit code
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | General error |
+| 2 | Invalid arguments |
+| 3 | No roadmap selected |
+| 4 | Resource not found |
+| 5 | Resource already exists |
+| 6 | Invalid data |

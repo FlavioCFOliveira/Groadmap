@@ -13,8 +13,8 @@ This will detect your OS and architecture, download the latest release from GitH
 ## Features
 
 - **Roadmap Management**: Create, list, select, and remove roadmaps
-- **Task Management**: Create, edit, list tasks with status, priority, and severity tracking
-- **Task Prioritization**: Get next tasks from open sprint ordered by sprint task order (or by priority with --order-by-priority flag)
+- **Task Management**: Create, edit, list, and get tasks with status, priority, and severity tracking
+- **Task Prioritization**: Get next tasks from open sprint ordered by sprint task order
 - **Sprint Management**: Organize tasks into sprints with complete lifecycle (PENDING, OPEN, CLOSED)
 - **Sprint Reporting**: Comprehensive sprint reports with progress and distribution metrics
 - **Task Ordering**: Reorder, move-to-position, swap, top, and bottom commands for sprint task management
@@ -27,7 +27,7 @@ This will detect your OS and architecture, download the latest release from GitH
 | Command | Description | Documentation |
 |---------|-------------|---------------|
 | `roadmap` | Roadmap management (create, list, select, remove) | [DOCS/commands/roadmap.md](DOCS/commands/roadmap.md) |
-| `task` | Task management (create, edit, list, status, priority, severity, next) | [DOCS/commands/task.md](DOCS/commands/task.md) |
+| `task` | Task management (create, edit, list, get, next, status, priority, severity) | [DOCS/commands/task.md](DOCS/commands/task.md) |
 | `sprint` | Sprint management with lifecycle control, reporting, and task ordering | [DOCS/commands/sprint.md](DOCS/commands/sprint.md) |
 | `audit` | Audit log and entity history | [DOCS/commands/audit.md](DOCS/commands/audit.md) |
 
@@ -90,7 +90,11 @@ rmp task create -t "Implement feature X" \
 # List tasks
 rmp task list
 
-# Get next task from open sprint (ordered by severity/priority)
+# Get specific task(s)
+rmp task get 1
+rmp task get 1,2,3
+
+# Get next task from open sprint (ordered by sprint task order)
 rmp task next
 
 # Create a sprint
@@ -130,6 +134,19 @@ rmp sprint show 1
 - **Error output**: Plain text to stderr
 - **Dates**: ISO 8601 UTC
 - **Roadmaps**: Stored in `~/.roadmaps/` with permissions `0700`
+
+## Exit Codes
+
+| Code | Meaning | Description |
+|------|---------|-------------|
+| 0 | Success | Command completed successfully |
+| 1 | General error | Database failure, unexpected error |
+| 2 | Invalid usage | Wrong arguments, syntax error |
+| 3 | No roadmap | No roadmap selected for command |
+| 4 | Not found | Roadmap/task/sprint doesn't exist |
+| 5 | Already exists | Duplicate name when creating |
+| 6 | Invalid data | Validation failed (dates, ranges) |
+| 127 | Unknown command | Unknown command or subcommand |
 
 ## Technical Documentation
 
