@@ -132,8 +132,8 @@ func roadmapRemove(args []string) error {
 	}
 
 	// Also remove -shm and -wal files if they exist
-	os.Remove(path + "-shm")
-	os.Remove(path + "-wal")
+	os.Remove(path + "-shm") // #nosec G104 -- best-effort WAL cleanup, non-critical
+	os.Remove(path + "-wal") // #nosec G104 -- best-effort WAL cleanup, non-critical
 
 	return nil
 }
@@ -187,7 +187,7 @@ func getCurrentRoadmap() (string, error) {
 	}
 
 	currentFile := filepath.Join(homeDir, ".roadmaps", ".current")
-	data, err := os.ReadFile(currentFile)
+	data, err := os.ReadFile(currentFile) // #nosec G304 -- path is fixed: homeDir + .roadmaps/.current
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", fmt.Errorf("%w: use -r <name> or set a default with 'rmp roadmap use'", utils.ErrNoRoadmap)

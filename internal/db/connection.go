@@ -124,7 +124,7 @@ func Open(roadmapName string) (*DB, error) {
 	if err := retryWithBackoff("configuring database", func() error {
 		return configureConnection(sqlDB)
 	}); err != nil {
-		sqlDB.Close()
+		sqlDB.Close() // #nosec G104 -- cleanup call in error path, original error returned
 		return nil, fmt.Errorf("configuring database: %w", err)
 	}
 
@@ -140,19 +140,19 @@ func Open(roadmapName string) (*DB, error) {
 		if err := retryWithBackoff("creating schema", func() error {
 			return db.CreateSchema()
 		}); err != nil {
-			db.Close()
+			db.Close() // #nosec G104 -- cleanup call in error path, original error returned
 			return nil, fmt.Errorf("creating schema: %w", err)
 		}
 
 		// Set file permissions to 0600 (owner only)
 		if err := os.Chmod(dbPath, utils.DBFilePerm); err != nil {
-			db.Close()
+			db.Close() // #nosec G104 -- cleanup call in error path, original error returned
 			return nil, fmt.Errorf("setting database permissions: %w", err)
 		}
 
 		// Verify permissions were set correctly (umask may have interfered)
 		if err := utils.VerifyPermissions(dbPath, utils.DBFilePerm); err != nil {
-			db.Close()
+			db.Close() // #nosec G104 -- cleanup call in error path, original error returned
 			return nil, fmt.Errorf("verifying database permissions: %w", err)
 		}
 	} else {
@@ -160,7 +160,7 @@ func Open(roadmapName string) (*DB, error) {
 		if err := retryWithBackoff("running migrations", func() error {
 			return db.RunMigrations()
 		}); err != nil {
-			db.Close()
+			db.Close() // #nosec G104 -- cleanup call in error path, original error returned
 			return nil, fmt.Errorf("running migrations: %w", err)
 		}
 	}
@@ -235,13 +235,13 @@ func (db *DB) WithTransaction(fn func(*sql.Tx) error) error {
 
 		defer func() {
 			if r := recover(); r != nil {
-				tx.Rollback()
+				tx.Rollback() // #nosec G104 -- rollback in panic recovery, error is secondary
 				panic(r)
 			}
 		}()
 
 		if err := fn(tx); err != nil {
-			tx.Rollback()
+			tx.Rollback() // #nosec G104 -- rollback after error, original error returned
 			return err
 		}
 

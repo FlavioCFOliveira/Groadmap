@@ -71,7 +71,7 @@ func (cc *ConnectionCache) OpenCached(roadmapName string) (*DB, error) {
 
 		// Connection is dead, remove it
 		cc.Remove(roadmapName)
-		cached.db.Close()
+		cached.db.Close() // #nosec G104 -- best-effort cleanup on cache eviction
 	}
 
 	// Create new connection
@@ -194,7 +194,7 @@ type ConnectionInfo struct {
 func init() {
 	// Register cleanup using atexit pattern
 	defaultAtexit.Register(func() {
-		globalCache.CloseAll()
+		globalCache.CloseAll() // #nosec G104 -- best-effort cleanup on process exit
 	})
 }
 

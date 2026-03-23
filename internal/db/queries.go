@@ -1045,7 +1045,7 @@ func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int)
 			args[i] = id
 		}
 
-		query := fmt.Sprintf(
+		query := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
 			"UPDATE tasks SET status = 'SPRINT' WHERE id IN (%s)",
 			placeholders,
 		)
@@ -1448,7 +1448,7 @@ func (db *DB) ReorderSprintTasks(sprintID int, taskIDs []int) error {
 			args[i+1] = id
 		}
 
-		countQuery := fmt.Sprintf(
+		countQuery := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
 			"SELECT COUNT(*) FROM sprint_tasks WHERE sprint_id = ? AND task_id IN (%s)",
 			strings.Join(placeholders, ","),
 		)

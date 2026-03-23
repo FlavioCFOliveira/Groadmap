@@ -131,7 +131,7 @@ func taskEdit(args []string) error {
 		}
 		queryArgs = append(queryArgs, taskID)
 
-		query := fmt.Sprintf("UPDATE tasks SET %s WHERE id = ?", strings.Join(setParts, ", "))
+		query := fmt.Sprintf("UPDATE tasks SET %s WHERE id = ?", strings.Join(setParts, ", ")) // #nosec G201 -- field names are internal constants, values use parameterized ?
 		updateResult, updateErr := tx.Exec(query, queryArgs...)
 		if updateErr != nil {
 			return updateErr

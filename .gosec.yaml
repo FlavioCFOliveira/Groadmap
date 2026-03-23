@@ -1,0 +1,27 @@
+# gosec security scan configuration for Groadmap
+#
+# Run: gosec -exclude-dir=.claude/worktrees ./...
+#
+# Accepted findings (annotated with #nosec in source code):
+#
+# G104 (CWE-703) - Errors unhandled
+#   Locations: db/connection.go, db/cache.go, commands/roadmap.go
+#   Reason: Intentional best-effort cleanup calls in error paths (db.Close(),
+#           tx.Rollback()) where the original error is already captured and
+#           returned, or cleanup is non-critical (WAL file removal on roadmap
+#           deletion).
+#
+# G201 (CWE-89) - SQL string formatting
+#   Locations: commands/task_edit.go, commands/task_mutate.go, db/queries.go
+#   Reason: fmt.Sprintf is used only to build dynamic IN (?,...,?) clauses
+#           or SET field=? lists for batch operations. Column names are
+#           internal constants derived from FlagParser field names. All user
+#           values are passed via parameterized ? placeholders. No user input
+#           is ever interpolated into the SQL string.
+#
+# G304 (CWE-22) - File inclusion via variable
+#   Locations: commands/roadmap.go
+#   Reason: Path is constructed as os.UserHomeDir() + ".roadmaps/.current".
+#           No user-controlled input affects the path suffix; the file stores
+#           the currently selected roadmap name and is written only by
+#           roadmapUse which validates the name before writing.

@@ -295,7 +295,7 @@ func taskSetPriority(args []string) error {
 			args[i+1] = id
 		}
 
-		query := fmt.Sprintf("UPDATE tasks SET priority = ? WHERE id IN (%s)", strings.Join(placeholders, ","))
+		query := fmt.Sprintf("UPDATE tasks SET priority = ? WHERE id IN (%s)", strings.Join(placeholders, ",")) // #nosec G201 -- only ? placeholders interpolated, values are parameterized
 		_, err := tx.Exec(query, args...)
 		if err != nil {
 			return err
@@ -363,7 +363,7 @@ func taskSetSeverity(args []string) error {
 			args[i+1] = id
 		}
 
-		query := fmt.Sprintf("UPDATE tasks SET severity = ? WHERE id IN (%s)", strings.Join(placeholders, ","))
+		query := fmt.Sprintf("UPDATE tasks SET severity = ? WHERE id IN (%s)", strings.Join(placeholders, ",")) // #nosec G201 -- only ? placeholders interpolated, values are parameterized
 		_, err := tx.Exec(query, args...)
 		if err != nil {
 			return err
