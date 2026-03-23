@@ -131,9 +131,10 @@ func roadmapRemove(args []string) error {
 		return fmt.Errorf("removing roadmap: %w", err)
 	}
 
-	// Also remove -shm and -wal files if they exist
-	os.Remove(path + "-shm") // #nosec G104 -- best-effort WAL cleanup, non-critical
-	os.Remove(path + "-wal") // #nosec G104 -- best-effort WAL cleanup, non-critical
+	// Remove SQLite WAL files if present; errors are intentionally ignored
+	// because these files may not exist and their absence is not an error.
+	_ = os.Remove(path + "-shm")
+	_ = os.Remove(path + "-wal")
 
 	return nil
 }
