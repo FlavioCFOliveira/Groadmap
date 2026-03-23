@@ -1,5 +1,12 @@
 # CLI Commands
 
+## Change History
+
+| Date | Change | Description |
+|------|--------|-------------|
+| 2026-03-23 | Initial | First version of CLI Commands specification |
+| 2026-03-23 | Update | Added `stats` command for roadmap statistics |
+
 ## Naming Conventions
 
 - Commands: lowercase, kebab-case (`list`, `create`)
@@ -952,6 +959,71 @@ rmp audit stats -r <name> [--since <date>] [--until <date>]
 
 ---
 
+## Statistics Command
+
+Command: `rmp stats`
+
+**Description:** Provides comprehensive statistics about a roadmap, including sprint and task distribution.
+
+### Get Roadmap Statistics
+
+```bash
+rmp stats --roadmap <name>
+rmp stats -r <name>
+```
+
+**Options:**
+- `-r, --roadmap <name>` - Roadmap name (required)
+
+**JSON Output:**
+```json
+{
+  "roadmap": "project-name",
+  "sprints": {
+    "current": 5,
+    "total": 12,
+    "completed": 10,
+    "pending": 2
+  },
+  "tasks": {
+    "backlog": 15,
+    "sprint": 8,
+    "doing": 5,
+    "testing": 3,
+    "completed": 42
+  }
+}
+```
+
+**Output Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `roadmap` | string | Name of the roadmap |
+| `sprints.current` | integer or null | ID of the currently open sprint, or null if no sprint is open |
+| `sprints.total` | integer | Total number of sprints in the roadmap |
+| `sprints.completed` | integer | Number of sprints with status CLOSED |
+| `sprints.pending` | integer | Number of sprints with status OPEN (typically 0 or 1) |
+| `tasks.backlog` | integer | Number of tasks with status BACKLOG |
+| `tasks.sprint` | integer | Number of tasks with status SPRINT |
+| `tasks.doing` | integer | Number of tasks with status DOING |
+| `tasks.testing` | integer | Number of tasks with status TESTING |
+| `tasks.completed` | integer | Number of tasks with status COMPLETED |
+
+**Error Cases:**
+
+| Scenario | Exit Code | stderr Output |
+|----------|-----------|---------------|
+| Roadmap not specified | 3 | "Error: no roadmap selected: no roadmap selected" |
+| Roadmap not found | 4 | "Error: resource not found: roadmap 'name'" |
+
+**Behavior Notes:**
+- The `sprints.current` field returns the ID of the sprint with status OPEN, or `null` if no sprint is currently open
+- The `sprints.pending` field reflects sprints with status OPEN (normally only one sprint can be open at a time)
+- The sum of all task statuses equals the total number of tasks in the roadmap
+
+---
+
 ## Command Aliases Reference
 
 | Command | Aliases |
@@ -960,6 +1032,7 @@ rmp audit stats -r <name> [--since <date>] [--until <date>]
 | `task` | `t` |
 | `sprint` | `s` |
 | `audit` | `aud` |
+| `stats` | - |
 | `list` | `ls` |
 | `create` | `new` |
 | `remove` | `rm`, `delete` |

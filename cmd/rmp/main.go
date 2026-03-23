@@ -8,6 +8,7 @@
 //	task       Manage tasks (alias: t)
 //	sprint     Manage sprints (alias: s)
 //	audit      View audit log (alias: aud)
+//	stats      View roadmap statistics
 //
 // Global Options:
 //
@@ -84,6 +85,8 @@ func main() {
 		err = commands.HandleSprint(os.Args[2:])
 	case "audit", "aud":
 		err = commands.HandleAudit(os.Args[2:])
+	case "stats":
+		err = commands.HandleStats(os.Args[2:])
 	default:
 		printError(fmt.Sprintf("Unknown command: %s", arg))
 		printHelp()
@@ -153,6 +156,7 @@ Commands:
   task, t          Manage tasks
   sprint, s        Manage sprints
   audit, aud       View audit log
+  stats            View roadmap statistics
 
 Global Options:
   -h, --help       Show this help message

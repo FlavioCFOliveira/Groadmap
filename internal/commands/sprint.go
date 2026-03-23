@@ -710,7 +710,7 @@ func sprintAddTasks(args []string) error {
 		return err
 	}
 
-	taskIDs, err := parseTaskIDs(remaining[1])
+	taskIDs, err := parseTaskIDs(strings.Join(remaining[1:], ","))
 	if err != nil {
 		return err
 	}

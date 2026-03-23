@@ -1650,3 +1650,117 @@ func (db *DB) SwapTasks(sprintID, taskID1, taskID2 int) error {
 		return tx.Commit()
 	})
 }
+
+// ==================== ROADMAP STATISTICS QUERIES ====================
+
+// GetRoadmapStats retrieves comprehensive statistics for a roadmap.
+// Returns sprint counts (total, open, closed, current) and task counts by status.
+func (db *DB) GetRoadmapStats(ctx context.Context, roadmapName string) (*models.RoadmapStats, error) {
+	stats := &models.RoadmapStats{
+		Roadmap: roadmapName,
+	}
+
+	// Get sprint statistics
+	sprintStats, err := db.getSprintStats(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("getting sprint stats: %w", err)
+	}
+	stats.Sprints = *sprintStats
+
+	// Get task statistics by status
+	taskStats, err := db.getTaskStatsByStatus(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("getting task stats: %w", err)
+	}
+	stats.Tasks = *taskStats
+
+	return stats, nil
+}
+
+// getSprintStats retrieves sprint statistics from the database.
+func (db *DB) getSprintStats(ctx context.Context) (*models.SprintStatsSummary, error) {
+	stats := &models.SprintStatsSummary{}
+
+	// Get total sprint count
+	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sprints").Scan(&stats.Total)
+	if err != nil {
+		return nil, fmt.Errorf("counting total sprints: %w", err)
+	}
+
+	// Get completed (closed) sprint count
+	err = db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM sprints WHERE status = ?",
+		models.SprintClosed,
+	).Scan(&stats.Completed)
+	if err != nil {
+		return nil, fmt.Errorf("counting closed sprints: %w", err)
+	}
+
+	// Get pending (open) sprint count
+	err = db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM sprints WHERE status = ?",
+		models.SprintOpen,
+	).Scan(&stats.Pending)
+	if err != nil {
+		return nil, fmt.Errorf("counting open sprints: %w", err)
+	}
+
+	// Get current open sprint ID (if any)
+	var currentSprintID sql.NullInt64
+	err = db.QueryRowContext(ctx,
+		"SELECT id FROM sprints WHERE status = ? LIMIT 1",
+		models.SprintOpen,
+	).Scan(&currentSprintID)
+
+	if err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("getting current sprint: %w", err)
+	}
+
+	if currentSprintID.Valid {
+		id := int(currentSprintID.Int64)
+		stats.Current = &id
+	}
+
+	return stats, nil
+}
+
+// getTaskStatsByStatus retrieves task counts grouped by status.
+func (db *DB) getTaskStatsByStatus(ctx context.Context) (*models.TaskStatsSummary, error) {
+	stats := &models.TaskStatsSummary{}
+
+	// Query to get counts by status
+	rows, err := db.QueryContext(ctx,
+		"SELECT status, COUNT(*) FROM tasks GROUP BY status",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying task counts by status: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var statusStr string
+		var count int
+		if err := rows.Scan(&statusStr, &count); err != nil {
+			return nil, fmt.Errorf("scanning task count: %w", err)
+		}
+
+		switch models.TaskStatus(statusStr) {
+		case models.StatusBacklog:
+			stats.Backlog = count
+		case models.StatusSprint:
+			stats.Sprint = count
+		case models.StatusDoing:
+			stats.Doing = count
+		case models.StatusTesting:
+			stats.Testing = count
+		case models.StatusCompleted:
+			stats.Completed = count
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating task counts: %w", err)
+	}
+
+	return stats, nil
+}

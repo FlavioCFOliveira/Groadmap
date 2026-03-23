@@ -271,6 +271,79 @@ Usage: rmp task create [OPTIONS]
 ...
 ```
 
+### Error Reuse Policy (Mandatory)
+
+All errors produced anywhere in the codebase MUST originate from the sentinel errors defined in `internal/utils/errors.go`. This is a hard requirement with no exceptions.
+
+#### Sentinel Error Catalogue
+
+The canonical set of sentinel errors is defined exclusively in `internal/utils/errors.go`:
+
+| Sentinel | Mapped Exit Code | When to Use |
+|----------|-----------------|-------------|
+| `utils.ErrNotFound` | 4 | Any resource lookup that returns no rows |
+| `utils.ErrAlreadyExists` | 5 | Unique constraint violation (name/ID conflict) |
+| `utils.ErrInvalidInput` | 2 | Malformed argument, unknown flag, bad syntax |
+| `utils.ErrRequired` | 2 | Required parameter is absent or empty |
+| `utils.ErrNoRoadmap` | 3 | No roadmap selected and none provided via `-r` |
+| `utils.ErrDatabase` | 1 | Any SQLite or I/O failure |
+| `utils.ErrValidation` | 6 | Value out of allowed range or invalid enum value |
+| `utils.ErrFieldTooLarge` | 6 | String field exceeds its maximum character limit |
+
+#### Wrapping Rules
+
+1. **Always use `%w`**: Every `fmt.Errorf` call that produces or re-wraps an error MUST use the `%w` verb to preserve the error chain for `errors.Is()` inspection.
+
+   ```go
+   // Correct
+   return fmt.Errorf("opening roadmap %q: %w", name, utils.ErrNotFound)
+
+   // Forbidden - breaks error chain
+   return fmt.Errorf("opening roadmap %q: %v", name, utils.ErrNotFound)
+   return errors.New("roadmap not found")
+   ```
+
+2. **Include context**: The wrapping message must identify the operation and relevant entity (roadmap name, task ID, etc.) to aid debugging.
+
+3. **Never construct ad-hoc sentinel errors inline**: Strings like `errors.New("not found")` in command handlers are forbidden. Always wrap the corresponding sentinel from `utils`.
+
+#### Propagation Rules
+
+Each layer of the stack has a designated wrapping responsibility:
+
+| Layer | Source Error | Must Wrap As |
+|-------|-------------|-------------|
+| `internal/db/` | `sql.ErrNoRows` | `utils.ErrNotFound` |
+| `internal/db/` | SQLite constraint violation | `utils.ErrAlreadyExists` |
+| `internal/db/` | Any other `database/sql` error | `utils.ErrDatabase` |
+| `internal/commands/` | Field length exceeded | `utils.ErrFieldTooLarge` |
+| `internal/commands/` | Missing required flag | `utils.ErrRequired` |
+| `internal/commands/` | Invalid flag value / enum | `utils.ErrValidation` or `utils.ErrInvalidInput` |
+| `internal/commands/` | No `-r` and no `.current` | `utils.ErrNoRoadmap` |
+| `cmd/rmp/main.go` | Any unwrapped error | Maps via `errors.Is()` to exit code; falls back to exit 1 |
+
+#### Adding New Error Types
+
+When a new error category is genuinely needed:
+
+1. Add the new sentinel variable to `internal/utils/errors.go` only — never inline.
+2. Add the corresponding `IsXxx()` helper function in the same file.
+3. Add a new exit-code mapping in `cmd/rmp/main.go` in the `handleError()` function.
+4. Update the sentinel catalogue table above in this specification.
+
+No new sentinel may be introduced without all four steps being completed in the same commit.
+
+#### Compliance Verification
+
+Static analysis must enforce these rules. The following patterns are forbidden and must be caught by code review or `go vet` custom checks:
+
+```go
+// Forbidden patterns
+errors.New("...")           // in internal/commands/ or internal/db/
+fmt.Errorf("...", err)      // missing %w — breaks errors.Is()
+fmt.Errorf("...")           // no error wrapped at all in a return-error path
+```
+
 ## Exit Codes
 
 Groadmap follows standard Unix/Linux exit code conventions. Success output is JSON; errors are plain text to stderr. The exit code indicates success or failure type for shell scripting and CI/CD integration.
