@@ -85,6 +85,7 @@ Maps to the `tasks` table and `Task` JSON object.
 - `FunctionalRequirements`: Maximum 4096 characters
 - `TechnicalRequirements`: Maximum 4096 characters
 - `AcceptanceCriteria`: Maximum 4096 characters
+- `Specialists`: Maximum 500 characters (comma-separated list of specialist names)
 
 ```go
 // Task represents a task in the roadmap.
@@ -103,7 +104,7 @@ type Task struct {
     CreatedAt              string     `json:"created_at"`               // ISO 8601 UTC, auto-set on creation
 
     // Group 2: Nullable tracking fields - lifecycle timestamps (32 bytes total)
-    Specialists *string `json:"specialists"`  // Comma-separated specialists
+    Specialists *string `json:"specialists"`  // Comma-separated specialists, nullable, max 500 chars
     StartedAt   *string `json:"started_at"`   // ISO 8601 UTC, auto-set on DOING transition
     TestedAt    *string `json:"tested_at"`    // ISO 8601 UTC, auto-set on TESTING transition
     ClosedAt    *string `json:"closed_at"`    // ISO 8601 UTC, auto-set on COMPLETED transition
