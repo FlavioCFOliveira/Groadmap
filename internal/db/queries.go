@@ -611,7 +611,7 @@ func (db *DB) GetOpenSprint(ctx context.Context) (*models.Sprint, error) {
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("%w: no sprint is currently open", utils.ErrNotFound)
+			return nil, fmt.Errorf("%w: no sprint is currently open. Use 'rmp sprint start <id>' to open a sprint first", utils.ErrNotFound)
 		}
 		return nil, fmt.Errorf("querying open sprint: %w", err)
 	}
@@ -659,7 +659,7 @@ func (db *DB) GetNextTasks(ctx context.Context, limit int) ([]models.Task, error
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("%w: no sprint is currently open", utils.ErrNotFound)
+			return nil, fmt.Errorf("%w: no sprint is currently open. Use 'rmp sprint start <id>' to open a sprint first", utils.ErrNotFound)
 		}
 		return nil, fmt.Errorf("querying open sprint: %w", err)
 	}

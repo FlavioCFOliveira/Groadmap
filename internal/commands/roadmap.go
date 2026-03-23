@@ -190,14 +190,14 @@ func getCurrentRoadmap() (string, error) {
 	data, err := os.ReadFile(currentFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", fmt.Errorf("%w: no roadmap selected", utils.ErrNoRoadmap)
+			return "", fmt.Errorf("%w: use -r <name> or set a default with 'rmp roadmap use'", utils.ErrNoRoadmap)
 		}
 		return "", fmt.Errorf("%w: reading current roadmap: %v", utils.ErrDatabase, err)
 	}
 
 	name := strings.TrimSpace(string(data))
 	if name == "" {
-		return "", fmt.Errorf("%w: no roadmap selected", utils.ErrNoRoadmap)
+		return "", fmt.Errorf("%w: use -r <name> or set a default with 'rmp roadmap use'", utils.ErrNoRoadmap)
 	}
 
 	return name, nil
