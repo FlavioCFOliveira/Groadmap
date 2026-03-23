@@ -54,7 +54,8 @@ Groadmap implements several security layers to protect user data and ensure syst
 
 ### 1. Data Isolation and Privacy
 - **Restricted Permissions**: The data directory `~/.roadmaps` is created with `0700` permissions, and individual `.db` files should be created with `0600` permissions, preventing other users on the system from reading or modifying roadmap data.
-- **Input Validation**: Roadmap names are strictly validated using the regex `^[a-z0-9_-]+$` to prevent path traversal attacks. This validation MUST be applied as a central gate for all commands that accept a roadmap name (via `-r`, `--roadmap`, or `roadmap use`).
+- **Input Validation**: Roadmap names are strictly validated using the regex `^[a-z0-9_-]+$` with a maximum length of **50 characters** to prevent path traversal attacks and ensure filesystem compatibility. This validation MUST be applied as a central gate for all commands that accept a roadmap name (via `-r` or `--roadmap`).
+- **Length Validation Error**: When a roadmap name exceeds 50 characters, the error message is: "Error: Roadmap name must not exceed 50 characters (got N)"
 
 ### 2. Binary Hardening
 - **ASLR Support**: The binary is compiled as a Position Independent Executable (PIE) to leverage Address Space Layout Randomization (standard in modern Go).
@@ -118,10 +119,10 @@ Groadmap/
 
 All Go structs are organized to minimize memory padding and maximize cache locality. Fields are grouped by size and access patterns:
 
-**Task Struct (152 bytes, zero padding on 64-bit):**
+**Task Struct (168 bytes, zero padding on 64-bit):**
 ```
-Group 1: Content fields (strings) - 96 bytes
-  Title, Status, FunctionalRequirements, TechnicalRequirements,
+Group 1: Content fields (strings) - 112 bytes
+  Title, Status, Type, FunctionalRequirements, TechnicalRequirements,
   AcceptanceCriteria, CreatedAt
 
 Group 2: Tracking fields (pointers) - 32 bytes
@@ -131,19 +132,65 @@ Group 3: Metadata fields (integers) - 24 bytes
   ID, Priority, Severity
 ```
 
+**SprintStats Struct Definition:**
+```go
+type SprintStats struct {
+    SprintID           int            `json:"sprint_id"`           // Sprint identifier
+    TotalTasks         int            `json:"total_tasks"`         // Total number of tasks in sprint
+    CompletedTasks     int            `json:"completed_tasks"`     // Number of tasks with status COMPLETED
+    ProgressPercentage float64        `json:"progress_percentage"` // Percentage of completed tasks (0.0-100.0)
+    StatusDistribution map[string]int `json:"status_distribution"` // Count of tasks per status
+    TaskOrder          []int          `json:"task_order"`          // Ordered array of task IDs by position
+}
+```
+
 **Rationale:**
 - String fields (16 bytes each) are grouped for cache locality when displaying task content
 - Pointer fields (8 bytes each) are grouped as they're often accessed together during lifecycle transitions
 - Integer fields (8 bytes each) are grouped as they're frequently used for filtering/sorting
+
+**Sprint-Task Relationship (Many-to-Many):**
+
+The relationship between sprints and tasks is maintained in the `sprint_tasks` junction table:
+
+```
+sprint_tasks table:
+- sprint_id (FK to sprints.id)
+- task_id (FK to tasks.id)
+- position (int) -- Execution order within the sprint (0 = first, 1 = second, ...)
+```
+
+**Task Ordering Semantics:**
+- The `position` column in `sprint_tasks` defines the execution sequence of tasks within a sprint
+- Position 0 represents the highest priority task that should be executed first
+- Tasks with the same sprint_id are ordered by position ASC
+- The `task_order` field in SprintStats is derived from this position ordering
 
 **Field Sizes on 64-bit Systems:**
 - `string`: 16 bytes (pointer + length), 8-byte aligned
 - `*T` (pointer): 8 bytes, 8-byte aligned
 - `int`: 8 bytes, 8-byte aligned
 
+**SprintStats Struct (56 bytes, zero padding on 64-bit):**
+```
+Group 1: Sprint identifiers (integers) - 16 bytes
+  SprintID, TotalTasks, CompletedTasks
+
+Group 2: Progress metrics (float64 + map) - 24 bytes
+  ProgressPercentage (8 bytes), StatusDistribution (16 bytes header)
+
+Group 3: Task ordering (slice) - 16 bytes
+  TaskOrder (pointer + length + capacity)
+```
+
+**Rationale:**
+- Integer fields are grouped for efficient access during stats calculations
+- Float64 and map are grouped as they're computed together
+- Slice header (TaskOrder) is last as it's a computed field from sprint_tasks table
+
 ### Cache Line Considerations
 
-The Task struct (152 bytes) spans approximately 2-3 cache lines (64 bytes each). Field grouping ensures that commonly accessed fields together (e.g., all content fields) fit within the same cache lines, reducing cache misses during task display operations.
+The Task struct (168 bytes) spans approximately 3 cache lines (64 bytes each). Field grouping ensures that commonly accessed fields together (e.g., all content fields) fit within the same cache lines, reducing cache misses during task display operations.
 
 ## Modules and Responsibilities
 
@@ -287,8 +334,7 @@ esac
 
 # Exit on any error (strict mode)
 set -e
-rmp roadmap use myproject    # Exits 4 if not found
-rmp task add -d "New task"   # Exits 3 if no roadmap
+rmp task add -r myproject -d "New task"   # Exits 3 if no roadmap specified
 ```
 
 ## Concurrency Model

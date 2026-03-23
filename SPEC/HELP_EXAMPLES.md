@@ -56,8 +56,6 @@ Subcommands:
    remove     Remove a roadmap permanently
               (alias: rm, delete)
 
-   use        Select a roadmap as default for subsequent commands
-
 See 'rmp roadmap <subcommand> --help' for more information.
 ```
 
@@ -107,22 +105,6 @@ Arguments:
 Example:
    rmp roadmap remove project1
    rmp road rm oldproject
-```
-
-### rmp roadmap use --help
-
-```
-usage: rmp roadmap use [-h | --help] <name>
-
-Select a roadmap as the default for subsequent commands.
-This avoids repeating --roadmap flag in every command.
-
-Arguments:
-   <name>     Name of the roadmap to select
-
-Example:
-   rmp roadmap use project1
-   rmp road use myproject
 ```
 
 ---
@@ -1002,7 +984,7 @@ Examples:
 
 ```
 $ rmp task list
-Error: No roadmap selected. Use --roadmap <name> or rmp roadmap use <name>
+Error: Roadmap not specified. Use -r <name> or --roadmap <name>
 
 usage: rmp task list [-h | --help] [-r <name>] [-s <status>] [-p <n>] [--severity <n>] [-l <n>]
 

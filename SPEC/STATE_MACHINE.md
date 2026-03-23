@@ -9,7 +9,7 @@ Tasks can be in one of the following states:
 | State | Description |
 |-------|-------------|
 | `BACKLOG` | Task is in the backlog, not yet assigned to a sprint |
-| `SPRINT` | Task is assigned to an active sprint |
+| `SPRINT` | Task is assigned to an active sprint (set automatically when added to sprint) |
 | `DOING` | Task is currently being worked on |
 | `TESTING` | Task is in testing/QA phase |
 | `COMPLETED` | Task has been completed |
@@ -59,10 +59,24 @@ Tasks can be in one of the following states:
 
 ## Transition Rules
 
+### Manual vs Automatic Status Changes
+
+| Transition Type | How Triggered | Command |
+|-----------------|---------------|---------|
+| **Automatic** | Status changed as side effect of sprint operations | `sprint add-tasks`, `sprint remove-tasks`, `sprint remove` |
+| **Manual** | Status changed explicitly via task command | `task stat` |
+
+### Automatic Transitions
+
+| Transition | Trigger | Date Tracking Behavior |
+|------------|---------|----------------------|
+| **BACKLOG → SPRINT** | Task added to sprint via `sprint add-tasks` | No date changes |
+| **SPRINT → BACKLOG** | Task removed from sprint via `sprint remove-tasks` OR sprint deleted via `sprint remove` | No date changes |
+
+### Manual Transitions
+
 | Transition | Description | Date Tracking Behavior |
 |------------|-------------|----------------------|
-| **BACKLOG → SPRINT** | Task is assigned to a sprint | No date changes |
-| **SPRINT → BACKLOG** | Task is removed from sprint | No date changes |
 | **SPRINT → DOING** | Work begins on the task | Set `started_at` to current timestamp |
 | **DOING → SPRINT** | Task is paused/returned to sprint | No date changes |
 | **DOING → TESTING** | Task is ready for testing | Set `tested_at` to current timestamp |

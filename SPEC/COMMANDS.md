@@ -55,6 +55,24 @@ The following fields have mandatory length constraints enforced by the applicati
 | Requirements exceed 4096 chars | "Error: {Field} must not exceed 4096 characters (got N)" |
 | Requirements are empty | "Error: {Field} is required" |
 
+### Roadmap Name Validation
+
+All roadmap names must conform to the following validation rules:
+
+| Rule | Value | Description |
+|------|-------|-------------|
+| Regex | `^[a-z0-9_-]+$` | Only lowercase letters, numbers, underscores, and hyphens |
+| Maximum length | 50 characters | Ensures filesystem compatibility |
+| Minimum length | 1 character | Name cannot be empty |
+
+**Validation Error Messages:**
+
+| Scenario | Error Message (stderr) |
+|----------|------------------------|
+| Invalid characters | "Error: Roadmap name must only contain lowercase letters, numbers, underscores, and hyphens" |
+| Exceeds 50 characters | "Error: Roadmap name must not exceed 50 characters (got N)" |
+| Empty name | "Error: Roadmap name is required" |
+
 ---
 
 ## Global Commands
@@ -113,6 +131,22 @@ rmp roadmap create <name>
 rmp road new <name>
 ```
 
+**Name Validation:**
+
+| Rule | Value | Description |
+|------|-------|-------------|
+| Regex | `^[a-z0-9_-]+$` | Only lowercase letters, numbers, underscores, and hyphens |
+| Maximum length | 50 characters | Ensures filesystem compatibility |
+| Minimum length | 1 character | Name cannot be empty |
+
+**Error Cases:**
+
+| Scenario | Exit Code | stderr Output |
+|----------|-----------|---------------|
+| Invalid characters | 2 | "Error: Roadmap name must only contain lowercase letters, numbers, underscores, and hyphens" |
+| Exceeds 50 characters | 2 | "Error: Roadmap name must not exceed 50 characters (got N)" |
+| Roadmap already exists | 5 | "Error: Roadmap 'name' already exists" |
+
 **Output (success):** `{"name": "project1"}`, exit code 0.
 
 ### Remove Roadmap
@@ -121,17 +155,6 @@ rmp road new <name>
 rmp roadmap remove <name>
 rmp road rm <name>
 ```
-
-**Output (success):** No output, exit code 0.
-
-### Select Roadmap (Default)
-
-```bash
-rmp roadmap use <name>
-rmp road use <name>
-```
-
-**Description:** Sets the default roadmap for subsequent commands.
 
 **Output (success):** No output, exit code 0.
 
@@ -191,6 +214,25 @@ rmp task get --roadmap <name> <id1,id2>
 ```
 
 **Description:** Retrieves one or more tasks by ID. Multiple IDs must be comma-separated without spaces.
+
+**Batch Operation Behavior (Fail-Fast):**
+
+All batch operations validate ALL IDs before executing any destructive operation. This ensures atomicity and prevents partial updates.
+
+| Scenario | Exit Code | Behavior | stderr Output |
+|----------|-----------|----------|---------------|
+| All IDs valid | 0 | Returns all tasks as JSON array | None |
+| Some IDs invalid | 4 | **No operation performed**, returns error | "Error: Task ID N not found" (first invalid only) |
+| All IDs invalid | 4 | **No operation performed**, returns error | "Error: Tasks not found: N,M,..." |
+| Invalid ID format | 2 | **No operation performed** | "Error: Invalid task ID format: X" |
+
+**Validation Order:**
+1. Parse all IDs and validate format (must be positive integers)
+2. Verify all IDs exist in the roadmap
+3. Only after full validation succeeds, execute the operation
+4. If any validation fails, exit immediately with exit code 4 (or 2 for format errors)
+
+**Rationale:** Prevents partial state changes. If a batch update fails halfway through, the database would be in an inconsistent state. Fail-fast ensures either all operations succeed or none do.
 
 **JSON Output:** Array of Task objects.
 
@@ -281,7 +323,7 @@ Success (no open tasks in sprint):
 |----------|-----------|---------------|
 | No sprint is currently open | 1 | "No sprint is currently open. Use 'rmp sprint start' to open a sprint first." |
 | Invalid num argument (not a positive integer) | 1 | "Invalid argument: num must be a positive integer" |
-| Roadmap not specified and no default set | 1 | "Roadmap not specified. Use -r flag or set a default with 'rmp roadmap use'" |
+| Roadmap not specified | 1 | "Error: Roadmap not specified. Use -r <name> or --roadmap <name>" |
 
 **Behavior Notes:**
 - Only returns tasks with status `SPRINT`, `DOING`, or `TESTING` (open tasks)
@@ -299,6 +341,25 @@ rmp task set-status -r <name> <ids> <state>
 
 **Description:** Updates the status of one or more tasks (bulk supported).
 
+**Batch Operation Behavior (Fail-Fast):**
+
+All batch operations validate ALL IDs and status transitions before applying any changes. This ensures atomicity - either all tasks are updated or none are.
+
+| Scenario | Exit Code | Behavior | stderr Output |
+|----------|-----------|----------|---------------|
+| All IDs valid | 0 | All tasks updated | None |
+| Some IDs invalid | 4 | **No changes made** | "Error: Task ID N not found" |
+| All IDs invalid | 4 | **No changes made** | "Error: Tasks not found: N,M,..." |
+| Invalid ID format | 2 | **No changes made** | "Error: Invalid task ID format: X" |
+| Invalid status transition | 2 | **No changes made** | "Error: Invalid status transition from X to Y" |
+
+**Validation Order:**
+1. Parse all IDs and validate format (must be positive integers)
+2. Verify all IDs exist in the roadmap
+3. Validate status transition for each task against state machine rules
+4. Only after full validation succeeds, update all tasks and audit log
+5. If any validation fails, exit immediately without making changes
+
 **Output (success):** No output, exit code 0.
 
 ### Change Priority (prio)
@@ -308,6 +369,16 @@ rmp task prio -r <name> <ids> <priority>
 rmp task set-priority -r <name> <ids> <priority>
 ```
 
+**Batch Operation Behavior (Fail-Fast):**
+
+Validates all IDs before updating any priorities. Follows same validation order as `task stat`.
+
+| Scenario | Exit Code | stderr Output |
+|----------|-----------|---------------|
+| All IDs valid | 0 | None |
+| Some IDs invalid | 4 | "Error: Task ID N not found" |
+| Priority out of range (0-9) | 2 | "Error: Priority must be between 0 and 9" |
+
 **Output (success):** No output, exit code 0.
 
 ### Change Severity (sev)
@@ -316,6 +387,16 @@ rmp task set-priority -r <name> <ids> <priority>
 rmp task sev -r <name> <ids> <severity>
 rmp task set-severity -r <name> <ids> <severity>
 ```
+
+**Batch Operation Behavior (Fail-Fast):**
+
+Validates all IDs before updating any severities. Follows same validation order as `task stat`.
+
+| Scenario | Exit Code | stderr Output |
+|----------|-----------|---------------|
+| All IDs valid | 0 | None |
+| Some IDs invalid | 4 | "Error: Task ID N not found" |
+| Severity out of range (0-9) | 2 | "Error: Severity must be between 0 and 9" |
 
 **Output (success):** No output, exit code 0.
 
@@ -337,13 +418,28 @@ rmp task edit --roadmap <name> <id> [OPTIONS]
 - `-sp, --specialists <list>`
 
 **Validation Rules:**
-When specified, the following fields must meet length constraints:
-| Field | Constraint | Error Message |
-|-------|------------|---------------|
-| `title` | Max 255 chars | "Title must not exceed 255 characters" |
-| `functional-requirements` | Max 4096 chars | "Functional requirements must not exceed 4096 characters" |
-| `technical-requirements` | Max 4096 chars | "Technical requirements must not exceed 4096 characters" |
-| `acceptance-criteria` | Max 4096 chars | "Acceptance criteria must not exceed 4096 characters" |
+
+When a field is specified, it is validated before updating:
+
+| Field | Constraint | Error Message (stderr) | Exit Code |
+|-------|------------|------------------------|-----------|
+| `title` | Required, max 255 chars | "Error: Title is required and must not exceed 255 characters" | 1 |
+| `title` | Empty string | "Error: Title cannot be empty" | 1 |
+| `functional-requirements` | Required, max 4096 chars | "Error: Functional requirements are required and must not exceed 4096 characters" | 1 |
+| `functional-requirements` | Empty string | "Error: Functional requirements cannot be empty" | 1 |
+| `technical-requirements` | Required, max 4096 chars | "Error: Technical requirements are required and must not exceed 4096 characters" | 1 |
+| `technical-requirements` | Empty string | "Error: Technical requirements cannot be empty" | 1 |
+| `acceptance-criteria` | Required, max 4096 chars | "Error: Acceptance criteria are required and must not exceed 4096 characters" | 1 |
+| `acceptance-criteria` | Empty string | "Error: Acceptance criteria cannot be empty" | 1 |
+| `priority` | Range 0-9 | "Error: Priority must be between 0 and 9" | 1 |
+| `severity` | Range 0-9 | "Error: Severity must be between 0 and 9" | 1 |
+
+**Validation Behavior:**
+- **Whitespace trimming:** Leading and trailing whitespace is trimmed before validation
+- **Empty strings:** Setting a required field to empty string fails validation
+- **Partial updates:** Only specified fields are validated and updated
+- **Type validation:** Non-integer values for priority/severity fail with exit code 1
+- **No-op:** If no fields are specified, command succeeds with no changes (exit code 0)
 
 **Output (success):** No output, exit code 0.
 
@@ -355,6 +451,27 @@ When specified, the following fields must meet length constraints:
 rmp task remove -r <name> <ids>
 rmp task rm -r <name> <ids>
 ```
+
+**Description:** Removes one or more tasks by ID (bulk supported).
+
+**Batch Operation Behavior (Fail-Fast):**
+
+All batch operations validate ALL IDs before removing any tasks. This is especially critical for destructive operations to prevent accidental partial deletion.
+
+| Scenario | Exit Code | Behavior | stderr Output |
+|----------|-----------|----------|---------------|
+| All IDs valid | 0 | All tasks removed | None |
+| Some IDs invalid | 4 | **No tasks removed** | "Error: Task ID N not found" |
+| All IDs invalid | 4 | **No tasks removed** | "Error: Tasks not found: N,M,..." |
+| Invalid ID format | 2 | **No tasks removed** | "Error: Invalid task ID format: X" |
+
+**Validation Order:**
+1. Parse all IDs and validate format (must be positive integers)
+2. Verify all IDs exist in the roadmap
+3. Only after full validation succeeds, remove all tasks in a single transaction
+4. If any validation fails, exit immediately without removing any tasks
+
+**Rationale:** Prevents accidental partial deletion. If IDs are mistyped, no data is lost.
 
 **Output (success):** No output, exit code 0.
 
@@ -502,7 +619,7 @@ rmp sprint show -r <name> <id>
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
 | Sprint not found | 1 | "Sprint not found" |
-| Roadmap not specified and no default set | 1 | "Roadmap not specified. Use -r flag or set a default with 'rmp roadmap use'" |
+| Roadmap not specified | 1 | "Error: Roadmap not specified. Use -r <name> or --roadmap <name>" |
 
 ### Sprint Lifecycle
 
@@ -523,6 +640,36 @@ rmp sprint move-tasks -r <name> <from-id> <to-id> <task-ids>
 ```
 
 **Description:** Bulk assignment/removal/movement of tasks using comma-separated IDs. Alias for `add-tasks` is `add`.
+
+**Batch Operation Behavior (Fail-Fast):**
+
+All sprint task operations validate ALL IDs before making any changes.
+
+| Scenario | Exit Code | Behavior | stderr Output |
+|----------|-----------|----------|---------------|
+| All IDs valid | 0 | All tasks assigned/removed/moved | None |
+| Some task IDs invalid | 4 | **No changes made** | "Error: Task ID N not found" |
+| Sprint ID invalid | 4 | **No changes made** | "Error: Sprint ID N not found" |
+| Invalid ID format | 2 | **No changes made** | "Error: Invalid ID format: X" |
+
+**Validation Order:**
+1. Validate sprint ID exists
+2. Parse all task IDs and validate format
+3. Verify all task IDs exist in the roadmap
+4. For `add-tasks`: verify tasks are not already in another sprint
+5. For `remove-tasks`/`move-tasks`: verify tasks are currently in the specified sprint
+6. Only after full validation succeeds, execute the operation
+7. If any validation fails, exit immediately without making changes
+
+**Automatic Status Updates:**
+
+| Command | Task Status Change | Description |
+|---------|-------------------|-------------|
+| `add-tasks` | BACKLOG → SPRINT | Tasks automatically change to SPRINT status when added to sprint |
+| `remove-tasks` | SPRINT → BACKLOG | Tasks automatically return to BACKLOG when removed from sprint |
+| `move-tasks` | (No change) | Status is preserved when moving between sprints |
+
+**Note:** The status SPRINT is automatically managed by sprint operations. Users should NOT manually set status to SPRINT using `task stat`. Manual status transitions should follow: BACKLOG → DOING → TESTING → COMPLETED.
 
 **Output (success):** No output, exit code 0.
 
@@ -665,7 +812,43 @@ rmp sprint remove -r <name> <id>
 rmp sprint rm -r <name> <id>
 ```
 
+**Description:** Removes a sprint and handles its associated tasks.
+
+**Task Behavior on Sprint Removal:**
+
+When a sprint is removed, all tasks currently associated with it are automatically returned to the backlog:
+
+| Current Task Status | New Status | sprint_id |
+|---------------------|------------|-----------|
+| SPRINT | BACKLOG | NULL |
+| DOING | BACKLOG | NULL |
+| TESTING | BACKLOG | NULL |
+| COMPLETED | BACKLOG | NULL |
+
+**Process:**
+1. Validate sprint ID exists
+2. For each task in the sprint:
+   - Set status to BACKLOG (regardless of current status)
+   - Clear sprint_id (set to NULL)
+   - Preserve all other fields (title, requirements, priority, severity, etc.)
+3. Delete sprint_tasks junction table entries
+4. Delete sprint from sprints table
+5. Log SPRINT_DELETE operation in audit log with cascade info
+
+**Rationale:**
+- Prevents data loss by preserving task content
+- Tasks return to backlog for re-prioritization and re-assignment
+- No automatic deletion of tasks (user must explicitly delete tasks if desired)
+- Clear audit trail of the cascade operation
+
 **Output (success):** No output, exit code 0.
+
+**Error Cases:**
+
+| Scenario | Exit Code | stderr Output |
+|----------|-----------|---------------|
+| Sprint not found | 4 | "Error: Sprint ID N not found" |
+| Roadmap not specified | 1 | "Error: Roadmap not specified. Use -r <name> or --roadmap <name>" |
 
 ---
 
@@ -707,7 +890,65 @@ rmp audit hist -r <name> -e <type> <id>
 rmp audit stats -r <name> [--since <date>] [--until <date>]
 ```
 
-**JSON Output:** Summary of operations performed in the period.
+**Description:** Returns aggregated statistics about audit log entries for the specified roadmap. Optional date filters allow narrowing the statistics to a specific time period.
+
+**Options:**
+- `--since <date>` - ISO 8601 date (inclusive). If omitted, includes all entries from the beginning.
+- `--until <date>` - ISO 8601 date (inclusive). If omitted, includes all entries up to now.
+
+**JSON Output:**
+```json
+{
+  "total_entries": 156,
+  "period": {
+    "since": "2026-01-01T00:00:00.000Z",
+    "until": "2026-03-23T23:59:59.000Z"
+  },
+  "first_entry": "2026-01-15T10:30:00.000Z",
+  "last_entry": "2026-03-23T14:45:00.000Z",
+  "operations_count": {
+    "CREATE": 45,
+    "UPDATE": 67,
+    "DELETE": 12,
+    "STATUS_CHANGE": 32
+  },
+  "entity_type_count": {
+    "TASK": 120,
+    "SPRINT": 25,
+    "ROADMAP": 11
+  }
+}
+```
+
+**Field Descriptions:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `total_entries` | int | Total number of audit log entries matching the filter criteria |
+| `period.since` | string (ISO 8601) | Start date of the statistics period (from `--since` or first entry) |
+| `period.until` | string (ISO 8601) | End date of the statistics period (from `--until` or last entry) |
+| `first_entry` | string (ISO 8601) | Timestamp of the first audit entry in the period |
+| `last_entry` | string (ISO 8601) | Timestamp of the last audit entry in the period |
+| `operations_count` | map[string]int | Count of entries per operation type (CREATE, UPDATE, DELETE, STATUS_CHANGE, etc.) |
+| `entity_type_count` | map[string]int | Count of entries per entity type (TASK, SPRINT, ROADMAP) |
+
+**Behavior:**
+- When no `--since` is specified, `period.since` equals `first_entry`
+- When no `--until` is specified, `period.until` equals `last_entry`
+- Empty audit log returns: `{"total_entries": 0, "period": {"since": null, "until": null}, "first_entry": null, "last_entry": null, "operations_count": {}, "entity_type_count": {}}`
+- All timestamps are in ISO 8601 UTC format
+
+**Output Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `total_entries` | int | Total number of audit entries matching the filter |
+| `period.since` | string | ISO 8601 UTC timestamp of filter start (or first entry if not specified) |
+| `period.until` | string | ISO 8601 UTC timestamp of filter end (or last entry if not specified) |
+| `first_entry` | string | ISO 8601 UTC timestamp of the oldest audit entry in results |
+| `last_entry` | string | ISO 8601 UTC timestamp of the newest audit entry in results |
+| `operations_count` | map[string]int | Count of entries grouped by operation type |
+| `entity_type_count` | map[string]int | Count of entries grouped by entity type |
 
 ---
 
