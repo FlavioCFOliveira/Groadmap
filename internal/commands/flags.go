@@ -11,13 +11,14 @@ import (
 
 // FlagDef defines a command-line flag.
 type FlagDef struct {
-	Name      string                  // Long name (e.g., "--description")
-	Short     string                  // Short name (e.g., "-d")
-	Field     string                  // Struct field name to populate
-	Type      string                  // "string", "int", "bool"
-	Required  bool                    // Whether the flag is required
-	Default   string                  // Default value (as string)
-	Validator func(interface{}) error // Optional validation function
+	Name        string                  // Long name (e.g., "--description")
+	Short       string                  // Short name (e.g., "-d")
+	Field       string                  // Struct field name to populate
+	Type        string                  // "string", "int", "bool"
+	Required    bool                    // Whether the flag is required
+	Default     string                  // Default value (as string)
+	Validator   func(interface{}) error // Optional validation function
+	DisplayName string                  // Human-readable name for parse error messages (e.g., "entity ID")
 }
 
 // ParseResult holds the result of flag parsing.
@@ -100,6 +101,9 @@ func (fp *FlagParser) Parse(args []string) (*ParseResult, error) {
 		// Parse and validate value
 		parsed, err := fp.parseValue(value, def.Type)
 		if err != nil {
+			if def.DisplayName != "" {
+				return nil, fmt.Errorf("%w: invalid %s: %s", utils.ErrInvalidInput, def.DisplayName, value)
+			}
 			return nil, fmt.Errorf("%w: invalid value for %s: %v", utils.ErrInvalidInput, def.Name, err)
 		}
 
@@ -205,40 +209,69 @@ func (fp *FlagParser) setField(field reflect.Value, value interface{}) error {
 	return fmt.Errorf("%w: unsupported field type: %s", utils.ErrInvalidInput, field.Kind())
 }
 
-// Common flag definitions for reuse
+// Common flag definitions for reuse across command handlers.
 var (
-	// TaskCreateFlags defines flags for task creation
+	// TaskCreateFlags defines flags for task creation.
 	TaskCreateFlags = []FlagDef{
-		{Name: "--description", Short: "-d", Field: "Description", Type: "string", Required: true},
-		{Name: "--action", Short: "-a", Field: "Action", Type: "string", Required: true},
-		{Name: "--expected-result", Short: "-e", Field: "ExpectedResult", Type: "string", Required: true},
-		{Name: "--priority", Short: "-p", Field: "Priority", Type: "int", Default: "0"},
-		{Name: "--severity", Short: "", Field: "Severity", Type: "int", Default: "0"},
-		{Name: "--specialists", Short: "-sp", Field: "Specialists", Type: "string"},
-	}
-
-	// TaskEditFlags defines flags for task editing
-	TaskEditFlags = []FlagDef{
-		{Name: "--description", Short: "-d", Field: "Description", Type: "string"},
-		{Name: "--action", Short: "-a", Field: "Action", Type: "string"},
-		{Name: "--expected-result", Short: "-e", Field: "ExpectedResult", Type: "string"},
+		{Name: "--title", Short: "-t", Field: "Title", Type: "string"},
+		{Name: "--functional-requirements", Short: "-fr", Field: "FunctionalRequirements", Type: "string"},
+		{Name: "--technical-requirements", Short: "-tr", Field: "TechnicalRequirements", Type: "string"},
+		{Name: "--acceptance-criteria", Short: "-ac", Field: "AcceptanceCriteria", Type: "string"},
+		{Name: "--type", Short: "-y", Field: "Type", Type: "string"},
 		{Name: "--priority", Short: "-p", Field: "Priority", Type: "int"},
-		{Name: "--severity", Short: "", Field: "Severity", Type: "int"},
+		{Name: "--severity", Field: "Severity", Type: "int"},
 		{Name: "--specialists", Short: "-sp", Field: "Specialists", Type: "string"},
 	}
 
-	// SprintCreateFlags defines flags for sprint creation
-	SprintCreateFlags = []FlagDef{
-		{Name: "--description", Short: "-d", Field: "Description", Type: "string", Required: true},
+	// TaskEditFlags defines flags for task editing.
+	TaskEditFlags = []FlagDef{
+		{Name: "--title", Short: "-t", Field: "Title", Type: "string"},
+		{Name: "--functional-requirements", Short: "-fr", Field: "FunctionalRequirements", Type: "string"},
+		{Name: "--technical-requirements", Short: "-tr", Field: "TechnicalRequirements", Type: "string"},
+		{Name: "--acceptance-criteria", Short: "-ac", Field: "AcceptanceCriteria", Type: "string"},
+		{Name: "--type", Short: "-y", Field: "Type", Type: "string"},
+		{Name: "--priority", Short: "-p", Field: "Priority", Type: "int"},
+		{Name: "--severity", Field: "Severity", Type: "int"},
+		{Name: "--specialists", Short: "-sp", Field: "Specialists", Type: "string"},
 	}
 
-	// AuditListFlags defines flags for audit listing
+	// TaskListFlags defines flags for task listing.
+	TaskListFlags = []FlagDef{
+		{Name: "--status", Short: "-s", Field: "Status", Type: "string"},
+		{Name: "--priority", Short: "-p", Field: "Priority", Type: "int"},
+		{Name: "--severity", Field: "Severity", Type: "int"},
+		{Name: "--limit", Short: "-l", Field: "Limit", Type: "int"},
+	}
+
+	// SprintCreateFlags defines flags for sprint creation and update.
+	SprintCreateFlags = []FlagDef{
+		{Name: "--description", Short: "-d", Field: "Description", Type: "string"},
+	}
+
+	// SprintListFlags defines flags for sprint listing.
+	SprintListFlags = []FlagDef{
+		{Name: "--status", Field: "Status", Type: "string"},
+	}
+
+	// SprintTasksFlags defines flags for listing tasks in a sprint.
+	SprintTasksFlags = []FlagDef{
+		{Name: "--status", Field: "Status", Type: "string"},
+		{Name: "--order-by-priority", Field: "OrderByPriority", Type: "bool"},
+	}
+
+	// AuditListFlags defines flags for audit listing.
 	AuditListFlags = []FlagDef{
 		{Name: "--operation", Short: "-o", Field: "Operation", Type: "string"},
 		{Name: "--entity-type", Short: "-e", Field: "EntityType", Type: "string"},
-		{Name: "--entity-id", Short: "", Field: "EntityID", Type: "int"},
-		{Name: "--since", Short: "", Field: "Since", Type: "string"},
-		{Name: "--until", Short: "", Field: "Until", Type: "string"},
-		{Name: "--limit", Short: "-l", Field: "Limit", Type: "int", Default: "100"},
+		{Name: "--entity-id", Field: "EntityID", Type: "int", DisplayName: "entity ID"},
+		{Name: "--since", Field: "Since", Type: "string"},
+		{Name: "--until", Field: "Until", Type: "string"},
+		{Name: "--limit", Short: "-l", Field: "Limit", Type: "int", DisplayName: "limit"},
+	}
+
+	// AuditStatsFlags defines flags for audit statistics.
+	AuditStatsFlags = []FlagDef{
+		{Name: "--since", Field: "Since", Type: "string"},
+		{Name: "--until", Field: "Until", Type: "string"},
 	}
 )

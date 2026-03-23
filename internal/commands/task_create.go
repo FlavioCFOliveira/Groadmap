@@ -3,7 +3,6 @@ package commands
 import (
 	"database/sql"
 	"fmt"
-	"strconv"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
@@ -49,71 +48,31 @@ func taskCreate(args []string) error {
 		return err
 	}
 
-	// Parse flags
-	var title, functionalReqs, technicalReqs, acceptanceCriteria string
-	var specialists string
-	taskType := models.TypeTask
-	priority := 0
-	severity := 0
-
-	for i := 0; i < len(remaining); i++ {
-		switch remaining[i] {
-		case "-t", "--title":
-			if i+1 < len(remaining) {
-				title = remaining[i+1]
-				i++
-			}
-		case "-fr", "--functional-requirements":
-			if i+1 < len(remaining) {
-				functionalReqs = remaining[i+1]
-				i++
-			}
-		case "-tr", "--technical-requirements":
-			if i+1 < len(remaining) {
-				technicalReqs = remaining[i+1]
-				i++
-			}
-		case "-ac", "--acceptance-criteria":
-			if i+1 < len(remaining) {
-				acceptanceCriteria = remaining[i+1]
-				i++
-			}
-		case "-y", "--type":
-			if i+1 < len(remaining) {
-				parsed, err := models.ParseTaskType(remaining[i+1])
-				if err != nil {
-					return fmt.Errorf("%w: %s", utils.ErrInvalidInput, err.Error())
-				}
-				taskType = parsed
-				i++
-			}
-		case "-p", "--priority":
-			if i+1 < len(remaining) {
-				p, err := strconv.Atoi(remaining[i+1])
-				if err != nil {
-					return fmt.Errorf("%w: invalid priority: %s", utils.ErrInvalidInput, remaining[i+1])
-				}
-				priority = p
-				i++
-			}
-		case "--severity":
-			if i+1 < len(remaining) {
-				s, err := strconv.Atoi(remaining[i+1])
-				if err != nil {
-					return fmt.Errorf("%w: invalid severity: %s", utils.ErrInvalidInput, remaining[i+1])
-				}
-				severity = s
-				i++
-			}
-		case "-sp", "--specialists":
-			if i+1 < len(remaining) {
-				specialists = remaining[i+1]
-				i++
-			}
-		}
+	fp := NewFlagParser(TaskCreateFlags)
+	result, err := fp.Parse(remaining)
+	if err != nil {
+		return err
 	}
 
-	// Validate required fields
+	title, _ := result.Flags["Title"].(string)
+	functionalReqs, _ := result.Flags["FunctionalRequirements"].(string)
+	technicalReqs, _ := result.Flags["TechnicalRequirements"].(string)
+	acceptanceCriteria, _ := result.Flags["AcceptanceCriteria"].(string)
+	specialists, _ := result.Flags["Specialists"].(string)
+	priority, _ := result.Flags["Priority"].(int)
+	severity, _ := result.Flags["Severity"].(int)
+
+	// Parse task type (enum conversion after FlagParser)
+	taskType := models.TypeTask
+	if typeStr, ok := result.Flags["Type"].(string); ok && typeStr != "" {
+		parsed, parseErr := models.ParseTaskType(typeStr)
+		if parseErr != nil {
+			return fmt.Errorf("%w: %s", utils.ErrInvalidInput, parseErr.Error())
+		}
+		taskType = parsed
+	}
+
+	// Validate required fields (preserve exact error messages for compatibility)
 	if title == "" {
 		return fmt.Errorf("%w: missing required parameter: --title", utils.ErrRequired)
 	}
@@ -160,28 +119,28 @@ func taskCreate(args []string) error {
 	var taskID int
 	err = database.WithTransaction(func(tx *sql.Tx) error {
 		// Insert task
-		result, err := tx.Exec(
+		insertResult, insertErr := tx.Exec(
 			`INSERT INTO tasks (title, status, type, functional_requirements, technical_requirements, acceptance_criteria, created_at, specialists, priority, severity)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			task.Title, task.Status, task.Type, task.FunctionalRequirements, task.TechnicalRequirements,
 			task.AcceptanceCriteria, task.CreatedAt, task.Specialists, task.Priority, task.Severity,
 		)
-		if err != nil {
-			return err
+		if insertErr != nil {
+			return insertErr
 		}
 
-		id, err := result.LastInsertId()
-		if err != nil {
-			return err
+		id, idErr := insertResult.LastInsertId()
+		if idErr != nil {
+			return idErr
 		}
 		taskID = int(id)
 
 		// Log audit with same timestamp
-		_, err = tx.Exec(
+		_, auditErr := tx.Exec(
 			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
 			models.OpTaskCreate, models.EntityTask, taskID, now,
 		)
-		return err
+		return auditErr
 	})
 
 	if err != nil {

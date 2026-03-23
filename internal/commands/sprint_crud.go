@@ -16,17 +16,19 @@ func sprintList(args []string) error {
 		return err
 	}
 
-	// Parse optional status filter
+	fp := NewFlagParser(SprintListFlags)
+	result, err := fp.Parse(remaining)
+	if err != nil {
+		return err
+	}
+
 	var status *models.SprintStatus
-	for i := 0; i < len(remaining); i++ {
-		if remaining[i] == "--status" && i+1 < len(remaining) {
-			s, err := models.ParseSprintStatus(remaining[i+1])
-			if err != nil {
-				return err
-			}
-			status = &s
-			i++
+	if statusStr, ok := result.Flags["Status"].(string); ok {
+		s, parseErr := models.ParseSprintStatus(statusStr)
+		if parseErr != nil {
+			return parseErr
 		}
+		status = &s
 	}
 
 	database, err := db.OpenExisting(roadmapName)
@@ -53,17 +55,13 @@ func sprintCreate(args []string) error {
 		return err
 	}
 
-	// Parse description
-	var description string
-	for i := 0; i < len(remaining); i++ {
-		if remaining[i] == "-d" || remaining[i] == "--description" {
-			if i+1 < len(remaining) {
-				description = remaining[i+1]
-				i++
-			}
-		}
+	fp := NewFlagParser(SprintCreateFlags)
+	result, err := fp.Parse(remaining)
+	if err != nil {
+		return err
 	}
 
+	description, _ := result.Flags["Description"].(string)
 	if description == "" {
 		return fmt.Errorf("%w: missing required parameter: --description", utils.ErrRequired)
 	}
@@ -90,26 +88,25 @@ func sprintCreate(args []string) error {
 	// Create within transaction with audit
 	var sprintID int
 	err = database.WithTransaction(func(tx *sql.Tx) error {
-		result, err := tx.Exec(
+		insertResult, insertErr := tx.Exec(
 			`INSERT INTO sprints (status, description, created_at) VALUES (?, ?, ?)`,
 			sprint.Status, sprint.Description, sprint.CreatedAt,
 		)
-		if err != nil {
-			return err
+		if insertErr != nil {
+			return insertErr
 		}
 
-		id, err := result.LastInsertId()
-		if err != nil {
-			return err
+		id, idErr := insertResult.LastInsertId()
+		if idErr != nil {
+			return idErr
 		}
 		sprintID = int(id)
 
-		// Log audit with same timestamp
-		_, err = tx.Exec(
+		_, auditErr := tx.Exec(
 			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
 			models.OpSprintCreate, models.EntitySprint, sprintID, now,
 		)
-		return err
+		return auditErr
 	})
 
 	if err != nil {
@@ -193,19 +190,16 @@ func sprintShow(args []string) error {
 	ctx, cancel := db.WithQuickTimeout()
 	defer cancel()
 
-	// Get sprint
 	sprint, err := database.GetSprint(ctx, sprintID)
 	if err != nil {
 		return err
 	}
 
-	// Get all tasks in sprint
 	tasks, err := database.GetSprintTasksFull(ctx, sprintID, nil, false)
 	if err != nil {
 		return err
 	}
 
-	// Calculate comprehensive report
 	result := models.CalculateSprintShowResult(sprint, tasks)
 	return utils.PrintJSON(result)
 }
@@ -226,17 +220,13 @@ func sprintUpdate(args []string) error {
 		return err
 	}
 
-	// Parse description
-	var description string
-	for i := 1; i < len(remaining); i++ {
-		if remaining[i] == "-d" || remaining[i] == "--description" {
-			if i+1 < len(remaining) {
-				description = remaining[i+1]
-				i++
-			}
-		}
+	fp := NewFlagParser(SprintCreateFlags)
+	result, err := fp.Parse(remaining[1:])
+	if err != nil {
+		return err
 	}
 
+	description, _ := result.Flags["Description"].(string)
 	if description == "" {
 		return fmt.Errorf("%w: missing required parameter: --description", utils.ErrRequired)
 	}
@@ -257,28 +247,27 @@ func sprintUpdate(args []string) error {
 
 	// Update within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
-		result, err := tx.Exec(
+		updateResult, updateErr := tx.Exec(
 			"UPDATE sprints SET description = ? WHERE id = ?",
 			description, sprintID,
 		)
-		if err != nil {
-			return err
+		if updateErr != nil {
+			return updateErr
 		}
 
-		affected, err := result.RowsAffected()
-		if err != nil {
-			return err
+		affected, affErr := updateResult.RowsAffected()
+		if affErr != nil {
+			return affErr
 		}
 		if affected == 0 {
 			return fmt.Errorf("%w: sprint %d not found", utils.ErrNotFound, sprintID)
 		}
 
-		// Log audit with same timestamp
-		_, err = tx.Exec(
+		_, auditErr := tx.Exec(
 			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
 			models.OpSprintUpdate, models.EntitySprint, sprintID, now,
 		)
-		return err
+		return auditErr
 	})
 }
 
@@ -309,41 +298,40 @@ func sprintRemove(args []string) error {
 	// Delete within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
 		// First reset task statuses
-		_, err := tx.Exec(
+		_, resetErr := tx.Exec(
 			`UPDATE tasks SET status = 'BACKLOG' WHERE id IN (
 				SELECT task_id FROM sprint_tasks WHERE sprint_id = ?
 			)`,
 			sprintID,
 		)
-		if err != nil {
-			return err
+		if resetErr != nil {
+			return resetErr
 		}
 
 		// Remove sprint_tasks entries
-		_, err = tx.Exec("DELETE FROM sprint_tasks WHERE sprint_id = ?", sprintID)
-		if err != nil {
-			return err
+		_, deleteTasksErr := tx.Exec("DELETE FROM sprint_tasks WHERE sprint_id = ?", sprintID)
+		if deleteTasksErr != nil {
+			return deleteTasksErr
 		}
 
 		// Delete sprint
-		result, err := tx.Exec("DELETE FROM sprints WHERE id = ?", sprintID)
-		if err != nil {
-			return err
+		deleteResult, deleteErr := tx.Exec("DELETE FROM sprints WHERE id = ?", sprintID)
+		if deleteErr != nil {
+			return deleteErr
 		}
 
-		affected, err := result.RowsAffected()
-		if err != nil {
-			return err
+		affected, affErr := deleteResult.RowsAffected()
+		if affErr != nil {
+			return affErr
 		}
 		if affected == 0 {
 			return fmt.Errorf("%w: sprint %d not found", utils.ErrNotFound, sprintID)
 		}
 
-		// Log audit with same timestamp
-		_, err = tx.Exec(
+		_, auditErr := tx.Exec(
 			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
 			models.OpSprintDelete, models.EntitySprint, sprintID, now,
 		)
-		return err
+		return auditErr
 	})
 }

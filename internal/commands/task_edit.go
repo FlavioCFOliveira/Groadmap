@@ -3,7 +3,6 @@ package commands
 import (
 	"database/sql"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
@@ -60,71 +59,48 @@ func taskEdit(args []string) error {
 		return err
 	}
 
-	// Parse optional fields
+	fp := NewFlagParser(TaskEditFlags)
+	result, err := fp.Parse(remaining[1:])
+	if err != nil {
+		return err
+	}
+
 	updates := make(map[string]interface{})
 
-	for i := 1; i < len(remaining); i++ {
-		switch remaining[i] {
-		case "-t", "--title":
-			if i+1 < len(remaining) {
-				updates["title"] = remaining[i+1]
-				i++
-			}
-		case "-fr", "--functional-requirements":
-			if i+1 < len(remaining) {
-				updates["functional_requirements"] = remaining[i+1]
-				i++
-			}
-		case "-tr", "--technical-requirements":
-			if i+1 < len(remaining) {
-				updates["technical_requirements"] = remaining[i+1]
-				i++
-			}
-		case "-ac", "--acceptance-criteria":
-			if i+1 < len(remaining) {
-				updates["acceptance_criteria"] = remaining[i+1]
-				i++
-			}
-		case "-p", "--priority":
-			if i+1 < len(remaining) {
-				p, err := strconv.Atoi(remaining[i+1])
-				if err != nil {
-					return fmt.Errorf("%w: invalid priority: %s", utils.ErrInvalidInput, remaining[i+1])
-				}
-				updates["priority"] = p
-				i++
-			}
-		case "--severity":
-			if i+1 < len(remaining) {
-				s, err := strconv.Atoi(remaining[i+1])
-				if err != nil {
-					return fmt.Errorf("%w: invalid severity: %s", utils.ErrInvalidInput, remaining[i+1])
-				}
-				updates["severity"] = s
-				i++
-			}
-		case "-y", "--type":
-			if i+1 < len(remaining) {
-				parsed, err := models.ParseTaskType(remaining[i+1])
-				if err != nil {
-					return fmt.Errorf("%w: %s", utils.ErrInvalidInput, err.Error())
-				}
-				updates["type"] = string(parsed)
-				i++
-			}
-		case "-sp", "--specialists":
-			if i+1 < len(remaining) {
-				updates["specialists"] = remaining[i+1]
-				i++
-			}
+	if v, ok := result.Flags["Title"]; ok {
+		updates["title"] = v.(string)
+	}
+	if v, ok := result.Flags["FunctionalRequirements"]; ok {
+		updates["functional_requirements"] = v.(string)
+	}
+	if v, ok := result.Flags["TechnicalRequirements"]; ok {
+		updates["technical_requirements"] = v.(string)
+	}
+	if v, ok := result.Flags["AcceptanceCriteria"]; ok {
+		updates["acceptance_criteria"] = v.(string)
+	}
+	if v, ok := result.Flags["Specialists"]; ok {
+		updates["specialists"] = v.(string)
+	}
+	if v, ok := result.Flags["Priority"]; ok {
+		updates["priority"] = v.(int)
+	}
+	if v, ok := result.Flags["Severity"]; ok {
+		updates["severity"] = v.(int)
+	}
+	if typeStr, ok := result.Flags["Type"].(string); ok {
+		parsed, parseErr := models.ParseTaskType(typeStr)
+		if parseErr != nil {
+			return fmt.Errorf("%w: %s", utils.ErrInvalidInput, parseErr.Error())
 		}
+		updates["type"] = string(parsed)
 	}
 
 	if len(updates) == 0 {
 		return fmt.Errorf("%w: no fields to update", utils.ErrInvalidInput)
 	}
 
-	// Validate required fields are not empty
+	// Validate that required text fields are not set to empty
 	requiredFields := map[string]string{
 		"title":                   "title",
 		"functional_requirements": "functional-requirements",
@@ -147,34 +123,32 @@ func taskEdit(args []string) error {
 
 	// Update within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
-		// Update task
 		setParts := []string{}
-		args := []interface{}{}
+		queryArgs := []interface{}{}
 		for field, value := range updates {
 			setParts = append(setParts, fmt.Sprintf("%s = ?", field))
-			args = append(args, value)
+			queryArgs = append(queryArgs, value)
 		}
-		args = append(args, taskID)
+		queryArgs = append(queryArgs, taskID)
 
 		query := fmt.Sprintf("UPDATE tasks SET %s WHERE id = ?", strings.Join(setParts, ", "))
-		result, err := tx.Exec(query, args...)
-		if err != nil {
-			return err
+		updateResult, updateErr := tx.Exec(query, queryArgs...)
+		if updateErr != nil {
+			return updateErr
 		}
 
-		affected, err := result.RowsAffected()
-		if err != nil {
-			return err
+		affected, affErr := updateResult.RowsAffected()
+		if affErr != nil {
+			return affErr
 		}
 		if affected == 0 {
 			return fmt.Errorf("%w: task %d not found", utils.ErrNotFound, taskID)
 		}
 
-		// Log audit
-		_, err = tx.Exec(
+		_, auditErr := tx.Exec(
 			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
 			models.OpTaskUpdate, models.EntityTask, taskID, utils.NowISO8601(),
 		)
-		return err
+		return auditErr
 	})
 }

@@ -42,65 +42,46 @@ func auditList(args []string) error {
 		return err
 	}
 
-	// Parse filters
+	fp := NewFlagParser(AuditListFlags)
+	result, err := fp.Parse(remaining)
+	if err != nil {
+		return err
+	}
+
 	var operation, entityType *string
 	var entityID *int
 	var since, until *string
-	limit := models.DefaultTaskLimit // Default limit
+	limit := models.DefaultTaskLimit
 
-	for i := 0; i < len(remaining); i++ {
-		switch remaining[i] {
-		case "-o", "--operation":
-			if i+1 < len(remaining) {
-				if !models.IsValidAuditOperation(remaining[i+1]) {
-					return fmt.Errorf("%w: invalid operation: %s", utils.ErrInvalidInput, remaining[i+1])
-				}
-				operation = &remaining[i+1]
-				i++
-			}
-		case "-e", "--entity-type":
-			if i+1 < len(remaining) {
-				if !models.IsValidEntityType(remaining[i+1]) {
-					return fmt.Errorf("%w: invalid entity type: %s", utils.ErrInvalidInput, remaining[i+1])
-				}
-				entityType = &remaining[i+1]
-				i++
-			}
-		case "--entity-id":
-			if i+1 < len(remaining) {
-				id, err := strconv.Atoi(remaining[i+1])
-				if err != nil {
-					return fmt.Errorf("%w: invalid entity ID: %s", utils.ErrInvalidInput, remaining[i+1])
-				}
-				entityID = &id
-				i++
-			}
-		case "--since":
-			if i+1 < len(remaining) {
-				if !utils.IsValidISO8601(remaining[i+1]) {
-					return fmt.Errorf("%w: invalid date format: %s", utils.ErrInvalidInput, remaining[i+1])
-				}
-				since = &remaining[i+1]
-				i++
-			}
-		case "--until":
-			if i+1 < len(remaining) {
-				if !utils.IsValidISO8601(remaining[i+1]) {
-					return fmt.Errorf("%w: invalid date format: %s", utils.ErrInvalidInput, remaining[i+1])
-				}
-				until = &remaining[i+1]
-				i++
-			}
-		case "-l", "--limit":
-			if i+1 < len(remaining) {
-				l, err := strconv.Atoi(remaining[i+1])
-				if err != nil {
-					return fmt.Errorf("%w: invalid limit: %s", utils.ErrInvalidInput, remaining[i+1])
-				}
-				limit = l
-				i++
-			}
+	if op, ok := result.Flags["Operation"].(string); ok {
+		if !models.IsValidAuditOperation(op) {
+			return fmt.Errorf("%w: invalid operation: %s", utils.ErrInvalidInput, op)
 		}
+		operation = &op
+	}
+	if et, ok := result.Flags["EntityType"].(string); ok {
+		if !models.IsValidEntityType(et) {
+			return fmt.Errorf("%w: invalid entity type: %s", utils.ErrInvalidInput, et)
+		}
+		entityType = &et
+	}
+	if id, ok := result.Flags["EntityID"].(int); ok {
+		entityID = &id
+	}
+	if s, ok := result.Flags["Since"].(string); ok {
+		if !utils.IsValidISO8601(s) {
+			return fmt.Errorf("%w: invalid date format: %s", utils.ErrInvalidInput, s)
+		}
+		since = &s
+	}
+	if u, ok := result.Flags["Until"].(string); ok {
+		if !utils.IsValidISO8601(u) {
+			return fmt.Errorf("%w: invalid date format: %s", utils.ErrInvalidInput, u)
+		}
+		until = &u
+	}
+	if l, ok := result.Flags["Limit"].(int); ok {
+		limit = l
 	}
 
 	database, err := db.OpenExisting(roadmapName)
@@ -167,27 +148,24 @@ func auditStats(args []string) error {
 		return err
 	}
 
-	// Parse date range
+	fp := NewFlagParser(AuditStatsFlags)
+	result, err := fp.Parse(remaining)
+	if err != nil {
+		return err
+	}
+
 	var since, until *string
-	for i := 0; i < len(remaining); i++ {
-		switch remaining[i] {
-		case "--since":
-			if i+1 < len(remaining) {
-				if !utils.IsValidISO8601(remaining[i+1]) {
-					return fmt.Errorf("%w: invalid date format: %s", utils.ErrInvalidInput, remaining[i+1])
-				}
-				since = &remaining[i+1]
-				i++
-			}
-		case "--until":
-			if i+1 < len(remaining) {
-				if !utils.IsValidISO8601(remaining[i+1]) {
-					return fmt.Errorf("%w: invalid date format: %s", utils.ErrInvalidInput, remaining[i+1])
-				}
-				until = &remaining[i+1]
-				i++
-			}
+	if s, ok := result.Flags["Since"].(string); ok {
+		if !utils.IsValidISO8601(s) {
+			return fmt.Errorf("%w: invalid date format: %s", utils.ErrInvalidInput, s)
 		}
+		since = &s
+	}
+	if u, ok := result.Flags["Until"].(string); ok {
+		if !utils.IsValidISO8601(u) {
+			return fmt.Errorf("%w: invalid date format: %s", utils.ErrInvalidInput, u)
+		}
+		until = &u
 	}
 
 	database, err := db.OpenExisting(roadmapName)

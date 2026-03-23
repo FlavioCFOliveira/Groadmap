@@ -27,21 +27,21 @@ func sprintTasks(args []string) error {
 		return err
 	}
 
-	// Parse optional filters
-	var status *models.TaskStatus
-	orderByPriority := false
-	for i := 1; i < len(remaining); i++ {
-		if remaining[i] == "--status" && i+1 < len(remaining) {
-			s, err := models.ParseTaskStatus(remaining[i+1])
-			if err != nil {
-				return err
-			}
-			status = &s
-			i++
-		} else if remaining[i] == "--order-by-priority" {
-			orderByPriority = true
-		}
+	fp := NewFlagParser(SprintTasksFlags)
+	result, err := fp.Parse(remaining[1:])
+	if err != nil {
+		return err
 	}
+
+	var status *models.TaskStatus
+	if statusStr, ok := result.Flags["Status"].(string); ok {
+		s, parseErr := models.ParseTaskStatus(statusStr)
+		if parseErr != nil {
+			return parseErr
+		}
+		status = &s
+	}
+	orderByPriority, _ := result.Flags["OrderByPriority"].(bool)
 
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {

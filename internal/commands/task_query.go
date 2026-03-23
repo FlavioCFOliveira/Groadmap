@@ -17,53 +17,35 @@ func taskList(args []string) error {
 		return err
 	}
 
-	// Parse filters
-	var status *models.TaskStatus
-	var minPriority, minSeverity *int
-	limit := models.DefaultTaskLimit // Default limit per SPEC
+	fp := NewFlagParser(TaskListFlags)
+	result, err := fp.Parse(remaining)
+	if err != nil {
+		return err
+	}
 
-	for i := 0; i < len(remaining); i++ {
-		switch remaining[i] {
-		case "-s", "--status":
-			if i+1 < len(remaining) {
-				s, err := models.ParseTaskStatus(remaining[i+1])
-				if err != nil {
-					return err
-				}
-				status = &s
-				i++
-			}
-		case "-p", "--priority":
-			if i+1 < len(remaining) {
-				p, err := strconv.Atoi(remaining[i+1])
-				if err != nil {
-					return fmt.Errorf("%w: invalid priority: %s", utils.ErrInvalidInput, remaining[i+1])
-				}
-				minPriority = &p
-				i++
-			}
-		case "--severity":
-			if i+1 < len(remaining) {
-				s, err := strconv.Atoi(remaining[i+1])
-				if err != nil {
-					return fmt.Errorf("%w: invalid severity: %s", utils.ErrInvalidInput, remaining[i+1])
-				}
-				minSeverity = &s
-				i++
-			}
-		case "-l", "--limit":
-			if i+1 < len(remaining) {
-				l, err := strconv.Atoi(remaining[i+1])
-				if err != nil {
-					return fmt.Errorf("%w: invalid limit: %s", utils.ErrInvalidInput, remaining[i+1])
-				}
-				if l < 1 || l > models.MaxTaskLimit {
-					return fmt.Errorf("%w: limit must be between 1 and %d", utils.ErrInvalidInput, models.MaxTaskLimit)
-				}
-				limit = l
-				i++
-			}
+	var status *models.TaskStatus
+	if statusStr, ok := result.Flags["Status"].(string); ok {
+		s, parseErr := models.ParseTaskStatus(statusStr)
+		if parseErr != nil {
+			return parseErr
 		}
+		status = &s
+	}
+
+	var minPriority, minSeverity *int
+	if p, ok := result.Flags["Priority"].(int); ok {
+		minPriority = &p
+	}
+	if s, ok := result.Flags["Severity"].(int); ok {
+		minSeverity = &s
+	}
+
+	limit := models.DefaultTaskLimit
+	if l, ok := result.Flags["Limit"].(int); ok {
+		if l < 1 || l > models.MaxTaskLimit {
+			return fmt.Errorf("%w: limit must be between 1 and %d", utils.ErrInvalidInput, models.MaxTaskLimit)
+		}
+		limit = l
 	}
 
 	database, err := db.OpenExisting(roadmapName)
