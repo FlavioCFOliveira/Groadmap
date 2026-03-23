@@ -165,6 +165,7 @@ func taskCreate(args []string) error {
 	// Parse flags
 	var title, functionalReqs, technicalReqs, acceptanceCriteria string
 	var specialists string
+	taskType := models.TypeTask
 	priority := 0
 	severity := 0
 
@@ -188,6 +189,15 @@ func taskCreate(args []string) error {
 		case "-ac", "--acceptance-criteria":
 			if i+1 < len(remaining) {
 				acceptanceCriteria = remaining[i+1]
+				i++
+			}
+		case "-y", "--type":
+			if i+1 < len(remaining) {
+				parsed, err := models.ParseTaskType(remaining[i+1])
+				if err != nil {
+					return fmt.Errorf("%w: %s", utils.ErrInvalidInput, err.Error())
+				}
+				taskType = parsed
 				i++
 			}
 		case "-p", "--priority":
@@ -242,7 +252,7 @@ func taskCreate(args []string) error {
 	task := &models.Task{
 		Title:                  title,
 		Status:                 models.StatusBacklog,
-		Type:                   models.TypeTask,
+		Type:                   taskType,
 		FunctionalRequirements: functionalReqs,
 		TechnicalRequirements:  technicalReqs,
 		AcceptanceCriteria:     acceptanceCriteria,
@@ -479,6 +489,15 @@ func taskEdit(args []string) error {
 					return fmt.Errorf("%w: invalid severity: %s", utils.ErrInvalidInput, remaining[i+1])
 				}
 				updates["severity"] = s
+				i++
+			}
+		case "-y", "--type":
+			if i+1 < len(remaining) {
+				parsed, err := models.ParseTaskType(remaining[i+1])
+				if err != nil {
+					return fmt.Errorf("%w: %s", utils.ErrInvalidInput, err.Error())
+				}
+				updates["type"] = string(parsed)
 				i++
 			}
 		case "-sp", "--specialists":

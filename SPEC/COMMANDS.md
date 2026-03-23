@@ -198,6 +198,7 @@ rmp task new -r <name> -t <title> -fr <fr> -tr <tr> -ac <ac>
 - `-fr, --functional-requirements <text>` - Functional requirements (required), maximum 4096 characters
 - `-tr, --technical-requirements <text>` - Technical requirements (required), maximum 4096 characters
 - `-ac, --acceptance-criteria <text>` - Acceptance criteria (required), maximum 4096 characters
+- `-y, --type <type>` - Task type (default: TASK). Valid values: `TASK`, `BUG`, `FEATURE`, `IMPROVEMENT`, `SPIKE`, `RESEARCH`, `DOCUMENTATION`, `REFACTORING`, `TESTING`, `INFRASTRUCTURE`
 - `-p, --priority <0-9>` - Priority (default: 0)
 - `--severity <0-9>` - Severity (default: 0)
 - `-sp, --specialists <list>` - Comma-separated specialists
@@ -209,6 +210,7 @@ rmp task new -r <name> -t <title> -fr <fr> -tr <tr> -ac <ac>
 | `functional-requirements` | Required, max 4096 chars | "Functional requirements are required and must not exceed 4096 characters" |
 | `technical-requirements` | Required, max 4096 chars | "Technical requirements are required and must not exceed 4096 characters" |
 | `acceptance-criteria` | Required, max 4096 chars | "Acceptance criteria are required and must not exceed 4096 characters" |
+| `type` | One of 10 valid values | "Error: invalid task type: <value>" | 6 |
 
 **Output (success):** `{"id": 42}`, exit code 0.
 
@@ -420,6 +422,7 @@ rmp task edit --roadmap <name> <id> [OPTIONS]
 - `-fr, --functional-requirements <text>` - Maximum 4096 characters
 - `-tr, --technical-requirements <text>` - Maximum 4096 characters
 - `-ac, --acceptance-criteria <text>` - Maximum 4096 characters
+- `-y, --type <type>` - Task type. Valid values: `TASK`, `BUG`, `FEATURE`, `IMPROVEMENT`, `SPIKE`, `RESEARCH`, `DOCUMENTATION`, `REFACTORING`, `TESTING`, `INFRASTRUCTURE`
 - `-p, --priority <0-9>`
 - `--severity <0-9>`
 - `-sp, --specialists <list>`
@@ -440,6 +443,7 @@ When a field is specified, it is validated before updating:
 | `acceptance-criteria` | Empty string | "Error: Acceptance criteria cannot be empty" | 1 |
 | `priority` | Range 0-9 | "Error: Priority must be between 0 and 9" | 1 |
 | `severity` | Range 0-9 | "Error: Severity must be between 0 and 9" | 1 |
+| `type` | One of 10 valid values | "Error: invalid task type: <value>" | 6 |
 
 **Validation Behavior:**
 - **Whitespace trimming:** Leading and trailing whitespace is trimmed before validation
