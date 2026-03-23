@@ -345,10 +345,10 @@ func TestParseISO8601(t *testing.T) {
 		// Valid format (must include milliseconds and Z UTC suffix)
 		{"RFC3339 with Z", "2024-03-15T10:30:00.000Z", false, 2024, 3, 15},
 
-		// Invalid formats - offsets not supported by implementation
-		{"RFC3339 with offset", "2024-03-15T10:30:00.000+00:00", true, 0, 0, 0},
-		{"RFC3339 with positive offset", "2024-03-15T10:30:00.000+01:00", true, 0, 0, 0},
-		{"RFC3339 with negative offset", "2024-03-15T10:30:00.000-05:00", true, 0, 0, 0},
+		// RFC3339 variants with timezone offsets - accepted and normalized to UTC
+		{"RFC3339 with offset", "2024-03-15T10:30:00.000+00:00", false, 2024, 3, 15},
+		{"RFC3339 with positive offset", "2024-03-15T10:30:00.000+01:00", false, 2024, 3, 15},
+		{"RFC3339 with negative offset", "2024-03-15T10:30:00.000-05:00", false, 2024, 3, 15},
 
 		// Invalid formats
 		{"empty string", "", true, 0, 0, 0}, // Empty string should return error
@@ -388,10 +388,10 @@ func TestIsValidISO8601(t *testing.T) {
 		// Valid (must include milliseconds and Z UTC suffix)
 		{"2024-03-15T10:30:00.000Z", true},
 
-		// Invalid - missing milliseconds
-		{"2024-03-15T10:30:00Z", false},
-		// Invalid - offsets not supported
-		{"2024-03-15T10:30:00.000+00:00", false},
+		// Valid - RFC3339 without milliseconds, accepted and normalized
+		{"2024-03-15T10:30:00Z", true},
+		// Valid - RFC3339 with +00:00 offset, accepted and normalized to UTC
+		{"2024-03-15T10:30:00.000+00:00", true},
 		// Invalid - date only not supported
 		{"2024-03-15", false},
 		// Invalid - empty string returns zero time (valid parse but not a real date)

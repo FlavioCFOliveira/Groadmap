@@ -69,16 +69,20 @@ func auditList(args []string) error {
 		entityID = &id
 	}
 	if s, ok := result.Flags["Since"].(string); ok {
-		if !utils.IsValidISO8601(s) {
+		t, err := utils.ParseISO8601(s)
+		if err != nil {
 			return fmt.Errorf("%w: invalid date format: %s", utils.ErrInvalidInput, s)
 		}
-		since = &s
+		normalized := utils.FormatISO8601(t)
+		since = &normalized
 	}
 	if u, ok := result.Flags["Until"].(string); ok {
-		if !utils.IsValidISO8601(u) {
+		t, err := utils.ParseISO8601(u)
+		if err != nil {
 			return fmt.Errorf("%w: invalid date format: %s", utils.ErrInvalidInput, u)
 		}
-		until = &u
+		normalized := utils.FormatISO8601(t)
+		until = &normalized
 	}
 	if l, ok := result.Flags["Limit"].(int); ok {
 		limit = l
@@ -156,16 +160,20 @@ func auditStats(args []string) error {
 
 	var since, until *string
 	if s, ok := result.Flags["Since"].(string); ok {
-		if !utils.IsValidISO8601(s) {
+		t, err := utils.ParseISO8601(s)
+		if err != nil {
 			return fmt.Errorf("%w: invalid date format: %s", utils.ErrInvalidInput, s)
 		}
-		since = &s
+		normalized := utils.FormatISO8601(t)
+		since = &normalized
 	}
 	if u, ok := result.Flags["Until"].(string); ok {
-		if !utils.IsValidISO8601(u) {
+		t, err := utils.ParseISO8601(u)
+		if err != nil {
 			return fmt.Errorf("%w: invalid date format: %s", utils.ErrInvalidInput, u)
 		}
-		until = &u
+		normalized := utils.FormatISO8601(t)
+		until = &normalized
 	}
 
 	database, err := db.OpenExisting(roadmapName)

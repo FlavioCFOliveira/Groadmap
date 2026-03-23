@@ -35,16 +35,35 @@ func FormatISO8601(t time.Time) string {
 }
 
 // ParseISO8601 parses an ISO 8601 UTC string to time.Time.
-// Accepts the format YYYY-MM-DDTHH:mm:ss.sssZ
+// Accepts the primary format YYYY-MM-DDTHH:mm:ss.sssZ and also RFC3339 variants
+// (e.g. with +00:00 offset or microseconds) for compatibility with standard libraries.
+// Always returns the time in UTC.
 // Validates that the date is within the valid range (1970-01-01 to 9999-12-31).
 func ParseISO8601(s string) (time.Time, error) {
 	if s == "" {
 		return time.Time{}, fmt.Errorf("parsing ISO 8601 date: empty string")
 	}
-	t, err := time.Parse(ISO8601Format, s)
+
+	// Try formats in order of preference.
+	formats := []string{
+		ISO8601Format,       // YYYY-MM-DDTHH:mm:ss.sssZ (primary)
+		time.RFC3339Nano,    // accepts +00:00 offset and sub-second precision
+		time.RFC3339,        // accepts +00:00 offset without fractional seconds
+	}
+
+	var t time.Time
+	var err error
+	for _, f := range formats {
+		t, err = time.Parse(f, s)
+		if err == nil {
+			break
+		}
+	}
 	if err != nil {
 		return time.Time{}, fmt.Errorf("parsing ISO 8601 date %q: %w", s, err)
 	}
+
+	t = t.UTC()
 
 	// Validate date range
 	if err := ValidateDateRange(t); err != nil {

@@ -166,8 +166,9 @@ class TestConcurrency:
         assert len(unexpected_errors) == 0, f"Unexpected errors: {unexpected_errors}"
 
         # Verify task is still accessible and has a valid status
+        # task get returns a JSON array even for a single ID (see SPEC/COMMANDS.md)
         result = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])
-        assert result["status"] in ["BACKLOG", "SPRINT", "DOING", "TESTING", "COMPLETED"]
+        assert result[0]["status"] in ["BACKLOG", "SPRINT", "DOING", "TESTING", "COMPLETED"]
 
         print("✓ Concurrent status changes test passed")
 
@@ -268,7 +269,8 @@ sys.exit(result.returncode)
             env["HOME"] = str(self.test.home_dir)
             p = subprocess.Popen(
                 [sys.executable, "-c", script],
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 env=env
             )
