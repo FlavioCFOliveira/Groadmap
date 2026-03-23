@@ -1505,7 +1505,7 @@ func (db *DB) MoveTaskToPosition(sprintID, taskID, newPosition int) error {
 		).Scan(&currentPos)
 		if err != nil {
 			if err == sql.ErrNoRows {
-				return fmt.Errorf("task %d not found in sprint %d", taskID, sprintID)
+				return fmt.Errorf("%w: task %d not found in sprint %d", utils.ErrNotFound, taskID, sprintID)
 			}
 			return fmt.Errorf("getting current position: %w", err)
 		}
