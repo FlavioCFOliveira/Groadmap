@@ -198,7 +198,7 @@ rmp task new -r <name> -t <title> -fr <fr> -tr <tr> -ac <ac>
 - `-fr, --functional-requirements <text>` - Functional requirements (required), maximum 4096 characters
 - `-tr, --technical-requirements <text>` - Technical requirements (required), maximum 4096 characters
 - `-ac, --acceptance-criteria <text>` - Acceptance criteria (required), maximum 4096 characters
-- `-y, --type <type>` - Task type (default: TASK). Valid values: `TASK`, `BUG`, `FEATURE`, `IMPROVEMENT`, `SPIKE`, `RESEARCH`, `DOCUMENTATION`, `REFACTORING`, `TESTING`, `INFRASTRUCTURE`
+- `-y, --type <type>` - Task type (default: TASK). Valid values: `USER_STORY`, `TASK`, `BUG`, `SUB_TASK`, `EPIC`, `REFACTOR`, `CHORE`, `SPIKE`, `DESIGN_UX`, `IMPROVEMENT`
 - `-p, --priority <0-9>` - Priority (default: 0)
 - `--severity <0-9>` - Severity (default: 0)
 - `-sp, --specialists <list>` - Comma-separated specialists
@@ -422,7 +422,7 @@ rmp task edit --roadmap <name> <id> [OPTIONS]
 - `-fr, --functional-requirements <text>` - Maximum 4096 characters
 - `-tr, --technical-requirements <text>` - Maximum 4096 characters
 - `-ac, --acceptance-criteria <text>` - Maximum 4096 characters
-- `-y, --type <type>` - Task type. Valid values: `TASK`, `BUG`, `FEATURE`, `IMPROVEMENT`, `SPIKE`, `RESEARCH`, `DOCUMENTATION`, `REFACTORING`, `TESTING`, `INFRASTRUCTURE`
+- `-y, --type <type>` - Task type. Valid values: `USER_STORY`, `TASK`, `BUG`, `SUB_TASK`, `EPIC`, `REFACTOR`, `CHORE`, `SPIKE`, `DESIGN_UX`, `IMPROVEMENT`
 - `-p, --priority <0-9>`
 - `--severity <0-9>`
 - `-sp, --specialists <list>`

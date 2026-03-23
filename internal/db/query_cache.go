@@ -66,7 +66,11 @@ func generatePlaceholders(n int) string {
 }
 
 // initializeTemplates pre-generates query templates for all supported operations.
-// This is called once during cache initialization.
+// Invariant: this method is called exclusively from NewQueryCache, before the
+// *QueryCache pointer is returned to any caller. No other goroutine can hold a
+// reference at that point, so qc.mu need not be acquired here. Any future
+// caller that shares the object across goroutines must acquire qc.mu.Lock()
+// before invoking this method.
 func (qc *QueryCache) initializeTemplates() {
 	// Define cached sizes: 1-100, 250, 500, 1000
 	sizes := make([]int, 0, 103)

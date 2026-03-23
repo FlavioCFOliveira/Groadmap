@@ -50,38 +50,98 @@ func OpenCached(roadmapName string) (*DB, error) {
 }
 
 // OpenCached returns a cached connection for the roadmap, or creates a new one.
+//
+// Concurrency design:
+//   - The health check (I/O) runs outside any lock to avoid blocking readers
+//     for up to 5 seconds.
+//   - After the health check, a write lock is acquired for every state mutation
+//     (lastUsed, useCount, map insert/delete). This eliminates the data race on
+//     CachedConnection fields (Task 73) and the TOCTOU race between releasing
+//     RLock and calling Remove (Task 74).
+//   - After acquiring the write lock we re-validate state because another
+//     goroutine may have raced us between the RLock and the write lock.
 func (cc *ConnectionCache) OpenCached(roadmapName string) (*DB, error) {
-	// Validate roadmap name first
+	// Validate roadmap name first (no lock needed — pure validation).
 	if err := utils.ValidateRoadmapName(roadmapName); err != nil {
 		return nil, err
 	}
 
-	// Try to get from cache
+	// --- Phase 1: snapshot under read lock, health-check outside lock ---
 	cc.mu.RLock()
-	cached, exists := cc.connections[roadmapName]
+	snapshot, exists := cc.connections[roadmapName]
 	cc.mu.RUnlock()
 
 	if exists {
-		// Check if connection is still healthy
-		if cc.isHealthy(cached.db) {
-			cached.lastUsed = time.Now()
-			cached.useCount++
-			return cached.db, nil
-		}
+		healthy := cc.isHealthy(snapshot.db) // I/O outside any lock
 
-		// Connection is dead, remove it
-		cc.Remove(roadmapName)
-		cached.db.Close() // #nosec G104 -- best-effort cleanup on cache eviction
+		cc.mu.Lock()
+		// Re-check: another goroutine may have replaced the entry while we ran
+		// the health check.
+		current, stillExists := cc.connections[roadmapName]
+		if stillExists && current == snapshot {
+			// Entry has not changed since our snapshot.
+			if healthy {
+				// Update metadata under write lock (fixes Task 73 data race).
+				current.lastUsed = time.Now()
+				current.useCount++
+				db := current.db
+				cc.mu.Unlock()
+				return db, nil
+			}
+			// Connection is dead. Remove this exact entry only — do not remove
+			// an entry that was replaced by another goroutine (fixes Task 74).
+			delete(cc.connections, roadmapName)
+			cc.mu.Unlock()
+			snapshot.db.Close() // #nosec G104 -- best-effort cleanup on cache eviction
+			// Fall through to create a fresh connection below.
+		} else if stillExists {
+			// Entry was replaced by another goroutine while we checked health.
+			// Re-validate the new entry under the write lock.
+			if cc.isHealthy(current.db) {
+				current.lastUsed = time.Now()
+				current.useCount++
+				db := current.db
+				cc.mu.Unlock()
+				return db, nil
+			}
+			// The replacement is also dead; remove it and fall through.
+			delete(cc.connections, roadmapName)
+			staleDB := current.db
+			cc.mu.Unlock()
+			staleDB.Close() // #nosec G104 -- best-effort cleanup on cache eviction
+		} else {
+			// Entry was already removed by another goroutine.
+			cc.mu.Unlock()
+		}
 	}
 
-	// Create new connection
+	// --- Phase 2: create a new connection outside the lock ---
 	db, err := Open(roadmapName)
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
 
-	// Cache the new connection
-	cc.Store(roadmapName, db)
+	// --- Phase 3: insert under write lock, handle concurrent winner ---
+	cc.mu.Lock()
+	if existing, ok := cc.connections[roadmapName]; ok {
+		// Another goroutine won the race and already stored a valid connection;
+		// reuse theirs and discard the one we just opened.
+		existing.lastUsed = time.Now()
+		existing.useCount++
+		winner := existing.db
+		cc.mu.Unlock()
+		db.Close() // #nosec G104 -- discard redundant connection
+		return winner, nil
+	}
+	cc.connections[roadmapName] = &CachedConnection{
+		db:          db,
+		roadmapName: roadmapName,
+		createdAt:   time.Now(),
+		lastUsed:    time.Now(),
+		useCount:    1,
+	}
+	cc.mu.Unlock()
+
 	return db, nil
 }
 

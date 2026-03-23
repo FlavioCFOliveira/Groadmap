@@ -33,6 +33,7 @@ import (
 	"strings"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/commands"
+	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
@@ -58,6 +59,7 @@ const (
 func main() {
 	if len(os.Args) < 2 {
 		printHelp()
+		db.RunExitHandlers()
 		os.Exit(ExitSuccess)
 	}
 
@@ -66,9 +68,11 @@ func main() {
 	switch arg {
 	case "-h", "--help", "help":
 		printHelp()
+		db.RunExitHandlers()
 		os.Exit(ExitSuccess)
 	case "-v", "--version", "version":
 		fmt.Printf("%s version %s\n", appName, version)
+		db.RunExitHandlers()
 		os.Exit(ExitSuccess)
 	}
 
@@ -90,6 +94,7 @@ func main() {
 	default:
 		printError(fmt.Sprintf("Unknown command: %s", arg))
 		printHelp()
+		db.RunExitHandlers()
 		os.Exit(ExitCmdNotFound)
 	}
 
@@ -97,6 +102,7 @@ func main() {
 		exitCode = handleError(err)
 	}
 
+	db.RunExitHandlers()
 	os.Exit(exitCode)
 }
 
