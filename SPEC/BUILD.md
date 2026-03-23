@@ -80,6 +80,63 @@ env:
 - Validate formatting
 - Static analysis with `go vet`
 
+## Static Analysis (Lint)
+
+### Linter: golangci-lint
+
+The project uses [golangci-lint](https://golangci-lint.run) for static analysis. Configuration is in `.golangci.yml`.
+
+**Install:**
+```bash
+# macOS
+brew install golangci-lint
+
+# Any platform
+go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+```
+
+**Run:**
+```bash
+golangci-lint run ./...
+# or via Makefile:
+make lint
+```
+
+### Enabled Linters
+
+| Linter | Purpose | Policy enforced |
+|--------|---------|----------------|
+| `goerr113` | Error wrapping | No `errors.New` inside functions; all `fmt.Errorf` must use `%w` |
+| `errcheck` | Error checking | All returned errors must be handled or explicitly discarded |
+
+### Error Policy Rules (goerr113)
+
+These patterns are **forbidden** and caught by the linter:
+
+```go
+// FORBIDDEN: bare errors.New inside a function (use package-level sentinels in utils/errors.go)
+func doSomething() error {
+    return errors.New("something failed")
+}
+
+// FORBIDDEN: fmt.Errorf without %w (loses error chain for errors.Is inspection)
+return fmt.Errorf("opening roadmap %q: failed", name)
+
+// CORRECT: wrap with %w to preserve chain
+return fmt.Errorf("opening roadmap %q: %w", name, utils.ErrNotFound)
+```
+
+### Known Exclusions
+
+Intentional deviations are documented in `.golangci.yml`:
+
+| Location | Reason |
+|----------|--------|
+| `internal/commands/roadmap.go` WAL cleanup | `os.Remove` on `-shm`/`-wal` files is best-effort; missing files are expected |
+| `internal/commands/sprint.go` sprint-stats fallback | Preserves E2E exit-code contract (see `test_12_sprint_stats.py:528`) |
+| `internal/utils/time.go` package-level sentinels | Package-level `fmt.Errorf` declarations are permitted sentinel definitions |
+| `*_test.go` files | Test helpers and deferred cleanups use idiomatic error-ignoring patterns |
+
 ## Build Commands
 
 ### Local Build

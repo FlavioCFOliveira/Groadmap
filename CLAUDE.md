@@ -129,6 +129,9 @@ Before any commit:
 2. `go vet ./...` (static analysis)
 3. `go test ./...` (tests - ALL must pass)
 4. `go build -o ./bin/ ./cmd/rmp` (build)
+5. `golangci-lint run ./...` (lint — requires golangci-lint; see SPEC/BUILD.md for install)
+
+Run all gates at once: `make check`
 
 ### Rule 3: Commit Standards
 
@@ -251,6 +254,12 @@ go run ./cmd/rmp [args]
 # Format/Vet
 go fmt ./...
 go vet ./...
+
+# Lint (requires golangci-lint; install: brew install golangci-lint)
+golangci-lint run ./...
+
+# All validation gates in one command
+make check
 ```
 
 ---
