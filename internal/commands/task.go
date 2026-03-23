@@ -45,7 +45,7 @@ func HandleTask(args []string) error {
 	case "sev", "set-severity":
 		return taskSetSeverity(args[1:])
 	default:
-		return fmt.Errorf("unknown task subcommand: %s", subcommand)
+		return fmt.Errorf("%w: unknown task subcommand: %s", utils.ErrInvalidInput, subcommand)
 	}
 }
 

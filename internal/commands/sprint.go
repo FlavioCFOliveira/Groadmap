@@ -66,7 +66,7 @@ func HandleSprint(args []string) error {
 	case "bottom", "btm":
 		return sprintBottom(args[1:])
 	default:
-		return fmt.Errorf("unknown sprint subcommand: %s", subcommand)
+		return fmt.Errorf("%w: unknown sprint subcommand: %s", utils.ErrInvalidInput, subcommand)
 	}
 }
 
@@ -485,7 +485,7 @@ func buildSprintUpdateQuery(newStatus models.SprintStatus, currentStatus models.
 // execSprintUpdate executes the sprint update and audit logging in a transaction.
 func execSprintUpdate(tx *sql.Tx, query string, args []interface{}, sprintID int, op models.AuditOperation, now string) error {
 	if query == "" {
-		return fmt.Errorf("invalid sprint status")
+		return fmt.Errorf("%w: invalid sprint status", utils.ErrInvalidInput)
 	}
 	result, err := tx.Exec(query, args...)
 	if err != nil {

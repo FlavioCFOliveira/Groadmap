@@ -145,7 +145,7 @@ func (fp *FlagParser) parseValue(value string, typ string) (interface{}, error) 
 	case "bool":
 		return strconv.ParseBool(value)
 	default:
-		return nil, fmt.Errorf("unknown type: %s", typ)
+		return nil, fmt.Errorf("%w: unknown type: %s", utils.ErrInvalidInput, typ)
 	}
 }
 
@@ -154,7 +154,7 @@ func (fp *FlagParser) parseValue(value string, typ string) (interface{}, error) 
 func (fp *FlagParser) Bind(result *ParseResult, target interface{}) error {
 	v := reflect.ValueOf(target)
 	if v.Kind() != reflect.Ptr || v.Elem().Kind() != reflect.Struct {
-		return fmt.Errorf("target must be a pointer to a struct")
+		return fmt.Errorf("%w: target must be a pointer to a struct", utils.ErrInvalidInput)
 	}
 
 	v = v.Elem()
@@ -188,21 +188,21 @@ func (fp *FlagParser) setField(field reflect.Value, value interface{}) error {
 			field.SetString(s)
 			return nil
 		}
-		return fmt.Errorf("expected string, got %T", value)
+		return fmt.Errorf("%w: expected string, got %T", utils.ErrInvalidInput, value)
 	case reflect.Int:
 		if i, ok := value.(int); ok {
 			field.SetInt(int64(i))
 			return nil
 		}
-		return fmt.Errorf("expected int, got %T", value)
+		return fmt.Errorf("%w: expected int, got %T", utils.ErrInvalidInput, value)
 	case reflect.Bool:
 		if b, ok := value.(bool); ok {
 			field.SetBool(b)
 			return nil
 		}
-		return fmt.Errorf("expected bool, got %T", value)
+		return fmt.Errorf("%w: expected bool, got %T", utils.ErrInvalidInput, value)
 	}
-	return fmt.Errorf("unsupported field type: %s", field.Kind())
+	return fmt.Errorf("%w: unsupported field type: %s", utils.ErrInvalidInput, field.Kind())
 }
 
 // Common flag definitions for reuse

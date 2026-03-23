@@ -31,7 +31,7 @@ func HandleAudit(args []string) error {
 	case "stats":
 		return auditStats(args[1:])
 	default:
-		return fmt.Errorf("unknown audit subcommand: %s", subcommand)
+		return fmt.Errorf("%w: unknown audit subcommand: %s", utils.ErrInvalidInput, subcommand)
 	}
 }
 

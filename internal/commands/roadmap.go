@@ -37,7 +37,7 @@ func HandleRoadmap(args []string) error {
 	case "use":
 		return roadmapUse(args[1:])
 	default:
-		return fmt.Errorf("unknown roadmap subcommand: %s", subcommand)
+		return fmt.Errorf("%w: unknown roadmap subcommand: %s", utils.ErrInvalidInput, subcommand)
 	}
 }
 
