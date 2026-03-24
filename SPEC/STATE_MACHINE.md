@@ -84,6 +84,24 @@ Tasks can be in one of the following states:
 | **TESTING → COMPLETED** | Testing passed, task is complete | Set `closed_at` to current timestamp; optionally set `completion_summary` |
 | **COMPLETED → BACKLOG** | Task is reopened for rework | Clear `started_at`, `tested_at`, `closed_at`, `completion_summary` to NULL |
 
+### Sub-task Hierarchy Guard
+
+When transitioning any task to **COMPLETED**, the system checks whether the task has any direct subtasks (`parent_task_id` references) that are not in `COMPLETED` status. If any incomplete subtasks are found, the transition is rejected with an error listing the blocking subtask IDs.
+
+| Scenario | Error |
+|----------|-------|
+| Task has incomplete subtasks | `Error: cannot mark task #N as COMPLETED: incomplete subtasks: #A, #B` |
+
+### Dependency Guard
+
+When transitioning any task to **COMPLETED**, the system also checks whether the task has any declared dependencies (rows in `task_dependencies` where `task_id = N`) that are not in `COMPLETED` status. If any incomplete dependencies are found, the transition is rejected with an error listing the blocking dependency IDs.
+
+The sub-task hierarchy guard is evaluated first; if no subtask violations are found, the dependency guard is evaluated.
+
+| Scenario | Error |
+|----------|-------|
+| Task has incomplete dependencies | `Error: cannot mark task #N as COMPLETED: incomplete dependencies: #A, #B` |
+
 ## Date Tracking Fields
 
 ### Lifecycle Tracking

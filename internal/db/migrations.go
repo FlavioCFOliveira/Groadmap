@@ -39,6 +39,16 @@ var migrations = []Migration{
 		Name:    "Add max_tasks column to sprints table",
 		Apply:   migrateV1_3_0_toV1_4_0,
 	},
+	{
+		Version: "1.5.0",
+		Name:    "Add parent_task_id column and index to tasks table",
+		Apply:   migrateV1_4_0_toV1_5_0,
+	},
+	{
+		Version: "1.6.0",
+		Name:    "Add task_dependencies table for blocking relationships",
+		Apply:   migrateV1_5_0_toV1_6_0,
+	},
 }
 
 // RunMigrations executes all pending migrations in a transaction.
@@ -157,6 +167,54 @@ func migrateV1_3_0_toV1_4_0(tx *sql.Tx) error {
 	if err != nil {
 		return fmt.Errorf("adding max_tasks column: %w", err)
 	}
+	return nil
+}
+
+// migrateV1_4_0_toV1_5_0 adds the parent_task_id column and its index to the tasks table.
+// The column is optional (NULL by default) and enables sub-task hierarchy.
+// The migration is idempotent: ALTER TABLE … ADD COLUMN is a no-op when the column already exists.
+func migrateV1_4_0_toV1_5_0(tx *sql.Tx) error {
+	if _, err := tx.Exec(
+		`ALTER TABLE tasks ADD COLUMN parent_task_id INTEGER REFERENCES tasks(id)`,
+	); err != nil {
+		return fmt.Errorf("adding parent_task_id column: %w", err)
+	}
+
+	if _, err := tx.Exec(
+		`CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id ON tasks(parent_task_id)`,
+	); err != nil {
+		return fmt.Errorf("creating idx_tasks_parent_task_id: %w", err)
+	}
+
+	return nil
+}
+
+// migrateV1_5_0_toV1_6_0 creates the task_dependencies table for blocking relationships.
+// The migration is idempotent: CREATE TABLE IF NOT EXISTS is a no-op if the table already exists.
+func migrateV1_5_0_toV1_6_0(tx *sql.Tx) error {
+	if _, err := tx.Exec(`
+CREATE TABLE IF NOT EXISTS task_dependencies (
+    task_id INTEGER NOT NULL,
+    depends_on_task_id INTEGER NOT NULL,
+    PRIMARY KEY (task_id, depends_on_task_id),
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+    FOREIGN KEY (depends_on_task_id) REFERENCES tasks(id) ON DELETE CASCADE
+)`); err != nil {
+		return fmt.Errorf("creating task_dependencies table: %w", err)
+	}
+
+	if _, err := tx.Exec(
+		`CREATE INDEX IF NOT EXISTS idx_task_deps_task_id ON task_dependencies(task_id)`,
+	); err != nil {
+		return fmt.Errorf("creating idx_task_deps_task_id: %w", err)
+	}
+
+	if _, err := tx.Exec(
+		`CREATE INDEX IF NOT EXISTS idx_task_deps_depends_on ON task_dependencies(depends_on_task_id)`,
+	); err != nil {
+		return fmt.Errorf("creating idx_task_deps_depends_on: %w", err)
+	}
+
 	return nil
 }
 

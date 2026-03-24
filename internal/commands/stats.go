@@ -42,7 +42,8 @@ func printStatsHelp() {
 	fmt.Print(`Usage: rmp stats [options]
 
 Description:
-  Provides comprehensive statistics about a roadmap, including sprint and task distribution.
+  Provides comprehensive statistics about a roadmap, including sprint and task distribution,
+  and average velocity across the last 5 closed sprints.
 
 Options:
   -r, --roadmap <name>    Roadmap name (or use default)
@@ -63,7 +64,8 @@ JSON Output:
       "doing": 5,
       "testing": 3,
       "completed": 42
-    }
+    },
+    "average_velocity": 2.5
   }
 
 Examples:

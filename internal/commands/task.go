@@ -46,6 +46,16 @@ func HandleTask(args []string) error {
 		return taskAssign(args[1:])
 	case "unassign":
 		return taskUnassign(args[1:])
+	case "subtasks":
+		return taskSubtasks(args[1:])
+	case "add-dep":
+		return taskAddDep(args[1:])
+	case "remove-dep":
+		return taskRemoveDep(args[1:])
+	case "blockers":
+		return taskBlockers(args[1:])
+	case "blocking":
+		return taskBlocking(args[1:])
 	default:
 		return fmt.Errorf("%w: unknown task subcommand: %s", utils.ErrInvalidInput, subcommand)
 	}
@@ -68,6 +78,11 @@ Commands:
   sev, set-severity <ids> <sev>     Set task severity
   assign <id> <specialist>          Add specialist to task (idempotent)
   unassign <id> <specialist>        Remove specialist from task
+  subtasks <id>                     List all direct subtasks of a task
+  add-dep <id> <dep-id>             Mark task <id> as depending on task <dep-id>
+  remove-dep <id> <dep-id>          Remove dependency of task <id> on task <dep-id>
+  blockers <id>                     List tasks blocking task <id> (dependencies not yet COMPLETED)
+  blocking <id>                     List tasks that task <id> is blocking (tasks that depend on it)
 
 Options:
   -r, --roadmap <name>           Roadmap name (or use default)
@@ -79,6 +94,7 @@ Options:
   -tr, --technical-requirements <text>  Technical requirements (How?)
   -ac, --acceptance-criteria <text>     Acceptance criteria (How to verify?)
   -sp, --specialists <list>       Comma-separated specialists
+  --parent <id>                   Parent task ID (creates a sub-task)
   -l, --limit <n>                 Limit results
   --help                          Show this help message
 

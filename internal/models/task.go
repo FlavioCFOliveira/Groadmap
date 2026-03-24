@@ -202,7 +202,7 @@ const (
 )
 
 // Task represents a task in the roadmap.
-// Field order optimized for memory layout (168 bytes, zero padding on 64-bit systems).
+// Field order optimized for memory layout (zero padding on 64-bit systems).
 // Groups: Content fields (strings), Tracking fields (pointers), Metadata (ints).
 type Task struct {
 	// Group 1: Content fields - frequently accessed together (112 bytes total)
@@ -214,17 +214,23 @@ type Task struct {
 	AcceptanceCriteria     string     `json:"acceptance_criteria"`     // How to verify: completion criteria
 	CreatedAt              string     `json:"created_at"`              // ISO 8601 UTC, auto-set on creation
 
-	// Group 2: Nullable tracking fields - lifecycle timestamps (40 bytes total)
+	// Group 2: Nullable tracking fields - lifecycle timestamps and hierarchy
 	Specialists       *string `json:"specialists"`        // Comma-separated specialists
 	StartedAt         *string `json:"started_at"`         // ISO 8601 UTC, auto-set on DOING transition
 	TestedAt          *string `json:"tested_at"`          // ISO 8601 UTC, auto-set on TESTING transition
 	ClosedAt          *string `json:"closed_at"`          // ISO 8601 UTC, auto-set on COMPLETED transition
 	CompletionSummary *string `json:"completion_summary"` // Optional summary set on TESTING → COMPLETED transition
+	ParentTaskID      *int    `json:"parent_task_id"`     // NULL for top-level tasks; non-NULL links to parent task
 
-	// Group 3: Numeric metadata fields (24 bytes total)
-	ID       int `json:"id"`       // Primary key
-	Priority int `json:"priority"` // 0-9 priority level
-	Severity int `json:"severity"` // 0-9 severity level
+	// Group 3: Numeric metadata fields
+	ID           int `json:"id"`            // Primary key
+	Priority     int `json:"priority"`      // 0-9 priority level
+	Severity     int `json:"severity"`      // 0-9 severity level
+	SubtaskCount int `json:"subtask_count"` // Computed: number of direct subtasks (not stored in DB)
+
+	// Dependency fields (fetched from task_dependencies table)
+	DependsOn []int `json:"depends_on"` // IDs of tasks this task depends on
+	Blocks    []int `json:"blocks"`     // IDs of tasks that depend on this task
 }
 
 // Validate checks if the task data is valid.

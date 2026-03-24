@@ -29,6 +29,7 @@ Each roadmap is stored in an individual SQLite file. The schema is designed to b
 |  - tested_at (TEXT ISO8601, NULL)      |
 |  - closed_at (TEXT ISO8601, NULL)      |
 |  - completion_summary (TEXT, NULL)     |
+|  - parent_task_id (INTEGER FK, NULL)   |
 |  - priority (INTEGER 0-9)              |
 |  - severity (INTEGER 0-9)              |
 +----------------------------------------+
@@ -52,6 +53,11 @@ Each roadmap is stored in an individual SQLite file. The schema is designed to b
 |  - entity_type (TEXT)                  |
 |  - entity_id (INTEGER)                 |
 |  - performed_at (TEXT ISO8601)         |
++----------------------------------------+
+|           task_dependencies            |
+|  - task_id (FK → tasks.id)            |
+|  - depends_on_task_id (FK → tasks.id) |
+|  - Composite PK (task_id, dep_id)     |
 +----------------------------------------+
 |           _metadata                     |
 |  - key (TEXT PK)                       |
@@ -86,6 +92,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     tested_at TEXT,                         -- ISO 8601 UTC, set when task moves to TESTING
     closed_at TEXT,                         -- ISO 8601 UTC, set when task moves to COMPLETED
     completion_summary TEXT CHECK(completion_summary IS NULL OR length(completion_summary) <= 4096),  -- Optional summary of work done, set only on TESTING → COMPLETED
+    parent_task_id INTEGER REFERENCES tasks(id),  -- NULL for top-level tasks; non-NULL links to parent task (sub-task hierarchy)
 
     -- Group 3: Numeric metadata fields
     priority INTEGER NOT NULL DEFAULT 0 CHECK(priority >= 0 AND priority <= 9),
@@ -103,6 +110,8 @@ CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_status_priority ON tasks(status, priority DESC);
 -- Covers: Priority filtering with date ordering (matches ListTasks ORDER BY)
 CREATE INDEX IF NOT EXISTS idx_tasks_priority_created ON tasks(priority DESC, created_at ASC);
+-- Covers: sub-task hierarchy lookups (GetSubTasks)
+CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id ON tasks(parent_task_id);
 ```
 
 ### `sprints` Table
@@ -188,6 +197,8 @@ CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 - `TASK_PRIORITY_CHANGE` - Priority change (0-9)
 - `TASK_SEVERITY_CHANGE` - Severity change (0-9)
 - `TASK_UPDATE` - Generic update (description, action, expected_result, specialists)
+- `TASK_ADD_DEP` - Dependency added (logged against both task_id and depends_on_task_id)
+- `TASK_REMOVE_DEP` - Dependency removed (logged against both task_id and depends_on_task_id)
 
 **Sprints:**
 - `SPRINT_CREATE` - New sprint created
@@ -208,6 +219,27 @@ CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 **Entities:**
 - `entity_type`: TASK, SPRINT
 
+### `task_dependencies` Table
+
+Junction table encoding blocking relationships between tasks.
+
+```sql
+CREATE TABLE IF NOT EXISTS task_dependencies (
+    task_id INTEGER NOT NULL,               -- The dependent task
+    depends_on_task_id INTEGER NOT NULL,    -- The task it depends on (the blocker)
+    PRIMARY KEY (task_id, depends_on_task_id),
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+    FOREIGN KEY (depends_on_task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_deps_task_id ON task_dependencies(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_deps_depends_on ON task_dependencies(depends_on_task_id);
+```
+
+**Semantics:** A row `(A, B)` means "task A depends on task B". Task A cannot be marked COMPLETED until task B is COMPLETED. Circular dependencies are rejected by the application using BFS traversal of existing dependencies.
+
+---
+
 ### `_metadata` Table
 
 Stores roadmap metadata and schema version.
@@ -220,7 +252,7 @@ CREATE TABLE IF NOT EXISTS _metadata (
 
 -- Insert schema version on creation
 INSERT INTO _metadata (key, value) VALUES
-    ('schema_version', '1.3.0'),
+    ('schema_version', '1.6.0'),
     ('created_at', '2026-03-20T00:00:00.000Z'),
     ('application', 'Groadmap');
 ```

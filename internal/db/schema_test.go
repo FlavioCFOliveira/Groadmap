@@ -25,7 +25,7 @@ func TestCreateSchema(t *testing.T) {
 	}
 
 	// Verify tables exist
-	tables := []string{"tasks", "sprints", "sprint_tasks", "audit", "_metadata"}
+	tables := []string{"tasks", "sprints", "sprint_tasks", "audit", "_metadata", "task_dependencies"}
 	for _, table := range tables {
 		var name string
 		err := sqlDB.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&name)
@@ -63,8 +63,8 @@ func TestSchemaVersion(t *testing.T) {
 		t.Fatalf("failed to get schema version: %v", err)
 	}
 
-	if version != "1.4.0" {
-		t.Errorf("expected schema version 1.4.0, got %s", version)
+	if version != "1.6.0" {
+		t.Errorf("expected schema version 1.6.0, got %s", version)
 	}
 }
 

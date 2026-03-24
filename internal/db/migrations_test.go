@@ -247,13 +247,13 @@ func TestMigrateV1_2_0_toV1_3_0(t *testing.T) {
 		t.Fatalf("max_tasks column not found after CreateSchema: %v", err)
 	}
 
-	// Schema version must be 1.4.0
+	// Schema version must be 1.5.0 (current)
 	version, err := db.GetSchemaVersion()
 	if err != nil {
 		t.Fatalf("GetSchemaVersion failed: %v", err)
 	}
-	if version != "1.4.0" {
-		t.Errorf("schema_version = %q, want %q", version, "1.4.0")
+	if version != "1.6.0" {
+		t.Errorf("schema_version = %q, want %q", version, "1.6.0")
 	}
 
 	// Running migrations again must be idempotent
@@ -265,7 +265,7 @@ func TestMigrateV1_2_0_toV1_3_0(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSchemaVersion after idempotent run failed: %v", err)
 	}
-	if version != "1.4.0" {
-		t.Errorf("schema_version after idempotent migration = %q, want %q", version, "1.4.0")
+	if version != "1.6.0" {
+		t.Errorf("schema_version after idempotent migration = %q, want %q", version, "1.6.0")
 	}
 }

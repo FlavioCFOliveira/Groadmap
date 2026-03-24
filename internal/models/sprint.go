@@ -177,24 +177,36 @@ func (s *Sprint) IsPending() bool {
 	return s.Status == SprintPending
 }
 
+// BurndownEntry represents a single day's snapshot of tasks remaining in a sprint.
+type BurndownEntry struct {
+	Date           string `json:"date"`            // ISO 8601 date (YYYY-MM-DD)
+	TasksRemaining int    `json:"tasks_remaining"` // Number of tasks not yet completed at end of day
+}
+
 // SprintStats represents statistics for a sprint.
 type SprintStats struct {
-	SprintID           int            `json:"sprint_id"`
-	TotalTasks         int            `json:"total_tasks"`
-	CompletedTasks     int            `json:"completed_tasks"`
-	ProgressPercentage float64        `json:"progress_percentage"`
-	StatusDistribution map[string]int `json:"status_distribution"`
-	TaskOrder          []int          `json:"task_order"` // Task IDs ordered by position
+	SprintID           int             `json:"sprint_id"`
+	TotalTasks         int             `json:"total_tasks"`
+	CompletedTasks     int             `json:"completed_tasks"`
+	ProgressPercentage float64         `json:"progress_percentage"`
+	StatusDistribution map[string]int  `json:"status_distribution"`
+	TaskOrder          []int           `json:"task_order"`     // Task IDs ordered by position
+	Velocity           float64         `json:"velocity"`       // Tasks completed per day (CLOSED sprints only; 0.0 if no completed tasks or sprint not closed)
+	DaysElapsed        *int            `json:"days_elapsed"`   // Days since sprint started (OPEN sprints only; null otherwise)
+	DaysRemaining      *int            `json:"days_remaining"` // Always null — Sprint has no end_date field
+	Burndown           []BurndownEntry `json:"burndown"`       // Daily tasks-remaining snapshots, derived from task closed_at dates
 }
 
 // CalculateSprintStats calculates statistics from a list of tasks.
 // The tasks slice must be ordered by position for correct task_order output.
+// sprint is required for velocity and days_elapsed computation; burndown entries are passed separately.
 func CalculateSprintStats(sprintID int, tasks []Task) SprintStats {
 	stats := SprintStats{
 		SprintID:           sprintID,
 		TotalTasks:         len(tasks),
 		StatusDistribution: make(map[string]int),
 		TaskOrder:          make([]int, 0, len(tasks)),
+		Burndown:           []BurndownEntry{},
 	}
 
 	for _, task := range tasks {
@@ -214,6 +226,46 @@ func CalculateSprintStats(sprintID int, tasks []Task) SprintStats {
 	}
 
 	return stats
+}
+
+// ApplySprintMetrics enriches a SprintStats with velocity, days_elapsed, days_remaining, and burndown.
+// sprint provides timing context; burndown is a pre-computed slice of BurndownEntry values.
+// now is the current time for computing days_elapsed (pass time.Now().UTC() from callers).
+func (s *SprintStats) ApplySprintMetrics(sprint *Sprint, burndown []BurndownEntry, now string) {
+	if burndown != nil {
+		s.Burndown = burndown
+	}
+
+	switch sprint.Status {
+	case SprintClosed:
+		// Velocity: tasks_completed / sprint_duration_days (only meaningful when there is a start and close date).
+		if sprint.StartedAt != nil && sprint.ClosedAt != nil {
+			startedTime, err1 := utils.ParseISO8601(*sprint.StartedAt)
+			closedTime, err2 := utils.ParseISO8601(*sprint.ClosedAt)
+			if err1 == nil && err2 == nil {
+				durationDays := closedTime.Sub(startedTime).Hours() / 24
+				if durationDays > 0 && s.CompletedTasks > 0 {
+					s.Velocity = float64(s.CompletedTasks) / durationDays
+				}
+			}
+		}
+		// DaysElapsed and DaysRemaining are not applicable for CLOSED sprints.
+
+	case SprintOpen:
+		// DaysElapsed: days since sprint started.
+		if sprint.StartedAt != nil {
+			startedTime, err := utils.ParseISO8601(*sprint.StartedAt)
+			nowTime, errNow := utils.ParseISO8601(now)
+			if err == nil && errNow == nil {
+				elapsed := int(nowTime.Sub(startedTime).Hours() / 24)
+				if elapsed < 0 {
+					elapsed = 0
+				}
+				s.DaysElapsed = &elapsed
+			}
+		}
+		// DaysRemaining is always null — Sprint model has no end_date field.
+	}
 }
 
 // SeverityRangeCount represents count and percentage for a severity range.

@@ -105,16 +105,22 @@ type Task struct {
     CreatedAt              string     `json:"created_at"`               // ISO 8601 UTC, auto-set on creation
 
     // Group 2: Nullable tracking fields - lifecycle timestamps and completion data (40 bytes total)
-    Specialists        *string `json:"specialists"`         // Comma-separated specialists, nullable, max 500 chars
-    StartedAt          *string `json:"started_at"`          // ISO 8601 UTC, auto-set on DOING transition
-    TestedAt           *string `json:"tested_at"`           // ISO 8601 UTC, auto-set on TESTING transition
-    ClosedAt           *string `json:"closed_at"`           // ISO 8601 UTC, auto-set on COMPLETED transition
-    CompletionSummary  *string `json:"completion_summary"`  // Optional summary of work done, settable only on TESTING → COMPLETED, max 4096 chars
+    Specialists        *string `json:"specialists"`          // Comma-separated specialists, nullable, max 500 chars
+    StartedAt          *string `json:"started_at"`           // ISO 8601 UTC, auto-set on DOING transition
+    TestedAt           *string `json:"tested_at"`            // ISO 8601 UTC, auto-set on TESTING transition
+    ClosedAt           *string `json:"closed_at"`            // ISO 8601 UTC, auto-set on COMPLETED transition
+    CompletionSummary  *string `json:"completion_summary"`   // Optional summary of work done, settable only on TESTING → COMPLETED, max 4096 chars
+    ParentTaskID       *int    `json:"parent_task_id"`       // NULL for top-level tasks; non-NULL links to parent task
 
     // Group 3: Numeric metadata fields (24 bytes total)
-    ID       int `json:"id"`       // Primary key
-    Priority int `json:"priority"` // 0-9 priority level
-    Severity int `json:"severity"` // 0-9 severity level
+    ID           int `json:"id"`            // Primary key
+    Priority     int `json:"priority"`      // 0-9 priority level
+    Severity     int `json:"severity"`      // 0-9 severity level
+    SubtaskCount int `json:"subtask_count"` // Computed: number of direct subtasks (not stored in DB)
+
+    // Dependency fields (fetched from task_dependencies table)
+    DependsOn []int `json:"depends_on"` // IDs of tasks this task depends on (blocking this task)
+    Blocks    []int `json:"blocks"`     // IDs of tasks that depend on this task (tasks this task is blocking)
 }
 ```
 
@@ -158,6 +164,16 @@ type Roadmap struct {
 }
 ```
 
+### BurndownEntry
+Represents a single day's snapshot of tasks remaining in a sprint. Used in the `burndown` field of `SprintStats`.
+
+```go
+type BurndownEntry struct {
+    Date           string `json:"date"`            // ISO 8601 date (YYYY-MM-DD)
+    TasksRemaining int    `json:"tasks_remaining"` // Number of tasks not yet completed at end of day
+}
+```
+
 ### Sprint Stats
 Used for the `rmp sprint stats` command.
 
@@ -169,6 +185,10 @@ type SprintStats struct {
     ProgressPercentage float64        `json:"progress_percentage"`
     StatusDistribution map[string]int `json:"status_distribution"`
     TaskOrder          []int          `json:"task_order"`
+    Velocity           float64        `json:"velocity"`
+    DaysElapsed        *int           `json:"days_elapsed"`
+    DaysRemaining      *int           `json:"days_remaining"`
+    Burndown           []BurndownEntry `json:"burndown"`
 }
 ```
 
@@ -182,6 +202,10 @@ type SprintStats struct {
 | `progress_percentage` | float64 | Percentage of completed tasks (0.0-100.0) |
 | `status_distribution` | map[string]int | Count of tasks per status |
 | `task_order` | []int | Ordered array of task IDs by position (computed in real-time from sprint_tasks table) |
+| `velocity` | float64 | Tasks completed per day. Non-zero only for CLOSED sprints with completed tasks and positive duration. 0.0 otherwise |
+| `days_elapsed` | *int (nullable) | Days since the sprint was started. Present only for OPEN sprints with a started_at date. null otherwise |
+| `days_remaining` | *int (nullable) | Always null. Sprint has no end_date field |
+| `burndown` | []BurndownEntry | Daily tasks-remaining snapshots derived from task closed_at dates. Empty array when no tasks completed |
 
 **TaskOrder Field Behavior:**
 - **Purpose:** Defines the execution sequence of tasks within the sprint. Lower positions (starting at 0) represent higher priority tasks that should be executed first.
@@ -191,6 +215,19 @@ type SprintStats struct {
 - **Format:** Array of task IDs where index 0 is the first task to execute (position 0)
 - **Empty sprint:** Returns empty array `[]` when sprint has no tasks
 - **Dynamic:** Reflects the current sprint task ordering. Changes to task order via sprint reorder commands are immediately reflected.
+
+**Velocity Computation:**
+- `velocity = completed_tasks / sprint_duration_days`
+- `sprint_duration_days = (closed_at - started_at)` in fractional days
+- Only computed for CLOSED sprints that have both `started_at` and `closed_at` set and a positive duration
+- 0.0 for sprints with no completed tasks, zero/negative duration, or non-CLOSED status
+
+**Burndown Computation:**
+- Queries task `closed_at` dates for all COMPLETED tasks belonging to the sprint
+- Groups completions by calendar date (YYYY-MM-DD)
+- Starts with `total_tasks` remaining on the sprint start date (or first completion date if no start date)
+- Decrements remaining count by completions per day
+- Only dates with at least one completion are included
 
 ### Sprint Task Order
 
@@ -224,3 +261,47 @@ type SprintTaskReorderRequest struct {
     TaskIDs  []int `json:"task_ids"`  // Ordered list of task IDs defining new sequence
 }
 ```
+
+### Roadmap Stats
+
+Used for the `rmp stats` command. Provides comprehensive roadmap statistics.
+
+```go
+type SprintStatsSummary struct {
+    Current   *int `json:"current"`   // ID of the currently open sprint, or null if none
+    Total     int  `json:"total"`     // Total number of sprints
+    Completed int  `json:"completed"` // Number of closed sprints
+    Pending   int  `json:"pending"`   // Number of open sprints (typically 0 or 1)
+}
+
+type TaskStatsSummary struct {
+    Backlog   int `json:"backlog"`   // Tasks with status BACKLOG
+    Sprint    int `json:"sprint"`    // Tasks with status SPRINT
+    Doing     int `json:"doing"`     // Tasks with status DOING
+    Testing   int `json:"testing"`   // Tasks with status TESTING
+    Completed int `json:"completed"` // Tasks with status COMPLETED
+}
+
+type RoadmapStats struct {
+    Roadmap         string             `json:"roadmap"`
+    Sprints         SprintStatsSummary `json:"sprints"`
+    Tasks           TaskStatsSummary   `json:"tasks"`
+    AverageVelocity float64            `json:"average_velocity"` // Average tasks/day across last 5 closed sprints (0.0 if none)
+}
+```
+
+**Field Descriptions:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `roadmap` | string | Name of the roadmap |
+| `sprints` | SprintStatsSummary | Sprint counts by state |
+| `tasks` | TaskStatsSummary | Task counts by status |
+| `average_velocity` | float64 | Average tasks completed per day across the last 5 closed sprints. 0.0 when no qualifying sprints exist |
+
+**average_velocity Computation:**
+- Considers the last 5 CLOSED sprints with both `started_at` and `closed_at` set
+- Per-sprint velocity = `completed_tasks / sprint_duration_days`
+- Sprints with zero duration are excluded from the count entirely
+- Sprints with zero completed tasks contribute 0.0 to the average
+- Returns 0.0 when no qualifying sprints exist

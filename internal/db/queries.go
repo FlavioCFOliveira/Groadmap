@@ -45,8 +45,8 @@ func (db *DB) CreateTask(ctx context.Context, task *models.Task) (int, error) {
 		}
 
 		result, err := db.ExecContext(ctx,
-			`INSERT INTO tasks (title, status, type, functional_requirements, technical_requirements, acceptance_criteria, created_at, specialists, priority, severity, completion_summary)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+			`INSERT INTO tasks (title, status, type, functional_requirements, technical_requirements, acceptance_criteria, created_at, specialists, priority, severity, completion_summary, parent_task_id)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
 			task.Title,
 			task.Status,
 			taskType,
@@ -57,6 +57,7 @@ func (db *DB) CreateTask(ctx context.Context, task *models.Task) (int, error) {
 			task.Specialists,
 			task.Priority,
 			task.Severity,
+			task.ParentTaskID,
 		)
 		if err != nil {
 			return fmt.Errorf("inserting task: %w", err)
@@ -78,7 +79,7 @@ func (db *DB) CreateTask(ctx context.Context, task *models.Task) (int, error) {
 	return taskID, nil
 }
 
-// GetTask retrieves a task by ID.
+// GetTask retrieves a task by ID, including parent_task_id and subtask_count.
 func (db *DB) GetTask(ctx context.Context, id int) (*models.Task, error) {
 	var task models.Task
 	var specialists sql.NullString
@@ -86,11 +87,14 @@ func (db *DB) GetTask(ctx context.Context, id int) (*models.Task, error) {
 	var testedAt sql.NullString
 	var closedAt sql.NullString
 	var completionSummary sql.NullString
+	var parentTaskID sql.NullInt64
 
 	err := db.QueryRowContext(ctx,
-		`SELECT id, title, status, type, functional_requirements, technical_requirements, acceptance_criteria,
-		        created_at, specialists, started_at, tested_at, closed_at, completion_summary, priority, severity
-		 FROM tasks WHERE id = ?`,
+		`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
+		        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
+		        t.priority, t.severity,
+		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count
+		 FROM tasks t WHERE t.id = ?`,
 		id,
 	).Scan(
 		&task.ID,
@@ -106,8 +110,10 @@ func (db *DB) GetTask(ctx context.Context, id int) (*models.Task, error) {
 		&testedAt,
 		&closedAt,
 		&completionSummary,
+		&parentTaskID,
 		&task.Priority,
 		&task.Severity,
+		&task.SubtaskCount,
 	)
 
 	if err != nil {
@@ -132,6 +138,29 @@ func (db *DB) GetTask(ctx context.Context, id int) (*models.Task, error) {
 	if completionSummary.Valid {
 		task.CompletionSummary = &completionSummary.String
 	}
+	if parentTaskID.Valid {
+		v := int(parentTaskID.Int64)
+		task.ParentTaskID = &v
+	}
+
+	// Populate dependency arrays
+	dependsOn, err := db.GetTaskDependsOn(ctx, task.ID)
+	if err != nil {
+		return nil, fmt.Errorf("fetching depends_on for task %d: %w", task.ID, err)
+	}
+	if dependsOn == nil {
+		dependsOn = []int{}
+	}
+	task.DependsOn = dependsOn
+
+	blocks, err := db.GetTaskBlocks(ctx, task.ID)
+	if err != nil {
+		return nil, fmt.Errorf("fetching blocks for task %d: %w", task.ID, err)
+	}
+	if blocks == nil {
+		blocks = []int{}
+	}
+	task.Blocks = blocks
 
 	return &task, nil
 }
@@ -150,9 +179,11 @@ func (db *DB) GetTasks(ctx context.Context, ids []int) ([]models.Task, error) {
 	}
 
 	query := fmt.Sprintf(
-		`SELECT id, title, status, type, functional_requirements, technical_requirements, acceptance_criteria,
-		        created_at, specialists, started_at, tested_at, closed_at, completion_summary, priority, severity
-		 FROM tasks WHERE id IN (%s) ORDER BY id`,
+		`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
+		        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
+		        t.priority, t.severity,
+		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count
+		 FROM tasks t WHERE t.id IN (%s) ORDER BY t.id`,
 		placeholders,
 	)
 
@@ -162,7 +193,33 @@ func (db *DB) GetTasks(ctx context.Context, ids []int) ([]models.Task, error) {
 	}
 	defer rows.Close()
 
-	return scanTasks(rows)
+	tasks, err := scanTasks(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	// Populate dependency arrays for each task
+	for i := range tasks {
+		dependsOn, dErr := db.GetTaskDependsOn(ctx, tasks[i].ID)
+		if dErr != nil {
+			return nil, fmt.Errorf("fetching depends_on for task %d: %w", tasks[i].ID, dErr)
+		}
+		if dependsOn == nil {
+			dependsOn = []int{}
+		}
+		tasks[i].DependsOn = dependsOn
+
+		blocks, bErr := db.GetTaskBlocks(ctx, tasks[i].ID)
+		if bErr != nil {
+			return nil, fmt.Errorf("fetching blocks for task %d: %w", tasks[i].ID, bErr)
+		}
+		if blocks == nil {
+			blocks = []int{}
+		}
+		tasks[i].Blocks = blocks
+	}
+
+	return tasks, nil
 }
 
 // TaskListFilter holds all optional filter and sort parameters for ListTasks.
@@ -188,51 +245,53 @@ func (db *DB) ListTasks(ctx context.Context, filter TaskListFilter) ([]models.Ta
 		filter.Limit = models.MaxTaskLimit
 	}
 
-	query := `SELECT id, title, status, type, functional_requirements, technical_requirements, acceptance_criteria,
-		        created_at, specialists, started_at, tested_at, closed_at, completion_summary, priority, severity
-		      FROM tasks WHERE 1=1`
+	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
+		        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
+		        t.priority, t.severity,
+		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count
+		      FROM tasks t WHERE 1=1`
 	args := make([]interface{}, 0, 8)
 
 	if filter.Status != nil {
-		query += " AND status = ?"
+		query += " AND t.status = ?"
 		args = append(args, string(*filter.Status))
 	}
 	if filter.MinPriority != nil {
-		query += " AND priority >= ?"
+		query += " AND t.priority >= ?"
 		args = append(args, *filter.MinPriority)
 	}
 	if filter.MinSeverity != nil {
-		query += " AND severity >= ?"
+		query += " AND t.severity >= ?"
 		args = append(args, *filter.MinSeverity)
 	}
 	if filter.TaskType != nil {
-		query += " AND type = ?"
+		query += " AND t.type = ?"
 		args = append(args, string(*filter.TaskType))
 	}
 	if filter.Specialists != nil {
 		// Escape SQL LIKE wildcards in the user-supplied value to prevent accidental pattern expansion.
 		escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(*filter.Specialists)
-		query += ` AND LOWER(COALESCE(specialists, '')) LIKE LOWER(?) ESCAPE '\'`
+		query += ` AND LOWER(COALESCE(t.specialists, '')) LIKE LOWER(?) ESCAPE '\'`
 		args = append(args, "%"+escaped+"%")
 	}
 	if filter.CreatedSince != nil {
-		query += " AND created_at >= ?"
+		query += " AND t.created_at >= ?"
 		args = append(args, filter.CreatedSince.UTC().Format(time.RFC3339))
 	}
 	if filter.CreatedUntil != nil {
-		query += " AND created_at <= ?"
+		query += " AND t.created_at <= ?"
 		args = append(args, filter.CreatedUntil.UTC().Format(time.RFC3339))
 	}
 
 	switch filter.Sort {
 	case "created":
-		query += " ORDER BY created_at ASC"
+		query += " ORDER BY t.created_at ASC"
 	case "status":
-		query += " ORDER BY status ASC, priority DESC, created_at ASC"
+		query += " ORDER BY t.status ASC, t.priority DESC, t.created_at ASC"
 	case "severity":
-		query += " ORDER BY severity DESC, priority DESC, created_at ASC"
+		query += " ORDER BY t.severity DESC, t.priority DESC, t.created_at ASC"
 	default: // "priority" or empty — matches existing default behaviour
-		query += " ORDER BY priority DESC, created_at ASC"
+		query += " ORDER BY t.priority DESC, t.created_at ASC"
 	}
 	query += " LIMIT ?"
 	args = append(args, filter.Limit)
@@ -243,7 +302,33 @@ func (db *DB) ListTasks(ctx context.Context, filter TaskListFilter) ([]models.Ta
 	}
 	defer rows.Close()
 
-	return scanTasks(rows)
+	tasks, err := scanTasks(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	// Populate dependency arrays for each task
+	for i := range tasks {
+		dependsOn, dErr := db.GetTaskDependsOn(ctx, tasks[i].ID)
+		if dErr != nil {
+			return nil, fmt.Errorf("fetching depends_on for task %d: %w", tasks[i].ID, dErr)
+		}
+		if dependsOn == nil {
+			dependsOn = []int{}
+		}
+		tasks[i].DependsOn = dependsOn
+
+		blocks, bErr := db.GetTaskBlocks(ctx, tasks[i].ID)
+		if bErr != nil {
+			return nil, fmt.Errorf("fetching blocks for task %d: %w", tasks[i].ID, bErr)
+		}
+		if blocks == nil {
+			blocks = []int{}
+		}
+		tasks[i].Blocks = blocks
+	}
+
+	return tasks, nil
 }
 
 // UpdateTask updates a task's fields with the provided values.
@@ -561,8 +646,93 @@ func (db *DB) DeleteTask(ctx context.Context, id int) error {
 	})
 }
 
+// GetSubTasks retrieves all direct subtasks of the given parent task ID.
+// Tasks are ordered by priority descending, then created_at ascending.
+func (db *DB) GetSubTasks(ctx context.Context, parentID int) ([]models.Task, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
+		        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
+		        t.priority, t.severity,
+		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count
+		 FROM tasks t WHERE t.parent_task_id = ?
+		 ORDER BY t.priority DESC, t.created_at ASC`,
+		parentID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying subtasks: %w", err)
+	}
+	defer rows.Close()
+
+	return scanTasks(rows)
+}
+
+// GetParentTask retrieves the parent task of a given task ID.
+// Returns nil (no error) if the task has no parent.
+func (db *DB) GetParentTask(ctx context.Context, taskID int) (*models.Task, error) {
+	// First get the parent_task_id from the task
+	var parentID sql.NullInt64
+	err := db.QueryRowContext(ctx,
+		`SELECT parent_task_id FROM tasks WHERE id = ?`,
+		taskID,
+	).Scan(&parentID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("%w: task %d", utils.ErrNotFound, taskID)
+		}
+		return nil, fmt.Errorf("querying parent task id: %w", err)
+	}
+
+	if !parentID.Valid {
+		return nil, nil // no parent
+	}
+
+	return db.GetTask(ctx, int(parentID.Int64))
+}
+
+// GetIncompleteSubTasks returns the IDs of all direct subtasks of a given task
+// that are NOT in COMPLETED status. Used to enforce the parent completion guard.
+func (db *DB) GetIncompleteSubTasks(ctx context.Context, parentID int) ([]int, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT id FROM tasks WHERE parent_task_id = ? AND status != ?`,
+		parentID, models.StatusCompleted,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying incomplete subtasks: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []int
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning subtask id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating subtask rows: %w", err)
+	}
+	return ids, nil
+}
+
+// HasSubTasks returns true if the given task has any direct subtasks.
+func (db *DB) HasSubTasks(ctx context.Context, taskID int) (bool, int, error) {
+	var count int
+	err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM tasks WHERE parent_task_id = ?`,
+		taskID,
+	).Scan(&count)
+	if err != nil {
+		return false, 0, fmt.Errorf("counting subtasks: %w", err)
+	}
+	return count > 0, count, nil
+}
+
 // scanTasks scans rows into a slice of Task.
 // Optimized for memory efficiency with pre-allocated slice and reusable scan variables.
+// Expected column order: id, title, status, type, functional_requirements, technical_requirements,
+// acceptance_criteria, created_at, specialists, started_at, tested_at, closed_at,
+// completion_summary, parent_task_id, priority, severity, subtask_count.
 func scanTasks(rows *sql.Rows) ([]models.Task, error) {
 	// Pre-allocate with typical batch size to avoid repeated reallocations
 	tasks := make([]models.Task, 0, 100)
@@ -573,6 +743,7 @@ func scanTasks(rows *sql.Rows) ([]models.Task, error) {
 	var testedAt sql.NullString
 	var closedAt sql.NullString
 	var completionSummary sql.NullString
+	var parentTaskID sql.NullInt64
 
 	for rows.Next() {
 		var task models.Task
@@ -583,6 +754,7 @@ func scanTasks(rows *sql.Rows) ([]models.Task, error) {
 		testedAt = sql.NullString{}
 		closedAt = sql.NullString{}
 		completionSummary = sql.NullString{}
+		parentTaskID = sql.NullInt64{}
 
 		err := rows.Scan(
 			&task.ID,
@@ -598,8 +770,10 @@ func scanTasks(rows *sql.Rows) ([]models.Task, error) {
 			&testedAt,
 			&closedAt,
 			&completionSummary,
+			&parentTaskID,
 			&task.Priority,
 			&task.Severity,
+			&task.SubtaskCount,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning task row: %w", err)
@@ -619,6 +793,10 @@ func scanTasks(rows *sql.Rows) ([]models.Task, error) {
 		}
 		if completionSummary.Valid {
 			task.CompletionSummary = &completionSummary.String
+		}
+		if parentTaskID.Valid {
+			v := int(parentTaskID.Int64)
+			task.ParentTaskID = &v
 		}
 
 		tasks = append(tasks, task)
@@ -724,7 +902,9 @@ func (db *DB) GetNextTasks(ctx context.Context, limit int) ([]models.Task, error
 	// Get open tasks from the sprint, ordered by sprint task position
 	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
 		         t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
-		         t.closed_at, t.completion_summary, t.priority, t.severity
+		         t.closed_at, t.completion_summary, t.parent_task_id,
+		         t.priority, t.severity,
+		         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count
 		      FROM tasks t
 		      INNER JOIN sprint_tasks st ON t.id = st.task_id
 		      WHERE st.sprint_id = ?
@@ -739,6 +919,291 @@ func (db *DB) GetNextTasks(ctx context.Context, limit int) ([]models.Task, error
 	defer rows.Close()
 
 	return scanTasks(rows)
+}
+
+// ==================== TASK DEPENDENCY QUERIES ====================
+
+// AddTaskDependency adds a dependency: taskID depends on depID.
+// Returns an error if the relationship already exists or would create a cycle.
+func (db *DB) AddTaskDependency(ctx context.Context, taskID, depID int) error {
+	// Self-dependency is forbidden.
+	if taskID == depID {
+		return fmt.Errorf("%w: task cannot depend on itself", utils.ErrInvalidInput)
+	}
+
+	// Circular dependency check: if depID already (transitively) depends on taskID,
+	// adding taskID→depID would create a cycle.
+	wouldCycle, err := db.hasTransitiveDependency(ctx, depID, taskID)
+	if err != nil {
+		return fmt.Errorf("checking circular dependency: %w", err)
+	}
+	if wouldCycle {
+		return fmt.Errorf("%w: adding dependency would create a circular dependency between task #%d and task #%d",
+			utils.ErrInvalidInput, taskID, depID)
+	}
+
+	_, err = db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_task_id) VALUES (?, ?)`,
+		taskID, depID,
+	)
+	if err != nil {
+		return fmt.Errorf("inserting task dependency: %w", err)
+	}
+	return nil
+}
+
+// AddTaskDependencyWithAudit adds a dependency and writes audit entries in a single transaction.
+func (db *DB) AddTaskDependencyWithAudit(ctx context.Context, taskID, depID int) error {
+	// Self-dependency check and circular check are performed in AddTaskDependency.
+	// Run them before opening the transaction to fail fast.
+	if taskID == depID {
+		return fmt.Errorf("%w: task cannot depend on itself", utils.ErrInvalidInput)
+	}
+	wouldCycle, err := db.hasTransitiveDependency(ctx, depID, taskID)
+	if err != nil {
+		return fmt.Errorf("checking circular dependency: %w", err)
+	}
+	if wouldCycle {
+		return fmt.Errorf("%w: adding dependency would create a circular dependency between task #%d and task #%d",
+			utils.ErrInvalidInput, taskID, depID)
+	}
+
+	now := utils.NowISO8601()
+
+	return db.WithTransaction(func(tx *sql.Tx) error {
+		if _, err := tx.Exec(
+			`INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_task_id) VALUES (?, ?)`,
+			taskID, depID,
+		); err != nil {
+			return fmt.Errorf("inserting task dependency: %w", err)
+		}
+
+		for _, auditTaskID := range []int{taskID, depID} {
+			if _, err := tx.Exec(
+				`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
+				models.OpTaskAddDep, models.EntityTask, auditTaskID, now,
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// RemoveTaskDependencyWithAudit removes a dependency and writes audit entries in a single transaction.
+func (db *DB) RemoveTaskDependencyWithAudit(ctx context.Context, taskID, depID int) error {
+	now := utils.NowISO8601()
+
+	return db.WithTransaction(func(tx *sql.Tx) error {
+		result, err := tx.Exec(
+			`DELETE FROM task_dependencies WHERE task_id = ? AND depends_on_task_id = ?`,
+			taskID, depID,
+		)
+		if err != nil {
+			return fmt.Errorf("deleting task dependency: %w", err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("checking rows affected: %w", err)
+		}
+		if affected == 0 {
+			return fmt.Errorf("%w: dependency from task #%d to task #%d not found", utils.ErrNotFound, taskID, depID)
+		}
+
+		for _, auditTaskID := range []int{taskID, depID} {
+			if _, err := tx.Exec(
+				`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
+				models.OpTaskRemoveDep, models.EntityTask, auditTaskID, now,
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// RemoveTaskDependency removes a dependency: taskID no longer depends on depID.
+func (db *DB) RemoveTaskDependency(ctx context.Context, taskID, depID int) error {
+	result, err := db.ExecContext(ctx,
+		`DELETE FROM task_dependencies WHERE task_id = ? AND depends_on_task_id = ?`,
+		taskID, depID,
+	)
+	if err != nil {
+		return fmt.Errorf("deleting task dependency: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking rows affected: %w", err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("%w: dependency from task #%d to task #%d not found", utils.ErrNotFound, taskID, depID)
+	}
+	return nil
+}
+
+// GetBlockers returns tasks that are blocking taskID (tasks that taskID depends on and are not COMPLETED).
+func (db *DB) GetBlockers(ctx context.Context, taskID int) ([]models.Task, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
+		        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
+		        t.priority, t.severity,
+		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count
+		 FROM tasks t
+		 INNER JOIN task_dependencies td ON t.id = td.depends_on_task_id
+		 WHERE td.task_id = ? AND t.status != ?
+		 ORDER BY t.priority DESC, t.created_at ASC`,
+		taskID, models.StatusCompleted,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying blockers: %w", err)
+	}
+	defer rows.Close()
+	return scanTasks(rows)
+}
+
+// GetBlocking returns tasks that depend on taskID (tasks this task is blocking).
+func (db *DB) GetBlocking(ctx context.Context, taskID int) ([]models.Task, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
+		        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
+		        t.priority, t.severity,
+		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count
+		 FROM tasks t
+		 INNER JOIN task_dependencies td ON t.id = td.task_id
+		 WHERE td.depends_on_task_id = ?
+		 ORDER BY t.priority DESC, t.created_at ASC`,
+		taskID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying blocking tasks: %w", err)
+	}
+	defer rows.Close()
+	return scanTasks(rows)
+}
+
+// GetIncompleteDependencies returns the IDs of tasks that taskID depends on and are NOT COMPLETED.
+// Used to enforce the dependency completion guard before allowing a task to be marked COMPLETED.
+func (db *DB) GetIncompleteDependencies(ctx context.Context, taskID int) ([]int, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT td.depends_on_task_id
+		 FROM task_dependencies td
+		 INNER JOIN tasks t ON t.id = td.depends_on_task_id
+		 WHERE td.task_id = ? AND t.status != ?`,
+		taskID, models.StatusCompleted,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying incomplete dependencies: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []int
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning dependency id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating dependency rows: %w", err)
+	}
+	return ids, nil
+}
+
+// GetTaskDependsOn returns the IDs of all tasks that taskID depends on.
+func (db *DB) GetTaskDependsOn(ctx context.Context, taskID int) ([]int, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT depends_on_task_id FROM task_dependencies WHERE task_id = ? ORDER BY depends_on_task_id ASC`,
+		taskID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying task depends_on: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []int
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning depends_on id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating depends_on rows: %w", err)
+	}
+	return ids, nil
+}
+
+// GetTaskBlocks returns the IDs of all tasks that depend on taskID.
+func (db *DB) GetTaskBlocks(ctx context.Context, taskID int) ([]int, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT task_id FROM task_dependencies WHERE depends_on_task_id = ? ORDER BY task_id ASC`,
+		taskID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying task blocks: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []int
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning blocks id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating blocks rows: %w", err)
+	}
+	return ids, nil
+}
+
+// hasTransitiveDependency checks if fromID transitively depends on targetID using BFS.
+// Returns true if there is a path fromID →...→ targetID through task_dependencies.
+func (db *DB) hasTransitiveDependency(ctx context.Context, fromID, targetID int) (bool, error) {
+	visited := make(map[int]bool)
+	queue := []int{fromID}
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		if current == targetID {
+			return true, nil
+		}
+		if visited[current] {
+			continue
+		}
+		visited[current] = true
+
+		// Get direct dependencies of current
+		rows, err := db.QueryContext(ctx,
+			`SELECT depends_on_task_id FROM task_dependencies WHERE task_id = ?`,
+			current,
+		)
+		if err != nil {
+			return false, fmt.Errorf("querying dependencies for task %d: %w", current, err)
+		}
+		var deps []int
+		for rows.Next() {
+			var id int
+			if scanErr := rows.Scan(&id); scanErr != nil {
+				rows.Close()
+				return false, fmt.Errorf("scanning dependency: %w", scanErr)
+			}
+			deps = append(deps, id)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return false, fmt.Errorf("iterating dependency rows: %w", err)
+		}
+
+		queue = append(queue, deps...)
+	}
+
+	return false, nil
 }
 
 // ==================== SPRINT QUERIES ====================
@@ -1041,7 +1506,9 @@ func (db *DB) GetActiveSprintTasks(ctx context.Context, sprintID int) ([]models.
 	rows, err := db.QueryContext(ctx,
 		`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
 		         t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
-		         t.closed_at, t.completion_summary, t.priority, t.severity
+		         t.closed_at, t.completion_summary, t.parent_task_id,
+		         t.priority, t.severity,
+		         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count
 		      FROM tasks t
 		      INNER JOIN sprint_tasks st ON t.id = st.task_id
 		      WHERE st.sprint_id = ? AND t.status IN ('SPRINT', 'DOING', 'TESTING')
@@ -1060,7 +1527,9 @@ func (db *DB) GetActiveSprintTasks(ctx context.Context, sprintID int) ([]models.
 func (db *DB) GetSprintTasksFull(ctx context.Context, sprintID int, status *models.TaskStatus, orderByPriority bool) ([]models.Task, error) {
 	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
 		         t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
-		         t.closed_at, t.completion_summary, t.priority, t.severity
+		         t.closed_at, t.completion_summary, t.parent_task_id,
+		         t.priority, t.severity,
+		         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count
 		      FROM tasks t
 		      INNER JOIN sprint_tasks st ON t.id = st.task_id
 		      WHERE st.sprint_id = ?`
@@ -1093,7 +1562,9 @@ func (db *DB) GetSprintTasksFull(ctx context.Context, sprintID int, status *mode
 func (db *DB) GetOpenSprintTasks(ctx context.Context, sprintID int, orderByPriority bool) ([]models.Task, error) {
 	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
 		         t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
-		         t.closed_at, t.completion_summary, t.priority, t.severity
+		         t.closed_at, t.completion_summary, t.parent_task_id,
+		         t.priority, t.severity,
+		         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count
 		      FROM tasks t
 		      INNER JOIN sprint_tasks st ON t.id = st.task_id
 		      WHERE st.sprint_id = ?
@@ -1773,7 +2244,8 @@ func (db *DB) SwapTasks(sprintID, taskID1, taskID2 int) error {
 // ==================== ROADMAP STATISTICS QUERIES ====================
 
 // GetRoadmapStats retrieves comprehensive statistics for a roadmap.
-// Returns sprint counts (total, open, closed, current) and task counts by status.
+// Returns sprint counts (total, open, closed, current), task counts by status,
+// and average velocity across the last 5 closed sprints.
 func (db *DB) GetRoadmapStats(ctx context.Context, roadmapName string) (*models.RoadmapStats, error) {
 	stats := &models.RoadmapStats{
 		Roadmap: roadmapName,
@@ -1792,6 +2264,13 @@ func (db *DB) GetRoadmapStats(ctx context.Context, roadmapName string) (*models.
 		return nil, fmt.Errorf("getting task stats: %w", err)
 	}
 	stats.Tasks = *taskStats
+
+	// Get average velocity across last 5 closed sprints.
+	avgVelocity, err := db.GetAverageVelocity(ctx, 5)
+	if err != nil {
+		return nil, fmt.Errorf("getting average velocity: %w", err)
+	}
+	stats.AverageVelocity = avgVelocity
 
 	return stats, nil
 }
@@ -1882,4 +2361,177 @@ func (db *DB) getTaskStatsByStatus(ctx context.Context) (*models.TaskStatsSummar
 	}
 
 	return stats, nil
+}
+
+// ==================== SPRINT VELOCITY AND BURNDOWN QUERIES ====================
+
+// GetSprintBurndown computes the burndown series for a sprint.
+// It derives completion dates from tasks.closed_at for all tasks that belong to the sprint.
+// Returns a slice of BurndownEntry ordered by date ascending, starting from the sprint start date
+// with total_tasks remaining and decrementing by completions per day.
+// Returns an empty slice when no tasks have been completed.
+func (db *DB) GetSprintBurndown(ctx context.Context, sprintID int) ([]models.BurndownEntry, error) {
+	// Get the sprint to determine total task count and start date.
+	sprint, err := db.GetSprint(ctx, sprintID)
+	if err != nil {
+		return nil, fmt.Errorf("getting sprint for burndown: %w", err)
+	}
+
+	// Count total tasks in the sprint.
+	var totalTasks int
+	err = db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sprint_tasks WHERE sprint_id = ?`,
+		sprintID,
+	).Scan(&totalTasks)
+	if err != nil {
+		return nil, fmt.Errorf("counting sprint tasks for burndown: %w", err)
+	}
+
+	// Query completions per day: tasks in this sprint that have a closed_at date (COMPLETED status).
+	// SQLite substr extracts the date portion (YYYY-MM-DD) from the ISO 8601 timestamp.
+	rows, err := db.QueryContext(ctx,
+		`SELECT substr(t.closed_at, 1, 10) AS completion_date, COUNT(*) AS completed_count
+		 FROM tasks t
+		 INNER JOIN sprint_tasks st ON st.task_id = t.id
+		 WHERE st.sprint_id = ?
+		   AND t.status = 'COMPLETED'
+		   AND t.closed_at IS NOT NULL
+		 GROUP BY completion_date
+		 ORDER BY completion_date ASC`,
+		sprintID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying burndown completions: %w", err)
+	}
+	defer rows.Close()
+
+	type dailyCount struct {
+		date  string
+		count int
+	}
+
+	var dailyCounts []dailyCount
+	for rows.Next() {
+		var dc dailyCount
+		if scanErr := rows.Scan(&dc.date, &dc.count); scanErr != nil {
+			return nil, fmt.Errorf("scanning burndown row: %w", scanErr)
+		}
+		dailyCounts = append(dailyCounts, dc)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating burndown rows: %w", err)
+	}
+
+	if len(dailyCounts) == 0 {
+		return []models.BurndownEntry{}, nil
+	}
+
+	// Build the burndown series.
+	// If sprint has a started_at, use it as the baseline; otherwise start from the first completion date.
+	var startDate string
+	if sprint.StartedAt != nil && *sprint.StartedAt != "" {
+		startDate = (*sprint.StartedAt)[:10] // Extract YYYY-MM-DD
+	} else {
+		startDate = dailyCounts[0].date
+	}
+
+	entries := make([]models.BurndownEntry, 0, len(dailyCounts)+1)
+
+	// Include start day with all tasks remaining (before any completions).
+	if startDate < dailyCounts[0].date {
+		entries = append(entries, models.BurndownEntry{
+			Date:           startDate,
+			TasksRemaining: totalTasks,
+		})
+	}
+
+	remaining := totalTasks
+	for _, dc := range dailyCounts {
+		remaining -= dc.count
+		if remaining < 0 {
+			remaining = 0
+		}
+		entries = append(entries, models.BurndownEntry{
+			Date:           dc.date,
+			TasksRemaining: remaining,
+		})
+	}
+
+	return entries, nil
+}
+
+// GetAverageVelocity computes the average velocity across the last N closed sprints.
+// Velocity for each sprint = completed_tasks / sprint_duration_days.
+// Sprints without a started_at or closed_at, or with zero duration, are excluded from the count.
+// Sprints with zero completed tasks contribute 0.0 to the average.
+// Returns 0.0 when no qualifying sprints exist.
+func (db *DB) GetAverageVelocity(ctx context.Context, limit int) (float64, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+
+	// Fetch the last N closed sprints that have both started_at and closed_at set.
+	rows, err := db.QueryContext(ctx,
+		`SELECT s.id, s.started_at, s.closed_at,
+		        (SELECT COUNT(*) FROM sprint_tasks st
+		         INNER JOIN tasks t ON t.id = st.task_id
+		         WHERE st.sprint_id = s.id AND t.status = 'COMPLETED') AS completed_count
+		 FROM sprints s
+		 WHERE s.status = 'CLOSED'
+		   AND s.started_at IS NOT NULL
+		   AND s.closed_at IS NOT NULL
+		 ORDER BY s.closed_at DESC
+		 LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		return 0.0, fmt.Errorf("querying closed sprints for velocity: %w", err)
+	}
+	defer rows.Close()
+
+	var totalVelocity float64
+	var count int
+
+	for rows.Next() {
+		var sprintID, completedCount int
+		var startedAt, closedAt string
+		if scanErr := rows.Scan(&sprintID, &startedAt, &closedAt, &completedCount); scanErr != nil {
+			return 0.0, fmt.Errorf("scanning sprint velocity row: %w", scanErr)
+		}
+
+		startTime, err1 := time.Parse("2006-01-02T15:04:05.000Z", startedAt)
+		closeTime, err2 := time.Parse("2006-01-02T15:04:05.000Z", closedAt)
+		// Also try RFC3339 variants for robustness.
+		if err1 != nil {
+			startTime, err1 = time.Parse(time.RFC3339, startedAt)
+		}
+		if err2 != nil {
+			closeTime, err2 = time.Parse(time.RFC3339, closedAt)
+		}
+		if err1 != nil || err2 != nil {
+			// Skip sprints with unparseable dates.
+			continue
+		}
+
+		durationDays := closeTime.Sub(startTime).Hours() / 24
+		if durationDays <= 0 {
+			// Zero-duration sprint: exclude from count entirely (would be a data anomaly).
+			continue
+		}
+
+		if completedCount > 0 {
+			totalVelocity += float64(completedCount) / durationDays
+		}
+		// completedCount == 0: contribute 0.0 (already zero, just increment count).
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		return 0.0, fmt.Errorf("iterating sprint velocity rows: %w", err)
+	}
+
+	if count == 0 {
+		return 0.0, nil
+	}
+
+	return totalVelocity / float64(count), nil
 }

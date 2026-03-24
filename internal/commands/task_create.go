@@ -61,6 +61,7 @@ func taskCreate(args []string) error {
 	specialists, _ := result.Flags["Specialists"].(string)
 	priority, _ := result.Flags["Priority"].(int)
 	severity, _ := result.Flags["Severity"].(int)
+	parentIDRaw, hasParent := result.Flags["ParentID"].(int)
 
 	// Parse task type (enum conversion after FlagParser)
 	taskType := models.TypeTask
@@ -86,11 +87,29 @@ func taskCreate(args []string) error {
 		return fmt.Errorf("%w: missing required parameter: --acceptance-criteria", utils.ErrRequired)
 	}
 
+	// Validate --parent value is a positive integer
+	if hasParent && parentIDRaw < 1 {
+		return fmt.Errorf("%w: --parent must be a positive integer", utils.ErrInvalidInput)
+	}
+
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {
 		return err
 	}
 	defer database.Close()
+
+	// Validate parent task exists (if --parent was supplied)
+	var parentTaskID *int
+	if hasParent {
+		ctx, cancel := db.WithQuickTimeout()
+		defer cancel()
+
+		_, parentErr := database.GetTask(ctx, parentIDRaw)
+		if parentErr != nil {
+			return fmt.Errorf("%w: parent task %d not found", utils.ErrNotFound, parentIDRaw)
+		}
+		parentTaskID = &parentIDRaw
+	}
 
 	// Capture timestamp once for the entire operation
 	now := utils.NowISO8601()
@@ -105,6 +124,7 @@ func taskCreate(args []string) error {
 		CreatedAt:              now,
 		Priority:               priority,
 		Severity:               severity,
+		ParentTaskID:           parentTaskID,
 	}
 
 	if specialists != "" {
@@ -120,10 +140,11 @@ func taskCreate(args []string) error {
 	err = database.WithTransaction(func(tx *sql.Tx) error {
 		// Insert task
 		insertResult, insertErr := tx.Exec(
-			`INSERT INTO tasks (title, status, type, functional_requirements, technical_requirements, acceptance_criteria, created_at, specialists, priority, severity)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO tasks (title, status, type, functional_requirements, technical_requirements, acceptance_criteria, created_at, specialists, priority, severity, parent_task_id)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			task.Title, task.Status, task.Type, task.FunctionalRequirements, task.TechnicalRequirements,
 			task.AcceptanceCriteria, task.CreatedAt, task.Specialists, task.Priority, task.Severity,
+			task.ParentTaskID,
 		)
 		if insertErr != nil {
 			return insertErr

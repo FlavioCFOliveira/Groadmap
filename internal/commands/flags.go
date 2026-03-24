@@ -221,6 +221,7 @@ var (
 		{Name: "--priority", Short: "-p", Field: "Priority", Type: "int"},
 		{Name: "--severity", Field: "Severity", Type: "int"},
 		{Name: "--specialists", Short: "-sp", Field: "Specialists", Type: "string"},
+		{Name: "--parent", Field: "ParentID", Type: "int", DisplayName: "parent task ID"},
 	}
 
 	// TaskEditFlags defines flags for task editing.

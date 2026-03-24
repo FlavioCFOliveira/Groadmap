@@ -57,6 +57,17 @@ func taskRemove(args []string) error {
 		}
 	}
 
+	// Guard: prevent deleting tasks that have subtasks.
+	for _, task := range tasks {
+		hasChildren, childCount, subErr := database.HasSubTasks(ctx, task.ID)
+		if subErr != nil {
+			return subErr
+		}
+		if hasChildren {
+			return fmt.Errorf("%w: task #%d cannot be deleted — it has %d subtask(s); remove them first", utils.ErrInvalidInput, task.ID, childCount)
+		}
+	}
+
 	// Delete within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
 		for _, id := range ids {
@@ -200,6 +211,38 @@ func taskSetStatus(args []string) error {
 	for _, task := range tasks {
 		if !task.Status.CanTransitionTo(newStatus) {
 			return fmt.Errorf("%w: invalid status transition from %s to %s for task %d", utils.ErrInvalidInput, task.Status, newStatus, task.ID)
+		}
+	}
+
+	// Guard: when transitioning to COMPLETED, ensure all subtasks and dependencies are also COMPLETED.
+	if newStatus == models.StatusCompleted {
+		for _, task := range tasks {
+			incompleteIDs, subErr := database.GetIncompleteSubTasks(ctx, task.ID)
+			if subErr != nil {
+				return subErr
+			}
+			if len(incompleteIDs) > 0 {
+				idStrsBlocking := make([]string, len(incompleteIDs))
+				for i, id := range incompleteIDs {
+					idStrsBlocking[i] = fmt.Sprintf("#%d", id)
+				}
+				return fmt.Errorf("%w: cannot mark task #%d as COMPLETED: incomplete subtasks: %s",
+					utils.ErrInvalidInput, task.ID, strings.Join(idStrsBlocking, ", "))
+			}
+
+			// Check task dependencies: all tasks this task depends on must be COMPLETED.
+			incompleteDeps, depErr := database.GetIncompleteDependencies(ctx, task.ID)
+			if depErr != nil {
+				return depErr
+			}
+			if len(incompleteDeps) > 0 {
+				depStrs := make([]string, len(incompleteDeps))
+				for i, id := range incompleteDeps {
+					depStrs[i] = fmt.Sprintf("#%d", id)
+				}
+				return fmt.Errorf("%w: cannot mark task #%d as COMPLETED: incomplete dependencies: %s",
+					utils.ErrInvalidInput, task.ID, strings.Join(depStrs, ", "))
+			}
 		}
 	}
 

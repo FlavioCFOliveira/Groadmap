@@ -38,6 +38,10 @@ const (
 	// Task specialist operations
 	OpTaskAssign   AuditOperation = "TASK_ASSIGN"
 	OpTaskUnassign AuditOperation = "TASK_UNASSIGN"
+
+	// Task dependency operations
+	OpTaskAddDep    AuditOperation = "TASK_ADD_DEP"
+	OpTaskRemoveDep AuditOperation = "TASK_REMOVE_DEP"
 )
 
 // ValidAuditOperations contains all valid audit operations.
@@ -64,6 +68,8 @@ var ValidAuditOperations = []AuditOperation{
 	OpSprintTaskSwap,
 	OpTaskAssign,
 	OpTaskUnassign,
+	OpTaskAddDep,
+	OpTaskRemoveDep,
 }
 
 // IsValidAuditOperation checks if a string is a valid audit operation.

@@ -19,7 +19,8 @@ type TaskStatsSummary struct {
 
 // RoadmapStats represents comprehensive statistics for a roadmap.
 type RoadmapStats struct {
-	Roadmap string             `json:"roadmap"`
-	Sprints SprintStatsSummary `json:"sprints"`
-	Tasks   TaskStatsSummary   `json:"tasks"`
+	Roadmap         string             `json:"roadmap"`
+	Sprints         SprintStatsSummary `json:"sprints"`
+	Tasks           TaskStatsSummary   `json:"tasks"`
+	AverageVelocity float64            `json:"average_velocity"` // Average tasks/day across last 5 closed sprints (0.0 if none)
 }

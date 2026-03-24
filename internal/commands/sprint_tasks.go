@@ -134,13 +134,26 @@ func sprintStats(args []string) error {
 	ctx, cancel := db.WithQuickTimeout()
 	defer cancel()
 
+	// Get sprint details for velocity/days_elapsed computation.
+	sprint, err := database.GetSprint(ctx, sprintID)
+	if err != nil {
+		return err
+	}
+
 	// Get sprint tasks
 	tasks, err := database.GetSprintTasksFull(ctx, sprintID, nil, false)
 	if err != nil {
 		return err
 	}
 
+	// Compute burndown series from task closed_at dates.
+	burndown, err := database.GetSprintBurndown(ctx, sprintID)
+	if err != nil {
+		return err
+	}
+
 	stats := models.CalculateSprintStats(sprintID, tasks)
+	stats.ApplySprintMetrics(sprint, burndown, utils.NowISO8601())
 	return utils.PrintJSON(stats)
 }
 

@@ -7,7 +7,7 @@ import (
 )
 
 // SchemaVersion is the current database schema version.
-const SchemaVersion = "1.4.0"
+const SchemaVersion = "1.6.0"
 
 // CreateSchema creates all database tables and indexes.
 // This implements the DDL from SPEC/DATABASE.md.
@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     tested_at TEXT,
     closed_at TEXT,
     completion_summary TEXT CHECK(completion_summary IS NULL OR length(completion_summary) <= 4096),
+    parent_task_id INTEGER REFERENCES tasks(id),
 
     -- Group 3: Numeric metadata fields
     priority INTEGER NOT NULL DEFAULT 0 CHECK(priority >= 0 AND priority <= 9),
@@ -46,6 +47,9 @@ CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
 -- Composite indexes for multi-criteria queries (TASK-P001)
 CREATE INDEX IF NOT EXISTS idx_tasks_status_priority ON tasks(status, priority DESC);
 CREATE INDEX IF NOT EXISTS idx_tasks_priority_created ON tasks(priority DESC, created_at ASC);
+
+-- Index for sub-task hierarchy lookups
+CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id ON tasks(parent_task_id);
 `
 
 	// Sprints table
@@ -114,8 +118,22 @@ CREATE TABLE IF NOT EXISTS _metadata (
 );
 `
 
+	// Task dependencies table
+	taskDependenciesDDL := `
+CREATE TABLE IF NOT EXISTS task_dependencies (
+    task_id INTEGER NOT NULL,
+    depends_on_task_id INTEGER NOT NULL,
+    PRIMARY KEY (task_id, depends_on_task_id),
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+    FOREIGN KEY (depends_on_task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_deps_task_id ON task_dependencies(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_deps_depends_on ON task_dependencies(depends_on_task_id);
+`
+
 	// Execute all DDL statements
-	statements := []string{tasksDDL, sprintsDDL, sprintTasksDDL, auditDDL, metadataDDL}
+	statements := []string{tasksDDL, sprintsDDL, sprintTasksDDL, auditDDL, metadataDDL, taskDependenciesDDL}
 	for _, ddl := range statements {
 		if _, err := db.Exec(ddl); err != nil {
 			return fmt.Errorf("executing schema DDL: %w", err)

@@ -9,6 +9,9 @@
 | 2026-03-24 | Update | Added `--summary` flag to `task stat` for completion summary |
 | 2026-03-24 | Update | Added `task reopen` command; restricted `task remove` to BACKLOG only; enforced sequential sprint opening |
 | 2026-03-24 | Update | Added `backlog` command group with `list` and `show-next` subcommands |
+| 2026-03-24 | Update | Added sub-task hierarchy: `--parent` flag on `task create`, `task subtasks <id>` subcommand, parent COMPLETED guard |
+| 2026-03-24 | Update | Added task dependency commands: `task add-dep`, `task remove-dep`, `task blockers`, `task blocking`; COMPLETED guard now checks dependencies |
+| 2026-03-24 | Update | Added velocity, days_elapsed, days_remaining, and burndown fields to `sprint stats`; added average_velocity to `rmp stats` |
 
 ## Naming Conventions
 
@@ -229,6 +232,7 @@ rmp task new -r <name> -t <title> -fr <fr> -tr <tr> -ac <ac>
 - `-p, --priority <0-9>` - Priority (default: 0)
 - `--severity <0-9>` - Severity (default: 0)
 - `-sp, --specialists <list>` - Comma-separated specialists
+- `--parent <id>` - Parent task ID; creates this task as a sub-task of the given parent. The parent must exist.
 
 **Validation Rules:**
 | Field | Constraint | Error Message |
@@ -538,6 +542,121 @@ All batch operations validate ALL IDs before removing any tasks. This is especia
 |----------|-----------|--------|
 | Task in SPRINT, DOING, TESTING, or COMPLETED | 6 | `Error: task #N cannot be deleted — status is X, must be BACKLOG` |
 | Batch with any non-BACKLOG task | 6 | Entire batch rejected, no tasks deleted |
+| Task has subtasks | 6 | `Error: task #N cannot be deleted — it has N subtask(s); remove them first` |
+
+---
+
+### List Subtasks
+
+```bash
+rmp task subtasks -r <name> <id>
+```
+
+**Description:** Returns all direct subtasks of a given task, ordered by priority descending, then created_at ascending.
+
+**Arguments:**
+- `id` - Parent task ID (required, positive integer)
+
+**JSON Output:** Array of Task objects. Empty array if the task has no subtasks.
+
+**Error Conditions:**
+| Scenario | Exit Code | stderr |
+|----------|-----------|--------|
+| Task not found | 4 | `Error: not found: task N` |
+| Invalid ID format | 2 | `Error: invalid task ID: X` |
+
+---
+
+### Add Task Dependency
+
+```bash
+rmp task add-dep -r <name> <task-id> <dep-id>
+```
+
+**Description:** Marks `<task-id>` as depending on `<dep-id>`. The task cannot be marked COMPLETED until `<dep-id>` is COMPLETED. Circular dependencies are rejected.
+
+**Arguments:**
+- `task-id` - ID of the dependent task (required, positive integer)
+- `dep-id` - ID of the task it depends on (required, positive integer)
+
+**Constraints:**
+- A task cannot depend on itself
+- Circular dependency detection: if adding A→B would create a cycle (B already transitively depends on A), the operation is rejected
+- Adding an already-existing dependency is a no-op (idempotent)
+
+**JSON Output:** No stdout output on success, exit code 0.
+
+**Error Conditions:**
+| Scenario | Exit Code | stderr |
+|----------|-----------|--------|
+| Task not found | 4 | `Error: task #N not found: ...` |
+| Self-dependency | 2 | `Error: task cannot depend on itself` |
+| Circular dependency | 2 | `Error: adding dependency would create a circular dependency...` |
+| Missing arguments | 3 | `Error: task ID and dependency ID required` |
+
+---
+
+### Remove Task Dependency
+
+```bash
+rmp task remove-dep -r <name> <task-id> <dep-id>
+```
+
+**Description:** Removes the dependency of `<task-id>` on `<dep-id>`.
+
+**Arguments:**
+- `task-id` - ID of the dependent task (required, positive integer)
+- `dep-id` - ID of the task it depends on (required, positive integer)
+
+**JSON Output:** No stdout output on success, exit code 0.
+
+**Error Conditions:**
+| Scenario | Exit Code | stderr |
+|----------|-----------|--------|
+| Dependency not found | 4 | `Error: dependency from task #N to task #N not found` |
+| Missing arguments | 3 | `Error: task ID and dependency ID required` |
+
+---
+
+### List Task Blockers
+
+```bash
+rmp task blockers -r <name> <id>
+```
+
+**Description:** Returns tasks that are blocking `<id>` — tasks that `<id>` depends on and that are NOT yet COMPLETED.
+
+**Arguments:**
+- `id` - Task ID (required, positive integer)
+
+**JSON Output:** Array of Task objects. Empty array if no blockers.
+
+**Error Conditions:**
+| Scenario | Exit Code | stderr |
+|----------|-----------|--------|
+| Task not found | 4 | `Error: not found: task N` |
+| Invalid ID format | 2 | `Error: invalid task ID: X` |
+
+---
+
+### List Tasks Being Blocked
+
+```bash
+rmp task blocking -r <name> <id>
+```
+
+**Description:** Returns tasks that `<id>` is blocking — tasks that depend on `<id>`.
+
+**Arguments:**
+- `id` - Task ID (required, positive integer)
+
+**JSON Output:** Array of Task objects. Empty array if this task is not blocking anything.
+
+**Error Conditions:**
+| Scenario | Exit Code | stderr |
+|----------|-----------|--------|
+| Task not found | 4 | `Error: not found: task N` |
+| Invalid ID format | 2 | `Error: invalid task ID: X` |
 
 ---
 
@@ -652,12 +771,29 @@ rmp sprint stats -r <name> <id>
     "TESTING": 1,
     "COMPLETED": 3
   },
-  "task_order": [5, 3, 8, 1, 9, 2, 7, 4, 6, 10]
+  "task_order": [5, 3, 8, 1, 9, 2, 7, 4, 6, 10],
+  "velocity": 0.0,
+  "days_elapsed": 5,
+  "days_remaining": null,
+  "burndown": [
+    {"date": "2026-03-19", "tasks_remaining": 10},
+    {"date": "2026-03-21", "tasks_remaining": 8},
+    {"date": "2026-03-24", "tasks_remaining": 7}
+  ]
 }
 ```
 
 **Fields:**
 - `task_order` - Array of task IDs ordered by position (first to last)
+- `velocity` - Tasks completed per day (CLOSED sprints only). 0.0 for OPEN or PENDING sprints, and for CLOSED sprints with no completed tasks
+- `days_elapsed` - Days since the sprint was started (OPEN sprints only). null for PENDING and CLOSED sprints, and for OPEN sprints with no started_at date
+- `days_remaining` - Always null. Sprint model has no end_date field
+- `burndown` - Array of daily snapshots `{date, tasks_remaining}` derived from task `closed_at` dates. Ordered by date ascending. Empty array when no tasks have been completed
+
+**Burndown Computation:**
+- Start with total_tasks as the initial remaining count on the sprint start date (or first completion date if no start date is set)
+- Subtract completions per day based on task `closed_at` timestamps
+- Only includes dates on which at least one task was completed
 
 ### Show Sprint Status Report
 
@@ -1181,7 +1317,8 @@ rmp stats -r <name>
     "doing": 5,
     "testing": 3,
     "completed": 42
-  }
+  },
+  "average_velocity": 2.5
 }
 ```
 
@@ -1199,6 +1336,7 @@ rmp stats -r <name>
 | `tasks.doing` | integer | Number of tasks with status DOING |
 | `tasks.testing` | integer | Number of tasks with status TESTING |
 | `tasks.completed` | integer | Number of tasks with status COMPLETED |
+| `average_velocity` | float64 | Average tasks completed per day across the last 5 closed sprints. 0.0 when no qualifying closed sprints exist |
 
 **Error Cases:**
 
@@ -1211,6 +1349,7 @@ rmp stats -r <name>
 - The `sprints.current` field returns the ID of the sprint with status OPEN, or `null` if no sprint is currently open
 - The `sprints.pending` field reflects sprints with status OPEN (normally only one sprint can be open at a time)
 - The sum of all task statuses equals the total number of tasks in the roadmap
+- `average_velocity` is computed from the last 5 closed sprints that have both `started_at` and `closed_at` set. Sprints with zero completed tasks contribute 0.0. Returns 0.0 when no qualifying sprints exist
 
 ---
 

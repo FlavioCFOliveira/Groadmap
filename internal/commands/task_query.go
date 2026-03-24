@@ -211,3 +211,41 @@ func taskGet(args []string) error {
 
 	return utils.PrintJSON(tasks)
 }
+
+// taskSubtasks returns all direct subtasks of the given task ID.
+func taskSubtasks(args []string) error {
+	roadmapName, remaining, err := requireRoadmap(args)
+	if err != nil {
+		return err
+	}
+
+	if len(remaining) == 0 {
+		return fmt.Errorf("%w: task ID required", utils.ErrRequired)
+	}
+
+	id, err := utils.ValidateIDString(strings.TrimSpace(remaining[0]), "task")
+	if err != nil {
+		return err
+	}
+
+	database, err := db.OpenExisting(roadmapName)
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+
+	ctx, cancel := db.WithQuickTimeout()
+	defer cancel()
+
+	// Verify parent task exists first
+	if _, err := database.GetTask(ctx, id); err != nil {
+		return err
+	}
+
+	subtasks, err := database.GetSubTasks(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	return utils.PrintJSON(subtasks)
+}
