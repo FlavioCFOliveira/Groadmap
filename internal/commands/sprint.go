@@ -41,6 +41,8 @@ func HandleSprint(args []string) error {
 		return sprintReopen(args[1:])
 	case "tasks":
 		return sprintTasks(args[1:])
+	case "open-tasks":
+		return sprintOpenTasks(args[1:])
 	case "stats":
 		return sprintStats(args[1:])
 	case "add-tasks", "add":
@@ -79,6 +81,7 @@ Commands:
   close <id> [--force]            Close sprint (--force bypasses active-task check)
   reopen <id>                     Reopen sprint
   tasks <id> [OPTIONS]            List tasks in sprint (use --order-by-priority for priority ordering)
+  open-tasks <id> [OPTIONS]       List incomplete tasks in sprint (SPRINT, DOING, TESTING only)
   stats <id>                       Show sprint statistics
   add-tasks, add <sprint> <ids>  Add tasks to sprint
   remove-tasks, rm-tasks <sprint> <ids>  Remove tasks from sprint

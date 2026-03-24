@@ -42,6 +42,10 @@ func HandleTask(args []string) error {
 		return taskSetPriority(args[1:])
 	case "sev", "set-severity":
 		return taskSetSeverity(args[1:])
+	case "assign":
+		return taskAssign(args[1:])
+	case "unassign":
+		return taskUnassign(args[1:])
 	default:
 		return fmt.Errorf("%w: unknown task subcommand: %s", utils.ErrInvalidInput, subcommand)
 	}
@@ -62,6 +66,8 @@ Commands:
   reopen <ids>                   Reopen task(s) back to BACKLOG (clears lifecycle timestamps)
   prio, set-priority <ids> <prio>    Set task priority
   sev, set-severity <ids> <sev>     Set task severity
+  assign <id> <specialist>          Add specialist to task (idempotent)
+  unassign <id> <specialist>        Remove specialist from task
 
 Options:
   -r, --roadmap <name>           Roadmap name (or use default)

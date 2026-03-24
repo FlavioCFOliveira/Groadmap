@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
@@ -164,38 +165,77 @@ func (db *DB) GetTasks(ctx context.Context, ids []int) ([]models.Task, error) {
 	return scanTasks(rows)
 }
 
+// TaskListFilter holds all optional filter and sort parameters for ListTasks.
+type TaskListFilter struct {
+	Status       *models.TaskStatus
+	MinPriority  *int
+	MinSeverity  *int
+	TaskType     *models.TaskType
+	Specialists  *string    // case-insensitive partial match against the specialists field
+	CreatedSince *time.Time // inclusive lower bound on created_at
+	CreatedUntil *time.Time // inclusive upper bound on created_at
+	Sort         string     // "priority" (default), "created", "status", "severity"
+	Limit        int
+}
+
 // ListTasks retrieves tasks with optional filters.
-// Returns tasks and error.
-// Filters: status, minPriority, minSeverity
-func (db *DB) ListTasks(ctx context.Context, status *models.TaskStatus, minPriority, minSeverity *int, limit int) ([]models.Task, error) {
-	if limit < 1 {
-		limit = models.DefaultTaskLimit
+// Filters: status, minPriority, minSeverity, taskType, specialists, createdSince, createdUntil, sort, limit.
+func (db *DB) ListTasks(ctx context.Context, filter TaskListFilter) ([]models.Task, error) {
+	if filter.Limit < 1 {
+		filter.Limit = models.DefaultTaskLimit
 	}
-	if limit > models.MaxTaskLimit {
-		limit = models.MaxTaskLimit
+	if filter.Limit > models.MaxTaskLimit {
+		filter.Limit = models.MaxTaskLimit
 	}
 
 	query := `SELECT id, title, status, type, functional_requirements, technical_requirements, acceptance_criteria,
 		        created_at, specialists, started_at, tested_at, closed_at, completion_summary, priority, severity
 		      FROM tasks WHERE 1=1`
-	args := []interface{}{}
+	args := make([]interface{}, 0, 8)
 
-	if status != nil {
+	if filter.Status != nil {
 		query += " AND status = ?"
-		args = append(args, string(*status))
+		args = append(args, string(*filter.Status))
 	}
-	if minPriority != nil {
+	if filter.MinPriority != nil {
 		query += " AND priority >= ?"
-		args = append(args, *minPriority)
+		args = append(args, *filter.MinPriority)
 	}
-	if minSeverity != nil {
+	if filter.MinSeverity != nil {
 		query += " AND severity >= ?"
-		args = append(args, *minSeverity)
+		args = append(args, *filter.MinSeverity)
+	}
+	if filter.TaskType != nil {
+		query += " AND type = ?"
+		args = append(args, string(*filter.TaskType))
+	}
+	if filter.Specialists != nil {
+		// Escape SQL LIKE wildcards in the user-supplied value to prevent accidental pattern expansion.
+		escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(*filter.Specialists)
+		query += ` AND LOWER(COALESCE(specialists, '')) LIKE LOWER(?) ESCAPE '\'`
+		args = append(args, "%"+escaped+"%")
+	}
+	if filter.CreatedSince != nil {
+		query += " AND created_at >= ?"
+		args = append(args, filter.CreatedSince.UTC().Format(time.RFC3339))
+	}
+	if filter.CreatedUntil != nil {
+		query += " AND created_at <= ?"
+		args = append(args, filter.CreatedUntil.UTC().Format(time.RFC3339))
 	}
 
-	query += " ORDER BY priority DESC, created_at ASC"
+	switch filter.Sort {
+	case "created":
+		query += " ORDER BY created_at ASC"
+	case "status":
+		query += " ORDER BY status ASC, priority DESC, created_at ASC"
+	case "severity":
+		query += " ORDER BY severity DESC, priority DESC, created_at ASC"
+	default: // "priority" or empty — matches existing default behaviour
+		query += " ORDER BY priority DESC, created_at ASC"
+	}
 	query += " LIMIT ?"
-	args = append(args, limit)
+	args = append(args, filter.Limit)
 
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -657,7 +697,7 @@ func (db *DB) GetOpenSprint(ctx context.Context) (*models.Sprint, error) {
 }
 
 // GetNextTasks retrieves the next N open tasks from the currently open sprint.
-// Tasks are ordered by sprint task position (task_order).
+// Tasks are ordered by sprint task position (task_order) with priority as a tiebreaker.
 // Only returns tasks with status SPRINT, DOING, or TESTING.
 func (db *DB) GetNextTasks(ctx context.Context, limit int) ([]models.Task, error) {
 	if limit < 1 {
@@ -689,7 +729,7 @@ func (db *DB) GetNextTasks(ctx context.Context, limit int) ([]models.Task, error
 		      INNER JOIN sprint_tasks st ON t.id = st.task_id
 		      WHERE st.sprint_id = ?
 		        AND t.status IN ('SPRINT', 'DOING', 'TESTING')
-		      ORDER BY st.position ASC
+		      ORDER BY st.position ASC, t.priority DESC
 		      LIMIT ?`
 
 	rows, err := db.QueryContext(ctx, query, sprintID, limit)
@@ -1040,6 +1080,34 @@ func (db *DB) GetSprintTasksFull(ctx context.Context, sprintID int, status *mode
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying sprint tasks: %w", err)
+	}
+	defer rows.Close()
+
+	return scanTasks(rows)
+}
+
+// GetOpenSprintTasks retrieves tasks in a sprint that are not yet completed.
+// Returns tasks with status SPRINT, DOING, or TESTING, ordered by sprint position.
+// When orderByPriority is true, tasks are ordered by priority DESC then position ASC.
+// Returns an empty slice (not an error) when the sprint has no open tasks.
+func (db *DB) GetOpenSprintTasks(ctx context.Context, sprintID int, orderByPriority bool) ([]models.Task, error) {
+	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
+		         t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
+		         t.closed_at, t.completion_summary, t.priority, t.severity
+		      FROM tasks t
+		      INNER JOIN sprint_tasks st ON t.id = st.task_id
+		      WHERE st.sprint_id = ?
+		        AND t.status IN ('SPRINT', 'DOING', 'TESTING')`
+
+	if orderByPriority {
+		query += " ORDER BY t.priority DESC, st.position ASC"
+	} else {
+		query += " ORDER BY st.position ASC"
+	}
+
+	rows, err := db.QueryContext(ctx, query, sprintID)
+	if err != nil {
+		return nil, fmt.Errorf("querying open sprint tasks: %w", err)
 	}
 	defer rows.Close()
 

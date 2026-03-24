@@ -60,6 +60,51 @@ func sprintTasks(args []string) error {
 	return utils.PrintJSON(tasks)
 }
 
+// sprintOpenTasks lists incomplete tasks in a sprint (status: SPRINT, DOING, TESTING).
+func sprintOpenTasks(args []string) error {
+	roadmapName, remaining, err := requireRoadmap(args)
+	if err != nil {
+		return err
+	}
+
+	if len(remaining) == 0 {
+		return fmt.Errorf("%w: sprint ID required", utils.ErrRequired)
+	}
+
+	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
+	if err != nil {
+		return err
+	}
+
+	fp := NewFlagParser(SprintTasksFlags)
+	result, err := fp.Parse(remaining[1:])
+	if err != nil {
+		return err
+	}
+	orderByPriority, _ := result.Flags["OrderByPriority"].(bool)
+
+	database, err := db.OpenExisting(roadmapName)
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+
+	ctx, cancel := db.WithQuickTimeout()
+	defer cancel()
+
+	// Verify sprint exists before querying tasks.
+	if _, err = database.GetSprint(ctx, sprintID); err != nil {
+		return err
+	}
+
+	tasks, err := database.GetOpenSprintTasks(ctx, sprintID, orderByPriority)
+	if err != nil {
+		return err
+	}
+
+	return utils.PrintJSON(tasks)
+}
+
 // sprintStats shows sprint statistics.
 func sprintStats(args []string) error {
 	roadmapName, remaining, err := requireRoadmap(args)

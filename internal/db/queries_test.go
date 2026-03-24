@@ -192,7 +192,7 @@ func TestListTasks(t *testing.T) {
 	}
 
 	// Test list all tasks (limit 10)
-	tasks, err := db.ListTasks(testContext(), nil, nil, nil, 10)
+	tasks, err := db.ListTasks(testContext(), TaskListFilter{Limit: 10})
 	if err != nil {
 		t.Fatalf("failed to list tasks: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestListTasks(t *testing.T) {
 
 	// Test filter by status
 	backlogStatus := models.StatusBacklog
-	tasks, err = db.ListTasks(testContext(), &backlogStatus, nil, nil, 10)
+	tasks, err = db.ListTasks(testContext(), TaskListFilter{Status: &backlogStatus, Limit: 10})
 	if err != nil {
 		t.Fatalf("failed to list tasks by status: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestListTasks(t *testing.T) {
 
 	// Test filter by min priority
 	minPriority := 1
-	tasks, err = db.ListTasks(testContext(), nil, &minPriority, nil, 10)
+	tasks, err = db.ListTasks(testContext(), TaskListFilter{MinPriority: &minPriority, Limit: 10})
 	if err != nil {
 		t.Fatalf("failed to list tasks by priority: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestListTasks(t *testing.T) {
 	}
 
 	// Test with limit
-	tasks, err = db.ListTasks(testContext(), nil, nil, nil, 2)
+	tasks, err = db.ListTasks(testContext(), TaskListFilter{Limit: 2})
 	if err != nil {
 		t.Fatalf("failed to list tasks with limit: %v", err)
 	}
@@ -930,7 +930,7 @@ func TestWithTransaction_Commit(t *testing.T) {
 	}
 
 	// Verify task was created
-	tasks, _ := db.ListTasks(testContext(), nil, nil, nil, 10)
+	tasks, _ := db.ListTasks(testContext(), TaskListFilter{Limit: 10})
 	if len(tasks) != 1 {
 		t.Errorf("expected 1 task after commit, got %d", len(tasks))
 	}
@@ -959,7 +959,7 @@ func TestWithTransaction_Rollback(t *testing.T) {
 	}
 
 	// Verify no tasks were created (rolled back)
-	tasks, _ := db.ListTasks(testContext(), nil, nil, nil, 10)
+	tasks, _ := db.ListTasks(testContext(), TaskListFilter{Limit: 10})
 	if len(tasks) != 0 {
 		t.Errorf("expected 0 tasks after rollback, got %d", len(tasks))
 	}

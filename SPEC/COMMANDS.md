@@ -8,6 +8,7 @@
 | 2026-03-23 | Update | Added `stats` command for roadmap statistics |
 | 2026-03-24 | Update | Added `--summary` flag to `task stat` for completion summary |
 | 2026-03-24 | Update | Added `task reopen` command; restricted `task remove` to BACKLOG only; enforced sequential sprint opening |
+| 2026-03-24 | Update | Added `backlog` command group with `list` and `show-next` subcommands |
 
 ## Naming Conventions
 
@@ -185,7 +186,30 @@ rmp task ls -r <name> [OPTIONS]
 - `-s, --status <state>` - Filter by status (BACKLOG, SPRINT, DOING, TESTING, COMPLETED)
 - `-p, --priority <n>` - Filter priority >= n (0-9)
 - `--severity <n>` - Filter severity >= n (0-9)
-- `-l, --limit <n>` - Limit number of results
+- `-l, --limit <n>` - Limit number of results (default: 20, max: 100)
+- `-y, --type <TYPE>` - Filter by task type (USER_STORY, TASK, BUG, SUB_TASK, EPIC, REFACTOR, CHORE, SPIKE, DESIGN_UX, IMPROVEMENT)
+- `-sp, --specialists <name>` - Filter by specialist name (partial match, case-insensitive)
+- `--created-since <date>` - Return tasks created on or after this date (RFC3339 or YYYY-MM-DD)
+- `--created-until <date>` - Return tasks created on or before this date (RFC3339 or YYYY-MM-DD)
+- `--sort <field>` - Sort order: `priority` (default), `created`, `status`, `severity`
+
+**Default Ordering:** Tasks are returned ordered by `priority DESC, created_at ASC`. Higher-priority tasks appear first; equal-priority tasks are ordered by creation date (oldest first).
+
+**Sort Field Ordering:**
+| `--sort` value | ORDER BY |
+|----------------|----------|
+| `priority` (default) | `priority DESC, created_at ASC` |
+| `created` | `created_at ASC` |
+| `status` | `status ASC, priority DESC, created_at ASC` |
+| `severity` | `severity DESC, priority DESC, created_at ASC` |
+
+**Error Conditions:**
+| Input | Exit Code | stderr |
+|-------|-----------|--------|
+| Invalid `--type` value | 1 | `Error: invalid task type: "X"` |
+| Invalid `--sort` value | 1 | `Error: --sort must be one of: priority, created, status, severity` |
+| Invalid `--created-since` format | 1 | `Error: --created-since: invalid date "X"...` |
+| Invalid `--created-until` format | 1 | `Error: --created-until: invalid date "X"...` |
 
 **JSON Output:** Array of Task objects.
 
@@ -255,7 +279,7 @@ rmp task next [num]
 rmp t next [num]
 ```
 
-**Description:** Returns the next N open tasks from the currently open sprint. Tasks are returned in the order defined by the sprint's `task_order` (set via `sprint reorder` or other ordering commands), allowing the team to define execution sequence independent of priority/severity.
+**Description:** Returns the next N open tasks from the currently open sprint. Tasks are returned in the order defined by the sprint's `task_order` (set via `sprint reorder` or other ordering commands). When two tasks share the same sprint position, `priority DESC` is used as a tiebreaker, ensuring higher-priority work surfaces first.
 
 **Arguments:**
 - `num` (optional) - Number of tasks to return. If not provided, defaults to 1.
@@ -584,6 +608,30 @@ rmp sprint tasks -r <name> <id> [--status <state>] [--order-by-priority]
 **Options:**
 - `-s, --status <state>` - Filter by status
 - `--order-by-priority` - Order by priority DESC, severity DESC (legacy ordering)
+
+### List Incomplete Sprint Tasks (open-tasks)
+
+```bash
+rmp sprint open-tasks -r <name> <id> [--order-by-priority]
+```
+
+**Description:** Returns all tasks in a sprint that are not yet completed (status: SPRINT, DOING, or TESTING). Useful during stand-ups and sprint reviews to see remaining work without client-side filtering.
+
+**Arguments:**
+- `id` - Sprint identifier
+
+**Options:**
+- `--order-by-priority` - Order by priority DESC instead of sprint position
+
+**Default Ordering:** Sprint position ASC (same as `sprint tasks`).
+
+**JSON Output:** Array of Task objects with status SPRINT, DOING, or TESTING. Returns an empty array if the sprint has no open tasks.
+
+**Error Conditions:**
+| Scenario | Exit Code | stderr |
+|----------|-----------|--------|
+| Sprint not found | 4 | `Error: resource not found: sprint #N not found` |
+| Missing sprint ID | 1 | `Error: required: sprint ID required` |
 
 ### Sprint Statistics
 
@@ -1031,6 +1079,73 @@ rmp audit stats -r <name> [--since <date>] [--until <date>]
 | `last_entry` | string | ISO 8601 UTC timestamp of the newest audit entry in results |
 | `operations_count` | map[string]int | Count of entries grouped by operation type |
 | `entity_type_count` | map[string]int | Count of entries grouped by entity type |
+
+---
+
+## Backlog Management
+
+Command: `rmp backlog` (alias: `bl`)
+
+**Description:** Dedicated commands for managing and querying tasks in the backlog. All subcommands filter exclusively on tasks with `status == BACKLOG`.
+
+### List Backlog Tasks
+
+```bash
+rmp backlog list -r <name> [OPTIONS]
+rmp backlog ls -r <name> [OPTIONS]
+```
+
+**Description:** Returns all tasks with status `BACKLOG`, with optional filters and sorting.
+
+**Options:**
+- `-r, --roadmap <name>` - Roadmap name (required if no default)
+- `-p, --priority <min>` - Filter by minimum priority value (inclusive)
+- `-y, --type <type>` - Filter by task type (TASK, BUG, FEATURE, IMPROVEMENT, SPIKE)
+- `--sort <field>` - Sort order: `priority` (default), `created`, `status`, `severity`
+- `-l, --limit <n>` - Maximum number of tasks to return
+
+**JSON Output:** Array of Task objects (same format as `rmp task list`).
+
+**Examples:**
+```bash
+rmp backlog list -r groadmap
+rmp backlog list --priority 7 -r groadmap
+rmp backlog list --type BUG -r groadmap
+rmp backlog list --sort priority -r groadmap
+rmp backlog ls --limit 20 -r groadmap
+```
+
+### Show Next Backlog Tasks
+
+```bash
+rmp backlog show-next [count] -r <name>
+```
+
+**Description:** Returns the top N backlog tasks ordered by priority descending (highest priority first) for sprint planning purposes. This is a convenience shortcut equivalent to `backlog list --sort priority --limit <count>`.
+
+**Arguments:**
+- `count` - Number of tasks to return (default: 5, max: 100)
+
+**Options:**
+- `-r, --roadmap <name>` - Roadmap name (required if no default)
+
+**JSON Output:** Array of Task objects ordered by priority descending.
+
+**Examples:**
+```bash
+rmp backlog show-next -r groadmap
+rmp backlog show-next 5 -r groadmap
+rmp backlog show-next 10 -r groadmap
+```
+
+**Error Conditions:**
+
+| Condition | Exit Code | Message |
+|-----------|-----------|---------|
+| Roadmap not found | 4 | `Error: roadmap "<name>" not found` |
+| Invalid type value | 6 | `Error: invalid task type: <value>` |
+| Invalid sort value | 6 | `Error: --sort must be one of: priority, created, status, severity` |
+| Invalid count (show-next) | 6 | `Error: count must be a positive integer` |
 
 ---
 

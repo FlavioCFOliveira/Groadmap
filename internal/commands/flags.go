@@ -241,6 +241,11 @@ var (
 		{Name: "--priority", Short: "-p", Field: "Priority", Type: "int"},
 		{Name: "--severity", Field: "Severity", Type: "int"},
 		{Name: "--limit", Short: "-l", Field: "Limit", Type: "int"},
+		{Name: "--type", Short: "-y", Field: "Type", Type: "string"},
+		{Name: "--specialists", Short: "-sp", Field: "Specialists", Type: "string"},
+		{Name: "--created-since", Field: "CreatedSince", Type: "string"},
+		{Name: "--created-until", Field: "CreatedUntil", Type: "string"},
+		{Name: "--sort", Field: "Sort", Type: "string"},
 	}
 
 	// SprintCreateFlags defines flags for sprint creation and update.

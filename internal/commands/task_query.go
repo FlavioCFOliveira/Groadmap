@@ -4,11 +4,35 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
+
+// validSortFields holds the accepted values for the --sort flag.
+var validSortFields = map[string]bool{
+	"priority": true,
+	"created":  true,
+	"status":   true,
+	"severity": true,
+}
+
+// parseFilterDate parses a date string for --created-since / --created-until.
+// Accepts full ISO 8601 / RFC3339 strings and date-only strings (YYYY-MM-DD).
+// Date-only values are interpreted as the start of that day in UTC.
+func parseFilterDate(s string) (time.Time, error) {
+	t, err := utils.ParseISO8601(s)
+	if err == nil {
+		return t, nil
+	}
+	t, dateErr := time.Parse("2006-01-02", s)
+	if dateErr != nil {
+		return time.Time{}, fmt.Errorf("invalid date %q: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01)", s)
+	}
+	return t.UTC(), nil
+}
 
 // taskList lists tasks with optional filters.
 func taskList(args []string) error {
@@ -23,29 +47,56 @@ func taskList(args []string) error {
 		return err
 	}
 
-	var status *models.TaskStatus
+	filter := db.TaskListFilter{Limit: models.DefaultTaskLimit}
+
 	if statusStr, ok := result.Flags["Status"].(string); ok {
 		s, parseErr := models.ParseTaskStatus(statusStr)
 		if parseErr != nil {
 			return parseErr
 		}
-		status = &s
+		filter.Status = &s
 	}
-
-	var minPriority, minSeverity *int
 	if p, ok := result.Flags["Priority"].(int); ok {
-		minPriority = &p
+		filter.MinPriority = &p
 	}
 	if s, ok := result.Flags["Severity"].(int); ok {
-		minSeverity = &s
+		filter.MinSeverity = &s
 	}
-
-	limit := models.DefaultTaskLimit
 	if l, ok := result.Flags["Limit"].(int); ok {
 		if l < 1 || l > models.MaxTaskLimit {
 			return fmt.Errorf("%w: limit must be between 1 and %d", utils.ErrInvalidInput, models.MaxTaskLimit)
 		}
-		limit = l
+		filter.Limit = l
+	}
+	if typeStr, ok := result.Flags["Type"].(string); ok {
+		tt, parseErr := models.ParseTaskType(typeStr)
+		if parseErr != nil {
+			return parseErr
+		}
+		filter.TaskType = &tt
+	}
+	if sp, ok := result.Flags["Specialists"].(string); ok {
+		filter.Specialists = &sp
+	}
+	if sinceStr, ok := result.Flags["CreatedSince"].(string); ok {
+		t, parseErr := parseFilterDate(sinceStr)
+		if parseErr != nil {
+			return fmt.Errorf("%w: --created-since: %v", utils.ErrInvalidInput, parseErr)
+		}
+		filter.CreatedSince = &t
+	}
+	if untilStr, ok := result.Flags["CreatedUntil"].(string); ok {
+		t, parseErr := parseFilterDate(untilStr)
+		if parseErr != nil {
+			return fmt.Errorf("%w: --created-until: %v", utils.ErrInvalidInput, parseErr)
+		}
+		filter.CreatedUntil = &t
+	}
+	if sortStr, ok := result.Flags["Sort"].(string); ok {
+		if !validSortFields[sortStr] {
+			return fmt.Errorf("%w: --sort must be one of: priority, created, status, severity", utils.ErrInvalidInput)
+		}
+		filter.Sort = sortStr
 	}
 
 	database, err := db.OpenExisting(roadmapName)
@@ -57,7 +108,7 @@ func taskList(args []string) error {
 	ctx, cancel := db.WithDefaultTimeout()
 	defer cancel()
 
-	tasks, err := database.ListTasks(ctx, status, minPriority, minSeverity, limit)
+	tasks, err := database.ListTasks(ctx, filter)
 	if err != nil {
 		return err
 	}

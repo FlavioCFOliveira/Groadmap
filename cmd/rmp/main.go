@@ -7,6 +7,7 @@
 //	roadmap    Manage roadmaps (alias: road)
 //	task       Manage tasks (alias: t)
 //	sprint     Manage sprints (alias: s)
+//	backlog    Manage backlog tasks (alias: bl)
 //	audit      View audit log (alias: aud)
 //	stats      View roadmap statistics
 //
@@ -87,6 +88,8 @@ func main() {
 		err = commands.HandleTask(os.Args[2:])
 	case "sprint", "s":
 		err = commands.HandleSprint(os.Args[2:])
+	case "backlog", "bl":
+		err = commands.HandleBacklog(os.Args[2:])
 	case "audit", "aud":
 		err = commands.HandleAudit(os.Args[2:])
 	case "stats":
@@ -161,6 +164,7 @@ Commands:
   roadmap, road    Manage roadmaps
   task, t          Manage tasks
   sprint, s        Manage sprints
+  backlog, bl      Manage backlog tasks
   audit, aud       View audit log
   stats            View roadmap statistics
 
