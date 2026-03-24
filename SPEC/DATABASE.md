@@ -39,12 +39,14 @@ Each roadmap is stored in an individual SQLite file. The schema is designed to b
 |  - description (TEXT)                  |
 |  - created_at (TEXT ISO8601)           |
 |  - started_at (TEXT ISO8601, NULL)     |
-|  - closed_at (TEXT ISO8601, NULL)    |
+|  - closed_at (TEXT ISO8601, NULL)      |
+|  - max_tasks (INTEGER, NULL)           |
 +----------------------------------------+
 |           sprint_tasks                 |
 |  - sprint_id (FK → sprints.id)         |
 |  - task_id (FK → tasks.id)             |
 |  - added_at (TEXT ISO8601)             |
+|  - position (INTEGER)                  |
 |  - Composite PK (sprint_id, task_id)   |
 +----------------------------------------+
 |           audit                        |
@@ -123,7 +125,8 @@ CREATE TABLE IF NOT EXISTS sprints (
     description TEXT NOT NULL,
     created_at TEXT NOT NULL,  -- ISO 8601 UTC
     started_at TEXT,           -- ISO 8601 UTC, NULL if not started
-    closed_at TEXT             -- ISO 8601 UTC, NULL if not closed
+    closed_at TEXT,            -- ISO 8601 UTC, NULL if not closed
+    max_tasks INTEGER          -- NULL means unlimited capacity
 );
 
 -- Indexes

@@ -143,6 +143,7 @@ PENDING → OPEN → CLOSED
   "id": 1,
   "title": "Implement JWT authentication system",
   "status": "BACKLOG",
+  "type": "USER_STORY",
   "functional_requirements": "Users must be able to authenticate securely",
   "technical_requirements": "Create authentication module with JWT token support",
   "acceptance_criteria": "Functional login with 24h valid tokens; proper error handling",
@@ -151,8 +152,13 @@ PENDING → OPEN → CLOSED
   "started_at": null,
   "tested_at": null,
   "closed_at": null,
+  "completion_summary": null,
+  "parent_task_id": null,
   "priority": 9,
-  "severity": 0
+  "severity": 0,
+  "subtask_count": 0,
+  "depends_on": [],
+  "blocks": []
 }
 ```
 
@@ -167,11 +173,12 @@ PENDING → OPEN → CLOSED
   "task_count": 4,
   "created_at": "2026-03-12T09:00:00.000Z",
   "started_at": "2026-03-12T10:00:00.000Z",
-  "closed_at": null
+  "closed_at": null,
+  "max_tasks": 10
 }
 ```
 
-**Note:** The `tasks` and `task_count` fields are computed at runtime from the `sprint_tasks` junction table and are not stored in the `sprints` table.
+**Note:** The `tasks` and `task_count` fields are computed at runtime from the `sprint_tasks` junction table and are not stored in the `sprints` table. The `max_tasks` field is `null` when no capacity limit is set.
 
 ### Audit Entry
 

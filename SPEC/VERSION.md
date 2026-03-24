@@ -5,7 +5,7 @@
 | Component | Version | File |
 |-----------|---------|------|
 | Application | v1.1.0 | `cmd/rmp/main.go` |
-| Database Schema | v1.1.0 | `internal/db/schema.go` |
+| Database Schema | v1.6.0 | `internal/db/schema.go` |
 | Specification | v1.1.0 | `SPEC/` |
 
 ## Versioning Strategy
@@ -28,7 +28,7 @@ This version is:
 The database schema version is managed separately via `internal/db/schema.go`:
 
 ```go
-const SchemaVersion = "1.1.0"
+const SchemaVersion = "1.6.0"
 ```
 
 - Used for database migrations
@@ -83,5 +83,6 @@ This independence allows:
 
 | Date | Application | Schema | Description |
 |------|-------------|--------|-------------|
+| 2026-03-24 | v1.1.0 | v1.6.0 | Sub-task hierarchy, task dependencies, sprint velocity, sprint show, capacity management |
 | 2026-03-20 | v1.1.0 | v1.1.0 | Added sprint task ordering (position column) |
 | 2026-03-20 | v1.0.0 | v1.0.0 | Initial release |

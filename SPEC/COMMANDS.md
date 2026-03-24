@@ -702,9 +702,13 @@ rmp sprint ls -r <name>
 ### Create Sprint
 
 ```bash
-rmp sprint create -r <name> -d "Description"
-rmp sprint new -r <name> -d "Description"
+rmp sprint create -r <name> -d "Description" [--max-tasks <n>]
+rmp sprint new -r <name> -d "Description" [--max-tasks <n>]
 ```
+
+**Options:**
+- `-d, --description <text>` - Sprint description (required)
+- `--max-tasks <n>` - Maximum number of tasks allowed in the sprint (optional; omit for unlimited capacity)
 
 **Output (success):** `{"id": 1}`, exit code 0.
 
@@ -1065,9 +1069,15 @@ rmp sprint bottom -r <name> <sprint-id> <task-id>
 ### Update Sprint
 
 ```bash
-rmp sprint update -r <name> <id> -d "New Description"
-rmp sprint upd -r <name> <id> -d "New Description"
+rmp sprint update -r <name> <id> [-d "New Description"] [--max-tasks <n>]
+rmp sprint upd -r <name> <id> [-d "New Description"] [--max-tasks <n>]
 ```
+
+**Options:**
+- `-d, --description <text>` - New sprint description
+- `--max-tasks <n>` - New capacity limit (positive integer)
+
+At least one of `--description` or `--max-tasks` is required.
 
 **Output (success):** No output, exit code 0.
 

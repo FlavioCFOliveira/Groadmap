@@ -137,6 +137,7 @@ type Sprint struct {
     CreatedAt   string       `json:"created_at"`
     StartedAt   *string      `json:"started_at"`       // Nullable
     ClosedAt    *string      `json:"closed_at"`        // Nullable
+    MaxTasks    *int         `json:"max_tasks"`        // Nullable; NULL means unlimited capacity
 }
 ```
 
@@ -229,38 +230,80 @@ type SprintStats struct {
 - Decrements remaining count by completions per day
 - Only dates with at least one completion are included
 
-### Sprint Task Order
+### Sprint Show Result
 
-Represents the ordering of a task within a sprint. Used for sprint task sequence operations.
+Used for the `rmp sprint show` command. Provides a comprehensive sprint status report.
 
 ```go
-type SprintTaskOrder struct {
-    TaskID   int `json:"task_id"`   // Task identifier
-    Position int `json:"position"` // 0-based position in sprint task order
+// SeverityRangeCount represents count and percentage for a severity range.
+type SeverityRangeCount struct {
+    Count      int     `json:"count"`
+    Percentage float64 `json:"percentage"`
+}
+
+// SeverityDistribution represents task distribution by severity ranges.
+type SeverityDistribution struct {
+    Range0To2 SeverityRangeCount `json:"0-2"`
+    Range3To5 SeverityRangeCount `json:"3-5"`
+    Range6To7 SeverityRangeCount `json:"6-7"`
+    Range8To9 SeverityRangeCount `json:"8-9"`
+}
+
+// CriticalityDistribution represents task distribution by criticality level.
+type CriticalityDistribution struct {
+    Low      SeverityRangeCount `json:"low"`
+    Medium   SeverityRangeCount `json:"medium"`
+    High     SeverityRangeCount `json:"high"`
+    Critical SeverityRangeCount `json:"critical"`
+}
+
+// SprintSummary represents the task count summary for a sprint.
+type SprintSummary struct {
+    TotalTasks int `json:"total_tasks"`
+    Pending    int `json:"pending"`
+    InProgress int `json:"in_progress"`
+    Completed  int `json:"completed"`
+}
+
+// SprintProgress represents the progress percentages for a sprint.
+type SprintProgress struct {
+    PendingPercentage    float64 `json:"pending_percentage"`
+    InProgressPercentage float64 `json:"in_progress_percentage"`
+    CompletedPercentage  float64 `json:"completed_percentage"`
+}
+
+// SprintShowResult represents a comprehensive sprint status report.
+// Used for the 'rmp sprint show' command.
+type SprintShowResult struct {
+    SprintID                int                     `json:"sprint_id"`
+    SprintDescription       string                  `json:"sprint_description"`
+    Status                  SprintStatus            `json:"status"`
+    Summary                 SprintSummary           `json:"summary"`
+    Progress                SprintProgress          `json:"progress"`
+    SeverityDistribution    SeverityDistribution    `json:"severity_distribution"`
+    CriticalityDistribution CriticalityDistribution `json:"criticality_distribution"`
+    TaskOrder               []int                   `json:"task_order"`   // Task IDs ordered by position
+    CurrentLoad             int                     `json:"current_load"` // Number of tasks currently in sprint
+    MaxTasks                *int                    `json:"max_tasks"`    // Nullable; NULL means unlimited
+    CapacityPct             *float64                `json:"capacity_pct"` // Nullable; NULL when max_tasks is unset
 }
 ```
 
-### Sprint Task with Order
+**Field Descriptions:**
 
-Represents a task within a sprint including its position. Used for sprint task listings.
-
-```go
-type SprintTask struct {
-    Task
-    Position int `json:"position"` // 0-based position in sprint task order
-}
-```
-
-### Sprint Task Reorder Request
-
-Represents a request to reorder sprint tasks.
-
-```go
-type SprintTaskReorderRequest struct {
-    SprintID int   `json:"sprint_id"` // Sprint identifier
-    TaskIDs  []int `json:"task_ids"`  // Ordered list of task IDs defining new sequence
-}
-```
+| Field | Type | Description |
+|-------|------|-------------|
+| `sprint_id` | int | Sprint identifier |
+| `sprint_description` | string | Sprint description text |
+| `status` | SprintStatus | Current sprint status |
+| `summary` | SprintSummary | Task counts by category (pending, in_progress, completed) |
+| `progress` | SprintProgress | Percentage breakdown of task categories |
+| `severity_distribution` | SeverityDistribution | Task counts per severity range (0-2, 3-5, 6-7, 8-9) |
+| `criticality_distribution` | CriticalityDistribution | Task counts per criticality level (low, medium, high, critical) |
+| `task_order` | []int | Task IDs ordered by position (ascending) |
+| `current_load` | int | Total number of tasks in the sprint |
+| `max_tasks` | *int | Capacity limit; null when unlimited |
+| `capacity_pct` | *float64 | `(current_load / max_tasks) * 100`; null when `max_tasks` is null |
 
 ### Roadmap Stats
 
