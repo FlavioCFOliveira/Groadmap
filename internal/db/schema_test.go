@@ -63,8 +63,8 @@ func TestSchemaVersion(t *testing.T) {
 		t.Fatalf("failed to get schema version: %v", err)
 	}
 
-	if version != "1.2.0" {
-		t.Errorf("expected schema version 1.2.0, got %s", version)
+	if version != "1.3.0" {
+		t.Errorf("expected schema version 1.3.0, got %s", version)
 	}
 }
 

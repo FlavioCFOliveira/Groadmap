@@ -44,8 +44,8 @@ func (db *DB) CreateTask(ctx context.Context, task *models.Task) (int, error) {
 		}
 
 		result, err := db.ExecContext(ctx,
-			`INSERT INTO tasks (title, status, type, functional_requirements, technical_requirements, acceptance_criteria, created_at, specialists, priority, severity)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO tasks (title, status, type, functional_requirements, technical_requirements, acceptance_criteria, created_at, specialists, priority, severity, completion_summary)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
 			task.Title,
 			task.Status,
 			taskType,
@@ -84,10 +84,11 @@ func (db *DB) GetTask(ctx context.Context, id int) (*models.Task, error) {
 	var startedAt sql.NullString
 	var testedAt sql.NullString
 	var closedAt sql.NullString
+	var completionSummary sql.NullString
 
 	err := db.QueryRowContext(ctx,
 		`SELECT id, title, status, type, functional_requirements, technical_requirements, acceptance_criteria,
-		        created_at, specialists, started_at, tested_at, closed_at, priority, severity
+		        created_at, specialists, started_at, tested_at, closed_at, completion_summary, priority, severity
 		 FROM tasks WHERE id = ?`,
 		id,
 	).Scan(
@@ -103,6 +104,7 @@ func (db *DB) GetTask(ctx context.Context, id int) (*models.Task, error) {
 		&startedAt,
 		&testedAt,
 		&closedAt,
+		&completionSummary,
 		&task.Priority,
 		&task.Severity,
 	)
@@ -126,6 +128,9 @@ func (db *DB) GetTask(ctx context.Context, id int) (*models.Task, error) {
 	if closedAt.Valid {
 		task.ClosedAt = &closedAt.String
 	}
+	if completionSummary.Valid {
+		task.CompletionSummary = &completionSummary.String
+	}
 
 	return &task, nil
 }
@@ -145,7 +150,7 @@ func (db *DB) GetTasks(ctx context.Context, ids []int) ([]models.Task, error) {
 
 	query := fmt.Sprintf(
 		`SELECT id, title, status, type, functional_requirements, technical_requirements, acceptance_criteria,
-		        created_at, specialists, started_at, tested_at, closed_at, priority, severity
+		        created_at, specialists, started_at, tested_at, closed_at, completion_summary, priority, severity
 		 FROM tasks WHERE id IN (%s) ORDER BY id`,
 		placeholders,
 	)
@@ -171,7 +176,7 @@ func (db *DB) ListTasks(ctx context.Context, status *models.TaskStatus, minPrior
 	}
 
 	query := `SELECT id, title, status, type, functional_requirements, technical_requirements, acceptance_criteria,
-		        created_at, specialists, started_at, tested_at, closed_at, priority, severity
+		        created_at, specialists, started_at, tested_at, closed_at, completion_summary, priority, severity
 		      FROM tasks WHERE 1=1`
 	args := []interface{}{}
 
@@ -527,6 +532,7 @@ func scanTasks(rows *sql.Rows) ([]models.Task, error) {
 	var startedAt sql.NullString
 	var testedAt sql.NullString
 	var closedAt sql.NullString
+	var completionSummary sql.NullString
 
 	for rows.Next() {
 		var task models.Task
@@ -536,6 +542,7 @@ func scanTasks(rows *sql.Rows) ([]models.Task, error) {
 		startedAt = sql.NullString{}
 		testedAt = sql.NullString{}
 		closedAt = sql.NullString{}
+		completionSummary = sql.NullString{}
 
 		err := rows.Scan(
 			&task.ID,
@@ -550,6 +557,7 @@ func scanTasks(rows *sql.Rows) ([]models.Task, error) {
 			&startedAt,
 			&testedAt,
 			&closedAt,
+			&completionSummary,
 			&task.Priority,
 			&task.Severity,
 		)
@@ -568,6 +576,9 @@ func scanTasks(rows *sql.Rows) ([]models.Task, error) {
 		}
 		if closedAt.Valid {
 			task.ClosedAt = &closedAt.String
+		}
+		if completionSummary.Valid {
+			task.CompletionSummary = &completionSummary.String
 		}
 
 		tasks = append(tasks, task)
@@ -667,7 +678,7 @@ func (db *DB) GetNextTasks(ctx context.Context, limit int) ([]models.Task, error
 	// Get open tasks from the sprint, ordered by sprint task position
 	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
 		         t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
-		         t.closed_at, t.priority, t.severity
+		         t.closed_at, t.completion_summary, t.priority, t.severity
 		      FROM tasks t
 		      INNER JOIN sprint_tasks st ON t.id = st.task_id
 		      WHERE st.sprint_id = ?
@@ -969,7 +980,7 @@ func (db *DB) GetSprintTasks(ctx context.Context, sprintID int) ([]int, error) {
 func (db *DB) GetSprintTasksFull(ctx context.Context, sprintID int, status *models.TaskStatus, orderByPriority bool) ([]models.Task, error) {
 	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
 		         t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
-		         t.closed_at, t.priority, t.severity
+		         t.closed_at, t.completion_summary, t.priority, t.severity
 		      FROM tasks t
 		      INNER JOIN sprint_tasks st ON t.id = st.task_id
 		      WHERE st.sprint_id = ?`

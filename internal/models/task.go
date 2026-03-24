@@ -198,6 +198,7 @@ const (
 	MaxTaskTechnicalRequirements  = 4096
 	MaxTaskAcceptanceCriteria     = 4096
 	MaxTaskSpecialists            = 500
+	MaxTaskCompletionSummary      = 4096
 )
 
 // Task represents a task in the roadmap.
@@ -213,11 +214,12 @@ type Task struct {
 	AcceptanceCriteria     string     `json:"acceptance_criteria"`     // How to verify: completion criteria
 	CreatedAt              string     `json:"created_at"`              // ISO 8601 UTC, auto-set on creation
 
-	// Group 2: Nullable tracking fields - lifecycle timestamps (32 bytes total)
-	Specialists *string `json:"specialists"` // Comma-separated specialists
-	StartedAt   *string `json:"started_at"`  // ISO 8601 UTC, auto-set on DOING transition
-	TestedAt    *string `json:"tested_at"`   // ISO 8601 UTC, auto-set on TESTING transition
-	ClosedAt    *string `json:"closed_at"`   // ISO 8601 UTC, auto-set on COMPLETED transition
+	// Group 2: Nullable tracking fields - lifecycle timestamps (40 bytes total)
+	Specialists       *string `json:"specialists"`        // Comma-separated specialists
+	StartedAt         *string `json:"started_at"`         // ISO 8601 UTC, auto-set on DOING transition
+	TestedAt          *string `json:"tested_at"`          // ISO 8601 UTC, auto-set on TESTING transition
+	ClosedAt          *string `json:"closed_at"`          // ISO 8601 UTC, auto-set on COMPLETED transition
+	CompletionSummary *string `json:"completion_summary"` // Optional summary set on TESTING → COMPLETED transition
 
 	// Group 3: Numeric metadata fields (24 bytes total)
 	ID       int `json:"id"`       // Primary key

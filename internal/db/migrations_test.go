@@ -219,3 +219,44 @@ func TestMigrationFuncType(t *testing.T) {
 		t.Error("MigrationFunc should not be nil")
 	}
 }
+
+func TestMigrateV1_2_0_toV1_3_0(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// Create schema (sets version to current SchemaVersion)
+	if err := db.CreateSchema(); err != nil {
+		t.Fatalf("CreateSchema failed: %v", err)
+	}
+
+	// completion_summary column must exist in the fresh schema
+	var colType string
+	err := db.QueryRow(
+		`SELECT type FROM pragma_table_info('tasks') WHERE name = 'completion_summary'`,
+	).Scan(&colType)
+	if err != nil {
+		t.Fatalf("completion_summary column not found after CreateSchema: %v", err)
+	}
+
+	// Schema version must be 1.3.0
+	version, err := db.GetSchemaVersion()
+	if err != nil {
+		t.Fatalf("GetSchemaVersion failed: %v", err)
+	}
+	if version != "1.3.0" {
+		t.Errorf("schema_version = %q, want %q", version, "1.3.0")
+	}
+
+	// Running migrations again must be idempotent
+	if err := db.RunMigrations(); err != nil {
+		t.Fatalf("RunMigrations (idempotency check) failed: %v", err)
+	}
+
+	version, err = db.GetSchemaVersion()
+	if err != nil {
+		t.Fatalf("GetSchemaVersion after idempotent run failed: %v", err)
+	}
+	if version != "1.3.0" {
+		t.Errorf("schema_version after idempotent migration = %q, want %q", version, "1.3.0")
+	}
+}

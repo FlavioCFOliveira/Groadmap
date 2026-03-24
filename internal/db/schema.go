@@ -7,7 +7,7 @@ import (
 )
 
 // SchemaVersion is the current database schema version.
-const SchemaVersion = "1.2.0"
+const SchemaVersion = "1.3.0"
 
 // CreateSchema creates all database tables and indexes.
 // This implements the DDL from SPEC/DATABASE.md.
@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     started_at TEXT,
     tested_at TEXT,
     closed_at TEXT,
+    completion_summary TEXT CHECK(completion_summary IS NULL OR length(completion_summary) <= 4096),
 
     -- Group 3: Numeric metadata fields
     priority INTEGER NOT NULL DEFAULT 0 CHECK(priority >= 0 AND priority <= 9),

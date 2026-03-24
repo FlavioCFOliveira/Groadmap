@@ -29,6 +29,11 @@ var migrations = []Migration{
 		Name:    "Add partial unique index to enforce at most one OPEN sprint",
 		Apply:   migrateV1_1_0_toV1_2_0,
 	},
+	{
+		Version: "1.3.0",
+		Name:    "Add completion_summary column to tasks table",
+		Apply:   migrateV1_2_0_toV1_3_0,
+	},
 }
 
 // RunMigrations executes all pending migrations in a transaction.
@@ -135,6 +140,19 @@ func migrateV1_1_0_toV1_2_0(tx *sql.Tx) error {
 	)
 	if err != nil {
 		return fmt.Errorf("creating idx_one_open_sprint: %w", err)
+	}
+	return nil
+}
+
+// migrateV1_2_0_toV1_3_0 adds the completion_summary column to the tasks table.
+// The column is optional (NULL by default) and capped at 4096 characters.
+// The migration is idempotent: ALTER TABLE … ADD COLUMN is a no-op when the column already exists in SQLite.
+func migrateV1_2_0_toV1_3_0(tx *sql.Tx) error {
+	_, err := tx.Exec(
+		`ALTER TABLE tasks ADD COLUMN completion_summary TEXT CHECK(completion_summary IS NULL OR length(completion_summary) <= 4096)`,
+	)
+	if err != nil {
+		return fmt.Errorf("adding completion_summary column: %w", err)
 	}
 	return nil
 }

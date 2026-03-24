@@ -220,7 +220,7 @@ CREATE TABLE IF NOT EXISTS _metadata (
 
 -- Insert schema version on creation
 INSERT INTO _metadata (key, value) VALUES
-    ('schema_version', '1.2.0'),
+    ('schema_version', '1.3.0'),
     ('created_at', '2026-03-20T00:00:00.000Z'),
     ('application', 'Groadmap');
 ```
@@ -1153,7 +1153,8 @@ The `_metadata` table enables future schema versioning.
 |---------|------|---------|
 | 1.0.0 | 2026-03-20 | Initial schema |
 | 1.1.0 | 2026-03-20 | Added sprint_tasks position column and idx_sprint_tasks_order index |
-| 1.2.0 | 2026-03-24 | Added completion_summary column to tasks table |
+| 1.2.0 | 2026-03-24 | Added partial unique index to enforce at most one OPEN sprint |
+| 1.3.0 | 2026-03-24 | Added completion_summary column to tasks table |
 
 ### Migration Commands
 
@@ -1162,15 +1163,25 @@ The `_metadata` table enables future schema versioning.
 SELECT value FROM _metadata WHERE key = 'schema_version';
 
 -- Update version after migration
-UPDATE _metadata SET value = '1.2.0' WHERE key = 'schema_version';
+UPDATE _metadata SET value = '1.3.0' WHERE key = 'schema_version';
 ```
 
 ### Migration 1.1.0 → 1.2.0
+
+```sql
+-- Enforce at most one OPEN sprint at a time
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_open_sprint ON sprints(status) WHERE status = 'OPEN';
+
+-- Update schema version
+UPDATE _metadata SET value = '1.2.0' WHERE key = 'schema_version';
+```
+
+### Migration 1.2.0 → 1.3.0
 
 ```sql
 -- Add completion_summary column to existing databases
 ALTER TABLE tasks ADD COLUMN completion_summary TEXT CHECK(completion_summary IS NULL OR length(completion_summary) <= 4096);
 
 -- Update schema version
-UPDATE _metadata SET value = '1.2.0' WHERE key = 'schema_version';
+UPDATE _metadata SET value = '1.3.0' WHERE key = 'schema_version';
 ```

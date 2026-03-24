@@ -132,6 +132,24 @@ func taskSetStatus(args []string) error {
 		return err
 	}
 
+	// Extract --summary / -s flag before positional arg parsing.
+	// Fail-fast: all validation happens before any database operation.
+	var completionSummary *string
+	filtered := make([]string, 0, len(remaining))
+	for i := 0; i < len(remaining); i++ {
+		if remaining[i] == "--summary" || remaining[i] == "-s" {
+			if i+1 >= len(remaining) {
+				return fmt.Errorf("%w: --summary requires a value", utils.ErrRequired)
+			}
+			s := remaining[i+1]
+			completionSummary = &s
+			i++ // consume the value
+		} else {
+			filtered = append(filtered, remaining[i])
+		}
+	}
+	remaining = filtered
+
 	if len(remaining) < 2 {
 		return fmt.Errorf("%w: task ID(s) and status required", utils.ErrRequired)
 	}
@@ -151,6 +169,15 @@ func taskSetStatus(args []string) error {
 	newStatus, err := models.ParseTaskStatus(remaining[1])
 	if err != nil {
 		return err
+	}
+
+	// Fail-fast validation for --summary (step 2: before ID/DB verification).
+	// --summary is only meaningful on the TESTING → COMPLETED transition.
+	if completionSummary != nil && newStatus != models.StatusCompleted {
+		return fmt.Errorf("%w: --summary is only valid when transitioning to COMPLETED", utils.ErrInvalidInput)
+	}
+	if completionSummary != nil && len(*completionSummary) > models.MaxTaskCompletionSummary {
+		return fmt.Errorf("%w: completion_summary exceeds maximum length of %d characters", utils.ErrFieldTooLarge, models.MaxTaskCompletionSummary)
 	}
 
 	database, err := db.OpenExisting(roadmapName)
@@ -185,8 +212,8 @@ func taskSetStatus(args []string) error {
 		// Per SPEC/STATE_MACHINE.md:
 		// - DOING: set started_at
 		// - TESTING: set tested_at
-		// - COMPLETED: set closed_at
-		// - BACKLOG: clear all tracking dates
+		// - COMPLETED: set closed_at and completion_summary (nil → NULL)
+		// - BACKLOG: clear all tracking dates (completion_summary cleared in task #96)
 		var query string
 		var args []interface{}
 
@@ -198,7 +225,7 @@ func taskSetStatus(args []string) error {
 		switch newStatus {
 		case models.StatusDoing:
 			// Transition to DOING: set started_at
-			query = fmt.Sprintf(
+			query = fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
 				"UPDATE tasks SET status = ?, started_at = ? WHERE id IN (%s)",
 				strings.Join(placeholders, ","),
 			)
@@ -206,31 +233,32 @@ func taskSetStatus(args []string) error {
 
 		case models.StatusTesting:
 			// Transition to TESTING: set tested_at
-			query = fmt.Sprintf(
+			query = fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
 				"UPDATE tasks SET status = ?, tested_at = ? WHERE id IN (%s)",
 				strings.Join(placeholders, ","),
 			)
 			args = append([]interface{}{newStatus, now}, makeInterfaceSlice(ids)...)
 
 		case models.StatusCompleted:
-			// Transition to COMPLETED: set closed_at
-			query = fmt.Sprintf(
-				"UPDATE tasks SET status = ?, closed_at = ? WHERE id IN (%s)",
+			// Transition to COMPLETED: set closed_at and completion_summary.
+			// completionSummary is *string: nil becomes SQL NULL, non-nil becomes the string value.
+			query = fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
+				"UPDATE tasks SET status = ?, closed_at = ?, completion_summary = ? WHERE id IN (%s)",
 				strings.Join(placeholders, ","),
 			)
-			args = append([]interface{}{newStatus, now}, makeInterfaceSlice(ids)...)
+			args = append([]interface{}{newStatus, now, completionSummary}, makeInterfaceSlice(ids)...)
 
 		case models.StatusBacklog:
-			// Reopening to BACKLOG: clear all tracking dates
-			query = fmt.Sprintf(
-				"UPDATE tasks SET status = ?, started_at = NULL, tested_at = NULL, closed_at = NULL WHERE id IN (%s)",
+			// Reopening to BACKLOG: clear all tracking dates and completion_summary for a fresh cycle
+			query = fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
+				"UPDATE tasks SET status = ?, started_at = NULL, tested_at = NULL, closed_at = NULL, completion_summary = NULL WHERE id IN (%s)",
 				strings.Join(placeholders, ","),
 			)
 			args = append([]interface{}{newStatus}, makeInterfaceSlice(ids)...)
 
 		default:
 			// Other status changes: just update status
-			query = fmt.Sprintf(
+			query = fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
 				"UPDATE tasks SET status = ? WHERE id IN (%s)",
 				strings.Join(placeholders, ","),
 			)
@@ -325,7 +353,7 @@ func taskReopen(args []string) error {
 		}
 
 		query := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
-			"UPDATE tasks SET status = ?, started_at = NULL, tested_at = NULL, closed_at = NULL WHERE id IN (%s)",
+			"UPDATE tasks SET status = ?, started_at = NULL, tested_at = NULL, closed_at = NULL, completion_summary = NULL WHERE id IN (%s)",
 			strings.Join(placeholders, ","),
 		)
 		args := append([]interface{}{models.StatusBacklog}, makeInterfaceSlice(toReopen)...)
