@@ -24,6 +24,11 @@ var migrations = []Migration{
 		Name:    "Add sprint_tasks position column",
 		Apply:   migrateV1_0_0_toV1_1_0,
 	},
+	{
+		Version: "1.2.0",
+		Name:    "Add partial unique index to enforce at most one OPEN sprint",
+		Apply:   migrateV1_1_0_toV1_2_0,
+	},
 }
 
 // RunMigrations executes all pending migrations in a transaction.
@@ -119,5 +124,17 @@ func migrateV1_0_0_toV1_1_0(tx *sql.Tx) error {
 		return fmt.Errorf("initializing task positions: %w", err)
 	}
 
+	return nil
+}
+
+// migrateV1_1_0_toV1_2_0 adds a partial unique index that enforces at most one OPEN sprint.
+// This prevents TOCTOU races between concurrent processes starting sprints simultaneously.
+func migrateV1_1_0_toV1_2_0(tx *sql.Tx) error {
+	_, err := tx.Exec(
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_one_open_sprint ON sprints(status) WHERE status = 'OPEN'`,
+	)
+	if err != nil {
+		return fmt.Errorf("creating idx_one_open_sprint: %w", err)
+	}
 	return nil
 }

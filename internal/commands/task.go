@@ -36,6 +36,8 @@ func HandleTask(args []string) error {
 		return taskRemove(args[1:])
 	case "stat", "set-status":
 		return taskSetStatus(args[1:])
+	case "reopen":
+		return taskReopen(args[1:])
 	case "prio", "set-priority":
 		return taskSetPriority(args[1:])
 	case "sev", "set-severity":
@@ -57,6 +59,7 @@ Commands:
   edit <id> [OPTIONS]             Edit a task
   remove, rm <ids>               Remove task(s)
   stat, set-status <ids> <status>  Set task status
+  reopen <ids>                   Reopen task(s) back to BACKLOG (clears lifecycle timestamps)
   prio, set-priority <ids> <prio>    Set task priority
   sev, set-severity <ids> <sev>     Set task severity
 

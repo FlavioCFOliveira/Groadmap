@@ -233,7 +233,13 @@ func TestIntegration_TaskLifecycle(t *testing.T) {
 		t.Errorf("failed to set task priority: %v", err)
 	}
 
-	// Step 7: Remove task
+	// Step 7: Reopen task back to BACKLOG so it can be removed
+	err = HandleTask([]string{"reopen", string(rune('0' + taskID))})
+	if err != nil {
+		t.Errorf("failed to reopen task: %v", err)
+	}
+
+	// Step 8: Remove task (only allowed from BACKLOG)
 	err = HandleTask([]string{"remove", string(rune('0' + taskID))})
 	if err != nil {
 		t.Errorf("failed to remove task: %v", err)

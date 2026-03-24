@@ -7,7 +7,7 @@ import (
 )
 
 // SchemaVersion is the current database schema version.
-const SchemaVersion = "1.1.0"
+const SchemaVersion = "1.2.0"
 
 // CreateSchema creates all database tables and indexes.
 // This implements the DDL from SPEC/DATABASE.md.
@@ -60,6 +60,9 @@ CREATE TABLE IF NOT EXISTS sprints (
 
 CREATE INDEX IF NOT EXISTS idx_sprints_status ON sprints(status);
 CREATE INDEX IF NOT EXISTS idx_sprints_created_at ON sprints(created_at);
+
+-- Enforce at most one OPEN sprint at a time (prevents TOCTOU races between concurrent processes).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_open_sprint ON sprints(status) WHERE status = 'OPEN';
 `
 
 	// Sprint tasks junction table

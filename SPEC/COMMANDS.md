@@ -6,6 +6,8 @@
 |------|--------|-------------|
 | 2026-03-23 | Initial | First version of CLI Commands specification |
 | 2026-03-23 | Update | Added `stats` command for roadmap statistics |
+| 2026-03-24 | Update | Added `--summary` flag to `task stat` for completion summary |
+| 2026-03-24 | Update | Added `task reopen` command; restricted `task remove` to BACKLOG only; enforced sequential sprint opening |
 
 ## Naming Conventions
 
@@ -45,6 +47,7 @@ The following fields have mandatory length constraints enforced by the applicati
 | `functional_requirements` | Yes | 4096 chars | Why: functional requirements |
 | `technical_requirements` | Yes | 4096 chars | How: technical description |
 | `acceptance_criteria` | Yes | 4096 chars | How to verify: completion criteria |
+| `completion_summary` | No | 4096 chars | Summary of work done; only accepted on `task stat` when target status is `COMPLETED` |
 
 ### Validation Behavior
 
@@ -346,9 +349,19 @@ Success (no open tasks in sprint):
 ```bash
 rmp task stat -r <name> <ids> <state>
 rmp task set-status -r <name> <ids> <state>
+
+# With optional completion summary (only valid when transitioning to COMPLETED)
+rmp task stat -r <name> <ids> COMPLETED --summary "Brief description of what was done"
+rmp task stat -r <name> <ids> COMPLETED -s "Brief description of what was done"
 ```
 
 **Description:** Updates the status of one or more tasks (bulk supported).
+
+**Flags:**
+
+| Flag | Short | Type | Description |
+|------|-------|------|-------------|
+| `--summary` | `-s` | string | Optional completion summary. Only accepted when target state is `COMPLETED`. Maximum 4096 characters. |
 
 **Batch Operation Behavior (Fail-Fast):**
 
@@ -361,13 +374,22 @@ All batch operations validate ALL IDs and status transitions before applying any
 | All IDs invalid | 4 | **No changes made** | "Error: Tasks not found: N,M,..." |
 | Invalid ID format | 2 | **No changes made** | "Error: Invalid task ID format: X" |
 | Invalid status transition | 2 | **No changes made** | "Error: Invalid status transition from X to Y" |
+| `--summary` used with non-COMPLETED state | 2 | **No changes made** | "Error: --summary flag is only allowed when transitioning to COMPLETED" |
+| `--summary` exceeds 4096 characters | 2 | **No changes made** | "Error: Completion summary must not exceed 4096 characters (got N)" |
 
 **Validation Order:**
 1. Parse all IDs and validate format (must be positive integers)
-2. Verify all IDs exist in the roadmap
-3. Validate status transition for each task against state machine rules
-4. Only after full validation succeeds, update all tasks and audit log
-5. If any validation fails, exit immediately without making changes
+2. Validate `--summary` flag: reject if target state is not `COMPLETED`; validate length if provided
+3. Verify all IDs exist in the roadmap
+4. Validate status transition for each task against state machine rules
+5. Only after full validation succeeds, update all tasks and audit log
+6. If any validation fails, exit immediately without making changes
+
+**Completion Summary Behavior:**
+- `--summary` is optional even when transitioning to `COMPLETED`
+- When provided, `completion_summary` is stored on each updated task
+- When transitioning COMPLETED → BACKLOG (reopen), `completion_summary` is cleared to NULL
+- `--summary` has no effect on non-COMPLETED transitions and is rejected with an error
 
 **Output (success):** No output, exit code 0.
 
@@ -485,6 +507,39 @@ All batch operations validate ALL IDs before removing any tasks. This is especia
 **Rationale:** Prevents accidental partial deletion. If IDs are mistyped, no data is lost.
 
 **Output (success):** No output, exit code 0.
+
+**Constraint:** Tasks must be in `BACKLOG` status to be removed. Attempting to delete a task in any other status returns an error.
+
+| Scenario | Exit Code | stderr |
+|----------|-----------|--------|
+| Task in SPRINT, DOING, TESTING, or COMPLETED | 6 | `Error: task #N cannot be deleted — status is X, must be BACKLOG` |
+| Batch with any non-BACKLOG task | 6 | Entire batch rejected, no tasks deleted |
+
+---
+
+### Reopen Task
+
+```bash
+rmp task reopen -r <name> <ids>
+```
+
+**Description:** Returns one or more tasks to `BACKLOG` status, clearing all lifecycle timestamps (`started_at`, `tested_at`, `closed_at`). Also removes the task from its sprint association (`sprint_tasks`). Accepts comma-separated IDs for bulk operations.
+
+**Valid source states:** `SPRINT`, `DOING`, `TESTING`, `COMPLETED` — any non-BACKLOG state.
+
+**Batch Operation Behavior (Fail-Fast):**
+
+All IDs are validated before any transitions are applied. If any ID is invalid, the entire batch is rejected and no tasks are modified.
+
+| Scenario | Exit Code | Behavior | Output |
+|----------|-----------|----------|--------|
+| Task transitions to BACKLOG | 0 | Timestamps cleared; sprint_tasks row removed if applicable | No stdout |
+| Task already in BACKLOG | 0 | No change | Informational message to stderr |
+| Invalid task ID | 4 | **No tasks modified** | Error to stderr |
+
+**Output (success):** No output to stdout, exit code 0.
+
+**Audit:** Each reopened task is logged individually with operation `TASK_REOPEN`.
 
 ---
 

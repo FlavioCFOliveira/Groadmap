@@ -128,6 +128,13 @@ func sprintLifecycle(args []string, newStatus models.SprintStatus, op models.Aud
 		return fmt.Errorf("%w: "+errorMsg, utils.ErrInvalidInput, sprint.Status)
 	}
 
+	// Prevent opening a sprint when another is already OPEN (task #77).
+	if newStatus == models.SprintOpen {
+		if open, err := database.GetOpenSprint(ctx); err == nil {
+			return fmt.Errorf("%w: sprint #%d is already open — close it first", utils.ErrInvalidInput, open.ID)
+		}
+	}
+
 	now := utils.NowISO8601()
 	query, queryArgs := buildSprintUpdateQuery(newStatus, sprint.Status, now, sprintID)
 	return database.WithTransaction(func(tx *sql.Tx) error {

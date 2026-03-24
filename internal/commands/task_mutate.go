@@ -3,6 +3,7 @@ package commands
 import (
 	"database/sql"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -38,6 +39,23 @@ func taskRemove(args []string) error {
 		return err
 	}
 	defer database.Close()
+
+	ctx, cancel := db.WithQuickTimeout()
+	defer cancel()
+
+	// Fail-fast: verify all tasks exist and are in BACKLOG before deleting any (task #78).
+	tasks, err := database.GetTasks(ctx, ids)
+	if err != nil {
+		return err
+	}
+	if len(tasks) != len(ids) {
+		return fmt.Errorf("%w: some tasks not found", utils.ErrNotFound)
+	}
+	for _, task := range tasks {
+		if task.Status != models.StatusBacklog {
+			return fmt.Errorf("%w: task #%d cannot be deleted — status is %s, must be BACKLOG", utils.ErrInvalidInput, task.ID, task.Status)
+		}
+	}
 
 	// Delete within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
@@ -231,6 +249,110 @@ func taskSetStatus(args []string) error {
 				models.OpTaskStatusChange, models.EntityTask, id, now,
 			)
 			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// taskReopen transitions one or more tasks back to BACKLOG, clearing all lifecycle timestamps.
+// Tasks already in BACKLOG are skipped with an informational message.
+// Accepts comma-separated IDs with fail-fast on any invalid ID.
+func taskReopen(args []string) error {
+	roadmapName, remaining, err := requireRoadmap(args)
+	if err != nil {
+		return err
+	}
+
+	if len(remaining) == 0 {
+		return fmt.Errorf("%w: task ID(s) required", utils.ErrRequired)
+	}
+
+	idStrs := strings.Split(remaining[0], ",")
+	ids := make([]int, 0, len(idStrs))
+	for _, s := range idStrs {
+		id, err := utils.ValidateIDString(strings.TrimSpace(s), "task")
+		if err != nil {
+			return err
+		}
+		ids = append(ids, id)
+	}
+
+	database, err := db.OpenExisting(roadmapName)
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+
+	ctx, cancel := db.WithDefaultTimeout()
+	defer cancel()
+
+	tasks, err := database.GetTasks(ctx, ids)
+	if err != nil {
+		return err
+	}
+	if len(tasks) != len(ids) {
+		return fmt.Errorf("%w: some tasks not found", utils.ErrNotFound)
+	}
+
+	// Separate already-BACKLOG tasks from tasks that need transition.
+	// Track which tasks are in sprint-associated states so we can clean up sprint_tasks rows.
+	var toReopen []int
+	var toRemoveFromSprint []int
+	for _, task := range tasks {
+		if task.Status == models.StatusBacklog {
+			fmt.Fprintf(os.Stderr, "task #%d is already in BACKLOG\n", task.ID)
+			continue
+		}
+		toReopen = append(toReopen, task.ID)
+		// Tasks in SPRINT, DOING, or TESTING have a row in sprint_tasks that must be removed.
+		if task.Status == models.StatusSprint || task.Status == models.StatusDoing || task.Status == models.StatusTesting {
+			toRemoveFromSprint = append(toRemoveFromSprint, task.ID)
+		}
+	}
+
+	if len(toReopen) == 0 {
+		return nil
+	}
+
+	now := utils.NowISO8601()
+
+	return database.WithTransaction(func(tx *sql.Tx) error {
+		placeholders := make([]string, len(toReopen))
+		for i := range toReopen {
+			placeholders[i] = "?"
+		}
+
+		query := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
+			"UPDATE tasks SET status = ?, started_at = NULL, tested_at = NULL, closed_at = NULL WHERE id IN (%s)",
+			strings.Join(placeholders, ","),
+		)
+		args := append([]interface{}{models.StatusBacklog}, makeInterfaceSlice(toReopen)...)
+		if _, err := tx.Exec(query, args...); err != nil {
+			return err
+		}
+
+		// Remove sprint_tasks rows for tasks that were associated with a sprint.
+		if len(toRemoveFromSprint) > 0 {
+			sprintPlaceholders := make([]string, len(toRemoveFromSprint))
+			for i := range toRemoveFromSprint {
+				sprintPlaceholders[i] = "?"
+			}
+			delQuery := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
+				"DELETE FROM sprint_tasks WHERE task_id IN (%s)",
+				strings.Join(sprintPlaceholders, ","),
+			)
+			if _, err := tx.Exec(delQuery, makeInterfaceSlice(toRemoveFromSprint)...); err != nil {
+				return err
+			}
+		}
+
+		for _, id := range toReopen {
+			if _, err := tx.Exec(
+				`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
+				models.OpTaskReopen, models.EntityTask, id, now,
+			); err != nil {
 				return err
 			}
 		}
