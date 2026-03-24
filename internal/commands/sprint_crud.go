@@ -66,6 +66,14 @@ func sprintCreate(args []string) error {
 		return fmt.Errorf("%w: missing required parameter: --description", utils.ErrRequired)
 	}
 
+	var maxTasks *int
+	if mt, ok := result.Flags["MaxTasks"].(int); ok {
+		if mt < 1 {
+			return fmt.Errorf("%w: --max-tasks must be a positive integer", utils.ErrInvalidInput)
+		}
+		maxTasks = &mt
+	}
+
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {
 		return err
@@ -79,6 +87,7 @@ func sprintCreate(args []string) error {
 		Status:      models.SprintPending,
 		Description: description,
 		CreatedAt:   now,
+		MaxTasks:    maxTasks,
 	}
 
 	if err := sprint.Validate(); err != nil {
@@ -89,8 +98,8 @@ func sprintCreate(args []string) error {
 	var sprintID int
 	err = database.WithTransaction(func(tx *sql.Tx) error {
 		insertResult, insertErr := tx.Exec(
-			`INSERT INTO sprints (status, description, created_at) VALUES (?, ?, ?)`,
-			sprint.Status, sprint.Description, sprint.CreatedAt,
+			`INSERT INTO sprints (status, description, created_at, max_tasks) VALUES (?, ?, ?, ?)`,
+			sprint.Status, sprint.Description, sprint.CreatedAt, sprint.MaxTasks,
 		)
 		if insertErr != nil {
 			return insertErr
@@ -227,13 +236,23 @@ func sprintUpdate(args []string) error {
 	}
 
 	description, _ := result.Flags["Description"].(string)
-	if description == "" {
-		return fmt.Errorf("%w: missing required parameter: --description", utils.ErrRequired)
+	_, hasMaxTasks := result.Flags["MaxTasks"]
+
+	if description == "" && !hasMaxTasks {
+		return fmt.Errorf("%w: at least one of --description or --max-tasks is required", utils.ErrRequired)
 	}
 
-	// Validate description length
-	if len(description) > models.MaxSprintDescription {
+	if description != "" && len(description) > models.MaxSprintDescription {
 		return fmt.Errorf("%w: description exceeds maximum length of %d characters", utils.ErrFieldTooLarge, models.MaxSprintDescription)
+	}
+
+	var maxTasks *int
+	if hasMaxTasks {
+		mt := result.Flags["MaxTasks"].(int)
+		if mt < 1 {
+			return fmt.Errorf("%w: --max-tasks must be a positive integer", utils.ErrInvalidInput)
+		}
+		maxTasks = &mt
 	}
 
 	database, err := db.OpenExisting(roadmapName)
@@ -245,12 +264,24 @@ func sprintUpdate(args []string) error {
 	// Capture timestamp once for the entire operation
 	now := utils.NowISO8601()
 
-	// Update within transaction with audit
+	// Build dynamic SET clause based on provided flags.
 	return database.WithTransaction(func(tx *sql.Tx) error {
-		updateResult, updateErr := tx.Exec(
-			"UPDATE sprints SET description = ? WHERE id = ?",
-			description, sprintID,
-		)
+		var query string
+		var args []interface{}
+
+		switch {
+		case description != "" && hasMaxTasks:
+			query = "UPDATE sprints SET description = ?, max_tasks = ? WHERE id = ?"
+			args = []interface{}{description, maxTasks, sprintID}
+		case description != "":
+			query = "UPDATE sprints SET description = ? WHERE id = ?"
+			args = []interface{}{description, sprintID}
+		default:
+			query = "UPDATE sprints SET max_tasks = ? WHERE id = ?"
+			args = []interface{}{maxTasks, sprintID}
+		}
+
+		updateResult, updateErr := tx.Exec(query, args...)
 		if updateErr != nil {
 			return updateErr
 		}

@@ -203,8 +203,8 @@ class TestSprintLifecycle:
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "COMPLETED"])
         self.test.assert_task_status(roadmap, task1, "COMPLETED")
 
-        # Close sprint
-        self.test.run_cmd(["sprint", "close", "-r", roadmap, str(sprint_id)])
+        # Close sprint — task2 is still SPRINT (never started), so --force is required
+        self.test.run_cmd(["sprint", "close", "-r", roadmap, str(sprint_id), "--force"])
         self.test.assert_sprint_status(roadmap, sprint_id, "CLOSED")
 
         print("✓ Sprint with tasks lifecycle test passed")

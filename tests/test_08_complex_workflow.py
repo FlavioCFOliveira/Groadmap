@@ -159,22 +159,27 @@ class TestComplexWorkflow:
             self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
             self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED"])
 
-        # Close sprint with incomplete tasks
-        self.test.run_cmd(["sprint", "close", "-r", roadmap, str(sprint1)])
+        # Close sprint with incomplete tasks — tasks[2:] are still SPRINT, so --force is required
+        self.test.run_cmd(["sprint", "close", "-r", roadmap, str(sprint1), "--force"])
         self.test.assert_sprint_status(roadmap, sprint1, "CLOSED")
 
-        # Remaining tasks are still in SPRINT status
+        # Remaining tasks are still in SPRINT status (sprint is CLOSED, tasks were never started)
         for task_id in tasks[2:]:
             result = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])
             assert result[0]["status"] == "SPRINT", \
                 f"Task {task_id} should remain SPRINT after close, got {result[0]['status']}"
 
-        # Carry them over to sprint 2
+        # Carry them over to sprint 2.
+        # move-tasks from a CLOSED sprint is blocked (Task #89), so the correct carryover
+        # workflow is: remove-tasks (→ BACKLOG) then add-tasks to the new sprint.
         sprint2 = self.test.create_sprint(roadmap, "Migration Sprint 2")
         self.test.run_cmd([
-            "sprint", "move-tasks", "-r", roadmap,
-            str(sprint1), str(sprint2),
-            ",".join(str(t) for t in tasks[2:])
+            "sprint", "remove-tasks", "-r", roadmap,
+            str(sprint1), ",".join(str(t) for t in tasks[2:])
+        ])
+        self.test.run_cmd([
+            "sprint", "add-tasks", "-r", roadmap,
+            str(sprint2), ",".join(str(t) for t in tasks[2:])
         ])
         self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint2)])
 
@@ -226,8 +231,8 @@ class TestComplexWorkflow:
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[0]), "TESTING"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[0]), "COMPLETED"])
 
-        # Close sprint prematurely
-        self.test.run_cmd(["sprint", "close", "-r", roadmap, str(sprint)])
+        # Close sprint prematurely — tasks[1] is still SPRINT (never started), --force required
+        self.test.run_cmd(["sprint", "close", "-r", roadmap, str(sprint), "--force"])
         self.test.assert_sprint_status(roadmap, sprint, "CLOSED")
 
         # Reopen to recover unfinished work
@@ -309,7 +314,7 @@ class TestComplexWorkflow:
     # ==================== Parallel Sprint Management ====================
 
     def test_parallel_sprint_management(self):
-        """Multiple open sprints can coexist and be managed independently."""
+        """Sequential sprint management: complete one team's sprint before starting the next."""
         roadmap = self.test.create_roadmap("multi-team-platform")
 
         team_a_tasks = [
@@ -348,12 +353,13 @@ class TestComplexWorkflow:
         self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint_a)] + [str(t) for t in team_a_tasks])
         self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint_b)] + [str(t) for t in team_b_tasks])
 
+        # Only one sprint can be OPEN at a time (sequential enforcement).
         self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint_a)])
-        self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint_b)])
 
-        # Verify two open sprints
+        # Verify exactly one open sprint
         open_sprints = self.test.run_cmd_json(["sprint", "list", "-r", roadmap, "--status", "OPEN"])
-        assert len(open_sprints) == 2, f"Expected 2 open sprints, got {len(open_sprints)}"
+        assert len(open_sprints) == 1, f"Expected 1 open sprint, got {len(open_sprints)}"
+        assert open_sprints[0]["id"] == sprint_a
 
         # Team A completes all tasks
         for task_id in team_a_tasks:
@@ -362,10 +368,12 @@ class TestComplexWorkflow:
             self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED"])
         self.test.run_cmd(["sprint", "close", "-r", roadmap, str(sprint_a)])
 
-        # Team B still running
+        # No open sprints after team A
         open_sprints = self.test.run_cmd_json(["sprint", "list", "-r", roadmap, "--status", "OPEN"])
-        assert len(open_sprints) == 1, f"Expected 1 open sprint after team A done, got {len(open_sprints)}"
-        assert open_sprints[0]["id"] == sprint_b
+        assert len(open_sprints) == 0, f"Expected 0 open sprints after team A done, got {len(open_sprints)}"
+
+        # Team B starts
+        self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint_b)])
 
         # Team B completes
         for task_id in team_b_tasks:

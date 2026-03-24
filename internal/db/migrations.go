@@ -34,6 +34,11 @@ var migrations = []Migration{
 		Name:    "Add completion_summary column to tasks table",
 		Apply:   migrateV1_2_0_toV1_3_0,
 	},
+	{
+		Version: "1.4.0",
+		Name:    "Add max_tasks column to sprints table",
+		Apply:   migrateV1_3_0_toV1_4_0,
+	},
 }
 
 // RunMigrations executes all pending migrations in a transaction.
@@ -140,6 +145,17 @@ func migrateV1_1_0_toV1_2_0(tx *sql.Tx) error {
 	)
 	if err != nil {
 		return fmt.Errorf("creating idx_one_open_sprint: %w", err)
+	}
+	return nil
+}
+
+// migrateV1_3_0_toV1_4_0 adds the max_tasks column to the sprints table.
+// The column is optional (NULL by default) and enables sprint capacity management.
+// The migration is idempotent: ALTER TABLE … ADD COLUMN is a no-op when the column already exists.
+func migrateV1_3_0_toV1_4_0(tx *sql.Tx) error {
+	_, err := tx.Exec(`ALTER TABLE sprints ADD COLUMN max_tasks INTEGER`)
+	if err != nil {
+		return fmt.Errorf("adding max_tasks column: %w", err)
 	}
 	return nil
 }

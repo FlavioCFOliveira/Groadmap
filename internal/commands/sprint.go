@@ -76,7 +76,7 @@ Commands:
   update, upd <id> [OPTIONS]       Update sprint description
   remove, rm <id>                 Remove sprint
   start <id>                      Start sprint
-  close <id>                      Close sprint
+  close <id> [--force]            Close sprint (--force bypasses active-task check)
   reopen <id>                     Reopen sprint
   tasks <id> [OPTIONS]            List tasks in sprint (use --order-by-priority for priority ordering)
   stats <id>                       Show sprint statistics

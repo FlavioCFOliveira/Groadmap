@@ -202,10 +202,10 @@ func TestSprintUpdate_MissingDescription(t *testing.T) {
 
 	err := HandleSprint([]string{"update", "1"})
 	if err == nil {
-		t.Error("sprintUpdate without description expected error, got nil")
+		t.Error("sprintUpdate without any flags expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "missing required parameter: --description") {
-		t.Errorf("expected 'missing required parameter: --description' error, got: %v", err)
+	if !strings.Contains(err.Error(), "--description") && !strings.Contains(err.Error(), "--max-tasks") {
+		t.Errorf("expected error referencing --description or --max-tasks, got: %v", err)
 	}
 }
 

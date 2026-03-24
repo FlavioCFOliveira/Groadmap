@@ -238,13 +238,22 @@ func TestMigrateV1_2_0_toV1_3_0(t *testing.T) {
 		t.Fatalf("completion_summary column not found after CreateSchema: %v", err)
 	}
 
-	// Schema version must be 1.3.0
+	// max_tasks column must exist in the fresh schema (added in 1.4.0)
+	var maxTasksColType string
+	err = db.QueryRow(
+		`SELECT type FROM pragma_table_info('sprints') WHERE name = 'max_tasks'`,
+	).Scan(&maxTasksColType)
+	if err != nil {
+		t.Fatalf("max_tasks column not found after CreateSchema: %v", err)
+	}
+
+	// Schema version must be 1.4.0
 	version, err := db.GetSchemaVersion()
 	if err != nil {
 		t.Fatalf("GetSchemaVersion failed: %v", err)
 	}
-	if version != "1.3.0" {
-		t.Errorf("schema_version = %q, want %q", version, "1.3.0")
+	if version != "1.4.0" {
+		t.Errorf("schema_version = %q, want %q", version, "1.4.0")
 	}
 
 	// Running migrations again must be idempotent
@@ -256,7 +265,7 @@ func TestMigrateV1_2_0_toV1_3_0(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSchemaVersion after idempotent run failed: %v", err)
 	}
-	if version != "1.3.0" {
-		t.Errorf("schema_version after idempotent migration = %q, want %q", version, "1.3.0")
+	if version != "1.4.0" {
+		t.Errorf("schema_version after idempotent migration = %q, want %q", version, "1.4.0")
 	}
 }

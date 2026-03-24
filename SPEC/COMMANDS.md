@@ -691,9 +691,25 @@ rmp sprint show -r <name> <id>
 
 ```bash
 rmp sprint start -r <name> <id>
-rmp sprint close -r <name> <id>
+rmp sprint close -r <name> <id> [--force]
 rmp sprint reopen -r <name> <id>
 ```
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--force` | (`sprint close` only) Close the sprint even if tasks are still in DOING or TESTING status. A warning listing the incomplete tasks is printed to stderr. |
+
+**Active-Task Safety Check (sprint close):**
+
+`sprint close` queries for tasks with status `DOING` or `TESTING` in the sprint before closing. If any exist and `--force` is not provided, the command returns exit code 2 with an error listing the task IDs and statuses. With `--force`, the sprint is closed and a warning is printed to stderr.
+
+| Scenario | Exit Code | stderr Output |
+|----------|-----------|---------------|
+| No active tasks | 0 | None |
+| Active tasks exist, no `--force` | 6 | "invalid input: sprint #N has M active task(s) still in progress: #ID (STATUS), ... — use --force to close anyway" |
+| Active tasks exist, `--force` given | 0 | "warning: closing sprint #N with M incomplete task(s): #ID (STATUS), ..." |
 
 **Output (success):** No output, exit code 0.
 

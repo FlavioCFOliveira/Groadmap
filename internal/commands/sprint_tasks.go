@@ -192,9 +192,26 @@ func sprintAddTasks(args []string) error {
 	ctx, cancel := db.WithQuickTimeout()
 	defer cancel()
 
-	if _, err = database.GetSprint(ctx, sprintID); err != nil {
+	sprint, err := database.GetSprint(ctx, sprintID)
+	if err != nil {
 		return err
 	}
+	if sprint.Status == models.SprintClosed {
+		return fmt.Errorf("%w: cannot add tasks to sprint #%d: sprint is CLOSED", utils.ErrInvalidInput, sprintID)
+	}
+
+	// Enforce capacity limit when max_tasks is set.
+	if sprint.MaxTasks != nil {
+		activeTasks, activeErr := database.GetActiveSprintTasks(ctx, sprintID)
+		if activeErr != nil {
+			return fmt.Errorf("checking sprint capacity: %w", activeErr)
+		}
+		if len(activeTasks)+len(taskIDs) > *sprint.MaxTasks {
+			return fmt.Errorf("%w: adding %d task(s) would exceed sprint #%d capacity (%d/%d tasks active)",
+				utils.ErrInvalidInput, len(taskIDs), sprintID, len(activeTasks), *sprint.MaxTasks)
+		}
+	}
+
 	if err = database.AddTasksToSprint(ctx, sprintID, taskIDs); err != nil {
 		return err
 	}
@@ -274,13 +291,22 @@ func sprintRemoveTasks(args []string) error {
 	})
 }
 
-// verifySprintsExist checks that both source and destination sprints exist.
+// verifySprintsExist checks that both source and destination sprints exist and are not CLOSED.
+// Moving tasks to or from a CLOSED sprint would corrupt historical sprint data.
 func verifySprintsExist(ctx context.Context, database *db.DB, fromID, toID int) error {
-	if _, err := database.GetSprint(ctx, fromID); err != nil {
+	from, err := database.GetSprint(ctx, fromID)
+	if err != nil {
 		return fmt.Errorf("%w: from sprint: %v", utils.ErrNotFound, err)
 	}
-	if _, err := database.GetSprint(ctx, toID); err != nil {
+	if from.Status == models.SprintClosed {
+		return fmt.Errorf("%w: cannot move tasks from sprint #%d: sprint is CLOSED", utils.ErrInvalidInput, fromID)
+	}
+	to, err := database.GetSprint(ctx, toID)
+	if err != nil {
 		return fmt.Errorf("%w: to sprint: %v", utils.ErrNotFound, err)
+	}
+	if to.Status == models.SprintClosed {
+		return fmt.Errorf("%w: cannot move tasks to sprint #%d: sprint is CLOSED", utils.ErrInvalidInput, toID)
 	}
 	return nil
 }

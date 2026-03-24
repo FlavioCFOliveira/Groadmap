@@ -3,6 +3,8 @@ package commands
 import (
 	"database/sql"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
@@ -11,21 +13,31 @@ import (
 
 // sprintStart starts a sprint.
 func sprintStart(args []string) error {
-	return sprintLifecycle(args, models.SprintOpen, models.OpSprintStart, func(s models.SprintStatus) bool {
+	return sprintLifecycle(args, models.SprintOpen, models.OpSprintStart, false, func(s models.SprintStatus) bool {
 		return s.CanStart()
 	}, "cannot start sprint with status %s")
 }
 
-// sprintClose closes a sprint.
+// sprintClose closes a sprint, blocking if tasks are still DOING or TESTING unless --force is given.
 func sprintClose(args []string) error {
-	return sprintLifecycle(args, models.SprintClosed, models.OpSprintClose, func(s models.SprintStatus) bool {
+	// Parse --force flag before delegating to lifecycle.
+	force := false
+	filtered := args[:0:len(args)]
+	for _, a := range args {
+		if a == "--force" {
+			force = true
+		} else {
+			filtered = append(filtered, a)
+		}
+	}
+	return sprintLifecycle(filtered, models.SprintClosed, models.OpSprintClose, force, func(s models.SprintStatus) bool {
 		return s.CanClose()
 	}, "cannot close sprint with status %s")
 }
 
 // sprintReopen reopens a sprint.
 func sprintReopen(args []string) error {
-	return sprintLifecycle(args, models.SprintOpen, models.OpSprintReopen, func(s models.SprintStatus) bool {
+	return sprintLifecycle(args, models.SprintOpen, models.OpSprintReopen, false, func(s models.SprintStatus) bool {
 		return s.CanReopen()
 	}, "cannot reopen sprint with status %s")
 }
@@ -73,6 +85,7 @@ func execSprintUpdate(tx *sql.Tx, query string, args []interface{}, sprintID int
 //   - args: Command-line arguments including sprint ID
 //   - newStatus: The target status to transition to (OPEN, CLOSED)
 //   - op: The audit operation type to log (OpSprintStart, OpSprintClose, OpSprintReopen)
+//   - force: When true, bypass the active-task safety check on close
 //   - canTransition: Function that validates if the transition is allowed from current status
 //   - errorMsg: Error message template if transition is not allowed
 //
@@ -88,6 +101,7 @@ func execSprintUpdate(tx *sql.Tx, query string, args []interface{}, sprintID int
 //   - Returns utils.ErrRequired if sprint ID is missing
 //   - Returns utils.ErrNotFound if sprint doesn't exist
 //   - Returns utils.ErrInvalidInput if transition is not allowed
+//   - Returns utils.ErrInvalidInput if close attempted with DOING/TESTING tasks and force=false
 //
 // Side effects:
 //   - Updates sprint status in database
@@ -98,7 +112,7 @@ func execSprintUpdate(tx *sql.Tx, query string, args []interface{}, sprintID int
 //   - Outputs updated sprint as JSON to stdout
 //
 // Complexity: O(1) - single database transaction
-func sprintLifecycle(args []string, newStatus models.SprintStatus, op models.AuditOperation, canTransition func(models.SprintStatus) bool, errorMsg string) error {
+func sprintLifecycle(args []string, newStatus models.SprintStatus, op models.AuditOperation, force bool, canTransition func(models.SprintStatus) bool, errorMsg string) error {
 	roadmapName, remaining, err := requireRoadmap(args)
 	if err != nil {
 		return err
@@ -132,6 +146,26 @@ func sprintLifecycle(args []string, newStatus models.SprintStatus, op models.Aud
 	if newStatus == models.SprintOpen {
 		if open, err := database.GetOpenSprint(ctx); err == nil {
 			return fmt.Errorf("%w: sprint #%d is already open — close it first", utils.ErrInvalidInput, open.ID)
+		}
+	}
+
+	// Block close when tasks are still SPRINT, DOING or TESTING unless --force is given.
+	if newStatus == models.SprintClosed {
+		activeTasks, err := database.GetActiveSprintTasks(ctx, sprintID)
+		if err != nil {
+			return fmt.Errorf("checking active tasks: %w", err)
+		}
+		if len(activeTasks) > 0 {
+			ids := make([]string, len(activeTasks))
+			for i, t := range activeTasks {
+				ids[i] = fmt.Sprintf("#%d (%s)", t.ID, t.Status)
+			}
+			if !force {
+				return fmt.Errorf("%w: sprint #%d has %d active task(s) still in progress: %s — use --force to close anyway",
+					utils.ErrInvalidInput, sprintID, len(activeTasks), strings.Join(ids, ", "))
+			}
+			fmt.Fprintf(os.Stderr, "warning: closing sprint #%d with %d incomplete task(s): %s\n",
+				sprintID, len(activeTasks), strings.Join(ids, ", "))
 		}
 	}
 

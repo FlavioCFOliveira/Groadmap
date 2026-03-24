@@ -598,11 +598,12 @@ func (db *DB) GetOpenSprint(ctx context.Context) (*models.Sprint, error) {
 	var startedAt sql.NullString
 	var closedAt sql.NullString
 	var tasksJSON sql.NullString
+	var maxTasks sql.NullInt64
 
 	// Single query using JSON aggregation to get sprint data and task IDs
 	err := db.QueryRowContext(ctx,
 		`SELECT
-			s.id, s.status, s.description, s.created_at, s.started_at, s.closed_at,
+			s.id, s.status, s.description, s.created_at, s.started_at, s.closed_at, s.max_tasks,
 			COALESCE(json_group_array(DISTINCT st.task_id), '[]') as tasks
 		 FROM sprints s
 		 LEFT JOIN sprint_tasks st ON s.id = st.sprint_id
@@ -617,6 +618,7 @@ func (db *DB) GetOpenSprint(ctx context.Context) (*models.Sprint, error) {
 		&sprint.CreatedAt,
 		&startedAt,
 		&closedAt,
+		&maxTasks,
 		&tasksJSON,
 	)
 
@@ -632,6 +634,10 @@ func (db *DB) GetOpenSprint(ctx context.Context) (*models.Sprint, error) {
 	}
 	if closedAt.Valid {
 		sprint.ClosedAt = &closedAt.String
+	}
+	if maxTasks.Valid {
+		v := int(maxTasks.Int64)
+		sprint.MaxTasks = &v
 	}
 
 	// Parse task IDs from JSON array
@@ -735,12 +741,13 @@ func (db *DB) GetSprint(ctx context.Context, id int) (*models.Sprint, error) {
 	var startedAt sql.NullString
 	var closedAt sql.NullString
 	var tasksJSON sql.NullString
+	var maxTasks sql.NullInt64
 
 	// Single query using JSON aggregation to get sprint data and task IDs
 	// json_group_array returns a JSON array of task IDs
 	err := db.QueryRowContext(ctx,
 		`SELECT
-			s.id, s.status, s.description, s.created_at, s.started_at, s.closed_at,
+			s.id, s.status, s.description, s.created_at, s.started_at, s.closed_at, s.max_tasks,
 			COALESCE(json_group_array(DISTINCT st.task_id), '[]') as tasks
 		 FROM sprints s
 		 LEFT JOIN sprint_tasks st ON s.id = st.sprint_id
@@ -754,6 +761,7 @@ func (db *DB) GetSprint(ctx context.Context, id int) (*models.Sprint, error) {
 		&sprint.CreatedAt,
 		&startedAt,
 		&closedAt,
+		&maxTasks,
 		&tasksJSON,
 	)
 
@@ -769,6 +777,10 @@ func (db *DB) GetSprint(ctx context.Context, id int) (*models.Sprint, error) {
 	}
 	if closedAt.Valid {
 		sprint.ClosedAt = &closedAt.String
+	}
+	if maxTasks.Valid {
+		v := int(maxTasks.Int64)
+		sprint.MaxTasks = &v
 	}
 
 	// Parse task IDs from JSON array
@@ -805,7 +817,7 @@ func parseJSONIntArray(jsonStr string) ([]int, error) {
 
 // ListSprints retrieves all sprints with optional status filter.
 func (db *DB) ListSprints(ctx context.Context, status *models.SprintStatus) ([]models.Sprint, error) {
-	query := `SELECT id, status, description, created_at, started_at, closed_at FROM sprints WHERE 1=1`
+	query := `SELECT id, status, description, created_at, started_at, closed_at, max_tasks FROM sprints WHERE 1=1`
 	args := []interface{}{}
 
 	if status != nil {
@@ -826,6 +838,7 @@ func (db *DB) ListSprints(ctx context.Context, status *models.SprintStatus) ([]m
 		var sprint models.Sprint
 		var startedAt sql.NullString
 		var closedAt sql.NullString
+		var maxTasks sql.NullInt64
 
 		err := rows.Scan(
 			&sprint.ID,
@@ -834,6 +847,7 @@ func (db *DB) ListSprints(ctx context.Context, status *models.SprintStatus) ([]m
 			&sprint.CreatedAt,
 			&startedAt,
 			&closedAt,
+			&maxTasks,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning sprint row: %w", err)
@@ -844,6 +858,10 @@ func (db *DB) ListSprints(ctx context.Context, status *models.SprintStatus) ([]m
 		}
 		if closedAt.Valid {
 			sprint.ClosedAt = &closedAt.String
+		}
+		if maxTasks.Valid {
+			v := int(maxTasks.Int64)
+			sprint.MaxTasks = &v
 		}
 
 		sprints = append(sprints, sprint)
@@ -974,6 +992,28 @@ func (db *DB) GetSprintTasks(ctx context.Context, sprintID int) ([]int, error) {
 	}
 
 	return tasks, nil
+}
+
+// GetActiveSprintTasks retrieves tasks in a sprint with status SPRINT, DOING, or TESTING.
+// SPRINT tasks were assigned but never started; DOING/TESTING tasks are actively in progress.
+// Used to validate sprint close safety.
+func (db *DB) GetActiveSprintTasks(ctx context.Context, sprintID int) ([]models.Task, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
+		         t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
+		         t.closed_at, t.completion_summary, t.priority, t.severity
+		      FROM tasks t
+		      INNER JOIN sprint_tasks st ON t.id = st.task_id
+		      WHERE st.sprint_id = ? AND t.status IN ('SPRINT', 'DOING', 'TESTING')
+		      ORDER BY st.position ASC`,
+		sprintID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying active sprint tasks: %w", err)
+	}
+	defer rows.Close()
+
+	return scanTasks(rows)
 }
 
 // GetSprintTasksFull retrieves full task objects for a sprint, ordered by position or priority.

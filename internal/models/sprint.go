@@ -78,6 +78,7 @@ type Sprint struct {
 	Tasks     []int   `json:"tasks"`      // Computed from sprint_tasks
 	StartedAt *string `json:"started_at"` // ISO 8601 UTC, nullable
 	ClosedAt  *string `json:"closed_at"`  // ISO 8601 UTC, nullable
+	MaxTasks  *int    `json:"max_tasks"`  // Optional capacity limit
 	ID        int     `json:"id"`
 	TaskCount int     `json:"task_count"` // Computed
 }
@@ -263,6 +264,9 @@ type SprintShowResult struct {
 	SeverityDistribution    SeverityDistribution    `json:"severity_distribution"`
 	CriticalityDistribution CriticalityDistribution `json:"criticality_distribution"`
 	TaskOrder               []int                   `json:"task_order"` // Task IDs ordered by position
+	CurrentLoad             int                     `json:"current_load"`
+	MaxTasks                *int                    `json:"max_tasks"`
+	CapacityPct             *float64                `json:"capacity_pct"`
 }
 
 // CalculateSprintShowResult calculates a comprehensive sprint report from tasks.
@@ -272,6 +276,7 @@ func CalculateSprintShowResult(sprint *Sprint, tasks []Task) SprintShowResult {
 		SprintID:          sprint.ID,
 		SprintDescription: sprint.Description,
 		Status:            sprint.Status,
+		MaxTasks:          sprint.MaxTasks,
 		TaskOrder:         make([]int, 0, len(tasks)),
 		Summary: SprintSummary{
 			TotalTasks: len(tasks),
@@ -285,7 +290,7 @@ func CalculateSprintShowResult(sprint *Sprint, tasks []Task) SprintShowResult {
 		// Add task ID to order (tasks should already be ordered by position)
 		result.TaskOrder = append(result.TaskOrder, task.ID)
 
-		// Count by status category
+		// Count by status category (preserving existing summary semantics)
 		switch task.Status {
 		case StatusBacklog, StatusSprint:
 			result.Summary.Pending++
@@ -293,6 +298,11 @@ func CalculateSprintShowResult(sprint *Sprint, tasks []Task) SprintShowResult {
 			result.Summary.InProgress++
 		case StatusCompleted:
 			result.Summary.Completed++
+		}
+
+		// current_load: all incomplete tasks assigned to the sprint
+		if task.Status == StatusSprint || task.Status == StatusDoing || task.Status == StatusTesting {
+			result.CurrentLoad++
 		}
 
 		// Count by severity range
@@ -306,6 +316,12 @@ func CalculateSprintShowResult(sprint *Sprint, tasks []Task) SprintShowResult {
 		case task.Severity >= 8 && task.Severity <= 9:
 			severity8To9++
 		}
+	}
+
+	// Compute capacity_pct when max_tasks is set and positive.
+	if sprint.MaxTasks != nil && *sprint.MaxTasks > 0 {
+		pct := float64(result.CurrentLoad) * 100.0 / float64(*sprint.MaxTasks)
+		result.CapacityPct = &pct
 	}
 
 	// Calculate percentages
