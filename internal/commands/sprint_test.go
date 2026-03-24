@@ -51,7 +51,7 @@ func TestSprintList_WithRoadmap(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"list"})
+	err := HandleSprint([]string{"list", "-r", testName})
 	if err != nil {
 		t.Errorf("sprintList error = %v", err)
 	}
@@ -62,7 +62,7 @@ func TestSprintList_WithStatusFilter(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"list", "--status", "PENDING"})
+	err := HandleSprint([]string{"list", "-r", testName, "--status", "PENDING"})
 	if err != nil {
 		t.Errorf("sprintList with status filter error = %v", err)
 	}
@@ -73,7 +73,7 @@ func TestSprintList_InvalidStatus(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"list", "--status", "INVALID"})
+	err := HandleSprint([]string{"list", "-r", testName, "--status", "INVALID"})
 	if err == nil {
 		t.Error("sprintList with invalid status expected error, got nil")
 	}
@@ -93,7 +93,7 @@ func TestSprintCreate_MissingDescription(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"create"})
+	err := HandleSprint([]string{"create", "-r", testName})
 	if err == nil {
 		t.Error("sprintCreate without description expected error, got nil")
 	}
@@ -107,7 +107,7 @@ func TestSprintCreate_Success(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"create", "-d", "Test sprint description"})
+	err := HandleSprint([]string{"create", "-r", testName, "-d", "Test sprint description"})
 	if err != nil {
 		t.Errorf("sprintCreate error = %v", err)
 	}
@@ -127,7 +127,7 @@ func TestSprintGet_NoID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"get"})
+	err := HandleSprint([]string{"get", "-r", testName})
 	if err == nil {
 		t.Error("sprintGet with no ID expected error, got nil")
 	}
@@ -141,7 +141,7 @@ func TestSprintGet_InvalidID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"get", "notanumber"})
+	err := HandleSprint([]string{"get", "-r", testName, "notanumber"})
 	if err == nil {
 		t.Error("sprintGet with invalid ID expected error, got nil")
 	}
@@ -155,7 +155,7 @@ func TestSprintGet_NotFound(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"get", "999"})
+	err := HandleSprint([]string{"get", "-r", testName, "999"})
 	if err == nil {
 		t.Error("sprintGet for non-existent sprint expected error, got nil")
 	}
@@ -175,7 +175,7 @@ func TestSprintUpdate_NoID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"update"})
+	err := HandleSprint([]string{"update", "-r", testName})
 	if err == nil {
 		t.Error("sprintUpdate with no ID expected error, got nil")
 	}
@@ -189,7 +189,7 @@ func TestSprintUpdate_InvalidID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"update", "notanumber"})
+	err := HandleSprint([]string{"update", "-r", testName, "notanumber"})
 	if err == nil {
 		t.Error("sprintUpdate with invalid ID expected error, got nil")
 	}
@@ -200,7 +200,7 @@ func TestSprintUpdate_MissingDescription(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"update", "1"})
+	err := HandleSprint([]string{"update", "-r", testName, "1"})
 	if err == nil {
 		t.Error("sprintUpdate without any flags expected error, got nil")
 	}
@@ -223,7 +223,7 @@ func TestSprintRemove_NoID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"remove"})
+	err := HandleSprint([]string{"remove", "-r", testName})
 	if err == nil {
 		t.Error("sprintRemove with no ID expected error, got nil")
 	}
@@ -237,7 +237,7 @@ func TestSprintRemove_InvalidID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"remove", "notanumber"})
+	err := HandleSprint([]string{"remove", "-r", testName, "notanumber"})
 	if err == nil {
 		t.Error("sprintRemove with invalid ID expected error, got nil")
 	}
@@ -257,7 +257,7 @@ func TestSprintStart_NoID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"start"})
+	err := HandleSprint([]string{"start", "-r", testName})
 	if err == nil {
 		t.Error("sprintStart with no ID expected error, got nil")
 	}
@@ -271,7 +271,7 @@ func TestSprintStart_InvalidID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"start", "notanumber"})
+	err := HandleSprint([]string{"start", "-r", testName, "notanumber"})
 	if err == nil {
 		t.Error("sprintStart with invalid ID expected error, got nil")
 	}
@@ -291,7 +291,7 @@ func TestSprintClose_NoID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"close"})
+	err := HandleSprint([]string{"close", "-r", testName})
 	if err == nil {
 		t.Error("sprintClose with no ID expected error, got nil")
 	}
@@ -311,7 +311,7 @@ func TestSprintReopen_NoID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"reopen"})
+	err := HandleSprint([]string{"reopen", "-r", testName})
 	if err == nil {
 		t.Error("sprintReopen with no ID expected error, got nil")
 	}
@@ -331,7 +331,7 @@ func TestSprintTasks_NoID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"tasks"})
+	err := HandleSprint([]string{"tasks", "-r", testName})
 	if err == nil {
 		t.Error("sprintTasks with no ID expected error, got nil")
 	}
@@ -345,7 +345,7 @@ func TestSprintTasks_InvalidID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"tasks", "notanumber"})
+	err := HandleSprint([]string{"tasks", "-r", testName, "notanumber"})
 	if err == nil {
 		t.Error("sprintTasks with invalid ID expected error, got nil")
 	}
@@ -365,7 +365,7 @@ func TestSprintStats_NoID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"stats"})
+	err := HandleSprint([]string{"stats", "-r", testName})
 	if err == nil {
 		t.Error("sprintStats with no ID expected error, got nil")
 	}
@@ -379,7 +379,7 @@ func TestSprintStats_InvalidID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"stats", "notanumber"})
+	err := HandleSprint([]string{"stats", "-r", testName, "notanumber"})
 	if err == nil {
 		t.Error("sprintStats with invalid ID expected error, got nil")
 	}
@@ -399,7 +399,7 @@ func TestSprintAddTasks_NoArgs(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"add-tasks"})
+	err := HandleSprint([]string{"add-tasks", "-r", testName})
 	if err == nil {
 		t.Error("sprintAddTasks with no args expected error, got nil")
 	}
@@ -413,7 +413,7 @@ func TestSprintAddTasks_InvalidSprintID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"add-tasks", "notanumber", "1"})
+	err := HandleSprint([]string{"add-tasks", "-r", testName, "notanumber", "1"})
 	if err == nil {
 		t.Error("sprintAddTasks with invalid sprint ID expected error, got nil")
 	}
@@ -424,7 +424,7 @@ func TestSprintAddTasks_InvalidTaskID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"add-tasks", "1", "notanumber"})
+	err := HandleSprint([]string{"add-tasks", "-r", testName, "1", "notanumber"})
 	if err == nil {
 		t.Error("sprintAddTasks with invalid task ID expected error, got nil")
 	}
@@ -444,7 +444,7 @@ func TestSprintRemoveTasks_NoArgs(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"remove-tasks"})
+	err := HandleSprint([]string{"remove-tasks", "-r", testName})
 	if err == nil {
 		t.Error("sprintRemoveTasks with no args expected error, got nil")
 	}
@@ -467,7 +467,7 @@ func TestSprintMoveTasks_NoArgs(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"move-tasks"})
+	err := HandleSprint([]string{"move-tasks", "-r", testName})
 	if err == nil {
 		t.Error("sprintMoveTasks with no args expected error, got nil")
 	}
@@ -481,7 +481,7 @@ func TestSprintMoveTasks_InvalidFromID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"move-tasks", "notanumber", "2", "3"})
+	err := HandleSprint([]string{"move-tasks", "-r", testName, "notanumber", "2", "3"})
 	if err == nil {
 		t.Error("sprintMoveTasks with invalid from ID expected error, got nil")
 	}
@@ -492,7 +492,7 @@ func TestSprintMoveTasks_InvalidToID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"move-tasks", "1", "notanumber", "3"})
+	err := HandleSprint([]string{"move-tasks", "-r", testName, "1", "notanumber", "3"})
 	if err == nil {
 		t.Error("sprintMoveTasks with invalid to ID expected error, got nil")
 	}
@@ -503,7 +503,7 @@ func TestSprintMoveTasks_InvalidTaskID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"move-tasks", "1", "2", "notanumber"})
+	err := HandleSprint([]string{"move-tasks", "-r", testName, "1", "2", "notanumber"})
 	if err == nil {
 		t.Error("sprintMoveTasks with invalid task ID expected error, got nil")
 	}

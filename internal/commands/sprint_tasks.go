@@ -112,7 +112,7 @@ func sprintStats(args []string) error {
 		// Return exit code 1 for missing roadmap in sprint stats (per SPEC/COMMANDS.md)
 		// Using fmt.Errorf without sentinel error to get default exit code 1
 		if utils.IsNoRoadmap(err) {
-			return fmt.Errorf("Roadmap not specified. Use -r flag or set a default with 'rmp roadmap use'")
+			return fmt.Errorf("%w: use -r <name> or --roadmap <name>", utils.ErrNoRoadmap)
 		}
 		return err
 	}

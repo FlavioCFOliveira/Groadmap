@@ -96,22 +96,7 @@ func TestIntegration_RoadmapLifecycle(t *testing.T) {
 		}
 	}
 
-	// Step 3: Use roadmap
-	err = HandleRoadmap([]string{"use", testRoadmap})
-	if err != nil {
-		t.Errorf("failed to use roadmap: %v", err)
-	}
-
-	// Verify current roadmap
-	current, err := getCurrentRoadmap()
-	if err != nil {
-		t.Errorf("failed to get current roadmap: %v", err)
-	}
-	if current != testRoadmap {
-		t.Errorf("current roadmap = %q, want %q", current, testRoadmap)
-	}
-
-	// Step 4: Remove roadmap
+	// Step 3: Remove roadmap
 	err = HandleRoadmap([]string{"remove", testRoadmap})
 	if err != nil {
 		t.Errorf("failed to remove roadmap: %v", err)
@@ -130,22 +115,18 @@ func TestIntegration_TaskLifecycle(t *testing.T) {
 	cleanupIntegrationTest(t, testRoadmap)
 	defer cleanupIntegrationTest(t, testRoadmap)
 
-	// Create roadmap and set as current
+	// Create roadmap
 	err := HandleRoadmap([]string{"create", testRoadmap})
 	if err != nil {
 		t.Fatalf("failed to create roadmap: %v", err)
 	}
 	defer HandleRoadmap([]string{"remove", testRoadmap})
 
-	err = HandleRoadmap([]string{"use", testRoadmap})
-	if err != nil {
-		t.Fatalf("failed to use roadmap: %v", err)
-	}
-
 	// Step 1: Create task
 	output := captureOutput(t, func() {
 		err := HandleTask([]string{
 			"create",
+			"-r", testRoadmap,
 			"-t", "Integration test task",
 			"-fr", "Perform integration test",
 			"-tr", "Task created successfully",
@@ -170,7 +151,7 @@ func TestIntegration_TaskLifecycle(t *testing.T) {
 
 	// Step 2: Get task
 	output = captureOutput(t, func() {
-		err := HandleTask([]string{"get", string(rune('0' + taskID))})
+		err := HandleTask([]string{"get", "-r", testRoadmap, string(rune('0' + taskID))})
 		if err != nil {
 			t.Errorf("failed to get task: %v", err)
 		}
@@ -192,7 +173,7 @@ func TestIntegration_TaskLifecycle(t *testing.T) {
 
 	// Step 3: List tasks
 	output = captureOutput(t, func() {
-		err := HandleTask([]string{"list"})
+		err := HandleTask([]string{"list", "-r", testRoadmap})
 		if err != nil {
 			t.Errorf("failed to list tasks: %v", err)
 		}
@@ -206,6 +187,7 @@ func TestIntegration_TaskLifecycle(t *testing.T) {
 	// Step 4: Edit task
 	err = HandleTask([]string{
 		"edit",
+		"-r", testRoadmap,
 		string(rune('0' + taskID)),
 		"-t", "Updated integration test task",
 	})
@@ -216,6 +198,7 @@ func TestIntegration_TaskLifecycle(t *testing.T) {
 	// Step 5: Set task status (valid transition: BACKLOG -> SPRINT)
 	err = HandleTask([]string{
 		"stat",
+		"-r", testRoadmap,
 		string(rune('0' + taskID)),
 		"SPRINT",
 	})
@@ -226,6 +209,7 @@ func TestIntegration_TaskLifecycle(t *testing.T) {
 	// Step 6: Set task priority
 	err = HandleTask([]string{
 		"prio",
+		"-r", testRoadmap,
 		string(rune('0' + taskID)),
 		"8",
 	})
@@ -234,13 +218,13 @@ func TestIntegration_TaskLifecycle(t *testing.T) {
 	}
 
 	// Step 7: Reopen task back to BACKLOG so it can be removed
-	err = HandleTask([]string{"reopen", string(rune('0' + taskID))})
+	err = HandleTask([]string{"reopen", "-r", testRoadmap, string(rune('0' + taskID))})
 	if err != nil {
 		t.Errorf("failed to reopen task: %v", err)
 	}
 
 	// Step 8: Remove task (only allowed from BACKLOG)
-	err = HandleTask([]string{"remove", string(rune('0' + taskID))})
+	err = HandleTask([]string{"remove", "-r", testRoadmap, string(rune('0' + taskID))})
 	if err != nil {
 		t.Errorf("failed to remove task: %v", err)
 	}
@@ -252,22 +236,18 @@ func TestIntegration_SprintLifecycle(t *testing.T) {
 	cleanupIntegrationTest(t, testRoadmap)
 	defer cleanupIntegrationTest(t, testRoadmap)
 
-	// Create roadmap and set as current
+	// Create roadmap
 	err := HandleRoadmap([]string{"create", testRoadmap})
 	if err != nil {
 		t.Fatalf("failed to create roadmap: %v", err)
 	}
 	defer HandleRoadmap([]string{"remove", testRoadmap})
 
-	err = HandleRoadmap([]string{"use", testRoadmap})
-	if err != nil {
-		t.Fatalf("failed to use roadmap: %v", err)
-	}
-
 	// Step 1: Create sprint
 	output := captureOutput(t, func() {
 		err := HandleSprint([]string{
 			"create",
+			"-r", testRoadmap,
 			"-d", "Integration test sprint",
 		})
 		if err != nil {
@@ -287,7 +267,7 @@ func TestIntegration_SprintLifecycle(t *testing.T) {
 
 	// Step 2: Get sprint
 	output = captureOutput(t, func() {
-		err := HandleSprint([]string{"get", string(rune('0' + sprintID))})
+		err := HandleSprint([]string{"get", "-r", testRoadmap, string(rune('0' + sprintID))})
 		if err != nil {
 			t.Errorf("failed to get sprint: %v", err)
 		}
@@ -308,7 +288,7 @@ func TestIntegration_SprintLifecycle(t *testing.T) {
 
 	// Step 3: List sprints
 	output = captureOutput(t, func() {
-		err := HandleSprint([]string{"list"})
+		err := HandleSprint([]string{"list", "-r", testRoadmap})
 		if err != nil {
 			t.Errorf("failed to list sprints: %v", err)
 		}
@@ -320,19 +300,19 @@ func TestIntegration_SprintLifecycle(t *testing.T) {
 	}
 
 	// Step 4: Start sprint
-	err = HandleSprint([]string{"start", string(rune('0' + sprintID))})
+	err = HandleSprint([]string{"start", "-r", testRoadmap, string(rune('0' + sprintID))})
 	if err != nil {
 		t.Errorf("failed to start sprint: %v", err)
 	}
 
 	// Step 5: Close sprint
-	err = HandleSprint([]string{"close", string(rune('0' + sprintID))})
+	err = HandleSprint([]string{"close", "-r", testRoadmap, string(rune('0' + sprintID))})
 	if err != nil {
 		t.Errorf("failed to close sprint: %v", err)
 	}
 
 	// Step 6: Remove sprint
-	err = HandleSprint([]string{"remove", string(rune('0' + sprintID))})
+	err = HandleSprint([]string{"remove", "-r", testRoadmap, string(rune('0' + sprintID))})
 	if err != nil {
 		t.Errorf("failed to remove sprint: %v", err)
 	}
@@ -344,21 +324,17 @@ func TestIntegration_AuditQuery(t *testing.T) {
 	cleanupIntegrationTest(t, testRoadmap)
 	defer cleanupIntegrationTest(t, testRoadmap)
 
-	// Create roadmap and set as current
+	// Create roadmap
 	err := HandleRoadmap([]string{"create", testRoadmap})
 	if err != nil {
 		t.Fatalf("failed to create roadmap: %v", err)
 	}
 	defer HandleRoadmap([]string{"remove", testRoadmap})
 
-	err = HandleRoadmap([]string{"use", testRoadmap})
-	if err != nil {
-		t.Fatalf("failed to use roadmap: %v", err)
-	}
-
 	// Create a task to generate audit entry
 	err = HandleTask([]string{
 		"create",
+		"-r", testRoadmap,
 		"-t", "Audit test task",
 		"-fr", "Test functional",
 		"-tr", "Test technical",
@@ -370,7 +346,7 @@ func TestIntegration_AuditQuery(t *testing.T) {
 
 	// Step 1: List audit entries
 	output := captureOutput(t, func() {
-		err := HandleAudit([]string{"list"})
+		err := HandleAudit([]string{"list", "-r", testRoadmap})
 		if err != nil {
 			t.Errorf("failed to list audit entries: %v", err)
 		}
@@ -386,7 +362,7 @@ func TestIntegration_AuditQuery(t *testing.T) {
 
 	// Step 2: Query audit stats
 	output = captureOutput(t, func() {
-		err := HandleAudit([]string{"stats"})
+		err := HandleAudit([]string{"stats", "-r", testRoadmap})
 		if err != nil {
 			t.Errorf("failed to get audit stats: %v", err)
 		}
@@ -421,16 +397,11 @@ func TestIntegration_ErrorHandling(t *testing.T) {
 	}
 	defer HandleRoadmap([]string{"remove", testRoadmap})
 
-	err = HandleRoadmap([]string{"use", testRoadmap})
-	if err != nil {
-		t.Fatalf("failed to use roadmap: %v", err)
-	}
-
 	// This should fail because task 999 doesn't exist
-	_ = HandleTask([]string{"get", "999"})
+	_ = HandleTask([]string{"get", "-r", testRoadmap, "999"})
 
 	// Test 3: Invalid task ID
-	err = HandleTask([]string{"get", "invalid"})
+	err = HandleTask([]string{"get", "-r", testRoadmap, "invalid"})
 	if err == nil {
 		t.Error("expected error for invalid task ID")
 	}
@@ -439,7 +410,7 @@ func TestIntegration_ErrorHandling(t *testing.T) {
 	}
 
 	// Test 4: Create task without required fields
-	err = HandleTask([]string{"create", "-t", "test"})
+	err = HandleTask([]string{"create", "-r", testRoadmap, "-t", "test"})
 	if err == nil {
 		t.Error("expected error when creating task without required fields")
 	}

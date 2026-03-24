@@ -319,7 +319,7 @@ Each layer of the stack has a designated wrapping responsibility:
 | `internal/commands/` | Field length exceeded | `utils.ErrFieldTooLarge` |
 | `internal/commands/` | Missing required flag | `utils.ErrRequired` |
 | `internal/commands/` | Invalid flag value / enum | `utils.ErrValidation` or `utils.ErrInvalidInput` |
-| `internal/commands/` | No `-r` and no `.current` | `utils.ErrNoRoadmap` |
+| `internal/commands/` | No `-r` flag provided | `utils.ErrNoRoadmap` |
 | `cmd/rmp/main.go` | Any unwrapped error | Maps via `errors.Is()` to exit code; falls back to exit 1 |
 
 #### Adding New Error Types

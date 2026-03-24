@@ -23,9 +23,6 @@ func setupTestTaskRoadmap(t *testing.T, name string) (*db.DB, func()) {
 		t.Fatalf("failed to create roadmap: %v", err)
 	}
 
-	// Set as current
-	HandleRoadmap([]string{"use", name})
-
 	cleanup := func() {
 		database.Close()
 		cleanupTestRoadmap(t, name)
@@ -87,7 +84,7 @@ func TestTaskList_WithRoadmap(t *testing.T) {
 	defer cleanup()
 
 	// Should not error
-	err := HandleTask([]string{"list"})
+	err := HandleTask([]string{"list", "-r", testName})
 	if err != nil {
 		t.Errorf("taskList error = %v", err)
 	}
@@ -111,7 +108,7 @@ func TestTaskList_WithFilters(t *testing.T) {
 
 	for _, args := range testCases {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {
-			err := HandleTask(args)
+			err := HandleTask(append(args, "-r", testName))
 			if err != nil {
 				t.Errorf("taskList(%v) error = %v", args, err)
 			}
@@ -124,7 +121,7 @@ func TestTaskList_InvalidStatus(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"list", "-s", "INVALID"})
+	err := HandleTask([]string{"list", "-r", testName, "-s", "INVALID"})
 	if err == nil {
 		t.Error("taskList with invalid status expected error, got nil")
 	}
@@ -135,7 +132,7 @@ func TestTaskList_InvalidPriority(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"list", "-p", "notanumber"})
+	err := HandleTask([]string{"list", "-r", testName, "-p", "notanumber"})
 	if err == nil {
 		t.Error("taskList with invalid priority expected error, got nil")
 	}
@@ -158,7 +155,7 @@ func TestTaskCreate_MissingTitle(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"create", "-fr", "functional", "-tr", "technical", "-ac", "criteria"})
+	err := HandleTask([]string{"create", "-r", testName, "-fr", "functional", "-tr", "technical", "-ac", "criteria"})
 	if err == nil {
 		t.Error("taskCreate without title expected error, got nil")
 	}
@@ -172,7 +169,7 @@ func TestTaskCreate_MissingFunctionalRequirements(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"create", "-t", "title", "-tr", "technical", "-ac", "criteria"})
+	err := HandleTask([]string{"create", "-r", testName, "-t", "title", "-tr", "technical", "-ac", "criteria"})
 	if err == nil {
 		t.Error("taskCreate without functional requirements expected error, got nil")
 	}
@@ -186,7 +183,7 @@ func TestTaskCreate_MissingTechnicalRequirements(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"create", "-t", "title", "-fr", "functional", "-ac", "criteria"})
+	err := HandleTask([]string{"create", "-r", testName, "-t", "title", "-fr", "functional", "-ac", "criteria"})
 	if err == nil {
 		t.Error("taskCreate without technical requirements expected error, got nil")
 	}
@@ -200,7 +197,7 @@ func TestTaskCreate_MissingAcceptanceCriteria(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"create", "-t", "title", "-fr", "functional", "-tr", "technical"})
+	err := HandleTask([]string{"create", "-r", testName, "-t", "title", "-fr", "functional", "-tr", "technical"})
 	if err == nil {
 		t.Error("taskCreate without acceptance criteria expected error, got nil")
 	}
@@ -214,7 +211,7 @@ func TestTaskCreate_InvalidPriority(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"create", "-t", "title", "-fr", "functional", "-tr", "technical", "-ac", "criteria", "-p", "invalid"})
+	err := HandleTask([]string{"create", "-r", testName, "-t", "title", "-fr", "functional", "-tr", "technical", "-ac", "criteria", "-p", "invalid"})
 	if err == nil {
 		t.Error("taskCreate with invalid priority expected error, got nil")
 	}
@@ -225,7 +222,7 @@ func TestTaskCreate_InvalidSeverity(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"create", "-t", "title", "-fr", "functional", "-tr", "technical", "-ac", "criteria", "--severity", "invalid"})
+	err := HandleTask([]string{"create", "-r", testName, "-t", "title", "-fr", "functional", "-tr", "technical", "-ac", "criteria", "--severity", "invalid"})
 	if err == nil {
 		t.Error("taskCreate with invalid severity expected error, got nil")
 	}
@@ -238,6 +235,7 @@ func TestTaskCreate_Success(t *testing.T) {
 
 	err := HandleTask([]string{
 		"create",
+		"-r", testName,
 		"-t", "Test task title",
 		"-fr", "Functional requirements",
 		"-tr", "Technical requirements",
@@ -257,6 +255,7 @@ func TestTaskCreate_WithSpecialists(t *testing.T) {
 
 	err := HandleTask([]string{
 		"create",
+		"-r", testName,
 		"-t", "Task with specialists",
 		"-fr", "Functional",
 		"-tr", "Technical",
@@ -282,7 +281,7 @@ func TestTaskGet_NoID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"get"})
+	err := HandleTask([]string{"get", "-r", testName})
 	if err == nil {
 		t.Error("taskGet with no ID expected error, got nil")
 	}
@@ -296,7 +295,7 @@ func TestTaskGet_InvalidID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"get", "notanumber"})
+	err := HandleTask([]string{"get", "-r", testName, "notanumber"})
 	if err == nil {
 		t.Error("taskGet with invalid ID expected error, got nil")
 	}
@@ -310,7 +309,7 @@ func TestTaskGet_ZeroID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"get", "0"})
+	err := HandleTask([]string{"get", "-r", testName, "0"})
 	if err == nil {
 		t.Error("taskGet with zero ID expected error, got nil")
 	}
@@ -324,7 +323,7 @@ func TestTaskGet_NegativeID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"get", "-1"})
+	err := HandleTask([]string{"get", "-r", testName, "-1"})
 	if err == nil {
 		t.Error("taskGet with negative ID expected error, got nil")
 	}
@@ -338,7 +337,7 @@ func TestTaskGet_OverflowID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"get", "99999999999999999"})
+	err := HandleTask([]string{"get", "-r", testName, "99999999999999999"})
 	if err == nil {
 		t.Error("taskGet with overflow ID expected error, got nil")
 	}
@@ -370,7 +369,7 @@ func TestTaskGet_MultipleIDs(t *testing.T) {
 	}
 
 	// Get multiple tasks
-	err := HandleTask([]string{"get", "1,2,3"})
+	err := HandleTask([]string{"get", "-r", testName, "1,2,3"})
 	if err != nil {
 		t.Errorf("taskGet with multiple IDs error = %v", err)
 	}
@@ -390,7 +389,7 @@ func TestTaskEdit_NoID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"edit"})
+	err := HandleTask([]string{"edit", "-r", testName})
 	if err == nil {
 		t.Error("taskEdit with no ID expected error, got nil")
 	}
@@ -404,7 +403,7 @@ func TestTaskEdit_InvalidID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"edit", "notanumber"})
+	err := HandleTask([]string{"edit", "-r", testName, "notanumber"})
 	if err == nil {
 		t.Error("taskEdit with invalid ID expected error, got nil")
 	}
@@ -415,7 +414,7 @@ func TestTaskEdit_NoFields(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"edit", "1"})
+	err := HandleTask([]string{"edit", "-r", testName, "1"})
 	if err == nil {
 		t.Error("taskEdit with no fields expected error, got nil")
 	}
@@ -429,7 +428,7 @@ func TestTaskEdit_InvalidPriority(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"edit", "1", "-p", "invalid"})
+	err := HandleTask([]string{"edit", "-r", testName, "1", "-p", "invalid"})
 	if err == nil {
 		t.Error("taskEdit with invalid priority expected error, got nil")
 	}
@@ -440,7 +439,7 @@ func TestTaskEdit_EmptyTitle(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"edit", "1", "-t", ""})
+	err := HandleTask([]string{"edit", "-r", testName, "1", "-t", ""})
 	if err == nil {
 		t.Error("taskEdit with empty title expected error, got nil")
 	}
@@ -454,7 +453,7 @@ func TestTaskEdit_EmptyFunctionalRequirements(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"edit", "1", "-fr", ""})
+	err := HandleTask([]string{"edit", "-r", testName, "1", "-fr", ""})
 	if err == nil {
 		t.Error("taskEdit with empty functional requirements expected error, got nil")
 	}
@@ -468,7 +467,7 @@ func TestTaskEdit_EmptyTechnicalRequirements(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"edit", "1", "-tr", ""})
+	err := HandleTask([]string{"edit", "-r", testName, "1", "-tr", ""})
 	if err == nil {
 		t.Error("taskEdit with empty technical requirements expected error, got nil")
 	}
@@ -482,7 +481,7 @@ func TestTaskEdit_EmptyAcceptanceCriteria(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"edit", "1", "-ac", ""})
+	err := HandleTask([]string{"edit", "-r", testName, "1", "-ac", ""})
 	if err == nil {
 		t.Error("taskEdit with empty acceptance criteria expected error, got nil")
 	}
@@ -497,7 +496,7 @@ func TestTaskEdit_EmptySpecialistsAllowed(t *testing.T) {
 	defer cleanup()
 
 	// Empty specialists should be allowed (optional field)
-	err := HandleTask([]string{"edit", "1", "-sp", ""})
+	err := HandleTask([]string{"edit", "-r", testName, "1", "-sp", ""})
 	// This may fail because task 1 doesn't exist, but should NOT fail due to empty specialists
 	// The error should be about task not found, not about empty field
 	if err != nil {
@@ -522,7 +521,7 @@ func TestTaskRemove_NoID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"remove"})
+	err := HandleTask([]string{"remove", "-r", testName})
 	if err == nil {
 		t.Error("taskRemove with no ID expected error, got nil")
 	}
@@ -536,7 +535,7 @@ func TestTaskRemove_InvalidID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"remove", "notanumber"})
+	err := HandleTask([]string{"remove", "-r", testName, "notanumber"})
 	if err == nil {
 		t.Error("taskRemove with invalid ID expected error, got nil")
 	}
@@ -556,7 +555,7 @@ func TestTaskSetStatus_NoArgs(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"stat"})
+	err := HandleTask([]string{"stat", "-r", testName})
 	if err == nil {
 		t.Error("taskSetStatus with no args expected error, got nil")
 	}
@@ -570,7 +569,7 @@ func TestTaskSetStatus_InvalidStatus(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"stat", "1", "INVALID"})
+	err := HandleTask([]string{"stat", "-r", testName, "1", "INVALID"})
 	if err == nil {
 		t.Error("taskSetStatus with invalid status expected error, got nil")
 	}
@@ -581,7 +580,7 @@ func TestTaskSetStatus_InvalidID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"stat", "notanumber", "DOING"})
+	err := HandleTask([]string{"stat", "-r", testName, "notanumber", "DOING"})
 	if err == nil {
 		t.Error("taskSetStatus with invalid ID expected error, got nil")
 	}
@@ -601,7 +600,7 @@ func TestTaskSetPriority_NoArgs(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"prio"})
+	err := HandleTask([]string{"prio", "-r", testName})
 	if err == nil {
 		t.Error("taskSetPriority with no args expected error, got nil")
 	}
@@ -615,7 +614,7 @@ func TestTaskSetPriority_InvalidPriority(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"prio", "1", "invalid"})
+	err := HandleTask([]string{"prio", "-r", testName, "1", "invalid"})
 	if err == nil {
 		t.Error("taskSetPriority with invalid priority expected error, got nil")
 	}
@@ -626,7 +625,7 @@ func TestTaskSetPriority_OutOfRange(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"prio", "1", "10"})
+	err := HandleTask([]string{"prio", "-r", testName, "1", "10"})
 	if err == nil {
 		t.Error("taskSetPriority with priority > 9 expected error, got nil")
 	}
@@ -649,7 +648,7 @@ func TestTaskSetSeverity_NoArgs(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"sev"})
+	err := HandleTask([]string{"sev", "-r", testName})
 	if err == nil {
 		t.Error("taskSetSeverity with no args expected error, got nil")
 	}
@@ -663,7 +662,7 @@ func TestTaskSetSeverity_InvalidSeverity(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"sev", "1", "invalid"})
+	err := HandleTask([]string{"sev", "-r", testName, "1", "invalid"})
 	if err == nil {
 		t.Error("taskSetSeverity with invalid severity expected error, got nil")
 	}
@@ -674,7 +673,7 @@ func TestTaskSetSeverity_OutOfRange(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"sev", "1", "10"})
+	err := HandleTask([]string{"sev", "-r", testName, "1", "10"})
 	if err == nil {
 		t.Error("taskSetSeverity with severity > 9 expected error, got nil")
 	}

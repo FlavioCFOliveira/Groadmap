@@ -396,6 +396,7 @@ func TestBoundary_SQLInjection_TitleInCreate(t *testing.T) {
 			out := captureOutput(t, func() {
 				if err := HandleTask([]string{
 					"create",
+					"-r", roadmap,
 					"-t", title,
 					"-fr", "SQL injection test: functional requirements remain intact",
 					"-tr", "Parameterized queries prevent SQL injection by design",
@@ -429,6 +430,7 @@ func TestBoundary_SQLInjection_FunctionalRequirements(t *testing.T) {
 	out := captureOutput(t, func() {
 		if err := HandleTask([]string{
 			"create",
+			"-r", roadmap,
 			"-t", "Validate parameterized query security in functional requirements",
 			"-fr", injectionFR,
 			"-tr", "All database queries use parameterized placeholders",
@@ -459,6 +461,7 @@ func TestBoundary_SQLInjection_SprintDescription(t *testing.T) {
 	out := captureOutput(t, func() {
 		if err := HandleSprint([]string{
 			"create",
+			"-r", roadmap,
 			"-d", injectionDesc,
 		}); err != nil {
 			t.Errorf("sprintCreate with SQL-injection description error = %v", err)
@@ -484,6 +487,7 @@ func TestHandleTask_Create_Priority_OutOfRange_Negative(t *testing.T) {
 	defer cleanup()
 	err := HandleTask([]string{
 		"create",
+		"-r", roadmap,
 		"-t", "Validate priority lower bound rejection",
 		"-fr", "System must reject negative priority values",
 		"-tr", "Input validation occurs before database insertion",
@@ -501,6 +505,7 @@ func TestHandleTask_Create_Priority_OutOfRange_TooHigh(t *testing.T) {
 	defer cleanup()
 	err := HandleTask([]string{
 		"create",
+		"-r", roadmap,
 		"-t", "Validate priority upper bound rejection",
 		"-fr", "System must reject priority values above 9",
 		"-tr", "Input validation occurs before database insertion",
@@ -518,6 +523,7 @@ func TestHandleTask_Create_Severity_OutOfRange_Negative(t *testing.T) {
 	defer cleanup()
 	err := HandleTask([]string{
 		"create",
+		"-r", roadmap,
 		"-t", "Validate severity lower bound rejection",
 		"-fr", "System must reject negative severity values",
 		"-tr", "Input validation occurs before database insertion",
@@ -535,6 +541,7 @@ func TestHandleTask_Create_Severity_OutOfRange_TooHigh(t *testing.T) {
 	defer cleanup()
 	err := HandleTask([]string{
 		"create",
+		"-r", roadmap,
 		"-t", "Validate severity upper bound rejection",
 		"-fr", "System must reject severity values above 9",
 		"-tr", "Input validation occurs before database insertion",
@@ -556,6 +563,7 @@ func TestHandleTask_Create_Title_ExactMaxLength(t *testing.T) {
 	out := captureOutput(t, func() {
 		if err := HandleTask([]string{
 			"create",
+			"-r", roadmap,
 			"-t", exactTitle,
 			"-fr", "Title at exact maximum byte boundary must be accepted",
 			"-tr", "String length validation uses byte count consistent with len() in Go",
@@ -581,6 +589,7 @@ func TestHandleTask_Create_Title_OneBeyondMaxLength(t *testing.T) {
 	overTitle := repeatByte('x', models.MaxTaskTitle+1)
 	err := HandleTask([]string{
 		"create",
+		"-r", roadmap,
 		"-t", overTitle,
 		"-fr", "Title one byte over maximum must be rejected",
 		"-tr", "Validation rejects the payload before reaching the database",
@@ -603,6 +612,7 @@ func TestHandleTask_Create_Unicode_CJKTitle_RoundTrip(t *testing.T) {
 	out := captureOutput(t, func() {
 		if err := HandleTask([]string{
 			"create",
+			"-r", roadmap,
 			"-t", unicodeTitle,
 			"-fr", unicodeFR,
 			"-tr", "SQLite stores UTF-8 natively; no transcoding layer required",
@@ -634,6 +644,7 @@ func TestHandleTask_Create_Unicode_AccentedTitle_RoundTrip(t *testing.T) {
 	out := captureOutput(t, func() {
 		if err := HandleTask([]string{
 			"create",
+			"-r", roadmap,
 			"-t", accentTitle,
 			"-fr", "Permitir autenticação via fornecedor SSO corporativo",
 			"-tr", "Integrar Auth0 SDK; actualizar middleware de sessão",
@@ -661,6 +672,7 @@ func TestHandleTask_Create_Unicode_RTLTitle_RoundTrip(t *testing.T) {
 	out := captureOutput(t, func() {
 		if err := HandleTask([]string{
 			"create",
+			"-r", roadmap,
 			"-t", rtlTitle,
 			"-fr", "Enable secure payment processing for Arabic-locale customers",
 			"-tr", "Integrate Stripe SDK with locale-aware error messages",
@@ -690,6 +702,7 @@ func TestHandleTask_Create_LongFunctionalRequirements_ExactMax(t *testing.T) {
 	out := captureOutput(t, func() {
 		if err := HandleTask([]string{
 			"create",
+			"-r", roadmap,
 			"-t", "Verify max-length functional requirements are accepted",
 			"-fr", exactFR,
 			"-tr", "String length validation uses len() byte count",
@@ -716,6 +729,7 @@ func TestHandleTask_Create_LongFunctionalRequirements_OneBeyondMax(t *testing.T)
 	overFR := repeatByte('f', models.MaxTaskFunctionalRequirements+1)
 	err := HandleTask([]string{
 		"create",
+		"-r", roadmap,
 		"-t", "Verify over-max functional requirements are rejected",
 		"-fr", overFR,
 		"-tr", "Validation rejects input before database insertion",
@@ -736,6 +750,7 @@ func TestBoundary_DB_Priority_MinBoundary(t *testing.T) {
 	out := captureOutput(t, func() {
 		if err := HandleTask([]string{
 			"create",
+			"-r", roadmap,
 			"-t", "Verify minimum priority stored correctly in the database",
 			"-fr", "Priority 0 must be persisted and retrieved without loss",
 			"-tr", "Database stores integer value 0 for priority column",
@@ -762,6 +777,7 @@ func TestBoundary_DB_Priority_MaxBoundary(t *testing.T) {
 	out := captureOutput(t, func() {
 		if err := HandleTask([]string{
 			"create",
+			"-r", roadmap,
 			"-t", "Verify maximum priority stored correctly in the database",
 			"-fr", "Priority 9 must be persisted and retrieved without loss",
 			"-tr", "Database stores integer value 9 for priority column",
@@ -788,6 +804,7 @@ func TestBoundary_DB_Severity_MinBoundary(t *testing.T) {
 	out := captureOutput(t, func() {
 		if err := HandleTask([]string{
 			"create",
+			"-r", roadmap,
 			"-t", "Verify minimum severity stored correctly in the database",
 			"-fr", "Severity 0 must be persisted and retrieved without loss",
 			"-tr", "Database stores integer value 0 for severity column",
@@ -814,6 +831,7 @@ func TestBoundary_DB_Severity_MaxBoundary(t *testing.T) {
 	out := captureOutput(t, func() {
 		if err := HandleTask([]string{
 			"create",
+			"-r", roadmap,
 			"-t", "Verify maximum severity stored correctly in the database",
 			"-fr", "Severity 9 must be persisted and retrieved without loss",
 			"-tr", "Database stores integer value 9 for severity column",
@@ -842,6 +860,7 @@ func TestBoundary_DB_UpdateTaskPriority_MinBoundary(t *testing.T) {
 	out := captureOutput(t, func() {
 		if err := HandleTask([]string{
 			"create",
+			"-r", roadmap,
 			"-t", "Verify UpdateTaskPriority accepts minimum value 0",
 			"-fr", "Priority can be updated to 0 after task creation",
 			"-tr", "UpdateTaskPriority issues parameterized SQL UPDATE",
@@ -871,6 +890,7 @@ func TestBoundary_DB_UpdateTaskPriority_MaxBoundary(t *testing.T) {
 	out := captureOutput(t, func() {
 		if err := HandleTask([]string{
 			"create",
+			"-r", roadmap,
 			"-t", "Verify UpdateTaskPriority accepts maximum value 9",
 			"-fr", "Priority can be updated to 9 after task creation",
 			"-tr", "UpdateTaskPriority issues parameterized SQL UPDATE",
@@ -900,6 +920,7 @@ func TestBoundary_DB_UpdateTaskSeverity_MinBoundary(t *testing.T) {
 	out := captureOutput(t, func() {
 		if err := HandleTask([]string{
 			"create",
+			"-r", roadmap,
 			"-t", "Verify UpdateTaskSeverity accepts minimum value 0",
 			"-fr", "Severity can be updated to 0 after task creation",
 			"-tr", "UpdateTaskSeverity issues parameterized SQL UPDATE",
@@ -929,6 +950,7 @@ func TestBoundary_DB_UpdateTaskSeverity_MaxBoundary(t *testing.T) {
 	out := captureOutput(t, func() {
 		if err := HandleTask([]string{
 			"create",
+			"-r", roadmap,
 			"-t", "Verify UpdateTaskSeverity accepts maximum value 9",
 			"-fr", "Severity can be updated to 9 after task creation",
 			"-tr", "UpdateTaskSeverity issues parameterized SQL UPDATE",

@@ -9,31 +9,18 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
-// setupTestRoadmap creates a temporary roadmap for testing
-func setupTestRoadmap(t *testing.T, name string) string {
+// setupTestRoadmap ensures the data directory exists and removes any pre-existing test roadmap.
+func setupTestRoadmap(t *testing.T, name string) {
 	t.Helper()
 
-	// Get data directory
-	dataDir, err := utils.GetDataDir()
-	if err != nil {
-		t.Fatalf("failed to get data dir: %v", err)
-	}
-
-	// Ensure data directory exists
 	if err := utils.EnsureDataDir(); err != nil {
 		t.Fatalf("failed to ensure data dir: %v", err)
 	}
 
-	// Clean up any existing test file
-	testPath := filepath.Join(dataDir, name+".db")
-	os.Remove(testPath)
-	os.Remove(testPath + "-shm")
-	os.Remove(testPath + "-wal")
-
-	return testPath
+	cleanupTestRoadmap(t, name)
 }
 
-// cleanupTestRoadmap removes test roadmap files
+// cleanupTestRoadmap removes test roadmap database files.
 func cleanupTestRoadmap(t *testing.T, name string) {
 	t.Helper()
 
@@ -218,85 +205,6 @@ func TestRoadmapRemove_Success(t *testing.T) {
 	}
 }
 
-// ==================== roadmapUse Tests ====================
-
-func TestRoadmapUse_NoName(t *testing.T) {
-	err := HandleRoadmap([]string{"use"})
-	if err == nil {
-		t.Error("roadmapUse with no name expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "roadmap name required") {
-		t.Errorf("expected 'roadmap name required' error, got: %v", err)
-	}
-}
-
-func TestRoadmapUse_NotFound(t *testing.T) {
-	err := HandleRoadmap([]string{"use", "nonexistentroadmap12345"})
-	if err == nil {
-		t.Error("using non-existent roadmap expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "not found") {
-		t.Errorf("expected 'not found' error, got: %v", err)
-	}
-}
-
-func TestRoadmapUse_Success(t *testing.T) {
-	testName := "testroadmapuse"
-	setupTestRoadmap(t, testName)
-	defer cleanupTestRoadmap(t, testName)
-
-	// Create first
-	err := HandleRoadmap([]string{"create", testName})
-	if err != nil {
-		t.Fatalf("create error = %v", err)
-	}
-
-	// Then use
-	err = HandleRoadmap([]string{"use", testName})
-	if err != nil {
-		t.Errorf("roadmapUse error = %v", err)
-	}
-
-	// Verify current was set
-	current, err := getCurrentRoadmap()
-	if err != nil {
-		t.Errorf("getCurrentRoadmap error = %v", err)
-	}
-	if current != testName {
-		t.Errorf("current roadmap = %q, want %q", current, testName)
-	}
-}
-
-// ==================== getCurrentRoadmap Tests ====================
-
-func TestGetCurrentRoadmap_NoCurrent(t *testing.T) {
-	// Remove .current file if it exists
-	dataDir, _ := utils.GetDataDir()
-	currentFile := filepath.Join(dataDir, ".current")
-	os.Remove(currentFile)
-
-	_, err := getCurrentRoadmap()
-	if err == nil {
-		t.Error("getCurrentRoadmap with no .current file expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "no roadmap selected") {
-		t.Errorf("expected 'no roadmap selected' error, got: %v", err)
-	}
-}
-
-func TestGetCurrentRoadmap_EmptyFile(t *testing.T) {
-	// Create empty .current file
-	dataDir, _ := utils.GetDataDir()
-	currentFile := filepath.Join(dataDir, ".current")
-	os.WriteFile(currentFile, []byte(""), 0600)
-	defer os.Remove(currentFile)
-
-	_, err := getCurrentRoadmap()
-	if err == nil {
-		t.Error("getCurrentRoadmap with empty .current file expected error, got nil")
-	}
-}
-
 // ==================== requireRoadmap Tests ====================
 
 func TestRequireRoadmap_FromFlag(t *testing.T) {
@@ -345,13 +253,11 @@ func TestRequireRoadmap_FromLongFlag(t *testing.T) {
 }
 
 func TestRequireRoadmap_NoRoadmap(t *testing.T) {
-	// Remove .current file
-	dataDir, _ := utils.GetDataDir()
-	currentFile := filepath.Join(dataDir, ".current")
-	os.Remove(currentFile)
-
 	_, _, err := requireRoadmap([]string{})
 	if err == nil {
-		t.Error("requireRoadmap with no roadmap expected error, got nil")
+		t.Error("requireRoadmap with no -r flag expected error, got nil")
+	}
+	if !utils.IsNoRoadmap(err) {
+		t.Errorf("expected ErrNoRoadmap, got: %v", err)
 	}
 }

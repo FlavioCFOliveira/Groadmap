@@ -30,7 +30,7 @@ import (
 //   - Returns utils.ErrRequired if required fields are missing
 //   - Returns utils.ErrInvalidInput if priority/severity are out of range
 //   - Returns utils.ErrFieldTooLarge if text fields exceed limits
-//   - Returns utils.ErrNoRoadmap if no roadmap specified and none selected
+//   - Returns utils.ErrNoRoadmap if no roadmap specified via -r flag
 //
 // Side effects:
 //   - Creates task record in database

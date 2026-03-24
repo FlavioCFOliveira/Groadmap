@@ -12,6 +12,7 @@
 | 2026-03-24 | Update | Added sub-task hierarchy: `--parent` flag on `task create`, `task subtasks <id>` subcommand, parent COMPLETED guard |
 | 2026-03-24 | Update | Added task dependency commands: `task add-dep`, `task remove-dep`, `task blockers`, `task blocking`; COMPLETED guard now checks dependencies |
 | 2026-03-24 | Update | Added velocity, days_elapsed, days_remaining, and burndown fields to `sprint stats`; added average_velocity to `rmp stats` |
+| 2026-03-24 | Update | Removed `roadmap use` subcommand; `-r <name>` / `--roadmap <name>` is now always required for roadmap-scoped commands; no default roadmap mechanism exists |
 
 ## Naming Conventions
 
@@ -114,6 +115,29 @@ rmp -v
 ## Exit Codes
 
 Groadmap follows standard Unix exit code conventions. Success results in exit code `0`. Errors use specific codes (1-127) and are documented in detail in [ARCHITECTURE.md](./ARCHITECTURE.md#exit-codes).
+
+---
+
+## Roadmap Selection (Always Required)
+
+All commands that operate on a roadmap require the `-r <name>` or `--roadmap <name>` flag explicitly.
+
+**There is no default roadmap mechanism.** Omitting the flag always produces an error:
+
+```
+Error: roadmap not specified. Use -r <name> or --roadmap <name>
+```
+
+This applies to every subcommand under `task`, `sprint`, `backlog`, `audit`, and `stats`.
+
+```bash
+# Always provide -r:
+rmp task list -r myproject
+rmp sprint create -r myproject -d "Sprint 1"
+rmp stats -r myproject
+```
+
+The `-r` / `--roadmap` flag may appear anywhere among the arguments after the subcommand; the parser extracts it before processing the remaining flags.
 
 ---
 

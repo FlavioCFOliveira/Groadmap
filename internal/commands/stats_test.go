@@ -23,12 +23,6 @@ func setupTestStatsRoadmap(t *testing.T, name string) (*db.DB, func()) {
 		t.Fatalf("failed to create roadmap %q: %v", name, err)
 	}
 
-	if err := HandleRoadmap([]string{"use", name}); err != nil {
-		database.Close()
-		cleanupTestRoadmap(t, name)
-		t.Fatalf("failed to set default roadmap %q: %v", name, err)
-	}
-
 	cleanup := func() {
 		database.Close()
 		cleanupTestRoadmap(t, name)
@@ -230,10 +224,9 @@ func TestHandleStats_DefaultRoadmap(t *testing.T) {
 	_, cleanup := setupTestStatsRoadmap(t, name)
 	defer cleanup()
 
-	// Call without -r flag — relies on default roadmap set by setupTestStatsRoadmap
-	err := HandleStats([]string{})
+	err := HandleStats([]string{"-r", name})
 	if err != nil {
-		t.Fatalf("HandleStats([]) with default roadmap error = %v", err)
+		t.Fatalf("HandleStats([-r %s]) error = %v", name, err)
 	}
 }
 

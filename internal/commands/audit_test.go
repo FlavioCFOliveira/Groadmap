@@ -51,7 +51,7 @@ func TestAuditList_WithRoadmap(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleAudit([]string{"list"})
+	err := HandleAudit([]string{"list", "-r", testName})
 	if err != nil {
 		t.Errorf("auditList error = %v", err)
 	}
@@ -74,7 +74,7 @@ func TestAuditList_WithFilters(t *testing.T) {
 
 	for _, args := range testCases {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {
-			err := HandleAudit(args)
+			err := HandleAudit(append(args, "-r", testName))
 			if err != nil {
 				t.Errorf("auditList(%v) error = %v", args, err)
 			}
@@ -87,7 +87,7 @@ func TestAuditList_InvalidOperation(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleAudit([]string{"list", "-o", "INVALID_OPERATION"})
+	err := HandleAudit([]string{"list", "-r", testName, "-o", "INVALID_OPERATION"})
 	if err == nil {
 		t.Error("auditList with invalid operation expected error, got nil")
 	}
@@ -101,7 +101,7 @@ func TestAuditList_InvalidEntityType(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleAudit([]string{"list", "-e", "INVALID_TYPE"})
+	err := HandleAudit([]string{"list", "-r", testName, "-e", "INVALID_TYPE"})
 	if err == nil {
 		t.Error("auditList with invalid entity type expected error, got nil")
 	}
@@ -115,7 +115,7 @@ func TestAuditList_InvalidEntityID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleAudit([]string{"list", "--entity-id", "notanumber"})
+	err := HandleAudit([]string{"list", "-r", testName, "--entity-id", "notanumber"})
 	if err == nil {
 		t.Error("auditList with invalid entity ID expected error, got nil")
 	}
@@ -129,7 +129,7 @@ func TestAuditList_InvalidLimit(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleAudit([]string{"list", "-l", "notanumber"})
+	err := HandleAudit([]string{"list", "-r", testName, "-l", "notanumber"})
 	if err == nil {
 		t.Error("auditList with invalid limit expected error, got nil")
 	}
@@ -143,7 +143,7 @@ func TestAuditList_InvalidSinceDate(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleAudit([]string{"list", "--since", "not-a-date"})
+	err := HandleAudit([]string{"list", "-r", testName, "--since", "not-a-date"})
 	if err == nil {
 		t.Error("auditList with invalid since date expected error, got nil")
 	}
@@ -157,7 +157,7 @@ func TestAuditList_InvalidUntilDate(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleAudit([]string{"list", "--until", "not-a-date"})
+	err := HandleAudit([]string{"list", "-r", testName, "--until", "not-a-date"})
 	if err == nil {
 		t.Error("auditList with invalid until date expected error, got nil")
 	}
@@ -173,6 +173,7 @@ func TestAuditList_ValidDates(t *testing.T) {
 
 	err := HandleAudit([]string{
 		"list",
+		"-r", testName,
 		"--since", "2026-01-01T00:00:00.000Z",
 		"--until", "2026-12-31T23:59:59.000Z",
 	})
@@ -195,7 +196,7 @@ func TestAuditHistory_NoArgs(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleAudit([]string{"history"})
+	err := HandleAudit([]string{"history", "-r", testName})
 	if err == nil {
 		t.Error("auditHistory with no args expected error, got nil")
 	}
@@ -209,7 +210,7 @@ func TestAuditHistory_InvalidEntityType(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleAudit([]string{"history", "INVALID_TYPE", "1"})
+	err := HandleAudit([]string{"history", "-r", testName, "INVALID_TYPE", "1"})
 	if err == nil {
 		t.Error("auditHistory with invalid entity type expected error, got nil")
 	}
@@ -223,7 +224,7 @@ func TestAuditHistory_InvalidEntityID(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleAudit([]string{"history", "TASK", "notanumber"})
+	err := HandleAudit([]string{"history", "-r", testName, "TASK", "notanumber"})
 	if err == nil {
 		t.Error("auditHistory with invalid entity ID expected error, got nil")
 	}
@@ -237,7 +238,7 @@ func TestAuditHistory_Success(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleAudit([]string{"history", "TASK", "1"})
+	err := HandleAudit([]string{"history", "-r", testName, "TASK", "1"})
 	if err != nil {
 		t.Errorf("auditHistory error = %v", err)
 	}
@@ -257,7 +258,7 @@ func TestAuditStats_WithRoadmap(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleAudit([]string{"stats"})
+	err := HandleAudit([]string{"stats", "-r", testName})
 	if err != nil {
 		t.Errorf("auditStats error = %v", err)
 	}
@@ -268,7 +269,7 @@ func TestAuditStats_InvalidSinceDate(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleAudit([]string{"stats", "--since", "not-a-date"})
+	err := HandleAudit([]string{"stats", "-r", testName, "--since", "not-a-date"})
 	if err == nil {
 		t.Error("auditStats with invalid since date expected error, got nil")
 	}
@@ -282,7 +283,7 @@ func TestAuditStats_InvalidUntilDate(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleAudit([]string{"stats", "--until", "not-a-date"})
+	err := HandleAudit([]string{"stats", "-r", testName, "--until", "not-a-date"})
 	if err == nil {
 		t.Error("auditStats with invalid until date expected error, got nil")
 	}
@@ -298,6 +299,7 @@ func TestAuditStats_ValidDateRange(t *testing.T) {
 
 	err := HandleAudit([]string{
 		"stats",
+		"-r", testName,
 		"--since", "2026-01-01T00:00:00.000Z",
 		"--until", "2026-12-31T23:59:59.000Z",
 	})

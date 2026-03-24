@@ -155,7 +155,7 @@ usage: rmp task list [-h | --help] [-r <name>] [-s <status>] [-p <n>] [--severit
 List tasks in the selected roadmap.
 
 Options:
-   -r, --roadmap <name>   Roadmap name (required if no default set)
+   -r, --roadmap <name>   Roadmap name (required)
    -s, --status <status>  Filter by status: BACKLOG, SPRINT, DOING, TESTING, COMPLETED
    -p, --priority <n>     Filter by minimum priority (0-9)
        --severity <n>     Filter by minimum severity (0-9)
@@ -417,7 +417,7 @@ usage: rmp sprint list [-h | --help] [-r <name>] [-s <status>]
 List sprints in the selected roadmap.
 
 Options:
-   -r, --roadmap <name>   Roadmap name (required if no default set)
+   -r, --roadmap <name>   Roadmap name (required)
    -s, --status <status>  Filter by status: PENDING, OPEN, CLOSED
 
 Output: JSON array of sprint objects
@@ -991,7 +991,7 @@ usage: rmp task list [-h | --help] [-r <name>] [-s <status>] [-p <n>] [--severit
 List tasks in the selected roadmap.
 
 Options:
-   -r, --roadmap <name>   Roadmap name (required if no default set)
+   -r, --roadmap <name>   Roadmap name (required)
    -s, --status <status>  Filter by status: BACKLOG, SPRINT, DOING, TESTING, COMPLETED
    -p, --priority <n>     Filter by minimum priority (0-9)
        --severity <n>     Filter by minimum severity (0-9)
