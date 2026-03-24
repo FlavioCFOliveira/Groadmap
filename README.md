@@ -167,13 +167,29 @@ See the `SPEC/` folder for detailed technical documentation:
 
 **What is the active roadmap?**
 ```bash
-rmp roadmap list
-rmp roadmap use <name>
+rmp roadmap list               # List all roadmaps
+rmp roadmap use <name>         # Set active roadmap
+```
+
+**How do I create and switch roadmaps?**
+```bash
+rmp roadmap create <name>      # Create new roadmap
+rmp roadmap use <name>         # Set as active for all subsequent commands
+rmp roadmap remove <name>      # Permanently delete (cannot remove active roadmap)
+```
+
+**What is the overall state of the roadmap?**
+```bash
+rmp stats                      # Sprint counts, task distribution by status, average velocity
+rmp stats -r <name>            # Specific roadmap
 ```
 
 **What is in the backlog?**
 ```bash
-rmp task list --status BACKLOG
+rmp backlog list               # All backlog tasks, sorted by priority
+rmp backlog show-next 10       # Top 10 backlog tasks for sprint planning
+rmp backlog list --type BUG    # Filter by type
+rmp backlog list --priority 7  # Filter by minimum priority
 ```
 
 **What sprints exist?**
@@ -183,161 +199,159 @@ rmp sprint list --status OPEN
 rmp sprint list --status PENDING,CLOSED
 ```
 
-**How do I create a new roadmap?**
-```bash
-rmp roadmap create <name>
-```
-
-**How do I remove a roadmap?**
-```bash
-rmp roadmap remove <name>
-rmp roadmap rm <name>         # Alias
-rmp roadmap delete <name>     # Alias
-```
-- This permanently deletes the roadmap database file
-- Cannot remove the currently active roadmap
-
-**How do I switch between roadmaps?**
-```bash
-rmp roadmap use <name>
-```
-- Sets the specified roadmap as the default for all subsequent commands
-
 ---
 
 ### Task Management
 
 **How do I create a well-defined task?**
 ```bash
-rmp task create -t "Title" \
+rmp task create \
+  -t "Title" \
   -fr "Functional requirements - Why build it?" \
   -tr "Technical requirements - How to build it?" \
   -ac "Acceptance criteria - How to verify it?" \
-  --type TASK --priority 5 --severity 3
+  --type USER_STORY --priority 7 --severity 3 \
+  --specialists "go-elite-developer,qa-engineer"
+```
+
+**What task types are available?**
+- `USER_STORY` - New feature from the user's perspective
+- `TASK` - Internal work unit (setup, configuration)
+- `BUG` - Something not working as expected
+- `SUB_TASK` - Decomposition of a story or task
+- `EPIC` - Large body of work spanning multiple sprints
+- `REFACTOR` - Structural improvement without behaviour change
+- `CHORE` - Maintenance (update dependencies, cleanup)
+- `SPIKE` - Research or prototype to reduce uncertainty
+- `DESIGN_UX` - Wireframes, prototypes, interface flows
+- `IMPROVEMENT` - Refinement of an existing working feature
+
+**How do I get a task or multiple tasks?**
+```bash
+rmp task get 5
+rmp task get 1,2,3             # Bulk fetch
+```
+
+**How do I filter and search tasks?**
+```bash
+rmp task list --status BACKLOG
+rmp task list --status DOING,TESTING
+rmp task list --type BUG --severity 8,9
+rmp task list --priority 7 --status SPRINT
+rmp task list --specialists "go-elite-developer"
+rmp task list --created-since 2026-03-01
+rmp task list --sort created --limit 50
 ```
 
 **What is the next task to work on?**
 ```bash
-rmp task next              # Next task
-rmp task next -n 5         # Next 5 tasks
-```
-
-**What is the status of task X?**
-```bash
-rmp task get <id>
-rmp task get 1,2,3         # Multiple tasks (bulk)
-```
-
-**What are the high priority tasks?**
-```bash
-rmp task list --priority 8,9
-```
-
-**What are the critical bugs?**
-```bash
-rmp task list --type BUG --severity 8,9
+rmp task next                  # Next task from active sprint (by sprint order)
+rmp task next 5                # Next 5 tasks
 ```
 
 **How do I edit a task?**
 ```bash
-rmp task edit <id> -t "New title" -p 9
+rmp task edit <id> -t "New title" --priority 9 --type BUG
 ```
 
-**How do I filter tasks by type?**
-```bash
-rmp task list --type TASK
-rmp task list --type BUG
-rmp task list --type USER_STORY
-```
-
-**What task types are available?**
-- `TASK` - General task
-- `USER_STORY` - User story
-- `BUG` - Bug report
-- `SUB_TASK` - Sub-task
-- `EPIC` - Epic (large body of work)
-- `REFACTOR` - Code refactoring
-- `CHORE` - Maintenance task
-- `SPIKE` - Research/exploration task
-- `DESIGN_UX` - Design or UX work
-- `IMPROVEMENT` - Enhancement to existing feature
-
-**How do I combine multiple filters in task list?**
-```bash
-rmp task list --status BACKLOG --priority 8,9
-rmp task list --type BUG --severity 9 --status SPRINT
-```
-
-**How do I remove a task?**
+**How do I delete a task?**
 ```bash
 rmp task remove <id>
-rmp task rm <id>              # Alias
+rmp task rm 1,2,3              # Bulk delete (tasks must be in BACKLOG)
+```
+- Task must be in `BACKLOG` status and have no subtasks.
+
+---
+
+### Sub-task Hierarchy
+
+**How do I break a task into subtasks?**
+```bash
+rmp task create -t "Write unit tests" \
+  -fr "..." -tr "..." -ac "..." \
+  --type SUB_TASK --parent 42
+```
+- The parent task's `subtask_count` is updated automatically.
+
+**How do I list the subtasks of a task?**
+```bash
+rmp task subtasks 42           # Direct subtasks of task 42, ordered by priority
+```
+
+---
+
+### Task Dependencies
+
+**How do I declare that a task depends on another?**
+```bash
+rmp task add-dep 10 5          # Task 10 depends on task 5 (task 5 must complete first)
+rmp task remove-dep 10 5       # Remove that dependency
+```
+- Circular dependencies are rejected.
+
+**How do I see what is blocking a task?**
+```bash
+rmp task blockers 10           # Tasks that task 10 depends on and are not yet COMPLETED
+```
+
+**How do I see what a task is blocking?**
+```bash
+rmp task blocking 5            # Tasks that depend on task 5 and are waiting for it
 ```
 
 ---
 
 ### Sprint Lifecycle
 
-**How do I create a new sprint?**
+**How do I create a sprint with capacity control?**
 ```bash
-rmp sprint create -d "Sprint X - Description"
+rmp sprint create -d "Sprint 5 - Auth module"
+rmp sprint create -d "Sprint 5 - Auth module" --max-tasks 8   # Cap at 8 tasks
+```
+
+**How do I update a sprint?**
+```bash
+rmp sprint update <id> -d "New description"
+rmp sprint update <id> --max-tasks 10        # Update capacity limit
+rmp sprint upd <id> -d "New description" --max-tasks 10
 ```
 
 **How do I add tasks to a sprint?**
 ```bash
-rmp sprint add-tasks <sprint_id> <task_ids>
-rmp sprint add-tasks 1 1,2,3,4
+rmp sprint add-tasks 1 5,8,12,15
 ```
+- Tasks move from `BACKLOG` to `SPRINT` automatically.
+- Rejected if the sprint is at `max_tasks` capacity.
 
 **How do I define the execution order of tasks?**
 ```bash
-rmp sprint reorder <sprint_id> <order>
-rmp sprint reorder 1 3,1,2     # Task 3 first, then 1, then 2
-```
-
-**How do I adjust the position of a specific task?**
-```bash
-rmp sprint move-to <sprint_id> <task_id> <position>
-rmp sprint swap <sprint_id> <task1> <task2>
-rmp sprint top <sprint_id> <task_id>
-rmp sprint bottom <sprint_id> <task_id>
+rmp sprint reorder 1 3,1,2        # Task 3 first, then 1, then 2
+rmp sprint move-to 1 8 0          # Move task 8 to position 0 (top)
+rmp sprint top 1 8                # Same as above, shorthand
+rmp sprint bottom 1 8             # Move task 8 to last position
+rmp sprint swap 1 3 7             # Swap positions of tasks 3 and 7
 ```
 
 **How do I start a sprint?**
 ```bash
 rmp sprint start <id>
 ```
+- Only one sprint can be `OPEN` at a time.
 
 **How do I move tasks between sprints?**
 ```bash
-rmp sprint move-tasks <from_sprint> <to_sprint> <task_ids>
-rmp sprint move-tasks 1 2 5,6,7
+rmp sprint move-tasks 1 2 5,6,7   # Move tasks 5, 6, 7 from sprint 1 to sprint 2
 ```
 
 **How do I remove tasks from a sprint?**
 ```bash
-rmp sprint remove-tasks <sprint_id> <task_ids>
-```
-
-**How do I see the detailed status of a sprint?**
-```bash
-rmp sprint show <id>
-```
-
-**How do I get sprint statistics?**
-```bash
-rmp sprint stats <id>
-```
-
-**How do I list only the tasks in a sprint?**
-```bash
-rmp sprint tasks <id>
-rmp sprint tasks <id> --status DOING
+rmp sprint remove-tasks 1 5,6     # Tasks return to BACKLOG
 ```
 
 **How do I close a sprint?**
 ```bash
 rmp sprint close <id>
+rmp sprint close <id> --force     # Bypass active-task check
 ```
 
 **How do I reopen a closed sprint?**
@@ -348,19 +362,12 @@ rmp sprint reopen <id>
 **How do I remove a sprint?**
 ```bash
 rmp sprint remove <id>
-rmp sprint rm <id>              # Alias
+rmp sprint rm <id>
 ```
-- Tasks in the sprint return to BACKLOG status
-- Sprint must be CLOSED before removal
-
-**How do I update a sprint's description?**
-```bash
-rmp sprint update <id> -d "New description"
-rmp sprint upd <id> -d "New description"   # Alias
-```
+- Sprint must be `CLOSED`. Tasks return to `BACKLOG`.
 
 **Can I have multiple open sprints?**
-No. Only one sprint can be OPEN at a time. You must close the current sprint before starting another.
+No. Only one sprint can be `OPEN` at a time. Close the current sprint before starting another.
 
 ---
 
@@ -368,87 +375,97 @@ No. Only one sprint can be OPEN at a time. You must close the current sprint bef
 
 **How do I start working on a task?**
 ```bash
-rmp task stat <id> DOING      # Automatically sets started_at
+rmp task stat <id> DOING          # Sets started_at automatically
 ```
 
 **How do I mark a task as ready for testing?**
 ```bash
-rmp task stat <id> TESTING    # Automatically sets tested_at
+rmp task stat <id> TESTING        # Sets tested_at automatically
 ```
 
 **What do I do if a task fails testing?**
 ```bash
-rmp task stat <id> DOING      # Returns to development
+rmp task stat <id> DOING          # Return to development
 ```
 
 **How do I complete a task?**
 ```bash
-rmp task stat <id> COMPLETED  # Automatically sets closed_at
+rmp task stat <id> COMPLETED
+rmp task stat <id> COMPLETED --summary "Implemented OAuth2 with PKCE flow"
 ```
+- `--summary` is optional (max 4096 chars) and only valid on the `TESTING → COMPLETED` transition.
+- `closed_at` is set automatically.
 
-**How do I change a task's priority?**
+**How do I bulk-change task status?**
 ```bash
-rmp task prio <id> <0-9>
-```
-
-**How do I change a task's severity?**
-```bash
-rmp task sev <id> <0-9>
+rmp task stat 1,2,3 TESTING
 ```
 
 **How do I reopen a completed task?**
 ```bash
-rmp task stat <id> BACKLOG    # Returns to backlog, clears tracking dates
+rmp task reopen <id>              # Returns to BACKLOG, clears all lifecycle timestamps
+rmp task reopen 1,2,3             # Bulk reopen
+```
+
+**How do I change priority or severity?**
+```bash
+rmp task prio <id> 9              # Priority 0-9
+rmp task sev <id> 8               # Severity 0-9
+rmp task prio 1,2,3 7             # Bulk update
+```
+
+**How do I assign or remove specialists?**
+```bash
+rmp task assign <id> "go-elite-developer"
+rmp task unassign <id> "go-elite-developer"
 ```
 
 ---
 
 ### Visibility and Reporting
 
-**How is the sprint going?**
+**How is the sprint going? (comprehensive view)**
 ```bash
-rmp sprint show <id>          # Complete report with distributions
+rmp sprint show <id>
 ```
+Returns: status, task summary (pending/in-progress/completed), progress percentages, severity distribution, criticality distribution, task order, current load, and capacity percentage.
 
-**How many tasks are in each status?**
+**How many tasks are in each status? (metrics and velocity)**
 ```bash
 rmp sprint stats <id>
 ```
+Returns: total tasks, completed tasks, progress percentage, status distribution, task order, velocity (tasks/day, CLOSED sprints only), days elapsed, and burndown series.
 
-**How do I see a task's history?**
+**What tasks are still open in the sprint?**
 ```bash
-rmp audit history --entity-type TASK --id <id>
+rmp sprint open-tasks <id>                    # SPRINT + DOING + TESTING only
+rmp sprint open-tasks <id> --order-by-priority
+```
+
+**How do I list all tasks in a sprint?**
+```bash
+rmp sprint tasks <id>
+rmp sprint tasks <id> --status DOING
+rmp sprint tasks <id> --order-by-priority
+```
+
+**How do I see a task's full audit history?**
+```bash
+rmp audit history --entity-type TASK --entity-id <id>
 ```
 
 **What happened recently?**
 ```bash
 rmp audit list --today
 rmp audit list --limit 20
-```
-
-**How do I view all audit operations?**
-```bash
-rmp audit list
+rmp audit list --since 2026-03-20
 rmp audit list --entity-type SPRINT
 ```
 
 **How do I see audit statistics?**
 ```bash
 rmp audit stats
-```
-
-**What task statuses are available for filtering?**
-- `BACKLOG` - Not in any sprint
-- `SPRINT` - In a sprint but not started
-- `DOING` - Currently being worked on
-- `TESTING` - Ready for or in testing
-- `COMPLETED` - Finished
-
-**How do I list tasks in a specific status?**
-```bash
-rmp task list --status DOING
-rmp task list --status TESTING,COMPLETED
-rmp task list --status BACKLOG,SPRINT    # All non-active tasks
+rmp audit stats --since 2026-03-01 --until 2026-03-31
 ```
 
 ---
@@ -457,62 +474,66 @@ rmp task list --status BACKLOG,SPRINT    # All non-active tasks
 
 **What is the difference between Priority and Severity?**
 
-- **Priority (0-9)**: Product Owner perspective (business urgency)
-  - Set with: `rmp task prio <id> <value>`
-  - Filter: `rmp task list --priority 8,9`
+- **Priority (0-9)**: business urgency, set by the Product Owner.
+  - `rmp task prio <id> 9` / filter: `--priority 8,9`
+- **Severity (0-9)**: technical impact, set by the engineering team.
+  - `rmp task sev <id> 8` / filter: `--severity 8,9`
 
-- **Severity (0-9)**: Technical team perspective (technical impact)
-  - Set with: `rmp task sev <id> <value>`
-  - Filter: `rmp task list --severity 8,9`
+Both scales run 0 (lowest) to 9 (highest). Use them independently.
 
-**What is the difference between sprint order and priority?**
+**What is the difference between `sprint show` and `sprint stats`?**
 
-**Sprint order** is defined manually by the team and determines execution sequence:
+- `sprint show` — operational view: task composition, severity/criticality distributions, capacity load.
+- `sprint stats` — metric view: velocity, burndown, days elapsed, progress percentage.
+
+**What is the difference between sprint order and task priority?**
+
+**Sprint order** controls execution sequence within a sprint — the order `rmp task next` returns tasks:
 ```bash
-rmp sprint reorder 1 3,1,2     # Task 3 first, then 1, then 2
-rmp task next                  # Returns in defined order
+rmp sprint reorder 1 5,3,1,2
+rmp task next                   # Returns task 5 first
 ```
 
-**Priority** is a task attribute used for filtering and planning:
+**Priority** is a planning attribute for filtering and backlog grooming:
 ```bash
-rmp task list --priority 9     # List high priority tasks
+rmp backlog show-next 5         # Top 5 by priority for sprint planning
+rmp task list --priority 8,9
 ```
 
 **Where is the data stored?**
 
-Roadmaps are stored in `~/.roadmaps/` with restricted permissions (0700):
-- Each roadmap is an independent SQLite file
-- No external infrastructure or cloud services required
-- Completely local data
+In `~/.roadmaps/` with permissions `0700`. Each roadmap is an independent SQLite file. No external services or cloud required.
 
-**How do I get help on a specific command?**
+**How do I get help on any command?**
 ```bash
-rmp --help                       # General help
-rmp task --help                  # Task command help
-rmp task create --help           # Specific subcommand help
-rmp sprint --help                # Sprint command help
+rmp --help
+rmp task --help
+rmp task create --help
+rmp sprint --help
+rmp sprint show --help
 ```
 
-**What are the shorthand aliases for commands?**
+**What are the shorthand aliases?**
 - `rmp t` = `rmp task`
 - `rmp s` = `rmp sprint`
 - `rmp road` = `rmp roadmap`
 - `rmp aud` = `rmp audit`
-- `rmp ls` = `rmp list` (for list subcommands)
-- `rmp rm` = `rmp remove` (for remove subcommands)
-- `rmp new` = `rmp create` (for create subcommands)
+- `rmp new` = `rmp create`
+- `rmp ls` = `rmp list`
+- `rmp rm` = `rmp remove`
+- `rmp upd` = `rmp update`
 
 **What if I get "No roadmap selected" error?**
 ```bash
-rmp roadmap list                 # See available roadmaps
-rmp roadmap use <name>           # Select a roadmap
+rmp roadmap list
+rmp roadmap use <name>
 ```
 
-**How are dates tracked automatically?**
-- `started_at` - Set when task moves to DOING
-- `tested_at` - Set when task moves to TESTING
-- `closed_at` - Set when task moves to COMPLETED
-- These are cleared when a task returns to BACKLOG
+**How are timestamps tracked automatically?**
+- `started_at` — set when task moves to `DOING`
+- `tested_at` — set when task moves to `TESTING`
+- `closed_at` — set when task moves to `COMPLETED`
+- All three are cleared when a task is reopened to `BACKLOG`
 
 ## License
 
