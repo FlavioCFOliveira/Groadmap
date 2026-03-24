@@ -86,6 +86,7 @@ Maps to the `tasks` table and `Task` JSON object.
 - `TechnicalRequirements`: Maximum 4096 characters
 - `AcceptanceCriteria`: Maximum 4096 characters
 - `Specialists`: Maximum 500 characters (comma-separated list of specialist names)
+- `CompletionSummary`: Maximum 4096 characters (optional, set only on close)
 
 ```go
 // Task represents a task in the roadmap.
@@ -103,11 +104,12 @@ type Task struct {
     AcceptanceCriteria     string     `json:"acceptance_criteria"`      // How to verify: completion criteria, max 4096 chars
     CreatedAt              string     `json:"created_at"`               // ISO 8601 UTC, auto-set on creation
 
-    // Group 2: Nullable tracking fields - lifecycle timestamps (32 bytes total)
-    Specialists *string `json:"specialists"`  // Comma-separated specialists, nullable, max 500 chars
-    StartedAt   *string `json:"started_at"`   // ISO 8601 UTC, auto-set on DOING transition
-    TestedAt    *string `json:"tested_at"`    // ISO 8601 UTC, auto-set on TESTING transition
-    ClosedAt    *string `json:"closed_at"`    // ISO 8601 UTC, auto-set on COMPLETED transition
+    // Group 2: Nullable tracking fields - lifecycle timestamps and completion data (40 bytes total)
+    Specialists        *string `json:"specialists"`         // Comma-separated specialists, nullable, max 500 chars
+    StartedAt          *string `json:"started_at"`          // ISO 8601 UTC, auto-set on DOING transition
+    TestedAt           *string `json:"tested_at"`           // ISO 8601 UTC, auto-set on TESTING transition
+    ClosedAt           *string `json:"closed_at"`           // ISO 8601 UTC, auto-set on COMPLETED transition
+    CompletionSummary  *string `json:"completion_summary"`  // Optional summary of work done, settable only on TESTING → COMPLETED, max 4096 chars
 
     // Group 3: Numeric metadata fields (24 bytes total)
     ID       int `json:"id"`       // Primary key

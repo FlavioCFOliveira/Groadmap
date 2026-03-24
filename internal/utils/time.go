@@ -46,9 +46,9 @@ func ParseISO8601(s string) (time.Time, error) {
 
 	// Try formats in order of preference.
 	formats := []string{
-		ISO8601Format,       // YYYY-MM-DDTHH:mm:ss.sssZ (primary)
-		time.RFC3339Nano,    // accepts +00:00 offset and sub-second precision
-		time.RFC3339,        // accepts +00:00 offset without fractional seconds
+		ISO8601Format,    // YYYY-MM-DDTHH:mm:ss.sssZ (primary)
+		time.RFC3339Nano, // accepts +00:00 offset and sub-second precision
+		time.RFC3339,     // accepts +00:00 offset without fractional seconds
 	}
 
 	var t time.Time

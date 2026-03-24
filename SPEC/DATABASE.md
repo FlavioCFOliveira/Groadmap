@@ -28,6 +28,7 @@ Each roadmap is stored in an individual SQLite file. The schema is designed to b
 |  - started_at (TEXT ISO8601, NULL)     |
 |  - tested_at (TEXT ISO8601, NULL)      |
 |  - closed_at (TEXT ISO8601, NULL)      |
+|  - completion_summary (TEXT, NULL)     |
 |  - priority (INTEGER 0-9)              |
 |  - severity (INTEGER 0-9)              |
 +----------------------------------------+
@@ -84,6 +85,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     started_at TEXT,                        -- ISO 8601 UTC, set when task moves to DOING
     tested_at TEXT,                         -- ISO 8601 UTC, set when task moves to TESTING
     closed_at TEXT,                         -- ISO 8601 UTC, set when task moves to COMPLETED
+    completion_summary TEXT CHECK(completion_summary IS NULL OR length(completion_summary) <= 4096),  -- Optional summary of work done, set only on TESTING → COMPLETED
 
     -- Group 3: Numeric metadata fields
     priority INTEGER NOT NULL DEFAULT 0 CHECK(priority >= 0 AND priority <= 9),
@@ -218,7 +220,7 @@ CREATE TABLE IF NOT EXISTS _metadata (
 
 -- Insert schema version on creation
 INSERT INTO _metadata (key, value) VALUES
-    ('schema_version', '1.1.0'),
+    ('schema_version', '1.2.0'),
     ('created_at', '2026-03-20T00:00:00.000Z'),
     ('application', 'Groadmap');
 ```
@@ -1151,6 +1153,7 @@ The `_metadata` table enables future schema versioning.
 |---------|------|---------|
 | 1.0.0 | 2026-03-20 | Initial schema |
 | 1.1.0 | 2026-03-20 | Added sprint_tasks position column and idx_sprint_tasks_order index |
+| 1.2.0 | 2026-03-24 | Added completion_summary column to tasks table |
 
 ### Migration Commands
 
@@ -1159,5 +1162,15 @@ The `_metadata` table enables future schema versioning.
 SELECT value FROM _metadata WHERE key = 'schema_version';
 
 -- Update version after migration
-UPDATE _metadata SET value = '1.1.0' WHERE key = 'schema_version';
+UPDATE _metadata SET value = '1.2.0' WHERE key = 'schema_version';
+```
+
+### Migration 1.1.0 → 1.2.0
+
+```sql
+-- Add completion_summary column to existing databases
+ALTER TABLE tasks ADD COLUMN completion_summary TEXT CHECK(completion_summary IS NULL OR length(completion_summary) <= 4096);
+
+-- Update schema version
+UPDATE _metadata SET value = '1.2.0' WHERE key = 'schema_version';
 ```

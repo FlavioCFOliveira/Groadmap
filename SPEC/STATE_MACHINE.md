@@ -81,8 +81,8 @@ Tasks can be in one of the following states:
 | **DOING → SPRINT** | Task is paused/returned to sprint | No date changes |
 | **DOING → TESTING** | Task is ready for testing | Set `tested_at` to current timestamp |
 | **TESTING → DOING** | Testing failed, return to development | No date changes |
-| **TESTING → COMPLETED** | Testing passed, task is complete | Set `closed_at` to current timestamp |
-| **COMPLETED → BACKLOG** | Task is reopened for rework | Clear `started_at`, `tested_at`, `closed_at` to NULL |
+| **TESTING → COMPLETED** | Testing passed, task is complete | Set `closed_at` to current timestamp; optionally set `completion_summary` |
+| **COMPLETED → BACKLOG** | Task is reopened for rework | Clear `started_at`, `tested_at`, `closed_at`, `completion_summary` to NULL |
 
 ## Date Tracking Fields
 
@@ -96,6 +96,7 @@ The following fields track the task lifecycle and are managed automatically by t
 | `started_at` | SPRINT → DOING transition | When work begins on the task |
 | `tested_at` | DOING → TESTING transition | When task enters testing phase |
 | `closed_at` | TESTING → COMPLETED transition | When task is marked complete |
+| `completion_summary` | TESTING → COMPLETED transition (optional) | Summary of work done during development; provided via `--summary` flag; NULL if not supplied |
 
 ### Rules
 
@@ -103,11 +104,13 @@ The following fields track the task lifecycle and are managed automatically by t
 2. **started_at**: Set on first transition to DOING, cleared on COMPLETED → BACKLOG
 3. **tested_at**: Set on first transition to TESTING, cleared on COMPLETED → BACKLOG
 4. **closed_at**: Set on transition to COMPLETED, cleared on COMPLETED → BACKLOG
+5. **completion_summary**: Optionally set on TESTING → COMPLETED transition via `--summary` flag; cleared on COMPLETED → BACKLOG; cannot be set on any other transition
 
 ### Reopening Behavior
 
 When a task is reopened (COMPLETED → BACKLOG):
 - All lifecycle dates (`started_at`, `tested_at`, `closed_at`) are reset to NULL
+- `completion_summary` is reset to NULL
 - `created_at` is preserved (original creation time)
 - This allows the task to go through the full lifecycle again
 
