@@ -92,7 +92,7 @@ func backlogList(args []string) error {
 	ctx, cancel := db.WithDefaultTimeout()
 	defer cancel()
 
-	tasks, err := database.ListTasks(ctx, filter)
+	tasks, err := database.ListTasks(ctx, &filter)
 	if err != nil {
 		return err
 	}
@@ -136,7 +136,7 @@ func backlogShowNext(args []string) error {
 	ctx, cancel := db.WithDefaultTimeout()
 	defer cancel()
 
-	tasks, err := database.ListTasks(ctx, filter)
+	tasks, err := database.ListTasks(ctx, &filter)
 	if err != nil {
 		return err
 	}

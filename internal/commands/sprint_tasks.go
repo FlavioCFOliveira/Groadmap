@@ -270,7 +270,7 @@ func sprintAddTasks(args []string) error {
 		}
 	}
 
-	if err = database.AddTasksToSprint(ctx, sprintID, taskIDs); err != nil {
+	if err := database.AddTasksToSprint(ctx, sprintID, taskIDs); err != nil {
 		return err
 	}
 	return logAuditForTasks(ctx, database, sprintID, models.OpSprintAddTask, len(taskIDs))
@@ -402,10 +402,10 @@ func sprintMoveTasks(args []string) error {
 	ctx, cancel := db.WithQuickTimeout()
 	defer cancel()
 
-	if err = verifySprintsExist(ctx, database, fromID, toID); err != nil {
+	if err := verifySprintsExist(ctx, database, fromID, toID); err != nil {
 		return err
 	}
-	if err = database.AddTasksToSprint(ctx, toID, taskIDs); err != nil {
+	if err := database.AddTasksToSprint(ctx, toID, taskIDs); err != nil {
 		return err
 	}
 	return logAuditForTasks(ctx, database, toID, models.OpSprintMoveTask, len(taskIDs))

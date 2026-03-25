@@ -51,20 +51,20 @@ func taskRemove(args []string) error {
 	if len(tasks) != len(ids) {
 		return fmt.Errorf("%w: some tasks not found", utils.ErrNotFound)
 	}
-	for _, task := range tasks {
-		if task.Status != models.StatusBacklog {
-			return fmt.Errorf("%w: task #%d cannot be deleted — status is %s, must be BACKLOG", utils.ErrInvalidInput, task.ID, task.Status)
+	for i := range tasks {
+		if tasks[i].Status != models.StatusBacklog {
+			return fmt.Errorf("%w: task #%d cannot be deleted — status is %s, must be BACKLOG", utils.ErrInvalidInput, tasks[i].ID, tasks[i].Status)
 		}
 	}
 
 	// Guard: prevent deleting tasks that have subtasks.
-	for _, task := range tasks {
-		hasChildren, childCount, subErr := database.HasSubTasks(ctx, task.ID)
+	for i := range tasks {
+		hasChildren, childCount, subErr := database.HasSubTasks(ctx, tasks[i].ID)
 		if subErr != nil {
 			return subErr
 		}
 		if hasChildren {
-			return fmt.Errorf("%w: task #%d cannot be deleted — it has %d subtask(s); remove them first", utils.ErrInvalidInput, task.ID, childCount)
+			return fmt.Errorf("%w: task #%d cannot be deleted — it has %d subtask(s); remove them first", utils.ErrInvalidInput, tasks[i].ID, childCount)
 		}
 	}
 
@@ -208,40 +208,40 @@ func taskSetStatus(args []string) error {
 	if len(tasks) != len(ids) {
 		return fmt.Errorf("%w: some tasks not found", utils.ErrNotFound)
 	}
-	for _, task := range tasks {
-		if !task.Status.CanTransitionTo(newStatus) {
-			return fmt.Errorf("%w: invalid status transition from %s to %s for task %d", utils.ErrInvalidInput, task.Status, newStatus, task.ID)
+	for i := range tasks {
+		if !tasks[i].Status.CanTransitionTo(newStatus) {
+			return fmt.Errorf("%w: invalid status transition from %s to %s for task %d", utils.ErrInvalidInput, tasks[i].Status, newStatus, tasks[i].ID)
 		}
 	}
 
 	// Guard: when transitioning to COMPLETED, ensure all subtasks and dependencies are also COMPLETED.
 	if newStatus == models.StatusCompleted {
-		for _, task := range tasks {
-			incompleteIDs, subErr := database.GetIncompleteSubTasks(ctx, task.ID)
+		for i := range tasks {
+			incompleteIDs, subErr := database.GetIncompleteSubTasks(ctx, tasks[i].ID)
 			if subErr != nil {
 				return subErr
 			}
 			if len(incompleteIDs) > 0 {
 				idStrsBlocking := make([]string, len(incompleteIDs))
-				for i, id := range incompleteIDs {
-					idStrsBlocking[i] = fmt.Sprintf("#%d", id)
+				for j, id := range incompleteIDs {
+					idStrsBlocking[j] = fmt.Sprintf("#%d", id)
 				}
 				return fmt.Errorf("%w: cannot mark task #%d as COMPLETED: incomplete subtasks: %s",
-					utils.ErrInvalidInput, task.ID, strings.Join(idStrsBlocking, ", "))
+					utils.ErrInvalidInput, tasks[i].ID, strings.Join(idStrsBlocking, ", "))
 			}
 
 			// Check task dependencies: all tasks this task depends on must be COMPLETED.
-			incompleteDeps, depErr := database.GetIncompleteDependencies(ctx, task.ID)
+			incompleteDeps, depErr := database.GetIncompleteDependencies(ctx, tasks[i].ID)
 			if depErr != nil {
 				return depErr
 			}
 			if len(incompleteDeps) > 0 {
 				depStrs := make([]string, len(incompleteDeps))
-				for i, id := range incompleteDeps {
-					depStrs[i] = fmt.Sprintf("#%d", id)
+				for j, id := range incompleteDeps {
+					depStrs[j] = fmt.Sprintf("#%d", id)
 				}
 				return fmt.Errorf("%w: cannot mark task #%d as COMPLETED: incomplete dependencies: %s",
-					utils.ErrInvalidInput, task.ID, strings.Join(depStrs, ", "))
+					utils.ErrInvalidInput, tasks[i].ID, strings.Join(depStrs, ", "))
 			}
 		}
 	}
@@ -371,15 +371,15 @@ func taskReopen(args []string) error {
 	// Track which tasks are in sprint-associated states so we can clean up sprint_tasks rows.
 	var toReopen []int
 	var toRemoveFromSprint []int
-	for _, task := range tasks {
-		if task.Status == models.StatusBacklog {
-			fmt.Fprintf(os.Stderr, "task #%d is already in BACKLOG\n", task.ID)
+	for i := range tasks {
+		if tasks[i].Status == models.StatusBacklog {
+			fmt.Fprintf(os.Stderr, "task #%d is already in BACKLOG\n", tasks[i].ID)
 			continue
 		}
-		toReopen = append(toReopen, task.ID)
+		toReopen = append(toReopen, tasks[i].ID)
 		// Tasks in SPRINT, DOING, or TESTING have a row in sprint_tasks that must be removed.
-		if task.Status == models.StatusSprint || task.Status == models.StatusDoing || task.Status == models.StatusTesting {
-			toRemoveFromSprint = append(toRemoveFromSprint, task.ID)
+		if tasks[i].Status == models.StatusSprint || tasks[i].Status == models.StatusDoing || tasks[i].Status == models.StatusTesting {
+			toRemoveFromSprint = append(toRemoveFromSprint, tasks[i].ID)
 		}
 	}
 
