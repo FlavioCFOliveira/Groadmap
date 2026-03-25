@@ -162,7 +162,7 @@ func TestDBClose(t *testing.T) {
 	}
 
 	// Closing again should not error (idempotent)
-	err = db.Close()
+	_ = db.Close()
 	// This may or may not error depending on implementation
 	// We just verify it doesn't panic
 }
