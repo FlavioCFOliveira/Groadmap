@@ -1,9 +1,16 @@
 package models
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
+)
+
+// Sentinel errors for sprint validation.
+var (
+	ErrInvalidSprintStatus = errors.New("invalid sprint status")
+	ErrDescriptionRequired = errors.New("description is required")
 )
 
 // SprintStatus represents the current state of a sprint.
@@ -43,7 +50,7 @@ func ParseSprintStatus(s string) (SprintStatus, error) {
 	if status, ok := validSprintStatusMap[s]; ok {
 		return status, nil
 	}
-	return "", fmt.Errorf("invalid sprint status: %q", s)
+	return "", fmt.Errorf("invalid sprint status: %q: %w", s, ErrInvalidSprintStatus)
 }
 
 // CanStart checks if a sprint can be started (PENDING -> OPEN).
@@ -69,30 +76,27 @@ const (
 // Sprint represents a sprint in the roadmap.
 // Field order optimized for memory alignment (largest fields first).
 type Sprint struct {
-	// 16-byte fields
+	StartedAt   *string      `json:"started_at"`
+	ClosedAt    *string      `json:"closed_at"`
+	MaxTasks    *int         `json:"max_tasks"`
 	Description string       `json:"description"`
-	CreatedAt   string       `json:"created_at"` // ISO 8601 UTC
-	Status      SprintStatus `json:"status"`     // string underlying type
-
-	// 8-byte fields (slice header, then pointers, then integers)
-	Tasks     []int   `json:"tasks"`      // Computed from sprint_tasks
-	StartedAt *string `json:"started_at"` // ISO 8601 UTC, nullable
-	ClosedAt  *string `json:"closed_at"`  // ISO 8601 UTC, nullable
-	MaxTasks  *int    `json:"max_tasks"`  // Optional capacity limit
-	ID        int     `json:"id"`
-	TaskCount int     `json:"task_count"` // Computed
+	CreatedAt   string       `json:"created_at"`
+	Status      SprintStatus `json:"status"`
+	Tasks       []int        `json:"tasks"`
+	ID          int          `json:"id"`
+	TaskCount   int          `json:"task_count"`
 }
 
 // Validate checks if the sprint data is valid.
 func (s *Sprint) Validate() error {
 	if s.Description == "" {
-		return fmt.Errorf("description is required")
+		return ErrDescriptionRequired
 	}
 	if len(s.Description) > MaxSprintDescription {
 		return fmt.Errorf("%w: description exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxSprintDescription)
 	}
 	if !IsValidSprintStatus(string(s.Status)) {
-		return fmt.Errorf("invalid status: %q", s.Status)
+		return fmt.Errorf("invalid status: %q: %w", s.Status, ErrInvalidSprintStatus)
 	}
 
 	// Validate dates
@@ -185,16 +189,16 @@ type BurndownEntry struct {
 
 // SprintStats represents statistics for a sprint.
 type SprintStats struct {
+	StatusDistribution map[string]int  `json:"status_distribution"`
+	DaysElapsed        *int            `json:"days_elapsed"`
+	DaysRemaining      *int            `json:"days_remaining"`
+	TaskOrder          []int           `json:"task_order"`
+	Burndown           []BurndownEntry `json:"burndown"`
 	SprintID           int             `json:"sprint_id"`
 	TotalTasks         int             `json:"total_tasks"`
 	CompletedTasks     int             `json:"completed_tasks"`
 	ProgressPercentage float64         `json:"progress_percentage"`
-	StatusDistribution map[string]int  `json:"status_distribution"`
-	TaskOrder          []int           `json:"task_order"`     // Task IDs ordered by position
-	Velocity           float64         `json:"velocity"`       // Tasks completed per day (CLOSED sprints only; 0.0 if no completed tasks or sprint not closed)
-	DaysElapsed        *int            `json:"days_elapsed"`   // Days since sprint started (OPEN sprints only; null otherwise)
-	DaysRemaining      *int            `json:"days_remaining"` // Always null — Sprint has no end_date field
-	Burndown           []BurndownEntry `json:"burndown"`       // Daily tasks-remaining snapshots, derived from task closed_at dates
+	Velocity           float64         `json:"velocity"`
 }
 
 // CalculateSprintStats calculates statistics from a list of tasks.
@@ -209,16 +213,16 @@ func CalculateSprintStats(sprintID int, tasks []Task) SprintStats {
 		Burndown:           []BurndownEntry{},
 	}
 
-	for _, task := range tasks {
-		statusStr := string(task.Status)
+	for i := range tasks {
+		statusStr := string(tasks[i].Status)
 		stats.StatusDistribution[statusStr]++
 
-		if task.Status == StatusCompleted {
+		if tasks[i].Status == StatusCompleted {
 			stats.CompletedTasks++
 		}
 
 		// Add task ID to order array (tasks should already be ordered by position)
-		stats.TaskOrder = append(stats.TaskOrder, task.ID)
+		stats.TaskOrder = append(stats.TaskOrder, tasks[i].ID)
 	}
 
 	if stats.TotalTasks > 0 {
@@ -308,17 +312,17 @@ type SprintProgress struct {
 // SprintShowResult represents a comprehensive sprint status report.
 // Used for the 'rmp sprint show' command.
 type SprintShowResult struct {
-	SprintID                int                     `json:"sprint_id"`
-	SprintDescription       string                  `json:"sprint_description"`
-	Status                  SprintStatus            `json:"status"`
-	Summary                 SprintSummary           `json:"summary"`
-	Progress                SprintProgress          `json:"progress"`
-	SeverityDistribution    SeverityDistribution    `json:"severity_distribution"`
-	CriticalityDistribution CriticalityDistribution `json:"criticality_distribution"`
-	TaskOrder               []int                   `json:"task_order"` // Task IDs ordered by position
-	CurrentLoad             int                     `json:"current_load"`
 	MaxTasks                *int                    `json:"max_tasks"`
 	CapacityPct             *float64                `json:"capacity_pct"`
+	SprintDescription       string                  `json:"sprint_description"`
+	Status                  SprintStatus            `json:"status"`
+	TaskOrder               []int                   `json:"task_order"`
+	SeverityDistribution    SeverityDistribution    `json:"severity_distribution"`
+	CriticalityDistribution CriticalityDistribution `json:"criticality_distribution"`
+	Summary                 SprintSummary           `json:"summary"`
+	Progress                SprintProgress          `json:"progress"`
+	SprintID                int                     `json:"sprint_id"`
+	CurrentLoad             int                     `json:"current_load"`
 }
 
 // CalculateSprintShowResult calculates a comprehensive sprint report from tasks.
@@ -338,12 +342,12 @@ func CalculateSprintShowResult(sprint *Sprint, tasks []Task) SprintShowResult {
 	// Severity counters
 	var severity0To2, severity3To5, severity6To7, severity8To9 int
 
-	for _, task := range tasks {
+	for i := range tasks {
 		// Add task ID to order (tasks should already be ordered by position)
-		result.TaskOrder = append(result.TaskOrder, task.ID)
+		result.TaskOrder = append(result.TaskOrder, tasks[i].ID)
 
 		// Count by status category (preserving existing summary semantics)
-		switch task.Status {
+		switch tasks[i].Status {
 		case StatusBacklog, StatusSprint:
 			result.Summary.Pending++
 		case StatusDoing, StatusTesting:
@@ -353,19 +357,19 @@ func CalculateSprintShowResult(sprint *Sprint, tasks []Task) SprintShowResult {
 		}
 
 		// current_load: all incomplete tasks assigned to the sprint
-		if task.Status == StatusSprint || task.Status == StatusDoing || task.Status == StatusTesting {
+		if tasks[i].Status == StatusSprint || tasks[i].Status == StatusDoing || tasks[i].Status == StatusTesting {
 			result.CurrentLoad++
 		}
 
 		// Count by severity range
 		switch {
-		case task.Severity >= 0 && task.Severity <= 2:
+		case tasks[i].Severity >= 0 && tasks[i].Severity <= 2:
 			severity0To2++
-		case task.Severity >= 3 && task.Severity <= 5:
+		case tasks[i].Severity >= 3 && tasks[i].Severity <= 5:
 			severity3To5++
-		case task.Severity >= 6 && task.Severity <= 7:
+		case tasks[i].Severity >= 6 && tasks[i].Severity <= 7:
 			severity6To7++
-		case task.Severity >= 8 && task.Severity <= 9:
+		case tasks[i].Severity >= 8 && tasks[i].Severity <= 9:
 			severity8To9++
 		}
 	}

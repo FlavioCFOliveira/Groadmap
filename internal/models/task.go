@@ -2,10 +2,28 @@
 package models
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
+)
+
+// Sentinel errors for task validation.
+var (
+	ErrInvalidTaskType       = errors.New("invalid task type")
+	ErrInvalidTaskStatus     = errors.New("invalid task status")
+	ErrInvalidStatus         = errors.New("invalid status")
+	ErrInvalidType           = errors.New("invalid type")
+	ErrInvalidCurrentStatus  = errors.New("invalid current status")
+	ErrInvalidTargetStatus   = errors.New("invalid target status")
+	ErrCannotTransition      = errors.New("cannot transition")
+	ErrTitleRequired         = errors.New("title is required")
+	ErrFuncReqRequired       = errors.New("functional_requirements is required")
+	ErrTechReqRequired       = errors.New("technical_requirements is required")
+	ErrAcceptanceCriteriaReq = errors.New("acceptance_criteria is required")
+	ErrPriorityOutOfRange    = errors.New("priority must be between 0 and 9")
+	ErrSeverityOutOfRange    = errors.New("severity must be between 0 and 9")
 )
 
 // TaskStatus represents the current state of a task.
@@ -76,7 +94,7 @@ func ParseTaskType(s string) (TaskType, error) {
 	if taskType, ok := validTypeMap[s]; ok {
 		return taskType, nil
 	}
-	return "", fmt.Errorf("invalid task type: %q", s)
+	return "", fmt.Errorf("invalid task type: %q: %w", s, ErrInvalidTaskType)
 }
 
 // ValidTaskStatuses contains all valid task statuses.
@@ -111,7 +129,7 @@ func ParseTaskStatus(s string) (TaskStatus, error) {
 	if status, ok := validStatusMap[s]; ok {
 		return status, nil
 	}
-	return "", fmt.Errorf("invalid task status: %q", s)
+	return "", fmt.Errorf("invalid task status: %q: %w", s, ErrInvalidTaskStatus)
 }
 
 // CanTransitionTo checks if a status transition is valid according to the state machine.
@@ -157,19 +175,19 @@ func (ts TaskStatus) CanTransitionTo(newStatus TaskStatus) bool {
 func ValidateStatusTransition(currentStatus, newStatus string) error {
 	// Validate current status
 	if !IsValidTaskStatus(currentStatus) {
-		return fmt.Errorf("invalid current status: %q", currentStatus)
+		return fmt.Errorf("invalid current status: %q: %w", currentStatus, ErrInvalidCurrentStatus)
 	}
 
 	// Validate new status
 	if !IsValidTaskStatus(newStatus) {
-		return fmt.Errorf("invalid target status: %q", newStatus)
+		return fmt.Errorf("invalid target status: %q: %w", newStatus, ErrInvalidTargetStatus)
 	}
 
 	current := TaskStatus(currentStatus)
 	target := TaskStatus(newStatus)
 
 	if !current.CanTransitionTo(target) {
-		return fmt.Errorf("cannot transition from %q to %q", currentStatus, newStatus)
+		return fmt.Errorf("cannot transition from %q to %q: %w", currentStatus, newStatus, ErrCannotTransition)
 	}
 
 	return nil
@@ -205,56 +223,49 @@ const (
 // Field order optimized for memory layout (zero padding on 64-bit systems).
 // Groups: Content fields (strings), Tracking fields (pointers), Metadata (ints).
 type Task struct {
-	// Group 1: Content fields - frequently accessed together (112 bytes total)
-	Title                  string     `json:"title"`                   // Task title/summary
-	Status                 TaskStatus `json:"status"`                  // Current status
-	Type                   TaskType   `json:"type"`                    // Task classification
-	FunctionalRequirements string     `json:"functional_requirements"` // Why: functional requirements
-	TechnicalRequirements  string     `json:"technical_requirements"`  // How: technical description
-	AcceptanceCriteria     string     `json:"acceptance_criteria"`     // How to verify: completion criteria
-	CreatedAt              string     `json:"created_at"`              // ISO 8601 UTC, auto-set on creation
-
-	// Group 2: Nullable tracking fields - lifecycle timestamps and hierarchy
-	Specialists       *string `json:"specialists"`        // Comma-separated specialists
-	StartedAt         *string `json:"started_at"`         // ISO 8601 UTC, auto-set on DOING transition
-	TestedAt          *string `json:"tested_at"`          // ISO 8601 UTC, auto-set on TESTING transition
-	ClosedAt          *string `json:"closed_at"`          // ISO 8601 UTC, auto-set on COMPLETED transition
-	CompletionSummary *string `json:"completion_summary"` // Optional summary set on TESTING → COMPLETED transition
-	ParentTaskID      *int    `json:"parent_task_id"`     // NULL for top-level tasks; non-NULL links to parent task
-
-	// Group 3: Numeric metadata fields
-	ID           int `json:"id"`            // Primary key
-	Priority     int `json:"priority"`      // 0-9 priority level
-	Severity     int `json:"severity"`      // 0-9 severity level
-	SubtaskCount int `json:"subtask_count"` // Computed: number of direct subtasks (not stored in DB)
-
-	// Dependency fields (fetched from task_dependencies table)
-	DependsOn []int `json:"depends_on"` // IDs of tasks this task depends on
-	Blocks    []int `json:"blocks"`     // IDs of tasks that depend on this task
+	ParentTaskID           *int       `json:"parent_task_id"`
+	Specialists            *string    `json:"specialists"`
+	CompletionSummary      *string    `json:"completion_summary"`
+	TestedAt               *string    `json:"tested_at"`
+	ClosedAt               *string    `json:"closed_at"`
+	StartedAt              *string    `json:"started_at"`
+	AcceptanceCriteria     string     `json:"acceptance_criteria"`
+	CreatedAt              string     `json:"created_at"`
+	Status                 TaskStatus `json:"status"`
+	TechnicalRequirements  string     `json:"technical_requirements"`
+	FunctionalRequirements string     `json:"functional_requirements"`
+	Type                   TaskType   `json:"type"`
+	Title                  string     `json:"title"`
+	DependsOn              []int      `json:"depends_on"`
+	Blocks                 []int      `json:"blocks"`
+	ID                     int        `json:"id"`
+	Priority               int        `json:"priority"`
+	Severity               int        `json:"severity"`
+	SubtaskCount           int        `json:"subtask_count"`
 }
 
 // Validate checks if the task data is valid.
 func (t *Task) Validate() error {
 	if t.Title == "" {
-		return fmt.Errorf("title is required")
+		return ErrTitleRequired
 	}
 	if len(t.Title) > MaxTaskTitle {
 		return fmt.Errorf("%w: title exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskTitle)
 	}
 	if t.FunctionalRequirements == "" {
-		return fmt.Errorf("functional_requirements is required")
+		return ErrFuncReqRequired
 	}
 	if len(t.FunctionalRequirements) > MaxTaskFunctionalRequirements {
 		return fmt.Errorf("%w: functional_requirements exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskFunctionalRequirements)
 	}
 	if t.TechnicalRequirements == "" {
-		return fmt.Errorf("technical_requirements is required")
+		return ErrTechReqRequired
 	}
 	if len(t.TechnicalRequirements) > MaxTaskTechnicalRequirements {
 		return fmt.Errorf("%w: technical_requirements exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskTechnicalRequirements)
 	}
 	if t.AcceptanceCriteria == "" {
-		return fmt.Errorf("acceptance_criteria is required")
+		return ErrAcceptanceCriteriaReq
 	}
 	if len(t.AcceptanceCriteria) > MaxTaskAcceptanceCriteria {
 		return fmt.Errorf("%w: acceptance_criteria exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskAcceptanceCriteria)
@@ -263,16 +274,16 @@ func (t *Task) Validate() error {
 		return fmt.Errorf("%w: specialists exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskSpecialists)
 	}
 	if t.Priority < 0 || t.Priority > 9 {
-		return fmt.Errorf("priority must be between 0 and 9, got %d", t.Priority)
+		return fmt.Errorf("priority must be between 0 and 9, got %d: %w", t.Priority, ErrPriorityOutOfRange)
 	}
 	if t.Severity < 0 || t.Severity > 9 {
-		return fmt.Errorf("severity must be between 0 and 9, got %d", t.Severity)
+		return fmt.Errorf("severity must be between 0 and 9, got %d: %w", t.Severity, ErrSeverityOutOfRange)
 	}
 	if !IsValidTaskStatus(string(t.Status)) {
-		return fmt.Errorf("invalid status: %q", t.Status)
+		return fmt.Errorf("invalid status: %q: %w", t.Status, ErrInvalidStatus)
 	}
 	if !IsValidTaskType(string(t.Type)) {
-		return fmt.Errorf("invalid type: %q", t.Type)
+		return fmt.Errorf("invalid type: %q: %w", t.Type, ErrInvalidType)
 	}
 
 	// Validate dates
@@ -390,25 +401,25 @@ func (u *TaskUpdate) HasChanges() bool {
 // Validate checks if the update values are valid.
 func (u *TaskUpdate) Validate() error {
 	if u.Title != nil && len(*u.Title) > MaxTaskTitle {
-		return fmt.Errorf("title exceeds maximum length of %d characters", MaxTaskTitle)
+		return fmt.Errorf("%w: title exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskTitle)
 	}
 	if u.FunctionalRequirements != nil && len(*u.FunctionalRequirements) > MaxTaskFunctionalRequirements {
-		return fmt.Errorf("functional_requirements exceeds maximum length of %d characters", MaxTaskFunctionalRequirements)
+		return fmt.Errorf("%w: functional_requirements exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskFunctionalRequirements)
 	}
 	if u.TechnicalRequirements != nil && len(*u.TechnicalRequirements) > MaxTaskTechnicalRequirements {
-		return fmt.Errorf("technical_requirements exceeds maximum length of %d characters", MaxTaskTechnicalRequirements)
+		return fmt.Errorf("%w: technical_requirements exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskTechnicalRequirements)
 	}
 	if u.AcceptanceCriteria != nil && len(*u.AcceptanceCriteria) > MaxTaskAcceptanceCriteria {
-		return fmt.Errorf("acceptance_criteria exceeds maximum length of %d characters", MaxTaskAcceptanceCriteria)
+		return fmt.Errorf("%w: acceptance_criteria exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskAcceptanceCriteria)
 	}
 	if u.Specialists != nil && len(*u.Specialists) > MaxTaskSpecialists {
-		return fmt.Errorf("specialists exceeds maximum length of %d characters", MaxTaskSpecialists)
+		return fmt.Errorf("%w: specialists exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskSpecialists)
 	}
 	if u.Priority != nil && (*u.Priority < 0 || *u.Priority > 9) {
-		return fmt.Errorf("priority must be between 0 and 9, got %d", *u.Priority)
+		return fmt.Errorf("priority must be between 0 and 9, got %d: %w", *u.Priority, ErrPriorityOutOfRange)
 	}
 	if u.Severity != nil && (*u.Severity < 0 || *u.Severity > 9) {
-		return fmt.Errorf("severity must be between 0 and 9, got %d", *u.Severity)
+		return fmt.Errorf("severity must be between 0 and 9, got %d: %w", *u.Severity, ErrSeverityOutOfRange)
 	}
 	return nil
 }

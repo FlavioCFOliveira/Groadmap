@@ -1,7 +1,17 @@
 package models
 
 import (
+	"errors"
 	"fmt"
+)
+
+// Sentinel errors for audit validation.
+var (
+	ErrInvalidAuditOperation = errors.New("invalid audit operation")
+	ErrInvalidEntityType     = errors.New("invalid entity type")
+	ErrInvalidOperation      = errors.New("invalid operation")
+	ErrEntityIDNotPositive   = errors.New("entity_id must be positive")
+	ErrPerformedAtRequired   = errors.New("performed_at is required")
 )
 
 // AuditOperation represents the type of operation logged.
@@ -85,7 +95,7 @@ func IsValidAuditOperation(s string) bool {
 // ParseAuditOperation parses a string into an AuditOperation.
 func ParseAuditOperation(s string) (AuditOperation, error) {
 	if !IsValidAuditOperation(s) {
-		return "", fmt.Errorf("invalid audit operation: %q", s)
+		return "", fmt.Errorf("invalid audit operation: %q: %w", s, ErrInvalidAuditOperation)
 	}
 	return AuditOperation(s), nil
 }
@@ -107,7 +117,7 @@ func IsValidEntityType(s string) bool {
 // ParseEntityType parses a string into an EntityType.
 func ParseEntityType(s string) (EntityType, error) {
 	if !IsValidEntityType(s) {
-		return "", fmt.Errorf("invalid entity type: %q", s)
+		return "", fmt.Errorf("invalid entity type: %q: %w", s, ErrInvalidEntityType)
 	}
 	return EntityType(s), nil
 }
@@ -128,16 +138,16 @@ type AuditEntry struct {
 // Validate checks if the audit entry data is valid.
 func (a *AuditEntry) Validate() error {
 	if !IsValidAuditOperation(a.Operation) {
-		return fmt.Errorf("invalid operation: %q", a.Operation)
+		return fmt.Errorf("invalid operation: %q: %w", a.Operation, ErrInvalidOperation)
 	}
 	if !IsValidEntityType(a.EntityType) {
-		return fmt.Errorf("invalid entity type: %q", a.EntityType)
+		return fmt.Errorf("invalid entity type: %q: %w", a.EntityType, ErrInvalidEntityType)
 	}
 	if a.EntityID <= 0 {
-		return fmt.Errorf("entity_id must be positive, got %d", a.EntityID)
+		return fmt.Errorf("entity_id must be positive, got %d: %w", a.EntityID, ErrEntityIDNotPositive)
 	}
 	if a.PerformedAt == "" {
-		return fmt.Errorf("performed_at is required")
+		return ErrPerformedAtRequired
 	}
 	return nil
 }
@@ -151,9 +161,9 @@ type Roadmap struct {
 
 // AuditStats represents statistics for audit entries.
 type AuditStats struct {
-	TotalEntries int            `json:"total_entries"`
 	ByOperation  map[string]int `json:"by_operation"`
 	ByEntityType map[string]int `json:"by_entity_type"`
 	FirstEntryAt string         `json:"first_entry_at"`
 	LastEntryAt  string         `json:"last_entry_at"`
+	TotalEntries int            `json:"total_entries"`
 }
