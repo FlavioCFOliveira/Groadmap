@@ -198,7 +198,7 @@ PENDING → OPEN → CLOSED
 
 1. **No extra fields**: Do not include extra fields in JSON responses
 2. **Consistent order**: Maintain field order as defined in examples
-3. **No pretty-print by default**: Compact JSON for efficient parsing
+3. **Pretty-print**: All JSON output must be human-readable with 2-space indentation (`  `) and no prefix. This applies to every command that produces JSON to stdout.
 4. **UTF-8**: All strings in UTF-8
 5. **Numbers**: Use JSON number format (not strings)
 6. **Empty arrays**: Represent as `[]` (not `null`)

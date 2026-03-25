@@ -477,41 +477,15 @@ func TestPrintJSON(t *testing.T) {
 	io.Copy(&buf, r)
 	output := buf.String()
 
-	expected := `{"key":"value"}`
-	if !strings.Contains(output, expected) {
-		t.Errorf("expected output to contain %q, got %q", expected, output)
-	}
-}
-
-func TestPrintJSONIndent(t *testing.T) {
-	// Capture stdout
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	input := map[string]string{"key": "value"}
-	err := PrintJSONIndent(input)
-
-	// Restore stdout
-	w.Close()
-	os.Stdout = oldStdout
-
-	if err != nil {
-		t.Fatalf("PrintJSONIndent failed: %v", err)
-	}
-
-	// Read output
-	var buf bytes.Buffer
-	io.Copy(&buf, r)
-	output := buf.String()
-
-	// Should contain indentation
+	// Must be human-readable indented output
 	if !strings.Contains(output, "\n") {
 		t.Error("expected indented output to contain newlines")
 	}
-
+	if !strings.Contains(output, "  ") {
+		t.Error("expected indented output to contain 2-space indentation")
+	}
 	if !strings.Contains(output, "key") {
-		t.Error("expected output to contain 'key'")
+		t.Errorf("expected output to contain 'key', got %q", output)
 	}
 }
 

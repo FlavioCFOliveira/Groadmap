@@ -61,16 +61,6 @@ func TestPrintJSONError(t *testing.T) {
 	}
 }
 
-// TestPrintJSONIndentError tests error handling in PrintJSONIndent
-func TestPrintJSONIndentError(t *testing.T) {
-	// Test with a channel (cannot be marshaled to JSON)
-	ch := make(chan int)
-	err := PrintJSONIndent(ch)
-	if err == nil {
-		t.Error("PrintJSONIndent should return error for unmarshalable data")
-	}
-}
-
 // TestToJSONError tests error handling in ToJSON
 func TestToJSONError(t *testing.T) {
 	// Test with a channel (cannot be marshaled to JSON)
@@ -81,7 +71,7 @@ func TestToJSONError(t *testing.T) {
 	}
 }
 
-// TestPrintJSONOutput tests the actual output of PrintJSON
+// TestPrintJSONOutput tests that PrintJSON produces indented, human-readable output
 func TestPrintJSONOutput(t *testing.T) {
 	// Capture stdout
 	oldStdout := os.Stdout
@@ -104,47 +94,22 @@ func TestPrintJSONOutput(t *testing.T) {
 	io.Copy(&buf, r)
 	output := buf.String()
 
-	expected := `{"key":"value"}`
-	if !strings.Contains(output, expected) {
-		t.Errorf("expected output to contain %q, got %q", expected, output)
-	}
-}
-
-// TestPrintJSONIndentOutput tests the actual output of PrintJSONIndent
-func TestPrintJSONIndentOutput(t *testing.T) {
-	// Capture stdout
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	input := map[string]string{"key": "value"}
-	err := PrintJSONIndent(input)
-
-	// Restore stdout
-	w.Close()
-	os.Stdout = oldStdout
-
-	if err != nil {
-		t.Fatalf("PrintJSONIndent failed: %v", err)
-	}
-
-	// Read output
-	var buf bytes.Buffer
-	io.Copy(&buf, r)
-	output := buf.String()
-
-	// Should contain indentation
+	// Must contain indentation (newlines and spaces)
 	if !strings.Contains(output, "\n") {
 		t.Error("expected indented output to contain newlines")
 	}
-
+	if !strings.Contains(output, "  ") {
+		t.Error("expected indented output to contain 2-space indentation")
+	}
 	if !strings.Contains(output, "key") {
 		t.Error("expected output to contain 'key'")
 	}
+	if !strings.Contains(output, "value") {
+		t.Error("expected output to contain 'value'")
+	}
 }
 
-// BenchmarkPrintJSON benchmarks the cached encoder implementation.
-// This verifies TASK-P008: Cache JSON Encoder Instance.
+// BenchmarkPrintJSON benchmarks the JSON encoder implementation.
 func BenchmarkPrintJSON(b *testing.B) {
 	data := map[string]interface{}{
 		"id":          123,
@@ -160,15 +125,9 @@ func BenchmarkPrintJSON(b *testing.B) {
 	os.Stdout = os.NewFile(0, os.DevNull)
 	defer func() { os.Stdout = oldStdout }()
 
-	b.Run("CachedEncoder", func(b *testing.B) {
+	b.Run("PrintJSON", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			_ = PrintJSON(data)
-		}
-	})
-
-	b.Run("CachedEncoderIndent", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			_ = PrintJSONIndent(data)
 		}
 	})
 }
