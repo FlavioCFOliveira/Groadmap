@@ -24,12 +24,23 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
+)
+
+// Package-level sentinel errors for static error conditions.
+var (
+	// ErrTasksNotInSprint indicates that one or more task IDs do not belong to the given sprint.
+	ErrTasksNotInSprint = errors.New("some task IDs do not belong to sprint")
+	// ErrCannotSwapSelf indicates an attempt to swap a task with itself.
+	ErrCannotSwapSelf = errors.New("cannot swap a task with itself")
+	// ErrSwapTasksNotFound indicates that one or both tasks were not found in the sprint.
+	ErrSwapTasksNotFound = errors.New("one or both tasks not found in sprint")
 )
 
 // ==================== TASK QUERIES ====================
@@ -117,7 +128,7 @@ func (db *DB) GetTask(ctx context.Context, id int) (*models.Task, error) {
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("%w: task %d", utils.ErrNotFound, id)
 		}
 		return nil, fmt.Errorf("querying task: %w", err)
@@ -237,7 +248,7 @@ type TaskListFilter struct {
 
 // ListTasks retrieves tasks with optional filters.
 // Filters: status, minPriority, minSeverity, taskType, specialists, createdSince, createdUntil, sort, limit.
-func (db *DB) ListTasks(ctx context.Context, filter TaskListFilter) ([]models.Task, error) {
+func (db *DB) ListTasks(ctx context.Context, filter *TaskListFilter) ([]models.Task, error) {
 	if filter.Limit < 1 {
 		filter.Limit = models.DefaultTaskLimit
 	}
@@ -676,7 +687,7 @@ func (db *DB) GetParentTask(ctx context.Context, taskID int) (*models.Task, erro
 		taskID,
 	).Scan(&parentID)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("%w: task %d", utils.ErrNotFound, taskID)
 		}
 		return nil, fmt.Errorf("querying parent task id: %w", err)
@@ -841,7 +852,7 @@ func (db *DB) GetOpenSprint(ctx context.Context) (*models.Sprint, error) {
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("%w: no sprint is currently open. Use 'rmp sprint start <id>' to open a sprint first", utils.ErrNotFound)
 		}
 		return nil, fmt.Errorf("querying open sprint: %w", err)
@@ -893,7 +904,7 @@ func (db *DB) GetNextTasks(ctx context.Context, limit int) ([]models.Task, error
 	).Scan(&sprintID)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("%w: no sprint is currently open. Use 'rmp sprint start <id>' to open a sprint first", utils.ErrNotFound)
 		}
 		return nil, fmt.Errorf("querying open sprint: %w", err)
@@ -1271,7 +1282,7 @@ func (db *DB) GetSprint(ctx context.Context, id int) (*models.Sprint, error) {
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("%w: sprint %d", utils.ErrNotFound, id)
 		}
 		return nil, fmt.Errorf("querying sprint: %w", err)
@@ -1597,7 +1608,7 @@ func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int)
 		if err != nil {
 			return fmt.Errorf("beginning transaction: %w", err)
 		}
-		defer tx.Rollback()
+		defer tx.Rollback() //nolint:errcheck // deferred rollback, transaction error already captured
 
 		now := utils.NowISO8601()
 
@@ -2027,7 +2038,7 @@ func (db *DB) ReorderSprintTasks(sprintID int, taskIDs []int) error {
 		if err != nil {
 			return fmt.Errorf("beginning transaction: %w", err)
 		}
-		defer tx.Rollback()
+		defer tx.Rollback() //nolint:errcheck // deferred rollback, transaction error already captured
 
 		// Verify all task IDs belong to this sprint
 		placeholders := make([]string, len(taskIDs))
@@ -2048,7 +2059,7 @@ func (db *DB) ReorderSprintTasks(sprintID int, taskIDs []int) error {
 			return fmt.Errorf("verifying task membership: %w", err)
 		}
 		if count != len(taskIDs) {
-			return fmt.Errorf("some task IDs do not belong to sprint %d", sprintID)
+			return fmt.Errorf("%w: sprint %d", ErrTasksNotInSprint, sprintID)
 		}
 
 		// Update positions
@@ -2085,7 +2096,7 @@ func (db *DB) MoveTaskToPosition(sprintID, taskID, newPosition int) error {
 		if err != nil {
 			return fmt.Errorf("beginning transaction: %w", err)
 		}
-		defer tx.Rollback()
+		defer tx.Rollback() //nolint:errcheck // deferred rollback, transaction error already captured
 
 		// Get current position of the task
 		var currentPos int
@@ -2094,7 +2105,7 @@ func (db *DB) MoveTaskToPosition(sprintID, taskID, newPosition int) error {
 			sprintID, taskID,
 		).Scan(&currentPos)
 		if err != nil {
-			if err == sql.ErrNoRows {
+			if errors.Is(err, sql.ErrNoRows) {
 				return fmt.Errorf("%w: task %d not found in sprint %d", utils.ErrNotFound, taskID, sprintID)
 			}
 			return fmt.Errorf("getting current position: %w", err)
@@ -2166,7 +2177,7 @@ func (db *DB) MoveTaskToPosition(sprintID, taskID, newPosition int) error {
 // Both tasks must belong to the same sprint.
 func (db *DB) SwapTasks(sprintID, taskID1, taskID2 int) error {
 	if taskID1 == taskID2 {
-		return fmt.Errorf("cannot swap a task with itself")
+		return ErrCannotSwapSelf
 	}
 
 	return retryWithBackoff("swap tasks", func() error {
@@ -2174,7 +2185,7 @@ func (db *DB) SwapTasks(sprintID, taskID1, taskID2 int) error {
 		if err != nil {
 			return fmt.Errorf("beginning transaction: %w", err)
 		}
-		defer tx.Rollback()
+		defer tx.Rollback() //nolint:errcheck // deferred rollback, transaction error already captured
 
 		// Get positions of both tasks
 		var pos1, pos2 int
@@ -2207,7 +2218,7 @@ func (db *DB) SwapTasks(sprintID, taskID1, taskID2 int) error {
 		}
 
 		if count != 2 {
-			return fmt.Errorf("one or both tasks not found in sprint %d", sprintID)
+			return fmt.Errorf("%w: sprint %d", ErrSwapTasksNotFound, sprintID)
 		}
 
 		// Swap positions
@@ -2310,7 +2321,7 @@ func (db *DB) getSprintStats(ctx context.Context) (*models.SprintStatsSummary, e
 		models.SprintOpen,
 	).Scan(&currentSprintID)
 
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("getting current sprint: %w", err)
 	}
 

@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -10,6 +11,9 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
+
+// ErrInvalidDateFormat indicates that a date string does not match any accepted format.
+var ErrInvalidDateFormat = errors.New("invalid date format: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01)")
 
 // validSortFields holds the accepted values for the --sort flag.
 var validSortFields = map[string]bool{
@@ -29,7 +33,7 @@ func parseFilterDate(s string) (time.Time, error) {
 	}
 	t, dateErr := time.Parse("2006-01-02", s)
 	if dateErr != nil {
-		return time.Time{}, fmt.Errorf("invalid date %q: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01)", s)
+		return time.Time{}, fmt.Errorf("%w: %q", ErrInvalidDateFormat, s)
 	}
 	return t.UTC(), nil
 }
@@ -108,7 +112,7 @@ func taskList(args []string) error {
 	ctx, cancel := db.WithDefaultTimeout()
 	defer cancel()
 
-	tasks, err := database.ListTasks(ctx, filter)
+	tasks, err := database.ListTasks(ctx, &filter)
 	if err != nil {
 		return err
 	}

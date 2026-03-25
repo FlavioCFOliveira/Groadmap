@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +11,9 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
+
+// errIntentional is a sentinel used in tests to trigger intentional rollbacks.
+var errIntentional = errors.New("intentional error")
 
 // setupTestDB creates an in-memory database for testing
 // Uses shared cache mode to allow concurrent access from multiple goroutines
@@ -134,7 +136,7 @@ func TestGetTasks(t *testing.T) {
 	defer cleanup()
 
 	// Create multiple tasks
-	var ids []int
+	ids := make([]int, 0, 3)
 	for i := 0; i < 3; i++ {
 		task := &models.Task{
 			Priority:               i,
@@ -192,7 +194,7 @@ func TestListTasks(t *testing.T) {
 	}
 
 	// Test list all tasks (limit 10)
-	tasks, err := db.ListTasks(testContext(), TaskListFilter{Limit: 10})
+	tasks, err := db.ListTasks(testContext(), &TaskListFilter{Limit: 10})
 	if err != nil {
 		t.Fatalf("failed to list tasks: %v", err)
 	}
@@ -203,7 +205,7 @@ func TestListTasks(t *testing.T) {
 
 	// Test filter by status
 	backlogStatus := models.StatusBacklog
-	tasks, err = db.ListTasks(testContext(), TaskListFilter{Status: &backlogStatus, Limit: 10})
+	tasks, err = db.ListTasks(testContext(), &TaskListFilter{Status: &backlogStatus, Limit: 10})
 	if err != nil {
 		t.Fatalf("failed to list tasks by status: %v", err)
 	}
@@ -214,7 +216,7 @@ func TestListTasks(t *testing.T) {
 
 	// Test filter by min priority
 	minPriority := 1
-	tasks, err = db.ListTasks(testContext(), TaskListFilter{MinPriority: &minPriority, Limit: 10})
+	tasks, err = db.ListTasks(testContext(), &TaskListFilter{MinPriority: &minPriority, Limit: 10})
 	if err != nil {
 		t.Fatalf("failed to list tasks by priority: %v", err)
 	}
@@ -224,7 +226,7 @@ func TestListTasks(t *testing.T) {
 	}
 
 	// Test with limit
-	tasks, err = db.ListTasks(testContext(), TaskListFilter{Limit: 2})
+	tasks, err = db.ListTasks(testContext(), &TaskListFilter{Limit: 2})
 	if err != nil {
 		t.Fatalf("failed to list tasks with limit: %v", err)
 	}
@@ -438,7 +440,7 @@ func TestUpdateTaskStatus(t *testing.T) {
 	defer cleanup()
 
 	// Create tasks
-	var ids []int
+	ids := make([]int, 0, 2)
 	for i := 0; i < 2; i++ {
 		task := &models.Task{
 			Priority:               1,
@@ -480,7 +482,7 @@ func TestUpdateTaskPriority(t *testing.T) {
 	defer cleanup()
 
 	// Create tasks
-	var ids []int
+	ids := make([]int, 0, 2)
 	for i := 0; i < 2; i++ {
 		task := &models.Task{
 			Priority:               1,
@@ -516,7 +518,7 @@ func TestUpdateTaskSeverity(t *testing.T) {
 	defer cleanup()
 
 	// Create tasks
-	var ids []int
+	ids := make([]int, 0, 2)
 	for i := 0; i < 2; i++ {
 		task := &models.Task{
 			Priority:               1,
@@ -763,7 +765,7 @@ func TestAddTasksToSprint(t *testing.T) {
 	sprintID, _ := db.CreateSprint(testContext(), sprint)
 
 	// Create tasks
-	var taskIDs []int
+	taskIDs := make([]int, 0, 3)
 	for i := 0; i < 3; i++ {
 		task := &models.Task{
 			Priority:               1,
@@ -817,7 +819,7 @@ func TestRemoveTasksFromSprint(t *testing.T) {
 	sprintID, _ := db.CreateSprint(testContext(), sprint)
 
 	// Create and add tasks
-	var taskIDs []int
+	taskIDs := make([]int, 0, 3)
 	for i := 0; i < 3; i++ {
 		task := &models.Task{
 			Priority:               1,
@@ -930,7 +932,7 @@ func TestWithTransaction_Commit(t *testing.T) {
 	}
 
 	// Verify task was created
-	tasks, _ := db.ListTasks(testContext(), TaskListFilter{Limit: 10})
+	tasks, _ := db.ListTasks(testContext(), &TaskListFilter{Limit: 10})
 	if len(tasks) != 1 {
 		t.Errorf("expected 1 task after commit, got %d", len(tasks))
 	}
@@ -951,7 +953,7 @@ func TestWithTransaction_Rollback(t *testing.T) {
 			return err
 		}
 		// Return error to trigger rollback
-		return fmt.Errorf("intentional error")
+		return errIntentional
 	})
 
 	if err == nil {
@@ -959,7 +961,7 @@ func TestWithTransaction_Rollback(t *testing.T) {
 	}
 
 	// Verify no tasks were created (rolled back)
-	tasks, _ := db.ListTasks(testContext(), TaskListFilter{Limit: 10})
+	tasks, _ := db.ListTasks(testContext(), &TaskListFilter{Limit: 10})
 	if len(tasks) != 0 {
 		t.Errorf("expected 0 tasks after rollback, got %d", len(tasks))
 	}
@@ -980,7 +982,7 @@ func TestGetSprintTasks(t *testing.T) {
 	sprintID, _ := db.CreateSprint(testContext(), sprint)
 
 	// Create tasks
-	var taskIDs []int
+	taskIDs := make([]int, 0, 3)
 	for i := 0; i < 3; i++ {
 		task := &models.Task{
 			Priority:               1,

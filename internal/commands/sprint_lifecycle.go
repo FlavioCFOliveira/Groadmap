@@ -139,7 +139,8 @@ func sprintLifecycle(args []string, newStatus models.SprintStatus, op models.Aud
 		return err
 	}
 	if !canTransition(sprint.Status) {
-		return fmt.Errorf("%w: "+errorMsg, utils.ErrInvalidInput, sprint.Status)
+		msg := fmt.Sprintf(errorMsg, sprint.Status)
+		return fmt.Errorf("%w: %s", utils.ErrInvalidInput, msg)
 	}
 
 	// Prevent opening a sprint when another is already OPEN (task #77).
@@ -157,8 +158,8 @@ func sprintLifecycle(args []string, newStatus models.SprintStatus, op models.Aud
 		}
 		if len(activeTasks) > 0 {
 			ids := make([]string, len(activeTasks))
-			for i, t := range activeTasks {
-				ids[i] = fmt.Sprintf("#%d (%s)", t.ID, t.Status)
+			for i := range activeTasks {
+				ids[i] = fmt.Sprintf("#%d (%s)", activeTasks[i].ID, activeTasks[i].Status)
 			}
 			if !force {
 				return fmt.Errorf("%w: sprint #%d has %d active task(s) still in progress: %s — use --force to close anyway",
