@@ -46,8 +46,8 @@ Description:
   and average velocity across the last 5 closed sprints.
 
 Options:
-  -r, --roadmap <name>    Roadmap name (or use default)
-  -h, --help             Show this help message
+  -r, --roadmap <name>    	Roadmap name (or use default)
+  -h, --help             	Show this help message
 
 JSON Output:
   {

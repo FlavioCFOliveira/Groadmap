@@ -149,16 +149,16 @@ func printBacklogHelp() {
 	fmt.Print(`Usage: rmp backlog [command] [arguments] [options]
 
 Commands:
-  list, ls [OPTIONS]         List all tasks in the backlog
-  show-next [count] [OPTIONS]  Show top N backlog tasks by priority for sprint planning
+  list, ls [OPTIONS]         	List all tasks in the backlog
+  show-next [count] [OPTIONS]  	Show top N backlog tasks by priority for sprint planning
 
 Options:
-  -r, --roadmap <name>       Roadmap name (or use default)
-  -p, --priority <min>       Filter by minimum priority value
-  -y, --type <type>          Filter by task type (TASK, BUG, FEATURE, IMPROVEMENT, SPIKE)
-  --sort <field>             Sort order: priority (default), created, status, severity
-  -l, --limit <n>            Maximum number of tasks to return
-  -h, --help                 Show this help message
+  -r, --roadmap <name>       	Roadmap name (or use default)
+  -p, --priority <min>       	Filter by minimum priority value
+  -y, --type <type>          	Filter by task type (TASK, BUG, FEATURE, IMPROVEMENT, SPIKE)
+  --sort <field>             	Sort order: priority (default), created, status, severity
+  -l, --limit <n>            	Maximum number of tasks to return
+  -h, --help                 	Show this help message
 
 Examples:
   rmp backlog list -r groadmap

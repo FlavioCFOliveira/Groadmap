@@ -66,37 +66,37 @@ func printTaskHelp() {
 	fmt.Print(`Usage: rmp task [command] [arguments] [options]
 
 Commands:
-  list, ls [OPTIONS]              List tasks
-  create, new [OPTIONS]           Create a new task
-  get <ids>                      Get tasks by ID(s)
-  next [num]                     Get next N tasks from open sprint
-  edit <id> [OPTIONS]             Edit a task
-  remove, rm <ids>               Remove task(s)
-  stat, set-status <ids> <status>  Set task status
-  reopen <ids>                   Reopen task(s) back to BACKLOG (clears lifecycle timestamps)
-  prio, set-priority <ids> <prio>    Set task priority
-  sev, set-severity <ids> <sev>     Set task severity
-  assign <id> <specialist>          Add specialist to task (idempotent)
-  unassign <id> <specialist>        Remove specialist from task
-  subtasks <id>                     List all direct subtasks of a task
-  add-dep <id> <dep-id>             Mark task <id> as depending on task <dep-id>
-  remove-dep <id> <dep-id>          Remove dependency of task <id> on task <dep-id>
-  blockers <id>                     List tasks blocking task <id> (dependencies not yet COMPLETED)
-  blocking <id>                     List tasks that task <id> is blocking (tasks that depend on it)
+  list, ls [OPTIONS]              			List tasks
+  create, new [OPTIONS]           			Create a new task
+  get <ids>                      			Get tasks by ID(s)
+  next [num]                     			Get next N tasks from open sprint
+  edit <id> [OPTIONS]             			Edit a task
+  remove, rm <ids>               			Remove task(s)
+  stat, set-status <ids> <status>  			Set task status
+  reopen <ids>                   			Reopen task(s) back to BACKLOG (clears lifecycle timestamps)
+  prio, set-priority <ids> <prio>    		Set task priority
+  sev, set-severity <ids> <sev>     		Set task severity
+  assign <id> <specialist>          		Add specialist to task (idempotent)
+  unassign <id> <specialist>        		Remove specialist from task
+  subtasks <id>                     		List all direct subtasks of a task
+  add-dep <id> <dep-id>             		Mark task <id> as depending on task <dep-id>
+  remove-dep <id> <dep-id>          		Remove dependency of task <id> on task <dep-id>
+  blockers <id>                     		List tasks blocking task <id> (dependencies not yet COMPLETED)
+  blocking <id>                     		List tasks that task <id> is blocking (tasks that depend on it)
 
 Options:
-  -r, --roadmap <name>           Roadmap name (or use default)
-  -s, --status <state>            Filter by status
-  -p, --priority <n>              Filter/set priority (0-9)
-  --severity <n>                  Filter/set severity (0-9)
-  -t, --title <text>              Task title
-  -fr, --functional-requirements <text> Functional requirements (Why?)
-  -tr, --technical-requirements <text>  Technical requirements (How?)
-  -ac, --acceptance-criteria <text>     Acceptance criteria (How to verify?)
-  -sp, --specialists <list>       Comma-separated specialists
-  --parent <id>                   Parent task ID (creates a sub-task)
-  -l, --limit <n>                 Limit results
-  --help                          Show this help message
+  -r, --roadmap <name>           			Roadmap name (or use default)
+  -s, --status <state>            			Filter by status
+  -p, --priority <n>              			Filter/set priority (0-9)
+  --severity <n>                  			Filter/set severity (0-9)
+  -t, --title <text>              			Task title
+  -fr, --functional-requirements <text> 	Functional requirements (Why?)
+  -tr, --technical-requirements <text>  	Technical requirements (How?)
+  -ac, --acceptance-criteria <text>     	Acceptance criteria (How to verify?)
+  -sp, --specialists <list>       			Comma-separated specialists
+  --parent <id>                   			Parent task ID (creates a sub-task)
+  -l, --limit <n>                 			Limit results
+  --help                          			Show this help message
 
 Examples:
   rmp task list -r myproject

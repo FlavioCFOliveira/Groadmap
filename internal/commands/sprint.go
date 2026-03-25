@@ -71,33 +71,33 @@ func printSprintHelp() {
 	fmt.Print(`Usage: rmp sprint [command] [arguments] [options]
 
 Commands:
-  list, ls [OPTIONS]              List sprints
-  create, new [OPTIONS]           Create a new sprint
-  get <id>                        Get sprint details
-  show <id>                       Show comprehensive sprint report
-  update, upd <id> [OPTIONS]       Update sprint description
-  remove, rm <id>                 Remove sprint
-  start <id>                      Start sprint
-  close <id> [--force]            Close sprint (--force bypasses active-task check)
-  reopen <id>                     Reopen sprint
-  tasks <id> [OPTIONS]            List tasks in sprint (use --order-by-priority for priority ordering)
-  open-tasks <id> [OPTIONS]       List incomplete tasks in sprint (SPRINT, DOING, TESTING only)
-  stats <id>                       Show sprint statistics
-  add-tasks, add <sprint> <ids>  Add tasks to sprint
-  remove-tasks, rm-tasks <sprint> <ids>  Remove tasks from sprint
-  move-tasks, mv-tasks <from> <to> <ids>  Move tasks between sprints
-  reorder, order <sprint> <ids>  Reorder tasks in sprint (comma-separated IDs)
-  move-to, mvto <sprint> <task> <pos>  Move task to specific position
-  swap <sprint> <task1> <task2>  Swap positions of two tasks
-  top <sprint> <task>           Move task to top (position 0)
-  bottom, btm <sprint> <task>   Move task to bottom (last position)
+  list, ls [OPTIONS]              			List sprints
+  create, new [OPTIONS]           			Create a new sprint
+  get <id>                        			Get sprint details
+  show <id>                       			Show comprehensive sprint report
+  update, upd <id> [OPTIONS]       			Update sprint description
+  remove, rm <id>                 			Remove sprint
+  start <id>                      			Start sprint
+  close <id> [--force]            			Close sprint (--force bypasses active-task check)
+  reopen <id>                     			Reopen sprint
+  tasks <id> [OPTIONS]            			List tasks in sprint (use --order-by-priority for priority ordering)
+  open-tasks <id> [OPTIONS]       			List incomplete tasks in sprint (SPRINT, DOING, TESTING only)
+  stats <id>                       			Show sprint statistics
+  add-tasks, add <sprint> <ids>  			Add tasks to sprint
+  remove-tasks, rm-tasks <sprint> <ids>  	Remove tasks from sprint
+  move-tasks, mv-tasks <from> <to> <ids>  	Move tasks between sprints
+  reorder, order <sprint> <ids>  			Reorder tasks in sprint (comma-separated IDs)
+  move-to, mvto <sprint> <task> <pos>  		Move task to specific position
+  swap <sprint> <task1> <task2>  			Swap positions of two tasks
+  top <sprint> <task>           			Move task to top (position 0)
+  bottom, btm <sprint> <task>   			Move task to bottom (last position)
 
 Options:
-  -r, --roadmap <name>           Roadmap name (or use default)
-  -d, --description <text>      Sprint description
-  --status <state>               Filter by status
-  --order-by-priority             Sort by priority (highest first)
-  -h, --help                      Show this help message
+  -r, --roadmap <name>           			Roadmap name (or use default)
+  -d, --description <text>      			Sprint description
+  --status <state>               			Filter by status
+  --order-by-priority             			Sort by priority (highest first)
+  -h, --help                      			Show this help message
 
 Examples:
   rmp sprint list -r myproject
