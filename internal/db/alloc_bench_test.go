@@ -41,7 +41,7 @@ func BenchmarkScanTasksAllocations(b *testing.B) {
 	b.Run("Scan100Tasks", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			tasks, err := db.ListTasks(ctx, TaskListFilter{Limit: 100})
+			tasks, err := db.ListTasks(ctx, &TaskListFilter{Limit: 100})
 			if err != nil {
 				b.Fatalf("Failed to list tasks: %v", err)
 			}
@@ -87,7 +87,7 @@ func BenchmarkScanTasksMemoryProfile(b *testing.B) {
 			b.ResetTimer()
 
 			for i := 0; i < b.N; i++ {
-				tasks, err := db.ListTasks(ctx, TaskListFilter{Limit: numTasks})
+				tasks, err := db.ListTasks(ctx, &TaskListFilter{Limit: numTasks})
 				if err != nil {
 					b.Fatalf("Failed to list tasks: %v", err)
 				}

@@ -123,10 +123,10 @@ func taskEdit(args []string) error {
 
 	// Update within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
-		setParts := []string{}
-		queryArgs := []interface{}{}
+		setParts := make([]string, 0, len(updates))
+		queryArgs := make([]interface{}, 0, len(updates)+1)
 		for field, value := range updates {
-			setParts = append(setParts, fmt.Sprintf("%s = ?", field))
+			setParts = append(setParts, field+" = ?")
 			queryArgs = append(queryArgs, value)
 		}
 		queryArgs = append(queryArgs, taskID)

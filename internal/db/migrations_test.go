@@ -129,7 +129,7 @@ func TestMigrateV1_0_0_toV1_1_0(t *testing.T) {
 		t.Fatalf("CreateSprint failed: %v", err)
 	}
 
-	var taskIDs []int
+	taskIDs := make([]int, 0, 3)
 	for i := 0; i < 3; i++ {
 		task := &models.Task{
 			Title:                  "Test task",

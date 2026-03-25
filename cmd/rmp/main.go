@@ -95,7 +95,7 @@ func main() {
 	case "stats":
 		err = commands.HandleStats(os.Args[2:])
 	default:
-		printError(fmt.Sprintf("Unknown command: %s", arg))
+		printError("Unknown command: " + arg)
 		printHelp()
 		db.RunExitHandlers()
 		os.Exit(ExitCmdNotFound)

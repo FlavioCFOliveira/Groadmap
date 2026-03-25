@@ -2,6 +2,7 @@
 package utils
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
@@ -20,9 +21,9 @@ var (
 
 // Common date validation errors
 var (
-	ErrDateTooEarly = fmt.Errorf("date is before minimum valid date (1970-01-01)")
-	ErrDateTooLate  = fmt.Errorf("date is after maximum valid date (9999-12-31)")
-	ErrDateInFuture = fmt.Errorf("date is in the future")
+	ErrDateTooEarly = errors.New("date is before minimum valid date (1970-01-01)")
+	ErrDateTooLate  = errors.New("date is after maximum valid date (9999-12-31)")
+	ErrDateInFuture = errors.New("date is in the future")
 )
 
 // FormatISO8601 formats a time.Time to ISO 8601 UTC string with milliseconds.
@@ -41,7 +42,7 @@ func FormatISO8601(t time.Time) string {
 // Validates that the date is within the valid range (1970-01-01 to 9999-12-31).
 func ParseISO8601(s string) (time.Time, error) {
 	if s == "" {
-		return time.Time{}, fmt.Errorf("parsing ISO 8601 date: empty string")
+		return time.Time{}, errors.New("parsing ISO 8601 date: empty string")
 	}
 
 	// Try formats in order of preference.

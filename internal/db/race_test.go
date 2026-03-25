@@ -62,7 +62,7 @@ func TestConcurrentTaskCreation(t *testing.T) {
 	}
 
 	// Verify all tasks were created
-	tasks, err := db.ListTasks(context.Background(), TaskListFilter{Limit: 1000})
+	tasks, err := db.ListTasks(context.Background(), &TaskListFilter{Limit: 1000})
 	if err != nil {
 		t.Fatalf("failed to list tasks: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestConcurrentTaskReads(t *testing.T) {
 				case <-stop:
 					return
 				default:
-					_, err := db.ListTasks(context.Background(), TaskListFilter{Limit: 100})
+					_, err := db.ListTasks(context.Background(), &TaskListFilter{Limit: 100})
 					if err != nil {
 						t.Logf("ListTasks error: %v", err)
 					}
@@ -152,7 +152,7 @@ func TestConcurrentTaskUpdates(t *testing.T) {
 	defer cleanup()
 
 	// Create tasks
-	var taskIDs []int
+	taskIDs := make([]int, 0, 5)
 	for i := 0; i < 5; i++ {
 		task := &models.Task{
 			Priority:               i,
@@ -258,7 +258,7 @@ func TestConcurrentSprintTaskOperations(t *testing.T) {
 	}
 
 	// Create tasks
-	var taskIDs []int
+	taskIDs := make([]int, 0, 10)
 	for i := 0; i < 10; i++ {
 		task := &models.Task{
 			Priority:               1,
@@ -438,7 +438,7 @@ func TestHighConcurrencyStress(t *testing.T) {
 					}
 
 				case 1: // List tasks
-					_, err := db.ListTasks(context.Background(), TaskListFilter{Limit: 10})
+					_, err := db.ListTasks(context.Background(), &TaskListFilter{Limit: 10})
 					if err != nil {
 						atomic.AddInt32(&errorCount, 1)
 					}
@@ -474,7 +474,7 @@ func TestHighConcurrencyStress(t *testing.T) {
 	t.Logf("Stress test completed: %d workers, %d operations each", numWorkers, operationsPerWorker)
 
 	// Verify that at least some operations succeeded
-	tasks, _ := db.ListTasks(context.Background(), TaskListFilter{Limit: 1000})
+	tasks, _ := db.ListTasks(context.Background(), &TaskListFilter{Limit: 1000})
 	sprints, _ := db.ListSprints(context.Background(), nil)
 	t.Logf("Final state: %d tasks, %d sprints", len(tasks), len(sprints))
 
