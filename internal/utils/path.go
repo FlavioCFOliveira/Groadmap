@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +20,16 @@ const (
 
 // ValidRoadmapNameRegex validates roadmap names: must start with letter, then lowercase letters, numbers, underscores, hyphens.
 var ValidRoadmapNameRegex = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+
+// Sentinel errors for path and name validation.
+var (
+	ErrPermissionsMismatch         = errors.New("permissions mismatch (umask may have interfered)")
+	ErrRoadmapNameEmpty            = errors.New("roadmap name cannot be empty")
+	ErrRoadmapNameTooLong          = errors.New("roadmap name too long")
+	ErrRoadmapNameStartsWithHyphen = errors.New("roadmap name cannot start with '-'")
+	ErrRoadmapNameReserved         = errors.New("roadmap name is a reserved system name")
+	ErrInvalidRoadmapName          = errors.New("invalid roadmap name")
+)
 
 // MaxRoadmapNameLength is the maximum allowed length for roadmap names.
 const MaxRoadmapNameLength = 255
@@ -81,8 +92,7 @@ func VerifyPermissions(path string, expectedPerm os.FileMode) error {
 
 	actualPerm := info.Mode().Perm()
 	if actualPerm != expectedPerm {
-		return fmt.Errorf("permissions mismatch: expected %04o, got %04o (umask may have interfered)",
-			expectedPerm, actualPerm)
+		return fmt.Errorf("expected %04o, got %04o: %w", expectedPerm, actualPerm, ErrPermissionsMismatch)
 	}
 
 	return nil
@@ -97,34 +107,34 @@ func VerifyPermissions(path string, expectedPerm os.FileMode) error {
 //   - Not be a Windows reserved name (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
 func ValidateRoadmapName(name string) error {
 	if name == "" {
-		return fmt.Errorf("roadmap name cannot be empty")
+		return ErrRoadmapNameEmpty
 	}
 
 	// Check maximum length
 	if len(name) > MaxRoadmapNameLength {
-		return fmt.Errorf("roadmap name too long: %d characters (maximum %d)", len(name), MaxRoadmapNameLength)
+		return fmt.Errorf("%d characters (maximum %d): %w", len(name), MaxRoadmapNameLength, ErrRoadmapNameTooLong)
 	}
 
 	// Check for flag confusion (names starting with '-')
 	if name[0] == '-' {
-		return fmt.Errorf("roadmap name cannot start with '-'")
+		return ErrRoadmapNameStartsWithHyphen
 	}
 
 	// Check against Windows reserved names (case-insensitive)
 	upperName := strings.ToUpper(name)
 	if WindowsReservedNames[upperName] {
-		return fmt.Errorf("roadmap name %q is a reserved system name", name)
+		return fmt.Errorf("%q: %w", name, ErrRoadmapNameReserved)
 	}
 
 	// Check for extension variants of reserved names (e.g., CON.txt)
 	baseName := strings.SplitN(upperName, ".", 2)[0]
 	if WindowsReservedNames[baseName] {
-		return fmt.Errorf("roadmap name %q is a reserved system name", name)
+		return fmt.Errorf("%q: %w", name, ErrRoadmapNameReserved)
 	}
 
 	// Validate against regex (must start with letter)
 	if !ValidRoadmapNameRegex.MatchString(name) {
-		return fmt.Errorf("invalid roadmap name %q: must start with a letter and contain only lowercase letters, numbers, underscores, and hyphens", name)
+		return fmt.Errorf("%q must start with a letter and contain only lowercase letters, numbers, underscores, and hyphens: %w", name, ErrInvalidRoadmapName)
 	}
 
 	return nil
