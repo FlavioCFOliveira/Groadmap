@@ -28,7 +28,6 @@ class TestComplexWorkflow:
     def test_full_development_cycle(self):
         """Simulate a full product development cycle across two sprints."""
         roadmap = self.test.create_roadmap("ecommerce-platform")
-        self.test.use_roadmap(roadmap)
 
         # Sprint 1: Core infrastructure
         infra_tasks = {

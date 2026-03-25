@@ -119,10 +119,6 @@ class GroadmapTestBase:
         self.run_cmd(["roadmap", "create", name])
         return name
 
-    def use_roadmap(self, name: str):
-        """Set the default roadmap."""
-        self.run_cmd(["roadmap", "use", name])
-
     def create_task(self, roadmap: str, title: str, functional_requirements: str,
                     technical_requirements: str, acceptance_criteria: str, **kwargs) -> int:
         """

@@ -24,7 +24,6 @@ class TestTaskNext:
     def test_next_task_no_open_sprint(self):
         """Test that task next fails when no sprint is open."""
         roadmap = self.test.create_roadmap()
-        self.test.use_roadmap(roadmap)
 
         # Create some backlog tasks (not in sprint)
         self.test.create_task(
@@ -37,7 +36,7 @@ class TestTaskNext:
 
         # Try to get next task without an open sprint - should fail
         exit_code, stdout, stderr = self.test.run_cmd(
-            ["task", "next"],
+            ["task", "next", "-r", roadmap],
             check=False
         )
 
@@ -52,14 +51,13 @@ class TestTaskNext:
     def test_next_task_empty_sprint(self):
         """Test that task next returns empty array when sprint has no open tasks."""
         roadmap = self.test.create_roadmap()
-        self.test.use_roadmap(roadmap)
 
         # Create a sprint and open it
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1 - Initial Setup")
         self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint_id)])
 
         # Sprint is open but has no tasks
-        result = self.test.run_cmd_json(["task", "next"])
+        result = self.test.run_cmd_json(["task", "next", "-r", roadmap])
 
         # Should return empty array with exit code 0
         assert result == [], f"Expected empty array, got: {result}"
@@ -69,7 +67,6 @@ class TestTaskNext:
     def test_next_single_task_default(self):
         """Test getting next single task (default N=1)."""
         roadmap = self.test.create_roadmap()
-        self.test.use_roadmap(roadmap)
 
         # Create a sprint and open it
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1 - Core Features")
@@ -92,7 +89,7 @@ class TestTaskNext:
         ])
 
         # Get next task (should return the one task)
-        result = self.test.run_cmd_json(["task", "next"])
+        result = self.test.run_cmd_json(["task", "next", "-r", roadmap])
 
         assert len(result) == 1, f"Expected 1 task, got {len(result)}"
         assert result[0]["id"] == task_id, f"Expected task ID {task_id}, got {result[0]['id']}"
@@ -105,7 +102,6 @@ class TestTaskNext:
     def test_next_multiple_tasks(self):
         """Test getting next N tasks."""
         roadmap = self.test.create_roadmap()
-        self.test.use_roadmap(roadmap)
 
         # Create a sprint and open it
         sprint_id = self.test.create_sprint(roadmap, "Sprint 2 - API Development")
@@ -167,7 +163,7 @@ class TestTaskNext:
         ])
 
         # Get next 2 tasks
-        result = self.test.run_cmd_json(["task", "next", "2"])
+        result = self.test.run_cmd_json(["task", "next", "-r", roadmap, "2"])
 
         assert len(result) == 2, f"Expected 2 tasks, got {len(result)}"
 
@@ -181,7 +177,6 @@ class TestTaskNext:
     def test_next_task_ordering(self):
         """Test that tasks are returned in sprint task_order (position ordering)."""
         roadmap = self.test.create_roadmap()
-        self.test.use_roadmap(roadmap)
 
         # Create a sprint and open it
         sprint_id = self.test.create_sprint(roadmap, "Sprint 3 - Security Features")
@@ -226,7 +221,7 @@ class TestTaskNext:
         ])
 
         # Get all next tasks
-        result = self.test.run_cmd_json(["task", "next", "10"])
+        result = self.test.run_cmd_json(["task", "next", "-r", roadmap, "10"])
 
         assert len(result) == len(tasks_config), \
                f"Expected {len(tasks_config)} tasks, got {len(result)}"
@@ -241,7 +236,6 @@ class TestTaskNext:
     def test_next_exceeds_available_tasks(self):
         """Test requesting more tasks than available."""
         roadmap = self.test.create_roadmap()
-        self.test.use_roadmap(roadmap)
 
         # Create a sprint and open it
         sprint_id = self.test.create_sprint(roadmap, "Sprint 4 - Bug Fixes")
@@ -274,7 +268,7 @@ class TestTaskNext:
         ])
 
         # Request 10 tasks but only 2 available
-        result = self.test.run_cmd_json(["task", "next", "10"])
+        result = self.test.run_cmd_json(["task", "next", "-r", roadmap, "10"])
 
         # Should return all available tasks (2)
         assert len(result) == 2, f"Expected 2 tasks, got {len(result)}"
@@ -288,7 +282,6 @@ class TestTaskNext:
     def test_next_ignores_non_sprint_tasks(self):
         """Test that only SPRINT, DOING, and TESTING tasks are considered."""
         roadmap = self.test.create_roadmap()
-        self.test.use_roadmap(roadmap)
 
         # Create a sprint and open it
         sprint_id = self.test.create_sprint(roadmap, "Sprint 5 - Mixed Status Tasks")
@@ -363,7 +356,7 @@ class TestTaskNext:
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(completed_task), "COMPLETED"])
 
         # Get next tasks
-        result = self.test.run_cmd_json(["task", "next", "10"])
+        result = self.test.run_cmd_json(["task", "next", "-r", roadmap, "10"])
 
         # Should only return SPRINT, DOING, and TESTING tasks
         returned_ids = {task["id"] for task in result}
@@ -464,7 +457,6 @@ class TestTaskNext:
     def test_next_task_json_structure(self):
         """Test that task next returns properly structured JSON."""
         roadmap = self.test.create_roadmap()
-        self.test.use_roadmap(roadmap)
 
         # Create a sprint and open it
         sprint_id = self.test.create_sprint(roadmap, "Sprint 6 - JSON Validation")
@@ -487,7 +479,7 @@ class TestTaskNext:
         ])
 
         # Get next task
-        result = self.test.run_cmd_json(["task", "next"])
+        result = self.test.run_cmd_json(["task", "next", "-r", roadmap])
 
         assert len(result) == 1, f"Expected 1 task, got {len(result)}"
 
@@ -521,7 +513,6 @@ class TestTaskNext:
     def test_next_zero_tasks_requested(self):
         """Test requesting zero tasks."""
         roadmap = self.test.create_roadmap()
-        self.test.use_roadmap(roadmap)
 
         # Create a sprint and open it
         sprint_id = self.test.create_sprint(roadmap, "Sprint 7 - Edge Cases")
@@ -542,7 +533,7 @@ class TestTaskNext:
 
         # Request 0 tasks - should fail with invalid input (must be positive)
         exit_code, stdout, stderr = self.test.run_cmd(
-            ["task", "next", "0"],
+            ["task", "next", "-r", roadmap, "0"],
             check=False
         )
 
@@ -556,7 +547,6 @@ class TestTaskNext:
     def test_next_invalid_argument(self):
         """Test task next with invalid argument."""
         roadmap = self.test.create_roadmap()
-        self.test.use_roadmap(roadmap)
 
         # Create a sprint and open it
         sprint_id = self.test.create_sprint(roadmap, "Sprint 8 - Error Handling")
@@ -564,7 +554,7 @@ class TestTaskNext:
 
         # Try with invalid (non-numeric) argument
         exit_code, stdout, stderr = self.test.run_cmd(
-            ["task", "next", "invalid"],
+            ["task", "next", "-r", roadmap, "invalid"],
             check=False
         )
 
@@ -576,7 +566,7 @@ class TestTaskNext:
 
         # Try with negative number
         exit_code, stdout, stderr = self.test.run_cmd(
-            ["task", "next", "-5"],
+            ["task", "next", "-r", roadmap, "-5"],
             check=False
         )
 
@@ -587,7 +577,6 @@ class TestTaskNext:
     def test_next_after_task_status_changes(self):
         """Test that task next reflects status changes."""
         roadmap = self.test.create_roadmap()
-        self.test.use_roadmap(roadmap)
 
         # Create a sprint and open it
         sprint_id = self.test.create_sprint(roadmap, "Sprint 9 - Status Workflow")
@@ -619,14 +608,14 @@ class TestTaskNext:
         ])
 
         # Initially both tasks should appear
-        result = self.test.run_cmd_json(["task", "next", "10"])
+        result = self.test.run_cmd_json(["task", "next", "-r", roadmap, "10"])
         assert len(result) == 2, f"Expected 2 tasks initially, got {len(result)}"
 
         # Move task1 to DOING
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "DOING"])
 
         # task1 should still appear
-        result = self.test.run_cmd_json(["task", "next", "10"])
+        result = self.test.run_cmd_json(["task", "next", "-r", roadmap, "10"])
         returned_ids = {task["id"] for task in result}
         assert task1 in returned_ids, "DOING task should still appear"
         assert task2 in returned_ids, "SPRINT task should appear"
@@ -635,7 +624,7 @@ class TestTaskNext:
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "TESTING"])
 
         # task1 should still appear
-        result = self.test.run_cmd_json(["task", "next", "10"])
+        result = self.test.run_cmd_json(["task", "next", "-r", roadmap, "10"])
         returned_ids = {task["id"] for task in result}
         assert task1 in returned_ids, "TESTING task should still appear"
         assert task2 in returned_ids, "SPRINT task should appear"
@@ -644,7 +633,7 @@ class TestTaskNext:
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "COMPLETED"])
 
         # task1 should NOT appear anymore
-        result = self.test.run_cmd_json(["task", "next", "10"])
+        result = self.test.run_cmd_json(["task", "next", "-r", roadmap, "10"])
         returned_ids = {task["id"] for task in result}
         assert task1 not in returned_ids, "COMPLETED task should not appear"
         assert task2 in returned_ids, "SPRINT task should still appear"
@@ -653,7 +642,7 @@ class TestTaskNext:
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "BACKLOG"])
 
         # task1 should still NOT appear (not in sprint)
-        result = self.test.run_cmd_json(["task", "next", "10"])
+        result = self.test.run_cmd_json(["task", "next", "-r", roadmap, "10"])
         returned_ids = {task["id"] for task in result}
         assert task1 not in returned_ids, "BACKLOG task should not appear"
         assert task2 in returned_ids, "SPRINT task should still appear"

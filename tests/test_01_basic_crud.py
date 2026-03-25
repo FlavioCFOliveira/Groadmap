@@ -43,25 +43,6 @@ class TestBasicCRUD:
 
         print("✓ Create and list roadmaps test passed")
 
-    def test_use_roadmap(self):
-        """Test setting default roadmap."""
-        name = self.test.create_roadmap()
-
-        # Set as default
-        self.test.run_cmd(["roadmap", "use", name])
-
-        # Create task without specifying roadmap (should use default)
-        result = self.test.run_cmd_json([
-            "task", "create",
-            "-t", "Test task",
-            "-fr", "Functional requirements",
-            "-tr", "Technical requirements",
-            "-ac", "Acceptance criteria"
-        ])
-        assert "id" in result
-
-        print("✓ Use roadmap test passed")
-
     def test_create_and_get_task(self):
         """Test creating and retrieving tasks."""
         roadmap = self.test.create_roadmap()

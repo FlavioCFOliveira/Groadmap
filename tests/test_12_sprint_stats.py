@@ -497,14 +497,12 @@ class TestSprintStats:
         )
         assert exit_code == 0, f"Valid stats request failed with exit code {exit_code}: {stderr}"
 
-        # Invalid sprint ID returns empty stats (not an error)
+        # Non-existent sprint ID returns not found error
         exit_code, stdout, stderr = self.test.run_cmd(
             ["sprint", "stats", "-r", roadmap, "99999"],
             check=False
         )
-        assert exit_code == 0, f"Expected exit code 0 for non-existent sprint, got {exit_code}"
-        result = json.loads(stdout)
-        assert result["total_tasks"] == 0, "Expected 0 tasks for non-existent sprint"
+        assert exit_code == 4, f"Expected exit code 4 for non-existent sprint, got {exit_code}"
 
         # Missing sprint ID should fail
         exit_code, stdout, stderr = self.test.run_cmd(
@@ -525,7 +523,7 @@ class TestSprintStats:
             ["sprint", "stats", str(sprint_id)],
             check=False
         )
-        assert exit_code == 1, f"Expected exit code 1 for missing roadmap, got {exit_code}"
+        assert exit_code == 3, f"Expected exit code 3 for missing roadmap, got {exit_code}"
 
         print("✓ Stats exit codes test passed")
 

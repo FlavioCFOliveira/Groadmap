@@ -44,16 +44,6 @@ class TestEdgeCasesErrors:
 
         print("✓ Create duplicate roadmap test passed")
 
-    def test_use_nonexistent_roadmap(self):
-        """Test using non-existent roadmap fails."""
-        exit_code, _, _ = self.test.run_cmd(
-            ["roadmap", "use", "nonexistent-roadmap-12345"],
-            check=False
-        )
-        assert exit_code == 4, "Should fail with exit code 4 (not found)"
-
-        print("✓ Use nonexistent roadmap test passed")
-
     def test_create_task_without_required_fields(self):
         """Test creating task without required fields fails."""
         roadmap = self.test.create_roadmap()
