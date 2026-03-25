@@ -1,60 +1,67 @@
-# golangci-lint configuration
-# Install: https://golangci-lint.run/welcome/install/
-#   brew install golangci-lint          (macOS)
-#   go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest (any platform)
-
-run:
-  timeout: 5m
-
+version: "2"
 linters:
-  disable-all: true
+  default: none
   enable:
-    # Enforces error wrapping policy:
-    #   - No bare errors.New() inside functions (use package-level sentinels in utils/errors.go)
-    #   - fmt.Errorf must use %w to preserve error chain for errors.Is() inspection
-    - goerr113
-    # Ensures all returned errors are handled or explicitly discarded
+    - bodyclose
+    - err113
     - errcheck
-
-linters-settings:
-  errcheck:
-    # Do not flag ignored errors from type assertions (common Go idiom: v, ok := x.(T))
-    check-type-assertions: false
-    # Do not flag ignored errors from blank identifier assignments
-    check-blank: false
-
+    - gocritic
+    - govet
+    - ineffassign
+    - perfsprint
+    - prealloc
+  settings:
+    errcheck:
+      check-type-assertions: false
+      check-blank: false
+    gocritic:
+      # hugeParam, rangeValCopy, appendAssign already included in the performance tag
+      enabled-tags:
+        - performance
+      enabled-checks:
+        - sloppyReassign
+    govet:
+      enable:
+        - fieldalignment
+    prealloc:
+      simple: true
+      range-loops: true
+      for-loops: true
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - err113
+          - errcheck
+        path: _test\.go
+      - linters:
+          - errcheck
+        path: internal/commands/roadmap\.go
+        text: Error return value of `os.Remove` is not checked
+      - linters:
+          - err113
+        path: internal/commands/sprint\.go
+        text: do not define dynamic errors
+      - linters:
+          - err113
+        path: internal/utils/time\.go
+    paths:
+      - vendor
+      - .claude
+      - third_party$
+      - builtin$
+      - examples$
 issues:
-  # Maximum number of issues with the same text. 0 means unlimited.
   max-same-issues: 0
-
-  exclude-rules:
-    # Test files: allow ignored errors in setup/teardown helpers and deferred cleanups
-    - path: _test\.go
-      linters:
-        - errcheck
-        - goerr113
-
-    # roadmap.go WAL cleanup: os.Remove on -shm/-wal files may not exist; error is irrelevant.
-    # Tracked in task #68 (explicit error ignoring in roadmap WAL file cleanup).
-    - path: internal/commands/roadmap\.go
-      text: "Error return value of `os.Remove` is not checked"
-      linters:
-        - errcheck
-
-    # sprint.go sprint-stats fallback: intentionally uses unwrapped error to produce exit code 1
-    # (preserves E2E test contract; see test_12_sprint_stats.py:528)
-    - path: internal/commands/sprint\.go
-      linters:
-        - goerr113
-      text: "do not define dynamic errors"
-
-    # utils/time.go: package-level sentinel errors use fmt.Errorf for readable messages.
-    # These are package-level var declarations, not function-body errors.
-    - path: internal/utils/time\.go
-      linters:
-        - goerr113
-
-  # Exclude test binary and vendor paths
-  exclude-dirs:
-    - vendor
-    - .claude
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
