@@ -40,6 +40,10 @@ linters:
           - errcheck
         path: _test\.go
       - linters:
+          - govet
+        path: _test\.go
+        text: fieldalignment
+      - linters:
           - errcheck
         path: internal/commands/roadmap\.go
         text: Error return value of `os.Remove` is not checked
