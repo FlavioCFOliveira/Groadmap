@@ -26,9 +26,9 @@ type ConnectionCache struct {
 // CachedConnection wraps a database connection with metadata
 type CachedConnection struct {
 	db          *DB
-	roadmapName string
 	createdAt   time.Time
 	lastUsed    time.Time
+	roadmapName string
 	useCount    int
 }
 
@@ -78,7 +78,8 @@ func (cc *ConnectionCache) OpenCached(roadmapName string) (*DB, error) {
 		// Re-check: another goroutine may have replaced the entry while we ran
 		// the health check.
 		current, stillExists := cc.connections[roadmapName]
-		if stillExists && current == snapshot {
+		switch {
+		case stillExists && current == snapshot:
 			// Entry has not changed since our snapshot.
 			if healthy {
 				// Update metadata under write lock (fixes Task 73 data race).
@@ -94,7 +95,7 @@ func (cc *ConnectionCache) OpenCached(roadmapName string) (*DB, error) {
 			cc.mu.Unlock()
 			snapshot.db.Close() // #nosec G104 -- best-effort cleanup on cache eviction
 			// Fall through to create a fresh connection below.
-		} else if stillExists {
+		case stillExists:
 			// Entry was replaced by another goroutine while we checked health.
 			// Re-validate the new entry under the write lock.
 			if cc.isHealthy(current.db) {
@@ -109,7 +110,7 @@ func (cc *ConnectionCache) OpenCached(roadmapName string) (*DB, error) {
 			staleDB := current.db
 			cc.mu.Unlock()
 			staleDB.Close() // #nosec G104 -- best-effort cleanup on cache eviction
-		} else {
+		default:
 			// Entry was already removed by another goroutine.
 			cc.mu.Unlock()
 		}
@@ -238,15 +239,15 @@ func (cc *ConnectionCache) Stats() CacheStats {
 
 // CacheStats contains statistics about cached connections
 type CacheStats struct {
-	ConnectionCount int
 	Connections     []ConnectionInfo
+	ConnectionCount int
 }
 
 // ConnectionInfo contains metadata about a cached connection
 type ConnectionInfo struct {
-	RoadmapName string
 	CreatedAt   time.Time
 	LastUsed    time.Time
+	RoadmapName string
 	UseCount    int
 }
 
@@ -254,7 +255,7 @@ type ConnectionInfo struct {
 func init() {
 	// Register cleanup using atexit pattern
 	defaultAtexit.Register(func() {
-		globalCache.CloseAll() // #nosec G104 -- best-effort cleanup on process exit
+		globalCache.CloseAll() //nolint:errcheck // best-effort cleanup on process exit, error is secondary  // #nosec G104
 	})
 }
 

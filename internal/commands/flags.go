@@ -11,21 +11,21 @@ import (
 
 // FlagDef defines a command-line flag.
 type FlagDef struct {
+	Validator   func(interface{}) error // Optional validation function
 	Name        string                  // Long name (e.g., "--description")
 	Short       string                  // Short name (e.g., "-d")
 	Field       string                  // Struct field name to populate
 	Type        string                  // "string", "int", "bool"
-	Required    bool                    // Whether the flag is required
 	Default     string                  // Default value (as string)
-	Validator   func(interface{}) error // Optional validation function
 	DisplayName string                  // Human-readable name for parse error messages (e.g., "entity ID")
+	Required    bool                    // Whether the flag is required
 }
 
 // ParseResult holds the result of flag parsing.
 type ParseResult struct {
 	Flags   map[string]interface{}
-	Args    []string // Positional arguments
 	Roadmap string   // Roadmap name if specified
+	Args    []string // Positional arguments
 }
 
 // FlagParser is a generic flag parser for commands.

@@ -79,9 +79,9 @@ func retryWithBackoff(operation string, fn func() error) error {
 // DB wraps sql.DB with roadmap-specific operations.
 type DB struct {
 	*sql.DB
-	roadmapName string
 	queryCache  *QueryCache
 	batchProc   *BatchProcessor
+	roadmapName string
 }
 
 // Open opens a connection to a roadmap database.
@@ -235,13 +235,13 @@ func (db *DB) WithTransaction(fn func(*sql.Tx) error) error {
 
 		defer func() {
 			if r := recover(); r != nil {
-				tx.Rollback() // #nosec G104 -- rollback in panic recovery, error is secondary
+				tx.Rollback() //nolint:errcheck // rollback in panic recovery, original panic takes precedence  // #nosec G104
 				panic(r)
 			}
 		}()
 
 		if err := fn(tx); err != nil {
-			tx.Rollback() // #nosec G104 -- rollback after error, original error returned
+			tx.Rollback() //nolint:errcheck // rollback after error, original error is returned to caller  // #nosec G104
 			return err
 		}
 

@@ -10,9 +10,9 @@ type MigrationFunc func(*sql.Tx) error
 
 // Migration represents a database schema migration.
 type Migration struct {
+	Apply   MigrationFunc
 	Version string
 	Name    string
-	Apply   MigrationFunc
 }
 
 // migrations is a list of all available migrations, ordered by version.
@@ -86,7 +86,7 @@ func (db *DB) runMigration(migration Migration) error {
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck // deferred rollback, migration error already captured
 
 	// Apply the migration
 	if err := migration.Apply(tx); err != nil {
