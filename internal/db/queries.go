@@ -45,6 +45,21 @@ var (
 	ErrSwapTasksNotFound = errors.New("one or both tasks not found in sprint")
 )
 
+// SQL fragments built from models constants so that renaming an enum value
+// (e.g. StatusSprint -> StatusInSprint) won't silently leave a stale string
+// literal in a query. Computed at package init.
+var (
+	// sqlActiveTaskStatuses lists the three non-terminal statuses a task can
+	// hold while it sits inside a sprint: SPRINT, DOING, TESTING.
+	sqlActiveTaskStatuses = "('" + string(models.StatusSprint) + "', '" +
+		string(models.StatusDoing) + "', '" + string(models.StatusTesting) + "')"
+	// sqlStatusCompleted and sqlSprintClosed are inlined into stats queries
+	// that group by status; using parameters there would require restructuring
+	// already-complex multi-clause aggregations.
+	sqlStatusCompleted = "'" + string(models.StatusCompleted) + "'"
+	sqlSprintClosed    = "'" + string(models.SprintClosed) + "'"
+)
+
 // ==================== TASK QUERIES ====================
 
 // CreateTask inserts a new task and returns its ID.
@@ -1003,7 +1018,7 @@ func (db *DB) GetNextTasks(ctx context.Context, limit int) ([]models.Task, error
 		      FROM tasks t
 		      INNER JOIN sprint_tasks st ON t.id = st.task_id
 		      WHERE st.sprint_id = ?
-		        AND t.status IN ('SPRINT', 'DOING', 'TESTING')
+		        AND t.status IN ` + sqlActiveTaskStatuses + `
 		      ORDER BY st.position ASC, t.priority DESC
 		      LIMIT ?`
 
@@ -1556,10 +1571,10 @@ func (db *DB) DeleteSprint(ctx context.Context, id int) error {
 	return retryWithBackoff("delete sprint", func() error {
 		// First reset task status for tasks in this sprint
 		_, err := db.ExecContext(ctx,
-			`UPDATE tasks SET status = 'BACKLOG' WHERE id IN (
+			`UPDATE tasks SET status = ? WHERE id IN (
 				SELECT task_id FROM sprint_tasks WHERE sprint_id = ?
 			)`,
-			id,
+			models.StatusBacklog, id,
 		)
 		if err != nil {
 			return fmt.Errorf("resetting task statuses: %w", err)
@@ -1622,7 +1637,7 @@ func (db *DB) GetActiveSprintTasks(ctx context.Context, sprintID int) ([]models.
 		         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count
 		      FROM tasks t
 		      INNER JOIN sprint_tasks st ON t.id = st.task_id
-		      WHERE st.sprint_id = ? AND t.status IN ('SPRINT', 'DOING', 'TESTING')
+		      WHERE st.sprint_id = ? AND t.status IN ` + sqlActiveTaskStatuses + `
 		      ORDER BY st.position ASC`,
 		sprintID,
 	)
@@ -1679,7 +1694,7 @@ func (db *DB) GetOpenSprintTasks(ctx context.Context, sprintID int, orderByPrior
 		      FROM tasks t
 		      INNER JOIN sprint_tasks st ON t.id = st.task_id
 		      WHERE st.sprint_id = ?
-		        AND t.status IN ('SPRINT', 'DOING', 'TESTING')`
+		        AND t.status IN ` + sqlActiveTaskStatuses + ``
 
 	if orderByPriority {
 		query += " ORDER BY t.priority DESC, st.position ASC"
@@ -1750,10 +1765,12 @@ func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int)
 			statusArgs[i] = id
 		}
 		statusQuery := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
-			"UPDATE tasks SET status = 'SPRINT' WHERE id IN (%s)",
+			"UPDATE tasks SET status = ? WHERE id IN (%s)",
 			placeholders,
 		)
-		if _, err := tx.Exec(statusQuery, statusArgs...); err != nil {
+		// Prepend the status value so the placeholder order matches: status, id, id, ...
+		statusArgsWithStatus := append([]interface{}{models.StatusSprint}, statusArgs...)
+		if _, err := tx.Exec(statusQuery, statusArgsWithStatus...); err != nil {
 			return fmt.Errorf("updating task statuses: %w", err)
 		}
 
@@ -1782,10 +1799,10 @@ func (db *DB) RemoveTasksFromSprint(ctx context.Context, taskIDs []int) error {
 			return fmt.Errorf("removing tasks from sprint: %w", err)
 		}
 
-		// Update task status to BACKLOG
-		query = fmt.Sprintf("UPDATE tasks SET status = 'BACKLOG' WHERE id IN (%s)", placeholders)
-		_, err = db.ExecContext(ctx, query, args...)
-		if err != nil {
+		// Update task status to BACKLOG. Prepend status value to args.
+		query = fmt.Sprintf("UPDATE tasks SET status = ? WHERE id IN (%s)", placeholders) // #nosec G201 -- only ? placeholders interpolated
+		statusArgs := append([]interface{}{models.StatusBacklog}, args...)
+		if _, err := db.ExecContext(ctx, query, statusArgs...); err != nil {
 			return fmt.Errorf("updating task statuses: %w", err)
 		}
 
@@ -2510,7 +2527,7 @@ func (db *DB) GetSprintBurndown(ctx context.Context, sprintID int) ([]models.Bur
 		 FROM tasks t
 		 INNER JOIN sprint_tasks st ON st.task_id = t.id
 		 WHERE st.sprint_id = ?
-		   AND t.status = 'COMPLETED'
+		   AND t.status = `+sqlStatusCompleted+`
 		   AND t.closed_at IS NOT NULL
 		 GROUP BY completion_date
 		 ORDER BY completion_date ASC`,
@@ -2591,9 +2608,9 @@ func (db *DB) GetAverageVelocity(ctx context.Context, limit int) (float64, error
 		`SELECT s.id, s.started_at, s.closed_at,
 		        (SELECT COUNT(*) FROM sprint_tasks st
 		         INNER JOIN tasks t ON t.id = st.task_id
-		         WHERE st.sprint_id = s.id AND t.status = 'COMPLETED') AS completed_count
+		         WHERE st.sprint_id = s.id AND t.status = `+sqlStatusCompleted+`) AS completed_count
 		 FROM sprints s
-		 WHERE s.status = 'CLOSED'
+		 WHERE s.status = `+sqlSprintClosed+`
 		   AND s.started_at IS NOT NULL
 		   AND s.closed_at IS NOT NULL
 		 ORDER BY s.closed_at DESC
