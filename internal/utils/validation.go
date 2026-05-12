@@ -49,6 +49,17 @@ func ValidateIDList(ids []int, entity string) error {
 	return nil
 }
 
+// ValidateNumericRange checks that val is within the inclusive [min, max]
+// range and returns a wrapped ErrInvalidInput error otherwise. Used for
+// CLI inputs like priority and severity that share an identical bounds
+// check and error format.
+func ValidateNumericRange(val, min, max int, field string) error {
+	if val < min || val > max {
+		return fmt.Errorf("%w: invalid %s: must be %d-%d (got %d)", ErrInvalidInput, field, min, max, val)
+	}
+	return nil
+}
+
 // ParseCommaSeparatedIDs parses a comma-separated list of IDs and validates
 // each one through ValidateIDString. Returns the parsed slice or the first
 // validation error encountered.

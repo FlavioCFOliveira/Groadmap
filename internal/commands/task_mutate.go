@@ -423,10 +423,12 @@ func taskSetPriority(args []string) error {
 		return err
 	}
 
-	// Parse priority
 	priority, err := strconv.Atoi(remaining[1])
-	if err != nil || priority < 0 || priority > 9 {
+	if err != nil {
 		return fmt.Errorf("%w: invalid priority: must be 0-9", utils.ErrInvalidInput)
+	}
+	if err := utils.ValidateNumericRange(priority, 0, 9, "priority"); err != nil {
+		return err
 	}
 
 	database, err := db.OpenExisting(roadmapName)
@@ -473,10 +475,12 @@ func taskSetSeverity(args []string) error {
 		return err
 	}
 
-	// Parse severity
 	severity, err := strconv.Atoi(remaining[1])
-	if err != nil || severity < 0 || severity > 9 {
+	if err != nil {
 		return fmt.Errorf("%w: invalid severity: must be 0-9", utils.ErrInvalidInput)
+	}
+	if err := utils.ValidateNumericRange(severity, 0, 9, "severity"); err != nil {
+		return err
 	}
 
 	database, err := db.OpenExisting(roadmapName)
