@@ -98,7 +98,12 @@ func TestRoadmapCreate_NoName(t *testing.T) {
 }
 
 func TestRoadmapCreate_InvalidName(t *testing.T) {
-	invalidNames := []string{"-r", "--help", "123abc", "MYROADMAP", "my roadmap", "../etc"}
+	// Note: '--help' is intercepted by the subcommand help router (it shows
+	// help rather than attempting to create a roadmap), so it isn't a
+	// candidate "invalid name" any more — that case is now covered by the
+	// roadmap subcommand help test, and the leading-hyphen rejection is
+	// still exercised here via "-r".
+	invalidNames := []string{"-r", "123abc", "MYROADMAP", "my roadmap", "../etc"}
 
 	for _, name := range invalidNames {
 		t.Run("invalid_"+name, func(t *testing.T) {

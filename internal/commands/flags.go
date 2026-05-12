@@ -9,6 +9,20 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
+// hasHelpFlag reports whether args contains a help flag in any form
+// (-h, --help, help). Subcommand handlers call this before any other
+// parsing so that 'rmp <cmd> <sub> --help' shows the subcommand-level
+// help instead of forwarding --help to the underlying parser (which
+// would normally complain about missing -r or positional arguments).
+func hasHelpFlag(args []string) bool {
+	for _, a := range args {
+		if a == "-h" || a == "--help" || a == "help" {
+			return true
+		}
+	}
+	return false
+}
+
 // FlagDef defines a command-line flag.
 type FlagDef struct {
 	Validator   func(any) error // Optional validation function

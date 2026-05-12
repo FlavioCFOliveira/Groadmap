@@ -26,6 +26,21 @@ func HandleRoadmap(args []string) error {
 		return nil
 	}
 
+	// Subcommand-level help: 'rmp roadmap <sub> --help'.
+	if hasHelpFlag(args[1:]) {
+		switch subcommand {
+		case "list", "ls":
+			printRoadmapListHelp()
+			return nil
+		case "create", "new":
+			printRoadmapCreateHelp()
+			return nil
+		case "remove", "rm", "delete":
+			printRoadmapRemoveHelp()
+			return nil
+		}
+	}
+
 	switch subcommand {
 	case "list", "ls":
 		return roadmapList()
@@ -36,6 +51,88 @@ func HandleRoadmap(args []string) error {
 	default:
 		return fmt.Errorf("%w: unknown roadmap subcommand: %s", utils.ErrInvalidInput, subcommand)
 	}
+}
+
+// printRoadmapListHelp prints help for 'rmp roadmap list'.
+func printRoadmapListHelp() {
+	fmt.Print(`Usage: rmp roadmap list
+
+Lists every roadmap database file found under ~/.roadmaps/.
+
+Arguments: (none)
+Options:   -h, --help
+
+Output (stdout JSON):
+  Array of objects, one per roadmap:
+    [
+      { "name": "<roadmap>", "path": "/home/<user>/.roadmaps/<roadmap>.db", "size": <bytes> },
+      ...
+    ]
+  An empty array is returned when no roadmaps exist; exit is still 0.
+
+Exit codes:
+  0   Success
+
+Examples:
+  rmp roadmap list
+  rmp roadmap ls
+`)
+}
+
+// printRoadmapCreateHelp prints help for 'rmp roadmap create'.
+func printRoadmapCreateHelp() {
+	fmt.Print(`Usage: rmp roadmap create <name>
+
+Creates a new roadmap database at ~/.roadmaps/<name>.db (mode 0600).
+Initialises the SQLite schema and records the current schema version.
+
+Arguments:
+  <name>   Required. Must match ^[a-z0-9_-]+$ and be at most 50 characters.
+           Reserved Windows names (CON, PRN, COM1..9, ...) are rejected.
+
+Options: -h, --help
+
+Output (stdout JSON):
+  {"name": "<name>"}
+
+Exit codes:
+  0   Success
+  5   A roadmap with that name already exists
+  6   Invalid roadmap name (bad regex match, length, or reserved word)
+
+Examples:
+  rmp roadmap create mobile-app
+  rmp roadmap new payment-api
+`)
+}
+
+// printRoadmapRemoveHelp prints help for 'rmp roadmap remove'.
+func printRoadmapRemoveHelp() {
+	fmt.Print(`Usage: rmp roadmap remove <name>
+
+Deletes the roadmap database file ~/.roadmaps/<name>.db AND its SQLite
+sidecar files (-wal, -shm) if present. This is permanent — there is no
+recovery flow other than restoring from your own backup.
+
+Aliases: rm, delete.
+
+Arguments:
+  <name>   Required. The roadmap to remove. Must already exist.
+
+Options: -h, --help
+
+Output: empty (exit 0 on success).
+
+Exit codes:
+  0   Success
+  4   Roadmap not found
+  6   Invalid roadmap name
+
+Examples:
+  rmp roadmap remove mobile-app
+  rmp roadmap rm payment-api
+  rmp roadmap delete legacy-project
+`)
 }
 
 // roadmapList lists all roadmaps.
