@@ -20,6 +20,14 @@ func HandleSprint(args []string) error {
 		return nil
 	}
 
+	// Subcommand-level help.
+	if hasHelpFlag(args[1:]) {
+		if h := sprintSubHelp(subcommand); h != nil {
+			h()
+			return nil
+		}
+	}
+
 	switch subcommand {
 	case "list", "ls":
 		return sprintList(args[1:])
@@ -64,6 +72,54 @@ func HandleSprint(args []string) error {
 	default:
 		return fmt.Errorf("%w: unknown sprint subcommand: %s", utils.ErrInvalidInput, subcommand)
 	}
+}
+
+// sprintSubHelp returns the help printer for a sprint subcommand, or nil
+// when the subcommand is unknown.
+func sprintSubHelp(sub string) func() {
+	switch sub {
+	case "list", "ls":
+		return printSprintListHelp
+	case "create", "new":
+		return printSprintCreateHelp
+	case "get":
+		return printSprintGetHelp
+	case "show":
+		return printSprintShowHelp
+	case "update", "upd":
+		return printSprintUpdateHelp
+	case "remove", "rm":
+		return printSprintRemoveHelp
+	case "start":
+		return printSprintStartHelp
+	case "close":
+		return printSprintCloseHelp
+	case "reopen":
+		return printSprintReopenHelp
+	case "tasks":
+		return printSprintTasksHelp
+	case "open-tasks":
+		return printSprintOpenTasksHelp
+	case "stats":
+		return printSprintStatsHelp
+	case "add-tasks", "add":
+		return printSprintAddTasksHelp
+	case "remove-tasks", "rm-tasks":
+		return printSprintRemoveTasksHelp
+	case "move-tasks", "mv-tasks":
+		return printSprintMoveTasksHelp
+	case "reorder", "order":
+		return printSprintReorderHelp
+	case "move-to", "mvto":
+		return printSprintMoveToHelp
+	case "swap":
+		return printSprintSwapHelp
+	case "top":
+		return printSprintTopHelp
+	case "bottom", "btm":
+		return printSprintBottomHelp
+	}
+	return nil
 }
 
 // printSprintHelp prints sprint command help.
