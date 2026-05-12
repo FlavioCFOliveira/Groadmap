@@ -67,20 +67,21 @@ func taskEdit(args []string) error {
 
 	updates := make(map[string]interface{})
 
+	// Trim leading/trailing whitespace before validation per SPEC/COMMANDS.md.
 	if v, ok := result.Flags["Title"]; ok {
-		updates["title"] = v.(string)
+		updates["title"] = strings.TrimSpace(v.(string))
 	}
 	if v, ok := result.Flags["FunctionalRequirements"]; ok {
-		updates["functional_requirements"] = v.(string)
+		updates["functional_requirements"] = strings.TrimSpace(v.(string))
 	}
 	if v, ok := result.Flags["TechnicalRequirements"]; ok {
-		updates["technical_requirements"] = v.(string)
+		updates["technical_requirements"] = strings.TrimSpace(v.(string))
 	}
 	if v, ok := result.Flags["AcceptanceCriteria"]; ok {
-		updates["acceptance_criteria"] = v.(string)
+		updates["acceptance_criteria"] = strings.TrimSpace(v.(string))
 	}
 	if v, ok := result.Flags["Specialists"]; ok {
-		updates["specialists"] = v.(string)
+		updates["specialists"] = strings.TrimSpace(v.(string))
 	}
 	if v, ok := result.Flags["Priority"]; ok {
 		updates["priority"] = v.(int)

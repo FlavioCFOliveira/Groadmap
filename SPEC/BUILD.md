@@ -106,10 +106,16 @@ make lint
 
 | Linter | Purpose | Policy enforced |
 |--------|---------|----------------|
-| `goerr113` | Error wrapping | No `errors.New` inside functions; all `fmt.Errorf` must use `%w` |
+| `err113` | Error wrapping | No `errors.New` inside functions; all `fmt.Errorf` must use `%w` |
 | `errcheck` | Error checking | All returned errors must be handled or explicitly discarded |
+| `bodyclose` | HTTP body close | Response bodies must be closed to avoid leaks |
+| `gocritic` | Performance idioms | Performance preset + `sloppyReassign`; flags hot-path inefficiencies |
+| `govet` | Static analysis (incl. `fieldalignment`) | Struct fields ordered to minimise padding; standard `vet` checks |
+| `ineffassign` | Dead assignments | Detects assignments whose values are never read |
+| `perfsprint` | Sprintf hotspots | Replaces `fmt.Sprintf("%s", s)` with cheaper alternatives |
+| `prealloc` | Slice preallocation | Loops with known iteration count must preallocate slice capacity |
 
-### Error Policy Rules (goerr113)
+### Error Policy Rules (err113)
 
 These patterns are **forbidden** and caught by the linter:
 

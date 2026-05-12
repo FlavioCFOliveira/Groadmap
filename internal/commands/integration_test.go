@@ -195,15 +195,31 @@ func TestIntegration_TaskLifecycle(t *testing.T) {
 		t.Errorf("failed to edit task: %v", err)
 	}
 
-	// Step 5: Set task status (valid transition: BACKLOG -> SPRINT)
-	err = HandleTask([]string{
-		"stat",
+	// Step 5: Move task to SPRINT via sprint add-tasks (manual `task stat SPRINT`
+	// is rejected per SPEC/STATE_MACHINE.md — SPRINT is an automatic transition).
+	sprintOutput := captureOutput(t, func() {
+		err := HandleSprint([]string{
+			"create",
+			"-r", testRoadmap,
+			"-d", "Integration test sprint",
+		})
+		if err != nil {
+			t.Errorf("failed to create sprint: %v", err)
+		}
+	})
+	var sprintCreate map[string]int
+	if err := json.Unmarshal([]byte(sprintOutput), &sprintCreate); err != nil {
+		t.Fatalf("failed to parse sprint create output: %v\noutput: %s", err, sprintOutput)
+	}
+	sprintID := sprintCreate["id"]
+	err = HandleSprint([]string{
+		"add-tasks",
 		"-r", testRoadmap,
+		string(rune('0' + sprintID)),
 		string(rune('0' + taskID)),
-		"SPRINT",
 	})
 	if err != nil {
-		t.Errorf("failed to set task status: %v", err)
+		t.Errorf("failed to add task to sprint: %v", err)
 	}
 
 	// Step 6: Set task priority

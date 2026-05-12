@@ -36,22 +36,27 @@ WAL mode provides:
 
 ### Connection Pooling
 
-Groadmap uses a connection pool optimized for concurrent read access:
+Groadmap is a single-user CLI tool, so the connection pool is sized for low
+resource usage and predictable behaviour rather than high read concurrency.
 
 ```go
-db.SetMaxOpenConns(10)        // Allow concurrent readers (WAL mode supports this)
-db.SetMaxIdleConns(5)         // Keep warm connections for frequent access
-db.SetConnMaxLifetime(time.Hour)   // Recycle connections after 1 hour
-db.SetConnMaxIdleTime(10 * time.Minute) // Close idle connections after 10 min
+db.SetMaxOpenConns(2)                    // One for reads, one for writes
+db.SetMaxIdleConns(1)                    // Keep one warm connection
+db.SetConnMaxLifetime(30 * time.Minute)  // Recycle connections every 30 min
+db.SetConnMaxIdleTime(10 * time.Minute)  // Close idle connections after 10 min
 ```
 
 **Rationale**:
-- **MaxOpenConns(10)**: WAL mode allows multiple concurrent readers
-- **MaxIdleConns(5)**: Maintains warm connections to avoid connection establishment overhead
-- **ConnMaxLifetime(1 hour)**: Periodically recycles connections to prevent resource leaks
-- **ConnMaxIdleTime(10 min)**: Closes unused connections to free resources
+- **MaxOpenConns(2)**: SQLite serialises writes; a CLI process rarely benefits
+  from more than one reader plus one writer in flight.
+- **MaxIdleConns(1)**: A single warm connection avoids re-handshake on the
+  next command without holding extra file descriptors.
+- **ConnMaxLifetime(30 min)**: Bounds the maximum age of a pooled connection
+  so long-running CLI sessions do not accumulate stale state.
+- **ConnMaxIdleTime(10 min)**: Releases unused connections to free resources.
 
-**Note**: Write operations remain serialized at the SQLite level regardless of connection pool size.
+**Note**: Write operations remain serialised at the SQLite level regardless of
+pool size. WAL mode is enabled so readers do not block writers and vice versa.
 
 ### Busy Timeout
 

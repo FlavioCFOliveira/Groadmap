@@ -74,11 +74,11 @@ Legend: arrows labelled with the command that triggers the transition. Transitio
 |------------|-----------------|-----|
 | `BACKLOG` | `SPRINT` | Automatic only (via `sprint add-tasks`) |
 | `SPRINT` | `BACKLOG`, `DOING` | `BACKLOG` is automatic (via `sprint remove-tasks` or `sprint remove`); `DOING` is manual (via `task stat`) |
-| `DOING` | `SPRINT`, `TESTING` | Manual (via `task stat`) |
+| `DOING` | `TESTING` | Manual (via `task stat`) |
 | `TESTING` | `DOING`, `COMPLETED` | Manual (via `task stat`; `COMPLETED` accepts optional `--summary`) |
 | `COMPLETED` | `BACKLOG` | Manual (via `task stat` or `task reopen`); clears `completion_summary` |
 
-**Rejection rule:** Manual `task stat <ids> SPRINT` is rejected with exit code 6. The SPRINT status is set exclusively by `sprint add-tasks`, which atomically links the task to a sprint via the `sprint_tasks` table.
+**Rejection rule:** Manual `task stat <ids> SPRINT` is rejected with exit code 6 from any source state. The SPRINT status is set exclusively by `sprint add-tasks`, which atomically links the task to a sprint via the `sprint_tasks` table. Returning a task to its sprint after starting work is therefore not supported via `task stat`.
 
 ### Task Deletion Precondition
 
@@ -109,7 +109,6 @@ This rule preserves the audit trail of work that progressed past `BACKLOG`. The 
 | Transition | Description | Date Tracking Behavior |
 |------------|-------------|----------------------|
 | **SPRINT → DOING** | Work begins on the task | Set `started_at` to current timestamp |
-| **DOING → SPRINT** | Task is paused/returned to sprint | No date changes |
 | **DOING → TESTING** | Task is ready for testing | Set `tested_at` to current timestamp |
 | **TESTING → DOING** | Testing failed, return to development | No date changes |
 | **TESTING → COMPLETED** | Testing passed, task is complete | Set `closed_at` to current timestamp; optionally set `completion_summary` |

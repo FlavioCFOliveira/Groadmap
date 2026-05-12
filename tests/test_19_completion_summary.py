@@ -50,8 +50,12 @@ def _create_feature_task(test: GroadmapTestBase, roadmap: str) -> int:
 
 
 def _advance_to_testing(test: GroadmapTestBase, roadmap: str, task_id: int):
-    """Drive a task from BACKLOG through SPRINT → DOING → TESTING."""
-    test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "SPRINT"])
+    """Drive a task from BACKLOG through SPRINT → DOING → TESTING.
+
+    SPRINT transition uses `sprint add-tasks` since manual `task stat SPRINT`
+    is rejected per SPEC/STATE_MACHINE.md.
+    """
+    test.move_task_to_sprint(roadmap, task_id)
     test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
     test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
 
@@ -200,15 +204,22 @@ class TestCompletionSummaryValidation:
         self.test.teardown()
 
     def _create_and_advance(self, roadmap: str, target_status: str) -> int:
-        """Create a task and advance it to target_status."""
+        """Create a task and advance it to target_status.
+
+        SPRINT transition uses `sprint add-tasks` since manual `task stat SPRINT`
+        is rejected per SPEC/STATE_MACHINE.md.
+        """
         task_id = _create_feature_task(self.test, roadmap)
-        status_path = {
-            "BACKLOG": [],
-            "SPRINT": ["SPRINT"],
-            "DOING": ["SPRINT", "DOING"],
-            "TESTING": ["SPRINT", "DOING", "TESTING"],
+        if target_status == "BACKLOG":
+            return task_id
+        self.test.move_task_to_sprint(roadmap, task_id)
+        if target_status == "SPRINT":
+            return task_id
+        manual_path = {
+            "DOING": ["DOING"],
+            "TESTING": ["DOING", "TESTING"],
         }
-        for status in status_path[target_status]:
+        for status in manual_path[target_status]:
             self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), status])
         return task_id
 

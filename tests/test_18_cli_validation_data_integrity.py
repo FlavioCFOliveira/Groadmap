@@ -162,7 +162,7 @@ class TestTaskDeletionBacklogOnly:
         roadmap = self.test.create_roadmap()
         task_id = self._create_task(roadmap)
 
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "SPRINT"])
+        self.test.move_task_to_sprint(roadmap, task_id)
 
         exit_code, _, stderr = self.test.run_cmd(
             ["task", "remove", "-r", roadmap, str(task_id)],
@@ -179,7 +179,7 @@ class TestTaskDeletionBacklogOnly:
         roadmap = self.test.create_roadmap()
         task_id = self._create_task(roadmap)
 
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "SPRINT"])
+        self.test.move_task_to_sprint(roadmap, task_id)
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
 
         exit_code, _, stderr = self.test.run_cmd(
@@ -196,7 +196,7 @@ class TestTaskDeletionBacklogOnly:
         roadmap = self.test.create_roadmap()
         task_id = self._create_task(roadmap)
 
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "SPRINT"])
+        self.test.move_task_to_sprint(roadmap, task_id)
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
 
@@ -214,7 +214,7 @@ class TestTaskDeletionBacklogOnly:
         roadmap = self.test.create_roadmap()
         task_id = self._create_task(roadmap)
 
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "SPRINT"])
+        self.test.move_task_to_sprint(roadmap, task_id)
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED"])
@@ -235,7 +235,7 @@ class TestTaskDeletionBacklogOnly:
         task_backlog = self._create_task(roadmap)
         task_doing = self._create_task(roadmap)
 
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_doing), "SPRINT"])
+        self.test.move_task_to_sprint(roadmap, task_doing)
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_doing), "DOING"])
 
         ids = f"{task_backlog},{task_doing}"
@@ -257,7 +257,7 @@ class TestTaskDeletionBacklogOnly:
         roadmap = self.test.create_roadmap()
         task_id = self._create_task(roadmap)
 
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "SPRINT"])
+        self.test.move_task_to_sprint(roadmap, task_id)
 
         _, _, stderr = self.test.run_cmd(
             ["task", "remove", "-r", roadmap, str(task_id)],
@@ -289,9 +289,17 @@ class TestTaskReopenCommand:
         )
 
     def _advance_to(self, roadmap: str, task_id: int, target_status: str):
-        """Advance task through states up to target_status."""
-        path = ["SPRINT", "DOING", "TESTING", "COMPLETED"]
-        for status in path:
+        """Advance task through states up to target_status.
+
+        SPRINT transition uses `sprint add-tasks` since manual `task stat SPRINT`
+        is rejected per SPEC/STATE_MACHINE.md.
+        """
+        if target_status == "BACKLOG":
+            return
+        self.test.move_task_to_sprint(roadmap, task_id)
+        if target_status == "SPRINT":
+            return
+        for status in ["DOING", "TESTING", "COMPLETED"]:
             self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), status])
             if status == target_status:
                 break

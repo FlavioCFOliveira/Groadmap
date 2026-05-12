@@ -42,10 +42,48 @@ detect_os() {
     case "$(uname -s)" in
         Linux*)     os="linux" ;;
         Darwin*)    os="darwin" ;;
+        FreeBSD*)   os="freebsd" ;;
         CYGWIN*|MINGW*|MSYS*) os="windows" ;;
         *)          os="unknown" ;;
     esac
     echo "$os"
+}
+
+# Detect Raspberry Pi via /proc/device-tree/model or /proc/cpuinfo (BCM28xx SoC).
+# Returns 0 if running on a Raspberry Pi, 1 otherwise.
+# Per SPEC/DEPLOY.md § Raspberry Pi Detection.
+is_raspberry_pi() {
+    if [ -r /proc/device-tree/model ]; then
+        if grep -qi "raspberry pi" /proc/device-tree/model 2>/dev/null; then
+            return 0
+        fi
+    fi
+    if [ -r /proc/cpuinfo ]; then
+        if grep -qE "^Hardware\s*:\s*BCM(2708|2709|2710|2711|2712|283[0-9])" /proc/cpuinfo 2>/dev/null; then
+            return 0
+        fi
+        if grep -qi "raspberry pi" /proc/cpuinfo 2>/dev/null; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# Build the GitHub release download URL for a given version, OS and architecture.
+# Output format: https://github.com/<REPO>/releases/download/<version>/rmp-<version>-<os>-<arch>.<ext>
+# Per SPEC/DEPLOY.md § Download URL Format.
+get_download_url() {
+    local version="$1"
+    local os="$2"
+    local arch="$3"
+    local archive_ext="tar.gz"
+
+    if [ "$os" = "windows" ]; then
+        archive_ext="zip"
+    fi
+
+    local archive_name="${BINARY_NAME}-${version}-${os}-${arch}.${archive_ext}"
+    echo "https://github.com/${REPO}/releases/download/${version}/${archive_name}"
 }
 
 # Detect architecture
@@ -187,9 +225,10 @@ download_binary() {
         archive_ext="tar.gz"
     fi
 
-    # Archive filename follows pattern: rmp-${version}-${os}-${arch}.${ext}
+    # Build archive name and URL via shared helper.
     local archive_name="${BINARY_NAME}-${version}-${os}-${arch}.${archive_ext}"
-    local download_url="https://github.com/${REPO}/releases/download/${version}/${archive_name}"
+    local download_url
+    download_url=$(get_download_url "$version" "$os" "$arch")
     local tmp_file="/tmp/${BINARY_NAME}${ext}"
     local tmp_dir="/tmp/rmp_install_$$"
 
@@ -298,11 +337,14 @@ main() {
     fi
 
     if [ "$arch" = "unknown" ]; then
-        error "Unsupported architecture: $(uname -m)"
+        error "Unsupported architecture: $(uname -m). Supported targets: amd64, arm64, armv6, armv7."
         exit 1
     fi
 
     info "Detected platform: ${os}/${arch}"
+    if is_raspberry_pi; then
+        info "Raspberry Pi detected"
+    fi
 
     # Get versions
     local latest_version

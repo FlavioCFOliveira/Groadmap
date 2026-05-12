@@ -79,13 +79,13 @@ func TestValidateRoadmapName(t *testing.T) {
 		{"starts with hyphen and text", "-roadmap", true},
 		{"single hyphen", "-", true},
 
-		// Names starting with number (now invalid - must start with letter)
-		{"starts with number", "123roadmap", true},
-		{"starts with underscore", "_roadmap", true},
+		// Names starting with number or underscore (valid per SPEC regex ^[a-z0-9_-]+$)
+		{"starts with number", "123roadmap", false},
+		{"starts with underscore", "_roadmap", false},
 
-		// Maximum length validation
-		{"max length (255 chars)", strings.Repeat("a", 255), false},
-		{"exceeds max length (256 chars)", strings.Repeat("a", 256), true},
+		// Maximum length validation (50 chars per SPEC)
+		{"max length (50 chars)", strings.Repeat("a", 50), false},
+		{"exceeds max length (51 chars)", strings.Repeat("a", 51), true},
 
 		// Reserved Windows names
 		{"CON", "CON", true},

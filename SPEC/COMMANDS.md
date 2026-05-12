@@ -218,7 +218,7 @@ rmp task ls -r <name> [OPTIONS]
 - `-s, --status <state>` - Filter by status (BACKLOG, SPRINT, DOING, TESTING, COMPLETED)
 - `-p, --priority <n>` - Filter priority >= n (0-9)
 - `--severity <n>` - Filter severity >= n (0-9)
-- `-l, --limit <n>` - Limit number of results (default: 20, max: 100)
+- `-l, --limit <n>` - Limit number of results (default: 100)
 - `-y, --type <TYPE>` - Filter by task type. See `MODELS.md` — Task Type for the canonical list of 10 valid values.
 - `-sp, --specialists <name>` - Filter by specialist name (partial match, case-insensitive)
 - `--created-since <date>` - Return tasks created on or after this date (RFC3339 or YYYY-MM-DD)
@@ -969,7 +969,7 @@ All sprint task operations validate ALL IDs before making any changes.
 | `remove-tasks` | SPRINT → BACKLOG | Tasks automatically return to BACKLOG when removed from sprint |
 | `move-tasks` | (No change) | Status is preserved when moving between sprints |
 
-**Note:** The status SPRINT is automatically managed by sprint operations. Users MUST NOT manually set status to SPRINT using `task stat`; attempts to do so are rejected with exit code 6 and the error message `"Error: status SPRINT can only be set automatically via 'sprint add-tasks'"`. Manual status transitions follow: BACKLOG → DOING → TESTING → COMPLETED (with `SPRINT → BACKLOG`, `DOING → SPRINT`, and `COMPLETED → BACKLOG` also available — see `STATE_MACHINE.md` for the full set).
+**Note:** The status SPRINT is automatically managed by sprint operations. Users MUST NOT manually set status to SPRINT using `task stat`; attempts to do so are rejected with exit code 6 and the error message `"Error: status SPRINT can only be set automatically via 'sprint add-tasks'"`. Manual status transitions follow: BACKLOG → SPRINT (automatic) → DOING → TESTING → COMPLETED (with `SPRINT → BACKLOG` and `COMPLETED → BACKLOG` also available — see `STATE_MACHINE.md` for the full set).
 
 **Output (success):** No output, exit code 0.
 

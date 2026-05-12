@@ -374,37 +374,55 @@ type RoadmapStats struct {
 
 ### Struct Field Ordering
 
-All Go structs are organized to minimize memory padding and maximize cache locality. Fields are grouped by size and access patterns:
+Field order in all domain structs is enforced by the `govet:fieldalignment`
+linter (see `BUILD.md § Enabled Linters`). The linter rearranges fields to
+minimise padding on 64-bit targets; the resulting order is the canonical one
+and must not be changed without also accepting the linter's revised order.
 
-**Task Struct (168 bytes, zero padding on 64-bit):**
+**Field sizes on 64-bit systems:**
+- `*T` (pointer): 8 bytes, 8-byte aligned
+- `string`: 16 bytes (pointer + length), 8-byte aligned
+- `[]T` (slice header): 24 bytes (pointer + length + capacity), 8-byte aligned
+- `map[K]V`: 8 bytes (header pointer), 8-byte aligned
+- `int` / `float64`: 8 bytes, 8-byte aligned
+
+**Task struct (240 bytes, zero padding on 64-bit):**
 ```
-Group 1: Content fields (strings) - 112 bytes
-  Title, Status, Type, FunctionalRequirements, TechnicalRequirements,
-  AcceptanceCriteria, CreatedAt
+Group 1: Pointer fields (6 × 8 = 48 bytes)
+  ParentTaskID, Specialists, CompletionSummary,
+  TestedAt, ClosedAt, StartedAt
 
-Group 2: Tracking fields (pointers) - 32 bytes
-  Specialists, StartedAt, TestedAt, ClosedAt
+Group 2: String fields (7 × 16 = 112 bytes)
+  AcceptanceCriteria, CreatedAt, Status, TechnicalRequirements,
+  FunctionalRequirements, Type, Title
+  (Status and Type are string-typed enums.)
 
-Group 3: Metadata fields (integers) - 24 bytes
-  ID, Priority, Severity
+Group 3: Slice fields (2 × 24 = 48 bytes)
+  DependsOn, Blocks
+
+Group 4: Int fields (4 × 8 = 32 bytes)
+  ID, Priority, Severity, SubtaskCount
 ```
 
-**SprintStats Struct Definition:**
-```go
-type SprintStats struct {
-    SprintID           int            `json:"sprint_id"`           // Sprint identifier
-    TotalTasks         int            `json:"total_tasks"`         // Total number of tasks in sprint
-    CompletedTasks     int            `json:"completed_tasks"`     // Number of tasks with status COMPLETED
-    ProgressPercentage float64        `json:"progress_percentage"` // Percentage of completed tasks (0.0-100.0)
-    StatusDistribution map[string]int `json:"status_distribution"` // Count of tasks per status
-    TaskOrder          []int          `json:"task_order"`          // Ordered array of task IDs by position
-}
+**SprintStats struct (136 bytes, zero padding on 64-bit):**
+```
+Group 1: Reference-type fields (3 × 8 = 24 bytes)
+  StatusDistribution (map header), DaysElapsed (*int), DaysRemaining (*int)
+
+Group 2: Slice fields (2 × 24 = 48 bytes)
+  TaskOrder, Burndown
+
+Group 3: Int + float fields (5 × 8 = 40 bytes)
+  SprintID, TotalTasks, CompletedTasks, ProgressPercentage, Velocity
 ```
 
 **Rationale:**
-- String fields (16 bytes each) are grouped for cache locality when displaying task content
-- Pointer fields (8 bytes each) are grouped as they're often accessed together during lifecycle transitions
-- Integer fields (8 bytes each) are grouped as they're frequently used for filtering/sorting
+- Largest-alignment fields go first so the compiler does not insert padding
+  between groups of differing alignment.
+- Pointer/string/slice groups stay together because their header sizes line
+  up with the 8-byte word boundary.
+- Int/float scalars trail because they are the smallest naturally aligned
+  group and absorb any remainder.
 
 **Sprint-Task Relationship (1:N — one sprint to many tasks; each task in at most one sprint):**
 
@@ -417,34 +435,15 @@ sprint_tasks table:
 - position (int) -- Execution order within the sprint (0 = first, 1 = second, ...)
 ```
 
-**Task Ordering Semantics:**
+**Task ordering semantics:**
 - The `position` column in `sprint_tasks` defines the execution sequence of tasks within a sprint
 - Position 0 represents the highest priority task that should be executed first
 - Tasks with the same sprint_id are ordered by position ASC
 - The `task_order` field in SprintStats is derived from this position ordering
 
-**Field Sizes on 64-bit Systems:**
-- `string`: 16 bytes (pointer + length), 8-byte aligned
-- `*T` (pointer): 8 bytes, 8-byte aligned
-- `int`: 8 bytes, 8-byte aligned
-
-**SprintStats Struct (56 bytes, zero padding on 64-bit):**
-```
-Group 1: Sprint identifiers (integers) - 16 bytes
-  SprintID, TotalTasks, CompletedTasks
-
-Group 2: Progress metrics (float64 + map) - 24 bytes
-  ProgressPercentage (8 bytes), StatusDistribution (16 bytes header)
-
-Group 3: Task ordering (slice) - 16 bytes
-  TaskOrder (pointer + length + capacity)
-```
-
-**Rationale:**
-- Integer fields are grouped for efficient access during stats calculations
-- Float64 and map are grouped as they're computed together
-- Slice header (TaskOrder) is last as it's a computed field from sprint_tasks table
-
 ### Cache Line Considerations
 
-The Task struct (168 bytes) spans approximately 3 cache lines (64 bytes each). Field grouping ensures that commonly accessed fields together (e.g., all content fields) fit within the same cache lines, reducing cache misses during task display operations.
+The Task struct (240 bytes) spans approximately 4 cache lines (64 bytes each).
+The `fieldalignment`-driven grouping keeps fields of the same kind contiguous,
+so common access patterns (e.g. iterating the pointer or string groups during
+display) stay within a small number of cache lines.

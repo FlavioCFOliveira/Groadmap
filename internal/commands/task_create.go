@@ -3,6 +3,7 @@ package commands
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
@@ -62,6 +63,13 @@ func taskCreate(args []string) error {
 	priority, _ := result.Flags["Priority"].(int)
 	severity, _ := result.Flags["Severity"].(int)
 	parentIDRaw, hasParent := result.Flags["ParentID"].(int)
+
+	// Trim leading/trailing whitespace before validation per SPEC/COMMANDS.md.
+	title = strings.TrimSpace(title)
+	functionalReqs = strings.TrimSpace(functionalReqs)
+	technicalReqs = strings.TrimSpace(technicalReqs)
+	acceptanceCriteria = strings.TrimSpace(acceptanceCriteria)
+	specialists = strings.TrimSpace(specialists)
 
 	// Parse task type (enum conversion after FlagParser)
 	taskType := models.TypeTask

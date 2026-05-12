@@ -160,6 +160,18 @@ class GroadmapTestBase:
         ])
         return result["id"]
 
+    def move_task_to_sprint(self, roadmap: str, task_id: int, sprint_id: Optional[int] = None) -> int:
+        """Move a task from BACKLOG to SPRINT via `sprint add-tasks`.
+
+        Manual `task stat <id> SPRINT` is rejected per SPEC/STATE_MACHINE.md;
+        SPRINT is an automatic transition triggered only by sprint assignment.
+        Creates a new sprint if sprint_id is not provided. Returns the sprint_id used.
+        """
+        if sprint_id is None:
+            sprint_id = self.create_sprint(roadmap, f"Test sprint for task {task_id}")
+        self.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint_id), str(task_id)])
+        return sprint_id
+
     def assert_task_status(self, roadmap: str, task_id: int, expected_status: str):
         """Assert that a task has the expected status."""
         result = self.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])

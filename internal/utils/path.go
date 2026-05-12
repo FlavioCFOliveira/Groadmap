@@ -18,8 +18,8 @@ const (
 	DBFilePerm = 0600
 )
 
-// ValidRoadmapNameRegex validates roadmap names: must start with letter, then lowercase letters, numbers, underscores, hyphens.
-var ValidRoadmapNameRegex = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+// ValidRoadmapNameRegex validates roadmap names: lowercase letters, numbers, underscores, hyphens.
+var ValidRoadmapNameRegex = regexp.MustCompile(`^[a-z0-9_-]+$`)
 
 // Sentinel errors for path and name validation.
 var (
@@ -32,7 +32,7 @@ var (
 )
 
 // MaxRoadmapNameLength is the maximum allowed length for roadmap names.
-const MaxRoadmapNameLength = 255
+const MaxRoadmapNameLength = 50
 
 // WindowsReservedNames contains reserved names that cannot be used on Windows systems.
 var WindowsReservedNames = map[string]bool{
@@ -101,9 +101,9 @@ func VerifyPermissions(path string, expectedPerm os.FileMode) error {
 // ValidateRoadmapName checks if a roadmap name is valid.
 // Names must:
 //   - Not be empty
-//   - Not exceed 255 characters
+//   - Not exceed 50 characters
 //   - Not start with '-' (to prevent flag confusion)
-//   - Start with a letter and contain only lowercase letters, numbers, underscores, and hyphens
+//   - Contain only lowercase letters, numbers, underscores, and hyphens
 //   - Not be a Windows reserved name (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
 func ValidateRoadmapName(name string) error {
 	if name == "" {
@@ -112,7 +112,7 @@ func ValidateRoadmapName(name string) error {
 
 	// Check maximum length
 	if len(name) > MaxRoadmapNameLength {
-		return fmt.Errorf("%d characters (maximum %d): %w", len(name), MaxRoadmapNameLength, ErrRoadmapNameTooLong)
+		return fmt.Errorf("must not exceed %d characters (got %d): %w", MaxRoadmapNameLength, len(name), ErrRoadmapNameTooLong)
 	}
 
 	// Check for flag confusion (names starting with '-')
@@ -132,9 +132,9 @@ func ValidateRoadmapName(name string) error {
 		return fmt.Errorf("%q: %w", name, ErrRoadmapNameReserved)
 	}
 
-	// Validate against regex (must start with letter)
+	// Validate against regex
 	if !ValidRoadmapNameRegex.MatchString(name) {
-		return fmt.Errorf("%q must start with a letter and contain only lowercase letters, numbers, underscores, and hyphens: %w", name, ErrInvalidRoadmapName)
+		return fmt.Errorf("%q must contain only lowercase letters, numbers, underscores, and hyphens: %w", name, ErrInvalidRoadmapName)
 	}
 
 	return nil

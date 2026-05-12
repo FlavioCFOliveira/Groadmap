@@ -123,8 +123,11 @@ class TestTaskStateMachine:
 
         print("✓ COMPLETED to BACKLOG transition test passed")
 
-    def test_doing_to_sprint_transition(self):
-        """Test DOING -> SPRINT transition (pause)."""
+    def test_manual_sprint_transition_rejected(self):
+        """Test that manual `task stat <id> SPRINT` is rejected per SPEC/STATE_MACHINE.md.
+
+        SPRINT is an automatic transition triggered exclusively by `sprint add-tasks`.
+        """
         roadmap = self.test.create_roadmap()
 
         task_id = self.test.create_task(roadmap, "Test task", "Functional", "Technical", "Criteria")
@@ -135,11 +138,18 @@ class TestTaskStateMachine:
         ])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
 
-        # Pause - return to SPRINT
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "SPRINT"])
-        self.test.assert_task_status(roadmap, task_id, "SPRINT")
+        # Manual SPRINT transition must fail with exit code 6
+        exit_code, _, stderr = self.test.run_cmd(
+            ["task", "stat", "-r", roadmap, str(task_id), "SPRINT"],
+            check=False,
+        )
+        assert exit_code == 6, f"Expected exit 6, got {exit_code}; stderr: {stderr}"
+        assert "SPRINT" in stderr
 
-        print("✓ DOING to SPRINT transition test passed")
+        # Status must remain DOING (rejection does not mutate)
+        self.test.assert_task_status(roadmap, task_id, "DOING")
+
+        print("✓ Manual SPRINT transition rejected with exit 6")
 
     def test_testing_to_doing_transition(self):
         """Test TESTING -> DOING transition (failed test)."""

@@ -107,12 +107,14 @@ func taskRemove(args []string) error {
 //   - task IDs: Comma-separated list of task IDs to update (first positional argument)
 //   - status: New status value (second positional argument)
 //
-// Valid status transitions:
-//   - BACKLOG → SPRINT, DOING
-//   - SPRINT → DOING, BACKLOG
-//   - DOING → TESTING, BACKLOG
-//   - TESTING → COMPLETED, DOING
+// Valid manual status transitions (this command):
+//   - SPRINT → BACKLOG, DOING
+//   - DOING → SPRINT, TESTING
+//   - TESTING → DOING, COMPLETED
 //   - COMPLETED → BACKLOG (reopen)
+//
+// BACKLOG → SPRINT is automatic only (via `sprint add-tasks`); manual
+// `task stat <ids> SPRINT` is rejected with exit code 6.
 //
 // Optional flags:
 //   - -r, --roadmap: Roadmap name (uses current if not specified)
@@ -152,7 +154,8 @@ func taskSetStatus(args []string) error {
 			if i+1 >= len(remaining) {
 				return fmt.Errorf("%w: --summary requires a value", utils.ErrRequired)
 			}
-			s := remaining[i+1]
+			// Trim leading/trailing whitespace per SPEC/COMMANDS.md.
+			s := strings.TrimSpace(remaining[i+1])
 			completionSummary = &s
 			i++ // consume the value
 		} else {
@@ -180,6 +183,12 @@ func taskSetStatus(args []string) error {
 	newStatus, err := models.ParseTaskStatus(remaining[1])
 	if err != nil {
 		return err
+	}
+
+	// SPRINT is an automatic transition triggered exclusively by `sprint add-tasks`.
+	// Manual `task stat <ids> SPRINT` is rejected per SPEC/STATE_MACHINE.md.
+	if newStatus == models.StatusSprint {
+		return fmt.Errorf("%w: status SPRINT can only be set automatically via 'sprint add-tasks'", utils.ErrValidation)
 	}
 
 	// Fail-fast validation for --summary (step 2: before ID/DB verification).
