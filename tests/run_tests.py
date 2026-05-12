@@ -34,6 +34,7 @@ TEST_MODULES = [
     "test_24_dependency_workflow",
     "test_25_completion_guards",
     "test_27_exit_code_extremes",
+    "test_28_command_aliases",
 ]
 
 # Stress tests (run separately due to time/data volume)
