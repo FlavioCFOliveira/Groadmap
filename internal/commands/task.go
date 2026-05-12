@@ -21,6 +21,14 @@ func HandleTask(args []string) error {
 		return nil
 	}
 
+	// Subcommand-level help: 'rmp task <sub> --help'.
+	if hasHelpFlag(args[1:]) {
+		if h := taskSubHelp(subcommand); h != nil {
+			h()
+			return nil
+		}
+	}
+
 	switch subcommand {
 	case "list", "ls":
 		return taskList(args[1:])
@@ -59,6 +67,48 @@ func HandleTask(args []string) error {
 	default:
 		return fmt.Errorf("%w: unknown task subcommand: %s", utils.ErrInvalidInput, subcommand)
 	}
+}
+
+// taskSubHelp returns the help printer for a given task subcommand (long
+// name or alias), or nil if the subcommand is unknown.
+func taskSubHelp(sub string) func() {
+	switch sub {
+	case "list", "ls":
+		return printTaskListHelp
+	case "create", "new":
+		return printTaskCreateHelp
+	case "get":
+		return printTaskGetHelp
+	case "next":
+		return printTaskNextHelp
+	case "edit":
+		return printTaskEditHelp
+	case "remove", "rm":
+		return printTaskRemoveHelp
+	case "stat", "set-status":
+		return printTaskStatHelp
+	case "reopen":
+		return printTaskReopenHelp
+	case "prio", "set-priority":
+		return printTaskPrioHelp
+	case "sev", "set-severity":
+		return printTaskSevHelp
+	case "assign":
+		return printTaskAssignHelp
+	case "unassign":
+		return printTaskUnassignHelp
+	case "subtasks":
+		return printTaskSubtasksHelp
+	case "add-dep":
+		return printTaskAddDepHelp
+	case "remove-dep":
+		return printTaskRemoveDepHelp
+	case "blockers":
+		return printTaskBlockersHelp
+	case "blocking":
+		return printTaskBlockingHelp
+	}
+	return nil
 }
 
 // printTaskHelp prints task command help.
