@@ -92,22 +92,33 @@ Commands:
   top <sprint> <task>           			Move task to top (position 0)
   bottom, btm <sprint> <task>   			Move task to bottom (last position)
 
-Options:
+Options (shared):
   -r, --roadmap <name>           			REQUIRED. Target roadmap.
-  -d, --description <text>      			Sprint description
-  --status <state>               			Filter by status
-  --order-by-priority             			Sort by priority (highest first)
   -h, --help                      			Show this help message
+
+Options (create / update):
+  -d, --description <text>      			Sprint description (free text)
+  --max-tasks <n>               			Maximum active tasks in this sprint (capacity cap)
+
+Options (list):
+  --status <state>               			Filter by sprint status
+
+Options (tasks / open-tasks):
+  --order-by-priority             			Sort tasks by priority DESC; otherwise sprint position ASC
+
+Options (close):
+  --force                         			Close even if SPRINT/DOING/TESTING tasks remain
 
 Examples:
   rmp sprint list -r myproject
   rmp sprint create -r myproject -d "Sprint 1"
+  rmp sprint create -r myproject -d "Capacity-bounded sprint" --max-tasks 12
   rmp sprint start -r myproject 1
   rmp sprint add-tasks -r myproject 1 1,2,3
+  rmp sprint open-tasks -r myproject 1
   rmp sprint reorder -r myproject 1 3,1,2
   rmp sprint move-to -r myproject 1 5 0
   rmp sprint swap -r myproject 1 3 5
-  rmp sprint top -r myproject 1 5
-  rmp sprint bottom -r myproject 1 5
+  rmp sprint close -r myproject 1 --force
 `)
 }

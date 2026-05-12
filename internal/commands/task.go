@@ -84,23 +84,48 @@ Commands:
   blockers <id>                     		List tasks blocking task <id> (dependencies not yet COMPLETED)
   blocking <id>                     		List tasks that task <id> is blocking (tasks that depend on it)
 
-Options:
+Options (shared by most subcommands):
   -r, --roadmap <name>           			REQUIRED. Target roadmap.
-  -s, --status <state>            			Filter by status
-  -p, --priority <n>              			Filter (>=n) on 'list'; setter on 'prio' (0-9)
-  --severity <n>                  			Filter (>=n) on 'list'; setter on 'sev' (0-9)
-  -t, --title <text>              			Task title
-  -fr, --functional-requirements <text> 	Functional requirements (Why?)
-  -tr, --technical-requirements <text>  	Technical requirements (How?)
-  -ac, --acceptance-criteria <text>     	Acceptance criteria (How to verify?)
-  -sp, --specialists <list>       			Comma-separated specialists
-  --parent <id>                   			Parent task ID (creates a sub-task)
-  -l, --limit <n>                 			Limit results
-  --help                          			Show this help message
+  -h, --help                      			Show this help message
+
+Options (list — all filters compose with AND):
+  -s, --status <state>            			Filter by exact status
+  -p, --priority <min>            			Filter: priority >= min (0-9)
+  --severity <min>                			Filter: severity >= min (0-9)
+  -y, --type <type>               			Filter by task type
+  -sp, --specialists <substring>  			Filter by specialists (case-insensitive substring)
+  --created-since <date>          			Include tasks created on/after this date (RFC3339 or YYYY-MM-DD)
+  --created-until <date>          			Include tasks created on/before this date (RFC3339 or YYYY-MM-DD)
+  --sort <field>                  			Sort: priority (default), created, status, severity
+  -l, --limit <n>                 			Maximum results (default 100)
+
+Options (create / edit):
+  -t, --title <text>              			Task title (max 255 chars)
+  -fr, --functional-requirements <text> 	Functional requirements (Why? — max 4096 chars)
+  -tr, --technical-requirements <text>  	Technical requirements (How? — max 4096 chars)
+  -ac, --acceptance-criteria <text>     	Acceptance criteria (How to verify? — max 4096 chars)
+  -y, --type <type>               			Task type (default: TASK)
+  -p, --priority <n>              			Initial/new priority (0-9, default 0)
+  --severity <n>                  			Initial/new severity (0-9, default 0)
+  -sp, --specialists <list>       			Comma-separated specialists (max 500 chars)
+  --parent <id>                   			Parent task ID (on create only — makes a sub-task)
+
+Options (stat to COMPLETED):
+  -s, --summary <text>            			Completion summary (max 4096 chars; only valid when transitioning to COMPLETED)
 
 Examples:
   rmp task list -r myproject
+  rmp task list -r myproject --status BACKLOG --priority 5 --sort priority
+  rmp task list -r myproject --created-since 2026-01-01 --type BUG
   rmp task create -r myproject -t "Fix bug" -fr "User can login" -tr "Update auth" -ac "Login works"
+  rmp task create -r myproject -t "Add metrics" --type CHORE -p 3
+  rmp task edit -r myproject 42 -t "Updated title" -p 8
   rmp task stat -r myproject 1,2,3 DOING
+  rmp task stat -r myproject 7 COMPLETED --summary "Shipped behind feature flag"
+  rmp task prio -r myproject 1,2,3 8
+  rmp task sev -r myproject 5 9
+  rmp task add-dep -r myproject 10 7
+  rmp task blockers -r myproject 10
+  rmp task next -r myproject 5
 `)
 }
