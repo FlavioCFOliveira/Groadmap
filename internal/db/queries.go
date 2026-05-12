@@ -739,6 +739,82 @@ func (db *DB) HasSubTasks(ctx context.Context, taskID int) (bool, int, error) {
 	return count > 0, count, nil
 }
 
+// CountSubTasksByParents returns a map from parent_task_id to its subtask
+// count, restricted to the given parent IDs. Parents with no subtasks are
+// absent from the result. One round-trip regardless of the number of parents.
+func (db *DB) CountSubTasksByParents(ctx context.Context, parentIDs []int) (map[int]int, error) {
+	if len(parentIDs) == 0 {
+		return map[int]int{}, nil
+	}
+	placeholders := db.queryCache.GetPlaceholders(len(parentIDs))
+	args := make([]interface{}, len(parentIDs))
+	for i, id := range parentIDs {
+		args[i] = id
+	}
+	query := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated
+		`SELECT parent_task_id, COUNT(*) FROM tasks
+		 WHERE parent_task_id IN (%s)
+		 GROUP BY parent_task_id`,
+		placeholders,
+	)
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("counting subtasks: %w", err)
+	}
+	defer rows.Close()
+	counts := make(map[int]int, len(parentIDs))
+	for rows.Next() {
+		var pid, c int
+		if err := rows.Scan(&pid, &c); err != nil {
+			return nil, fmt.Errorf("scanning subtask count: %w", err)
+		}
+		counts[pid] = c
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating subtask count rows: %w", err)
+	}
+	return counts, nil
+}
+
+// GetIncompleteSubTasksByParents returns a map from parent_task_id to the
+// list of its subtask IDs that are NOT in COMPLETED status. Parents with
+// no incomplete subtasks are absent from the result. One round-trip
+// regardless of the number of parents.
+func (db *DB) GetIncompleteSubTasksByParents(ctx context.Context, parentIDs []int) (map[int][]int, error) {
+	if len(parentIDs) == 0 {
+		return map[int][]int{}, nil
+	}
+	placeholders := db.queryCache.GetPlaceholders(len(parentIDs))
+	args := make([]interface{}, 0, len(parentIDs)+1)
+	for _, id := range parentIDs {
+		args = append(args, id)
+	}
+	args = append(args, models.StatusCompleted)
+	query := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated
+		`SELECT parent_task_id, id FROM tasks
+		 WHERE parent_task_id IN (%s) AND status != ?
+		 ORDER BY parent_task_id, id`,
+		placeholders,
+	)
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying incomplete subtasks: %w", err)
+	}
+	defer rows.Close()
+	result := make(map[int][]int, len(parentIDs))
+	for rows.Next() {
+		var pid, id int
+		if err := rows.Scan(&pid, &id); err != nil {
+			return nil, fmt.Errorf("scanning incomplete subtask: %w", err)
+		}
+		result[pid] = append(result[pid], id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating incomplete subtask rows: %w", err)
+	}
+	return result, nil
+}
+
 // scanTasks scans rows into a slice of Task.
 // Optimized for memory efficiency with pre-allocated slice and reusable scan variables.
 // Expected column order: id, title, status, type, functional_requirements, technical_requirements,
@@ -1119,6 +1195,47 @@ func (db *DB) GetIncompleteDependencies(ctx context.Context, taskID int) ([]int,
 		return nil, fmt.Errorf("iterating dependency rows: %w", err)
 	}
 	return ids, nil
+}
+
+// GetIncompleteDependenciesByTasks returns a map from task_id to the list of
+// task IDs it depends on that are NOT in COMPLETED status. Tasks with no
+// incomplete dependencies are absent from the result. One round-trip
+// regardless of the number of tasks queried.
+func (db *DB) GetIncompleteDependenciesByTasks(ctx context.Context, taskIDs []int) (map[int][]int, error) {
+	if len(taskIDs) == 0 {
+		return map[int][]int{}, nil
+	}
+	placeholders := db.queryCache.GetPlaceholders(len(taskIDs))
+	args := make([]interface{}, 0, len(taskIDs)+1)
+	for _, id := range taskIDs {
+		args = append(args, id)
+	}
+	args = append(args, models.StatusCompleted)
+	query := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated
+		`SELECT td.task_id, td.depends_on_task_id
+		 FROM task_dependencies td
+		 INNER JOIN tasks t ON t.id = td.depends_on_task_id
+		 WHERE td.task_id IN (%s) AND t.status != ?
+		 ORDER BY td.task_id, td.depends_on_task_id`,
+		placeholders,
+	)
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying incomplete dependencies: %w", err)
+	}
+	defer rows.Close()
+	result := make(map[int][]int, len(taskIDs))
+	for rows.Next() {
+		var tid, depID int
+		if err := rows.Scan(&tid, &depID); err != nil {
+			return nil, fmt.Errorf("scanning incomplete dependency: %w", err)
+		}
+		result[tid] = append(result[tid], depID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating incomplete dependency rows: %w", err)
+	}
+	return result, nil
 }
 
 // GetTaskDependsOn returns the IDs of all tasks that taskID depends on.

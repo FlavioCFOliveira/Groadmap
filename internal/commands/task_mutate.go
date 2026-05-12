@@ -51,14 +51,14 @@ func taskRemove(args []string) error {
 		}
 	}
 
-	// Guard: prevent deleting tasks that have subtasks.
+	// Guard: prevent deleting tasks that have subtasks. One bulk query.
+	subtaskCounts, err := database.CountSubTasksByParents(ctx, ids)
+	if err != nil {
+		return err
+	}
 	for i := range tasks {
-		hasChildren, childCount, subErr := database.HasSubTasks(ctx, tasks[i].ID)
-		if subErr != nil {
-			return subErr
-		}
-		if hasChildren {
-			return fmt.Errorf("%w: task #%d cannot be deleted — it has %d subtask(s); remove them first", utils.ErrInvalidInput, tasks[i].ID, childCount)
+		if c := subtaskCounts[tasks[i].ID]; c > 0 {
+			return fmt.Errorf("%w: task #%d cannot be deleted — it has %d subtask(s); remove them first", utils.ErrInvalidInput, tasks[i].ID, c)
 		}
 	}
 
@@ -211,30 +211,29 @@ func taskSetStatus(args []string) error {
 		}
 	}
 
-	// Guard: when transitioning to COMPLETED, ensure all subtasks and dependencies are also COMPLETED.
+	// Guard: when transitioning to COMPLETED, ensure all subtasks and
+	// dependencies are also COMPLETED. Two bulk queries cover all IDs.
 	if newStatus == models.StatusCompleted {
+		incompleteByParent, err := database.GetIncompleteSubTasksByParents(ctx, ids)
+		if err != nil {
+			return err
+		}
+		incompleteDepsByTask, err := database.GetIncompleteDependenciesByTasks(ctx, ids)
+		if err != nil {
+			return err
+		}
 		for i := range tasks {
-			incompleteIDs, subErr := database.GetIncompleteSubTasks(ctx, tasks[i].ID)
-			if subErr != nil {
-				return subErr
-			}
-			if len(incompleteIDs) > 0 {
-				idStrsBlocking := make([]string, len(incompleteIDs))
-				for j, id := range incompleteIDs {
+			if blocking := incompleteByParent[tasks[i].ID]; len(blocking) > 0 {
+				idStrsBlocking := make([]string, len(blocking))
+				for j, id := range blocking {
 					idStrsBlocking[j] = fmt.Sprintf("#%d", id)
 				}
 				return fmt.Errorf("%w: cannot mark task #%d as COMPLETED: incomplete subtasks: %s",
 					utils.ErrInvalidInput, tasks[i].ID, strings.Join(idStrsBlocking, ", "))
 			}
-
-			// Check task dependencies: all tasks this task depends on must be COMPLETED.
-			incompleteDeps, depErr := database.GetIncompleteDependencies(ctx, tasks[i].ID)
-			if depErr != nil {
-				return depErr
-			}
-			if len(incompleteDeps) > 0 {
-				depStrs := make([]string, len(incompleteDeps))
-				for j, id := range incompleteDeps {
+			if deps := incompleteDepsByTask[tasks[i].ID]; len(deps) > 0 {
+				depStrs := make([]string, len(deps))
+				for j, id := range deps {
 					depStrs[j] = fmt.Sprintf("#%d", id)
 				}
 				return fmt.Errorf("%w: cannot mark task #%d as COMPLETED: incomplete dependencies: %s",
