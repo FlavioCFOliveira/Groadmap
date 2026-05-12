@@ -3,6 +3,7 @@ package utils
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 )
 
@@ -77,9 +78,9 @@ func ValidateIDString(s string, entity string) (int, error) {
 		}
 	}
 
-	// Parse the integer
-	var id int
-	_, err := fmt.Sscanf(s, "%d", &id)
+	// Parse the integer. The digit-only check above guarantees Atoi cannot
+	// fail on syntax, so any error here is an overflow.
+	id, err := strconv.Atoi(s)
 	if err != nil {
 		return 0, fmt.Errorf("%w: invalid %s ID: %q (must be a positive integer)", ErrInvalidInput, entity, s)
 	}
