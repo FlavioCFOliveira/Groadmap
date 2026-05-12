@@ -5,12 +5,12 @@
 **MANDATORY: No implementation without SPEC/**. Zero exceptions.
 
 ```
-User Request → spec-orchestrator → SPEC/ → [task-creator → roadmap-coordinator] → go-elite-developer → Implementation
+User Request → specification-manager → SPEC/ → [roadmap-manager] → go-developer → Implementation
 ```
 
 | Violation | Action |
 |-----------|--------|
-| Code requested without SPEC | STOP → Invoke spec-orchestrator |
+| Code requested without SPEC | STOP → Invoke `specification-manager` |
 | SPEC incomplete | STOP → Update SPEC first |
 | Urgency cited | NO exceptions. SPEC first. ALWAYS. |
 
@@ -46,81 +46,79 @@ User Request → spec-orchestrator → SPEC/ → [task-creator → roadmap-coord
 
 ---
 
-## 3. Skill Responsibilities
+## 3. Agent and Skill Responsibilities
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                     RESPONSIBILITY FLOW                         │
 ├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│   spec-orchestrator          task-creator                      │
-│   ┌─────────────┐            ┌─────────────┐                  │
-│   │ SPEC/       │            │ Collects    │                  │
-│   │ creation    │            │ ALL data    │                  │
-│   └──────┬──────┘            └──────┬──────┘                  │
-│          │                         │                           │
-│          ▼                         ▼                           │
-│   go-elite-developer         roadmap-coordinator              │
-│   ┌─────────────┐            ┌─────────────┐                  │
-│   │ Code        │◄──────────│ CLI exec    │                  │
-│   │ implementation│          │ (rmp)       │                  │
-│   └─────────────┘            └──────┬──────┘                  │
-│                                   │                           │
-│                                   ▼                           │
-│                            ┌─────────────┐                  │
-│                            │ SQLite DB   │                  │
-│                            │ (truth)     │                  │
-│                            └─────────────┘                  │
-│                                                                  │
-│   Supporting: go-gitflow, exhaustive-qa-engineer,              │
-│   red-team-hacker, go-performance-advisor, doc-manager         │
+│                                                                 │
+│   specification-manager       roadmap-manager                   │
+│   ┌─────────────┐             ┌─────────────┐                   │
+│   │ SPEC/       │             │ Tasks/      │                   │
+│   │ creation    │             │ Sprints     │                   │
+│   └──────┬──────┘             └──────┬──────┘                   │
+│          │                          │                           │
+│          ▼                          ▼                           │
+│   go-developer                ┌─────────────┐                   │
+│   ┌─────────────┐             │ rmp CLI     │                   │
+│   │ Code        │             └──────┬──────┘                   │
+│   │ implement.  │                    │                          │
+│   └─────────────┘                    ▼                          │
+│                                ┌─────────────┐                  │
+│                                │ SQLite DB   │                  │
+│                                │ (truth)     │                  │
+│                                └─────────────┘                  │
+│                                                                 │
+│   Supporting: exhaustive-qa-engineer, release-manager,          │
+│   doc-manager, security-review, review, simplify                │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Core Skills
+### Core Agents and Skills
 
-| Skill | Responsibility | Key Rules |
-|-------|---------------|-----------|
-| **spec-orchestrator** | SPEC/ creation and maintenance | MUST be first step. NEVER derives from code. |
-| **task-creator** | Task/sprint data collection | Collects ALL fields. Delegates to coordinator. |
-| **roadmap-coordinator** | CLI execution and coordination | Source of truth via `rmp` CLI. NEVER implements directly. |
-| **go-elite-developer** | Go implementation | ONLY after SPEC exists. Validates build/test/vet/fmt. |
-| **go-gitflow** | Git operations | Tests MUST pass before push. User approval required. |
-| **exhaustive-qa-engineer** | Testing and validation | Critical features, pre-release, schema changes. |
-| **red-team-hacker** | Security audits | Security features, input validation. |
-| **go-performance-advisor** | Performance analysis | Bottlenecks, memory, concurrency. |
-| **doc-manager** | Documentation management | README, command docs, sync with code. |
+| Agent / Skill | Type | Responsibility | Key Rules |
+|---------------|------|----------------|-----------|
+| **specification-manager** | agent | SPEC/ creation and maintenance | MUST be first step. NEVER derives from code. Sole owner of `SPEC/`. |
+| **roadmap-manager** | skill | Roadmap/sprint/task management via `rmp` CLI | Source of truth via `rmp`. NEVER implements code directly. |
+| **go-developer** | agent | Go implementation, refactor, review, performance | ONLY after SPEC exists. Validates build/test/vet/fmt/lint. |
+| **exhaustive-qa-engineer** | agent | Testing, edge cases, security/robustness validation | Critical features, pre-release, schema changes. |
+| **release-manager** | agent | Release coordination, version bump, CHANGELOG | Triggered by release requests. Runs full validation gates. |
+| **doc-manager** | skill | Documentation (README, command docs) | Sync docs with code. Go CLI projects only. |
+| **security-review** | skill | Security review of pending changes | Trigger before merging security-sensitive changes. |
+| **review** | skill | Pull request review | Code review on PRs. |
+| **simplify** | skill | Review changes for reuse/quality and fix issues | Post-implementation cleanup. |
 
 ### Task/Sprint Creation Flow
 
-**Step 1: task-creator** collects ALL required fields:
+**Step 1: `roadmap-manager`** collects ALL required fields and confirms with the user:
 - Tasks: title, type, priority, status, description, technical, criteria, specialists, time, complexity
 - Sprints: name, goal, start, end, status
 
-**Step 2: User confirmation** → task-creator delegates to roadmap-coordinator
-
-**Step 3: roadmap-coordinator** executes CLI commands:
+**Step 2: User confirmation** → `roadmap-manager` executes `rmp` CLI commands:
 - `rmp task create --title "X" --type TASK --priority P1 ...`
 - `rmp sprint create --name "X" --goal "Y" ...`
 
-**Step 4: SQLite** stores as source of truth
+**Step 3: SQLite** stores as source of truth.
 
 ---
 
 ## 4. Execution Rules
 
-### Rule 1: Skill Delegation
+### Rule 1: Agent/Skill Delegation
 
-| Task Type | Skill |
-|-----------|-------|
-| New feature/changes | `spec-orchestrator` FIRST |
-| Create task/sprint | `task-creator` → `roadmap-coordinator` |
-| Execute/coordinate tasks | `roadmap-coordinator` |
-| Code implementation | `go-elite-developer` |
-| Git operations | `go-gitflow` |
+| Task Type | Agent / Skill |
+|-----------|---------------|
+| New feature/changes | `specification-manager` FIRST |
+| Create/manage task/sprint | `roadmap-manager` |
+| Code implementation, refactor, performance | `go-developer` |
+| Git operations | Bash (`git`) — see Rule 3 |
+| Releases / version bump | `release-manager` |
 | Testing | `exhaustive-qa-engineer` |
-| Security audit | `red-team-hacker` |
-| Performance | `go-performance-advisor` |
+| Security audit | `security-review` skill |
+| Documentation | `doc-manager` |
+| PR review | `review` skill |
+| Code cleanup / simplification | `simplify` skill |
 
 ### Rule 2: Validation Gates
 
@@ -163,23 +161,27 @@ type(scope): subject
 ## 5. Project Structure
 
 ```
-/Users/flaviocfo/dev/github.com/FlavioCFOliveira/Groadmap/
+/data/dev/github.com/FlavioCFOliveira/Groadmap/
 ├── cmd/rmp/main.go              # Entry point
 ├── internal/
 │   ├── commands/                # Subcommands
-│   ├── db/                    # SQLite, schema
-│   ├── models/                # Structs, enums
-│   └── utils/                 # JSON, dates, paths
-├── bin/                       # Build output
-├── tests/                     # E2E tests
-├── SPEC/                      # Technical specifications
-└── .claude/skills/            # Skill definitions
-    ├── task-creator/
-    ├── roadmap-coordinator/
-    ├── spec-orchestrator/
-    ├── go-elite-developer/
-    └── go-gitflow/
+│   ├── db/                      # SQLite, schema
+│   ├── models/                  # Structs, enums
+│   └── utils/                   # JSON, dates, paths
+├── bin/                         # Build output
+├── tests/                       # E2E tests
+├── SPEC/                        # Technical specifications
+└── .claude/
+    ├── agents/                  # Project-local agent definitions
+    └── skills/                  # Project-local skill definitions
+        ├── doc-manager/
+        └── skill-creator/
 ```
+
+Project-local skill set is intentionally minimal; most agents/skills used in
+this project (e.g., `specification-manager`, `roadmap-manager`, `go-developer`,
+`exhaustive-qa-engineer`, `release-manager`, `review`, `security-review`,
+`simplify`) are provided by the global Claude Code configuration.
 
 ---
 
@@ -187,16 +189,17 @@ type(scope): subject
 
 | Situation | Action |
 |-----------|--------|
-| New feature | `spec-orchestrator` FIRST |
-| Code changes | Verify SPEC/ or invoke `spec-orchestrator` |
-| Create task/sprint | `task-creator` |
-| Execute tasks | `roadmap-coordinator` |
-| Git operations | `go-gitflow` |
+| New feature | `specification-manager` FIRST |
+| Code changes | Verify SPEC/ or invoke `specification-manager` |
+| Create/manage task/sprint | `roadmap-manager` |
+| Git operations | Bash (`git`) with user confirmation for destructive ops |
+| Release / version bump | `release-manager` |
 | Tests needed | `exhaustive-qa-engineer` |
-| Security audit | `red-team-hacker` |
-| Performance analysis | `go-performance-advisor` |
+| Security audit | `security-review` skill |
+| Performance analysis | `go-developer` (covers performance) |
 | Documentation needed | `doc-manager` |
-| SPEC exists, implement | `go-elite-developer` |
+| SPEC exists, implement | `go-developer` |
+| PR review | `review` skill |
 | Requirements unclear | ASK the user |
 | Code vs SPEC diverge | Follow SPEC, ask user |
 
@@ -294,7 +297,7 @@ make check
 ## 11. Documentation Standards
 
 ### Language
-- **SPEC/, skills, CLAUDE.md:** English
+- **SPEC/, agent/skill definitions, CLAUDE.md:** English
 - **User interaction:** Portuguese (PT-pt)
 - **Technical terms:** May remain in English
 
