@@ -100,22 +100,7 @@ The canonical state-machine definition (states, valid transitions, manual/automa
 
 JSON output that includes a `status` field uses one of the five enum values defined in `MODELS.md` — Task Status (`BACKLOG`, `SPRINT`, `DOING`, `TESTING`, `COMPLETED`).
 
----
-
-## Sprint Status Flow
-
-Sprints follow a linear progression with reopening capability.
-
-```
-PENDING → OPEN → CLOSED
-            ↑      │
-            └──────┘ (reopen)
-```
-
-1. **PENDING**: Initial state upon creation.
-2. **OPEN**: Active sprint (started via `rmp sprint start`).
-3. **CLOSED**: Completed sprint (closed via `rmp sprint close`).
-4. **REOPEN**: Moving from `CLOSED` back to `OPEN`.
+Sprint state machine (states, transitions, reopening): see `STATE_MACHINE.md § Sprint State Machine`.
 
 ---
 

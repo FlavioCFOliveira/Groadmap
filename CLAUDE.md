@@ -24,16 +24,17 @@ User Request → specification-manager → SPEC/ → [roadmap-manager] → go-de
 
 | Area | SPEC File | Covers |
 |------|-----------|--------|
-| Version | `VERSION.md` | Version commands, logic, display |
+| Version | `VERSION.md` | Version commands, logic, display, schema migrations |
 | Build | `BUILD.md` | Build process, CI/CD, targets |
 | Deploy | `DEPLOY.md` | Installation, distribution, releases |
 | CLI | `COMMANDS.md` | Commands, subcommands, aliases, flags |
-| Database | `DATABASE.md` | Schema, migrations, queries |
+| Database | `DATABASE.md` | Schema, queries, indexes, constraints |
 | Data | `DATA_FORMATS.md` | JSON schemas, formats |
-| Models | `MODELS.md` | Structs, enums, domain models |
-| Architecture | `ARCHITECTURE.md` | System design, components |
-| State | `STATE_MACHINE.md` | State transitions, workflows |
-| Help | `HELP_EXAMPLES.md` | Help text, errors, examples |
+| Models | `MODELS.md` | Structs, enums, domain models, memory layout |
+| Architecture | `ARCHITECTURE.md` | System design, modules, error handling, exit codes |
+| Implementation | `IMPLEMENTATION.md` | Concurrency, caching, performance strategies |
+| State | `STATE_MACHINE.md` | Task and Sprint state transitions |
+| Help | `HELP.md` | Help skeleton, error message format, structure |
 
 ### Update Rules
 

@@ -1,5 +1,22 @@
 # CLI Commands
 
+## Table of Contents
+
+- [Naming Conventions](#naming-conventions)
+- [Command Structure](#command-structure)
+- [Error Handling](#error-handling)
+- [Field Validation](#field-validation)
+- [Global Commands](#global-commands)
+- [Exit Codes](#exit-codes)
+- [Roadmap Selection (Always Required)](#roadmap-selection-always-required)
+- [Roadmap Management](#roadmap-management)
+- [Task Management](#task-management)
+- [Sprint Management](#sprint-management)
+- [Audit Log Management](#audit-log-management)
+- [Backlog Management](#backlog-management)
+- [Statistics Command](#statistics-command)
+- [Command Aliases Reference](#command-aliases-reference)
+
 ## Naming Conventions
 
 - Commands: lowercase, kebab-case (`list`, `create`)

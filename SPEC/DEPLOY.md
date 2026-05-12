@@ -1,5 +1,14 @@
 # Deployment and Installation Specification
 
+## Table of Contents
+
+- [Overview](#overview)
+- [Installation Methods](#installation-methods)
+- [Platform Detection](#platform-detection)
+- [Installation Script Reference](#installation-script-reference)
+- [Release Process](#release-process)
+- [Acceptance Criteria](#acceptance-criteria)
+
 ## Overview
 
 This specification defines the deployment process, installation methods, and platform detection for the Groadmap CLI.

@@ -60,6 +60,44 @@ The application version and schema version are independent:
 - Schema version increments only when a migration is added in `internal/db/migrations.go`
 - Schema updates can happen without application version bumps and vice versa
 
+## Migrations
+
+The `_metadata` table records the active schema version. Migration steps and their descriptions live in `internal/db/migrations.go`; the migration history is recoverable via `git log internal/db/migrations.go`.
+
+### Current Schema Version
+
+`SchemaVersion = "1.6.0"` (defined in `internal/db/schema.go`).
+
+### Migration Commands
+
+```sql
+-- Check current version
+SELECT value FROM _metadata WHERE key = 'schema_version';
+
+-- Update version after migration
+UPDATE _metadata SET value = '1.3.0' WHERE key = 'schema_version';
+```
+
+### Migration 1.1.0 → 1.2.0
+
+```sql
+-- Enforce at most one OPEN sprint at a time
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_open_sprint ON sprints(status) WHERE status = 'OPEN';
+
+-- Update schema version
+UPDATE _metadata SET value = '1.2.0' WHERE key = 'schema_version';
+```
+
+### Migration 1.2.0 → 1.3.0
+
+```sql
+-- Add completion_summary column to existing databases
+ALTER TABLE tasks ADD COLUMN completion_summary TEXT CHECK(completion_summary IS NULL OR length(completion_summary) <= 4096);
+
+-- Update schema version
+UPDATE _metadata SET value = '1.3.0' WHERE key = 'schema_version';
+```
+
 ## Release Process
 
 1. Update the version constant in `cmd/rmp/main.go`

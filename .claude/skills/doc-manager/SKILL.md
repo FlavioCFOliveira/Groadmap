@@ -203,7 +203,7 @@ var [Name]SubCmd = &cobra.Command{...}
 
 ### From SPEC
 
-Read `SPEC/COMMANDS.md` and `SPEC/HELP_EXAMPLES.md` for:
+Read `SPEC/COMMANDS.md` and `SPEC/HELP.md` for:
 - Formal descriptions
 - Usage examples
 - Documented aliases

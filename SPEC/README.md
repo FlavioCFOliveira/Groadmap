@@ -6,40 +6,75 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 
 ---
 
-## 1. Index
+## 1. Quick-Find Map
 
-| File | Functional Area |
-|------|-----------------|
-| `ARCHITECTURE.md` | System design, components, exit codes |
-| `BUILD.md` | Build system, cross-compilation matrix, CI/CD |
-| `COMMANDS.md` | CLI commands, subcommands, flags, aliases |
-| `DATABASE.md` | Schema, migrations, queries, audit operations |
-| `DATA_FORMATS.md` | JSON schemas, input/output formats |
-| `DEPLOY.md` | Installation, distribution, release process |
-| `HELP_EXAMPLES.md` | Help text, error messages, usage examples |
-| `MODELS.md` | Structs, enums, domain models |
-| `STATE_MACHINE.md` | State transitions, workflows |
-| `VERSION.md` | Application and schema versioning |
+| Looking for... | File |
+|----------------|------|
+| CLI command syntax / flags | `COMMANDS.md` |
+| JSON input/output formats | `DATA_FORMATS.md` |
+| Help text structure | `HELP.md` |
+| Domain models (Task, Sprint, etc.) | `MODELS.md` |
+| Memory layout / struct ordering | `MODELS.md § Memory Layout Optimization` |
+| State transitions (Task) | `STATE_MACHINE.md § Task State Machine` |
+| State transitions (Sprint) | `STATE_MACHINE.md § Sprint State Machine` |
+| System design / modules | `ARCHITECTURE.md` |
+| Error handling / sentinel errors | `ARCHITECTURE.md § Error Handling` |
+| Exit codes | `ARCHITECTURE.md § Exit Codes` |
+| Database schema (DDL) | `DATABASE.md § DDL - Table Creation` |
+| SQL queries | `DATABASE.md § Main SQL Queries` |
+| Audit operations catalogue | `DATABASE.md § audit Table` |
+| Concurrency (WAL, pool, retry) | `IMPLEMENTATION.md § Concurrency Model` |
+| Query / connection caching | `IMPLEMENTATION.md § Query Caching` and `IMPLEMENTATION.md § Connection Caching` |
+| Performance practices | `IMPLEMENTATION.md § Performance Considerations` |
+| Application version | `VERSION.md` |
+| Schema migrations | `VERSION.md § Migrations` |
+| Build / CI / lint | `BUILD.md` |
+| Installation / release | `DEPLOY.md` |
 
 ---
 
-## 2. Canonical Sources
+## 2. Index
+
+| File | Functional Area |
+|------|-----------------|
+| `COMMANDS.md` | CLI commands, subcommands, flags, aliases |
+| `DATA_FORMATS.md` | JSON schemas, input/output formats |
+| `HELP.md` | CLI help skeleton and structure |
+| `MODELS.md` | Structs, enums, memory layout |
+| `STATE_MACHINE.md` | Task and Sprint state transitions |
+| `ARCHITECTURE.md` | System design, modules, error handling, exit codes |
+| `DATABASE.md` | Schema, queries, constraints, indexes |
+| `IMPLEMENTATION.md` | Concurrency, caching, performance strategies |
+| `VERSION.md` | Application and schema versioning, migrations |
+| `BUILD.md` | Build system, cross-compilation, CI/CD |
+| `DEPLOY.md` | Installation, distribution, release process |
+
+---
+
+## 3. Canonical Sources
 
 To prevent drift across SPEC files, the following topics have a single authoritative source. Other SPEC files MUST link to the canonical source rather than duplicate its content.
 
 | Topic | Canonical Source |
 |-------|------------------|
-| Exit codes (numeric values and sentinel names) | `ARCHITECTURE.md` — Exit Codes section |
-| Enums (`TaskType`, `TaskStatus`, `SprintStatus`) | `MODELS.md` |
-| State transitions | `STATE_MACHINE.md` |
-| Audit operations | `DATABASE.md` — Audit Log section |
+| Exit codes (numeric values and sentinel names) | `ARCHITECTURE.md § Exit Codes` |
+| Sentinel errors and wrapping rules | `ARCHITECTURE.md § Error Handling` |
+| Enums (`TaskType`, `TaskStatus`, `SprintStatus`) | `MODELS.md § Enums` |
+| Memory layout / struct field ordering | `MODELS.md § Memory Layout Optimization` |
+| Task state transitions | `STATE_MACHINE.md § Task State Machine` |
+| Sprint state transitions | `STATE_MACHINE.md § Sprint State Machine` |
+| Audit operations catalogue | `DATABASE.md § audit Table` |
 | SQL DDL (table definitions, indexes, constraints) | `DATABASE.md` |
+| Schema migrations | `VERSION.md § Migrations` |
+| Concurrency model (WAL, pool, retry) | `IMPLEMENTATION.md § Concurrency Model` |
+| Caching strategies (query, connection) | `IMPLEMENTATION.md` |
+| Help text canonical | code in `internal/commands/*.go` (structure in `HELP.md`) |
 
 `DATABASE.md` additionally retains `CHECK` constraints in DDL as a normative reproduction of the enums; the Go-level enum definitions remain in `MODELS.md`.
 
 ---
 
-## 3. Global Conventions
+## 4. Global Conventions
 
 ### Dates and Timestamps
 

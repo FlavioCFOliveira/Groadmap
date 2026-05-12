@@ -1,5 +1,19 @@
 # System Architecture
 
+## Table of Contents
+
+- [High-Level Overview](#high-level-overview)
+- [Directory Structure](#directory-structure)
+- [Security Guarantees](#security-guarantees)
+- [Source Code Structure](#source-code-structure)
+- [Modules and Responsibilities](#modules-and-responsibilities)
+- [Command Lifecycle](#command-lifecycle)
+- [Error Handling](#error-handling)
+  - [Error Reuse Policy (Mandatory)](#error-reuse-policy-mandatory)
+- [Exit Codes](#exit-codes)
+  - [Exit Code Standards](#exit-code-standards)
+- [See Also](#see-also)
+
 ## High-Level Overview
 
 Groadmap is a CLI application distributed as a single binary executable. The architecture follows principles of simplicity, performance, and data isolation.
@@ -103,94 +117,18 @@ Groadmap/
 │       └── path.go        # Cross-platform path resolution
 └── SPEC/                  # Technical specification
     ├── ARCHITECTURE.md
+    ├── BUILD.md
     ├── COMMANDS.md
     ├── DATABASE.md
     ├── DATA_FORMATS.md
     ├── DEPLOY.md
-    ├── HELP_EXAMPLES.md
+    ├── HELP.md
+    ├── IMPLEMENTATION.md
     ├── MODELS.md
+    ├── README.md
     ├── STATE_MACHINE.md
     └── VERSION.md
 ```
-
-## Memory Layout Optimization
-
-### Struct Field Ordering
-
-All Go structs are organized to minimize memory padding and maximize cache locality. Fields are grouped by size and access patterns:
-
-**Task Struct (168 bytes, zero padding on 64-bit):**
-```
-Group 1: Content fields (strings) - 112 bytes
-  Title, Status, Type, FunctionalRequirements, TechnicalRequirements,
-  AcceptanceCriteria, CreatedAt
-
-Group 2: Tracking fields (pointers) - 32 bytes
-  Specialists, StartedAt, TestedAt, ClosedAt
-
-Group 3: Metadata fields (integers) - 24 bytes
-  ID, Priority, Severity
-```
-
-**SprintStats Struct Definition:**
-```go
-type SprintStats struct {
-    SprintID           int            `json:"sprint_id"`           // Sprint identifier
-    TotalTasks         int            `json:"total_tasks"`         // Total number of tasks in sprint
-    CompletedTasks     int            `json:"completed_tasks"`     // Number of tasks with status COMPLETED
-    ProgressPercentage float64        `json:"progress_percentage"` // Percentage of completed tasks (0.0-100.0)
-    StatusDistribution map[string]int `json:"status_distribution"` // Count of tasks per status
-    TaskOrder          []int          `json:"task_order"`          // Ordered array of task IDs by position
-}
-```
-
-**Rationale:**
-- String fields (16 bytes each) are grouped for cache locality when displaying task content
-- Pointer fields (8 bytes each) are grouped as they're often accessed together during lifecycle transitions
-- Integer fields (8 bytes each) are grouped as they're frequently used for filtering/sorting
-
-**Sprint-Task Relationship (1:N — one sprint to many tasks; each task in at most one sprint):**
-
-The relationship between sprints and tasks is maintained in the `sprint_tasks` junction table. While structurally a junction table, the `UNIQUE` constraint on `task_id` enforces that any task belongs to at most one sprint at a time:
-
-```
-sprint_tasks table:
-- sprint_id (FK to sprints.id)
-- task_id (FK to tasks.id)
-- position (int) -- Execution order within the sprint (0 = first, 1 = second, ...)
-```
-
-**Task Ordering Semantics:**
-- The `position` column in `sprint_tasks` defines the execution sequence of tasks within a sprint
-- Position 0 represents the highest priority task that should be executed first
-- Tasks with the same sprint_id are ordered by position ASC
-- The `task_order` field in SprintStats is derived from this position ordering
-
-**Field Sizes on 64-bit Systems:**
-- `string`: 16 bytes (pointer + length), 8-byte aligned
-- `*T` (pointer): 8 bytes, 8-byte aligned
-- `int`: 8 bytes, 8-byte aligned
-
-**SprintStats Struct (56 bytes, zero padding on 64-bit):**
-```
-Group 1: Sprint identifiers (integers) - 16 bytes
-  SprintID, TotalTasks, CompletedTasks
-
-Group 2: Progress metrics (float64 + map) - 24 bytes
-  ProgressPercentage (8 bytes), StatusDistribution (16 bytes header)
-
-Group 3: Task ordering (slice) - 16 bytes
-  TaskOrder (pointer + length + capacity)
-```
-
-**Rationale:**
-- Integer fields are grouped for efficient access during stats calculations
-- Float64 and map are grouped as they're computed together
-- Slice header (TaskOrder) is last as it's a computed field from sprint_tasks table
-
-### Cache Line Considerations
-
-The Task struct (168 bytes) spans approximately 3 cache lines (64 bytes each). Field grouping ensures that commonly accessed fields together (e.g., all content fields) fit within the same cache lines, reducing cache misses during task display operations.
 
 ## Modules and Responsibilities
 
@@ -410,128 +348,8 @@ set -e
 rmp task add -r myproject -d "New task"   # Exits 3 if no roadmap specified
 ```
 
-## Concurrency Model
+## See Also
 
-Groadmap uses SQLite as its database backend with a carefully designed concurrency model for safe concurrent access.
-
-### WAL Mode
-
-Groadmap enables SQLite's Write-Ahead Logging (WAL) mode for better concurrency:
-
-```sql
-PRAGMA journal_mode = WAL;
-```
-
-WAL mode provides:
-- **Readers don't block writers**: Multiple readers can access the database while a writer is active
-- **Writers don't block readers**: Readers see a consistent snapshot of the database
-- **Better performance**: Especially for read-heavy workloads
-
-### Connection Pooling
-
-Groadmap uses a connection pool optimized for concurrent read access:
-
-```go
-db.SetMaxOpenConns(10)        // Allow concurrent readers (WAL mode supports this)
-db.SetMaxIdleConns(5)         // Keep warm connections for frequent access
-db.SetConnMaxLifetime(time.Hour)   // Recycle connections after 1 hour
-db.SetConnMaxIdleTime(10 * time.Minute) // Close idle connections after 10 min
-```
-
-**Rationale**:
-- **MaxOpenConns(10)**: WAL mode allows multiple concurrent readers
-- **MaxIdleConns(5)**: Maintains warm connections to avoid connection establishment overhead
-- **ConnMaxLifetime(1 hour)**: Periodically recycles connections to prevent resource leaks
-- **ConnMaxIdleTime(10 min)**: Closes unused connections to free resources
-
-**Note**: Write operations remain serialized at the SQLite level regardless of connection pool size.
-
-### Busy Timeout
-
-A busy timeout is configured to prevent immediate failures when the database is locked:
-
-```sql
-PRAGMA busy_timeout = 10000;  -- 10 seconds
-```
-
-### Retry Logic
-
-Groadmap implements exponential backoff retry logic for database operations:
-
-- **Initial delay**: 100ms
-- **Maximum delay**: 1000ms
-- **Maximum retries**: 5
-- **Backoff pattern**: 100ms, 200ms, 400ms, 800ms, 1000ms
-
-**Retry Conditions:**
-- Only retry on SQLite busy/locked errors (`database is locked`, `SQLITE_BUSY`)
-- Do not retry on schema errors, constraint violations, syntax errors, or invalid input errors
-
-### Safe Concurrent Patterns
-
-**Pattern 1: Multiple Readers**
-Multiple goroutines can safely read from the database simultaneously.
-
-**Pattern 2: Single Writer**
-Only one goroutine should write at a time. Use a mutex if needed:
-
-```go
-var writeMutex sync.Mutex
-
-func safeWrite(db *DB, task *models.Task) (int, error) {
-    writeMutex.Lock()
-    defer writeMutex.Unlock()
-    return db.CreateTask(ctx, task)
-}
-```
-
-**Pattern 3: Read-While-Writing**
-Readers can safely read while a writer is active (WAL mode).
-
-**Pattern 4: Transaction Boundaries**
-Use transactions for atomic operations:
-
-```go
-db.WithTransaction(func(tx *sql.Tx) error {
-    // Multiple operations within a transaction
-    _, err := tx.Exec("INSERT INTO tasks ...")
-    if err != nil {
-        return err
-    }
-    _, err = tx.Exec("INSERT INTO audit ...")
-    return err
-})
-```
-
-### Anti-Patterns to Avoid
-
-- **Multiple Writers Without Coordination**: Multiple uncoordinated writers may fail with "database is locked"
-- **Long-Running Transactions**: Holding locks for too long blocks other operations
-- **Ignoring Context Cancellation**: Always pass context for proper timeout/cancellation handling
-
-### Race Condition Testing
-
-Run tests with the race detector:
-
-```bash
-go test -race ./internal/db/...
-```
-
-**Test Coverage:**
-- Concurrent task creation and reads
-- Concurrent task updates
-- Concurrent sprint operations
-- Concurrent audit logging
-- High concurrency stress testing
-
----
-
-## Performance Considerations
-
-1. **Lazy loading**: SQLite connections only opened when needed.
-2. **Prepared statements**: Pre-compiled SQLite queries for repeated operations.
-3. **WAL Mode**: Use `PRAGMA journal_mode=WAL;` to improve concurrency for read/write operations.
-4. **Foreign Keys**: Explicitly enable `PRAGMA foreign_keys=ON;` on every connection to enforce constraints and cascading actions.
-5. **Bulk Operations**: Encapsulate multiple updates in a single transaction. Batch ID lists larger than 500 to avoid SQLite variable limits.
-6. **Streaming Output**: Use `json.Encoder` for large result sets (e.g., `audit list`) to stream JSON directly to `stdout` instead of buffering.
-7. **Concurrency**: Leverage Go's concurrency for independent read operations, but ensure writes are strictly sequential per roadmap file.
+- Memory Layout Optimization → `MODELS.md § Memory Layout Optimization`
+- Concurrency, Caching, Performance → `IMPLEMENTATION.md`
+- Database schema and queries → `DATABASE.md`

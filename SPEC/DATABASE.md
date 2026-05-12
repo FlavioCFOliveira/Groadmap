@@ -1,5 +1,28 @@
 # Database Schema
 
+## Table of Contents
+
+- [Overview](#overview)
+- [Naming Conventions](#naming-conventions)
+- [SQLite File Structure](#sqlite-file-structure)
+- [DDL - Table Creation](#ddl---table-creation)
+  - [`tasks` Table](#tasks-table)
+  - [`sprints` Table](#sprints-table)
+  - [`sprint_tasks` Table (1:N Relationship)](#sprint_tasks-table-1n-relationship)
+  - [`audit` Table](#audit-table)
+  - [`task_dependencies` Table](#task_dependencies-table)
+  - [`_metadata` Table](#_metadata-table)
+- [Main SQL Queries](#main-sql-queries)
+  - [Tasks](#tasks)
+  - [Sprints](#sprints)
+  - [Audit](#audit)
+- [Relationships](#relationships)
+- [Data Constraints](#data-constraints)
+- [Performance Optimization](#performance-optimization)
+- [Field Length Validation](#field-length-validation)
+- [SQLite Validation](#sqlite-validation)
+- [See Also](#see-also)
+
 ## Overview
 
 Each roadmap is stored in an individual SQLite file. The schema is designed to be simple, efficient, and normalized.
@@ -720,138 +743,6 @@ DELETE FROM audit WHERE performed_at < ?;
 
 ---
 
-## Audit Queries
-
-### List All Audit Entries
-
-```sql
-SELECT * FROM audit
-ORDER BY performed_at DESC
-LIMIT ? OFFSET ?;
-```
-
-### Filter by Operation Type
-
-```sql
-SELECT * FROM audit
-WHERE operation = ?
-ORDER BY performed_at DESC
-LIMIT ?;
-```
-
-### Filter by Entity Type
-
-```sql
-SELECT * FROM audit
-WHERE entity_type = ?
-ORDER BY performed_at DESC
-LIMIT ?;
-```
-
-### Filter by Entity ID
-
-```sql
--- Complete history of a specific entity
-SELECT * FROM audit
-WHERE entity_type = ? AND entity_id = ?
-ORDER BY performed_at DESC;
-
--- Or using separate columns
-SELECT * FROM audit
-WHERE entity_type = 'TASK' AND entity_id = 42
-ORDER BY performed_at DESC;
-```
-
-### Filter by Date Range
-
-```sql
--- Since a specific date
-SELECT * FROM audit
-WHERE performed_at >= ?
-ORDER BY performed_at DESC
-LIMIT ?;
-
--- Until a specific date
-SELECT * FROM audit
-WHERE performed_at <= ?
-ORDER BY performed_at DESC
-LIMIT ?;
-
--- Date range (between two dates)
-SELECT * FROM audit
-WHERE performed_at >= ? AND performed_at <= ?
-ORDER BY performed_at DESC
-LIMIT ?;
-```
-
-### Combined Filters
-
-```sql
--- By operation and entity type
-SELECT * FROM audit
-WHERE operation = ? AND entity_type = ?
-ORDER BY performed_at DESC
-LIMIT ?;
-
--- By entity type, operation, and date range
-SELECT * FROM audit
-WHERE entity_type = ?
-  AND operation = ?
-  AND performed_at >= ?
-  AND performed_at <= ?
-ORDER BY performed_at DESC
-LIMIT ? OFFSET ?;
-```
-
-### Get Total Count (for pagination)
-
-```sql
--- Total entries with optional filters
-SELECT COUNT(*) FROM audit;
-
--- With filters
-SELECT COUNT(*) FROM audit
-WHERE entity_type = ? AND operation = ?;
-```
-
-### Audit Statistics
-
-```sql
--- Total entries in period
-SELECT COUNT(*) FROM audit
-WHERE performed_at >= ? AND performed_at <= ?;
-
--- By operation type
-SELECT operation, COUNT(*) as count
-FROM audit
-WHERE performed_at >= ? AND performed_at <= ?
-GROUP BY operation
-ORDER BY count DESC;
-
--- By entity type
-SELECT entity_type, COUNT(*) as count
-FROM audit
-WHERE performed_at >= ? AND performed_at <= ?
-GROUP BY entity_type
-ORDER BY count DESC;
-
--- First and last entry dates
-SELECT MIN(performed_at) as first_entry, MAX(performed_at) as last_entry
-FROM audit;
-
--- Combined statistics (all in one query for application processing)
-SELECT
-  operation,
-  entity_type,
-  COUNT(*) as count
-FROM audit
-WHERE performed_at >= ? AND performed_at <= ?
-GROUP BY operation, entity_type
-ORDER BY count DESC;
-```
-
----
-
 ## Relationships
 
 ```
@@ -894,19 +785,7 @@ ORDER BY count DESC;
 
 **Field Grouping Rationale:**
 
-Fields are organized to match the optimized Go struct layout:
-- **Content fields**: Frequently accessed together for display purposes (96 bytes)
-- **Tracking fields**: Nullable lifecycle timestamps, often queried together (32 bytes)
-- **Metadata fields**: Small integers used for filtering and sorting (24 bytes)
-
-**Memory Layout Optimization:**
-
-On 64-bit systems, the Task struct occupies exactly 168 bytes with zero padding:
-- String fields: 16 bytes each (ptr + len), 8-byte aligned
-- Pointer fields: 8 bytes each, 8-byte aligned
-- Integer fields: 8 bytes each, 8-byte aligned
-
-Total: 168 bytes (7×16 + 4×8 + 3×8 = 112 + 32 + 24)
+Fields are organized to match the optimized Go struct layout (Content, Tracking, Metadata groups). The byte-level layout, struct sizes, and cache-line considerations are documented in `MODELS.md § Memory Layout Optimization`.
 
 ### Sprints
 
@@ -1025,196 +904,8 @@ Or check magic bytes: SQLite files start with `"SQLite format 3\x00"`
 
 ---
 
-## Query Caching
+## See Also
 
-The database layer implements prepared statement caching to eliminate query plan recompilation overhead for frequently executed batch operations with IN clauses.
-
-### Problem Statement
-
-Multiple database functions build SQL queries using `fmt.Sprintf` with `strings.Join`, creating unique query strings for each call. This prevents SQLite from caching query plans, forcing recompilation on every execution.
-
-**Affected Operations:**
-- `GetTasks` - IN clause for task IDs
-- `UpdateTaskStatus` - IN clause for task IDs
-- `UpdateTaskPriority` - IN clause for task IDs
-- `UpdateTaskSeverity` - IN clause for task IDs
-- `AddTasksToSprint` - IN clause for task IDs
-- `RemoveTasksFromSprint` - IN clause for task IDs
-
-**Current Overhead:** 20-30% on repeated batch operations.
-
-### Cache Strategy
-
-Pre-generate and cache query templates for common IN clause sizes to enable SQLite query plan reuse.
-
-**Cached Sizes:**
-- **Standard sizes:** 1-100 (individual caches)
-- **Large batches:** 250, 500, 1000
-
-Total cached templates: 103
-
-### Data Structures
-
-```go
-// QueryCache stores pre-generated query templates for batch operations
-type QueryCache struct {
-    templates    map[string]string
-    placeholders []string
-    mu           sync.RWMutex
-}
-
-// Operation types for cache keys
-const (
-    OpGetTasks              = "get_tasks"
-    OpUpdateTaskStatus      = "update_task_status"
-    OpUpdateTaskPriority    = "update_task_priority"
-    OpUpdateTaskSeverity    = "update_task_severity"
-    OpAddTasksToSprint      = "add_tasks_to_sprint"
-    OpRemoveTasksFromSprint = "remove_tasks_from_sprint"
-)
-```
-
-### Batch Processing
-
-```go
-// BatchProcessor handles chunking large ID lists into manageable batches
-type BatchProcessor struct {
-    batchSize int
-}
-
-// ProcessChunks splits a slice of IDs into chunks and executes fn for each
-func (bp *BatchProcessor) ProcessChunks(ids []int, fn func(chunk []int) error) error
-```
-
-### Performance Requirements
-
-- 20-30% improvement in batch update operations
-- Query plan cache hit rate above 90% for repeated operations
-- Batch processing handles 1000+ IDs efficiently
-- Thread-safe implementation verified with concurrent access
-
----
-
-## Connection Caching
-
-The database layer implements connection caching to eliminate connection establishment overhead (10-50ms per command) by reusing database connections within the same process lifetime.
-
-### Problem Statement
-
-Every CLI command opens and closes the database connection, incurring:
-- **Connection establishment:** 5-20ms
-- **Schema validation:** 2-10ms
-- **File descriptor operations:** 3-10ms
-- **Total overhead:** 10-50ms per command
-
-### Cache Design
-
-A process-level connection cache that:
-- Keys connections by roadmap name
-- Returns existing connections when available
-- Validates connection health before reuse
-- Cleans up on process exit
-
-### Data Structures
-
-```go
-// ConnectionCache manages database connections for the process lifetime
-type ConnectionCache struct {
-    connections map[string]*CachedConnection
-    mu          sync.RWMutex
-    cleanupOnce sync.Once
-}
-
-// CachedConnection wraps a database connection with metadata
-type CachedConnection struct {
-    db          *DB
-    roadmapName string
-    createdAt   time.Time
-    lastUsed    time.Time
-    useCount    int
-}
-```
-
-### Cache Operations
-
-```go
-// OpenCached returns a cached connection for the roadmap, or creates a new one
-func (cc *ConnectionCache) OpenCached(roadmapName string) (*DB, error)
-
-// Get retrieves a cached connection without creating a new one
-func (cc *ConnectionCache) Get(roadmapName string) *DB
-
-// Store adds a connection to the cache
-func (cc *ConnectionCache) Store(roadmapName string, db *DB)
-
-// Remove deletes a connection from the cache
-func (cc *ConnectionCache) Remove(roadmapName string)
-
-// HealthCheck verifies a connection is still alive
-func (cc *ConnectionCache) HealthCheck(db *DB) error
-
-// CloseAll closes all cached connections
-func (cc *ConnectionCache) CloseAll() error
-```
-
-### Global Cache Instance
-
-```go
-// globalCache is the process-level connection cache
-var globalCache = NewConnectionCache()
-
-// OpenCached is a convenience function that uses the global cache
-func OpenCached(roadmapName string) (*DB, error)
-
-// CloseAllCached closes all cached connections
-func CloseAllCached() error
-```
-
-### Performance Requirements
-
-- Second command reuses existing connection
-- Connection health check validates liveness
-- Dead connections are removed from cache and recreated
-- Process exit closes all cached connections
-- Concurrent access to cache is thread-safe
-- Memory usage remains stable (no connection leaks)
-
----
-
-## Migrations
-
-The `_metadata` table records the active schema version. Migration steps and their descriptions live in `internal/db/migrations.go`; the migration history is recoverable via `git log internal/db/migrations.go`.
-
-### Current Schema Version
-
-`SchemaVersion = "1.6.0"` (defined in `internal/db/schema.go`).
-
-### Migration Commands
-
-```sql
--- Check current version
-SELECT value FROM _metadata WHERE key = 'schema_version';
-
--- Update version after migration
-UPDATE _metadata SET value = '1.3.0' WHERE key = 'schema_version';
-```
-
-### Migration 1.1.0 → 1.2.0
-
-```sql
--- Enforce at most one OPEN sprint at a time
-CREATE UNIQUE INDEX IF NOT EXISTS idx_one_open_sprint ON sprints(status) WHERE status = 'OPEN';
-
--- Update schema version
-UPDATE _metadata SET value = '1.2.0' WHERE key = 'schema_version';
-```
-
-### Migration 1.2.0 → 1.3.0
-
-```sql
--- Add completion_summary column to existing databases
-ALTER TABLE tasks ADD COLUMN completion_summary TEXT CHECK(completion_summary IS NULL OR length(completion_summary) <= 4096);
-
--- Update schema version
-UPDATE _metadata SET value = '1.3.0' WHERE key = 'schema_version';
-```
+- Query and connection caching strategies → `IMPLEMENTATION.md § Query Caching` / `IMPLEMENTATION.md § Connection Caching`
+- Schema migrations and version history → `VERSION.md § Migrations`
+- Concurrency model (WAL, pool, retry) → `IMPLEMENTATION.md § Concurrency Model`
