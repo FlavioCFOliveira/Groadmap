@@ -316,12 +316,7 @@ func sprintRemoveTasks(args []string) error {
 				return err
 			}
 
-			// Log audit with same timestamp
-			_, err = tx.Exec(
-				`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-				models.OpSprintRemoveTask, models.EntitySprint, sprintID, now,
-			)
-			if err != nil {
+			if err := db.LogAuditTx(tx, models.OpSprintRemoveTask, models.EntitySprint, sprintID, now); err != nil {
 				return err
 			}
 		}

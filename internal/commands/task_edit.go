@@ -155,10 +155,6 @@ func taskEdit(args []string) error {
 			return fmt.Errorf("%w: task %d not found", utils.ErrNotFound, taskID)
 		}
 
-		_, auditErr := tx.Exec(
-			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-			models.OpTaskUpdate, models.EntityTask, taskID, utils.NowISO8601(),
-		)
-		return auditErr
+		return db.LogAuditTx(tx, models.OpTaskUpdate, models.EntityTask, taskID, utils.NowISO8601())
 	})
 }

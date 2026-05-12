@@ -111,11 +111,7 @@ func sprintCreate(args []string) error {
 		}
 		sprintID = int(id)
 
-		_, auditErr := tx.Exec(
-			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-			models.OpSprintCreate, models.EntitySprint, sprintID, now,
-		)
-		return auditErr
+		return db.LogAuditTx(tx, models.OpSprintCreate, models.EntitySprint, sprintID, now)
 	})
 
 	if err != nil {
@@ -294,11 +290,7 @@ func sprintUpdate(args []string) error {
 			return fmt.Errorf("%w: sprint %d not found", utils.ErrNotFound, sprintID)
 		}
 
-		_, auditErr := tx.Exec(
-			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-			models.OpSprintUpdate, models.EntitySprint, sprintID, now,
-		)
-		return auditErr
+		return db.LogAuditTx(tx, models.OpSprintUpdate, models.EntitySprint, sprintID, now)
 	})
 }
 
@@ -359,10 +351,6 @@ func sprintRemove(args []string) error {
 			return fmt.Errorf("%w: sprint %d not found", utils.ErrNotFound, sprintID)
 		}
 
-		_, auditErr := tx.Exec(
-			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-			models.OpSprintDelete, models.EntitySprint, sprintID, now,
-		)
-		return auditErr
+		return db.LogAuditTx(tx, models.OpSprintDelete, models.EntitySprint, sprintID, now)
 	})
 }

@@ -79,12 +79,7 @@ func taskRemove(args []string) error {
 				return fmt.Errorf("%w: task %d not found", utils.ErrNotFound, id)
 			}
 
-			// Log audit
-			_, err = tx.Exec(
-				`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-				models.OpTaskDelete, models.EntityTask, id, utils.NowISO8601(),
-			)
-			if err != nil {
+			if err := db.LogAuditTx(tx, models.OpTaskDelete, models.EntityTask, id, utils.NowISO8601()); err != nil {
 				return err
 			}
 		}
@@ -308,11 +303,7 @@ func taskSetStatus(args []string) error {
 
 		// Log audit with same timestamp
 		for _, id := range ids {
-			_, err = tx.Exec(
-				`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-				models.OpTaskStatusChange, models.EntityTask, id, now,
-			)
-			if err != nil {
+			if err := db.LogAuditTx(tx, models.OpTaskStatusChange, models.EntityTask, id, now); err != nil {
 				return err
 			}
 		}
@@ -399,10 +390,7 @@ func taskReopen(args []string) error {
 		}
 
 		for _, id := range toReopen {
-			if _, err := tx.Exec(
-				`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-				models.OpTaskReopen, models.EntityTask, id, now,
-			); err != nil {
+			if err := db.LogAuditTx(tx, models.OpTaskReopen, models.EntityTask, id, now); err != nil {
 				return err
 			}
 		}
@@ -461,10 +449,7 @@ func taskSetPriority(args []string) error {
 
 		// Log audit with same timestamp
 		for _, id := range ids {
-			if _, err := tx.Exec(
-				`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-				models.OpTaskPriorityChange, models.EntityTask, id, now,
-			); err != nil {
+			if err := db.LogAuditTx(tx, models.OpTaskPriorityChange, models.EntityTask, id, now); err != nil {
 				return err
 			}
 		}
@@ -514,10 +499,7 @@ func taskSetSeverity(args []string) error {
 
 		// Log audit with same timestamp
 		for _, id := range ids {
-			if _, err := tx.Exec(
-				`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-				models.OpTaskSeverityChange, models.EntityTask, id, now,
-			); err != nil {
+			if err := db.LogAuditTx(tx, models.OpTaskSeverityChange, models.EntityTask, id, now); err != nil {
 				return err
 			}
 		}

@@ -1074,10 +1074,7 @@ func (db *DB) AddTaskDependencyWithAudit(ctx context.Context, taskID, depID int)
 		}
 
 		for _, auditTaskID := range []int{taskID, depID} {
-			if _, err := tx.Exec(
-				`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-				models.OpTaskAddDep, models.EntityTask, auditTaskID, now,
-			); err != nil {
+			if err := LogAuditTx(tx, models.OpTaskAddDep, models.EntityTask, auditTaskID, now); err != nil {
 				return err
 			}
 		}
@@ -1106,10 +1103,7 @@ func (db *DB) RemoveTaskDependencyWithAudit(ctx context.Context, taskID, depID i
 		}
 
 		for _, auditTaskID := range []int{taskID, depID} {
-			if _, err := tx.Exec(
-				`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-				models.OpTaskRemoveDep, models.EntityTask, auditTaskID, now,
-			); err != nil {
+			if err := LogAuditTx(tx, models.OpTaskRemoveDep, models.EntityTask, auditTaskID, now); err != nil {
 				return err
 			}
 		}
@@ -1801,6 +1795,21 @@ func (db *DB) RemoveTasksFromSprint(ctx context.Context, taskIDs []int) error {
 
 // ==================== AUDIT QUERIES ====================
 
+// LogAuditTx inserts an audit row inside an existing transaction. The 21+
+// transactional sites that write audit rows alongside a domain mutation
+// must call this rather than spelling out the INSERT manually — it keeps
+// the table layout in one place and lets writers stay terse.
+func LogAuditTx(tx *sql.Tx, op models.AuditOperation, entityType models.EntityType, entityID int, performedAt string) error {
+	_, err := tx.Exec(
+		`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
+		op, entityType, entityID, performedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("inserting audit entry: %w", err)
+	}
+	return nil
+}
+
 // LogAuditEntry inserts a new audit entry.
 func (db *DB) LogAuditEntry(ctx context.Context, entry *models.AuditEntry) (int, error) {
 	var auditID int
@@ -2183,11 +2192,7 @@ func (db *DB) ReorderSprintTasks(sprintID int, taskIDs []int) error {
 
 		// Log audit entry
 		now := utils.NowISO8601()
-		_, err = tx.Exec(
-			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-			models.OpSprintReorderTasks, models.EntitySprint, sprintID, now,
-		)
-		if err != nil {
+		if err := LogAuditTx(tx, models.OpSprintReorderTasks, models.EntitySprint, sprintID, now); err != nil {
 			return fmt.Errorf("logging audit entry: %w", err)
 		}
 
@@ -2269,11 +2274,7 @@ func (db *DB) MoveTaskToPosition(sprintID, taskID, newPosition int) error {
 
 		// Log audit entry
 		now := utils.NowISO8601()
-		_, err = tx.Exec(
-			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-			models.OpSprintTaskMovePosition, models.EntitySprint, sprintID, now,
-		)
-		if err != nil {
+		if err := LogAuditTx(tx, models.OpSprintTaskMovePosition, models.EntitySprint, sprintID, now); err != nil {
 			return fmt.Errorf("logging audit entry: %w", err)
 		}
 
@@ -2348,11 +2349,7 @@ func (db *DB) SwapTasks(sprintID, taskID1, taskID2 int) error {
 
 		// Log audit entry
 		now := utils.NowISO8601()
-		_, err = tx.Exec(
-			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-			models.OpSprintTaskSwap, models.EntitySprint, sprintID, now,
-		)
-		if err != nil {
+		if err := LogAuditTx(tx, models.OpSprintTaskSwap, models.EntitySprint, sprintID, now); err != nil {
 			return fmt.Errorf("logging audit entry: %w", err)
 		}
 

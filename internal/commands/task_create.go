@@ -164,12 +164,7 @@ func taskCreate(args []string) error {
 		}
 		taskID = int(id)
 
-		// Log audit with same timestamp
-		_, auditErr := tx.Exec(
-			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-			models.OpTaskCreate, models.EntityTask, taskID, now,
-		)
-		return auditErr
+		return db.LogAuditTx(tx, models.OpTaskCreate, models.EntityTask, taskID, now)
 	})
 
 	if err != nil {

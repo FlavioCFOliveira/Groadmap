@@ -72,11 +72,7 @@ func execSprintUpdate(tx *sql.Tx, query string, args []interface{}, sprintID int
 	if affected == 0 {
 		return fmt.Errorf("%w: sprint %d not found", utils.ErrNotFound, sprintID)
 	}
-	_, err = tx.Exec(
-		`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-		op, models.EntitySprint, sprintID, now,
-	)
-	return err
+	return db.LogAuditTx(tx, op, models.EntitySprint, sprintID, now)
 }
 
 // sprintLifecycle handles sprint lifecycle state transitions (start, close, reopen).

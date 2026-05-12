@@ -84,11 +84,7 @@ func taskAssign(args []string) error {
 			return execErr
 		}
 
-		_, auditErr := tx.Exec(
-			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-			models.OpTaskAssign, models.EntityTask, taskID, now,
-		)
-		return auditErr
+		return db.LogAuditTx(tx, models.OpTaskAssign, models.EntityTask, taskID, now)
 	})
 }
 
@@ -173,10 +169,6 @@ func taskUnassign(args []string) error {
 			return execErr
 		}
 
-		_, auditErr := tx.Exec(
-			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-			models.OpTaskUnassign, models.EntityTask, taskID, now,
-		)
-		return auditErr
+		return db.LogAuditTx(tx, models.OpTaskUnassign, models.EntityTask, taskID, now)
 	})
 }
