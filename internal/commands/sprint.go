@@ -75,7 +75,12 @@ Valid sprint status values (for --status filter):
 
 Sprint lifecycle:
   create -> start (PENDING->OPEN) -> close (OPEN->CLOSED) -> reopen (CLOSED->OPEN)
-  At most one sprint can be OPEN at any time.
+  Rules enforced:
+    - At most one sprint can be OPEN at any time (idx_one_open_sprint).
+    - 'sprint close' rejects (exit 6) if any task is still SPRINT/DOING/TESTING — pass --force to override.
+    - 'sprint add-tasks' rejects (exit 6) if sprint is CLOSED, or if --max-tasks capacity would be exceeded.
+    - 'sprint remove' resets all member task statuses back to BACKLOG.
+    - 'sprint add-tasks' atomically moves tasks BACKLOG -> SPRINT (manual stat SPRINT is forbidden).
 
 Commands:
   list, ls [OPTIONS]              			List sprints

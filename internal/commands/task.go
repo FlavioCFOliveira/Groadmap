@@ -67,13 +67,23 @@ func printTaskHelp() {
 
 Valid status values (for --status filter and 'stat' setter):
   BACKLOG, SPRINT, DOING, TESTING, COMPLETED
-  Note: SPRINT is only reached via 'sprint add-tasks'; 'task stat <id> SPRINT' is rejected (exit 6).
 
 Valid task types (for --type filter and 'create'/'edit' setter):
   USER_STORY, TASK, BUG, SUB_TASK, EPIC, REFACTOR, CHORE, SPIKE, DESIGN_UX, IMPROVEMENT
 
 Numeric ranges:
   --priority, --severity      0-9 (0 = lowest, 9 = highest)
+
+Status workflow (per SPEC/STATE_MACHINE.md):
+  BACKLOG --[sprint add-tasks]--> SPRINT --[task stat DOING]--> DOING
+        DOING --[task stat TESTING]--> TESTING
+        TESTING --[task stat COMPLETED]--> COMPLETED --[task reopen / stat BACKLOG]--> BACKLOG
+  Rules enforced:
+    - 'task stat <id> SPRINT' is rejected (exit 6). Use 'sprint add-tasks' instead.
+    - 'task remove' is only allowed while a task is in BACKLOG.
+    - Marking COMPLETED is rejected (exit 6) if any subtask or dependency is not yet COMPLETED.
+    - On COMPLETED transition you may attach a free-form summary with --summary / -s (max 4096 chars).
+    - 'task reopen' (or 'stat BACKLOG' from COMPLETED) clears started_at, tested_at, closed_at, completion_summary.
 
 Commands:
   list, ls [OPTIONS]              			List tasks
