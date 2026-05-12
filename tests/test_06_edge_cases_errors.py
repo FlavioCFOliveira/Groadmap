@@ -45,38 +45,33 @@ class TestEdgeCasesErrors:
         print("✓ Create duplicate roadmap test passed")
 
     def test_create_task_without_required_fields(self):
-        """Test creating task without required fields fails."""
+        """Test creating task without required fields fails with exit 2 (misuse).
+
+        Each missing field must surface its own name in stderr so the user
+        knows precisely which flag was forgotten.
+        """
         roadmap = self.test.create_roadmap()
 
-        # Missing title
-        exit_code, _, _ = self.test.run_cmd(
-            ["task", "create", "-r", roadmap, "-fr", "Functional", "-tr", "Technical", "-ac", "Criteria"],
-            check=False
-        )
-        assert exit_code != 0
+        cases = [
+            # (missing field name, args)
+            ("--title",                  ["-fr", "Functional", "-tr", "Technical", "-ac", "Criteria"]),
+            ("--functional-requirements", ["-t", "Title", "-tr", "Technical", "-ac", "Criteria"]),
+            ("--technical-requirements",  ["-t", "Title", "-fr", "Functional", "-ac", "Criteria"]),
+            ("--acceptance-criteria",     ["-t", "Title", "-fr", "Functional", "-tr", "Technical"]),
+        ]
+        for missing, extra_args in cases:
+            exit_code, _, stderr = self.test.run_cmd(
+                ["task", "create", "-r", roadmap, *extra_args],
+                check=False,
+            )
+            assert exit_code == 2, (
+                f"missing {missing} must exit 2 (misuse); got {exit_code}, stderr={stderr}"
+            )
+            assert missing in stderr, (
+                f"stderr must name the missing field {missing!r}; got {stderr!r}"
+            )
 
-        # Missing functional requirements
-        exit_code, _, _ = self.test.run_cmd(
-            ["task", "create", "-r", roadmap, "-t", "Title", "-tr", "Technical", "-ac", "Criteria"],
-            check=False
-        )
-        assert exit_code != 0
-
-        # Missing technical requirements
-        exit_code, _, _ = self.test.run_cmd(
-            ["task", "create", "-r", roadmap, "-t", "Title", "-fr", "Functional", "-ac", "Criteria"],
-            check=False
-        )
-        assert exit_code != 0
-
-        # Missing acceptance criteria
-        exit_code, _, _ = self.test.run_cmd(
-            ["task", "create", "-r", roadmap, "-t", "Title", "-fr", "Functional", "-tr", "Technical"],
-            check=False
-        )
-        assert exit_code != 0
-
-        print("✓ Create task without required fields test passed")
+        print("✓ Create task without required fields: each missing field returns exit 2 with field name")
 
     def test_get_nonexistent_task(self):
         """Test getting non-existent task returns empty result."""
@@ -103,79 +98,68 @@ class TestEdgeCasesErrors:
         print("✓ Edit nonexistent task test passed")
 
     def test_invalid_priority_values(self):
-        """Test invalid priority values are rejected."""
+        """Test invalid priority values are rejected with exit 6 and a 'priority' message."""
         roadmap = self.test.create_roadmap()
         task_id = self.test.create_task(roadmap, "Task", "Functional", "Technical", "Criteria")
 
-        # Negative priority
-        exit_code, _, _ = self.test.run_cmd(
-            ["task", "prio", "-r", roadmap, str(task_id), "-1"],
-            check=False
-        )
-        assert exit_code != 0
+        for bad in ["-1", "10", "high"]:
+            exit_code, _, stderr = self.test.run_cmd(
+                ["task", "prio", "-r", roadmap, str(task_id), bad],
+                check=False,
+            )
+            assert exit_code == 6, f"priority={bad!r} must exit 6; got {exit_code}, stderr={stderr}"
+            assert "priority" in stderr.lower(), (
+                f"stderr must mention 'priority' for value {bad!r}; got {stderr!r}"
+            )
 
-        # Priority > 9
-        exit_code, _, _ = self.test.run_cmd(
-            ["task", "prio", "-r", roadmap, str(task_id), "10"],
-            check=False
-        )
-        assert exit_code != 0
-
-        # Non-numeric priority
-        exit_code, _, _ = self.test.run_cmd(
-            ["task", "prio", "-r", roadmap, str(task_id), "high"],
-            check=False
-        )
-        assert exit_code != 0
-
-        print("✓ Invalid priority values test passed")
+        print("✓ Invalid priority values rejected with exit 6 + 'priority' message")
 
     def test_invalid_severity_values(self):
-        """Test invalid severity values are rejected."""
+        """Test invalid severity values are rejected with exit 6 and a 'severity' message."""
         roadmap = self.test.create_roadmap()
         task_id = self.test.create_task(roadmap, "Task", "Functional", "Technical", "Criteria")
 
-        # Negative severity
-        exit_code, _, _ = self.test.run_cmd(
-            ["task", "sev", "-r", roadmap, str(task_id), "-1"],
-            check=False
-        )
-        assert exit_code != 0
+        for bad in ["-1", "10"]:
+            exit_code, _, stderr = self.test.run_cmd(
+                ["task", "sev", "-r", roadmap, str(task_id), bad],
+                check=False,
+            )
+            assert exit_code == 6, f"severity={bad!r} must exit 6; got {exit_code}, stderr={stderr}"
+            assert "severity" in stderr.lower(), (
+                f"stderr must mention 'severity' for value {bad!r}; got {stderr!r}"
+            )
 
-        # Severity > 9
-        exit_code, _, _ = self.test.run_cmd(
-            ["task", "sev", "-r", roadmap, str(task_id), "10"],
-            check=False
-        )
-        assert exit_code != 0
-
-        print("✓ Invalid severity values test passed")
+        print("✓ Invalid severity values rejected with exit 6 + 'severity' message")
 
     def test_invalid_task_id(self):
-        """Test invalid task IDs are rejected."""
+        """Test invalid task IDs are rejected with exit 6 and a 'task ID' message."""
         roadmap = self.test.create_roadmap()
 
-        # Non-numeric ID
-        exit_code, _, _ = self.test.run_cmd(
+        exit_code, _, stderr = self.test.run_cmd(
             ["task", "get", "-r", roadmap, "abc"],
-            check=False
+            check=False,
         )
-        assert exit_code != 0
+        assert exit_code == 6, f"non-numeric task id must exit 6; got {exit_code}, stderr={stderr}"
+        assert "task ID" in stderr or "task id" in stderr.lower(), (
+            f"stderr must mention task ID; got {stderr!r}"
+        )
 
-        print("✓ Invalid task ID test passed")
+        print("✓ Invalid task ID rejected with exit 6 + 'task ID' message")
 
     def test_invalid_sprint_id(self):
-        """Test invalid sprint IDs are rejected."""
+        """Test invalid sprint IDs are rejected with exit 6 and a 'sprint ID' message."""
         roadmap = self.test.create_roadmap()
 
-        # Non-numeric ID
-        exit_code, _, _ = self.test.run_cmd(
+        exit_code, _, stderr = self.test.run_cmd(
             ["sprint", "get", "-r", roadmap, "abc"],
-            check=False
+            check=False,
         )
-        assert exit_code != 0
+        assert exit_code == 6, f"non-numeric sprint id must exit 6; got {exit_code}, stderr={stderr}"
+        assert "sprint ID" in stderr or "sprint id" in stderr.lower(), (
+            f"stderr must mention sprint ID; got {stderr!r}"
+        )
 
-        print("✓ Invalid sprint ID test passed")
+        print("✓ Invalid sprint ID rejected with exit 6 + 'sprint ID' message")
 
     def test_get_nonexistent_sprint(self):
         """Test getting non-existent sprint fails."""
@@ -215,27 +199,32 @@ class TestEdgeCasesErrors:
         print("✓ Add tasks to nonexistent sprint test passed")
 
     def test_add_nonexistent_task_to_sprint(self):
-        """Test adding non-existent task to sprint fails."""
+        """Test adding non-existent task to sprint fails with exit 4 + 'not found' message."""
         roadmap = self.test.create_roadmap()
         sprint_id = self.test.create_sprint(roadmap, "Sprint")
 
-        exit_code, _, _ = self.test.run_cmd(
+        exit_code, _, stderr = self.test.run_cmd(
             ["sprint", "add-tasks", "-r", roadmap, str(sprint_id), "99999"],
-            check=False
+            check=False,
         )
-        assert exit_code != 0
+        assert exit_code == 4, f"adding missing task must exit 4; got {exit_code}, stderr={stderr}"
+        assert "99999" in stderr, f"stderr must reference the missing task id; got {stderr!r}"
+        assert "not found" in stderr.lower(), f"stderr must say 'not found'; got {stderr!r}"
 
-        print("✓ Add nonexistent task to sprint test passed")
+        print("✓ Add nonexistent task to sprint: exit 4 + 'not found' message naming task id")
 
     def test_empty_roadmap_name(self):
-        """Test empty roadmap name is rejected."""
-        exit_code, _, _ = self.test.run_cmd(
+        """Test empty roadmap name is rejected with exit 6 + 'empty' message."""
+        exit_code, _, stderr = self.test.run_cmd(
             ["roadmap", "create", ""],
-            check=False
+            check=False,
         )
-        assert exit_code != 0
+        assert exit_code == 6, f"empty roadmap name must exit 6; got {exit_code}, stderr={stderr}"
+        assert "empty" in stderr.lower() or "required" in stderr.lower(), (
+            f"stderr must reference empty/required; got {stderr!r}"
+        )
 
-        print("✓ Empty roadmap name test passed")
+        print("✓ Empty roadmap name rejected with exit 6 + descriptive message")
 
     def test_roadmap_name_with_special_chars(self):
         """Test roadmap name with special characters."""
@@ -343,18 +332,18 @@ class TestEdgeCasesErrors:
         print("✓ Remove already removed task test passed")
 
     def test_edit_with_no_changes(self):
-        """Test editing task with no changes fails."""
+        """Test editing task with no fields fails with exit 6 + 'no fields' message."""
         roadmap = self.test.create_roadmap()
         task_id = self.test.create_task(roadmap, "Task", "Functional", "Technical", "Criteria")
 
-        # Try to edit with no fields
-        exit_code, _, _ = self.test.run_cmd(
+        exit_code, _, stderr = self.test.run_cmd(
             ["task", "edit", "-r", roadmap, str(task_id)],
-            check=False
+            check=False,
         )
-        assert exit_code != 0
+        assert exit_code == 6, f"edit with no fields must exit 6; got {exit_code}, stderr={stderr}"
+        assert "no fields" in stderr.lower(), f"stderr must say 'no fields'; got {stderr!r}"
 
-        print("✓ Edit with no changes test passed")
+        print("✓ Edit with no changes rejected with exit 6 + 'no fields' message")
 
     def test_help_commands(self):
         """Test help commands work."""

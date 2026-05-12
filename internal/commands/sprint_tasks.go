@@ -244,6 +244,27 @@ func sprintAddTasks(args []string) error {
 		return fmt.Errorf("%w: cannot add tasks to sprint #%d: sprint is CLOSED", utils.ErrInvalidInput, sprintID)
 	}
 
+	// Fail-fast: confirm every task exists before any mutation. Without this,
+	// the SQLite FOREIGN KEY constraint surfaces a generic DB error (exit 1)
+	// instead of the documented utils.ErrNotFound (exit 4).
+	existing, err := database.GetTasks(ctx, taskIDs)
+	if err != nil {
+		return err
+	}
+	if len(existing) != len(taskIDs) {
+		found := make(map[int]struct{}, len(existing))
+		for i := range existing {
+			found[existing[i].ID] = struct{}{}
+		}
+		missing := make([]int, 0, len(taskIDs)-len(existing))
+		for _, id := range taskIDs {
+			if _, ok := found[id]; !ok {
+				missing = append(missing, id)
+			}
+		}
+		return fmt.Errorf("%w: task(s) not found: %v", utils.ErrNotFound, missing)
+	}
+
 	// Enforce capacity limit when max_tasks is set.
 	if sprint.MaxTasks != nil {
 		activeTasks, activeErr := database.GetActiveSprintTasks(ctx, sprintID)
