@@ -31,7 +31,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/commands"
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
@@ -115,10 +114,11 @@ func handleError(err error) int {
 		return ExitSuccess
 	}
 
-	msg := err.Error()
-	printError(msg)
+	printError(err.Error())
 
-	// Map sentinel errors to exit codes using errors.Is
+	// Map sentinel errors to exit codes using errors.Is.
+	// All errors raised by internal packages go through utils.Err* sentinels
+	// with %w wrapping, so this switch is exhaustive in practice.
 	switch {
 	case errors.Is(err, utils.ErrNotFound):
 		return ExitNotFound
@@ -131,22 +131,7 @@ func handleError(err error) int {
 	case errors.Is(err, utils.ErrRequired):
 		return ExitMisuse
 	}
-
-	// Fallback to string matching for wrapped errors not yet using sentinel errors
-	switch {
-	case strings.Contains(msg, "not found"):
-		return ExitNotFound
-	case strings.Contains(msg, "already exists"):
-		return ExitExists
-	case strings.Contains(msg, "invalid"):
-		return ExitInvalidData
-	case strings.Contains(msg, "required"):
-		return ExitMisuse
-	case strings.Contains(msg, "no roadmap"):
-		return ExitNoRoadmap
-	default:
-		return ExitFailure
-	}
+	return ExitFailure
 }
 
 // printError prints an error message to stderr.

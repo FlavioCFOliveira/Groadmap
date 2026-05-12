@@ -60,25 +60,26 @@ func TestHandleError_WrappedErrors(t *testing.T) {
 	}
 }
 
-func TestHandleError_StringMatching(t *testing.T) {
+func TestHandleError_UnwrappedFallsBackToFailure(t *testing.T) {
+	// Errors that do not wrap a utils.Err* sentinel collapse to ExitFailure.
+	// Internal callers must always wrap with %w; this guards against drift.
 	tests := []struct {
-		name     string
-		err      error
-		expected int
+		name string
+		err  error
 	}{
-		{"not found in message", errors.New("resource not found in database"), ExitNotFound},
-		{"already exists in message", errors.New("item already exists"), ExitExists},
-		{"invalid in message", errors.New("invalid input provided"), ExitInvalidData},
-		{"required in message", errors.New("field is required"), ExitMisuse},
-		{"no roadmap in message", errors.New("no roadmap selected"), ExitNoRoadmap},
-		{"generic error", errors.New("something went wrong"), ExitFailure},
+		{"plain not-found text", errors.New("resource not found in database")},
+		{"plain already-exists text", errors.New("item already exists")},
+		{"plain invalid text", errors.New("invalid input provided")},
+		{"plain required text", errors.New("field is required")},
+		{"plain no-roadmap text", errors.New("no roadmap selected")},
+		{"generic error", errors.New("something went wrong")},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			code := handleError(tt.err)
-			if code != tt.expected {
-				t.Errorf("handleError(%v) = %d, want %d", tt.err, code, tt.expected)
+			if code != ExitFailure {
+				t.Errorf("handleError(%v) = %d, want %d (ExitFailure)", tt.err, code, ExitFailure)
 			}
 		})
 	}
