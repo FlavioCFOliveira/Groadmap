@@ -78,25 +78,41 @@ func (fp *FlagParser) Parse(args []string) (*ParseResult, error) {
 			continue
 		}
 
-		// Find matching flag definition
-		def := fp.findDef(arg)
+		// Support GNU-style "--flag=value" by splitting on the first '='.
+		// The right-hand side becomes the value, the left-hand side the flag.
+		flagName, inlineValue, hasInline := strings.Cut(arg, "=")
+
+		def := fp.findDef(flagName)
 		if def == nil {
-			return nil, fmt.Errorf("%w: unknown flag: %s", utils.ErrInvalidInput, arg)
+			return nil, fmt.Errorf("%w: unknown flag: %s", utils.ErrInvalidInput, flagName)
 		}
 
-		// Handle boolean flags (no value required)
+		// Handle boolean flags (no value required, but '--flag=true|false' tolerated)
 		if def.Type == "bool" {
-			result.Flags[def.Field] = true
+			if hasInline {
+				parsed, err := fp.parseValue(inlineValue, "bool")
+				if err != nil {
+					return nil, fmt.Errorf("%w: invalid value for %s: %v", utils.ErrInvalidInput, flagName, err)
+				}
+				result.Flags[def.Field] = parsed
+			} else {
+				result.Flags[def.Field] = true
+			}
 			continue
 		}
 
-		// Get value for non-boolean flags
-		if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
-			return nil, fmt.Errorf("%w: %s requires a value", utils.ErrRequired, arg)
+		// Get value for non-boolean flags. Either the next arg, or the
+		// inline value from "--flag=value".
+		var value string
+		if hasInline {
+			value = inlineValue
+		} else {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				return nil, fmt.Errorf("%w: %s requires a value", utils.ErrRequired, flagName)
+			}
+			value = args[i+1]
+			i++
 		}
-
-		value := args[i+1]
-		i++
 
 		// Parse and validate value
 		parsed, err := fp.parseValue(value, def.Type)
