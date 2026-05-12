@@ -65,6 +65,16 @@ func HandleTask(args []string) error {
 func printTaskHelp() {
 	fmt.Print(`Usage: rmp task [command] [arguments] [options]
 
+Valid status values (for --status filter and 'stat' setter):
+  BACKLOG, SPRINT, DOING, TESTING, COMPLETED
+  Note: SPRINT is only reached via 'sprint add-tasks'; 'task stat <id> SPRINT' is rejected (exit 6).
+
+Valid task types (for --type filter and 'create'/'edit' setter):
+  USER_STORY, TASK, BUG, SUB_TASK, EPIC, REFACTOR, CHORE, SPIKE, DESIGN_UX, IMPROVEMENT
+
+Numeric ranges:
+  --priority, --severity      0-9 (0 = lowest, 9 = highest)
+
 Commands:
   list, ls [OPTIONS]              			List tasks
   create, new [OPTIONS]           			Create a new task

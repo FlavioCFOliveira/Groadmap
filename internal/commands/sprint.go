@@ -70,6 +70,13 @@ func HandleSprint(args []string) error {
 func printSprintHelp() {
 	fmt.Print(`Usage: rmp sprint [command] [arguments] [options]
 
+Valid sprint status values (for --status filter):
+  PENDING (never started), OPEN (active), CLOSED
+
+Sprint lifecycle:
+  create -> start (PENDING->OPEN) -> close (OPEN->CLOSED) -> reopen (CLOSED->OPEN)
+  At most one sprint can be OPEN at any time.
+
 Commands:
   list, ls [OPTIONS]              			List sprints
   create, new [OPTIONS]           			Create a new sprint

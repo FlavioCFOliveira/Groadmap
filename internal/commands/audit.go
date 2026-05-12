@@ -204,24 +204,51 @@ func auditStats(args []string) error {
 func printAuditHelp() {
 	fmt.Print(`Usage: rmp audit [command] [arguments] [options]
 
-Commands:
-  list, ls [OPTIONS]              List audit entries
-  history, hist <type> <id>       Show entity history
-  stats [OPTIONS]                 Show audit statistics
+Valid entity types (for --entity-type filter and 'history' arg):
+  TASK, SPRINT
 
-Options:
+Valid operations (for --operation filter):
+  Task ops:   TASK_CREATE, TASK_UPDATE, TASK_DELETE, TASK_STATUS_CHANGE,
+              TASK_PRIORITY_CHANGE, TASK_SEVERITY_CHANGE, TASK_TYPE_CHANGE,
+              TASK_REOPEN, TASK_ASSIGN, TASK_UNASSIGN,
+              TASK_ADD_DEP, TASK_REMOVE_DEP
+  Sprint ops: SPRINT_CREATE, SPRINT_UPDATE, SPRINT_DELETE,
+              SPRINT_START, SPRINT_CLOSE, SPRINT_REOPEN,
+              SPRINT_ADD_TASK, SPRINT_REMOVE_TASK, SPRINT_MOVE_TASK,
+              SPRINT_REORDER_TASKS, SPRINT_TASK_MOVE_POSITION, SPRINT_TASK_SWAP
+
+Date format (--since / --until):
+  ISO 8601 with millisecond precision and UTC suffix:
+  YYYY-MM-DDTHH:mm:ss.sssZ   (e.g. 2026-01-01T00:00:00.000Z)
+  RFC 3339 variants are also accepted.
+
+Commands:
+  list, ls [OPTIONS]              List audit entries (newest first)
+  history, hist <type> <id>       Show full history for one entity (TASK or SPRINT)
+  stats [OPTIONS]                 Show aggregate audit counts
+
+Options (shared):
   -r, --roadmap <name>            REQUIRED. Target roadmap.
-  -o, --operation <type>          Filter by operation
-  -e, --entity-type <type>        Filter by entity type
-  --entity-id <id>                Filter by entity ID
-  --since <date>                  Filter from date (ISO 8601)
-  --until <date>                  Filter until date (ISO 8601)
-  -l, --limit <n>                 Limit results (default: 100)
   -h, --help                      Show this help message
+
+Options (list):
+  -o, --operation <type>          Filter by operation (see Valid operations above)
+  -e, --entity-type <type>        Filter by entity type (TASK or SPRINT)
+  --entity-id <id>                Filter by specific entity numeric id
+  --since <date>                  Lower bound on performed_at (inclusive)
+  --until <date>                  Upper bound on performed_at (inclusive)
+  -l, --limit <n>                 Maximum rows returned (default: 100)
+
+Options (stats):
+  --since <date>                  Aggregation window start
+  --until <date>                  Aggregation window end
 
 Examples:
   rmp audit list -r myproject
+  rmp audit list -r myproject -o TASK_STATUS_CHANGE -e TASK
+  rmp audit list -r myproject --since 2026-01-01 --until 2026-01-31 -l 500
   rmp audit history -r myproject TASK 1
+  rmp audit history -r myproject SPRINT 3
   rmp audit stats -r myproject --since 2026-01-01T00:00:00.000Z
 `)
 }
