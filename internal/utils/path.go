@@ -107,34 +107,34 @@ func VerifyPermissions(path string, expectedPerm os.FileMode) error {
 //   - Not be a Windows reserved name (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
 func ValidateRoadmapName(name string) error {
 	if name == "" {
-		return ErrRoadmapNameEmpty
+		return fmt.Errorf("%w: %w", ErrValidation, ErrRoadmapNameEmpty)
 	}
 
 	// Check maximum length
 	if len(name) > MaxRoadmapNameLength {
-		return fmt.Errorf("must not exceed %d characters (got %d): %w", MaxRoadmapNameLength, len(name), ErrRoadmapNameTooLong)
+		return fmt.Errorf("%w: must not exceed %d characters (got %d): %w", ErrValidation, MaxRoadmapNameLength, len(name), ErrRoadmapNameTooLong)
 	}
 
 	// Check for flag confusion (names starting with '-')
 	if name[0] == '-' {
-		return ErrRoadmapNameStartsWithHyphen
+		return fmt.Errorf("%w: %w", ErrValidation, ErrRoadmapNameStartsWithHyphen)
 	}
 
 	// Check against Windows reserved names (case-insensitive)
 	upperName := strings.ToUpper(name)
 	if WindowsReservedNames[upperName] {
-		return fmt.Errorf("%q: %w", name, ErrRoadmapNameReserved)
+		return fmt.Errorf("%w: %q: %w", ErrValidation, name, ErrRoadmapNameReserved)
 	}
 
 	// Check for extension variants of reserved names (e.g., CON.txt)
 	baseName := strings.SplitN(upperName, ".", 2)[0]
 	if WindowsReservedNames[baseName] {
-		return fmt.Errorf("%q: %w", name, ErrRoadmapNameReserved)
+		return fmt.Errorf("%w: %q: %w", ErrValidation, name, ErrRoadmapNameReserved)
 	}
 
 	// Validate against regex
 	if !ValidRoadmapNameRegex.MatchString(name) {
-		return fmt.Errorf("%q must contain only lowercase letters, numbers, underscores, and hyphens: %w", name, ErrInvalidRoadmapName)
+		return fmt.Errorf("%w: %q must contain only lowercase letters, numbers, underscores, and hyphens: %w", ErrValidation, name, ErrInvalidRoadmapName)
 	}
 
 	return nil
