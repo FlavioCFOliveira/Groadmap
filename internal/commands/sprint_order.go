@@ -3,7 +3,6 @@ package commands
 import (
 	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
@@ -53,20 +52,16 @@ func sprintReorder(args []string) error {
 		return err
 	}
 
-	// Parse and validate task IDs
-	idStrs := strings.Split(remaining[1], ",")
-	var taskIDs []int
-	seen := make(map[int]bool)
-	for _, s := range idStrs {
-		id, err := utils.ValidateIDString(strings.TrimSpace(s), "task")
-		if err != nil {
-			return err
-		}
+	taskIDs, err := utils.ParseCommaSeparatedIDs(remaining[1], "task")
+	if err != nil {
+		return err
+	}
+	seen := make(map[int]bool, len(taskIDs))
+	for _, id := range taskIDs {
 		if seen[id] {
 			return fmt.Errorf("%w: duplicate task ID %d", utils.ErrInvalidInput, id)
 		}
 		seen[id] = true
-		taskIDs = append(taskIDs, id)
 	}
 
 	database, err := db.OpenExisting(roadmapName)

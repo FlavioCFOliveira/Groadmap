@@ -23,15 +23,9 @@ func taskRemove(args []string) error {
 		return fmt.Errorf("%w: task ID(s) required", utils.ErrRequired)
 	}
 
-	// Parse and validate IDs (comma-separated)
-	idStrs := strings.Split(remaining[0], ",")
-	var ids []int
-	for _, s := range idStrs {
-		id, err := utils.ValidateIDString(strings.TrimSpace(s), "task")
-		if err != nil {
-			return err
-		}
-		ids = append(ids, id)
+	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], "task")
+	if err != nil {
+		return err
 	}
 
 	database, err := db.OpenExisting(roadmapName)
@@ -168,15 +162,9 @@ func taskSetStatus(args []string) error {
 		return fmt.Errorf("%w: task ID(s) and status required", utils.ErrRequired)
 	}
 
-	// Parse IDs
-	idStrs := strings.Split(remaining[0], ",")
-	var ids []int
-	for _, s := range idStrs {
-		id, err := strconv.Atoi(strings.TrimSpace(s))
-		if err != nil {
-			return fmt.Errorf("%w: invalid task ID: %s", utils.ErrInvalidInput, s)
-		}
-		ids = append(ids, id)
+	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], "task")
+	if err != nil {
+		return err
 	}
 
 	// Parse status
@@ -349,14 +337,9 @@ func taskReopen(args []string) error {
 		return fmt.Errorf("%w: task ID(s) required", utils.ErrRequired)
 	}
 
-	idStrs := strings.Split(remaining[0], ",")
-	ids := make([]int, 0, len(idStrs))
-	for _, s := range idStrs {
-		id, err := utils.ValidateIDString(strings.TrimSpace(s), "task")
-		if err != nil {
-			return err
-		}
-		ids = append(ids, id)
+	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], "task")
+	if err != nil {
+		return err
 	}
 
 	database, err := db.OpenExisting(roadmapName)
@@ -460,15 +443,9 @@ func taskSetPriority(args []string) error {
 		return fmt.Errorf("%w: task ID(s) and priority required", utils.ErrRequired)
 	}
 
-	// Parse IDs
-	idStrs := strings.Split(remaining[0], ",")
-	var ids []int
-	for _, s := range idStrs {
-		id, err := strconv.Atoi(strings.TrimSpace(s))
-		if err != nil {
-			return fmt.Errorf("%w: invalid task ID: %s", utils.ErrInvalidInput, s)
-		}
-		ids = append(ids, id)
+	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], "task")
+	if err != nil {
+		return err
 	}
 
 	// Parse priority
@@ -528,15 +505,9 @@ func taskSetSeverity(args []string) error {
 		return fmt.Errorf("%w: task ID(s) and severity required", utils.ErrRequired)
 	}
 
-	// Parse IDs
-	idStrs := strings.Split(remaining[0], ",")
-	var ids []int
-	for _, s := range idStrs {
-		id, err := strconv.Atoi(strings.TrimSpace(s))
-		if err != nil {
-			return fmt.Errorf("%w: invalid task ID: %s", utils.ErrInvalidInput, s)
-		}
-		ids = append(ids, id)
+	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], "task")
+	if err != nil {
+		return err
 	}
 
 	// Parse severity

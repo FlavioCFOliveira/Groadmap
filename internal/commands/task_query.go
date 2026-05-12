@@ -188,15 +188,9 @@ func taskGet(args []string) error {
 		return fmt.Errorf("%w: task ID(s) required", utils.ErrRequired)
 	}
 
-	// Parse and validate IDs (comma-separated)
-	idStrs := strings.Split(remaining[0], ",")
-	var ids []int
-	for _, s := range idStrs {
-		id, err := utils.ValidateIDString(strings.TrimSpace(s), "task")
-		if err != nil {
-			return err
-		}
-		ids = append(ids, id)
+	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], "task")
+	if err != nil {
+		return err
 	}
 
 	database, err := db.OpenExisting(roadmapName)

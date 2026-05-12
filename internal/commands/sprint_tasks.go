@@ -157,20 +157,6 @@ func sprintStats(args []string) error {
 	return utils.PrintJSON(stats)
 }
 
-// parseTaskIDs parses comma-separated task IDs from a string.
-func parseTaskIDs(idStr string) ([]int, error) {
-	idStrs := strings.Split(idStr, ",")
-	taskIDs := make([]int, 0, len(idStrs))
-	for _, s := range idStrs {
-		id, err := utils.ValidateIDString(strings.TrimSpace(s), "task")
-		if err != nil {
-			return nil, err
-		}
-		taskIDs = append(taskIDs, id)
-	}
-	return taskIDs, nil
-}
-
 // logAuditForTasks logs audit entries for multiple tasks in a sprint using batch insert.
 func logAuditForTasks(ctx context.Context, database *db.DB, sprintID int, op models.AuditOperation, count int) error {
 	if count == 0 {
@@ -236,7 +222,7 @@ func sprintAddTasks(args []string) error {
 		return err
 	}
 
-	taskIDs, err := parseTaskIDs(strings.Join(remaining[1:], ","))
+	taskIDs, err := utils.ParseCommaSeparatedIDs(strings.Join(remaining[1:], ","), "task")
 	if err != nil {
 		return err
 	}
@@ -292,15 +278,9 @@ func sprintRemoveTasks(args []string) error {
 		return err
 	}
 
-	// Parse and validate task IDs
-	idStrs := strings.Split(remaining[1], ",")
-	var taskIDs []int
-	for _, s := range idStrs {
-		id, err := utils.ValidateIDString(strings.TrimSpace(s), "task")
-		if err != nil {
-			return err
-		}
-		taskIDs = append(taskIDs, id)
+	taskIDs, err := utils.ParseCommaSeparatedIDs(remaining[1], "task")
+	if err != nil {
+		return err
 	}
 
 	database, err := db.OpenExisting(roadmapName)
@@ -388,7 +368,7 @@ func sprintMoveTasks(args []string) error {
 		return err
 	}
 
-	taskIDs, err := parseTaskIDs(remaining[2])
+	taskIDs, err := utils.ParseCommaSeparatedIDs(remaining[2], "task")
 	if err != nil {
 		return err
 	}

@@ -49,6 +49,30 @@ func ValidateIDList(ids []int, entity string) error {
 	return nil
 }
 
+// ParseCommaSeparatedIDs parses a comma-separated list of IDs and validates
+// each one through ValidateIDString. Returns the parsed slice or the first
+// validation error encountered.
+//
+// Example:
+//
+//	ids, err := ParseCommaSeparatedIDs("1,2, 3", "task")
+//	// ids == []int{1, 2, 3}
+func ParseCommaSeparatedIDs(s string, entity string) ([]int, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, fmt.Errorf("%w: %s ID(s) required", ErrRequired, entity)
+	}
+	parts := strings.Split(s, ",")
+	ids := make([]int, 0, len(parts))
+	for _, p := range parts {
+		id, err := ValidateIDString(strings.TrimSpace(p), entity)
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
 // ValidateIDString parses and validates an ID from a string.
 // Returns the parsed ID if valid, or an error if invalid.
 //
