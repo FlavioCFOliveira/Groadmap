@@ -99,29 +99,51 @@ class TestTaskStateMachine:
         print("✓ TESTING to COMPLETED transition test passed")
 
     def test_completed_to_backlog_transition(self):
-        """Test COMPLETED -> BACKLOG transition (reopen)."""
+        """Test COMPLETED -> BACKLOG transition (reopen).
+
+        Per SPEC/STATE_MACHINE.md line 116, reopening must clear EVERY
+        lifecycle field set during the forward path: started_at,
+        tested_at, closed_at, and completion_summary. Earlier the test
+        only checked closed_at, so regressions on the other three
+        could slip through.
+        """
         roadmap = self.test.create_roadmap()
 
         task_id = self.test.create_task(roadmap, "Test task", "Functional", "Technical", "Criteria")
         sprint_id = self.test.create_sprint(roadmap, "Sprint 1")
 
-        # Complete the task
+        # Complete the task through every state, attaching a real summary.
         self.test.run_cmd([
             "sprint", "add-tasks", "-r", roadmap, str(sprint_id), str(task_id)
         ])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED"])
+        self.test.run_cmd([
+            "task", "stat", "-r", roadmap, str(task_id), "COMPLETED",
+            "--summary", "Shipped behind feature flag after manual QA on staging.",
+        ])
 
-        # Reopen to BACKLOG
+        # Confirm the forward path populated all four fields before reopen.
+        before = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])[0]
+        assert before["started_at"] is not None, "started_at must be set after DOING"
+        assert before["tested_at"] is not None, "tested_at must be set after TESTING"
+        assert before["closed_at"] is not None, "closed_at must be set after COMPLETED"
+        assert before["completion_summary"] is not None, "completion_summary must be stored when supplied"
+
+        # Reopen to BACKLOG.
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "BACKLOG"])
         self.test.assert_task_status(roadmap, task_id, "BACKLOG")
 
-        # Verify closed_at is cleared
-        result = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])
-        assert result[0]["closed_at"] is None
+        # Reopen must wipe every lifecycle timestamp and the completion summary.
+        after = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])[0]
+        assert after["started_at"] is None, f"started_at must be NULL after reopen; got {after['started_at']}"
+        assert after["tested_at"] is None, f"tested_at must be NULL after reopen; got {after['tested_at']}"
+        assert after["closed_at"] is None, f"closed_at must be NULL after reopen; got {after['closed_at']}"
+        assert after["completion_summary"] is None, (
+            f"completion_summary must be NULL after reopen; got {after['completion_summary']!r}"
+        )
 
-        print("✓ COMPLETED to BACKLOG transition test passed")
+        print("✓ COMPLETED to BACKLOG clears started_at, tested_at, closed_at, completion_summary")
 
     def test_manual_sprint_transition_rejected(self):
         """Test that manual `task stat <id> SPRINT` is rejected per SPEC/STATE_MACHINE.md.
