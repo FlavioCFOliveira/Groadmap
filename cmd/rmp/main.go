@@ -31,6 +31,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/commands"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
@@ -55,7 +57,22 @@ const (
 	ExitSigint        = 130
 )
 
+// installSignalHandler maps SIGINT/SIGTERM to the canonical exit code 130
+// defined in SPEC/ARCHITECTURE.md § Exit Codes. Without an explicit handler
+// the Go runtime lets the kernel terminate the process by signal, which
+// produces a platform-dependent status that is not the documented 130.
+func installSignalHandler() {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		os.Exit(ExitSigint)
+	}()
+}
+
 func main() {
+	installSignalHandler()
+
 	if len(os.Args) < 2 {
 		printHelp()
 		os.Exit(ExitSuccess)
