@@ -191,7 +191,9 @@ func (db *DB) ListTasks(ctx context.Context, filter *TaskListFilter) ([]models.T
 		        t.priority, t.severity,
 		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count` + taskDepsSelect + `
 		      FROM tasks t WHERE 1=1`
-	args := make([]any, 0, 8)
+	// 7 filters + LIMIT = up to 8 placeholders; +1 to absorb a future
+	// arg without forcing an extra grow.
+	args := make([]any, 0, 9)
 
 	if filter.Status != nil {
 		query += " AND t.status = ?"
