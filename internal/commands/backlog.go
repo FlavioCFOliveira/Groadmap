@@ -31,6 +31,18 @@ func HandleBacklog(args []string) error {
 		return nil
 	}
 
+	// Subcommand-level help.
+	if hasHelpFlag(args[1:]) {
+		switch subcommand {
+		case "list", "ls":
+			printBacklogListHelp()
+			return nil
+		case "show-next":
+			printBacklogShowNextHelp()
+			return nil
+		}
+	}
+
 	switch subcommand {
 	case "list", "ls":
 		return backlogList(args[1:])
@@ -39,6 +51,77 @@ func HandleBacklog(args []string) error {
 	default:
 		return fmt.Errorf("%w: unknown backlog subcommand: %s", utils.ErrInvalidInput, subcommand)
 	}
+}
+
+// printBacklogListHelp — `rmp backlog list`.
+func printBacklogListHelp() {
+	fmt.Print(`Usage: rmp backlog list -r <roadmap> [filters]
+
+Lists every task currently in BACKLOG status. Equivalent to
+'rmp task list -r <roadmap> --status BACKLOG' but with a focused option
+set for the planning view.
+
+Aliases: ls.
+
+Required:
+  -r, --roadmap <name>            Target roadmap
+
+Filters:
+  -p, --priority <min>            priority >= <min> (0-9)
+  -y, --type <type>               One of: USER_STORY, TASK, BUG, SUB_TASK,
+                                  EPIC, REFACTOR, CHORE, SPIKE, DESIGN_UX, IMPROVEMENT
+
+Sorting and paging:
+  --sort <field>                  priority (default) | created | status | severity
+  -l, --limit <n>                 Maximum entries returned (1-1000)
+
+Output (stdout JSON):
+  Array of task objects; status is always BACKLOG. See 'rmp task --help'
+  for the full task-object key list.
+
+Exit codes:
+  0  Success
+  3  Missing -r
+  6  Bad --type, --sort, --priority, or --limit value
+
+Examples:
+  rmp backlog list -r myproject
+  rmp backlog list -r myproject --priority 7
+  rmp backlog list -r myproject --type BUG --sort severity
+  rmp backlog list -r myproject --sort created --limit 50
+`)
+}
+
+// printBacklogShowNextHelp — `rmp backlog show-next`.
+func printBacklogShowNextHelp() {
+	fmt.Print(`Usage: rmp backlog show-next -r <roadmap> [count]
+
+Returns the top-<count> BACKLOG tasks by priority DESC, then created_at
+ASC for ties. Designed for sprint planning ("what should we pull in next?").
+
+Compared to:
+  - 'rmp task next': top tasks from the OPEN sprint (not from BACKLOG).
+  - 'rmp backlog list --sort priority': same ordering but no implicit
+    limit; useful when filtering and paging are needed.
+
+Required:
+  -r, --roadmap <name>            Target roadmap
+
+Optional:
+  [count]                         Maximum tasks to return (default 5, max 1000)
+
+Output (stdout JSON):
+  Array of task objects (status BACKLOG, ordered by priority DESC).
+
+Exit codes:
+  0  Success
+  3  Missing -r
+  6  Non-positive or non-numeric <count>
+
+Examples:
+  rmp backlog show-next -r myproject
+  rmp backlog show-next -r myproject 10
+`)
 }
 
 // backlogList lists tasks with status BACKLOG, with optional filters.

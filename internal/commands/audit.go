@@ -23,6 +23,21 @@ func HandleAudit(args []string) error {
 		return nil
 	}
 
+	// Subcommand-level help.
+	if hasHelpFlag(args[1:]) {
+		switch subcommand {
+		case "list", "ls":
+			printAuditListHelp()
+			return nil
+		case "history", "hist":
+			printAuditHistoryHelp()
+			return nil
+		case "stats":
+			printAuditStatsHelp()
+			return nil
+		}
+	}
+
 	switch subcommand {
 	case "list", "ls":
 		return auditList(args[1:])
@@ -33,6 +48,113 @@ func HandleAudit(args []string) error {
 	default:
 		return fmt.Errorf("%w: unknown audit subcommand: %s", utils.ErrInvalidInput, subcommand)
 	}
+}
+
+// printAuditListHelp — `rmp audit list`.
+func printAuditListHelp() {
+	fmt.Print(`Usage: rmp audit list -r <roadmap> [filters]
+
+Returns audit-log entries for the roadmap, newest first (performed_at
+DESC). Filters compose with AND.
+
+Aliases: ls.
+
+Required:
+  -r, --roadmap <name>            Target roadmap
+
+Filters:
+  -o, --operation <op>            Filter by operation. See 'rmp audit --help'
+                                  for the full operation enum.
+  -e, --entity-type <type>        TASK or SPRINT
+  --entity-id <id>                Integer id within the entity type
+  --since <date>                  Inclusive lower bound on performed_at
+                                  (ISO 8601 with millisecond precision, e.g.
+                                  2026-01-01T00:00:00.000Z; date-only also accepted)
+  --until <date>                  Inclusive upper bound
+  -l, --limit <n>                 Maximum entries returned (default 100)
+
+Output (stdout JSON):
+  Array of audit entries:
+    [{ "id": <int>, "operation": "...", "entity_type": "TASK|SPRINT",
+       "entity_id": <int>, "performed_at": "<ISO 8601>" }, ...]
+
+Exit codes:
+  0  Success
+  3  Missing -r
+  6  Invalid operation, entity-type, or date format
+
+Examples:
+  rmp audit list -r myproject
+  rmp audit list -r myproject -o TASK_STATUS_CHANGE -e TASK
+  rmp audit list -r myproject --entity-id 42 --since 2026-01-01
+  rmp audit list -r myproject --since 2026-01-01 --until 2026-01-31 -l 500
+`)
+}
+
+// printAuditHistoryHelp — `rmp audit history`.
+func printAuditHistoryHelp() {
+	fmt.Print(`Usage: rmp audit history -r <roadmap> <entity-type> <entity-id>
+
+Returns every audit entry recorded for a single entity, newest first.
+Equivalent to 'rmp audit list -r <roadmap> -e <entity-type> --entity-id <id>'
+without pagination.
+
+Aliases: hist.
+
+Required:
+  -r, --roadmap <name>            Target roadmap
+  <entity-type>                   TASK or SPRINT
+  <entity-id>                     Integer id within the entity type
+
+Output (stdout JSON):
+  Array of audit entries (same shape as 'audit list').
+
+Exit codes:
+  0  Success
+  3  Missing -r
+  6  Bad entity-type value or non-integer id
+
+Examples:
+  rmp audit history -r myproject TASK 1
+  rmp audit history -r myproject SPRINT 3
+  rmp audit hist -r myproject TASK 42
+`)
+}
+
+// printAuditStatsHelp — `rmp audit stats`.
+func printAuditStatsHelp() {
+	fmt.Print(`Usage: rmp audit stats -r <roadmap> [--since <date>] [--until <date>]
+
+Aggregates the audit log over an optional time window: total entries,
+the first/last timestamps observed, and per-operation/per-entity-type
+counts.
+
+Required:
+  -r, --roadmap <name>            Target roadmap
+
+Optional:
+  --since <date>                  Aggregation window start (inclusive)
+  --until <date>                  Aggregation window end (inclusive)
+
+Output (stdout JSON):
+  {
+    "total_entries": <int>,
+    "first_entry_at": "<ISO 8601 or empty>",
+    "last_entry_at":  "<ISO 8601 or empty>",
+    "by_operation":  {"TASK_CREATE": <int>, "TASK_UPDATE": <int>, ...},
+    "by_entity_type": {"TASK": <int>, "SPRINT": <int>}
+  }
+
+Exit codes:
+  0  Success
+  3  Missing -r
+  6  Invalid --since/--until date
+
+Examples:
+  rmp audit stats -r myproject
+  rmp audit stats -r myproject --since 2026-01-01T00:00:00.000Z
+  rmp audit stats -r myproject --since 2026-01-01 --until 2026-01-31
+`)
 }
 
 // auditList lists audit entries with filters.
