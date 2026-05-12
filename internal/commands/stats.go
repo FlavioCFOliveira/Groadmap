@@ -68,6 +68,11 @@ JSON Output:
     "average_velocity": 2.5
   }
 
+Exit codes:
+  0   Success
+  3   No roadmap specified (-r missing)
+  4   Roadmap not found
+
 Examples:
   rmp stats -r myproject
 `)

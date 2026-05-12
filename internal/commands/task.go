@@ -144,6 +144,14 @@ Output (stdout JSON):
   started_at, tested_at, closed_at, completion_summary, parent_task_id,
   priority, severity, subtask_count, depends_on, blocks.
 
+Exit codes:
+  0   Success
+  2   Misuse (missing required flag, bad syntax)
+  3   No roadmap specified (-r missing)
+  4   Task not found
+  6   Validation error (bad enum, out-of-range number, oversized field,
+       invalid state transition, subtask/dependency guard, etc.)
+
 Examples:
   rmp task list -r myproject
   rmp task list -r myproject --status BACKLOG --priority 5 --sort priority

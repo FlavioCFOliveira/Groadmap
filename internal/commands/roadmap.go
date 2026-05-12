@@ -178,13 +178,27 @@ func requireRoadmap(args []string) (string, []string, error) {
 func printRoadmapHelp() {
 	fmt.Print(`Usage: rmp roadmap [command] [arguments]
 
+Roadmap names must match the regex ^[a-z0-9_-]+$ and not exceed 50 characters.
+Each roadmap is stored as a SQLite database in ~/.roadmaps/<name>.db (mode 0600).
+
 Commands:
   list, ls                       List all roadmaps
   create, new <name>             Create a new roadmap
-  remove, rm, delete <name>      Remove a roadmap
+  remove, rm, delete <name>      Remove a roadmap (irreversible)
 
 Options:
   -h, --help                     Show this help message
+
+Output (stdout JSON):
+  list      Array of objects { "name", "path", "size" }
+  create    {"name": "<name>"}
+  remove    Empty (exit 0 on success)
+
+Exit codes:
+  0   Success
+  4   Roadmap not found (remove only)
+  5   Roadmap already exists (create only)
+  6   Invalid roadmap name (regex or length violation)
 
 Examples:
   rmp roadmap list

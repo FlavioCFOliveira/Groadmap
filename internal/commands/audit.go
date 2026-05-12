@@ -249,6 +249,11 @@ Output (stdout JSON):
   stats               AuditStats: total_entries, first_entry_at, last_entry_at,
                        by_operation (map), by_entity_type (map).
 
+Exit codes:
+  0   Success
+  3   No roadmap specified (-r missing)
+  6   Validation error (bad operation/entity-type/date format)
+
 Examples:
   rmp audit list -r myproject
   rmp audit list -r myproject -o TASK_STATUS_CHANGE -e TASK

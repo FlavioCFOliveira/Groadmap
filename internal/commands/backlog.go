@@ -165,6 +165,11 @@ Output (stdout JSON):
   Both subcommands return an array of task objects with status == BACKLOG.
   Task object shape matches 'rmp task --help' (Output section).
 
+Exit codes:
+  0   Success
+  3   No roadmap specified (-r missing)
+  6   Validation error (bad type/sort/limit/count value)
+
 Examples:
   rmp backlog list -r groadmap
   rmp backlog list --priority 7 -r groadmap

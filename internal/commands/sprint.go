@@ -136,6 +136,14 @@ Output (stdout JSON):
   Sprint object keys: id, status, description, created_at, started_at, closed_at,
   max_tasks, tasks (array of int), task_count.
 
+Exit codes:
+  0   Success
+  2   Misuse (missing required arg, bad syntax)
+  3   No roadmap specified (-r missing)
+  4   Sprint not found
+  6   Validation error (bad enum, --max-tasks overflow, close-without-force,
+       attempting to open while another sprint is OPEN, etc.)
+
 Examples:
   rmp sprint list -r myproject
   rmp sprint create -r myproject -d "Sprint 1"
