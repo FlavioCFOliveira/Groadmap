@@ -85,10 +85,10 @@ Commands:
   blocking <id>                     		List tasks that task <id> is blocking (tasks that depend on it)
 
 Options:
-  -r, --roadmap <name>           			Roadmap name (or use default)
+  -r, --roadmap <name>           			REQUIRED. Target roadmap.
   -s, --status <state>            			Filter by status
-  -p, --priority <n>              			Filter/set priority (0-9)
-  --severity <n>                  			Filter/set severity (0-9)
+  -p, --priority <n>              			Filter (>=n) on 'list'; setter on 'prio' (0-9)
+  --severity <n>                  			Filter (>=n) on 'list'; setter on 'sev' (0-9)
   -t, --title <text>              			Task title
   -fr, --functional-requirements <text> 	Functional requirements (Why?)
   -tr, --technical-requirements <text>  	Technical requirements (How?)
@@ -101,6 +101,6 @@ Options:
 Examples:
   rmp task list -r myproject
   rmp task create -r myproject -t "Fix bug" -fr "User can login" -tr "Update auth" -ac "Login works"
-  rmp task stat 1,2,3 DOING
+  rmp task stat -r myproject 1,2,3 DOING
 `)
 }

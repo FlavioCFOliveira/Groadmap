@@ -93,7 +93,7 @@ Commands:
   bottom, btm <sprint> <task>   			Move task to bottom (last position)
 
 Options:
-  -r, --roadmap <name>           			Roadmap name (or use default)
+  -r, --roadmap <name>           			REQUIRED. Target roadmap.
   -d, --description <text>      			Sprint description
   --status <state>               			Filter by status
   --order-by-priority             			Sort by priority (highest first)
@@ -102,12 +102,12 @@ Options:
 Examples:
   rmp sprint list -r myproject
   rmp sprint create -r myproject -d "Sprint 1"
-  rmp sprint start 1
-  rmp sprint add-tasks 1 1,2,3
-  rmp sprint reorder 1 3,1,2
-  rmp sprint move-to 1 5 0
-  rmp sprint swap 1 3 5
-  rmp sprint top 1 5
-  rmp sprint bottom 1 5
+  rmp sprint start -r myproject 1
+  rmp sprint add-tasks -r myproject 1 1,2,3
+  rmp sprint reorder -r myproject 1 3,1,2
+  rmp sprint move-to -r myproject 1 5 0
+  rmp sprint swap -r myproject 1 3 5
+  rmp sprint top -r myproject 1 5
+  rmp sprint bottom -r myproject 1 5
 `)
 }

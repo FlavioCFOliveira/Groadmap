@@ -46,7 +46,7 @@ Description:
   and average velocity across the last 5 closed sprints.
 
 Options:
-  -r, --roadmap <name>    	Roadmap name (or use default)
+  -r, --roadmap <name>    	REQUIRED. Target roadmap.
   -h, --help             	Show this help message
 
 JSON Output:
@@ -70,6 +70,5 @@ JSON Output:
 
 Examples:
   rmp stats -r myproject
-  rmp stats
 `)
 }

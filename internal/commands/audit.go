@@ -210,7 +210,7 @@ Commands:
   stats [OPTIONS]                 Show audit statistics
 
 Options:
-  -r, --roadmap <name>            Roadmap name (or use default)
+  -r, --roadmap <name>            REQUIRED. Target roadmap.
   -o, --operation <type>          Filter by operation
   -e, --entity-type <type>        Filter by entity type
   --entity-id <id>                Filter by entity ID
@@ -221,7 +221,7 @@ Options:
 
 Examples:
   rmp audit list -r myproject
-  rmp audit history TASK 1
-  rmp audit stats --since 2026-01-01T00:00:00.000Z
+  rmp audit history -r myproject TASK 1
+  rmp audit stats -r myproject --since 2026-01-01T00:00:00.000Z
 `)
 }

@@ -153,9 +153,10 @@ Commands:
   show-next [count] [OPTIONS]  	Show top N backlog tasks by priority for sprint planning
 
 Options:
-  -r, --roadmap <name>       	Roadmap name (or use default)
-  -p, --priority <min>       	Filter by minimum priority value
-  -y, --type <type>          	Filter by task type (TASK, BUG, FEATURE, IMPROVEMENT, SPIKE)
+  -r, --roadmap <name>       	REQUIRED. Target roadmap.
+  -p, --priority <min>       	Filter: keep tasks with priority >= <min> (range 0-9)
+  -y, --type <type>          	Filter by task type. Valid: USER_STORY, TASK, BUG, SUB_TASK,
+                             	EPIC, REFACTOR, CHORE, SPIKE, DESIGN_UX, IMPROVEMENT
   --sort <field>             	Sort order: priority (default), created, status, severity
   -l, --limit <n>            	Maximum number of tasks to return
   -h, --help                 	Show this help message

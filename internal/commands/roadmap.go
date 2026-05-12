@@ -179,15 +179,16 @@ func printRoadmapHelp() {
 	fmt.Print(`Usage: rmp roadmap [command] [arguments]
 
 Commands:
-  list, ls                   List all roadmaps
-  create, new <name>         Create a new roadmap
-  remove, rm <name>          Remove a roadmap
+  list, ls                       List all roadmaps
+  create, new <name>             Create a new roadmap
+  remove, rm, delete <name>      Remove a roadmap
 
 Options:
-  -h, --help                 Show this help message
+  -h, --help                     Show this help message
 
 Examples:
   rmp roadmap list
   rmp roadmap create myproject
+  rmp roadmap remove myproject
 `)
 }
