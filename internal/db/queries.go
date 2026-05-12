@@ -1627,31 +1627,33 @@ func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int)
 			startPos = int(maxPos.Int64)
 		}
 
+		// Multi-row INSERT: one round-trip for all tasks.
+		valueGroups := make([]string, len(taskIDs))
+		insertArgs := make([]interface{}, 0, 4*len(taskIDs))
 		for i, taskID := range taskIDs {
-			position := startPos + i + 1
-			_, err := tx.Exec(
-				`INSERT INTO sprint_tasks (sprint_id, task_id, added_at, position) VALUES (?, ?, ?, ?)
-				 ON CONFLICT(task_id) DO UPDATE SET sprint_id = excluded.sprint_id, added_at = excluded.added_at, position = excluded.position`,
-				sprintID, taskID, now, position,
-			)
-			if err != nil {
-				return fmt.Errorf("adding task %d to sprint: %w", taskID, err)
-			}
+			valueGroups[i] = "(?, ?, ?, ?)"
+			insertArgs = append(insertArgs, sprintID, taskID, now, startPos+i+1)
+		}
+		insertQuery := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated
+			`INSERT INTO sprint_tasks (sprint_id, task_id, added_at, position) VALUES %s
+			 ON CONFLICT(task_id) DO UPDATE SET sprint_id = excluded.sprint_id, added_at = excluded.added_at, position = excluded.position`,
+			strings.Join(valueGroups, ","),
+		)
+		if _, err := tx.Exec(insertQuery, insertArgs...); err != nil {
+			return fmt.Errorf("adding tasks to sprint: %w", err)
 		}
 
-		// Update task status to SPRINT using cached placeholders
+		// Update task status to SPRINT using cached placeholders.
 		placeholders := db.queryCache.GetPlaceholders(len(taskIDs))
-		args := make([]interface{}, len(taskIDs))
+		statusArgs := make([]interface{}, len(taskIDs))
 		for i, id := range taskIDs {
-			args[i] = id
+			statusArgs[i] = id
 		}
-
-		query := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
+		statusQuery := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
 			"UPDATE tasks SET status = 'SPRINT' WHERE id IN (%s)",
 			placeholders,
 		)
-		_, err = tx.Exec(query, args...)
-		if err != nil {
+		if _, err := tx.Exec(statusQuery, statusArgs...); err != nil {
 			return fmt.Errorf("updating task statuses: %w", err)
 		}
 
