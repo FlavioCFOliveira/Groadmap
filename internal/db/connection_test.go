@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -124,11 +125,12 @@ func TestIsLockedError(t *testing.T) {
 		expected bool
 	}{
 		{"nil error", nil, false},
-		{"database is locked", errorString("database is locked"), true},
-		{"SQLITE_BUSY", errorString("SQLITE_BUSY"), true},
-		{"busy with code 5", errorString("busy 5"), true},
+		{"SQLITE_BUSY (5)", &mockSQLiteErr{code: 5}, true},
+		{"SQLITE_LOCKED (6)", &mockSQLiteErr{code: 6}, true},
+		{"extended busy code (261)", &mockSQLiteErr{code: 261}, true}, // SQLITE_BUSY_RECOVERY: high byte 1, low byte 5
+		{"unrelated SQLite code", &mockSQLiteErr{code: 14}, false},    // SQLITE_CANTOPEN
+		{"plain string error", errorString("database is locked"), false},
 		{"other error", errorString("some other error"), false},
-		{"connection refused", errorString("connection refused"), false},
 	}
 
 	for _, tt := range tests {
@@ -140,6 +142,14 @@ func TestIsLockedError(t *testing.T) {
 		})
 	}
 }
+
+// mockSQLiteErr satisfies the sqliteCoded interface used by isLockedError.
+type mockSQLiteErr struct {
+	code int
+}
+
+func (e *mockSQLiteErr) Code() int     { return e.code }
+func (e *mockSQLiteErr) Error() string { return fmt.Sprintf("sqlite error %d", e.code) }
 
 // errorString is a simple error type for testing
 type errorString string

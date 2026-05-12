@@ -4,9 +4,9 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -33,16 +33,32 @@ const (
 	QueryTimeout = 30 * time.Second
 )
 
-// isLockedError checks if an error is a SQLite busy/locked error
+// SQLite primary result codes for busy/locked conditions.
+// See https://www.sqlite.org/rescode.html.
+const (
+	sqliteBusy   = 5
+	sqliteLocked = 6
+)
+
+// sqliteCoded is satisfied by modernc.org/sqlite's *sqlite.Error.
+// Using an interface keeps the check structural and testable without
+// importing the driver here.
+type sqliteCoded interface {
+	Code() int
+}
+
+// isLockedError checks if an error is a SQLite busy/locked error by
+// inspecting the structured result code rather than matching strings.
 func isLockedError(err error) bool {
 	if err == nil {
 		return false
 	}
-	errStr := err.Error()
-	// Check for SQLite busy/locked error codes and messages
-	return strings.Contains(errStr, "database is locked") ||
-		strings.Contains(errStr, "SQLITE_BUSY") ||
-		strings.Contains(errStr, "busy") && strings.Contains(errStr, "5")
+	var coded sqliteCoded
+	if errors.As(err, &coded) {
+		c := coded.Code() & 0xFF // primary result code (low 8 bits)
+		return c == sqliteBusy || c == sqliteLocked
+	}
+	return false
 }
 
 // retryWithBackoff executes a function with exponential backoff retry logic
