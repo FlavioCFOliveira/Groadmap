@@ -36,6 +36,7 @@ TEST_MODULES = [
     "test_26_timing_realism",
     "test_27_exit_code_extremes",
     "test_28_command_aliases",
+    "test_29_subprocess_concurrency",
 ]
 
 # Stress tests (run separately due to time/data volume)
