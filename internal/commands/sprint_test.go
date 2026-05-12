@@ -1,8 +1,14 @@
 package commands
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/FlavioCFOliveira/Groadmap/internal/db"
+	"github.com/FlavioCFOliveira/Groadmap/internal/models"
+	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
 // ==================== HandleSprint Tests ====================
@@ -348,6 +354,99 @@ func TestSprintTasks_InvalidID(t *testing.T) {
 	err := HandleSprint([]string{"tasks", "-r", testName, "notanumber"})
 	if err == nil {
 		t.Error("sprintTasks with invalid ID expected error, got nil")
+	}
+}
+
+// ==================== sprintOpenTasks Tests ====================
+
+func TestSprintOpenTasks_NoRoadmap(t *testing.T) {
+	err := HandleSprint([]string{"open-tasks", "1"})
+	if err == nil {
+		t.Error("sprintOpenTasks with no roadmap expected error, got nil")
+	}
+}
+
+func TestSprintOpenTasks_NoID(t *testing.T) {
+	testName := "testsprintopentasksnoid"
+	_, cleanup := setupTestTaskRoadmap(t, testName)
+	defer cleanup()
+
+	err := HandleSprint([]string{"open-tasks", "-r", testName})
+	if err == nil {
+		t.Error("sprintOpenTasks with no ID expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "sprint ID required") {
+		t.Errorf("expected 'sprint ID required' error, got: %v", err)
+	}
+}
+
+func TestSprintOpenTasks_InvalidID(t *testing.T) {
+	testName := "testsprintopentasksinvalid"
+	_, cleanup := setupTestTaskRoadmap(t, testName)
+	defer cleanup()
+
+	err := HandleSprint([]string{"open-tasks", "-r", testName, "notanumber"})
+	if err == nil {
+		t.Error("sprintOpenTasks with invalid ID expected error, got nil")
+	}
+}
+
+func TestSprintOpenTasks_NonexistentSprint(t *testing.T) {
+	testName := "testsprintopentasksmissing"
+	_, cleanup := setupTestTaskRoadmap(t, testName)
+	defer cleanup()
+
+	err := HandleSprint([]string{"open-tasks", "-r", testName, "999"})
+	if err == nil {
+		t.Error("sprintOpenTasks against missing sprint expected error, got nil")
+	}
+	if !errors.Is(err, utils.ErrNotFound) {
+		t.Errorf("expected ErrNotFound for missing sprint, got: %v", err)
+	}
+}
+
+func TestSprintOpenTasks_EmptySprint(t *testing.T) {
+	testName := "testsprintopentasksempty"
+	database, cleanup := setupTestTaskRoadmap(t, testName)
+	defer cleanup()
+
+	// Create a sprint with no tasks; open-tasks must succeed and return an empty list.
+	ctx, cancel := db.WithQuickTimeout()
+	defer cancel()
+	sprintID, err := database.CreateSprint(ctx, &models.Sprint{
+		Status:      models.SprintPending,
+		Description: "Sprint without tasks for open-tasks happy-path test",
+		CreatedAt:   utils.NowISO8601(),
+	})
+	if err != nil {
+		t.Fatalf("seed sprint failed: %v", err)
+	}
+
+	if err := HandleSprint([]string{"open-tasks", "-r", testName, fmt.Sprintf("%d", sprintID)}); err != nil {
+		t.Errorf("sprintOpenTasks on empty sprint should succeed, got: %v", err)
+	}
+}
+
+func TestSprintOpenTasks_OrderByPriorityFlag(t *testing.T) {
+	testName := "testsprintopentasksorder"
+	database, cleanup := setupTestTaskRoadmap(t, testName)
+	defer cleanup()
+
+	ctx, cancel := db.WithQuickTimeout()
+	defer cancel()
+	sprintID, err := database.CreateSprint(ctx, &models.Sprint{
+		Status:      models.SprintPending,
+		Description: "Sprint for order-by-priority verification",
+		CreatedAt:   utils.NowISO8601(),
+	})
+	if err != nil {
+		t.Fatalf("seed sprint failed: %v", err)
+	}
+
+	// --order-by-priority is a boolean flag and should be accepted without value.
+	err = HandleSprint([]string{"open-tasks", "-r", testName, fmt.Sprintf("%d", sprintID), "--order-by-priority"})
+	if err != nil {
+		t.Errorf("sprintOpenTasks --order-by-priority should be accepted, got: %v", err)
 	}
 }
 
