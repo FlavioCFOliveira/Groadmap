@@ -60,6 +60,9 @@ class TestBasicCRUD:
         # Get task
         result = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])
         assert len(result) == 1
+        # Validate the full JSON shape — any drift in MODELS.md vs the
+        # serialiser surfaces immediately here.
+        self.test.assert_task_shape(result[0])
         assert result[0]["id"] == task_id
         assert result[0]["title"] == "Implement user authentication"
         assert result[0]["functional_requirements"] == "Users need to authenticate to access the system"

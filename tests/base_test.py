@@ -198,6 +198,47 @@ class GroadmapTestBase:
             f"Expected exit code {expected_code}, got {exit_code}"
         )
 
+    # Canonical JSON shapes per SPEC/MODELS.md. Used by assert_task_shape /
+    # assert_sprint_shape to catch fields that disappear or are added
+    # without an explicit decision.
+    TASK_KEYS = frozenset([
+        "id", "title", "status", "type",
+        "functional_requirements", "technical_requirements", "acceptance_criteria",
+        "created_at", "specialists",
+        "started_at", "tested_at", "closed_at", "completion_summary",
+        "parent_task_id", "priority", "severity",
+        "subtask_count", "depends_on", "blocks",
+    ])
+    SPRINT_KEYS = frozenset([
+        "id", "status", "description",
+        "created_at", "started_at", "closed_at",
+        "max_tasks", "tasks", "task_count",
+    ])
+
+    @classmethod
+    def assert_task_shape(cls, task: Dict[str, Any]):
+        """Validate that a task JSON object carries exactly the SPEC-defined keys.
+
+        Catches both regressions (a field silently dropped) and accidental
+        additions (a field introduced without a SPEC update).
+        """
+        got = set(task.keys())
+        missing = cls.TASK_KEYS - got
+        extra = got - cls.TASK_KEYS
+        assert not missing and not extra, (
+            f"task JSON shape diverges from SPEC:\n  missing: {sorted(missing)}\n  extra:   {sorted(extra)}"
+        )
+
+    @classmethod
+    def assert_sprint_shape(cls, sprint: Dict[str, Any]):
+        """Validate that a sprint JSON object carries exactly the SPEC-defined keys."""
+        got = set(sprint.keys())
+        missing = cls.SPRINT_KEYS - got
+        extra = got - cls.SPRINT_KEYS
+        assert not missing and not extra, (
+            f"sprint JSON shape diverges from SPEC:\n  missing: {sorted(missing)}\n  extra:   {sorted(extra)}"
+        )
+
     def list_tasks(self, roadmap: str, **filters) -> List[Dict[str, Any]]:
         """List tasks with optional filters."""
         cmd = ["task", "list", "-r", roadmap]

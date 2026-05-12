@@ -35,8 +35,9 @@ class TestSprintLifecycle:
         # Verify sprint was created with PENDING status
         self.test.assert_sprint_status(roadmap, sprint_id, "PENDING")
 
-        # Get sprint details
+        # Get sprint details and validate the full JSON shape against MODELS.md.
         result = self.test.run_cmd_json(["sprint", "get", "-r", roadmap, str(sprint_id)])
+        self.test.assert_sprint_shape(result)
         assert result["description"] == "Sprint 1: Initial Development"
         assert result["task_count"] == 0
 

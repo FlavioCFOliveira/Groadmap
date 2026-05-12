@@ -180,6 +180,8 @@ class TestDependencyChain:
         """`task get` returns depends_on (incoming edges) and blocks (outgoing edges)."""
         result = self.test.run_cmd_json(["task", "get", "-r", self.roadmap, str(self.t_c)])
         task = result[0]
+        # Full shape check — depends_on and blocks must be part of the canonical key set.
+        self.test.assert_task_shape(task)
         assert task["depends_on"] == [self.t_b], (
             f"C.depends_on must be [B]; got {task['depends_on']}"
         )
