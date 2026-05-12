@@ -100,6 +100,14 @@ type DB struct {
 	roadmapName string
 }
 
+// Placeholders returns a comma-separated string of n SQL "?" placeholders,
+// pulled from the connection's pre-generated cache when n is in range.
+// Use from command handlers to build IN (...) clauses without re-allocating
+// a []string + strings.Join on each call.
+func (db *DB) Placeholders(n int) string {
+	return db.queryCache.GetPlaceholders(n)
+}
+
 // Open opens a connection to a roadmap database.
 // Creates the database file if it doesn't exist.
 func Open(roadmapName string) (*DB, error) {

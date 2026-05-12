@@ -256,17 +256,14 @@ func taskSetStatus(args []string) error {
 		var query string
 		var args []interface{}
 
-		placeholders := make([]string, len(ids))
-		for i := range ids {
-			placeholders[i] = "?"
-		}
+		placeholders := database.Placeholders(len(ids))
 
 		switch newStatus {
 		case models.StatusDoing:
 			// Transition to DOING: set started_at
 			query = fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
 				"UPDATE tasks SET status = ?, started_at = ? WHERE id IN (%s)",
-				strings.Join(placeholders, ","),
+				placeholders,
 			)
 			args = append([]interface{}{newStatus, now}, makeInterfaceSlice(ids)...)
 
@@ -274,7 +271,7 @@ func taskSetStatus(args []string) error {
 			// Transition to TESTING: set tested_at
 			query = fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
 				"UPDATE tasks SET status = ?, tested_at = ? WHERE id IN (%s)",
-				strings.Join(placeholders, ","),
+				placeholders,
 			)
 			args = append([]interface{}{newStatus, now}, makeInterfaceSlice(ids)...)
 
@@ -283,7 +280,7 @@ func taskSetStatus(args []string) error {
 			// completionSummary is *string: nil becomes SQL NULL, non-nil becomes the string value.
 			query = fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
 				"UPDATE tasks SET status = ?, closed_at = ?, completion_summary = ? WHERE id IN (%s)",
-				strings.Join(placeholders, ","),
+				placeholders,
 			)
 			args = append([]interface{}{newStatus, now, completionSummary}, makeInterfaceSlice(ids)...)
 
@@ -291,7 +288,7 @@ func taskSetStatus(args []string) error {
 			// Reopening to BACKLOG: clear all tracking dates and completion_summary for a fresh cycle
 			query = fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
 				"UPDATE tasks SET status = ?, started_at = NULL, tested_at = NULL, closed_at = NULL, completion_summary = NULL WHERE id IN (%s)",
-				strings.Join(placeholders, ","),
+				placeholders,
 			)
 			args = append([]interface{}{newStatus}, makeInterfaceSlice(ids)...)
 
@@ -299,7 +296,7 @@ func taskSetStatus(args []string) error {
 			// Other status changes: just update status
 			query = fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
 				"UPDATE tasks SET status = ? WHERE id IN (%s)",
-				strings.Join(placeholders, ","),
+				placeholders,
 			)
 			args = append([]interface{}{newStatus}, makeInterfaceSlice(ids)...)
 		}
@@ -381,14 +378,9 @@ func taskReopen(args []string) error {
 	now := utils.NowISO8601()
 
 	return database.WithTransaction(func(tx *sql.Tx) error {
-		placeholders := make([]string, len(toReopen))
-		for i := range toReopen {
-			placeholders[i] = "?"
-		}
-
 		query := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
 			"UPDATE tasks SET status = ?, started_at = NULL, tested_at = NULL, closed_at = NULL, completion_summary = NULL WHERE id IN (%s)",
-			strings.Join(placeholders, ","),
+			database.Placeholders(len(toReopen)),
 		)
 		args := append([]interface{}{models.StatusBacklog}, makeInterfaceSlice(toReopen)...)
 		if _, err := tx.Exec(query, args...); err != nil {
@@ -397,13 +389,9 @@ func taskReopen(args []string) error {
 
 		// Remove sprint_tasks rows for tasks that were associated with a sprint.
 		if len(toRemoveFromSprint) > 0 {
-			sprintPlaceholders := make([]string, len(toRemoveFromSprint))
-			for i := range toRemoveFromSprint {
-				sprintPlaceholders[i] = "?"
-			}
 			delQuery := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
 				"DELETE FROM sprint_tasks WHERE task_id IN (%s)",
-				strings.Join(sprintPlaceholders, ","),
+				database.Placeholders(len(toRemoveFromSprint)),
 			)
 			if _, err := tx.Exec(delQuery, makeInterfaceSlice(toRemoveFromSprint)...); err != nil {
 				return err
@@ -464,28 +452,19 @@ func taskSetPriority(args []string) error {
 
 	// Update within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
-		// Update tasks
-		placeholders := make([]string, len(ids))
-		args := make([]interface{}, len(ids)+1)
-		args[0] = priority
-		for i, id := range ids {
-			placeholders[i] = "?"
-			args[i+1] = id
-		}
-
-		query := fmt.Sprintf("UPDATE tasks SET priority = ? WHERE id IN (%s)", strings.Join(placeholders, ",")) // #nosec G201 -- only ? placeholders interpolated, values are parameterized
-		_, err := tx.Exec(query, args...)
-		if err != nil {
+		args := append([]interface{}{priority}, makeInterfaceSlice(ids)...)
+		query := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
+			"UPDATE tasks SET priority = ? WHERE id IN (%s)", database.Placeholders(len(ids)))
+		if _, err := tx.Exec(query, args...); err != nil {
 			return err
 		}
 
 		// Log audit with same timestamp
 		for _, id := range ids {
-			_, err = tx.Exec(
+			if _, err := tx.Exec(
 				`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
 				models.OpTaskPriorityChange, models.EntityTask, id, now,
-			)
-			if err != nil {
+			); err != nil {
 				return err
 			}
 		}
@@ -526,28 +505,19 @@ func taskSetSeverity(args []string) error {
 
 	// Update within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
-		// Update tasks
-		placeholders := make([]string, len(ids))
-		args := make([]interface{}, len(ids)+1)
-		args[0] = severity
-		for i, id := range ids {
-			placeholders[i] = "?"
-			args[i+1] = id
-		}
-
-		query := fmt.Sprintf("UPDATE tasks SET severity = ? WHERE id IN (%s)", strings.Join(placeholders, ",")) // #nosec G201 -- only ? placeholders interpolated, values are parameterized
-		_, err := tx.Exec(query, args...)
-		if err != nil {
+		args := append([]interface{}{severity}, makeInterfaceSlice(ids)...)
+		query := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
+			"UPDATE tasks SET severity = ? WHERE id IN (%s)", database.Placeholders(len(ids)))
+		if _, err := tx.Exec(query, args...); err != nil {
 			return err
 		}
 
 		// Log audit with same timestamp
 		for _, id := range ids {
-			_, err = tx.Exec(
+			if _, err := tx.Exec(
 				`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
 				models.OpTaskSeverityChange, models.EntityTask, id, now,
-			)
-			if err != nil {
+			); err != nil {
 				return err
 			}
 		}
