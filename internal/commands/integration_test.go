@@ -80,7 +80,7 @@ func TestIntegration_RoadmapLifecycle(t *testing.T) {
 	})
 
 	// Verify output contains our roadmap
-	var roadmaps []map[string]interface{}
+	var roadmaps []map[string]any
 	if err := json.Unmarshal([]byte(output), &roadmaps); err != nil {
 		t.Logf("list output: %s", output)
 	} else {
@@ -158,7 +158,7 @@ func TestIntegration_TaskLifecycle(t *testing.T) {
 	})
 
 	// Verify task data
-	var tasks []map[string]interface{}
+	var tasks []map[string]any
 	if err := json.Unmarshal([]byte(output), &tasks); err != nil {
 		t.Logf("get task output: %s", output)
 	} else if len(tasks) > 0 {
@@ -290,7 +290,7 @@ func TestIntegration_SprintLifecycle(t *testing.T) {
 	})
 
 	// Verify sprint data
-	var sprint map[string]interface{}
+	var sprint map[string]any
 	if err := json.Unmarshal([]byte(output), &sprint); err != nil {
 		t.Logf("get sprint output: %s", output)
 	} else {
@@ -369,7 +369,7 @@ func TestIntegration_AuditQuery(t *testing.T) {
 	})
 
 	// Verify audit entries exist
-	var auditEntries []map[string]interface{}
+	var auditEntries []map[string]any
 	if err := json.Unmarshal([]byte(output), &auditEntries); err != nil {
 		t.Logf("audit list output: %s", output)
 	} else if len(auditEntries) == 0 {
@@ -385,7 +385,7 @@ func TestIntegration_AuditQuery(t *testing.T) {
 	})
 
 	// Verify stats output is valid JSON
-	var stats map[string]interface{}
+	var stats map[string]any
 	if err := json.Unmarshal([]byte(output), &stats); err != nil {
 		t.Logf("audit stats output: %s", output)
 	}

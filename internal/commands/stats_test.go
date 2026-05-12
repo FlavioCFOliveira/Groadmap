@@ -128,7 +128,7 @@ func TestHandleStats_JSONOutputStructure(t *testing.T) {
 		t.Fatalf("json.Marshal error = %v", err)
 	}
 
-	var decoded map[string]interface{}
+	var decoded map[string]any
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("json.Unmarshal error = %v", err)
 	}
@@ -140,7 +140,7 @@ func TestHandleStats_JSONOutputStructure(t *testing.T) {
 		}
 	}
 
-	tasksMap, ok := decoded["tasks"].(map[string]interface{})
+	tasksMap, ok := decoded["tasks"].(map[string]any)
 	if !ok {
 		t.Fatal("JSON tasks field is not an object")
 	}
@@ -151,7 +151,7 @@ func TestHandleStats_JSONOutputStructure(t *testing.T) {
 		}
 	}
 
-	sprintsMap, ok := decoded["sprints"].(map[string]interface{})
+	sprintsMap, ok := decoded["sprints"].(map[string]any)
 	if !ok {
 		t.Fatal("JSON sprints field is not an object")
 	}

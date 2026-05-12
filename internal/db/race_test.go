@@ -179,7 +179,7 @@ func TestConcurrentTaskUpdates(t *testing.T) {
 		go func(taskID int, iteration int) {
 			defer wg.Done()
 
-			updates := map[string]interface{}{
+			updates := map[string]any{
 				"priority": iteration,
 			}
 

@@ -11,19 +11,19 @@ import (
 
 // FlagDef defines a command-line flag.
 type FlagDef struct {
-	Validator   func(interface{}) error // Optional validation function
-	Name        string                  // Long name (e.g., "--description")
-	Short       string                  // Short name (e.g., "-d")
-	Field       string                  // Struct field name to populate
-	Type        string                  // "string", "int", "bool"
-	Default     string                  // Default value (as string)
-	DisplayName string                  // Human-readable name for parse error messages (e.g., "entity ID")
-	Required    bool                    // Whether the flag is required
+	Validator   func(any) error // Optional validation function
+	Name        string          // Long name (e.g., "--description")
+	Short       string          // Short name (e.g., "-d")
+	Field       string          // Struct field name to populate
+	Type        string          // "string", "int", "bool"
+	Default     string          // Default value (as string)
+	DisplayName string          // Human-readable name for parse error messages (e.g., "entity ID")
+	Required    bool            // Whether the flag is required
 }
 
 // ParseResult holds the result of flag parsing.
 type ParseResult struct {
-	Flags   map[string]interface{}
+	Flags   map[string]any
 	Roadmap string   // Roadmap name if specified
 	Args    []string // Positional arguments
 }
@@ -42,7 +42,7 @@ func NewFlagParser(defs []FlagDef) *FlagParser {
 // Returns a map of parsed values and any remaining positional arguments.
 func (fp *FlagParser) Parse(args []string) (*ParseResult, error) {
 	result := &ParseResult{
-		Flags: make(map[string]interface{}),
+		Flags: make(map[string]any),
 		Args:  make([]string, 0),
 	}
 
@@ -156,7 +156,7 @@ func (fp *FlagParser) findDef(arg string) *FlagDef {
 }
 
 // parseValue parses a string value into the appropriate type.
-func (fp *FlagParser) parseValue(value string, typ string) (interface{}, error) {
+func (fp *FlagParser) parseValue(value string, typ string) (any, error) {
 	switch typ {
 	case "string":
 		return value, nil
@@ -171,7 +171,7 @@ func (fp *FlagParser) parseValue(value string, typ string) (interface{}, error) 
 
 // Bind binds the parsed result to a target struct using reflection.
 // The target struct must have exported fields matching the Field names in FlagDef.
-func (fp *FlagParser) Bind(result *ParseResult, target interface{}) error {
+func (fp *FlagParser) Bind(result *ParseResult, target any) error {
 	v := reflect.ValueOf(target)
 	if v.Kind() != reflect.Pointer || v.Elem().Kind() != reflect.Struct {
 		return fmt.Errorf("%w: target must be a pointer to a struct", utils.ErrInvalidInput)
@@ -201,7 +201,7 @@ func (fp *FlagParser) Bind(result *ParseResult, target interface{}) error {
 }
 
 // setField sets a struct field from an interface{} value.
-func (fp *FlagParser) setField(field reflect.Value, value interface{}) error {
+func (fp *FlagParser) setField(field reflect.Value, value any) error {
 	switch field.Kind() {
 	case reflect.String:
 		if s, ok := value.(string); ok {

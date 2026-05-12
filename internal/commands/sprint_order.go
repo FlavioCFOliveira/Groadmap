@@ -107,7 +107,7 @@ func sprintReorder(args []string) error {
 		return err
 	}
 
-	return utils.PrintJSON(map[string]interface{}{
+	return utils.PrintJSON(map[string]any{
 		"success":    true,
 		"sprint_id":  sprintID,
 		"task_order": taskIDs,
@@ -204,7 +204,7 @@ func sprintMoveTo(args []string) error {
 		return err
 	}
 
-	return utils.PrintJSON(map[string]interface{}{
+	return utils.PrintJSON(map[string]any{
 		"success":   true,
 		"sprint_id": sprintID,
 		"task_id":   taskID,
@@ -305,7 +305,7 @@ func sprintSwap(args []string) error {
 		return err
 	}
 
-	return utils.PrintJSON(map[string]interface{}{
+	return utils.PrintJSON(map[string]any{
 		"success":   true,
 		"sprint_id": sprintID,
 		"task_id_1": taskID1,

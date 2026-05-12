@@ -263,18 +263,18 @@ func sprintUpdate(args []string) error {
 	// Build dynamic SET clause based on provided flags.
 	return database.WithTransaction(func(tx *sql.Tx) error {
 		var query string
-		var args []interface{}
+		var args []any
 
 		switch {
 		case description != "" && hasMaxTasks:
 			query = "UPDATE sprints SET description = ?, max_tasks = ? WHERE id = ?"
-			args = []interface{}{description, maxTasks, sprintID}
+			args = []any{description, maxTasks, sprintID}
 		case description != "":
 			query = "UPDATE sprints SET description = ? WHERE id = ?"
-			args = []interface{}{description, sprintID}
+			args = []any{description, sprintID}
 		default:
 			query = "UPDATE sprints SET max_tasks = ? WHERE id = ?"
-			args = []interface{}{maxTasks, sprintID}
+			args = []any{maxTasks, sprintID}
 		}
 
 		updateResult, updateErr := tx.Exec(query, args...)

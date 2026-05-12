@@ -111,7 +111,7 @@ func TestPrintJSONOutput(t *testing.T) {
 
 // BenchmarkPrintJSON benchmarks the JSON encoder implementation.
 func BenchmarkPrintJSON(b *testing.B) {
-	data := map[string]interface{}{
+	data := map[string]any{
 		"id":          123,
 		"name":        "Test Task",
 		"description": "This is a test task with some content",
@@ -134,7 +134,7 @@ func BenchmarkPrintJSON(b *testing.B) {
 
 // BenchmarkToJSON benchmarks JSON marshaling.
 func BenchmarkToJSON(b *testing.B) {
-	data := map[string]interface{}{
+	data := map[string]any{
 		"id":          123,
 		"name":        "Test Task",
 		"description": "This is a test task with some content",

@@ -255,7 +255,7 @@ func TestUpdateTask(t *testing.T) {
 	id, _ := db.CreateTask(testContext(), task)
 
 	// Update the task
-	updates := map[string]interface{}{
+	updates := map[string]any{
 		"title":    "Updated",
 		"priority": 5,
 	}
@@ -282,7 +282,7 @@ func TestUpdateTask(t *testing.T) {
 	}
 
 	// Test empty updates
-	err = db.UpdateTask(testContext(), id, map[string]interface{}{})
+	err = db.UpdateTask(testContext(), id, map[string]any{})
 	if err != nil {
 		t.Errorf("expected no error for empty updates, got %v", err)
 	}
@@ -1205,7 +1205,7 @@ func TestUpdateTask_NotFound(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	err := db.UpdateTask(testContext(), 999, map[string]interface{}{"priority": 5})
+	err := db.UpdateTask(testContext(), 999, map[string]any{"priority": 5})
 	if err == nil {
 		t.Fatal("expected error for non-existent task")
 	}

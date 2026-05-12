@@ -146,7 +146,7 @@ func BenchmarkGetTasks_CachedVsUncached(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			// Build query dynamically (simulating old behavior)
 			placeholders := make([]string, len(ids))
-			args := make([]interface{}, len(ids))
+			args := make([]any, len(ids))
 			for j, id := range ids {
 				placeholders[j] = "?"
 				args[j] = id
@@ -171,7 +171,7 @@ func BenchmarkGetTasks_CachedVsUncached(b *testing.B) {
 			// Use cached query template
 			query := qc.GetQuery(OpGetTasks, len(ids))
 
-			args := make([]interface{}, len(ids))
+			args := make([]any, len(ids))
 			for j, id := range ids {
 				args[j] = id
 			}
@@ -200,7 +200,7 @@ func BenchmarkBatchUpdate_CachedVsUncached(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			// Process without batching/caching
 			placeholders := make([]string, len(ids))
-			args := make([]interface{}, len(ids)+1)
+			args := make([]any, len(ids)+1)
 			args[0] = "DOING"
 			for j, id := range ids {
 				placeholders[j] = "?"
@@ -224,7 +224,7 @@ func BenchmarkBatchUpdate_CachedVsUncached(b *testing.B) {
 			err := bp.ProcessChunks(ids, func(chunk []int) error {
 				query := qc.GetQuery(OpUpdateTaskStatus, len(chunk))
 
-				args := make([]interface{}, len(chunk)+2)
+				args := make([]any, len(chunk)+2)
 				args[0] = "DOING"
 				args[1] = nil // completed_at
 				for j, id := range chunk {

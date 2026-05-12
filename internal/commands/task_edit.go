@@ -66,7 +66,7 @@ func taskEdit(args []string) error {
 		return err
 	}
 
-	updates := make(map[string]interface{})
+	updates := make(map[string]any)
 
 	// Trim leading/trailing whitespace before validation per SPEC/COMMANDS.md.
 	if v, ok := result.Flags["Title"]; ok {
@@ -134,7 +134,7 @@ func taskEdit(args []string) error {
 		sort.Strings(fields)
 
 		setParts := make([]string, 0, len(fields))
-		queryArgs := make([]interface{}, 0, len(fields)+1)
+		queryArgs := make([]any, 0, len(fields)+1)
 		for _, field := range fields {
 			setParts = append(setParts, field+" = ?")
 			queryArgs = append(queryArgs, updates[field])

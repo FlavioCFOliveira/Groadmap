@@ -43,21 +43,21 @@ func sprintReopen(args []string) error {
 }
 
 // buildSprintUpdateQuery builds the UPDATE query and args for sprint status change.
-func buildSprintUpdateQuery(newStatus models.SprintStatus, currentStatus models.SprintStatus, now string, sprintID int) (string, []interface{}) {
+func buildSprintUpdateQuery(newStatus models.SprintStatus, currentStatus models.SprintStatus, now string, sprintID int) (string, []any) {
 	switch newStatus {
 	case models.SprintOpen:
 		if currentStatus == models.SprintClosed {
-			return "UPDATE sprints SET status = ?, closed_at = NULL WHERE id = ?", []interface{}{newStatus, sprintID}
+			return "UPDATE sprints SET status = ?, closed_at = NULL WHERE id = ?", []any{newStatus, sprintID}
 		}
-		return "UPDATE sprints SET status = ?, started_at = ? WHERE id = ?", []interface{}{newStatus, now, sprintID}
+		return "UPDATE sprints SET status = ?, started_at = ? WHERE id = ?", []any{newStatus, now, sprintID}
 	case models.SprintClosed:
-		return "UPDATE sprints SET status = ?, closed_at = ? WHERE id = ?", []interface{}{newStatus, now, sprintID}
+		return "UPDATE sprints SET status = ?, closed_at = ? WHERE id = ?", []any{newStatus, now, sprintID}
 	}
 	return "", nil
 }
 
 // execSprintUpdate executes the sprint update and audit logging in a transaction.
-func execSprintUpdate(tx *sql.Tx, query string, args []interface{}, sprintID int, op models.AuditOperation, now string) error {
+func execSprintUpdate(tx *sql.Tx, query string, args []any, sprintID int, op models.AuditOperation, now string) error {
 	if query == "" {
 		return fmt.Errorf("%w: invalid sprint status", utils.ErrInvalidInput)
 	}

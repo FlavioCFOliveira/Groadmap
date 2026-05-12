@@ -15,7 +15,7 @@ import (
 // 3. HTML escaping would make output harder to parse (e.g., "<" becomes "\u003c")
 // 4. No web browser is involved in rendering this output
 // If this output were to be used in a web context, HTML escaping should be enabled.
-func PrintJSON(v interface{}) error {
+func PrintJSON(v any) error {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetEscapeHTML(false)
 	encoder.SetIndent("", "  ")
@@ -26,7 +26,7 @@ func PrintJSON(v interface{}) error {
 }
 
 // ToJSON converts a value to a JSON byte slice.
-func ToJSON(v interface{}) ([]byte, error) {
+func ToJSON(v any) ([]byte, error) {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling JSON: %w", err)
@@ -35,7 +35,7 @@ func ToJSON(v interface{}) ([]byte, error) {
 }
 
 // FromJSON parses JSON data into a value.
-func FromJSON(data []byte, v interface{}) error {
+func FromJSON(data []byte, v any) error {
 	if err := json.Unmarshal(data, v); err != nil {
 		return fmt.Errorf("unmarshaling JSON: %w", err)
 	}

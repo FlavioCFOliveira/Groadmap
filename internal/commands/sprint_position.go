@@ -92,7 +92,7 @@ func sprintBottom(args []string) error {
 		return err
 	}
 
-	return utils.PrintJSON(map[string]interface{}{
+	return utils.PrintJSON(map[string]any{
 		"success":   true,
 		"sprint_id": sprintID,
 		"task_id":   taskID,
@@ -158,7 +158,7 @@ func sprintMoveToPosition(args []string, position int) error {
 		return err
 	}
 
-	return utils.PrintJSON(map[string]interface{}{
+	return utils.PrintJSON(map[string]any{
 		"success":   true,
 		"sprint_id": sprintID,
 		"task_id":   taskID,

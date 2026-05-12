@@ -13,9 +13,9 @@ import (
 // ==================== JSON Assertion Helpers ====================
 
 // parseJSONObject parses a JSON object from output, failing the test on error.
-func parseJSONObject(t *testing.T, output string) map[string]interface{} {
+func parseJSONObject(t *testing.T, output string) map[string]any {
 	t.Helper()
-	var result map[string]interface{}
+	var result map[string]any
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatalf("output is not a valid JSON object: %v\noutput: %s", err, output)
 	}
@@ -23,9 +23,9 @@ func parseJSONObject(t *testing.T, output string) map[string]interface{} {
 }
 
 // parseJSONArray parses a JSON array from output, failing the test on error.
-func parseJSONArray(t *testing.T, output string) []map[string]interface{} {
+func parseJSONArray(t *testing.T, output string) []map[string]any {
 	t.Helper()
-	var result []map[string]interface{}
+	var result []map[string]any
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatalf("output is not a valid JSON array: %v\noutput: %s", err, output)
 	}
@@ -33,7 +33,7 @@ func parseJSONArray(t *testing.T, output string) []map[string]interface{} {
 }
 
 // assertStringField asserts that a JSON object has a string field with the expected value.
-func assertStringField(t *testing.T, obj map[string]interface{}, field, want string) {
+func assertStringField(t *testing.T, obj map[string]any, field, want string) {
 	t.Helper()
 	raw, ok := obj[field]
 	if !ok {
@@ -51,7 +51,7 @@ func assertStringField(t *testing.T, obj map[string]interface{}, field, want str
 }
 
 // assertNumericField asserts that a JSON object has a numeric field with the expected value.
-func assertNumericField(t *testing.T, obj map[string]interface{}, field string, want float64) {
+func assertNumericField(t *testing.T, obj map[string]any, field string, want float64) {
 	t.Helper()
 	raw, ok := obj[field]
 	if !ok {
@@ -69,7 +69,7 @@ func assertNumericField(t *testing.T, obj map[string]interface{}, field string, 
 }
 
 // assertFieldExists asserts that a JSON object contains the given field key.
-func assertFieldExists(t *testing.T, obj map[string]interface{}, field string) {
+func assertFieldExists(t *testing.T, obj map[string]any, field string) {
 	t.Helper()
 	if _, ok := obj[field]; !ok {
 		t.Errorf("field %q missing from JSON object; keys: %v", field, jsonKeys(obj))
@@ -77,7 +77,7 @@ func assertFieldExists(t *testing.T, obj map[string]interface{}, field string) {
 }
 
 // assertNonEmptyArray asserts that the JSON array is not empty.
-func assertNonEmptyArray(t *testing.T, arr []map[string]interface{}, context string) {
+func assertNonEmptyArray(t *testing.T, arr []map[string]any, context string) {
 	t.Helper()
 	if len(arr) == 0 {
 		t.Errorf("%s: expected non-empty JSON array, got empty", context)
@@ -85,7 +85,7 @@ func assertNonEmptyArray(t *testing.T, arr []map[string]interface{}, context str
 }
 
 // jsonKeys returns the sorted key list of a JSON object for readable error messages.
-func jsonKeys(obj map[string]interface{}) []string {
+func jsonKeys(obj map[string]any) []string {
 	keys := make([]string, 0, len(obj))
 	for k := range obj {
 		keys = append(keys, k)
@@ -575,7 +575,7 @@ func TestOutputValidation_SprintShow_JSONStructure(t *testing.T) {
 	assertStringField(t, obj, "status", string(models.SprintOpen))
 
 	// Validate nested summary object
-	summary, ok := obj["summary"].(map[string]interface{})
+	summary, ok := obj["summary"].(map[string]any)
 	if !ok {
 		t.Fatalf("'summary' is not an object, got %T", obj["summary"])
 	}
@@ -592,7 +592,7 @@ func TestOutputValidation_SprintShow_JSONStructure(t *testing.T) {
 	}
 
 	// Validate task_order array
-	taskOrder, ok := obj["task_order"].([]interface{})
+	taskOrder, ok := obj["task_order"].([]any)
 	if !ok {
 		t.Fatalf("task_order is not an array, got %T", obj["task_order"])
 	}
@@ -633,7 +633,7 @@ func TestOutputValidation_Stats_JSONStructure(t *testing.T) {
 	assertFieldExists(t, obj, "sprints")
 	assertStringField(t, obj, "roadmap", roadmap)
 
-	tasks, ok := obj["tasks"].(map[string]interface{})
+	tasks, ok := obj["tasks"].(map[string]any)
 	if !ok {
 		t.Fatalf("'tasks' field is not an object, got %T", obj["tasks"])
 	}
@@ -646,7 +646,7 @@ func TestOutputValidation_Stats_JSONStructure(t *testing.T) {
 		t.Errorf("tasks.backlog = %v, want 2", tasks["backlog"])
 	}
 
-	sprints, ok := obj["sprints"].(map[string]interface{})
+	sprints, ok := obj["sprints"].(map[string]any)
 	if !ok {
 		t.Fatalf("'sprints' field is not an object, got %T", obj["sprints"])
 	}

@@ -155,7 +155,7 @@ func TestFlagParser_Bind(t *testing.T) {
 	parser := NewFlagParser(defs)
 
 	result := &ParseResult{
-		Flags: map[string]interface{}{
+		Flags: map[string]any{
 			"Description": "test",
 			"Priority":    5,
 			"Verbose":     true,
@@ -188,7 +188,7 @@ func TestFlagParser_BindInvalidTarget(t *testing.T) {
 	parser := NewFlagParser(defs)
 
 	result := &ParseResult{
-		Flags: map[string]interface{}{"Description": "test"},
+		Flags: map[string]any{"Description": "test"},
 		Args:  []string{},
 	}
 

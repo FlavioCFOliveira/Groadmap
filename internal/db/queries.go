@@ -140,7 +140,7 @@ func (db *DB) GetTasks(ctx context.Context, ids []int) ([]models.Task, error) {
 
 	// Use cached placeholders for better performance
 	placeholders := db.queryCache.GetPlaceholders(len(ids))
-	args := make([]interface{}, len(ids))
+	args := make([]any, len(ids))
 	for i, id := range ids {
 		args[i] = id
 	}
@@ -191,7 +191,7 @@ func (db *DB) ListTasks(ctx context.Context, filter *TaskListFilter) ([]models.T
 		        t.priority, t.severity,
 		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count` + taskDepsSelect + `
 		      FROM tasks t WHERE 1=1`
-	args := make([]interface{}, 0, 8)
+	args := make([]any, 0, 8)
 
 	if filter.Status != nil {
 		query += " AND t.status = ?"
@@ -274,14 +274,14 @@ func (db *DB) ListTasks(ctx context.Context, filter *TaskListFilter) ([]models.T
 //   - Does NOT create audit entries (caller should log changes)
 //
 // Security: Uses hardcoded field names in SQL to prevent injection attacks.
-func (db *DB) UpdateTask(ctx context.Context, id int, updates map[string]interface{}) error {
+func (db *DB) UpdateTask(ctx context.Context, id int, updates map[string]any) error {
 	if len(updates) == 0 {
 		return nil
 	}
 
 	return retryWithBackoff("update task", func() error {
 		setParts := make([]string, 0, len(updates))
-		args := make([]interface{}, 0, len(updates)+1)
+		args := make([]any, 0, len(updates)+1)
 
 		// Iterate updates in a deterministic order so the generated SQL is
 		// stable across runs — required for SQLite's prepared-statement
@@ -378,7 +378,7 @@ func (db *DB) UpdateTaskStruct(ctx context.Context, id int, update *models.TaskU
 		// Build SQL with deterministic field ordering
 		// Fields are always in the same order: title, functional_requirements, technical_requirements, acceptance_criteria, specialists, priority, severity
 		var setParts []string
-		var args []interface{}
+		var args []any
 
 		if update.Title != nil {
 			setParts = append(setParts, "title = ?")
@@ -443,7 +443,7 @@ func (db *DB) UpdateTaskStatus(ctx context.Context, ids []int, status models.Tas
 	return retryWithBackoff("update task status", func() error {
 		// Use cached placeholders for better performance
 		placeholders := db.queryCache.GetPlaceholders(len(ids))
-		idArgs := make([]interface{}, len(ids))
+		idArgs := make([]any, len(ids))
 		for i, id := range ids {
 			idArgs[i] = id
 		}
@@ -452,7 +452,7 @@ func (db *DB) UpdateTaskStatus(ctx context.Context, ids []int, status models.Tas
 
 		// Build query based on target status for lifecycle date tracking
 		var query string
-		var args []interface{}
+		var args []any
 
 		switch status {
 		case models.StatusDoing:
@@ -461,7 +461,7 @@ func (db *DB) UpdateTaskStatus(ctx context.Context, ids []int, status models.Tas
 				"UPDATE tasks SET status = ?, started_at = ? WHERE id IN (%s)",
 				placeholders,
 			)
-			args = append([]interface{}{status, now}, idArgs...)
+			args = append([]any{status, now}, idArgs...)
 
 		case models.StatusTesting:
 			// Transition to TESTING: set tested_at
@@ -469,7 +469,7 @@ func (db *DB) UpdateTaskStatus(ctx context.Context, ids []int, status models.Tas
 				"UPDATE tasks SET status = ?, tested_at = ? WHERE id IN (%s)",
 				placeholders,
 			)
-			args = append([]interface{}{status, now}, idArgs...)
+			args = append([]any{status, now}, idArgs...)
 
 		case models.StatusCompleted:
 			// Transition to COMPLETED: set closed_at
@@ -477,7 +477,7 @@ func (db *DB) UpdateTaskStatus(ctx context.Context, ids []int, status models.Tas
 				"UPDATE tasks SET status = ?, closed_at = ? WHERE id IN (%s)",
 				placeholders,
 			)
-			args = append([]interface{}{status, now}, idArgs...)
+			args = append([]any{status, now}, idArgs...)
 
 		case models.StatusBacklog:
 			// Reopening to BACKLOG: clear all tracking dates
@@ -485,7 +485,7 @@ func (db *DB) UpdateTaskStatus(ctx context.Context, ids []int, status models.Tas
 				"UPDATE tasks SET status = ?, started_at = NULL, tested_at = NULL, closed_at = NULL WHERE id IN (%s)",
 				placeholders,
 			)
-			args = append([]interface{}{status}, idArgs...)
+			args = append([]any{status}, idArgs...)
 
 		default:
 			// Other status changes: just update status
@@ -493,7 +493,7 @@ func (db *DB) UpdateTaskStatus(ctx context.Context, ids []int, status models.Tas
 				"UPDATE tasks SET status = ? WHERE id IN (%s)",
 				placeholders,
 			)
-			args = append([]interface{}{status}, idArgs...)
+			args = append([]any{status}, idArgs...)
 		}
 
 		_, err := db.ExecContext(ctx, query, args...)
@@ -513,7 +513,7 @@ func (db *DB) UpdateTaskPriority(ctx context.Context, ids []int, priority int) e
 
 	return retryWithBackoff("update task priority", func() error {
 		placeholders := db.queryCache.GetPlaceholders(len(ids))
-		args := make([]interface{}, len(ids)+1)
+		args := make([]any, len(ids)+1)
 		args[0] = priority
 		for i, id := range ids {
 			args[i+1] = id
@@ -536,7 +536,7 @@ func (db *DB) UpdateTaskSeverity(ctx context.Context, ids []int, severity int) e
 
 	return retryWithBackoff("update task severity", func() error {
 		placeholders := db.queryCache.GetPlaceholders(len(ids))
-		args := make([]interface{}, len(ids)+1)
+		args := make([]any, len(ids)+1)
 		args[0] = severity
 		for i, id := range ids {
 			args[i+1] = id
@@ -661,7 +661,7 @@ func (db *DB) CountSubTasksByParents(ctx context.Context, parentIDs []int) (map[
 		return map[int]int{}, nil
 	}
 	placeholders := db.queryCache.GetPlaceholders(len(parentIDs))
-	args := make([]interface{}, len(parentIDs))
+	args := make([]any, len(parentIDs))
 	for i, id := range parentIDs {
 		args[i] = id
 	}
@@ -699,7 +699,7 @@ func (db *DB) GetIncompleteSubTasksByParents(ctx context.Context, parentIDs []in
 		return map[int][]int{}, nil
 	}
 	placeholders := db.queryCache.GetPlaceholders(len(parentIDs))
-	args := make([]interface{}, 0, len(parentIDs)+1)
+	args := make([]any, 0, len(parentIDs)+1)
 	for _, id := range parentIDs {
 		args = append(args, id)
 	}
@@ -1223,7 +1223,7 @@ func (db *DB) GetIncompleteDependenciesByTasks(ctx context.Context, taskIDs []in
 		return map[int][]int{}, nil
 	}
 	placeholders := db.queryCache.GetPlaceholders(len(taskIDs))
-	args := make([]interface{}, 0, len(taskIDs)+1)
+	args := make([]any, 0, len(taskIDs)+1)
 	for _, id := range taskIDs {
 		args = append(args, id)
 	}
@@ -1449,7 +1449,7 @@ func parseJSONIntArray(jsonStr string) ([]int, error) {
 // ListSprints retrieves all sprints with optional status filter.
 func (db *DB) ListSprints(ctx context.Context, status *models.SprintStatus) ([]models.Sprint, error) {
 	query := `SELECT id, status, description, created_at, started_at, closed_at, max_tasks FROM sprints WHERE 1=1`
-	args := []interface{}{}
+	args := []any{}
 
 	if status != nil {
 		query += " AND status = ?"
@@ -1532,21 +1532,21 @@ func (db *DB) UpdateSprint(ctx context.Context, id int, description string) erro
 func (db *DB) UpdateSprintStatus(ctx context.Context, id int, status models.SprintStatus) error {
 	return retryWithBackoff("update sprint status", func() error {
 		var query string
-		var args []interface{}
+		var args []any
 
 		switch status {
 		case models.SprintOpen:
 			// Starting sprint
 			query = "UPDATE sprints SET status = ?, started_at = ? WHERE id = ?"
-			args = []interface{}{status, utils.NowISO8601(), id}
+			args = []any{status, utils.NowISO8601(), id}
 		case models.SprintClosed:
 			// Closing sprint
 			query = "UPDATE sprints SET status = ?, closed_at = ? WHERE id = ?"
-			args = []interface{}{status, utils.NowISO8601(), id}
+			args = []any{status, utils.NowISO8601(), id}
 		default:
 			// Other status changes
 			query = "UPDATE sprints SET status = ? WHERE id = ?"
-			args = []interface{}{status, id}
+			args = []any{status, id}
 		}
 
 		result, err := db.ExecContext(ctx, query, args...)
@@ -1637,7 +1637,7 @@ func (db *DB) GetActiveSprintTasks(ctx context.Context, sprintID int) ([]models.
 		         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count
 		      FROM tasks t
 		      INNER JOIN sprint_tasks st ON t.id = st.task_id
-		      WHERE st.sprint_id = ? AND t.status IN ` + sqlActiveTaskStatuses + `
+		      WHERE st.sprint_id = ? AND t.status IN `+sqlActiveTaskStatuses+`
 		      ORDER BY st.position ASC`,
 		sprintID,
 	)
@@ -1659,7 +1659,7 @@ func (db *DB) GetSprintTasksFull(ctx context.Context, sprintID int, status *mode
 		      FROM tasks t
 		      INNER JOIN sprint_tasks st ON t.id = st.task_id
 		      WHERE st.sprint_id = ?`
-	args := []interface{}{sprintID}
+	args := []any{sprintID}
 
 	if status != nil {
 		query += " AND t.status = ?"
@@ -1744,7 +1744,7 @@ func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int)
 
 		// Multi-row INSERT: one round-trip for all tasks.
 		valueGroups := make([]string, len(taskIDs))
-		insertArgs := make([]interface{}, 0, 4*len(taskIDs))
+		insertArgs := make([]any, 0, 4*len(taskIDs))
 		for i, taskID := range taskIDs {
 			valueGroups[i] = "(?, ?, ?, ?)"
 			insertArgs = append(insertArgs, sprintID, taskID, now, startPos+i+1)
@@ -1760,7 +1760,7 @@ func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int)
 
 		// Update task status to SPRINT using cached placeholders.
 		placeholders := db.queryCache.GetPlaceholders(len(taskIDs))
-		statusArgs := make([]interface{}, len(taskIDs))
+		statusArgs := make([]any, len(taskIDs))
 		for i, id := range taskIDs {
 			statusArgs[i] = id
 		}
@@ -1769,7 +1769,7 @@ func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int)
 			placeholders,
 		)
 		// Prepend the status value so the placeholder order matches: status, id, id, ...
-		statusArgsWithStatus := append([]interface{}{models.StatusSprint}, statusArgs...)
+		statusArgsWithStatus := append([]any{models.StatusSprint}, statusArgs...)
 		if _, err := tx.Exec(statusQuery, statusArgsWithStatus...); err != nil {
 			return fmt.Errorf("updating task statuses: %w", err)
 		}
@@ -1787,7 +1787,7 @@ func (db *DB) RemoveTasksFromSprint(ctx context.Context, taskIDs []int) error {
 	return retryWithBackoff("remove tasks from sprint", func() error {
 		// Use cached placeholders
 		placeholders := db.queryCache.GetPlaceholders(len(taskIDs))
-		args := make([]interface{}, len(taskIDs))
+		args := make([]any, len(taskIDs))
 		for i, id := range taskIDs {
 			args[i] = id
 		}
@@ -1801,7 +1801,7 @@ func (db *DB) RemoveTasksFromSprint(ctx context.Context, taskIDs []int) error {
 
 		// Update task status to BACKLOG. Prepend status value to args.
 		query = fmt.Sprintf("UPDATE tasks SET status = ? WHERE id IN (%s)", placeholders) // #nosec G201 -- only ? placeholders interpolated
-		statusArgs := append([]interface{}{models.StatusBacklog}, args...)
+		statusArgs := append([]any{models.StatusBacklog}, args...)
 		if _, err := db.ExecContext(ctx, query, statusArgs...); err != nil {
 			return fmt.Errorf("updating task statuses: %w", err)
 		}
@@ -1928,7 +1928,7 @@ func (db *DB) GetAuditEntries(ctx context.Context, operation, entityType *string
 	var qb strings.Builder
 	qb.Grow(256) // rough upper bound for SELECT + 7 clauses
 	qb.WriteString(`SELECT id, operation, entity_type, entity_id, performed_at FROM audit WHERE 1=1`)
-	args := make([]interface{}, 0, 7)
+	args := make([]any, 0, 7)
 
 	if operation != nil {
 		qb.WriteString(" AND operation = ?")
@@ -2034,7 +2034,7 @@ func (db *DB) GetAuditStats(ctx context.Context, since, until *string) (*models.
 
 	// Total count
 	countQuery := `SELECT COUNT(*) FROM audit WHERE 1=1`
-	countArgs := []interface{}{}
+	countArgs := []any{}
 
 	if since != nil {
 		countQuery += " AND performed_at >= ?"
@@ -2052,7 +2052,7 @@ func (db *DB) GetAuditStats(ctx context.Context, since, until *string) (*models.
 
 	// First and last entry dates
 	dateQuery := `SELECT MIN(performed_at), MAX(performed_at) FROM audit WHERE 1=1`
-	dateArgs := []interface{}{}
+	dateArgs := []any{}
 
 	if since != nil {
 		dateQuery += " AND performed_at >= ?"
@@ -2078,7 +2078,7 @@ func (db *DB) GetAuditStats(ctx context.Context, since, until *string) (*models.
 
 	// Count by operation
 	opQuery := `SELECT operation, COUNT(*) FROM audit WHERE 1=1`
-	opArgs := []interface{}{}
+	opArgs := []any{}
 
 	if since != nil {
 		opQuery += " AND performed_at >= ?"
@@ -2107,7 +2107,7 @@ func (db *DB) GetAuditStats(ctx context.Context, since, until *string) (*models.
 
 	// Count by entity type
 	entQuery := `SELECT entity_type, COUNT(*) FROM audit WHERE 1=1`
-	entArgs := []interface{}{}
+	entArgs := []any{}
 
 	if since != nil {
 		entQuery += " AND performed_at >= ?"
@@ -2179,7 +2179,7 @@ func (db *DB) ReorderSprintTasks(sprintID int, taskIDs []int) error {
 
 		// Verify all task IDs belong to this sprint
 		placeholders := make([]string, len(taskIDs))
-		args := make([]interface{}, len(taskIDs)+1)
+		args := make([]any, len(taskIDs)+1)
 		args[0] = sprintID
 		for i, id := range taskIDs {
 			placeholders[i] = "?"

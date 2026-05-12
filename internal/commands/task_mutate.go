@@ -249,7 +249,7 @@ func taskSetStatus(args []string) error {
 		// - COMPLETED: set closed_at and completion_summary (nil → NULL)
 		// - BACKLOG: clear all tracking dates (completion_summary cleared in task #96)
 		var query string
-		var args []interface{}
+		var args []any
 
 		placeholders := database.Placeholders(len(ids))
 
@@ -260,7 +260,7 @@ func taskSetStatus(args []string) error {
 				"UPDATE tasks SET status = ?, started_at = ? WHERE id IN (%s)",
 				placeholders,
 			)
-			args = append([]interface{}{newStatus, now}, makeInterfaceSlice(ids)...)
+			args = append([]any{newStatus, now}, makeInterfaceSlice(ids)...)
 
 		case models.StatusTesting:
 			// Transition to TESTING: set tested_at
@@ -268,7 +268,7 @@ func taskSetStatus(args []string) error {
 				"UPDATE tasks SET status = ?, tested_at = ? WHERE id IN (%s)",
 				placeholders,
 			)
-			args = append([]interface{}{newStatus, now}, makeInterfaceSlice(ids)...)
+			args = append([]any{newStatus, now}, makeInterfaceSlice(ids)...)
 
 		case models.StatusCompleted:
 			// Transition to COMPLETED: set closed_at and completion_summary.
@@ -277,7 +277,7 @@ func taskSetStatus(args []string) error {
 				"UPDATE tasks SET status = ?, closed_at = ?, completion_summary = ? WHERE id IN (%s)",
 				placeholders,
 			)
-			args = append([]interface{}{newStatus, now, completionSummary}, makeInterfaceSlice(ids)...)
+			args = append([]any{newStatus, now, completionSummary}, makeInterfaceSlice(ids)...)
 
 		case models.StatusBacklog:
 			// Reopening to BACKLOG: clear all tracking dates and completion_summary for a fresh cycle
@@ -285,7 +285,7 @@ func taskSetStatus(args []string) error {
 				"UPDATE tasks SET status = ?, started_at = NULL, tested_at = NULL, closed_at = NULL, completion_summary = NULL WHERE id IN (%s)",
 				placeholders,
 			)
-			args = append([]interface{}{newStatus}, makeInterfaceSlice(ids)...)
+			args = append([]any{newStatus}, makeInterfaceSlice(ids)...)
 
 		default:
 			// Other status changes: just update status
@@ -293,7 +293,7 @@ func taskSetStatus(args []string) error {
 				"UPDATE tasks SET status = ? WHERE id IN (%s)",
 				placeholders,
 			)
-			args = append([]interface{}{newStatus}, makeInterfaceSlice(ids)...)
+			args = append([]any{newStatus}, makeInterfaceSlice(ids)...)
 		}
 
 		_, err := tx.Exec(query, args...)
@@ -373,7 +373,7 @@ func taskReopen(args []string) error {
 			"UPDATE tasks SET status = ?, started_at = NULL, tested_at = NULL, closed_at = NULL, completion_summary = NULL WHERE id IN (%s)",
 			database.Placeholders(len(toReopen)),
 		)
-		args := append([]interface{}{models.StatusBacklog}, makeInterfaceSlice(toReopen)...)
+		args := append([]any{models.StatusBacklog}, makeInterfaceSlice(toReopen)...)
 		if _, err := tx.Exec(query, args...); err != nil {
 			return err
 		}
@@ -399,8 +399,8 @@ func taskReopen(args []string) error {
 }
 
 // makeInterfaceSlice converts []int to []interface{}
-func makeInterfaceSlice(ids []int) []interface{} {
-	result := make([]interface{}, len(ids))
+func makeInterfaceSlice(ids []int) []any {
+	result := make([]any, len(ids))
 	for i, id := range ids {
 		result[i] = id
 	}
@@ -442,7 +442,7 @@ func taskSetPriority(args []string) error {
 
 	// Update within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
-		args := append([]interface{}{priority}, makeInterfaceSlice(ids)...)
+		args := append([]any{priority}, makeInterfaceSlice(ids)...)
 		query := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
 			"UPDATE tasks SET priority = ? WHERE id IN (%s)", database.Placeholders(len(ids)))
 		if _, err := tx.Exec(query, args...); err != nil {
@@ -494,7 +494,7 @@ func taskSetSeverity(args []string) error {
 
 	// Update within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
-		args := append([]interface{}{severity}, makeInterfaceSlice(ids)...)
+		args := append([]any{severity}, makeInterfaceSlice(ids)...)
 		query := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
 			"UPDATE tasks SET severity = ? WHERE id IN (%s)", database.Placeholders(len(ids)))
 		if _, err := tx.Exec(query, args...); err != nil {
