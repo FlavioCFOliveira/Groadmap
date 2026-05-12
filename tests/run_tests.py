@@ -33,6 +33,7 @@ TEST_MODULES = [
     "test_23_backlog_management",
     "test_24_dependency_workflow",
     "test_25_completion_guards",
+    "test_26_timing_realism",
     "test_27_exit_code_extremes",
     "test_28_command_aliases",
 ]
