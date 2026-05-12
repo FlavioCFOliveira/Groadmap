@@ -6,7 +6,8 @@
 |-----------|---------|------|
 | Application | v1.2.1 | `cmd/rmp/main.go` |
 | Database Schema | v1.6.0 | `internal/db/schema.go` |
-| Specification | v2.0.0 | `SPEC/README.md` |
+
+The SPEC itself is not versioned (see `SPEC/README.md` and `CLAUDE.md` § Versioning Policy). Git tags are the canonical record of past application and schema versions.
 
 ## Versioning Strategy
 
@@ -21,7 +22,7 @@ const version = "1.2.1"
 This version is:
 - Compiled into the binary at build time
 - Displayed via `rmp --version`
-- Used for release artifact naming (e.g., `rmp-v1.0.0-linux-amd64.tar.gz`)
+- Used for release artefact naming (e.g., `rmp-v1.2.1-linux-amd64.tar.gz`)
 
 ### Database Schema Version
 
@@ -35,12 +36,6 @@ const SchemaVersion = "1.6.0"
 - Stored in database `_metadata` table
 - Independent from application version
 
-### Specification Version
-
-The technical specification has its own versioning:
-- Defined in `SPEC/README.md`
-- Tracks changes to the specification documents
-
 ## Semantic Versioning
 
 Groadmap follows Semantic Versioning (SemVer):
@@ -48,7 +43,7 @@ Groadmap follows Semantic Versioning (SemVer):
 ```
 vMAJOR.MINOR.PATCH
 
-Example: v1.0.0
+Example: v1.2.1
 ```
 
 ### Version Components
@@ -59,32 +54,18 @@ Example: v1.0.0
 
 ## Version Independence
 
-The three version numbers (application, schema, specification) are independent:
+The application version and schema version are independent:
 
-- Application can be v1.0.0 while Schema is v1.0.0
-- Schema changes follow database migration requirements
-- Specification changes track documentation evolution
-
-This independence allows:
-- Schema updates without application version bumps
-- Documentation updates without code changes
-- Clear separation of concerns
+- Application version follows release cadence and SemVer
+- Schema version increments only when a migration is added in `internal/db/migrations.go`
+- Schema updates can happen without application version bumps and vice versa
 
 ## Release Process
 
-1. Update version constant in `cmd/rmp/main.go`
-2. Update `SPEC/VERSION.md` with new version information
-3. Update `SPEC/README.md` version and date
-4. Create git tag: `git tag -a v1.2.1 -m "Release v1.2.1"`
-5. Push tag: `git push origin v1.2.1`
-6. Workflow builds binaries and uploads artifacts
+1. Update the version constant in `cmd/rmp/main.go`
+2. Update the `Current Version` table in this file
+3. Create the git tag: `git tag -a v<version> -m "Release v<version>"`
+4. Push the tag: `git push origin v<version>`
+5. The release workflow builds binaries and uploads artefacts
 
-## Version History
-
-| Date | Application | Schema | Description |
-|------|-------------|--------|-------------|
-| 2026-03-25 | v1.2.1 | v1.6.0 | Lint compliance, performance polish, E2E alignment |
-| 2026-03-24 | v1.2.0 | v1.6.0 | Sprint discovery, sub-task hierarchy, task dependencies, sprint velocity, stats, backlog |
-| 2026-03-24 | v1.1.0 | v1.6.0 | Sub-task hierarchy, task dependencies, sprint velocity, sprint show, capacity management |
-| 2026-03-20 | v1.1.0 | v1.1.0 | Added sprint task ordering (position column) |
-| 2026-03-20 | v1.0.0 | v1.0.0 | Initial release |
+Past releases are discoverable via `git tag --list` and `git log v<previous>..v<current>` — no Version History table is kept here.

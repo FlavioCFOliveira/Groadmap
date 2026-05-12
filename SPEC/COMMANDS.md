@@ -1,7 +1,5 @@
 # CLI Commands
 
-> Change History for this file is consolidated in `SPEC/README.md` — Section 4 (Change History). See the "Historical Per-File Entries → COMMANDS.md" subsection.
-
 ## Naming Conventions
 
 - Commands: lowercase, kebab-case (`list`, `create`)

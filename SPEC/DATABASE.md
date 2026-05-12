@@ -1183,19 +1183,11 @@ func CloseAllCached() error
 
 ## Migrations
 
-The `_metadata` table enables future schema versioning.
+The `_metadata` table records the active schema version. Migration steps and their descriptions live in `internal/db/migrations.go`; the migration history is recoverable via `git log internal/db/migrations.go`.
 
-### Schema Version History
+### Current Schema Version
 
-| Version | Date | Changes |
-|---------|------|---------|
-| 1.0.0 | 2026-03-20 | Initial schema |
-| 1.1.0 | 2026-03-20 | Added sprint_tasks position column and idx_sprint_tasks_order index |
-| 1.2.0 | 2026-03-24 | Added partial unique index to enforce at most one OPEN sprint |
-| 1.3.0 | 2026-03-24 | Added completion_summary column to tasks table |
-| 1.4.0 | 2026-03-24 | Added max_tasks column to sprints table (sprint capacity management) |
-| 1.5.0 | 2026-03-24 | Added parent_task_id column and idx_tasks_parent_task_id index to tasks table (sub-task hierarchy) |
-| 1.6.0 | 2026-03-24 | Added task_dependencies table with idx_task_deps_task_id and idx_task_deps_depends_on indexes (blocking relationships) |
+`SchemaVersion = "1.6.0"` (defined in `internal/db/schema.go`).
 
 ### Migration Commands
 

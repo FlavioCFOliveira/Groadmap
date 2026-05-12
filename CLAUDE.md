@@ -44,6 +44,16 @@ User Request → specification-manager → SPEC/ → [roadmap-manager] → go-de
 
 **NEVER** create task-specific specs (e.g., "VERSION_RESET.md").
 
+### Versioning Policy
+
+The SPEC has **no versioning**. Git is the version control system and the **single source of truth** for the SPEC's evolution.
+
+- SPEC files MUST contain only the currently effective specification — no version numbers, no dates, no change-history tables, no historical entries.
+- Past states of any SPEC file are recovered via `git log` / `git show` / `git checkout`.
+- The Application binary version (`cmd/rmp/main.go`) and Database Schema version (`internal/db/schema.go`) remain versioned because they are technical artefacts with runtime implications (release tagging, migrations); their *history*, however, is in git tags and migration code — not in SPEC tables.
+
+If a change to the SPEC needs a narrative beyond the diff, write it in the commit message.
+
 ---
 
 ## 3. Agent and Skill Responsibilities
@@ -213,6 +223,7 @@ this project (e.g., `specification-manager`, `roadmap-manager`, `go-developer`,
 - Make product decisions without user
 - Create task-specific spec files
 - Duplicate functional areas
+- Add versioning, dates, or change history to SPEC files (git is the source of truth)
 
 ### Other Forbidden
 - Ignore `go vet` or `go test` failures

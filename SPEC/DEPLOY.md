@@ -224,8 +224,6 @@ Each release includes:
 - [ ] Version updated in `cmd/rmp/main.go`
 - [ ] Documentation updated (`SPEC/VERSION.md`, `SPEC/README.md`)
 
-> Change History for this file is consolidated in `SPEC/README.md` — Section 4 (Change History). See the "Historical Per-File Entries → DEPLOY.md" subsection.
-
 ## Acceptance Criteria
 
 ### Installation Script
