@@ -1923,42 +1923,45 @@ func (db *DB) LogAuditEntriesBatch(ctx context.Context, entries []*models.AuditE
 //	    100, 0,                 // limit 100, offset 0
 //	)
 func (db *DB) GetAuditEntries(ctx context.Context, operation, entityType *string, entityID *int, since, until *string, limit, offset int) ([]models.AuditEntry, error) {
-	query := `SELECT id, operation, entity_type, entity_id, performed_at FROM audit WHERE 1=1`
-	args := []interface{}{}
+	// Build the query with strings.Builder so we don't allocate a new
+	// backing string for every appended clause.
+	var qb strings.Builder
+	qb.Grow(256) // rough upper bound for SELECT + 7 clauses
+	qb.WriteString(`SELECT id, operation, entity_type, entity_id, performed_at FROM audit WHERE 1=1`)
+	args := make([]interface{}, 0, 7)
 
 	if operation != nil {
-		query += " AND operation = ?"
+		qb.WriteString(" AND operation = ?")
 		args = append(args, *operation)
 	}
 	if entityType != nil {
-		query += " AND entity_type = ?"
+		qb.WriteString(" AND entity_type = ?")
 		args = append(args, *entityType)
 	}
 	if entityID != nil {
-		query += " AND entity_id = ?"
+		qb.WriteString(" AND entity_id = ?")
 		args = append(args, *entityID)
 	}
 	if since != nil {
-		query += " AND performed_at >= ?"
+		qb.WriteString(" AND performed_at >= ?")
 		args = append(args, *since)
 	}
 	if until != nil {
-		query += " AND performed_at <= ?"
+		qb.WriteString(" AND performed_at <= ?")
 		args = append(args, *until)
 	}
 
-	query += " ORDER BY performed_at DESC"
-
+	qb.WriteString(" ORDER BY performed_at DESC")
 	if limit > 0 {
-		query += " LIMIT ?"
+		qb.WriteString(" LIMIT ?")
 		args = append(args, limit)
 	}
 	if offset > 0 {
-		query += " OFFSET ?"
+		qb.WriteString(" OFFSET ?")
 		args = append(args, offset)
 	}
 
-	rows, err := db.QueryContext(ctx, query, args...)
+	rows, err := db.QueryContext(ctx, qb.String(), args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying audit entries: %w", err)
 	}
