@@ -2,7 +2,7 @@ package commands
 
 import (
 	"errors"
-	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -422,7 +422,7 @@ func TestSprintOpenTasks_EmptySprint(t *testing.T) {
 		t.Fatalf("seed sprint failed: %v", err)
 	}
 
-	if err := HandleSprint([]string{"open-tasks", "-r", testName, fmt.Sprintf("%d", sprintID)}); err != nil {
+	if err := HandleSprint([]string{"open-tasks", "-r", testName, strconv.Itoa(sprintID)}); err != nil {
 		t.Errorf("sprintOpenTasks on empty sprint should succeed, got: %v", err)
 	}
 }
@@ -444,7 +444,7 @@ func TestSprintOpenTasks_OrderByPriorityFlag(t *testing.T) {
 	}
 
 	// --order-by-priority is a boolean flag and should be accepted without value.
-	err = HandleSprint([]string{"open-tasks", "-r", testName, fmt.Sprintf("%d", sprintID), "--order-by-priority"})
+	err = HandleSprint([]string{"open-tasks", "-r", testName, strconv.Itoa(sprintID), "--order-by-priority"})
 	if err != nil {
 		t.Errorf("sprintOpenTasks --order-by-priority should be accepted, got: %v", err)
 	}
