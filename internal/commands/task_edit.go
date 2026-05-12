@@ -3,6 +3,7 @@ package commands
 import (
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
@@ -124,11 +125,19 @@ func taskEdit(args []string) error {
 
 	// Update within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
-		setParts := make([]string, 0, len(updates))
-		queryArgs := make([]interface{}, 0, len(updates)+1)
-		for field, value := range updates {
+		// Sort field names so the generated UPDATE statement is stable
+		// across runs (deterministic SQL helps the query planner cache).
+		fields := make([]string, 0, len(updates))
+		for f := range updates {
+			fields = append(fields, f)
+		}
+		sort.Strings(fields)
+
+		setParts := make([]string, 0, len(fields))
+		queryArgs := make([]interface{}, 0, len(fields)+1)
+		for _, field := range fields {
 			setParts = append(setParts, field+" = ?")
-			queryArgs = append(queryArgs, value)
+			queryArgs = append(queryArgs, updates[field])
 		}
 		queryArgs = append(queryArgs, taskID)
 

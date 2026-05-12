@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -264,12 +265,22 @@ func (db *DB) UpdateTask(ctx context.Context, id int, updates map[string]interfa
 	}
 
 	return retryWithBackoff("update task", func() error {
-		setParts := []string{}
-		args := []interface{}{}
+		setParts := make([]string, 0, len(updates))
+		args := make([]interface{}, 0, len(updates)+1)
+
+		// Iterate updates in a deterministic order so the generated SQL is
+		// stable across runs — required for SQLite's prepared-statement
+		// cache and for reproducible behaviour in tests.
+		fields := make([]string, 0, len(updates))
+		for f := range updates {
+			fields = append(fields, f)
+		}
+		sort.Strings(fields)
 
 		// Use hardcoded field names to prevent SQL injection
 		// Field names are never dynamically inserted into SQL
-		for field, value := range updates {
+		for _, field := range fields {
+			value := updates[field]
 			switch field {
 			case "title":
 				setParts = append(setParts, "title = ?")
