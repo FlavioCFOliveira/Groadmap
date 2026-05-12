@@ -117,6 +117,32 @@ func taskEdit(args []string) error {
 		}
 	}
 
+	// Validate that text fields stay within their documented maximums.
+	// Without this, oversized values reach SQLite and surface as a generic
+	// "constraint failed" error (exit 1) instead of the documented
+	// utils.ErrFieldTooLarge (exit 6) per SPEC/COMMANDS.md.
+	maxLengths := map[string]int{
+		"title":                   models.MaxTaskTitle,
+		"functional_requirements": models.MaxTaskFunctionalRequirements,
+		"technical_requirements":  models.MaxTaskTechnicalRequirements,
+		"acceptance_criteria":     models.MaxTaskAcceptanceCriteria,
+		"specialists":             models.MaxTaskSpecialists,
+	}
+	for field, limit := range maxLengths {
+		v, ok := updates[field]
+		if !ok {
+			continue
+		}
+		s, ok := v.(string)
+		if !ok {
+			continue
+		}
+		if len(s) > limit {
+			return fmt.Errorf("%w: %s exceeds maximum length of %d characters",
+				utils.ErrFieldTooLarge, field, limit)
+		}
+	}
+
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {
 		return err

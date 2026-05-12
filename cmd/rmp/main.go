@@ -137,7 +137,9 @@ func handleError(err error) int {
 		return ExitExists
 	case errors.Is(err, utils.ErrNoRoadmap):
 		return ExitNoRoadmap
-	case errors.Is(err, utils.ErrInvalidInput), errors.Is(err, utils.ErrValidation):
+	case errors.Is(err, utils.ErrInvalidInput),
+		errors.Is(err, utils.ErrValidation),
+		errors.Is(err, utils.ErrFieldTooLarge):
 		return ExitInvalidData
 	case errors.Is(err, utils.ErrRequired):
 		return ExitMisuse

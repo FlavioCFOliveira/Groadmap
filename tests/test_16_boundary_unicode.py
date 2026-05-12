@@ -284,6 +284,109 @@ class TestBoundaryUnicode:
             f"Stored AC length {len(stored_ac)} does not match expected 4096"
         )
 
+    def test_technical_requirements_one_beyond_max_rejected(self):
+        """Technical requirements at 4097 bytes (max+1) must be rejected."""
+        roadmap = self.test.create_roadmap()
+        over_tr = "t" * 4097
+        exit_code, _, stderr = self.test.run_cmd(
+            [
+                "task", "create", "-r", roadmap,
+                "-t", "Verify technical requirements over-max rejection",
+                "-fr", "Validation should enforce the 4096-byte limit",
+                "-tr", over_tr,
+                "-ac", "Error returned and no task created",
+            ],
+            check=False,
+        )
+        assert exit_code == 6, (
+            f"TR of 4097 bytes must exit 6 (validation); got {exit_code}, stderr={stderr}"
+        )
+        # stderr should reference the field or 4096 limit
+        assert "technical" in stderr.lower() or "4096" in stderr, (
+            f"stderr must reference the field or its limit; got {stderr!r}"
+        )
+
+    def test_acceptance_criteria_one_beyond_max_rejected(self):
+        """Acceptance criteria at 4097 bytes (max+1) must be rejected."""
+        roadmap = self.test.create_roadmap()
+        over_ac = "c" * 4097
+        exit_code, _, stderr = self.test.run_cmd(
+            [
+                "task", "create", "-r", roadmap,
+                "-t", "Verify acceptance criteria over-max rejection",
+                "-fr", "Validation should enforce the 4096-byte limit",
+                "-tr", "AC oversize boundary test",
+                "-ac", over_ac,
+            ],
+            check=False,
+        )
+        assert exit_code == 6, (
+            f"AC of 4097 bytes must exit 6 (validation); got {exit_code}, stderr={stderr}"
+        )
+        assert "acceptance" in stderr.lower() or "4096" in stderr, (
+            f"stderr must reference the field or its limit; got {stderr!r}"
+        )
+
+    def test_fr_tr_ac_at_4095_accepted(self):
+        """Each text field at 4095 bytes (one below max) must be accepted."""
+        roadmap = self.test.create_roadmap()
+        under = "x" * 4095
+        task_id = self.test.create_task(
+            roadmap,
+            title="Below-max boundary sanity check across all text fields",
+            functional_requirements=under,
+            technical_requirements=under,
+            acceptance_criteria=under,
+        )
+        result = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])[0]
+        assert len(result["functional_requirements"]) == 4095
+        assert len(result["technical_requirements"]) == 4095
+        assert len(result["acceptance_criteria"]) == 4095
+
+    def test_fr_oversize_via_edit_rejected(self):
+        """`task edit` must reject an oversized functional_requirements update too,
+        not just the initial create — boundaries apply to every write path."""
+        roadmap = self.test.create_roadmap()
+        task_id = self.test.create_task(
+            roadmap,
+            title="Edit-path boundary check task",
+            functional_requirements="small FR to start",
+            technical_requirements="small TR",
+            acceptance_criteria="small AC",
+        )
+        over_fr = "f" * 4097
+        exit_code, _, stderr = self.test.run_cmd(
+            ["task", "edit", "-r", roadmap, str(task_id), "-fr", over_fr],
+            check=False,
+        )
+        assert exit_code == 6, (
+            f"edit with FR>4096 must exit 6; got {exit_code}, stderr={stderr}"
+        )
+
+    def test_completion_summary_at_exact_max_accepted(self):
+        """completion_summary at exactly 4096 bytes must be accepted on COMPLETED transition."""
+        roadmap = self.test.create_roadmap()
+        task_id = self.test.create_task(
+            roadmap,
+            title="Boundary check for completion_summary max length",
+            functional_requirements="The summary field has its own 4096-byte ceiling",
+            technical_requirements="The set-status path accepts --summary at the limit",
+            acceptance_criteria="Stored completion_summary length matches input verbatim",
+        )
+        sprint_id = self.test.create_sprint(roadmap, "Completion-summary boundary sprint")
+        self.test.move_task_to_sprint(roadmap, task_id, sprint_id)
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
+
+        exact_summary = "s" * 4096
+        self.test.run_cmd([
+            "task", "stat", "-r", roadmap, str(task_id), "COMPLETED",
+            "--summary", exact_summary,
+        ])
+        stored = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])[0]
+        assert stored["completion_summary"] is not None
+        assert len(stored["completion_summary"]) == 4096
+
     # ==================== Unicode round-trips ====================
 
     def test_unicode_cjk_title_round_trip(self):
