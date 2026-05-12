@@ -17,45 +17,57 @@ Tasks can be in one of the following states:
 ## State Diagram
 
 ```
-                    ┌──────────┐
-         ┌─────────│ COMPLETED│◄────────────────┐
-         │         └────┬─────┘                 │
-         │              │                        │
-         │         (backlog)                    │
-         │              │                        │
-         │              ▼                        │
-┌────────┴─┐      ┌─────────┐    (sprint)   ┌──┴───────┐
-│  SPRINT  │◄─────│ BACKLOG │──────────────►│  SPRINT  │
-│          │─────►│         │               │          │
-└────┬─────┘      └─────────┘               └────┬─────┘
-     │                                           │
-     │ (doing)                                   │ (backlog)
-     │                                           │
-     ▼                                           │
-┌─────────┐    (sprint)                  ┌─────┘
-│  DOING  │◄──────────────────────────────┘
-│         │──────┐
-└────┬────┘      │ (testing)
-     │            ▼
-     │      ┌───────────┐
-     └─────►│  TESTING  │
-            │           │──────┐
-            └─────┬─────┘      │ (completed)
-                  │            ▼
-                  │      ┌───────────┐
-                  └─────│ COMPLETED │
-                        └───────────┘
+                +-----------+
+                |  BACKLOG  |<--------------------------+
+                +-----+-----+                           |
+                      |                                 |
+        sprint add-   |  (automatic)                    |
+        tasks         v                                 | task stat BACKLOG
+                +-----------+   sprint remove-tasks     | (or task reopen)
+                |  SPRINT   |---------------------------+
+                +-----+-----+   (automatic)             |
+                      |                                 |
+       task stat      |     +---------------------------+
+       DOING          |     |   task stat BACKLOG       |
+                      v     |                           |
+                +-----------+                           |
+              +>|   DOING   |                           |
+              | +-----+-----+                           |
+              |       |                                 |
+              |       |  task stat TESTING              |
+   task stat  |       v                                 |
+   DOING      | +-----------+                           |
+              +-+  TESTING  |                           |
+                +-----+-----+                           |
+                      |                                 |
+                      |  task stat COMPLETED            |
+                      v                                 |
+                +-----------+                           |
+                | COMPLETED |---------------------------+
+                +-----------+
 ```
+
+Legend: arrows labelled with the command that triggers the transition. Transitions marked `(automatic)` are not user-callable via `task stat`; see Section "Valid Transitions" for the full rule set.
 
 ## Valid Transitions
 
-| From State | Valid To States |
-|------------|-----------------|
-| `BACKLOG` | `SPRINT` |
-| `SPRINT` | `BACKLOG`, `DOING` |
-| `DOING` | `SPRINT`, `TESTING` |
-| `TESTING` | `DOING`, `COMPLETED` |
-| `COMPLETED` | `BACKLOG` |
+| From State | Valid To States | How |
+|------------|-----------------|-----|
+| `BACKLOG` | `SPRINT` | Automatic only (via `sprint add-tasks`) |
+| `SPRINT` | `BACKLOG`, `DOING` | `BACKLOG` is automatic (via `sprint remove-tasks` or `sprint remove`); `DOING` is manual (via `task stat`) |
+| `DOING` | `SPRINT`, `TESTING` | Manual (via `task stat`) |
+| `TESTING` | `DOING`, `COMPLETED` | Manual (via `task stat`; `COMPLETED` accepts optional `--summary`) |
+| `COMPLETED` | `BACKLOG` | Manual (via `task stat` or `task reopen`); clears `completion_summary` |
+
+**Rejection rule:** Manual `task stat <ids> SPRINT` is rejected with exit code 6. The SPRINT status is set exclusively by `sprint add-tasks`, which atomically links the task to a sprint via the `sprint_tasks` table.
+
+## Task Deletion Precondition
+
+A task may be removed (`task remove` / `task rm`) only while it is in `BACKLOG` status. Attempts to delete a task in any other status (`SPRINT`, `DOING`, `TESTING`, `COMPLETED`) are rejected with exit code 6 and the message `"Error: task #N cannot be deleted — status is X, must be BACKLOG"`. To delete a non-BACKLOG task, the caller MUST first transition the task back to `BACKLOG` (via `sprint remove-tasks` for `SPRINT`, or via `task stat <id> BACKLOG` from `SPRINT` or `COMPLETED`).
+
+A task with active subtasks cannot be removed either; the subtasks must be removed first.
+
+This rule preserves the audit trail of work that progressed past `BACKLOG`. The constraint is enforced by the application layer; the SQLite DDL does not include a `CHECK` or trigger for this rule.
 
 ## Transition Rules
 
@@ -162,12 +174,3 @@ The state machine is designed to:
 2. **Support agile practices**: Tasks can move back (e.g., from TESTING to DOING)
 3. **Enable reopening**: Completed tasks can be reopened to BACKLOG
 4. **Maintain clarity**: Each state has a clear meaning and purpose
-
-## Future Considerations
-
-Potential future enhancements:
-
-- Add `BLOCKED` state for tasks that are blocked by dependencies
-- Add `REVIEW` state for code review phase
-- Add transition hooks (e.g., notifications on status change)
-- Add time tracking per state

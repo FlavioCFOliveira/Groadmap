@@ -76,20 +76,21 @@ Example:
 ### rmp roadmap create --help
 
 ```
-usage: rmp roadmap create [-h | --help] [--force] <name>
+usage: rmp roadmap create [-h | --help] <name>
 
 Create a new roadmap with the given name.
 The roadmap will be stored as ~/.roadmaps/<name>.db
 
-Options:
-   --force    Overwrite if roadmap already exists
+If a roadmap with the same name already exists, the command exits with code 5
+and an error message. To replace an existing roadmap, first run
+'rmp roadmap remove <name>' and then 'rmp roadmap create <name>'.
 
 Arguments:
-   <name>     Name for the new roadmap (alphanumeric, hyphens, underscores)
+   <name>     Name for the new roadmap (lowercase letters, numbers, hyphens, underscores; max 50 chars)
 
 Example:
    rmp roadmap create project1
-   rmp road new myproject --force
+   rmp road new myproject
 ```
 
 ### rmp roadmap remove --help
@@ -172,27 +173,31 @@ Examples:
 ### rmp task create --help
 
 ```
-usage: rmp task create [-h | --help] -r <name> -t <title> -f <fr> -h <tr> -a <ac> [-p <n>] [--severity <n>] [--specialists <list>]
+usage: rmp task create [-h | --help] -r <name> -t <title> -fr <fr> -tr <tr> -ac <ac> [-p <n>] [--severity <n>] [-sp <list>] [--parent <id>]
 
 Create a new task in the specified roadmap.
 
 Required Options:
    -r, --roadmap <name>                  Roadmap name
    -t, --title <title>                   Task title/summary
-   -f, --functional-requirements <fr>    Functional requirements (Why?)
-   -h, --technical-requirements <tr>     Technical requirements (How?)
-   -a, --acceptance-criteria <ac>        Acceptance criteria (How to verify?)
+   -fr, --functional-requirements <fr>   Functional requirements (Why?)
+   -tr, --technical-requirements <tr>    Technical requirements (How?)
+   -ac, --acceptance-criteria <ac>       Acceptance criteria (How to verify?)
 
 Optional Options:
+   -y, --type <type>                     Task type: USER_STORY, TASK, BUG, SUB_TASK, EPIC,
+                                         REFACTOR, CHORE, SPIKE, DESIGN_UX, IMPROVEMENT
+                                         (default: TASK)
    -p, --priority <n>                    Priority 0-9 (default: 0)
        --severity <n>                    Severity 0-9 (default: 0)
-       --specialists <list>                Comma-separated specialist tags
+   -sp, --specialists <list>             Comma-separated specialist tags
+       --parent <id>                     Create as a sub-task of the given parent task
 
 Output: JSON object with task ID
 
 Examples:
-   rmp task create -r project1 -t "Fix login bug" -f "User can login" -h "Update auth" -a "Login works"
-   rmp task new -r project1 -t "Update docs" -f "Docs needed" -h "Write README" -a "Docs complete" -p 5
+   rmp task create -r project1 -t "Fix login bug" -fr "User can login" -tr "Update auth" -ac "Login works"
+   rmp task new -r project1 -t "Update docs" -fr "Docs needed" -tr "Write README" -ac "Docs complete" -p 5
 ```
 
 ### rmp task next --help
@@ -248,7 +253,8 @@ Options:
 
 Arguments:
    <id>[,<id>,...]        Comma-separated task IDs (no spaces)
-   <state>                New status: BACKLOG, SPRINT, DOING, TESTING, COMPLETED
+   <state>                New status (manual): BACKLOG, DOING, TESTING, COMPLETED
+                          (SPRINT is set automatically by 'sprint add-tasks' and is rejected here)
 
 Status Flow:
    BACKLOG ↔ SPRINT ↔ DOING ↔ TESTING → COMPLETED
@@ -313,12 +319,13 @@ Edit an existing task's properties. Only specified fields are updated.
 Options:
    -r, --roadmap <name>                  Roadmap name (required)
    -t, --title <text>                    Update task title
-   -f, --functional-requirements <text>  Update functional requirements
-   -h, --technical-requirements <text>   Update technical requirements
-   -a, --acceptance-criteria <text>    Update acceptance criteria
+   -fr, --functional-requirements <text> Update functional requirements
+   -tr, --technical-requirements <text>  Update technical requirements
+   -ac, --acceptance-criteria <text>     Update acceptance criteria
+   -y, --type <type>                     Update task type (see 'task create --help' for valid values)
    -p, --priority <n>                    Update priority (0-9)
        --severity <n>                    Update severity (0-9)
-       --specialists <list>              Update comma-separated specialists
+   -sp, --specialists <list>             Update comma-separated specialists
 
 Arguments:
    <id>                                  Task ID to edit
@@ -335,6 +342,13 @@ usage: rmp task remove [-h | --help] -r <name> <id>[,<id>,...]
 
 Remove one or more tasks permanently. This action cannot be undone.
 
+Constraint:
+   Tasks can only be removed while in BACKLOG status. Attempts to remove a
+   task in SPRINT, DOING, TESTING, or COMPLETED status are rejected with
+   exit code 6. Move the task back to BACKLOG first (via 'sprint remove-tasks'
+   for SPRINT, or 'task stat <id> BACKLOG' for other states).
+   Tasks with subtasks must have their subtasks removed first.
+
 Options:
    -r, --roadmap <name>   Roadmap name (required)
 
@@ -344,6 +358,127 @@ Arguments:
 Examples:
    rmp task remove -r project1 42
    rmp task rm -r project1 1,2,3
+```
+
+### rmp task reopen --help
+
+```
+usage: rmp task reopen [-h | --help] -r <name> <id>[,<id>,...]
+
+Return one or more tasks to BACKLOG status. Clears all lifecycle timestamps
+(started_at, tested_at, closed_at) and removes the task from its current sprint
+association. Accepts comma-separated IDs for bulk reopening.
+
+Options:
+   -r, --roadmap <name>   Roadmap name (required)
+
+Arguments:
+   <id>[,<id>,...]        Comma-separated task IDs (no spaces)
+
+Valid source states: SPRINT, DOING, TESTING, COMPLETED (any non-BACKLOG state).
+Reopening a task already in BACKLOG is a no-op.
+
+Examples:
+   rmp task reopen -r project1 42
+   rmp task reopen -r project1 1,2,3
+```
+
+### rmp task subtasks --help
+
+```
+usage: rmp task subtasks [-h | --help] -r <name> <id>
+
+List all direct subtasks of the given parent task. Subtasks are ordered by
+priority descending, then created_at ascending.
+
+Options:
+   -r, --roadmap <name>   Roadmap name (required)
+
+Arguments:
+   <id>                   Parent task ID
+
+Output: JSON array of Task objects (empty array if the task has no subtasks).
+
+Examples:
+   rmp task subtasks -r project1 10
+```
+
+### rmp task add-dep --help
+
+```
+usage: rmp task add-dep [-h | --help] -r <name> <task-id> <dep-id>
+
+Mark <task-id> as depending on <dep-id>. The task cannot be marked COMPLETED
+until <dep-id> is COMPLETED. Circular dependencies and self-dependencies are
+rejected.
+
+Options:
+   -r, --roadmap <name>   Roadmap name (required)
+
+Arguments:
+   <task-id>              ID of the dependent task
+   <dep-id>               ID of the task it depends on
+
+Examples:
+   rmp task add-dep -r project1 42 17
+```
+
+### rmp task remove-dep --help
+
+```
+usage: rmp task remove-dep [-h | --help] -r <name> <task-id> <dep-id>
+
+Remove the dependency of <task-id> on <dep-id>.
+
+Options:
+   -r, --roadmap <name>   Roadmap name (required)
+
+Arguments:
+   <task-id>              ID of the dependent task
+   <dep-id>               ID of the task it depends on
+
+Examples:
+   rmp task remove-dep -r project1 42 17
+```
+
+### rmp task blockers --help
+
+```
+usage: rmp task blockers [-h | --help] -r <name> <id>
+
+List tasks that are blocking <id> — tasks that <id> depends on and that are
+NOT yet COMPLETED.
+
+Options:
+   -r, --roadmap <name>   Roadmap name (required)
+
+Arguments:
+   <id>                   Task ID
+
+Output: JSON array of Task objects (empty array if there are no blockers).
+
+Examples:
+   rmp task blockers -r project1 42
+```
+
+### rmp task blocking --help
+
+```
+usage: rmp task blocking [-h | --help] -r <name> <id>
+
+List tasks that <id> is blocking — tasks that depend on <id>.
+
+Options:
+   -r, --roadmap <name>   Roadmap name (required)
+
+Arguments:
+   <id>                   Task ID
+
+Output: JSON array of Task objects (empty array if this task is not blocking
+anything).
+
+Examples:
+   rmp task blocking -r project1 17
 ```
 
 ---
@@ -485,6 +620,31 @@ Output: JSON array of task objects
 Examples:
    rmp sprint tasks -r project1 1
    rmp sprint tasks -r project1 1 -s DOING
+```
+
+### rmp sprint open-tasks --help
+
+```
+usage: rmp sprint open-tasks [-h | --help] -r <name> <id> [--order-by-priority]
+
+List the incomplete tasks of a sprint (status SPRINT, DOING, or TESTING).
+Useful for stand-ups and sprint reviews when only remaining work matters.
+
+Options:
+   -r, --roadmap <name>     Roadmap name (required)
+       --order-by-priority  Order by priority DESC instead of sprint position
+
+Arguments:
+   <id>                     Sprint identifier
+
+Default ordering: sprint position ASC.
+
+Output: JSON array of Task objects with status SPRINT, DOING, or TESTING.
+Empty array if no open tasks remain.
+
+Examples:
+   rmp sprint open-tasks -r project1 1
+   rmp sprint open-tasks -r project1 1 --order-by-priority
 ```
 
 ### rmp sprint create --help
@@ -818,14 +978,12 @@ List audit log entries with optional filtering.
 
 Options:
    -r, --roadmap <name>        Roadmap name (required)
-   -o, --operation <type>     Filter by operation type:
-                               TASK_CREATE, TASK_UPDATE, TASK_STATUS_CHANGE,
-                               TASK_PRIORITY_CHANGE, TASK_SEVERITY_CHANGE,
-                               TASK_DELETE, SPRINT_CREATE, SPRINT_UPDATE,
-                               SPRINT_START, SPRINT_CLOSE, SPRINT_REOPEN,
-                               SPRINT_DELETE, SPRINT_ADD_TASK,
-                               SPRINT_REMOVE_TASK, SPRINT_MOVE_TASK
-   -e, --entity-type <type>   Filter by entity type: TASK, SPRINT
+   -o, --operation <type>      Filter by operation type. See SPEC/DATABASE.md
+                               for the canonical list of audit operations
+                               (TASK_*, SPRINT_*). Examples: TASK_CREATE,
+                               TASK_STATUS_CHANGE, TASK_REOPEN, TASK_ADD_DEP,
+                               SPRINT_START, SPRINT_CLOSE, SPRINT_REORDER_TASKS.
+   -e, --entity-type <type>    Filter by entity type: TASK, SPRINT
        --entity-id <id>        Filter by specific entity ID
        --since <date>          Include entries from this date (ISO 8601)
        --until <date>          Include entries until this date (ISO 8601)
@@ -881,6 +1039,95 @@ Examples:
 
 ---
 
+## Backlog Commands (rmp backlog --help)
+
+```
+usage: rmp backlog [-h | --help] <subcommand> [<args>]
+
+Manage and query tasks in the backlog. All subcommands operate exclusively
+on tasks with status BACKLOG.
+
+Subcommands:
+   list         List backlog tasks with optional filters
+   show-next    Show the top N highest-priority backlog tasks
+
+Example:
+   rmp backlog list -r project1
+   rmp backlog show-next 10 -r project1
+```
+
+### rmp backlog list --help
+
+```
+usage: rmp backlog list [-h | --help] -r <name> [OPTIONS]
+       rmp backlog ls   [-h | --help] -r <name> [OPTIONS]
+
+List tasks with status BACKLOG, with optional filtering and sorting.
+
+Options:
+   -r, --roadmap <name>     Roadmap name (required)
+   -p, --priority <min>     Minimum priority (inclusive)
+   -y, --type <type>        Filter by task type (see 'task create --help'
+                            for the 10 valid types)
+       --sort <field>       Sort by: priority (default), created, status, severity
+   -l, --limit <n>          Maximum number of tasks to return
+
+Output: JSON array of Task objects.
+
+Examples:
+   rmp backlog list -r project1
+   rmp backlog list -r project1 --priority 7
+   rmp backlog list -r project1 --type BUG
+   rmp backlog ls   -r project1 --limit 20
+```
+
+### rmp backlog show-next --help
+
+```
+usage: rmp backlog show-next [-h | --help] [count] -r <name>
+
+Show the top N highest-priority backlog tasks for sprint-planning purposes.
+Equivalent to 'backlog list --sort priority --limit <count>'.
+
+Options:
+   -r, --roadmap <name>   Roadmap name (required)
+
+Arguments:
+   count                  Number of tasks to return (default: 5, max: 100)
+
+Output: JSON array of Task objects ordered by priority descending.
+
+Examples:
+   rmp backlog show-next -r project1
+   rmp backlog show-next 10 -r project1
+```
+
+---
+
+## Statistics Command (rmp stats --help)
+
+```
+usage: rmp stats [-h | --help] -r <name>
+
+Get comprehensive statistics for a roadmap, including totals, status
+distribution, priority distribution, sprint summary, and average velocity.
+
+Options:
+   -r, --roadmap <name>   Roadmap name (required)
+
+Output: JSON object with the following top-level fields:
+   total_tasks                Total task count
+   status_distribution        Count of tasks per status
+   priority_distribution      Count of tasks per priority band
+   sprint_summary             Sprint totals by status (PENDING, OPEN, CLOSED)
+   average_velocity           Average tasks completed per closed sprint
+
+Examples:
+   rmp stats -r project1
+```
+
+---
+
 ## Error Messages with Help
 
 When a command is invoked incorrectly, an error message is shown followed by the specific help for that command.
@@ -910,8 +1157,8 @@ Optional Options:
 Output: JSON object with task ID
 
 Examples:
-   rmp task create -r project1 -t "Fix login bug" -f "User can login" -h "Update auth" -a "Login works"
-   rmp task new -r project1 -t "Update docs" -f "Docs needed" -h "Write README" -a "Docs complete" -p 5
+   rmp task create -r project1 -t "Fix login bug" -fr "User can login" -tr "Update auth" -ac "Login works"
+   rmp task new -r project1 -t "Update docs" -fr "Docs needed" -tr "Write README" -ac "Docs complete" -p 5
 ```
 
 ### Example: Unknown subcommand
@@ -1009,17 +1256,10 @@ Examples:
 
 ## Exit Codes Reference
 
-All commands return the following exit codes:
+The canonical exit-code catalogue lives in `SPEC/ARCHITECTURE.md` — Exit Codes section. In summary:
 
-| Code | Meaning         | Description                              |
-|------|-----------------|------------------------------------------|
-| 0    | Success         | Command completed successfully           |
-| 1    | General error   | Database failure, unexpected error       |
-| 2    | Invalid usage   | Wrong arguments, syntax error            |
-| 3    | No roadmap      | No roadmap selected for command          |
-| 4    | Not found       | Roadmap/task/sprint doesn't exist        |
-| 5    | Already exists  | Duplicate name when creating             |
-| 6    | Invalid data    | Validation failed (dates, ranges)        |
-| 126  | Not executable  | Permission issues                         |
-| 127  | Unknown command | Unknown command or subcommand            |
-| 130  | Interrupted     | Ctrl+C pressed                           |
+- `0` success; `1` system/database failure; `2` malformed input or missing required argument
+- `3` no roadmap specified; `4` resource not found; `5` resource already exists; `6` validation failed (range, enum, format, length, state-rule)
+- `126` not executable; `127` unknown command; `130` interrupted (Ctrl+C)
+
+For sentinel-to-exit-code mappings and the per-error-code table, refer to `ARCHITECTURE.md`.

@@ -90,11 +90,11 @@ Maps to the `tasks` table and `Task` JSON object.
 
 ```go
 // Task represents a task in the roadmap.
-// Field order optimized for memory layout (168 bytes, zero padding on 64-bit systems).
-// Groups: Content fields (strings), Tracking fields (pointers), Metadata (ints).
-// All content fields are mandatory (NOT NULL) with enforced maximum lengths.
+// Field order optimized for memory layout (240 bytes, zero padding on 64-bit systems).
+// Groups: Content (strings), Tracking (pointers), Metadata (ints), Dependencies (slices).
+// All Group 1 fields are mandatory (NOT NULL) with enforced maximum lengths.
 type Task struct {
-    // Group 1: Content fields - frequently accessed together (112 bytes total)
+    // Group 1: Content fields - frequently accessed together (112 bytes: 7 x 16)
     // All fields are mandatory (NOT NULL) with length constraints enforced by application
     Title                  string     `json:"title"`                    // Task title/summary, max 255 chars
     Status                 TaskStatus `json:"status"`                   // Current status
@@ -104,7 +104,7 @@ type Task struct {
     AcceptanceCriteria     string     `json:"acceptance_criteria"`      // How to verify: completion criteria, max 4096 chars
     CreatedAt              string     `json:"created_at"`               // ISO 8601 UTC, auto-set on creation
 
-    // Group 2: Nullable tracking fields - lifecycle timestamps and completion data (40 bytes total)
+    // Group 2: Nullable tracking fields - lifecycle timestamps and parent link (48 bytes: 6 x 8)
     Specialists        *string `json:"specialists"`          // Comma-separated specialists, nullable, max 500 chars
     StartedAt          *string `json:"started_at"`           // ISO 8601 UTC, auto-set on DOING transition
     TestedAt           *string `json:"tested_at"`            // ISO 8601 UTC, auto-set on TESTING transition
@@ -112,13 +112,13 @@ type Task struct {
     CompletionSummary  *string `json:"completion_summary"`   // Optional summary of work done, settable only on TESTING → COMPLETED, max 4096 chars
     ParentTaskID       *int    `json:"parent_task_id"`       // NULL for top-level tasks; non-NULL links to parent task
 
-    // Group 3: Numeric metadata fields (24 bytes total)
+    // Group 3: Numeric metadata fields (32 bytes: 4 x 8)
     ID           int `json:"id"`            // Primary key
     Priority     int `json:"priority"`      // 0-9 priority level
     Severity     int `json:"severity"`      // 0-9 severity level
     SubtaskCount int `json:"subtask_count"` // Computed: number of direct subtasks (not stored in DB)
 
-    // Dependency fields (fetched from task_dependencies table)
+    // Group 4: Dependency fields - fetched from task_dependencies table (48 bytes: 2 x 24 slice headers)
     DependsOn []int `json:"depends_on"` // IDs of tasks this task depends on (blocking this task)
     Blocks    []int `json:"blocks"`     // IDs of tasks that depend on this task (tasks this task is blocking)
 }
@@ -210,7 +210,7 @@ type SprintStats struct {
 
 **TaskOrder Field Behavior:**
 - **Purpose:** Defines the execution sequence of tasks within the sprint. Lower positions (starting at 0) represent higher priority tasks that should be executed first.
-- **Source:** Computed from the `sprint_tasks` junction table which maintains the many-to-many relationship between sprints and tasks, including the `position` column.
+- **Source:** Computed from the `sprint_tasks` junction table which maintains the 1:N relationship between sprints and tasks (one sprint has many tasks; each task belongs to at most one sprint), including the `position` column.
 - **Always included** in the SprintStats response
 - **Computed in real-time** from the sprint_tasks table, ordered by position (ASC)
 - **Format:** Array of task IDs where index 0 is the first task to execute (position 0)

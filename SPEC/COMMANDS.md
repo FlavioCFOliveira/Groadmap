@@ -1,18 +1,6 @@
 # CLI Commands
 
-## Change History
-
-| Date | Change | Description |
-|------|--------|-------------|
-| 2026-03-23 | Initial | First version of CLI Commands specification |
-| 2026-03-23 | Update | Added `stats` command for roadmap statistics |
-| 2026-03-24 | Update | Added `--summary` flag to `task stat` for completion summary |
-| 2026-03-24 | Update | Added `task reopen` command; restricted `task remove` to BACKLOG only; enforced sequential sprint opening |
-| 2026-03-24 | Update | Added `backlog` command group with `list` and `show-next` subcommands |
-| 2026-03-24 | Update | Added sub-task hierarchy: `--parent` flag on `task create`, `task subtasks <id>` subcommand, parent COMPLETED guard |
-| 2026-03-24 | Update | Added task dependency commands: `task add-dep`, `task remove-dep`, `task blockers`, `task blocking`; COMPLETED guard now checks dependencies |
-| 2026-03-24 | Update | Added velocity, days_elapsed, days_remaining, and burndown fields to `sprint stats`; added average_velocity to `rmp stats` |
-| 2026-03-24 | Update | Removed `roadmap use` subcommand; `-r <name>` / `--roadmap <name>` is now always required for roadmap-scoped commands; no default roadmap mechanism exists |
+> Change History for this file is consolidated in `SPEC/README.md` — Section 4 (Change History). See the "Historical Per-File Entries → COMMANDS.md" subsection.
 
 ## Naming Conventions
 
@@ -59,7 +47,7 @@ The following fields have mandatory length constraints enforced by the applicati
 - **Whitespace trimming:** Leading and trailing whitespace is trimmed before validation
 - **Empty strings:** Treated as missing for required fields
 - **Error format:** Plain text to stderr with descriptive message
-- **Exit code:** 1 for validation errors
+- **Exit code:** 6 for validation errors (see `ARCHITECTURE.md` — Exit Codes for canonical mapping)
 
 ### Validation Error Messages
 
@@ -169,6 +157,8 @@ rmp roadmap create <name>
 rmp road new <name>
 ```
 
+`roadmap create` accepts no flags beyond `--help`. It does not provide a `--force` or overwrite option; the operation is intentionally non-destructive. To replace an existing roadmap, the caller MUST run `rmp roadmap remove <name>` first.
+
 **Name Validation:**
 
 | Rule | Value | Description |
@@ -181,9 +171,9 @@ rmp road new <name>
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
-| Invalid characters | 2 | "Error: Roadmap name must only contain lowercase letters, numbers, underscores, and hyphens" |
-| Exceeds 50 characters | 2 | "Error: Roadmap name must not exceed 50 characters (got N)" |
-| Roadmap already exists | 5 | "Error: Roadmap 'name' already exists" |
+| Invalid characters | 6 | "Error: Roadmap name must only contain lowercase letters, numbers, underscores, and hyphens" |
+| Exceeds 50 characters | 6 | "Error: Roadmap name must not exceed 50 characters (got N)" |
+| Roadmap already exists | 5 | "Error: Roadmap 'name' already exists. To replace it, run 'rmp roadmap remove <name>' first." |
 
 **Output (success):** `{"name": "project1"}`, exit code 0.
 
@@ -214,7 +204,7 @@ rmp task ls -r <name> [OPTIONS]
 - `-p, --priority <n>` - Filter priority >= n (0-9)
 - `--severity <n>` - Filter severity >= n (0-9)
 - `-l, --limit <n>` - Limit number of results (default: 20, max: 100)
-- `-y, --type <TYPE>` - Filter by task type (USER_STORY, TASK, BUG, SUB_TASK, EPIC, REFACTOR, CHORE, SPIKE, DESIGN_UX, IMPROVEMENT)
+- `-y, --type <TYPE>` - Filter by task type. See `MODELS.md` — Task Type for the canonical list of 10 valid values.
 - `-sp, --specialists <name>` - Filter by specialist name (partial match, case-insensitive)
 - `--created-since <date>` - Return tasks created on or after this date (RFC3339 or YYYY-MM-DD)
 - `--created-until <date>` - Return tasks created on or before this date (RFC3339 or YYYY-MM-DD)
@@ -233,10 +223,10 @@ rmp task ls -r <name> [OPTIONS]
 **Error Conditions:**
 | Input | Exit Code | stderr |
 |-------|-----------|--------|
-| Invalid `--type` value | 1 | `Error: invalid task type: "X"` |
-| Invalid `--sort` value | 1 | `Error: --sort must be one of: priority, created, status, severity` |
-| Invalid `--created-since` format | 1 | `Error: --created-since: invalid date "X"...` |
-| Invalid `--created-until` format | 1 | `Error: --created-until: invalid date "X"...` |
+| Invalid `--type` value | 6 | `Error: invalid task type: "X"` |
+| Invalid `--sort` value | 6 | `Error: --sort must be one of: priority, created, status, severity` |
+| Invalid `--created-since` format | 6 | `Error: --created-since: invalid date "X"...` |
+| Invalid `--created-until` format | 6 | `Error: --created-until: invalid date "X"...` |
 
 **JSON Output:** Array of Task objects.
 
@@ -252,7 +242,7 @@ rmp task new -r <name> -t <title> -fr <fr> -tr <tr> -ac <ac>
 - `-fr, --functional-requirements <text>` - Functional requirements (required), maximum 4096 characters
 - `-tr, --technical-requirements <text>` - Technical requirements (required), maximum 4096 characters
 - `-ac, --acceptance-criteria <text>` - Acceptance criteria (required), maximum 4096 characters
-- `-y, --type <type>` - Task type (default: TASK). Valid values: `USER_STORY`, `TASK`, `BUG`, `SUB_TASK`, `EPIC`, `REFACTOR`, `CHORE`, `SPIKE`, `DESIGN_UX`, `IMPROVEMENT`
+- `-y, --type <type>` - Task type (default: `TASK`). See `MODELS.md` — Task Type for the canonical list of 10 valid values.
 - `-p, --priority <0-9>` - Priority (default: 0)
 - `--severity <0-9>` - Severity (default: 0)
 - `-sp, --specialists <list>` - Comma-separated specialists
@@ -269,7 +259,7 @@ rmp task new -r <name> -t <title> -fr <fr> -tr <tr> -ac <ac>
 
 **Output (success):** `{"id": 42}`, exit code 0.
 
-**Error Output:** Validation errors written to stderr with exit code 1.
+**Error Output:** Validation errors written to stderr with exit code 6.
 
 ### Get Task(s)
 
@@ -385,9 +375,9 @@ Success (no open tasks in sprint):
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
-| No sprint is currently open | 1 | "No sprint is currently open. Use 'rmp sprint start' to open a sprint first." |
-| Invalid num argument (not a positive integer) | 1 | "Invalid argument: num must be a positive integer" |
-| Roadmap not specified | 1 | "Error: Roadmap not specified. Use -r <name> or --roadmap <name>" |
+| No sprint is currently open | 6 | "No sprint is currently open. Use 'rmp sprint start' to open a sprint first." |
+| Invalid num argument (not a positive integer) | 2 | "Invalid argument: num must be a positive integer" |
+| Roadmap not specified | 3 | "Error: Roadmap not specified. Use -r <name> or --roadmap <name>" |
 
 **Behavior Notes:**
 - Only returns tasks with status `SPRINT`, `DOING`, or `TESTING` (open tasks)
@@ -425,9 +415,10 @@ All batch operations validate ALL IDs and status transitions before applying any
 | Some IDs invalid | 4 | **No changes made** | "Error: Task ID N not found" |
 | All IDs invalid | 4 | **No changes made** | "Error: Tasks not found: N,M,..." |
 | Invalid ID format | 2 | **No changes made** | "Error: Invalid task ID format: X" |
-| Invalid status transition | 2 | **No changes made** | "Error: Invalid status transition from X to Y" |
-| `--summary` used with non-COMPLETED state | 2 | **No changes made** | "Error: --summary flag is only allowed when transitioning to COMPLETED" |
-| `--summary` exceeds 4096 characters | 2 | **No changes made** | "Error: Completion summary must not exceed 4096 characters (got N)" |
+| Invalid status transition | 6 | **No changes made** | "Error: Invalid status transition from X to Y" |
+| Target state is `SPRINT` | 6 | **No changes made** | "Error: status SPRINT can only be set automatically via 'sprint add-tasks'" |
+| `--summary` used with non-COMPLETED state | 6 | **No changes made** | "Error: --summary flag is only allowed when transitioning to COMPLETED" |
+| `--summary` exceeds 4096 characters | 6 | **No changes made** | "Error: Completion summary must not exceed 4096 characters (got N)" |
 
 **Validation Order:**
 1. Parse all IDs and validate format (must be positive integers)
@@ -460,7 +451,7 @@ Validates all IDs before updating any priorities. Follows same validation order 
 |----------|-----------|---------------|
 | All IDs valid | 0 | None |
 | Some IDs invalid | 4 | "Error: Task ID N not found" |
-| Priority out of range (0-9) | 2 | "Error: Priority must be between 0 and 9" |
+| Priority out of range (0-9) | 6 | "Error: Priority must be between 0 and 9" |
 
 **Output (success):** No output, exit code 0.
 
@@ -479,7 +470,7 @@ Validates all IDs before updating any severities. Follows same validation order 
 |----------|-----------|---------------|
 | All IDs valid | 0 | None |
 | Some IDs invalid | 4 | "Error: Task ID N not found" |
-| Severity out of range (0-9) | 2 | "Error: Severity must be between 0 and 9" |
+| Severity out of range (0-9) | 6 | "Error: Severity must be between 0 and 9" |
 
 **Output (success):** No output, exit code 0.
 
@@ -496,7 +487,7 @@ rmp task edit --roadmap <name> <id> [OPTIONS]
 - `-fr, --functional-requirements <text>` - Maximum 4096 characters
 - `-tr, --technical-requirements <text>` - Maximum 4096 characters
 - `-ac, --acceptance-criteria <text>` - Maximum 4096 characters
-- `-y, --type <type>` - Task type. Valid values: `USER_STORY`, `TASK`, `BUG`, `SUB_TASK`, `EPIC`, `REFACTOR`, `CHORE`, `SPIKE`, `DESIGN_UX`, `IMPROVEMENT`
+- `-y, --type <type>` - Task type. See `MODELS.md` — Task Type for the canonical list of 10 valid values.
 - `-p, --priority <0-9>`
 - `--severity <0-9>`
 - `-sp, --specialists <list>`
@@ -507,28 +498,28 @@ When a field is specified, it is validated before updating:
 
 | Field | Constraint | Error Message (stderr) | Exit Code |
 |-------|------------|------------------------|-----------|
-| `title` | Required, max 255 chars | "Error: Title is required and must not exceed 255 characters" | 1 |
-| `title` | Empty string | "Error: Title cannot be empty" | 1 |
-| `functional-requirements` | Required, max 4096 chars | "Error: Functional requirements are required and must not exceed 4096 characters" | 1 |
-| `functional-requirements` | Empty string | "Error: Functional requirements cannot be empty" | 1 |
-| `technical-requirements` | Required, max 4096 chars | "Error: Technical requirements are required and must not exceed 4096 characters" | 1 |
-| `technical-requirements` | Empty string | "Error: Technical requirements cannot be empty" | 1 |
-| `acceptance-criteria` | Required, max 4096 chars | "Error: Acceptance criteria are required and must not exceed 4096 characters" | 1 |
-| `acceptance-criteria` | Empty string | "Error: Acceptance criteria cannot be empty" | 1 |
-| `priority` | Range 0-9 | "Error: Priority must be between 0 and 9" | 1 |
-| `severity` | Range 0-9 | "Error: Severity must be between 0 and 9" | 1 |
+| `title` | Required, max 255 chars | "Error: Title is required and must not exceed 255 characters" | 6 |
+| `title` | Empty string | "Error: Title cannot be empty" | 6 |
+| `functional-requirements` | Required, max 4096 chars | "Error: Functional requirements are required and must not exceed 4096 characters" | 6 |
+| `functional-requirements` | Empty string | "Error: Functional requirements cannot be empty" | 6 |
+| `technical-requirements` | Required, max 4096 chars | "Error: Technical requirements are required and must not exceed 4096 characters" | 6 |
+| `technical-requirements` | Empty string | "Error: Technical requirements cannot be empty" | 6 |
+| `acceptance-criteria` | Required, max 4096 chars | "Error: Acceptance criteria are required and must not exceed 4096 characters" | 6 |
+| `acceptance-criteria` | Empty string | "Error: Acceptance criteria cannot be empty" | 6 |
+| `priority` | Range 0-9 | "Error: Priority must be between 0 and 9" | 6 |
+| `severity` | Range 0-9 | "Error: Severity must be between 0 and 9" | 6 |
 | `type` | One of 10 valid values | "Error: invalid task type: <value>" | 6 |
 
 **Validation Behavior:**
 - **Whitespace trimming:** Leading and trailing whitespace is trimmed before validation
 - **Empty strings:** Setting a required field to empty string fails validation
 - **Partial updates:** Only specified fields are validated and updated
-- **Type validation:** Non-integer values for priority/severity fail with exit code 1
+- **Type validation:** Non-integer values for priority/severity fail with exit code 2 (malformed input)
 - **No-op:** If no fields are specified, command succeeds with no changes (exit code 0)
 
 **Output (success):** No output, exit code 0.
 
-**Error Output:** Validation errors written to stderr with exit code 1.
+**Error Output:** Validation errors written to stderr with exit code 6.
 
 ### Remove Task
 
@@ -614,9 +605,9 @@ rmp task add-dep -r <name> <task-id> <dep-id>
 | Scenario | Exit Code | stderr |
 |----------|-----------|--------|
 | Task not found | 4 | `Error: task #N not found: ...` |
-| Self-dependency | 2 | `Error: task cannot depend on itself` |
-| Circular dependency | 2 | `Error: adding dependency would create a circular dependency...` |
-| Missing arguments | 3 | `Error: task ID and dependency ID required` |
+| Self-dependency | 6 | `Error: task cannot depend on itself` |
+| Circular dependency | 6 | `Error: adding dependency would create a circular dependency...` |
+| Missing arguments | 2 | `Error: task ID and dependency ID required` |
 
 ---
 
@@ -638,7 +629,7 @@ rmp task remove-dep -r <name> <task-id> <dep-id>
 | Scenario | Exit Code | stderr |
 |----------|-----------|--------|
 | Dependency not found | 4 | `Error: dependency from task #N to task #N not found` |
-| Missing arguments | 3 | `Error: task ID and dependency ID required` |
+| Missing arguments | 2 | `Error: task ID and dependency ID required` |
 
 ---
 
@@ -778,7 +769,7 @@ rmp sprint open-tasks -r <name> <id> [--order-by-priority]
 | Scenario | Exit Code | stderr |
 |----------|-----------|--------|
 | Sprint not found | 4 | `Error: resource not found: sprint #N not found` |
-| Missing sprint ID | 1 | `Error: required: sprint ID required` |
+| Missing sprint ID | 2 | `Error: required: sprint ID required` |
 
 ### Sprint Statistics
 
@@ -896,8 +887,8 @@ rmp sprint show -r <name> <id>
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
-| Sprint not found | 1 | "Sprint not found" |
-| Roadmap not specified | 1 | "Error: Roadmap not specified. Use -r <name> or --roadmap <name>" |
+| Sprint not found | 4 | "Sprint not found" |
+| Roadmap not specified | 3 | "Error: Roadmap not specified. Use -r <name> or --roadmap <name>" |
 
 ### Sprint Lifecycle
 
@@ -915,7 +906,7 @@ rmp sprint reopen -r <name> <id>
 
 **Active-Task Safety Check (sprint close):**
 
-`sprint close` queries for tasks with status `DOING` or `TESTING` in the sprint before closing. If any exist and `--force` is not provided, the command returns exit code 2 with an error listing the task IDs and statuses. With `--force`, the sprint is closed and a warning is printed to stderr.
+`sprint close` queries for tasks with status `DOING` or `TESTING` in the sprint before closing. If any exist and `--force` is not provided, the command returns exit code 6 with an error listing the task IDs and statuses. With `--force`, the sprint is closed and a warning is printed to stderr.
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
@@ -963,7 +954,7 @@ All sprint task operations validate ALL IDs before making any changes.
 | `remove-tasks` | SPRINT → BACKLOG | Tasks automatically return to BACKLOG when removed from sprint |
 | `move-tasks` | (No change) | Status is preserved when moving between sprints |
 
-**Note:** The status SPRINT is automatically managed by sprint operations. Users should NOT manually set status to SPRINT using `task stat`. Manual status transitions should follow: BACKLOG → DOING → TESTING → COMPLETED.
+**Note:** The status SPRINT is automatically managed by sprint operations. Users MUST NOT manually set status to SPRINT using `task stat`; attempts to do so are rejected with exit code 6 and the error message `"Error: status SPRINT can only be set automatically via 'sprint add-tasks'"`. Manual status transitions follow: BACKLOG → DOING → TESTING → COMPLETED (with `SPRINT → BACKLOG`, `DOING → SPRINT`, and `COMPLETED → BACKLOG` also available — see `STATE_MACHINE.md` for the full set).
 
 **Output (success):** No output, exit code 0.
 
@@ -1000,11 +991,11 @@ rmp sprint order -r <name> <sprint-id> <task-ids>
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
-| Sprint not found | 1 | "Sprint not found" |
-| Task ID not in sprint | 1 | "Task ID N is not in sprint" |
-| Duplicate task IDs | 1 | "Duplicate task ID: N" |
-| Missing task IDs | 1 | "Task list incomplete: expected N tasks, got M" |
-| Invalid task ID format | 1 | "Invalid task ID: X" |
+| Sprint not found | 4 | "Sprint not found" |
+| Task ID not in sprint | 6 | "Task ID N is not in sprint" |
+| Duplicate task IDs | 6 | "Duplicate task ID: N" |
+| Missing task IDs | 6 | "Task list incomplete: expected N tasks, got M" |
+| Invalid task ID format | 2 | "Invalid task ID: X" |
 
 #### Move Task to Position
 
@@ -1032,9 +1023,9 @@ rmp sprint mvto -r <name> <sprint-id> <task-id> <position>
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
-| Sprint not found | 1 | "Sprint not found" |
-| Task not in sprint | 1 | "Task N is not in sprint" |
-| Invalid position | 1 | "Position must be a non-negative integer" |
+| Sprint not found | 4 | "Sprint not found" |
+| Task not in sprint | 6 | "Task N is not in sprint" |
+| Invalid position | 6 | "Position must be a non-negative integer" |
 
 #### Swap Tasks
 
@@ -1060,9 +1051,9 @@ rmp sprint swap -r <name> <sprint-id> <task-id-1> <task-id-2>
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
-| Sprint not found | 1 | "Sprint not found" |
-| Task not in sprint | 1 | "Task N is not in sprint" |
-| Same task ID | 1 | "Cannot swap a task with itself" |
+| Sprint not found | 4 | "Sprint not found" |
+| Task not in sprint | 6 | "Task N is not in sprint" |
+| Same task ID | 6 | "Cannot swap a task with itself" |
 
 #### Move Task to Top/Bottom
 
@@ -1087,8 +1078,8 @@ rmp sprint bottom -r <name> <sprint-id> <task-id>
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
-| Sprint not found | 1 | "Sprint not found" |
-| Task not in sprint | 1 | "Task N is not in sprint" |
+| Sprint not found | 4 | "Sprint not found" |
+| Task not in sprint | 6 | "Task N is not in sprint" |
 
 ### Update Sprint
 
@@ -1148,7 +1139,7 @@ When a sprint is removed, all tasks currently associated with it are automatical
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
 | Sprint not found | 4 | "Error: Sprint ID N not found" |
-| Roadmap not specified | 1 | "Error: Roadmap not specified. Use -r <name> or --roadmap <name>" |
+| Roadmap not specified | 3 | "Error: Roadmap not specified. Use -r <name> or --roadmap <name>" |
 
 ---
 
@@ -1270,7 +1261,7 @@ rmp backlog ls -r <name> [OPTIONS]
 **Options:**
 - `-r, --roadmap <name>` - Roadmap name (required if no default)
 - `-p, --priority <min>` - Filter by minimum priority value (inclusive)
-- `-y, --type <type>` - Filter by task type (TASK, BUG, FEATURE, IMPROVEMENT, SPIKE)
+- `-y, --type <type>` - Filter by task type. Valid values: `USER_STORY`, `TASK`, `BUG`, `SUB_TASK`, `EPIC`, `REFACTOR`, `CHORE`, `SPIKE`, `DESIGN_UX`, `IMPROVEMENT` (see `MODELS.md` — Task Type for the canonical enum)
 - `--sort <field>` - Sort order: `priority` (default), `created`, `status`, `severity`
 - `-l, --limit <n>` - Maximum number of tasks to return
 

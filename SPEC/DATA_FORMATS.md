@@ -96,24 +96,9 @@ YYYY-MM-DDTHH:mm:ss.sssZ
 
 ## Task Status State Machine
 
-The following table defines the valid transitions between task statuses.
+The canonical state-machine definition (states, valid transitions, manual/automatic semantics, deletion preconditions) lives in `SPEC/STATE_MACHINE.md`. Refer to that file for the authoritative transition matrix and rules.
 
-| From \ To | BACKLOG | SPRINT | DOING | TESTING | COMPLETED |
-|-----------|:-------:|:------:|:-----:|:-------:|:---------:|
-| **BACKLOG** | - | Yes | No | No | No |
-| **SPRINT** | Yes | - | Yes | No | No |
-| **DOING** | No | Yes | - | Yes | No |
-| **TESTING** | No | No | Yes | - | Yes |
-| **COMPLETED** | Yes | No | No | No | - |
-
-**Key Rules:**
-1. **Adding to Sprint**: Tasks move from `BACKLOG` to `SPRINT` (typically via `rmp sprint add`).
-2. **Starting Work**: Tasks move from `SPRINT` to `DOING` (starting development).
-3. **Internal Iteration**: `TESTING -> DOING` allows returning to development if tests fail.
-4. **Pausing**: `DOING -> SPRINT` allows pausing work on a task within the same sprint.
-5. **Removal/Return**: `SPRINT -> BACKLOG` allows removing a task from a sprint.
-6. **Completion**: Only `TESTING` tasks can be marked as `COMPLETED`.
-7. **Reopening**: A `COMPLETED` task can be moved back to `BACKLOG` for major changes or bug fixes.
+JSON output that includes a `status` field uses one of the five enum values defined in `MODELS.md` — Task Status (`BACKLOG`, `SPRINT`, `DOING`, `TESTING`, `COMPLETED`).
 
 ---
 
@@ -164,6 +149,8 @@ PENDING → OPEN → CLOSED
 
 ### Sprint
 
+Example with a capacity limit set (`max_tasks` is an integer):
+
 ```json
 {
   "id": 1,
@@ -178,7 +165,23 @@ PENDING → OPEN → CLOSED
 }
 ```
 
-**Note:** The `tasks` and `task_count` fields are computed at runtime from the `sprint_tasks` junction table and are not stored in the `sprints` table. The `max_tasks` field is `null` when no capacity limit is set.
+Example with unlimited capacity (`max_tasks` is `null`):
+
+```json
+{
+  "id": 2,
+  "status": "PENDING",
+  "description": "Sprint 2 - Open scope",
+  "tasks": [],
+  "task_count": 0,
+  "created_at": "2026-03-13T09:00:00.000Z",
+  "started_at": null,
+  "closed_at": null,
+  "max_tasks": null
+}
+```
+
+**Note:** The `tasks` and `task_count` fields are computed at runtime from the `sprint_tasks` junction table and are not stored in the `sprints` table. The `max_tasks` field is always present in the JSON output (never omitted); it is `null` when no capacity limit is set and an integer otherwise.
 
 ### Audit Entry
 

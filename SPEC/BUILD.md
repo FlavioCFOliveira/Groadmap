@@ -171,11 +171,7 @@ rmp-{version}-{target}.tar.gz
 └── README.md             # Quick start guide
 ```
 
-## Change History
-
-| Date | Change | Description |
-|------|--------|-------------|
-| 2026-03-20 | Initial | Build system with all supported platforms including Raspberry Pi |
+> Change History for this file is consolidated in `SPEC/README.md` — Section 4 (Change History). See the "Historical Per-File Entries → BUILD.md" subsection.
 
 ## Acceptance Criteria
 

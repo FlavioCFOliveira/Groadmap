@@ -4,9 +4,9 @@
 
 | Component | Version | File |
 |-----------|---------|------|
-| Application | v1.1.0 | `cmd/rmp/main.go` |
+| Application | v1.2.1 | `cmd/rmp/main.go` |
 | Database Schema | v1.6.0 | `internal/db/schema.go` |
-| Specification | v1.1.0 | `SPEC/` |
+| Specification | v2.0.0 | `SPEC/README.md` |
 
 ## Versioning Strategy
 
@@ -15,7 +15,7 @@
 The application version is defined in `cmd/rmp/main.go`:
 
 ```go
-const version = "1.1.0"
+const version = "1.2.1"
 ```
 
 This version is:
@@ -75,14 +75,16 @@ This independence allows:
 1. Update version constant in `cmd/rmp/main.go`
 2. Update `SPEC/VERSION.md` with new version information
 3. Update `SPEC/README.md` version and date
-4. Create git tag: `git tag -a v1.1.0 -m "Release v1.1.0"`
-5. Push tag: `git push origin v1.1.0`
+4. Create git tag: `git tag -a v1.2.1 -m "Release v1.2.1"`
+5. Push tag: `git push origin v1.2.1`
 6. Workflow builds binaries and uploads artifacts
 
 ## Version History
 
 | Date | Application | Schema | Description |
 |------|-------------|--------|-------------|
+| 2026-03-25 | v1.2.1 | v1.6.0 | Lint compliance, performance polish, E2E alignment |
+| 2026-03-24 | v1.2.0 | v1.6.0 | Sprint discovery, sub-task hierarchy, task dependencies, sprint velocity, stats, backlog |
 | 2026-03-24 | v1.1.0 | v1.6.0 | Sub-task hierarchy, task dependencies, sprint velocity, sprint show, capacity management |
 | 2026-03-20 | v1.1.0 | v1.1.0 | Added sprint task ordering (position column) |
 | 2026-03-20 | v1.0.0 | v1.0.0 | Initial release |

@@ -58,7 +58,8 @@ The installation script detects architecture via `uname -m`:
 | arm64, aarch64 | arm64 | {goos}-arm64 |
 | armv6l, armv6 | armv6 | {goos}-armv6 |
 | armv7l, armv7 | armv7 | {goos}-armv7 |
-| i386, i686 | 386 | {goos}-386 |
+
+**Unsupported architectures:** 32-bit x86 (`i386`, `i686`) and any other architecture not listed above are not produced by `BUILD.md`. The script exits with an error message: `"Error: architecture <uname> is not supported. Supported targets: amd64, arm64, armv6, armv7. See SPEC/BUILD.md for the build matrix."` and exit code 1.
 
 ### ARM Variant Detection
 
@@ -109,8 +110,8 @@ Returns the architecture string for the current system.
 - `arm64` - 64-bit ARM systems
 - `armv6` - ARMv6 systems (Pi Zero/1)
 - `armv7` - ARMv7 systems (Pi 2/3/4 32-bit)
-- `386` - 32-bit x86 systems
-- `unknown` - Unrecognized architecture
+- `unsupported` - Architecture detected but not produced by the build (e.g., `i386`, `i686`); script exits with error
+- `unknown` - Unrecognized architecture string
 
 #### `is_raspberry_pi()`
 Detects if running on Raspberry Pi hardware.
@@ -223,12 +224,7 @@ Each release includes:
 - [ ] Version updated in `cmd/rmp/main.go`
 - [ ] Documentation updated (`SPEC/VERSION.md`, `SPEC/README.md`)
 
-## Change History
-
-| Date | Change | Description |
-|------|--------|-------------|
-| 2026-03-20 | Initial | Installation script with platform detection including Raspberry Pi |
-| 2026-03-20 | Update | Added automated GitHub Release creation workflow triggered on tag push |
+> Change History for this file is consolidated in `SPEC/README.md` — Section 4 (Change History). See the "Historical Per-File Entries → DEPLOY.md" subsection.
 
 ## Acceptance Criteria
 

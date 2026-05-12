@@ -7,7 +7,7 @@ Each roadmap is stored in an individual SQLite file. The schema is designed to b
 ## Naming Conventions
 
 - **Tables**: snake_case, plural (`tasks`, `sprints`)
-- **Columns**: snake_case (`created_at`, `expected_result`)
+- **Columns**: snake_case (`created_at`, `acceptance_criteria`)
 - **Primary keys**: `INTEGER PRIMARY KEY AUTOINCREMENT`
 - **Indexes**: prefix `idx_` followed by table and column name
 
@@ -134,9 +134,9 @@ CREATE INDEX IF NOT EXISTS idx_sprints_status ON sprints(status);
 CREATE INDEX IF NOT EXISTS idx_sprints_created_at ON sprints(created_at);
 ```
 
-### `sprint_tasks` Table (N:M Relationship)
+### `sprint_tasks` Table (1:N Relationship)
 
-Junction table for many-to-many relationship between sprints and tasks, with ordering support for sprint task priority.
+Junction table linking sprints to their tasks. The relationship is one-sprint-to-many-tasks: a sprint contains many tasks, but each task belongs to at most one sprint at any given time. This 1:N constraint is enforced at the schema level by the `UNIQUE` constraint on `task_id`. The table also stores ordering information (`position`) for sprint task priority.
 
 ```sql
 CREATE TABLE IF NOT EXISTS sprint_tasks (
@@ -190,16 +190,17 @@ CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 - `entity_id`: Affected entity ID
 - `performed_at`: Operation timestamp
 
-**Valid values (validated by application):**
+**Valid values (validated by application):** This section is the canonical catalogue of audit operations. All other SPEC files referencing audit operations MUST link here rather than re-listing.
 
 **Tasks:**
 - `TASK_CREATE` - New task created
-- `TASK_DELETE` - Task deleted
-- `TASK_STATUS_CHANGE` - Status change (BACKLOG → SPRINT → DOING → TESTING → COMPLETED)
+- `TASK_DELETE` - Task deleted (only allowed while in BACKLOG; see Delete Task precondition)
+- `TASK_STATUS_CHANGE` - Status change (BACKLOG ↔ DOING ↔ TESTING → COMPLETED, plus COMPLETED → BACKLOG; SPRINT transitions are logged as `SPRINT_ADD_TASK` / `SPRINT_REMOVE_TASK`)
 - `TASK_TYPE_CHANGE` - Type change (USER_STORY, TASK, BUG, SUB_TASK, EPIC, REFACTOR, CHORE, SPIKE, DESIGN_UX, IMPROVEMENT)
 - `TASK_PRIORITY_CHANGE` - Priority change (0-9)
 - `TASK_SEVERITY_CHANGE` - Severity change (0-9)
-- `TASK_UPDATE` - Generic update (description, action, expected_result, specialists)
+- `TASK_UPDATE` - Generic update (title, functional_requirements, technical_requirements, acceptance_criteria, specialists)
+- `TASK_REOPEN` - Task returned to BACKLOG via `task reopen`; lifecycle timestamps cleared and sprint_tasks row removed
 - `TASK_ADD_DEP` - Dependency added (logged against both task_id and depends_on_task_id)
 - `TASK_REMOVE_DEP` - Dependency removed (logged against both task_id and depends_on_task_id)
 
@@ -500,6 +501,8 @@ UPDATE sprint_tasks SET position = ? WHERE sprint_id = ? AND task_id = ?;
 ```sql
 DELETE FROM tasks WHERE id = ?;
 ```
+
+**Application-level precondition:** Before executing this statement, the application MUST verify that the task's `status` is `BACKLOG` and that the task has no subtasks (no other tasks with `parent_task_id = <id>`). Tasks in `SPRINT`, `DOING`, `TESTING`, or `COMPLETED` status are not deletable; the operation returns exit code 6. See `STATE_MACHINE.md` — Task Deletion Precondition. The SQLite DDL does not enforce this rule via `CHECK` or trigger.
 
 ### Sprints
 
@@ -925,7 +928,7 @@ Total: 168 bytes (7×16 + 4×8 + 3×8 = 112 + 32 + 24)
 | added_at | TEXT | NOT NULL, ISO 8601 format |
 | position | INTEGER | NOT NULL, DEFAULT 0, position in sprint task order (0-based) |
 
-**Note:** Composite primary key `(sprint_id, task_id)`. A task can only be in one sprint at a time. The `position` field enables sprint task ordering, with 0 being the first position.
+**Note:** Composite primary key `(sprint_id, task_id)` combined with the `UNIQUE` constraint on `task_id` enforces the 1:N relationship — a task can only belong to one sprint at a time. The `position` field enables sprint task ordering, with 0 being the first position.
 
 ### Audit
 
@@ -938,7 +941,7 @@ Total: 168 bytes (7×16 + 4×8 + 3×8 = 112 + 32 + 24)
 | performed_at | TEXT | NOT NULL, ISO 8601 format |
 
 **Valid values (validated by application):**
-- `operation`: TASK_CREATE, TASK_UPDATE, TASK_DELETE, TASK_STATUS_CHANGE, TASK_TYPE_CHANGE, TASK_PRIORITY_CHANGE, TASK_SEVERITY_CHANGE, SPRINT_CREATE, SPRINT_UPDATE, SPRINT_DELETE, SPRINT_START, SPRINT_CLOSE, SPRINT_REOPEN, SPRINT_ADD_TASK, SPRINT_REMOVE_TASK, SPRINT_MOVE_TASK, SPRINT_REORDER_TASKS, SPRINT_TASK_MOVE_POSITION, SPRINT_TASK_SWAP
+- `operation`: See the canonical catalogue in the `audit` Table section above (Tasks + Sprints).
 - `entity_type`: TASK, SPRINT
 
 ---
@@ -1190,6 +1193,9 @@ The `_metadata` table enables future schema versioning.
 | 1.1.0 | 2026-03-20 | Added sprint_tasks position column and idx_sprint_tasks_order index |
 | 1.2.0 | 2026-03-24 | Added partial unique index to enforce at most one OPEN sprint |
 | 1.3.0 | 2026-03-24 | Added completion_summary column to tasks table |
+| 1.4.0 | 2026-03-24 | Added max_tasks column to sprints table (sprint capacity management) |
+| 1.5.0 | 2026-03-24 | Added parent_task_id column and idx_tasks_parent_task_id index to tasks table (sub-task hierarchy) |
+| 1.6.0 | 2026-03-24 | Added task_dependencies table with idx_task_deps_task_id and idx_task_deps_depends_on indexes (blocking relationships) |
 
 ### Migration Commands
 

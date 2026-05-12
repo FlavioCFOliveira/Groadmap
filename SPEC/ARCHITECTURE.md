@@ -149,9 +149,9 @@ type SprintStats struct {
 - Pointer fields (8 bytes each) are grouped as they're often accessed together during lifecycle transitions
 - Integer fields (8 bytes each) are grouped as they're frequently used for filtering/sorting
 
-**Sprint-Task Relationship (Many-to-Many):**
+**Sprint-Task Relationship (1:N — one sprint to many tasks; each task in at most one sprint):**
 
-The relationship between sprints and tasks is maintained in the `sprint_tasks` junction table:
+The relationship between sprints and tasks is maintained in the `sprint_tasks` junction table. While structurally a junction table, the `UNIQUE` constraint on `task_id` enforces that any task belongs to at most one sprint at a time:
 
 ```
 sprint_tasks table:
@@ -265,7 +265,7 @@ Error: Task with ID 999 not found in roadmap 'project1'
 **Example - Input error (shows help):**
 ```
 $ rmp task create -r project1
-Error: Missing required parameters: --description, --action, --expected-result
+Error: Missing required parameters: --functional-requirements, --technical-requirements, --acceptance-criteria
 
 Usage: rmp task create [OPTIONS]
 ...
@@ -374,7 +374,7 @@ Internal error codes map to exit codes as follows:
 | `INVALID_DATE_RANGE` | 6 | Date range validation failed |
 | `INVALID_PRIORITY` | 6 | Priority out of range (0-9) |
 | `INVALID_SEVERITY` | 6 | Severity out of range (0-9) |
-| `INVALID_STATUS_TRANSITION` | 2 | Invalid task status transition |
+| `INVALID_STATUS_TRANSITION` | 6 | Invalid task status transition (state-machine validation) |
 | `ROADMAP_NOT_FOUND` | 4 | Specified roadmap does not exist |
 | `ROADMAP_EXISTS` | 5 | Roadmap name already in use |
 | `TASK_NOT_FOUND` | 4 | Task ID does not exist |
