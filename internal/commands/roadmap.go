@@ -4,6 +4,7 @@ package commands
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
@@ -38,23 +39,37 @@ func HandleRoadmap(args []string) error {
 }
 
 // roadmapList lists all roadmaps.
+//
+// Reads the data directory once and asks each DirEntry for its Info();
+// on Linux/macOS the directory read already filled in the file metadata,
+// so we avoid one stat(2) syscall per roadmap that os.Stat would issue.
 func roadmapList() error {
-	names, err := utils.ListRoadmaps()
+	dataDir, err := utils.GetDataDir()
 	if err != nil {
 		return err
 	}
 
-	var roadmaps []models.Roadmap
-	for _, name := range names {
-		path, _ := utils.GetRoadmapPath(name)
-		info, err := os.Stat(path)
-		if err != nil {
+	entries, err := os.ReadDir(dataDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return utils.PrintJSON([]models.Roadmap{})
+		}
+		return fmt.Errorf("reading data directory: %w", err)
+	}
+
+	roadmaps := make([]models.Roadmap, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".db" {
 			continue
 		}
-
+		info, err := entry.Info()
+		if err != nil {
+			continue // file may have been removed between ReadDir and Info
+		}
+		name := entry.Name()[:len(entry.Name())-len(".db")]
 		roadmaps = append(roadmaps, models.Roadmap{
 			Name: name,
-			Path: path,
+			Path: filepath.Join(dataDir, entry.Name()),
 			Size: info.Size(),
 		})
 	}
