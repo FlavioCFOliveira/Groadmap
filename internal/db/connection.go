@@ -133,13 +133,10 @@ func Open(roadmapName string) (*DB, error) {
 		isNew = true
 	}
 
-	// Open database connection with retry logic
-	var sqlDB *sql.DB
-	err = retryWithBackoff("opening database", func() error {
-		var openErr error
-		sqlDB, openErr = sql.Open("sqlite", dbPath)
-		return openErr
-	})
+	// sql.Open is documented as not actually establishing a connection — it
+	// only validates the driver — so wrapping it in retryWithBackoff was
+	// dead weight. Any failure here is immediate and not retryable.
+	sqlDB, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("opening database %s: %w", roadmapName, err)
 	}
