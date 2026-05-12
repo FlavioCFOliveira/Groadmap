@@ -30,6 +30,7 @@ TEST_MODULES = [
     "test_11_sprint_show",
     "test_12_sprint_stats",
     "test_13_sprint_task_ordering",
+    "test_23_backlog_management",
 ]
 
 # Stress tests (run separately due to time/data volume)
