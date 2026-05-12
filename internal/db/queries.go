@@ -1288,50 +1288,31 @@ func (db *DB) GetTaskBlocks(ctx context.Context, taskID int) ([]int, error) {
 	return ids, nil
 }
 
-// hasTransitiveDependency checks if fromID transitively depends on targetID using BFS.
-// Returns true if there is a path fromID →...→ targetID through task_dependencies.
+// hasTransitiveDependency checks if fromID transitively depends on targetID.
+// Returns true if there is a path fromID →...→ targetID through
+// task_dependencies, computed via a single recursive CTE in SQLite.
 func (db *DB) hasTransitiveDependency(ctx context.Context, fromID, targetID int) (bool, error) {
-	visited := make(map[int]bool)
-	queue := []int{fromID}
-
-	for len(queue) > 0 {
-		current := queue[0]
-		queue = queue[1:]
-
-		if current == targetID {
-			return true, nil
-		}
-		if visited[current] {
-			continue
-		}
-		visited[current] = true
-
-		// Get direct dependencies of current
-		rows, err := db.QueryContext(ctx,
-			`SELECT depends_on_task_id FROM task_dependencies WHERE task_id = ?`,
-			current,
-		)
-		if err != nil {
-			return false, fmt.Errorf("querying dependencies for task %d: %w", current, err)
-		}
-		var deps []int
-		for rows.Next() {
-			var id int
-			if scanErr := rows.Scan(&id); scanErr != nil {
-				rows.Close()
-				return false, fmt.Errorf("scanning dependency: %w", scanErr)
-			}
-			deps = append(deps, id)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return false, fmt.Errorf("iterating dependency rows: %w", err)
-		}
-
-		queue = append(queue, deps...)
+	if fromID == targetID {
+		return true, nil
 	}
-
-	return false, nil
+	const query = `
+		WITH RECURSIVE deps(id) AS (
+			SELECT depends_on_task_id FROM task_dependencies WHERE task_id = ?
+			UNION
+			SELECT td.depends_on_task_id
+			FROM task_dependencies td
+			JOIN deps ON td.task_id = deps.id
+		)
+		SELECT 1 FROM deps WHERE id = ? LIMIT 1`
+	var found int
+	err := db.QueryRowContext(ctx, query, fromID, targetID).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("checking transitive dependency: %w", err)
+	}
+	return found == 1, nil
 }
 
 // ==================== SPRINT QUERIES ====================
