@@ -1883,39 +1883,35 @@ func (db *DB) LogAuditEntriesBatch(ctx context.Context, entries []*models.AuditE
 	})
 }
 
-// GetAuditEntries retrieves audit entries with optional filters and pagination.
+// AuditFilter bundles every optional knob for GetAuditEntries. A nil
+// pointer in any of the *Field positions means "no filter on this field".
+// Limit == 0 means "no limit"; Offset == 0 means "start from the top".
+type AuditFilter struct {
+	Operation  *string
+	EntityType *string
+	EntityID   *int
+	Since      *string
+	Until      *string
+	Limit      int
+	Offset     int
+}
+
+// GetAuditEntries retrieves audit entries matching the supplied filter,
+// ordered by performed_at DESC.
 //
-// Parameters (all optional, use nil to skip filter):
-//   - ctx: Context for timeout and cancellation
-//   - operation: Filter by operation type (e.g., "TASK_CREATE", "TASK_UPDATE")
-//   - entityType: Filter by entity type (e.g., "TASK", "SPRINT")
-//   - entityID: Filter by specific entity ID
-//   - since: Filter entries from this timestamp (ISO 8601 format)
-//   - until: Filter entries up to this timestamp (ISO 8601 format)
-//   - limit: Maximum number of entries to return (0 = no limit)
-//   - offset: Number of entries to skip for pagination (0 = start from beginning)
-//
-// Returns:
-//   - Slice of AuditEntry structs, ordered by performed_at DESC (newest first)
-//   - Error if database query fails
-//
-// Error conditions:
-//   - Returns wrapped database errors for connection/query failures
-//   - Returns empty slice (not error) if no entries match filters
-//
-// Side effects: None (read-only operation)
-//
-// Complexity: O(n) where n is the number of entries returned
+// Returns an empty slice (no error) when no rows match.
 //
 // Example:
 //
-//	entries, err := db.GetAuditEntries(ctx,
-//	    strPtr("TASK_CREATE"),  // operation filter
-//	    strPtr("TASK"),         // entity type filter
-//	    nil, nil, nil,          // no entity ID, since, until filters
-//	    100, 0,                 // limit 100, offset 0
-//	)
-func (db *DB) GetAuditEntries(ctx context.Context, operation, entityType *string, entityID *int, since, until *string, limit, offset int) ([]models.AuditEntry, error) {
+//	op := "TASK_CREATE"
+//	entries, err := db.GetAuditEntries(ctx, &db.AuditFilter{
+//	    Operation: &op,
+//	    Limit:     100,
+//	})
+func (db *DB) GetAuditEntries(ctx context.Context, f *AuditFilter) ([]models.AuditEntry, error) {
+	if f == nil {
+		f = &AuditFilter{}
+	}
 	// Build the query with strings.Builder so we don't allocate a new
 	// backing string for every appended clause.
 	var qb strings.Builder
@@ -1923,35 +1919,35 @@ func (db *DB) GetAuditEntries(ctx context.Context, operation, entityType *string
 	qb.WriteString(`SELECT id, operation, entity_type, entity_id, performed_at FROM audit WHERE 1=1`)
 	args := make([]any, 0, 7)
 
-	if operation != nil {
+	if f.Operation != nil {
 		qb.WriteString(" AND operation = ?")
-		args = append(args, *operation)
+		args = append(args, *f.Operation)
 	}
-	if entityType != nil {
+	if f.EntityType != nil {
 		qb.WriteString(" AND entity_type = ?")
-		args = append(args, *entityType)
+		args = append(args, *f.EntityType)
 	}
-	if entityID != nil {
+	if f.EntityID != nil {
 		qb.WriteString(" AND entity_id = ?")
-		args = append(args, *entityID)
+		args = append(args, *f.EntityID)
 	}
-	if since != nil {
+	if f.Since != nil {
 		qb.WriteString(" AND performed_at >= ?")
-		args = append(args, *since)
+		args = append(args, *f.Since)
 	}
-	if until != nil {
+	if f.Until != nil {
 		qb.WriteString(" AND performed_at <= ?")
-		args = append(args, *until)
+		args = append(args, *f.Until)
 	}
 
 	qb.WriteString(" ORDER BY performed_at DESC")
-	if limit > 0 {
+	if f.Limit > 0 {
 		qb.WriteString(" LIMIT ?")
-		args = append(args, limit)
+		args = append(args, f.Limit)
 	}
-	if offset > 0 {
+	if f.Offset > 0 {
 		qb.WriteString(" OFFSET ?")
-		args = append(args, offset)
+		args = append(args, f.Offset)
 	}
 
 	rows, err := db.QueryContext(ctx, qb.String(), args...)
@@ -1985,7 +1981,10 @@ func (db *DB) GetAuditEntries(ctx context.Context, operation, entityType *string
 
 // GetEntityHistory retrieves audit history for a specific entity.
 func (db *DB) GetEntityHistory(ctx context.Context, entityType string, entityID int) ([]models.AuditEntry, error) {
-	return db.GetAuditEntries(ctx, nil, &entityType, &entityID, nil, nil, 0, 0)
+	return db.GetAuditEntries(ctx, &AuditFilter{
+		EntityType: &entityType,
+		EntityID:   &entityID,
+	})
 }
 
 // GetAuditStats retrieves aggregated statistics for audit entries in a date range.

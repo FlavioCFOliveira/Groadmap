@@ -97,7 +97,14 @@ func auditList(args []string) error {
 	ctx, cancel := db.WithDefaultTimeout()
 	defer cancel()
 
-	entries, err := database.GetAuditEntries(ctx, operation, entityType, entityID, since, until, limit, 0)
+	entries, err := database.GetAuditEntries(ctx, &db.AuditFilter{
+		Operation:  operation,
+		EntityType: entityType,
+		EntityID:   entityID,
+		Since:      since,
+		Until:      until,
+		Limit:      limit,
+	})
 	if err != nil {
 		return err
 	}

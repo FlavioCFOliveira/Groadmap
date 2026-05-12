@@ -890,7 +890,7 @@ func TestGetAuditEntries(t *testing.T) {
 	}
 
 	// Get all entries
-	entries, err := db.GetAuditEntries(testContext(), nil, nil, nil, nil, nil, 10, 0)
+	entries, err := db.GetAuditEntries(testContext(), &AuditFilter{Limit: 10})
 	if err != nil {
 		t.Fatalf("failed to get audit entries: %v", err)
 	}
@@ -901,7 +901,7 @@ func TestGetAuditEntries(t *testing.T) {
 
 	// Filter by operation
 	op := "TASK_CREATE"
-	entries, err = db.GetAuditEntries(testContext(), &op, nil, nil, nil, nil, 10, 0)
+	entries, err = db.GetAuditEntries(testContext(), &AuditFilter{Operation: &op, Limit: 10})
 	if err != nil {
 		t.Fatalf("failed to filter audit entries: %v", err)
 	}
@@ -1140,7 +1140,7 @@ func TestGetAuditEntriesWithFilters(t *testing.T) {
 
 	// Test filter by entity type
 	entityType := "TASK"
-	results, err := db.GetAuditEntries(testContext(), nil, &entityType, nil, nil, nil, 10, 0)
+	results, err := db.GetAuditEntries(testContext(), &AuditFilter{EntityType: &entityType, Limit: 10})
 	if err != nil {
 		t.Fatalf("failed to filter by entity type: %v", err)
 	}
@@ -1151,7 +1151,7 @@ func TestGetAuditEntriesWithFilters(t *testing.T) {
 
 	// Test filter by entity ID
 	entityID := 1
-	results, err = db.GetAuditEntries(testContext(), nil, nil, &entityID, nil, nil, 10, 0)
+	results, err = db.GetAuditEntries(testContext(), &AuditFilter{EntityID: &entityID, Limit: 10})
 	if err != nil {
 		t.Fatalf("failed to filter by entity ID: %v", err)
 	}
@@ -1161,7 +1161,7 @@ func TestGetAuditEntriesWithFilters(t *testing.T) {
 	}
 
 	// Test with offset
-	results, err = db.GetAuditEntries(testContext(), nil, nil, nil, nil, nil, 10, 1)
+	results, err = db.GetAuditEntries(testContext(), &AuditFilter{Limit: 10, Offset: 1})
 	if err != nil {
 		t.Fatalf("failed to get entries with offset: %v", err)
 	}

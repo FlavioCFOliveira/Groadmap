@@ -343,7 +343,7 @@ func TestConcurrentAuditLogging(t *testing.T) {
 	}
 
 	// Verify entries were created
-	entries, err := db.GetAuditEntries(context.Background(), nil, nil, nil, nil, nil, 0, 0)
+	entries, err := db.GetAuditEntries(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("failed to get audit entries: %v", err)
 	}
@@ -371,7 +371,7 @@ func TestConcurrentAuditReads(t *testing.T) {
 			case <-stop:
 				return
 			default:
-				db.GetAuditEntries(context.Background(), nil, nil, nil, nil, nil, 10, 0)
+				db.GetAuditEntries(context.Background(), &AuditFilter{Limit: 10})
 				time.Sleep(time.Millisecond)
 			}
 		}
