@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -90,90 +91,29 @@ func (db *DB) CreateTask(ctx context.Context, task *models.Task) (int, error) {
 	return taskID, nil
 }
 
-// GetTask retrieves a task by ID, including parent_task_id and subtask_count.
+// GetTask retrieves a task by ID, including dependencies and subtask_count.
+// Uses scanTasksWithDeps to fold depends_on / blocks into the same query.
 func (db *DB) GetTask(ctx context.Context, id int) (*models.Task, error) {
-	var task models.Task
-	var specialists sql.NullString
-	var startedAt sql.NullString
-	var testedAt sql.NullString
-	var closedAt sql.NullString
-	var completionSummary sql.NullString
-	var parentTaskID sql.NullInt64
+	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
+	        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
+	        t.priority, t.severity,
+	        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count` + taskDepsSelect + `
+	 FROM tasks t WHERE t.id = ?`
 
-	err := db.QueryRowContext(ctx,
-		`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
-		        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
-		        t.priority, t.severity,
-		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count
-		 FROM tasks t WHERE t.id = ?`,
-		id,
-	).Scan(
-		&task.ID,
-		&task.Title,
-		&task.Status,
-		&task.Type,
-		&task.FunctionalRequirements,
-		&task.TechnicalRequirements,
-		&task.AcceptanceCriteria,
-		&task.CreatedAt,
-		&specialists,
-		&startedAt,
-		&testedAt,
-		&closedAt,
-		&completionSummary,
-		&parentTaskID,
-		&task.Priority,
-		&task.Severity,
-		&task.SubtaskCount,
-	)
-
+	rows, err := db.QueryContext(ctx, query, id)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("%w: task %d", utils.ErrNotFound, id)
-		}
 		return nil, fmt.Errorf("querying task: %w", err)
 	}
+	defer rows.Close()
 
-	if specialists.Valid {
-		task.Specialists = &specialists.String
-	}
-	if startedAt.Valid {
-		task.StartedAt = &startedAt.String
-	}
-	if testedAt.Valid {
-		task.TestedAt = &testedAt.String
-	}
-	if closedAt.Valid {
-		task.ClosedAt = &closedAt.String
-	}
-	if completionSummary.Valid {
-		task.CompletionSummary = &completionSummary.String
-	}
-	if parentTaskID.Valid {
-		v := int(parentTaskID.Int64)
-		task.ParentTaskID = &v
-	}
-
-	// Populate dependency arrays
-	dependsOn, err := db.GetTaskDependsOn(ctx, task.ID)
+	tasks, err := scanTasksWithDeps(rows)
 	if err != nil {
-		return nil, fmt.Errorf("fetching depends_on for task %d: %w", task.ID, err)
+		return nil, err
 	}
-	if dependsOn == nil {
-		dependsOn = []int{}
+	if len(tasks) == 0 {
+		return nil, fmt.Errorf("%w: task %d", utils.ErrNotFound, id)
 	}
-	task.DependsOn = dependsOn
-
-	blocks, err := db.GetTaskBlocks(ctx, task.ID)
-	if err != nil {
-		return nil, fmt.Errorf("fetching blocks for task %d: %w", task.ID, err)
-	}
-	if blocks == nil {
-		blocks = []int{}
-	}
-	task.Blocks = blocks
-
-	return &task, nil
+	return &tasks[0], nil
 }
 
 // GetTasks retrieves multiple tasks by IDs.
@@ -189,11 +129,11 @@ func (db *DB) GetTasks(ctx context.Context, ids []int) ([]models.Task, error) {
 		args[i] = id
 	}
 
-	query := fmt.Sprintf(
+	query := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated
 		`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
 		        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
 		        t.priority, t.severity,
-		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count
+		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count`+taskDepsSelect+`
 		 FROM tasks t WHERE t.id IN (%s) ORDER BY t.id`,
 		placeholders,
 	)
@@ -204,33 +144,7 @@ func (db *DB) GetTasks(ctx context.Context, ids []int) ([]models.Task, error) {
 	}
 	defer rows.Close()
 
-	tasks, err := scanTasks(rows)
-	if err != nil {
-		return nil, err
-	}
-
-	// Populate dependency arrays for each task
-	for i := range tasks {
-		dependsOn, dErr := db.GetTaskDependsOn(ctx, tasks[i].ID)
-		if dErr != nil {
-			return nil, fmt.Errorf("fetching depends_on for task %d: %w", tasks[i].ID, dErr)
-		}
-		if dependsOn == nil {
-			dependsOn = []int{}
-		}
-		tasks[i].DependsOn = dependsOn
-
-		blocks, bErr := db.GetTaskBlocks(ctx, tasks[i].ID)
-		if bErr != nil {
-			return nil, fmt.Errorf("fetching blocks for task %d: %w", tasks[i].ID, bErr)
-		}
-		if blocks == nil {
-			blocks = []int{}
-		}
-		tasks[i].Blocks = blocks
-	}
-
-	return tasks, nil
+	return scanTasksWithDeps(rows)
 }
 
 // TaskListFilter holds all optional filter and sort parameters for ListTasks.
@@ -259,7 +173,7 @@ func (db *DB) ListTasks(ctx context.Context, filter *TaskListFilter) ([]models.T
 	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
 		        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
 		        t.priority, t.severity,
-		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count
+		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count` + taskDepsSelect + `
 		      FROM tasks t WHERE 1=1`
 	args := make([]interface{}, 0, 8)
 
@@ -313,33 +227,7 @@ func (db *DB) ListTasks(ctx context.Context, filter *TaskListFilter) ([]models.T
 	}
 	defer rows.Close()
 
-	tasks, err := scanTasks(rows)
-	if err != nil {
-		return nil, err
-	}
-
-	// Populate dependency arrays for each task
-	for i := range tasks {
-		dependsOn, dErr := db.GetTaskDependsOn(ctx, tasks[i].ID)
-		if dErr != nil {
-			return nil, fmt.Errorf("fetching depends_on for task %d: %w", tasks[i].ID, dErr)
-		}
-		if dependsOn == nil {
-			dependsOn = []int{}
-		}
-		tasks[i].DependsOn = dependsOn
-
-		blocks, bErr := db.GetTaskBlocks(ctx, tasks[i].ID)
-		if bErr != nil {
-			return nil, fmt.Errorf("fetching blocks for task %d: %w", tasks[i].ID, bErr)
-		}
-		if blocks == nil {
-			blocks = []int{}
-		}
-		tasks[i].Blocks = blocks
-	}
-
-	return tasks, nil
+	return scanTasksWithDeps(rows)
 }
 
 // UpdateTask updates a task's fields with the provided values.
@@ -813,6 +701,115 @@ func (db *DB) GetIncompleteSubTasksByParents(ctx context.Context, parentIDs []in
 		return nil, fmt.Errorf("iterating incomplete subtask rows: %w", err)
 	}
 	return result, nil
+}
+
+// taskDepsSelect is the SQL fragment that appends two comma-separated
+// columns of dependency IDs (depends_on then blocks) to a tasks query.
+// Use together with scanTasksWithDeps. The subqueries are ORDER-BY'd so
+// the resulting CSV is stable for callers that depend on order.
+const taskDepsSelect = `,
+		(SELECT COALESCE(group_concat(d), '') FROM (
+			SELECT depends_on_task_id AS d FROM task_dependencies
+			WHERE task_id = t.id ORDER BY depends_on_task_id
+		)) AS depends_on_csv,
+		(SELECT COALESCE(group_concat(b), '') FROM (
+			SELECT task_id AS b FROM task_dependencies
+			WHERE depends_on_task_id = t.id ORDER BY task_id
+		)) AS blocks_csv`
+
+// parseCSVInts parses an unquoted comma-separated list of integers as
+// produced by SQLite's group_concat. Returns an empty slice for "".
+func parseCSVInts(s string) []int {
+	if s == "" {
+		return []int{}
+	}
+	parts := strings.Split(s, ",")
+	out := make([]int, 0, len(parts))
+	for _, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			continue // group_concat output is trusted; skip if somehow malformed
+		}
+		out = append(out, n)
+	}
+	return out
+}
+
+// scanTasksWithDeps is like scanTasks but expects two extra trailing
+// columns (depends_on_csv, blocks_csv) produced by taskDepsSelect, and
+// populates Task.DependsOn / Task.Blocks from them. This collapses what
+// used to be 2N follow-up queries into the original SELECT.
+func scanTasksWithDeps(rows *sql.Rows) ([]models.Task, error) {
+	tasks := make([]models.Task, 0, 100)
+
+	var specialists, startedAt, testedAt, closedAt, completionSummary sql.NullString
+	var parentTaskID sql.NullInt64
+	var dependsOnCSV, blocksCSV string
+
+	for rows.Next() {
+		var task models.Task
+		specialists = sql.NullString{}
+		startedAt = sql.NullString{}
+		testedAt = sql.NullString{}
+		closedAt = sql.NullString{}
+		completionSummary = sql.NullString{}
+		parentTaskID = sql.NullInt64{}
+		dependsOnCSV = ""
+		blocksCSV = ""
+
+		err := rows.Scan(
+			&task.ID,
+			&task.Title,
+			&task.Status,
+			&task.Type,
+			&task.FunctionalRequirements,
+			&task.TechnicalRequirements,
+			&task.AcceptanceCriteria,
+			&task.CreatedAt,
+			&specialists,
+			&startedAt,
+			&testedAt,
+			&closedAt,
+			&completionSummary,
+			&parentTaskID,
+			&task.Priority,
+			&task.Severity,
+			&task.SubtaskCount,
+			&dependsOnCSV,
+			&blocksCSV,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scanning task row: %w", err)
+		}
+
+		if specialists.Valid {
+			task.Specialists = &specialists.String
+		}
+		if startedAt.Valid {
+			task.StartedAt = &startedAt.String
+		}
+		if testedAt.Valid {
+			task.TestedAt = &testedAt.String
+		}
+		if closedAt.Valid {
+			task.ClosedAt = &closedAt.String
+		}
+		if completionSummary.Valid {
+			task.CompletionSummary = &completionSummary.String
+		}
+		if parentTaskID.Valid {
+			v := int(parentTaskID.Int64)
+			task.ParentTaskID = &v
+		}
+		task.DependsOn = parseCSVInts(dependsOnCSV)
+		task.Blocks = parseCSVInts(blocksCSV)
+
+		tasks = append(tasks, task)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating task rows: %w", err)
+	}
+	return tasks, nil
 }
 
 // scanTasks scans rows into a slice of Task.
