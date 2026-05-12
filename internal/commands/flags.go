@@ -157,7 +157,7 @@ func (fp *FlagParser) parseValue(value string, typ string) (interface{}, error) 
 // The target struct must have exported fields matching the Field names in FlagDef.
 func (fp *FlagParser) Bind(result *ParseResult, target interface{}) error {
 	v := reflect.ValueOf(target)
-	if v.Kind() != reflect.Ptr || v.Elem().Kind() != reflect.Struct {
+	if v.Kind() != reflect.Pointer || v.Elem().Kind() != reflect.Struct {
 		return fmt.Errorf("%w: target must be a pointer to a struct", utils.ErrInvalidInput)
 	}
 
