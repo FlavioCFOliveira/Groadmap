@@ -2032,108 +2032,57 @@ func (db *DB) GetAuditStats(ctx context.Context, since, until *string) (*models.
 		ByEntityType: make(map[string]int),
 	}
 
-	// Total count
-	countQuery := `SELECT COUNT(*) FROM audit WHERE 1=1`
-	countArgs := []any{}
-
+	// One pass over the audit table, grouped by (operation, entity_type),
+	// returns enough information to derive every field of AuditStats:
+	//   total = sum(cnt)
+	//   ByOperation[op]    = sum(cnt) per op
+	//   ByEntityType[et]   = sum(cnt) per et
+	//   FirstEntryAt       = min(min_at)
+	//   LastEntryAt        = max(max_at)
+	var qb strings.Builder
+	qb.Grow(256)
+	qb.WriteString(`SELECT operation, entity_type, COUNT(*), MIN(performed_at), MAX(performed_at) FROM audit WHERE 1=1`)
+	args := make([]any, 0, 2)
 	if since != nil {
-		countQuery += " AND performed_at >= ?"
-		countArgs = append(countArgs, *since)
+		qb.WriteString(" AND performed_at >= ?")
+		args = append(args, *since)
 	}
 	if until != nil {
-		countQuery += " AND performed_at <= ?"
-		countArgs = append(countArgs, *until)
+		qb.WriteString(" AND performed_at <= ?")
+		args = append(args, *until)
 	}
+	qb.WriteString(" GROUP BY operation, entity_type")
 
-	err := db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&stats.TotalEntries)
+	rows, err := db.QueryContext(ctx, qb.String(), args...)
 	if err != nil {
-		return nil, fmt.Errorf("counting audit entries: %w", err)
+		return nil, fmt.Errorf("aggregating audit stats: %w", err)
 	}
+	defer rows.Close()
 
-	// First and last entry dates
-	dateQuery := `SELECT MIN(performed_at), MAX(performed_at) FROM audit WHERE 1=1`
-	dateArgs := []any{}
-
-	if since != nil {
-		dateQuery += " AND performed_at >= ?"
-		dateArgs = append(dateArgs, *since)
-	}
-	if until != nil {
-		dateQuery += " AND performed_at <= ?"
-		dateArgs = append(dateArgs, *until)
-	}
-
-	var firstEntry, lastEntry sql.NullString
-	err = db.QueryRowContext(ctx, dateQuery, dateArgs...).Scan(&firstEntry, &lastEntry)
-	if err != nil {
-		return nil, fmt.Errorf("getting date range: %w", err)
-	}
-
-	if firstEntry.Valid {
-		stats.FirstEntryAt = firstEntry.String
-	}
-	if lastEntry.Valid {
-		stats.LastEntryAt = lastEntry.String
-	}
-
-	// Count by operation
-	opQuery := `SELECT operation, COUNT(*) FROM audit WHERE 1=1`
-	opArgs := []any{}
-
-	if since != nil {
-		opQuery += " AND performed_at >= ?"
-		opArgs = append(opArgs, *since)
-	}
-	if until != nil {
-		opQuery += " AND performed_at <= ?"
-		opArgs = append(opArgs, *until)
-	}
-	opQuery += " GROUP BY operation"
-
-	opRows, err := db.QueryContext(ctx, opQuery, opArgs...)
-	if err != nil {
-		return nil, fmt.Errorf("counting by operation: %w", err)
-	}
-	defer opRows.Close()
-
-	for opRows.Next() {
-		var op string
-		var count int
-		if err := opRows.Scan(&op, &count); err != nil {
-			return nil, fmt.Errorf("scanning operation count: %w", err)
+	for rows.Next() {
+		var op, ent string
+		var cnt int
+		var minAt, maxAt sql.NullString
+		if err := rows.Scan(&op, &ent, &cnt, &minAt, &maxAt); err != nil {
+			return nil, fmt.Errorf("scanning audit stats row: %w", err)
 		}
-		stats.ByOperation[op] = count
-	}
-
-	// Count by entity type
-	entQuery := `SELECT entity_type, COUNT(*) FROM audit WHERE 1=1`
-	entArgs := []any{}
-
-	if since != nil {
-		entQuery += " AND performed_at >= ?"
-		entArgs = append(entArgs, *since)
-	}
-	if until != nil {
-		entQuery += " AND performed_at <= ?"
-		entArgs = append(entArgs, *until)
-	}
-	entQuery += " GROUP BY entity_type"
-
-	entRows, err := db.QueryContext(ctx, entQuery, entArgs...)
-	if err != nil {
-		return nil, fmt.Errorf("counting by entity type: %w", err)
-	}
-	defer entRows.Close()
-
-	for entRows.Next() {
-		var entType string
-		var count int
-		if err := entRows.Scan(&entType, &count); err != nil {
-			return nil, fmt.Errorf("scanning entity type count: %w", err)
+		stats.TotalEntries += cnt
+		stats.ByOperation[op] += cnt
+		stats.ByEntityType[ent] += cnt
+		if minAt.Valid {
+			if stats.FirstEntryAt == "" || minAt.String < stats.FirstEntryAt {
+				stats.FirstEntryAt = minAt.String
+			}
 		}
-		stats.ByEntityType[entType] = count
+		if maxAt.Valid {
+			if maxAt.String > stats.LastEntryAt {
+				stats.LastEntryAt = maxAt.String
+			}
+		}
 	}
-
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating audit stats rows: %w", err)
+	}
 	return stats, nil
 }
 
