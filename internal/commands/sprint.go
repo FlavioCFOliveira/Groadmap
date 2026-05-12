@@ -121,6 +121,21 @@ Options (tasks / open-tasks):
 Options (close):
   --force                         			Close even if SPRINT/DOING/TESTING tasks remain
 
+Output (stdout JSON):
+  list                                  Array of sprint objects.
+  get                                   Single sprint object.
+  show                                  Combined sprint report (sprint + tasks + stats).
+  stats                                 SprintStats: total_tasks, completed_tasks,
+                                         progress_percentage, status_distribution,
+                                         task_order[], burndown[], velocity, days_*.
+  tasks, open-tasks                     Array of task objects (see 'rmp task --help').
+  create                                {"id": <int>}
+  update, remove, start, close, reopen  Empty (exit 0 on success).
+  add-tasks, remove-tasks, move-tasks,
+  reorder, move-to, swap, top, bottom   Empty (exit 0 on success).
+  Sprint object keys: id, status, description, created_at, started_at, closed_at,
+  max_tasks, tasks (array of int), task_count.
+
 Examples:
   rmp sprint list -r myproject
   rmp sprint create -r myproject -d "Sprint 1"

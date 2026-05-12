@@ -133,6 +133,17 @@ Options (create / edit):
 Options (stat to COMPLETED):
   -s, --summary <text>            			Completion summary (max 4096 chars; only valid when transitioning to COMPLETED)
 
+Output (stdout JSON):
+  list, get, next, subtasks, blockers, blocking   Array of task objects.
+  create                                          {"id": <int>}
+  edit, stat, prio, sev, reopen, remove           Empty (exit 0 on success).
+  assign, unassign                                Empty (exit 0 on success).
+  add-dep, remove-dep                             Empty (exit 0 on success).
+  Task object keys: id, title, status, type, functional_requirements,
+  technical_requirements, acceptance_criteria, created_at, specialists,
+  started_at, tested_at, closed_at, completion_summary, parent_task_id,
+  priority, severity, subtask_count, depends_on, blocks.
+
 Examples:
   rmp task list -r myproject
   rmp task list -r myproject --status BACKLOG --priority 5 --sort priority

@@ -243,6 +243,12 @@ Options (stats):
   --since <date>                  Aggregation window start
   --until <date>                  Aggregation window end
 
+Output (stdout JSON):
+  list, history       Array of audit-entry objects, performed_at DESC.
+                       Keys: id, operation, entity_type, entity_id, performed_at.
+  stats               AuditStats: total_entries, first_entry_at, last_entry_at,
+                       by_operation (map), by_entity_type (map).
+
 Examples:
   rmp audit list -r myproject
   rmp audit list -r myproject -o TASK_STATUS_CHANGE -e TASK

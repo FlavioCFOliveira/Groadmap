@@ -161,6 +161,10 @@ Options:
   -l, --limit <n>            	Maximum number of tasks to return
   -h, --help                 	Show this help message
 
+Output (stdout JSON):
+  Both subcommands return an array of task objects with status == BACKLOG.
+  Task object shape matches 'rmp task --help' (Output section).
+
 Examples:
   rmp backlog list -r groadmap
   rmp backlog list --priority 7 -r groadmap

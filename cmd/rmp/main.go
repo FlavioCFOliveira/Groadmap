@@ -159,12 +159,25 @@ func printHelp() {
 Usage: rmp [command] [subcommand] [arguments] [options]
 
 Commands:
-  roadmap, road    Manage roadmaps
-  task, t          Manage tasks
-  sprint, s        Manage sprints
-  backlog, bl      Manage backlog tasks
-  audit, aud       View audit log
-  stats            View roadmap statistics
+  roadmap, road    Create, list, and remove roadmap database files (~/.roadmaps/<name>.db)
+  task, t          Manage tasks across statuses BACKLOG/SPRINT/DOING/TESTING/COMPLETED
+  sprint, s        Manage sprints and their task membership/ordering
+  backlog, bl      Query BACKLOG-status tasks (planning view for tasks not yet in a sprint)
+  audit, aud       Query the per-roadmap audit log
+  stats            Roadmap-wide statistics (sprint counts, task distribution, velocity)
+
+Choosing a task-listing command:
+  rmp task list            All tasks in a roadmap, any status (filter with --status, etc.)
+  rmp backlog list         Only BACKLOG tasks (subset of 'task list' with --status BACKLOG)
+  rmp sprint tasks <id>    Tasks that belong to one specific sprint (any status)
+  rmp sprint open-tasks <id>   Tasks in a sprint with status SPRINT/DOING/TESTING (excludes COMPLETED)
+  rmp task next [num]      Top-priority tasks from the currently OPEN sprint (planning shortcut)
+  rmp backlog show-next [n]    Top-priority BACKLOG tasks (sprint-planning shortcut)
+
+I/O conventions:
+  - Every command except 'rmp roadmap' and global help requires -r <roadmap>.
+  - Successful output is JSON on stdout; errors are plain text on stderr.
+  - All timestamps in JSON use ISO 8601 UTC: YYYY-MM-DDTHH:mm:ss.sssZ.
 
 Global Options:
   -h, --help       Show this help message
