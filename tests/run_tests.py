@@ -32,6 +32,7 @@ TEST_MODULES = [
     "test_13_sprint_task_ordering",
     "test_23_backlog_management",
     "test_24_dependency_workflow",
+    "test_25_completion_guards",
 ]
 
 # Stress tests (run separately due to time/data volume)
