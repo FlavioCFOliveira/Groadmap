@@ -73,7 +73,8 @@ Filters:
 
 Sorting and paging:
   --sort <field>                  priority (default) | created | status | severity
-  -l, --limit <n>                 Maximum entries returned (1-1000)
+  -l, --limit <n>                 Maximum entries returned (1-100, default 100;
+                                  out-of-range values fail with exit 6)
 
 Output (stdout JSON):
   Array of task objects; status is always BACKLOG. See 'rmp task --help'
@@ -108,7 +109,8 @@ Required:
   -r, --roadmap <name>            Target roadmap
 
 Optional:
-  [count]                         Maximum tasks to return (default 5, max 1000)
+  [count]                         Maximum tasks to return (default 5, max 100;
+                                  values above 100 are silently clamped to 100)
 
 Output (stdout JSON):
   Array of task objects (status BACKLOG, ordered by priority DESC).
@@ -241,7 +243,9 @@ Options:
   -y, --type <type>          	Filter by task type. Valid: USER_STORY, TASK, BUG, SUB_TASK,
                              	EPIC, REFACTOR, CHORE, SPIKE, DESIGN_UX, IMPROVEMENT
   --sort <field>             	Sort order: priority (default), created, status, severity
-  -l, --limit <n>            	Maximum number of tasks to return
+  -l, --limit <n>            	Maximum number of tasks to return (1-100, default 100;
+                             	applies to 'list'. 'show-next' uses its own [count]
+                             	positional, default 5, max 100 silently clamped)
   -h, --help                 	Show this help message
 
 Output (stdout JSON):

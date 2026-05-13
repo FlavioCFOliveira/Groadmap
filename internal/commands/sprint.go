@@ -139,56 +139,62 @@ Sprint lifecycle:
     - 'sprint add-tasks' atomically moves tasks BACKLOG -> SPRINT (manual stat SPRINT is forbidden).
 
 Commands:
-  list, ls [OPTIONS]              			List sprints
-  create, new [OPTIONS]           			Create a new sprint
-  get <id>                        			Get sprint details
-  show <id>                       			Show comprehensive sprint report
-  update, upd <id> [OPTIONS]       			Update sprint description
-  remove, rm <id>                 			Remove sprint
-  start <id>                      			Start sprint
-  close <id> [--force]            			Close sprint (--force bypasses active-task check)
-  reopen <id>                     			Reopen sprint
-  tasks <id> [OPTIONS]            			List tasks in sprint (use --order-by-priority for priority ordering)
-  open-tasks <id> [OPTIONS]       			List incomplete tasks in sprint (SPRINT, DOING, TESTING only)
-  stats <id>                       			Show sprint statistics
-  add-tasks, add <sprint> <ids>  			Add tasks to sprint
-  remove-tasks, rm-tasks <sprint> <ids>  	Remove tasks from sprint
-  move-tasks, mv-tasks <from> <to> <ids>  	Move tasks between sprints
-  reorder, order <sprint> <ids>  			Reorder tasks in sprint (comma-separated IDs)
-  move-to, mvto <sprint> <task> <pos>  		Move task to specific position
-  swap <sprint> <task1> <task2>  			Swap positions of two tasks
-  top <sprint> <task>           			Move task to top (position 0)
-  bottom, btm <sprint> <task>   			Move task to bottom (last position)
+  list, ls [OPTIONS]                       List sprints
+  create, new [OPTIONS]                    Create a new sprint (PENDING)
+  get <id>                                 Get sprint details (sprint object only)
+  show <id>                                Stand-up-style summary (counts, distributions)
+  update, upd <id> [OPTIONS]               Update sprint description or capacity cap
+  remove, rm <id>                          Delete sprint (member tasks revert to BACKLOG)
+  start <id>                               PENDING -> OPEN (sets started_at)
+  close <id> [--force]                     OPEN -> CLOSED (--force bypasses active-task check)
+  reopen <id>                              CLOSED -> OPEN (clears closed_at; started_at preserved)
+  tasks <id> [OPTIONS]                     List ALL tasks in sprint (incl. COMPLETED)
+  open-tasks <id> [OPTIONS]                List incomplete tasks in sprint (SPRINT, DOING, TESTING)
+  stats <id>                               Per-status counts, burndown, velocity, days_*
+  add-tasks, add <sprint> <ids>            Atomically add BACKLOG tasks -> SPRINT
+  remove-tasks, rm-tasks <sprint> <ids>    Remove tasks from sprint (revert to BACKLOG)
+  move-tasks, mv-tasks <from> <to> <ids>   Move tasks between sprints (status preserved)
+  reorder, order <sprint> <ids>            Set exact full ordering (all members in CSV)
+  move-to, mvto <sprint> <task> <pos>      Move one task to zero-based position
+  swap <sprint> <task1> <task2>            Swap positions of two tasks
+  top <sprint> <task>                      Move task to position 0
+  bottom, btm <sprint> <task>              Move task to last position
 
 Options (shared):
-  -r, --roadmap <name>           			REQUIRED. Target roadmap.
-  -h, --help                      			Show this help message
+  -r, --roadmap <name>                     REQUIRED. Target roadmap.
+  -h, --help                               Show this help message
 
 Options (create / update):
-  -d, --description <text>      			Sprint description (free text)
-  --max-tasks <n>               			Maximum active tasks in this sprint (capacity cap)
+  -d, --description <text>                 Sprint description (free text, max 500 chars)
+  --max-tasks <n>                          Capacity cap on active tasks (n >= 1; cannot be
+                                           removed once set)
 
 Options (list):
-  --status <state>               			Filter by sprint status
+  --status <state>                         Filter by sprint status
 
 Options (tasks / open-tasks):
-  --order-by-priority             			Sort tasks by priority DESC; otherwise sprint position ASC
+  --order-by-priority                      Sort by priority DESC; default is sprint position ASC
 
 Options (close):
-  --force                         			Close even if SPRINT/DOING/TESTING tasks remain
+  --force                                  Close even if SPRINT/DOING/TESTING tasks remain
 
 Output (stdout JSON):
-  list                                  Array of sprint objects.
-  get                                   Single sprint object.
-  show                                  Combined sprint report (sprint + tasks + stats).
-  stats                                 SprintStats: total_tasks, completed_tasks,
-                                         progress_percentage, status_distribution,
-                                         task_order[], burndown[], velocity, days_*.
-  tasks, open-tasks                     Array of task objects (see 'rmp task --help').
-  create                                {"id": <int>}
-  update, remove, start, close, reopen  Empty (exit 0 on success).
+  list                                     Array of sprint objects.
+  get                                      Single sprint object.
+  show                                     Flat object: sprint_id, sprint_description, status,
+                                           max_tasks, capacity_pct, current_load, task_order,
+                                           summary, progress, severity_distribution,
+                                           criticality_distribution.
+                                           NOTE: does NOT include the task list.
+  stats                                    SprintStats: sprint_id, total_tasks, completed_tasks,
+                                           progress_percentage, status_distribution, task_order,
+                                           burndown[], velocity, days_elapsed, days_remaining.
+                                           NOTE: days_remaining is always null (no end_date).
+  tasks, open-tasks                        Array of task objects (see 'rmp task --help').
+  create                                   {"id": <int>}
+  update, remove, start, close, reopen     Empty (exit 0 on success).
   add-tasks, remove-tasks, move-tasks,
-  reorder, move-to, swap, top, bottom   Empty (exit 0 on success).
+  reorder, move-to, swap, top, bottom      Empty (exit 0 on success).
   Sprint object keys: id, status, description, created_at, started_at, closed_at,
   max_tasks, tasks (array of int), task_count.
 

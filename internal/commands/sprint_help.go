@@ -42,16 +42,21 @@ func printSprintCreateHelp() {
 Creates a new sprint in PENDING status. The sprint will not accept work
 until it is moved to OPEN via 'rmp sprint start <id>'.
 
+Sprints have no fixed end date. started_at is set when the sprint is
+moved to OPEN; closed_at is set when it is moved to CLOSED. There is
+no --start-date / --end-date flag.
+
 Aliases: new.
 
 Required:
   -r, --roadmap <name>            Target roadmap
-  -d, --description <text>        Sprint description
+  -d, --description <text>        Sprint description (max 500 chars)
 
 Optional:
   --max-tasks <n>                 Hard cap on active tasks (n >= 1). When set,
                                   'sprint add-tasks' refuses to push the active
-                                  task count past <n>.
+                                  task count past <n>. Cannot be removed once
+                                  set, only changed to another positive integer.
 
 Output (stdout JSON):
   {"id": <new-sprint-id>}
@@ -72,8 +77,10 @@ Examples:
 func printSprintGetHelp() {
 	fmt.Print(`Usage: rmp sprint get -r <roadmap> <sprint-id>
 
-Returns the sprint object for <sprint-id>. For a richer report that
-includes tasks and stats, use 'rmp sprint show <sprint-id>' instead.
+Returns the sprint object for <sprint-id>. For a richer summary with
+counts and severity distribution, use 'rmp sprint show <sprint-id>'.
+For per-status counts, burndown and velocity, use 'rmp sprint stats'.
+For the task list, use 'rmp sprint tasks'.
 
 Required:
   -r, --roadmap <name>            Target roadmap
@@ -96,17 +103,32 @@ Examples:
 func printSprintShowHelp() {
 	fmt.Print(`Usage: rmp sprint show -r <roadmap> <sprint-id>
 
-Returns a comprehensive sprint report: sprint metadata, the full task
-list, computed statistics (totals/distribution/velocity), and a
-severity breakdown. Equivalent to 'sprint get' + 'sprint stats' +
-'sprint tasks' in one shot.
+Returns a stand-up-style summary of a sprint: identification, status,
+capacity, task-count totals split into pending / in-progress /
+completed, the same totals as percentages, and per-severity /
+per-criticality task distributions. The full task list is NOT included
+— use 'rmp sprint tasks <id>' for that.
 
 Required:
   -r, --roadmap <name>            Target roadmap
   <sprint-id>                     Integer sprint id
 
 Output (stdout JSON):
-  Object with keys: sprint, tasks, stats, severity_distribution.
+  Flat object with these keys:
+    sprint_id                int
+    sprint_description       string
+    status                   "PENDING" | "OPEN" | "CLOSED"
+    max_tasks                int | null         (null = no capacity cap)
+    capacity_pct             float | null       (current_load / max_tasks * 100; null when uncapped)
+    current_load             int                (count of SPRINT/DOING/TESTING tasks)
+    task_order               [int, ...]         (task ids in sprint position order)
+    summary                  {total_tasks, pending, in_progress, completed}
+                             - pending     = BACKLOG + SPRINT
+                             - in_progress = DOING + TESTING
+                             - completed   = COMPLETED
+    progress                 {pending_percentage, in_progress_percentage, completed_percentage}
+    severity_distribution    {"0-2": {count, percentage}, "3-5": ..., "6-7": ..., "8-9": ...}
+    criticality_distribution {low: {count, percentage}, medium: ..., high: ..., critical: ...}
 
 Exit codes:
   0  Success
@@ -125,6 +147,11 @@ func printSprintUpdateHelp() {
 Edits the description or capacity cap of an existing sprint. At least
 one of -d or --max-tasks must be supplied.
 
+The capacity cap can be changed to any positive integer; it cannot be
+removed once set, and there is no validation against the sprint's
+current active task count (an over-capacity cap simply blocks future
+'sprint add-tasks').
+
 Aliases: upd.
 
 Required:
@@ -132,18 +159,17 @@ Required:
   <sprint-id>                     Integer sprint id
 
 At least one of:
-  -d, --description <text>        New description
-  --max-tasks <n>                 New capacity cap (n >= 1). Pass 0 to remove
-                                  the cap entirely.
+  -d, --description <text>        New description (max 500 chars)
+  --max-tasks <n>                 New capacity cap; must be >= 1
 
-Output: empty (exit 0).
+Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
   2  Neither -d nor --max-tasks given
   3  Missing -r
   4  Sprint not found
-  6  --max-tasks < 0, or the new cap is below the current active task count
+  6  --max-tasks < 1, or description exceeds the max length
 
 Examples:
   rmp sprint update -r myproject 5 -d "Sprint 1 — Auth + observability"
@@ -155,8 +181,15 @@ Examples:
 func printSprintRemoveHelp() {
 	fmt.Print(`Usage: rmp sprint remove -r <roadmap> <sprint-id>
 
-Deletes the sprint and resets every member task's status back to
-BACKLOG (the tasks themselves are NOT deleted).
+Deletes the sprint. All member tasks — regardless of their current
+status (SPRINT, DOING, TESTING, or even COMPLETED) — are reverted to
+BACKLOG and their sprint association is cleared. The tasks themselves
+are NOT deleted; their requirements, priority, severity, etc. are
+preserved.
+
+Removing a CLOSED sprint is allowed and follows the same cascade:
+COMPLETED tasks in it are pulled back to BACKLOG. If that is not what
+you want, leave the sprint CLOSED and create a new sprint instead.
 
 Aliases: rm.
 
@@ -164,7 +197,7 @@ Required:
   -r, --roadmap <name>            Target roadmap
   <sprint-id>                     Integer sprint id
 
-Output: empty (exit 0).
+Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
@@ -192,7 +225,7 @@ Required:
   -r, --roadmap <name>            Target roadmap
   <sprint-id>                     Integer sprint id
 
-Output: empty (exit 0).
+Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
@@ -225,7 +258,7 @@ Optional:
   --force                         Close even when the sprint has active
                                   (SPRINT/DOING/TESTING) tasks.
 
-Output: empty (exit 0).
+Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
@@ -247,14 +280,18 @@ Transitions a CLOSED sprint back to OPEN (e.g. when a follow-up
 issue surfaces and you want to keep work attached to the same sprint).
 Rejected if another sprint is already OPEN.
 
-Side effect:
-  Clears closed_at (sets it to NULL).
+Side effects:
+  - Clears closed_at (sets it to NULL).
+  - started_at is preserved (the original sprint-start timestamp stays
+    intact, so velocity calculations remain comparable).
+  - Member tasks keep their current status (SPRINT/DOING/TESTING/COMPLETED);
+    nothing is auto-reverted.
 
 Required:
   -r, --roadmap <name>            Target roadmap
   <sprint-id>                     Integer sprint id
 
-Output: empty (exit 0).
+Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
@@ -334,8 +371,7 @@ func printSprintStatsHelp() {
 
 Returns the SprintStats object: per-status counts, completion
 percentage, ordered task ids, burndown series (one entry per day),
-velocity (tasks/day), and elapsed/remaining days when the sprint
-has been started.
+velocity (tasks/day), and elapsed days when the sprint has been started.
 
 Required:
   -r, --roadmap <name>            Target roadmap
@@ -354,6 +390,15 @@ Output (stdout JSON):
     "days_elapsed": <int|null>,
     "days_remaining": <int|null>
   }
+
+Notes for callers:
+  - velocity is 0.0 for OPEN and PENDING sprints, and for CLOSED sprints
+    with zero completed tasks. Only meaningful for CLOSED sprints.
+  - days_elapsed is null for PENDING sprints, and for OPEN sprints with
+    no started_at. For CLOSED sprints it spans started_at -> closed_at.
+  - days_remaining is ALWAYS null. The Sprint model has no end_date
+    field, so there is no target completion date to count down to.
+  - burndown is empty when no tasks have been completed in the sprint.
 
 Exit codes:
   0  Success
@@ -378,7 +423,7 @@ Aliases: add.
 Required:
   -r, --roadmap <name>            Target roadmap
   <sprint-id>                     Integer sprint id (must not be CLOSED)
-  <task-ids>                      Comma-separated integer task ids
+  <task-ids>                      Comma-separated integer task ids (no spaces, e.g. "1,3,5")
 
 Output: empty (exit 0). Audits SPRINT_ADD_TASK once per added task.
 
@@ -406,7 +451,7 @@ Aliases: rm-tasks.
 Required:
   -r, --roadmap <name>            Target roadmap
   <sprint-id>                     Integer sprint id
-  <task-ids>                      Comma-separated integer task ids
+  <task-ids>                      Comma-separated integer task ids (no spaces, e.g. "1,3,5")
 
 Output: empty (exit 0). Audits SPRINT_REMOVE_TASK per removed task.
 
@@ -434,9 +479,9 @@ Required:
   -r, --roadmap <name>            Target roadmap
   <from-id>                       Source sprint id
   <to-id>                         Destination sprint id (must not be CLOSED)
-  <task-ids>                      Comma-separated integer task ids
+  <task-ids>                      Comma-separated integer task ids (no spaces, e.g. "1,3,5")
 
-Output: empty (exit 0).
+Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
@@ -464,7 +509,7 @@ Aliases: order.
 Required:
   -r, --roadmap <name>            Target roadmap
   <sprint-id>                     Integer sprint id
-  <task-ids-csv>                  Comma-separated task ids — the new full order
+  <task-ids-csv>                  Comma-separated task ids in the desired order (no spaces, e.g. "3,1,7,2")
 
 Output: empty (exit 0). Audits SPRINT_REORDER_TASKS once.
 

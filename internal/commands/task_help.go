@@ -30,7 +30,8 @@ Filters (compose with AND):
 
 Sorting and paging:
   --sort <field>                  priority (default) | created | status | severity
-  -l, --limit <n>                 Maximum tasks returned (default 100)
+  -l, --limit <n>                 Maximum tasks returned (1-100, default 100;
+                                  out-of-range values fail with exit 6)
 
 Required:
   -r, --roadmap <name>            Target roadmap
@@ -106,7 +107,7 @@ the request fails fast with exit 4 and no rows are returned.
 
 Required:
   -r, --roadmap <name>            Target roadmap
-  <task-ids>                      Comma-separated integer ids (e.g. "1,4,7")
+  <task-ids>                      Comma-separated integer ids (no spaces, e.g. "1,4,7")
 
 Output (stdout JSON):
   Array of task objects. Empty array (and exit 0) only if no ids were given;
@@ -128,9 +129,10 @@ Examples:
 func printTaskNextHelp() {
 	fmt.Print(`Usage: rmp task next -r <roadmap> [num]
 
-Returns the top-<num> highest-priority tasks from the currently OPEN
-sprint (statuses SPRINT, DOING, TESTING — i.e. not COMPLETED). Used as
-the "what should I pick up next?" planning shortcut.
+Returns the next <num> incomplete tasks from the currently OPEN sprint
+(statuses SPRINT, DOING, TESTING — i.e. not COMPLETED), in the order
+the sprint dictates. Used as the "what should I pick up next?"
+planning shortcut.
 
 Compared to:
   - 'sprint open-tasks <id>': scope is "this sprint", any priority.
@@ -141,19 +143,23 @@ Required:
   -r, --roadmap <name>            Target roadmap
 
 Optional:
-  [num]                           Maximum tasks to return (default 5)
+  [num]                           Maximum tasks to return (default 1, max 100;
+                                  values above 100 are silently clamped)
 
 Output (stdout JSON):
-  Array of task objects, priority DESC then position ASC.
+  Array of task objects, ordered by sprint position ASC (i.e. the order set
+  by 'sprint reorder' / 'move-to' / 'top' / 'bottom'); priority DESC is used
+  only as a tiebreaker for tasks sharing the same position.
+  Empty array (exit 0) if the OPEN sprint has no SPRINT/DOING/TESTING tasks.
 
 Exit codes:
   0  Success
   3  Missing -r
   4  No sprint is OPEN
-  6  Invalid <num>
+  6  Invalid <num> (non-numeric or < 1)
 
 Examples:
-  rmp task next -r myproject
+  rmp task next -r myproject              # returns the first 1 task
   rmp task next -r myproject 10
 `)
 }
@@ -180,7 +186,7 @@ At least one of:
   --severity <n>                  0-9
   -sp, --specialists <list>       Comma-separated names (max 500 chars total)
 
-Output: empty (exit 0).
+Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
@@ -208,9 +214,9 @@ Aliases: rm.
 
 Required:
   -r, --roadmap <name>            Target roadmap
-  <task-ids>                      Comma-separated integer ids
+  <task-ids>                      Comma-separated integer ids (no spaces, e.g. "1,3,5")
 
-Output: empty (exit 0).
+Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
@@ -253,13 +259,13 @@ Aliases: set-status.
 
 Required:
   -r, --roadmap <name>            Target roadmap
-  <task-ids>                      Comma-separated integer ids
+  <task-ids>                      Comma-separated integer ids (no spaces, e.g. "1,3,5")
   <new-status>                    One of: BACKLOG, DOING, TESTING, COMPLETED
 
 Optional (only valid when <new-status> == COMPLETED):
   -s, --summary <text>            Completion summary (max 4096 chars)
 
-Output: empty (exit 0).
+Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
@@ -289,9 +295,9 @@ are already in BACKLOG — they are skipped with a stderr note).
 
 Required:
   -r, --roadmap <name>            Target roadmap
-  <task-ids>                      Comma-separated integer ids
+  <task-ids>                      Comma-separated integer ids (no spaces, e.g. "1,3,5")
 
-Output: empty (exit 0).
+Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
@@ -316,10 +322,10 @@ Aliases: set-priority.
 
 Required:
   -r, --roadmap <name>            Target roadmap
-  <task-ids>                      Comma-separated integer ids
+  <task-ids>                      Comma-separated integer ids (no spaces, e.g. "1,3,5")
   <priority>                      Integer 0-9 (0 = lowest, 9 = highest)
 
-Output: empty (exit 0).
+Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
@@ -344,10 +350,10 @@ Aliases: set-severity.
 
 Required:
   -r, --roadmap <name>            Target roadmap
-  <task-ids>                      Comma-separated integer ids
+  <task-ids>                      Comma-separated integer ids (no spaces, e.g. "1,3,5")
   <severity>                      Integer 0-9 (0 = lowest, 9 = highest)
 
-Output: empty (exit 0).
+Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
@@ -366,15 +372,17 @@ func printTaskAssignHelp() {
 	fmt.Print(`Usage: rmp task assign -r <roadmap> <task-id> <specialist>
 
 Adds <specialist> to the comma-separated specialists list on <task-id>.
-Idempotent — assigning an already-present name is a no-op (and prints
-a stderr note). Use 'task unassign' to remove a specialist.
+Idempotent: assigning an already-present name is a no-op and exits 0.
+A note is written to stderr in the no-op case for transparency — it is
+informational, not an error, and callers parsing stderr as an error
+signal should ignore it. Use 'task unassign' to remove a specialist.
 
 Required:
   -r, --roadmap <name>            Target roadmap
   <task-id>                       Integer task id
   <specialist>                    Free-form specialist label (kept as one token)
 
-Output: empty (exit 0).
+Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
@@ -392,16 +400,18 @@ Examples:
 func printTaskUnassignHelp() {
 	fmt.Print(`Usage: rmp task unassign -r <roadmap> <task-id> <specialist>
 
-Removes <specialist> from the task's specialists list. If the list becomes
-empty, the specialists field is set to NULL. Not-present specialists are
-treated as a no-op (with a stderr note).
+Removes <specialist> from the task's specialists list. If the list
+becomes empty, the specialists field is set to NULL. Idempotent: if the
+specialist is not present on the task, the call is a no-op and exits 0.
+A note is written to stderr in the no-op case for transparency — it is
+informational, not an error.
 
 Required:
   -r, --roadmap <name>            Target roadmap
   <task-id>                       Integer task id
   <specialist>                    Specialist label to remove
 
-Output: empty (exit 0).
+Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
@@ -453,7 +463,7 @@ Required:
   <task-id>                       Integer id of the dependent task
   <blocker-id>                    Integer id of the task that must complete first
 
-Output: empty (exit 0).
+Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
@@ -482,7 +492,7 @@ Required:
   <task-id>                       Integer id of the dependent task
   <blocker-id>                    Integer id of the task that was a blocker
 
-Output: empty (exit 0).
+Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success

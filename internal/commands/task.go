@@ -136,52 +136,56 @@ Status workflow (per SPEC/STATE_MACHINE.md):
     - 'task reopen' (or 'stat BACKLOG' from COMPLETED) clears started_at, tested_at, closed_at, completion_summary.
 
 Commands:
-  list, ls [OPTIONS]              			List tasks
-  create, new [OPTIONS]           			Create a new task
-  get <ids>                      			Get tasks by ID(s)
-  next [num]                     			Get next N tasks from open sprint
-  edit <id> [OPTIONS]             			Edit a task
-  remove, rm <ids>               			Remove task(s)
-  stat, set-status <ids> <status>  			Set task status
-  reopen <ids>                   			Reopen task(s) back to BACKLOG (clears lifecycle timestamps)
-  prio, set-priority <ids> <prio>    		Set task priority
-  sev, set-severity <ids> <sev>     		Set task severity
-  assign <id> <specialist>          		Add specialist to task (idempotent)
-  unassign <id> <specialist>        		Remove specialist from task
-  subtasks <id>                     		List all direct subtasks of a task
-  add-dep <id> <dep-id>             		Mark task <id> as depending on task <dep-id>
-  remove-dep <id> <dep-id>          		Remove dependency of task <id> on task <dep-id>
-  blockers <id>                     		List tasks blocking task <id> (dependencies not yet COMPLETED)
-  blocking <id>                     		List tasks that task <id> is blocking (tasks that depend on it)
+  list, ls [OPTIONS]                List tasks (any status; filter with --status)
+  create, new [OPTIONS]             Create a new task (lands in BACKLOG)
+  get <ids>                         Get tasks by id (CSV, no spaces)
+  next [num]                        Get next [num] incomplete tasks from the OPEN sprint
+  edit <id> [OPTIONS]               Edit fields of a task (status NOT editable here)
+  remove, rm <ids>                  Remove task(s) — BACKLOG only, no active subtasks
+  stat, set-status <ids> <status>   Set task status (manual transitions; SPRINT is rejected)
+  reopen <ids>                      Reopen task(s) to BACKLOG, clearing lifecycle timestamps
+  prio, set-priority <ids> <prio>   Set task priority (0-9) for one or many tasks
+  sev, set-severity <ids> <sev>     Set task severity (0-9) for one or many tasks
+  assign <id> <specialist>          Add specialist to task (idempotent; stderr note on dup)
+  unassign <id> <specialist>        Remove specialist from task (idempotent)
+  subtasks <id>                     List direct subtasks (one level; no grand-children)
+  add-dep <id> <dep-id>             Declare task <id> depends on task <dep-id> (cycles rejected)
+  remove-dep <id> <dep-id>          Remove the dependency edge created by add-dep
+  blockers <id>                     List tasks blocking <id> (incomplete dependencies)
+  blocking <id>                     List tasks that depend on <id> (reverse of blockers)
 
 Options (shared by most subcommands):
-  -r, --roadmap <name>           			REQUIRED. Target roadmap.
-  -h, --help                      			Show this help message
+  -r, --roadmap <name>              REQUIRED. Target roadmap.
+  -h, --help                        Show this help message
 
 Options (list — all filters compose with AND):
-  -s, --status <state>            			Filter by exact status
-  -p, --priority <min>            			Filter: priority >= min (0-9)
-  --severity <min>                			Filter: severity >= min (0-9)
-  -y, --type <type>               			Filter by task type
-  -sp, --specialists <substring>  			Filter by specialists (case-insensitive substring)
-  --created-since <date>          			Include tasks created on/after this date (RFC3339 or YYYY-MM-DD)
-  --created-until <date>          			Include tasks created on/before this date (RFC3339 or YYYY-MM-DD)
-  --sort <field>                  			Sort: priority (default), created, status, severity
-  -l, --limit <n>                 			Maximum results (default 100)
+  -s, --status <state>              Filter by exact status
+  -p, --priority <min>              Filter: priority >= min (0-9)
+  --severity <min>                  Filter: severity >= min (0-9)
+  -y, --type <type>                 Filter by task type
+  -sp, --specialists <substring>    Filter by specialists (case-insensitive substring)
+  --created-since <date>            Include tasks created on/after this date (RFC3339 or YYYY-MM-DD)
+  --created-until <date>            Include tasks created on/before this date (RFC3339 or YYYY-MM-DD)
+  --sort <field>                    Sort: priority (default), created, status, severity
+  -l, --limit <n>                   Maximum results (1-100, default 100)
 
 Options (create / edit):
-  -t, --title <text>              			Task title (max 255 chars)
-  -fr, --functional-requirements <text> 	Functional requirements (Why? — max 4096 chars)
-  -tr, --technical-requirements <text>  	Technical requirements (How? — max 4096 chars)
-  -ac, --acceptance-criteria <text>     	Acceptance criteria (How to verify? — max 4096 chars)
-  -y, --type <type>               			Task type (default: TASK)
-  -p, --priority <n>              			Initial/new priority (0-9, default 0)
-  --severity <n>                  			Initial/new severity (0-9, default 0)
-  -sp, --specialists <list>       			Comma-separated specialists (max 500 chars)
-  --parent <id>                   			Parent task ID (on create only — makes a sub-task)
+  -t,  --title <text>               Task title (max 255 chars)
+  -fr, --functional-requirements <text>
+                                    Functional requirements — Why? (max 4096 chars)
+  -tr, --technical-requirements <text>
+                                    Technical requirements — How? (max 4096 chars)
+  -ac, --acceptance-criteria <text>
+                                    Acceptance criteria — How to verify? (max 4096 chars)
+  -y,  --type <type>                Task type (default: TASK)
+  -p,  --priority <n>               Initial/new priority (0-9, default 0)
+       --severity <n>               Initial/new severity (0-9, default 0)
+  -sp, --specialists <list>         Comma-separated specialists (max 500 chars)
+       --parent <id>                Parent task ID (on create only — makes a sub-task)
 
 Options (stat to COMPLETED):
-  -s, --summary <text>            			Completion summary (max 4096 chars; only valid when transitioning to COMPLETED)
+  -s, --summary <text>              Completion summary (max 4096 chars; only valid when
+                                    target status is COMPLETED)
 
 Output (stdout JSON):
   list, get, next, subtasks, blockers, blocking   Array of task objects.
