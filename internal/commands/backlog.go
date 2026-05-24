@@ -17,40 +17,9 @@ var BacklogListFlags = []FlagDef{
 	{Name: "--limit", Short: "-l", Field: "Limit", Type: "int"},
 }
 
-// HandleBacklog handles backlog commands.
+// HandleBacklog handles backlog commands via the central registry.
 func HandleBacklog(args []string) error {
-	if len(args) == 0 {
-		printBacklogHelp()
-		return nil
-	}
-
-	subcommand := args[0]
-
-	if subcommand == "-h" || subcommand == "--help" || subcommand == "help" {
-		printBacklogHelp()
-		return nil
-	}
-
-	// Subcommand-level help.
-	if hasHelpFlag(args[1:]) {
-		switch subcommand {
-		case "list", "ls":
-			printBacklogListHelp()
-			return nil
-		case "show-next":
-			printBacklogShowNextHelp()
-			return nil
-		}
-	}
-
-	switch subcommand {
-	case "list", "ls":
-		return backlogList(args[1:])
-	case "show-next":
-		return backlogShowNext(args[1:])
-	default:
-		return fmt.Errorf("%w: unknown backlog subcommand: %s", utils.ErrInvalidInput, subcommand)
-	}
+	return dispatchFamily("backlog", args)
 }
 
 // printBacklogListHelp — `rmp backlog list`.

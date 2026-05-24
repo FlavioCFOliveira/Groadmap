@@ -9,45 +9,9 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
-// HandleAudit handles audit commands.
+// HandleAudit handles audit commands via the central registry.
 func HandleAudit(args []string) error {
-	if len(args) == 0 {
-		printAuditHelp()
-		return nil
-	}
-
-	subcommand := args[0]
-
-	if subcommand == "-h" || subcommand == "--help" || subcommand == "help" {
-		printAuditHelp()
-		return nil
-	}
-
-	// Subcommand-level help.
-	if hasHelpFlag(args[1:]) {
-		switch subcommand {
-		case "list", "ls":
-			printAuditListHelp()
-			return nil
-		case "history", "hist":
-			printAuditHistoryHelp()
-			return nil
-		case "stats":
-			printAuditStatsHelp()
-			return nil
-		}
-	}
-
-	switch subcommand {
-	case "list", "ls":
-		return auditList(args[1:])
-	case "history", "hist":
-		return auditHistory(args[1:])
-	case "stats":
-		return auditStats(args[1:])
-	default:
-		return fmt.Errorf("%w: unknown audit subcommand: %s", utils.ErrInvalidInput, subcommand)
-	}
+	return dispatchFamily("audit", args)
 }
 
 // printAuditListHelp — `rmp audit list`.

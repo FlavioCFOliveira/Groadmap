@@ -11,46 +11,11 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
-// HandleRoadmap handles roadmap commands.
+// HandleRoadmap handles roadmap commands via the central registry.
+// See HandleTask for the rationale; the dispatch lives in
+// Command.DispatchFamily.
 func HandleRoadmap(args []string) error {
-	if len(args) == 0 {
-		printRoadmapHelp()
-		return nil
-	}
-
-	subcommand := args[0]
-
-	// Check for help
-	if subcommand == "-h" || subcommand == "--help" || subcommand == "help" {
-		printRoadmapHelp()
-		return nil
-	}
-
-	// Subcommand-level help: 'rmp roadmap <sub> --help'.
-	if hasHelpFlag(args[1:]) {
-		switch subcommand {
-		case "list", "ls":
-			printRoadmapListHelp()
-			return nil
-		case "create", "new":
-			printRoadmapCreateHelp()
-			return nil
-		case "remove", "rm", "delete":
-			printRoadmapRemoveHelp()
-			return nil
-		}
-	}
-
-	switch subcommand {
-	case "list", "ls":
-		return roadmapList()
-	case "create", "new":
-		return roadmapCreate(args[1:])
-	case "remove", "rm", "delete":
-		return roadmapRemove(args[1:])
-	default:
-		return fmt.Errorf("%w: unknown roadmap subcommand: %s", utils.ErrInvalidInput, subcommand)
-	}
+	return dispatchFamily("roadmap", args)
 }
 
 // printRoadmapListHelp prints help for 'rmp roadmap list'.

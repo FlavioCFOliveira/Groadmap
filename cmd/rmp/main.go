@@ -80,6 +80,9 @@ func main() {
 
 	arg := os.Args[1]
 
+	// Global flags are handled here, before any command lookup. They
+	// are intentionally NOT in the command registry because their
+	// effect is on the binary itself, not on any single command family.
 	switch arg {
 	case "-h", "--help", "help":
 		printHelp()
@@ -89,29 +92,21 @@ func main() {
 		os.Exit(ExitSuccess)
 	}
 
-	// Route to appropriate command handler
-	var err error
-	exitCode := ExitSuccess
-
-	switch arg {
-	case "roadmap", "road":
-		err = commands.HandleRoadmap(os.Args[2:])
-	case "task", "t":
-		err = commands.HandleTask(os.Args[2:])
-	case "sprint", "s":
-		err = commands.HandleSprint(os.Args[2:])
-	case "backlog", "bl":
-		err = commands.HandleBacklog(os.Args[2:])
-	case "audit", "aud":
-		err = commands.HandleAudit(os.Args[2:])
-	case "stats":
-		err = commands.HandleStats(os.Args[2:])
-	default:
+	// Route via the command registry. The registry is the single
+	// source of truth for command names, aliases, and the handler
+	// associated with each command family (see
+	// internal/commands/registry.go and registry_data.go).
+	reg := commands.AppRegistry()
+	cmd := reg.FindCommand(arg)
+	if cmd == nil {
 		printError("Unknown command: " + arg)
 		printHelp()
 		os.Exit(ExitCmdNotFound)
 	}
 
+	err := cmd.DispatchFamily(os.Args[2:])
+
+	exitCode := ExitSuccess
 	if err != nil {
 		exitCode = handleError(err)
 	}

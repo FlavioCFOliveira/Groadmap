@@ -1,114 +1,16 @@
 // Package commands implements CLI command handlers for Groadmap.
 package commands
 
-import (
-	"fmt"
+import "fmt"
 
-	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
-)
-
-// HandleTask handles task commands.
+// HandleTask handles task commands by delegating to the central
+// command registry. The dispatch (subcommand resolution, alias
+// matching, --help routing) is implemented once in
+// Command.DispatchFamily; this function exists only to expose the
+// task-family entry point with its historic signature for callers and
+// tests that resolve commands by name.
 func HandleTask(args []string) error {
-	if len(args) == 0 {
-		printTaskHelp()
-		return nil
-	}
-
-	subcommand := args[0]
-
-	if subcommand == "-h" || subcommand == "--help" || subcommand == "help" {
-		printTaskHelp()
-		return nil
-	}
-
-	// Subcommand-level help: 'rmp task <sub> --help'.
-	if hasHelpFlag(args[1:]) {
-		if h := taskSubHelp(subcommand); h != nil {
-			h()
-			return nil
-		}
-	}
-
-	switch subcommand {
-	case "list", "ls":
-		return taskList(args[1:])
-	case "create", "new":
-		return taskCreate(args[1:])
-	case "get":
-		return taskGet(args[1:])
-	case "next":
-		return taskNext(args[1:])
-	case "edit":
-		return taskEdit(args[1:])
-	case "remove", "rm":
-		return taskRemove(args[1:])
-	case "stat", "set-status":
-		return taskSetStatus(args[1:])
-	case "reopen":
-		return taskReopen(args[1:])
-	case "prio", "set-priority":
-		return taskSetPriority(args[1:])
-	case "sev", "set-severity":
-		return taskSetSeverity(args[1:])
-	case "assign":
-		return taskAssign(args[1:])
-	case "unassign":
-		return taskUnassign(args[1:])
-	case "subtasks":
-		return taskSubtasks(args[1:])
-	case "add-dep":
-		return taskAddDep(args[1:])
-	case "remove-dep":
-		return taskRemoveDep(args[1:])
-	case "blockers":
-		return taskBlockers(args[1:])
-	case "blocking":
-		return taskBlocking(args[1:])
-	default:
-		return fmt.Errorf("%w: unknown task subcommand: %s", utils.ErrInvalidInput, subcommand)
-	}
-}
-
-// taskSubHelp returns the help printer for a given task subcommand (long
-// name or alias), or nil if the subcommand is unknown.
-func taskSubHelp(sub string) func() {
-	switch sub {
-	case "list", "ls":
-		return printTaskListHelp
-	case "create", "new":
-		return printTaskCreateHelp
-	case "get":
-		return printTaskGetHelp
-	case "next":
-		return printTaskNextHelp
-	case "edit":
-		return printTaskEditHelp
-	case "remove", "rm":
-		return printTaskRemoveHelp
-	case "stat", "set-status":
-		return printTaskStatHelp
-	case "reopen":
-		return printTaskReopenHelp
-	case "prio", "set-priority":
-		return printTaskPrioHelp
-	case "sev", "set-severity":
-		return printTaskSevHelp
-	case "assign":
-		return printTaskAssignHelp
-	case "unassign":
-		return printTaskUnassignHelp
-	case "subtasks":
-		return printTaskSubtasksHelp
-	case "add-dep":
-		return printTaskAddDepHelp
-	case "remove-dep":
-		return printTaskRemoveDepHelp
-	case "blockers":
-		return printTaskBlockersHelp
-	case "blocking":
-		return printTaskBlockingHelp
-	}
-	return nil
+	return dispatchFamily("task", args)
 }
 
 // printTaskHelp prints task command help.
