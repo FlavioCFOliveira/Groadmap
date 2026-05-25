@@ -105,10 +105,11 @@ func Generate(scope Scope, info ContractInfo) ([]byte, error) {
 		Enums:       buildEnums(reg),
 		GlobalFlags: buildFlagList(reg.Globals),
 		Commands:    commandsField,
-		// Stubs: SPEC requires arrays here; content lives in task #7.
-		// Non-nil so JSON renders `[]` rather than `null`.
-		CommonWorkflows: []Workflow{},
-		Pitfalls:        []Pitfall{},
+		// Curated catalogues mandated by SPEC/DATA_FORMATS.md § AI Agent
+		// Contract. See workflows.go / pitfalls.go for the canonical
+		// entries and their rationale.
+		CommonWorkflows: staticWorkflows(),
+		Pitfalls:        staticPitfalls(),
 	}
 
 	out, err := json.MarshalIndent(contract, "", "  ")

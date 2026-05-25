@@ -23,11 +23,10 @@
 // by the CLI entry point so this package stays decoupled from
 // cmd/rmp/main.go.
 //
-// Two top-level fields, `common_workflows` and `pitfalls`, are emitted
-// as empty arrays by this implementation. The schema reserves the slot
-// for them; the curated content (six workflows and twelve pitfalls
-// catalogued in SPEC/DATA_FORMATS.md) is populated by a later task in
-// the AI-help sprint sequence.
+// Two top-level fields, `common_workflows` and `pitfalls`, carry the
+// curated catalogues mandated by SPEC/DATA_FORMATS.md § AI Agent
+// Contract — six workflows and twelve pitfalls. The canonical entries
+// and their rationale live in workflows.go and pitfalls.go.
 package aihelp
 
 // SchemaVersion is the semantic version of the AI Agent Contract
@@ -59,12 +58,14 @@ type Contract struct {
 	// scopes contain exactly one command (and optionally one
 	// subcommand under it).
 	Commands []CommandEntry `json:"commands"`
-	// CommonWorkflows is reserved for the curated workflow catalogue.
-	// Currently emitted as `[]`; populated by a later AI-help sprint
-	// task. The field is non-nil so JSON renders `[]` not `null`.
+	// CommonWorkflows is the curated workflow catalogue mandated by
+	// SPEC/DATA_FORMATS.md § AI Agent Contract. Populated by the
+	// generator from staticWorkflows() in workflows.go. Always non-nil
+	// so JSON renders `[]` rather than `null` should the catalogue
+	// ever be emptied.
 	CommonWorkflows []Workflow `json:"common_workflows"`
-	// Pitfalls is reserved for the curated mistakes catalogue. Same
-	// rationale as CommonWorkflows.
+	// Pitfalls is the curated mistakes catalogue mandated by the same
+	// SPEC section. Populated from staticPitfalls() in pitfalls.go.
 	Pitfalls []Pitfall `json:"pitfalls"`
 }
 
@@ -269,9 +270,8 @@ type CommandEntry struct {
 }
 
 // Workflow is the JSON shape of a `common_workflows` entry. The
-// generator emits an empty slice for this field; the curated list of
-// six workflows from SPEC/DATA_FORMATS.md is populated by a later
-// AI-help sprint task.
+// curated list of six workflows mandated by SPEC/DATA_FORMATS.md §
+// AI Agent Contract is supplied by staticWorkflows() in workflows.go.
 type Workflow struct {
 	Name            string         `json:"name"`
 	Description     string         `json:"description"`
@@ -286,10 +286,9 @@ type WorkflowStep struct {
 	Purpose string `json:"purpose"`
 }
 
-// Pitfall is the JSON shape of a `pitfalls` entry. The generator emits
-// an empty slice for this field; the curated list of twelve pitfalls
-// from SPEC/DATA_FORMATS.md is populated by a later AI-help sprint
-// task.
+// Pitfall is the JSON shape of a `pitfalls` entry. The curated list
+// of twelve pitfalls mandated by SPEC/DATA_FORMATS.md § AI Agent
+// Contract is supplied by staticPitfalls() in pitfalls.go.
 type Pitfall struct {
 	ID             string `json:"id"`
 	Description    string `json:"description"`
