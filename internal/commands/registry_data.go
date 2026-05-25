@@ -36,16 +36,18 @@ func buildRegistry() *Registry {
 			buildBacklogCommand(),
 			buildAuditCommand(),
 			buildStatsCommand(),
+			buildAIHelpCommand(),
 		},
 	}
 }
 
 // buildGlobalFlags lists every flag the binary recognises at the top
-// level. --ai-help is the metadata-only declaration consumed by the
-// AI-contract emitter (internal/aihelp); the runtime wiring that turns
-// the flag into the contract emission is added by a later task in the
-// AI-help sprint sequence. SPEC/COMMANDS.md § AI Help is the canonical
-// description of the flag's behaviour.
+// level. --ai-help is wired by an early-pass scan in cmd/rmp/main.go
+// that intercepts the flag at every nesting level (root, command,
+// subcommand) before family dispatch. The entry here is the metadata
+// source that the AI contract emitter (internal/aihelp) projects into
+// the contract's global_flags array. SPEC/COMMANDS.md § AI Help is
+// the canonical description of the flag's behaviour.
 func buildGlobalFlags() []Flag {
 	return []Flag{
 		{

@@ -78,8 +78,19 @@ func Generate(scope Scope, info ContractInfo) ([]byte, error) {
 
 	commandsField, err := buildCommands(reg, scope)
 	if err != nil {
+		// Scope-resolution failure is a misuse, not an emission: do
+		// NOT flip the WasInvoked sentinel. The downstream hint
+		// emitters (tasks #5/#6) should still attach the agent hint
+		// to the resulting error so the agent can correct the scope.
 		return nil, err
 	}
+
+	// Past this point the contract IS being emitted. Flip the sentinel
+	// BEFORE marshalling so that any failure between here and stdout
+	// still suppresses the agent hint on the error path — the agent
+	// is interacting with the contract surface and should not also see
+	// "run --ai-help" as guidance.
+	markInvoked()
 
 	contract := Contract{
 		SchemaVersion: SchemaVersion,

@@ -78,6 +78,16 @@ func main() {
 		os.Exit(ExitSuccess)
 	}
 
+	// AI Agent Contract emission is intercepted BEFORE any other
+	// global-flag handling so that --ai-help wins over --help, --version,
+	// -r, and every action flag — the precedence required by
+	// SPEC/COMMANDS.md § AI Help. The wiring lives in aihelp_wiring.go
+	// to keep main.go small and to make the scope-extraction logic
+	// independently unit-testable.
+	if handled, code := maybeHandleAIHelp(os.Args[1:], os.Stdout, os.Stderr); handled {
+		os.Exit(code)
+	}
+
 	arg := os.Args[1]
 
 	// Global flags are handled here, before any command lookup. They
