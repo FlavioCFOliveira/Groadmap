@@ -34,6 +34,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/FlavioCFOliveira/Groadmap/internal/aihelp"
 	"github.com/FlavioCFOliveira/Groadmap/internal/commands"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
@@ -76,6 +77,25 @@ func main() {
 	if len(os.Args) < 2 {
 		printHelp()
 		os.Exit(ExitSuccess)
+	}
+
+	// AI_AGENT env-var discovery hint (SPEC/HELP.md
+	// § AI_AGENT environment variable):
+	//
+	// When AI_AGENT=1 is active, the hint MUST be the first line of
+	// stderr for the entire invocation. We emit it here, BEFORE
+	// maybeHandleAIHelp runs, with one caveat: per SPEC the hint is
+	// suppressed for the AI-help invocation forms themselves (the
+	// agent is already consuming the contract, so the hint would be
+	// noise). We peek at argv with the same detector the wiring uses
+	// to decide whether this invocation is going to serve the contract.
+	//
+	// The actual write goes through aihelp.EmitHintOnce, a sync.Once-
+	// guarded helper that coordinates with the error-path hint in
+	// handleError. The dedup contract is "exactly one hint per
+	// invocation, even when both paths fire".
+	if aihelp.IsAIAgentEnvActive() && !isAIHelpInvocation(os.Args[1:]) {
+		aihelp.EmitHintOnce(os.Stderr, commands.AIBannerLine)
 	}
 
 	// AI Agent Contract emission is intercepted BEFORE any other
@@ -152,9 +172,42 @@ func handleError(err error) int {
 	return ExitFailure
 }
 
-// printError prints an error message to stderr.
+// printError prints an error message to stderr in the SPEC-mandated
+// shape (SPEC/HELP.md § Error message format):
+//
+//	Error: <msg>
+//	<blank line>
+//	AI agents: run `rmp --ai-help` for a machine-readable command contract.
+//
+// The trailing AI-agent hint is suppressed in two situations:
+//
+//  1. When this invocation already emitted the AI Agent Contract
+//     (aihelp.WasInvoked() == true). The agent is consuming the
+//     contract; pointing them at it again would be recursive noise.
+//
+//  2. When the AI_AGENT=1 env-var path already wrote the hint at the
+//     top of stderr (handled implicitly by EmitHintOnce's sync.Once:
+//     the second call here becomes a no-op).
+//
+// Note: case (1) covers `rmp --ai-help` / `rmp ai-help` etc., where
+// markInvoked() flipped the sentinel inside aihelp.Generate. For
+// scope-rejection errors emitted by maybeHandleAIHelp (e.g.
+// `rmp invalidcmd --ai-help`), markInvoked() is NOT called because
+// Generate returns before it — so WasInvoked() stays false and the
+// agent gets the hint, helping it discover the contract entry point.
 func printError(msg string) {
 	fmt.Fprintf(os.Stderr, "Error: %s\n", msg)
+	if aihelp.WasInvoked() {
+		return
+	}
+	// EmitHintOnce internally writes the hint plus a leading newline
+	// pair (the "blank line" before it). To get the SPEC shape
+	// "Error line, blank line, hint, blank line" we prepend the
+	// separating blank line here. Subsequent callers in the same
+	// invocation (rare — handleError runs at most once) are deduped
+	// by sync.Once and produce nothing.
+	fmt.Fprintln(os.Stderr)
+	aihelp.EmitHintOnce(os.Stderr, commands.AIBannerLine)
 }
 
 // printHelp prints the main help text.

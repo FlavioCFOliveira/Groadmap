@@ -217,6 +217,12 @@ func TestDetectAIHelpInvocation_FlagAtSubcommandSlotIsCommandScope(t *testing.T)
 func runWiring(t *testing.T, args []string) (bool, int, []byte, []byte) {
 	t.Helper()
 	aihelp.ResetForTesting()
+	// Reset the hint sync.Once so each subtest starts with a clean
+	// dedup state. Without this, the first test that exercises an
+	// error path emits the hint and every subsequent test sees an
+	// empty trailing hint (the sync.Once treats them as duplicates of
+	// a long-ago "first call"). See aihelp/hint.go.
+	aihelp.ResetHintForTesting()
 	var stdout, stderr bytes.Buffer
 	handled, code := maybeHandleAIHelp(args, &stdout, &stderr)
 	return handled, code, stdout.Bytes(), stderr.Bytes()

@@ -53,6 +53,51 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/commands"
 )
 
+// isAIHelpInvocation reports whether args (the program's argv minus
+// the binary name) is going to be handled by the AI-help wiring.
+// Wrapper around detectAIHelpInvocation so the main() entry can decide
+// — BEFORE calling maybeHandleAIHelp — whether to skip the AI_AGENT
+// env-var hint emission. The SPEC requires the hint to be suppressed
+// for any of the four AI-help invocation forms (the agent is already
+// consuming the contract).
+//
+// The function deliberately ignores the boolean's "scope" value: at
+// this point we only need to know that the wiring WILL take over;
+// the scope (whole CLI vs. one command) does not change the
+// suppression decision.
+func isAIHelpInvocation(args []string) bool {
+	_, ok := detectAIHelpInvocation(args)
+	return ok
+}
+
+// writeAIHelpError emits a SPEC-shaped error from the AI-help wiring
+// layer. It mirrors cmd/rmp/main.go's printError but writes to an
+// arbitrary io.Writer (the wiring path is unit-tested with a buffer
+// instead of os.Stderr).
+//
+// The trailing AI-agent hint is appended exactly like printError
+// does, with the same suppression rules:
+//
+//   - If aihelp.WasInvoked() is true, the contract has already been
+//     delivered and the hint is suppressed (no recursion).
+//   - The dedup with the env-var hint is implicit: aihelp.EmitHintOnce
+//     uses a single sync.Once for the whole process, so if the env-var
+//     path already fired, this call is a no-op.
+//
+// In practice WasInvoked() is always false here because the only
+// caller is the scope-rejection branch of maybeHandleAIHelp, which
+// runs BEFORE Generate flips the sentinel. Checking the sentinel is
+// still the right thing to do: it keeps the helper drop-in safe if
+// future error sites move below Generate.
+func writeAIHelpError(w io.Writer, msg string) {
+	fmt.Fprintln(w, "Error: "+msg)
+	if aihelp.WasInvoked() {
+		return
+	}
+	fmt.Fprintln(w)
+	aihelp.EmitHintOnce(w, commands.AIBannerLine)
+}
+
 // aiHelpFlagToken is the literal flag string the early-pass scan
 // looks for. Declared as a constant so the test suite can reference
 // it without re-typing the literal.
@@ -97,7 +142,7 @@ func maybeHandleAIHelp(args []string, stdout, stderr io.Writer) (handled bool, e
 	// SPEC-accurate error message instead of leaking the sentinel
 	// through Generate's "unknown command" branch.
 	if scope.Command == aiHelpRejectScopeName {
-		fmt.Fprintln(stderr, "Error: ai-help accepts no positional arguments or flags other than --help")
+		writeAIHelpError(stderr, "ai-help accepts no positional arguments or flags other than --help")
 		return true, ExitMisuse
 	}
 
@@ -120,7 +165,7 @@ func maybeHandleAIHelp(args []string, stdout, stderr io.Writer) (handled bool, e
 		// data), but per SPEC/COMMANDS.md § AI Help "Exit codes" the
 		// correct code is 2 (misuse). We surface the error directly
 		// here to stay on the SPEC-mandated mapping.
-		fmt.Fprintf(stderr, "Error: %s\n", err.Error())
+		writeAIHelpError(stderr, err.Error())
 		return true, ExitMisuse
 	}
 
@@ -128,7 +173,7 @@ func maybeHandleAIHelp(args []string, stdout, stderr io.Writer) (handled bool, e
 		// stdout write errors are rare in practice (pipe closed,
 		// disk full) but worth surfacing as a generic failure so the
 		// caller knows the contract did not reach the consumer.
-		fmt.Fprintf(stderr, "Error: write contract to stdout: %s\n", err.Error())
+		writeAIHelpError(stderr, "write contract to stdout: "+err.Error())
 		return true, ExitFailure
 	}
 	return true, ExitSuccess
