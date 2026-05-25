@@ -30,6 +30,7 @@ This will detect your OS and architecture, download the latest release from GitH
 | `task` | Task management (create, edit, list, get, next, status, priority, severity) | [DOCS/commands/task.md](DOCS/commands/task.md) |
 | `sprint` | Sprint management with lifecycle control, reporting, and task ordering | [DOCS/commands/sprint.md](DOCS/commands/sprint.md) |
 | `audit` | Audit log and entity history | [DOCS/commands/audit.md](DOCS/commands/audit.md) |
+| `ai-help` | Emit the AI Agent Contract (machine-readable JSON for automated callers) | [DOCS/commands/ai-help.md](DOCS/commands/ai-help.md) |
 
 ## Installation
 
@@ -512,6 +513,32 @@ rmp task create --help
 rmp sprint --help
 rmp sprint show --help
 ```
+
+---
+
+### For AI Agents
+
+Groadmap exposes a machine-readable contract that fully describes the CLI surface in a single JSON document. AI agents and automated callers should fetch this contract once and use it as the canonical reference instead of scraping `--help` output.
+
+**Fetch the whole contract:**
+```bash
+rmp --ai-help        # global flag form
+rmp ai-help          # equivalent top-level command
+```
+
+**Scope to one command or subcommand:**
+```bash
+rmp task --ai-help              # one command and all its subcommands
+rmp task create --ai-help       # a single subcommand
+```
+
+The contract is pretty-printed JSON on stdout (2-space indent, trailing newline, UTF-8) with `schema_version`, `tool`, `conventions`, `exit_codes`, `enums`, `global_flags`, `commands`, `common_workflows`, and `pitfalls`. The JSON shape is specified in `SPEC/DATA_FORMATS.md § AI Agent Contract`. `--ai-help` wins over any other action flag: combining it with `task create` flags emits the contract and persists nothing.
+
+**Discoverability surfaces for agents that did not start at the contract:**
+
+- Every `--help` output is prepended with `AI agents: run \`rmp --ai-help\` for a machine-readable command contract.` as its first line.
+- Every `Error: ...` line on stderr is followed by the same hint after a blank line.
+- Setting `AI_AGENT=1` in the environment prepends the same hint as the first line of stderr on every invocation. Only the literal string `1` enables this; other values (including `true`, `yes`, `0`) are silent. When `AI_AGENT=1` is active and an error occurs, the hint is emitted exactly once at the top.
 
 **What are the shorthand aliases?**
 - `rmp t` = `rmp task`
