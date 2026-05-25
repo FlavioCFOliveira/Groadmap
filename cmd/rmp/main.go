@@ -158,7 +158,16 @@ func printError(msg string) {
 }
 
 // printHelp prints the main help text.
+//
+// The SPEC-mandated AI-agent discovery banner is prepended first
+// (see SPEC/HELP.md § AI agent banner). The banner makes the
+// machine-readable contract emitted by `rmp --ai-help` discoverable
+// to LLM agents that first reach for the standard `--help` surface.
+// The single source of the banner string lives in
+// internal/commands.AIBannerLine, exposed via commands.WriteAIBanner
+// so this binary cannot drift from the SPEC text.
 func printHelp() {
+	commands.WriteAIBanner(os.Stdout)
 	fmt.Printf(`%s - A CLI tool for managing technical roadmaps
 
 Usage: rmp [command] [subcommand] [arguments] [options]

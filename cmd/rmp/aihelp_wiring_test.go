@@ -426,6 +426,45 @@ func TestWasInvoked_StaysOffWhenNotInvoked(t *testing.T) {
 	}
 }
 
+// TestMaybeHandleAIHelp_ContractOutputHasNoBanner asserts that the
+// AI-agent discovery banner (SPEC/HELP.md § AI agent banner) is NEVER
+// emitted on the contract path. The banner exists to make the JSON
+// contract discoverable from --help; emitting it on top of the
+// contract itself would corrupt the JSON. The first byte of every
+// contract-path response must therefore be `{`.
+//
+// This is the in-process complement to the SPEC rule "The banner is
+// not printed when the contract itself is being emitted".
+func TestMaybeHandleAIHelp_ContractOutputHasNoBanner(t *testing.T) {
+	cases := [][]string{
+		{"--ai-help"},
+		{"ai-help"},
+		{"task", "--ai-help"},
+		{"task", "create", "--ai-help"},
+	}
+	for _, args := range cases {
+		handled, code, stdout, _ := runWiring(t, args)
+		if !handled || code != 0 {
+			t.Fatalf("%v: handled=%v code=%d, want true/0", args, handled, code)
+		}
+		if len(stdout) == 0 {
+			t.Fatalf("%v: stdout empty", args)
+		}
+		// The contract is pretty-printed JSON whose first non-whitespace
+		// byte is `{`. A banner prefix would push that byte past index
+		// 0 and would also fail JSON parsing for any consumer using
+		// json.Decoder without a stripper.
+		if stdout[0] != '{' {
+			t.Errorf("%v: first byte is %q, expected '{' (banner leaked into contract path)\nfirst 200 bytes: %q", args, stdout[0], string(stdout[:min(200, len(stdout))]))
+		}
+		// Belt-and-braces: the SPEC banner literal must not appear
+		// anywhere in the contract output.
+		if bytes.Contains(stdout, []byte("AI agents: run `rmp --ai-help`")) {
+			t.Errorf("%v: contract output contains the discovery banner string", args)
+		}
+	}
+}
+
 // Pre-Go-1.21 codebases would need a local min(). Go 1.21+ has it
 // built in. The module's go.mod targets Go 1.21+, so the builtin is
 // available — but if a downstream toolchain change ever rolls back,

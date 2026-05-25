@@ -277,17 +277,19 @@ func (c *Command) DispatchFamily(args []string) error {
 	}
 
 	if len(args) == 0 {
-		if c.HelpPrinter != nil {
-			c.HelpPrinter()
-		}
+		// Family help triggered by bare `rmp <family>`. Route through
+		// invokeHelpPrinter so the SPEC-mandated AI-agent banner is
+		// prepended uniformly (see SPEC/HELP.md § AI agent banner and
+		// internal/commands/banner.go).
+		invokeHelpPrinter(c.HelpPrinter)
 		return nil
 	}
 
 	subToken := args[0]
 	if isHelpToken(subToken) {
-		if c.HelpPrinter != nil {
-			c.HelpPrinter()
-		}
+		// Explicit family-help token: `rmp <family> --help` (or `-h` /
+		// `help`). Same banner-prepending dispatch as above.
+		invokeHelpPrinter(c.HelpPrinter)
 		return nil
 	}
 
@@ -297,10 +299,12 @@ func (c *Command) DispatchFamily(args []string) error {
 	}
 
 	// Subcommand-level help: `rmp <family> <sub> --help` (or `help` /
-	// `-h` anywhere among the remaining args).
+	// `-h` anywhere among the remaining args). Banner is prepended via
+	// invokeHelpPrinter, keeping the SPEC banner rule applied at the
+	// single dispatch point rather than duplicated across 40+ printers.
 	if hasHelpFlag(args[1:]) {
 		if sub.HelpPrinter != nil {
-			sub.HelpPrinter()
+			invokeHelpPrinter(sub.HelpPrinter)
 			return nil
 		}
 	}

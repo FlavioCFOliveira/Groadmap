@@ -10,7 +10,11 @@ import (
 // HandleStats handles the stats command.
 func HandleStats(args []string) error {
 	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help" || args[0] == "help") {
-		printStatsHelp()
+		// Route through invokeHelpPrinter so the SPEC-mandated AI-agent
+		// banner (SPEC/HELP.md § AI agent banner) is prepended uniformly.
+		// `stats` is a leaf command and bypasses DispatchFamily's help
+		// path, so the banner wrapping has to happen here explicitly.
+		invokeHelpPrinter(printStatsHelp)
 		return nil
 	}
 
