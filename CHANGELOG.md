@@ -5,6 +5,93 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-05-25
+
+Minor release. Introduces the **AI Agent Contract**: a machine-readable JSON
+description of every command, flag, exit code, JSON output shape, common
+workflow and known pitfall, exposed via `rmp --ai-help` and `rmp ai-help`.
+The release adds proactive discovery hints (a banner on every `--help` page,
+a stderr hint on every error, and an opt-in `AI_AGENT=1` environment-variable
+hint) so that AI agents that invoke `rmp` always find the contract entry
+point. Internally, command dispatch is now driven by a declarative command
+registry, eliminating the long-standing handcrafted switch chains. The
+`sprint` description length cap is raised from 500 to 2048 characters. No
+breaking changes; the public CLI surface, exit codes and existing JSON
+output schemas remain backward compatible with `v1.3.0`.
+
+### Added
+
+- **AI Agent Contract** (`internal/aihelp`): a complete machine-readable
+  contract describing every command family, subcommand, flag, alias,
+  enum, exit code, JSON output shape, plus canonical `common_workflows`
+  and `pitfalls`. The contract is generated from the same registry that
+  drives runtime dispatch, so it cannot drift from the binary.
+- `rmp --ai-help` global flag and `rmp ai-help` command emit the contract
+  to stdout. The flag takes precedence over `--help`, `--version`, `-r`
+  and every action flag. Scoping is supported: `rmp task --ai-help`,
+  `rmp sprint create --ai-help` and equivalents return the relevant
+  contract slice.
+- AI-agent discovery banner prepended to every `--help` page (main help
+  and every family/subcommand help), pointing agents at `rmp --ai-help`.
+- AI-agent stderr hint emitted on the error path
+  (`Error: ...` followed by a hint pointing at `rmp --ai-help`).
+- Opt-in `AI_AGENT=1` environment-variable mode: when active, the
+  discovery hint is the first line written to stderr for the entire
+  invocation, with a `sync.Once`-guarded dedup so it appears exactly
+  once even when both the env-var path and the error path are involved.
+  The hint is intentionally suppressed when the invocation itself is
+  serving the contract.
+- Declarative **command registry** (`internal/commands/registry*.go`):
+  command families, subcommands, aliases, and handlers are now declared
+  as data. `cmd/rmp/main.go` dispatches through the registry and the
+  AI Agent Contract is generated from the same source.
+- E2E test `test_30_aihelp_contract.py`: exhaustive coverage of the
+  contract surface (579 lines) including precedence, scoping,
+  exit codes, JSON schema invariants and discoverability.
+- E2E test `test_31_sprint_description_limit.py`: exhaustive coverage
+  of the new sprint description length boundary (178 lines).
+- Go unit-test suites for the AI Agent Contract generator, registry,
+  banner, hint emission and the `--ai-help` wiring layer.
+- `DOCS/commands/ai-help.md`: complete reference page for the AI Agent
+  Contract feature.
+- README section surfacing `--ai-help` for human discovery.
+
+### Changed
+
+- `sprint` description maximum length raised from **500** to **2048**
+  characters (`internal/models/consts.go`, SPEC/DATABASE.md,
+  SPEC/MODELS.md). Existing rows are unaffected; only the validator
+  upper bound changes. No schema migration required.
+- Command family dispatch (`task`, `sprint`, `roadmap`, `audit`,
+  `backlog`) now flows through the declarative registry rather than
+  per-family switch statements. Public CLI behaviour is unchanged.
+- The AI-agent stderr hint replaces the previous silent error path: every
+  error message is now followed by `AI agents: run `+"`rmp --ai-help`"+`
+  for a machine-readable command contract.` (suppressed when the
+  contract itself is being emitted).
+
+### Documentation
+
+- New SPEC pages: SPEC/COMMANDS.md (AI Help section), SPEC/HELP.md
+  (banner, error hint, AI_AGENT env var), SPEC/ARCHITECTURE.md
+  (contract subsystem), SPEC/DATA_FORMATS.md (contract JSON schema).
+- README and `DOCS/commands/` updated to surface the new feature.
+
+### Known Issues
+
+The two SPEC-vs-code divergences flagged in v1.3.0 remain open and are
+unchanged by this release:
+
+- `SPEC/ARCHITECTURE.md` documents `ErrInvalidInput` mapping to exit
+  code `2`; the implementation maps `ErrInvalidInput`, `ErrValidation`
+  and `ErrFieldTooLarge` to `ExitInvalidData = 6`.
+- `SPEC/COMMANDS.md` `audit stats` JSON keys differ from the
+  implementation (`by_operation` / `by_entity_type` /
+  `first_entry_at` / `last_entry_at` / `total_entries`, no `period`
+  object). Implementation behaviour is stable and adopted by tooling.
+
+[1.4.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.3.0...v1.4.0
+
 ## [1.3.0] - 2026-05-13
 
 Minor release. Adds GNU-style `--flag=value` parsing across every command and
