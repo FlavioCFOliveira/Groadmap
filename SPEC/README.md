@@ -13,6 +13,10 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | CLI command syntax / flags | `COMMANDS.md` |
 | JSON input/output formats | `DATA_FORMATS.md` |
 | Help text structure | `HELP.md` |
+| AI agent contract (CLI surface) | `COMMANDS.md § AI Help` |
+| AI agent contract (JSON schema) | `DATA_FORMATS.md § AI Agent Contract` |
+| AI agent contract (generation) | `ARCHITECTURE.md § AI Agent Contract Generation` |
+| `AI_AGENT` env-var behaviour | `HELP.md § AI_AGENT environment variable` |
 | Domain models (Task, Sprint, etc.) | `MODELS.md` |
 | Memory layout / struct ordering | `MODELS.md § Memory Layout Optimization` |
 | State transitions (Task) | `STATE_MACHINE.md § Task State Machine` |
@@ -69,6 +73,8 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Concurrency model (WAL, pool, retry) | `IMPLEMENTATION.md § Concurrency Model` |
 | Caching strategies (query, connection) | `IMPLEMENTATION.md` |
 | Help text canonical | code in `internal/commands/*.go` (structure in `HELP.md`) |
+| AI agent contract JSON schema | `DATA_FORMATS.md § AI Agent Contract` |
+| AI agent contract generation rules | `ARCHITECTURE.md § AI Agent Contract Generation` |
 
 `DATABASE.md` additionally retains `CHECK` constraints in DDL as a normative reproduction of the enums; the Go-level enum definitions remain in `MODELS.md`.
 

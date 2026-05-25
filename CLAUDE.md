@@ -1,5 +1,9 @@
 # CLAUDE.md
 
+## Roadmap
+
+**Name:** groadmap
+
 ## 1. Critical Policy: Specification First
 
 **MANDATORY: No implementation without SPEC/**. Zero exceptions.

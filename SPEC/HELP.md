@@ -12,11 +12,13 @@ is modified.
 
 - [Audience and intent](#audience-and-intent)
 - [Help levels](#help-levels)
+- [AI agent banner](#ai-agent-banner)
 - [Help structure template](#help-structure-template)
 - [Family-help template](#family-help-template)
 - [Subcommand-help template](#subcommand-help-template)
 - [Command inventory](#command-inventory)
 - [Error message format](#error-message-format)
+- [AI_AGENT environment variable](#ai_agent-environment-variable)
 - [Exit codes](#exit-codes)
 
 ## Audience and intent
@@ -45,6 +47,36 @@ Every family handler routes `--help` (and `-h` and the literal word
 `help`) anywhere in its argument list to the matching printer **before**
 any other parsing runs, so subcommand help is reachable even when the
 required `-r` flag is missing.
+
+A separate machine-readable surface for the second audience exists in
+parallel to the plain-text help: the AI Agent Contract emitted by
+`rmp --ai-help`. The contract is specified in
+`COMMANDS.md § AI Help` (CLI surface) and
+`DATA_FORMATS.md § AI Agent Contract` (JSON shape). The plain-text help
+described in this document remains the primary surface for human
+operators.
+
+## AI agent banner
+
+To make the machine-readable contract discoverable to LLM agents that
+first reach for the plain-text help, every plain-text help printer
+emits the following banner as its **first line**, followed by exactly
+one blank line, followed by the existing help body:
+
+```
+AI agents: run `rmp --ai-help` for a machine-readable command contract.
+```
+
+The banner is mandatory and identical across all three help levels
+(global, family, subcommand). It is the literal string above, with
+backticks, with no surrounding decoration.
+
+The banner is **not** printed when:
+
+- The contract itself is being emitted (`rmp --ai-help`, `rmp ai-help`,
+  `rmp <command> --ai-help`, `rmp <command> <subcommand> --ai-help`):
+  the contract is JSON and contains no plain-text help.
+- `rmp --version` / `rmp -v`: version output is not help.
 
 ## Help structure template
 
@@ -165,6 +197,7 @@ help text must match the command contract in `COMMANDS.md`.
 |--------|---------|-------------------------|
 | Global | `rmp --help` | `COMMANDS.md § Global Commands` |
 | Global | `rmp --version` | `COMMANDS.md § Global Commands` |
+| Global | `rmp --ai-help` / `rmp ai-help` | `COMMANDS.md § AI Help` |
 | Roadmap | `rmp roadmap [list \| create \| remove]` | `COMMANDS.md § Roadmap Management` |
 | Task | `rmp task [list \| create \| get \| next \| edit \| remove \| stat \| reopen \| prio \| sev \| assign \| unassign \| subtasks \| add-dep \| remove-dep \| blockers \| blocking]` | `COMMANDS.md § Task Management` |
 | Sprint | `rmp sprint [list \| create \| get \| show \| update \| remove]` | `COMMANDS.md § Sprint Management` |
@@ -190,6 +223,8 @@ want it. The required shape is:
 
 ```
 Error: <human-readable description of the problem>
+
+AI agents: run `rmp --ai-help` for a machine-readable command contract.
 ```
 
 The wording starts with `Error: ` (with the colon and the trailing
@@ -199,12 +234,99 @@ the offending flag or value. For non-input errors (resource not found,
 already exists, database failure) the description names the entity and
 its id where relevant.
 
+After the error line, the printer writes one blank line followed by the
+AI-agent hint:
+
+```
+AI agents: run `rmp --ai-help` for a machine-readable command contract.
+```
+
+The hint:
+
+- Is written to stderr, after the `Error: ` line, on every error path.
+- Is one line of plain text, identical across every error.
+- Does not change the exit code.
+- Is suppressed when the failing command is itself `rmp --ai-help`,
+  `rmp ai-help`, `rmp <command> --ai-help`, or
+  `rmp <command> <subcommand> --ai-help`, to avoid recursive guidance
+  from the contract emitter.
+- Is suppressed when `AI_AGENT=1` is active for this invocation: in
+  that case the env-var hint has already been emitted as the first
+  line of stderr, and repeating it on the error path would duplicate
+  the same message. See the deduplication rule in
+  `AI_AGENT environment variable` below.
+
 Example: missing required arguments on `rmp task create`
 
 ```
 $ rmp task create -r myproject
 Error: required parameter missing: --title
+
+AI agents: run `rmp --ai-help` for a machine-readable command contract.
 ```
+
+## AI_AGENT environment variable
+
+When the environment variable `AI_AGENT` is set to the exact value `1`,
+the CLI emits the AI-agent hint to stderr **before** any other output on
+every invocation:
+
+```
+AI agents: run `rmp --ai-help` for a machine-readable command contract.
+```
+
+### Ordering
+
+The env-var hint is the **first line** written to stderr. It is followed
+by exactly **one blank line**. Any further stderr content (an `Error:`
+line on failure paths, diagnostic output, etc.) is written after that
+blank line. The ordering is the same on success and on failure:
+
+```
+AI agents: run `rmp --ai-help` for a machine-readable command contract.
+<blank line>
+<remaining stderr, if any>
+```
+
+On a successful invocation with `AI_AGENT=1`, the hint is the only
+stderr output and stdout is unaffected.
+
+### Deduplication
+
+The env-var hint and the error-path hint (specified in
+`Error message format` above) are textually identical. To avoid
+emitting the same line twice in the same invocation, the following
+deduplication rule applies:
+
+- When `AI_AGENT=1` is active **and** the invocation fails, the
+  env-var hint is emitted once at the top of stderr (per the ordering
+  above) and the trailing error-path hint is **suppressed**.
+- When `AI_AGENT=1` is not active and the invocation fails, only the
+  trailing error-path hint is emitted (no top hint).
+- When `AI_AGENT=1` is active and the invocation succeeds, only the
+  env-var hint is emitted at the top of stderr (no error path runs).
+
+The agent therefore observes the hint exactly once per invocation in
+every combination of states.
+
+### Rules
+
+- The hint is one line, plain text, written to stderr.
+- The hint is written exactly once per invocation (see deduplication
+  above).
+- The hint does **not** modify stdout in any way (JSON payloads remain
+  byte-identical and parseable).
+- The hint does **not** modify the exit code.
+- The hint is suppressed when the invocation is `rmp --ai-help`,
+  `rmp ai-help`, `rmp <command> --ai-help`, or
+  `rmp <command> <subcommand> --ai-help` (the agent is already
+  consuming the contract).
+- The hint is enabled **only** when `AI_AGENT` is exactly the string
+  `1`. Any other value (including empty, `0`, `true`, `false`, or
+  unset) leaves the CLI silent on this axis.
+
+The variable is read once at process start. It is a hint mechanism, not
+a mode switch: no other behaviour changes when `AI_AGENT=1`.
 
 ## Exit codes
 

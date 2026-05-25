@@ -7,6 +7,7 @@
 - [Error Handling](#error-handling)
 - [Field Validation](#field-validation)
 - [Global Commands](#global-commands)
+- [AI Agent Contract](#ai-agent-contract)
 - [Exit Codes](#exit-codes)
 - [Roadmap Selection (Always Required)](#roadmap-selection-always-required)
 - [Roadmap Management](#roadmap-management)
@@ -112,6 +113,82 @@ rmp -v
 ```
 
 **Description:** Displays application version.
+
+### AI Help
+
+```bash
+rmp --ai-help
+rmp ai-help
+```
+
+**Description:** Emits a machine-readable JSON contract that fully describes the CLI surface (commands, subcommands, flags, exit codes, output shapes, enums, examples). The output is intended to be consumed by AI agents and other automated callers without recourse to any other documentation.
+
+**Forms:**
+
+| Invocation | Scope of the returned contract |
+|------------|--------------------------------|
+| `rmp --ai-help` | Whole CLI: every command and every subcommand. |
+| `rmp ai-help` | Whole CLI: identical payload to `rmp --ai-help`. |
+| `rmp <command> --ai-help` | One command and all of its subcommands. |
+| `rmp <command> <subcommand> --ai-help` | One subcommand only. |
+
+**Rules:**
+
+- The flag `--ai-help` is a global flag. It is recognised at every level of the command tree and is parsed before any other validation runs (analogous to `--help`).
+- The flag `--ai-help` has no short form.
+- The command `rmp ai-help` is functionally equivalent to `rmp --ai-help`. It exists so the contract is discoverable through plain command listings and shell tab-completion.
+- The command `ai-help` accepts no positional arguments and no flags other than `--help`. Any other argument produces an `Error: ` to stderr with exit code 2.
+- When both `--ai-help` and any other action-bearing flag or argument are present, `--ai-help` wins: the contract is emitted and no other action is performed.
+- `--ai-help` and `ai-help` ignore the `-r` / `--roadmap` flag; the contract is a static description of the CLI and does not touch any roadmap database.
+
+**Output (stdout JSON):** the contract document defined in `DATA_FORMATS.md § AI Agent Contract`. The JSON is pretty-printed with two-space indentation, UTF-8, and includes a final newline.
+
+**Exit codes:**
+
+| Code | Cause |
+|------|-------|
+| 0 | Contract emitted successfully. |
+| 2 | `ai-help` invoked with unexpected positional arguments or flags; `--ai-help` used with an unknown command or subcommand name preceding it. |
+
+**Discoverability requirements:**
+
+1. The first line of the plain-text output of `rmp --help` and of every family-level and subcommand-level `--help` is the banner:
+
+   ```
+   AI agents: run `rmp --ai-help` for a machine-readable command contract.
+   ```
+
+   The banner is followed by one blank line, then the existing help body. The banner is **not** printed by `rmp --version` / `rmp -v` (version output is parsed by scripts; extra lines would break automations) and is **not** printed by the AI contract emitters (`rmp --ai-help`, `rmp ai-help`, `rmp <command> --ai-help`, `rmp <command> <subcommand> --ai-help`), which emit JSON only.
+
+2. Every error message emitted to stderr by the CLI ends with one blank line followed by the hint:
+
+   ```
+   AI agents: run `rmp --ai-help` for a machine-readable command contract.
+   ```
+
+   This rule applies uniformly to input errors (missing flags, unknown subcommands), validation errors, not-found errors, conflict errors, and database errors. The hint is one line, plain text, written to stderr, and does not change the exit code. The hint is not appended when the command itself is `rmp --ai-help`, `rmp ai-help`, `rmp <command> --ai-help`, or `rmp <command> <subcommand> --ai-help` (to avoid recursion in error paths of the contract emitter). The hint is also not appended when `AI_AGENT=1` is active for this invocation; in that case the env-var hint already occupies the top of stderr and the trailing hint is suppressed to avoid duplication (see rule 3 below).
+
+3. When the environment variable `AI_AGENT` is set to the literal value `1`, every invocation of `rmp` writes the same hint line to stderr **before** any other output, regardless of whether the invocation succeeds or fails:
+
+   ```
+   AI agents: run `rmp --ai-help` for a machine-readable command contract.
+   ```
+
+   The hint:
+   - Is the **first line** written to stderr, followed by exactly one blank line, followed by any remaining stderr content (an `Error:` line on failure, otherwise nothing).
+   - Is written exactly once per invocation. When `AI_AGENT=1` is active and the invocation fails, the trailing error-path hint specified in rule 2 is suppressed so the agent observes the hint exactly once.
+   - Does not change stdout in any way.
+   - Does not change the exit code.
+   - Is suppressed for the invocations `rmp --ai-help`, `rmp ai-help`, `rmp <command> --ai-help`, and `rmp <command> <subcommand> --ai-help` (the agent is already using the contract).
+   - Any value of `AI_AGENT` other than the exact string `1` (including empty, `0`, `true`, `false`, or unset) disables the hint.
+
+   The canonical specification of ordering and deduplication is in `HELP.md § AI_AGENT environment variable`.
+
+---
+
+## AI Agent Contract
+
+The structure, fields, and example payload of the JSON document returned by `rmp --ai-help` are specified in `DATA_FORMATS.md § AI Agent Contract`. The contract is generated by the CLI at runtime from its internal command registry; the registry is the single source of truth from which both the human help text and the AI contract are derived. See `ARCHITECTURE.md § AI Agent Contract Generation`.
 
 ---
 
@@ -1397,6 +1474,7 @@ rmp stats -r <name>
 
 | Command | Aliases |
 |---------|---------|
+| `ai-help` | - |
 | `roadmap` | `road` |
 | `task` | `t` |
 | `sprint` | `s` |

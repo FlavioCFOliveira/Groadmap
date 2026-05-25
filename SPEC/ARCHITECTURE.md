@@ -12,6 +12,7 @@
   - [Error Reuse Policy (Mandatory)](#error-reuse-policy-mandatory)
 - [Exit Codes](#exit-codes)
   - [Exit Code Standards](#exit-code-standards)
+- [AI Agent Contract Generation](#ai-agent-contract-generation)
 - [See Also](#see-also)
 
 ## High-Level Overview
@@ -348,8 +349,61 @@ set -e
 rmp task add -r myproject -d "New task"   # Exits 3 if no roadmap specified
 ```
 
+## AI Agent Contract Generation
+
+The CLI exposes a machine-readable description of its surface to AI
+agents via `rmp --ai-help` (see `COMMANDS.md § AI Help` and
+`DATA_FORMATS.md § AI Agent Contract`). To keep that contract and the
+plain-text help in lock-step, both surfaces MUST be generated from the
+same single source of truth at runtime.
+
+### Single source of truth
+
+A central command registry inside the binary describes every command,
+every subcommand, every flag (long, short, type, required, default,
+enum, range, length bounds, mutual exclusion), every positional
+argument, every exit code, every success-output shape, every side
+effect, every prerequisite, and at least one success and one failure
+example per subcommand.
+
+Two derivations are taken from this registry:
+
+1. The plain-text help printers (`internal/commands/*_help.go`) format
+   selected fields per the templates in `HELP.md`.
+2. The AI contract emitter serialises the registry to JSON per the
+   schema in `DATA_FORMATS.md § AI Agent Contract`.
+
+### Non-duplication rules
+
+- No `--help` printer may invent flag descriptions, defaults, or exit
+  codes that are not in the registry. If the help needs to surface
+  information, the registry is the place to add it.
+- No `--ai-help` serialiser may invent or omit fields relative to the
+  registry. Filtering by scope (whole CLI / command / subcommand) is
+  the only transformation permitted.
+- A change to a command's surface (new flag, renamed alias, new exit
+  code, changed default) is one edit in the registry and is reflected
+  automatically by both surfaces.
+
+### Determinism
+
+The JSON contract is deterministic: two invocations of `rmp --ai-help`
+against the same binary version produce byte-identical output. The
+contract does not include a timestamp, a process identifier, or any
+locale-dependent string.
+
+### Failure modes
+
+The contract emitter is in-process and reads no external state. The
+only runtime errors it can surface are I/O errors writing to stdout,
+which map to exit code 1 via the standard error-handling path. When
+`--ai-help` is combined with an unknown command or subcommand name
+preceding it, the CLI emits exit code 2 with the standard error format.
+
 ## See Also
 
 - Memory Layout Optimization → `MODELS.md § Memory Layout Optimization`
 - Concurrency, Caching, Performance → `IMPLEMENTATION.md`
 - Database schema and queries → `DATABASE.md`
+- AI Agent Contract schema → `DATA_FORMATS.md § AI Agent Contract`
+- AI Agent Contract CLI surface → `COMMANDS.md § AI Help`
