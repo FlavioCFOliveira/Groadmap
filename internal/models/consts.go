@@ -27,5 +27,5 @@ const (
 // Sprint description limits
 const (
 	// MaxSprintDescriptionLength is the maximum length for sprint descriptions
-	MaxSprintDescriptionLength = 500
+	MaxSprintDescriptionLength = 2048
 )

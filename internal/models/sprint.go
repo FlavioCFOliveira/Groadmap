@@ -70,7 +70,7 @@ func (ss SprintStatus) CanReopen() bool {
 
 // Sprint field size limits
 const (
-	MaxSprintDescription = 500
+	MaxSprintDescription = 2048
 )
 
 // Sprint represents a sprint in the roadmap.

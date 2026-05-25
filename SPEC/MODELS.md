@@ -150,7 +150,7 @@ Maps to the `sprints` table and `Sprint` JSON object.
 type Sprint struct {
     ID          int          `json:"id"`
     Status      SprintStatus `json:"status"`
-    Description string       `json:"description"`
+    Description string       `json:"description"`      // Sprint description, max 2048 chars
     Tasks       []int        `json:"tasks"`            // Computed from sprint_tasks (ordered by position)
     TaskCount   int          `json:"task_count"`       // Computed
     CreatedAt   string       `json:"created_at"`
@@ -159,6 +159,10 @@ type Sprint struct {
     MaxTasks    *int         `json:"max_tasks"`        // Nullable; NULL means unlimited capacity
 }
 ```
+
+#### Sprint Field Constraints
+
+- `Description`: Maximum 2048 characters (free text covering sprint goal, scope, and non-goals).
 
 ### Audit Entry
 Maps to the `audit` table.

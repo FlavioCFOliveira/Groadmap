@@ -38,6 +38,7 @@ TEST_MODULES = [
     "test_28_command_aliases",
     "test_29_subprocess_concurrency",
     "test_30_aihelp_contract",
+    "test_31_sprint_description_limit",
 ]
 
 # Stress tests (run separately due to time/data volume)

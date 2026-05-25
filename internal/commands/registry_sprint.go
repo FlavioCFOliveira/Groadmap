@@ -40,7 +40,7 @@ func buildSprintCommand() Command {
 				Handler:     sprintCreate,
 				Flags: []Flag{
 					sharedRoadmapFlag(),
-					{Long: "--description", Short: "-d", Type: "string", Required: true, MaxLength: 500, Description: "Sprint description."},
+					{Long: "--description", Short: "-d", Type: "string", Required: true, MaxLength: 2048, Description: "Sprint description."},
 					{Long: "--max-tasks", Type: "integer", HasRange: true, RangeMin: 1, Description: "Capacity cap on active tasks; cannot be removed once set."},
 					helpFlag(),
 				},
@@ -102,7 +102,7 @@ func buildSprintCommand() Command {
 				},
 				Flags: []Flag{
 					sharedRoadmapFlag(),
-					{Long: "--description", Short: "-d", Type: "string", MaxLength: 500, Description: "New description."},
+					{Long: "--description", Short: "-d", Type: "string", MaxLength: 2048, Description: "New description."},
 					{Long: "--max-tasks", Type: "integer", HasRange: true, RangeMin: 1, Description: "New capacity cap."},
 					helpFlag(),
 				},

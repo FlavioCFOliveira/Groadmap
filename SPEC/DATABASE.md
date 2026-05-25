@@ -884,7 +884,15 @@ The following length constraints are enforced at the database level using CHECK 
 | `technical_requirements` | 4096 characters | `CHECK(length(technical_requirements) <= 4096)` |
 | `acceptance_criteria` | 4096 characters | `CHECK(length(acceptance_criteria) <= 4096)` |
 
-**Application-Level Validation:**
+**Application-Level Validation Only:**
+
+The following fields have a maximum length enforced at the application layer but **not** at the database level (the column has no CHECK constraint). The application MUST reject inputs that exceed the limit before insert/update.
+
+| Table.Field | Maximum Length | Enforcement |
+|-------------|----------------|-------------|
+| `sprints.description` | 2048 characters | Application validation (`models.MaxSprintDescription`) |
+
+**Application-Level Validation Rules:**
 - Validate inputs BEFORE database insertion to provide clear error messages
 - Trim whitespace before length checking
 - Return specific error messages indicating which field exceeded the limit

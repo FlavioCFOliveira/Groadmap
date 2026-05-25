@@ -50,7 +50,7 @@ Aliases: new.
 
 Required:
   -r, --roadmap <name>            Target roadmap
-  -d, --description <text>        Sprint description (max 500 chars)
+  -d, --description <text>        Sprint description (max 2048 chars)
 
 Optional:
   --max-tasks <n>                 Hard cap on active tasks (n >= 1). When set,
@@ -159,7 +159,7 @@ Required:
   <sprint-id>                     Integer sprint id
 
 At least one of:
-  -d, --description <text>        New description (max 500 chars)
+  -d, --description <text>        New description (max 2048 chars)
   --max-tasks <n>                 New capacity cap; must be >= 1
 
 Output: empty (exit 0 on success).

@@ -52,7 +52,7 @@ Options (shared):
   -h, --help                               Show this help message
 
 Options (create / update):
-  -d, --description <text>                 Sprint description (free text, max 500 chars)
+  -d, --description <text>                 Sprint description (free text, max 2048 chars)
   --max-tasks <n>                          Capacity cap on active tasks (n >= 1; cannot be
                                            removed once set)
 
