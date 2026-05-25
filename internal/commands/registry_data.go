@@ -41,9 +41,11 @@ func buildRegistry() *Registry {
 }
 
 // buildGlobalFlags lists every flag the binary recognises at the top
-// level. --ai-help is intentionally absent here: it is introduced by
-// task 2 of the AI-help sprint sequence; until then the registry
-// reflects only the existing surface.
+// level. --ai-help is the metadata-only declaration consumed by the
+// AI-contract emitter (internal/aihelp); the runtime wiring that turns
+// the flag into the contract emission is added by a later task in the
+// AI-help sprint sequence. SPEC/COMMANDS.md § AI Help is the canonical
+// description of the flag's behaviour.
 func buildGlobalFlags() []Flag {
 	return []Flag{
 		{
@@ -57,6 +59,11 @@ func buildGlobalFlags() []Flag {
 			Short:       "-v",
 			Type:        "boolean",
 			Description: "Print the application version and exit.",
+		},
+		{
+			Long:        "--ai-help",
+			Type:        "boolean",
+			Description: "Emit a machine-readable JSON contract describing the entire CLI surface (commands, subcommands, flags, exit codes, enums, examples). Intended for AI agents; takes precedence over any other action when combined.",
 		},
 	}
 }
