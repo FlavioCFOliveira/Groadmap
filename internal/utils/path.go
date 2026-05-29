@@ -16,6 +16,10 @@ const (
 	DataDirPerm = 0700
 	// DBFilePerm is the permission for database files (0600 - owner only).
 	DBFilePerm = 0600
+	// DBFileName is the fixed filename of the SQLite database inside each
+	// roadmap home directory (~/.roadmaps/<name>/project.db). The roadmap
+	// name is encoded in the directory, not in this basename.
+	DBFileName = "project.db"
 )
 
 // ValidRoadmapNameRegex validates roadmap names: lowercase letters, numbers, underscores, hyphens.
@@ -140,9 +144,12 @@ func ValidateRoadmapName(name string) error {
 	return nil
 }
 
-// GetRoadmapPath returns the full path to a roadmap database file.
-// Validates the name to prevent path traversal attacks.
-func GetRoadmapPath(name string) (string, error) {
+// GetRoadmapDir returns the absolute path to a roadmap's home directory
+// (~/.roadmaps/<name>/). This directory is the container for every file the
+// application stores for that roadmap (today the SQLite database and its
+// sidecars; designed to hold further per-roadmap artefacts later).
+// The name is validated to prevent path traversal attacks.
+func GetRoadmapDir(name string) (string, error) {
 	if err := ValidateRoadmapName(name); err != nil {
 		return "", err
 	}
@@ -152,12 +159,56 @@ func GetRoadmapPath(name string) (string, error) {
 		return "", err
 	}
 
-	// Use .db extension
-	dbPath := filepath.Join(dataDir, name+".db")
-	return dbPath, nil
+	return filepath.Join(dataDir, name), nil
 }
 
-// RoadmapExists checks if a roadmap database file exists.
+// GetRoadmapPath returns the full path to a roadmap database file
+// (~/.roadmaps/<name>/project.db).
+// Validates the name to prevent path traversal attacks.
+func GetRoadmapPath(name string) (string, error) {
+	dir, err := GetRoadmapDir(name)
+	if err != nil {
+		return "", err
+	}
+
+	return filepath.Join(dir, DBFileName), nil
+}
+
+// EnsureRoadmapDir creates a roadmap's home directory if it does not exist.
+// Sets permissions to 0700 (owner only) for security and verifies that the
+// permissions were applied correctly after creation (umask may interfere).
+// It mirrors EnsureDataDir but targets ~/.roadmaps/<name>/.
+func EnsureRoadmapDir(name string) error {
+	// The data directory must exist (and be private) before any roadmap
+	// home directory can be created under it.
+	if err := EnsureDataDir(); err != nil {
+		return err
+	}
+
+	dir, err := GetRoadmapDir(name)
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(dir, DataDirPerm); err != nil {
+		return fmt.Errorf("creating roadmap directory %s: %w", dir, err)
+	}
+
+	// Ensure permissions are set correctly (umask may have affected creation).
+	if err := os.Chmod(dir, DataDirPerm); err != nil {
+		return fmt.Errorf("setting permissions on roadmap directory: %w", err)
+	}
+
+	// Verify permissions were set correctly.
+	if err := VerifyPermissions(dir, DataDirPerm); err != nil {
+		return fmt.Errorf("verifying roadmap directory permissions: %w", err)
+	}
+
+	return nil
+}
+
+// RoadmapExists checks whether a roadmap exists under the current layout,
+// i.e. whether ~/.roadmaps/<name>/project.db is present as a regular file.
 func RoadmapExists(name string) (bool, error) {
 	path, err := GetRoadmapPath(name)
 	if err != nil {
@@ -169,13 +220,16 @@ func RoadmapExists(name string) (bool, error) {
 		if os.IsNotExist(err) {
 			return false, nil
 		}
-		return false, fmt.Errorf("checking roadmap file: %w", err)
+		return false, fmt.Errorf("checking roadmap database: %w", err)
 	}
 
 	return !info.IsDir(), nil
 }
 
-// ListRoadmaps returns a list of all roadmap names in the data directory.
+// ListRoadmaps returns the names of all roadmaps in the data directory.
+// Under the current layout each roadmap is an immediate subdirectory of
+// ~/.roadmaps/ that contains a project.db database; top-level files are not
+// considered roadmaps.
 func ListRoadmaps() ([]string, error) {
 	dataDir, err := GetDataDir()
 	if err != nil {
@@ -190,12 +244,20 @@ func ListRoadmaps() ([]string, error) {
 		return nil, fmt.Errorf("reading data directory: %w", err)
 	}
 
-	var roadmaps []string
+	// Initialise non-nil so the empty case returns [] rather than null,
+	// matching the os.IsNotExist branch and the JSON contract expected by
+	// callers.
+	roadmaps := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".db" {
-			name := entry.Name()[:len(entry.Name())-len(".db")]
-			roadmaps = append(roadmaps, name)
+		if !entry.IsDir() {
+			continue
 		}
+		dbPath := filepath.Join(dataDir, entry.Name(), DBFileName)
+		info, statErr := os.Stat(dbPath)
+		if statErr != nil || info.IsDir() {
+			continue // not a roadmap home directory
+		}
+		roadmaps = append(roadmaps, entry.Name())
 	}
 
 	return roadmaps, nil

@@ -225,6 +225,8 @@ The `-r` / `--roadmap` flag may appear anywhere among the arguments after the su
 
 Command: `rmp roadmap` (alias: `rmp road`)
 
+A roadmap is stored in its own home directory at `~/.roadmaps/<name>/`, with the SQLite database at `~/.roadmaps/<name>/project.db`. On every `rmp` invocation, a startup sweep automatically migrates any roadmap still in the legacy `~/.roadmaps/<name>.db` layout into the current layout before the command runs, so `roadmap list` and all other commands always observe the current layout. The sweep is specified in `ARCHITECTURE.md § Filesystem Layout Migration`.
+
 ### List Roadmaps
 
 ```bash
@@ -232,13 +234,13 @@ rmp roadmap list
 rmp road ls
 ```
 
-**Description:** Lists all existing roadmaps.
+**Description:** Lists all existing roadmaps. Each roadmap is the immediate subdirectory of `~/.roadmaps/` that contains a `project.db` database.
 
-**JSON Output:**
+**JSON Output:** Array of objects, each with `name` (the roadmap home directory name), `path` (the absolute path to the roadmap's `project.db`), and `size` (the size of `project.db` in bytes).
 ```json
 [
-  {"name": "project1", "path": "~/.roadmaps/project1.db", "size": 24576},
-  {"name": "project2", "path": "~/.roadmaps/project2.db", "size": 8192}
+  {"name": "project1", "path": "~/.roadmaps/project1/project.db", "size": 24576},
+  {"name": "project2", "path": "~/.roadmaps/project2/project.db", "size": 8192}
 ]
 ```
 
@@ -248,6 +250,8 @@ rmp road ls
 rmp roadmap create <name>
 rmp road new <name>
 ```
+
+**Description:** Creates a new roadmap. The command creates the roadmap home directory `~/.roadmaps/<name>/` (mode `0700`) and the SQLite database `~/.roadmaps/<name>/project.db` (mode `0600`) inside it.
 
 `roadmap create` accepts no flags beyond `--help`. It does not provide a `--force` or overwrite option; the operation is intentionally non-destructive. To replace an existing roadmap, the caller MUST run `rmp roadmap remove <name>` first.
 
@@ -275,6 +279,8 @@ rmp road new <name>
 rmp roadmap remove <name>
 rmp road rm <name>
 ```
+
+**Description:** Removes a roadmap by deleting its entire home directory `~/.roadmaps/<name>/` recursively. This removes the `project.db` database, its SQLite sidecars (`project.db-wal`, `project.db-shm`), and any other per-roadmap files the directory contains.
 
 **Output (success):** No output, exit code 0.
 

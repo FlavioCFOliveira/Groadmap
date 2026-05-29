@@ -3,6 +3,7 @@
 ## Table of Contents
 
 - [Overview](#overview)
+- [Data Location](#data-location)
 - [Installation Methods](#installation-methods)
 - [Platform Detection](#platform-detection)
 - [Installation Script Reference](#installation-script-reference)
@@ -12,6 +13,16 @@
 ## Overview
 
 This specification defines the deployment process, installation methods, and platform detection for the Groadmap CLI.
+
+## Data Location
+
+The `rmp` binary installs to a system location (default `/usr/local/bin`). Its runtime data is stored separately, per user, under the data directory `~/.roadmaps/` (mode `0700`).
+
+- Each roadmap occupies its own home directory `~/.roadmaps/<name>/` (mode `0700`), containing the SQLite database `project.db` (mode `0600`) and its sidecars.
+- The data directory persists across binary upgrades and reinstalls; installing or removing the binary does not create, move, or delete roadmap data.
+- On first run after upgrading from a build that used the legacy `~/.roadmaps/<name>.db` layout, the binary automatically migrates existing roadmaps to the current layout. The migration moves data in place and does not require user action. It is specified in `ARCHITECTURE.md § Filesystem Layout Migration`.
+
+The full data directory layout and permission model are specified in `ARCHITECTURE.md § Directory Structure`.
 
 ## Installation Methods
 

@@ -2,7 +2,7 @@
 
 ## Description
 
-Roadmap management - the top-level containers for tasks and sprints. Each roadmap is stored as an independent SQLite database in `~/.roadmaps/`.
+Roadmap management - the top-level containers for tasks and sprints. Each roadmap lives in its own directory `~/.roadmaps/<name>/`, which holds the roadmap's SQLite database at `~/.roadmaps/<name>/project.db`.
 
 ## Synopsis
 
@@ -29,8 +29,8 @@ rmp road ls
 **Example output:**
 ```json
 [
-  {"name": "project1", "path": "~/.roadmaps/project1.db", "size": 24576},
-  {"name": "project2", "path": "~/.roadmaps/project2.db", "size": 8192}
+  {"name": "project1", "path": "~/.roadmaps/project1/project.db", "size": 24576},
+  {"name": "project2", "path": "~/.roadmaps/project2/project.db", "size": 8192}
 ]
 ```
 
@@ -64,7 +64,7 @@ rmp road new myproject
 
 ### remove
 
-Removes a roadmap permanently. This action cannot be undone.
+Removes a roadmap permanently, deleting its entire `~/.roadmaps/<name>/` directory (the database and every file the roadmap owns). This action cannot be undone.
 
 **Usage:** `rmp roadmap remove <name>` or `rmp road rm <name>`
 
@@ -109,8 +109,9 @@ rmp road use myproject
 
 ## Notes
 
-- Roadmaps are stored in `~/.roadmaps/<name>.db`
-- The `~/.roadmaps/` directory has permissions `0700` (owner only)
+- Each roadmap lives in its own home directory `~/.roadmaps/<name>/`, which holds the SQLite database `~/.roadmaps/<name>/project.db` (plus its `-wal`/`-shm` sidecars). This directory is the roadmap's home for all of its files, including future per-roadmap artefacts.
+- The `~/.roadmaps/` directory and each `~/.roadmaps/<name>/` directory have permissions `0700` (owner only); `project.db` has permissions `0600`.
+- Legacy roadmaps stored in the old `~/.roadmaps/<name>.db` layout are migrated automatically to `~/.roadmaps/<name>/project.db` on the next `rmp` invocation, without data loss.
 - The `.current` file in `~/.roadmaps/` stores the roadmap selected by `use`
 
 ## Output Format

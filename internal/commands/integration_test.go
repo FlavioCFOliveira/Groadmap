@@ -37,16 +37,14 @@ func captureOutput(t *testing.T, fn func()) string {
 	return buf.String()
 }
 
-// cleanupIntegrationTest removes test roadmaps
+// cleanupIntegrationTest removes test roadmaps' entire home directories under
+// the current layout (~/.roadmaps/<name>/).
 func cleanupIntegrationTest(t *testing.T, names ...string) {
 	t.Helper()
 
 	dataDir, _ := utils.GetDataDir()
 	for _, name := range names {
-		testPath := filepath.Join(dataDir, name+".db")
-		os.Remove(testPath)
-		os.Remove(testPath + "-shm")
-		os.Remove(testPath + "-wal")
+		os.RemoveAll(filepath.Join(dataDir, name))
 	}
 }
 

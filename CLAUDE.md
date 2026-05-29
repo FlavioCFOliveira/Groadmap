@@ -245,7 +245,7 @@ this project (e.g., `specification-manager`, `roadmap-manager`, `go-developer`,
 ### Security
 - Input validation for all CLI arguments
 - Parameterized SQL queries
-- Filesystem permissions: `0700` for `~/.roadmaps/`
+- Filesystem permissions: `0700` for `~/.roadmaps/` and each roadmap home `~/.roadmaps/<name>/`; `0600` for `project.db`
 
 ### Data Standards
 - All dates: ISO 8601 UTC
@@ -253,7 +253,7 @@ this project (e.g., `specification-manager`, `roadmap-manager`, `go-developer`,
 - Errors: Plain text to stderr
 
 ### SQLite
-- Individual `.db` files in `~/.roadmaps/`
+- One SQLite database per roadmap at `~/.roadmaps/<name>/project.db`
 - Versioned schema with migrations
 
 ---

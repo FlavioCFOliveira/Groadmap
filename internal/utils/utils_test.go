@@ -111,14 +111,17 @@ func TestValidateRoadmapName(t *testing.T) {
 }
 
 func TestGetRoadmapPath(t *testing.T) {
-	// Test valid name - just verify it returns a path ending with .db
+	// Under the current layout the database lives at
+	// ~/.roadmaps/<name>/project.db, so the path must end with the roadmap
+	// name as a directory followed by the fixed project.db basename.
 	path, err := GetRoadmapPath("myroadmap")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !strings.HasSuffix(path, "myroadmap.db") {
-		t.Errorf("expected path to end with 'myroadmap.db', got %q", path)
+	wantSuffix := filepath.Join("myroadmap", DBFileName)
+	if !strings.HasSuffix(path, wantSuffix) {
+		t.Errorf("expected path to end with %q, got %q", wantSuffix, path)
 	}
 
 	// Test invalid name
@@ -128,19 +131,43 @@ func TestGetRoadmapPath(t *testing.T) {
 	}
 }
 
-func TestRoadmapExists(t *testing.T) {
-	// Get the actual data directory
+func TestGetRoadmapDir(t *testing.T) {
+	// The roadmap home directory is ~/.roadmaps/<name>/.
+	dir, err := GetRoadmapDir("paymentservice")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
 	dataDir, err := GetDataDir()
 	if err != nil {
 		t.Fatalf("failed to get data dir: %v", err)
 	}
 
-	// Ensure data directory exists
-	os.MkdirAll(dataDir, 0700)
+	want := filepath.Join(dataDir, "paymentservice")
+	if dir != want {
+		t.Errorf("expected roadmap dir %q, got %q", want, dir)
+	}
 
-	// Clean up any existing test file
-	testFile := filepath.Join(dataDir, "testroadmapexists.db")
-	os.Remove(testFile)
+	// The database path must be the home directory joined with project.db.
+	dbPath, err := GetRoadmapPath("paymentservice")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dbPath != filepath.Join(dir, DBFileName) {
+		t.Errorf("expected db path %q under dir %q, got %q", DBFileName, dir, dbPath)
+	}
+
+	// Invalid name must be rejected (path-traversal guard).
+	if _, err := GetRoadmapDir("../escape"); err == nil {
+		t.Error("expected error for invalid roadmap name")
+	}
+}
+
+func TestRoadmapExists(t *testing.T) {
+	// Hermetic data directory via a temporary HOME (os.UserHomeDir honours
+	// $HOME on this platform). Under the current layout a roadmap exists
+	// when ~/.roadmaps/<name>/project.db is a regular file.
+	dataDir := withTempDataDir(t)
 
 	// Test non-existent roadmap
 	exists, err := RoadmapExists("testroadmapexists")
@@ -151,11 +178,23 @@ func TestRoadmapExists(t *testing.T) {
 		t.Error("expected roadmap to not exist")
 	}
 
-	// Create a roadmap file
-	if err := os.WriteFile(testFile, []byte{}, 0600); err != nil {
-		t.Fatalf("failed to create test file: %v", err)
+	// A bare home directory without project.db must NOT count as existing.
+	if err := os.MkdirAll(filepath.Join(dataDir, "testroadmapexists"), 0700); err != nil {
+		t.Fatalf("failed to create roadmap dir: %v", err)
 	}
-	defer os.Remove(testFile)
+	exists, err = RoadmapExists("testroadmapexists")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if exists {
+		t.Error("expected roadmap with empty home directory to not exist")
+	}
+
+	// Create the database inside the home directory.
+	dbPath := filepath.Join(dataDir, "testroadmapexists", DBFileName)
+	if err := os.WriteFile(dbPath, []byte{}, 0600); err != nil {
+		t.Fatalf("failed to create test database: %v", err)
+	}
 
 	// Test existing roadmap
 	exists, err = RoadmapExists("testroadmapexists")
@@ -174,38 +213,30 @@ func TestRoadmapExists(t *testing.T) {
 }
 
 func TestListRoadmaps(t *testing.T) {
-	// Get the actual data directory
-	dataDir, err := GetDataDir()
-	if err != nil {
-		t.Fatalf("failed to get data dir: %v", err)
-	}
+	// Hermetic data directory via a temporary HOME.
+	dataDir := withTempDataDir(t)
 
-	// Ensure data directory exists
-	os.MkdirAll(dataDir, 0700)
-
-	// Clean up test files after test
-	defer func() {
-		for i := 1; i <= 3; i++ {
-			os.Remove(filepath.Join(dataDir, "testlistroadmap"+string(rune('0'+i))+".db"))
-		}
-		os.Remove(filepath.Join(dataDir, "testlistnotadb.txt"))
-		os.RemoveAll(filepath.Join(dataDir, "testlistdirectory.db"))
-	}()
-
-	// Create some roadmap files
+	// Create roadmap home directories each containing a project.db.
 	testNames := []string{"testlistroadmap1", "testlistroadmap2", "testlistroadmap3"}
 	for _, name := range testNames {
-		roadmapPath := filepath.Join(dataDir, name+".db")
-		os.WriteFile(roadmapPath, []byte{}, 0600)
+		if err := os.MkdirAll(filepath.Join(dataDir, name), 0700); err != nil {
+			t.Fatalf("failed to create roadmap dir %q: %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dataDir, name, DBFileName), []byte{}, 0600); err != nil {
+			t.Fatalf("failed to create database for %q: %v", name, err)
+		}
 	}
 
-	// Create a non-.db file (should be ignored)
-	nonDbPath := filepath.Join(dataDir, "testlistnotadb.txt")
-	os.WriteFile(nonDbPath, []byte{}, 0600)
+	// A top-level .db FILE must be ignored (it is a legacy artefact, not a
+	// roadmap under the current layout; the migration sweep handles it).
+	if err := os.WriteFile(filepath.Join(dataDir, "legacytoplevel.db"), []byte{}, 0600); err != nil {
+		t.Fatalf("failed to create legacy file: %v", err)
+	}
 
-	// Create a directory (should be ignored)
-	dirPath := filepath.Join(dataDir, "testlistdirectory.db")
-	os.Mkdir(dirPath, 0700)
+	// A subdirectory WITHOUT a project.db must be ignored.
+	if err := os.MkdirAll(filepath.Join(dataDir, "notaroadmap"), 0700); err != nil {
+		t.Fatalf("failed to create non-roadmap dir: %v", err)
+	}
 
 	// List roadmaps
 	roadmaps, err := ListRoadmaps()
@@ -213,47 +244,59 @@ func TestListRoadmaps(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Check that all expected names are present
+	if len(roadmaps) != len(testNames) {
+		t.Errorf("expected %d roadmaps, got %d: %v", len(testNames), len(roadmaps), roadmaps)
+	}
+
 	nameMap := make(map[string]bool)
 	for _, name := range roadmaps {
 		nameMap[name] = true
 	}
-
 	for _, expected := range testNames {
 		if !nameMap[expected] {
 			t.Errorf("expected roadmap %q not found in list", expected)
 		}
 	}
+	if nameMap["legacytoplevel"] {
+		t.Error("top-level .db file must not be reported as a roadmap")
+	}
+	if nameMap["notaroadmap"] {
+		t.Error("subdirectory without project.db must not be reported as a roadmap")
+	}
 }
 
 func TestListRoadmapsEmpty(t *testing.T) {
-	// Create a temporary directory for this test
-	tmpDir, err := os.MkdirTemp("", "groadmap-test-empty-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	// Empty data directory: ListRoadmaps must return a non-nil empty slice.
+	withTempDataDir(t)
 
-	// Temporarily override the data directory by creating a test condition
-	// where ~/.roadmaps doesn't exist yet
-	// This tests the os.IsNotExist branch
-	// We can't easily test this without modifying the function, but we can test
-	// that ListRoadmaps returns empty when directory exists but is empty
-
-	// Test with a fresh empty directory
-	emptyDir := filepath.Join(tmpDir, "empty")
-	os.MkdirAll(emptyDir, 0700)
-
-	// This test documents that ListRoadmaps works correctly with empty directories
-	// The actual implementation uses GetDataDir() which we can't easily override
-	// So we just verify the function doesn't error
 	roadmaps, err := ListRoadmaps()
 	if err != nil {
 		t.Fatalf("ListRoadmaps should not error: %v", err)
 	}
-	// Result should be a valid slice (may or may not be empty depending on state)
 	if roadmaps == nil {
 		t.Error("ListRoadmaps should return empty slice, not nil")
+	}
+	if len(roadmaps) != 0 {
+		t.Errorf("expected empty list, got %v", roadmaps)
+	}
+}
+
+func TestListRoadmapsNoDataDir(t *testing.T) {
+	// When ~/.roadmaps/ does not exist at all, ListRoadmaps is a no-op that
+	// returns an empty (non-nil) slice rather than an error.
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	// Deliberately do NOT create ~/.roadmaps.
+
+	roadmaps, err := ListRoadmaps()
+	if err != nil {
+		t.Fatalf("ListRoadmaps should not error when data dir is absent: %v", err)
+	}
+	if roadmaps == nil {
+		t.Error("ListRoadmaps should return empty slice, not nil")
+	}
+	if len(roadmaps) != 0 {
+		t.Errorf("expected empty list, got %v", roadmaps)
 	}
 }
 

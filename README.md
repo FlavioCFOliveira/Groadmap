@@ -134,7 +134,7 @@ rmp sprint show 1
 - **Success output**: JSON to stdout
 - **Error output**: Plain text to stderr
 - **Dates**: ISO 8601 UTC
-- **Roadmaps**: Stored in `~/.roadmaps/` with permissions `0700`
+- **Roadmaps**: Each roadmap is a directory `~/.roadmaps/<name>/` (permissions `0700`) holding its SQLite database `project.db` (permissions `0600`)
 
 ## Exit Codes
 
@@ -503,7 +503,7 @@ rmp task list --priority 8,9
 
 **Where is the data stored?**
 
-In `~/.roadmaps/` with permissions `0700`. Each roadmap is an independent SQLite file. No external services or cloud required.
+In `~/.roadmaps/` with permissions `0700`. Each roadmap is an independent directory `~/.roadmaps/<name>/` holding its own SQLite database at `project.db`. Legacy single-file roadmaps are migrated automatically on first use. No external services or cloud required.
 
 **How do I get help on any command?**
 ```bash

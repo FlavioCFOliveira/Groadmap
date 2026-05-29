@@ -22,6 +22,8 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | State transitions (Task) | `STATE_MACHINE.md § Task State Machine` |
 | State transitions (Sprint) | `STATE_MACHINE.md § Sprint State Machine` |
 | System design / modules | `ARCHITECTURE.md` |
+| Data directory layout / permissions | `ARCHITECTURE.md § Directory Structure` |
+| Filesystem layout migration (per-roadmap directories) | `ARCHITECTURE.md § Filesystem Layout Migration` |
 | Error handling / sentinel errors | `ARCHITECTURE.md § Error Handling` |
 | Exit codes | `ARCHITECTURE.md § Exit Codes` |
 | Database schema (DDL) | `DATABASE.md § DDL - Table Creation` |
@@ -97,7 +99,9 @@ To prevent drift across SPEC files, the following topics have a single authorita
 ### Filesystem
 
 - Roadmap data directory: `~/.roadmaps/` with permissions `0700`.
-- Individual roadmap databases: `~/.roadmaps/<name>.db` with permissions `0600`.
+- Per-roadmap home directory: `~/.roadmaps/<name>/` with permissions `0700`. The directory name is the roadmap name and is the container for all files the application uses for that roadmap.
+- Individual roadmap databases: `~/.roadmaps/<name>/project.db` with permissions `0600` (sidecars `project.db-wal`, `project.db-shm` alongside).
+- Roadmaps in the legacy `~/.roadmaps/<name>.db` layout are migrated automatically to the current layout at startup. See `ARCHITECTURE.md § Filesystem Layout Migration`.
 
 ### Naming Conventions
 

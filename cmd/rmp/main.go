@@ -122,6 +122,18 @@ func main() {
 		os.Exit(ExitSuccess)
 	}
 
+	// Filesystem layout migration sweep (SPEC/ARCHITECTURE.md
+	// § Filesystem Layout Migration). It runs after the global-flag
+	// switch above — so --help/--version/--ai-help, which exit earlier,
+	// never trigger it — and before command routing, so every real
+	// command observes the current ~/.roadmaps/<name>/project.db layout.
+	// Per-roadmap skips and failures are non-fatal and already reported to
+	// stderr inside the sweep; only an unreadable data directory is fatal,
+	// surfaced here as ErrDatabase (exit 1) via the standard error path.
+	if err := utils.MigrateLegacyLayout(); err != nil {
+		os.Exit(handleError(err))
+	}
+
 	// Route via the command registry. The registry is the single
 	// source of truth for command names, aliases, and the handler
 	// associated with each command family (see
@@ -226,7 +238,7 @@ func printHelp() {
 Usage: rmp [command] [subcommand] [arguments] [options]
 
 Commands:
-  roadmap, road    Create, list, and remove roadmap database files (~/.roadmaps/<name>.db)
+  roadmap, road    Create, list, and remove roadmaps (~/.roadmaps/<name>/project.db)
   task, t          Manage tasks across statuses BACKLOG/SPRINT/DOING/TESTING/COMPLETED
   sprint, s        Manage sprints and their task membership/ordering
   backlog, bl      Query BACKLOG-status tasks (planning view for tasks not yet in a sprint)

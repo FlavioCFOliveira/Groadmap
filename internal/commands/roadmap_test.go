@@ -20,7 +20,8 @@ func setupTestRoadmap(t *testing.T, name string) {
 	cleanupTestRoadmap(t, name)
 }
 
-// cleanupTestRoadmap removes test roadmap database files.
+// cleanupTestRoadmap removes a test roadmap's entire home directory under the
+// current layout (~/.roadmaps/<name>/), covering project.db and its sidecars.
 func cleanupTestRoadmap(t *testing.T, name string) {
 	t.Helper()
 
@@ -29,10 +30,7 @@ func cleanupTestRoadmap(t *testing.T, name string) {
 		return
 	}
 
-	testPath := filepath.Join(dataDir, name+".db")
-	os.Remove(testPath)
-	os.Remove(testPath + "-shm")
-	os.Remove(testPath + "-wal")
+	os.RemoveAll(filepath.Join(dataDir, name))
 }
 
 // ==================== HandleRoadmap Tests ====================

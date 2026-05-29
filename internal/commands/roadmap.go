@@ -22,7 +22,8 @@ func HandleRoadmap(args []string) error {
 func printRoadmapListHelp() {
 	fmt.Print(`Usage: rmp roadmap list
 
-Lists every roadmap database file found under ~/.roadmaps/.
+Lists every roadmap under ~/.roadmaps/. Each roadmap is the immediate
+subdirectory of ~/.roadmaps/ that contains a project.db database.
 
 Arguments: (none)
 Options:   -h, --help
@@ -30,7 +31,7 @@ Options:   -h, --help
 Output (stdout JSON):
   Array of objects, one per roadmap:
     [
-      { "name": "<roadmap>", "path": "/home/<user>/.roadmaps/<roadmap>.db", "size": <bytes> },
+      { "name": "<roadmap>", "path": "/home/<user>/.roadmaps/<roadmap>/project.db", "size": <bytes> },
       ...
     ]
   An empty array is returned when no roadmaps exist; exit is still 0.
@@ -48,7 +49,8 @@ Examples:
 func printRoadmapCreateHelp() {
 	fmt.Print(`Usage: rmp roadmap create <name>
 
-Creates a new roadmap database at ~/.roadmaps/<name>.db (mode 0600).
+Creates the roadmap home directory ~/.roadmaps/<name>/ (mode 0700) and the
+SQLite database ~/.roadmaps/<name>/project.db (mode 0600) inside it.
 Initialises the SQLite schema and records the current schema version.
 
 Arguments:
@@ -75,8 +77,9 @@ Examples:
 func printRoadmapRemoveHelp() {
 	fmt.Print(`Usage: rmp roadmap remove <name>
 
-Deletes the roadmap database file ~/.roadmaps/<name>.db AND its SQLite
-sidecar files (-wal, -shm) if present. This is permanent — there is no
+Deletes the entire roadmap home directory ~/.roadmaps/<name>/ recursively,
+including project.db, its SQLite sidecars (project.db-wal, project.db-shm),
+and any other per-roadmap files it contains. This is permanent — there is no
 recovery flow other than restoring from your own backup.
 
 Aliases: rm, delete.
@@ -102,9 +105,11 @@ Examples:
 
 // roadmapList lists all roadmaps.
 //
-// Reads the data directory once and asks each DirEntry for its Info();
-// on Linux/macOS the directory read already filled in the file metadata,
-// so we avoid one stat(2) syscall per roadmap that os.Stat would issue.
+// Under the current layout each roadmap is an immediate subdirectory of
+// ~/.roadmaps/ that contains a project.db database. The data directory is read
+// once; for every candidate subdirectory we stat its project.db to obtain the
+// reported size. A subdirectory without a project.db (or one that disappears
+// between ReadDir and Stat) is silently skipped — it is not a roadmap.
 func roadmapList() error {
 	dataDir, err := utils.GetDataDir()
 	if err != nil {
@@ -121,17 +126,17 @@ func roadmapList() error {
 
 	roadmaps := make([]models.Roadmap, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".db" {
+		if !entry.IsDir() {
 			continue
 		}
-		info, err := entry.Info()
-		if err != nil {
-			continue // file may have been removed between ReadDir and Info
+		dbPath := filepath.Join(dataDir, entry.Name(), utils.DBFileName)
+		info, err := os.Stat(dbPath)
+		if err != nil || info.IsDir() {
+			continue // not a roadmap home directory
 		}
-		name := entry.Name()[:len(entry.Name())-len(".db")]
 		roadmaps = append(roadmaps, models.Roadmap{
-			Name: name,
-			Path: filepath.Join(dataDir, entry.Name()),
+			Name: entry.Name(),
+			Path: dbPath,
 			Size: info.Size(),
 		})
 	}
@@ -194,20 +199,17 @@ func roadmapRemove(args []string) error {
 		return fmt.Errorf("%w: roadmap %q not found", utils.ErrNotFound, name)
 	}
 
-	// Get path and delete
-	path, err := utils.GetRoadmapPath(name)
+	// Remove the entire roadmap home directory recursively. This naturally
+	// covers project.db, its SQLite sidecars (project.db-wal/-shm), and any
+	// other per-roadmap files the directory holds.
+	dir, err := utils.GetRoadmapDir(name)
 	if err != nil {
 		return err
 	}
 
-	if err := os.Remove(path); err != nil {
-		return fmt.Errorf("removing roadmap: %w", err)
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("removing roadmap %q: %w", name, err)
 	}
-
-	// Remove SQLite WAL files if present; errors are intentionally ignored
-	// because these files may not exist and their absence is not an error.
-	_ = os.Remove(path + "-shm")
-	_ = os.Remove(path + "-wal")
 
 	return nil
 }
@@ -241,7 +243,8 @@ func printRoadmapHelp() {
 	fmt.Print(`Usage: rmp roadmap [command] [arguments]
 
 Roadmap names must match the regex ^[a-z0-9_-]+$ and not exceed 50 characters.
-Each roadmap is stored as a SQLite database in ~/.roadmaps/<name>.db (mode 0600).
+Each roadmap lives in its own home directory ~/.roadmaps/<name>/ (mode 0700),
+with the SQLite database at ~/.roadmaps/<name>/project.db (mode 0600).
 
 Commands:
   list, ls                       List all roadmaps

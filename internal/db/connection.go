@@ -116,12 +116,14 @@ func Open(roadmapName string) (*DB, error) {
 		return nil, err
 	}
 
-	// Ensure data directory exists
-	if err := utils.EnsureDataDir(); err != nil {
+	// Ensure the roadmap home directory (~/.roadmaps/<name>/) exists with
+	// 0700 permissions before opening project.db inside it. This also
+	// ensures the parent data directory exists and is private.
+	if err := utils.EnsureRoadmapDir(roadmapName); err != nil {
 		return nil, err
 	}
 
-	// Get database path
+	// Get database path (~/.roadmaps/<name>/project.db)
 	dbPath, err := utils.GetRoadmapPath(roadmapName)
 	if err != nil {
 		return nil, err

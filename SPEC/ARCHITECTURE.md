@@ -8,6 +8,7 @@
 - [Source Code Structure](#source-code-structure)
 - [Modules and Responsibilities](#modules-and-responsibilities)
 - [Command Lifecycle](#command-lifecycle)
+- [Filesystem Layout Migration](#filesystem-layout-migration)
 - [Error Handling](#error-handling)
   - [Error Reuse Policy (Mandatory)](#error-reuse-policy-mandatory)
 - [Exit Codes](#exit-codes)
@@ -42,33 +43,40 @@ Groadmap is a CLI application distributed as a single binary executable. The arc
                    |
 +------------------v------------------+
 |         Filesystem                  |
-|   (~/.roadmaps/*.db)                |
+|   (~/.roadmaps/<name>/project.db)   |
 +-------------------------------------+
 ```
 
 ## Directory Structure
 
 ```
-~/.roadmaps/              # User data directory
-├── project1.db          # Individual roadmap (SQLite)
-├── project2.db
+~/.roadmaps/                  # User data directory
+├── project1/                 # Roadmap home directory
+│   ├── project.db            # Individual roadmap (SQLite)
+│   ├── project.db-wal        # SQLite write-ahead log sidecar (when present)
+│   └── project.db-shm        # SQLite shared-memory sidecar (when present)
+├── project2/
+│   └── project.db
 └── ...
 ```
 
 ### Location Rules
 
-1. The `.roadmaps` directory is located in the **user home directory**
-2. Directory name: exactly `.roadmaps` (dot prefix, lowercase)
-3. Permissions: Restricted to the owner (`0700` or `drwx------` on POSIX) to ensure data privacy
-4. Each `.db` file represents an independent roadmap
-5. Only files with `.db` extension are considered
+1. The `.roadmaps` directory is located in the **user home directory**.
+2. Directory name: exactly `.roadmaps` (dot prefix, lowercase).
+3. Permissions: the data directory is restricted to the owner (`0700` or `drwx------` on POSIX) to ensure data privacy.
+4. Each roadmap has its own **home directory** at `~/.roadmaps/<name>/`. The directory name is the roadmap name. This directory is the container for every file the `rmp` application uses for that roadmap.
+5. Each roadmap home directory is created if absent, is owned by the user only, and uses the same `0700` permissions as the data directory; its permissions are verified on access.
+6. The roadmap's SQLite database lives inside the roadmap home directory at `~/.roadmaps/<name>/project.db` with `0600` permissions. Its SQLite sidecars (`project.db-wal`, `project.db-shm`) live alongside it.
+7. A roadmap home directory currently holds only the SQLite database and its sidecars. The directory is the designated location for future per-roadmap artefacts; additional file types may be added without changing this layout.
+8. Roadmap enumeration considers the immediate **subdirectories** of `~/.roadmaps/` (one directory per roadmap), not files at the top level.
 
 ## Security Guarantees
 
 Groadmap implements several security layers to protect user data and ensure system stability:
 
 ### 1. Data Isolation and Privacy
-- **Restricted Permissions**: The data directory `~/.roadmaps` is created with `0700` permissions, and individual `.db` files should be created with `0600` permissions, preventing other users on the system from reading or modifying roadmap data.
+- **Restricted Permissions**: The data directory `~/.roadmaps` and every per-roadmap home directory `~/.roadmaps/<name>/` are created with `0700` permissions, and individual `project.db` files are created with `0600` permissions, preventing other users on the system from reading or modifying roadmap data. Permissions are (re)verified to `0700` for directories and `0600` for the database after every layout migration.
 - **Input Validation**: Roadmap names are strictly validated using the regex `^[a-z0-9_-]+$` with a maximum length of **50 characters** to prevent path traversal attacks and ensure filesystem compatibility. This validation MUST be applied as a central gate for all commands that accept a roadmap name (via `-r` or `--roadmap`).
 - **Length Validation Error**: When a roadmap name exceeds 50 characters, the error message is: "Error: Roadmap name must not exceed 50 characters (got N)"
 
@@ -165,12 +173,71 @@ Each package implements:
 
 ```
 1. CLI Input → Parse arguments
-2. Validation → Verify syntax and values
-3. Routing → Determine handler
-4. Execution → Business logic + DB
-5. Formatting → Structure result
-6. Output → JSON to stdout
+2. Startup → Filesystem layout migration sweep (see Filesystem Layout Migration)
+3. Validation → Verify syntax and values
+4. Routing → Determine handler
+5. Execution → Business logic + DB
+6. Formatting → Structure result
+7. Output → JSON to stdout
 ```
+
+The startup sweep runs before routing on every `rmp` invocation, so all handlers (including `roadmap list` and `roadmap open`) observe the current filesystem layout.
+
+## Filesystem Layout Migration
+
+This section specifies the automatic migration of roadmaps from the **legacy** filesystem layout to the **current** layout. This is a filesystem-and-directory migration; it is distinct from the SQLite **schema** migration mechanism, which alters the contents of a database and is specified in `VERSION.md § Migrations`. The two mechanisms are independent and run at different times: the layout migration runs once at startup against the data directory; a schema migration runs when a specific database is opened.
+
+### Layout Transition
+
+| Layout | Database path |
+|--------|---------------|
+| Legacy | `~/.roadmaps/<name>.db` (plus sidecars `<name>.db-wal`, `<name>.db-shm`) |
+| Current | `~/.roadmaps/<name>/project.db` (plus sidecars `project.db-wal`, `project.db-shm`) |
+
+The roadmap name moves from being the database file basename to being the roadmap home directory name.
+
+### When the Migration Runs
+
+1. A migration sweep runs at the **startup of every `rmp` invocation**, before command routing.
+2. The sweep performs a single read of the `~/.roadmaps/` directory to detect legacy roadmaps, identified as the immediate top-level entries that are **regular files** whose name ends in `.db` (the `-wal` and `-shm` sidecars are not counted as roadmaps; they are handled as part of their database's migration). A top-level entry whose name ends in `.db` but which is **not a regular file** — a symbolic link, a directory, or any other special file — is **not** a legacy roadmap candidate and is left untouched (see Edge Cases).
+3. The sweep migrates **all** detected legacy roadmaps in one pass.
+4. The sweep is idempotent and cheap when there is nothing to migrate: when no top-level `.db` files exist, the single directory read finds no candidates and the sweep is a no-op.
+5. After the sweep completes, the rest of the command proceeds normally. Every command therefore observes the current layout.
+
+### How a Single Roadmap Is Migrated
+
+For each detected legacy database `~/.roadmaps/<name>.db` (a top-level **regular file** whose name ends in `.db`; non-regular entries are excluded at detection time per When the Migration Runs):
+
+1. Validate `<name>` (the basename without the `.db` extension) against the roadmap name rules (see `COMMANDS.md § Create Roadmap`: regex `^[a-z0-9_-]+$`, maximum 50 characters, and any reserved-name rules). If the name is invalid, the entry is **not a valid roadmap**: skip it and leave it untouched (see Edge Cases).
+2. Check for a conflict on the **destination database file**: if `~/.roadmaps/<name>/project.db` already exists, the current layout wins. Skip the migration for that name, leave the legacy `~/.roadmaps/<name>.db` and its sidecars untouched, surface a non-fatal warning on stderr, and continue with the remaining roadmaps (see Edge Cases). The conflict is keyed on the existence of `project.db`, not on the existence of the `~/.roadmaps/<name>/` directory: an existing directory without `project.db` is not a conflict and is handled by the next step.
+3. Ensure the roadmap home directory `~/.roadmaps/<name>/` exists with `0700` permissions, before moving any file into it. If the directory does not exist, create it. If it already exists (for example, because an earlier run was interrupted after creating the directory but before the rename completed), reuse it and (re)apply and verify `0700` permissions on it.
+4. **Move** (atomic rename within the same filesystem) the legacy files into the home directory:
+   - `~/.roadmaps/<name>.db` → `~/.roadmaps/<name>/project.db`
+   - `~/.roadmaps/<name>.db-wal` → `~/.roadmaps/<name>/project.db-wal` (only if the sidecar is present)
+   - `~/.roadmaps/<name>.db-shm` → `~/.roadmaps/<name>/project.db-shm` (only if the sidecar is present)
+5. No copies are left behind. After a successful migration the legacy top-level files for that roadmap no longer exist.
+6. Verify permissions after the move: `0700` on `~/.roadmaps/<name>/` and `0600` on `~/.roadmaps/<name>/project.db`, consistent with the security model.
+
+The move uses an atomic rename. The database content is never copied, so a roadmap's data is never duplicated and cannot be partially written; at every instant the database exists exactly once on disk.
+
+The conflict check in step 2 is a mandatory safety guard. An atomic rename **silently overwrites** an existing destination file. The check that `~/.roadmaps/<name>/project.db` is absent must therefore pass before the rename in step 4 is attempted; this is precisely why the conflict is keyed on `project.db`. When `project.db` already exists, step 2 skips the roadmap and the rename in step 4 is never reached, so existing data is never overwritten.
+
+### Edge Cases
+
+| Case | Behaviour |
+|------|-----------|
+| **Conflict — current database already exists.** Both `~/.roadmaps/<name>.db` (legacy) and `~/.roadmaps/<name>/project.db` (current) exist. | The **current layout wins**. The migration for that name is **skipped**: the legacy `~/.roadmaps/<name>.db` and its sidecars are **left untouched** and are not moved, deleted, or overwritten. No existing data is destroyed. The conflict is keyed on the existence of `project.db`, not on the existence of the `~/.roadmaps/<name>/` directory. This skip is surfaced to the user as a non-fatal warning on stderr; the invocation continues and other roadmaps are still migrated. |
+| **Existing `project.db`-less home directory — not a conflict (idempotent recovery).** `~/.roadmaps/<name>/` already exists but does **not** contain `project.db` (for example, an earlier run was interrupted after creating the directory but before the rename completed). | This is **not a conflict**. The migration **proceeds**: the existing directory is **reused**, its `0700` permissions are (re)applied and verified, and the legacy `~/.roadmaps/<name>.db` (plus any present sidecars) is moved into it as `project.db`. This makes the sweep idempotent across an interrupted earlier run. No warning is emitted; the migration completes normally. |
+| **Invalid legacy name.** `<name>` violates the roadmap name rules (regex, length, or reserved name). | The entry is not a valid roadmap. It is **skipped and left untouched**; it is never moved and never deleted. A non-fatal warning may be surfaced on stderr. |
+| **Non-regular top-level entry.** A top-level entry whose name ends in `.db` is **not a regular file**: a symbolic link (dangling, or pointing to a file or a directory), a directory, or any other special file (for example, a `.db`-named directory, or `escape.db` that is a symlink to a path outside the data directory). | The entry is **not a legacy roadmap candidate**. It is **skipped silently and left completely untouched**: it is never renamed, moved, chmod-ed, or deleted, and no roadmap home directory is created for it. No warning is emitted; like a `.db`-named directory, it is simply not a roadmap. The sweep never follows a symbolic link, so it can never move, change permissions on, or delete anything reached through the link. This preserves the security guarantee that the migration only ever affects paths strictly inside `~/.roadmaps/<name>/` and never mutates anything outside the data directory. |
+| **Missing sidecars.** A `-wal` and/or `-shm` sidecar is absent. | Not an error. Only the files that are present are moved. |
+| **Single-roadmap failure.** Moving one roadmap fails (for example, a rename across filesystems, or a permissions error). | The failure is contained to that one roadmap. Because the move is an atomic rename, a failed move leaves the original legacy files intact (no partial state). The sweep skips that roadmap, surfaces a non-fatal warning on stderr, and continues with the remaining roadmaps. The CLI invocation is not aborted destructively. |
+
+### Error Handling and Exit Codes
+
+1. A skipped roadmap (conflict, invalid name, or contained failure) does not change the invocation's exit code on its own; the sweep records a non-fatal warning to stderr and the requested command runs. A non-regular top-level entry (for example, a symbolic link or a directory) is not a candidate at all rather than a skipped roadmap: it does not change the exit code, and it is skipped silently with no warning (see Edge Cases).
+2. A failure that prevents the sweep from reading the data directory at all (for example, `~/.roadmaps/` exists but is not readable) is an I/O failure and maps to `utils.ErrDatabase` (exit code `1`), consistent with `ARCHITECTURE.md § Error Handling`.
+3. The migration never deletes a file it did not first successfully move. Legacy files are removed only as the source side of an atomic rename; they are never unlinked independently.
 
 ## Error Handling
 

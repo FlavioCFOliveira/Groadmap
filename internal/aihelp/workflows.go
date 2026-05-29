@@ -42,7 +42,7 @@ func staticWorkflows() []Workflow {
 			Steps: []WorkflowStep{
 				{
 					Command: "rmp roadmap create <name>",
-					Purpose: "Create the SQLite database file under ~/.roadmaps/ and register the roadmap.",
+					Purpose: "Create the roadmap home directory ~/.roadmaps/<name>/ and its SQLite database project.db, registering the roadmap.",
 				},
 				{
 					Command: "rmp task create -r <name> -t \"<title>\" -fr \"<functional-requirements>\" -tr \"<technical-requirements>\" -ac \"<acceptance-criteria>\" --type <TYPE> --priority <0-9>",

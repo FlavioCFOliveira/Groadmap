@@ -464,7 +464,7 @@ same contract under `commands`.
   "steps": [
     {
       "command": "rmp roadmap create <name>",
-      "purpose": "Create the SQLite database file under ~/.roadmaps/ and register the roadmap."
+      "purpose": "Create the roadmap home directory ~/.roadmaps/<name>/ and its SQLite database project.db, and register the roadmap."
     },
     {
       "command": "rmp task create -r <name> --title <t> --type TASK --priority <p> --functional-requirements <fr> --technical-requirements <tr> --acceptance-criteria <ac>",

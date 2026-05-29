@@ -25,7 +25,14 @@
 
 ## Overview
 
-Each roadmap is stored in an individual SQLite file. The schema is designed to be simple, efficient, and normalized.
+Each roadmap is stored in an individual SQLite database. The schema is designed to be simple, efficient, and normalized.
+
+### Physical Location and Naming
+
+- Each roadmap has its own home directory at `~/.roadmaps/<name>/`, where `<name>` is the roadmap name. The home directory uses `0700` permissions, owner-only.
+- The SQLite database is named `project.db` and lives inside that directory at `~/.roadmaps/<name>/project.db` with `0600` permissions.
+- SQLite sidecars (`project.db-wal`, `project.db-shm`) live alongside the database in the same directory.
+- The data directory layout, its permission model, and the automatic migration from the legacy `~/.roadmaps/<name>.db` layout are specified in `ARCHITECTURE.md § Directory Structure` and `ARCHITECTURE.md § Filesystem Layout Migration`.
 
 ## Naming Conventions
 

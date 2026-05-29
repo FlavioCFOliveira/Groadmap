@@ -39,7 +39,7 @@ class TestBurndownSpread:
         self.test = GroadmapTestBase()
         self.test.setup()
         self.roadmap = self.test.create_roadmap()
-        self.db_path = self.test.roadmaps_dir / f"{self.roadmap}.db"
+        self.db_path = self.test.roadmaps_dir / self.roadmap / "project.db"
 
         # Build a five-day sprint: started day -4, four tasks completed on
         # days -3, -2, -2, 0 (relative to "today"). One task still open at end.
@@ -162,7 +162,7 @@ class TestVelocityAcrossClosedSprints:
         self.test = GroadmapTestBase()
         self.test.setup()
         self.roadmap = self.test.create_roadmap()
-        self.db_path = self.test.roadmaps_dir / f"{self.roadmap}.db"
+        self.db_path = self.test.roadmaps_dir / self.roadmap / "project.db"
 
         # Create two closed sprints with different durations and counts.
         # Sprint X: 5 days, 4 tasks completed
