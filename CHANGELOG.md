@@ -5,6 +5,59 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-06-01
+
+Maintenance release. Updates the Go toolchain directive to `1.26.2`, upgrades
+all GitHub Actions to their latest patch releases, and bumps transitive Go
+module dependencies. Removes the stale Windows binary references from the
+release workflow body (Windows builds were dropped in v1.5.0 when GoGraph's
+`syscall.Kill` dependency made cross-compilation to Windows infeasible). No
+new features, no breaking changes; the public CLI surface, exit codes, and
+all JSON output schemas remain fully backward compatible with `v1.5.0`.
+
+### Changed
+
+- **Go toolchain directive**: `go.mod` raised from `go 1.26` to `go 1.26.2`.
+- **GitHub Actions — `actions/checkout`**: v6 → v6.0.2.
+- **GitHub Actions — `actions/setup-go`**: v6.3.0 → v6.4.0.
+- **GitHub Actions — `actions/upload-artifact`**: v7 → v7.0.1.
+- **GitHub Actions — `actions/download-artifact`**: v7/v8 → v8.0.1
+  (unified to a single version across `ci.yml` and `release.yml`).
+- **GitHub Actions — `golangci/golangci-lint-action`**: v8 → v9.2.1.
+- **GitHub Actions — `codecov/codecov-action`**: v5.5.3 → v6.0.1.
+- **GitHub Actions — `softprops/action-gh-release`**: v2.6.1 → v3.0.0.
+- **Go module `google/go-cmp`**: v0.6.0 → v0.7.0 (indirect).
+- **Go module `golang.org/x/text`**: v0.22.0 → v0.37.0 (indirect).
+- **Go module `modernc.org/cc/v4`**: v4.28.2 → v4.28.4 (indirect).
+- **Go module `modernc.org/ccgo/v4`**: v4.34.2 → v4.34.4 (indirect).
+- **Release workflow body**: stale Windows binary download links removed
+  from the `dev-release` step; Windows targets were already dropped in
+  a prior commit due to GoGraph's `syscall.Kill` dependency.
+
+### Tests
+
+- Go unit tests: 6 packages, all green (fmt / vet / test / build / lint clean).
+- E2E: 21/21 pass (100 % success rate).
+- `gosec` not installed on the release host; security gate skipped and noted
+  per project policy. No security-relevant code changes in this release.
+
+### Known Issues
+
+The two SPEC-vs-code divergences flagged in earlier releases remain open and
+are unchanged by this release:
+
+- `SPEC/ARCHITECTURE.md` documents `ErrInvalidInput` mapping to exit code `2`;
+  the implementation maps `ErrInvalidInput`, `ErrValidation` and
+  `ErrFieldTooLarge` to `ExitInvalidData = 6`.
+- `SPEC/COMMANDS.md` `audit stats` JSON keys differ from the implementation
+  (`by_operation` / `by_entity_type` / `first_entry_at` / `last_entry_at` /
+  `total_entries`, no `period` object). Implementation behaviour is stable.
+
+No E2E tests cover `rmp graph` subcommands. Coverage will be added in a
+follow-up release.
+
+[1.6.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.5.0...v1.6.0
+
 ## [1.5.0] - 2026-06-01
 
 Minor release. Introduces the **`rmp graph` command**: a Cypher-queryable
