@@ -36,3 +36,6 @@ bin/
 # Python test runtime artifacts
 __pycache__/
 *.pyc
+
+# Claude Code agent-local memory (not versioned)
+.claude/agent-memory/
