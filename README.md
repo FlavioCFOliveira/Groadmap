@@ -21,6 +21,7 @@ This will detect your OS and architecture, download the latest release from GitH
 - **Audit Trail**: Automatic logging of all operations for traceability
 - **State Machine**: Validated task and sprint status transitions with automatic date tracking
 - **Bulk Operations**: Support for multiple task IDs in single commands
+- **Knowledge Graph**: Per-roadmap queryable graph (nodes, edges, Cypher) for capturing project elements and their relationships
 
 ## Available Commands
 
@@ -30,6 +31,7 @@ This will detect your OS and architecture, download the latest release from GitH
 | `task` | Task management (create, edit, list, get, next, status, priority, severity) | [DOCS/commands/task.md](DOCS/commands/task.md) |
 | `sprint` | Sprint management with lifecycle control, reporting, and task ordering | [DOCS/commands/sprint.md](DOCS/commands/sprint.md) |
 | `audit` | Audit log and entity history | [DOCS/commands/audit.md](DOCS/commands/audit.md) |
+| `graph` | Knowledge graph management (create, query, update, delete, search via Cypher) | [DOCS/commands/graph.md](DOCS/commands/graph.md) |
 | `ai-help` | Emit the AI Agent Contract (machine-readable JSON for automated callers) | [DOCS/commands/ai-help.md](DOCS/commands/ai-help.md) |
 
 ## Installation
@@ -112,6 +114,14 @@ rmp sprint reorder 1 3,1,2
 
 # Show sprint report
 rmp sprint show 1
+
+# Record project knowledge in the roadmap's graph
+rmp graph create -r myproject \
+  --query "MERGE (s:Spec {key:'user-authentication'}) MERGE (c:Code {path:'internal/auth/jwt.go'}) MERGE (s)-[:IMPLEMENTED_BY]->(c)"
+
+# Query the graph
+rmp graph query -r myproject \
+  --query "MATCH (s:Spec)-[:IMPLEMENTED_BY]->(c:Code) RETURN s.key, c.path"
 ```
 
 ## Project Structure
@@ -120,7 +130,7 @@ rmp sprint show 1
 .
 ├── cmd/rmp/main.go          # CLI entry point
 ├── internal/
-│   ├── commands/            # Subcommands (roadmap, task, sprint, audit)
+│   ├── commands/            # Subcommands (roadmap, task, sprint, audit, graph)
 │   ├── db/                  # SQLite, schema, parameterized queries
 │   ├── models/              # Structs and enums
 │   └── utils/               # JSON, ISO 8601 dates, paths
@@ -135,6 +145,7 @@ rmp sprint show 1
 - **Error output**: Plain text to stderr
 - **Dates**: ISO 8601 UTC
 - **Roadmaps**: Each roadmap is a directory `~/.roadmaps/<name>/` (permissions `0700`) holding its SQLite database `project.db` (permissions `0600`)
+- **Knowledge graph**: Each roadmap may hold a graph store under `~/.roadmaps/<name>/graph/` (a directory, permissions `0700`), created on first use of the `graph` command
 
 ## Exit Codes
 
@@ -158,6 +169,7 @@ See the `SPEC/` folder for detailed technical documentation:
 - `SPEC/DATABASE.md` - SQLite schema and migrations
 - `SPEC/DATA_FORMATS.md` - JSON output schema
 - `SPEC/DEPLOY.md` - Installation, deployment, and platform detection
+- `SPEC/GRAPH.md` - Knowledge graph feature: GoGraph integration, persistence, guard rails
 - `SPEC/MODELS.md` - Model definitions
 - `SPEC/STATE_MACHINE.md` - State machines
 - `SPEC/VERSION.md` - Version management strategy
@@ -468,6 +480,56 @@ rmp audit list --entity-type SPRINT
 rmp audit stats
 rmp audit stats --since 2026-03-01 --until 2026-03-31
 ```
+
+---
+
+### Knowledge Graph
+
+**What is the knowledge graph?**
+
+Each roadmap owns one free-form, queryable graph backed by GoGraph. It captures the project's elements (specs, code, decisions, dependencies) and the relationships between them, so an AI agent can answer questions about the project without re-reading every source file. The graph is independent of the SQLite tasks/sprints data and is accessed through Cypher.
+
+**How do I record knowledge in the graph?**
+```bash
+rmp graph create -r myproject \
+  --query "MERGE (s:Spec {key:'user-authentication'}) MERGE (c:Code {path:'internal/auth/jwt.go'}) MERGE (s)-[:IMPLEMENTED_BY]->(c)"
+```
+
+**How do I read or traverse the graph?**
+```bash
+rmp graph query -r myproject \
+  --query "MATCH (s:Spec)-[:IMPLEMENTED_BY]->(c:Code) RETURN s.key, c.path"
+rmp graph search -r myproject \
+  --query "MATCH path = (s:Spec {key:'user-authentication'})-[:DEPENDS_ON*1..3]->(d:Dependency) RETURN path"
+```
+
+**How do I update or delete graph elements?**
+```bash
+rmp graph update -r myproject \
+  --query "MATCH (s:Spec {key:'user-authentication'}) SET s.status = 'implemented'"
+rmp graph delete -r myproject \
+  --query "MATCH (d:Decision {key:'use-sessions'}) DETACH DELETE d"
+```
+
+**What are the five graph subcommands?**
+
+Each subcommand is a guard rail that accepts only Cypher whose operation class matches it, rejecting everything else (exit code 6) before execution:
+- `create` — add nodes/edges (`CREATE` / `MERGE`)
+- `query` — read (`MATCH ... RETURN`, read-only)
+- `update` — mutate existing elements (`SET` / `REMOVE`)
+- `delete` — remove nodes/edges (`DELETE` / `DETACH DELETE`)
+- `search` — read-only traversal, including variable-length paths (e.g. `-[*1..3]-`)
+
+**Can I pipe a query instead of using `--query`?**
+```bash
+echo "MATCH (n) RETURN count(n)" | rmp graph query -r myproject
+cat query.cypher | rmp graph search -r myproject
+```
+When `--query` is absent, the entire standard input is read as the query. See [DOCS/commands/graph.md](DOCS/commands/graph.md) for full details.
+
+**Where is the graph stored?**
+
+Under the roadmap's home directory at `~/.roadmaps/<name>/graph/` (a directory, permissions `0700`), created on first use of any `graph` subcommand. Removing the roadmap deletes its graph along with the rest of the home directory.
 
 ---
 
