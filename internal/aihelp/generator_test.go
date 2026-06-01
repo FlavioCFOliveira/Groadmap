@@ -203,7 +203,7 @@ func TestGenerate_ScopeAll_ContainsEveryFamily(t *testing.T) {
 	for _, e := range cmds {
 		got[e.(map[string]any)["name"].(string)] = true
 	}
-	for _, want := range []string{"roadmap", "task", "sprint", "backlog", "audit", "stats"} {
+	for _, want := range []string{"roadmap", "task", "sprint", "backlog", "audit", "stats", "graph"} {
 		if !got[want] {
 			t.Errorf("ScopeAll commands missing family %q", want)
 		}

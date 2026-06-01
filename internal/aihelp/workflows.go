@@ -197,5 +197,34 @@ func staticWorkflows() []Workflow {
 			},
 			ExpectedOutcome: "The task is in COMPLETED status, carries the supplied completion_summary, and has all three of started_at, tested_at, and closed_at set.",
 		},
+		{
+			Name: "build_knowledge_graph",
+			Description: "Populate a roadmap's knowledge graph with the project's structural elements " +
+				"(specifications, modules, decisions, dependencies) and query relationships between them. " +
+				"Use when an agent needs to record or retrieve non-task knowledge about a project's architecture.",
+			Prerequisites: []string{
+				"Roadmap `<name>` exists.",
+				"The graph starts empty on first use; no setup required.",
+			},
+			Steps: []WorkflowStep{
+				{
+					Command: "rmp graph create -r <name> --query \"CREATE (s:Spec {key:'<key>', title:'<title>', status:'pending'})\"",
+					Purpose: "Add a specification node. Repeat once per element (Spec, Module, Decision, Dependency). Use MERGE instead of CREATE to make the operation idempotent.",
+				},
+				{
+					Command: "rmp graph create -r <name> --query \"MATCH (a:Spec {key:'<from>'}), (b:Module {path:'<to>'}) CREATE (a)-[:IMPLEMENTED_BY]->(b)\"",
+					Purpose: "Link two existing nodes with a typed, directed relationship. Repeat for each relationship to add.",
+				},
+				{
+					Command: "rmp graph query -r <name> --query \"MATCH (s:Spec)-[:IMPLEMENTED_BY]->(m:Module) RETURN s.key AS spec, m.path AS module\"",
+					Purpose: "Read and verify the recorded relationships. Any MATCH ... RETURN query can be used here.",
+				},
+				{
+					Command: "rmp graph search -r <name> --query \"MATCH (a)-[*1..3]->(dep:Dependency) WHERE a.key='<key>' RETURN dep.name AS transitive_dep\"",
+					Purpose: "Traverse the graph up to N hops to discover transitive dependencies or impacts not visible from direct relationships.",
+				},
+			},
+			ExpectedOutcome: "The graph contains the recorded nodes and relationships, queryable via Cypher across future invocations (the store is durable).",
+		},
 	}
 }

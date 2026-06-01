@@ -154,7 +154,7 @@ func maybeHandleAIHelp(args []string, stdout, stderr io.Writer) (handled bool, e
 		ToolName:      "rmp",
 		DisplayName:   appName,
 		BinaryVersion: version,
-		Description:   "CLI for managing technical roadmaps in SQLite.",
+		Description:   "CLI for managing technical roadmaps with SQLite-backed task/sprint tracking and a Cypher-queryable knowledge graph per roadmap.",
 	}
 
 	payload, err := aihelp.Generate(scope, info)

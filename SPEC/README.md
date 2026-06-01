@@ -13,6 +13,12 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | CLI command syntax / flags | `COMMANDS.md` |
 | JSON input/output formats | `DATA_FORMATS.md` |
 | Help text structure | `HELP.md` |
+| Knowledge graph feature (design, persistence, guard rails) | `GRAPH.md` |
+| `graph` command syntax / subcommands | `COMMANDS.md § Graph Management` |
+| Graph query result JSON / property-type mapping | `DATA_FORMATS.md § Graph Query Result` |
+| Cypher input via flag or stdin | `GRAPH.md § Cypher Input Source and Precedence` |
+| Graph store concurrency / recovery | `IMPLEMENTATION.md § Graph Store Concurrency` |
+| Go toolchain / external dependencies | `BUILD.md § Go Toolchain` |
 | AI agent contract (CLI surface) | `COMMANDS.md § AI Help` |
 | AI agent contract (JSON schema) | `DATA_FORMATS.md § AI Agent Contract` |
 | AI agent contract (generation) | `ARCHITECTURE.md § AI Agent Contract Generation` |
@@ -46,6 +52,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | `COMMANDS.md` | CLI commands, subcommands, flags, aliases |
 | `DATA_FORMATS.md` | JSON schemas, input/output formats |
 | `HELP.md` | CLI help skeleton and structure |
+| `GRAPH.md` | Knowledge graph feature: GoGraph integration, persistence, multi-layer conventions, guard-rail validation |
 | `MODELS.md` | Structs, enums, memory layout |
 | `STATE_MACHINE.md` | Task and Sprint state transitions |
 | `ARCHITECTURE.md` | System design, modules, error handling, exit codes |
@@ -74,6 +81,11 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Schema migrations | `VERSION.md § Migrations` |
 | Concurrency model (WAL, pool, retry) | `IMPLEMENTATION.md § Concurrency Model` |
 | Caching strategies (query, connection) | `IMPLEMENTATION.md` |
+| Knowledge graph feature, persistence layout, guard rails, multi-layer conventions | `GRAPH.md` |
+| Graph store directory (`graph/` subdir) | `GRAPH.md § Persistence Layout` (layout referenced from `ARCHITECTURE.md § Directory Structure`) |
+| Graph query result JSON and property-type mapping | `DATA_FORMATS.md § Graph Query Result` |
+| Graph store concurrency / single-writer / recovery | `IMPLEMENTATION.md § Graph Store Concurrency` |
+| Minimum Go version and external dependencies | `BUILD.md § Go Toolchain` |
 | Help text canonical | code in `internal/commands/*.go` (structure in `HELP.md`) |
 | AI agent contract JSON schema | `DATA_FORMATS.md § AI Agent Contract` |
 | AI agent contract generation rules | `ARCHITECTURE.md § AI Agent Contract Generation` |
@@ -101,6 +113,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 - Roadmap data directory: `~/.roadmaps/` with permissions `0700`.
 - Per-roadmap home directory: `~/.roadmaps/<name>/` with permissions `0700`. The directory name is the roadmap name and is the container for all files the application uses for that roadmap.
 - Individual roadmap databases: `~/.roadmaps/<name>/project.db` with permissions `0600` (sidecars `project.db-wal`, `project.db-shm` alongside).
+- Per-roadmap knowledge graph store: `~/.roadmaps/<name>/graph/` (a directory) with permissions `0700`, created on first use of the `graph` command. See `GRAPH.md § Persistence Layout`.
 - Roadmaps in the legacy `~/.roadmaps/<name>.db` layout are migrated automatically to the current layout at startup. See `ARCHITECTURE.md § Filesystem Layout Migration`.
 
 ### Naming Conventions

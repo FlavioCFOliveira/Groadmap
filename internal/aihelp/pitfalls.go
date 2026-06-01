@@ -125,5 +125,24 @@ func staticPitfalls() []Pitfall {
 			CorrectExample: "rmp task stat -r myproject 42 DOING && echo \"transition succeeded\"",
 			Reference:      "task stat; task prio; sprint reorder; conventions.stdout_on_success.",
 		},
+		{
+			ID: "graph_guard_rail_mismatch",
+			Description: "Using the wrong graph subcommand for the query's operation class. Each subcommand " +
+				"is a guard rail: `create` accepts only CREATE/MERGE, `update` only SET/REMOVE, `delete` only " +
+				"DELETE/DETACH DELETE, and `query`/`search` only read-only MATCH queries. Supplying a query " +
+				"whose clauses do not match exits with code 6 and makes no change to the graph.",
+			WrongExample:   "rmp graph query -r myproject --query \"CREATE (n:Spec {key:'auth'})\"",
+			CorrectExample: "rmp graph create -r myproject --query \"CREATE (n:Spec {key:'auth'})\"",
+			Reference:      "graph create/query/update/delete/search; SPEC/GRAPH.md § Subcommands and Guard-Rail Validation.",
+		},
+		{
+			ID: "graph_missing_query",
+			Description: "Invoking a graph subcommand without --query and without piping a query on stdin. " +
+				"When --query is absent the subcommand reads stdin; if stdin is also empty (terminal, no pipe) " +
+				"the command fails with exit code 2. Either pass --query or pipe the Cypher: `echo '<cypher>' | rmp graph query -r <name>`.",
+			WrongExample:   "rmp graph query -r myproject",
+			CorrectExample: "rmp graph query -r myproject --query \"MATCH (n) RETURN count(n)\"",
+			Reference:      "graph query; SPEC/GRAPH.md § Cypher Input Source and Precedence.",
+		},
 	}
 }

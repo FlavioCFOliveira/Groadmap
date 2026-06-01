@@ -16,6 +16,7 @@
 - [Audit Log Management](#audit-log-management)
 - [Backlog Management](#backlog-management)
 - [Statistics Command](#statistics-command)
+- [Graph Management](#graph-management)
 - [Command Aliases Reference](#command-aliases-reference)
 
 ## Naming Conventions
@@ -208,7 +209,7 @@ All commands that operate on a roadmap require the `-r <name>` or `--roadmap <na
 Error: roadmap not specified. Use -r <name> or --roadmap <name>
 ```
 
-This applies to every subcommand under `task`, `sprint`, `backlog`, `audit`, and `stats`.
+This applies to every subcommand under `task`, `sprint`, `backlog`, `audit`, `stats`, and `graph`.
 
 ```bash
 # Always provide -r:
@@ -1476,6 +1477,205 @@ rmp stats -r <name>
 
 ---
 
+## Graph Management
+
+Command: `rmp graph` (no alias)
+
+The `graph` command operates a roadmap's knowledge graph: a free-form, queryable
+store of the project's elements and the relationships between them, backed by the
+GoGraph engine. The design, persistence layout, multi-layer conventions, and
+guard-rail rules are specified in `GRAPH.md`. This section is the CLI contract
+for the command.
+
+Each roadmap owns one graph, stored under that roadmap's home directory at
+`~/.roadmaps/<name>/graph/` (a directory, mode `0700`). The graph is created on
+first use of any `graph` subcommand. The graph is independent of the roadmap's
+SQLite tasks and sprints data in this version.
+
+`graph` has five subcommands, each a guard rail that accepts only Cypher whose
+operation class matches the subcommand and rejects everything else before
+execution:
+
+| Subcommand | Operation | Accepts | Rejects |
+|------------|-----------|---------|---------|
+| `create` | Create nodes/edges | Writing query whose only writing clauses are `CREATE` and/or `MERGE` | Read-only queries; `SET`, `REMOVE`, `DELETE`, `DETACH DELETE` |
+| `query` | Read | Read-only query (`MATCH ... RETURN`, no writing clause) | Any writing clause |
+| `update` | Mutate existing | Writing query whose writing clauses are `SET` and/or `REMOVE` | Read-only queries; `CREATE`, `MERGE`, `DELETE`, `DETACH DELETE` |
+| `delete` | Remove | Writing query whose writing clauses are `DELETE` and/or `DETACH DELETE` | Read-only queries; `CREATE`, `MERGE`, `SET`, `REMOVE` |
+| `search` | Read (traversal) | Read-only query, including variable-length paths (e.g. `-[*1..3]-`) | Any writing clause |
+
+The canonical operation-class definitions and the full per-subcommand rules are
+in `GRAPH.md § Subcommands and Guard-Rail Validation`.
+
+### Shared Options (all graph subcommands)
+
+- `-r, --roadmap <name>` - REQUIRED. Target roadmap (see
+  `COMMANDS.md § Roadmap Selection (Always Required)`).
+- `--query <cypher>` - The Cypher query to run. When omitted, the query is read
+  in full from standard input.
+- `-h, --help` - Show the subcommand help.
+
+**Query input source and precedence** (specified in
+`GRAPH.md § Cypher Input Source and Precedence`):
+
+1. When `--query` is present and non-empty, its value is used and standard input
+   is not read.
+2. When `--query` is absent, the entire standard input is read and used as the
+   query.
+3. When `--query` is absent and standard input is empty or not connected, the
+   command fails with exit code 2 (no query supplied).
+4. When `--query` is present but empty or whitespace only, the command fails with
+   exit code 2.
+5. Leading and trailing whitespace is trimmed before validation and execution.
+
+### Output
+
+- Read subcommands (`query`, `search`) on success: JSON to stdout in the shape
+  defined in `DATA_FORMATS.md § Graph Query Result` (a `columns` array and a
+  `rows` array). Exit code 0.
+- Write subcommands (`create`, `update`, `delete`) on success: the output
+  mirrors the query's `RETURN` clause. When the query has a `RETURN` clause, the
+  output is the same `{columns, rows}` shape as a read result; when it has no
+  `RETURN` clause, the output is exactly `{"ok": true}`. There is no
+  affected-element count, because the engine reports none. Exit code 0. The shape
+  is fixed in `DATA_FORMATS.md § Graph Write Result`.
+- Errors: plain text to stderr, with the standard AI-agent hint.
+
+### Exit Codes
+
+| Exit Code | Cause |
+|-----------|-------|
+| 0 | Query executed successfully. |
+| 1 | Cypher failed to parse or execute, or the graph store could not be opened, read, or written (`utils.ErrDatabase`). |
+| 2 | No query supplied: `--query` absent and stdin empty, or `--query` empty/whitespace (`utils.ErrRequired`). |
+| 3 | No roadmap selected and none provided via `-r` (`utils.ErrNoRoadmap`). |
+| 4 | Selected roadmap does not exist (`utils.ErrNotFound`). |
+| 6 | The query's operation class does not match the subcommand (`utils.ErrValidation`). |
+
+The canonical exit-code catalogue is in `ARCHITECTURE.md § Exit Codes`; the graph
+feature introduces no new codes.
+
+### Create
+
+```bash
+rmp graph create -r <name> --query "<cypher>"
+echo "<cypher>" | rmp graph create -r <name>
+```
+
+**Description:** Adds nodes and/or edges to the graph. Accepts only Cypher whose
+writing clauses are `CREATE` and/or `MERGE`. Runs as a single transaction.
+
+**Example:**
+
+```bash
+rmp graph create -r backend-platform \
+  --query "MERGE (s:Spec {key:'user-authentication'}) MERGE (c:Code {path:'internal/auth/jwt.go'}) MERGE (s)-[:IMPLEMENTED_BY]->(c)"
+```
+
+Output (success): `{"ok": true}`, exit code 0. The query has no `RETURN` clause,
+so the output is the `{"ok": true}` object. Appending `RETURN` to the query (for
+example `... RETURN s`) returns the created elements in the `{columns, rows}`
+shape instead (see `DATA_FORMATS.md § Graph Write Result`).
+
+### Query
+
+```bash
+rmp graph query -r <name> --query "<cypher>"
+cat query.cypher | rmp graph query -r <name>
+```
+
+**Description:** Reads from the graph and returns the result columns and rows.
+Read-only: rejects any query containing a writing clause.
+
+**Example:**
+
+```bash
+rmp graph query -r backend-platform \
+  --query "MATCH (s:Spec)-[:IMPLEMENTED_BY]->(c:Code) RETURN s.key, c.path"
+```
+
+Output (success): JSON in the shape defined in
+`DATA_FORMATS.md § Graph Query Result`, for example:
+
+```json
+{
+  "columns": ["s.key", "c.path"],
+  "rows": [
+    ["user-authentication", "internal/auth/jwt.go"]
+  ]
+}
+```
+
+### Update
+
+```bash
+rmp graph update -r <name> --query "<cypher>"
+```
+
+**Description:** Mutates properties or labels on existing graph elements. Accepts
+only Cypher whose writing clauses are `SET` and/or `REMOVE`. Runs as a single
+transaction.
+
+**Example:**
+
+```bash
+rmp graph update -r backend-platform \
+  --query "MATCH (s:Spec {key:'user-authentication'}) SET s.status = 'implemented'"
+```
+
+Output (success): `{"ok": true}`, exit code 0.
+
+### Delete
+
+```bash
+rmp graph delete -r <name> --query "<cypher>"
+```
+
+**Description:** Removes nodes and/or edges. Accepts only Cypher whose writing
+clauses are `DELETE` and/or `DETACH DELETE`. Runs as a single transaction.
+
+**Example:**
+
+```bash
+rmp graph delete -r backend-platform \
+  --query "MATCH (d:Decision {key:'use-sessions'}) DETACH DELETE d"
+```
+
+Output (success): `{"ok": true}`, exit code 0.
+
+### Search
+
+```bash
+rmp graph search -r <name> --query "<cypher>"
+```
+
+**Description:** Read-only traversal and pattern matching, including
+variable-length paths. Semantically the traversal-oriented sibling of `query`;
+it enforces the same read-only guard rail.
+
+**Example:**
+
+```bash
+rmp graph search -r backend-platform \
+  --query "MATCH path = (s:Spec {key:'user-authentication'})-[:DEPENDS_ON*1..3]->(d:Dependency) RETURN path"
+```
+
+Output (success): JSON in the shape defined in
+`DATA_FORMATS.md § Graph Query Result`, exit code 0.
+
+### Error Cases (all graph subcommands)
+
+| Scenario | Exit Code | stderr Output (illustrative) |
+|----------|-----------|------------------------------|
+| Roadmap not specified | 3 | "Error: no roadmap selected: use -r <name> or --roadmap <name>" |
+| Roadmap not found | 4 | "Error: resource not found: roadmap 'name'" |
+| No query supplied | 2 | "Error: required parameter missing: --query (or pipe a query on stdin)" |
+| Operation-class mismatch | 6 | "Error: graph create accepts only CREATE/MERGE queries" |
+| Cypher parse/execution error | 1 | "Error: graph query failed: <engine diagnostic>" |
+| Graph store open/read/write failure | 1 | "Error: graph store unavailable: <detail>" |
+
+---
+
 ## Command Aliases Reference
 
 | Command | Aliases |
@@ -1486,6 +1686,7 @@ rmp stats -r <name>
 | `sprint` | `s` |
 | `audit` | `aud` |
 | `stats` | - |
+| `graph` | - |
 | `list` | `ls` |
 | `create` | `new` |
 | `remove` | `rm`, `delete` |

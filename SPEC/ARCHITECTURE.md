@@ -28,24 +28,30 @@ Groadmap is a CLI application distributed as a single binary executable. The arc
                    |
 +------------------v------------------+
 |         Command Router            |
-|   (roadmap | task | sprint)       |
+|  (roadmap | task | sprint | graph)|
 +------------------+------------------+
                    |
 +------------------v------------------+
 |         Business Logic              |
 |   (validation, business rules)    |
-+------------------+------------------+
-                   |
-+------------------v------------------+
-|         SQLite Layer                |
-|   (queries, transactions, schema)   |
-+------------------+------------------+
-                   |
-+------------------v------------------+
++--------+-------------------+--------+
+         |                   |
++--------v--------+   +------v-----------+
+|  SQLite Layer   |   |  Graph Layer     |
+| (queries, tx,   |   |  (GoGraph Cypher |
+|  schema)        |   |   engine, store) |
++--------+--------+   +------+-----------+
+         |                   |
++--------v-------------------v--------+
 |         Filesystem                  |
-|   (~/.roadmaps/<name>/project.db)   |
+| ~/.roadmaps/<name>/project.db       |
+| ~/.roadmaps/<name>/graph/           |
 +-------------------------------------+
 ```
+
+The SQLite layer and the graph layer are independent persistence mechanisms
+under the same roadmap home directory. They do not share connections,
+transactions, or locks. The graph layer is specified in `GRAPH.md`.
 
 ## Directory Structure
 
@@ -54,7 +60,8 @@ Groadmap is a CLI application distributed as a single binary executable. The arc
 ├── project1/                 # Roadmap home directory
 │   ├── project.db            # Individual roadmap (SQLite)
 │   ├── project.db-wal        # SQLite write-ahead log sidecar (when present)
-│   └── project.db-shm        # SQLite shared-memory sidecar (when present)
+│   ├── project.db-shm        # SQLite shared-memory sidecar (when present)
+│   └── graph/                # Knowledge graph store (GoGraph), when present
 ├── project2/
 │   └── project.db
 └── ...
@@ -68,8 +75,9 @@ Groadmap is a CLI application distributed as a single binary executable. The arc
 4. Each roadmap has its own **home directory** at `~/.roadmaps/<name>/`. The directory name is the roadmap name. This directory is the container for every file the `rmp` application uses for that roadmap.
 5. Each roadmap home directory is created if absent, is owned by the user only, and uses the same `0700` permissions as the data directory; its permissions are verified on access.
 6. The roadmap's SQLite database lives inside the roadmap home directory at `~/.roadmaps/<name>/project.db` with `0600` permissions. Its SQLite sidecars (`project.db-wal`, `project.db-shm`) live alongside it.
-7. A roadmap home directory currently holds only the SQLite database and its sidecars. The directory is the designated location for future per-roadmap artefacts; additional file types may be added without changing this layout.
-8. Roadmap enumeration considers the immediate **subdirectories** of `~/.roadmaps/` (one directory per roadmap), not files at the top level.
+7. A roadmap home directory holds the SQLite database and its sidecars, and, once the knowledge graph is used, the `graph/` subdirectory. The directory is the designated location for per-roadmap artefacts; additional file types may be added without changing this layout.
+8. The knowledge graph for a roadmap is stored in the subdirectory `~/.roadmaps/<name>/graph/` (mode `0700`), created on first use of any `rmp graph` subcommand. It is a directory because the GoGraph backing store persists through an on-disk snapshot plus a write-ahead log. Its internal layout is owned by GoGraph and is opaque to Groadmap. The graph store is the canonical subject of `GRAPH.md`; see `GRAPH.md § Persistence Layout`.
+9. Roadmap enumeration considers the immediate **subdirectories** of `~/.roadmaps/` (one directory per roadmap), not files at the top level. A roadmap is identified by the presence of `project.db`; the optional `graph/` subdirectory does not by itself constitute a roadmap.
 
 ## Security Guarantees
 
@@ -106,7 +114,8 @@ Groadmap/
 │   ├── commands/
 │   │   ├── roadmap.go     # Roadmap subcommands
 │   │   ├── task.go        # Task subcommands
-│   │   └── sprint.go      # Sprint subcommands
+│   │   ├── sprint.go      # Sprint subcommands
+│   │   └── graph.go       # Graph subcommands (GoGraph integration)
 │   ├── db/
 │   │   ├── connection.go  # SQLite connection management
 │   │   ├── schema.go      # DDL, structure creation
@@ -167,7 +176,28 @@ Each package implements:
 ### 5. internal/utils/
 - **json.go**: Consistent JSON output wrapper
 - **time.go**: UTC conversion, ISO 8601 formatting
-- **path.go**: Cross-platform path resolution
+- **path.go**: Cross-platform path resolution. Resolves the roadmap home
+  directory and, for the graph feature, the per-roadmap `graph/` subdirectory.
+
+### 6. internal/commands/graph.go and the GoGraph dependency
+- Implements the `graph` command and its five subcommands.
+- Integrates the external module `github.com/FlavioCFOliveira/GoGraph`, which
+  supplies the labelled property graph, the Cypher engine, and the durable
+  directory-based store. The integration boundary is contained in this one
+  package so that an upstream API change is absorbed in a single place.
+- Owns the guard-rail validation that maps each subcommand to an allowed Cypher
+  operation class, the `--query`/stdin input handling, the JSON serialisation of
+  results, and the mapping of engine failures onto Groadmap's sentinel errors.
+- The behaviour is specified in `GRAPH.md`; the CLI contract is in
+  `COMMANDS.md § Graph Management`; the result JSON is in
+  `DATA_FORMATS.md § Graph Query Result`.
+
+**External dependency note.** GoGraph requires Go 1.26 and, at the time this
+specification was written, is published as the pre-release `v2.0.0-rc2`. A
+pre-release dependency is not API-stable and its on-disk format may change before
+a stable release. GoGraph MUST be pinned to an exact version in `go.mod`. The
+risk analysis and required mitigations are in `GRAPH.md § Dependency Maturity
+Risk`; the toolchain and pinning requirements are in `BUILD.md § Go Toolchain`.
 
 ## Command Lifecycle
 

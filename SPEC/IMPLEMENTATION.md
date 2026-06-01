@@ -14,6 +14,7 @@ This file contains the implementation strategies that support the contracts defi
   - [Race Condition Testing](#race-condition-testing)
 - [Query Caching](#query-caching)
 - [Connection Caching](#connection-caching)
+- [Graph Store Concurrency](#graph-store-concurrency)
 - [Performance Considerations](#performance-considerations)
 - [See Also](#see-also)
 
@@ -288,6 +289,55 @@ func CloseAllCached() error
 - Concurrent access to cache is thread-safe
 - Memory usage remains stable (no connection leaks)
 
+## Graph Store Concurrency
+
+The knowledge graph is backed by the GoGraph store, which is a separate
+persistence mechanism from SQLite. This section specifies how Groadmap uses that
+store at runtime. The feature itself is specified in `GRAPH.md`.
+
+### Single-Writer Transactional Model
+
+GoGraph's store is single-writer and transactional: writes are serialised through
+one writer while reads observe a consistent committed snapshot. Durability comes
+from a write-ahead log (with CRC32C integrity checks) plus atomic on-disk
+snapshots; opening the store runs recovery to restore the last committed state
+from the snapshot and log.
+
+### Process Model
+
+1. The `rmp` CLI is a short-lived process. Each `rmp graph` invocation opens the
+   roadmap's graph store, runs exactly one query, commits any write, closes the
+   store, and exits. The store is **not** held open across invocations and is
+   **not** part of the SQLite connection cache (see
+   [Connection Caching](#connection-caching)). The two persistence mechanisms
+   share no connections, locks, or transactions.
+2. Read subcommands open the store, run the query through the engine's read path,
+   stream the result to stdout, and close. Write subcommands run the query through
+   the engine's transactional path so the change is committed atomically.
+
+### Write Contention and Recovery
+
+1. Because the store is single-writer, two concurrent `rmp graph` write
+   invocations against the **same** roadmap may contend for the writer. The losing
+   invocation MUST fail fast rather than hang indefinitely or corrupt the store.
+2. The contention/lock failure surfaces as `utils.ErrDatabase` (exit code 1),
+   consistent with treating the graph store as a database-class dependency.
+3. A bounded retry on a graph-store lock uses the **same** bounded
+   exponential-backoff policy specified for SQLite in
+   [Concurrency Model](#concurrency-model) (a small bounded number of attempts,
+   exponential backoff, retrying only on lock/contention conditions and never on
+   parse or validation errors). The contract is fail-fast with a bounded wait,
+   not an unbounded block.
+4. Recovery on open is expected to be transparent for a consistently committed
+   store. A corrupt or unreadable store surfaces as `utils.ErrDatabase` (exit code
+   1); there is no automatic graph-store repair in this version.
+
+### Reads During Writes
+
+A read invocation observes the last committed snapshot. It does not block on, and
+is not blocked by, an in-flight writer in a different process, subject to the
+store's own consistency guarantees. Groadmap does not add a separate read lock.
+
 ## Performance Considerations
 
 1. **Lazy loading**: SQLite connections only opened when needed.
@@ -303,3 +353,4 @@ func CloseAllCached() error
 - `ARCHITECTURE.md` § System design and module boundaries
 - `DATABASE.md` § Schema, queries, and indexes
 - `MODELS.md` § Memory Layout Optimization
+- `GRAPH.md` § Knowledge graph feature, persistence, and guard rails

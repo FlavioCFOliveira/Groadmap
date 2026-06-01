@@ -244,6 +244,7 @@ Commands:
   backlog, bl      Query BACKLOG-status tasks (planning view for tasks not yet in a sprint)
   audit, aud       Query the per-roadmap audit log
   stats            Roadmap-wide statistics (sprint counts, task distribution, velocity)
+  graph            Manage the knowledge graph (Cypher: create/query/update/delete/search)
 
 Choosing a task-listing command:
   rmp task list            All tasks in a roadmap, any status (filter with --status, etc.)

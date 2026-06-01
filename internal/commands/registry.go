@@ -94,6 +94,10 @@ type Flag struct {
 	HasRange bool
 	// Required reports whether the flag must be supplied.
 	Required bool
+	// StdinFallback, when true, signals that the subcommand reads this
+	// flag's value from standard input when the flag is absent. This is
+	// used by graph subcommands to accept Cypher via a pipe.
+	StdinFallback bool
 }
 
 // Example is one invocation example for help and the AI contract.
@@ -181,6 +185,10 @@ type Subcommand struct {
 	// Idempotent reports whether repeated invocations with the same
 	// arguments leave the system in the same state.
 	Idempotent bool
+	// ReadsStdin, when true, signals that the subcommand may read from
+	// standard input (in addition to, or instead of, a flag). Used by
+	// the AI contract emitter to annotate subcommands with stdin fallback.
+	ReadsStdin bool
 }
 
 // Command is a top-level command family (roadmap, task, sprint, ...).

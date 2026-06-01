@@ -4,6 +4,35 @@
 
 This specification defines the build system, cross-compilation targets, and CI/CD workflow for the Groadmap project.
 
+## Go Toolchain
+
+### Minimum Go Version
+
+Groadmap requires **Go 1.26** (toolchain 1.26.3 or later). This is raised from the
+previous minimum of Go 1.25 to satisfy the GoGraph dependency, which requires Go
+1.26. The `go` directive in `go.mod` MUST declare `go 1.26` (or later), and the
+CI and release toolchains MUST use Go 1.26.x.
+
+### External Dependencies
+
+| Module | Path | Version | Purpose |
+|--------|------|---------|---------|
+| GoGraph | `github.com/FlavioCFOliveira/GoGraph` | Pinned exact version (currently the pre-release `v2.0.0-rc2`) | Labelled property graph, Cypher engine, and durable store backing the `graph` command. See `GRAPH.md`. |
+
+Rules:
+
+1. GoGraph MUST be pinned to an exact tagged version in `go.mod`, not a floating
+   reference (no branch or pseudo-version that tracks a moving target), so that
+   builds are reproducible and the on-disk graph format is stable across a
+   release.
+2. GoGraph is currently a **pre-release** (`v2.0.0-rc2`). It is not API-stable and
+   its on-disk format may change before a stable `v2.0.0`. The risk analysis and
+   mitigations are in `GRAPH.md § Dependency Maturity Risk`. Upgrading GoGraph is
+   a change that MUST be re-validated against the acceptance criteria in
+   `GRAPH.md` before release.
+3. `go.sum` MUST record the checksum of the pinned version. The build MUST fail
+   if the module checksum does not match.
+
 ## Supported Build Targets
 
 ### Primary Platforms
@@ -47,6 +76,7 @@ This specification defines the build system, cross-compilation targets, and CI/C
 **Jobs:**
 
 1. **test**
+   - Use Go 1.26.x (see `Go Toolchain`)
    - Run `go fmt`, `go vet`
    - Run `go test ./...`
    - Validate code quality before build

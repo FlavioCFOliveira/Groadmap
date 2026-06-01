@@ -208,11 +208,30 @@ help text must match the command contract in `COMMANDS.md`.
 | Audit | `rmp audit [list \| history \| stats]` | `COMMANDS.md § Audit Log Management` |
 | Backlog | `rmp backlog [list \| show-next]` | `COMMANDS.md § Backlog Management` |
 | Stats | `rmp stats` | `COMMANDS.md § Statistics Command` |
+| Graph | `rmp graph [create \| query \| update \| delete \| search]` | `COMMANDS.md § Graph Management` |
 
 Each subcommand in the inventory has its own dedicated help printer in
 the code (e.g. `printTaskStatHelp`, `printSprintCloseHelp`,
 `printBacklogShowNextHelp`). The family help additionally summarises the
 subcommands and shared invariants.
+
+### Graph family help specifics
+
+The `graph` family help and each graph subcommand help follow the same
+structure template as every other family but MUST additionally make two
+graph-specific behaviours explicit, because an agent cannot infer them
+from the generic template:
+
+1. **Query input.** State that the Cypher query comes from the `--query`
+   flag or, when the flag is absent, from standard input, and that
+   supplying neither is an error (exit code 2). This is the only command
+   in the CLI that reads standard input. See
+   `GRAPH.md § Cypher Input Source and Precedence`.
+2. **Guard rail.** State, per subcommand, which Cypher operation class is
+   accepted and that a mismatching query is rejected with exit code 6
+   before execution. The family help lists the five subcommand-to-operation
+   mappings; each subcommand help names its own allowed class. See
+   `GRAPH.md § Subcommands and Guard-Rail Validation`.
 
 ## Error message format
 

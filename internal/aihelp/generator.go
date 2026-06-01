@@ -222,7 +222,7 @@ func subcommandMatches(s *commands.Subcommand, name string) bool {
 func buildSubcommand(s *commands.Subcommand) SubcommandEntry {
 	so := buildSuccessOutput(s.Output)
 	se := buildSideEffects(s.SideEffects)
-	return SubcommandEntry{
+	entry := SubcommandEntry{
 		Name:                  s.Name,
 		Aliases:               nilSliceIfEmpty(s.Aliases),
 		Summary:               s.Summary,
@@ -238,6 +238,10 @@ func buildSubcommand(s *commands.Subcommand) SubcommandEntry {
 		Prerequisites:         nilSliceIfEmpty(s.Prerequisites),
 		Examples:              buildExampleList(s.Examples),
 	}
+	if s.ReadsStdin {
+		entry.ReadsStdin = boolPtr(true)
+	}
+	return entry
 }
 
 // buildFlagList projects every flag, applying the null/absent
@@ -278,6 +282,9 @@ func buildFlag(f *commands.Flag) FlagEntry {
 	if f.MaxLength != 0 {
 		v := f.MaxLength
 		entry.MaxLength = &v
+	}
+	if f.StdinFallback {
+		entry.StdinFallback = boolPtr(true)
 	}
 	return entry
 }
@@ -462,3 +469,9 @@ func nilSliceIfEmpty[T any](s []T) []T {
 func nilGroupsIfEmpty(g [][]string) [][]string {
 	return nilSliceIfEmpty(g)
 }
+
+// boolPtr returns a pointer to the given bool value. Used to populate
+// optional pointer fields (StdinFallback, ReadsStdin) that follow the
+// omitempty/null convention: nil means absent from JSON, non-nil means
+// the value is present.
+func boolPtr(b bool) *bool { return &b }

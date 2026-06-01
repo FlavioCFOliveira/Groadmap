@@ -154,12 +154,13 @@ type EnumValue struct {
 //     absent when not applicable (omitempty + pointer or zero-test)
 type FlagEntry struct {
 	// Pointer fields first (8 bytes each, GC-scanned).
-	Short     *string `json:"short"`
-	Default   *string `json:"default"`
-	Enum      *string `json:"enum"`
-	Range     *Range  `json:"range,omitempty"`
-	MinLength *int    `json:"min_length,omitempty"`
-	MaxLength *int    `json:"max_length,omitempty"`
+	Short         *string `json:"short"`
+	Default       *string `json:"default"`
+	Enum          *string `json:"enum"`
+	Range         *Range  `json:"range,omitempty"`
+	MinLength     *int    `json:"min_length,omitempty"`
+	MaxLength     *int    `json:"max_length,omitempty"`
+	StdinFallback *bool   `json:"stdin_fallback,omitempty"`
 	// Strings and slices next (header-typed: 16/24 bytes).
 	Long                  string   `json:"long"`
 	Type                  string   `json:"type"`
@@ -222,6 +223,7 @@ type ExampleEntry struct {
 // CommandEntry without a Subcommands array, so SubcommandEntry only
 // appears under genuine sub-tokens.
 type SubcommandEntry struct {
+	ReadsStdin            *bool                `json:"reads_stdin,omitempty"`
 	SideEffects           SideEffects          `json:"side_effects"`
 	StdoutOnSuccess       SuccessOutput        `json:"stdout_on_success"`
 	Usage                 string               `json:"usage"`
@@ -229,12 +231,12 @@ type SubcommandEntry struct {
 	Summary               string               `json:"summary"`
 	Name                  string               `json:"name"`
 	Flags                 []FlagEntry          `json:"flags"`
-	Examples              []ExampleEntry       `json:"examples"`
 	Prerequisites         []string             `json:"prerequisites"`
 	ExitCodes             []int                `json:"exit_codes"`
 	MutualExclusionGroups [][]string           `json:"mutual_exclusion_groups"`
 	PositionalArguments   []PositionalArgument `json:"positional_arguments"`
 	Aliases               []string             `json:"aliases"`
+	Examples              []ExampleEntry       `json:"examples"`
 	Idempotent            bool                 `json:"idempotent"`
 }
 

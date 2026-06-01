@@ -18,18 +18,23 @@
 
 ### Input
 
-**All application inputs are via CLI parameters, without exceptions.**
+**Application inputs are via CLI parameters. The single exception is the
+`graph` command, which also accepts a Cypher query on standard input.**
 
 - No JSON input
-- No stdin input
 - No configuration files
 - No interactive input
+- **Standard input:** used by the `graph` subcommands only, as an alternative
+  source for the `--query` Cypher string. Every other command ignores standard
+  input. See `GRAPH.md § Cypher Input Source and Precedence`.
 
 **Accepted formats:**
 - Positional parameters: `rmp task create <name>`
 - Short flags: `-r <name>`, `-p 5`
 - Long flags: `--roadmap <name>`, `--priority 5`
 - Comma-separated lists: `1,2,3`
+- Standard input (graph only): the full stdin contents are read as the Cypher
+  query when `rmp graph <subcommand>` is invoked without `--query`.
 
 ---
 
@@ -182,6 +187,150 @@ Example with unlimited capacity (`max_tasks` is `null`):
 
 ---
 
+## Graph Query Result
+
+The read graph subcommands (`rmp graph query` and `rmp graph search`) return the
+result of a Cypher query as a single JSON object to stdout. The shape exposes the
+result's columns and its rows, mirroring the GoGraph engine result, which exposes
+the ordered column names (`Columns()`) and an iterable sequence of records.
+
+This is the canonical specification of the graph read-result shape. The command
+contract that references it is `COMMANDS.md § Graph Management`; the feature
+design is in `GRAPH.md`.
+
+### Shape
+
+```json
+{
+  "columns": ["s.key", "c.path"],
+  "rows": [
+    ["user-authentication", "internal/auth/jwt.go"],
+    ["payment-processing", "internal/payments/stripe.go"]
+  ]
+}
+```
+
+Field reference:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `columns` | array of string | The ordered return-column names of the query (the engine's `Columns()`). One entry per returned expression, in the order the query declares them. |
+| `rows` | array of array | One inner array per record, in the order the engine yields records. Each inner array has exactly `columns.length` cells, positionally aligned with `columns`. |
+
+Rules:
+
+1. `columns` and `rows` are always present. A query that matches nothing returns
+   its declared `columns` and an empty `rows` array (`[]`), never `null`.
+2. A query that returns no columns (for example a write run through a read path,
+   which the guard rail forbids) is not a valid read result; read subcommands
+   always declare at least one return column.
+3. Each row cell is a JSON value produced by the property-type mapping below.
+4. The result is pretty-printed with two-space indentation and a trailing
+   newline, consistent with all other JSON output (see
+   [Implementation Notes](#implementation-notes)).
+
+### Property-Type Mapping
+
+GoGraph property values carry Go types. Each maps to JSON as follows:
+
+| GoGraph value type | JSON representation | Notes |
+|--------------------|---------------------|-------|
+| `string` | JSON string | UTF-8, as-is. |
+| `int64` | JSON number (integer) | Emitted without a decimal point. JSON numbers are IEEE-754 doubles in many consumers; values outside the safe integer range (beyond ±2^53) may lose precision on the consumer side. The CLI emits the exact integer; precision loss, if any, is the consumer's concern. |
+| `float64` | JSON number | Emitted in the standard Go float format. `NaN`, positive infinity, and negative infinity are not valid JSON numbers; when the engine produces any of them, they are emitted as JSON `null`. |
+| `bool` | JSON boolean | `true` / `false`. |
+| `time.Time` | JSON string | ISO 8601 UTC with milliseconds and a `Z` suffix, identical to every other timestamp in Groadmap (see [Dates - ISO 8601 with UTC](#dates---iso-8601-with-utc)). |
+| `[]byte` | JSON string | Base64-standard-encoded (RFC 4648) so arbitrary bytes survive JSON transport. |
+| absent / null property | JSON `null` | A returned expression that has no value is `null`. |
+
+### Graph element mapping
+
+A returned value that is itself a graph element (rather than a scalar property)
+is serialised as a JSON object using the fixed shapes below. The same mapping
+applies recursively to properties, list elements, and map values.
+
+| GoGraph value | JSON representation |
+|---------------|---------------------|
+| Node | `{"id": <int>, "labels": [<string>, ...], "properties": {<object>}}` |
+| Relationship (edge) | `{"id": <int>, "type": "<string>", "startId": <int>, "endId": <int>, "properties": {<object>}}` |
+| Path | `{"nodes": [<node>, ...], "relationships": [<relationship>, ...]}` |
+| List | JSON array of mapped values. |
+| Map | JSON object whose values are mapped values. |
+
+Rules:
+
+1. `properties` is a JSON object whose values follow the scalar property-type
+   mapping above, applied recursively (a property may itself be a list or map).
+2. A node's `labels` array preserves the order GoGraph reports and may be empty
+   (`[]`) when the node carries no labels.
+3. Within a single result, a relationship's `startId` and `endId` reference the
+   `id` of nodes that appear in the same result or path. The identifiers exist
+   so that nodes and relationships in one result or path can be correlated.
+4. `id`, `startId`, and `endId` are GoGraph's internal storage identifiers
+   (`uint64`). They are emitted as JSON numbers and carry the same `>2^53`
+   precision caveat noted for `int64` above. These identifiers are **ephemeral**:
+   they are not stable business keys, are not guaranteed to remain constant
+   across invocations, and MUST NOT be persisted or used as long-lived
+   references. Agents must rely on node and edge properties (for example `key` or
+   `name`) for stable identity, following the conventions in
+   `GRAPH.md § Multi-Layer Modelling Conventions`.
+
+## Graph Write Result
+
+The write graph subcommands (`rmp graph create`, `rmp graph update`,
+`rmp graph delete`) mirror their query's `RETURN` clause. The output shape
+depends on whether the query returns anything:
+
+1. **With a `RETURN` clause:** the output is the standard read-result shape
+   defined in [Graph Query Result](#graph-query-result) — a `columns` array and a
+   `rows` array — populated with the elements the query returns. For example, a
+   `CREATE ... RETURN n` query returns the created node in the `{columns, rows}`
+   shape.
+2. **Without a `RETURN` clause:** the output is exactly:
+
+```json
+{"ok": true}
+```
+
+The GoGraph engine exposes only the result's columns and an iterable record
+sequence; it reports no mutation or affected-element counter. There is therefore
+**no** count field in the write result, and the CLI does not attempt to compute
+one. The `{"ok": true}` object is the success signal for a write query that
+returns no data.
+
+Field reference (no-`RETURN` case):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ok` | boolean | Always `true`. Confirms the write transaction committed successfully. |
+
+Examples:
+
+A write query without `RETURN`:
+
+```json
+{"ok": true}
+```
+
+A write query that ends with `RETURN n` (same shape as a read result):
+
+```json
+{
+  "columns": ["n"],
+  "rows": [
+    [
+      {
+        "id": 17,
+        "labels": ["Spec"],
+        "properties": {"key": "user-authentication"}
+      }
+    ]
+  ]
+}
+```
+
+---
+
 ## Implementation Notes
 
 1. **No extra fields**: Do not include extra fields in JSON responses
@@ -253,7 +402,7 @@ other document**. Concretely:
 | `exit_codes` | array of object | Catalogue of every exit code the binary can emit. |
 | `enums` | object | Map of enum name to enum definition. Mirrors `MODELS.md § Enums`. |
 | `global_flags` | array of object | Flags accepted at the top level (e.g. `--help`, `--version`, `--ai-help`). |
-| `commands` | array of object | One entry per top-level command family (`roadmap`, `task`, `sprint`, `audit`, `backlog`, `stats`). |
+| `commands` | array of object | One entry per top-level command family (`roadmap`, `task`, `sprint`, `audit`, `backlog`, `stats`, `graph`). |
 | `common_workflows` | array of object | Canonical end-to-end command sequences an agent is expected to perform. See `common_workflows` below. |
 | `pitfalls` | array of object | Known mistakes agents make against this CLI, each paired with the correct alternative. See `pitfalls` below. |
 
@@ -426,12 +575,14 @@ least `--help` / `-h`, `--version` / `-v`, and `--ai-help`.
 | `min_length` | integer or absent | no | Minimum string length when applicable. |
 | `description` | string | yes | One-sentence description of the flag's purpose. |
 | `mutually_exclusive_with` | array of string or absent | no | Long flag names that cannot be combined with this one. |
+| `stdin_fallback` | boolean or absent | no | `true` when the flag's value is read from standard input if the flag is omitted. Present and `true` only on the `graph` subcommands' `--query` flag. When `stdin_fallback` is `true`, `required` is `false` (the value may come from stdin instead), but the value is mandatory from one source or the other; supplying neither is an error. See `GRAPH.md § Cypher Input Source and Precedence`. |
 
 ### Field reference: subcommand-level fields
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `usage` | string | One-line usage signature. |
+| `reads_stdin` | boolean or absent | `true` when the subcommand reads standard input as an input source (the `graph` subcommands). Absent or `false` for every other subcommand, which ignores stdin. |
 | `positional_arguments` | array of object | Each entry: `{name, type, required, description}`. |
 | `mutual_exclusion_groups` | array of array of string | Each inner array is a set of long flag names of which at most one may be supplied. |
 | `stdout_on_success.kind` | string | One of `object`, `array`, `empty`. `empty` is used by mutating commands that return no body. |
