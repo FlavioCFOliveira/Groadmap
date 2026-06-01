@@ -19,7 +19,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6.3.0
         with:
-          go-version: '1.25.0'
+          go-version-file: go.mod
 
       - name: Download dependencies
         run: go mod download
@@ -69,7 +69,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6.3.0
         with:
-          go-version: '1.25.0'
+          go-version-file: go.mod
 
       - name: Get version from tag
         id: get_version
