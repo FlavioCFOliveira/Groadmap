@@ -39,6 +39,9 @@ jobs:
     name: Build Release Binaries
     needs: test
     runs-on: ubuntu-latest
+    # Windows is excluded: the GoGraph dependency uses syscall.Kill
+    # (Unix-only) in its WAL crash-injection layer; cross-compilation
+    # to Windows fails with "undefined: syscall.Kill".
     strategy:
       matrix:
         include:
@@ -55,10 +58,6 @@ jobs:
           - goos: darwin
             goarch: amd64
           - goos: darwin
-            goarch: arm64
-          - goos: windows
-            goarch: amd64
-          - goos: windows
             goarch: arm64
           - goos: freebsd
             goarch: amd64
@@ -83,34 +82,15 @@ jobs:
           CGO_ENABLED: 0
         run: |
           version="${{ steps.get_version.outputs.VERSION }}"
-          output_name="rmp"
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            output_name="rmp.exe"
-          fi
-
-          # Base ldflags for all platforms: strip debug info, set version
           ldflags="-s -w -X main.version=${version}"
-
-          # Platform-specific optimizations
           if [ "${{ matrix.goos }}" = "linux" ]; then
-            # Static linking for Linux (fully static binary)
             ldflags="${ldflags} -extldflags '-static'"
-          elif [ "${{ matrix.goos }}" = "darwin" ]; then
-            # macOS: -s is sufficient, OS handles dynamic linking
-            : # No additional flags needed
-          elif [ "${{ matrix.goos }}" = "windows" ]; then
-            # Windows: strip debug info
-            : # No additional flags needed
           fi
-
-          # -trimpath removes build paths for reproducible builds
-          go build -trimpath -ldflags="${ldflags}" -o "dist/${output_name}" ./cmd/rmp
-
-          # Display ARM version in build output if applicable
+          go build -trimpath -ldflags="${ldflags}" -o "dist/rmp" ./cmd/rmp
           if [ -n "${{ matrix.goarm }}" ]; then
-            echo "Built ${{ matrix.goos }}/${{ matrix.goarch }}v${{ matrix.goarm }}: ${output_name}"
+            echo "Built ${{ matrix.goos }}/${{ matrix.goarch }}v${{ matrix.goarm }}"
           else
-            echo "Built ${{ matrix.goos }}/${{ matrix.goarch }}: ${output_name}"
+            echo "Built ${{ matrix.goos }}/${{ matrix.goarch }}"
           fi
 
       - name: Create archive
@@ -120,24 +100,15 @@ jobs:
           goos="${{ matrix.goos }}"
           goarch="${{ matrix.goarch }}"
           goarm="${{ matrix.goarm }}"
-          binary_name="rmp"
 
-          # Build archive name with ARM version suffix when applicable
           if [ -n "${goarm}" ]; then
             arch_suffix="${goarch}v${goarm}"
           else
             arch_suffix="${goarch}"
           fi
 
-          if [ "${goos}" = "windows" ]; then
-            binary_name="rmp.exe"
-            archive_name="rmp-${version}-${goos}-${arch_suffix}.zip"
-            (cd dist && zip "${archive_name}" "${binary_name}")
-          else
-            archive_name="rmp-${version}-${goos}-${arch_suffix}.tar.gz"
-            tar -czf "dist/${archive_name}" -C dist "${binary_name}"
-          fi
-
+          archive_name="rmp-${version}-${goos}-${arch_suffix}.tar.gz"
+          tar -czf "dist/${archive_name}" -C dist rmp
           echo "ARCHIVE=${archive_name}" >> $GITHUB_OUTPUT
 
       - name: Generate checksum
