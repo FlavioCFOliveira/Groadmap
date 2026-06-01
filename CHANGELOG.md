@@ -5,6 +5,108 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-06-01
+
+Minor release. Introduces the **`rmp graph` command**: a Cypher-queryable
+knowledge graph per roadmap, backed by the GoGraph engine and persisted under
+`~/.roadmaps/<name>/graph/`. Adds the **per-roadmap directory layout** with
+automatic legacy migration, moving each roadmap's SQLite database from a flat
+`~/.roadmaps/<name>.db` file to `~/.roadmaps/<name>/project.db` inside its own
+home directory. The AI Agent Contract gains two new registry fields
+(`stdin_fallback`, `reads_stdin`), a new `build_knowledge_graph` workflow, and
+two new pitfall entries. No breaking changes; the public CLI surface, exit codes
+and existing JSON output schemas remain backward compatible with `v1.4.0`.
+
+### Added
+
+- **`rmp graph` command** (`internal/commands/graph.go`,
+  `internal/commands/registry_graph.go`): five subcommands backed by the
+  GoGraph Cypher engine:
+  - `graph create` — executes `CREATE`/`MERGE` queries to add nodes or edges.
+  - `graph query` — executes read-only `MATCH ... RETURN` queries.
+  - `graph update` — executes `SET`/`REMOVE` queries to mutate existing elements.
+  - `graph delete` — executes `DELETE`/`DETACH DELETE` queries to remove elements.
+  - `graph search` — executes read-only traversal queries (variable-length paths).
+  Each subcommand is a guard rail: it rejects a Cypher query whose operation class
+  does not match the subcommand, exiting with code `6` before touching the graph.
+  The `--query` flag falls back to reading from standard input when absent.
+  The graph store is rooted at `~/.roadmaps/<name>/graph/` (mode `0700`),
+  created on first use, and is durable via GoGraph's WAL.
+- **Per-roadmap directory layout** (`internal/utils/path.go`): each roadmap is
+  now stored under `~/.roadmaps/<name>/` (mode `0700`) with the SQLite database
+  at `~/.roadmaps/<name>/project.db` (mode `0600`).
+- **Automatic legacy migration** (`internal/utils/migrate.go`):
+  `MigrateLegacyLayout` runs at startup and atomically renames any flat
+  `~/.roadmaps/<name>.db` file into `~/.roadmaps/<name>/project.db`. The
+  migration is idempotent, skips symbolic links and invalid names, and handles
+  WAL/SHM sidecars best-effort. An existing `project.db` is never overwritten.
+- E2E test `test_32_layout_migration.py`: end-to-end coverage of the migration
+  (data preservation, permissions, idempotent re-run, conflict resolution,
+  symlink security guard).
+- Go unit tests in `internal/utils/migrate_test.go`: happy-path, idempotent
+  no-op, conflict, empty home directory recovery, invalid-name skip, and symlink
+  guard scenarios.
+- AI contract field `stdin_fallback` on `FlagEntry`: projected from registry's
+  `Flag.StdinFallback`; omitted when false.
+- AI contract field `reads_stdin` on `SubcommandEntry`: projected from registry's
+  `Subcommand.ReadsStdin`; omitted when false.
+- AI contract workflow `build_knowledge_graph`: a four-step guide for populating
+  and querying a roadmap's knowledge graph with Cypher.
+- AI contract pitfall `graph_guard_rail_mismatch`: documents the exit-6 guard
+  rail and shows the correct subcommand for each operation class.
+- AI contract pitfall `graph_missing_query`: documents the stdin-fallback
+  behaviour and the failure mode when neither `--query` nor stdin is supplied.
+- `SPEC/GRAPH.md` (new): complete specification for the graph command —
+  persistence layout, guard-rail rules, Cypher input source precedence, output
+  schemas, exit codes, and security model.
+
+### Changed
+
+- Storage layout: roadmap databases moved from `~/.roadmaps/<name>.db` to
+  `~/.roadmaps/<name>/project.db`. Existing databases are migrated automatically
+  on the first run of any command (other than `--help`, `--version`,
+  `--ai-help`). No manual action is required.
+- `go.mod`: GoGraph (`github.com/FlavioCFOliveira/GoGraph`) promoted from
+  indirect to direct dependency at `v0.0.0-20260601121207-03162239610a`; `go`
+  directive raised to `1.26`.
+- AI contract tool description updated to mention the Cypher-queryable knowledge
+  graph capability (`cmd/rmp/aihelp_wiring.go`).
+- `internal/commands/registry.go`: `Flag` gains `StdinFallback bool`;
+  `Subcommand` gains `ReadsStdin bool`.
+- `internal/commands/registry_data.go`: `graph` family registered in the
+  declarative command registry.
+- `internal/commands/roadmap.go`: `list` output now reports
+  `<name>/project.db` paths; `remove` deletes the whole `<name>/` home
+  directory.
+- `internal/db/connection.go`: `Open` ensures the roadmap home directory before
+  opening `project.db`.
+- SPEC updated: `ARCHITECTURE.md`, `COMMANDS.md`, `DATA_FORMATS.md`, `BUILD.md`,
+  `HELP.md`, `IMPLEMENTATION.md`, `README.md`, `DATABASE.md`, `DEPLOY.md`,
+  `VERSION.md`.
+
+### Tests
+
+- E2E: 21/21 pass (`test_32_layout_migration.py` added; no E2E coverage for
+  `rmp graph` subcommands yet — tracked as a follow-up).
+- Go unit tests: 6 packages, all green (fmt/vet/test/build/lint clean).
+
+### Known Issues
+
+The two SPEC-vs-code divergences flagged in earlier releases remain open and are
+unchanged by this release:
+
+- `SPEC/ARCHITECTURE.md` documents `ErrInvalidInput` mapping to exit code `2`;
+  the implementation maps `ErrInvalidInput`, `ErrValidation` and
+  `ErrFieldTooLarge` to `ExitInvalidData = 6`.
+- `SPEC/COMMANDS.md` `audit stats` JSON keys differ from the implementation
+  (`by_operation` / `by_entity_type` / `first_entry_at` / `last_entry_at` /
+  `total_entries`, no `period` object). Implementation behaviour is stable.
+
+No E2E tests cover `rmp graph` subcommands in this release. Coverage will be
+added in a follow-up release.
+
+[1.5.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.4.0...v1.5.0
+
 ## [1.4.0] - 2026-05-25
 
 Minor release. Introduces the **AI Agent Contract**: a machine-readable JSON
