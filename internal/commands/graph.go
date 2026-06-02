@@ -19,7 +19,10 @@ import (
 
 	"github.com/FlavioCFOliveira/GoGraph/cypher"
 	"github.com/FlavioCFOliveira/GoGraph/cypher/expr"
+	"github.com/FlavioCFOliveira/GoGraph/graph/csr"
+	"github.com/FlavioCFOliveira/GoGraph/graph/lpg"
 	"github.com/FlavioCFOliveira/GoGraph/store/recovery"
+	"github.com/FlavioCFOliveira/GoGraph/store/snapshot"
 	"github.com/FlavioCFOliveira/GoGraph/store/txn"
 	"github.com/FlavioCFOliveira/GoGraph/store/wal"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
@@ -566,6 +569,45 @@ func runGraphRead(subcmd, allowed string, args []string) error {
 	return utils.PrintJSON(out)
 }
 
+// checkpointGraph performs the synchronous post-commit checkpoint
+// (SPEC/GRAPH.md § Synchronous Checkpoint on Write). It writes a
+// self-sufficient full snapshot of the committed graph state under
+// graphDir/snapshot/ and then truncates the write-ahead log so the log
+// holds only post-snapshot transactions. The snapshot carries the
+// node-key mapping (mapper.bin) for string keys, so snapshot + WAL tail
+// is enough for recovery to reconstruct the graph.
+//
+// It MUST be called only after the write transaction has committed
+// durably; the caller treats any error here as non-fatal (see FR7).
+func checkpointGraph(g *lpg.Graph[string, float64], w *wal.Writer, graphDir string) error {
+	// Build a CSR view of the committed in-memory graph for the snapshot.
+	cs := csr.BuildFromAdjList(g.AdjList())
+
+	snapDir := filepath.Join(graphDir, "snapshot")
+	// WriteSnapshotFullWithMapperCodec assembles in snapDir+".tmp" and
+	// renames atomically into snapDir; the codec emits mapper.bin so the
+	// snapshot is self-sufficient for string keys.
+	if err := snapshot.WriteSnapshotFullWithMapperCodec(snapDir, cs, g, txn.NewStringCodec()); err != nil {
+		return fmt.Errorf("snapshot write: %w", err)
+	}
+
+	// Flush the WAL, then truncate it to bound its growth. Truncation
+	// happens only after the snapshot is durable, so no committed data is
+	// lost.
+	if err := w.Sync(); err != nil {
+		return fmt.Errorf("wal sync: %w", err)
+	}
+	if _, err := w.Truncate(); err != nil {
+		return fmt.Errorf("wal truncate: %w", err)
+	}
+
+	// Keep the snapshot directory consistent with the 0700 graphDir
+	// permissions set in openGraphStore. Best-effort: a failure here does
+	// not invalidate the durable snapshot.
+	_ = os.Chmod(snapDir, 0700)
+	return nil
+}
+
 // runGraphWrite is the shared implementation for write subcommands
 // (create, update, delete). It opens the WAL store with retry,
 // runs the query in a transaction, and serialises the result.
@@ -612,23 +654,48 @@ func runGraphWrite(subcmd, allowed string, args []string) error {
 	if err != nil {
 		return fmt.Errorf("%w: graph %s failed: %v", utils.ErrDatabase, subcmd, err)
 	}
-	defer result.Close() //nolint:errcheck
 
+	// Build the output value first by draining the result. The write
+	// transaction is not yet committed here: result.Close() performs the
+	// commit and returns its error, so the result MUST be fully consumed
+	// and serialised BEFORE Close, not via a deferred Close.
+	var output any
 	cols := result.Columns()
 	if len(cols) == 0 {
-		// Consume result to allow commit.
+		// No RETURN clause: drain to allow the commit and emit {"ok": true}.
 		for result.Next() {
 		}
 		if iterErr := result.Err(); iterErr != nil {
+			_ = result.Close() //nolint:errcheck // roll back; commit error is moot on iteration failure
 			return fmt.Errorf("%w: graph %s failed: %v", utils.ErrDatabase, subcmd, iterErr)
 		}
-		return utils.PrintJSON(graphOKResult{OK: true})
+		output = graphOKResult{OK: true}
+	} else {
+		out, serErr := serializeGraphResult(result)
+		if serErr != nil {
+			_ = result.Close() //nolint:errcheck // roll back; commit error is moot on iteration failure
+			return fmt.Errorf("%w: graph %s failed: %v", utils.ErrDatabase, subcmd, serErr)
+		}
+		output = out
 	}
 
-	out, err := serializeGraphResult(result)
-	if err != nil {
-		return fmt.Errorf("%w: graph %s failed: %v", utils.ErrDatabase, subcmd, err)
+	// Commit is the durability boundary: Result.Close applies and commits
+	// the write transaction and returns the commit error. A commit failure
+	// here is a normal write failure (SPEC FR7 §4): no checkpoint runs and
+	// the command fails with ErrDatabase (exit 1).
+	if cerr := result.Close(); cerr != nil {
+		return fmt.Errorf("%w: graph %s commit failed: %v", utils.ErrDatabase, subcmd, cerr)
 	}
 
-	return utils.PrintJSON(out)
+	// The transaction has committed durably; res.Graph now reflects the new
+	// state. Checkpoint synchronously: write a self-sufficient snapshot and
+	// truncate the WAL. Per SPEC FR7, a checkpoint failure AFTER a durable
+	// commit MUST NOT fail the write: the WAL is intact, recovery still
+	// works, and the next write reconciles the snapshot. Surface the failure
+	// as a diagnostic on stderr but return success with exit code 0.
+	if cperr := checkpointGraph(res.Graph, w, graphDir); cperr != nil {
+		fmt.Fprintf(os.Stderr, "Warning: graph checkpoint failed: %v\n", cperr)
+	}
+
+	return utils.PrintJSON(output)
 }
