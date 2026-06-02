@@ -49,11 +49,26 @@ separate runtime artefact.
 
 Rules:
 
-1. **Embedded at build time.** The HTML templates, the stylesheet, the client
-   scripts, and the vendored JavaScript graph library live under `internal/web/`
-   (in `templates/` and `static/`) and are embedded with `go:embed`. They become
-   part of the compiled binary. No web asset is read from the host filesystem at
-   runtime, and the binary remains a single self-contained file.
+1. **Self-contained binary: everything embedded via `go:embed`.** The shipped
+   `rmp` binary MUST embed every component required to render and operate the web
+   interface, with zero external runtime dependency. Every asset category lives
+   under `internal/web/` (in `templates/` and `static/`) and is embedded with
+   `go:embed`, so each becomes part of the compiled binary. The complete set of
+   embedded asset categories is:
+   - HTML templates;
+   - the stylesheet (all CSS, including any vendored CSS reset or framework);
+   - all client JavaScript, including the Cytoscape.js knowledge-graph
+     visualisation library and any of its dependencies;
+   - web fonts;
+   - icons and images;
+   - the favicon;
+   - any other static asset the interface requires.
+
+   No web asset is read from the host filesystem at runtime, and the binary
+   remains a single self-contained file. There is no sidecar file and no separate
+   assets directory shipped alongside the binary (see
+   `WEB.md § Self-Contained Deliverable` and
+   `WEB.md § Embedded Asset Categories`).
 2. **No JavaScript build toolchain.** The build uses the Go toolchain only. There
    is no Node.js, no `npm`/`yarn`, no `node_modules`, and no bundler step in the
    build or CI pipeline. Any JavaScript dependency is committed to the repository
@@ -65,9 +80,12 @@ Rules:
    delivery network or any remote origin (see `WEB.md § Knowledge-Graph
    Visualisation Library`). Upgrading or replacing the vendored library is a change
    to the committed asset and to this section, recorded in git.
-4. **No outbound network at build or run time for assets.** The build does not
+4. **No CDN and no outbound network at build or run time.** The build does not
    download web assets, and the running server makes no outbound request to load
-   them; every asset is in the binary.
+   them; every asset is in the binary. No page references a content delivery
+   network, a remote font host such as Google Fonts, or any other remote origin
+   for a script, stylesheet, font, icon, image, or API. The interface renders and
+   functions fully offline (see `WEB.md § Self-Contained Deliverable`).
 5. **Embedding does not change the build targets.** Embedded assets are part of
    the Go package, so every target in Supported Build Targets builds the web
    interface in without any per-target asset handling. `CGO_ENABLED=0` static
@@ -253,7 +271,8 @@ rmp-{version}-{target}.tar.gz
 - [ ] All matrix targets build successfully
 - [ ] Binaries are statically linked (`CGO_ENABLED=0`)
 - [ ] Archive naming follows convention: `rmp-{version}-{target}.{ext}`
-- [ ] Web assets (templates, CSS, JS, vendored Cytoscape.js) are embedded via `go:embed`; the build uses the Go toolchain only, with no Node.js or `node_modules` step (see Vendored Web Assets)
+- [ ] Every web asset category (HTML templates, the stylesheet, all client JS including the vendored Cytoscape.js and its dependencies, web fonts, icons and images, and the favicon) is embedded via `go:embed`; the build uses the Go toolchain only, with no Node.js or `node_modules` step (see Vendored Web Assets)
+- [ ] The web interface is fully self-contained: with networking disabled and with only the `rmp` binary present on disk (no sidecar files and no separate assets directory), `rmp web` serves the full UI — every page and the knowledge-graph visualisation render and function with no network egress (see Vendored Web Assets and `WEB.md § Self-Contained Deliverable`)
 
 ### Architecture Verification
 - [ ] Use `file` command to verify binary architecture matches target

@@ -17,6 +17,8 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Read-only web interface (`rmp web`, server, pages, graph viz) | `WEB.md` |
 | `rmp web` command syntax / flags | `COMMANDS.md § Web Interface` |
 | Web graph data endpoint JSON shape | `DATA_FORMATS.md § Graph View Data` |
+| Self-contained web binary (offline, no CDN, embedded asset categories) | `WEB.md § Self-Contained Deliverable` |
+| Responsive / mobile-first web design | `WEB.md § Responsive and Mobile-First Design` |
 | Vendored web assets / embedded Cytoscape.js | `BUILD.md § Vendored Web Assets` |
 | `graph` command syntax / subcommands | `COMMANDS.md § Graph Management` |
 | Graph query result JSON / property-type mapping | `DATA_FORMATS.md § Graph Query Result` |

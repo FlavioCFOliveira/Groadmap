@@ -17,7 +17,11 @@
   - [Tasks and Sprints from SQLite](#tasks-and-sprints-from-sqlite)
   - [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)
 - [Frontend and Embedded Assets](#frontend-and-embedded-assets)
+  - [Self-Contained Deliverable](#self-contained-deliverable)
+  - [Embedded Asset Categories](#embedded-asset-categories)
+  - [Frontend Rules](#frontend-rules)
   - [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library)
+- [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)
 - [Error Handling and Exit Codes](#error-handling-and-exit-codes)
 - [Security and Constraints](#security-and-constraints)
 - [Acceptance Criteria](#acceptance-criteria)
@@ -39,9 +43,17 @@ serves it as server-rendered HTML.
 The server is built only from Go's standard library (`net/http`) and assets
 embedded into the binary at build time. It requires no external runtime
 dependency, no JavaScript build toolchain, no `node_modules`, and no content
-delivery network. The binary is self-contained: it serves its own HTML
-templates, its own stylesheet and scripts, and the vendored JavaScript graph
-library, all from embedded assets.
+delivery network. The deliverable is fully self-contained: the single `rmp`
+binary embeds every component required to render and operate the interface, and
+the interface renders and functions fully offline with only that binary present
+on disk (see
+[Self-Contained Deliverable](#self-contained-deliverable)).
+
+The interface is designed responsive and mobile-first: its base styles target
+small phone-sized viewports first and progressively enhance for larger viewports,
+and it adapts fluidly across viewport sizes on every page, including the
+interactive knowledge-graph visualisation (see
+[Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
 
 The web interface exposes three kinds of page for each roadmap:
 
@@ -87,13 +99,38 @@ The web interface exposes three kinds of page for each roadmap:
    truncation that write subcommands perform (see
    [Security and Constraints](#security-and-constraints) and
    `GRAPH.md § Synchronous Checkpoint on Write`).
-9. All HTML, the stylesheet, the client scripts, and the vendored JavaScript
-   graph library are embedded into the binary at build time and served only from
-   those embedded assets. The server never serves an arbitrary path from the
-   host filesystem (see
-   [Frontend and Embedded Assets](#frontend-and-embedded-assets) and
+9. **The deliverable is fully self-contained.** The shipped `rmp` binary MUST
+   embed every component required to render and operate the web interface, with
+   zero external runtime dependency. Every asset category — HTML templates, the
+   stylesheet, all client JavaScript (including the Cytoscape.js
+   knowledge-graph visualisation library and any of its dependencies), web
+   fonts, icons and images, the favicon, and any other static asset — is
+   embedded into the binary at build time with `go:embed` and served only from
+   the embedded asset set under the `/static/...` route. The server never reads
+   an asset from the host filesystem and never serves an arbitrary host
+   filesystem path (see
+   [Self-Contained Deliverable](#self-contained-deliverable),
+   [Embedded Asset Categories](#embedded-asset-categories), and
    [Security and Constraints](#security-and-constraints)).
-10. Startup failures (for example, the chosen port is already in use, the data
+10. **No runtime network fetch.** No page references a script, stylesheet, font,
+    image, or any other asset from a remote origin: no content delivery network,
+    no Google Fonts or other remote font, script, or style host, and no external
+    API. The interface renders and functions fully offline, with only the single
+    `rmp` binary present on disk: no sidecar files and no separate assets
+    directory shipped alongside it. The running server makes no outbound network
+    request of its own (see
+    [Self-Contained Deliverable](#self-contained-deliverable) and
+    [Frontend and Embedded Assets](#frontend-and-embedded-assets)).
+11. **Responsive and mobile-first.** The web interface MUST be designed
+    responsive and mobile-first: base styles target small phone-sized viewports
+    first and progressively enhance for larger tablet and desktop viewports
+    through `min-width` media queries, and every page adapts fluidly across
+    viewport sizes. This requirement applies to all three pages — the roadmap
+    index, the roadmap detail page, and the knowledge-graph page — and to the
+    interactive knowledge-graph visualisation, which MUST remain usable on touch
+    and small-viewport devices (see
+    [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
+12. Startup failures (for example, the chosen port is already in use, the data
     directory is unreadable, or a flag value is invalid) are reported as plain
     text to stderr and map to the existing exit codes; no new exit code is
     introduced (see [Error Handling and Exit Codes](#error-handling-and-exit-codes)).
@@ -266,9 +303,14 @@ how the `rmp web` process itself terminates.
   library from `/static/...` and fetches the graph's nodes and edges as JSON from
   the graph data endpoint (`/roadmaps/{name}/graph/data`).
 - **Interaction.** The visualisation supports pan and zoom and shows the
-  properties of a node or an edge when the user selects or hovers it. Node and
-  edge labels, types, and properties shown come directly from the graph data
-  (see [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
+  properties of a node or an edge when the user selects it. Node and edge labels,
+  types, and properties shown come directly from the graph data (see
+  [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
+  The visualisation MUST be usable without a mouse: it supports touch gestures
+  (pan, pinch-to-zoom, and tap to select and inspect) and surfaces node and edge
+  detail through tap or selection rather than relying on mouse hover, so the page
+  is fully usable on touch devices (see
+  [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
 - **Empty graph.** A roadmap that has never used the `graph` command, or whose
   graph is empty, renders successfully and shows an empty-graph state. Reading a
   roadmap that has no graph yet behaves the same way the read subcommands do: it
@@ -355,24 +397,80 @@ location rules, and never writes to it.
 
 ## Frontend and Embedded Assets
 
+### Self-Contained Deliverable
+
+The shipped deliverable is the single `rmp` binary, and that binary alone MUST be
+sufficient to render and operate the web interface. This is a hard requirement,
+not a convenience.
+
+1. **Everything is embedded.** Every component required to render and operate the
+   interface is embedded into the binary at build time with `go:embed`. The full
+   list of asset categories is enumerated in
+   [Embedded Asset Categories](#embedded-asset-categories), so "all components"
+   is unambiguous: nothing the interface needs is left outside the binary.
+2. **Zero external runtime dependency.** The interface requires no runtime
+   dependency beyond the binary itself: no separate assets directory, no sidecar
+   file, no companion package, no external service, and no JavaScript build
+   toolchain (see `BUILD.md § Vendored Web Assets`).
+3. **No network fetch at runtime.** No asset is fetched from the network when the
+   interface runs. No page references a content delivery network, Google Fonts or
+   any other remote font, script, or style host, or an external API. The running
+   server makes no outbound network request of its own.
+4. **Fully offline.** The interface renders and functions fully offline, with
+   networking disabled and with only the single `rmp` binary present on disk.
+   This property is build-verifiable (see
+   [Acceptance Criteria](#acceptance-criteria) and
+   `BUILD.md § Vendored Web Assets`).
+5. **Served only from the embedded filesystem.** Every asset is served exclusively
+   from the embedded asset set under the `/static/...` route. The server never
+   reads an asset from the real filesystem, consistent with the path-traversal and
+   no-arbitrary-file-serving constraint in
+   [Security and Constraints](#security-and-constraints).
+
+### Embedded Asset Categories
+
+Every asset category below is embedded into the binary with `go:embed` and served
+only from the embedded asset set. This enumeration defines the complete set of
+asset categories the binary must carry; no category is fetched from the network or
+read from the host filesystem at runtime.
+
+1. **HTML templates** — the `html/template` set that renders every page.
+2. **Stylesheet** — all CSS, including any vendored CSS reset or framework (see
+   [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
+3. **JavaScript** — all client scripts, including the Cytoscape.js
+   knowledge-graph visualisation library and any of its dependencies, all in
+   already-built (vendored) form.
+4. **Web fonts** — any font the interface uses; no font is loaded from a remote
+   font host.
+5. **Icons and images** — any icon or image the interface displays.
+6. **Favicon** — the site favicon.
+7. **Any other static asset** — any further static asset the interface requires
+   is embedded under the same rule; no static asset is exempt.
+
+### Frontend Rules
+
 1. **Server-rendered HTML.** Pages are rendered with Go's `html/template`. The
    template set is embedded into the binary at build time with `go:embed`.
    `html/template` performs contextual auto-escaping, which is the primary
    defence against injecting roadmap-derived text (task titles, descriptions,
    graph property values) into the page (see
    [Security and Constraints](#security-and-constraints)).
-2. **Embedded static assets.** The stylesheet, the client scripts, and the
-   vendored JavaScript graph library are embedded with `go:embed` and served from
-   the `/static/...` route. There is no separate asset directory on disk at
-   runtime and no asset is read from the host filesystem.
+2. **Embedded static assets.** Every asset category in
+   [Embedded Asset Categories](#embedded-asset-categories) is embedded with
+   `go:embed` and served from the `/static/...` route. There is no separate asset
+   directory on disk at runtime and no asset is read from the host filesystem.
 3. **No build toolchain.** The frontend uses no JavaScript build step, no
    `node_modules`, and no package manager at build time. Any JavaScript library
    the interface uses is committed to the repository in already-built form
    (vendored) and embedded directly.
-4. **No content delivery network and no external network calls.** No page
+4. **Responsive viewport.** Every HTML page includes the responsive viewport meta
+   tag so the interface scales correctly on mobile devices (see
+   [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
+5. **No content delivery network and no external network calls.** No page
    references a script, stylesheet, font, or image from a remote origin. Every
    asset a page loads is served from `/static/...` on the same local server. The
-   running server makes no outbound network request of its own.
+   running server makes no outbound network request of its own (see
+   [Self-Contained Deliverable](#self-contained-deliverable)).
 
 ### Knowledge-Graph Visualisation Library
 
@@ -386,11 +484,55 @@ location rules, and never writes to it.
    (see [Graph Data Endpoint](#graph-data-endpoint)) and provides pan, zoom, and
    selection so the user can inspect a node's or edge's labels, type, and
    properties.
-4. The choice of Cytoscape.js is an implementation-level decision recorded here
+4. **Touch and small-viewport configuration.** Cytoscape.js supports touch
+   gestures. The visualisation and its container MUST be configured to be touch-
+   and small-viewport-friendly: the container is fluid and fits the viewport, and
+   the visualisation supports touch pan, pinch-to-zoom, and tap to select and
+   inspect, so node and edge detail can be reached without a mouse hover (see
+   [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
+5. The choice of Cytoscape.js is an implementation-level decision recorded here
    so the SPEC is unambiguous about which library is vendored; substituting a
    different vendored, locally-served, build-step-free graph library is a SPEC
    change to this section and to `BUILD.md § Vendored Web Assets`, not a silent
    code change.
+
+## Responsive and Mobile-First Design
+
+The web interface MUST be designed responsive and mobile-first. The layout adapts
+to the viewport rather than assuming a desktop window, and the small-viewport
+experience is the baseline that larger viewports enhance.
+
+1. **Mobile-first base styles.** Base styles target small phone-sized viewports
+   first. Styling for larger tablet and desktop viewports is layered on top
+   through `min-width` media queries, so the unqualified styles are the
+   small-screen styles and wider screens progressively enhance them.
+2. **Fluid layouts.** Layouts adapt fluidly across viewport sizes. On small
+   screens there is no horizontal scrolling, typography stays readable, and
+   navigation and other interactive controls present touch-friendly, appropriately
+   sized hit targets.
+3. **Applies to every page.** The mobile-first, responsive requirement applies to
+   all three pages: the roadmap index page, the roadmap detail page (tasks and
+   sprints), and the knowledge-graph page.
+4. **Usable tabular data on narrow screens.** The roadmap detail page presents
+   task and sprint data that is tabular by nature. This data MUST remain usable on
+   narrow screens, for example through responsive or stacked tables or an
+   equivalent layout that avoids horizontal overflow, while still presenting the
+   fields and relationships defined for the detail page (see
+   [Roadmap Detail Page](#roadmap-detail-page)).
+5. **Touch- and mobile-usable graph visualisation.** The interactive
+   knowledge-graph visualisation MUST remain usable on touch and mobile devices.
+   Its container is fluid and fits the viewport, and it supports touch gestures —
+   pan, pinch-to-zoom, and tap to select and inspect — so node and edge detail can
+   be reached without a mouse hover (see
+   [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library)).
+6. **Responsive viewport meta tag.** Every HTML page includes the responsive
+   viewport meta tag, so mobile browsers scale the page to the device width rather
+   than rendering it at a fixed desktop width.
+7. **Framework-free, vendored CSS only.** The interface uses no external CSS
+   framework loaded from a content delivery network or any remote origin,
+   consistent with [Self-Contained Deliverable](#self-contained-deliverable). If
+   any CSS framework or reset is used, it MUST be vendored and embedded with the
+   stylesheet (see [Embedded Asset Categories](#embedded-asset-categories)).
 
 ## Error Handling and Exit Codes
 
@@ -464,8 +606,11 @@ Rules:
    [Routes and Pages](#routes-and-pages)). This mirrors the central roadmap-name
    validation gate the CLI applies (see `ARCHITECTURE.md § Security Guarantees`).
 5. **Self-contained assets, no CDN, no external calls.** Every asset a page loads
-   is served from the local server's embedded assets. No page references a remote
-   origin and the server makes no outbound network request (see
+   is served from the local server's embedded assets, and the deliverable is the
+   single `rmp` binary with zero external runtime dependency. No page references a
+   content delivery network or any other remote origin, the interface functions
+   fully offline, and the server makes no outbound network request (see
+   [Self-Contained Deliverable](#self-contained-deliverable) and
    [Frontend and Embedded Assets](#frontend-and-embedded-assets)).
 6. **Output escaping.** Roadmap-derived text (task and sprint fields, graph node
    and edge labels and property values) is rendered through `html/template`'s
@@ -508,7 +653,8 @@ Rules:
 10. `GET /roadmaps/{name}/graph` for an existing roadmap returns HTTP 200 and an
     HTML page that loads the vendored Cytoscape.js from `/static/...` (not from
     any remote origin) and renders an interactive node-link visualisation with pan
-    and zoom.
+    and zoom that is usable with touch gestures (pan, pinch-to-zoom, tap to select
+    and inspect) and surfaces node and edge detail without requiring a mouse hover.
 11. `GET /roadmaps/{name}/graph/data` returns HTTP 200 and JSON in the shape
     defined in `DATA_FORMATS.md § Graph View Data`, populated from a read-only
     query against the roadmap's GoGraph store.
@@ -522,15 +668,35 @@ Rules:
 15. A request for a `/static/...` path that is not in the embedded asset set
     returns HTTP 404, and no `/static/...` request can read a file outside the
     embedded asset set.
-16. Every page the interface serves loads its scripts, stylesheet, and graph
-    library only from `/static/...` on the same server; no page references a
-    content delivery network or any remote origin, and the running server makes no
-    outbound network request.
+16. Every page the interface serves loads all of its assets — scripts,
+    stylesheet, graph library, fonts, icons, images, and favicon — only from
+    `/static/...` on the same server; no page references a content delivery
+    network, a remote font host, or any other remote origin, and the running
+    server makes no outbound network request.
 17. Sending `SIGINT` (`Ctrl+C`) or `SIGTERM` to a running `rmp web` shuts the
     server down gracefully and the process exits 0.
-18. The binary serves the interface with no external runtime dependency: the HTML
-    templates, the stylesheet, the client scripts, and the Cytoscape.js bundle are
-    all embedded and the build produces a single self-contained binary.
+18. The deliverable is fully self-contained: the binary serves the interface with
+    zero external runtime dependency. Every embedded asset category in
+    [Embedded Asset Categories](#embedded-asset-categories) — HTML templates, the
+    stylesheet, all client JavaScript including the Cytoscape.js bundle and its
+    dependencies, web fonts, icons and images, and the favicon — is embedded via
+    `go:embed`, and the build produces a single self-contained binary (see
+    `BUILD.md § Vendored Web Assets`).
+19. The interface works with networking disabled and with only the `rmp` binary
+    present on disk (no sidecar files and no separate assets directory): every
+    page renders and functions fully, including the knowledge-graph visualisation,
+    with no network egress.
+20. On a small phone-sized viewport, the roadmap index page, the roadmap detail
+    page, and the knowledge-graph page each render without horizontal scrolling,
+    with readable typography and touch-friendly hit targets, demonstrating the
+    mobile-first base styles.
+21. On the roadmap detail page at a narrow viewport, the task and sprint data
+    remains usable without horizontal overflow (for example through responsive or
+    stacked tables or an equivalent layout) while still showing the fields and
+    relationships defined for the page.
+22. Every HTML page the interface serves includes the responsive viewport meta
+    tag, and no page loads a CSS framework or reset from a remote origin; any CSS
+    framework or reset in use is vendored and served from `/static/...`.
 
 ## See Also
 
@@ -548,6 +714,6 @@ Rules:
   `ARCHITECTURE.md § Command Lifecycle`
 - Task and Sprint fields presented in the detail page → `MODELS.md` and
   `DATABASE.md`
-- Embedded asset bundling and the vendored Cytoscape.js asset →
-  `BUILD.md § Vendored Web Assets`
+- Embedded asset bundling, the vendored Cytoscape.js asset, and the
+  self-contained-binary build verification → `BUILD.md § Vendored Web Assets`
 - Help skeleton for `web` → `HELP.md`
