@@ -99,26 +99,42 @@ implications are specified in `BUILD.md § Go Toolchain`.
 
 ### Dependency Maturity Risk
 
-At the time this specification was written, GoGraph is published as the
-pre-release `v2.0.0-rc2`. A pre-release dependency is not API-stable: its public
-surface (engine constructors, result iteration, helper functions, on-disk format)
-may change before a stable `v2.0.0` tag. This carries concrete risks for
-Groadmap:
+GoGraph is consumed at the stable release **v3.0.1**, which is a member of the
+stable, API-stable v3.x release line. The engine constructors, result iteration,
+helper functions, and on-disk format named in this specification are stable
+within that line. The dependency is therefore not a pre-release, and the public
+surface is not expected to drift within v3.x.
 
-1. **API drift.** The engine and result types named in this specification may be
-   renamed or change signature between release candidates.
-2. **On-disk format drift.** The store's snapshot and write-ahead-log format may
-   change, which could make a graph written by one release candidate unreadable
-   by a later one. There is no graph-format migration mechanism in this first
-   version.
-3. **Correctness maturity.** A release candidate may contain defects in Cypher
-   parsing, execution, or recovery that a stable release would not.
+The way GoGraph is pinned is itself a consequence of its versioning. GoGraph's
+`go.mod` declares the module path `github.com/FlavioCFOliveira/GoGraph` with no
+`/v3` major-version suffix. Under Go's Semantic Import Versioning rules, a module
+released at major version 2 or higher must include the matching major-version
+suffix in its module path, so the Go toolchain rejects the literal `@v3.0.1` tag
+with: "module contains a go.mod file, so module path must match major version
+github.com/FlavioCFOliveira/GoGraph/v3". GoGraph adopts the no-suffix path
+deliberately, matching the precedent set at v2.0.0. As a result Groadmap consumes
+v3.0.1 not by its tag but as the exact, immutable pseudo-version that points at
+the v3.0.1 tagged commit: `v0.0.0-20260602124150-69db4d715c7b` (commit
+`69db4d715c7b758e675bca40809487a5cb8607f7`). This pseudo-version is an exact pin,
+not a floating or branch reference, so it satisfies the pinning requirement
+below. The pseudo-version string is recorded in `BUILD.md § Go Toolchain`.
+
+The following residual risks remain even with a stable release line:
+
+1. **Pseudo-version pinning.** Because of the no-`/v3` module path, the dependency
+   is referenced by the pseudo-version of a tagged commit rather than by a clean
+   semantic tag. Any future upgrade must resolve the corresponding pseudo-version
+   for the target commit, since the literal version tag cannot be used directly.
+2. **On-disk format across major versions.** The store's snapshot and
+   write-ahead-log format may evolve across GoGraph major versions, which could
+   make a graph written by one major version unreadable by a later one. There is
+   no graph-format migration mechanism in Groadmap in this version.
 
 Mitigations required by this specification:
 
-1. Groadmap MUST pin GoGraph to an exact version in `go.mod` (a specific tagged
-   version, not a floating reference), so builds are reproducible. The exact
-   version is recorded in `BUILD.md § Go Toolchain`.
+1. Groadmap MUST pin GoGraph to an exact version in `go.mod` (a specific immutable
+   reference, not a floating or branch reference), so builds are reproducible. The
+   exact pseudo-version is recorded in `BUILD.md § Go Toolchain`.
 2. The graph feature MUST be implemented behind Groadmap's own command and
    error-handling boundary (this specification), so that an upstream API change
    is absorbed in one integration layer rather than spread across the codebase.
@@ -178,9 +194,12 @@ Sequence and durability boundary:
 2. After a successful commit, and before closing the store, the implementation
    writes a full snapshot of the committed graph state. The snapshot MUST be
    self-sufficient: it carries the node-identifier-to-key mapping needed to
-   interpret the graph on its own, so that the snapshot plus any write-ahead-log
-   tail is enough to reconstruct the graph and truncating the log loses no
-   committed data.
+   interpret the graph on its own, and it captures the set of deleted (tombstoned)
+   nodes, so that the snapshot plus any write-ahead-log tail is enough to
+   reconstruct the graph and truncating the log loses no committed data. Because
+   the deletion tombstone set is part of the snapshot, a node deleted by a write
+   stays deleted after the log is truncated and the store is reopened; it does not
+   reappear on recovery.
 3. After the self-sufficient snapshot is durable, the write-ahead log is
    truncated. Truncation bounds the log's growth: without it the log grows with
    every write for the life of the graph (see [Concurrency and Recovery](#concurrency-and-recovery)).
@@ -231,8 +250,9 @@ roadmap's home directory:
 └── graph/                # Knowledge graph store (GoGraph)
     ├── wal               # Write-ahead log (truncated after each checkpoint)
     └── snapshot/         # On-disk snapshot, present after the first write
-        ├── manifest.json # Snapshot manifest (GoGraph-owned)
-        └── ...           # Snapshot data files (GoGraph-owned)
+        ├── manifest.json   # Snapshot manifest (GoGraph-owned)
+        ├── tombstones.bin  # Deleted-node tombstone set (present only when the graph has tombstoned nodes; GoGraph-owned)
+        └── ...             # Snapshot data files (GoGraph-owned)
 ```
 
 Rules:
@@ -253,11 +273,14 @@ Rules:
 4. The graph directory uses permissions `0700`, consistent with the roadmap home
    directory and the data directory (see `ARCHITECTURE.md § Directory Structure`).
 5. The internal file names and on-disk format inside `graph/`, including the
-   layout and contents of `snapshot/` and the format of `wal` and `manifest.json`,
-   are owned by GoGraph and are not specified here. Groadmap treats the directory
-   as an opaque store managed through the engine; the diagram above names the
-   `wal` entry and the `snapshot/` subdirectory only to document which entries are
-   expected to appear, not their internal format.
+   layout and contents of `snapshot/` and the format of `wal`, `manifest.json`,
+   and `tombstones.bin`, are owned by GoGraph and are not specified here. The
+   `tombstones.bin` component is optional: GoGraph emits it only when the graph
+   has tombstoned (deleted) nodes, so a graph that has never had a node deleted
+   need not contain it. Groadmap treats the directory as an opaque store managed
+   through the engine; the diagram above names the `wal` entry and the `snapshot/`
+   subdirectory only to document which entries are expected to appear, not their
+   internal format.
 6. Removing a roadmap (`rmp roadmap remove <name>`) deletes the entire roadmap
    home directory recursively, which includes `graph/`. No separate graph-removal
    command is required (see `COMMANDS.md § Remove Roadmap`).
@@ -443,10 +466,13 @@ Groadmap's usage model and expectations:
    [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)), recovery
    genuinely exercises the snapshot path: a graph opened after a previous write is
    rebuilt from that snapshot plus any log entries written since the last
-   checkpoint, rather than by replaying the entire write history. A graph left in
-   a consistent committed state by a previous invocation opens cleanly. A graph
-   whose store is corrupt or unreadable surfaces as `utils.ErrDatabase` (exit code
-   1); there is no automatic graph-store repair in this first version.
+   checkpoint, rather than by replaying the entire write history. The restored
+   state includes deletions: a node deleted by a previous invocation stays deleted
+   after the store is reopened, because the snapshot records the tombstone set and
+   recovery reconstructs it. A graph left in a consistent committed state by a
+   previous invocation opens cleanly. A graph whose store is corrupt or unreadable
+   surfaces as `utils.ErrDatabase` (exit code 1); there is no automatic graph-store
+   repair in this first version.
 4. The graph store is independent of the SQLite connection cache and SQLite WAL
    model described in `IMPLEMENTATION.md § Concurrency Model`; the two persistence
    mechanisms do not share connections, locks, or transactions.

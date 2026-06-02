@@ -17,20 +17,29 @@ CI and release toolchains MUST use Go 1.26.x.
 
 | Module | Path | Version | Purpose |
 |--------|------|---------|---------|
-| GoGraph | `github.com/FlavioCFOliveira/GoGraph` | Pinned exact version (currently the pre-release `v2.0.0-rc2`) | Labelled property graph, Cypher engine, and durable store backing the `graph` command. See `GRAPH.md`. |
+| GoGraph | `github.com/FlavioCFOliveira/GoGraph` | Stable release **v3.0.1**, pinned as the exact pseudo-version `v0.0.0-20260602124150-69db4d715c7b` (see Rules below) | Labelled property graph, Cypher engine, and durable store backing the `graph` command. See `GRAPH.md`. |
 
 Rules:
 
-1. GoGraph MUST be pinned to an exact tagged version in `go.mod`, not a floating
-   reference (no branch or pseudo-version that tracks a moving target), so that
-   builds are reproducible and the on-disk graph format is stable across a
-   release.
-2. GoGraph is currently a **pre-release** (`v2.0.0-rc2`). It is not API-stable and
-   its on-disk format may change before a stable `v2.0.0`. The risk analysis and
-   mitigations are in `GRAPH.md § Dependency Maturity Risk`. Upgrading GoGraph is
-   a change that MUST be re-validated against the acceptance criteria in
-   `GRAPH.md` before release.
-3. `go.sum` MUST record the checksum of the pinned version. The build MUST fail
+1. GoGraph MUST be pinned to an exact, immutable version in `go.mod`, not a
+   floating reference (no branch or moving target), so that builds are
+   reproducible and the on-disk graph format is stable.
+2. GoGraph is consumed at the stable release **v3.0.1**. Its `go.mod` declares the
+   module path `github.com/FlavioCFOliveira/GoGraph` with no `/v3` major-version
+   suffix, so under Go's Semantic Import Versioning rules the toolchain rejects the
+   literal `@v3.0.1` tag ("module path must match major version
+   github.com/FlavioCFOliveira/GoGraph/v3"). GoGraph adopts the no-suffix path
+   deliberately, matching its v2.0.0 precedent. Groadmap therefore pins v3.0.1 as
+   the exact pseudo-version of the v3.0.1 tagged commit,
+   `v0.0.0-20260602124150-69db4d715c7b` (commit
+   `69db4d715c7b758e675bca40809487a5cb8607f7`). This pseudo-version is an exact,
+   immutable pin and satisfies Rule 1.
+3. GoGraph's v3.x line is stable and API-stable. The residual risks (pseudo-version
+   pinning and on-disk format evolution across major versions) and their
+   mitigations are in `GRAPH.md § Dependency Maturity Risk`. Upgrading GoGraph is a
+   change that MUST be re-validated against the acceptance criteria in `GRAPH.md`
+   before release.
+4. `go.sum` MUST record the checksum of the pinned version. The build MUST fail
    if the module checksum does not match.
 
 ## Supported Build Targets

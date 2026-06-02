@@ -3,7 +3,7 @@ module github.com/FlavioCFOliveira/Groadmap
 go 1.26.2
 
 require (
-	github.com/FlavioCFOliveira/GoGraph v0.0.0-20260601121207-03162239610a
+	github.com/FlavioCFOliveira/GoGraph v0.0.0-20260602124150-69db4d715c7b
 	modernc.org/sqlite v1.51.0
 )
 

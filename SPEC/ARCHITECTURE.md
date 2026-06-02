@@ -192,12 +192,14 @@ Each package implements:
   `COMMANDS.md § Graph Management`; the result JSON is in
   `DATA_FORMATS.md § Graph Query Result`.
 
-**External dependency note.** GoGraph requires Go 1.26 and, at the time this
-specification was written, is published as the pre-release `v2.0.0-rc2`. A
-pre-release dependency is not API-stable and its on-disk format may change before
-a stable release. GoGraph MUST be pinned to an exact version in `go.mod`. The
-risk analysis and required mitigations are in `GRAPH.md § Dependency Maturity
-Risk`; the toolchain and pinning requirements are in `BUILD.md § Go Toolchain`.
+**External dependency note.** GoGraph requires Go 1.26 and is consumed at the
+stable release **v3.0.1**. Because GoGraph's module path carries no `/v3`
+major-version suffix, the toolchain rejects the literal `@v3.0.1` tag, so v3.0.1
+is pinned as the exact, immutable pseudo-version
+`v0.0.0-20260602124150-69db4d715c7b`. GoGraph MUST be pinned to an exact version
+in `go.mod`. The risk analysis and required mitigations are in `GRAPH.md §
+Dependency Maturity Risk`; the toolchain and pinning requirements are in `BUILD.md
+§ Go Toolchain`.
 
 ## Command Lifecycle
 
