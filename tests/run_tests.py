@@ -40,6 +40,7 @@ TEST_MODULES = [
     "test_30_aihelp_contract",
     "test_31_sprint_description_limit",
     "test_32_layout_migration",
+    "test_33_graph_checkpoint",
 ]
 
 # Stress tests (run separately due to time/data volume)
