@@ -39,6 +39,8 @@ User Request → specification-manager → SPEC/ → [roadmap-manager] → go-de
 | Implementation | `IMPLEMENTATION.md` | Concurrency, caching, performance strategies |
 | State | `STATE_MACHINE.md` | Task and Sprint state transitions |
 | Help | `HELP.md` | Help skeleton, error message format, structure |
+| Graph | `GRAPH.md` | Knowledge graph: GoGraph integration, persistence, guard-rail validation |
+| Web | `WEB.md` | `rmp web` server, read-only pages, knowledge-graph visualisation, embedded assets |
 
 ### Update Rules
 

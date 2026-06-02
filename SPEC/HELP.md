@@ -209,6 +209,7 @@ help text must match the command contract in `COMMANDS.md`.
 | Backlog | `rmp backlog [list \| show-next]` | `COMMANDS.md § Backlog Management` |
 | Stats | `rmp stats` | `COMMANDS.md § Statistics Command` |
 | Graph | `rmp graph [create \| query \| update \| delete \| search]` | `COMMANDS.md § Graph Management` |
+| Web | `rmp web` | `COMMANDS.md § Web Interface` |
 
 Each subcommand in the inventory has its own dedicated help printer in
 the code (e.g. `printTaskStatHelp`, `printSprintCloseHelp`,
@@ -232,6 +233,60 @@ from the generic template:
    before execution. The family help lists the five subcommand-to-operation
    mappings; each subcommand help names its own allowed class. See
    `GRAPH.md § Subcommands and Guard-Rail Validation`.
+
+### Web command help specifics
+
+`rmp web` is a single command with no subcommands. Its help follows the same
+block order as every other command (Usage, description, Options, Output, Exit
+codes, Examples), and MUST additionally make explicit three behaviours an agent
+or user cannot infer from the generic template:
+
+1. **No roadmap flag.** State that `rmp web` does **not** take `-r` /
+   `--roadmap`: it lists all roadmaps and the user selects one in the browser.
+   This is the one command exempt from the always-required-roadmap rule (see
+   `COMMANDS.md § Roadmap Selection (Always Required)`).
+2. **Read-only and local by default.** State that the interface is read-only
+   (the CLI remains the sole write path) and binds loopback `127.0.0.1` by
+   default, and that `--host`/`--port` override the bind address, with the
+   default-port ephemeral fallback. See `WEB.md`.
+3. **Long-lived process.** State that the command starts a server that keeps
+   running until interrupted (`Ctrl+C` / `SIGINT` or `SIGTERM`), unlike every
+   other command, which completes and exits. On startup it prints the served
+   URL; with `--no-open` it does not launch a browser.
+
+The skeleton (illustrative; the canonical contract is
+`COMMANDS.md § Web Interface`):
+
+```
+Usage: rmp web [options]
+
+Start a read-only web interface for the roadmaps under ~/.roadmaps/.
+The browser lists every roadmap and lets you view its tasks, sprints,
+and knowledge graph. The web interface never writes; the rmp CLI
+remains the sole write path. rmp web does not take -r/--roadmap.
+
+Options:
+  --host <address>   Bind host. Default 127.0.0.1 (loopback only).
+  --port <number>    Bind port 0-65535. Default 8787; falls back to an
+                     ephemeral port if 8787 is in use and --port is not set.
+  --no-open          Do not launch a browser; just print the served URL.
+  -h, --help         Show this help message
+
+Output (stdout JSON):
+  On startup: {"url": "http://127.0.0.1:8787"} (reflects the bound host/port)
+
+Exit codes:
+  0   Server started and was stopped by Ctrl+C / SIGINT / SIGTERM
+  1   Host/port could not be bound, or the data directory was unreadable
+  2   Unknown flag or unexpected argument
+  6   --port out of range 0-65535 or not an integer
+
+Examples:
+  rmp web
+  rmp web --port 9000
+  rmp web --host 0.0.0.0 --port 9000
+  rmp web --no-open
+```
 
 ## Error message format
 

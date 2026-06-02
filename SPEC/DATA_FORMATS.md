@@ -7,6 +7,7 @@
 **JSON output is reserved for query operations and record creation.**
 
 - **Query operations (JSON)**: `list`, `ls`, `get`, `next`, `tasks`, `stats`, `show`, `history`, `hist`.
+- **Server startup (JSON)**: `web` prints a single JSON object naming the served URL on successful startup (e.g. `{"url": "http://127.0.0.1:8787"}`), then keeps running; see `COMMANDS.md § Web Interface`. While running, the server returns HTTP responses (HTML pages and the JSON graph data endpoint), which are not command stdout output.
 - **Creation operations (JSON)**: `create`, `new`. These commands return a JSON object containing the ID of the newly created record (e.g., `{"id": 42}`).
 - **Other database modifications (No output)**: Commands that update, delete, or change the state of entities (status, priority, etc.) respond with **no content** on success, signaling completion via exit code `0`.
 - **Help commands (Plain text)**: When no command is provided, or when using `-h` and `--help` flags, the application displays information in **plain text**, following traditional CLI application formats (not JSON).
@@ -328,6 +329,67 @@ A write query that ends with `RETURN n` (same shape as a read result):
   ]
 }
 ```
+
+---
+
+## Graph View Data
+
+The web interface's graph data endpoint (`GET /roadmaps/{name}/graph/data`, see
+`WEB.md § Graph Data Endpoint`) returns a roadmap's knowledge graph as a single
+JSON object describing its nodes and edges, shaped for an interactive node-link
+visualisation. The endpoint reads the graph **read-only**, the same way
+`rmp graph query`/`search` do (see `GRAPH.md § Engine Construction and
+Lifecycle`); it never writes and never checkpoints.
+
+This is the canonical specification of the graph view-data shape. It **reuses**
+the graph-element and property-type conventions already defined in
+[Graph Query Result](#graph-query-result); it does not introduce a new element
+encoding.
+
+### Shape
+
+```json
+{
+  "nodes": [
+    {"id": 17, "labels": ["Spec"], "properties": {"key": "user-authentication"}},
+    {"id": 18, "labels": ["Code"], "properties": {"path": "internal/auth/jwt.go"}}
+  ],
+  "edges": [
+    {"id": 42, "type": "IMPLEMENTED_BY", "startId": 17, "endId": 18, "properties": {}}
+  ]
+}
+```
+
+Field reference:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `nodes` | array of object | One object per node in the graph, using the Node shape from [Graph element mapping](#graph-element-mapping): `{"id", "labels", "properties"}`. |
+| `edges` | array of object | One object per relationship in the graph, using the Relationship shape from [Graph element mapping](#graph-element-mapping): `{"id", "type", "startId", "endId", "properties"}`. |
+
+Rules:
+
+1. `nodes` and `edges` are always present. An empty graph returns
+   `{"nodes": [], "edges": []}` (empty arrays, never `null`). A roadmap that has
+   never used the `graph` command is treated as an empty graph and returns this
+   empty object; it is not an error (see `GRAPH.md § Persistence Layout`, rule 2).
+2. Each node object follows the Node mapping and each edge object follows the
+   Relationship mapping in [Graph element mapping](#graph-element-mapping),
+   including the `properties` object, whose values follow the
+   [Property-Type Mapping](#property-type-mapping) recursively.
+3. Every `startId` and `endId` in `edges` references the `id` of a node present
+   in the same `nodes` array, so the visualisation can resolve every edge's
+   endpoints from the one response.
+4. `id`, `startId`, and `endId` are GoGraph's internal storage identifiers
+   (`uint64`), **ephemeral** and not stable business keys, exactly as defined in
+   [Graph element mapping](#graph-element-mapping) rule 4. They are used only to
+   correlate nodes and edges **within this response** for rendering; they MUST
+   NOT be persisted or treated as long-lived references. Stable identity comes
+   from node and edge properties (for example `key` or `name`), per
+   `GRAPH.md § Multi-Layer Modelling Conventions`.
+5. The result is pretty-printed with two-space indentation and a trailing
+   newline, consistent with all other JSON output (see
+   [Implementation Notes](#implementation-notes)).
 
 ---
 

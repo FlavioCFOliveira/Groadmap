@@ -14,6 +14,10 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | JSON input/output formats | `DATA_FORMATS.md` |
 | Help text structure | `HELP.md` |
 | Knowledge graph feature (design, persistence, guard rails) | `GRAPH.md` |
+| Read-only web interface (`rmp web`, server, pages, graph viz) | `WEB.md` |
+| `rmp web` command syntax / flags | `COMMANDS.md § Web Interface` |
+| Web graph data endpoint JSON shape | `DATA_FORMATS.md § Graph View Data` |
+| Vendored web assets / embedded Cytoscape.js | `BUILD.md § Vendored Web Assets` |
 | `graph` command syntax / subcommands | `COMMANDS.md § Graph Management` |
 | Graph query result JSON / property-type mapping | `DATA_FORMATS.md § Graph Query Result` |
 | Cypher input via flag or stdin | `GRAPH.md § Cypher Input Source and Precedence` |
@@ -53,6 +57,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | `DATA_FORMATS.md` | JSON schemas, input/output formats |
 | `HELP.md` | CLI help skeleton and structure |
 | `GRAPH.md` | Knowledge graph feature: GoGraph integration, persistence, multi-layer conventions, guard-rail validation |
+| `WEB.md` | Read-only web interface: `rmp web` server, server-rendered pages, interactive knowledge-graph visualisation, embedded assets |
 | `MODELS.md` | Structs, enums, memory layout |
 | `STATE_MACHINE.md` | Task and Sprint state transitions |
 | `ARCHITECTURE.md` | System design, modules, error handling, exit codes |
@@ -82,8 +87,11 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Concurrency model (WAL, pool, retry) | `IMPLEMENTATION.md § Concurrency Model` |
 | Caching strategies (query, connection) | `IMPLEMENTATION.md` |
 | Knowledge graph feature, persistence layout, guard rails, multi-layer conventions | `GRAPH.md` |
+| Read-only web interface (server behaviour, routes, pages, security model) | `WEB.md` |
 | Graph store directory (`graph/` subdir) | `GRAPH.md § Persistence Layout` (layout referenced from `ARCHITECTURE.md § Directory Structure`) |
 | Graph query result JSON and property-type mapping | `DATA_FORMATS.md § Graph Query Result` |
+| Web graph view-data JSON shape | `DATA_FORMATS.md § Graph View Data` |
+| Vendored web assets / embedded Cytoscape.js | `BUILD.md § Vendored Web Assets` |
 | Graph store concurrency / single-writer / recovery | `IMPLEMENTATION.md § Graph Store Concurrency` |
 | Minimum Go version and external dependencies | `BUILD.md § Go Toolchain` |
 | Help text canonical | code in `internal/commands/*.go` (structure in `HELP.md`) |

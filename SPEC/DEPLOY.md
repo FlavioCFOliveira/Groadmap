@@ -24,6 +24,8 @@ The `rmp` binary installs to a system location (default `/usr/local/bin`). Its r
 
 The full data directory layout and permission model are specified in `ARCHITECTURE.md § Directory Structure`.
 
+The `rmp web` command (read-only web interface, see `WEB.md`) reads this same data and creates no new on-disk artefact: its HTML templates, static assets, and vendored graph library are embedded in the binary, so the runtime data footprint under `~/.roadmaps/` is unchanged.
+
 ## Installation Methods
 
 ### 1. Automated Installation Script (Recommended)

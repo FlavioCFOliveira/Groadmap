@@ -40,6 +40,39 @@ Rules:
 4. `go.sum` MUST record the checksum of the pinned version. The build MUST fail
    if the module checksum does not match.
 
+## Vendored Web Assets
+
+The `rmp web` command serves a read-only web interface from assets embedded into
+the binary at build time (see `WEB.md` and `ARCHITECTURE.md § internal/web/ and
+the embedded HTTP server`). These assets are part of the Go build; they are not a
+separate runtime artefact.
+
+Rules:
+
+1. **Embedded at build time.** The HTML templates, the stylesheet, the client
+   scripts, and the vendored JavaScript graph library live under `internal/web/`
+   (in `templates/` and `static/`) and are embedded with `go:embed`. They become
+   part of the compiled binary. No web asset is read from the host filesystem at
+   runtime, and the binary remains a single self-contained file.
+2. **No JavaScript build toolchain.** The build uses the Go toolchain only. There
+   is no Node.js, no `npm`/`yarn`, no `node_modules`, and no bundler step in the
+   build or CI pipeline. Any JavaScript dependency is committed to the repository
+   in already-built (vendored) form.
+3. **Vendored graph library: Cytoscape.js.** The interactive knowledge-graph
+   visualisation uses Cytoscape.js. Its already-built distribution file is
+   committed under `internal/web/static/` and embedded with `go:embed`. It is
+   served locally from the `/static/...` route and is never fetched from a content
+   delivery network or any remote origin (see `WEB.md § Knowledge-Graph
+   Visualisation Library`). Upgrading or replacing the vendored library is a change
+   to the committed asset and to this section, recorded in git.
+4. **No outbound network at build or run time for assets.** The build does not
+   download web assets, and the running server makes no outbound request to load
+   them; every asset is in the binary.
+5. **Embedding does not change the build targets.** Embedded assets are part of
+   the Go package, so every target in Supported Build Targets builds the web
+   interface in without any per-target asset handling. `CGO_ENABLED=0` static
+   linking is unaffected.
+
 ## Supported Build Targets
 
 ### Primary Platforms
@@ -220,6 +253,7 @@ rmp-{version}-{target}.tar.gz
 - [ ] All matrix targets build successfully
 - [ ] Binaries are statically linked (`CGO_ENABLED=0`)
 - [ ] Archive naming follows convention: `rmp-{version}-{target}.{ext}`
+- [ ] Web assets (templates, CSS, JS, vendored Cytoscape.js) are embedded via `go:embed`; the build uses the Go toolchain only, with no Node.js or `node_modules` step (see Vendored Web Assets)
 
 ### Architecture Verification
 - [ ] Use `file` command to verify binary architecture matches target

@@ -17,6 +17,7 @@
 - [Backlog Management](#backlog-management)
 - [Statistics Command](#statistics-command)
 - [Graph Management](#graph-management)
+- [Web Interface](#web-interface)
 - [Command Aliases Reference](#command-aliases-reference)
 
 ## Naming Conventions
@@ -210,6 +211,8 @@ Error: roadmap not specified. Use -r <name> or --roadmap <name>
 ```
 
 This applies to every subcommand under `task`, `sprint`, `backlog`, `audit`, `stats`, and `graph`.
+
+The `web` command is deliberately **not** in this list. `rmp web` operates across all roadmaps: the web interface lists every roadmap found under `~/.roadmaps/` and the user selects one in the browser, so `rmp web` does not require and does not accept the `-r` / `--roadmap` flag (see [Web Interface](#web-interface)).
 
 ```bash
 # Always provide -r:
@@ -1682,6 +1685,108 @@ Output (success): JSON in the shape defined in
 
 ---
 
+## Web Interface
+
+Command: `rmp web` (no alias)
+
+The `web` command starts a read-only, browser-based view of the data the CLI
+manages. It runs an HTTP server embedded in the `rmp` binary (Go standard-library
+`net/http`) that serves server-rendered HTML and embedded static assets, and it
+reads the same on-disk data under `~/.roadmaps/` that the CLI reads. The interface
+never writes; the CLI remains the sole write path. The full behaviour of the
+running server — routes, pages, the read-only data flow, the interactive
+knowledge-graph visualisation, and the security model — is specified in `WEB.md`.
+This section is the command-line contract.
+
+`rmp web` operates across all roadmaps. The web interface lists every roadmap
+found under `~/.roadmaps/` and the user drills into one from the browser, so
+`rmp web` does **not** require and does **not** accept the `-r` / `--roadmap`
+flag (see [Roadmap Selection (Always Required)](#roadmap-selection-always-required)).
+
+`rmp web` has no subcommands.
+
+```bash
+rmp web
+rmp web --port 9000
+rmp web --host 0.0.0.0 --port 9000
+rmp web --no-open
+```
+
+### Options
+
+- `--host <address>` - Bind host. Default `127.0.0.1` (loopback only). Binding a
+  non-loopback address (for example `0.0.0.0`) exposes the read-only interface on
+  the network and is an explicit opt-in (see `WEB.md § Security and Constraints`).
+- `--port <number>` - Bind port, an integer in the range 0-65535. Default `8787`.
+  When `--port` is omitted and the default port `8787` is already in use, the
+  server falls back to an operating-system-chosen ephemeral port so it still
+  starts. When `--port` is given explicitly, there is no fallback: a port that
+  cannot be bound is a bind error. `--port 0` requests an ephemeral port
+  explicitly. The chosen port is reported in the served URL.
+- `--no-open` - Do not launch a browser. The server still starts and prints the
+  served URL. Default behaviour (without this flag) is to open the user's default
+  browser at the served URL; a failed browser launch is not fatal.
+- `-h, --help` - Show the command help.
+
+`rmp web` accepts no positional arguments. An unexpected positional argument or an
+unknown flag is an input error (exit code 2).
+
+### Output
+
+- **On successful startup (stdout):** a single JSON object naming the URL the
+  server is listening on, so the address is machine-readable even when no browser
+  is opened:
+
+  ```json
+  {"url": "http://127.0.0.1:8787"}
+  ```
+
+  The `url` reflects the actual bound host and port, including an ephemeral port
+  chosen by the fallback. The object is pretty-printed with two-space indentation
+  and a trailing newline, consistent with all other JSON output (see
+  `DATA_FORMATS.md § Implementation Notes`).
+- **While running:** the server serves HTML pages and a JSON graph data endpoint
+  per `WEB.md § Routes and Pages`. Per-request responses are HTTP responses from
+  the server, not stdout output of the command.
+- **Errors (stderr):** plain text, with the standard AI-agent hint, per
+  `HELP.md § Error message format`.
+
+### Lifecycle
+
+`rmp web` is long-lived: it serves until interrupted. It is the only `rmp` command
+whose process keeps running rather than completing a single operation and exiting.
+Sending `SIGINT` (`Ctrl+C`) or `SIGTERM` shuts the server down gracefully and the
+process exits 0 (see `WEB.md § Server Lifecycle`).
+
+### Exit Codes
+
+These are the exit codes of the `rmp web` **process**. They are distinct from the
+per-request HTTP status codes the running server returns (200, 404, 405, 500),
+which are specified in `WEB.md § Routes and Pages`.
+
+| Exit Code | Cause |
+|-----------|-------|
+| 0 | Server started and was later stopped by `SIGINT`/`SIGTERM` (graceful shutdown). |
+| 1 | Requested host/port could not be bound (port in use with an explicit `--port`, or host not assignable), or the data directory could not be read (`utils.ErrDatabase`). |
+| 2 | Unknown flag or unexpected positional argument (`utils.ErrInvalidInput`). |
+| 6 | `--port` value out of range 0-65535 or non-integer (`utils.ErrValidation`). |
+
+The canonical exit-code catalogue is in `ARCHITECTURE.md § Exit Codes`; the web
+interface introduces no new codes.
+
+### Error Cases
+
+| Scenario | Exit Code | stderr Output (illustrative) |
+|----------|-----------|------------------------------|
+| Explicit `--port` already in use | 1 | "Error: cannot bind 127.0.0.1:8787: address already in use" |
+| Host not assignable | 1 | "Error: cannot bind 10.0.0.5:8787: cannot assign requested address" |
+| `--port` out of range | 6 | "Error: --port must be an integer between 0 and 65535 (got 70000)" |
+| `--port` not an integer | 6 | "Error: --port must be an integer between 0 and 65535 (got \"notanumber\")" |
+| Unknown flag | 2 | "Error: unknown flag: --foo" |
+| Data directory unreadable | 1 | "Error: cannot read data directory ~/.roadmaps: <detail>" |
+
+---
+
 ## Command Aliases Reference
 
 | Command | Aliases |
@@ -1693,6 +1798,7 @@ Output (success): JSON in the shape defined in
 | `audit` | `aud` |
 | `stats` | - |
 | `graph` | - |
+| `web` | - |
 | `list` | `ls` |
 | `create` | `new` |
 | `remove` | `rm`, `delete` |

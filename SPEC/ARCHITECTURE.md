@@ -115,7 +115,13 @@ Groadmap/
 │   │   ├── roadmap.go     # Roadmap subcommands
 │   │   ├── task.go        # Task subcommands
 │   │   ├── sprint.go      # Sprint subcommands
-│   │   └── graph.go       # Graph subcommands (GoGraph integration)
+│   │   ├── graph.go       # Graph subcommands (GoGraph integration)
+│   │   └── web.go         # web command (starts the embedded HTTP server)
+│   ├── web/               # Embedded read-only HTTP server (net/http)
+│   │   ├── server.go      # Server construction, routes, graceful shutdown
+│   │   ├── handlers.go    # Read-only route handlers (index, detail, graph, data)
+│   │   ├── templates/     # Embedded html/template files (go:embed)
+│   │   └── static/        # Embedded CSS, JS, and vendored Cytoscape.js (go:embed)
 │   ├── db/
 │   │   ├── connection.go  # SQLite connection management
 │   │   ├── schema.go      # DDL, structure creation
@@ -145,7 +151,8 @@ Groadmap/
     ├── MODELS.md
     ├── README.md
     ├── STATE_MACHINE.md
-    └── VERSION.md
+    ├── VERSION.md
+    └── WEB.md
 ```
 
 ## Modules and Responsibilities
@@ -199,6 +206,30 @@ it is consumable directly at the bare module path and `go.mod` pins the clean ex
 required mitigations are in `GRAPH.md § Dependency Maturity Risk`; the toolchain and
 pinning requirements are in `BUILD.md § Go Toolchain`.
 
+### 7. internal/web/ and the embedded HTTP server
+
+- Implements the read-only web interface started by `rmp web`. The command entry
+  point is `internal/commands/web.go`; the server itself lives in
+  `internal/web/`.
+- Built on Go's standard-library `net/http` only. It introduces no third-party
+  web framework and no external runtime dependency.
+- Serves server-rendered HTML produced from `html/template`, plus a stylesheet,
+  client scripts, and the vendored Cytoscape.js graph library. The templates and
+  static assets are embedded into the binary with `go:embed`; the server serves
+  only those embedded assets and never an arbitrary host filesystem path.
+- Reads the same on-disk data the CLI reads: tasks and sprints from each
+  roadmap's `project.db` (via the existing read queries in `DATABASE.md`) and the
+  knowledge graph from each roadmap's `graph/` store (via the GoGraph engine's
+  read path, exactly as `graph query`/`search` open it). It performs **no** write
+  and triggers **no** graph checkpoint.
+- Validates roadmap names taken from the URL path against the central
+  roadmap-name rules before using them to resolve any filesystem path, so a
+  crafted path cannot traverse outside `~/.roadmaps/` (see Security Guarantees).
+- The behaviour is specified in `WEB.md`; the CLI contract is in
+  `COMMANDS.md § Web Interface`; the graph data JSON shape is in
+  `DATA_FORMATS.md § Graph View Data`; the embedded-asset bundling is in
+  `BUILD.md § Vendored Web Assets`.
+
 ## Command Lifecycle
 
 ```
@@ -212,6 +243,8 @@ pinning requirements are in `BUILD.md § Go Toolchain`.
 ```
 
 The startup sweep runs before routing on every `rmp` invocation, so all handlers (including `roadmap list` and `roadmap open`) observe the current filesystem layout.
+
+Most commands complete a single operation and exit. The one exception is `rmp web`, whose handler does not return after step 5: it starts the embedded HTTP server and serves read-only requests until it receives an interrupt or termination signal, then shuts down gracefully and exits 0. Each request the server handles opens the data it needs read-only, renders the response, and releases the handle; the server holds no roadmap database or graph store open across requests. The `web` lifecycle is specified in `WEB.md § Server Lifecycle`.
 
 ## Filesystem Layout Migration
 
