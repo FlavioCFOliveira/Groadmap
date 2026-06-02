@@ -306,14 +306,16 @@ from the snapshot and log.
 ### Process Model
 
 1. The `rmp` CLI is a short-lived process. Each `rmp graph` invocation opens the
-   roadmap's graph store, runs exactly one query, commits any write, closes the
-   store, and exits. The store is **not** held open across invocations and is
-   **not** part of the SQLite connection cache (see
+   roadmap's graph store, runs exactly one query, commits any write, checkpoints
+   after a successful write (see [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)),
+   closes the store, and exits. The store is **not** held open across invocations
+   and is **not** part of the SQLite connection cache (see
    [Connection Caching](#connection-caching)). The two persistence mechanisms
    share no connections, locks, or transactions.
 2. Read subcommands open the store, run the query through the engine's read path,
    stream the result to stdout, and close. Write subcommands run the query through
-   the engine's transactional path so the change is committed atomically.
+   the engine's transactional path so the change is committed atomically, then
+   checkpoint synchronously before closing.
 
 ### Write Contention and Recovery
 
@@ -331,6 +333,52 @@ from the snapshot and log.
 4. Recovery on open is expected to be transparent for a consistently committed
    store. A corrupt or unreadable store surfaces as `utils.ErrDatabase` (exit code
    1); there is no automatic graph-store repair in this version.
+
+### Synchronous Checkpoint on Write
+
+After a write subcommand (`create`, `update`, `delete`) commits its transaction
+durably, the implementation produces a self-sufficient on-disk snapshot of the
+committed graph state and truncates the write-ahead log, synchronously within the
+same short-lived invocation, before closing the store. Read subcommands never
+checkpoint. The feature-level behaviour is specified in
+`GRAPH.md § Synchronous Checkpoint on Write`; this section records the runtime
+implications.
+
+1. **Single-writer ordering.** The checkpoint runs under the store's existing
+   single-writer model. It runs after the transaction commit, holds no separate
+   lock, and does not change the read path. Two concurrent writers against the
+   same roadmap still serialise through the one writer exactly as specified in
+   [Write Contention and Recovery](#write-contention-and-recovery); the checkpoint
+   does not introduce a new contention point beyond the write itself.
+2. **Durability boundary.** The transaction commit is the durability boundary. The
+   committed change survives recovery from the write-ahead log regardless of the
+   checkpoint outcome. The snapshot is self-sufficient (it carries the
+   node-identifier-to-key mapping) so that truncating the log after the snapshot
+   loses no committed data and recovery can rebuild from the snapshot plus any log
+   tail alone.
+3. **Write-ahead-log truncation.** After the self-sufficient snapshot is durable,
+   the write-ahead log is truncated. Without truncation the log would grow with
+   every write for the life of the graph, and every invocation (read or write)
+   would replay the full write history on open, degrading open latency in
+   proportion to total history. Truncation bounds log size and keeps recovery cost
+   proportional to the live graph size.
+4. **Failure policy.** A checkpoint failure that occurs after the commit is
+   already durable MUST NOT fail the user-visible write. The command returns its
+   normal success output and exit code 0; the checkpoint failure is reported as a
+   diagnostic on stderr (per `HELP.md § Error message format`) without changing the
+   exit code. This is a degraded-but-correct state: the intact write-ahead log
+   still recovers the committed state, and the next successful write checkpoints
+   again and reconciles the snapshot. A failure before or during the commit is an
+   ordinary write failure (`utils.ErrDatabase`, exit code 1), not a checkpoint
+   failure, and no checkpoint is attempted.
+5. **Performance trade-off.** A synchronous full snapshot on every write makes each
+   write cost proportional to the live graph size, because the snapshot rewrites
+   the committed state. The deliberate trade is bounded write-ahead-log growth and
+   a recovery cost proportional to live graph size rather than to total write
+   history. This version intentionally does **not** use a size-thresholded or
+   background checkpoint; a thresholded checkpoint that snapshots only after the
+   log crosses a size bound is a possible future optimisation and is out of scope
+   here.
 
 ### Reads During Writes
 

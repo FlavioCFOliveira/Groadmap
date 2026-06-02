@@ -1539,6 +1539,12 @@ in `GRAPH.md § Subcommands and Guard-Rail Validation`.
   `RETURN` clause, the output is exactly `{"ok": true}`. There is no
   affected-element count, because the engine reports none. Exit code 0. The shape
   is fixed in `DATA_FORMATS.md § Graph Write Result`.
+- Side effect of a successful write: after committing, a write subcommand
+  produces an on-disk snapshot under `~/.roadmaps/<name>/graph/snapshot/` and
+  truncates the write-ahead log, synchronously, before exit (see
+  `GRAPH.md § Synchronous Checkpoint on Write`). A snapshot failure after a
+  durable commit does not change the success output or the exit code; it is
+  reported as a diagnostic on stderr while the command still exits 0.
 - Errors: plain text to stderr, with the standard AI-agent hint.
 
 ### Exit Codes

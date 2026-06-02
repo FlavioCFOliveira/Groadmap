@@ -8,6 +8,7 @@
   - [Dependency](#dependency)
   - [Dependency Maturity Risk](#dependency-maturity-risk)
   - [Engine Construction and Lifecycle](#engine-construction-and-lifecycle)
+  - [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)
 - [Persistence Layout](#persistence-layout)
 - [Multi-Layer Modelling Conventions](#multi-layer-modelling-conventions)
 - [Subcommands and Guard-Rail Validation](#subcommands-and-guard-rail-validation)
@@ -58,9 +59,24 @@ engine, and durable on-disk persistence.
    a `RETURN` clause returns `{"ok": true}` (see
    `DATA_FORMATS.md § Graph Write Result`). The engine reports no
    affected-element count, so the write result carries no such field.
-6. The graph for a roadmap is stored under that roadmap's home directory and is
+6. After a write subcommand (`create`, `update`, `delete`) commits its
+   transaction durably, and before the process exits, the implementation MUST
+   produce a self-sufficient on-disk snapshot of the committed graph state and
+   truncate the write-ahead log, synchronously within the same invocation. This
+   checkpoint bounds write-ahead-log growth and keeps recovery cost proportional
+   to the live graph size rather than to the total history of writes (see
+   [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)). Read
+   subcommands (`query`, `search`) are read-only and never checkpoint.
+7. A checkpoint that fails after the transaction has already committed durably
+   MUST NOT fail the user-visible write. The write succeeded, the write-ahead log
+   is durable, and the next successful write reconciles the snapshot; recovery
+   still works from the intact write-ahead log. The command returns its normal
+   success output and exit code 0, and the checkpoint failure is surfaced through
+   the existing observability conventions without changing the exit code (see
+   [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)).
+8. The graph for a roadmap is stored under that roadmap's home directory and is
    created on first use (see [Persistence Layout](#persistence-layout)).
-7. Errors are written as plain text to stderr and map to the existing exit-code
+9. Errors are written as plain text to stderr and map to the existing exit-code
    conventions (see [Error Handling and Exit Codes](#error-handling-and-exit-codes)).
 
 ## Backing Engine: GoGraph
@@ -130,7 +146,11 @@ implementation:
 5. Iterates the result for read subcommands (`Columns`, then `Next` / `Record`
    until exhausted, checking `Err`), serialises it to JSON, and writes it to
    stdout.
-6. Closes the result and the store, ensuring committed writes are durable, then
+6. For write subcommands only, after the transaction has committed durably,
+   produces a self-sufficient snapshot of the committed graph state and truncates
+   the write-ahead log, synchronously, before the process exits (see
+   [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)).
+7. Closes the result and the store, ensuring committed writes are durable, then
    exits.
 
 Parameter binding: when query parameters are supported, the implementation binds
@@ -138,6 +158,63 @@ them through GoGraph's parameter-binding path (`RunAny` / `RunInTxAny`, which
 accept `map[string]any`, or `cypher.BindParams` followed by `Run` / `RunInTx`).
 
 The exact Go types, function signatures, and any wrapper structs are
+implementation details for `go-developer`; this specification fixes the
+behaviour, not the Go API.
+
+### Synchronous Checkpoint on Write
+
+Every successful graph write invocation produces a durable snapshot and truncates
+the write-ahead log before the process exits. This step is synchronous: it runs
+inside the same short-lived CLI invocation, not in a background goroutine. It
+applies to the three write subcommands (`create`, `update`, `delete`) only; read
+subcommands (`query`, `search`) never checkpoint.
+
+Sequence and durability boundary:
+
+1. The transaction commit is and remains the durability boundary. Once the write
+   transaction has committed durably, the user's change is persisted in the
+   write-ahead log and is guaranteed to survive recovery, independent of whether
+   the checkpoint that follows succeeds.
+2. After a successful commit, and before closing the store, the implementation
+   writes a full snapshot of the committed graph state. The snapshot MUST be
+   self-sufficient: it carries the node-identifier-to-key mapping needed to
+   interpret the graph on its own, so that the snapshot plus any write-ahead-log
+   tail is enough to reconstruct the graph and truncating the log loses no
+   committed data.
+3. After the self-sufficient snapshot is durable, the write-ahead log is
+   truncated. Truncation bounds the log's growth: without it the log grows with
+   every write for the life of the graph (see [Concurrency and Recovery](#concurrency-and-recovery)).
+
+Failure policy:
+
+1. A checkpoint failure that occurs **after** the transaction has already
+   committed durably MUST NOT fail the user-visible write. The write has already
+   succeeded.
+2. In that case the command still returns its normal success output (the
+   `RETURN`-mirroring shape or `{"ok": true}`) and exit code 0. A failed
+   checkpoint after a durable commit is a degraded-but-correct state: the
+   write-ahead log is intact, so recovery still restores the committed state, and
+   the next successful write checkpoints again and reconciles the snapshot.
+3. The checkpoint failure is surfaced through the existing error and
+   observability conventions (a diagnostic on stderr, consistent with
+   `HELP.md § Error message format`) **without** changing the exit code from 0.
+   This is the one place where a non-fatal diagnostic may accompany a success
+   exit code.
+4. A failure that occurs **before or during** the commit (the transaction does
+   not commit durably) is a normal write failure, not a checkpoint failure: the
+   write did not succeed, no checkpoint is attempted, and the command fails with
+   `utils.ErrDatabase` (exit code 1) per
+   [Error Handling and Exit Codes](#error-handling-and-exit-codes).
+
+Performance trade-off: a synchronous full snapshot on every write makes each
+write cost proportional to the live graph size (the snapshot rewrites the
+committed state), in exchange for a write-ahead log that stays bounded and a
+recovery cost proportional to the live graph size rather than to the full write
+history. This trade-off, and the explicit decision not to use a size-thresholded
+or background checkpoint in this version, are recorded in
+`IMPLEMENTATION.md § Graph Store Concurrency`.
+
+The exact GoGraph snapshot and truncation calls, and any wrapper structs, are
 implementation details for `go-developer`; this specification fixes the
 behaviour, not the Go API.
 
@@ -152,7 +229,10 @@ roadmap's home directory:
 ├── project.db-wal        # SQLite sidecar (when present)
 ├── project.db-shm        # SQLite sidecar (when present)
 └── graph/                # Knowledge graph store (GoGraph)
-    └── ...               # GoGraph snapshot and write-ahead-log files
+    ├── wal               # Write-ahead log (truncated after each checkpoint)
+    └── snapshot/         # On-disk snapshot, present after the first write
+        ├── manifest.json # Snapshot manifest (GoGraph-owned)
+        └── ...           # Snapshot data files (GoGraph-owned)
 ```
 
 Rules:
@@ -164,15 +244,24 @@ Rules:
    that roadmap, including read subcommands. A read against a roadmap that has no
    graph yet creates an empty graph store and returns an empty result; it is not
    an error.
-3. The graph directory uses permissions `0700`, consistent with the roadmap home
+3. The `snapshot/` subdirectory (including its `manifest.json`) is produced by the
+   synchronous checkpoint that runs after each successful write (see
+   [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)). It is
+   expected to be present after the first successful write subcommand. A graph
+   that has only ever been read, or that has never been written, may contain only
+   the `wal` entry and no `snapshot/` subdirectory.
+4. The graph directory uses permissions `0700`, consistent with the roadmap home
    directory and the data directory (see `ARCHITECTURE.md § Directory Structure`).
-4. The internal file names and on-disk format inside `graph/` are owned by
-   GoGraph and are not specified here. Groadmap treats the directory as an opaque
-   store managed through the engine.
-5. Removing a roadmap (`rmp roadmap remove <name>`) deletes the entire roadmap
+5. The internal file names and on-disk format inside `graph/`, including the
+   layout and contents of `snapshot/` and the format of `wal` and `manifest.json`,
+   are owned by GoGraph and are not specified here. Groadmap treats the directory
+   as an opaque store managed through the engine; the diagram above names the
+   `wal` entry and the `snapshot/` subdirectory only to document which entries are
+   expected to appear, not their internal format.
+6. Removing a roadmap (`rmp roadmap remove <name>`) deletes the entire roadmap
    home directory recursively, which includes `graph/`. No separate graph-removal
    command is required (see `COMMANDS.md § Remove Roadmap`).
-6. The roadmap home directory layout, including the graph subdirectory, is
+7. The roadmap home directory layout, including the graph subdirectory, is
    described in `ARCHITECTURE.md § Directory Structure`. This file is the
    canonical source for the `graph/` subdirectory.
 
@@ -337,18 +426,27 @@ committed state from the snapshot and log.
 Groadmap's usage model and expectations:
 
 1. Each `rmp graph` invocation is a short-lived process that opens the store,
-   runs one query, commits any write, and closes the store. The process does not
-   hold the store open across invocations.
+   runs one query, commits any write, checkpoints after a successful write (see
+   [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)), and
+   closes the store. The process does not hold the store open across invocations.
 2. Because the store is single-writer, two concurrent `rmp graph` write
    invocations against the **same** roadmap may contend for the writer. The
    implementation MUST surface a contention or lock failure as `utils.ErrDatabase`
    (exit code 1) rather than corrupting the store or hanging indefinitely. The
-   retry and timeout behaviour for graph writes is specified in
-   `IMPLEMENTATION.md § Graph Store Concurrency`.
-3. Recovery on open is expected to be transparent: a graph left in a consistent
-   committed state by a previous invocation opens cleanly. A graph whose store is
-   corrupt or unreadable surfaces as `utils.ErrDatabase` (exit code 1); there is
-   no automatic graph-store repair in this first version.
+   checkpoint that follows a successful write runs under the same single-writer
+   model: it does not add a separate lock, does not change the read path, and two
+   concurrent writers still serialise. The retry and timeout behaviour for graph
+   writes is specified in `IMPLEMENTATION.md § Graph Store Concurrency`.
+3. Recovery on open restores the last committed state from the snapshot and the
+   write-ahead-log tail. Because every successful write now writes a self-sufficient
+   snapshot and truncates the log (see
+   [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)), recovery
+   genuinely exercises the snapshot path: a graph opened after a previous write is
+   rebuilt from that snapshot plus any log entries written since the last
+   checkpoint, rather than by replaying the entire write history. A graph left in
+   a consistent committed state by a previous invocation opens cleanly. A graph
+   whose store is corrupt or unreadable surfaces as `utils.ErrDatabase` (exit code
+   1); there is no automatic graph-store repair in this first version.
 4. The graph store is independent of the SQLite connection cache and SQLite WAL
    model described in `IMPLEMENTATION.md § Concurrency Model`; the two persistence
    mechanisms do not share connections, locks, or transactions.
@@ -405,6 +503,20 @@ Groadmap's usage model and expectations:
     other subcommand (see `DATA_FORMATS.md § AI Agent Contract`).
 13. The graph directory `~/.roadmaps/<roadmap>/graph/` is created with `0700`
     permissions on first graph use.
+14. After a successful `rmp graph create -r <roadmap> --query "..."`, the snapshot
+    manifest `~/.roadmaps/<roadmap>/graph/snapshot/manifest.json` exists, proving a
+    checkpoint ran (see [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)).
+15. After a successful write subcommand and its checkpoint, the write-ahead log
+    `~/.roadmaps/<roadmap>/graph/wal` is truncated (small or empty), proving the
+    log was bounded rather than left to grow with history.
+16. After a successful write and its checkpoint, a subsequent read in a
+    **separate** invocation returns the written data, proving recovery from the
+    snapshot plus any log tail works across process exits.
+17. When the checkpoint fails after the write transaction has already committed
+    durably, the write subcommand still returns its normal success output (the
+    `RETURN`-mirroring shape or `{"ok": true}`) and exit code 0, and the checkpoint
+    failure is reported as a diagnostic on stderr without changing the exit code
+    (see [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)).
 
 ## See Also
 
@@ -413,5 +525,5 @@ Groadmap's usage model and expectations:
 - Standard input as a Cypher source → `DATA_FORMATS.md § Input`
 - GoGraph integration, directory layout, error handling → `ARCHITECTURE.md`
 - Go 1.26 toolchain bump and the GoGraph dependency → `BUILD.md § Go Toolchain`
-- Single-writer store, recovery, and write contention → `IMPLEMENTATION.md § Graph Store Concurrency`
+- Single-writer store, recovery, write contention, and the synchronous checkpoint trade-off → `IMPLEMENTATION.md § Graph Store Concurrency`
 - Help skeleton and AI-help entry for `graph` → `HELP.md`
