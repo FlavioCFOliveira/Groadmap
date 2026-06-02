@@ -5,6 +5,92 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-06-02
+
+Feature release. Introduces the `rmp graph` command family: a per-roadmap
+knowledge graph backed by the external GoGraph engine, accessed through Cypher
+and exposed via five guard-railed subcommands (`create`, `query`, `update`,
+`delete`, `search`). Each write is made durable through a synchronous
+checkpoint that snapshots the committed state and truncates the write-ahead log
+before the process exits. The graph is an additive capability: the existing CLI
+surface, exit codes, and all JSON output schemas remain fully backward
+compatible with `v1.6.0`, so this is a MINOR release under SemVer.
+
+### Added
+
+- **`rmp graph` command family** — a per-roadmap knowledge graph for recording
+  and querying the project's elements and their relationships. Specified in
+  `SPEC/GRAPH.md`. Five subcommands, each accepting Cypher via `--query` or
+  standard input:
+  - `graph create` — execute write Cypher that adds nodes and edges.
+  - `graph query` — execute read Cypher and return `columns`/`rows` as JSON.
+  - `graph update` — execute write Cypher that modifies existing elements.
+  - `graph delete` — execute write Cypher that removes elements; deletions are
+    durable tombstones that survive store reopen.
+  - `graph search` — execute read Cypher tailored to lookup/traversal queries.
+- **Guard-rail validation** — every subcommand validates that the supplied
+  Cypher matches its operation class (read vs. write) before execution, so a
+  read subcommand cannot mutate the graph and a write subcommand cannot be used
+  to bypass the intended access pattern.
+- **Cypher input precedence** — each subcommand reads its query from the
+  `--query` flag when present, otherwise from standard input, enabling both
+  inline invocation and piped/heredoc usage.
+- **Synchronous checkpoint on write** — after a write subcommand commits its
+  transaction durably, and before the process exits, the implementation
+  produces a self-sufficient on-disk snapshot of the committed graph state and
+  truncates the write-ahead log within the same invocation. This bounds WAL
+  growth and keeps recovery cost proportional to the live graph size rather
+  than to the total history of writes. Read subcommands never checkpoint.
+- **Per-roadmap graph store** — each roadmap owns one graph, persisted under
+  `~/.roadmaps/<name>/graph/`, independent of the roadmap's `project.db`. Graph
+  operations never read or write the SQLite database.
+- **Multigraph support** — parallel edges between the same pair of nodes are
+  supported, allowing multiple distinct relationships to coexist.
+
+### Changed
+
+- **Go toolchain directive**: `go.mod` raised from `go 1.26.2` to `go 1.26.4`.
+  CI and release workflows derive the Go version from `go.mod` via
+  `go-version-file`, so no workflow edit was required.
+- **`SPEC/VERSION.md` `Current Version` table**: corrected the stale
+  Application entry (was `v1.2.1`) to reflect the real state
+  (Application `v1.7.0`, Database Schema `v1.6.0`), and updated the illustrative
+  `const version` snippet to match.
+
+### Dependencies
+
+- **GoGraph** added as a direct dependency, pinned at the exact tag `v0.1.0`
+  (a pre-1.0 release consumed directly via `go get`, with no pseudo-version).
+  GoGraph provides the labelled property graph, the Cypher engine, the durable
+  on-disk store, durable node tombstones (deletes survive reopen), and
+  multigraph parallel edges that back the `rmp graph` command.
+
+### Tests
+
+- Go unit tests: 6 packages, all green (fmt / vet / test / build / lint clean).
+- E2E: 23/23 pass (100 % success rate) against the freshly built `v1.7.0`
+  binary on the Go 1.26.4 toolchain.
+- Two new E2E suites added for the graph command:
+  - `tests/test_33_graph_checkpoint.py` — verifies the synchronous
+    snapshot-and-WAL-truncate checkpoint contract on every write.
+  - `tests/test_34_graph_realistic_usage.py` — exercises 219 graph calls in a
+    realistic modelling scenario, including multigraph parallel edges.
+
+### Known Issues
+
+The two SPEC-vs-code divergences carried forward from prior releases remain
+open and are unaffected by this release:
+
+1. **Exit-code mapping for `ErrInvalidInput`** — `SPEC/ARCHITECTURE.md`
+   documents exit code `2`; the implementation uses `ExitInvalidData = 6`.
+2. **`audit stats` JSON keys** — `SPEC/COMMANDS.md` documents one set of keys;
+   the implementation emits a different (stable) set.
+
+Both are tracked as `spec` / `tech-debt` GitHub issues and will be resolved by
+a `specification-manager` pass in a future release.
+
+[1.7.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.6.0...v1.7.0
+
 ## [1.6.0] - 2026-06-01
 
 Maintenance release. Updates the Go toolchain directive to `1.26.2`, upgrades
