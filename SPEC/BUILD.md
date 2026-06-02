@@ -8,34 +8,32 @@ This specification defines the build system, cross-compilation targets, and CI/C
 
 ### Minimum Go Version
 
-Groadmap requires **Go 1.26** (toolchain 1.26.3 or later). This is raised from the
-previous minimum of Go 1.25 to satisfy the GoGraph dependency, which requires Go
-1.26. The `go` directive in `go.mod` MUST declare `go 1.26` (or later), and the
-CI and release toolchains MUST use Go 1.26.x.
+Groadmap requires **Go 1.26.4** (or later). This is raised from the
+previous minimum of Go 1.25 to satisfy the GoGraph dependency, which sets the
+1.26 minor floor. The `go` directive in `go.mod` MUST declare `go 1.26.4` (or
+later), and the CI and release toolchains MUST use the Go version that matches
+the `go` directive (Go 1.26.4 or later). The CI and release workflows obtain
+that version from `go.mod` via `go-version-file: go.mod`, so they track the
+directive automatically.
 
 ### External Dependencies
 
 | Module | Path | Version | Purpose |
 |--------|------|---------|---------|
-| GoGraph | `github.com/FlavioCFOliveira/GoGraph` | Stable release **v3.0.1**, pinned as the exact pseudo-version `v0.0.0-20260602124150-69db4d715c7b` (see Rules below) | Labelled property graph, Cypher engine, and durable store backing the `graph` command. See `GRAPH.md`. |
+| GoGraph | `github.com/FlavioCFOliveira/GoGraph` | Exact tag **v0.1.0** | Labelled property graph, Cypher engine, and durable store backing the `graph` command. See `GRAPH.md`. |
 
 Rules:
 
 1. GoGraph MUST be pinned to an exact, immutable version in `go.mod`, not a
    floating reference (no branch or moving target), so that builds are
    reproducible and the on-disk graph format is stable.
-2. GoGraph is consumed at the stable release **v3.0.1**. Its `go.mod` declares the
-   module path `github.com/FlavioCFOliveira/GoGraph` with no `/v3` major-version
-   suffix, so under Go's Semantic Import Versioning rules the toolchain rejects the
-   literal `@v3.0.1` tag ("module path must match major version
-   github.com/FlavioCFOliveira/GoGraph/v3"). GoGraph adopts the no-suffix path
-   deliberately, matching its v2.0.0 precedent. Groadmap therefore pins v3.0.1 as
-   the exact pseudo-version of the v3.0.1 tagged commit,
-   `v0.0.0-20260602124150-69db4d715c7b` (commit
-   `69db4d715c7b758e675bca40809487a5cb8607f7`). This pseudo-version is an exact,
-   immutable pin and satisfies Rule 1.
-3. GoGraph's v3.x line is stable and API-stable. The residual risks (pseudo-version
-   pinning and on-disk format evolution across major versions) and their
+2. GoGraph is consumed at the exact tag **v0.1.0**. Because v0.1.0 is a v0 (pre-1.0)
+   version, it is consumable directly at the bare module path
+   `github.com/FlavioCFOliveira/GoGraph`, and `go.mod` pins the clean exact tag
+   `v0.1.0`. This exact-tag pin satisfies Rule 1.
+3. v0.1.0 is a `0.y.z` release, so GoGraph's public API is not yet stable and may
+   change while the module matures toward `1.0.0`. The residual risks (pre-1.0 API
+   instability and on-disk format change across pre-1.0 releases) and their
    mitigations are in `GRAPH.md § Dependency Maturity Risk`. Upgrading GoGraph is a
    change that MUST be re-validated against the acceptance criteria in `GRAPH.md`
    before release.
@@ -85,7 +83,7 @@ Rules:
 **Jobs:**
 
 1. **test**
-   - Use Go 1.26.x (see `Go Toolchain`)
+   - Use Go 1.26.4 or later (see `Go Toolchain`)
    - Run `go fmt`, `go vet`
    - Run `go test ./...`
    - Validate code quality before build

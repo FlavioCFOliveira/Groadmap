@@ -34,8 +34,8 @@ Reliability properties covered by focused tests:
 - Durable node deletion across a store reopen (GoGraph v3.0.1): a deleted
   node does not resurrect as a label-stripped ghost, and re-creating its
   key revives it cleanly.
-- The simple-directed-graph invariant (at most one edge per ordered
-  endpoint pair).
+- Multigraph semantics: parallel edges between the same ordered pair
+  coexist (different types, and same-type duplicates) under CREATE.
 - Guard-rail rejection matrix: each write subcommand accepts only its own
   operation class (exit code 6 otherwise).
 
@@ -94,16 +94,21 @@ class GraphModel:
     def add_edge(self, src: str, dst: str, etype: str):
         assert src in self.nodes, f"edge source {src!r} not modelled"
         assert dst in self.nodes, f"edge target {dst!r} not modelled"
-        # The backing LPG is a SIMPLE directed graph: at most one edge per
-        # ordered endpoint pair. Guard the model against accidentally
-        # modelling a second edge on the same pair, which the store would
-        # silently collapse.
-        assert not any(e[0] == src and e[1] == dst for e in self.edges), (
-            f"simple-graph violation in test data: duplicate ordered pair {src} -> {dst}")
+        # GoGraph v0.1.0 is a multigraph, so the model keys edges by the
+        # (src, dst, type) triple and allows several typed edges between the
+        # same ordered pair. The guard only rejects an exact duplicate triple:
+        # a parallel SAME-type edge cannot be represented by this set and would
+        # silently desync the model from the store (the count(r) oracle would
+        # then fail), so creating one through this path is a test-data error.
+        assert (src, dst, etype) not in self.edges, (
+            f"test-data error: duplicate edge {src} -[{etype}]-> {dst} "
+            f"(a parallel same-type edge is not representable by the model)")
         self.edges.add((src, dst, etype))
 
-    def remove_edge(self, src: str, dst: str):
-        self.edges = {e for e in self.edges if not (e[0] == src and e[1] == dst)}
+    def remove_edge(self, src: str, dst: str, etype: str):
+        # Multigraph-aware: remove only the specific typed edge, leaving any
+        # parallel edge of a different type between the same pair intact.
+        self.edges.discard((src, dst, etype))
 
     def remove_node(self, key: str):
         self.nodes.pop(key, None)
@@ -217,7 +222,7 @@ class TestGraphRealisticUsage:
             "delete",
             f"MATCH (a:{slabel} {{key: {cypher_lit(src)}}})-[r:{etype}]->(b:{dlabel} {{key: {cypher_lit(dst)}}}) "
             f"DELETE r")
-        self.model.remove_edge(src, dst)
+        self.model.remove_edge(src, dst, etype)
 
     def detach_delete_node(self, key: str):
         label = self.model.label_of(key)
@@ -370,7 +375,21 @@ class TestGraphRealisticUsage:
         ]
         for src, dst in runs_on:
             self.create_edge(src, dst, "RUNS_ON")
-        self.assert_consistent("after infrastructure")
+
+        # Multigraph in realistic use: a single ordered pair carries several
+        # typed relationships at once. svc-worker already RUNS_ON comp-redis
+        # and comp-billing-svc already DEPENDS_ON comp-redis; add a second,
+        # differently-typed edge on each of those exact pairs.
+        self.create_edge("svc-worker", "comp-redis", "EMITS_TO")
+        self.create_edge("comp-billing-svc", "comp-redis", "CACHES_IN")
+        worker_to_redis = self.col_set(
+            "MATCH (:Service {key:'svc-worker'})-[r]->(:Component {key:'comp-redis'}) RETURN type(r) AS t", "t")
+        assert worker_to_redis == {"RUNS_ON", "EMITS_TO"}, (
+            f"parallel typed edges on one ordered pair must coexist: {worker_to_redis}")
+        billing_to_redis = self.scalar(
+            "MATCH (:Component {key:'comp-billing-svc'})-[r]->(:Component {key:'comp-redis'}) RETURN count(r) AS c", "c")
+        assert billing_to_redis == 2, f"comp-billing-svc -> comp-redis must carry 2 typed edges, got {billing_to_redis}"
+        self.assert_consistent("after infrastructure + parallel edges")
 
         # ---------------------------------------------------------------
         # PHASE 5 - Decisions (incl. superseded ones) and risks.
@@ -580,19 +599,29 @@ class TestGraphRealisticUsage:
         assert revived["rows"][0][revived["columns"].index("l")] == ["Decision"], revived
         assert revived["rows"][0][revived["columns"].index("r")] == "revived", revived
 
-    def test_simple_graph_at_most_one_edge_per_ordered_pair(self):
-        # The backing LPG is a simple directed graph: an ordered endpoint
-        # pair holds at most one edge. A second edge created on the same
-        # pair does not accumulate a parallel relationship.
+    def test_multigraph_supports_parallel_edges(self):
+        # GoGraph v0.1.0 is a multigraph: CREATE is additive, so multiple
+        # edges between the same ordered pair coexist -- both edges of
+        # different types and parallel edges of the same type. (Earlier
+        # GoGraph builds collapsed any second edge on an occupied ordered
+        # pair to a single one; the v0.1.0 upgrade restored proper
+        # multigraph semantics.)
         self.create_node("Component", "left")
         self.create_node("Component", "right")
-        self._write("create",
-                    "MATCH (a:Component {key:'left'}),(b:Component {key:'right'}) CREATE (a)-[:USES]->(b)")
-        self._write("create",
-                    "MATCH (a:Component {key:'left'}),(b:Component {key:'right'}) MERGE (a)-[:CALLS]->(b)")
+        pair = "MATCH (a:Component {key:'left'}),(b:Component {key:'right'})"
+        edge_q = "MATCH (:Component {key:'left'})-[r]->(:Component {key:'right'}) RETURN count(r) AS c"
+        # Two different relationship types on the same ordered pair.
+        self._write("create", f"{pair} CREATE (a)-[:USES]->(b)")
+        self._write("create", f"{pair} CREATE (a)-[:CALLS]->(b)")
+        assert self.scalar(edge_q, "c") == 2, "CREATE of a second edge type must add a parallel edge"
+        types = self.col_set(
+            "MATCH (:Component {key:'left'})-[r]->(:Component {key:'right'}) RETURN type(r) AS t", "t")
+        assert types == {"USES", "CALLS"}, f"both relationship types must coexist: {types}"
+        # A parallel edge of the SAME type is preserved too (true multigraph).
+        self._write("create", f"{pair} CREATE (a)-[:USES]->(b)")
+        assert self.scalar(edge_q, "c") == 3, "a parallel same-type edge must be preserved"
         assert self.scalar(
-            "MATCH (:Component {key:'left'})-[r]->(:Component {key:'right'}) RETURN count(r) AS c", "c") == 1, (
-            "a simple directed graph must keep at most one edge per ordered pair")
+            "MATCH (:Component {key:'left'})-[r:USES]->(:Component {key:'right'}) RETURN count(r) AS c", "c") == 2
 
     def test_guardrail_blocks_mismatched_operations(self):
         self.create_node("Spec", "spec-x", status="draft")

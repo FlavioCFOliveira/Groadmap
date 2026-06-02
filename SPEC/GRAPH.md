@@ -94,47 +94,36 @@ module path `github.com/FlavioCFOliveira/GoGraph`. GoGraph provides:
   snapshots, and recovery on open (see [Concurrency and Recovery](#concurrency-and-recovery)).
 
 GoGraph requires Go 1.26 (toolchain 1.26.3). Adopting the graph feature
-therefore raises Groadmap's minimum Go version from 1.25 to 1.26. The build
+therefore raises Groadmap's minimum Go version from 1.25 to 1.26.4. The build
 implications are specified in `BUILD.md § Go Toolchain`.
 
 ### Dependency Maturity Risk
 
-GoGraph is consumed at the stable release **v3.0.1**, which is a member of the
-stable, API-stable v3.x release line. The engine constructors, result iteration,
-helper functions, and on-disk format named in this specification are stable
-within that line. The dependency is therefore not a pre-release, and the public
-surface is not expected to drift within v3.x.
+GoGraph is consumed at the exact tag **v0.1.0**, its first published release. Because
+v0.1.0 is a v0 (pre-1.0) version, it is consumable directly at the bare module path
+`github.com/FlavioCFOliveira/GoGraph`, and `go.mod` pins the clean exact tag `v0.1.0`.
+This exact-tag pin satisfies the pinning mitigation below directly. The pinned version
+is recorded in `BUILD.md § Go Toolchain`.
 
-The way GoGraph is pinned is itself a consequence of its versioning. GoGraph's
-`go.mod` declares the module path `github.com/FlavioCFOliveira/GoGraph` with no
-`/v3` major-version suffix. Under Go's Semantic Import Versioning rules, a module
-released at major version 2 or higher must include the matching major-version
-suffix in its module path, so the Go toolchain rejects the literal `@v3.0.1` tag
-with: "module contains a go.mod file, so module path must match major version
-github.com/FlavioCFOliveira/GoGraph/v3". GoGraph adopts the no-suffix path
-deliberately, matching the precedent set at v2.0.0. As a result Groadmap consumes
-v3.0.1 not by its tag but as the exact, immutable pseudo-version that points at
-the v3.0.1 tagged commit: `v0.0.0-20260602124150-69db4d715c7b` (commit
-`69db4d715c7b758e675bca40809487a5cb8607f7`). This pseudo-version is an exact pin,
-not a floating or branch reference, so it satisfies the pinning requirement
-below. The pseudo-version string is recorded in `BUILD.md § Go Toolchain`.
+As a `0.y.z` release, v0.1.0 signals under Semantic Versioning that GoGraph's public
+API is not yet stable: it may change while the module matures toward `1.0.0`, and such
+changes can land without a major-version bump. The following residual risks remain:
 
-The following residual risks remain even with a stable release line:
-
-1. **Pseudo-version pinning.** Because of the no-`/v3` module path, the dependency
-   is referenced by the pseudo-version of a tagged commit rather than by a clean
-   semantic tag. Any future upgrade must resolve the corresponding pseudo-version
-   for the target commit, since the literal version tag cannot be used directly.
-2. **On-disk format across major versions.** The store's snapshot and
-   write-ahead-log format may evolve across GoGraph major versions, which could
-   make a graph written by one major version unreadable by a later one. There is
-   no graph-format migration mechanism in Groadmap in this version.
+1. **Pre-1.0 API instability.** The engine constructors, result types, helper
+   functions, and on-disk format named in this specification may change between
+   `0.y` releases. A GoGraph upgrade can therefore alter the integration surface
+   that this specification depends on.
+2. **On-disk format change across pre-1.0 releases.** The store's snapshot and
+   write-ahead-log format may change between `0.y` releases, which could make a graph
+   written by one release unreadable by a later one. There is no graph-format
+   migration mechanism in Groadmap in this version, so a `0.y` on-disk-format change
+   could make an existing graph unreadable.
 
 Mitigations required by this specification:
 
 1. Groadmap MUST pin GoGraph to an exact version in `go.mod` (a specific immutable
    reference, not a floating or branch reference), so builds are reproducible. The
-   exact pseudo-version is recorded in `BUILD.md § Go Toolchain`.
+   pinned exact tag is recorded in `BUILD.md § Go Toolchain`.
 2. The graph feature MUST be implemented behind Groadmap's own command and
    error-handling boundary (this specification), so that an upstream API change
    is absorbed in one integration layer rather than spread across the codebase.

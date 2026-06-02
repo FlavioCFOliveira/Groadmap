@@ -1,9 +1,9 @@
 module github.com/FlavioCFOliveira/Groadmap
 
-go 1.26.2
+go 1.26.4
 
 require (
-	github.com/FlavioCFOliveira/GoGraph v0.0.0-20260602124150-69db4d715c7b
+	github.com/FlavioCFOliveira/GoGraph v0.1.0
 	modernc.org/sqlite v1.51.0
 )
 

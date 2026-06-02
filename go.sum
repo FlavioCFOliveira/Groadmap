@@ -1,5 +1,5 @@
-github.com/FlavioCFOliveira/GoGraph v0.0.0-20260602124150-69db4d715c7b h1:wxvHH5Se5xOzBkrfnP2HzAleS50Jqu3mSuj8z1lEm64=
-github.com/FlavioCFOliveira/GoGraph v0.0.0-20260602124150-69db4d715c7b/go.mod h1:NpQ1WM+wYK1EVmIi3zr5jDEvnc5rmvKMilmjECQZ2IQ=
+github.com/FlavioCFOliveira/GoGraph v0.1.0 h1:PU94jI384ggPhhf3K9pCzwZnAVvGv2ICol2Y1KyiG6o=
+github.com/FlavioCFOliveira/GoGraph v0.1.0/go.mod h1:NpQ1WM+wYK1EVmIi3zr5jDEvnc5rmvKMilmjECQZ2IQ=
 github.com/RoaringBitmap/roaring/v2 v2.18.2 h1:oPq3Cgx//iDuJQVp6xSInAKW34J9CEwE5GmLI2z+Eic=
 github.com/RoaringBitmap/roaring/v2 v2.18.2/go.mod h1:eq4wdNXxtJIS/oikeCzdX1rBzek7ANzbth041hrU8Q4=
 github.com/antlr4-go/antlr/v4 v4.13.1 h1:SqQKkuVZ+zWkMMNkjy5FZe5mr5WURWnlpmOuzYWrPrQ=
