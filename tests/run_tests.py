@@ -41,6 +41,7 @@ TEST_MODULES = [
     "test_31_sprint_description_limit",
     "test_32_layout_migration",
     "test_33_graph_checkpoint",
+    "test_34_graph_realistic_usage",
 ]
 
 # Stress tests (run separately due to time/data volume)
