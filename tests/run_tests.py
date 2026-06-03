@@ -45,6 +45,7 @@ TEST_MODULES = [
     "test_34_graph_realistic_usage",
     "test_35_web_interface",
     "test_36_query_commands_correctness",
+    "test_37_write_persistence_fidelity",
 ]
 
 # Stress tests (run separately due to time/data volume)
