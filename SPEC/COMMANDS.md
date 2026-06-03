@@ -906,7 +906,7 @@ rmp sprint stats -r <name> <id>
 
 **Fields:**
 - `task_order` - Array of task IDs ordered by position (first to last)
-- `velocity` - Tasks completed per day (CLOSED sprints only). 0.0 for OPEN or PENDING sprints, and for CLOSED sprints with no completed tasks
+- `velocity` - Tasks completed per day (CLOSED sprints only). Computed as `completed_task_count / max(1.0, (closed_at - started_at) in days)`, so the sprint duration in the denominator is floored at a minimum of 1 day and a sprint that starts and closes within the same day yields a velocity equal to its completed-task count rather than an inflated value. 0.0 for OPEN or PENDING sprints, and for CLOSED sprints with no completed tasks
 - `days_elapsed` - Days since the sprint was started (OPEN sprints only). null for PENDING and CLOSED sprints, and for OPEN sprints with no started_at date
 - `days_remaining` - Always null. Sprint model has no end_date field
 - `burndown` - Array of daily snapshots `{date, tasks_remaining}` derived from task `closed_at` dates. Ordered by date ascending. Empty array when no tasks have been completed
@@ -930,6 +930,10 @@ rmp sprint show -r <name> <id>
   "sprint_id": 5,
   "sprint_description": "Sprint 12 - March 2026",
   "status": "OPEN",
+  "max_tasks": 25,
+  "capacity_pct": 56.0,
+  "current_load": 14,
+  "task_order": [12, 7, 19, 3, 21, 8, 15, 2, 9, 11, 4, 17, 6, 1, 20, 5, 18, 10, 13, 16],
   "summary": {
     "total_tasks": 20,
     "pending": 8,
@@ -963,6 +967,10 @@ rmp sprint show -r <name> <id>
 | `sprint_id` | integer | Sprint identifier |
 | `sprint_description` | string | Sprint description/name |
 | `status` | string | Sprint status (OPEN, CLOSED) |
+| `max_tasks` | integer or null | Sprint capacity cap (maximum number of tasks the sprint may hold), or null when no cap is set |
+| `capacity_pct` | float or null | Percentage of capacity used, computed from `current_load` against `max_tasks`. null when no cap is set |
+| `current_load` | integer | Number of non-COMPLETED tasks counting against the sprint capacity |
+| `task_order` | array of integers | Task IDs in sprint position order (first to last) |
 | `summary.total_tasks` | integer | Total number of tasks in sprint |
 | `summary.pending` | integer | Tasks with status BACKLOG or SPRINT |
 | `summary.in_progress` | integer | Tasks with status DOING or TESTING |
@@ -1292,24 +1300,18 @@ rmp audit stats -r <name> [--since <date>] [--until <date>]
 **JSON Output:**
 ```json
 {
-  "total_entries": 156,
-  "period": {
-    "since": "2026-01-01T00:00:00.000Z",
-    "until": "2026-03-23T23:59:59.000Z"
+  "by_operation": {
+    "TASK_CREATE": 15,
+    "TASK_STATUS_CHANGE": 19,
+    "SPRINT_ADD_TASK": 11
   },
-  "first_entry": "2026-01-15T10:30:00.000Z",
-  "last_entry": "2026-03-23T14:45:00.000Z",
-  "operations_count": {
-    "CREATE": 45,
-    "UPDATE": 67,
-    "DELETE": 12,
-    "STATUS_CHANGE": 32
+  "by_entity_type": {
+    "TASK": 36,
+    "SPRINT": 18
   },
-  "entity_type_count": {
-    "TASK": 120,
-    "SPRINT": 25,
-    "ROADMAP": 11
-  }
+  "first_entry_at": "2026-06-03T09:15:46.656Z",
+  "last_entry_at": "2026-06-03T09:15:47.522Z",
+  "total_entries": 54
 }
 ```
 
@@ -1317,31 +1319,18 @@ rmp audit stats -r <name> [--since <date>] [--until <date>]
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `by_operation` | map[string]int | Count of entries per operation type, keyed by the full operation name (for example `TASK_CREATE`, `TASK_STATUS_CHANGE`, `SPRINT_ADD_TASK`). See `DATABASE.md § audit Table` for the operation catalogue |
+| `by_entity_type` | map[string]int | Count of entries per entity type (`TASK`, `SPRINT`) |
+| `first_entry_at` | string (ISO 8601 UTC) or null | Timestamp of the oldest audit entry among the filtered entries, or null when no entries match |
+| `last_entry_at` | string (ISO 8601 UTC) or null | Timestamp of the newest audit entry among the filtered entries, or null when no entries match |
 | `total_entries` | int | Total number of audit log entries matching the filter criteria |
-| `period.since` | string (ISO 8601) | Start date of the statistics period (from `--since` or first entry) |
-| `period.until` | string (ISO 8601) | End date of the statistics period (from `--until` or last entry) |
-| `first_entry` | string (ISO 8601) | Timestamp of the first audit entry in the period |
-| `last_entry` | string (ISO 8601) | Timestamp of the last audit entry in the period |
-| `operations_count` | map[string]int | Count of entries per operation type (CREATE, UPDATE, DELETE, STATUS_CHANGE, etc.) |
-| `entity_type_count` | map[string]int | Count of entries per entity type (TASK, SPRINT, ROADMAP) |
 
 **Behavior:**
-- When no `--since` is specified, `period.since` equals `first_entry`
-- When no `--until` is specified, `period.until` equals `last_entry`
-- Empty audit log returns: `{"total_entries": 0, "period": {"since": null, "until": null}, "first_entry": null, "last_entry": null, "operations_count": {}, "entity_type_count": {}}`
+- The `--since` and `--until` filters are applied to the audit entries before aggregation; all counts and timestamps reflect only the entries that pass the filter
+- The command does not echo the requested period back in the output; there is no `period` object
+- `first_entry_at` and `last_entry_at` are the oldest and newest timestamps among the filtered entries, not the filter bounds
+- Empty result set (no entries match the filter) returns: `{"by_operation": {}, "by_entity_type": {}, "first_entry_at": null, "last_entry_at": null, "total_entries": 0}`
 - All timestamps are in ISO 8601 UTC format
-
-**Output Fields:**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `total_entries` | int | Total number of audit entries matching the filter |
-| `period.since` | string | ISO 8601 UTC timestamp of filter start (or first entry if not specified) |
-| `period.until` | string | ISO 8601 UTC timestamp of filter end (or last entry if not specified) |
-| `first_entry` | string | ISO 8601 UTC timestamp of the oldest audit entry in results |
-| `last_entry` | string | ISO 8601 UTC timestamp of the newest audit entry in results |
-| `operations_count` | map[string]int | Count of entries grouped by operation type |
-| `entity_type_count` | map[string]int | Count of entries grouped by entity type |
 
 ---
 
@@ -1435,7 +1424,7 @@ rmp stats -r <name>
   "sprints": {
     "current": 5,
     "total": 12,
-    "completed": 10,
+    "completed": 9,
     "pending": 2
   },
   "tasks": {
@@ -1457,13 +1446,13 @@ rmp stats -r <name>
 | `sprints.current` | integer or null | ID of the currently open sprint, or null if no sprint is open |
 | `sprints.total` | integer | Total number of sprints in the roadmap |
 | `sprints.completed` | integer | Number of sprints with status CLOSED |
-| `sprints.pending` | integer | Number of sprints with status OPEN (typically 0 or 1) |
+| `sprints.pending` | integer | Number of sprints with status PENDING (created but never started) |
 | `tasks.backlog` | integer | Number of tasks with status BACKLOG |
 | `tasks.sprint` | integer | Number of tasks with status SPRINT |
 | `tasks.doing` | integer | Number of tasks with status DOING |
 | `tasks.testing` | integer | Number of tasks with status TESTING |
 | `tasks.completed` | integer | Number of tasks with status COMPLETED |
-| `average_velocity` | float64 | Average tasks completed per day across the last 5 closed sprints. 0.0 when no qualifying closed sprints exist |
+| `average_velocity` | float64 | Average tasks completed per day across the last 5 closed sprints. Each sprint's daily rate uses a sprint duration floored at a minimum of 1 day: `duration_days = max(1.0, (closed_at - started_at) in days)`. 0.0 when no qualifying closed sprints exist |
 
 **Error Cases:**
 
@@ -1474,9 +1463,11 @@ rmp stats -r <name>
 
 **Behavior Notes:**
 - The `sprints.current` field returns the ID of the sprint with status OPEN, or `null` if no sprint is currently open
-- The `sprints.pending` field reflects sprints with status OPEN (normally only one sprint can be open at a time)
+- The `sprints.pending` field counts sprints with status PENDING (created but never started)
+- The `sprints.completed` field counts sprints with status CLOSED
+- `sprints.total` may exceed `sprints.completed` plus `sprints.pending` because the currently open sprint is counted in `sprints.current` and `sprints.total` but not in `sprints.completed` or `sprints.pending`
 - The sum of all task statuses equals the total number of tasks in the roadmap
-- `average_velocity` is computed from the last 5 closed sprints that have both `started_at` and `closed_at` set. Sprints with zero completed tasks contribute 0.0. Returns 0.0 when no qualifying sprints exist
+- `average_velocity` is computed from the last 5 closed sprints that have both `started_at` and `closed_at` set. Each sprint's daily completion rate divides its completed-task count by `max(1.0, (closed_at - started_at) in days)`, so a sprint that starts and closes within the same day contributes its completed-task count rather than an inflated value. Sprints with zero completed tasks contribute 0.0. Returns 0.0 when no qualifying sprints exist
 
 ---
 
