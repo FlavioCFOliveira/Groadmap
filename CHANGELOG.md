@@ -5,7 +5,7 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.8.0] - 2026-06-03
 
 Adds the read-only `rmp web` interface and aligns the CLI exit-code mapping with
 the canonical `SPEC/ARCHITECTURE.md` contract. Both changes are additive or
@@ -62,7 +62,7 @@ changes, so this remains backward compatible with `v1.7.0`.
 - Go unit tests green across all packages (fmt / vet / test / build / lint
   clean), including the new `internal/web` package tests.
 
-[Unreleased]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.7.0...HEAD
+[1.8.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.7.0...v1.8.0
 
 ## [1.7.0] - 2026-06-02
 
