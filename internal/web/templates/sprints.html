@@ -1,4 +1,4 @@
-{{define "detail.html"}}<!doctype html>
+{{define "sprints.html"}}<!doctype html>
 <html lang="en" data-bs-theme="dark">
 <head>
 {{template "head" .}}
@@ -23,65 +23,6 @@
       </div>
       <div class="page-body">
         <div class="container-fluid">
-
-          <div class="card mb-3" id="tasks">
-            <div class="card-header">
-              <h3 class="card-title">Tasks <span class="badge bg-secondary-lt ms-2">{{len .Tasks}}</span></h3>
-            </div>
-            {{if .Tasks}}
-            <div class="table-responsive">
-              <table class="table table-vcenter card-table">
-                <thead>
-                  <tr>
-                    <th>ID</th>
-                    <th>Title</th>
-                    <th>Status</th>
-                    <th>Type</th>
-                    <th>Priority</th>
-                    <th>Severity</th>
-                    <th>Specialists</th>
-                    <th>Parent</th>
-                    <th>Subtasks</th>
-                    <th>Depends on</th>
-                    <th>Blocks</th>
-                    <th>Created</th>
-                    <th>Started</th>
-                    <th>Tested</th>
-                    <th>Closed</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {{range .Tasks}}
-                  <tr class="task-row" data-bs-toggle="modal" data-bs-target="#task-modal-{{.ID}}" tabindex="0" role="button" aria-label="Open details for task #{{.ID}}">
-                    <td>{{.ID}}</td>
-                    <td>{{.Title}}</td>
-                    <td><span class="badge bg-blue-lt">{{.Status}}</span></td>
-                    <td>{{.Type}}</td>
-                    <td>{{.Priority}}</td>
-                    <td>{{.Severity}}</td>
-                    <td>{{with .Specialists}}{{.}}{{else}}&mdash;{{end}}</td>
-                    <td>{{with .ParentTaskID}}#{{.}}{{else}}&mdash;{{end}}</td>
-                    <td>{{.SubtaskCount}}</td>
-                    <td>{{if .DependsOn}}{{range $i, $d := .DependsOn}}{{if $i}}, {{end}}#{{$d}}{{end}}{{else}}&mdash;{{end}}</td>
-                    <td>{{if .Blocks}}{{range $i, $b := .Blocks}}{{if $i}}, {{end}}#{{$b}}{{end}}{{else}}&mdash;{{end}}</td>
-                    <td class="text-nowrap text-secondary">{{.CreatedAt}}</td>
-                    <td class="text-nowrap text-secondary">{{with .StartedAt}}{{.}}{{else}}&mdash;{{end}}</td>
-                    <td class="text-nowrap text-secondary">{{with .TestedAt}}{{.}}{{else}}&mdash;{{end}}</td>
-                    <td class="text-nowrap text-secondary">{{with .ClosedAt}}{{.}}{{else}}&mdash;{{end}}</td>
-                  </tr>
-                  {{end}}
-                </tbody>
-              </table>
-            </div>
-            {{else}}
-            <div class="card-body">
-              <div class="empty">
-                <p class="empty-title">No tasks yet</p>
-                <p class="empty-subtitle text-secondary">This roadmap has no tasks yet.</p>
-              </div>
-            </div>
-            {{end}}
-          </div>
 
           <div class="card" id="sprints">
             <div class="card-header">
@@ -218,9 +159,10 @@
     </div>
   </div>
 
-  {{/* One read-only task detail modal per task (covers the Tasks table and the
-       Actual tab, whose task rows are a subset of the full task list). */}}
-  {{range .Tasks}}{{template "taskModal" .}}{{end}}
+  {{/* One read-only task detail modal per task shown clickable on the Actual
+       tab: the OPEN sprints' member tasks, deduplicated by id so each modal id
+       is rendered exactly once (SPEC/WEB.md § Task Detail Modal). */}}
+  {{range .ModalTasks}}{{template "taskModal" .}}{{end}}
 
   <script src="/static/vendor/tabler/tabler.min.js"></script>
 </body>

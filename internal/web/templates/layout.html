@@ -47,16 +47,16 @@
           <li class="nav-item mt-3">
             <span class="nav-link text-muted text-uppercase fw-bold" style="font-size:0.75rem;letter-spacing:0.04em;">{{.}}</span>
           </li>
-          <li class="nav-item{{if eq $.Chrome.Active "tasks"}} active{{end}}">
-            <a class="nav-link" href="/roadmaps/{{.}}#tasks">
-              <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-checklist"></i></span>
-              <span class="nav-link-title">Tasks</span>
-            </a>
-          </li>
           <li class="nav-item{{if eq $.Chrome.Active "sprints"}} active{{end}}">
-            <a class="nav-link" href="/roadmaps/{{.}}#sprints">
+            <a class="nav-link" href="/roadmaps/{{.}}">
               <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-run"></i></span>
               <span class="nav-link-title">Sprints</span>
+            </a>
+          </li>
+          <li class="nav-item{{if eq $.Chrome.Active "tasks"}} active{{end}}">
+            <a class="nav-link" href="/roadmaps/{{.}}/tasks">
+              <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-checklist"></i></span>
+              <span class="nav-link-title">Tasks</span>
             </a>
           </li>
           <li class="nav-item{{if eq $.Chrome.Active "graph"}} active{{end}}">

@@ -119,7 +119,7 @@ Groadmap/
 │   │   └── web.go         # web command (starts the embedded HTTP server)
 │   ├── web/               # Embedded read-only HTTP server (net/http)
 │   │   ├── server.go      # Server construction, routes, graceful shutdown
-│   │   ├── handlers.go    # Read-only route handlers (index, detail, graph, data)
+│   │   ├── handlers.go    # Read-only route handlers (index, sprints, tasks, sprint, graph, data)
 │   │   ├── templates/     # Embedded html/template files (go:embed)
 │   │   └── static/        # Embedded CSS/JS (vendored Tabler framework, D3.js + d3-sankey), fonts (Inter, Tabler Icons) (go:embed)
 │   ├── db/

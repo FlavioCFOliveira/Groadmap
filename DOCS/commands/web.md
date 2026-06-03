@@ -45,8 +45,9 @@ All routes serve `GET` and `HEAD` only. Any other HTTP method on any route retur
 
 | Route | Purpose | Response |
 |-------|---------|----------|
-| `/` | Roadmap index: every roadmap under `~/.roadmaps/`, with links to each detail and graph page (empty-state message when none) | HTML |
-| `/roadmaps/{name}` | Roadmap detail: that roadmap's tasks, and sprints in three tabs (Próximos / Actual / Concluídos, Actual default); clicking a task opens a read-only modal with all task fields | HTML |
+| `/` | Roadmap index: every roadmap under `~/.roadmaps/`, with links to each roadmap's sprints landing page and graph page (empty-state message when none) | HTML |
+| `/roadmaps/{name}` | Roadmap sprints page and landing page: that roadmap's sprints in three tabs (Próximos / Actual / Concluídos, Actual default), the OPEN sprint expanded with its tasks; each sprint links to its own page. Selecting a roadmap on the index lands here | HTML |
+| `/roadmaps/{name}/tasks` | Roadmap tasks page: that roadmap's full task table (every task, any status); clicking a task opens a read-only modal with all task fields | HTML |
 | `/roadmaps/{name}/sprints/{id}` | Dedicated sprint page: all sprint details and the task list in planned execution order; each task opens the task detail modal | HTML |
 | `/roadmaps/{name}/graph` | Interactive knowledge-graph visualisation (D3.js; selectable Networks-section layouts via a dropdown, default Mobile patent suits; pan/zoom, touch, tap-to-inspect) | HTML |
 | `/roadmaps/{name}/graph/data` | The graph's nodes and edges for the visualisation | JSON |

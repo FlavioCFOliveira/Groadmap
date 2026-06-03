@@ -26,9 +26,16 @@ func buildMux() *http.ServeMux {
 	mux.HandleFunc("GET /{$}", handleIndex)
 	mux.HandleFunc("HEAD /{$}", handleIndex)
 
-	// Roadmap detail page.
-	mux.HandleFunc("GET /roadmaps/{name}", handleDetail)
-	mux.HandleFunc("HEAD /roadmaps/{name}", handleDetail)
+	// Roadmap sprints page (landing): the roadmap's sprints as three tabs.
+	mux.HandleFunc("GET /roadmaps/{name}", handleSprints)
+	mux.HandleFunc("HEAD /roadmaps/{name}", handleSprints)
+
+	// Roadmap tasks page: the full task table. A distinct, more specific
+	// pattern than /roadmaps/{name}; Go 1.22+ ServeMux routes the literal
+	// "tasks" segment here and {name} alone to handleSprints without conflict,
+	// exactly as the sprints/{id} and graph patterns already coexist.
+	mux.HandleFunc("GET /roadmaps/{name}/tasks", handleTasks)
+	mux.HandleFunc("HEAD /roadmaps/{name}/tasks", handleTasks)
 
 	// Roadmap sprint page. {id} is parsed and validated inside the handler;
 	// a non-integer id, or an id that is not a sprint of the roadmap, is a 404

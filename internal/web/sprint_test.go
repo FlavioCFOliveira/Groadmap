@@ -30,7 +30,7 @@ func seededTask(now, title string) *models.Task {
 }
 
 // seedSprintFixture creates a roadmap with three sprints — one PENDING, one
-// OPEN, two CLOSED — and member tasks, so the detail-page classification and
+// OPEN, two CLOSED — and member tasks, so the sprints-page classification and
 // the sprint page can be exercised against genuine SQLite data. It returns the
 // roadmap name and the ids it created. The two CLOSED sprints get distinct
 // closed_at timestamps (set directly via the embedded *sql.DB) so the
@@ -132,11 +132,12 @@ func setClosed(t *testing.T, database *db.DB, id int, closedAt string) {
 	}
 }
 
-// TestDetail_SprintTabsLabelsAndDefault asserts the detail page renders the
-// three sprint tabs with the exact Portuguese labels in left-to-right order —
-// Proximos, Actual, Concluidos — and that Actual is the active/default tab on
-// load (SPEC/WEB.md Acceptance Criterion 10).
-func TestDetail_SprintTabsLabelsAndDefault(t *testing.T) {
+// TestSprints_SprintTabsLabelsAndDefault asserts the sprints landing page
+// renders the three sprint tabs with the exact Portuguese labels in
+// left-to-right order — Proximos, Actual, Concluidos — and that Actual is the
+// active/default tab on load (SPEC/WEB.md § Roadmap Sprints Page, Acceptance
+// Criterion 11).
+func TestSprints_SprintTabsLabelsAndDefault(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	f := seedSprintFixture(t, "web-sprint-tabs")
 	mux := buildMux()
@@ -163,12 +164,13 @@ func TestDetail_SprintTabsLabelsAndDefault(t *testing.T) {
 	}
 }
 
-// TestDetail_SprintClassificationAndLinks asserts each sprint is classified
+// TestSprints_SprintClassificationAndLinks asserts each sprint is classified
 // into the correct tab by status and that every sprint links to its page. The
 // PENDING sprint must be under Próximos, the OPEN sprint (with its tasks'
 // statuses) under Actual, and both CLOSED sprints under Concluídos in
-// closed_at-descending order (SPEC/WEB.md Acceptance Criteria 11/12).
-func TestDetail_SprintClassificationAndLinks(t *testing.T) {
+// closed_at-descending order (SPEC/WEB.md § Roadmap Sprints Page, Acceptance
+// Criteria 12/13).
+func TestSprints_SprintClassificationAndLinks(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	f := seedSprintFixture(t, "web-sprint-classify")
 	mux := buildMux()
@@ -354,17 +356,22 @@ func TestSprintPage_NotFoundCases(t *testing.T) {
 }
 
 // TestTaskModal_WiringAndContent asserts the read-only task detail modal
-// mechanism on both the detail page and the sprint page: each clickable task is
-// wired with data-bs-toggle="modal" to a matching modal element, the modal
-// shows the long free-text fields, and it contains no form/input/submit
-// (SPEC/WEB.md § Task Detail Modal; Acceptance Criterion 14).
+// mechanism on every page that shows clickable tasks: the tasks page, the
+// sprints landing page's Actual tab, and the sprint page. Each clickable task
+// is wired with data-bs-toggle="modal" to a matching modal element, the modal
+// shows the long free-text fields, and it contains no form/input/submit. The
+// asserted task (f.openTaskID) is a member of the OPEN sprint, so its modal is
+// rendered on the sprints page's Actual tab and on the sprint page, and it also
+// appears in the full task table on the tasks page (SPEC/WEB.md § Task Detail
+// Modal; Acceptance Criterion 15).
 func TestTaskModal_WiringAndContent(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	f := seedSprintFixture(t, "web-task-modal")
 	mux := buildMux()
 
 	for _, path := range []string{
-		"/roadmaps/" + f.name,                                // detail page (Tasks table + Actual tab)
+		"/roadmaps/" + f.name + "/tasks",                     // tasks page (full task table)
+		"/roadmaps/" + f.name,                                // sprints landing page (Actual tab)
 		"/roadmaps/" + f.name + "/sprints/" + itoa(f.openID), // sprint page
 	} {
 		body := servePage(t, mux, path)
@@ -401,7 +408,7 @@ func TestTaskModal_WiringAndContent(t *testing.T) {
 
 // paneSlice returns the substring of body starting at the opening marker of one
 // tab pane and ending just before the next pane's opening <div id="tab-, so an
-// assertion can confirm a sprint link lives in the EXPECTED pane. The detail
+// assertion can confirm a sprint link lives in the EXPECTED pane. The sprints
 // template renders the panes in the source order current, upcoming, closed.
 func paneSlice(t *testing.T, body, marker string) string {
 	t.Helper()

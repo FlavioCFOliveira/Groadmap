@@ -539,7 +539,7 @@ Under the roadmap's home directory at `~/.roadmaps/<name>/graph/` (a directory, 
 
 **What is `rmp web`?**
 
-A read-only, browser-based view of everything the CLI manages. It starts an HTTP server embedded in the `rmp` binary that lists every roadmap under `~/.roadmaps/` and lets you drill into a roadmap's tasks and sprints and an interactive visualisation of its knowledge graph. It only presents data; the CLI remains the sole write path.
+A read-only, browser-based view of everything the CLI manages. It starts an HTTP server embedded in the `rmp` binary that lists every roadmap under `~/.roadmaps/`. Selecting a roadmap lands you on its sprints page with the current sprint selected; from there a separate page shows the roadmap's full task list, and another shows an interactive visualisation of its knowledge graph. It only presents data; the CLI remains the sole write path.
 
 ```bash
 # Start on the default host (all interfaces) and port and open the browser

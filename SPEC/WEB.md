@@ -9,7 +9,8 @@
 - [Bind Address and Port Selection](#bind-address-and-port-selection)
 - [Routes and Pages](#routes-and-pages)
   - [Roadmap Index Page](#roadmap-index-page)
-  - [Roadmap Detail Page](#roadmap-detail-page)
+  - [Roadmap Sprints Page](#roadmap-sprints-page)
+  - [Roadmap Tasks Page](#roadmap-tasks-page)
   - [Roadmap Sprint Page](#roadmap-sprint-page)
   - [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page)
   - [Graph Data Endpoint](#graph-data-endpoint)
@@ -56,7 +57,11 @@ The interface is built on the Tabler admin-dashboard framework and presents a
 Tabler admin-shell layout in Tabler's dark theme across every page: a
 navigation sidebar, a top navbar, page headers, and Tabler cards, tables, and
 badges. The sidebar lists the roadmaps and, within a roadmap, links to that
-roadmap's Tasks, Sprints, and Graph views. Tabler and its assets are vendored
+roadmap's Sprints, Tasks, and Graph views: the Sprints link points to the
+roadmap's landing page at `/roadmaps/{name}`, the Tasks link points to
+`/roadmaps/{name}/tasks`, and the Graph link points to `/roadmaps/{name}/graph`;
+the sidebar highlights whichever of these views is active. Tabler and its assets
+are vendored
 and served locally, never from a content delivery network or any remote origin
 (see [Frontend and Embedded Assets](#frontend-and-embedded-assets) and
 [UI Framework](#ui-framework)).
@@ -72,15 +77,26 @@ usable without horizontal overflow (see
 The web interface exposes the following kinds of page for each roadmap:
 
 1. A roadmap index that lists every roadmap found under `~/.roadmaps/`.
-2. A roadmap detail page that shows that roadmap's tasks and sprints, read from
-   its SQLite `project.db`. The page presents the roadmap's sprints as three tabs
-   (Próximos, Actual, Concluídos) and links each sprint to its own page.
-3. A roadmap sprint page that shows all details of a single sprint and the
+2. A roadmap sprints page that is the roadmap's landing page, served at
+   `/roadmaps/{name}` and read from its SQLite `project.db`. It presents the
+   roadmap's sprints as three tabs (Próximos, Actual, Concluídos), with **Actual**
+   active by default, expands the OPEN ("current") sprint or sprints under Actual
+   with their member tasks, and links each sprint to its own page. It does not
+   render the full tasks table.
+3. A roadmap tasks page, served at `/roadmaps/{name}/tasks` and read from that
+   roadmap's `project.db`. It presents the full task table of the roadmap (every
+   task, any status), with each task row clickable to open the read-only task
+   detail modal.
+4. A roadmap sprint page that shows all details of a single sprint and the
    sprint's task list in planned in-sprint execution order, read from that
    roadmap's `project.db`.
-4. A roadmap knowledge-graph page that shows that roadmap's knowledge graph,
+5. A roadmap knowledge-graph page that shows that roadmap's knowledge graph,
    read from its GoGraph store under `~/.roadmaps/<name>/graph/`, as an
    interactive node-link visualisation.
+
+When a user selects a roadmap on the index page, the user lands on that
+roadmap's sprints page (`/roadmaps/{name}`), with the **Actual** tab — the
+current OPEN sprint or sprints — active by default.
 
 Where a task is shown clickable on these pages, selecting it opens a read-only
 task detail modal that displays all of the task's fields (see
@@ -109,32 +125,46 @@ task detail modal that displays all of the task's fields (see
 5. The roadmap index page lists every roadmap discovered under `~/.roadmaps/`,
    using the same roadmap-discovery rule the CLI uses (see
    [Roadmap Index Page](#roadmap-index-page)).
-6. The roadmap detail page shows the selected roadmap's tasks and sprints, with
-   the fields and relationships already defined in `MODELS.md` and `DATABASE.md`,
-   read from that roadmap's `project.db`. The detail page presents the roadmap's
-   sprints as three tabs, labelled **Próximos**, **Actual**, and **Concluídos**
-   from left to right, with **Actual** active by default. The interface classifies
-   each sprint into a tab by its status: a `PENDING` sprint appears under Próximos,
-   an `OPEN` sprint under Actual, and a `CLOSED` sprint under Concluídos. Próximos
-   lists PENDING sprints ordered by predicted execution order (ascending sprint
-   `id`, next first); Actual lists the OPEN sprint or sprints and shows the status
-   of all of their tasks; Concluídos lists CLOSED sprints ordered by most recently
-   closed first (`closed_at` descending, sprints without a `closed_at` last). Each
-   sprint shown in any tab is a clickable link to that sprint's own page (see
-   [Roadmap Detail Page](#roadmap-detail-page) and
+6. The roadmap sprints page is the roadmap's landing page. It shows the selected
+   roadmap's sprints, with the fields and relationships already defined in
+   `MODELS.md` and `DATABASE.md`, read from that roadmap's `project.db`, and is
+   served at `/roadmaps/{name}`. The page presents the roadmap's sprints as three
+   tabs, labelled **Próximos**, **Actual**, and **Concluídos** from left to right,
+   with **Actual** active by default. The interface classifies each sprint into a
+   tab by its status: a `PENDING` sprint appears under Próximos, an `OPEN` sprint
+   under Actual, and a `CLOSED` sprint under Concluídos. Próximos lists PENDING
+   sprints ordered by predicted execution order (ascending sprint `id`, next
+   first); Actual lists the OPEN sprint or sprints, expanded with their member
+   tasks, and shows the status of all of those tasks; Concluídos lists CLOSED
+   sprints ordered by most recently closed first (`closed_at` descending, sprints
+   without a `closed_at` last). Each sprint shown in any tab is a clickable link to
+   that sprint's own page. The sprints page does not render the full tasks table
+   (see [Roadmap Sprints Page](#roadmap-sprints-page) and
    [Roadmap Sprint Page](#roadmap-sprint-page)).
-7. The roadmap sprint page shows all details of a single sprint and the sprint's
+7. The roadmap tasks page shows the selected roadmap's full task table — every
+   task of the roadmap, of any status — with the fields and relationships already
+   defined in `MODELS.md` and `DATABASE.md`, read from that roadmap's `project.db`.
+   It is served at `/roadmaps/{name}/tasks`. Each task row is clickable: selecting
+   a row opens the read-only task detail modal for that task (see
+   [Roadmap Tasks Page](#roadmap-tasks-page) and
+   [Task Detail Modal](#task-detail-modal)).
+8. When a user selects a roadmap on the index page, the user lands on that
+   roadmap's sprints page (`/roadmaps/{name}`), with the **Actual** tab — the
+   current OPEN sprint or sprints — active by default (see
+   [Roadmap Index Page](#roadmap-index-page) and
+   [Roadmap Sprints Page](#roadmap-sprints-page)).
+9. The roadmap sprint page shows all details of a single sprint and the sprint's
    task list in the planned in-sprint execution order, read from that roadmap's
    `project.db`. It is served at `/roadmaps/{name}/sprints/{id}`, is read-only, and
    returns HTTP `404 Not Found` when `{id}` is not a valid integer or is not a
    sprint of the named roadmap (see [Roadmap Sprint Page](#roadmap-sprint-page)).
-8. Anywhere a task is shown clickable — the detail page Tasks table, the Actual
+10. Anywhere a task is shown clickable — the tasks page's task table, the Actual
    tab's task list, and the sprint page's task list — selecting the task opens a
    read-only task detail modal that displays all of the task's fields. The modal
    only displays data: it contains no form, no edit control, and no submit action,
    and it requires no new server endpoint and no new write path (see
    [Task Detail Modal](#task-detail-modal)).
-9. The roadmap knowledge-graph page shows the selected roadmap's knowledge graph
+11. The roadmap knowledge-graph page shows the selected roadmap's knowledge graph
    as an interactive node-link visualisation rendered with **D3.js**, read from
    that roadmap's GoGraph store, opened read-only exactly as the `graph query` and
    `graph search` subcommands open it. The page offers the complete set of
@@ -147,12 +177,12 @@ task detail modal that displays all of the task's fields (see
    [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library),
    and
    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
-10. Read access to a knowledge graph through the web interface MUST NOT write to
+12. Read access to a knowledge graph through the web interface MUST NOT write to
     the store and MUST NOT trigger the synchronous checkpoint or write-ahead-log
     truncation that write subcommands perform (see
     [Security and Constraints](#security-and-constraints) and
     `GRAPH.md § Synchronous Checkpoint on Write`).
-11. **The deliverable is fully self-contained.** The shipped `rmp` binary MUST
+13. **The deliverable is fully self-contained.** The shipped `rmp` binary MUST
    embed every component required to render and operate the web interface, with
    zero external runtime dependency. Every asset category — HTML templates, the
    stylesheet, all client JavaScript (including the D3.js knowledge-graph
@@ -165,7 +195,7 @@ task detail modal that displays all of the task's fields (see
    [Self-Contained Deliverable](#self-contained-deliverable),
    [Embedded Asset Categories](#embedded-asset-categories), and
    [Security and Constraints](#security-and-constraints)).
-12. **No runtime network fetch.** No page references a script, stylesheet, font,
+14. **No runtime network fetch.** No page references a script, stylesheet, font,
     image, or any other asset from a remote origin: no content delivery network,
     no Google Fonts or other remote font, script, or style host, and no external
     API. The interface renders and functions fully offline, with only the single
@@ -174,25 +204,27 @@ task detail modal that displays all of the task's fields (see
     request of its own (see
     [Self-Contained Deliverable](#self-contained-deliverable) and
     [Frontend and Embedded Assets](#frontend-and-embedded-assets)).
-13. **Responsive and mobile-first.** The web interface MUST be designed
+15. **Responsive and mobile-first.** The web interface MUST be designed
     responsive and mobile-first: base styles target small phone-sized viewports
     first and progressively enhance for larger tablet and desktop viewports
     through `min-width` media queries, and every page adapts fluidly across
     viewport sizes. This requirement applies to every page — the roadmap index,
-    the roadmap detail page, the roadmap sprint page, and the knowledge-graph
-    page — and to the interactive components, including the sprint tabs, the task
-    detail modal, and the interactive knowledge-graph visualisation, which MUST
-    all remain usable on touch and small-viewport devices (see
-    [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
-14. **Tabler admin-shell layout in the dark theme.** The interface presents a
+    the roadmap sprints page, the roadmap tasks page, the roadmap sprint page, and
+    the knowledge-graph page — and to the interactive components, including the
+    sprint tabs, the task detail modal, and the interactive knowledge-graph
+    visualisation, which MUST all remain usable on touch and small-viewport devices
+    (see [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
+16. **Tabler admin-shell layout in the dark theme.** The interface presents a
     Tabler admin-shell layout in Tabler's dark theme across every page: a
     navigation sidebar (listing the roadmaps and, within a roadmap, that
-    roadmap's Tasks, Sprints, and Graph views), a top navbar, page headers, and
-    Tabler cards, tables, and badges. The interface is built on the vendored
-    Tabler framework; on small viewports the navigation sidebar collapses to an
-    off-canvas (hamburger) menu (see [UI Framework](#ui-framework) and
+    roadmap's Sprints, Tasks, and Graph views, resolving to `/roadmaps/{name}`,
+    `/roadmaps/{name}/tasks`, and `/roadmaps/{name}/graph` respectively and
+    highlighting the active view), a top navbar, page headers, and Tabler cards,
+    tables, and badges. The interface is built on the vendored Tabler framework;
+    on small viewports the navigation sidebar collapses to an off-canvas
+    (hamburger) menu (see [UI Framework](#ui-framework) and
     [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
-15. Startup failures (for example, the chosen port is already in use, the data
+17. Startup failures (for example, the chosen port is already in use, the data
     directory is unreadable, or a flag value is invalid) are reported as plain
     text to stderr and map to the existing exit codes; no new exit code is
     introduced (see [Error Handling and Exit Codes](#error-handling-and-exit-codes)).
@@ -289,7 +321,8 @@ produced from embedded `html/template` templates. Page routes return HTML
 | Route | Method | Purpose | Response |
 |-------|--------|---------|----------|
 | `/` | GET, HEAD | Roadmap index | HTML list of roadmaps |
-| `/roadmaps/{name}` | GET, HEAD | Roadmap detail (tasks and sprint tabs) | HTML |
+| `/roadmaps/{name}` | GET, HEAD | Roadmap sprints page (landing; sprint tabs) | HTML |
+| `/roadmaps/{name}/tasks` | GET, HEAD | Roadmap tasks page (full task table) | HTML |
 | `/roadmaps/{name}/sprints/{id}` | GET, HEAD | Roadmap sprint page (all sprint details and the sprint's task list) | HTML |
 | `/roadmaps/{name}/graph` | GET, HEAD | Roadmap knowledge-graph page (interactive visualisation) | HTML |
 | `/roadmaps/{name}/graph/data` | GET, HEAD | Graph nodes and edges for the visualisation | JSON |
@@ -334,38 +367,39 @@ how the `rmp web` process itself terminates.
   same discovery rule the CLI uses for `rmp roadmap list`: each immediate
   subdirectory of `~/.roadmaps/` that contains a `project.db` is one roadmap (see
   `COMMANDS.md § List Roadmaps` and `ARCHITECTURE.md § Directory Structure`,
-  location rule 9). For each roadmap the page links to its detail page
-  (`/roadmaps/{name}`) and its knowledge-graph page (`/roadmaps/{name}/graph`).
+  location rule 9). For each roadmap the page links to its sprints page (the
+  landing page, `/roadmaps/{name}`) and its knowledge-graph page
+  (`/roadmaps/{name}/graph`). Selecting a roadmap lands the user on that
+  roadmap's sprints page.
 - **Empty state.** When no roadmaps exist under `~/.roadmaps/`, the index page
   renders successfully (HTTP 200) and shows a clear empty-state message telling
   the user that no roadmaps were found and that roadmaps are created with the CLI
   (`rmp roadmap create <name>`). The absence of roadmaps is not an error for the
   web interface; the server still starts and serves the empty index.
 
-### Roadmap Detail Page
+### Roadmap Sprints Page
 
 - **Route:** `GET /roadmaps/{name}`
-- **Content:** A read-only presentation of the named roadmap's tasks and sprints,
-  read from that roadmap's `project.db`.
-- **Tasks.** The page presents the tasks of the roadmap with the fields defined
-  for the `Task` model in `MODELS.md § Task`: title, status, type, priority,
-  severity, functional/technical/acceptance text, specialists, lifecycle
-  timestamps, parent task link, subtask relationships, and dependency
-  relationships (`depends_on` and `blocks`). The page does not redefine these
-  fields; `MODELS.md` and `DATABASE.md` remain canonical. Each task row in the
-  Tasks table is clickable: selecting a row opens the read-only task detail modal
-  for that task (see [Task Detail Modal](#task-detail-modal)).
+- **Landing page.** This is the roadmap's landing page: selecting a roadmap on the
+  index page lands the user here (see [Roadmap Index Page](#roadmap-index-page)).
+- **Content:** A read-only presentation of the named roadmap's sprints, read from
+  that roadmap's `project.db`. This page does **not** render the full tasks table;
+  the full task table is its own page at `/roadmaps/{name}/tasks` (see
+  [Roadmap Tasks Page](#roadmap-tasks-page)).
 - **Sprints.** The page presents the roadmap's sprints as three tabs. From left
   to right the tab labels are exactly **Próximos**, **Actual**, and
   **Concluídos**, and the **Actual** tab is the active tab by default when the
-  page loads. The interface classifies each sprint into exactly one tab by its
-  `Sprint` status (`MODELS.md § Sprint`, status enum in `MODELS.md § Enums`):
-  a `PENDING` sprint goes to Próximos, an `OPEN` sprint to Actual, and a `CLOSED`
-  sprint to Concluídos.
+  page loads. "Current sprint selected by default" means the Actual tab — the OPEN
+  sprint or sprints — is the active tab on landing. The interface classifies each
+  sprint into exactly one tab by its `Sprint` status (`MODELS.md § Sprint`, status
+  enum in `MODELS.md § Enums`): a `PENDING` sprint goes to Próximos, an `OPEN`
+  sprint to Actual, and a `CLOSED` sprint to Concluídos.
   - **Actual** (the default active tab) lists the OPEN sprint or sprints — those
-    in progress — and shows the state of all of their tasks, presenting each task
-    with its status. When no sprint is OPEN, the Actual tab shows a clear
-    empty-state message and no sprint.
+    in progress — expanded with their member tasks, and shows the state of all of
+    those tasks, presenting each task with its status. The member tasks are listed
+    in the planned in-sprint execution order (the `sprint_tasks` order; see
+    `MODELS.md § Sprint` and `DATABASE.md § Relationships`). When no sprint is
+    OPEN, the Actual tab shows a clear empty-state message and no sprint.
   - **Próximos** lists the PENDING sprints — planned but not yet started — ordered
     by predicted execution order. Because a sprint carries no planned-date field,
     the predicted execution order is the creation order: ascending sprint `id`,
@@ -377,18 +411,47 @@ how the `rmp web` process itself terminates.
     message.
   - Every sprint shown in any of the three tabs is a clickable link to that
     sprint's own page at `/roadmaps/{name}/sprints/{id}` (see
-    [Roadmap Sprint Page](#roadmap-sprint-page)). On the Actual tab, the tasks
-    shown for an OPEN sprint are also clickable and open the task detail modal
-    (see [Task Detail Modal](#task-detail-modal)).
+    [Roadmap Sprint Page](#roadmap-sprint-page)). On the Actual tab, the member
+    tasks shown for an OPEN sprint are also clickable and open the task detail
+    modal (see [Task Detail Modal](#task-detail-modal)).
 - **Relationships shown.** The page surfaces, in a read-only view, the
-  relationships already modelled in the data: task-to-sprint membership
-  (including task order within a sprint), task parent/subtask hierarchy, and task
-  dependency edges. The presentation MUST reflect the same relationships defined
-  in `DATABASE.md § Relationships`; it introduces no new relationship.
+  relationships already modelled in the data: task-to-sprint membership (including
+  task order within a sprint). The presentation MUST reflect the same
+  relationships defined in `DATABASE.md § Relationships`; it introduces no new
+  relationship.
 - **Read-only.** The page renders data only. It contains no form, button, or
   link that submits a change; there is no edit affordance of any kind. The sprint
   links and the task detail modal navigate to or display read-only views and
   submit no change.
+
+### Roadmap Tasks Page
+
+- **Route:** `GET /roadmaps/{name}/tasks`
+- **Content:** A read-only presentation of the named roadmap's full task table —
+  every task of the roadmap, of any status — read from that roadmap's
+  `project.db`. This is the same Tasks table presentation that the roadmap's
+  landing page used to carry, now served at its own endpoint.
+- **Tasks.** The page presents the tasks of the roadmap with the fields defined
+  for the `Task` model in `MODELS.md § Task`: title, status, type, priority,
+  severity, functional/technical/acceptance text, specialists, lifecycle
+  timestamps, parent task link, subtask relationships, and dependency
+  relationships (`depends_on` and `blocks`). The page does not redefine these
+  fields; `MODELS.md` and `DATABASE.md` remain canonical. Each task row in the
+  task table is clickable: selecting a row opens the read-only task detail modal
+  for that task (see [Task Detail Modal](#task-detail-modal)).
+- **Relationships shown.** The page surfaces, in a read-only view, the
+  relationships already modelled in the data: task-to-sprint membership, task
+  parent/subtask hierarchy, and task dependency edges. The presentation MUST
+  reflect the same relationships defined in `DATABASE.md § Relationships`; it
+  introduces no new relationship.
+- **Path parameters.** `{name}` is validated against the roadmap-name rules
+  exactly as on the other roadmap routes (the path-traversal guard in
+  [Routes and Pages](#routes-and-pages) and
+  [Security and Constraints](#security-and-constraints)); an invalid or
+  nonexistent `{name}` returns HTTP `404 Not Found`.
+- **Read-only.** The page renders data only. It contains no form, button, or
+  link that submits a change; there is no edit affordance of any kind. The task
+  detail modal displays a read-only view and submits no change.
 
 ### Roadmap Sprint Page
 
@@ -495,8 +558,8 @@ The task detail modal is a popup overlay that displays the full set of fields fo
 one task. It is not a separate route; it is part of the pages that show clickable
 tasks.
 
-- **Where it appears.** Anywhere a task is shown clickable: the Tasks table on the
-  roadmap detail page, the Actual tab's task list on the roadmap detail page, and
+- **Where it appears.** Anywhere a task is shown clickable: the task table on the
+  roadmap tasks page, the Actual tab's task list on the roadmap sprints page, and
   the task list on the roadmap sprint page. Selecting a task opens the modal for
   that task.
 - **Fields shown.** The modal displays all of the task's fields as defined for the
@@ -536,13 +599,15 @@ location rules, and never writes to it.
 
 ### Tasks and Sprints from SQLite
 
-1. For a roadmap detail request or a roadmap sprint request, the server resolves
-   the roadmap's database at `~/.roadmaps/{name}/project.db` (see
-   `ARCHITECTURE.md § Directory Structure`) and reads its tasks and sprints using
-   the existing read queries defined in `DATABASE.md § Main SQL Queries`. The task
-   data the task detail modal displays comes from the same read queries; the modal
-   adds no separate request. The web interface adds no new schema, no new table,
-   and no new write query.
+1. For a roadmap sprints request, a roadmap tasks request, or a roadmap sprint
+   request, the server resolves the roadmap's database at
+   `~/.roadmaps/{name}/project.db` (see `ARCHITECTURE.md § Directory Structure`)
+   and reads its sprints and tasks using the existing read queries defined in
+   `DATABASE.md § Main SQL Queries`. The sprints page reads the roadmap's sprints
+   and, for each OPEN sprint on the Actual tab, its ordered member tasks; the tasks
+   page reads the roadmap's full task list. The task data the task detail modal
+   displays comes from the same read queries; the modal adds no separate request.
+   The web interface adds no new schema, no new table, and no new write query.
 2. The server opens the database for reading only. It MUST NOT modify rows, MUST
    NOT write an audit entry, and MUST NOT alter the schema. A web read produces no
    audit-log entry, because the audit log records changes and a read is not a
@@ -666,9 +731,12 @@ read from the host filesystem at runtime.
 1. The web interface is built on **Tabler**, the admin-dashboard CSS and
    JavaScript framework (built on Bootstrap). Tabler provides the admin-shell
    layout — the navigation sidebar, the top navbar, page headers, and the cards,
-   tables, badges, and buttons used across every page. Tabler also provides the
-   tabs used for the sprint presentation on the roadmap detail page and the modal
-   used for the task detail popup.
+   tables, badges, and buttons used across every page. The sidebar's per-roadmap
+   links resolve to the roadmap's three views — Sprints at `/roadmaps/{name}` (the
+   landing page), Tasks at `/roadmaps/{name}/tasks`, and Graph at
+   `/roadmaps/{name}/graph` — and the sidebar highlights whichever of these is the
+   active view. Tabler also provides the tabs used for the sprint presentation on
+   the roadmap sprints page and the modal used for the task detail popup.
 2. The interface uses Tabler's **dark theme**.
 3. Tabler is **vendored**: its already-built distribution (the compiled Tabler
    CSS and JavaScript) is committed to the repository under the web asset set and
@@ -771,22 +839,25 @@ experience is the baseline that larger viewports enhance.
    navigation and other interactive controls present touch-friendly, appropriately
    sized hit targets.
 3. **Applies to every page.** The mobile-first, responsive requirement applies to
-   every page: the roadmap index page, the roadmap detail page (tasks and the
-   sprint tabs), the roadmap sprint page, and the knowledge-graph page.
-4. **Usable tabular data on narrow screens.** The roadmap detail page and the
-   roadmap sprint page present task and sprint data that is tabular by nature.
-   This data MUST remain usable on narrow screens, for example through responsive
-   or stacked tables or an equivalent layout that avoids horizontal overflow, while
-   still presenting the fields and relationships defined for those pages (see
-   [Roadmap Detail Page](#roadmap-detail-page) and
+   every page: the roadmap index page, the roadmap sprints page (the sprint tabs),
+   the roadmap tasks page (the full task table), the roadmap sprint page, and the
+   knowledge-graph page.
+4. **Usable tabular data on narrow screens.** The roadmap sprints page, the
+   roadmap tasks page, and the roadmap sprint page present sprint and task data
+   that is tabular by nature. This data MUST remain usable on narrow screens, for
+   example through responsive or stacked tables or an equivalent layout that
+   avoids horizontal overflow, while still presenting the fields and relationships
+   defined for those pages (see [Roadmap Sprints Page](#roadmap-sprints-page),
+   [Roadmap Tasks Page](#roadmap-tasks-page), and
    [Roadmap Sprint Page](#roadmap-sprint-page)).
 5. **Touch- and small-viewport-usable sprint tabs and task modal.** The three
-   sprint tabs on the roadmap detail page (Próximos, Actual, Concluídos) and the
+   sprint tabs on the roadmap sprints page (Próximos, Actual, Concluídos) and the
    task detail modal MUST remain usable on touch input and on small viewports. The
    tabs offer touch-friendly controls to switch between them without horizontal
    overflow, and the task detail modal fits the viewport, scrolls its content when
    the task's text is long, and offers touch-friendly controls to open and dismiss
-   it (see [Roadmap Detail Page](#roadmap-detail-page) and
+   it (see [Roadmap Sprints Page](#roadmap-sprints-page),
+   [Roadmap Tasks Page](#roadmap-tasks-page), and
    [Task Detail Modal](#task-detail-modal)).
 6. **Touch- and mobile-usable graph visualisation.** The interactive
    knowledge-graph visualisation MUST remain usable on touch and mobile devices.
@@ -920,30 +991,45 @@ Rules:
    `rmp web --port notanumber` fails with exit code 6 (non-integer port).
 6. With at least one roadmap present, `GET /` returns HTTP 200 and an HTML page
    listing every roadmap discovered under `~/.roadmaps/`, with links to each
-   roadmap's detail and graph pages.
+   roadmap's sprints page (the landing page, `/roadmaps/{name}`) and graph page.
+   Selecting a roadmap lands the user on its sprints page with the **Actual** tab
+   (the current OPEN sprint or sprints) active by default.
 7. With no roadmaps present, `rmp web` still starts and `GET /` returns HTTP 200
    with an empty-state message; the absence of roadmaps is not an error.
 8. `GET /roadmaps/{name}` for an existing roadmap returns HTTP 200 and an HTML
-   page showing that roadmap's tasks and sprints with the fields and
-   relationships defined in `MODELS.md` and `DATABASE.md`, and contains no form,
-   button, or link that submits a change.
-9. `GET /roadmaps/{name}` for a non-existent roadmap returns HTTP 404, and a
-   request whose `{name}` violates the roadmap-name rules (for example
-   `../etc`) returns HTTP 404 without touching the filesystem outside
+   page that renders the roadmap's sprints page: the roadmap's sprints as three
+   tabs with the **Actual** tab active by default and the OPEN sprint or sprints
+   expanded under Actual with their member tasks, using the fields and
+   relationships defined in `MODELS.md` and `DATABASE.md`. The page does **not**
+   render the full tasks table, and it contains no form, button, or link that
+   submits a change.
+9. `GET /roadmaps/{name}/tasks` for an existing roadmap returns HTTP 200 and an
+   HTML page that renders the roadmap's full task table — every task, of any
+   status — with the fields and relationships defined in `MODELS.md` and
+   `DATABASE.md`. This is a distinct endpoint from the sprints page. Each task row
+   is clickable and opens a working read-only task detail modal, and the page
+   contains no form, button, or link that submits a change. `GET /roadmaps/{name}/tasks`
+   for a non-existent roadmap, or a request whose `{name}` violates the
+   roadmap-name rules, returns HTTP 404 without touching the filesystem outside
    `~/.roadmaps/`.
-10. On the roadmap detail page, the roadmap's sprints are presented as three tabs
+10. `GET /roadmaps/{name}` for a non-existent roadmap returns HTTP 404, and a
+    request whose `{name}` violates the roadmap-name rules (for example
+    `../etc`) returns HTTP 404 without touching the filesystem outside
+    `~/.roadmaps/`.
+11. On the roadmap sprints page, the roadmap's sprints are presented as three tabs
     whose labels, from left to right, are exactly **Próximos**, **Actual**, and
     **Concluídos**, and the **Actual** tab is the active tab by default when the
     page loads.
-11. On the roadmap detail page, sprints are classified into the tabs by their
+12. On the roadmap sprints page, sprints are classified into the tabs by their
     status: every `PENDING` sprint appears under Próximos ordered by ascending
-    sprint `id`; every `OPEN` sprint appears under Actual with the status of each
-    of its tasks shown; every `CLOSED` sprint appears under Concluídos ordered by
-    `closed_at` descending, with any CLOSED sprint lacking a `closed_at` value
-    sorted last. A tab with no matching sprint shows a clear empty-state message.
-12. On the roadmap detail page, every sprint shown in any tab is a clickable link
+    sprint `id`; every `OPEN` sprint appears under Actual, expanded with its member
+    tasks in in-sprint order and the status of each of those tasks shown; every
+    `CLOSED` sprint appears under Concluídos ordered by `closed_at` descending,
+    with any CLOSED sprint lacking a `closed_at` value sorted last. A tab with no
+    matching sprint shows a clear empty-state message.
+13. On the roadmap sprints page, every sprint shown in any tab is a clickable link
     to that sprint's page at `/roadmaps/{name}/sprints/{id}`.
-13. `GET /roadmaps/{name}/sprints/{id}` for a sprint of an existing roadmap returns
+14. `GET /roadmaps/{name}/sprints/{id}` for a sprint of an existing roadmap returns
     HTTP 200 and an HTML page showing all details of that sprint (id, status,
     description, capacity `max_tasks`, `created_at`, `started_at`, `closed_at`, and
     `task_count`) and the sprint's task list in `sprint_tasks` order (the planned
@@ -951,7 +1037,7 @@ Rules:
     submits a change. A request whose `{id}` is not a valid integer, or is an
     integer that is not a sprint of the named roadmap, returns HTTP 404, and a
     request whose `{name}` is invalid or nonexistent returns HTTP 404.
-14. Clicking a task anywhere it is shown clickable — the detail page Tasks table,
+15. Clicking a task anywhere it is shown clickable — the tasks page's task table,
     the Actual tab's task list, and the sprint page's task list — opens a modal
     popup that displays all of that task's fields (`id`, `title`, `status`, `type`,
     `priority`, `severity`, `functional_requirements`, `technical_requirements`,
@@ -961,7 +1047,12 @@ Rules:
     control, and no submit action, and it triggers no new server request and no new
     write path. The modal and the sprint tabs are usable on touch input and on a
     small phone-sized viewport.
-15. `GET /roadmaps/{name}/graph` for an existing roadmap returns HTTP 200 and an
+16. The admin-shell sidebar's per-roadmap links target the two distinct endpoints:
+    the Sprints link points to `/roadmaps/{name}` (the landing page) and the Tasks
+    link points to `/roadmaps/{name}/tasks`; the sidebar highlights whichever of
+    the two is the active view, and the Graph link points to
+    `/roadmaps/{name}/graph`.
+17. `GET /roadmaps/{name}/graph` for an existing roadmap returns HTTP 200 and an
     HTML page that loads the vendored D3.js library (and the d3-sankey plugin) from
     `/static/...` (not from any remote origin) and renders an interactive node-link
     visualisation with pan and zoom that is usable with touch gestures (pan,
@@ -976,29 +1067,30 @@ Rules:
     selected layout (for example a cyclic graph selected as Sankey), the page shows
     a clear, read-only in-place message instead of erroring, and the user can select
     a different layout; touch usability is preserved across all layouts.
-16. `GET /roadmaps/{name}/graph/data` returns HTTP 200 and JSON in the shape
+18. `GET /roadmaps/{name}/graph/data` returns HTTP 200 and JSON in the shape
     defined in `DATA_FORMATS.md § Graph View Data`, populated from a read-only
     query against the roadmap's GoGraph store.
-17. After serving any number of graph page and graph data requests for a roadmap
+19. After serving any number of graph page and graph data requests for a roadmap
     that has never been written, the graph store directory contains no `snapshot/`
     subdirectory and no checkpoint has run, proving the web read path is read-only
     (see `GRAPH.md § Synchronous Checkpoint on Write`).
-18. Serving roadmap detail pages and roadmap sprint pages produces **no** new
-    audit-log entry in the roadmap's `project.db` (a read is not a change).
-19. A `POST`, `PUT`, `PATCH`, or `DELETE` request to any route returns HTTP 405.
-20. A request for a `/static/...` path that is not in the embedded asset set
+20. Serving roadmap sprints pages, roadmap tasks pages, and roadmap sprint pages
+    produces **no** new audit-log entry in the roadmap's `project.db` (a read is
+    not a change).
+21. A `POST`, `PUT`, `PATCH`, or `DELETE` request to any route returns HTTP 405.
+22. A request for a `/static/...` path that is not in the embedded asset set
     returns HTTP 404, and no `/static/...` request can read a file outside the
     embedded asset set.
-21. Every page the interface serves loads all of its assets — the vendored Tabler
+23. Every page the interface serves loads all of its assets — the vendored Tabler
     CSS and JavaScript, the D3.js graph library and the d3-sankey plugin, the
     Tabler Icons webfont, the Inter font, and every other script, stylesheet, font,
     icon, image, and the favicon — only from `/static/...` on the same server; no
     page references a
     content delivery network, a remote font host (no Google Fonts), or any other
     remote origin, and the running server makes no outbound network request.
-22. Sending `SIGINT` (`Ctrl+C`) or `SIGTERM` to a running `rmp web` shuts the
+24. Sending `SIGINT` (`Ctrl+C`) or `SIGTERM` to a running `rmp web` shuts the
     server down gracefully and the process exits 0.
-23. The deliverable is fully self-contained: the binary serves the interface with
+25. The deliverable is fully self-contained: the binary serves the interface with
     zero external runtime dependency. Every embedded asset category in
     [Embedded Asset Categories](#embedded-asset-categories) — HTML templates, the
     stylesheet, all client JavaScript including the D3.js bundle and the d3-sankey
@@ -1006,26 +1098,27 @@ Rules:
     is embedded via
     `go:embed`, and the build produces a single self-contained binary (see
     `BUILD.md § Vendored Web Assets`).
-24. The interface works with networking disabled and with only the `rmp` binary
+26. The interface works with networking disabled and with only the `rmp` binary
     present on disk (no sidecar files and no separate assets directory): every
     page renders and functions fully, including the knowledge-graph visualisation,
     with no network egress.
-25. On a small phone-sized viewport, the roadmap index page, the roadmap detail
-    page, the roadmap sprint page, and the knowledge-graph page each render without
-    horizontal scrolling, with readable typography and touch-friendly hit targets,
-    demonstrating the mobile-first base styles.
-26. On the roadmap detail page and the roadmap sprint page at a narrow viewport,
-    the task and sprint data remains usable without horizontal overflow (for
-    example through responsive or stacked tables or an equivalent layout) while
-    still showing the fields and relationships defined for those pages.
-27. Every HTML page the interface serves includes the responsive viewport meta
+27. On a small phone-sized viewport, the roadmap index page, the roadmap sprints
+    page, the roadmap tasks page, the roadmap sprint page, and the knowledge-graph
+    page each render without horizontal scrolling, with readable typography and
+    touch-friendly hit targets, demonstrating the mobile-first base styles.
+28. On the roadmap sprints page, the roadmap tasks page, and the roadmap sprint
+    page at a narrow viewport, the sprint and task data remains usable without
+    horizontal overflow (for example through responsive or stacked tables or an
+    equivalent layout) while still showing the fields and relationships defined for
+    those pages.
+29. Every HTML page the interface serves includes the responsive viewport meta
     tag, and no page loads a CSS framework or reset from a remote origin; the
     Tabler CSS framework in use is vendored and served from `/static/...`.
-28. Every page renders in the Tabler admin-shell layout — a navigation sidebar
-    (listing the roadmaps and, within a roadmap, that roadmap's Tasks, Sprints,
+30. Every page renders in the Tabler admin-shell layout — a navigation sidebar
+    (listing the roadmaps and, within a roadmap, that roadmap's Sprints, Tasks,
     and Graph views), a top navbar, and a page header — using Tabler cards,
     tables, and badges, and the interface renders in Tabler's dark theme.
-29. On a small phone-sized viewport, the admin-shell navigation sidebar is not
+31. On a small phone-sized viewport, the admin-shell navigation sidebar is not
     shown expanded inline; it collapses to an off-canvas (hamburger) menu that the
     user can open, so each page stays usable without horizontal overflow.
 
@@ -1043,9 +1136,9 @@ Rules:
 - Web module responsibilities and command lifecycle →
   `ARCHITECTURE.md § Modules and Responsibilities` and
   `ARCHITECTURE.md § Command Lifecycle`
-- Task and Sprint fields presented in the detail page, the sprint page, and the
-  task detail modal → `MODELS.md` and `DATABASE.md`
-- Sprint status enum and lifecycle that classify sprints into the detail-page tabs
+- Task and Sprint fields presented in the sprints page, the tasks page, the sprint
+  page, and the task detail modal → `MODELS.md` and `DATABASE.md`
+- Sprint status enum and lifecycle that classify sprints into the sprints-page tabs
   → `MODELS.md § Enums` and `STATE_MACHINE.md § Sprint State Machine`
 - Embedded asset bundling, the vendored Tabler framework and D3.js (with
   d3-sankey) assets, and the self-contained-binary build verification →

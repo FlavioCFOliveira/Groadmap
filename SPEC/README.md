@@ -15,7 +15,8 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Help text structure | `HELP.md` |
 | Knowledge graph feature (design, persistence, guard rails) | `GRAPH.md` |
 | Read-only web interface (`rmp web`, server, pages, graph viz) | `WEB.md` |
-| Web roadmap detail page sprint tabs (Próximos / Actual / Concluídos) | `WEB.md § Roadmap Detail Page` |
+| Web roadmap sprints page / landing (`/roadmaps/{name}`, sprint tabs Próximos / Actual / Concluídos) | `WEB.md § Roadmap Sprints Page` |
+| Web roadmap tasks page (`/roadmaps/{name}/tasks`, full task table) | `WEB.md § Roadmap Tasks Page` |
 | Web sprint page (`/roadmaps/{name}/sprints/{id}`) | `WEB.md § Roadmap Sprint Page` |
 | Web task detail modal (read-only task popup) | `WEB.md § Task Detail Modal` |
 | `rmp web` command syntax / flags | `COMMANDS.md § Web Interface` |

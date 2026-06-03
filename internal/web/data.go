@@ -19,26 +19,43 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
-// detailData is the view model handed to the roadmap detail template. It
-// presents the roadmap's tasks and its sprints grouped into the three detail
-// tabs (Próximos / Actual / Concluídos), plus the relationships modelled in
-// the data: sprint membership (with in-sprint order), the parent/subtask
-// hierarchy, and dependency edges. It is read-only; nothing here is
-// persisted.
+// sprintsData is the view model handed to the roadmap sprints template (the
+// roadmap's landing page). It presents the roadmap's sprints grouped into the
+// three tabs (Próximos / Actual / Concluídos), plus the relationships modelled
+// in the data: sprint membership with in-sprint order. It is read-only;
+// nothing here is persisted. The sprints page does NOT render the full tasks
+// table (SPEC/WEB.md § Roadmap Sprints Page).
 //
-// Tasks is the full, unfiltered task list rendered in the Tasks table and the
-// task detail modals. The three sprint slices are disjoint partitions of the
-// roadmap's sprints by status (SPEC/WEB.md § Roadmap Detail Page):
+// The three sprint slices are disjoint partitions of the roadmap's sprints by
+// status (SPEC/WEB.md § Roadmap Sprints Page):
 //   - SprintsUpcoming: PENDING sprints, ascending id (predicted execution order).
 //   - SprintsCurrent:  OPEN sprints (zero, one, or more), ascending id.
 //   - SprintsClosed:   CLOSED sprints, closed_at descending (nil/empty last).
-type detailData struct {
+//
+// ModalTasks carries the tasks for which the page renders a task detail modal:
+// the OPEN sprints' member tasks (those shown clickable on the Actual tab),
+// deduplicated by task ID so each modal id is rendered exactly once. The
+// Próximos and Concluídos tabs only link to sprint pages and do not open task
+// modals, so their member tasks are not included here.
+type sprintsData struct {
 	Name            string
 	Chrome          chrome
-	Tasks           []models.Task
 	SprintsUpcoming []sprintView
 	SprintsCurrent  []sprintView
 	SprintsClosed   []sprintView
+	ModalTasks      []models.Task
+}
+
+// tasksData is the view model handed to the roadmap tasks template. It
+// presents the roadmap's full task table — every task, any status — with each
+// row clickable to open the read-only task detail modal. Tasks is the full,
+// unfiltered task list rendered in the Tasks table and the task detail modals.
+// It is read-only; nothing here is persisted (SPEC/WEB.md § Roadmap Tasks
+// Page).
+type tasksData struct {
+	Name   string
+	Chrome chrome
+	Tasks  []models.Task
 }
 
 // sprintView pairs a sprint with its ordered member tasks. Tasks preserves
@@ -79,20 +96,66 @@ func loadRoadmapNames() ([]string, error) {
 	return utils.ListRoadmaps()
 }
 
-// loadDetail reads a roadmap's tasks and sprints read-only. It opens the
-// roadmap database, reads every task (no status filter) and every sprint,
-// resolves each sprint's ordered member tasks, and classifies the sprints
-// into the three detail-page tabs. The database handle is released before the
-// function returns; no row is written and no audit entry is produced
+// loadSprints reads a roadmap's sprints read-only for the sprints landing
+// page. It opens the roadmap database, reads every sprint, resolves each
+// sprint's ordered member tasks, and classifies the sprints into the three
+// tabs. It does NOT read the full task table — the sprints page does not
+// render it (SPEC/WEB.md § Roadmap Sprints Page). The database handle is
+// released before the function returns; no row is written and no audit entry
+// is produced (SPEC/WEB.md § Tasks and Sprints from SQLite).
+//
+// ModalTasks is the deduplicated set of OPEN-sprint member tasks the Actual
+// tab shows clickable, so the page renders exactly one task detail modal per
+// distinct task without scanning the whole roadmap.
+//
+// The caller is responsible for the {name} validation and existence check
+// (resolveRoadmap); this function trusts name is a validated, existing
+// roadmap.
+func loadSprints(ctx context.Context, name string) (sprintsData, error) {
+	database, err := db.OpenExisting(name)
+	if err != nil {
+		return sprintsData{}, err
+	}
+	defer database.Close() //nolint:errcheck // read-only handle; close error is non-actionable
+
+	sprints, err := database.ListSprints(ctx, nil)
+	if err != nil {
+		return sprintsData{}, err
+	}
+
+	views := make([]sprintView, 0, len(sprints))
+	for _, sp := range sprints {
+		orderedTasks, terr := sprintOrderedTasks(ctx, database, sp.ID)
+		if terr != nil {
+			return sprintsData{}, terr
+		}
+		views = append(views, sprintView{Sprint: sp, Tasks: orderedTasks})
+	}
+
+	upcoming, current, closed := classifySprints(views)
+	return sprintsData{
+		Name:            name,
+		SprintsUpcoming: upcoming,
+		SprintsCurrent:  current,
+		SprintsClosed:   closed,
+		ModalTasks:      dedupeSprintTasks(current),
+	}, nil
+}
+
+// loadTasks reads a roadmap's full task table read-only for the tasks page. It
+// opens the roadmap database, reads every task (no status filter), and returns
+// it. It does NOT read sprints — the tasks page only shows the task table
+// (SPEC/WEB.md § Roadmap Tasks Page). The database handle is released before
+// the function returns; no row is written and no audit entry is produced
 // (SPEC/WEB.md § Tasks and Sprints from SQLite).
 //
 // The caller is responsible for the {name} validation and existence check
 // (resolveRoadmap); this function trusts name is a validated, existing
 // roadmap.
-func loadDetail(ctx context.Context, name string) (detailData, error) {
+func loadTasks(ctx context.Context, name string) (tasksData, error) {
 	database, err := db.OpenExisting(name)
 	if err != nil {
-		return detailData{}, err
+		return tasksData{}, err
 	}
 	defer database.Close() //nolint:errcheck // read-only handle; close error is non-actionable
 
@@ -101,31 +164,32 @@ func loadDetail(ctx context.Context, name string) (detailData, error) {
 	// blocks, subtask_count, and parent_task_id.
 	tasks, err := database.ListTasks(ctx, &db.TaskListFilter{Limit: models.MaxTaskLimit})
 	if err != nil {
-		return detailData{}, err
+		return tasksData{}, err
 	}
 
-	sprints, err := database.ListSprints(ctx, nil)
-	if err != nil {
-		return detailData{}, err
-	}
+	return tasksData{Name: name, Tasks: tasks}, nil
+}
 
-	views := make([]sprintView, 0, len(sprints))
-	for _, sp := range sprints {
-		orderedTasks, terr := sprintOrderedTasks(ctx, database, sp.ID)
-		if terr != nil {
-			return detailData{}, terr
+// dedupeSprintTasks flattens the member tasks of the given sprint views into a
+// single slice with each task ID appearing once, preserving first-seen order.
+// A task can in principle belong to more than one OPEN sprint; deduplicating
+// by ID keeps each task detail modal's id unique so the page renders one modal
+// per distinct task (SPEC/WEB.md § Roadmap Sprints Page, Task Detail Modal).
+func dedupeSprintTasks(views []sprintView) []models.Task {
+	out := make([]models.Task, 0)
+	seen := make(map[int]struct{})
+	for i := range views {
+		tasks := views[i].Tasks
+		for j := range tasks {
+			id := tasks[j].ID
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			out = append(out, tasks[j])
 		}
-		views = append(views, sprintView{Sprint: sp, Tasks: orderedTasks})
 	}
-
-	upcoming, current, closed := classifySprints(views)
-	return detailData{
-		Name:            name,
-		Tasks:           tasks,
-		SprintsUpcoming: upcoming,
-		SprintsCurrent:  current,
-		SprintsClosed:   closed,
-	}, nil
+	return out
 }
 
 // loadSprint reads a single sprint of a roadmap read-only and returns the

@@ -67,10 +67,16 @@ func TestEmbeddedStaticFS_ContainsVendoredAssets(t *testing.T) {
 	}
 }
 
-// pagePaths returns the three HTML page routes against a seeded roadmap so a
-// test can assert a property across every page the interface serves.
+// pagePaths returns the HTML page routes against a seeded roadmap so a test can
+// assert a property across every page the interface serves: the index, the
+// roadmap sprints landing page, the roadmap tasks page, and the graph page.
 func pagePaths(name string) []string {
-	return []string{"/", "/roadmaps/" + name, "/roadmaps/" + name + "/graph"}
+	return []string{
+		"/",
+		"/roadmaps/" + name,
+		"/roadmaps/" + name + "/tasks",
+		"/roadmaps/" + name + "/graph",
+	}
 }
 
 // servePage drives one GET request through the mux and returns the 200 body,
@@ -133,27 +139,41 @@ func TestPages_AdminShellMarkup(t *testing.T) {
 }
 
 // TestPages_RoadmapSidebarLinks asserts that, on a roadmap's pages, the sidebar
-// also surfaces that roadmap's name and links to its Tasks/Sprints (anchors on
-// the detail page) and Graph view, as required by the admin-shell layout
-// (SPEC/WEB.md Functional Requirement 12, Acceptance Criterion 23). The index
-// page (no active roadmap) must NOT render those roadmap-scoped links.
+// surfaces that roadmap's name and links to its two distinct page endpoints —
+// Sprints at /roadmaps/{name} (the landing page) and Tasks at
+// /roadmaps/{name}/tasks — plus the Graph view, as required by the admin-shell
+// layout (SPEC/WEB.md § UI Framework, Functional Requirement 16, Acceptance
+// Criterion 16). The index page (no active roadmap) must NOT render those
+// roadmap-scoped links.
 func TestPages_RoadmapSidebarLinks(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	name := seedRoadmap(t, "platform-core")
 	mux := buildMux()
 
-	// Roadmap pages: the roadmap-scoped sidebar links are present.
-	for _, path := range []string{"/roadmaps/" + name, "/roadmaps/" + name + "/graph"} {
+	// Roadmap pages: the roadmap-scoped sidebar links resolve to the real
+	// endpoints, not to #tasks / #sprints anchors on a combined page.
+	for _, path := range []string{"/roadmaps/" + name, "/roadmaps/" + name + "/tasks", "/roadmaps/" + name + "/graph"} {
 		body := servePage(t, mux, path)
 		for _, link := range []string{
-			"/roadmaps/" + name + "#tasks",
-			"/roadmaps/" + name + "#sprints",
-			"/roadmaps/" + name + "/graph",
+			`href="/roadmaps/` + name + `"`,       // Sprints (landing)
+			`href="/roadmaps/` + name + `/tasks"`, // Tasks
+			`href="/roadmaps/` + name + `/graph"`, // Graph
 		} {
 			if !strings.Contains(body, link) {
 				t.Errorf("page %s missing roadmap sidebar link %q", path, link)
 			}
 		}
+		// The retired anchor-style links must be gone everywhere.
+		for _, gone := range []string{"#tasks", "#sprints"} {
+			if strings.Contains(body, gone) {
+				t.Errorf("page %s still references retired sidebar anchor %q", path, gone)
+			}
+		}
+		// In the sidebar, Sprints is listed before Tasks (SPEC order: Sprints,
+		// Tasks, Graph).
+		assertOrdered(t, path+" sidebar order", body, []string{
+			">Sprints<", ">Tasks<", ">Graph<",
+		})
 	}
 
 	// Index page: no active roadmap, so no roadmap-scoped Tasks/Sprints anchors.
@@ -363,24 +383,23 @@ func TestStatic_VendoredAssetsServed(t *testing.T) {
 	}
 }
 
-// TestDetail_PreservesAllTaskAndSprintFields asserts the reworked detail page
-// still presents the full 15-column Tasks table (ID, Title, Status, Type,
-// Priority, Severity, Specialists, Parent, Subtasks, Depends on, Blocks,
-// Created, Started, Tested, Closed) with status as a Tabler badge, and that the
-// seeded sprint is surfaced (as a clickable card linking to its page) with its
-// description. The capacity/lifecycle datagrid moved to the dedicated sprint
-// page; the detail page now groups sprints into three tabs (SPEC/WEB.md
-// § Roadmap Detail Page, Acceptance Criterion 8).
-func TestDetail_PreservesAllTaskAndSprintFields(t *testing.T) {
+// TestTasksPage_PreservesAllTaskFields asserts the dedicated tasks page
+// presents the full 15-column Tasks table (ID, Title, Status, Type, Priority,
+// Severity, Specialists, Parent, Subtasks, Depends on, Blocks, Created,
+// Started, Tested, Closed) inside a responsive table, with status as a Tabler
+// badge. This is the same Tasks table the combined detail page used to carry,
+// now at its own endpoint (SPEC/WEB.md § Roadmap Tasks Page, Acceptance
+// Criterion 9).
+func TestTasksPage_PreservesAllTaskFields(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	name := seedRoadmap(t, "platform-core")
 	mux := buildMux()
 
-	body := servePage(t, mux, "/roadmaps/"+name)
+	body := servePage(t, mux, "/roadmaps/"+name+"/tasks")
 
 	// The seeded task is in a responsive table inside a card.
 	if !strings.Contains(body, "table-responsive") {
-		t.Errorf("detail page task table is not in a .table-responsive wrapper")
+		t.Errorf("tasks page task table is not in a .table-responsive wrapper")
 	}
 	for _, header := range []string{
 		"ID", "Title", "Status", "Type", "Priority", "Severity", "Specialists",
@@ -388,24 +407,51 @@ func TestDetail_PreservesAllTaskAndSprintFields(t *testing.T) {
 		"Tested", "Closed",
 	} {
 		if !strings.Contains(body, "<th>"+header+"</th>") {
-			t.Errorf("detail task table missing column header %q", header)
+			t.Errorf("tasks table missing column header %q", header)
 		}
 	}
 
 	// Status as a Tabler badge.
 	if !strings.Contains(body, `<span class="badge bg-blue-lt">`) {
-		t.Errorf("detail page status not rendered as a Tabler badge")
+		t.Errorf("tasks page status not rendered as a Tabler badge")
 	}
+
+	// The full task table is the tasks page's content; it carries no sprint
+	// tabs (those live on the sprints landing page).
+	if strings.Contains(body, `id="tab-current"`) {
+		t.Errorf("tasks page must NOT render the sprint tabs")
+	}
+}
+
+// TestSprintsPage_PreservesSprintCards asserts the sprints landing page
+// surfaces the seeded sprint as a clickable card linking to its own page, with
+// its description, and that it does NOT render the full tasks table (that moved
+// to /roadmaps/{name}/tasks). The page groups sprints into three tabs
+// (SPEC/WEB.md § Roadmap Sprints Page, Acceptance Criterion 8).
+func TestSprintsPage_PreservesSprintCards(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name := seedRoadmap(t, "platform-core")
+	mux := buildMux()
+
+	body := servePage(t, mux, "/roadmaps/"+name)
 
 	// The seeded sprint (PENDING) appears as a clickable card linking to its
 	// own page, with its description.
 	if !strings.Contains(body, "Sprint #") {
-		t.Errorf("detail page missing sprint card heading")
+		t.Errorf("sprints page missing sprint card heading")
 	}
 	if !strings.Contains(body, "/roadmaps/"+name+"/sprints/") {
-		t.Errorf("detail page sprint card is not a link to the sprint page")
+		t.Errorf("sprints page sprint card is not a link to the sprint page")
 	}
 	if !strings.Contains(body, "Ship the read-only web UI for roadmap inspection") {
-		t.Errorf("detail sprint card missing the seeded sprint description")
+		t.Errorf("sprints page sprint card missing the seeded sprint description")
+	}
+
+	// The full 15-column task table must NOT be on the sprints page. The
+	// "<th>Type</th>" header is unique to the full table (the Actual tab's
+	// in-sprint mini-table has only ID/Title/Status), so its absence proves the
+	// full table is not rendered here.
+	if strings.Contains(body, "<th>Type</th>") {
+		t.Errorf("sprints page must NOT render the full tasks table (found a Type column header)")
 	}
 }

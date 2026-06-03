@@ -9,11 +9,14 @@ running HTTP server:
 - Process/CLI contract: flag validation and exit codes (AC1-AC5), the
   machine-readable {"url": ...} startup object, and graceful SIGINT/SIGTERM
   shutdown with exit 0 (AC17).
-- Routes and pages: index with discovery + empty state (AC6-AC7), the
-  read-only detail page (AC8) with no edit affordance and no audit-log
-  growth (AC13), name validation / path-traversal guard (AC9), the
-  knowledge-graph page (AC10) and its JSON data endpoint (AC11), and the
-  read-only proof that graph reads create no snapshot/ directory (AC12).
+- Routes and pages: index with discovery + empty state, the read-only
+  sprints landing page (GET /roadmaps/{name}: three sprint tabs, Actual
+  active by default) and the separate tasks page (GET /roadmaps/{name}/tasks:
+  the full task table) — both with no edit affordance and no audit-log
+  growth, name validation / path-traversal guard, the knowledge-graph page
+  and its JSON data endpoint, and the read-only proof that graph reads create
+  no snapshot/ directory. Choosing a roadmap on the index lands the user on
+  the sprints page with the current (OPEN) sprint selected by default.
 - Read-only enforcement: non-read HTTP methods answered 405 (AC14).
 - Self-contained delivery: static assets served only from /static/, a
   missing asset 404s (AC15), the vendored D3.js bundle and the d3-sankey
@@ -110,8 +113,10 @@ class TestWebInterface:
         (OPEN->CLOSED), and at most one sprint may be OPEN at a time, so the
         CLOSED sprint is built (started then closed) before the OPEN one is
         started. The result is one PENDING, one OPEN, and one CLOSED sprint, so
-        the detail page's three tabs (Próximos / Actual / Concluídos) each have
-        content (SPEC/WEB.md § Roadmap Detail Page).
+        the sprints page's three tabs (Próximos / Actual / Concluídos) each have
+        content (SPEC/WEB.md § Roadmap Sprints Page). The PENDING-sprint task
+        and the BACKLOG/never-sprinted tasks appear only on the tasks page
+        (SPEC/WEB.md § Roadmap Tasks Page), not on the sprints page.
         """
         self._run(["roadmap", "create", ROADMAP])
         t1 = self.test.create_task(
@@ -470,8 +475,29 @@ class TestWebInterface:
         assert status == 200
         assert headers.get("content-type", "").startswith("text/html")
         assert ROADMAP in body, "index must list the roadmap name"
-        assert f"/roadmaps/{ROADMAP}" in body, "index must link the detail page"
+        assert f"/roadmaps/{ROADMAP}" in body, "index must link the sprints landing page"
         assert f"/roadmaps/{ROADMAP}/graph" in body, "index must link the graph page"
+
+    def test_choosing_roadmap_lands_on_sprints_page(self):
+        """Selecting a roadmap on the index lands on the sprints page
+        (GET /roadmaps/{name}) with the current (OPEN) sprint selected by
+        default — the Actual tab is the active tab (SPEC/WEB.md § Roadmap Index
+        Page and § Roadmap Sprints Page)."""
+        proc, port = self._start(["--port", "0"])
+        # The index card's primary link for the roadmap is the sprints landing
+        # page (href="/roadmaps/{name}" exactly, not the tasks or graph URL).
+        _, _, index = self._req(port, "/")
+        assert f'href="/roadmaps/{ROADMAP}"' in index, (
+            "index must link the roadmap to its sprints landing page"
+        )
+        # Following that link lands on the sprints page with Actual active.
+        status, headers, body = self._req(port, f"/roadmaps/{ROADMAP}")
+        assert status == 200
+        assert headers.get("content-type", "").startswith("text/html")
+        assert re.search(
+            r'href="#tab-current"[^>]*\bclass="nav-link active"[^>]*aria-selected="true">Actual',
+            body,
+        ), "landing must select the current (Actual/OPEN) sprint tab by default"
 
     def test_index_empty_state_when_no_roadmaps(self):
         proc, port = self._start(["--port", "0"], home=self._fresh_home())
@@ -482,32 +508,81 @@ class TestWebInterface:
         )
 
     # ====================================================================
-    # AC8/AC13: detail page is read-only and writes no audit entry
+    # Sprints page and tasks page are read-only and write no audit entry
     # ====================================================================
 
-    def test_detail_page_shows_tasks_and_sprints_read_only(self):
+    def test_sprints_page_shows_sprints_not_full_task_table(self):
+        """The sprints landing page renders the sprints (and the Actual tab's
+        OPEN-sprint task list) but NOT the full task table, which now lives at
+        /roadmaps/{name}/tasks (SPEC/WEB.md § Roadmap Sprints Page)."""
         proc, port = self._start(["--port", "0"])
         status, headers, body = self._req(port, f"/roadmaps/{ROADMAP}")
         assert status == 200
         assert headers.get("content-type", "").startswith("text/html")
-        assert "passwordless login" in body.lower(), "detail must show task titles"
-        assert "authentication hardening sprint" in body.lower(), "detail must show sprints"
+        assert "authentication hardening sprint" in body.lower(), "must show sprints"
+        # The OPEN sprint's member task surfaces under the Actual tab.
+        assert "passwordless login" in body.lower(), (
+            "Actual tab must show the OPEN sprint's task title"
+        )
+        # The full task table (its 15-column header) belongs to the tasks page,
+        # not the sprints page. The <th>Specialists</th> header is unique to the
+        # full table (the modal's "Specialists" datagrid title is not a <th>).
+        assert "<th>Specialists</th>" not in body, (
+            "the sprints page must NOT render the full task table"
+        )
+        # The PENDING-sprint task is not a member of any OPEN sprint, so it must
+        # not appear on the sprints page (it appears on the tasks page).
+        assert "add webauthn passkey support" not in body.lower(), (
+            "non-OPEN-sprint tasks must not appear on the sprints page"
+        )
         # No edit affordance: no form and no write-method submission.
-        assert "<form" not in body.lower(), "detail page must contain no form"
+        assert "<form" not in body.lower(), "sprints page must contain no form"
         assert not re.search(r'method=["\']?(post|put|patch|delete)', body, re.I), (
-            "detail page must not submit any change"
+            "sprints page must not submit any change"
         )
 
-    def test_serving_detail_writes_no_audit_entry(self):
+    def test_tasks_page_shows_full_table_read_only(self):
+        """The tasks page renders the roadmap's full task table — every task of
+        any status — with the read-only task detail modal on each row, and does
+        NOT render the sprint tabs (SPEC/WEB.md § Roadmap Tasks Page)."""
+        proc, port = self._start(["--port", "0"])
+        status, headers, body = self._req(port, f"/roadmaps/{ROADMAP}/tasks")
+        assert status == 200
+        assert headers.get("content-type", "").startswith("text/html")
+        # The full 15-column task table is present.
+        assert "<th>Specialists</th>" in body, "tasks page must render the full task table"
+        # Every task, any status — including the PENDING-sprint task that the
+        # sprints page does not show.
+        low = body.lower()
+        for title in (
+            "implement passwordless login",
+            "rate-limit the token endpoint",
+            "add webauthn passkey support",
+            "audit the session-cookie flags",
+        ):
+            assert title in low, f"tasks page must list task {title!r}"
+        # A clickable row opens the read-only modal for the task.
+        t1 = self.open_task_ids[0]
+        assert f'data-bs-target="#task-modal-{t1}"' in body, "tasks page missing modal trigger"
+        assert f'id="task-modal-{t1}"' in body, "tasks page missing modal element"
+        # The tasks page does NOT render the sprint tabs/panes.
+        assert 'id="tab-current"' not in body, "tasks page must not render the sprint tabs"
+        # Read-only: no edit affordance.
+        assert "<form" not in low, "tasks page must contain no form"
+        assert "<input" not in low, "tasks page must contain no input"
+        assert 'type="submit"' not in low, "tasks page must contain no submit"
+
+    def test_serving_pages_writes_no_audit_entry(self):
         before = self._run(["audit", "stats", "-r", ROADMAP])[1]
         before_total = json.loads(before).get("total_entries")
         proc, port = self._start(["--port", "0"])
         for _ in range(4):
             assert self._req(port, f"/roadmaps/{ROADMAP}")[0] == 200
+            assert self._req(port, f"/roadmaps/{ROADMAP}/tasks")[0] == 200
         after = self._run(["audit", "stats", "-r", ROADMAP])[1]
         after_total = json.loads(after).get("total_entries")
         assert before_total == after_total, (
-            f"serving detail pages changed the audit log: {before_total} -> {after_total}"
+            f"serving the sprints/tasks pages changed the audit log: {before_total} -> {after_total}"
         )
 
     # ====================================================================
@@ -638,7 +713,11 @@ class TestWebInterface:
     def test_task_modal_wiring_and_content(self):
         proc, port = self._start(["--port", "0"])
         t1 = self.open_task_ids[0]
-        for path in (f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/sprints/{self.open_sid}"):
+        for path in (
+            f"/roadmaps/{ROADMAP}",
+            f"/roadmaps/{ROADMAP}/tasks",
+            f"/roadmaps/{ROADMAP}/sprints/{self.open_sid}",
+        ):
             _, _, body = self._req(port, path)
             # A clickable control toggles a Bootstrap modal targeting the task's modal.
             assert 'data-bs-toggle="modal"' in body, f"{path}: no modal-toggling control"
@@ -673,10 +752,13 @@ class TestWebInterface:
         proc, port = self._start(["--port", "0"])
         # Name violating ^[a-z0-9_-]+$ (uppercase) -> 404, never reaches FS.
         assert self._req(port, "/roadmaps/INVALID")[0] == 404
+        assert self._req(port, "/roadmaps/INVALID/tasks")[0] == 404
         # Encoded traversal attempt -> 404 (raw path, no client normalisation).
         assert self._req(port, "/roadmaps/..%2fetc")[0] == 404
+        assert self._req(port, "/roadmaps/..%2fetc/tasks")[0] == 404
         # Syntactically valid but non-existent roadmap -> 404.
         assert self._req(port, "/roadmaps/no_such_roadmap")[0] == 404
+        assert self._req(port, "/roadmaps/no_such_roadmap/tasks")[0] == 404
         assert self._req(port, "/roadmaps/no_such_roadmap/graph")[0] == 404
         assert self._req(port, "/roadmaps/no_such_roadmap/graph/data")[0] == 404
 
@@ -791,6 +873,7 @@ class TestWebInterface:
         routes = [
             "/",
             f"/roadmaps/{ROADMAP}",
+            f"/roadmaps/{ROADMAP}/tasks",
             f"/roadmaps/{ROADMAP}/graph",
             f"/roadmaps/{ROADMAP}/graph/data",
             "/static/style.css",
@@ -835,7 +918,7 @@ class TestWebInterface:
 
     def test_pages_reference_no_remote_origin(self):
         proc, port = self._start(["--port", "0"])
-        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/graph"):
+        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/tasks", f"/roadmaps/{ROADMAP}/graph"):
             _, _, body = self._req(port, path)
             for ref in self._asset_refs(body):
                 assert not ref.startswith(("http://", "https://", "//")), (
@@ -851,7 +934,7 @@ class TestWebInterface:
 
     def test_every_page_has_viewport_meta(self):
         proc, port = self._start(["--port", "0"])
-        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/graph"):
+        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/tasks", f"/roadmaps/{ROADMAP}/graph"):
             _, _, body = self._req(port, path)
             assert re.search(r'<meta[^>]*name=["\']viewport["\']', body, re.I), (
                 f"page {path} missing responsive viewport meta tag"
@@ -877,7 +960,7 @@ class TestWebInterface:
         attribute on its root element.
         """
         proc, port = self._start(["--port", "0"])
-        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/graph"):
+        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/tasks", f"/roadmaps/{ROADMAP}/graph"):
             _, _, body = self._req(port, path)
             assert re.search(
                 r"<html[^>]*\bdata-bs-theme\s*=\s*[\"']dark[\"']", body, re.I
@@ -894,7 +977,7 @@ class TestWebInterface:
         proof of the responsive sidebar.
         """
         proc, port = self._start(["--port", "0"])
-        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/graph"):
+        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/tasks", f"/roadmaps/{ROADMAP}/graph"):
             _, _, body = self._req(port, path)
             for marker in (
                 "navbar-vertical",   # vertical sidebar
@@ -906,14 +989,24 @@ class TestWebInterface:
             ):
                 assert marker in body, f"page {path} missing admin-shell marker {marker!r}"
 
-    def test_roadmap_pages_link_tasks_sprints_graph_in_sidebar(self):
-        """AC23: a roadmap's pages surface its Tasks/Sprints/Graph in the sidebar."""
+    def test_roadmap_pages_link_sprints_tasks_graph_in_sidebar(self):
+        """A roadmap's pages surface its Sprints/Tasks/Graph in the sidebar, each
+        resolving to its own endpoint (no #anchors on a combined page):
+        Sprints -> /roadmaps/{name}, Tasks -> /roadmaps/{name}/tasks,
+        Graph -> /roadmaps/{name}/graph (SPEC/WEB.md § UI Framework)."""
         proc, port = self._start(["--port", "0"])
-        for path in (f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/graph"):
+        for path in (
+            f"/roadmaps/{ROADMAP}",
+            f"/roadmaps/{ROADMAP}/tasks",
+            f"/roadmaps/{ROADMAP}/graph",
+        ):
             _, _, body = self._req(port, path)
-            assert f"/roadmaps/{ROADMAP}#tasks" in body, "sidebar must link the roadmap's Tasks"
-            assert f"/roadmaps/{ROADMAP}#sprints" in body, "sidebar must link the roadmap's Sprints"
-            assert f"/roadmaps/{ROADMAP}/graph" in body, "sidebar must link the roadmap's Graph"
+            assert f'href="/roadmaps/{ROADMAP}"' in body, "sidebar must link the roadmap's Sprints (landing)"
+            assert f'href="/roadmaps/{ROADMAP}/tasks"' in body, "sidebar must link the roadmap's Tasks"
+            assert f'href="/roadmaps/{ROADMAP}/graph"' in body, "sidebar must link the roadmap's Graph"
+            # The old combined-page anchors must be gone.
+            assert f"/roadmaps/{ROADMAP}#tasks" not in body, "stale #tasks anchor must be removed"
+            assert f"/roadmaps/{ROADMAP}#sprints" not in body, "stale #sprints anchor must be removed"
 
     def test_vendored_tabler_and_fonts_served_locally(self):
         """AC16/AC22: the vendored Tabler framework and fonts are served from /static/.
@@ -945,7 +1038,7 @@ class TestWebInterface:
     def test_pages_load_vendored_tabler_assets(self):
         """AC16/AC22: every page loads the vendored Tabler CSS/JS from /static/."""
         proc, port = self._start(["--port", "0"])
-        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/graph"):
+        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/tasks", f"/roadmaps/{ROADMAP}/graph"):
             _, _, body = self._req(port, path)
             assert "/static/vendor/tabler/tabler.min.css" in body, (
                 f"page {path} must load the vendored Tabler CSS"
@@ -972,7 +1065,7 @@ class TestWebInterface:
             r'<link[^>]*\bhref=["\']([^"\']+)["\'][^>]*\brel=["\']?stylesheet["\']?',
             re.I,
         )
-        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/graph"):
+        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/tasks", f"/roadmaps/{ROADMAP}/graph"):
             _, _, body = self._req(port, path)
             hrefs = link_re.findall(body) + link_re2.findall(body)
             assert hrefs, f"page {path} declares no stylesheet link"
@@ -981,8 +1074,10 @@ class TestWebInterface:
                     f"page {path} stylesheet {href!r} is not served from /static/"
                 )
 
-    def test_detail_text_is_html_escaped(self):
+    def test_tasks_text_is_html_escaped(self):
         # Output escaping (SPEC Security): roadmap-derived text cannot inject markup.
+        # The task is in BACKLOG (no sprint), so it surfaces on the tasks page,
+        # which renders the full task table (SPEC/WEB.md § Roadmap Tasks Page).
         self._run(["roadmap", "create", "escaping_demo"])
         self.test.create_task(
             "escaping_demo",
@@ -990,7 +1085,7 @@ class TestWebInterface:
             "why", "how", "verify",
         )
         proc, port = self._start(["--port", "0"])
-        _, _, body = self._req(port, "/roadmaps/escaping_demo")
+        _, _, body = self._req(port, "/roadmaps/escaping_demo/tasks")
         assert "<script>alert(1)</script>" not in body, "task title must be escaped"
         assert "&lt;script&gt;" in body, "title must appear HTML-escaped"
 

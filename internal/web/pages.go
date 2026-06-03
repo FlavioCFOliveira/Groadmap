@@ -62,23 +62,46 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleDetail renders a roadmap's tasks and sprints with their
-// relationships. The {name} is validated and confirmed to exist before any
+// handleSprints renders a roadmap's sprints landing page: the roadmap's
+// sprints grouped into the three tabs (Próximos / Actual / Concluídos), with
+// the Actual tab active by default and the OPEN sprints expanded with their
+// member tasks. It does NOT render the full tasks table (SPEC/WEB.md § Roadmap
+// Sprints Page). The {name} is validated and confirmed to exist before any
 // data read; an invalid or unknown name yields 404 (handled by
-// resolveRoadmap).
-func handleDetail(w http.ResponseWriter, r *http.Request) {
+// resolveRoadmap), an internal read error yields 500.
+func handleSprints(w http.ResponseWriter, r *http.Request) {
 	name, ok := resolveRoadmap(w, r)
 	if !ok {
 		return
 	}
 
-	data, err := loadDetail(r.Context(), name)
+	data, err := loadSprints(r.Context(), name)
 	if err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
-	data.Chrome = chrome{Title: "Groadmap — " + name, Roadmap: name, Active: "tasks"}
-	renderHTML(w, "detail.html", data)
+	data.Chrome = chrome{Title: "Groadmap — " + name, Roadmap: name, Active: "sprints"}
+	renderHTML(w, "sprints.html", data)
+}
+
+// handleTasks renders a roadmap's tasks page: the full task table (every task,
+// any status), each row clickable to open the read-only task detail modal
+// (SPEC/WEB.md § Roadmap Tasks Page). The {name} is validated and confirmed to
+// exist before any data read; an invalid or unknown name yields 404 (handled
+// by resolveRoadmap), an internal read error yields 500.
+func handleTasks(w http.ResponseWriter, r *http.Request) {
+	name, ok := resolveRoadmap(w, r)
+	if !ok {
+		return
+	}
+
+	data, err := loadTasks(r.Context(), name)
+	if err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	data.Chrome = chrome{Title: "Groadmap — " + name + " / Tasks", Roadmap: name, Active: "tasks"}
+	renderHTML(w, "tasks.html", data)
 }
 
 // handleSprint renders a single sprint's page: all of its fields and its task

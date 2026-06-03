@@ -65,12 +65,13 @@ func seedRoadmap(t *testing.T, name string) string {
 	return name
 }
 
-// TestHandleDetail_HappyPath drives handleDetail end-to-end against a populated
-// roadmap: it must render 200 HTML whose body reflects the seeded task title
-// and sprint membership. This covers loadDetail's full read path (tasks,
-// sprints, sprint membership) and renderHTML's success branch
-// (SPEC/WEB.md § Tasks and Sprints from SQLite).
-func TestHandleDetail_HappyPath(t *testing.T) {
+// TestHandleSprints_HappyPath drives handleSprints (the landing page)
+// end-to-end against a populated roadmap: it must render 200 HTML whose body
+// reflects the seeded sprint membership and surfaces the sprint tabs, but does
+// NOT render the full tasks table. This covers loadSprints' read path (sprints
+// + ordered member tasks + classification) and renderHTML's success branch
+// (SPEC/WEB.md § Roadmap Sprints Page; Tasks and Sprints from SQLite).
+func TestHandleSprints_HappyPath(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	name := seedRoadmap(t, "web-ui-rollout")
 
@@ -80,20 +81,92 @@ func TestHandleDetail_HappyPath(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("detail status = %d, want 200; body=%q", rec.Code, rec.Body.String())
+		t.Fatalf("sprints status = %d, want 200; body=%q", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != contentTypeHTML {
+		t.Errorf("content-type = %q, want %q", ct, contentTypeHTML)
+	}
+	body := rec.Body.String()
+	// The sprints page surfaces the sprint card and its description.
+	if !contains(body, "Ship the read-only web UI for roadmap inspection") {
+		t.Errorf("sprints body missing seeded sprint description")
+	}
+	// The Sprints card with its three tabs is present.
+	if !contains(body, `id="tab-current"`) {
+		t.Errorf("sprints body missing the Actual sprint tab pane")
+	}
+	// The full task table (the 15-column header) must NOT be on this page; the
+	// tasks table lives at /roadmaps/{name}/tasks. The first task-table column
+	// header "<th>Type</th>" is unique to the full table (the Actual tab's
+	// in-sprint mini-table has only ID/Title/Status), so its absence proves the
+	// full table is not rendered here.
+	if contains(body, "<th>Type</th>") {
+		t.Errorf("sprints page must NOT render the full tasks table (found a Type column header)")
+	}
+}
+
+// TestHandleTasks_HappyPath drives handleTasks end-to-end against a populated
+// roadmap: it must render 200 HTML showing the full task table with the seeded
+// task title and a task detail modal for that task. This covers loadTasks'
+// read path (the full, unfiltered task list) and renderHTML's success branch
+// (SPEC/WEB.md § Roadmap Tasks Page; Tasks and Sprints from SQLite).
+func TestHandleTasks_HappyPath(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name := seedRoadmap(t, "web-ui-rollout")
+
+	mux := buildMux()
+	req := httptest.NewRequest(http.MethodGet, "/roadmaps/"+name+"/tasks", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("tasks status = %d, want 200; body=%q", rec.Code, rec.Body.String())
 	}
 	if ct := rec.Header().Get("Content-Type"); ct != contentTypeHTML {
 		t.Errorf("content-type = %q, want %q", ct, contentTypeHTML)
 	}
 	body := rec.Body.String()
 	if !contains(body, "Wire read-only web server to SQLite") {
-		t.Errorf("detail body missing seeded task title")
+		t.Errorf("tasks body missing seeded task title")
+	}
+	// The full task table is present (its unique Type column header).
+	if !contains(body, "<th>Type</th>") {
+		t.Errorf("tasks page missing the full task table (no Type column header)")
+	}
+	// A task detail modal is rendered for the seeded task.
+	if !contains(body, "task-modal-") {
+		t.Errorf("tasks page missing a task detail modal")
 	}
 }
 
-// TestHandleIndex_WithRoadmaps confirms the index renders 200 and links to a
-// roadmap that exists on disk, covering handleIndex's success branch with a
-// non-empty roadmap list (the empty-state branch is covered elsewhere).
+// TestHandleSprintsAndTasks_Head confirms both the sprints landing page and the
+// tasks page answer a HEAD request with 200 and the HTML content type. HEAD is
+// a read method the routes register explicitly alongside GET (SPEC/WEB.md
+// § Routes and Pages: all routes serve GET and HEAD only).
+func TestHandleSprintsAndTasks_Head(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name := seedRoadmap(t, "web-ui-rollout")
+	mux := buildMux()
+
+	for _, path := range []string{"/roadmaps/" + name, "/roadmaps/" + name + "/tasks"} {
+		req := httptest.NewRequest(http.MethodHead, path, nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("HEAD %s: status = %d, want 200; body=%q", path, rec.Code, rec.Body.String())
+		}
+		if ct := rec.Header().Get("Content-Type"); ct != contentTypeHTML {
+			t.Errorf("HEAD %s: content-type = %q, want %q", path, ct, contentTypeHTML)
+		}
+	}
+}
+
+// TestHandleIndex_WithRoadmaps confirms the index renders 200, mentions a
+// roadmap that exists on disk, and links each roadmap to its sprints landing
+// page (/roadmaps/{name}) and its graph page (/roadmaps/{name}/graph) — and not
+// to a tasks endpoint, which is reached from the sidebar. The primary button is
+// labelled "Sprints", not the retired "Tasks & sprints" (SPEC/WEB.md § Roadmap
+// Index Page, Acceptance Criterion 6).
 func TestHandleIndex_WithRoadmaps(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	name := seedRoadmap(t, "web-ui-rollout")
@@ -112,6 +185,24 @@ func TestHandleIndex_WithRoadmaps(t *testing.T) {
 	}
 	if contains(body, "No roadmaps found") {
 		t.Errorf("index still shows empty state despite a seeded roadmap")
+	}
+	// The card links to the sprints landing page and the graph page.
+	if !contains(body, `href="/roadmaps/`+name+`"`) {
+		t.Errorf("index card does not link to the sprints landing page /roadmaps/%s", name)
+	}
+	if !contains(body, `href="/roadmaps/`+name+`/graph"`) {
+		t.Errorf("index card does not link to the graph page /roadmaps/%s/graph", name)
+	}
+	// The primary button is relabelled "Sprints"; the old combined label is gone.
+	if !contains(body, ">Sprints<") {
+		t.Errorf("index card primary button is not labelled \"Sprints\"")
+	}
+	if contains(body, "Tasks &amp; sprints") || contains(body, "Tasks & sprints") {
+		t.Errorf("index card still shows the retired \"Tasks & sprints\" label")
+	}
+	// The index does not link to a tasks page (reached from the sidebar).
+	if contains(body, "/roadmaps/"+name+"/tasks") {
+		t.Errorf("index page must not link to the tasks page %s/tasks", name)
 	}
 }
 
