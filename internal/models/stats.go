@@ -5,7 +5,7 @@ type SprintStatsSummary struct {
 	Current   *int `json:"current"`   // ID of the currently open sprint, or null if none
 	Total     int  `json:"total"`     // Total number of sprints
 	Completed int  `json:"completed"` // Number of closed sprints
-	Pending   int  `json:"pending"`   // Number of open sprints (typically 0 or 1)
+	Pending   int  `json:"pending"`   // Number of PENDING sprints (created but never started)
 }
 
 // TaskStatsSummary represents statistics for tasks in a roadmap.

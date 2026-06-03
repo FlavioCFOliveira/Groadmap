@@ -220,8 +220,8 @@ func buildStatsCommand() Command {
 				Flags:       []Flag{sharedRoadmapFlag(), helpFlag()},
 				Output: SuccessOutput{
 					Kind:    "object",
-					Schema:  "{roadmap, sprints:{current,total,completed,pending}, tasks:{backlog,sprint,doing,testing,completed}, average_velocity}",
-					Example: `{"roadmap":"myproject","sprints":{"current":5,"total":12,"completed":10,"pending":1},"tasks":{"backlog":15,"sprint":8,"doing":5,"testing":3,"completed":42},"average_velocity":2.5}`,
+					Schema:  "{roadmap, sprints:{current=OPEN sprint id or null, total, completed=CLOSED count, pending=PENDING count}, tasks:{backlog,sprint,doing,testing,completed}, average_velocity}",
+					Example: `{"roadmap":"myproject","sprints":{"current":5,"total":12,"completed":9,"pending":2},"tasks":{"backlog":15,"sprint":8,"doing":5,"testing":3,"completed":42},"average_velocity":2.5}`,
 				},
 				SideEffects: SideEffects{Database: "Read-only.", Filesystem: "Read-only.", Network: "None."},
 				Idempotent:  true,

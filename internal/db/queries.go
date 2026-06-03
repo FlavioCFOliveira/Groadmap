@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -580,7 +581,7 @@ func (db *DB) GetSubTasks(ctx context.Context, parentID int) ([]models.Task, err
 		`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
 		        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
 		        t.priority, t.severity,
-		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count
+		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count`+taskDepsSelect+`
 		 FROM tasks t WHERE t.parent_task_id = ?
 		 ORDER BY t.priority DESC, t.created_at ASC`,
 		parentID,
@@ -590,7 +591,7 @@ func (db *DB) GetSubTasks(ctx context.Context, parentID int) ([]models.Task, err
 	}
 	defer rows.Close()
 
-	return scanTasks(rows)
+	return scanTasksWithDeps(rows)
 }
 
 // GetParentTask retrieves the parent task of a given task ID.
@@ -810,20 +811,29 @@ func scanTasksWithDeps(rows *sql.Rows) ([]models.Task, error) {
 			return nil, fmt.Errorf("scanning task row: %w", err)
 		}
 
+		// Copy each nullable string into a fresh per-iteration variable before
+		// taking its address. Taking the address of the loop-external scan
+		// variable would make every task in a multi-row result share the same
+		// backing storage and serialize the LAST row's values.
 		if specialists.Valid {
-			task.Specialists = &specialists.String
+			v := specialists.String
+			task.Specialists = &v
 		}
 		if startedAt.Valid {
-			task.StartedAt = &startedAt.String
+			v := startedAt.String
+			task.StartedAt = &v
 		}
 		if testedAt.Valid {
-			task.TestedAt = &testedAt.String
+			v := testedAt.String
+			task.TestedAt = &v
 		}
 		if closedAt.Valid {
-			task.ClosedAt = &closedAt.String
+			v := closedAt.String
+			task.ClosedAt = &v
 		}
 		if completionSummary.Valid {
-			task.CompletionSummary = &completionSummary.String
+			v := completionSummary.String
+			task.CompletionSummary = &v
 		}
 		if parentTaskID.Valid {
 			v := int(parentTaskID.Int64)
@@ -837,87 +847,6 @@ func scanTasksWithDeps(rows *sql.Rows) ([]models.Task, error) {
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating task rows: %w", err)
 	}
-	return tasks, nil
-}
-
-// scanTasks scans rows into a slice of Task.
-// Optimized for memory efficiency with pre-allocated slice and reusable scan variables.
-// Expected column order: id, title, status, type, functional_requirements, technical_requirements,
-// acceptance_criteria, created_at, specialists, started_at, tested_at, closed_at,
-// completion_summary, parent_task_id, priority, severity, subtask_count.
-func scanTasks(rows *sql.Rows) ([]models.Task, error) {
-	// Pre-allocate with typical batch size to avoid repeated reallocations
-	tasks := make([]models.Task, 0, 100)
-
-	// Reusable scan variables to avoid allocations per iteration
-	var specialists sql.NullString
-	var startedAt sql.NullString
-	var testedAt sql.NullString
-	var closedAt sql.NullString
-	var completionSummary sql.NullString
-	var parentTaskID sql.NullInt64
-
-	for rows.Next() {
-		var task models.Task
-
-		// Reset scan variables for each row
-		specialists = sql.NullString{}
-		startedAt = sql.NullString{}
-		testedAt = sql.NullString{}
-		closedAt = sql.NullString{}
-		completionSummary = sql.NullString{}
-		parentTaskID = sql.NullInt64{}
-
-		err := rows.Scan(
-			&task.ID,
-			&task.Title,
-			&task.Status,
-			&task.Type,
-			&task.FunctionalRequirements,
-			&task.TechnicalRequirements,
-			&task.AcceptanceCriteria,
-			&task.CreatedAt,
-			&specialists,
-			&startedAt,
-			&testedAt,
-			&closedAt,
-			&completionSummary,
-			&parentTaskID,
-			&task.Priority,
-			&task.Severity,
-			&task.SubtaskCount,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("scanning task row: %w", err)
-		}
-
-		if specialists.Valid {
-			task.Specialists = &specialists.String
-		}
-		if startedAt.Valid {
-			task.StartedAt = &startedAt.String
-		}
-		if testedAt.Valid {
-			task.TestedAt = &testedAt.String
-		}
-		if closedAt.Valid {
-			task.ClosedAt = &closedAt.String
-		}
-		if completionSummary.Valid {
-			task.CompletionSummary = &completionSummary.String
-		}
-		if parentTaskID.Valid {
-			v := int(parentTaskID.Int64)
-			task.ParentTaskID = &v
-		}
-
-		tasks = append(tasks, task)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating task rows: %w", err)
-	}
-
 	return tasks, nil
 }
 
@@ -1016,7 +945,7 @@ func (db *DB) GetNextTasks(ctx context.Context, limit int) ([]models.Task, error
 		         t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
 		         t.closed_at, t.completion_summary, t.parent_task_id,
 		         t.priority, t.severity,
-		         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count
+		         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count` + taskDepsSelect + `
 		      FROM tasks t
 		      INNER JOIN sprint_tasks st ON t.id = st.task_id
 		      WHERE st.sprint_id = ?
@@ -1030,7 +959,7 @@ func (db *DB) GetNextTasks(ctx context.Context, limit int) ([]models.Task, error
 	}
 	defer rows.Close()
 
-	return scanTasks(rows)
+	return scanTasksWithDeps(rows)
 }
 
 // ==================== TASK DEPENDENCY QUERIES ====================
@@ -1153,7 +1082,7 @@ func (db *DB) GetBlockers(ctx context.Context, taskID int) ([]models.Task, error
 		`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
 		        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
 		        t.priority, t.severity,
-		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count
+		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count`+taskDepsSelect+`
 		 FROM tasks t
 		 INNER JOIN task_dependencies td ON t.id = td.depends_on_task_id
 		 WHERE td.task_id = ? AND t.status != ?
@@ -1164,7 +1093,7 @@ func (db *DB) GetBlockers(ctx context.Context, taskID int) ([]models.Task, error
 		return nil, fmt.Errorf("querying blockers: %w", err)
 	}
 	defer rows.Close()
-	return scanTasks(rows)
+	return scanTasksWithDeps(rows)
 }
 
 // GetBlocking returns tasks that depend on taskID (tasks this task is blocking).
@@ -1173,7 +1102,7 @@ func (db *DB) GetBlocking(ctx context.Context, taskID int) ([]models.Task, error
 		`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
 		        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
 		        t.priority, t.severity,
-		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count
+		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count`+taskDepsSelect+`
 		 FROM tasks t
 		 INNER JOIN task_dependencies td ON t.id = td.task_id
 		 WHERE td.depends_on_task_id = ?
@@ -1184,7 +1113,7 @@ func (db *DB) GetBlocking(ctx context.Context, taskID int) ([]models.Task, error
 		return nil, fmt.Errorf("querying blocking tasks: %w", err)
 	}
 	defer rows.Close()
-	return scanTasks(rows)
+	return scanTasksWithDeps(rows)
 }
 
 // GetIncompleteDependencies returns the IDs of tasks that taskID depends on and are NOT COMPLETED.
@@ -1636,7 +1565,7 @@ func (db *DB) GetActiveSprintTasks(ctx context.Context, sprintID int) ([]models.
 		         t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
 		         t.closed_at, t.completion_summary, t.parent_task_id,
 		         t.priority, t.severity,
-		         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count
+		         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count`+taskDepsSelect+`
 		      FROM tasks t
 		      INNER JOIN sprint_tasks st ON t.id = st.task_id
 		      WHERE st.sprint_id = ? AND t.status IN `+sqlActiveTaskStatuses+`
@@ -1648,7 +1577,7 @@ func (db *DB) GetActiveSprintTasks(ctx context.Context, sprintID int) ([]models.
 	}
 	defer rows.Close()
 
-	return scanTasks(rows)
+	return scanTasksWithDeps(rows)
 }
 
 // GetSprintTasksFull retrieves full task objects for a sprint, ordered by position or priority.
@@ -1657,7 +1586,7 @@ func (db *DB) GetSprintTasksFull(ctx context.Context, sprintID int, status *mode
 		         t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
 		         t.closed_at, t.completion_summary, t.parent_task_id,
 		         t.priority, t.severity,
-		         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count
+		         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count` + taskDepsSelect + `
 		      FROM tasks t
 		      INNER JOIN sprint_tasks st ON t.id = st.task_id
 		      WHERE st.sprint_id = ?`
@@ -1680,7 +1609,7 @@ func (db *DB) GetSprintTasksFull(ctx context.Context, sprintID int, status *mode
 	}
 	defer rows.Close()
 
-	return scanTasks(rows)
+	return scanTasksWithDeps(rows)
 }
 
 // GetOpenSprintTasks retrieves tasks in a sprint that are not yet completed.
@@ -1692,7 +1621,7 @@ func (db *DB) GetOpenSprintTasks(ctx context.Context, sprintID int, orderByPrior
 		         t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
 		         t.closed_at, t.completion_summary, t.parent_task_id,
 		         t.priority, t.severity,
-		         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count
+		         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count` + taskDepsSelect + `
 		      FROM tasks t
 		      INNER JOIN sprint_tasks st ON t.id = st.task_id
 		      WHERE st.sprint_id = ?
@@ -1710,7 +1639,7 @@ func (db *DB) GetOpenSprintTasks(ctx context.Context, sprintID int, orderByPrior
 	}
 	defer rows.Close()
 
-	return scanTasks(rows)
+	return scanTasksWithDeps(rows)
 }
 
 // AddTasksToSprint adds tasks to a sprint with automatic position assignment.
@@ -2344,13 +2273,13 @@ func (db *DB) getSprintStats(ctx context.Context) (*models.SprintStatsSummary, e
 		return nil, fmt.Errorf("counting closed sprints: %w", err)
 	}
 
-	// Get pending (open) sprint count
+	// Get pending (never-started) sprint count
 	err = db.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM sprints WHERE status = ?",
-		models.SprintOpen,
+		models.SprintPending,
 	).Scan(&stats.Pending)
 	if err != nil {
-		return nil, fmt.Errorf("counting open sprints: %w", err)
+		return nil, fmt.Errorf("counting pending sprints: %w", err)
 	}
 
 	// Get current open sprint ID (if any)
@@ -2563,11 +2492,11 @@ func (db *DB) GetAverageVelocity(ctx context.Context, limit int) (float64, error
 			continue
 		}
 
-		durationDays := closeTime.Sub(startTime).Hours() / 24
-		if durationDays <= 0 {
-			// Zero-duration sprint: exclude from count entirely (would be a data anomaly).
-			continue
-		}
+		// Floor the duration at 1 day so a sub-day (or same-day) sprint does not
+		// inflate velocity. The previous zero-duration skip is no longer needed:
+		// with the floor, durationDays is always >= 1.0, so every qualifying
+		// closed sprint stays counted.
+		durationDays := math.Max(1.0, closeTime.Sub(startTime).Hours()/24)
 
 		if completedCount > 0 {
 			totalVelocity += float64(completedCount) / durationDays

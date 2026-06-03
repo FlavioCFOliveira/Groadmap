@@ -3,6 +3,7 @@ package models
 import (
 	"errors"
 	"fmt"
+	"math"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
@@ -247,8 +248,12 @@ func (s *SprintStats) ApplySprintMetrics(sprint *Sprint, burndown []BurndownEntr
 			startedTime, err1 := utils.ParseISO8601(*sprint.StartedAt)
 			closedTime, err2 := utils.ParseISO8601(*sprint.ClosedAt)
 			if err1 == nil && err2 == nil {
-				durationDays := closedTime.Sub(startedTime).Hours() / 24
-				if durationDays > 0 && s.CompletedTasks > 0 {
+				// Floor the duration at 1 day so sub-day sprints do not inflate
+				// velocity to absurd magnitudes (a same-day close would otherwise
+				// divide by a fraction of a day). With the floor, durationDays is
+				// always >= 1.0, so velocity is set whenever there are completed tasks.
+				durationDays := math.Max(1.0, closedTime.Sub(startedTime).Hours()/24)
+				if s.CompletedTasks > 0 {
 					s.Velocity = float64(s.CompletedTasks) / durationDays
 				}
 			}
