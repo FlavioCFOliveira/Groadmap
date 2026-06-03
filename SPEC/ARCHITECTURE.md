@@ -121,7 +121,7 @@ Groadmap/
 │   │   ├── server.go      # Server construction, routes, graceful shutdown
 │   │   ├── handlers.go    # Read-only route handlers (index, detail, graph, data)
 │   │   ├── templates/     # Embedded html/template files (go:embed)
-│   │   └── static/        # Embedded CSS, JS, and vendored Cytoscape.js (go:embed)
+│   │   └── static/        # Embedded CSS/JS (vendored Tabler framework, D3.js + d3-sankey), fonts (Inter, Tabler Icons) (go:embed)
 │   ├── db/
 │   │   ├── connection.go  # SQLite connection management
 │   │   ├── schema.go      # DDL, structure creation
@@ -213,10 +213,14 @@ pinning requirements are in `BUILD.md § Go Toolchain`.
   `internal/web/`.
 - Built on Go's standard-library `net/http` only. It introduces no third-party
   web framework and no external runtime dependency.
-- Serves server-rendered HTML produced from `html/template`, plus a stylesheet,
-  client scripts, and the vendored Cytoscape.js graph library. The templates and
-  static assets are embedded into the binary with `go:embed`; the server serves
-  only those embedded assets and never an arbitrary host filesystem path.
+- Serves server-rendered HTML produced from `html/template`, presented in the
+  vendored Tabler admin-shell layout (dark theme), plus the vendored Tabler CSS
+  and JavaScript framework, the Inter font and the Tabler Icons webfont, client
+  scripts, and the vendored D3.js graph library (and d3-sankey). The templates and static
+  assets are embedded into the binary with `go:embed`; the server serves only
+  those embedded assets and never an arbitrary host filesystem path. The UI
+  framework and asset set are specified in `WEB.md § UI Framework` and
+  `BUILD.md § Vendored Web Assets`.
 - Reads the same on-disk data the CLI reads: tasks and sprints from each
   roadmap's `project.db` (via the existing read queries in `DATABASE.md`) and the
   knowledge graph from each roadmap's `graph/` store (via the GoGraph engine's

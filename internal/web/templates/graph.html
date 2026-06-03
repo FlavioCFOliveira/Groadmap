@@ -1,36 +1,77 @@
 {{define "graph.html"}}<!doctype html>
-<html lang="en">
+<html lang="en" data-bs-theme="dark">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Groadmap — {{.Name}} graph</title>
-  <link rel="stylesheet" href="/static/style.css">
+{{template "head" .}}
 </head>
-<body>
-  <header class="topbar">
-    <h1 class="topbar__title"><a class="topbar__home" href="/">Groadmap</a> / {{.Name}} / graph</h1>
-    <p class="topbar__subtitle">
-      <a class="btn btn--secondary" href="/roadmaps/{{.Name}}">Back to tasks &amp; sprints</a>
-    </p>
-  </header>
+<body class="layout-fluid">
+  <div class="page">
+{{template "sidebar" .}}
+    <div class="page-wrapper">
+{{template "topnavbar" .}}
+      <div class="page-header d-print-none">
+        <div class="container-fluid">
+          <div class="row align-items-center">
+            <div class="col">
+              <div class="page-pretitle">Knowledge graph</div>
+              <h2 class="page-title">{{.Name}}</h2>
+            </div>
+            <div class="col-auto ms-auto">
+              <div class="d-flex align-items-center gap-2 flex-wrap">
+                <label for="layout-select" class="form-label mb-0 text-secondary d-none d-sm-inline">Layout</label>
+                <select id="layout-select" class="form-select form-select-sm graph-layout-select" aria-label="Graph layout">
+                  <option value="force">Force-directed graph</option>
+                  <option value="disjoint">Disjoint force-directed graph</option>
+                  <option value="patents" selected>Mobile patent suits</option>
+                  <option value="arc">Arc diagram</option>
+                  <option value="sankey">Sankey diagram</option>
+                  <option value="bundling">Hierarchical edge bundling</option>
+                  <option value="chord">Chord diagram</option>
+                  <option value="chord-directed">Directed chord diagram</option>
+                  <option value="chord-dependency">Chord dependency diagram</option>
+                </select>
+                <a class="btn btn-outline-secondary btn-sm" href="/roadmaps/{{.Name}}"><i class="ti ti-arrow-left me-1"></i>Tasks &amp; sprints</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="page-body">
+        <div class="container-fluid h-100">
+          <div class="card graph-card">
+            <div id="graph" class="graph" data-graph-url="/roadmaps/{{.Name}}/graph/data"></div>
 
-  <main class="graph-main">
-    <div id="cy" class="cy" data-graph-url="/roadmaps/{{.Name}}/graph/data"></div>
+            <aside id="detail-panel" class="detail-panel card" hidden>
+              <div class="card-header">
+                <h3 id="detail-title" class="card-title detail-panel__title">Details</h3>
+                <div class="card-actions">
+                  <button type="button" id="detail-close" class="btn-close" aria-label="Close details"></button>
+                </div>
+              </div>
+              <div class="card-body">
+                <dl id="detail-body" class="datagrid detail-panel__body mb-0"></dl>
+              </div>
+            </aside>
 
-    <aside id="detail-panel" class="detail-panel" hidden>
-      <button type="button" id="detail-close" class="detail-panel__close" aria-label="Close details">&times;</button>
-      <h2 id="detail-title" class="detail-panel__title">Details</h2>
-      <dl id="detail-body" class="detail-panel__body"></dl>
-    </aside>
-
-    <div id="empty-graph" class="graph-empty" hidden>
-      <p>This roadmap has no knowledge graph yet.</p>
-      <p>Add nodes and edges with the CLI, for example:</p>
-      <pre class="empty-state__cmd">rmp graph create -r {{.Name}} --query "CREATE (n:Spec {key:'auth'})"</pre>
+            <div id="empty-graph" class="graph-empty" hidden>
+              <div class="empty">
+                <div class="empty-icon"><i class="ti ti-affiliate-off" style="font-size:2.5rem;"></i></div>
+                <p class="empty-title">No knowledge graph yet</p>
+                <p class="empty-subtitle text-secondary">
+                  This roadmap has no knowledge graph yet. Add nodes and edges with the CLI, for example:
+                </p>
+                <div class="empty-action">
+                  <pre class="text-secondary mb-0"><code>rmp graph create -r {{.Name}} --query "CREATE (n:Spec {key:'auth'})"</code></pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
-  </main>
-
-  <script src="/static/cytoscape.min.js"></script>
+  </div>
+  <script src="/static/vendor/tabler/tabler.min.js"></script>
+  <script src="/static/vendor/d3/d3.min.js"></script>
+  <script src="/static/vendor/d3/d3-sankey.min.js"></script>
   <script src="/static/graph.js"></script>
 </body>
 </html>{{end}}

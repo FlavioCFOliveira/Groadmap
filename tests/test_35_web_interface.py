@@ -3,7 +3,7 @@
 Test 35: rmp web - read-only embedded web interface (SPEC/WEB.md).
 
 This suite drives the compiled binary's `rmp web` command end-to-end and
-exercises every acceptance criterion AC1-AC22 of SPEC/WEB.md against the
+exercises every acceptance criterion AC1-AC24 of SPEC/WEB.md against the
 running HTTP server:
 
 - Process/CLI contract: flag validation and exit codes (AC1-AC5), the
@@ -16,10 +16,16 @@ running HTTP server:
   read-only proof that graph reads create no snapshot/ directory (AC12).
 - Read-only enforcement: non-read HTTP methods answered 405 (AC14).
 - Self-contained delivery: static assets served only from /static/, a
-  missing asset 404s (AC15), the vendored Cytoscape.js is served whole
-  and locally, no page references any remote origin (AC16, AC18, AC19).
+  missing asset 404s (AC15), the vendored D3.js bundle and the d3-sankey
+  plugin are served locally, no page references any remote origin
+  (AC16, AC18, AC19).
 - Mobile-first: every page carries the responsive viewport meta tag and
   loads no remote CSS; the stylesheet uses min-width media queries (AC20-AC22).
+- Tabler admin-shell: every page renders in the dark theme
+  (data-bs-theme="dark"), with a vertical sidebar, page wrapper/header, a
+  read-only indicator, and the off-canvas hamburger markup; the vendored
+  Tabler CSS/JS and the Inter / Tabler Icons web fonts are served locally
+  from /static/ (AC23/AC24, AC16/AC22).
 
 The server is long-lived, so each scenario launches a fresh `rmp web`
 process on an ephemeral port (--port 0), parses the startup URL from
@@ -47,7 +53,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tests.base_test import GroadmapTestBase
 
 ROADMAP = "platform"
-CYTOSCAPE_BYTES = 373304  # vendored cytoscape@3.30.2 dist size
 
 
 class TestWebInterface:
@@ -98,7 +103,16 @@ class TestWebInterface:
         return result.returncode, result.stdout, result.stderr
 
     def _populate(self):
-        """Build a realistic roadmap with tasks, a sprint and a knowledge graph."""
+        """Build a realistic roadmap with tasks, three sprints (one per status)
+        and a knowledge graph.
+
+        Sprint lifecycle is create -> start (PENDING->OPEN) -> close
+        (OPEN->CLOSED), and at most one sprint may be OPEN at a time, so the
+        CLOSED sprint is built (started then closed) before the OPEN one is
+        started. The result is one PENDING, one OPEN, and one CLOSED sprint, so
+        the detail page's three tabs (Próximos / Actual / Concluídos) each have
+        content (SPEC/WEB.md § Roadmap Detail Page).
+        """
         self._run(["roadmap", "create", ROADMAP])
         t1 = self.test.create_task(
             ROADMAP,
@@ -118,10 +132,46 @@ class TestWebInterface:
         )
         # A dependency edge so the detail page has a relationship to render.
         self._run(["task", "add-dep", "-r", ROADMAP, str(t1), str(t2)], check=False)
-        sid = self.test.create_sprint(ROADMAP, "Authentication hardening sprint")
-        self._run(["sprint", "add-tasks", "-r", ROADMAP, str(sid), str(t1), str(t2)])
+
+        # CLOSED sprint: started, then force-closed (it carries active tasks).
+        t_closed = self.test.create_task(
+            ROADMAP,
+            "Audit the session-cookie flags",
+            "Session cookies must be Secure, HttpOnly and SameSite",
+            "Set the cookie attributes in the session middleware",
+            "Cookies inspected in the browser carry all three flags",
+            priority=5,
+        )
+        closed_sid = self.test.create_sprint(ROADMAP, "Session cookie hardening sprint")
+        self._run(["sprint", "add-tasks", "-r", ROADMAP, str(closed_sid), str(t_closed)])
+        self._run(["sprint", "start", "-r", ROADMAP, str(closed_sid)])
+        self._run(["sprint", "close", "-r", ROADMAP, str(closed_sid), "--force"])
+
+        # OPEN sprint: the current/Actual sprint, started with two tasks.
+        open_sid = self.test.create_sprint(ROADMAP, "Authentication hardening sprint")
+        self._run(["sprint", "add-tasks", "-r", ROADMAP, str(open_sid), str(t1), str(t2)])
+        self._run(["sprint", "start", "-r", ROADMAP, str(open_sid)])
+
+        # PENDING sprint: planned, not started, under Próximos.
+        t_pending = self.test.create_task(
+            ROADMAP,
+            "Add WebAuthn passkey support",
+            "Users should be able to register a hardware passkey",
+            "Integrate a FIDO2 server library and a registration ceremony",
+            "A registered passkey authenticates without a magic link",
+            priority=4,
+        )
+        pending_sid = self.test.create_sprint(ROADMAP, "Passkey enrolment sprint")
+        self._run(["sprint", "add-tasks", "-r", ROADMAP, str(pending_sid), str(t_pending)])
+
         self.task_ids = (t1, t2)
-        self.sprint_id = sid
+        self.sprint_id = open_sid
+        self.open_sid = open_sid
+        self.pending_sid = pending_sid
+        self.closed_sid = closed_sid
+        self.open_task_ids = (t1, t2)
+        self.pending_task_id = t_pending
+        self.closed_task_id = t_closed
 
         # A small knowledge graph: two nodes and one relationship.
         self._run(["graph", "create", "-r", ROADMAP,
@@ -149,8 +199,20 @@ class TestWebInterface:
         long-lived and never closes its stdout, so a pipe + readline would
         deadlock. Polling a file for the pretty-printed {"url": ...} object
         is deterministic and EOF-independent.
+
+        The default bind host is now 0.0.0.0 (all interfaces), which would
+        expose a network-listening socket for the duration of every running-
+        server scenario (SPEC/WEB.md § Bind Address and Port Selection). These
+        route/lifecycle scenarios only need a reachable server, not network
+        exposure, so unless the caller already pins --host we restrict the
+        listener to loopback (the documented --host 127.0.0.1 opt-in). The
+        default-host behaviour itself is asserted separately, on the printed
+        URL, in test_default_host_is_all_interfaces.
         """
-        args = [self.cli, "web", "--no-open"] + (extra_args or [])
+        extra_args = list(extra_args or [])
+        if not any(a == "--host" or a.startswith("--host=") for a in extra_args):
+            extra_args = ["--host", "127.0.0.1"] + extra_args
+        args = [self.cli, "web", "--no-open"] + extra_args
         out = tempfile.TemporaryFile(mode="w+")
         err = tempfile.TemporaryFile(mode="w+")
         proc = subprocess.Popen(
@@ -324,16 +386,55 @@ class TestWebInterface:
         )
 
     # ====================================================================
-    # AC1/AC2: startup URL object, loopback default
+    # AC1/AC2: startup URL object; all-interfaces default with loopback opt-in
     # ====================================================================
 
     def test_startup_prints_url_object_and_serves(self):
+        # _start pins --host 127.0.0.1 (loopback opt-in) so the suite does not
+        # leave an all-interfaces listener bound; the default-host value is
+        # asserted on the printed URL in test_default_host_is_all_interfaces.
         proc, port = self._start(["--port", "0"])
-        # AC1: the URL reflects the actual loopback bind.
+        # AC1: the URL reflects the actual bind.
         status, _, _ = self._req(port, "/")
         assert status == 200
         # AC2: server is up without a browser (we passed --no-open); URL printed.
         assert port > 0
+
+    def test_default_host_is_all_interfaces(self):
+        """AC1: with no --host the printed URL host is 0.0.0.0 (all interfaces).
+
+        We start the server with the default host but an explicit ephemeral
+        --port 0 (so the test does not race the real 8787), read the printed
+        startup URL, assert its host component, and immediately stop the
+        server. The assertion is on the printed URL, and the all-interfaces
+        listener exists only for the brief window before teardown signals the
+        process, so the suite does not leave a network-listening socket bound.
+        """
+        # Bypass _start's loopback pin: launch directly with no --host so the
+        # process resolves the real default. Reuse the same stdout-file polling.
+        out = tempfile.TemporaryFile(mode="w+")
+        err = tempfile.TemporaryFile(mode="w+")
+        proc = subprocess.Popen(
+            [self.cli, "web", "--no-open", "--port", "0"],
+            stdout=out, stderr=err, text=True, env=self._env(),
+        )
+        proc.out_file = out
+        proc.err_file = err
+        self._procs.append(proc)
+        url = self._read_startup_url(proc)
+        assert url is not None, (
+            "server did not print a startup URL; "
+            f"exit={proc.poll()} stderr={self._drain(err)}"
+        )
+        # url is http://<host>:<port>; the host is the default bind host.
+        host = url[len("http://"):].rsplit(":", 1)[0]
+        assert host == "0.0.0.0", (
+            f"default bind host must be 0.0.0.0 (all interfaces); got {host!r} "
+            f"from url {url!r}"
+        )
+        # Stop promptly so the all-interfaces listener is not left bound.
+        code = self._stop(proc, signal.SIGTERM)
+        assert code == 0, f"graceful SIGTERM shutdown must exit 0, got {code}"
 
     # ====================================================================
     # AC3/AC4: explicit-port bind failure vs default-port fallback
@@ -410,6 +511,161 @@ class TestWebInterface:
         )
 
     # ====================================================================
+    # AC10/AC11/AC12: sprint tabs, classification + ordering, sprint links
+    # ====================================================================
+
+    def test_detail_sprint_tabs_labels_and_default(self):
+        """AC10: three tabs labelled Próximos / Actual / Concluídos, left to
+        right, with Actual active by default on load."""
+        proc, port = self._start(["--port", "0"])
+        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}")
+
+        # The exact Portuguese labels appear in the required left-to-right order.
+        i_prox = body.find(">Próximos")
+        i_actual = body.find(">Actual")
+        i_concl = body.find(">Concluídos")
+        assert -1 < i_prox < i_actual < i_concl, (
+            "sprint tabs must read Próximos, Actual, Concluídos left-to-right; "
+            f"offsets prox={i_prox} actual={i_actual} concl={i_concl}"
+        )
+
+        # Actual is the active/default tab: its link is the only one marked
+        # active + aria-selected="true".
+        assert re.search(
+            r'href="#tab-current"[^>]*\bclass="nav-link active"[^>]*aria-selected="true">Actual',
+            body,
+        ), "the Actual tab must be active and aria-selected by default"
+        assert body.count('aria-selected="true"') == 1, (
+            "exactly one tab (Actual) may be aria-selected by default"
+        )
+        # And its pane is the shown/active pane.
+        assert '<div id="tab-current" class="tab-pane active show"' in body, (
+            "the Actual tab pane must be the active/shown pane by default"
+        )
+
+    def test_detail_sprint_classification_and_links(self):
+        """AC11/AC12: sprints are classified by status into the right tab and
+        each links to its own page."""
+        proc, port = self._start(["--port", "0"])
+        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}")
+
+        # Every sprint links to its page.
+        for sid in (self.pending_sid, self.open_sid, self.closed_sid):
+            assert f"/roadmaps/{ROADMAP}/sprints/{sid}" in body, (
+                f"detail page must link sprint #{sid} to its page"
+            )
+
+        # Slice the three panes apart so a link is asserted in the RIGHT pane.
+        def pane(marker):
+            start = body.index(marker)
+            rest = body[start + len(marker):]
+            nxt = rest.find('<div id="tab-')
+            return rest if nxt < 0 else rest[:nxt]
+
+        current = pane('<div id="tab-current"')
+        upcoming = pane('<div id="tab-upcoming"')
+        closed = pane('<div id="tab-closed"')
+
+        # PENDING -> Próximos, OPEN -> Actual (with task statuses), CLOSED -> Concluídos.
+        assert f"/sprints/{self.pending_sid}" in upcoming, "PENDING sprint not under Próximos"
+        assert f"/sprints/{self.open_sid}" in current, "OPEN sprint not under Actual"
+        assert f"/sprints/{self.closed_sid}" in closed, "CLOSED sprint not under Concluídos"
+
+        # The Actual tab shows the OPEN sprint's task statuses.
+        assert "passwordless login" in current.lower(), (
+            "Actual tab must show the OPEN sprint's task title"
+        )
+        assert ">SPRINT</span>" in current, (
+            "Actual tab must show each OPEN-sprint task's status"
+        )
+
+    # ====================================================================
+    # AC13: sprint page — all details, task order, 404/405 rules
+    # ====================================================================
+
+    def test_sprint_page_shows_all_details_and_task_order(self):
+        proc, port = self._start(["--port", "0"])
+        status, headers, body = self._req(port, f"/roadmaps/{ROADMAP}/sprints/{self.open_sid}")
+        assert status == 200
+        assert headers.get("content-type", "").startswith("text/html")
+
+        # All sprint detail fields are present.
+        for field in ("Status", "Capacity", "Created", "Started", "Closed", "Tasks"):
+            assert field in body, f"sprint page missing field {field!r}"
+        assert f"Sprint #{self.open_sid}" in body, "sprint page missing the sprint id"
+        assert "authentication hardening sprint" in body.lower(), (
+            "sprint page missing the sprint description"
+        )
+
+        # The member tasks are listed in sprint_tasks (execution) order: t1 was
+        # added before t2.
+        t1, t2 = self.open_task_ids
+        low = body.lower()
+        i1 = low.find("passwordless login")
+        i2 = low.find("rate-limit the token endpoint")
+        assert i1 != -1 and i2 != -1, "sprint page must list both member tasks"
+        assert i1 < i2, (
+            f"sprint page tasks out of execution order: task #{t1} must precede task #{t2}"
+        )
+
+        # Read-only: no edit affordance.
+        assert "<form" not in body.lower(), "sprint page must contain no form"
+        assert "<input" not in body.lower(), "sprint page must contain no input"
+        assert not re.search(r'method=["\']?(post|put|patch|delete)', body, re.I), (
+            "sprint page must not submit any change"
+        )
+
+    def test_sprint_page_not_found_and_method_rules(self):
+        proc, port = self._start(["--port", "0"])
+        # Non-integer id -> 404.
+        assert self._req(port, f"/roadmaps/{ROADMAP}/sprints/abc")[0] == 404
+        # Valid-but-nonexistent id -> 404.
+        assert self._req(port, f"/roadmaps/{ROADMAP}/sprints/999999")[0] == 404
+        # Invalid / nonexistent roadmap name -> 404.
+        assert self._req(port, "/roadmaps/INVALID/sprints/1")[0] == 404
+        assert self._req(port, "/roadmaps/no_such_roadmap/sprints/1")[0] == 404
+        # Non-read method on the sprint route -> 405.
+        for method in ("POST", "PUT", "PATCH", "DELETE"):
+            status, _, _ = self._req(
+                port, f"/roadmaps/{ROADMAP}/sprints/{self.open_sid}", method=method
+            )
+            assert status == 405, f"{method} sprint route must be 405, got {status}"
+
+    # ====================================================================
+    # AC14: read-only task detail modal — wiring, content, no edit control
+    # ====================================================================
+
+    def test_task_modal_wiring_and_content(self):
+        proc, port = self._start(["--port", "0"])
+        t1 = self.open_task_ids[0]
+        for path in (f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/sprints/{self.open_sid}"):
+            _, _, body = self._req(port, path)
+            # A clickable control toggles a Bootstrap modal targeting the task's modal.
+            assert 'data-bs-toggle="modal"' in body, f"{path}: no modal-toggling control"
+            assert f'data-bs-target="#task-modal-{t1}"' in body, (
+                f"{path}: missing modal trigger for task #{t1}"
+            )
+            # The matching modal element exists.
+            assert f'id="task-modal-{t1}"' in body, f"{path}: missing modal element for task #{t1}"
+            # The modal shows the long free-text sections.
+            for section in (
+                "Functional requirements",
+                "Technical requirements",
+                "Acceptance criteria",
+                "Completion summary",
+            ):
+                assert section in body, f"{path}: task modal missing section {section!r}"
+            # The functional-requirement text of the OPEN-sprint task is present.
+            assert "end users must authenticate without a stored password" in body.lower(), (
+                f"{path}: task modal missing the task's functional-requirements text"
+            )
+            # Read-only: no form/input/submit.
+            low = body.lower()
+            assert "<form" not in low, f"{path}: modal page must contain no form"
+            assert "<input" not in low, f"{path}: modal page must contain no input"
+            assert 'type="submit"' not in low, f"{path}: modal page must contain no submit"
+
+    # ====================================================================
     # AC9: name validation / path-traversal guard
     # ====================================================================
 
@@ -428,14 +684,60 @@ class TestWebInterface:
     # AC10/AC11/AC12: graph page, data endpoint, read-only proof
     # ====================================================================
 
-    def test_graph_page_loads_local_cytoscape(self):
+    def test_graph_page_loads_local_d3_and_layout_dropdown(self):
         proc, port = self._start(["--port", "0"])
         status, headers, body = self._req(port, f"/roadmaps/{ROADMAP}/graph")
         assert status == 200
         assert headers.get("content-type", "").startswith("text/html")
-        assert "/static/cytoscape.min.js" in body, "graph page must load vendored Cytoscape"
-        # Cytoscape must not come from any remote origin.
+        # The vendored D3.js bundle and the d3-sankey plugin load locally, in
+        # the order d3 -> d3-sankey -> graph.js (d3-sankey augments the global
+        # d3 and graph.js consumes both).
+        assert "/static/vendor/d3/d3.min.js" in body, "graph page must load vendored D3.js"
+        assert "/static/vendor/d3/d3-sankey.min.js" in body, "graph page must load the d3-sankey plugin"
+        assert "/static/graph.js" in body, "graph page must load the local viewer script"
+        i_d3 = body.index("/static/vendor/d3/d3.min.js")
+        i_sankey = body.index("/static/vendor/d3/d3-sankey.min.js")
+        i_viewer = body.index("/static/graph.js")
+        assert i_d3 < i_sankey < i_viewer, (
+            "script load order must be d3, then d3-sankey, then graph.js"
+        )
+        # Cytoscape is gone and not referenced anywhere on the page.
+        assert "cytoscape" not in body.lower(), "graph page must no longer reference cytoscape"
+        # Nothing comes from a remote origin.
         assert "cdn" not in body.lower() and "unpkg" not in body.lower()
+
+        # The layout dropdown offers the complete set of nine Networks-section
+        # layouts with Mobile patent suits preselected as the default (AC10).
+        assert 'id="layout-select"' in body, "graph page must provide the layout dropdown"
+        layouts = (
+            ("force", "Force-directed graph"),
+            ("disjoint", "Disjoint force-directed graph"),
+            ("patents", "Mobile patent suits"),
+            ("arc", "Arc diagram"),
+            ("sankey", "Sankey diagram"),
+            ("bundling", "Hierarchical edge bundling"),
+            ("chord", "Chord diagram"),
+            ("chord-directed", "Directed chord diagram"),
+            ("chord-dependency", "Chord dependency diagram"),
+        )
+        for value, label in layouts:
+            assert f'value="{value}"' in body, f"layout dropdown missing option {value!r}"
+            assert label in body, f"layout dropdown missing label {label!r}"
+        # The four new layouts added in this version are present by value.
+        for value in ("patents", "chord", "chord-directed", "chord-dependency"):
+            assert f'value="{value}"' in body, f"layout dropdown missing new option {value!r}"
+        # The nine options appear in the required order.
+        positions = [body.index(f'value="{value}"') for value, _ in layouts]
+        assert positions == sorted(positions), (
+            "layout dropdown options are out of the required order"
+        )
+        # Mobile patent suits is the default selected option (exactly one preselected).
+        assert re.search(
+            r'<option value="patents"[^>]*\bselected\b', body, re.I
+        ), "Mobile patent suits must be the preselected default layout"
+        assert body.count("selected>") == 1, (
+            "exactly one layout option must be preselected (the Mobile patent suits default)"
+        )
 
     def test_graph_data_endpoint_shape(self):
         proc, port = self._start(["--port", "0"])
@@ -507,11 +809,19 @@ class TestWebInterface:
         status, headers, _ = self._req(port, "/static/style.css")
         assert status == 200
         assert "css" in headers.get("content-type", "").lower()
-        # The vendored Cytoscape bundle is served whole, locally.
-        status, _, body = self._req(port, "/static/cytoscape.min.js")
-        assert status == 200
-        assert len(body.encode("utf-8")) == CYTOSCAPE_BYTES, (
-            "the full vendored Cytoscape bundle must be served"
+        # The vendored D3.js bundle and the d3-sankey plugin are served locally
+        # as JavaScript, with non-empty bodies.
+        status, headers, body = self._req(port, "/static/vendor/d3/d3.min.js")
+        assert status == 200, "the vendored D3.js bundle must be served"
+        assert "javascript" in headers.get("content-type", "").lower()
+        assert len(body) > 0, "the D3.js bundle must not be empty"
+        status, headers, body = self._req(port, "/static/vendor/d3/d3-sankey.min.js")
+        assert status == 200, "the vendored d3-sankey plugin must be served"
+        assert "javascript" in headers.get("content-type", "").lower()
+        assert len(body) > 0, "the d3-sankey plugin must not be empty"
+        # The retired Cytoscape bundle is gone (404, not served).
+        assert self._req(port, "/static/cytoscape.min.js")[0] == 404, (
+            "the retired Cytoscape bundle must no longer be served"
         )
         assert self._req(port, "/static/graph.js")[0] == 200
 
@@ -553,6 +863,123 @@ class TestWebInterface:
         assert "@media" in css and "min-width" in css, (
             "stylesheet must progressively enhance via min-width media queries"
         )
+
+    # ====================================================================
+    # AC23/AC24: Tabler admin-shell layout in the dark theme
+    # ====================================================================
+
+    def test_every_page_is_dark_theme(self):
+        """AC23: every page renders in Tabler's dark theme.
+
+        Tabler 1.x sets the colour mode with data-bs-theme="dark" on the
+        <html> element (Bootstrap 5.3 colour mode). The interface must render
+        dark by default with no toggle, so every served page carries that
+        attribute on its root element.
+        """
+        proc, port = self._start(["--port", "0"])
+        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/graph"):
+            _, _, body = self._req(port, path)
+            assert re.search(
+                r"<html[^>]*\bdata-bs-theme\s*=\s*[\"']dark[\"']", body, re.I
+            ), f"page {path} is not in the dark theme (no data-bs-theme=\"dark\" on <html>)"
+
+    def test_every_page_renders_admin_shell(self):
+        """AC23/AC24: every page renders the Tabler admin-shell.
+
+        The shell is a vertical navigation sidebar (listing Roadmaps and,
+        within a roadmap, that roadmap's views), a page wrapper, a page
+        header, and a top-navbar read-only indicator. The navbar-toggler +
+        collapse markup is what Tabler's JS turns into an off-canvas hamburger
+        menu on small viewports (AC24), so its presence is the structural
+        proof of the responsive sidebar.
+        """
+        proc, port = self._start(["--port", "0"])
+        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/graph"):
+            _, _, body = self._req(port, path)
+            for marker in (
+                "navbar-vertical",   # vertical sidebar
+                "page-wrapper",      # content wrapper
+                "page-header",       # per-page header
+                "navbar-toggler",    # hamburger / off-canvas toggle
+                "Roadmaps",          # always-present sidebar link
+                "Read-only",         # top-navbar indicator
+            ):
+                assert marker in body, f"page {path} missing admin-shell marker {marker!r}"
+
+    def test_roadmap_pages_link_tasks_sprints_graph_in_sidebar(self):
+        """AC23: a roadmap's pages surface its Tasks/Sprints/Graph in the sidebar."""
+        proc, port = self._start(["--port", "0"])
+        for path in (f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/graph"):
+            _, _, body = self._req(port, path)
+            assert f"/roadmaps/{ROADMAP}#tasks" in body, "sidebar must link the roadmap's Tasks"
+            assert f"/roadmaps/{ROADMAP}#sprints" in body, "sidebar must link the roadmap's Sprints"
+            assert f"/roadmaps/{ROADMAP}/graph" in body, "sidebar must link the roadmap's Graph"
+
+    def test_vendored_tabler_and_fonts_served_locally(self):
+        """AC16/AC22: the vendored Tabler framework and fonts are served from /static/.
+
+        The Tabler CSS framework is served with the correct text/css content
+        type (so a nosniff client does not block it), the Tabler JS is served,
+        and the Inter and Tabler Icons web fonts are served — all locally, no
+        remote origin.
+        """
+        proc, port = self._start(["--port", "0"])
+
+        status, headers, _ = self._req(port, "/static/vendor/tabler/tabler.min.css")
+        assert status == 200, "vendored Tabler CSS must be served"
+        assert "text/css" in headers.get("content-type", "").lower(), (
+            "Tabler CSS must be served as text/css"
+        )
+
+        assert self._req(port, "/static/vendor/tabler/tabler.min.js")[0] == 200, (
+            "vendored Tabler JS must be served"
+        )
+        assert self._req(port, "/static/vendor/tabler-icons/tabler-icons.min.css")[0] == 200
+        assert self._req(port, "/static/vendor/inter/files/inter-latin-wght-normal.woff2")[0] == 200, (
+            "the Inter web font must be served"
+        )
+        assert self._req(port, "/static/vendor/tabler-icons/fonts/tabler-icons.woff2")[0] == 200, (
+            "the Tabler Icons web font must be served"
+        )
+
+    def test_pages_load_vendored_tabler_assets(self):
+        """AC16/AC22: every page loads the vendored Tabler CSS/JS from /static/."""
+        proc, port = self._start(["--port", "0"])
+        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/graph"):
+            _, _, body = self._req(port, path)
+            assert "/static/vendor/tabler/tabler.min.css" in body, (
+                f"page {path} must load the vendored Tabler CSS"
+            )
+            assert "/static/vendor/tabler/tabler.min.js" in body, (
+                f"page {path} must load the vendored Tabler JS (for the off-canvas sidebar)"
+            )
+            assert "/static/vendor/inter/inter.css" in body, (
+                f"page {path} must load the vendored Inter font CSS"
+            )
+
+    def test_stylesheet_links_are_local(self):
+        """AC22: no page loads a CSS framework/reset from a remote origin.
+
+        Every <link rel=stylesheet href> must be a same-origin /static/ URL.
+        """
+        proc, port = self._start(["--port", "0"])
+        link_re = re.compile(
+            r'<link[^>]*\brel=["\']?stylesheet["\']?[^>]*\bhref=["\']([^"\']+)["\']',
+            re.I,
+        )
+        # Also catch href-before-rel ordering.
+        link_re2 = re.compile(
+            r'<link[^>]*\bhref=["\']([^"\']+)["\'][^>]*\brel=["\']?stylesheet["\']?',
+            re.I,
+        )
+        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/graph"):
+            _, _, body = self._req(port, path)
+            hrefs = link_re.findall(body) + link_re2.findall(body)
+            assert hrefs, f"page {path} declares no stylesheet link"
+            for href in hrefs:
+                assert href.startswith("/static/"), (
+                    f"page {path} stylesheet {href!r} is not served from /static/"
+                )
 
     def test_detail_text_is_html_escaped(self):
         # Output escaping (SPEC Security): roadmap-derived text cannot inject markup.

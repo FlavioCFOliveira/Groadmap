@@ -30,6 +30,12 @@ func buildMux() *http.ServeMux {
 	mux.HandleFunc("GET /roadmaps/{name}", handleDetail)
 	mux.HandleFunc("HEAD /roadmaps/{name}", handleDetail)
 
+	// Roadmap sprint page. {id} is parsed and validated inside the handler;
+	// a non-integer id, or an id that is not a sprint of the roadmap, is a 404
+	// (SPEC/WEB.md § Routes and Pages, path-parameter rule 3).
+	mux.HandleFunc("GET /roadmaps/{name}/sprints/{id}", handleSprint)
+	mux.HandleFunc("HEAD /roadmaps/{name}/sprints/{id}", handleSprint)
+
 	// Knowledge-graph page and its data endpoint.
 	mux.HandleFunc("GET /roadmaps/{name}/graph", handleGraphPage)
 	mux.HandleFunc("HEAD /roadmaps/{name}/graph", handleGraphPage)

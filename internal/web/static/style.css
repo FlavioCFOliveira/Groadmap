@@ -1,24 +1,18 @@
-/* Groadmap web interface — mobile-first, framework-free, vendored CSS.
-   Base styles target small phone-sized viewports; min-width media queries
-   progressively enhance for larger screens (SPEC/WEB.md
-   § Responsive and Mobile-First Design). System font stack only; no web
-   font is loaded. */
-
-:root {
-  --bg: #f6f7f9;
-  --surface: #ffffff;
-  --border: #d9dde3;
-  --text: #1c2330;
-  --muted: #6b7280;
-  --accent: #2563eb;
-  --accent-contrast: #ffffff;
-  --accent-2: #475569;
-  --radius: 8px;
-  --gap: 0.75rem;
-  --tap: 44px; /* touch-friendly minimum hit target */
-}
-
-* { box-sizing: border-box; }
+/* Groadmap web interface — Tabler override/glue stylesheet.
+ *
+ * The admin-shell layout, typography, colours, dark theme, tables, cards,
+ * badges, buttons, and the responsive off-canvas sidebar all come from the
+ * vendored Tabler framework (SPEC/WEB.md § UI Framework). This file holds
+ * only what Tabler does not give us: the D3 #graph container sizing, the
+ * graph detail-panel positioning, the empty-graph overlay, the in-place
+ * degradation message, the layout dropdown glue, and a couple of minor
+ * dark-theme tweaks. It does not re-implement any layout Tabler already
+ * provides.
+ *
+ * Mobile-first: the base rules target small phone-sized viewports and a
+ * min-width media query enhances the graph layout for wider screens
+ * (SPEC/WEB.md § Responsive and Mobile-First Design).
+ */
 
 /* The `hidden` attribute must always win over component display rules.
    Without this, a class such as `.graph-empty { display: flex }` overrides
@@ -26,361 +20,133 @@
    leaving a `hidden` overlay painted on top of the rendered graph. */
 [hidden] { display: none !important; }
 
-html { -webkit-text-size-adjust: 100%; }
+/* ---- Roadmap detail / sprint pages ----
+   A clickable task row (opens the read-only task detail modal). Tabler/Bootstrap
+   own the modal itself; this only signals the row is interactive and gives it a
+   visible keyboard-focus affordance, so it is usable by touch and keyboard
+   (SPEC/WEB.md § Task Detail Modal, § Responsive and Mobile-First Design). */
+.task-row { cursor: pointer; }
+.task-row:focus-visible { outline: 2px solid var(--tblr-primary, #4299e1); outline-offset: -2px; }
 
-body {
-  margin: 0;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 1.5;
-  color: var(--text);
-  background: var(--bg);
-  overflow-x: hidden; /* no horizontal scroll on small screens */
-}
+/* The sprint tabs wrap on narrow viewports rather than overflowing the card
+   horizontally, keeping the three tabs reachable on phones. */
+.sprint-tabs { flex-wrap: wrap; }
 
-a { color: var(--accent); }
-
-code, pre {
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-}
-
-/* ---- Layout ---- */
-
-.topbar {
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-  padding: var(--gap) 1rem;
-}
-
-.topbar__title {
-  margin: 0;
-  font-size: 1.25rem;
+/* The long free-text fields in the task detail modal (functional/technical
+   requirements, acceptance criteria, completion summary) wrap and preserve the
+   line breaks of the source text without forcing horizontal scrolling, so the
+   modal stays readable on small viewports. */
+.task-modal__text {
+  white-space: pre-wrap;
   word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
-.topbar__home { text-decoration: none; }
+/* ---- Knowledge-graph page ----
+   The graph fills the page body. The card is positioned so the absolutely
+   positioned #graph SVG host, the detail panel, and the empty-graph overlay
+   all anchor to it. Mobile-first: a viewport-derived height that leaves room
+   for the Tabler navbar + page header on small screens. */
 
-.topbar__subtitle {
-  margin: 0.4rem 0 0;
-  color: var(--muted);
-  font-size: 0.95rem;
-}
-
-.container {
-  width: 100%;
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 1rem;
-}
-
-.section { margin-bottom: 2rem; }
-
-h2 { font-size: 1.15rem; }
-
-.count { color: var(--muted); font-weight: normal; font-size: 0.9rem; }
-
-.muted { color: var(--muted); }
-
-/* ---- Buttons / links ---- */
-
-.btn {
-  display: inline-flex;
-  align-items: center;
-  min-height: var(--tap);
-  padding: 0.5rem 0.9rem;
-  margin: 0.15rem 0;
-  border-radius: var(--radius);
-  background: var(--accent);
-  color: var(--accent-contrast);
-  text-decoration: none;
-  font-size: 0.95rem;
-}
-
-.btn--secondary { background: var(--accent-2); }
-
-.btn:active { filter: brightness(0.92); }
-
-/* ---- Roadmap index ---- */
-
-.roadmap-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: var(--gap);
-}
-
-.roadmap-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 1rem;
-  display: flex;
-  flex-direction: column;
-  gap: var(--gap);
-}
-
-.roadmap-card__name {
-  font-weight: 600;
-  font-size: 1.05rem;
-  word-break: break-word;
-}
-
-.roadmap-card__links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-
-/* ---- Empty states ---- */
-
-.empty-state {
-  background: var(--surface);
-  border: 1px dashed var(--border);
-  border-radius: var(--radius);
-  padding: 1.25rem;
-  color: var(--muted);
-}
-
-.empty-state__cmd {
-  background: #0f172a;
-  color: #e2e8f0;
-  padding: 0.75rem;
-  border-radius: var(--radius);
-  overflow-x: auto;
-}
-
-/* ---- Badges ---- */
-
-.badge {
-  display: inline-block;
-  padding: 0.1rem 0.5rem;
-  border-radius: 999px;
-  font-size: 0.8rem;
-  background: #e5e7eb;
-  color: #111827;
-}
-
-/* ---- Responsive / stacked tables ----
-   On small screens each row becomes a stacked card; the column header is
-   shown via the data-label attribute so no horizontal scroll is needed. */
-
-.data-table {
-  width: 100%;
-  border-collapse: collapse;
-  background: var(--surface);
-}
-
-.data-table thead { display: none; }
-
-.data-table tr {
-  display: block;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  margin-bottom: var(--gap);
-  padding: 0.5rem 0.75rem;
-}
-
-.data-table td {
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0.3rem 0;
-  border-bottom: 1px solid #eef1f4;
-  font-size: 0.95rem;
-}
-
-.data-table td:last-child { border-bottom: none; }
-
-.data-table td::before {
-  content: attr(data-label);
-  font-weight: 600;
-  color: var(--muted);
-  flex: 0 0 auto;
-}
-
-/* ---- Sprint cards ---- */
-
-.sprint-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 1rem;
-  margin-bottom: var(--gap);
-}
-
-.sprint-card__head {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-.sprint-card__id { font-weight: 600; }
-
-.sprint-card__desc { margin: 0.5rem 0; }
-
-.sprint-card__meta {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 0.25rem 1rem;
-  margin: 0.5rem 0;
-}
-
-.sprint-card__meta dt {
-  font-size: 0.78rem;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: var(--muted);
-}
-
-.sprint-card__meta dd { margin: 0 0 0.5rem; }
-
-.sprint-task-order {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
-  list-style: none;
-  margin: 0.35rem 0 0;
-  padding: 0;
-}
-
-.sprint-task-order li {
-  background: #eef2ff;
-  color: #3730a3;
-  border-radius: var(--radius);
-  padding: 0.15rem 0.5rem;
-  font-size: 0.85rem;
-}
-
-/* ---- Graph page ---- */
-
-.graph-main {
+.graph-card {
   position: relative;
   width: 100%;
-  height: calc(100vh - 96px);
+  height: calc(100vh - 9rem);
   min-height: 320px;
+  overflow: hidden;
 }
 
-.cy {
+.graph {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  background: var(--surface);
-  touch-action: none; /* let Cytoscape own touch gestures */
+  touch-action: none; /* let D3 (d3.zoom) own touch gestures */
 }
 
+.graph-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Layout dropdown in the page header: keep it compact and touch-friendly. */
+.graph-layout-select {
+  min-width: 12rem;
+  max-width: 16rem;
+}
+
+/* Chord-variant group labels sit close to the rim; keep their font from being
+   scaled up by Tabler's SVG text rules and let them paint over the arcs. */
+.graph-svg text {
+  paint-order: stroke;
+  user-select: none;
+}
+
+/* In-place graceful-degradation message rendered inside the graph area when a
+   layout cannot draw the current graph (e.g. Sankey on a cyclic graph). */
+.graph-message {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  text-align: center;
+}
+
+.graph-message__text {
+  max-width: 32rem;
+  margin: 0;
+}
+
+/* Detail panel: a docked card over the graph. On small screens it docks to
+   the bottom edge; on wider screens (min-width below) it docks to the right. */
 .detail-panel {
   position: absolute;
   right: 0;
   bottom: 0;
   left: 0;
-  max-height: 50%;
+  z-index: 10;
+  max-height: 55%;
+  margin: 0;
   overflow-y: auto;
-  background: var(--surface);
-  border-top: 1px solid var(--border);
-  padding: 1rem;
-  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.08);
+  border-radius: 0;
 }
 
-.detail-panel__close {
-  position: absolute;
-  top: 0.5rem;
-  right: 0.5rem;
-  min-width: var(--tap);
-  min-height: var(--tap);
-  border: none;
-  background: transparent;
-  font-size: 1.5rem;
-  line-height: 1;
-  cursor: pointer;
-  color: var(--muted);
-}
+.detail-panel__title { margin: 0; }
 
-.detail-panel__title { margin: 0 2rem 0.5rem 0; font-size: 1.05rem; }
-
-.detail-panel__body { margin: 0; }
 .detail-panel__body dt {
-  font-weight: 600;
-  color: var(--muted);
   font-size: 0.8rem;
   text-transform: uppercase;
 }
+
 .detail-panel__body dd {
   margin: 0 0 0.5rem;
   word-break: break-word;
 }
 
+/* Empty-graph overlay covering the graph card. */
 .graph-empty {
   position: absolute;
   inset: 0;
+  z-index: 5;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  text-align: center;
-  gap: 0.5rem;
   padding: 1.5rem;
-  color: var(--muted);
-  background: var(--surface);
-}
-
-/* ---- Footer ---- */
-
-.footer {
-  padding: 1rem;
-  text-align: center;
-  color: var(--muted);
-  font-size: 0.85rem;
 }
 
 /* ---- Tablet / desktop enhancements ---- */
 
-@media (min-width: 640px) {
-  .roadmap-card {
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .sprint-card__meta { grid-template-columns: repeat(2, 1fr); }
-
+@media (min-width: 768px) {
   .detail-panel {
+    right: 0;
+    bottom: 0;
     left: auto;
     top: 0;
-    bottom: 0;
-    width: 320px;
+    width: 22rem;
+    max-width: 60%;
     max-height: none;
-    border-top: none;
-    border-left: 1px solid var(--border);
-    box-shadow: -2px 0 10px rgba(0, 0, 0, 0.08);
-  }
-}
-
-@media (min-width: 880px) {
-  /* Real table layout once there is room for the columns. */
-  .data-table thead { display: table-header-group; }
-  .data-table tr {
-    display: table-row;
-    border: none;
-    margin: 0;
-    padding: 0;
-  }
-  .data-table th,
-  .data-table td {
-    display: table-cell;
-    text-align: left;
-    padding: 0.5rem 0.6rem;
-    border-bottom: 1px solid var(--border);
-    justify-content: flex-start;
-  }
-  .data-table td::before { content: none; }
-  .data-table th {
-    background: #f1f3f6;
-    font-size: 0.8rem;
-    text-transform: uppercase;
-    letter-spacing: 0.02em;
-    color: var(--muted);
   }
 }

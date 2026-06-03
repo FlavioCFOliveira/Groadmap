@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/FlavioCFOliveira/GoGraph/cypher"
@@ -19,23 +20,46 @@ import (
 )
 
 // detailData is the view model handed to the roadmap detail template. It
-// presents the roadmap's tasks and sprints and the relationships modelled
-// in the data: sprint membership (with in-sprint order), the parent/subtask
+// presents the roadmap's tasks and its sprints grouped into the three detail
+// tabs (Próximos / Actual / Concluídos), plus the relationships modelled in
+// the data: sprint membership (with in-sprint order), the parent/subtask
 // hierarchy, and dependency edges. It is read-only; nothing here is
 // persisted.
+//
+// Tasks is the full, unfiltered task list rendered in the Tasks table and the
+// task detail modals. The three sprint slices are disjoint partitions of the
+// roadmap's sprints by status (SPEC/WEB.md § Roadmap Detail Page):
+//   - SprintsUpcoming: PENDING sprints, ascending id (predicted execution order).
+//   - SprintsCurrent:  OPEN sprints (zero, one, or more), ascending id.
+//   - SprintsClosed:   CLOSED sprints, closed_at descending (nil/empty last).
 type detailData struct {
-	Name    string
-	Tasks   []models.Task
-	Sprints []sprintView
+	Name            string
+	Chrome          chrome
+	Tasks           []models.Task
+	SprintsUpcoming []sprintView
+	SprintsCurrent  []sprintView
+	SprintsClosed   []sprintView
 }
 
-// sprintView pairs a sprint with the ordered task IDs that belong to it.
-// The Tasks slice preserves sprint_tasks order (the in-sprint order shown
-// on the detail page). Field order places the slice header before the
-// embedded Sprint value to keep the pointer-scan prefix minimal
-// (govet fieldalignment).
+// sprintView pairs a sprint with its ordered member tasks. Tasks preserves
+// the planned in-sprint execution order (sprint_tasks position order) and
+// carries each task's full record, so the Actual tab and the sprint page can
+// show every task's status without a second lookup. Field order places the
+// slice header before the embedded Sprint value to keep the pointer-scan
+// prefix minimal (govet fieldalignment).
 type sprintView struct {
-	Tasks  []int
+	Tasks  []models.Task
+	Sprint models.Sprint
+}
+
+// sprintPageData is the view model handed to the roadmap sprint template. It
+// presents a single sprint with all of its fields and its tasks in planned
+// in-sprint execution order, each clickable to open the read-only task detail
+// modal (SPEC/WEB.md § Roadmap Sprint Page). It is read-only.
+type sprintPageData struct {
+	Name   string
+	Chrome chrome
+	Tasks  []models.Task
 	Sprint models.Sprint
 }
 
@@ -57,9 +81,10 @@ func loadRoadmapNames() ([]string, error) {
 
 // loadDetail reads a roadmap's tasks and sprints read-only. It opens the
 // roadmap database, reads every task (no status filter) and every sprint,
-// and resolves each sprint's ordered membership. The database handle is
-// released before the function returns; no row is written and no audit
-// entry is produced (SPEC/WEB.md § Tasks and Sprints from SQLite).
+// resolves each sprint's ordered member tasks, and classifies the sprints
+// into the three detail-page tabs. The database handle is released before the
+// function returns; no row is written and no audit entry is produced
+// (SPEC/WEB.md § Tasks and Sprints from SQLite).
 //
 // The caller is responsible for the {name} validation and existence check
 // (resolveRoadmap); this function trusts name is a validated, existing
@@ -86,14 +111,135 @@ func loadDetail(ctx context.Context, name string) (detailData, error) {
 
 	views := make([]sprintView, 0, len(sprints))
 	for _, sp := range sprints {
-		taskIDs, terr := database.GetSprintTasks(ctx, sp.ID)
+		orderedTasks, terr := sprintOrderedTasks(ctx, database, sp.ID)
 		if terr != nil {
 			return detailData{}, terr
 		}
-		views = append(views, sprintView{Sprint: sp, Tasks: taskIDs})
+		views = append(views, sprintView{Sprint: sp, Tasks: orderedTasks})
 	}
 
-	return detailData{Name: name, Tasks: tasks, Sprints: views}, nil
+	upcoming, current, closed := classifySprints(views)
+	return detailData{
+		Name:            name,
+		Tasks:           tasks,
+		SprintsUpcoming: upcoming,
+		SprintsCurrent:  current,
+		SprintsClosed:   closed,
+	}, nil
+}
+
+// loadSprint reads a single sprint of a roadmap read-only and returns the
+// sprint-page view model: the sprint with all its fields and its member tasks
+// in planned in-sprint execution order (SPEC/WEB.md § Roadmap Sprint Page).
+// The database handle is released before the function returns; no row is
+// written and no audit entry is produced.
+//
+// The caller validates {name} and confirms it exists (resolveRoadmap) and
+// parses {id} to an integer before calling. loadSprint returns
+// utils.ErrNotFound (from db.GetSprint) when no sprint with that id belongs to
+// the roadmap, which the handler maps to HTTP 404.
+func loadSprint(ctx context.Context, name string, id int) (sprintPageData, error) {
+	database, err := db.OpenExisting(name)
+	if err != nil {
+		return sprintPageData{}, err
+	}
+	defer database.Close() //nolint:errcheck // read-only handle; close error is non-actionable
+
+	sprint, err := database.GetSprint(ctx, id)
+	if err != nil {
+		return sprintPageData{}, err
+	}
+
+	orderedTasks, err := sprintOrderedTasks(ctx, database, sprint.ID)
+	if err != nil {
+		return sprintPageData{}, err
+	}
+
+	return sprintPageData{Name: name, Sprint: *sprint, Tasks: orderedTasks}, nil
+}
+
+// sprintOrderedTasks resolves a sprint's member tasks in the planned in-sprint
+// execution order, which is the sprint_tasks position order (DATABASE.md
+// § Relationships; the schema's sprint_tasks.position column and its
+// idx_sprint_tasks_order index). db.GetSprintTasksFull with a nil status
+// filter and orderByPriority=false returns the full task records ordered by
+// st.position ASC, so each task carries its status, depends_on, blocks, and
+// the rest of its fields for the Actual tab, the sprint page, and the task
+// detail modal — all without a second per-task query.
+func sprintOrderedTasks(ctx context.Context, database *db.DB, sprintID int) ([]models.Task, error) {
+	return database.GetSprintTasksFull(ctx, sprintID, nil, false)
+}
+
+// classifySprints partitions a roadmap's sprints into the three detail-page
+// tabs by status and orders each group as the detail page presents it
+// (SPEC/WEB.md § Roadmap Detail Page; Acceptance Criterion 11):
+//   - upcoming: PENDING, ascending id (predicted execution order; the next
+//     sprint to start appears first).
+//   - current:  OPEN, ascending id.
+//   - closed:   CLOSED, closed_at descending; a sprint with a nil or empty
+//     closed_at sorts last, with descending id as the tiebreak.
+//
+// A sprint whose status is none of PENDING/OPEN/CLOSED is dropped from all
+// groups; the sprint status enum is closed (MODELS.md § Enums), so this is
+// defensive only.
+func classifySprints(views []sprintView) (upcoming, current, closed []sprintView) {
+	upcoming = make([]sprintView, 0)
+	current = make([]sprintView, 0)
+	closed = make([]sprintView, 0)
+
+	for i := range views {
+		switch views[i].Sprint.Status {
+		case models.SprintPending:
+			upcoming = append(upcoming, views[i])
+		case models.SprintOpen:
+			current = append(current, views[i])
+		case models.SprintClosed:
+			closed = append(closed, views[i])
+		}
+	}
+
+	sort.SliceStable(upcoming, func(i, j int) bool {
+		return upcoming[i].Sprint.ID < upcoming[j].Sprint.ID
+	})
+	sort.SliceStable(current, func(i, j int) bool {
+		return current[i].Sprint.ID < current[j].Sprint.ID
+	})
+	sort.SliceStable(closed, func(i, j int) bool {
+		return closedSprintBefore(&closed[i].Sprint, &closed[j].Sprint)
+	})
+
+	return upcoming, current, closed
+}
+
+// closedSprintBefore reports whether closed sprint a should sort before b in
+// the Concluídos tab: most recently closed first (closed_at descending). A
+// sprint with no usable closed_at value sorts after any sprint that has one;
+// when neither has a closed_at, or the two closed_at values are equal, the
+// tiebreak is descending id (SPEC/WEB.md § Roadmap Detail Page, Concluídos).
+func closedSprintBefore(a, b *models.Sprint) bool {
+	ca, aok := closedAtValue(a)
+	cb, bok := closedAtValue(b)
+
+	switch {
+	case aok && bok:
+		if ca != cb {
+			return ca > cb // descending closed_at: later timestamp first
+		}
+	case aok != bok:
+		return aok // the one WITH a closed_at sorts first
+	}
+	// Equal closed_at, or both missing: descending id tiebreak.
+	return a.ID > b.ID
+}
+
+// closedAtValue returns a sprint's closed_at timestamp and whether it is a
+// usable (non-nil, non-empty) value. ISO 8601 UTC timestamps sort correctly
+// as strings, so string comparison gives chronological order without parsing.
+func closedAtValue(s *models.Sprint) (string, bool) {
+	if s.ClosedAt == nil || *s.ClosedAt == "" {
+		return "", false
+	}
+	return *s.ClosedAt, true
 }
 
 // loadGraphView reads a roadmap's knowledge graph read-only and returns its

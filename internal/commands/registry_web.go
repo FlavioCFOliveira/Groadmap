@@ -30,19 +30,19 @@ func buildWebCommand() Command {
 	return Command{
 		Name:          "web",
 		Summary:       "Start a read-only web interface for the roadmaps under ~/.roadmaps/.",
-		Description:   "Starts a long-lived HTTP server embedded in the rmp binary that presents every roadmap under ~/.roadmaps/ as read-only HTML and an interactive knowledge-graph visualisation. It binds loopback 127.0.0.1 by default, prints the served URL, opens a browser unless --no-open is given, and runs until interrupted (Ctrl+C / SIGINT / SIGTERM). It does not take -r/--roadmap and never writes; the CLI remains the sole write path.",
+		Description:   "Starts a long-lived HTTP server embedded in the rmp binary that presents every roadmap under ~/.roadmaps/ as read-only HTML and an interactive knowledge-graph visualisation. It binds all interfaces 0.0.0.0 by default, so it is reachable from the network; pass --host 127.0.0.1 to restrict it to loopback. It prints the served URL, opens a browser unless --no-open is given, and runs until interrupted (Ctrl+C / SIGINT / SIGTERM). It does not take -r/--roadmap and never writes; the CLI remains the sole write path.",
 		HelpPrinter:   web.PrintHelp,
 		HasSubcommand: false,
 		Subcommands: []Subcommand{
 			{
 				Name:        "",
 				Summary:     "Start the read-only web interface.",
-				Description: "Resolves the bind host/port (default 127.0.0.1:8787, with an ephemeral-port fallback when 8787 is busy and --port was not given), serves the read-only routes, prints the served URL as a JSON object, and runs until SIGINT/SIGTERM.",
+				Description: "Resolves the bind host/port (default 0.0.0.0:8787, with an ephemeral-port fallback when 8787 is busy and --port was not given), serves the read-only routes, prints the served URL as a JSON object, and runs until SIGINT/SIGTERM.",
 				Usage:       "rmp web [--host <address>] [--port <number>] [--no-open]",
 				HelpPrinter: web.PrintHelp,
 				Handler:     runWeb,
 				Flags: []Flag{
-					{Long: "--host", Type: "string", Default: "127.0.0.1", Description: "Bind host. Default 127.0.0.1 (loopback only)."},
+					{Long: "--host", Type: "string", Default: "0.0.0.0", Description: "Bind host. Default 0.0.0.0 (binds all interfaces), which exposes the read-only interface on the network. Use --host 127.0.0.1 to restrict it to the local machine (loopback only)."},
 					{Long: "--port", Type: "integer", HasRange: true, RangeMin: 0, RangeMax: 65535, Default: "8787", Description: "Bind port 0-65535. Default 8787; falls back to an ephemeral port if 8787 is in use and --port is not set."},
 					{Long: "--no-open", Type: "boolean", Description: "Do not launch a browser; just print the served URL."},
 					helpFlag(),
@@ -50,7 +50,7 @@ func buildWebCommand() Command {
 				Output: SuccessOutput{
 					Kind:    "object",
 					Schema:  `{"url":"http://host:port"}`,
-					Example: `{"url":"http://127.0.0.1:8787"}`,
+					Example: `{"url":"http://0.0.0.0:8787"}`,
 				},
 				SideEffects: SideEffects{
 					Database:   "Read-only (no writes, no audit entry).",
@@ -61,15 +61,15 @@ func buildWebCommand() Command {
 				ExitCodes:  []int{0, 1, 2, 6},
 				Examples: []Example{
 					{
-						Title:  "Start on the default loopback address and port",
+						Title:  "Start on the default all-interfaces address and port",
 						Cmd:    "rmp web",
-						Stdout: `{"url":"http://127.0.0.1:8787"}`,
+						Stdout: `{"url":"http://0.0.0.0:8787"}`,
 						Exit:   0,
 					},
 					{
 						Title:  "Start without opening a browser",
 						Cmd:    "rmp web --no-open",
-						Stdout: `{"url":"http://127.0.0.1:8787"}`,
+						Stdout: `{"url":"http://0.0.0.0:8787"}`,
 						Exit:   0,
 					},
 					{

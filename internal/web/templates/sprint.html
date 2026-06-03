@@ -1,0 +1,123 @@
+{{define "sprint.html"}}<!doctype html>
+<html lang="en" data-bs-theme="dark">
+<head>
+{{template "head" .}}
+</head>
+<body class="layout-fluid">
+  <div class="page">
+{{template "sidebar" .}}
+    <div class="page-wrapper">
+{{template "topnavbar" .}}
+      <div class="page-header d-print-none">
+        <div class="container-fluid">
+          <div class="row align-items-center">
+            <div class="col">
+              <div class="page-pretitle">{{.Name}} / Sprint</div>
+              <h2 class="page-title">Sprint #{{.Sprint.ID}} <span class="badge bg-blue-lt ms-2">{{.Sprint.Status}}</span></h2>
+            </div>
+            <div class="col-auto ms-auto">
+              <a class="btn btn-outline-secondary" href="/roadmaps/{{.Name}}#sprints"><i class="ti ti-arrow-left me-1"></i>Back to sprints</a>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="page-body">
+        <div class="container-fluid">
+
+          <div class="card mb-3">
+            <div class="card-header">
+              <h3 class="card-title">Sprint details</h3>
+            </div>
+            <div class="card-body">
+              <p>{{.Sprint.Description}}</p>
+              <div class="datagrid">
+                <div class="datagrid-item">
+                  <div class="datagrid-title">ID</div>
+                  <div class="datagrid-content">#{{.Sprint.ID}}</div>
+                </div>
+                <div class="datagrid-item">
+                  <div class="datagrid-title">Status</div>
+                  <div class="datagrid-content"><span class="badge bg-blue-lt">{{.Sprint.Status}}</span></div>
+                </div>
+                <div class="datagrid-item">
+                  <div class="datagrid-title">Capacity</div>
+                  <div class="datagrid-content">{{with .Sprint.MaxTasks}}{{.}}{{else}}Unlimited{{end}}</div>
+                </div>
+                <div class="datagrid-item">
+                  <div class="datagrid-title">Tasks</div>
+                  <div class="datagrid-content">{{.Sprint.TaskCount}}</div>
+                </div>
+                <div class="datagrid-item">
+                  <div class="datagrid-title">Created</div>
+                  <div class="datagrid-content text-secondary">{{.Sprint.CreatedAt}}</div>
+                </div>
+                <div class="datagrid-item">
+                  <div class="datagrid-title">Started</div>
+                  <div class="datagrid-content text-secondary">{{with .Sprint.StartedAt}}{{.}}{{else}}&mdash;{{end}}</div>
+                </div>
+                <div class="datagrid-item">
+                  <div class="datagrid-title">Closed</div>
+                  <div class="datagrid-content text-secondary">{{with .Sprint.ClosedAt}}{{.}}{{else}}&mdash;{{end}}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h3 class="card-title">Tasks <span class="badge bg-secondary-lt ms-2">{{len .Tasks}}</span></h3>
+              <div class="card-actions text-secondary">In planned execution order</div>
+            </div>
+            {{if .Tasks}}
+            <div class="table-responsive">
+              <table class="table table-vcenter card-table">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Title</th>
+                    <th>Status</th>
+                    <th>Type</th>
+                    <th>Priority</th>
+                    <th>Severity</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {{range .Tasks}}
+                  <tr class="task-row" data-bs-toggle="modal" data-bs-target="#task-modal-{{.ID}}" tabindex="0" role="button" aria-label="Open details for task #{{.ID}}">
+                    <td>#{{.ID}}</td>
+                    <td>{{.Title}}</td>
+                    <td><span class="badge bg-blue-lt">{{.Status}}</span></td>
+                    <td>{{.Type}}</td>
+                    <td>{{.Priority}}</td>
+                    <td>{{.Severity}}</td>
+                  </tr>
+                  {{end}}
+                </tbody>
+              </table>
+            </div>
+            {{else}}
+            <div class="card-body">
+              <div class="empty">
+                <p class="empty-title">No tasks in this sprint</p>
+                <p class="empty-subtitle text-secondary">This sprint has no tasks assigned yet.</p>
+              </div>
+            </div>
+            {{end}}
+          </div>
+
+        </div>
+      </div>
+      <footer class="footer footer-transparent d-print-none">
+        <div class="container-fluid text-secondary text-center">
+          Read-only. The rmp CLI remains the sole write path.
+        </div>
+      </footer>
+    </div>
+  </div>
+
+  {{/* One read-only task detail modal per task in this sprint. */}}
+  {{range .Tasks}}{{template "taskModal" .}}{{end}}
+
+  <script src="/static/vendor/tabler/tabler.min.js"></script>
+</body>
+</html>{{end}}

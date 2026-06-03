@@ -20,6 +20,15 @@ func TestParseArgs_Defaults(t *testing.T) {
 	if opts.host != defaultHost {
 		t.Errorf("host = %q, want %q", opts.host, defaultHost)
 	}
+	// With no --host the resolved default binds all interfaces (0.0.0.0),
+	// reachable from the network; restricting to loopback is the explicit
+	// --host 127.0.0.1 opt-in (SPEC/WEB.md § Bind Address and Port Selection,
+	// item 1). Asserting the literal here guards the default value itself, not
+	// just that it equals the constant. We assert the parsed option rather than
+	// binding, so the test opens no all-interfaces listening socket.
+	if opts.host != "0.0.0.0" {
+		t.Errorf("default host = %q, want 0.0.0.0 (all interfaces)", opts.host)
+	}
 	if opts.port != defaultPort {
 		t.Errorf("port = %d, want %d", opts.port, defaultPort)
 	}
@@ -43,10 +52,15 @@ func TestParseArgs_HelpTokens(t *testing.T) {
 	}
 }
 
+// TestParseArgs_HostAndPort exercises the host/port override path. It passes
+// --host 127.0.0.1, which is also the documented loopback opt-in that
+// restricts the otherwise network-exposed default (0.0.0.0) to the local
+// machine (SPEC/WEB.md § Bind Address and Port Selection, item 2). Both the
+// `--flag value` and `--flag=value` forms are covered.
 func TestParseArgs_HostAndPort(t *testing.T) {
 	cases := [][]string{
-		{"--host", "0.0.0.0", "--port", "9000", "--no-open"},
-		{"--host=0.0.0.0", "--port=9000", "--no-open"},
+		{"--host", "127.0.0.1", "--port", "9000", "--no-open"},
+		{"--host=127.0.0.1", "--port=9000", "--no-open"},
 	}
 	for _, args := range cases {
 		opts, showHelp, err := parseArgs(args)
@@ -56,8 +70,8 @@ func TestParseArgs_HostAndPort(t *testing.T) {
 		if showHelp {
 			t.Fatalf("%v: showHelp = true", args)
 		}
-		if opts.host != "0.0.0.0" {
-			t.Errorf("%v: host = %q, want 0.0.0.0", args, opts.host)
+		if opts.host != "127.0.0.1" {
+			t.Errorf("%v: host = %q, want 127.0.0.1 (loopback opt-in)", args, opts.host)
 		}
 		if opts.port != 9000 || !opts.portExplicit {
 			t.Errorf("%v: port = %d explicit=%v, want 9000 true", args, opts.port, opts.portExplicit)

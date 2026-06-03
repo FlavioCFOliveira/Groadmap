@@ -1,0 +1,28 @@
+/*
+ * Inter variable web font, vendored for the rmp web interface.
+ *
+ * Self-contained: the font file is committed under files/ and served from
+ * /static/vendor/inter/, never from a content delivery network or any remote
+ * font host (SPEC/WEB.md UI Framework, BUILD.md Vendored Web Assets). Two
+ * @font-face families are declared because Tabler's default sans-serif stack
+ * begins with "Inter Var", Inter; both names resolve to the same variable
+ * file, with the 100-900 weight axis covering every Tabler weight.
+ *
+ * Source: @fontsource-variable/inter (Inter by Rasmus Andersson, SIL OFL 1.1),
+ * file inter-latin-wght-normal.woff2.
+ */
+@font-face {
+  font-family: 'Inter Var';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url('./files/inter-latin-wght-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url('./files/inter-latin-wght-normal.woff2') format('woff2');
+}

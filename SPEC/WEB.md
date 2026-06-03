@@ -10,9 +10,11 @@
 - [Routes and Pages](#routes-and-pages)
   - [Roadmap Index Page](#roadmap-index-page)
   - [Roadmap Detail Page](#roadmap-detail-page)
+  - [Roadmap Sprint Page](#roadmap-sprint-page)
   - [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page)
   - [Graph Data Endpoint](#graph-data-endpoint)
   - [Static Assets](#static-assets)
+  - [Task Detail Modal](#task-detail-modal)
 - [Read-Only Data Flow](#read-only-data-flow)
   - [Tasks and Sprints from SQLite](#tasks-and-sprints-from-sqlite)
   - [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)
@@ -20,6 +22,7 @@
   - [Self-Contained Deliverable](#self-contained-deliverable)
   - [Embedded Asset Categories](#embedded-asset-categories)
   - [Frontend Rules](#frontend-rules)
+  - [UI Framework](#ui-framework)
   - [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library)
 - [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)
 - [Error Handling and Exit Codes](#error-handling-and-exit-codes)
@@ -49,29 +52,51 @@ the interface renders and functions fully offline with only that binary present
 on disk (see
 [Self-Contained Deliverable](#self-contained-deliverable)).
 
+The interface is built on the Tabler admin-dashboard framework and presents a
+Tabler admin-shell layout in Tabler's dark theme across every page: a
+navigation sidebar, a top navbar, page headers, and Tabler cards, tables, and
+badges. The sidebar lists the roadmaps and, within a roadmap, links to that
+roadmap's Tasks, Sprints, and Graph views. Tabler and its assets are vendored
+and served locally, never from a content delivery network or any remote origin
+(see [Frontend and Embedded Assets](#frontend-and-embedded-assets) and
+[UI Framework](#ui-framework)).
+
 The interface is designed responsive and mobile-first: its base styles target
 small phone-sized viewports first and progressively enhance for larger viewports,
 and it adapts fluidly across viewport sizes on every page, including the
-interactive knowledge-graph visualisation (see
+interactive knowledge-graph visualisation. On small viewports the admin-shell
+navigation sidebar collapses to an off-canvas (hamburger) menu so the pages stay
+usable without horizontal overflow (see
 [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
 
-The web interface exposes three kinds of page for each roadmap:
+The web interface exposes the following kinds of page for each roadmap:
 
 1. A roadmap index that lists every roadmap found under `~/.roadmaps/`.
 2. A roadmap detail page that shows that roadmap's tasks and sprints, read from
-   its SQLite `project.db`.
-3. A roadmap knowledge-graph page that shows that roadmap's knowledge graph,
+   its SQLite `project.db`. The page presents the roadmap's sprints as three tabs
+   (Próximos, Actual, Concluídos) and links each sprint to its own page.
+3. A roadmap sprint page that shows all details of a single sprint and the
+   sprint's task list in planned in-sprint execution order, read from that
+   roadmap's `project.db`.
+4. A roadmap knowledge-graph page that shows that roadmap's knowledge graph,
    read from its GoGraph store under `~/.roadmaps/<name>/graph/`, as an
    interactive node-link visualisation.
+
+Where a task is shown clickable on these pages, selecting it opens a read-only
+task detail modal that displays all of the task's fields (see
+[Task Detail Modal](#task-detail-modal)).
 
 ## Functional Requirements
 
 1. `rmp web` starts an HTTP server embedded in the `rmp` binary, built on Go's
    standard-library `net/http`, and serves the read-only web interface until the
    server is stopped (see [Server Lifecycle](#server-lifecycle)).
-2. The server binds to a loopback address and a port chosen as specified in
-   [Bind Address and Port Selection](#bind-address-and-port-selection). The bind
-   host and port are overridable by flag, but the default is loopback-only.
+2. The server binds to a host and a port chosen as specified in
+   [Bind Address and Port Selection](#bind-address-and-port-selection). By default
+   the server binds all interfaces (`0.0.0.0`), so the read-only interface is
+   reachable from every network point of the machine. The bind host and port are
+   overridable by flag; restricting the interface to the local machine is the
+   explicit opt-in `--host 127.0.0.1`.
 3. `rmp web` does **not** require the `-r` / `--roadmap` flag. The web interface
    discovers all roadmaps under `~/.roadmaps/` and lets the user drill into any
    one of them from the index page. This is the one user-facing command that
@@ -86,25 +111,53 @@ The web interface exposes three kinds of page for each roadmap:
    [Roadmap Index Page](#roadmap-index-page)).
 6. The roadmap detail page shows the selected roadmap's tasks and sprints, with
    the fields and relationships already defined in `MODELS.md` and `DATABASE.md`,
-   read from that roadmap's `project.db` (see
-   [Roadmap Detail Page](#roadmap-detail-page)).
-7. The roadmap knowledge-graph page shows the selected roadmap's knowledge graph
-   as an interactive node-link visualisation, read from that roadmap's GoGraph
-   store, opened read-only exactly as the `graph query` and `graph search`
-   subcommands open it (see
-   [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page) and
+   read from that roadmap's `project.db`. The detail page presents the roadmap's
+   sprints as three tabs, labelled **Próximos**, **Actual**, and **Concluídos**
+   from left to right, with **Actual** active by default. The interface classifies
+   each sprint into a tab by its status: a `PENDING` sprint appears under Próximos,
+   an `OPEN` sprint under Actual, and a `CLOSED` sprint under Concluídos. Próximos
+   lists PENDING sprints ordered by predicted execution order (ascending sprint
+   `id`, next first); Actual lists the OPEN sprint or sprints and shows the status
+   of all of their tasks; Concluídos lists CLOSED sprints ordered by most recently
+   closed first (`closed_at` descending, sprints without a `closed_at` last). Each
+   sprint shown in any tab is a clickable link to that sprint's own page (see
+   [Roadmap Detail Page](#roadmap-detail-page) and
+   [Roadmap Sprint Page](#roadmap-sprint-page)).
+7. The roadmap sprint page shows all details of a single sprint and the sprint's
+   task list in the planned in-sprint execution order, read from that roadmap's
+   `project.db`. It is served at `/roadmaps/{name}/sprints/{id}`, is read-only, and
+   returns HTTP `404 Not Found` when `{id}` is not a valid integer or is not a
+   sprint of the named roadmap (see [Roadmap Sprint Page](#roadmap-sprint-page)).
+8. Anywhere a task is shown clickable — the detail page Tasks table, the Actual
+   tab's task list, and the sprint page's task list — selecting the task opens a
+   read-only task detail modal that displays all of the task's fields. The modal
+   only displays data: it contains no form, no edit control, and no submit action,
+   and it requires no new server endpoint and no new write path (see
+   [Task Detail Modal](#task-detail-modal)).
+9. The roadmap knowledge-graph page shows the selected roadmap's knowledge graph
+   as an interactive node-link visualisation rendered with **D3.js**, read from
+   that roadmap's GoGraph store, opened read-only exactly as the `graph query` and
+   `graph search` subcommands open it. The page offers the complete set of
+   "Networks"-section D3 gallery layouts — Force-directed graph,
+   Disjoint force-directed graph, Mobile patent suits (the **default**), Arc diagram,
+   Sankey diagram, Hierarchical edge bundling, Chord diagram, Directed chord diagram,
+   and Chord dependency diagram — selectable through a dropdown, and layouts that need a
+   constrained data shape degrade gracefully (see
+   [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page),
+   [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library),
+   and
    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
-8. Read access to a knowledge graph through the web interface MUST NOT write to
-   the store and MUST NOT trigger the synchronous checkpoint or write-ahead-log
-   truncation that write subcommands perform (see
-   [Security and Constraints](#security-and-constraints) and
-   `GRAPH.md § Synchronous Checkpoint on Write`).
-9. **The deliverable is fully self-contained.** The shipped `rmp` binary MUST
+10. Read access to a knowledge graph through the web interface MUST NOT write to
+    the store and MUST NOT trigger the synchronous checkpoint or write-ahead-log
+    truncation that write subcommands perform (see
+    [Security and Constraints](#security-and-constraints) and
+    `GRAPH.md § Synchronous Checkpoint on Write`).
+11. **The deliverable is fully self-contained.** The shipped `rmp` binary MUST
    embed every component required to render and operate the web interface, with
    zero external runtime dependency. Every asset category — HTML templates, the
-   stylesheet, all client JavaScript (including the Cytoscape.js
-   knowledge-graph visualisation library and any of its dependencies), web
-   fonts, icons and images, the favicon, and any other static asset — is
+   stylesheet, all client JavaScript (including the D3.js knowledge-graph
+   visualisation library and the d3-sankey plugin and any of their dependencies),
+   web fonts, icons and images, the favicon, and any other static asset — is
    embedded into the binary at build time with `go:embed` and served only from
    the embedded asset set under the `/static/...` route. The server never reads
    an asset from the host filesystem and never serves an arbitrary host
@@ -112,7 +165,7 @@ The web interface exposes three kinds of page for each roadmap:
    [Self-Contained Deliverable](#self-contained-deliverable),
    [Embedded Asset Categories](#embedded-asset-categories), and
    [Security and Constraints](#security-and-constraints)).
-10. **No runtime network fetch.** No page references a script, stylesheet, font,
+12. **No runtime network fetch.** No page references a script, stylesheet, font,
     image, or any other asset from a remote origin: no content delivery network,
     no Google Fonts or other remote font, script, or style host, and no external
     API. The interface renders and functions fully offline, with only the single
@@ -121,16 +174,25 @@ The web interface exposes three kinds of page for each roadmap:
     request of its own (see
     [Self-Contained Deliverable](#self-contained-deliverable) and
     [Frontend and Embedded Assets](#frontend-and-embedded-assets)).
-11. **Responsive and mobile-first.** The web interface MUST be designed
+13. **Responsive and mobile-first.** The web interface MUST be designed
     responsive and mobile-first: base styles target small phone-sized viewports
     first and progressively enhance for larger tablet and desktop viewports
     through `min-width` media queries, and every page adapts fluidly across
-    viewport sizes. This requirement applies to all three pages — the roadmap
-    index, the roadmap detail page, and the knowledge-graph page — and to the
-    interactive knowledge-graph visualisation, which MUST remain usable on touch
-    and small-viewport devices (see
+    viewport sizes. This requirement applies to every page — the roadmap index,
+    the roadmap detail page, the roadmap sprint page, and the knowledge-graph
+    page — and to the interactive components, including the sprint tabs, the task
+    detail modal, and the interactive knowledge-graph visualisation, which MUST
+    all remain usable on touch and small-viewport devices (see
     [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
-12. Startup failures (for example, the chosen port is already in use, the data
+14. **Tabler admin-shell layout in the dark theme.** The interface presents a
+    Tabler admin-shell layout in Tabler's dark theme across every page: a
+    navigation sidebar (listing the roadmaps and, within a roadmap, that
+    roadmap's Tasks, Sprints, and Graph views), a top navbar, page headers, and
+    Tabler cards, tables, and badges. The interface is built on the vendored
+    Tabler framework; on small viewports the navigation sidebar collapses to an
+    off-canvas (hamburger) menu (see [UI Framework](#ui-framework) and
+    [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
+15. Startup failures (for example, the chosen port is already in use, the data
     directory is unreadable, or a flag value is invalid) are reported as plain
     text to stderr and map to the existing exit codes; no new exit code is
     introduced (see [Error Handling and Exit Codes](#error-handling-and-exit-codes)).
@@ -153,8 +215,8 @@ Key contract points, repeated here only to make this file self-contained
   `COMMANDS.md § Roadmap Selection (Always Required)` lists the families it
   applies to (`task`, `sprint`, `backlog`, `audit`, `stats`, `graph`); `web` is
   deliberately not in that list.
-- Flags: `--host <address>` (default `127.0.0.1`), `--port <number>` (default
-  `8787`, with the fallback behaviour in
+- Flags: `--host <address>` (default `0.0.0.0`, bind all interfaces),
+  `--port <number>` (default `8787`, with the fallback behaviour in
   [Bind Address and Port Selection](#bind-address-and-port-selection)),
   `--no-open` (do not launch a browser), and `-h, --help`.
 
@@ -193,13 +255,14 @@ database or a graph store open across requests.
 
 ## Bind Address and Port Selection
 
-1. **Default host.** The server binds to the loopback interface `127.0.0.1` by
-   default. With the default host the interface is reachable only from the local
-   machine and is not exposed on the network.
-2. **Host override.** `--host <address>` overrides the bind host. A user who
-   deliberately wants to reach the interface from another machine may pass, for
-   example, `--host 0.0.0.0`. The default is loopback; binding to a non-loopback
-   address is an explicit user choice, and the security note in
+1. **Default host.** The server binds all interfaces (`0.0.0.0`) by default. With
+   the default host the read-only interface is reachable from every network point
+   of the machine, not only from the local machine.
+2. **Host override.** `--host <address>` overrides the bind host. A user who wants
+   to restrict the interface to the local machine passes the explicit opt-in
+   `--host 127.0.0.1` (the loopback interface). The default binds all interfaces;
+   restricting to loopback, or binding any other specific address, is an explicit
+   user choice, and the security note in
    [Security and Constraints](#security-and-constraints) applies.
 3. **Default port.** The default port is `8787`. When `--port` is not given, the
    server attempts to bind `8787`. If `8787` is already in use, the server falls
@@ -226,10 +289,11 @@ produced from embedded `html/template` templates. Page routes return HTML
 | Route | Method | Purpose | Response |
 |-------|--------|---------|----------|
 | `/` | GET, HEAD | Roadmap index | HTML list of roadmaps |
-| `/roadmaps/{name}` | GET, HEAD | Roadmap detail (tasks and sprints) | HTML |
+| `/roadmaps/{name}` | GET, HEAD | Roadmap detail (tasks and sprint tabs) | HTML |
+| `/roadmaps/{name}/sprints/{id}` | GET, HEAD | Roadmap sprint page (all sprint details and the sprint's task list) | HTML |
 | `/roadmaps/{name}/graph` | GET, HEAD | Roadmap knowledge-graph page (interactive visualisation) | HTML |
 | `/roadmaps/{name}/graph/data` | GET, HEAD | Graph nodes and edges for the visualisation | JSON |
-| `/static/...` | GET, HEAD | Embedded static assets (CSS, JS, vendored graph library) | static file |
+| `/static/...` | GET, HEAD | Embedded static assets (CSS, JS, vendored D3.js graph library) | static file |
 
 Path-parameter rules:
 
@@ -242,6 +306,11 @@ Path-parameter rules:
    [Security and Constraints](#security-and-constraints)).
 2. A syntactically valid `{name}` that does not correspond to an existing roadmap
    under `~/.roadmaps/` is answered with HTTP `404 Not Found`.
+3. `{id}`, on the sprint route `/roadmaps/{name}/sprints/{id}`, is a sprint
+   identifier. It MUST be a valid integer. A non-integer `{id}`, or an integer
+   `{id}` that is not the `id` of a sprint belonging to the named roadmap, is
+   answered with HTTP `404 Not Found`. The `{name}` part of the sprint route is
+   validated by rules 1 and 2 above, exactly as on the other roadmap routes.
 
 HTTP status mapping for page and data routes:
 
@@ -249,6 +318,7 @@ HTTP status mapping for page and data routes:
 |-----------|-------------|
 | Page or data served successfully | 200 |
 | Roadmap name invalid, or roadmap not found | 404 |
+| Sprint `{id}` not a valid integer, or not a sprint of the roadmap | 404 |
 | Non-read HTTP method on any route | 405 |
 | Unhandled internal error reading data (I/O, corrupt store) | 500 |
 
@@ -282,16 +352,71 @@ how the `rmp web` process itself terminates.
   severity, functional/technical/acceptance text, specialists, lifecycle
   timestamps, parent task link, subtask relationships, and dependency
   relationships (`depends_on` and `blocks`). The page does not redefine these
-  fields; `MODELS.md` and `DATABASE.md` remain canonical.
-- **Sprints.** The page presents the roadmap's sprints with the fields defined
-  for the `Sprint` model in `MODELS.md § Sprint`: status, description, capacity
-  (`max_tasks`), lifecycle timestamps, and the ordered set of tasks assigned to
-  each sprint.
+  fields; `MODELS.md` and `DATABASE.md` remain canonical. Each task row in the
+  Tasks table is clickable: selecting a row opens the read-only task detail modal
+  for that task (see [Task Detail Modal](#task-detail-modal)).
+- **Sprints.** The page presents the roadmap's sprints as three tabs. From left
+  to right the tab labels are exactly **Próximos**, **Actual**, and
+  **Concluídos**, and the **Actual** tab is the active tab by default when the
+  page loads. The interface classifies each sprint into exactly one tab by its
+  `Sprint` status (`MODELS.md § Sprint`, status enum in `MODELS.md § Enums`):
+  a `PENDING` sprint goes to Próximos, an `OPEN` sprint to Actual, and a `CLOSED`
+  sprint to Concluídos.
+  - **Actual** (the default active tab) lists the OPEN sprint or sprints — those
+    in progress — and shows the state of all of their tasks, presenting each task
+    with its status. When no sprint is OPEN, the Actual tab shows a clear
+    empty-state message and no sprint.
+  - **Próximos** lists the PENDING sprints — planned but not yet started — ordered
+    by predicted execution order. Because a sprint carries no planned-date field,
+    the predicted execution order is the creation order: ascending sprint `id`,
+    so the next sprint to start appears first. When no sprint is PENDING, the
+    Próximos tab shows a clear empty-state message.
+  - **Concluídos** lists the CLOSED sprints ordered by most recently closed first:
+    descending `closed_at`. A CLOSED sprint that has no `closed_at` value sorts
+    last. When no sprint is CLOSED, the Concluídos tab shows a clear empty-state
+    message.
+  - Every sprint shown in any of the three tabs is a clickable link to that
+    sprint's own page at `/roadmaps/{name}/sprints/{id}` (see
+    [Roadmap Sprint Page](#roadmap-sprint-page)). On the Actual tab, the tasks
+    shown for an OPEN sprint are also clickable and open the task detail modal
+    (see [Task Detail Modal](#task-detail-modal)).
 - **Relationships shown.** The page surfaces, in a read-only view, the
   relationships already modelled in the data: task-to-sprint membership
   (including task order within a sprint), task parent/subtask hierarchy, and task
   dependency edges. The presentation MUST reflect the same relationships defined
   in `DATABASE.md § Relationships`; it introduces no new relationship.
+- **Read-only.** The page renders data only. It contains no form, button, or
+  link that submits a change; there is no edit affordance of any kind. The sprint
+  links and the task detail modal navigate to or display read-only views and
+  submit no change.
+
+### Roadmap Sprint Page
+
+- **Route:** `GET /roadmaps/{name}/sprints/{id}`
+- **Content:** A read-only presentation of a single sprint of the named roadmap,
+  read from that roadmap's `project.db`.
+- **Sprint details.** The page shows all details of the sprint, using the fields
+  defined for the `Sprint` model in `MODELS.md § Sprint`: the sprint `id`, its
+  status, its description, its capacity (`max_tasks`, which may be unset meaning
+  unlimited capacity), `created_at`, `started_at`, `closed_at`, and `task_count`.
+  The page presents the sprint status clearly (the status enum and lifecycle are
+  defined in `MODELS.md § Enums` and `STATE_MACHINE.md § Sprint State Machine`).
+  The page does not redefine these fields; `MODELS.md` and `DATABASE.md` remain
+  canonical.
+- **Task list.** The page lists the sprint's tasks in the planned in-sprint
+  execution order, which is the `sprint_tasks` order (the ordered set of task IDs
+  the `Sprint` model exposes as `tasks`; see `MODELS.md § Sprint` and
+  `DATABASE.md § Relationships`). Each task in the list is clickable: selecting a
+  task opens the read-only task detail modal for that task (see
+  [Task Detail Modal](#task-detail-modal)).
+- **Path parameters.** `{name}` is validated against the roadmap-name rules
+  exactly as on the other roadmap routes (the path-traversal guard in
+  [Routes and Pages](#routes-and-pages) and
+  [Security and Constraints](#security-and-constraints)); an invalid or
+  nonexistent `{name}` returns HTTP `404 Not Found`. `{id}` MUST be a valid
+  integer; a non-integer `{id}`, or an integer `{id}` that is not the `id` of a
+  sprint belonging to the named roadmap, returns HTTP `404 Not Found` (see the
+  HTTP status mapping in [Routes and Pages](#routes-and-pages)).
 - **Read-only.** The page renders data only. It contains no form, button, or
   link that submits a change; there is no edit affordance of any kind.
 
@@ -299,9 +424,24 @@ how the `rmp web` process itself terminates.
 
 - **Route:** `GET /roadmaps/{name}/graph`
 - **Content:** An HTML page that renders the named roadmap's knowledge graph as
-  an interactive node-link visualisation. The page loads the vendored graph
-  library from `/static/...` and fetches the graph's nodes and edges as JSON from
-  the graph data endpoint (`/roadmaps/{name}/graph/data`).
+  an interactive node-link visualisation. The page loads the vendored D3.js
+  library (and the d3-sankey plugin) from `/static/...` and fetches the graph's
+  nodes and edges as JSON from the graph data endpoint
+  (`/roadmaps/{name}/graph/data`).
+- **Layout selection.** The page provides a dropdown (select control) that lets
+  the user choose which layout renders the graph, offering the complete set of
+  layouts from the "Networks" section of the D3 gallery: Force-directed graph,
+  Disjoint force-directed graph, Mobile patent suits, Arc diagram, Sankey diagram,
+  Hierarchical edge bundling, Chord diagram, Directed chord diagram, and Chord
+  dependency diagram. The page renders the **Mobile patent suits** layout by
+  default, and changing the selection re-renders the same graph data in the chosen
+  layout. Layouts that need a constrained data shape (Sankey requires a directed
+  acyclic graph; Hierarchical edge bundling and the Chord variants derive a
+  grouping or adjacency matrix from the graph) degrade gracefully: the option is
+  always offered, and when the current graph cannot be drawn in the selected
+  layout the page shows a clear, read-only in-place message instead of erroring
+  (see
+  [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library)).
 - **Interaction.** The visualisation supports pan and zoom and shows the
   properties of a node or an edge when the user selects it. Node and edge labels,
   types, and properties shown come directly from the graph data (see
@@ -323,7 +463,9 @@ how the `rmp web` process itself terminates.
 
 - **Route:** `GET /roadmaps/{name}/graph/data`
 - **Purpose:** Feeds the node-link visualisation. The page's JavaScript fetches
-  this endpoint and hands the result to the vendored graph library.
+  this endpoint and hands the result to the vendored D3.js library, which renders
+  it in the layout selected on the page (see
+  [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page)).
 - **Response:** JSON describing the graph's nodes and edges, in the shape
   specified in `DATA_FORMATS.md § Graph View Data`. That shape reuses the
   graph-element and property-type conventions already defined in
@@ -340,11 +482,52 @@ how the `rmp web` process itself terminates.
 
 - **Route:** `GET /static/...`
 - **Content:** The embedded stylesheet, the embedded client scripts, and the
-  vendored JavaScript graph library. These are served only from the embedded
-  asset set. The static handler MUST serve only embedded assets and MUST NOT map a
+  vendored D3.js graph library (with the d3-sankey plugin). These are served only
+  from the embedded asset set. The static handler MUST serve only embedded assets
+  and MUST NOT map a
   request path to an arbitrary path on the host filesystem. A request for an asset
   that is not in the embedded set is answered with HTTP `404 Not Found` (see
   [Security and Constraints](#security-and-constraints)).
+
+### Task Detail Modal
+
+The task detail modal is a popup overlay that displays the full set of fields for
+one task. It is not a separate route; it is part of the pages that show clickable
+tasks.
+
+- **Where it appears.** Anywhere a task is shown clickable: the Tasks table on the
+  roadmap detail page, the Actual tab's task list on the roadmap detail page, and
+  the task list on the roadmap sprint page. Selecting a task opens the modal for
+  that task.
+- **Fields shown.** The modal displays all of the task's fields as defined for the
+  `Task` model in `MODELS.md § Task`: `id`, `title`, `status`, `type`, `priority`,
+  `severity`, `functional_requirements`, `technical_requirements`,
+  `acceptance_criteria`, `specialists`, `completion_summary`, `parent_task_id`,
+  `subtask_count`, `depends_on`, `blocks`, `created_at`, `started_at`, `tested_at`,
+  and `closed_at`. This includes the long free-text fields
+  (`functional_requirements`, `technical_requirements`, `acceptance_criteria`, and
+  `completion_summary`), which the modal presents formatted for readable display.
+  The page does not redefine these fields; `MODELS.md` and `DATABASE.md` remain
+  canonical.
+- **Read-only.** The modal only displays data. It contains no form, no input, no
+  edit control, and no submit action of any kind.
+- **No new server endpoint and no new write path.** The modal is populated from
+  read-only task data already delivered to the page that opens it: the task data
+  is server-rendered into the page (as auto-escaped HTML) or carried in a JSON data
+  island (JSON-encoded, not interpolated into HTML). The modal introduces no new
+  server endpoint and no new write path; the CLI remains the sole write path (see
+  [Security and Constraints](#security-and-constraints)).
+- **Output escaping.** Roadmap-derived text shown in the modal is escaped
+  consistently with [Security and Constraints](#security-and-constraints):
+  `html/template` contextual auto-escaping for HTML, or JSON encoding for a data
+  island. Task field values that contain HTML control characters cannot alter page
+  structure.
+- **Popup and touch usability.** The modal is a popup overlay (for example a
+  Tabler or Bootstrap modal) rendered inside the Tabler admin shell. It MUST be
+  usable on touch input and on small viewports: it fits the viewport without
+  horizontal overflow, scrolls its content when the task's text is long, and
+  offers touch-friendly controls to open and dismiss it (see
+  [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
 
 ## Read-Only Data Flow
 
@@ -353,11 +536,13 @@ location rules, and never writes to it.
 
 ### Tasks and Sprints from SQLite
 
-1. For a roadmap detail request, the server resolves the roadmap's database at
-   `~/.roadmaps/{name}/project.db` (see `ARCHITECTURE.md § Directory Structure`)
-   and reads its tasks and sprints using the existing read queries defined in
-   `DATABASE.md § Main SQL Queries`. The web interface adds no new schema, no new
-   table, and no new write query.
+1. For a roadmap detail request or a roadmap sprint request, the server resolves
+   the roadmap's database at `~/.roadmaps/{name}/project.db` (see
+   `ARCHITECTURE.md § Directory Structure`) and reads its tasks and sprints using
+   the existing read queries defined in `DATABASE.md § Main SQL Queries`. The task
+   data the task detail modal displays comes from the same read queries; the modal
+   adds no separate request. The web interface adds no new schema, no new table,
+   and no new write query.
 2. The server opens the database for reading only. It MUST NOT modify rows, MUST
    NOT write an audit entry, and MUST NOT alter the schema. A web read produces no
    audit-log entry, because the audit log records changes and a read is not a
@@ -435,14 +620,18 @@ asset categories the binary must carry; no category is fetched from the network 
 read from the host filesystem at runtime.
 
 1. **HTML templates** — the `html/template` set that renders every page.
-2. **Stylesheet** — all CSS, including any vendored CSS reset or framework (see
+2. **Stylesheet** — all CSS, including the vendored Tabler CSS framework (the UI
+   framework, see [UI Framework](#ui-framework)) and any further vendored CSS the
+   interface uses (see
    [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
-3. **JavaScript** — all client scripts, including the Cytoscape.js
-   knowledge-graph visualisation library and any of its dependencies, all in
-   already-built (vendored) form.
-4. **Web fonts** — any font the interface uses; no font is loaded from a remote
-   font host.
-5. **Icons and images** — any icon or image the interface displays.
+3. **JavaScript** — all client scripts, including the Tabler JavaScript (the UI
+   framework's scripts) and the D3.js knowledge-graph visualisation library (and
+   the d3-sankey plugin) and any of their dependencies, all in already-built
+   (vendored) form.
+4. **Web fonts** — every font the interface uses, including the Inter font and
+   the Tabler Icons webfont; no font is loaded from a remote font host.
+5. **Icons and images** — any icon or image the interface displays, including the
+   Tabler Icons set.
 6. **Favicon** — the site favicon.
 7. **Any other static asset** — any further static asset the interface requires
    is embedded under the same rule; no static asset is exempt.
@@ -472,29 +661,100 @@ read from the host filesystem at runtime.
    running server makes no outbound network request of its own (see
    [Self-Contained Deliverable](#self-contained-deliverable)).
 
+### UI Framework
+
+1. The web interface is built on **Tabler**, the admin-dashboard CSS and
+   JavaScript framework (built on Bootstrap). Tabler provides the admin-shell
+   layout — the navigation sidebar, the top navbar, page headers, and the cards,
+   tables, badges, and buttons used across every page. Tabler also provides the
+   tabs used for the sprint presentation on the roadmap detail page and the modal
+   used for the task detail popup.
+2. The interface uses Tabler's **dark theme**.
+3. Tabler is **vendored**: its already-built distribution (the compiled Tabler
+   CSS and JavaScript) is committed to the repository under the web asset set and
+   embedded into the binary with `go:embed`. It is served locally from
+   `/static/...`. It is never loaded from a content delivery network or any
+   remote origin.
+4. The fonts and icons the Tabler shell depends on are likewise vendored and
+   served from `/static/...`: the **Inter** font and the **Tabler Icons** webfont
+   are committed font files, embedded with `go:embed`, and loaded only from
+   `/static/...`. No font is loaded from a remote font host such as Google Fonts
+   (see [Embedded Asset Categories](#embedded-asset-categories) and
+   [Self-Contained Deliverable](#self-contained-deliverable)).
+5. Tabler is itself responsive and mobile-first; the admin-shell navigation
+   sidebar collapses to an off-canvas (hamburger) menu on small viewports, so the
+   pages stay usable without horizontal overflow on phones (see
+   [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
+6. The knowledge-graph visualisation, rendered with D3.js, is displayed inside the
+   Tabler shell (see
+   [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library)).
+7. The choice of Tabler, and of its dark theme, is recorded here so the SPEC is
+   unambiguous about which UI framework is vendored; substituting a different UI
+   framework, or changing the theme, is a SPEC change to this subsection and to
+   `BUILD.md § Vendored Web Assets`, not a silent code change. No version number
+   is pinned here; the vendored Tabler version lives in the committed distribution
+   under git.
+
 ### Knowledge-Graph Visualisation Library
 
-1. The interactive node-link visualisation uses **Cytoscape.js** as the graph
-   rendering library.
-2. Cytoscape.js is **vendored**: its already-built distribution file is committed
-   to the repository under the web asset set and embedded into the binary with
-   `go:embed`. It is served locally from `/static/...`. It is never loaded from a
-   content delivery network or any remote origin.
+1. The interactive node-link visualisation uses **D3.js** (<https://d3js.org/>)
+   as the graph rendering library, rendered inside the Tabler admin-shell (see
+   [UI Framework](#ui-framework)).
+2. D3.js is **vendored**: its already-built distribution file, together with the
+   **d3-sankey** plugin used for the Sankey layout, is committed to the repository
+   under the web asset set and embedded into the binary with `go:embed`. Both are
+   served locally from `/static/...`. Neither is ever loaded from a content
+   delivery network or any remote origin.
 3. The library renders the nodes and edges returned by the graph data endpoint
    (see [Graph Data Endpoint](#graph-data-endpoint)) and provides pan, zoom, and
    selection so the user can inspect a node's or edge's labels, type, and
    properties.
-4. **Touch and small-viewport configuration.** Cytoscape.js supports touch
-   gestures. The visualisation and its container MUST be configured to be touch-
-   and small-viewport-friendly: the container is fluid and fits the viewport, and
-   the visualisation supports touch pan, pinch-to-zoom, and tap to select and
-   inspect, so node and edge detail can be reached without a mouse hover (see
-   [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
-5. The choice of Cytoscape.js is an implementation-level decision recorded here
-   so the SPEC is unambiguous about which library is vendored; substituting a
-   different vendored, locally-served, build-step-free graph library is a SPEC
-   change to this section and to `BUILD.md § Vendored Web Assets`, not a silent
-   code change.
+4. **Selectable layouts.** The graph page can render the same graph data in any of
+   the following layouts, which are the complete set of layouts in the "Networks"
+   section of the D3 gallery (<https://observablehq.com/@d3/gallery>):
+   - **Force-directed graph**;
+   - **Disjoint force-directed graph**;
+   - **Mobile patent suits** — the **default** layout;
+   - **Arc diagram**;
+   - **Sankey diagram**;
+   - **Hierarchical edge bundling**;
+   - **Chord diagram**;
+   - **Directed chord diagram**;
+   - **Chord dependency diagram**.
+
+   All of these layouts are rendered with the vendored D3.js. The three Chord
+   variants use D3's **d3-chord** module (`d3.chord`, `d3.ribbon`,
+   `d3.ribbonArrow`), which is part of the vendored D3 bundle; no new vendored
+   library is added for them. A dropdown (select control) on the graph page lets
+   the user choose which layout renders the graph. The page renders the
+   Mobile patent suits layout by default, and changing the dropdown selection
+   re-renders the same graph data in the chosen layout.
+5. **Graceful degradation for constrained layouts.** Some layouts require a
+   constrained data shape: the Sankey diagram requires a directed acyclic graph,
+   and Hierarchical edge bundling and the Chord variants (Chord diagram, Directed
+   chord diagram, and Chord dependency diagram) derive a grouping or an adjacency
+   matrix from the graph. Every layout option is always offered in the dropdown
+   regardless of the current graph data. When the current graph data cannot be
+   meaningfully drawn in the selected layout — for example a cyclic graph selected
+   as Sankey — the page MUST degrade gracefully: it shows a clear, read-only,
+   in-place message explaining that the current graph cannot be rendered in that
+   layout, instead of erroring or breaking the page. The user can then select a
+   different layout. This is a read-only message; it triggers no write and no
+   navigation.
+6. **Touch and small-viewport configuration.** D3.js supports touch gestures. The
+   visualisation and its container MUST be configured to be touch- and
+   small-viewport-friendly: the container is fluid and fits the viewport, and the
+   visualisation supports touch pan, pinch-to-zoom, and tap to select and inspect,
+   so node and edge detail can be reached without a mouse hover (see
+   [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)). The
+   layout dropdown is likewise touch-usable.
+7. The choice of D3.js (with the d3-sankey plugin) is an implementation-level
+   decision recorded here so the SPEC is unambiguous about which library is
+   vendored; substituting a different vendored, locally-served, build-step-free
+   graph library is a SPEC change to this subsection and to
+   `BUILD.md § Vendored Web Assets`, not a silent code change. No version number is
+   pinned here; the vendored D3.js and d3-sankey versions live in the committed
+   distribution under git.
 
 ## Responsive and Mobile-First Design
 
@@ -511,28 +771,43 @@ experience is the baseline that larger viewports enhance.
    navigation and other interactive controls present touch-friendly, appropriately
    sized hit targets.
 3. **Applies to every page.** The mobile-first, responsive requirement applies to
-   all three pages: the roadmap index page, the roadmap detail page (tasks and
-   sprints), and the knowledge-graph page.
-4. **Usable tabular data on narrow screens.** The roadmap detail page presents
-   task and sprint data that is tabular by nature. This data MUST remain usable on
-   narrow screens, for example through responsive or stacked tables or an
-   equivalent layout that avoids horizontal overflow, while still presenting the
-   fields and relationships defined for the detail page (see
-   [Roadmap Detail Page](#roadmap-detail-page)).
-5. **Touch- and mobile-usable graph visualisation.** The interactive
+   every page: the roadmap index page, the roadmap detail page (tasks and the
+   sprint tabs), the roadmap sprint page, and the knowledge-graph page.
+4. **Usable tabular data on narrow screens.** The roadmap detail page and the
+   roadmap sprint page present task and sprint data that is tabular by nature.
+   This data MUST remain usable on narrow screens, for example through responsive
+   or stacked tables or an equivalent layout that avoids horizontal overflow, while
+   still presenting the fields and relationships defined for those pages (see
+   [Roadmap Detail Page](#roadmap-detail-page) and
+   [Roadmap Sprint Page](#roadmap-sprint-page)).
+5. **Touch- and small-viewport-usable sprint tabs and task modal.** The three
+   sprint tabs on the roadmap detail page (Próximos, Actual, Concluídos) and the
+   task detail modal MUST remain usable on touch input and on small viewports. The
+   tabs offer touch-friendly controls to switch between them without horizontal
+   overflow, and the task detail modal fits the viewport, scrolls its content when
+   the task's text is long, and offers touch-friendly controls to open and dismiss
+   it (see [Roadmap Detail Page](#roadmap-detail-page) and
+   [Task Detail Modal](#task-detail-modal)).
+6. **Touch- and mobile-usable graph visualisation.** The interactive
    knowledge-graph visualisation MUST remain usable on touch and mobile devices.
    Its container is fluid and fits the viewport, and it supports touch gestures —
    pan, pinch-to-zoom, and tap to select and inspect — so node and edge detail can
    be reached without a mouse hover (see
    [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library)).
-6. **Responsive viewport meta tag.** Every HTML page includes the responsive
+7. **Responsive viewport meta tag.** Every HTML page includes the responsive
    viewport meta tag, so mobile browsers scale the page to the device width rather
    than rendering it at a fixed desktop width.
-7. **Framework-free, vendored CSS only.** The interface uses no external CSS
-   framework loaded from a content delivery network or any remote origin,
-   consistent with [Self-Contained Deliverable](#self-contained-deliverable). If
-   any CSS framework or reset is used, it MUST be vendored and embedded with the
-   stylesheet (see [Embedded Asset Categories](#embedded-asset-categories)).
+8. **Vendored CSS framework (Tabler), no remote origin.** The interface uses the
+   Tabler CSS framework (see [UI Framework](#ui-framework)). The framework, and
+   any further CSS the interface uses, MUST be vendored and embedded with the
+   stylesheet and served only from `/static/...`; no CSS is loaded from a content
+   delivery network or any remote origin, consistent with
+   [Self-Contained Deliverable](#self-contained-deliverable) and
+   [Embedded Asset Categories](#embedded-asset-categories). Tabler is itself
+   responsive and mobile-first, which keeps the mobile-first guarantee of this
+   section intact; on small viewports the admin-shell navigation sidebar
+   collapses to an off-canvas (hamburger) menu so the pages stay usable without
+   horizontal overflow on phones.
 
 ## Error Handling and Exit Codes
 
@@ -578,11 +853,14 @@ Rules:
 
 ## Security and Constraints
 
-1. **Loopback by default.** The server binds `127.0.0.1` by default, so the
-   interface is reachable only from the local machine. Binding to a non-loopback
-   address (for example via `--host 0.0.0.0`) is an explicit, opt-in user choice;
-   the interface remains read-only regardless of bind address, but a non-loopback
-   bind exposes read access to the network and is the user's responsibility.
+1. **Exposed to the network by default.** The server binds all interfaces
+   (`0.0.0.0`) by default, so the read-only interface is reachable from every
+   network point of the machine, not only from the local machine. Restricting the
+   interface to the local machine is the explicit opt-in `--host 127.0.0.1`
+   (the loopback interface). The interface remains read-only regardless of bind
+   address; exposing read access to the network is the default behaviour and is
+   the user's responsibility, and restricting that exposure to loopback is the
+   user's explicit choice.
 2. **Read-only.** The interface never writes. It exposes no route that creates,
    edits, or deletes roadmap data, tasks, sprints, audit entries, or graph
    elements. The server accepts only `GET` and `HEAD`; every other method returns
@@ -612,11 +890,13 @@ Rules:
    fully offline, and the server makes no outbound network request (see
    [Self-Contained Deliverable](#self-contained-deliverable) and
    [Frontend and Embedded Assets](#frontend-and-embedded-assets)).
-6. **Output escaping.** Roadmap-derived text (task and sprint fields, graph node
-   and edge labels and property values) is rendered through `html/template`'s
-   contextual auto-escaping, so data that contains HTML control characters cannot
-   alter page structure. Graph data delivered as JSON to the visualisation is
-   encoded as JSON, not interpolated into HTML.
+6. **Output escaping.** Roadmap-derived text (task and sprint fields, including
+   the task fields shown in the task detail modal, and graph node and edge labels
+   and property values) is rendered through `html/template`'s contextual
+   auto-escaping, so data that contains HTML control characters cannot alter page
+   structure. Task data carried to the page as a JSON data island for the task
+   detail modal, and graph data delivered as JSON to the visualisation, are encoded
+   as JSON, not interpolated into HTML.
 7. **No new write path.** The web interface does not become a second source of
    truth. The CLI and its SQLite databases and GoGraph stores remain the sole
    source of truth and the sole write path; the web interface is a view over them.
@@ -626,7 +906,8 @@ Rules:
 1. `rmp web` starts a server, prints the served URL to stdout as the success
    object defined in `COMMANDS.md § Web Interface`, and (unless `--no-open` is
    given) opens the default browser at that URL. With no flags it binds
-   `127.0.0.1:8787`.
+   `0.0.0.0:8787` (all interfaces). Passing `--host 127.0.0.1` restricts the
+   bind to the loopback interface.
 2. `rmp web --no-open` starts the server and prints the URL without launching a
    browser.
 3. `rmp web --port 8787` when port 8787 is already in use fails with exit code 1
@@ -650,53 +931,103 @@ Rules:
    request whose `{name}` violates the roadmap-name rules (for example
    `../etc`) returns HTTP 404 without touching the filesystem outside
    `~/.roadmaps/`.
-10. `GET /roadmaps/{name}/graph` for an existing roadmap returns HTTP 200 and an
-    HTML page that loads the vendored Cytoscape.js from `/static/...` (not from
-    any remote origin) and renders an interactive node-link visualisation with pan
-    and zoom that is usable with touch gestures (pan, pinch-to-zoom, tap to select
-    and inspect) and surfaces node and edge detail without requiring a mouse hover.
-11. `GET /roadmaps/{name}/graph/data` returns HTTP 200 and JSON in the shape
+10. On the roadmap detail page, the roadmap's sprints are presented as three tabs
+    whose labels, from left to right, are exactly **Próximos**, **Actual**, and
+    **Concluídos**, and the **Actual** tab is the active tab by default when the
+    page loads.
+11. On the roadmap detail page, sprints are classified into the tabs by their
+    status: every `PENDING` sprint appears under Próximos ordered by ascending
+    sprint `id`; every `OPEN` sprint appears under Actual with the status of each
+    of its tasks shown; every `CLOSED` sprint appears under Concluídos ordered by
+    `closed_at` descending, with any CLOSED sprint lacking a `closed_at` value
+    sorted last. A tab with no matching sprint shows a clear empty-state message.
+12. On the roadmap detail page, every sprint shown in any tab is a clickable link
+    to that sprint's page at `/roadmaps/{name}/sprints/{id}`.
+13. `GET /roadmaps/{name}/sprints/{id}` for a sprint of an existing roadmap returns
+    HTTP 200 and an HTML page showing all details of that sprint (id, status,
+    description, capacity `max_tasks`, `created_at`, `started_at`, `closed_at`, and
+    `task_count`) and the sprint's task list in `sprint_tasks` order (the planned
+    in-sprint execution order); the page contains no form, button, or link that
+    submits a change. A request whose `{id}` is not a valid integer, or is an
+    integer that is not a sprint of the named roadmap, returns HTTP 404, and a
+    request whose `{name}` is invalid or nonexistent returns HTTP 404.
+14. Clicking a task anywhere it is shown clickable — the detail page Tasks table,
+    the Actual tab's task list, and the sprint page's task list — opens a modal
+    popup that displays all of that task's fields (`id`, `title`, `status`, `type`,
+    `priority`, `severity`, `functional_requirements`, `technical_requirements`,
+    `acceptance_criteria`, `specialists`, `completion_summary`, `parent_task_id`,
+    `subtask_count`, `depends_on`, `blocks`, `created_at`, `started_at`,
+    `tested_at`, `closed_at`). The modal is read-only: it contains no form, no edit
+    control, and no submit action, and it triggers no new server request and no new
+    write path. The modal and the sprint tabs are usable on touch input and on a
+    small phone-sized viewport.
+15. `GET /roadmaps/{name}/graph` for an existing roadmap returns HTTP 200 and an
+    HTML page that loads the vendored D3.js library (and the d3-sankey plugin) from
+    `/static/...` (not from any remote origin) and renders an interactive node-link
+    visualisation with pan and zoom that is usable with touch gestures (pan,
+    pinch-to-zoom, tap to select and inspect) and surfaces node and edge detail
+    without requiring a mouse hover. The page renders the **Mobile patent suits**
+    layout by default and provides a dropdown offering the complete set of
+    "Networks"-section D3 gallery layouts — Force-directed graph, Disjoint
+    force-directed graph, Mobile patent suits, Arc diagram, Sankey diagram,
+    Hierarchical edge bundling, Chord diagram, Directed chord diagram, and Chord
+    dependency diagram. Selecting a layout in the dropdown re-renders the same graph
+    data in that layout. When the current graph cannot be meaningfully drawn in the
+    selected layout (for example a cyclic graph selected as Sankey), the page shows
+    a clear, read-only in-place message instead of erroring, and the user can select
+    a different layout; touch usability is preserved across all layouts.
+16. `GET /roadmaps/{name}/graph/data` returns HTTP 200 and JSON in the shape
     defined in `DATA_FORMATS.md § Graph View Data`, populated from a read-only
     query against the roadmap's GoGraph store.
-12. After serving any number of graph page and graph data requests for a roadmap
+17. After serving any number of graph page and graph data requests for a roadmap
     that has never been written, the graph store directory contains no `snapshot/`
     subdirectory and no checkpoint has run, proving the web read path is read-only
     (see `GRAPH.md § Synchronous Checkpoint on Write`).
-13. Serving roadmap detail pages produces **no** new audit-log entry in the
-    roadmap's `project.db` (a read is not a change).
-14. A `POST`, `PUT`, `PATCH`, or `DELETE` request to any route returns HTTP 405.
-15. A request for a `/static/...` path that is not in the embedded asset set
+18. Serving roadmap detail pages and roadmap sprint pages produces **no** new
+    audit-log entry in the roadmap's `project.db` (a read is not a change).
+19. A `POST`, `PUT`, `PATCH`, or `DELETE` request to any route returns HTTP 405.
+20. A request for a `/static/...` path that is not in the embedded asset set
     returns HTTP 404, and no `/static/...` request can read a file outside the
     embedded asset set.
-16. Every page the interface serves loads all of its assets — scripts,
-    stylesheet, graph library, fonts, icons, images, and favicon — only from
-    `/static/...` on the same server; no page references a content delivery
-    network, a remote font host, or any other remote origin, and the running
-    server makes no outbound network request.
-17. Sending `SIGINT` (`Ctrl+C`) or `SIGTERM` to a running `rmp web` shuts the
+21. Every page the interface serves loads all of its assets — the vendored Tabler
+    CSS and JavaScript, the D3.js graph library and the d3-sankey plugin, the
+    Tabler Icons webfont, the Inter font, and every other script, stylesheet, font,
+    icon, image, and the favicon — only from `/static/...` on the same server; no
+    page references a
+    content delivery network, a remote font host (no Google Fonts), or any other
+    remote origin, and the running server makes no outbound network request.
+22. Sending `SIGINT` (`Ctrl+C`) or `SIGTERM` to a running `rmp web` shuts the
     server down gracefully and the process exits 0.
-18. The deliverable is fully self-contained: the binary serves the interface with
+23. The deliverable is fully self-contained: the binary serves the interface with
     zero external runtime dependency. Every embedded asset category in
     [Embedded Asset Categories](#embedded-asset-categories) — HTML templates, the
-    stylesheet, all client JavaScript including the Cytoscape.js bundle and its
-    dependencies, web fonts, icons and images, and the favicon — is embedded via
+    stylesheet, all client JavaScript including the D3.js bundle and the d3-sankey
+    plugin and their dependencies, web fonts, icons and images, and the favicon —
+    is embedded via
     `go:embed`, and the build produces a single self-contained binary (see
     `BUILD.md § Vendored Web Assets`).
-19. The interface works with networking disabled and with only the `rmp` binary
+24. The interface works with networking disabled and with only the `rmp` binary
     present on disk (no sidecar files and no separate assets directory): every
     page renders and functions fully, including the knowledge-graph visualisation,
     with no network egress.
-20. On a small phone-sized viewport, the roadmap index page, the roadmap detail
-    page, and the knowledge-graph page each render without horizontal scrolling,
-    with readable typography and touch-friendly hit targets, demonstrating the
-    mobile-first base styles.
-21. On the roadmap detail page at a narrow viewport, the task and sprint data
-    remains usable without horizontal overflow (for example through responsive or
-    stacked tables or an equivalent layout) while still showing the fields and
-    relationships defined for the page.
-22. Every HTML page the interface serves includes the responsive viewport meta
-    tag, and no page loads a CSS framework or reset from a remote origin; any CSS
-    framework or reset in use is vendored and served from `/static/...`.
+25. On a small phone-sized viewport, the roadmap index page, the roadmap detail
+    page, the roadmap sprint page, and the knowledge-graph page each render without
+    horizontal scrolling, with readable typography and touch-friendly hit targets,
+    demonstrating the mobile-first base styles.
+26. On the roadmap detail page and the roadmap sprint page at a narrow viewport,
+    the task and sprint data remains usable without horizontal overflow (for
+    example through responsive or stacked tables or an equivalent layout) while
+    still showing the fields and relationships defined for those pages.
+27. Every HTML page the interface serves includes the responsive viewport meta
+    tag, and no page loads a CSS framework or reset from a remote origin; the
+    Tabler CSS framework in use is vendored and served from `/static/...`.
+28. Every page renders in the Tabler admin-shell layout — a navigation sidebar
+    (listing the roadmaps and, within a roadmap, that roadmap's Tasks, Sprints,
+    and Graph views), a top navbar, and a page header — using Tabler cards,
+    tables, and badges, and the interface renders in Tabler's dark theme.
+29. On a small phone-sized viewport, the admin-shell navigation sidebar is not
+    shown expanded inline; it collapses to an off-canvas (hamburger) menu that the
+    user can open, so each page stays usable without horizontal overflow.
 
 ## See Also
 
@@ -712,8 +1043,11 @@ Rules:
 - Web module responsibilities and command lifecycle →
   `ARCHITECTURE.md § Modules and Responsibilities` and
   `ARCHITECTURE.md § Command Lifecycle`
-- Task and Sprint fields presented in the detail page → `MODELS.md` and
-  `DATABASE.md`
-- Embedded asset bundling, the vendored Cytoscape.js asset, and the
-  self-contained-binary build verification → `BUILD.md § Vendored Web Assets`
+- Task and Sprint fields presented in the detail page, the sprint page, and the
+  task detail modal → `MODELS.md` and `DATABASE.md`
+- Sprint status enum and lifecycle that classify sprints into the detail-page tabs
+  → `MODELS.md § Enums` and `STATE_MACHINE.md § Sprint State Machine`
+- Embedded asset bundling, the vendored Tabler framework and D3.js (with
+  d3-sankey) assets, and the self-contained-binary build verification →
+  `BUILD.md § Vendored Web Assets`
 - Help skeleton for `web` → `HELP.md`

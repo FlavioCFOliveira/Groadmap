@@ -22,7 +22,7 @@ This will detect your OS and architecture, download the latest release from GitH
 - **State Machine**: Validated task and sprint status transitions with automatic date tracking
 - **Bulk Operations**: Support for multiple task IDs in single commands
 - **Knowledge Graph**: Per-roadmap queryable graph (nodes, edges, Cypher) for capturing project elements and their relationships
-- **Web Interface**: Read-only, self-contained, mobile-first browser view of all roadmaps, their tasks and sprints, and an interactive knowledge-graph visualisation (`rmp web`)
+- **Web Interface**: Read-only, self-contained, mobile-first browser view of all roadmaps, their tasks and sprints, and an interactive knowledge-graph visualisation, built on the Tabler admin-shell UI in a dark theme (`rmp web`)
 
 ## Available Commands
 
@@ -542,26 +542,27 @@ Under the roadmap's home directory at `~/.roadmaps/<name>/graph/` (a directory, 
 A read-only, browser-based view of everything the CLI manages. It starts an HTTP server embedded in the `rmp` binary that lists every roadmap under `~/.roadmaps/` and lets you drill into a roadmap's tasks and sprints and an interactive visualisation of its knowledge graph. It only presents data; the CLI remains the sole write path.
 
 ```bash
-# Start on the default loopback host and port and open the browser
+# Start on the default host (all interfaces) and port and open the browser
 rmp web
 
 # Start without launching a browser; just print the served URL
 rmp web --no-open
 
-# Choose a port, or expose on the network (explicit opt-in)
+# Choose a port, or restrict to the local machine (loopback opt-in)
 rmp web --port 9000
-rmp web --host 0.0.0.0 --port 9000
+rmp web --host 127.0.0.1 --port 9000
 ```
 
-On startup the served URL is printed as JSON (`{"url": "http://127.0.0.1:8787"}`); the `url` reflects the actual bound host and port. When `--port` is omitted and `8787` is in use, the server falls back to an OS-chosen ephemeral port so it still starts.
+On startup the served URL is printed as JSON (`{"url": "http://0.0.0.0:8787"}`); the `url` reflects the actual bound host and port. When `--port` is omitted and `8787` is in use, the server falls back to an OS-chosen ephemeral port so it still starts.
 
 **What makes it different from every other command?**
 
 - **Read-only.** No route creates, edits, or deletes anything; serving a page writes no rows, no audit-log entry, and never checkpoints the graph store. Only `GET`/`HEAD` are accepted (any other method returns HTTP 405).
 - **No `-r` flag.** It is the one command exempt from the always-required-roadmap rule; it lists all roadmaps and you pick one in the browser.
 - **Long-lived.** It keeps serving until interrupted; `Ctrl+C` (`SIGINT`) or `SIGTERM` shuts it down gracefully (exit 0).
-- **Self-contained and offline.** Every asset (HTML, CSS, JavaScript, the vendored Cytoscape.js graph library) is embedded in the binary via `go:embed`; no page references a CDN or any remote origin, and the server makes no outbound request.
-- **Loopback by default.** It binds `127.0.0.1`; a non-loopback bind via `--host` is an explicit opt-in. Roadmap names from the URL are validated before any filesystem path is built (path-traversal guard).
+- **Tabler dark-theme UI.** The interface is built on the vendored Tabler admin-dashboard framework in its dark theme: a navigation sidebar (which collapses to a hamburger menu on small viewports), a top navbar, page headers, and Tabler cards, tables, and badges.
+- **Self-contained and offline.** Every asset (HTML, CSS, JavaScript, the vendored Tabler framework and D3.js graph library with the d3-sankey plugin, the Tabler Icons webfont, and the Inter font) is embedded in the binary via `go:embed` and served only from `/static/`; no page references a CDN, a remote font host, or any other remote origin, and the server makes no outbound request.
+- **Exposed to the network by default.** It binds all interfaces (`0.0.0.0`), so the read-only interface is reachable from every network point of the machine; restricting it to the local machine via `--host 127.0.0.1` is the explicit opt-in. Roadmap names from the URL are validated before any filesystem path is built (path-traversal guard).
 - **Responsive, mobile-first.** Every page, including the graph visualisation, adapts to small touch viewports.
 
 See [DOCS/commands/web.md](DOCS/commands/web.md) for the full route list and exit codes.

@@ -1,0 +1,195 @@
+{{/*
+  Shared admin-shell chrome for every page (SPEC/WEB.md § UI Framework,
+  Functional Requirement 12, Acceptance Criteria 22/23/24).
+
+  These partials define the Tabler admin-shell once: the document head (with
+  the vendored asset chain), the off-canvas-capable vertical sidebar, and the
+  top navbar. Each page template (index/detail/graph) invokes them, passing a
+  view model whose .Chrome field carries the shell data (page title, active
+  roadmap, active nav section). The dark theme is set with
+  data-bs-theme="dark" on <html>; no toggle is offered.
+
+  Asset order in <head> is fixed: Inter font, Tabler core CSS, Tabler Icons
+  CSS, then the reworked override stylesheet. All come from /static/...; no
+  remote origin, no CDN, no Google Fonts.
+*/}}
+
+{{define "head"}}  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex">
+  <title>{{.Chrome.Title}}</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="stylesheet" href="/static/vendor/inter/inter.css">
+  <link rel="stylesheet" href="/static/vendor/tabler/tabler.min.css">
+  <link rel="stylesheet" href="/static/vendor/tabler-icons/tabler-icons.min.css">
+  <link rel="stylesheet" href="/static/style.css">{{end}}
+
+{{define "sidebar"}}  <aside class="navbar navbar-vertical navbar-expand-lg" data-bs-theme="dark">
+    <div class="container-fluid">
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#sidebar-menu" aria-controls="sidebar-menu" aria-expanded="false" aria-label="Toggle navigation">
+        <span class="navbar-toggler-icon"></span>
+      </button>
+      <div class="navbar-brand navbar-brand-autodark">
+        <a href="/" class="text-decoration-none d-flex align-items-center">
+          <img src="/static/favicon.svg" width="28" height="28" alt="" class="me-2">
+          <span class="fw-bold">Groadmap</span>
+        </a>
+      </div>
+      <div class="collapse navbar-collapse" id="sidebar-menu">
+        <ul class="navbar-nav pt-lg-3">
+          <li class="nav-item{{if eq .Chrome.Active "roadmaps"}} active{{end}}">
+            <a class="nav-link" href="/">
+              <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-list"></i></span>
+              <span class="nav-link-title">Roadmaps</span>
+            </a>
+          </li>
+          {{with .Chrome.Roadmap}}
+          <li class="nav-item mt-3">
+            <span class="nav-link text-muted text-uppercase fw-bold" style="font-size:0.75rem;letter-spacing:0.04em;">{{.}}</span>
+          </li>
+          <li class="nav-item{{if eq $.Chrome.Active "tasks"}} active{{end}}">
+            <a class="nav-link" href="/roadmaps/{{.}}#tasks">
+              <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-checklist"></i></span>
+              <span class="nav-link-title">Tasks</span>
+            </a>
+          </li>
+          <li class="nav-item{{if eq $.Chrome.Active "sprints"}} active{{end}}">
+            <a class="nav-link" href="/roadmaps/{{.}}#sprints">
+              <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-run"></i></span>
+              <span class="nav-link-title">Sprints</span>
+            </a>
+          </li>
+          <li class="nav-item{{if eq $.Chrome.Active "graph"}} active{{end}}">
+            <a class="nav-link" href="/roadmaps/{{.}}/graph">
+              <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-affiliate"></i></span>
+              <span class="nav-link-title">Graph</span>
+            </a>
+          </li>
+          {{end}}
+        </ul>
+      </div>
+    </div>
+  </aside>{{end}}
+
+{{define "topnavbar"}}  <header class="navbar navbar-expand-md d-print-none">
+    <div class="container-fluid">
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#sidebar-menu" aria-controls="sidebar-menu" aria-expanded="false" aria-label="Toggle navigation">
+        <span class="navbar-toggler-icon"></span>
+      </button>
+      <div class="navbar-brand d-md-none">
+        <a href="/" class="text-decoration-none">Groadmap</a>
+      </div>
+      <div class="navbar-nav flex-row order-md-last">
+        <div class="nav-item d-flex align-items-center">
+          <span class="badge bg-secondary-lt"><i class="ti ti-lock me-1"></i>Read-only</span>
+        </div>
+      </div>
+    </div>
+  </header>{{end}}
+
+{{/*
+  taskModal renders ONE Bootstrap modal for a single task (dot = a models.Task).
+  Each clickable task on a page is a control with
+  data-bs-toggle="modal" data-bs-target="#task-modal-{ID}", and the page renders
+  one taskModal per task it shows; tabler.min.js (Bootstrap 5.3) drives open and
+  close natively, so no custom JavaScript and no new server endpoint are needed
+  (SPEC/WEB.md § Task Detail Modal). The modal is read-only: it has no form, no
+  input, and no submit control — only a close control.
+
+  Every roadmap-derived field (title, the long free-text requirements, the
+  completion summary, specialists) is emitted through html/template's
+  contextual auto-escaping, so task data that contains HTML control characters
+  cannot alter page structure (SPEC/WEB.md § Security and Constraints, rule 6).
+  The long free-text fields render inside .task-modal__text blocks that wrap and
+  preserve their line breaks.
+*/}}
+{{define "taskModal"}}  <div class="modal modal-blur fade" id="task-modal-{{.ID}}" tabindex="-1" aria-labelledby="task-modal-{{.ID}}-title" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable modal-dialog-centered" role="document">
+      <div class="modal-content">
+        <div class="modal-header">
+          <div>
+            <div class="text-secondary">Task #{{.ID}}</div>
+            <h5 class="modal-title" id="task-modal-{{.ID}}-title">{{.Title}}</h5>
+          </div>
+          <span class="badge bg-blue-lt ms-auto me-2">{{.Status}}</span>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div class="datagrid mb-3">
+            <div class="datagrid-item">
+              <div class="datagrid-title">Type</div>
+              <div class="datagrid-content">{{.Type}}</div>
+            </div>
+            <div class="datagrid-item">
+              <div class="datagrid-title">Priority</div>
+              <div class="datagrid-content">{{.Priority}}</div>
+            </div>
+            <div class="datagrid-item">
+              <div class="datagrid-title">Severity</div>
+              <div class="datagrid-content">{{.Severity}}</div>
+            </div>
+            <div class="datagrid-item">
+              <div class="datagrid-title">Specialists</div>
+              <div class="datagrid-content">{{with .Specialists}}{{.}}{{else}}&mdash;{{end}}</div>
+            </div>
+            <div class="datagrid-item">
+              <div class="datagrid-title">Parent task</div>
+              <div class="datagrid-content">{{with .ParentTaskID}}#{{.}}{{else}}&mdash;{{end}}</div>
+            </div>
+            <div class="datagrid-item">
+              <div class="datagrid-title">Subtasks</div>
+              <div class="datagrid-content">{{.SubtaskCount}}</div>
+            </div>
+            <div class="datagrid-item">
+              <div class="datagrid-title">Depends on</div>
+              <div class="datagrid-content">
+                {{if .DependsOn}}<span class="d-flex flex-wrap gap-1">{{range .DependsOn}}<span class="badge bg-secondary-lt">#{{.}}</span>{{end}}</span>{{else}}&mdash;{{end}}
+              </div>
+            </div>
+            <div class="datagrid-item">
+              <div class="datagrid-title">Blocks</div>
+              <div class="datagrid-content">
+                {{if .Blocks}}<span class="d-flex flex-wrap gap-1">{{range .Blocks}}<span class="badge bg-secondary-lt">#{{.}}</span>{{end}}</span>{{else}}&mdash;{{end}}
+              </div>
+            </div>
+            <div class="datagrid-item">
+              <div class="datagrid-title">Created</div>
+              <div class="datagrid-content text-secondary">{{.CreatedAt}}</div>
+            </div>
+            <div class="datagrid-item">
+              <div class="datagrid-title">Started</div>
+              <div class="datagrid-content text-secondary">{{with .StartedAt}}{{.}}{{else}}&mdash;{{end}}</div>
+            </div>
+            <div class="datagrid-item">
+              <div class="datagrid-title">Tested</div>
+              <div class="datagrid-content text-secondary">{{with .TestedAt}}{{.}}{{else}}&mdash;{{end}}</div>
+            </div>
+            <div class="datagrid-item">
+              <div class="datagrid-title">Closed</div>
+              <div class="datagrid-content text-secondary">{{with .ClosedAt}}{{.}}{{else}}&mdash;{{end}}</div>
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <div class="datagrid-title mb-1">Functional requirements</div>
+            <div class="task-modal__text">{{.FunctionalRequirements}}</div>
+          </div>
+          <div class="mb-3">
+            <div class="datagrid-title mb-1">Technical requirements</div>
+            <div class="task-modal__text">{{.TechnicalRequirements}}</div>
+          </div>
+          <div class="mb-3">
+            <div class="datagrid-title mb-1">Acceptance criteria</div>
+            <div class="task-modal__text">{{.AcceptanceCriteria}}</div>
+          </div>
+          <div>
+            <div class="datagrid-title mb-1">Completion summary</div>
+            <div class="task-modal__text">{{with .CompletionSummary}}{{.}}{{else}}&mdash;{{end}}</div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>{{end}}

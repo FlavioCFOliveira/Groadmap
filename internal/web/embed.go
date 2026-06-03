@@ -21,9 +21,9 @@ import (
 var templatesFS embed.FS
 
 // staticFS holds every static asset served under /static/...: the
-// stylesheet, the client scripts, and the vendored Cytoscape.js bundle.
-// Every asset the interface loads comes from this embedded set; the server
-// never serves an arbitrary host filesystem path (SPEC/WEB.md
+// stylesheet, the client scripts, and the vendored D3.js bundle (with the
+// d3-sankey plugin). Every asset the interface loads comes from this embedded
+// set; the server never serves an arbitrary host filesystem path (SPEC/WEB.md
 // § Static Assets and § Security and Constraints, rule 4).
 //
 //go:embed static

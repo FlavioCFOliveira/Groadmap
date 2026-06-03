@@ -15,11 +15,15 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Help text structure | `HELP.md` |
 | Knowledge graph feature (design, persistence, guard rails) | `GRAPH.md` |
 | Read-only web interface (`rmp web`, server, pages, graph viz) | `WEB.md` |
+| Web roadmap detail page sprint tabs (Próximos / Actual / Concluídos) | `WEB.md § Roadmap Detail Page` |
+| Web sprint page (`/roadmaps/{name}/sprints/{id}`) | `WEB.md § Roadmap Sprint Page` |
+| Web task detail modal (read-only task popup) | `WEB.md § Task Detail Modal` |
 | `rmp web` command syntax / flags | `COMMANDS.md § Web Interface` |
 | Web graph data endpoint JSON shape | `DATA_FORMATS.md § Graph View Data` |
 | Self-contained web binary (offline, no CDN, embedded asset categories) | `WEB.md § Self-Contained Deliverable` |
 | Responsive / mobile-first web design | `WEB.md § Responsive and Mobile-First Design` |
-| Vendored web assets / embedded Cytoscape.js | `BUILD.md § Vendored Web Assets` |
+| Web UI framework (Tabler admin shell, dark theme) | `WEB.md § UI Framework` |
+| Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
 | `graph` command syntax / subcommands | `COMMANDS.md § Graph Management` |
 | Graph query result JSON / property-type mapping | `DATA_FORMATS.md § Graph Query Result` |
 | Cypher input via flag or stdin | `GRAPH.md § Cypher Input Source and Precedence` |
@@ -93,7 +97,8 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Graph store directory (`graph/` subdir) | `GRAPH.md § Persistence Layout` (layout referenced from `ARCHITECTURE.md § Directory Structure`) |
 | Graph query result JSON and property-type mapping | `DATA_FORMATS.md § Graph Query Result` |
 | Web graph view-data JSON shape | `DATA_FORMATS.md § Graph View Data` |
-| Vendored web assets / embedded Cytoscape.js | `BUILD.md § Vendored Web Assets` |
+| Web UI framework (Tabler admin shell, dark theme) | `WEB.md § UI Framework` |
+| Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
 | Graph store concurrency / single-writer / recovery | `IMPLEMENTATION.md § Graph Store Concurrency` |
 | Minimum Go version and external dependencies | `BUILD.md § Go Toolchain` |
 | Help text canonical | code in `internal/commands/*.go` (structure in `HELP.md`) |

@@ -1699,15 +1699,16 @@ flag (see [Roadmap Selection (Always Required)](#roadmap-selection-always-requir
 ```bash
 rmp web
 rmp web --port 9000
-rmp web --host 0.0.0.0 --port 9000
+rmp web --host 127.0.0.1 --port 9000
 rmp web --no-open
 ```
 
 ### Options
 
-- `--host <address>` - Bind host. Default `127.0.0.1` (loopback only). Binding a
-  non-loopback address (for example `0.0.0.0`) exposes the read-only interface on
-  the network and is an explicit opt-in (see `WEB.md § Security and Constraints`).
+- `--host <address>` - Bind host. Default `0.0.0.0` (binds all interfaces),
+  which exposes the read-only interface on the network. Restricting the
+  interface to the local machine is the explicit opt-in `--host 127.0.0.1`
+  (loopback only) (see `WEB.md § Security and Constraints`).
 - `--port <number>` - Bind port, an integer in the range 0-65535. Default `8787`.
   When `--port` is omitted and the default port `8787` is already in use, the
   server falls back to an operating-system-chosen ephemeral port so it still
@@ -1729,7 +1730,7 @@ unknown flag is an input error (exit code 2).
   is opened:
 
   ```json
-  {"url": "http://127.0.0.1:8787"}
+  {"url": "http://0.0.0.0:8787"}
   ```
 
   The `url` reflects the actual bound host and port, including an ephemeral port
@@ -1769,7 +1770,7 @@ interface introduces no new codes.
 
 | Scenario | Exit Code | stderr Output (illustrative) |
 |----------|-----------|------------------------------|
-| Explicit `--port` already in use | 1 | "Error: cannot bind 127.0.0.1:8787: address already in use" |
+| Explicit `--port` already in use | 1 | "Error: cannot bind 0.0.0.0:8787: address already in use" |
 | Host not assignable | 1 | "Error: cannot bind 10.0.0.5:8787: cannot assign requested address" |
 | `--port` out of range | 6 | "Error: --port must be an integer between 0 and 65535 (got 70000)" |
 | `--port` not an integer | 6 | "Error: --port must be an integer between 0 and 65535 (got \"notanumber\")" |

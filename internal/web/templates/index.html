@@ -1,42 +1,62 @@
 {{define "index.html"}}<!doctype html>
-<html lang="en">
+<html lang="en" data-bs-theme="dark">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Groadmap — Roadmaps</title>
-  <link rel="stylesheet" href="/static/style.css">
+{{template "head" .}}
 </head>
-<body>
-  <header class="topbar">
-    <h1 class="topbar__title">Groadmap</h1>
-    <p class="topbar__subtitle">Read-only view of the roadmaps under ~/.roadmaps/</p>
-  </header>
-
-  <main class="container">
-    <h2>Roadmaps</h2>
-    {{if .Roadmaps}}
-    <ul class="roadmap-list">
-      {{range .Roadmaps}}
-      <li class="roadmap-card">
-        <span class="roadmap-card__name">{{.}}</span>
-        <span class="roadmap-card__links">
-          <a class="btn" href="/roadmaps/{{.}}">Tasks &amp; sprints</a>
-          <a class="btn btn--secondary" href="/roadmaps/{{.}}/graph">Knowledge graph</a>
-        </span>
-      </li>
-      {{end}}
-    </ul>
-    {{else}}
-    <div class="empty-state">
-      <p>No roadmaps found under <code>~/.roadmaps/</code>.</p>
-      <p>Create one with the CLI:</p>
-      <pre class="empty-state__cmd">rmp roadmap create &lt;name&gt;</pre>
+<body class="layout-fluid">
+  <div class="page">
+{{template "sidebar" .}}
+    <div class="page-wrapper">
+{{template "topnavbar" .}}
+      <div class="page-header d-print-none">
+        <div class="container-fluid">
+          <div class="row align-items-center">
+            <div class="col">
+              <h2 class="page-title">Roadmaps</h2>
+              <div class="text-secondary mt-1">Read-only view of the roadmaps under <code>~/.roadmaps/</code></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="page-body">
+        <div class="container-fluid">
+          {{if .Roadmaps}}
+          <div class="row row-cards">
+            {{range .Roadmaps}}
+            <div class="col-sm-6 col-lg-4">
+              <div class="card">
+                <div class="card-body">
+                  <h3 class="card-title text-truncate" title="{{.}}"><i class="ti ti-map me-1"></i>{{.}}</h3>
+                  <div class="d-flex flex-wrap gap-2 mt-3">
+                    <a class="btn btn-primary" href="/roadmaps/{{.}}"><i class="ti ti-checklist me-1"></i>Tasks &amp; sprints</a>
+                    <a class="btn btn-outline-secondary" href="/roadmaps/{{.}}/graph"><i class="ti ti-affiliate me-1"></i>Knowledge graph</a>
+                  </div>
+                </div>
+              </div>
+            </div>
+            {{end}}
+          </div>
+          {{else}}
+          <div class="empty">
+            <div class="empty-icon"><i class="ti ti-map-off" style="font-size:2.5rem;"></i></div>
+            <p class="empty-title">No roadmaps found</p>
+            <p class="empty-subtitle text-secondary">
+              No roadmaps were found under <code>~/.roadmaps/</code>. Create one with the CLI:
+            </p>
+            <div class="empty-action">
+              <pre class="text-secondary mb-0"><code>rmp roadmap create &lt;name&gt;</code></pre>
+            </div>
+          </div>
+          {{end}}
+        </div>
+      </div>
+      <footer class="footer footer-transparent d-print-none">
+        <div class="container-fluid text-secondary text-center">
+          Read-only. The rmp CLI remains the sole write path.
+        </div>
+      </footer>
     </div>
-    {{end}}
-  </main>
-
-  <footer class="footer">
-    <p>Read-only. The rmp CLI remains the sole write path.</p>
-  </footer>
+  </div>
+  <script src="/static/vendor/tabler/tabler.min.js"></script>
 </body>
 </html>{{end}}

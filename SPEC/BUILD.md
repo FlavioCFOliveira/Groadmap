@@ -56,11 +56,13 @@ Rules:
    `go:embed`, so each becomes part of the compiled binary. The complete set of
    embedded asset categories is:
    - HTML templates;
-   - the stylesheet (all CSS, including any vendored CSS reset or framework);
-   - all client JavaScript, including the Cytoscape.js knowledge-graph
-     visualisation library and any of its dependencies;
-   - web fonts;
-   - icons and images;
+   - the stylesheet (all CSS, including the vendored Tabler CSS framework — the UI
+     framework — and any further vendored CSS);
+   - all client JavaScript, including the Tabler JavaScript and the D3.js
+     knowledge-graph visualisation library (and the d3-sankey plugin) and any of
+     their dependencies;
+   - web fonts, including the Inter font and the Tabler Icons webfont;
+   - icons and images, including the Tabler Icons set;
    - the favicon;
    - any other static asset the interface requires.
 
@@ -73,20 +75,36 @@ Rules:
    is no Node.js, no `npm`/`yarn`, no `node_modules`, and no bundler step in the
    build or CI pipeline. Any JavaScript dependency is committed to the repository
    in already-built (vendored) form.
-3. **Vendored graph library: Cytoscape.js.** The interactive knowledge-graph
-   visualisation uses Cytoscape.js. Its already-built distribution file is
-   committed under `internal/web/static/` and embedded with `go:embed`. It is
-   served locally from the `/static/...` route and is never fetched from a content
-   delivery network or any remote origin (see `WEB.md § Knowledge-Graph
-   Visualisation Library`). Upgrading or replacing the vendored library is a change
+3. **Vendored UI framework: Tabler.** The web interface is built on the Tabler
+   admin-dashboard framework (Bootstrap-based). Its already-built distribution —
+   the compiled Tabler CSS and JavaScript — is committed under
+   `internal/web/static/` and embedded with `go:embed`. It is served locally from
+   the `/static/...` route and is never fetched from a content delivery network or
+   any remote origin. The fonts and icons the Tabler shell depends on are likewise
+   vendored: the Inter font and the Tabler Icons webfont are committed font files
+   under `internal/web/static/`, embedded with `go:embed`, and served only from
+   `/static/...` (see `WEB.md § UI Framework`). Upgrading or replacing any of these
+   vendored Tabler assets — the framework CSS or JavaScript, the Inter font, or the
+   Tabler Icons webfont — is a change to the committed asset and to this section,
+   recorded in git.
+4. **Vendored graph library: D3.js.** The interactive knowledge-graph
+   visualisation uses D3.js together with the d3-sankey plugin (used for the Sankey
+   layout). Their already-built distribution files are committed under
+   `internal/web/static/` and embedded with `go:embed`. They are served locally
+   from the `/static/...` route and are never fetched from a content delivery
+   network or any remote origin (see `WEB.md § Knowledge-Graph Visualisation
+   Library`). Upgrading or replacing the vendored library or its plugin is a change
    to the committed asset and to this section, recorded in git.
-4. **No CDN and no outbound network at build or run time.** The build does not
+5. **No CDN and no outbound network at build or run time.** The build does not
    download web assets, and the running server makes no outbound request to load
    them; every asset is in the binary. No page references a content delivery
    network, a remote font host such as Google Fonts, or any other remote origin
-   for a script, stylesheet, font, icon, image, or API. The interface renders and
-   functions fully offline (see `WEB.md § Self-Contained Deliverable`).
-5. **Embedding does not change the build targets.** Embedded assets are part of
+   for a script, stylesheet, font, icon, image, or API. This covers the vendored
+   Tabler CSS framework, the Tabler JavaScript, the Tabler Icons webfont, the
+   Inter font, and the D3.js library with the d3-sankey plugin: all are embedded,
+   locally-served assets with no remote origin. The interface renders and functions
+   fully offline (see `WEB.md § Self-Contained Deliverable`).
+6. **Embedding does not change the build targets.** Embedded assets are part of
    the Go package, so every target in Supported Build Targets builds the web
    interface in without any per-target asset handling. `CGO_ENABLED=0` static
    linking is unaffected.
@@ -271,7 +289,7 @@ rmp-{version}-{target}.tar.gz
 - [ ] All matrix targets build successfully
 - [ ] Binaries are statically linked (`CGO_ENABLED=0`)
 - [ ] Archive naming follows convention: `rmp-{version}-{target}.{ext}`
-- [ ] Every web asset category (HTML templates, the stylesheet, all client JS including the vendored Cytoscape.js and its dependencies, web fonts, icons and images, and the favicon) is embedded via `go:embed`; the build uses the Go toolchain only, with no Node.js or `node_modules` step (see Vendored Web Assets)
+- [ ] Every web asset category (HTML templates, the stylesheet including the vendored Tabler CSS framework, all client JS including the vendored Tabler JavaScript and D3.js with the d3-sankey plugin and their dependencies, web fonts including the Inter font and the Tabler Icons webfont, icons and images, and the favicon) is embedded via `go:embed`; the build uses the Go toolchain only, with no Node.js or `node_modules` step (see Vendored Web Assets)
 - [ ] The web interface is fully self-contained: with networking disabled and with only the `rmp` binary present on disk (no sidecar files and no separate assets directory), `rmp web` serves the full UI — every page and the knowledge-graph visualisation render and function with no network egress (see Vendored Web Assets and `WEB.md § Self-Contained Deliverable`)
 
 ### Architecture Verification
