@@ -4,7 +4,7 @@
 
 | Component | Version | File |
 |-----------|---------|------|
-| Application | v1.8.0 | `cmd/rmp/main.go` |
+| Application | v1.8.1 | `cmd/rmp/main.go` |
 | Database Schema | v1.6.0 | `internal/db/schema.go` |
 
 The SPEC itself is not versioned (see `SPEC/README.md` and `CLAUDE.md` § Versioning Policy). Git tags are the canonical record of past application and schema versions.
@@ -16,7 +16,7 @@ The SPEC itself is not versioned (see `SPEC/README.md` and `CLAUDE.md` § Versio
 The application version is defined in `cmd/rmp/main.go`:
 
 ```go
-const version = "1.8.0"
+const version = "1.8.1"
 ```
 
 This version is:

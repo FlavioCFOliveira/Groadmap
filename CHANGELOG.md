@@ -5,6 +5,39 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.1] - 2026-06-03
+
+Fixes a rendering defect in the `rmp web` knowledge-graph page introduced with
+the web interface in `v1.8.0`. The page rendered the empty-state overlay on top
+of a populated knowledge graph, hiding the graph from view. This is a
+backward-compatible bug fix that restores the behaviour already specified in
+`SPEC/WEB.md` (§ Empty graph). No new features, and no API, exit-code, or schema
+changes, so this is a PATCH release fully compatible with `v1.8.0`.
+
+### Fixed
+
+- **`rmp web` graph page now renders the knowledge graph** — the
+  `/roadmaps/{name}/graph` page no longer paints the empty-state overlay over a
+  populated graph. Root cause: the `.graph-empty { display: flex }` class rule
+  outranked the user-agent `[hidden] { display: none }` rule on specificity, so
+  the `hidden` empty-state overlay (`position: absolute; inset: 0;` with an
+  opaque background) was always painted on top of the Cytoscape canvas, hiding
+  the graph that had in fact initialised correctly underneath. The fix adds a
+  global `[hidden] { display: none !important; }` reset to
+  `internal/web/static/style.css`, so the `hidden` attribute always wins over
+  component `display` rules. The empty-graph state now appears only when the
+  graph is genuinely empty, as specified in `SPEC/WEB.md` (§ Empty graph).
+
+### Tests
+
+- Added the regression test `TestEmbeddedCSS_HiddenAttributeWins` in
+  `internal/web/web_test.go`, which asserts the embedded `style.css` carries the
+  global `[hidden] { display: none !important }` rule so the defect cannot
+  silently return (no browser required).
+- E2E: 24/24 pass (100 % success rate) against the freshly built binary.
+
+[1.8.1]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.8.0...v1.8.1
+
 ## [1.8.0] - 2026-06-03
 
 Adds the read-only `rmp web` interface and aligns the CLI exit-code mapping with
