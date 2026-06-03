@@ -5,6 +5,77 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-06-03
+
+Redesigns the read-only `rmp web` interface and restructures its navigation. The
+web UI is rebuilt on a shared Tabler-based layout with a D3.js knowledge-graph
+viewer (replacing the previous Cytoscape.js renderer), and the roadmap view is
+split into a dedicated Sprints landing page and a separate Tasks page served from
+a new `/roadmaps/{name}/tasks` endpoint. Authored line breaks in sprint and task
+free-text are now preserved verbatim. Every change is additive or
+presentation-only: the `rmp` CLI remains the sole write path, the read-only
+contract is unchanged, and there are no CLI, JSON output, exit-code, or database
+schema changes. Under Semantic Versioning 2.0.0 this is a **MINOR** release, fully
+backward compatible with `v1.8.2`. The database schema version is unchanged at
+`1.6.0`.
+
+### Added
+
+- **Dedicated sprint page** — a new read-only page at
+  `/roadmaps/{name}/sprints/{id}` presents a single sprint and its member tasks.
+  The id is validated in the handler; an unknown or non-integer id returns HTTP
+  `404`. Specified in `SPEC/WEB.md` (Routes and Pages).
+- **Separate Tasks endpoint** — the roadmap view is split into two pages. The
+  landing page (`/roadmaps/{name}`) is now the Sprints page (three sprint tabs,
+  the current/`OPEN` sprint expanded by default), and a new
+  `/roadmaps/{name}/tasks` endpoint serves the full task list with a per-row
+  read-only detail modal. The sidebar links Sprints to `/roadmaps/{name}` and
+  Tasks to `/roadmaps/{name}/tasks`. Both endpoints answer `GET`/`HEAD` only and
+  keep the existing roadmap-name 404 path guard.
+
+### Changed
+
+- **Read-only web UI redesigned on a shared Tabler layout** — `index`, the
+  roadmap pages, and the graph page now extend a single shared base layout
+  (HTML skeleton, Tabler-based navbar and shell, favicon, vendored CSS and
+  fonts), removing the per-page duplicated boilerplate. The vendored asset set is
+  updated accordingly: the Cytoscape.js bundle is removed and a new vendor bundle
+  (D3 with d3-sankey, the Inter web font, the Tabler UI framework and Tabler
+  Icons, and the favicon) is embedded with `go:embed`, each bundle's licence
+  recorded in `vendor/LICENSES.md`. The interface remains fully self-contained
+  and renders offline; the server makes no outbound request.
+- **Knowledge-graph viewer rebuilt on D3.js** — the graph renderer is
+  reimplemented in D3.js, replacing Cytoscape.js. A force-directed layout is the
+  default, with the D3 "Networks" gallery layouts (including the d3-sankey flow
+  layout) selectable from a dropdown. Graph data is fetched once and re-rendered
+  in memory on layout change, with no re-fetch (`SPEC/WEB.md` FR7, AC10).
+- **Authored line breaks preserved in sprint and task free-text** — sprint
+  descriptions and task long-text now retain their authored newlines instead of
+  collapsing them under HTML's default whitespace handling. A shared `pre-wrap`
+  stylesheet rule (`white-space: pre-wrap; word-break: break-word;
+  overflow-wrap: anywhere`) covers both the task detail modal and sprint
+  descriptions across the Sprints page and the sprint detail page. Output remains
+  `html/template`-escaped; no raw HTML is introduced.
+- **Project governance** — `CLAUDE.md` gains a "Core Working Principles" section
+  (Ask-Never-Assume, Never-Guess, Measure-to-Decide, Production-Grade-by-Default,
+  Self-Contained Development, and the Specify -> Implement -> Test -> Document
+  workflow), reinforced across the Decision Matrix and Anti-Patterns sections.
+  Documentation and process only; no code or SPEC impact.
+
+### Tests
+
+- Web E2E suite extended for the redesigned UI: the shared layout chrome, the new
+  sprint page (valid id and 404 paths), the D3 graph assets, the Sprints/Tasks
+  split, the Tasks page with HTML escaping, the new sidebar links, and the
+  verbatim survival of multi-line sprint and task free-text in the served HTML.
+- New Go unit tests cover the shared layout rendering and the sprint page
+  (`internal/web/layout_test.go`, `internal/web/sprint_test.go`); `web_test.go`
+  is updated for the D3 asset set and the new routes.
+- All validation gates pass against the freshly built binary (fmt / vet / test
+  under the race detector / build / lint clean).
+
+[1.9.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.8.2...v1.9.0
+
 ## [1.8.2] - 2026-06-03
 
 Corrects a silent result-truncation defect in large multi-task fetches and
