@@ -25,12 +25,21 @@ TEST_MODULES = [
     "test_04_sprint_task_management",
     "test_05_audit_reporting",
     "test_06_edge_cases_errors",
+    "test_07_concurrency",
     "test_08_complex_workflow",
     "test_10_task_next",
     "test_11_sprint_show",
     "test_12_sprint_stats",
     "test_13_sprint_task_ordering",
+    "test_14_audit_date_filters",
+    "test_15_roadmap_stats",
+    "test_16_boundary_unicode",
+    "test_17_task_type_flag",
+    "test_18_cli_validation_data_integrity",
     "test_19_completion_summary",
+    "test_20_task90_sprint_closed_guard",
+    "test_21_task89_move_tasks_closed_guard",
+    "test_22_task87_sprint_capacity",
     "test_23_backlog_management",
     "test_24_dependency_workflow",
     "test_25_completion_guards",
@@ -46,12 +55,28 @@ TEST_MODULES = [
     "test_35_web_interface",
     "test_36_query_commands_correctness",
     "test_37_write_persistence_fidelity",
+    "test_38_task_list_date_filters",
 ]
 
 # Stress tests (run separately due to time/data volume)
 STRESS_TEST_MODULES = [
     "test_09_stress_load",
 ]
+
+
+def assert_no_dormant_modules() -> list[str]:
+    """Guard against dormant tests: every tests/test_*.py on disk must be
+    registered in TEST_MODULES or STRESS_TEST_MODULES. A test file that exists
+    but is not registered never runs, providing a false sense of coverage.
+
+    Returns the list of unregistered module names (empty when all are wired).
+    """
+    registered = set(TEST_MODULES) | set(STRESS_TEST_MODULES)
+    on_disk = {
+        p.stem
+        for p in Path(__file__).parent.glob("test_*.py")
+    }
+    return sorted(on_disk - registered)
 
 
 def run_test_module(module_name: str) -> tuple[bool, str]:
@@ -154,6 +179,18 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Fail fast on dormant tests: a test_*.py file that exists but is not
+    # registered would never run, masking a coverage gap.
+    dormant = assert_no_dormant_modules()
+    if dormant:
+        print("=" * 60)
+        print("ERROR: unregistered test modules detected (they never run):")
+        for name in dormant:
+            print(f"  - {name}")
+        print("Add them to TEST_MODULES or STRESS_TEST_MODULES in run_tests.py.")
+        print("=" * 60)
+        return False
 
     if args.stress:
         # Run only stress tests

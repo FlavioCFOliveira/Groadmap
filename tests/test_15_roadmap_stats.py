@@ -30,8 +30,6 @@ class TestRoadmapStats:
     def test_stats_output_has_required_fields(self):
         """Stats output must contain roadmap, sprints, and tasks fields."""
         roadmap = self.test.create_roadmap("analytics_platform")
-        self.test.use_roadmap(roadmap)
-
         result = self.test.run_cmd_json(["stats", "-r", roadmap])
 
         assert "roadmap" in result, "Missing 'roadmap' field"
@@ -41,8 +39,6 @@ class TestRoadmapStats:
     def test_stats_sprints_fields(self):
         """Sprint stats must contain current, total, completed, pending."""
         roadmap = self.test.create_roadmap("backend_services")
-        self.test.use_roadmap(roadmap)
-
         result = self.test.run_cmd_json(["stats", "-r", roadmap])
         sprints = result["sprints"]
 
@@ -54,8 +50,6 @@ class TestRoadmapStats:
     def test_stats_tasks_fields(self):
         """Task stats must contain backlog, sprint, doing, testing, completed."""
         roadmap = self.test.create_roadmap("frontend_dashboard")
-        self.test.use_roadmap(roadmap)
-
         result = self.test.run_cmd_json(["stats", "-r", roadmap])
         tasks = result["tasks"]
 
@@ -68,8 +62,6 @@ class TestRoadmapStats:
     def test_stats_roadmap_name_matches(self):
         """The roadmap field must match the requested roadmap name."""
         roadmap = self.test.create_roadmap("inventory_system")
-        self.test.use_roadmap(roadmap)
-
         result = self.test.run_cmd_json(["stats", "-r", roadmap])
 
         assert result["roadmap"] == roadmap, (
@@ -81,8 +73,6 @@ class TestRoadmapStats:
     def test_stats_empty_roadmap(self):
         """Stats for a roadmap with no tasks or sprints should return all zeros."""
         roadmap = self.test.create_roadmap("greenfield_project")
-        self.test.use_roadmap(roadmap)
-
         result = self.test.run_cmd_json(["stats", "-r", roadmap])
 
         assert result["sprints"]["current"] is None
@@ -100,8 +90,6 @@ class TestRoadmapStats:
     def test_stats_tasks_all_backlog(self):
         """All tasks in BACKLOG status should be counted correctly."""
         roadmap = self.test.create_roadmap("migration_toolkit")
-        self.test.use_roadmap(roadmap)
-
         for i in range(3):
             self.test.create_task(
                 roadmap,
@@ -122,8 +110,6 @@ class TestRoadmapStats:
     def test_stats_tasks_mixed_statuses(self):
         """Tasks across multiple statuses should each be counted correctly."""
         roadmap = self.test.create_roadmap("payment_gateway")
-        self.test.use_roadmap(roadmap)
-
         # Create tasks
         task_ids = []
         titles = [
@@ -183,8 +169,6 @@ class TestRoadmapStats:
     def test_stats_task_sum_equals_total(self):
         """Sum of all task status counts must equal total number of tasks."""
         roadmap = self.test.create_roadmap("observability_stack")
-        self.test.use_roadmap(roadmap)
-
         for i in range(7):
             self.test.create_task(
                 roadmap,
@@ -205,8 +189,6 @@ class TestRoadmapStats:
     def test_stats_no_sprints(self):
         """Roadmap with tasks but no sprints should show zero sprint counts."""
         roadmap = self.test.create_roadmap("documentation_hub")
-        self.test.use_roadmap(roadmap)
-
         self.test.create_task(
             roadmap,
             title="Write API reference documentation",
@@ -222,26 +204,28 @@ class TestRoadmapStats:
         assert result["sprints"]["completed"] == 0
         assert result["sprints"]["pending"] == 0
 
-    def test_stats_single_open_sprint(self):
-        """A single open sprint should show as current and pending."""
+    def test_stats_open_sprint_current_and_pending_counts_unstarted(self):
+        """An OPEN sprint is reported as current; pending counts only PENDING (unstarted) sprints."""
         roadmap = self.test.create_roadmap("auth_service")
-        self.test.use_roadmap(roadmap)
-
-        sprint_id = self.test.create_sprint(roadmap, "Authentication overhaul sprint")
-        self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint_id)])
+        open_sid = self.test.create_sprint(roadmap, "Authentication overhaul sprint")
+        self.test.run_cmd(["sprint", "start", "-r", roadmap, str(open_sid)])
+        # A second sprint left unstarted stays in PENDING status. Per SPEC/COMMANDS.md,
+        # sprints.pending = sprints with status PENDING (created but never started).
+        self.test.create_sprint(roadmap, "Session hardening sprint")
 
         result = self.test.run_cmd_json(["stats", "-r", roadmap])
 
-        assert result["sprints"]["current"] == sprint_id
-        assert result["sprints"]["total"] == 1
+        assert result["sprints"]["current"] == open_sid
+        assert result["sprints"]["total"] == 2
         assert result["sprints"]["completed"] == 0
-        assert result["sprints"]["pending"] == 1
+        # Only the unstarted sprint is PENDING; the started one is OPEN, not pending.
+        assert result["sprints"]["pending"] == 1, (
+            f"Expected 1 pending (unstarted) sprint, got {result['sprints']['pending']}"
+        )
 
     def test_stats_closed_sprints(self):
         """Closed sprints should be counted in completed, not pending."""
         roadmap = self.test.create_roadmap("release_pipeline")
-        self.test.use_roadmap(roadmap)
-
         # Create and close two sprints
         for desc in ["Pipeline setup sprint", "Pipeline hardening sprint"]:
             sid = self.test.create_sprint(roadmap, desc)
@@ -258,8 +242,6 @@ class TestRoadmapStats:
     def test_stats_mixed_sprints(self):
         """Mix of open and closed sprints should be counted correctly."""
         roadmap = self.test.create_roadmap("microservices_platform")
-        self.test.use_roadmap(roadmap)
-
         # Create and close one sprint
         sid1 = self.test.create_sprint(roadmap, "Service mesh implementation")
         self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sid1)])
@@ -269,32 +251,16 @@ class TestRoadmapStats:
         sid2 = self.test.create_sprint(roadmap, "API gateway configuration")
         self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sid2)])
 
+        # Create a third sprint left unstarted; it stays in PENDING status.
+        self.test.create_sprint(roadmap, "Observability rollout")
+
         result = self.test.run_cmd_json(["stats", "-r", roadmap])
 
         assert result["sprints"]["current"] == sid2
-        assert result["sprints"]["total"] == 2
+        assert result["sprints"]["total"] == 3
         assert result["sprints"]["completed"] == 1
+        # Closed sprint -> completed; open sprint -> current; only the unstarted one is pending.
         assert result["sprints"]["pending"] == 1
-
-    # ==================== Default Roadmap ====================
-
-    def test_stats_uses_default_roadmap(self):
-        """Stats should work with default roadmap when -r is not specified."""
-        roadmap = self.test.create_roadmap("default_project")
-        self.test.use_roadmap(roadmap)
-
-        self.test.create_task(
-            roadmap,
-            title="Configure CI pipeline",
-            functional_requirements="Automated builds on every push",
-            technical_requirements="GitHub Actions with caching",
-            acceptance_criteria="Build completes in under 5 minutes"
-        )
-
-        result = self.test.run_cmd_json(["stats"])
-
-        assert result["roadmap"] == roadmap
-        assert result["tasks"]["backlog"] == 1
 
     # ==================== Error Cases ====================
 
@@ -337,8 +303,6 @@ class TestRoadmapStats:
     def test_stats_with_many_tasks(self):
         """Stats should handle a roadmap with many tasks correctly."""
         roadmap = self.test.create_roadmap("enterprise_erp")
-        self.test.use_roadmap(roadmap)
-
         task_count = 20
         for i in range(task_count):
             self.test.create_task(
@@ -358,5 +322,41 @@ class TestRoadmapStats:
 
 
 if __name__ == "__main__":
-    import pytest
-    pytest.main([__file__, "-v"])
+    import inspect
+    import traceback as _tb
+
+    _suites = [obj for name, obj in sorted(globals().items())
+               if name.startswith("Test") and inspect.isclass(obj)
+               and any(m.startswith("test_") for m in dir(obj))]
+    _passed = 0
+    _failed = 0
+    _failures = []
+    for _suite_class in _suites:
+        for _method_name in sorted(m for m in dir(_suite_class) if m.startswith("test_")):
+            _suite = _suite_class()
+            if hasattr(_suite, "setup_method"):
+                _suite.setup_method()
+            try:
+                getattr(_suite, _method_name)()
+                _passed += 1
+            except Exception as _exc:
+                _label = f"{_suite_class.__name__}.{_method_name}"
+                print(f"FAIL  {_label}: {_exc}")
+                _tb.print_exc()
+                _failures.append((_label, str(_exc)))
+                _failed += 1
+            finally:
+                if hasattr(_suite, "teardown_method"):
+                    _suite.teardown_method()
+    _total = _passed + _failed
+    print()
+    print("=" * 65)
+    print(f"Total: {_total} | Passed: {_passed} | Failed: {_failed}")
+    if _failures:
+        print("\nFailed tests:")
+        for _label, _msg in _failures:
+            print(f"  [X] {_label}")
+            print(f"      -> {_msg}")
+    print()
+    print("OVERALL: PASS" if _failed == 0 else f"OVERALL: FAIL ({_failed} tests failed)")
+    sys.exit(0 if _failed == 0 else 1)

@@ -10,7 +10,10 @@ Covers:
 - type field appears in task get and task list output
 """
 
-import pytest
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from tests.base_test import GroadmapTestBase
 
 
@@ -29,11 +32,11 @@ ALL_VALID_TYPES = [
 
 
 class TestTaskTypeFlag:
-    @pytest.fixture(autouse=True)
-    def setup(self):
+    def setup_method(self):
         self.test = GroadmapTestBase()
         self.test.setup()
-        yield
+
+    def teardown_method(self):
         self.test.teardown()
 
     def test_default_type_is_task(self):
@@ -185,3 +188,44 @@ class TestTaskTypeFlag:
             check=False,
         )
         assert exit_code != 0, "Expected rejection of lowercase 'bug' type"
+
+
+if __name__ == "__main__":
+    import inspect
+    import traceback as _tb
+
+    _suites = [obj for name, obj in sorted(globals().items())
+               if name.startswith("Test") and inspect.isclass(obj)
+               and any(m.startswith("test_") for m in dir(obj))]
+    _passed = 0
+    _failed = 0
+    _failures = []
+    for _suite_class in _suites:
+        for _method_name in sorted(m for m in dir(_suite_class) if m.startswith("test_")):
+            _suite = _suite_class()
+            if hasattr(_suite, "setup_method"):
+                _suite.setup_method()
+            try:
+                getattr(_suite, _method_name)()
+                _passed += 1
+            except Exception as _exc:
+                _label = f"{_suite_class.__name__}.{_method_name}"
+                print(f"FAIL  {_label}: {_exc}")
+                _tb.print_exc()
+                _failures.append((_label, str(_exc)))
+                _failed += 1
+            finally:
+                if hasattr(_suite, "teardown_method"):
+                    _suite.teardown_method()
+    _total = _passed + _failed
+    print()
+    print("=" * 65)
+    print(f"Total: {_total} | Passed: {_passed} | Failed: {_failed}")
+    if _failures:
+        print("\nFailed tests:")
+        for _label, _msg in _failures:
+            print(f"  [X] {_label}")
+            print(f"      -> {_msg}")
+    print()
+    print("OVERALL: PASS" if _failed == 0 else f"OVERALL: FAIL ({_failed} tests failed)")
+    sys.exit(0 if _failed == 0 else 1)

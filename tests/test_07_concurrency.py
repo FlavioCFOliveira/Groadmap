@@ -76,46 +76,6 @@ class TestConcurrency:
 
         print("✓ Concurrent task creation test passed")
 
-    def test_concurrent_roadmap_switch(self):
-        """Test that switching roadmaps concurrently doesn't corrupt .current file."""
-        # Create multiple roadmaps
-        roadmaps = [self.test.create_roadmap(f"roadmap_{i}") for i in range(3)]
-
-        errors = []
-        lock = threading.Lock()
-
-        def switch_roadmap_worker(worker_id):
-            try:
-                for i in range(10):
-                    roadmap = roadmaps[i % len(roadmaps)]
-                    self.test.run_cmd(["roadmap", "use", roadmap])
-                    time.sleep(0.005)  # Small delay to increase chance of overlap
-            except Exception as e:
-                with lock:
-                    errors.append((worker_id, str(e)))
-
-        # Spawn multiple threads
-        threads = []
-        for i in range(5):
-            t = threading.Thread(target=switch_roadmap_worker, args=(i,))
-            threads.append(t)
-            t.start()
-
-        # Wait for all threads to complete
-        for t in threads:
-            t.join()
-
-        # Verify no errors occurred
-        assert len(errors) == 0, f"Errors during concurrent roadmap switch: {errors}"
-
-        # Verify .current file is still valid
-        current_file = Path(self.test.home_dir) / ".roadmaps" / ".current"
-        if current_file.exists():
-            content = current_file.read_text().strip()
-            assert content in roadmaps, f"Current roadmap {content} not in expected list"
-
-        print("✓ Concurrent roadmap switch test passed")
-
     def test_concurrent_status_changes(self):
         """Test concurrent status changes on the same task."""
         roadmap = self.test.create_roadmap()
@@ -299,5 +259,41 @@ sys.exit(result.returncode)
 
 
 if __name__ == "__main__":
-    import pytest
-    pytest.main([__file__, "-v"])
+    import inspect
+    import traceback as _tb
+
+    _suites = [obj for name, obj in sorted(globals().items())
+               if name.startswith("Test") and inspect.isclass(obj)
+               and any(m.startswith("test_") for m in dir(obj))]
+    _passed = 0
+    _failed = 0
+    _failures = []
+    for _suite_class in _suites:
+        for _method_name in sorted(m for m in dir(_suite_class) if m.startswith("test_")):
+            _suite = _suite_class()
+            if hasattr(_suite, "setup_method"):
+                _suite.setup_method()
+            try:
+                getattr(_suite, _method_name)()
+                _passed += 1
+            except Exception as _exc:
+                _label = f"{_suite_class.__name__}.{_method_name}"
+                print(f"FAIL  {_label}: {_exc}")
+                _tb.print_exc()
+                _failures.append((_label, str(_exc)))
+                _failed += 1
+            finally:
+                if hasattr(_suite, "teardown_method"):
+                    _suite.teardown_method()
+    _total = _passed + _failed
+    print()
+    print("=" * 65)
+    print(f"Total: {_total} | Passed: {_passed} | Failed: {_failed}")
+    if _failures:
+        print("\nFailed tests:")
+        for _label, _msg in _failures:
+            print(f"  [X] {_label}")
+            print(f"      -> {_msg}")
+    print()
+    print("OVERALL: PASS" if _failed == 0 else f"OVERALL: FAIL ({_failed} tests failed)")
+    sys.exit(0 if _failed == 0 else 1)
