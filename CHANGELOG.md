@@ -5,6 +5,65 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Adds the read-only `rmp web` interface and aligns the CLI exit-code mapping with
+the canonical `SPEC/ARCHITECTURE.md` contract. Both changes are additive or
+corrective: the web interface is a new command and the exit-code change only
+affects error paths the SPEC already defined. No existing JSON output schema
+changes, so this remains backward compatible with `v1.7.0`.
+
+### Added
+
+- **`rmp web` command** — a read-only, self-contained, mobile-first web
+  interface for browsing every roadmap under `~/.roadmaps/`, its tasks and
+  sprints, and an interactive knowledge-graph visualisation. Specified in
+  `SPEC/WEB.md`.
+  - Serves server-rendered HTML and a JSON graph-data endpoint over the Go
+    standard-library `net/http`; routes answer `GET`/`HEAD` only (any other
+    method returns HTTP `405`).
+  - Routes: roadmap index (`/`), roadmap detail (`/roadmaps/{name}`),
+    knowledge-graph page (`/roadmaps/{name}/graph`), graph data
+    (`/roadmaps/{name}/graph/data`), and embedded static assets (`/static/...`).
+    Roadmap names from the URL are validated before any path is built; an
+    invalid or unknown name returns HTTP `404`.
+  - **Self-contained** — every asset (HTML templates, stylesheet, all client
+    JavaScript including the vendored Cytoscape.js graph library, favicon) is
+    embedded with `go:embed`; the interface renders fully offline and the
+    server makes no outbound request.
+  - **Read-only** — exposes no route that creates, edits, or deletes data; the
+    graph store is opened read-only and a web read never triggers a checkpoint
+    or write-ahead-log truncation. The `rmp` CLI remains the sole write path.
+  - **Loopback by default** — binds `127.0.0.1:8787`; a non-loopback bind
+    (`--host 0.0.0.0`) is an explicit opt-in. When `--port` is omitted and the
+    default port is in use, the server falls back to an OS-chosen ephemeral
+    port so it still starts.
+  - Flags: `--host`, `--port`, `--no-open`, and `-h`/`--help`. The process is
+    long-lived: `SIGINT`/`SIGTERM` shut it down gracefully (exit 0). It is the
+    one command exempt from the always-required-roadmap rule and accepts no
+    `-r`/`--roadmap` flag and no subcommands.
+
+### Fixed
+
+- **CLI exit-code mapping aligned with `SPEC/ARCHITECTURE.md`** —
+  `ErrInvalidInput` now maps to exit `2` (misuse: unknown flags and
+  subcommands, malformed or non-numeric IDs), while value, range, enum, date,
+  state-transition and business-rule validations are reclassified to
+  `ErrValidation` so they remain exit `6` (invalid data). This resolves the
+  first item under the `v1.7.0` "Known Issues" (the `ErrInvalidInput`
+  exit-code divergence).
+
+### Tests
+
+- E2E: 24/24 pass (100 % success rate) against the freshly built binary,
+  including the new `tests/test_35_web_interface.py` suite covering the server,
+  every route and method, the read-only guarantee, path-traversal validation,
+  and graceful shutdown.
+- Go unit tests green across all packages (fmt / vet / test / build / lint
+  clean), including the new `internal/web` package tests.
+
+[Unreleased]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.7.0...HEAD
+
 ## [1.7.0] - 2026-06-02
 
 Feature release. Introduces the `rmp graph` command family: a per-roadmap
