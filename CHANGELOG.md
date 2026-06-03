@@ -5,6 +5,84 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.2] - 2026-06-03
+
+Corrects a silent result-truncation defect in large multi-task fetches and
+activates a query-caching optimisation that was specified but dormant. Both
+changes are backward-compatible bug fixes: existing commands now return the
+complete data they were always meant to return, and a mandated internal
+optimisation finally runs. No new commands, flags, JSON output fields, exit
+codes, or database schema changes, so this is a **PATCH** release fully
+compatible with `v1.8.1`. The database schema version is unchanged at `1.6.0`.
+
+### Fixed
+
+- **Large task fetches and batch updates no longer truncate to the first 1000
+  ids** — multi-id task operations built a single `WHERE id IN (...)` clause and
+  passed the id count through `normalizeSize`, which caps at 1000. Result sets
+  with more than 1000 matching tasks (for example `task list` over a large
+  roadmap) were silently truncated to the first 1000 rows, and batch status,
+  priority, and sprint-membership updates could miss tasks beyond the cap. Every
+  multi-id path now sorts a copy of the id set and chunks it through the
+  `BatchProcessor` (`ProcessChunks` / `ProcessChunksWithResult`), so results are
+  complete and each generated statement stays within SQLite's per-statement
+  variable limit. The caller's slice is never mutated, and chunks are processed
+  in deterministic id order.
+- **Query cache reconciled with the real schema and activated** — the
+  `QueryCache` templates referenced a fictional schema (columns that never
+  existed in the `tasks` table), so the cached query plans could not be used and
+  the optimisation mandated by `SPEC/IMPLEMENTATION.md` (§ Query Caching) was
+  effectively dead. The templates are now generated from a single
+  `buildTemplates` source of truth shared by the pre-generation and on-demand
+  paths, byte-identical in semantics to the real production queries (full task
+  projection with dependency columns, subtask count, and the `ORDER BY t.id`
+  tail). The cache and batch path are now genuinely active, so repeated batch
+  operations reuse prepared query plans instead of rebuilding them.
+
+### Performance
+
+- **Repeated batch task operations reuse cached query plans** — with the query
+  cache reconciled and activated (see Fixed), `GetTasks` and the batch
+  status/priority/sprint-membership updates now fetch a cached, chunk-sized
+  template per operation instead of formatting a fresh SQL string on every call.
+  The optimisation is internal and changes no observable output; it reduces
+  per-call query construction on hot batch paths.
+
+### Removed
+
+- **Dead code in `internal/db` and `internal/commands`** — removed ten unused
+  `internal/db` functions (parent/subtask, task-dependency, and max-position
+  helpers superseded by current code paths) and the unused `HandleBacklog` and
+  `HandleGraph` command wrappers (command dispatch already routes through the
+  central registry). No behaviour change; these paths were unreachable.
+
+### Tests
+
+- **Nine dormant E2E suites revived and a dormancy guard added** — nine
+  `tests/test_*.py` files existed on disk but were never registered in
+  `tests/run_tests.py`, so they never ran and gave a false sense of coverage.
+  All nine are now registered, and a new `assert_no_dormant_modules()` guard
+  fails the run fast if any `tests/test_*.py` is left unregistered, preventing
+  the gap from silently returning. The registered E2E suite grows from 27 to 37
+  modules; all 37 pass (100 %) against the freshly built binary.
+- **New `task list --created-since` / `--until` coverage** — added
+  `tests/test_38_task_list_date_filters.py` exercising the date-range filters on
+  `task list`. Two stale tests targeting non-existent features were removed.
+- **Web-server coverage is now measurable** — the web server now tears down
+  gracefully on `SIGTERM`, so coverage counters flush on shutdown. New
+  `internal/web` unit tests (`data_test.go`, `handlers_test.go`,
+  `server_test.go`) and new `internal/db` tests (`batch_test.go`,
+  `query_cache_test.go`) accompany the fixes above.
+
+### Tooling
+
+- **New coverage targets** — `make cover` reports unit-test coverage, and
+  `make cover-full` builds an instrumented binary, drives it through the E2E
+  suite, and merges the result with unit coverage to report the real exercised
+  command surface. Merged coverage for this release is **83.9 %**.
+
+[1.8.2]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.8.1...v1.8.2
+
 ## [1.8.1] - 2026-06-03
 
 Fixes a rendering defect in the `rmp web` knowledge-graph page introduced with
