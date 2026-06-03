@@ -403,7 +403,11 @@ func sprintMoveTasks(args []string) error {
 	if err := verifySprintsExist(ctx, database, fromID, toID); err != nil {
 		return err
 	}
-	if err := database.AddTasksToSprint(ctx, toID, taskIDs); err != nil {
+	// Move (re-parent) the tasks from the source sprint to the destination,
+	// preserving each task's status. Unlike AddTasksToSprint, this neither
+	// forces status to SPRINT nor applies the destination's max-tasks cap;
+	// it also validates that every task is currently in the source sprint.
+	if err := database.MoveTasksBetweenSprints(ctx, fromID, toID, taskIDs); err != nil {
 		return err
 	}
 	return logAuditForTasks(ctx, database, toID, models.OpSprintMoveTask, len(taskIDs))

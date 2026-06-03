@@ -1702,6 +1702,93 @@ func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int)
 	})
 }
 
+// MoveTasksBetweenSprints relocates the membership of taskIDs from fromID to
+// toID atomically, preserving each task's status.
+//
+// Unlike AddTasksToSprint (used by `sprint add-tasks`), this method DOES NOT
+// modify tasks.status: a task that is DOING or TESTING in the source sprint
+// keeps that status in the destination sprint. Per SPEC/COMMANDS.md, moving a
+// task between sprints is a re-parenting of work, not a re-admission to the
+// sprint backlog, so the lifecycle state must be carried over unchanged.
+//
+// Validation (SPEC/COMMANDS.md validation step 5): every task in taskIDs must
+// currently be a member of fromID (a row in sprint_tasks with sprint_id =
+// fromID). If any task is not a member of the source sprint, no rows are moved
+// and the call returns ErrTasksNotInSprint wrapped with utils.ErrValidation so
+// the CLI maps it to exit code 6 ("task not in sprint"), matching the
+// task-ordering error contract. The membership check and the re-parenting run
+// in the same transaction, so the move is all-or-nothing.
+//
+// Re-parenting (mirrors AddTasksToSprint's position/added_at conventions):
+//   - sprint_id is set to toID
+//   - added_at is refreshed to now
+//   - position values are appended after the current max position in toID,
+//     preserving the relative order of the moved tasks (taskIDs order)
+//
+// No capacity (max_tasks) check is applied: relocating existing work must not
+// be blocked by the destination sprint's cap (SPEC requires the cap only for
+// `add-tasks`).
+func (db *DB) MoveTasksBetweenSprints(ctx context.Context, fromID, toID int, taskIDs []int) error {
+	if len(taskIDs) == 0 {
+		return nil
+	}
+
+	return db.WithTransaction(func(tx *sql.Tx) error {
+		// Verify every task is currently a member of the source sprint.
+		// Count matching membership rows and compare against the requested
+		// count; this mirrors ReorderSprintTasks's membership guard and
+		// fails the whole move if any task is absent.
+		memberArgs := make([]any, 0, len(taskIDs)+1)
+		memberArgs = append(memberArgs, fromID)
+		for _, id := range taskIDs {
+			memberArgs = append(memberArgs, id)
+		}
+		countQuery := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
+			"SELECT COUNT(*) FROM sprint_tasks WHERE sprint_id = ? AND task_id IN (%s)",
+			db.queryCache.GetPlaceholders(len(taskIDs)),
+		)
+		var count int
+		if err := tx.QueryRow(countQuery, memberArgs...).Scan(&count); err != nil {
+			return fmt.Errorf("verifying task membership: %w", err)
+		}
+		if count != len(taskIDs) {
+			// Wrap with utils.ErrValidation so the CLI maps this to exit 6
+			// (SPEC/COMMANDS.md: "Task ID not in sprint" -> exit 6).
+			return fmt.Errorf("%w: %w: one or more tasks are not in sprint #%d",
+				utils.ErrValidation, ErrTasksNotInSprint, fromID)
+		}
+
+		// Re-parent the membership rows, appending after the destination's
+		// current max position to preserve order. added_at is refreshed.
+		now := utils.NowISO8601()
+		var maxPos sql.NullInt64
+		if err := tx.QueryRow(
+			"SELECT MAX(position) FROM sprint_tasks WHERE sprint_id = ?",
+			toID,
+		).Scan(&maxPos); err != nil {
+			return fmt.Errorf("querying max position: %w", err)
+		}
+		startPos := -1
+		if maxPos.Valid {
+			startPos = int(maxPos.Int64)
+		}
+
+		for i, taskID := range taskIDs {
+			if _, err := tx.Exec(
+				`UPDATE sprint_tasks SET sprint_id = ?, added_at = ?, position = ?
+				 WHERE task_id = ? AND sprint_id = ?`,
+				toID, now, startPos+i+1, taskID, fromID,
+			); err != nil {
+				return fmt.Errorf("moving task %d: %w", taskID, err)
+			}
+		}
+
+		// Intentionally NOT updating tasks.status: the task keeps whatever
+		// status it had (BACKLOG/SPRINT/DOING/TESTING/COMPLETED).
+		return nil
+	})
+}
+
 // RemoveTasksFromSprint removes tasks from a sprint.
 func (db *DB) RemoveTasksFromSprint(ctx context.Context, taskIDs []int) error {
 	if len(taskIDs) == 0 {
