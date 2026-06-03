@@ -32,11 +32,14 @@
    horizontally, keeping the three tabs reachable on phones. */
 .sprint-tabs { flex-wrap: wrap; }
 
-/* The long free-text fields in the task detail modal (functional/technical
-   requirements, acceptance criteria, completion summary) wrap and preserve the
-   line breaks of the source text without forcing horizontal scrolling, so the
-   modal stays readable on small viewports. */
-.task-modal__text {
+/* Authored multi-line free-text wraps and preserves the source line breaks
+   without forcing horizontal scrolling, so it stays readable on small
+   viewports (SPEC/WEB.md § Frontend Rules, rule 6). This covers the task
+   detail modal's long free-text fields (functional/technical requirements,
+   acceptance criteria, completion summary) and a sprint's description wherever
+   it is shown (the sprints page tabs and the sprint detail page). */
+.task-modal__text,
+.sprint-description {
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;

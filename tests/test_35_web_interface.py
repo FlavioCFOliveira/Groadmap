@@ -706,6 +706,48 @@ class TestWebInterface:
             )
             assert status == 405, f"{method} sprint route must be 405, got {status}"
 
+    def test_sprint_description_preserves_line_breaks(self):
+        """Authored multi-line sprint descriptions render preserving the line
+        breaks (SPEC/WEB.md § Frontend Rules rule 6, Acceptance Criterion 32):
+        the description <p> carries the sprint-description class, the served
+        HTML keeps the author's newlines verbatim, and the stylesheet applies
+        white-space: pre-wrap to that class (and to the task modal text)."""
+        desc = "First objective line.\nSecond objective line.\nThird objective line."
+        sid = self.test.create_sprint(ROADMAP, desc)
+        proc, port = self._start(["--port", "0"])
+        # The sprint detail page always shows the full description.
+        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/sprints/{sid}")
+        assert "sprint-description" in body, (
+            "the sprint description must carry the line-break-preserving class"
+        )
+        # html/template passes newlines through unchanged; CSS pre-wrap renders
+        # them. The exact multi-line text must survive verbatim in the HTML.
+        assert desc in body, "sprint description must preserve the author's line breaks"
+        # The stylesheet preserves line breaks for the sprint description class.
+        _, _, css = self._req(port, "/static/style.css")
+        assert ".sprint-description" in css, "stylesheet must target .sprint-description"
+        assert "white-space: pre-wrap" in css, (
+            "the stylesheet must preserve authored line breaks (white-space: pre-wrap)"
+        )
+
+    def test_task_modal_text_preserves_line_breaks(self):
+        """Authored multi-line task free-text renders preserving the line breaks
+        in the detail modal (SPEC/WEB.md § Frontend Rules rule 6): the long
+        fields sit in .task-modal__text, which the stylesheet renders with
+        white-space: pre-wrap, and the served HTML keeps the newlines."""
+        multiline_fr = "Step one of the rationale.\nStep two of the rationale."
+        self._run(["roadmap", "create", "linebreaks_demo"])
+        self.test.create_task(
+            "linebreaks_demo",
+            "Document the rollout rationale",
+            multiline_fr,            # functional requirements: multi-line
+            "how", "verify",
+        )
+        proc, port = self._start(["--port", "0"])
+        _, _, body = self._req(port, "/roadmaps/linebreaks_demo/tasks")
+        assert "task-modal__text" in body, "task long-text must use the preserving class"
+        assert multiline_fr in body, "task free-text must preserve the author's line breaks"
+
     # ====================================================================
     # AC14: read-only task detail modal — wiring, content, no edit control
     # ====================================================================

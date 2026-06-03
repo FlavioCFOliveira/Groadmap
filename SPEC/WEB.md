@@ -414,6 +414,12 @@ how the `rmp web` process itself terminates.
     [Roadmap Sprint Page](#roadmap-sprint-page)). On the Actual tab, the member
     tasks shown for an OPEN sprint are also clickable and open the task detail
     modal (see [Task Detail Modal](#task-detail-modal)).
+- **Sprint description line breaks.** Wherever a sprint's `description` text is
+  shown on this page — the expanded OPEN sprint under the Actual tab, and the
+  sprint cards under Próximos and Concluídos — the description renders preserving
+  the author's line breaks (newlines), because the description is multi-line as
+  authored through the CLI; the text still wraps, so no forced horizontal
+  scrolling is introduced (see [Frontend Rules](#frontend-rules), rule 6).
 - **Relationships shown.** The page surfaces, in a read-only view, the
   relationships already modelled in the data: task-to-sprint membership (including
   task order within a sprint). The presentation MUST reflect the same
@@ -464,8 +470,11 @@ how the `rmp web` process itself terminates.
   unlimited capacity), `created_at`, `started_at`, `closed_at`, and `task_count`.
   The page presents the sprint status clearly (the status enum and lifecycle are
   defined in `MODELS.md § Enums` and `STATE_MACHINE.md § Sprint State Machine`).
-  The page does not redefine these fields; `MODELS.md` and `DATABASE.md` remain
-  canonical.
+  The sprint `description` is multi-line as authored through the CLI, and the page
+  renders it preserving the author's line breaks (newlines); the text still wraps,
+  so no forced horizontal scrolling is introduced (see
+  [Frontend Rules](#frontend-rules), rule 6). The page does not redefine these
+  fields; `MODELS.md` and `DATABASE.md` remain canonical.
 - **Task list.** The page lists the sprint's tasks in the planned in-sprint
   execution order, which is the `sprint_tasks` order (the ordered set of task IDs
   the `Sprint` model exposes as `tasks`; see `MODELS.md § Sprint` and
@@ -570,8 +579,11 @@ tasks.
   and `closed_at`. This includes the long free-text fields
   (`functional_requirements`, `technical_requirements`, `acceptance_criteria`, and
   `completion_summary`), which the modal presents formatted for readable display.
-  The page does not redefine these fields; `MODELS.md` and `DATABASE.md` remain
-  canonical.
+  These long free-text fields are multi-line as authored through the CLI, and the
+  modal renders them preserving the author's line breaks (newlines); the text
+  still wraps within the modal, so no forced horizontal scrolling is introduced
+  (see [Frontend Rules](#frontend-rules), rule 6). The page does not redefine
+  these fields; `MODELS.md` and `DATABASE.md` remain canonical.
 - **Read-only.** The modal only displays data. It contains no form, no input, no
   edit control, and no submit action of any kind.
 - **No new server endpoint and no new write path.** The modal is populated from
@@ -725,6 +737,20 @@ read from the host filesystem at runtime.
    asset a page loads is served from `/static/...` on the same local server. The
    running server makes no outbound network request of its own (see
    [Self-Contained Deliverable](#self-contained-deliverable)).
+6. **Authored line breaks preserved in multi-line free-text.** Free-text that a
+   user authored through the CLI is multi-line: the user enters line breaks
+   (newlines) in it. Where the interface renders such authored free-text — the
+   task long free-text fields (`functional_requirements`,
+   `technical_requirements`, `acceptance_criteria`, and `completion_summary`) in
+   the task detail modal, and a sprint's `description` wherever it is shown — the
+   interface preserves the author's line breaks rather than collapsing them under
+   HTML's default whitespace handling. The text still wraps within its container,
+   so preserving line breaks introduces no forced horizontal scrolling, and the
+   text is still rendered through `html/template`'s contextual auto-escaping (rule
+   1): it is never rendered as raw HTML. This rule is the general statement of the
+   behaviour; the [Task Detail Modal](#task-detail-modal),
+   [Roadmap Sprints Page](#roadmap-sprints-page), and
+   [Roadmap Sprint Page](#roadmap-sprint-page) sections reference it.
 
 ### UI Framework
 
@@ -1121,6 +1147,15 @@ Rules:
 31. On a small phone-sized viewport, the admin-shell navigation sidebar is not
     shown expanded inline; it collapses to an off-canvas (hamburger) menu that the
     user can open, so each page stays usable without horizontal overflow.
+32. Multi-line free-text authored through the CLI renders preserving its source
+    line breaks: the task detail modal's long free-text fields
+    (`functional_requirements`, `technical_requirements`, `acceptance_criteria`,
+    and `completion_summary`) and a sprint's `description` — shown on the roadmap
+    sprints page (the Actual-tab expanded sprint and the Próximos and Concluídos
+    sprint cards) and on the roadmap sprint page — each display the author's
+    newlines rather than collapsing them, while the text still wraps without forced
+    horizontal scrolling and remains HTML-escaped through `html/template` (never
+    rendered as raw HTML).
 
 ## See Also
 

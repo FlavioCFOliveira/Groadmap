@@ -56,7 +56,7 @@
                           <div class="card-actions"><span class="badge bg-blue-lt">{{.Sprint.Status}}</span></div>
                         </div>
                         <div class="card-body">
-                          <p>{{.Sprint.Description}}</p>
+                          <p class="sprint-description">{{.Sprint.Description}}</p>
                           <div class="text-secondary mb-1">Tasks:</div>
                           {{if .Tasks}}
                           <div class="table-responsive">
@@ -103,7 +103,7 @@
                           <div class="card-actions"><span class="badge bg-blue-lt">{{.Sprint.Status}}</span></div>
                         </div>
                         <div class="card-body">
-                          <p class="mb-1">{{.Sprint.Description}}</p>
+                          <p class="mb-1 sprint-description">{{.Sprint.Description}}</p>
                           <span class="text-secondary">{{len .Tasks}} task(s)</span>
                         </div>
                       </a>
@@ -130,7 +130,7 @@
                           <div class="card-actions"><span class="badge bg-blue-lt">{{.Sprint.Status}}</span></div>
                         </div>
                         <div class="card-body">
-                          <p class="mb-1">{{.Sprint.Description}}</p>
+                          <p class="mb-1 sprint-description">{{.Sprint.Description}}</p>
                           <span class="text-secondary">Closed: {{with .Sprint.ClosedAt}}{{.}}{{else}}&mdash;{{end}}</span>
                         </div>
                       </a>
