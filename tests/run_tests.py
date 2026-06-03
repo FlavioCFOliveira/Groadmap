@@ -30,6 +30,7 @@ TEST_MODULES = [
     "test_11_sprint_show",
     "test_12_sprint_stats",
     "test_13_sprint_task_ordering",
+    "test_19_completion_summary",
     "test_23_backlog_management",
     "test_24_dependency_workflow",
     "test_25_completion_guards",
@@ -43,6 +44,7 @@ TEST_MODULES = [
     "test_33_graph_checkpoint",
     "test_34_graph_realistic_usage",
     "test_35_web_interface",
+    "test_36_query_commands_correctness",
 ]
 
 # Stress tests (run separately due to time/data volume)
