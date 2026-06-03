@@ -212,8 +212,19 @@ class TestWebInterface:
     def _kill(self, proc):
         if proc.poll() is None:
             try:
-                proc.send_signal(signal.SIGKILL)
-                proc.wait(timeout=5)
+                # Prefer a graceful SIGTERM: the server supports clean
+                # SIGINT/SIGTERM shutdown (exit 0). A clean exit also lets a
+                # coverage-instrumented binary flush its GOCOVERDIR data, which
+                # an immediate SIGKILL would discard. Fall back to SIGKILL only
+                # if the server fails to stop within the grace window.
+                proc.send_signal(signal.SIGTERM)
+                proc.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.send_signal(signal.SIGKILL)
+                    proc.wait(timeout=5)
+                except Exception:  # noqa: BLE001
+                    pass
             except Exception:  # noqa: BLE001
                 pass
         for attr in ("out_file", "err_file"):
