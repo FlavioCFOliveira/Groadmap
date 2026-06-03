@@ -133,35 +133,42 @@ func (db *DB) GetTask(ctx context.Context, id int) (*models.Task, error) {
 	return &tasks[0], nil
 }
 
-// GetTasks retrieves multiple tasks by IDs.
+// GetTasks retrieves multiple tasks by IDs, ordered by id ascending.
+//
+// The id set is sorted then chunked through the BatchProcessor so it never
+// exceeds SQLite's variable limit (SQLITE_LIMIT_VARIABLE_NUMBER, ~999) and each
+// chunk reuses the cached OpGetTasks template (a query plan). Because the ids
+// are pre-sorted and chunks are processed in order, each chunk's per-query
+// "ORDER BY t.id" composes into a globally id-ascending result — identical to
+// the single-query behaviour for small sets.
 func (db *DB) GetTasks(ctx context.Context, ids []int) ([]models.Task, error) {
 	if len(ids) == 0 {
 		return []models.Task{}, nil
 	}
 
-	// Use cached placeholders for better performance
-	placeholders := db.queryCache.GetPlaceholders(len(ids))
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		args[i] = id
-	}
+	// Sort a copy so the caller's slice is not mutated and cross-chunk order
+	// is globally ascending.
+	sorted := make([]int, len(ids))
+	copy(sorted, ids)
+	sort.Ints(sorted)
 
-	query := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated
-		`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
-		        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
-		        t.priority, t.severity,
-		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count`+taskDepsSelect+`
-		 FROM tasks t WHERE t.id IN (%s) ORDER BY t.id`,
-		placeholders,
-	)
+	// The cached template is byte-identical to the projection
+	// scanTasksWithDeps expects, so the row shape is unchanged.
+	return ProcessChunksWithResult(sorted, db.batchProc.BatchSize(), func(chunk []int) ([]models.Task, error) {
+		query := db.queryCache.GetQuery(OpGetTasks, len(chunk))
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
 
-	rows, err := db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("querying tasks: %w", err)
-	}
-	defer rows.Close()
+		rows, err := db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("querying tasks: %w", err)
+		}
+		defer rows.Close()
 
-	return scanTasksWithDeps(rows)
+		return scanTasksWithDeps(rows)
+	})
 }
 
 // TaskListFilter holds all optional filter and sort parameters for ListTasks.
@@ -444,67 +451,47 @@ func (db *DB) UpdateTaskStatus(ctx context.Context, ids []int, status models.Tas
 	}
 
 	return retryWithBackoff("update task status", func() error {
-		// Use cached placeholders for better performance
-		placeholders := db.queryCache.GetPlaceholders(len(ids))
-		idArgs := make([]any, len(ids))
-		for i, id := range ids {
-			idArgs[i] = id
-		}
-
 		now := utils.NowISO8601()
 
-		// Build query based on target status for lifecycle date tracking
-		var query string
-		var args []any
-
+		// Select the cached operation key and the leading bound parameters
+		// (those that precede the IN-clause ids) for the target status. The
+		// lifecycle variants set a timestamp column per SPEC/STATE_MACHINE.md;
+		// each has its own cached template so every transition reuses a plan.
+		var op string
+		var leadArgs []any
 		switch status {
 		case models.StatusDoing:
-			// Transition to DOING: set started_at
-			query = fmt.Sprintf(
-				"UPDATE tasks SET status = ?, started_at = ? WHERE id IN (%s)",
-				placeholders,
-			)
-			args = append([]any{status, now}, idArgs...)
-
+			op = OpUpdateTaskStatusDoing // SET status, started_at
+			leadArgs = []any{status, now}
 		case models.StatusTesting:
-			// Transition to TESTING: set tested_at
-			query = fmt.Sprintf(
-				"UPDATE tasks SET status = ?, tested_at = ? WHERE id IN (%s)",
-				placeholders,
-			)
-			args = append([]any{status, now}, idArgs...)
-
+			op = OpUpdateTaskStatusTesting // SET status, tested_at
+			leadArgs = []any{status, now}
 		case models.StatusCompleted:
-			// Transition to COMPLETED: set closed_at
-			query = fmt.Sprintf(
-				"UPDATE tasks SET status = ?, closed_at = ? WHERE id IN (%s)",
-				placeholders,
-			)
-			args = append([]any{status, now}, idArgs...)
-
+			op = OpUpdateTaskStatusCompleted // SET status, closed_at
+			leadArgs = []any{status, now}
 		case models.StatusBacklog:
-			// Reopening to BACKLOG: clear all tracking dates
-			query = fmt.Sprintf(
-				"UPDATE tasks SET status = ?, started_at = NULL, tested_at = NULL, closed_at = NULL WHERE id IN (%s)",
-				placeholders,
-			)
-			args = append([]any{status}, idArgs...)
-
+			op = OpUpdateTaskStatusBacklog // SET status, clear timestamps
+			leadArgs = []any{status}
 		default:
-			// Other status changes: just update status
-			query = fmt.Sprintf(
-				"UPDATE tasks SET status = ? WHERE id IN (%s)",
-				placeholders,
-			)
-			args = append([]any{status}, idArgs...)
+			op = OpUpdateTaskStatus // SET status only
+			leadArgs = []any{status}
 		}
 
-		_, err := db.ExecContext(ctx, query, args...)
-		if err != nil {
-			return fmt.Errorf("updating task status: %w", err)
-		}
-
-		return nil
+		// Chunk the id set so a large update is split into batches that stay
+		// within SQLite's variable limit (SQLITE_LIMIT_VARIABLE_NUMBER, ~999).
+		// Each chunk fetches its own cached template sized to the chunk.
+		return db.batchProc.ProcessChunks(ids, func(chunk []int) error {
+			query := db.queryCache.GetQuery(op, len(chunk))
+			args := make([]any, 0, len(leadArgs)+len(chunk))
+			args = append(args, leadArgs...)
+			for _, id := range chunk {
+				args = append(args, id)
+			}
+			if _, err := db.ExecContext(ctx, query, args...); err != nil {
+				return fmt.Errorf("updating task status: %w", err)
+			}
+			return nil
+		})
 	})
 }
 
@@ -515,19 +502,20 @@ func (db *DB) UpdateTaskPriority(ctx context.Context, ids []int, priority int) e
 	}
 
 	return retryWithBackoff("update task priority", func() error {
-		placeholders := db.queryCache.GetPlaceholders(len(ids))
-		args := make([]any, len(ids)+1)
-		args[0] = priority
-		for i, id := range ids {
-			args[i+1] = id
-		}
-
-		query := fmt.Sprintf("UPDATE tasks SET priority = ? WHERE id IN (%s)", placeholders)
-		_, err := db.ExecContext(ctx, query, args...)
-		if err != nil {
-			return fmt.Errorf("updating task priority: %w", err)
-		}
-		return nil
+		// Cached template (OpUpdateTaskPriority) + batch chunking so large id
+		// sets stay within SQLite's variable limit.
+		return db.batchProc.ProcessChunks(ids, func(chunk []int) error {
+			query := db.queryCache.GetQuery(OpUpdateTaskPriority, len(chunk))
+			args := make([]any, 0, len(chunk)+1)
+			args = append(args, priority)
+			for _, id := range chunk {
+				args = append(args, id)
+			}
+			if _, err := db.ExecContext(ctx, query, args...); err != nil {
+				return fmt.Errorf("updating task priority: %w", err)
+			}
+			return nil
+		})
 	})
 }
 
@@ -538,19 +526,20 @@ func (db *DB) UpdateTaskSeverity(ctx context.Context, ids []int, severity int) e
 	}
 
 	return retryWithBackoff("update task severity", func() error {
-		placeholders := db.queryCache.GetPlaceholders(len(ids))
-		args := make([]any, len(ids)+1)
-		args[0] = severity
-		for i, id := range ids {
-			args[i+1] = id
-		}
-
-		query := fmt.Sprintf("UPDATE tasks SET severity = ? WHERE id IN (%s)", placeholders)
-		_, err := db.ExecContext(ctx, query, args...)
-		if err != nil {
-			return fmt.Errorf("updating task severity: %w", err)
-		}
-		return nil
+		// Cached template (OpUpdateTaskSeverity) + batch chunking so large id
+		// sets stay within SQLite's variable limit.
+		return db.batchProc.ProcessChunks(ids, func(chunk []int) error {
+			query := db.queryCache.GetQuery(OpUpdateTaskSeverity, len(chunk))
+			args := make([]any, 0, len(chunk)+1)
+			args = append(args, severity)
+			for _, id := range chunk {
+				args = append(args, id)
+			}
+			if _, err := db.ExecContext(ctx, query, args...); err != nil {
+				return fmt.Errorf("updating task severity: %w", err)
+			}
+			return nil
+		})
 	})
 }
 
@@ -592,68 +581,6 @@ func (db *DB) GetSubTasks(ctx context.Context, parentID int) ([]models.Task, err
 	defer rows.Close()
 
 	return scanTasksWithDeps(rows)
-}
-
-// GetParentTask retrieves the parent task of a given task ID.
-// Returns nil (no error) if the task has no parent.
-func (db *DB) GetParentTask(ctx context.Context, taskID int) (*models.Task, error) {
-	// First get the parent_task_id from the task
-	var parentID sql.NullInt64
-	err := db.QueryRowContext(ctx,
-		`SELECT parent_task_id FROM tasks WHERE id = ?`,
-		taskID,
-	).Scan(&parentID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("%w: task %d", utils.ErrNotFound, taskID)
-		}
-		return nil, fmt.Errorf("querying parent task id: %w", err)
-	}
-
-	if !parentID.Valid {
-		return nil, nil // no parent
-	}
-
-	return db.GetTask(ctx, int(parentID.Int64))
-}
-
-// GetIncompleteSubTasks returns the IDs of all direct subtasks of a given task
-// that are NOT in COMPLETED status. Used to enforce the parent completion guard.
-func (db *DB) GetIncompleteSubTasks(ctx context.Context, parentID int) ([]int, error) {
-	rows, err := db.QueryContext(ctx,
-		`SELECT id FROM tasks WHERE parent_task_id = ? AND status != ?`,
-		parentID, models.StatusCompleted,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("querying incomplete subtasks: %w", err)
-	}
-	defer rows.Close()
-
-	var ids []int
-	for rows.Next() {
-		var id int
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scanning subtask id: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating subtask rows: %w", err)
-	}
-	return ids, nil
-}
-
-// HasSubTasks returns true if the given task has any direct subtasks.
-func (db *DB) HasSubTasks(ctx context.Context, taskID int) (bool, int, error) {
-	var count int
-	err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM tasks WHERE parent_task_id = ?`,
-		taskID,
-	).Scan(&count)
-	if err != nil {
-		return false, 0, fmt.Errorf("counting subtasks: %w", err)
-	}
-	return count > 0, count, nil
 }
 
 // CountSubTasksByParents returns a map from parent_task_id to its subtask
@@ -964,39 +891,10 @@ func (db *DB) GetNextTasks(ctx context.Context, limit int) ([]models.Task, error
 
 // ==================== TASK DEPENDENCY QUERIES ====================
 
-// AddTaskDependency adds a dependency: taskID depends on depID.
-// Returns an error if the relationship already exists or would create a cycle.
-func (db *DB) AddTaskDependency(ctx context.Context, taskID, depID int) error {
-	// Self-dependency is forbidden.
-	if taskID == depID {
-		return fmt.Errorf("%w: task cannot depend on itself", utils.ErrValidation)
-	}
-
-	// Circular dependency check: if depID already (transitively) depends on taskID,
-	// adding taskID→depID would create a cycle.
-	wouldCycle, err := db.hasTransitiveDependency(ctx, depID, taskID)
-	if err != nil {
-		return fmt.Errorf("checking circular dependency: %w", err)
-	}
-	if wouldCycle {
-		return fmt.Errorf("%w: adding dependency would create a circular dependency between task #%d and task #%d",
-			utils.ErrValidation, taskID, depID)
-	}
-
-	_, err = db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_task_id) VALUES (?, ?)`,
-		taskID, depID,
-	)
-	if err != nil {
-		return fmt.Errorf("inserting task dependency: %w", err)
-	}
-	return nil
-}
-
 // AddTaskDependencyWithAudit adds a dependency and writes audit entries in a single transaction.
 func (db *DB) AddTaskDependencyWithAudit(ctx context.Context, taskID, depID int) error {
-	// Self-dependency check and circular check are performed in AddTaskDependency.
-	// Run them before opening the transaction to fail fast.
+	// Self-dependency check and circular check run before opening the
+	// transaction to fail fast.
 	if taskID == depID {
 		return fmt.Errorf("%w: task cannot depend on itself", utils.ErrValidation)
 	}
@@ -1057,25 +955,6 @@ func (db *DB) RemoveTaskDependencyWithAudit(ctx context.Context, taskID, depID i
 	})
 }
 
-// RemoveTaskDependency removes a dependency: taskID no longer depends on depID.
-func (db *DB) RemoveTaskDependency(ctx context.Context, taskID, depID int) error {
-	result, err := db.ExecContext(ctx,
-		`DELETE FROM task_dependencies WHERE task_id = ? AND depends_on_task_id = ?`,
-		taskID, depID,
-	)
-	if err != nil {
-		return fmt.Errorf("deleting task dependency: %w", err)
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("checking rows affected: %w", err)
-	}
-	if affected == 0 {
-		return fmt.Errorf("%w: dependency from task #%d to task #%d not found", utils.ErrNotFound, taskID, depID)
-	}
-	return nil
-}
-
 // GetBlockers returns tasks that are blocking taskID (tasks that taskID depends on and are not COMPLETED).
 func (db *DB) GetBlockers(ctx context.Context, taskID int) ([]models.Task, error) {
 	rows, err := db.QueryContext(ctx,
@@ -1114,35 +993,6 @@ func (db *DB) GetBlocking(ctx context.Context, taskID int) ([]models.Task, error
 	}
 	defer rows.Close()
 	return scanTasksWithDeps(rows)
-}
-
-// GetIncompleteDependencies returns the IDs of tasks that taskID depends on and are NOT COMPLETED.
-// Used to enforce the dependency completion guard before allowing a task to be marked COMPLETED.
-func (db *DB) GetIncompleteDependencies(ctx context.Context, taskID int) ([]int, error) {
-	rows, err := db.QueryContext(ctx,
-		`SELECT td.depends_on_task_id
-		 FROM task_dependencies td
-		 INNER JOIN tasks t ON t.id = td.depends_on_task_id
-		 WHERE td.task_id = ? AND t.status != ?`,
-		taskID, models.StatusCompleted,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("querying incomplete dependencies: %w", err)
-	}
-	defer rows.Close()
-
-	var ids []int
-	for rows.Next() {
-		var id int
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scanning dependency id: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating dependency rows: %w", err)
-	}
-	return ids, nil
 }
 
 // GetIncompleteDependenciesByTasks returns a map from task_id to the list of
@@ -1184,56 +1034,6 @@ func (db *DB) GetIncompleteDependenciesByTasks(ctx context.Context, taskIDs []in
 		return nil, fmt.Errorf("iterating incomplete dependency rows: %w", err)
 	}
 	return result, nil
-}
-
-// GetTaskDependsOn returns the IDs of all tasks that taskID depends on.
-func (db *DB) GetTaskDependsOn(ctx context.Context, taskID int) ([]int, error) {
-	rows, err := db.QueryContext(ctx,
-		`SELECT depends_on_task_id FROM task_dependencies WHERE task_id = ? ORDER BY depends_on_task_id ASC`,
-		taskID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("querying task depends_on: %w", err)
-	}
-	defer rows.Close()
-
-	var ids []int
-	for rows.Next() {
-		var id int
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scanning depends_on id: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating depends_on rows: %w", err)
-	}
-	return ids, nil
-}
-
-// GetTaskBlocks returns the IDs of all tasks that depend on taskID.
-func (db *DB) GetTaskBlocks(ctx context.Context, taskID int) ([]int, error) {
-	rows, err := db.QueryContext(ctx,
-		`SELECT task_id FROM task_dependencies WHERE depends_on_task_id = ? ORDER BY task_id ASC`,
-		taskID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("querying task blocks: %w", err)
-	}
-	defer rows.Close()
-
-	var ids []int
-	for rows.Next() {
-		var id int
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scanning blocks id: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating blocks rows: %w", err)
-	}
-	return ids, nil
 }
 
 // hasTransitiveDependency checks if fromID transitively depends on targetID.
@@ -1683,20 +1483,23 @@ func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int)
 			return fmt.Errorf("adding tasks to sprint: %w", err)
 		}
 
-		// Update task status to SPRINT using cached placeholders.
-		placeholders := db.queryCache.GetPlaceholders(len(taskIDs))
-		statusArgs := make([]any, len(taskIDs))
-		for i, id := range taskIDs {
-			statusArgs[i] = id
-		}
-		statusQuery := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
-			"UPDATE tasks SET status = ? WHERE id IN (%s)",
-			placeholders,
-		)
-		// Prepend the status value so the placeholder order matches: status, id, id, ...
-		statusArgsWithStatus := append([]any{models.StatusSprint}, statusArgs...)
-		if _, err := tx.Exec(statusQuery, statusArgsWithStatus...); err != nil {
-			return fmt.Errorf("updating task statuses: %w", err)
+		// Update task status to SPRINT using the cached template
+		// (OpAddTasksToSprint) and batch chunking so large id sets stay within
+		// SQLite's variable limit. status is a bound parameter, so the leading
+		// arg is models.StatusSprint followed by the chunk ids.
+		if err := db.batchProc.ProcessChunks(taskIDs, func(chunk []int) error {
+			statusQuery := db.queryCache.GetQuery(OpAddTasksToSprint, len(chunk))
+			args := make([]any, 0, len(chunk)+1)
+			args = append(args, models.StatusSprint)
+			for _, id := range chunk {
+				args = append(args, id)
+			}
+			if _, err := tx.Exec(statusQuery, args...); err != nil {
+				return fmt.Errorf("updating task statuses: %w", err)
+			}
+			return nil
+		}); err != nil {
+			return err
 		}
 		return nil
 	})
@@ -1796,28 +1599,40 @@ func (db *DB) RemoveTasksFromSprint(ctx context.Context, taskIDs []int) error {
 	}
 
 	return retryWithBackoff("remove tasks from sprint", func() error {
-		// Use cached placeholders
-		placeholders := db.queryCache.GetPlaceholders(len(taskIDs))
-		args := make([]any, len(taskIDs))
-		for i, id := range taskIDs {
-			args[i] = id
+		// Batch both writes so large id sets stay within SQLite's variable
+		// limit. Delete the sprint membership first, then reset task status to
+		// BACKLOG via the cached template (OpRemoveTasksFromSprint).
+
+		// Delete from sprint_tasks. The membership DELETE is not one of the
+		// cached operations, so build its IN-clause from cached placeholders.
+		if err := db.batchProc.ProcessChunks(taskIDs, func(chunk []int) error {
+			placeholders := db.queryCache.GetPlaceholders(len(chunk))
+			query := fmt.Sprintf("DELETE FROM sprint_tasks WHERE task_id IN (%s)", placeholders) // #nosec G201 -- only ? placeholders interpolated
+			args := make([]any, 0, len(chunk))
+			for _, id := range chunk {
+				args = append(args, id)
+			}
+			if _, err := db.ExecContext(ctx, query, args...); err != nil {
+				return fmt.Errorf("removing tasks from sprint: %w", err)
+			}
+			return nil
+		}); err != nil {
+			return err
 		}
 
-		// Delete from sprint_tasks
-		query := fmt.Sprintf("DELETE FROM sprint_tasks WHERE task_id IN (%s)", placeholders)
-		_, err := db.ExecContext(ctx, query, args...)
-		if err != nil {
-			return fmt.Errorf("removing tasks from sprint: %w", err)
-		}
-
-		// Update task status to BACKLOG. Prepend status value to args.
-		query = fmt.Sprintf("UPDATE tasks SET status = ? WHERE id IN (%s)", placeholders) // #nosec G201 -- only ? placeholders interpolated
-		statusArgs := append([]any{models.StatusBacklog}, args...)
-		if _, err := db.ExecContext(ctx, query, statusArgs...); err != nil {
-			return fmt.Errorf("updating task statuses: %w", err)
-		}
-
-		return nil
+		// Update task status to BACKLOG. status is a bound parameter.
+		return db.batchProc.ProcessChunks(taskIDs, func(chunk []int) error {
+			query := db.queryCache.GetQuery(OpRemoveTasksFromSprint, len(chunk))
+			args := make([]any, 0, len(chunk)+1)
+			args = append(args, models.StatusBacklog)
+			for _, id := range chunk {
+				args = append(args, id)
+			}
+			if _, err := db.ExecContext(ctx, query, args...); err != nil {
+				return fmt.Errorf("updating task statuses: %w", err)
+			}
+			return nil
+		})
 	})
 }
 
@@ -2097,29 +1912,6 @@ func (db *DB) GetAuditStats(ctx context.Context, since, until *string) (*models.
 }
 
 // ==================== SPRINT TASK ORDERING QUERIES ====================
-
-// getMaxPositionInternal retrieves the maximum position value for a sprint.
-// Returns -1 if sprint has no tasks, meaning first task gets position 0.
-func (db *DB) getMaxPositionInternal(sprintID int) (int, error) {
-	var maxPos sql.NullInt64
-	err := db.QueryRow(
-		"SELECT MAX(position) FROM sprint_tasks WHERE sprint_id = ?",
-		sprintID,
-	).Scan(&maxPos)
-	if err != nil {
-		return -1, fmt.Errorf("querying max position: %w", err)
-	}
-	if maxPos.Valid {
-		return int(maxPos.Int64), nil
-	}
-	return -1, nil
-}
-
-// GetMaxPosition retrieves the maximum position value for a sprint.
-// Returns -1 if sprint has no tasks.
-func (db *DB) GetMaxPosition(sprintID int) (int, error) {
-	return db.getMaxPositionInternal(sprintID)
-}
 
 // ReorderSprintTasks sets the exact order of tasks in a sprint.
 // All task IDs must belong to the sprint, and the list must be complete.

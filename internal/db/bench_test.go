@@ -28,19 +28,33 @@ func setupBenchDB(b *testing.B) (*sql.DB, func()) {
 		b.Fatalf("Failed to open db: %v", err)
 	}
 
-	// Create schema
+	// Create the real production schema so the cached templates — which the
+	// benchmarks exercise via QueryCache.GetQuery — run against the same table
+	// shape as production (tasks columns + task_dependencies for OpGetTasks).
 	schema := `
 CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    priority INTEGER NOT NULL DEFAULT 0,
-    severity INTEGER NOT NULL DEFAULT 0,
+    title TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'BACKLOG',
-    description TEXT NOT NULL,
-    specialists TEXT,
-    action TEXT NOT NULL,
-    expected_result TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'TASK',
+    functional_requirements TEXT NOT NULL,
+    technical_requirements TEXT NOT NULL,
+    acceptance_criteria TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    completed_at TEXT
+    specialists TEXT,
+    started_at TEXT,
+    tested_at TEXT,
+    closed_at TEXT,
+    completion_summary TEXT,
+    parent_task_id INTEGER REFERENCES tasks(id),
+    priority INTEGER NOT NULL DEFAULT 0,
+    severity INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS task_dependencies (
+    task_id INTEGER NOT NULL,
+    depends_on_task_id INTEGER NOT NULL,
+    PRIMARY KEY (task_id, depends_on_task_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
@@ -67,8 +81,9 @@ func populateTasks(b *testing.B, db *sql.DB, n int) []int {
 	ids := make([]int, n)
 	for i := 0; i < n; i++ {
 		result, err := db.Exec(
-			"INSERT INTO tasks (priority, severity, status, description, action, expected_result, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-			i%10, i%5, "BACKLOG", fmt.Sprintf("Task %d", i), "action", "result", "2026-03-18T10:00:00Z",
+			`INSERT INTO tasks (title, status, type, functional_requirements, technical_requirements, acceptance_criteria, created_at, priority, severity)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			fmt.Sprintf("Task %d", i), "BACKLOG", "TASK", "functional", "technical", "criteria", "2026-03-18T10:00:00Z", i%10, i%5,
 		)
 		if err != nil {
 			b.Fatalf("Failed to insert task: %v", err)
@@ -153,8 +168,11 @@ func BenchmarkGetTasks_CachedVsUncached(b *testing.B) {
 			}
 
 			query := fmt.Sprintf(
-				`SELECT id, priority, severity, status, description, specialists, action, expected_result, created_at, completed_at
-				 FROM tasks WHERE id IN (%s) ORDER BY id`,
+				`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
+				        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
+				        t.priority, t.severity,
+				        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count`+taskDepsSelect+`
+				 FROM tasks t WHERE t.id IN (%s) ORDER BY t.id`,
 				strings.Join(placeholders, ","),
 			)
 
@@ -222,13 +240,15 @@ func BenchmarkBatchUpdate_CachedVsUncached(b *testing.B) {
 	b.Run("Cached_WithBatching", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			err := bp.ProcessChunks(ids, func(chunk []int) error {
+				// OpUpdateTaskStatus default shape: a single status parameter
+				// precedes the IN-clause ids (mirrors (*DB).UpdateTaskStatus
+				// for non-lifecycle transitions).
 				query := qc.GetQuery(OpUpdateTaskStatus, len(chunk))
 
-				args := make([]any, len(chunk)+2)
+				args := make([]any, len(chunk)+1)
 				args[0] = "DOING"
-				args[1] = nil // completed_at
 				for j, id := range chunk {
-					args[j+2] = id
+					args[j+1] = id
 				}
 
 				_, err := db.ExecContext(context.Background(), query, args...)

@@ -6,7 +6,17 @@ import (
 	"sync"
 )
 
-// Operation type constants for cache keys
+// Operation type constants for cache keys.
+//
+// These name the batch operations whose SQL is cached. The templates are
+// reconciled to be byte-identical in semantics to the inline queries the
+// production builders in queries.go would otherwise construct with
+// fmt.Sprintf + strings.Join, so routing a builder through GetQuery changes
+// nothing observable except eliminating per-call query-plan recompilation.
+//
+// UpdateTaskStatus has several SET-clause shapes depending on the target
+// status (lifecycle-timestamp tracking per SPEC/STATE_MACHINE.md). Each shape
+// is cached under its own key so every transition benefits from plan reuse.
 const (
 	OpGetTasks              = "get_tasks"
 	OpUpdateTaskStatus      = "update_task_status"
@@ -14,6 +24,13 @@ const (
 	OpUpdateTaskSeverity    = "update_task_severity"
 	OpAddTasksToSprint      = "add_tasks_to_sprint"
 	OpRemoveTasksFromSprint = "remove_tasks_from_sprint"
+
+	// Lifecycle-specific UpdateTaskStatus variants. The SET clause differs by
+	// the transition; the WHERE id IN (...) tail is shared.
+	OpUpdateTaskStatusDoing     = "update_task_status_doing"     // SET status, started_at
+	OpUpdateTaskStatusTesting   = "update_task_status_testing"   // SET status, tested_at
+	OpUpdateTaskStatusCompleted = "update_task_status_completed" // SET status, closed_at
+	OpUpdateTaskStatusBacklog   = "update_task_status_backlog"   // SET status, clear all timestamps
 )
 
 // QueryCache stores pre-generated query templates for batch operations.
@@ -82,43 +99,81 @@ func (qc *QueryCache) initializeTemplates() {
 	// Generate templates for each operation and size
 	for _, size := range sizes {
 		placeholders := qc.placeholders[size]
+		for op, tmpl := range buildTemplates(placeholders) {
+			qc.templates[fmt.Sprintf("%s_%d", op, size)] = tmpl
+		}
+	}
+}
 
-		// GetTasks: SELECT ... FROM tasks WHERE id IN (...)
-		qc.templates[fmt.Sprintf("%s_%d", OpGetTasks, size)] = fmt.Sprintf(
-			`SELECT id, priority, severity, status, description, specialists, action, expected_result, created_at, completed_at
-			 FROM tasks WHERE id IN (%s) ORDER BY id`,
+// buildTemplates returns, for a given placeholder string, the SQL template of
+// every cached operation. It is the single source of truth shared by the
+// pre-generation path (initializeTemplates) and the on-demand fallback
+// (generateQuery), so the two can never drift apart.
+//
+// Each template is byte-identical in semantics to the query the corresponding
+// production builder in queries.go constructs inline. In particular:
+//   - OpGetTasks reproduces GetTasks: table alias t, the subtask_count
+//     correlated subquery, the taskDepsSelect dependency columns, and the
+//     ORDER BY t.id tail, so scanTasksWithDeps consumes an unchanged row shape.
+//   - The Add/Remove sprint variants use a status = ? parameter (not a literal)
+//     exactly as AddTasksToSprint / RemoveTasksFromSprint do.
+func buildTemplates(placeholders string) map[string]string {
+	return map[string]string{
+		// GetTasks: full task projection with dependency CSV columns,
+		// identical to (*DB).GetTasks.
+		OpGetTasks: fmt.Sprintf(
+			`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
+			        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
+			        t.priority, t.severity,
+			        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count`+taskDepsSelect+`
+			 FROM tasks t WHERE t.id IN (%s) ORDER BY t.id`,
 			placeholders,
-		)
+		),
 
-		// UpdateTaskStatus: UPDATE tasks SET status = ?, completed_at = ? WHERE id IN (...)
-		qc.templates[fmt.Sprintf("%s_%d", OpUpdateTaskStatus, size)] = fmt.Sprintf(
-			"UPDATE tasks SET status = ?, completed_at = ? WHERE id IN (%s)",
+		// UpdateTaskStatus default shape: status only.
+		OpUpdateTaskStatus: fmt.Sprintf(
+			"UPDATE tasks SET status = ? WHERE id IN (%s)",
 			placeholders,
-		)
+		),
+		// Lifecycle variants set the appropriate timestamp column.
+		OpUpdateTaskStatusDoing: fmt.Sprintf(
+			"UPDATE tasks SET status = ?, started_at = ? WHERE id IN (%s)",
+			placeholders,
+		),
+		OpUpdateTaskStatusTesting: fmt.Sprintf(
+			"UPDATE tasks SET status = ?, tested_at = ? WHERE id IN (%s)",
+			placeholders,
+		),
+		OpUpdateTaskStatusCompleted: fmt.Sprintf(
+			"UPDATE tasks SET status = ?, closed_at = ? WHERE id IN (%s)",
+			placeholders,
+		),
+		OpUpdateTaskStatusBacklog: fmt.Sprintf(
+			"UPDATE tasks SET status = ?, started_at = NULL, tested_at = NULL, closed_at = NULL WHERE id IN (%s)",
+			placeholders,
+		),
 
-		// UpdateTaskPriority: UPDATE tasks SET priority = ? WHERE id IN (...)
-		qc.templates[fmt.Sprintf("%s_%d", OpUpdateTaskPriority, size)] = fmt.Sprintf(
+		// UpdateTaskPriority: priority only.
+		OpUpdateTaskPriority: fmt.Sprintf(
 			"UPDATE tasks SET priority = ? WHERE id IN (%s)",
 			placeholders,
-		)
-
-		// UpdateTaskSeverity: UPDATE tasks SET severity = ? WHERE id IN (...)
-		qc.templates[fmt.Sprintf("%s_%d", OpUpdateTaskSeverity, size)] = fmt.Sprintf(
+		),
+		// UpdateTaskSeverity: severity only.
+		OpUpdateTaskSeverity: fmt.Sprintf(
 			"UPDATE tasks SET severity = ? WHERE id IN (%s)",
 			placeholders,
-		)
+		),
 
-		// AddTasksToSprint: UPDATE tasks SET status = 'SPRINT' WHERE id IN (...)
-		qc.templates[fmt.Sprintf("%s_%d", OpAddTasksToSprint, size)] = fmt.Sprintf(
-			"UPDATE tasks SET status = 'SPRINT' WHERE id IN (%s)",
+		// AddTasksToSprint / RemoveTasksFromSprint: status as a bound parameter
+		// (SPRINT / BACKLOG respectively), matching the production builders.
+		OpAddTasksToSprint: fmt.Sprintf(
+			"UPDATE tasks SET status = ? WHERE id IN (%s)",
 			placeholders,
-		)
-
-		// RemoveTasksFromSprint: UPDATE tasks SET status = 'BACKLOG' WHERE id IN (...)
-		qc.templates[fmt.Sprintf("%s_%d", OpRemoveTasksFromSprint, size)] = fmt.Sprintf(
-			"UPDATE tasks SET status = 'BACKLOG' WHERE id IN (%s)",
+		),
+		OpRemoveTasksFromSprint: fmt.Sprintf(
+			"UPDATE tasks SET status = ? WHERE id IN (%s)",
 			placeholders,
-		)
+		),
 	}
 }
 
@@ -162,45 +217,12 @@ func (qc *QueryCache) normalizeSize(size int) int {
 }
 
 // generateQuery creates a query template on-demand for non-cached sizes.
-// This is used as a fallback when the exact size is not pre-cached.
+// This is used as a fallback when the exact size is not pre-cached. It shares
+// buildTemplates with the pre-generation path so a fallback template is
+// guaranteed identical to its cached counterpart.
 func (qc *QueryCache) generateQuery(operation string, size int) string {
 	placeholders := generatePlaceholders(size)
-
-	switch operation {
-	case OpGetTasks:
-		return fmt.Sprintf(
-			`SELECT id, priority, severity, status, description, specialists, action, expected_result, created_at, completed_at
-			 FROM tasks WHERE id IN (%s) ORDER BY id`,
-			placeholders,
-		)
-	case OpUpdateTaskStatus:
-		return fmt.Sprintf(
-			"UPDATE tasks SET status = ?, completed_at = ? WHERE id IN (%s)",
-			placeholders,
-		)
-	case OpUpdateTaskPriority:
-		return fmt.Sprintf(
-			"UPDATE tasks SET priority = ? WHERE id IN (%s)",
-			placeholders,
-		)
-	case OpUpdateTaskSeverity:
-		return fmt.Sprintf(
-			"UPDATE tasks SET severity = ? WHERE id IN (%s)",
-			placeholders,
-		)
-	case OpAddTasksToSprint:
-		return fmt.Sprintf(
-			"UPDATE tasks SET status = 'SPRINT' WHERE id IN (%s)",
-			placeholders,
-		)
-	case OpRemoveTasksFromSprint:
-		return fmt.Sprintf(
-			"UPDATE tasks SET status = 'BACKLOG' WHERE id IN (%s)",
-			placeholders,
-		)
-	default:
-		return ""
-	}
+	return buildTemplates(placeholders)[operation]
 }
 
 // GetPlaceholders returns a pre-generated placeholder string for the given count.

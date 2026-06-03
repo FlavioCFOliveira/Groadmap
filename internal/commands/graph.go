@@ -48,11 +48,6 @@ type graphOKResult struct {
 	OK bool `json:"ok"`
 }
 
-// HandleGraph routes rmp graph … through the central registry.
-func HandleGraph(args []string) error {
-	return dispatchFamily("graph", args)
-}
-
 // printGraphHelp prints the family-level help for rmp graph.
 func printGraphHelp() {
 	fmt.Print(`Usage: rmp graph <subcommand> -r <roadmap> [--query <cypher>]

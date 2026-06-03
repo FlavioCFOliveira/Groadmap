@@ -17,11 +17,6 @@ var BacklogListFlags = []FlagDef{
 	{Name: "--limit", Short: "-l", Field: "Limit", Type: "int"},
 }
 
-// HandleBacklog handles backlog commands via the central registry.
-func HandleBacklog(args []string) error {
-	return dispatchFamily("backlog", args)
-}
-
 // printBacklogListHelp — `rmp backlog list`.
 func printBacklogListHelp() {
 	fmt.Print(`Usage: rmp backlog list -r <roadmap> [filters]
