@@ -191,6 +191,38 @@ func TestIndex_EmptyState(t *testing.T) {
 	}
 }
 
+// TestEmbeddedCSS_HiddenAttributeWins guards against a graph-rendering
+// regression: the `hidden` attribute must override component display rules.
+// A class rule such as `.graph-empty { display: flex }` otherwise beats the
+// user-agent `[hidden] { display: none }` on specificity, leaving the
+// empty-graph overlay painted over a populated graph and hiding it
+// (SPEC/WEB.md § Empty graph). The global `[hidden] { display: none
+// !important }` in style.css restores the attribute's semantics.
+func TestEmbeddedCSS_HiddenAttributeWins(t *testing.T) {
+	css, err := staticFS.ReadFile("static/style.css")
+	if err != nil {
+		t.Fatalf("reading embedded style.css: %v", err)
+	}
+	if !contains(stripSpace(string(css)), "[hidden]{display:none!important") {
+		t.Errorf("style.css must contain a global `[hidden] { display: none !important }` rule so the hidden attribute overrides component display rules (e.g. .graph-empty); not found")
+	}
+}
+
+// stripSpace removes all ASCII whitespace so a CSS-rule assertion is
+// insensitive to source formatting.
+func stripSpace(s string) string {
+	out := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case ' ', '\t', '\n', '\r', '\f', '\v':
+			// skip whitespace
+		default:
+			out = append(out, s[i])
+		}
+	}
+	return string(out)
+}
+
 func contains(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {

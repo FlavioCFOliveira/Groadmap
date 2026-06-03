@@ -20,6 +20,12 @@
 
 * { box-sizing: border-box; }
 
+/* The `hidden` attribute must always win over component display rules.
+   Without this, a class such as `.graph-empty { display: flex }` overrides
+   the user-agent `[hidden] { display: none }` (class beats UA specificity),
+   leaving a `hidden` overlay painted on top of the rendered graph. */
+[hidden] { display: none !important; }
+
 html { -webkit-text-size-adjust: 100%; }
 
 body {
