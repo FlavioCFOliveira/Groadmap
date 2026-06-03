@@ -132,34 +132,44 @@ class TestEdgeCasesErrors:
         print("✓ Invalid severity values rejected with exit 6 + 'severity' message")
 
     def test_invalid_task_id(self):
-        """Test invalid task IDs are rejected with exit 6 and a 'task ID' message."""
+        """Test non-numeric task IDs are rejected with exit 2 and a 'task ID' message.
+
+        A non-numeric ID token cannot be parsed into the declared integer
+        shape: per SPEC/ARCHITECTURE.md this is a syntax/misuse error
+        (EXIT_MISUSE / exit 2), not an invalid-data error (exit 6).
+        """
         roadmap = self.test.create_roadmap()
 
         exit_code, _, stderr = self.test.run_cmd(
             ["task", "get", "-r", roadmap, "abc"],
             check=False,
         )
-        assert exit_code == 6, f"non-numeric task id must exit 6; got {exit_code}, stderr={stderr}"
+        assert exit_code == 2, f"non-numeric task id must exit 2; got {exit_code}, stderr={stderr}"
         assert "task ID" in stderr or "task id" in stderr.lower(), (
             f"stderr must mention task ID; got {stderr!r}"
         )
 
-        print("✓ Invalid task ID rejected with exit 6 + 'task ID' message")
+        print("✓ Invalid task ID rejected with exit 2 + 'task ID' message")
 
     def test_invalid_sprint_id(self):
-        """Test invalid sprint IDs are rejected with exit 6 and a 'sprint ID' message."""
+        """Test non-numeric sprint IDs are rejected with exit 2 and a 'sprint ID' message.
+
+        A non-numeric ID token cannot be parsed into the declared integer
+        shape: per SPEC/ARCHITECTURE.md this is a syntax/misuse error
+        (EXIT_MISUSE / exit 2), not an invalid-data error (exit 6).
+        """
         roadmap = self.test.create_roadmap()
 
         exit_code, _, stderr = self.test.run_cmd(
             ["sprint", "get", "-r", roadmap, "abc"],
             check=False,
         )
-        assert exit_code == 6, f"non-numeric sprint id must exit 6; got {exit_code}, stderr={stderr}"
+        assert exit_code == 2, f"non-numeric sprint id must exit 2; got {exit_code}, stderr={stderr}"
         assert "sprint ID" in stderr or "sprint id" in stderr.lower(), (
             f"stderr must mention sprint ID; got {stderr!r}"
         )
 
-        print("✓ Invalid sprint ID rejected with exit 6 + 'sprint ID' message")
+        print("✓ Invalid sprint ID rejected with exit 2 + 'sprint ID' message")
 
     def test_get_nonexistent_sprint(self):
         """Test getting non-existent sprint fails."""

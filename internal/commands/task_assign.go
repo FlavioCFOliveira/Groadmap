@@ -34,7 +34,7 @@ func taskAssign(args []string) error {
 
 	specialist := strings.TrimSpace(remaining[1])
 	if specialist == "" {
-		return fmt.Errorf("%w: specialist name cannot be empty", utils.ErrInvalidInput)
+		return fmt.Errorf("%w: specialist name cannot be empty", utils.ErrValidation)
 	}
 
 	database, err := db.OpenExisting(roadmapName)
@@ -112,7 +112,7 @@ func taskUnassign(args []string) error {
 
 	specialist := strings.TrimSpace(remaining[1])
 	if specialist == "" {
-		return fmt.Errorf("%w: specialist name cannot be empty", utils.ErrInvalidInput)
+		return fmt.Errorf("%w: specialist name cannot be empty", utils.ErrValidation)
 	}
 
 	database, err := db.OpenExisting(roadmapName)

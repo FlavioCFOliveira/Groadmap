@@ -79,7 +79,7 @@ func sprintBottom(args []string) error {
 		}
 	}
 	if !found {
-		return fmt.Errorf("%w: task %d does not belong to sprint %d", utils.ErrInvalidInput, taskID, sprintID)
+		return fmt.Errorf("%w: task %d does not belong to sprint %d", utils.ErrValidation, taskID, sprintID)
 	}
 
 	// Move to bottom (position = count - 1, or use a large number)
@@ -150,7 +150,7 @@ func sprintMoveToPosition(args []string, position int) error {
 		}
 	}
 	if !found {
-		return fmt.Errorf("%w: task %d does not belong to sprint %d", utils.ErrInvalidInput, taskID, sprintID)
+		return fmt.Errorf("%w: task %d does not belong to sprint %d", utils.ErrValidation, taskID, sprintID)
 	}
 
 	// Move task to position

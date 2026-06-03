@@ -29,7 +29,7 @@ import (
 //
 // Error conditions:
 //   - Returns utils.ErrRequired if required fields are missing
-//   - Returns utils.ErrInvalidInput if priority/severity are out of range
+//   - Returns utils.ErrValidation if priority/severity/type are out of range
 //   - Returns utils.ErrFieldTooLarge if text fields exceed limits
 //   - Returns utils.ErrNoRoadmap if no roadmap specified via -r flag
 //
@@ -76,7 +76,7 @@ func taskCreate(args []string) error {
 	if typeStr, ok := result.Flags["Type"].(string); ok && typeStr != "" {
 		parsed, parseErr := models.ParseTaskType(typeStr)
 		if parseErr != nil {
-			return fmt.Errorf("%w: %s", utils.ErrInvalidInput, parseErr.Error())
+			return fmt.Errorf("%w: %s", utils.ErrValidation, parseErr.Error())
 		}
 		taskType = parsed
 	}
@@ -95,9 +95,11 @@ func taskCreate(args []string) error {
 		return fmt.Errorf("%w: missing required parameter: --acceptance-criteria", utils.ErrRequired)
 	}
 
-	// Validate --parent value is a positive integer
+	// Validate --parent value is a positive integer. The flag parser has
+	// already parsed the token as an int, so a value < 1 is an out-of-range
+	// value, not a syntax error: ErrValidation (exit 6) per SPEC.
 	if hasParent && parentIDRaw < 1 {
-		return fmt.Errorf("%w: --parent must be a positive integer", utils.ErrInvalidInput)
+		return fmt.Errorf("%w: --parent must be a positive integer", utils.ErrValidation)
 	}
 
 	database, err := db.OpenExisting(roadmapName)

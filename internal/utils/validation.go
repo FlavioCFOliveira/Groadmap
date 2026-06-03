@@ -25,10 +25,10 @@ const MaxInt32 = math.MaxInt32 // 2,147,483,647
 //	}
 func ValidateID(id int, entity string) error {
 	if id <= 0 {
-		return fmt.Errorf("%w: invalid %s ID: %d (must be positive)", ErrInvalidInput, entity, id)
+		return fmt.Errorf("%w: invalid %s ID: %d (must be positive)", ErrValidation, entity, id)
 	}
 	if id > MaxInt32 {
-		return fmt.Errorf("%w: invalid %s ID: %d (exceeds maximum value %d)", ErrInvalidInput, entity, id, MaxInt32)
+		return fmt.Errorf("%w: invalid %s ID: %d (exceeds maximum value %d)", ErrValidation, entity, id, MaxInt32)
 	}
 	return nil
 }
@@ -50,12 +50,14 @@ func ValidateIDList(ids []int, entity string) error {
 }
 
 // ValidateNumericRange checks that val is within the inclusive [min, max]
-// range and returns a wrapped ErrInvalidInput error otherwise. Used for
+// range and returns a wrapped ErrValidation error otherwise. Used for
 // CLI inputs like priority and severity that share an identical bounds
-// check and error format.
+// check and error format. The value is well-formed (it parsed as an
+// integer); it is the value that is out of the allowed range, so this is
+// a data-validation failure (exit 6), not a syntax error (exit 2).
 func ValidateNumericRange(val, min, max int, field string) error {
 	if val < min || val > max {
-		return fmt.Errorf("%w: invalid %s: must be %d-%d (got %d)", ErrInvalidInput, field, min, max, val)
+		return fmt.Errorf("%w: invalid %s: must be %d-%d (got %d)", ErrValidation, field, min, max, val)
 	}
 	return nil
 }

@@ -160,11 +160,14 @@ func maybeHandleAIHelp(args []string, stdout, stderr io.Writer) (handled bool, e
 	payload, err := aihelp.Generate(scope, info)
 	if err != nil {
 		// Generate returns ErrInvalidInput when scope filtering hits an
-		// unknown command or subcommand. The standard handleError path
-		// in main.go would map ErrInvalidInput to exit code 6 (invalid
-		// data), but per SPEC/COMMANDS.md § AI Help "Exit codes" the
-		// correct code is 2 (misuse). We surface the error directly
-		// here to stay on the SPEC-mandated mapping.
+		// unknown command or subcommand. Per SPEC/COMMANDS.md § AI Help
+		// "Exit codes" the correct code is 2 (misuse), which is also what
+		// the standard handleError path in main.go now produces for
+		// ErrInvalidInput. We surface the error directly here (rather than
+		// routing through handleError) because the AI-help error shape is
+		// distinct — writeAIHelpError emits the contract-discovery hint —
+		// and returning ExitMisuse explicitly keeps this path independent
+		// of the central mapping.
 		writeAIHelpError(stderr, err.Error())
 		return true, ExitMisuse
 	}

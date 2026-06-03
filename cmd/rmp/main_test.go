@@ -24,7 +24,7 @@ func TestHandleError_SentinelErrors(t *testing.T) {
 		{"ErrNotFound", utils.ErrNotFound, ExitNotFound},
 		{"ErrAlreadyExists", utils.ErrAlreadyExists, ExitExists},
 		{"ErrNoRoadmap", utils.ErrNoRoadmap, ExitNoRoadmap},
-		{"ErrInvalidInput", utils.ErrInvalidInput, ExitInvalidData},
+		{"ErrInvalidInput", utils.ErrInvalidInput, ExitMisuse},
 		{"ErrValidation", utils.ErrValidation, ExitInvalidData},
 		{"ErrRequired", utils.ErrRequired, ExitMisuse},
 	}

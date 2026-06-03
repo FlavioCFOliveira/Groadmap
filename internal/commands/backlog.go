@@ -119,7 +119,7 @@ func backlogList(args []string) error {
 	}
 	if l, ok := result.Flags["Limit"].(int); ok {
 		if l < 1 || l > models.MaxTaskLimit {
-			return fmt.Errorf("%w: limit must be between 1 and %d", utils.ErrInvalidInput, models.MaxTaskLimit)
+			return fmt.Errorf("%w: limit must be between 1 and %d", utils.ErrValidation, models.MaxTaskLimit)
 		}
 		filter.Limit = l
 	}
@@ -132,7 +132,7 @@ func backlogList(args []string) error {
 	}
 	if sortStr, ok := result.Flags["Sort"].(string); ok {
 		if !validSortFields[sortStr] {
-			return fmt.Errorf("%w: --sort must be one of: priority, created, status, severity", utils.ErrInvalidInput)
+			return fmt.Errorf("%w: --sort must be one of: priority, created, status, severity", utils.ErrValidation)
 		}
 		filter.Sort = sortStr
 	}
@@ -164,9 +164,12 @@ func backlogShowNext(args []string) error {
 	// Parse optional count argument (default: 5)
 	count := 5
 	if len(remaining) > 0 {
+		// 'count' is a positive-integer domain value, so any invalid form —
+		// non-numeric or out of range — is a value-validation failure
+		// (exit 6 / ErrValidation per SPEC/ARCHITECTURE.md).
 		n, parseErr := strconv.Atoi(remaining[0])
 		if parseErr != nil || n < 1 {
-			return fmt.Errorf("%w: count must be a positive integer", utils.ErrInvalidInput)
+			return fmt.Errorf("%w: count must be a positive integer", utils.ErrValidation)
 		}
 		if n > models.MaxTaskLimit {
 			n = models.MaxTaskLimit

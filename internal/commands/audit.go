@@ -141,13 +141,13 @@ func auditList(args []string) error {
 
 	if op, ok := result.Flags["Operation"].(string); ok {
 		if !models.IsValidAuditOperation(op) {
-			return fmt.Errorf("%w: invalid operation: %s", utils.ErrInvalidInput, op)
+			return fmt.Errorf("%w: invalid operation: %s", utils.ErrValidation, op)
 		}
 		operation = &op
 	}
 	if et, ok := result.Flags["EntityType"].(string); ok {
 		if !models.IsValidEntityType(et) {
-			return fmt.Errorf("%w: invalid entity type: %s", utils.ErrInvalidInput, et)
+			return fmt.Errorf("%w: invalid entity type: %s", utils.ErrValidation, et)
 		}
 		entityType = &et
 	}
@@ -157,7 +157,7 @@ func auditList(args []string) error {
 	if s, ok := result.Flags["Since"].(string); ok {
 		t, err := utils.ParseISO8601(s)
 		if err != nil {
-			return fmt.Errorf("%w: invalid date format: %s", utils.ErrInvalidInput, s)
+			return fmt.Errorf("%w: invalid date format: %s", utils.ErrValidation, s)
 		}
 		normalized := utils.FormatISO8601(t)
 		since = &normalized
@@ -165,7 +165,7 @@ func auditList(args []string) error {
 	if u, ok := result.Flags["Until"].(string); ok {
 		t, err := utils.ParseISO8601(u)
 		if err != nil {
-			return fmt.Errorf("%w: invalid date format: %s", utils.ErrInvalidInput, u)
+			return fmt.Errorf("%w: invalid date format: %s", utils.ErrValidation, u)
 		}
 		normalized := utils.FormatISO8601(t)
 		until = &normalized
@@ -211,7 +211,7 @@ func auditHistory(args []string) error {
 
 	// Parse entity type
 	if !models.IsValidEntityType(remaining[0]) {
-		return fmt.Errorf("%w: invalid entity type: %s", utils.ErrInvalidInput, remaining[0])
+		return fmt.Errorf("%w: invalid entity type: %s", utils.ErrValidation, remaining[0])
 	}
 	entityType := remaining[0]
 
@@ -255,7 +255,7 @@ func auditStats(args []string) error {
 	if s, ok := result.Flags["Since"].(string); ok {
 		t, err := utils.ParseISO8601(s)
 		if err != nil {
-			return fmt.Errorf("%w: invalid date format: %s", utils.ErrInvalidInput, s)
+			return fmt.Errorf("%w: invalid date format: %s", utils.ErrValidation, s)
 		}
 		normalized := utils.FormatISO8601(t)
 		since = &normalized
@@ -263,7 +263,7 @@ func auditStats(args []string) error {
 	if u, ok := result.Flags["Until"].(string); ok {
 		t, err := utils.ParseISO8601(u)
 		if err != nil {
-			return fmt.Errorf("%w: invalid date format: %s", utils.ErrInvalidInput, u)
+			return fmt.Errorf("%w: invalid date format: %s", utils.ErrValidation, u)
 		}
 		normalized := utils.FormatISO8601(t)
 		until = &normalized

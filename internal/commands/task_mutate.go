@@ -47,7 +47,7 @@ func taskRemove(args []string) error {
 	}
 	for i := range tasks {
 		if tasks[i].Status != models.StatusBacklog {
-			return fmt.Errorf("%w: task #%d cannot be deleted — status is %s, must be BACKLOG", utils.ErrInvalidInput, tasks[i].ID, tasks[i].Status)
+			return fmt.Errorf("%w: task #%d cannot be deleted — status is %s, must be BACKLOG", utils.ErrValidation, tasks[i].ID, tasks[i].Status)
 		}
 	}
 
@@ -58,7 +58,7 @@ func taskRemove(args []string) error {
 	}
 	for i := range tasks {
 		if c := subtaskCounts[tasks[i].ID]; c > 0 {
-			return fmt.Errorf("%w: task #%d cannot be deleted — it has %d subtask(s); remove them first", utils.ErrInvalidInput, tasks[i].ID, c)
+			return fmt.Errorf("%w: task #%d cannot be deleted — it has %d subtask(s); remove them first", utils.ErrValidation, tasks[i].ID, c)
 		}
 	}
 
@@ -111,8 +111,7 @@ func taskRemove(args []string) error {
 // Error conditions:
 //   - Returns utils.ErrRequired if task IDs or status missing
 //   - Returns utils.ErrNotFound if task doesn't exist
-//   - Returns utils.ErrInvalidInput if status is invalid
-//   - Returns error if status transition is not allowed
+//   - Returns utils.ErrValidation if status or status transition is invalid
 //
 // Side effects:
 //   - Updates task status in database
@@ -177,7 +176,7 @@ func taskSetStatus(args []string) error {
 	// Fail-fast validation for --summary (step 2: before ID/DB verification).
 	// --summary is only meaningful on the TESTING → COMPLETED transition.
 	if completionSummary != nil && newStatus != models.StatusCompleted {
-		return fmt.Errorf("%w: --summary is only valid when transitioning to COMPLETED", utils.ErrInvalidInput)
+		return fmt.Errorf("%w: --summary is only valid when transitioning to COMPLETED", utils.ErrValidation)
 	}
 	if completionSummary != nil && len(*completionSummary) > models.MaxTaskCompletionSummary {
 		return fmt.Errorf("%w: completion_summary exceeds maximum length of %d characters", utils.ErrFieldTooLarge, models.MaxTaskCompletionSummary)
@@ -202,7 +201,7 @@ func taskSetStatus(args []string) error {
 	}
 	for i := range tasks {
 		if !tasks[i].Status.CanTransitionTo(newStatus) {
-			return fmt.Errorf("%w: invalid status transition from %s to %s for task %d", utils.ErrInvalidInput, tasks[i].Status, newStatus, tasks[i].ID)
+			return fmt.Errorf("%w: invalid status transition from %s to %s for task %d", utils.ErrValidation, tasks[i].Status, newStatus, tasks[i].ID)
 		}
 	}
 
@@ -224,7 +223,7 @@ func taskSetStatus(args []string) error {
 					idStrsBlocking[j] = fmt.Sprintf("#%d", id)
 				}
 				return fmt.Errorf("%w: cannot mark task #%d as COMPLETED: incomplete subtasks: %s",
-					utils.ErrInvalidInput, tasks[i].ID, strings.Join(idStrsBlocking, ", "))
+					utils.ErrValidation, tasks[i].ID, strings.Join(idStrsBlocking, ", "))
 			}
 			if deps := incompleteDepsByTask[tasks[i].ID]; len(deps) > 0 {
 				depStrs := make([]string, len(deps))
@@ -232,7 +231,7 @@ func taskSetStatus(args []string) error {
 					depStrs[j] = fmt.Sprintf("#%d", id)
 				}
 				return fmt.Errorf("%w: cannot mark task #%d as COMPLETED: incomplete dependencies: %s",
-					utils.ErrInvalidInput, tasks[i].ID, strings.Join(depStrs, ", "))
+					utils.ErrValidation, tasks[i].ID, strings.Join(depStrs, ", "))
 			}
 		}
 	}
@@ -425,7 +424,11 @@ func taskSetPriority(args []string) error {
 
 	priority, err := strconv.Atoi(remaining[1])
 	if err != nil {
-		return fmt.Errorf("%w: invalid priority: must be 0-9", utils.ErrInvalidInput)
+		// A non-numeric priority is a domain value-validation failure
+		// (exit 6 / ErrValidation per SPEC/ARCHITECTURE.md): priority is a
+		// 0-9 enum-like value, so any token that is not a valid value in
+		// that range — numeric out-of-range or non-numeric — is invalid data.
+		return fmt.Errorf("%w: invalid priority: must be 0-9", utils.ErrValidation)
 	}
 	if err := utils.ValidateNumericRange(priority, 0, 9, "priority"); err != nil {
 		return err
@@ -477,7 +480,11 @@ func taskSetSeverity(args []string) error {
 
 	severity, err := strconv.Atoi(remaining[1])
 	if err != nil {
-		return fmt.Errorf("%w: invalid severity: must be 0-9", utils.ErrInvalidInput)
+		// A non-numeric severity is a domain value-validation failure
+		// (exit 6 / ErrValidation per SPEC/ARCHITECTURE.md): severity is a
+		// 0-9 enum-like value, so any token that is not a valid value in
+		// that range — numeric out-of-range or non-numeric — is invalid data.
+		return fmt.Errorf("%w: invalid severity: must be 0-9", utils.ErrValidation)
 	}
 	if err := utils.ValidateNumericRange(severity, 0, 9, "severity"); err != nil {
 		return err

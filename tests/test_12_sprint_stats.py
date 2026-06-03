@@ -511,12 +511,15 @@ class TestSprintStats:
         )
         assert exit_code == 2, f"Expected exit code 2 for missing sprint ID, got {exit_code}"
 
-        # Invalid sprint ID format should fail
+        # Invalid sprint ID format should fail. A non-numeric token cannot be
+        # parsed into the declared integer shape, so per SPEC/ARCHITECTURE.md
+        # this is a syntax/misuse error (EXIT_MISUSE / exit 2), not an
+        # invalid-data error (exit 6).
         exit_code, stdout, stderr = self.test.run_cmd(
             ["sprint", "stats", "-r", roadmap, "not_a_number"],
             check=False
         )
-        assert exit_code == 6, f"Expected exit code 6 for invalid sprint ID, got {exit_code}"
+        assert exit_code == 2, f"Expected exit code 2 for non-numeric sprint ID, got {exit_code}"
 
         # Missing roadmap should fail
         exit_code, stdout, stderr = self.test.run_cmd(

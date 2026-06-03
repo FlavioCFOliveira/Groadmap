@@ -68,7 +68,7 @@ func taskList(args []string) error {
 	}
 	if l, ok := result.Flags["Limit"].(int); ok {
 		if l < 1 || l > models.MaxTaskLimit {
-			return fmt.Errorf("%w: limit must be between 1 and %d", utils.ErrInvalidInput, models.MaxTaskLimit)
+			return fmt.Errorf("%w: limit must be between 1 and %d", utils.ErrValidation, models.MaxTaskLimit)
 		}
 		filter.Limit = l
 	}
@@ -85,20 +85,20 @@ func taskList(args []string) error {
 	if sinceStr, ok := result.Flags["CreatedSince"].(string); ok {
 		t, parseErr := parseFilterDate(sinceStr)
 		if parseErr != nil {
-			return fmt.Errorf("%w: --created-since: %v", utils.ErrInvalidInput, parseErr)
+			return fmt.Errorf("%w: --created-since: %v", utils.ErrValidation, parseErr)
 		}
 		filter.CreatedSince = &t
 	}
 	if untilStr, ok := result.Flags["CreatedUntil"].(string); ok {
 		t, parseErr := parseFilterDate(untilStr)
 		if parseErr != nil {
-			return fmt.Errorf("%w: --created-until: %v", utils.ErrInvalidInput, parseErr)
+			return fmt.Errorf("%w: --created-until: %v", utils.ErrValidation, parseErr)
 		}
 		filter.CreatedUntil = &t
 	}
 	if sortStr, ok := result.Flags["Sort"].(string); ok {
 		if !validSortFields[sortStr] {
-			return fmt.Errorf("%w: --sort must be one of: priority, created, status, severity", utils.ErrInvalidInput)
+			return fmt.Errorf("%w: --sort must be one of: priority, created, status, severity", utils.ErrValidation)
 		}
 		filter.Sort = sortStr
 	}
@@ -131,7 +131,7 @@ func taskList(args []string) error {
 //
 // Error conditions:
 //   - Returns utils.ErrNotFound if no sprint is currently open
-//   - Returns utils.ErrInvalidInput if num is not a positive integer
+//   - Returns utils.ErrValidation if num is not a positive integer
 //
 // Output:
 //   - JSON array of Task objects ordered by sprint task position (task_order)
@@ -147,12 +147,14 @@ func taskNext(args []string) error {
 		return err
 	}
 
-	// Parse optional num argument (default: 1)
+	// Parse optional num argument (default: 1). 'num' is a positive-integer
+	// domain value, so any invalid form — non-numeric or out of range — is a
+	// value-validation failure (exit 6 / ErrValidation per SPEC/ARCHITECTURE.md).
 	limit := 1
 	if len(remaining) > 0 {
 		num, err := strconv.Atoi(remaining[0])
 		if err != nil || num < 1 {
-			return fmt.Errorf("%w: num must be a positive integer", utils.ErrInvalidInput)
+			return fmt.Errorf("%w: num must be a positive integer", utils.ErrValidation)
 		}
 		if num > models.MaxTaskLimit {
 			num = models.MaxTaskLimit

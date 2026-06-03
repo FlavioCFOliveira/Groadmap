@@ -1040,7 +1040,7 @@ func (db *DB) GetNextTasks(ctx context.Context, limit int) ([]models.Task, error
 func (db *DB) AddTaskDependency(ctx context.Context, taskID, depID int) error {
 	// Self-dependency is forbidden.
 	if taskID == depID {
-		return fmt.Errorf("%w: task cannot depend on itself", utils.ErrInvalidInput)
+		return fmt.Errorf("%w: task cannot depend on itself", utils.ErrValidation)
 	}
 
 	// Circular dependency check: if depID already (transitively) depends on taskID,
@@ -1051,7 +1051,7 @@ func (db *DB) AddTaskDependency(ctx context.Context, taskID, depID int) error {
 	}
 	if wouldCycle {
 		return fmt.Errorf("%w: adding dependency would create a circular dependency between task #%d and task #%d",
-			utils.ErrInvalidInput, taskID, depID)
+			utils.ErrValidation, taskID, depID)
 	}
 
 	_, err = db.ExecContext(ctx,
@@ -1069,7 +1069,7 @@ func (db *DB) AddTaskDependencyWithAudit(ctx context.Context, taskID, depID int)
 	// Self-dependency check and circular check are performed in AddTaskDependency.
 	// Run them before opening the transaction to fail fast.
 	if taskID == depID {
-		return fmt.Errorf("%w: task cannot depend on itself", utils.ErrInvalidInput)
+		return fmt.Errorf("%w: task cannot depend on itself", utils.ErrValidation)
 	}
 	wouldCycle, err := db.hasTransitiveDependency(ctx, depID, taskID)
 	if err != nil {
@@ -1077,7 +1077,7 @@ func (db *DB) AddTaskDependencyWithAudit(ctx context.Context, taskID, depID int)
 	}
 	if wouldCycle {
 		return fmt.Errorf("%w: adding dependency would create a circular dependency between task #%d and task #%d",
-			utils.ErrInvalidInput, taskID, depID)
+			utils.ErrValidation, taskID, depID)
 	}
 
 	now := utils.NowISO8601()

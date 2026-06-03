@@ -195,7 +195,9 @@ func logAuditForTasks(ctx context.Context, database *db.DB, sprintID int, op mod
 // Error conditions:
 //   - Returns utils.ErrRequired if sprint ID or task IDs missing
 //   - Returns utils.ErrNotFound if sprint or tasks don't exist
-//   - Returns utils.ErrInvalidInput if task IDs are invalid
+//   - Returns utils.ErrInvalidInput if a task ID token is malformed (non-numeric)
+//   - Returns utils.ErrValidation if a task ID is out of range, or the sprint
+//     is CLOSED, or the add would exceed the sprint's max-tasks capacity
 //
 // Side effects:
 //   - Creates sprint_tasks junction records linking tasks to sprint
@@ -241,7 +243,7 @@ func sprintAddTasks(args []string) error {
 		return err
 	}
 	if sprint.Status == models.SprintClosed {
-		return fmt.Errorf("%w: cannot add tasks to sprint #%d: sprint is CLOSED", utils.ErrInvalidInput, sprintID)
+		return fmt.Errorf("%w: cannot add tasks to sprint #%d: sprint is CLOSED", utils.ErrValidation, sprintID)
 	}
 
 	// Fail-fast: confirm every task exists before any mutation. Without this,
@@ -273,7 +275,7 @@ func sprintAddTasks(args []string) error {
 		}
 		if len(activeTasks)+len(taskIDs) > *sprint.MaxTasks {
 			return fmt.Errorf("%w: adding %d task(s) would exceed sprint #%d capacity (%d/%d tasks active)",
-				utils.ErrInvalidInput, len(taskIDs), sprintID, len(activeTasks), *sprint.MaxTasks)
+				utils.ErrValidation, len(taskIDs), sprintID, len(activeTasks), *sprint.MaxTasks)
 		}
 	}
 
@@ -353,14 +355,14 @@ func verifySprintsExist(ctx context.Context, database *db.DB, fromID, toID int) 
 		return fmt.Errorf("%w: from sprint: %v", utils.ErrNotFound, err)
 	}
 	if from.Status == models.SprintClosed {
-		return fmt.Errorf("%w: cannot move tasks from sprint #%d: sprint is CLOSED", utils.ErrInvalidInput, fromID)
+		return fmt.Errorf("%w: cannot move tasks from sprint #%d: sprint is CLOSED", utils.ErrValidation, fromID)
 	}
 	to, err := database.GetSprint(ctx, toID)
 	if err != nil {
 		return fmt.Errorf("%w: to sprint: %v", utils.ErrNotFound, err)
 	}
 	if to.Status == models.SprintClosed {
-		return fmt.Errorf("%w: cannot move tasks to sprint #%d: sprint is CLOSED", utils.ErrInvalidInput, toID)
+		return fmt.Errorf("%w: cannot move tasks to sprint #%d: sprint is CLOSED", utils.ErrValidation, toID)
 	}
 	return nil
 }

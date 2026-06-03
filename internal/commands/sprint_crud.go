@@ -69,7 +69,7 @@ func sprintCreate(args []string) error {
 	var maxTasks *int
 	if mt, ok := result.Flags["MaxTasks"].(int); ok {
 		if mt < 1 {
-			return fmt.Errorf("%w: --max-tasks must be a positive integer", utils.ErrInvalidInput)
+			return fmt.Errorf("%w: --max-tasks must be a positive integer", utils.ErrValidation)
 		}
 		maxTasks = &mt
 	}
@@ -246,7 +246,7 @@ func sprintUpdate(args []string) error {
 	if hasMaxTasks {
 		mt := result.Flags["MaxTasks"].(int)
 		if mt < 1 {
-			return fmt.Errorf("%w: --max-tasks must be a positive integer", utils.ErrInvalidInput)
+			return fmt.Errorf("%w: --max-tasks must be a positive integer", utils.ErrValidation)
 		}
 		maxTasks = &mt
 	}

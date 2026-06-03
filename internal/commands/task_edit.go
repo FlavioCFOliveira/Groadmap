@@ -32,7 +32,7 @@ import (
 // Error conditions:
 //   - Returns utils.ErrRequired if task ID is missing
 //   - Returns utils.ErrNotFound if task doesn't exist
-//   - Returns utils.ErrInvalidInput if priority/severity out of range
+//   - Returns utils.ErrValidation if priority/severity/type out of range
 //   - Returns utils.ErrFieldTooLarge if text fields exceed limits
 //
 // Side effects:
@@ -93,13 +93,13 @@ func taskEdit(args []string) error {
 	if typeStr, ok := result.Flags["Type"].(string); ok {
 		parsed, parseErr := models.ParseTaskType(typeStr)
 		if parseErr != nil {
-			return fmt.Errorf("%w: %s", utils.ErrInvalidInput, parseErr.Error())
+			return fmt.Errorf("%w: %s", utils.ErrValidation, parseErr.Error())
 		}
 		updates["type"] = string(parsed)
 	}
 
 	if len(updates) == 0 {
-		return fmt.Errorf("%w: no fields to update", utils.ErrInvalidInput)
+		return fmt.Errorf("%w: no fields to update", utils.ErrValidation)
 	}
 
 	// Validate that required text fields are not set to empty

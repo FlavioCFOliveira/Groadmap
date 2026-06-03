@@ -59,7 +59,7 @@ func buildSprintUpdateQuery(newStatus models.SprintStatus, currentStatus models.
 // execSprintUpdate executes the sprint update and audit logging in a transaction.
 func execSprintUpdate(tx *sql.Tx, query string, args []any, sprintID int, op models.AuditOperation, now string) error {
 	if query == "" {
-		return fmt.Errorf("%w: invalid sprint status", utils.ErrInvalidInput)
+		return fmt.Errorf("%w: invalid sprint status", utils.ErrValidation)
 	}
 	result, err := tx.Exec(query, args...)
 	if err != nil {
@@ -96,8 +96,8 @@ func execSprintUpdate(tx *sql.Tx, query string, args []any, sprintID int, op mod
 // Error conditions:
 //   - Returns utils.ErrRequired if sprint ID is missing
 //   - Returns utils.ErrNotFound if sprint doesn't exist
-//   - Returns utils.ErrInvalidInput if transition is not allowed
-//   - Returns utils.ErrInvalidInput if close attempted with DOING/TESTING tasks and force=false
+//   - Returns utils.ErrValidation if transition is not allowed
+//   - Returns utils.ErrValidation if close attempted with DOING/TESTING tasks and force=false
 //
 // Side effects:
 //   - Updates sprint status in database
@@ -136,13 +136,13 @@ func sprintLifecycle(args []string, newStatus models.SprintStatus, op models.Aud
 	}
 	if !canTransition(sprint.Status) {
 		msg := fmt.Sprintf(errorMsg, sprint.Status)
-		return fmt.Errorf("%w: %s", utils.ErrInvalidInput, msg)
+		return fmt.Errorf("%w: %s", utils.ErrValidation, msg)
 	}
 
 	// Prevent opening a sprint when another is already OPEN (task #77).
 	if newStatus == models.SprintOpen {
 		if open, err := database.GetOpenSprint(ctx); err == nil {
-			return fmt.Errorf("%w: sprint #%d is already open — close it first", utils.ErrInvalidInput, open.ID)
+			return fmt.Errorf("%w: sprint #%d is already open — close it first", utils.ErrValidation, open.ID)
 		}
 	}
 
@@ -159,7 +159,7 @@ func sprintLifecycle(args []string, newStatus models.SprintStatus, op models.Aud
 			}
 			if !force {
 				return fmt.Errorf("%w: sprint #%d has %d active task(s) still in progress: %s — use --force to close anyway",
-					utils.ErrInvalidInput, sprintID, len(activeTasks), strings.Join(ids, ", "))
+					utils.ErrValidation, sprintID, len(activeTasks), strings.Join(ids, ", "))
 			}
 			fmt.Fprintf(os.Stderr, "warning: closing sprint #%d with %d incomplete task(s): %s\n",
 				sprintID, len(activeTasks), strings.Join(ids, ", "))

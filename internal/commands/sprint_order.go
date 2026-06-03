@@ -25,7 +25,9 @@ import (
 // Error conditions:
 //   - Returns utils.ErrRequired if sprint ID or task IDs missing
 //   - Returns utils.ErrNotFound if sprint doesn't exist
-//   - Returns utils.ErrInvalidInput if task IDs invalid, duplicated, or incomplete
+//   - Returns utils.ErrInvalidInput if a task ID token is malformed (non-numeric)
+//   - Returns utils.ErrValidation if task IDs are duplicated, incomplete, or
+//     do not belong to the sprint
 //
 // Side effects:
 //   - Updates position field for all tasks in the sprint
@@ -59,7 +61,7 @@ func sprintReorder(args []string) error {
 	seen := make(map[int]bool, len(taskIDs))
 	for _, id := range taskIDs {
 		if seen[id] {
-			return fmt.Errorf("%w: duplicate task ID %d", utils.ErrInvalidInput, id)
+			return fmt.Errorf("%w: duplicate task ID %d", utils.ErrValidation, id)
 		}
 		seen[id] = true
 	}
@@ -88,7 +90,7 @@ func sprintReorder(args []string) error {
 	// Validate that all sprint tasks are included
 	if len(taskIDs) != len(currentTaskIDs) {
 		return fmt.Errorf("%w: expected %d task IDs, got %d (must include all sprint tasks)",
-			utils.ErrInvalidInput, len(currentTaskIDs), len(taskIDs))
+			utils.ErrValidation, len(currentTaskIDs), len(taskIDs))
 	}
 
 	// Validate all task IDs belong to sprint
@@ -98,7 +100,7 @@ func sprintReorder(args []string) error {
 	}
 	for _, id := range taskIDs {
 		if !currentSet[id] {
-			return fmt.Errorf("%w: task %d does not belong to sprint %d", utils.ErrInvalidInput, id, sprintID)
+			return fmt.Errorf("%w: task %d does not belong to sprint %d", utils.ErrValidation, id, sprintID)
 		}
 	}
 
@@ -127,7 +129,8 @@ func sprintReorder(args []string) error {
 // Error conditions:
 //   - Returns utils.ErrRequired if any argument is missing
 //   - Returns utils.ErrNotFound if sprint or task doesn't exist
-//   - Returns utils.ErrInvalidInput if task doesn't belong to sprint
+//   - Returns utils.ErrValidation if task doesn't belong to sprint or position
+//     is out of range
 //
 // Side effects:
 //   - Updates position field for the moved task and shifted tasks
@@ -159,7 +162,10 @@ func sprintMoveTo(args []string) error {
 
 	position, err := strconv.Atoi(remaining[2])
 	if err != nil || position < 0 {
-		return fmt.Errorf("%w: position must be a non-negative integer", utils.ErrInvalidInput)
+		// 'position' is a non-negative-integer domain value, so any invalid
+		// form — non-numeric or negative — is a value-validation failure
+		// (exit 6 / ErrValidation per SPEC/ARCHITECTURE.md).
+		return fmt.Errorf("%w: position must be a non-negative integer", utils.ErrValidation)
 	}
 
 	database, err := db.OpenExisting(roadmapName)
@@ -185,7 +191,7 @@ func sprintMoveTo(args []string) error {
 
 	taskCount := len(currentTasks)
 	if position >= taskCount {
-		return fmt.Errorf("%w: position must be less than task count (%d)", utils.ErrInvalidInput, taskCount)
+		return fmt.Errorf("%w: position must be less than task count (%d)", utils.ErrValidation, taskCount)
 	}
 
 	found := false
@@ -196,7 +202,7 @@ func sprintMoveTo(args []string) error {
 		}
 	}
 	if !found {
-		return fmt.Errorf("%w: task %d does not belong to sprint %d", utils.ErrInvalidInput, taskID, sprintID)
+		return fmt.Errorf("%w: task %d does not belong to sprint %d", utils.ErrValidation, taskID, sprintID)
 	}
 
 	// Move task to position
@@ -229,7 +235,7 @@ func sprintMoveTo(args []string) error {
 // Error conditions:
 //   - Returns utils.ErrRequired if any argument is missing
 //   - Returns utils.ErrNotFound if sprint doesn't exist
-//   - Returns utils.ErrInvalidInput if tasks don't belong to sprint or are identical
+//   - Returns utils.ErrValidation if tasks don't belong to sprint or are identical
 //
 // Side effects:
 //   - Swaps position values of the two tasks
@@ -264,7 +270,7 @@ func sprintSwap(args []string) error {
 	}
 
 	if taskID1 == taskID2 {
-		return fmt.Errorf("%w: cannot swap a task with itself", utils.ErrInvalidInput)
+		return fmt.Errorf("%w: cannot swap a task with itself", utils.ErrValidation)
 	}
 
 	database, err := db.OpenExisting(roadmapName)
@@ -294,10 +300,10 @@ func sprintSwap(args []string) error {
 	}
 
 	if !currentSet[taskID1] {
-		return fmt.Errorf("%w: task %d does not belong to sprint %d", utils.ErrInvalidInput, taskID1, sprintID)
+		return fmt.Errorf("%w: task %d does not belong to sprint %d", utils.ErrValidation, taskID1, sprintID)
 	}
 	if !currentSet[taskID2] {
-		return fmt.Errorf("%w: task %d does not belong to sprint %d", utils.ErrInvalidInput, taskID2, sprintID)
+		return fmt.Errorf("%w: task %d does not belong to sprint %d", utils.ErrValidation, taskID2, sprintID)
 	}
 
 	// Swap tasks
