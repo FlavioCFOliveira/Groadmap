@@ -4,6 +4,69 @@
 
 **Name:** groadmap
 
+## 0. Core Working Principles
+
+These principles govern every interaction and override convenience. They apply
+across analysis, planning, development, testing, and documentation.
+
+### Ask, Never Assume
+
+You are NOT authorized to make decisions on your own. Whenever the instructions
+are insufficient, unclear, unspecific, or non-concrete, or whenever you detect
+contradictions or ambiguities, you MUST ALWAYS ASK the user how to proceed.
+
+When you ask the user:
+- Provide multiple options (a, b, c, ...) and state which one you recommend.
+- When several clarifications are needed, ask the questions **sequentially —
+  one at a time**, not all at once.
+
+This covers product decisions, scope decisions, and any judgment call not fully
+determined by these instructions or the SPEC.
+
+### Never Guess
+
+All work in this project MUST be based EXCLUSIVELY on knowledge you already
+have. Never guess the intended answer. When your information is insufficient:
+- Consult the **Knowledge Graph** first — it is the primary source, both to
+  query and to record the relationships you discover (see Section 5).
+- Then search the internet in official or authoritative sources, papers, books,
+  or domain experts to determine the best result.
+
+### Measure to Decide
+
+Whenever you must assess performance, completeness (whether something is
+finished), or correctness, ALWAYS gather evidence from the project itself.
+Decide empirically — never by assumption.
+
+### Production-Grade by Default
+
+Across the entire workflow (analysis → planning → development → testing), the
+objective is always a **production-grade** result. Apply maximum knowledge and
+maximum diligence so that every cycle produces code that is ready for production
+use.
+
+### Self-Contained Development
+
+Every development cycle MUST be self-contained. NEVER deliver only part of a
+task; each cycle must produce a working result (a deliverable).
+- All code and development is **Full-fledged** by rule. NEVER create tests with
+  skip.
+- When new, previously-unforeseen needs are discovered mid-task, resolve them
+  within the SAME development cycle (as immediately as possible): add the new
+  tasks via `rmp` and develop them as fast as possible.
+- When you find pre-existing bugs, fix them on the spot, then resume the work
+  you were doing when you found the bug.
+
+### Workflow: Specify → Implement → Test → Document
+
+Work ALWAYS follows these phases, in order:
+1. **Specify** — SPEC/ first (see Section 1).
+2. **Implement** — code only after the SPEC exists.
+3. **Test** — validate behavior and acceptance criteria.
+4. **Document** — keep documentation accurate and faithful to the code.
+
+---
+
 ## 1. Critical Policy: Specification First
 
 **MANDATORY: No implementation without SPEC/**. Zero exceptions.
@@ -120,7 +183,85 @@ If a change to the SPEC needs a narrative beyond the diff, write it in the commi
 
 ---
 
-## 4. Execution Rules
+## 4. Planning & Task Execution
+
+Use the `rmp` CLI (the system's roadmap-management tool) to plan and coordinate
+execution. `rmp` is the **SINGLE SOURCE OF TRUTH** for planning and task
+execution in this project — no other mechanism may be used for this purpose.
+
+Use the **Knowledge Graph** (Section 5) to understand the project, its
+components, and how they relate, so you can identify the scope and impact of
+each task.
+
+### Planning
+
+- First, examine the scope of the work the user proposes and determine, as a
+  primary decision, whether it warrants multiple development phases. Each phase
+  must deliver a solid deliverable.
+- Phases are modeled as **Sprints** in `rmp`; sprints group tasks.
+- Every task MUST have a clear, objective definition of its goals, functional
+  requirements, and technical requirements, plus the **acceptance criteria**
+  that confirm the task can be closed (its goal is met).
+- When a task is completed, it MUST be closed with a short summary of what was
+  done.
+- When the work needs multiple phases (sprints), planning MUST happen in two
+  distinct stages:
+  1. Define the required sprints and the scope (goal) of each sprint.
+  2. Then, sprint by sprint, define the tasks of each sprint.
+
+  Always using `rmp` as the single source of truth.
+- Use the Knowledge Graph to identify the highest-leverage and foundational
+  tasks and the extent of each task's impact, to optimize the execution path.
+
+### Task Execution
+
+Task execution is the natural continuation of planning (the next step). Always
+use `rmp` to determine:
+1. Whether there is an open, not-yet-completed task to continue.
+2. Which task is next.
+3. The goal of the task being started, based on its description and its
+   functional and technical requirements.
+4. Always validate that the acceptance criteria are observed before closing a
+   task.
+5. Ensure the task is closed with a short summary of what was done.
+6. After closing the task and before moving to the next one, make a git commit
+   following best practices, explaining what was done.
+7. Update the Knowledge Graph.
+
+Sprints and tasks are preferably executed sequentially. **Sprints MUST be
+executed sequentially.** Tasks may run in parallel only when there is
+justification for it.
+
+---
+
+## 5. Knowledge Graph
+
+Use `rmp`'s Graph (Groadmap) features to create, maintain (update), and query a
+knowledge graph of the project. This graph **MUST CONTAIN EVERYTHING** useful to
+know about the project. Examples:
+- What features exist; where each is specified; where each is implemented; which
+  tests exist and what they test.
+- The components, how they relate, and the dependencies between them.
+- The git commit in which a feature was specified, the commit in which it was
+  implemented, and the commit in which it was tested.
+- `rmp` tasks, component tasks, and any other information worth mapping.
+
+This knowledge graph **MUST ALWAYS BE UPDATED** at every git commit, recording
+the changes to the graph's objects. When updating nodes and relationships,
+record which commit made the change and its date.
+
+**The graph's purpose is to provide the absolute truth about the project.** Keep
+it as up to date as possible so that, before having to read files, you can
+consult the graph and learn what you need.
+
+Create whatever nodes and edges make the most sense for the project and your
+activity. Use the graph together with tasks and sprints to coordinate the
+project's work. The Knowledge Graph is the **primary source of information** —
+both to query and to store the relationships you discover.
+
+---
+
+## 6. Execution Rules
 
 ### Rule 1: Agent/Skill Delegation
 
@@ -175,7 +316,7 @@ type(scope): subject
 
 ---
 
-## 5. Project Structure
+## 7. Project Structure
 
 ```
 /data/dev/github.com/FlavioCFOliveira/Groadmap/
@@ -202,7 +343,7 @@ this project (e.g., `specification-manager`, `roadmap-manager`, `go-developer`,
 
 ---
 
-## 6. Decision Matrix
+## 8. Decision Matrix
 
 | Situation | Action |
 |-----------|--------|
@@ -217,23 +358,33 @@ this project (e.g., `specification-manager`, `roadmap-manager`, `go-developer`,
 | Documentation needed | `doc-manager` |
 | SPEC exists, implement | `go-developer` |
 | PR review | `review` skill |
-| Requirements unclear | ASK the user |
+| Requirements unclear / ambiguous / contradictory | ASK the user — provide options (a, b, c) with a recommendation; one question at a time |
+| New need discovered mid-task | Add task via `rmp`; resolve in the SAME cycle |
+| Pre-existing bug found | Fix on the spot, then resume the original work |
+| Assess performance / completeness / correctness | Gather evidence; decide empirically |
+| Information insufficient | Consult Knowledge Graph first, then authoritative sources — never guess |
 | Code vs SPEC diverge | Follow SPEC, ask user |
 
 ---
 
-## 7. Anti-Patterns (Zero Tolerance)
+## 9. Anti-Patterns (Zero Tolerance)
 
 ### Critical Violations
 - Implement without SPEC/
 - Derive SPEC from existing code
 - Make product decisions without user
+- Make decisions alone when instructions are unclear, ambiguous, or contradictory (always ASK)
+- Guess instead of consulting the Knowledge Graph or authoritative sources
+- Decide on performance/completeness/correctness without empirical evidence
 - Create task-specific spec files
 - Duplicate functional areas
 - Add versioning, dates, or change history to SPEC files (git is the source of truth)
 
 ### Other Forbidden
 - Ignore `go vet` or `go test` failures
+- Partial (non-self-contained) deliverables or tests created with skip
+- Leaving pre-existing bugs unfixed once found
+- Committing without updating the Knowledge Graph
 - Destructive Git operations without confirmation
 - Security compromises (SQL injection, etc.)
 - Reference Claude/AI in commits
@@ -242,7 +393,7 @@ this project (e.g., `specification-manager`, `roadmap-manager`, `go-developer`,
 
 ---
 
-## 8. Technical Constraints
+## 10. Technical Constraints
 
 ### Security
 - Input validation for all CLI arguments
@@ -260,7 +411,7 @@ this project (e.g., `specification-manager`, `roadmap-manager`, `go-developer`,
 
 ---
 
-## 9. Development Commands
+## 11. Development Commands
 
 ```bash
 # Build
@@ -285,7 +436,7 @@ make check
 
 ---
 
-## 10. End-To-End (E2E) Testing
+## 12. End-To-End (E2E) Testing
 
 ### Test Location
 - All E2E tests are stored in the `/tests` directory at repository root
@@ -312,12 +463,20 @@ make check
 
 ---
 
-## 11. Documentation Standards
+## 13. Documentation Standards
 
 ### Language
 - **SPEC/, agent/skill definitions, CLAUDE.md:** English
 - **User interaction:** Portuguese (PT-pt)
 - **Technical terms:** May remain in English
+- All project documentation MUST be written in flawless English — no
+  orthographic, grammatical, or syntactic errors. Use clear, simple, and
+  unambiguous technical language aimed at human readers.
+
+### Accuracy
+- Documentation MUST be accurate and faithful to the code. It is the final phase
+  of the workflow (Specify → Implement → Test → **Document**) and must reflect
+  what the code actually does.
 
 ### Tone
 - Clear, technical, professional
