@@ -1,0 +1,110 @@
+{{define "detail.html"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Groadmap — {{.Name}}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1 class="topbar__title"><a class="topbar__home" href="/">Groadmap</a> / {{.Name}}</h1>
+    <p class="topbar__subtitle">
+      <a class="btn btn--secondary" href="/roadmaps/{{.Name}}/graph">View knowledge graph</a>
+    </p>
+  </header>
+
+  <main class="container">
+    <section class="section">
+      <h2>Tasks <span class="count">({{len .Tasks}})</span></h2>
+      {{if .Tasks}}
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Title</th>
+            <th>Status</th>
+            <th>Type</th>
+            <th>Priority</th>
+            <th>Severity</th>
+            <th>Specialists</th>
+            <th>Parent</th>
+            <th>Subtasks</th>
+            <th>Depends on</th>
+            <th>Blocks</th>
+            <th>Created</th>
+            <th>Started</th>
+            <th>Tested</th>
+            <th>Closed</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Tasks}}
+          <tr>
+            <td data-label="ID">{{.ID}}</td>
+            <td data-label="Title">{{.Title}}</td>
+            <td data-label="Status"><span class="badge badge--status">{{.Status}}</span></td>
+            <td data-label="Type">{{.Type}}</td>
+            <td data-label="Priority">{{.Priority}}</td>
+            <td data-label="Severity">{{.Severity}}</td>
+            <td data-label="Specialists">{{with .Specialists}}{{.}}{{else}}&mdash;{{end}}</td>
+            <td data-label="Parent">{{with .ParentTaskID}}#{{.}}{{else}}&mdash;{{end}}</td>
+            <td data-label="Subtasks">{{.SubtaskCount}}</td>
+            <td data-label="Depends on">{{if .DependsOn}}{{range $i, $d := .DependsOn}}{{if $i}}, {{end}}#{{$d}}{{end}}{{else}}&mdash;{{end}}</td>
+            <td data-label="Blocks">{{if .Blocks}}{{range $i, $b := .Blocks}}{{if $i}}, {{end}}#{{$b}}{{end}}{{else}}&mdash;{{end}}</td>
+            <td data-label="Created">{{.CreatedAt}}</td>
+            <td data-label="Started">{{with .StartedAt}}{{.}}{{else}}&mdash;{{end}}</td>
+            <td data-label="Tested">{{with .TestedAt}}{{.}}{{else}}&mdash;{{end}}</td>
+            <td data-label="Closed">{{with .ClosedAt}}{{.}}{{else}}&mdash;{{end}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      {{else}}
+      <div class="empty-state">
+        <p>This roadmap has no tasks yet.</p>
+      </div>
+      {{end}}
+    </section>
+
+    <section class="section">
+      <h2>Sprints <span class="count">({{len .Sprints}})</span></h2>
+      {{if .Sprints}}
+      {{range .Sprints}}
+      <article class="sprint-card">
+        <header class="sprint-card__head">
+          <span class="sprint-card__id">Sprint #{{.Sprint.ID}}</span>
+          <span class="badge badge--status">{{.Sprint.Status}}</span>
+        </header>
+        <p class="sprint-card__desc">{{.Sprint.Description}}</p>
+        <dl class="sprint-card__meta">
+          <div><dt>Capacity</dt><dd>{{with .Sprint.MaxTasks}}{{.}}{{else}}Unlimited{{end}}</dd></div>
+          <div><dt>Created</dt><dd>{{.Sprint.CreatedAt}}</dd></div>
+          <div><dt>Started</dt><dd>{{with .Sprint.StartedAt}}{{.}}{{else}}&mdash;{{end}}</dd></div>
+          <div><dt>Closed</dt><dd>{{with .Sprint.ClosedAt}}{{.}}{{else}}&mdash;{{end}}</dd></div>
+        </dl>
+        <div class="sprint-card__tasks">
+          <span class="sprint-card__tasks-label">Tasks in order:</span>
+          {{if .Tasks}}
+          <ol class="sprint-task-order">
+            {{range .Tasks}}<li>#{{.}}</li>{{end}}
+          </ol>
+          {{else}}
+          <span class="muted">No tasks assigned.</span>
+          {{end}}
+        </div>
+      </article>
+      {{end}}
+      {{else}}
+      <div class="empty-state">
+        <p>This roadmap has no sprints yet.</p>
+      </div>
+      {{end}}
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>Read-only. The rmp CLI remains the sole write path.</p>
+  </footer>
+</body>
+</html>{{end}}

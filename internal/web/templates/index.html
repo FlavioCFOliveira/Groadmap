@@ -1,0 +1,42 @@
+{{define "index.html"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Groadmap — Roadmaps</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1 class="topbar__title">Groadmap</h1>
+    <p class="topbar__subtitle">Read-only view of the roadmaps under ~/.roadmaps/</p>
+  </header>
+
+  <main class="container">
+    <h2>Roadmaps</h2>
+    {{if .Roadmaps}}
+    <ul class="roadmap-list">
+      {{range .Roadmaps}}
+      <li class="roadmap-card">
+        <span class="roadmap-card__name">{{.}}</span>
+        <span class="roadmap-card__links">
+          <a class="btn" href="/roadmaps/{{.}}">Tasks &amp; sprints</a>
+          <a class="btn btn--secondary" href="/roadmaps/{{.}}/graph">Knowledge graph</a>
+        </span>
+      </li>
+      {{end}}
+    </ul>
+    {{else}}
+    <div class="empty-state">
+      <p>No roadmaps found under <code>~/.roadmaps/</code>.</p>
+      <p>Create one with the CLI:</p>
+      <pre class="empty-state__cmd">rmp roadmap create &lt;name&gt;</pre>
+    </div>
+    {{end}}
+  </main>
+
+  <footer class="footer">
+    <p>Read-only. The rmp CLI remains the sole write path.</p>
+  </footer>
+</body>
+</html>{{end}}

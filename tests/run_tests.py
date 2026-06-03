@@ -42,6 +42,7 @@ TEST_MODULES = [
     "test_32_layout_migration",
     "test_33_graph_checkpoint",
     "test_34_graph_realistic_usage",
+    "test_35_web_interface",
 ]
 
 # Stress tests (run separately due to time/data volume)

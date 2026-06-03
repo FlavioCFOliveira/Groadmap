@@ -22,6 +22,7 @@ This will detect your OS and architecture, download the latest release from GitH
 - **State Machine**: Validated task and sprint status transitions with automatic date tracking
 - **Bulk Operations**: Support for multiple task IDs in single commands
 - **Knowledge Graph**: Per-roadmap queryable graph (nodes, edges, Cypher) for capturing project elements and their relationships
+- **Web Interface**: Read-only, self-contained, mobile-first browser view of all roadmaps, their tasks and sprints, and an interactive knowledge-graph visualisation (`rmp web`)
 
 ## Available Commands
 
@@ -32,6 +33,7 @@ This will detect your OS and architecture, download the latest release from GitH
 | `sprint` | Sprint management with lifecycle control, reporting, and task ordering | [DOCS/commands/sprint.md](DOCS/commands/sprint.md) |
 | `audit` | Audit log and entity history | [DOCS/commands/audit.md](DOCS/commands/audit.md) |
 | `graph` | Knowledge graph management (create, query, update, delete, search via Cypher) | [DOCS/commands/graph.md](DOCS/commands/graph.md) |
+| `web` | Read-only, self-contained web interface for all roadmaps and their knowledge graphs | [DOCS/commands/web.md](DOCS/commands/web.md) |
 | `ai-help` | Emit the AI Agent Contract (machine-readable JSON for automated callers) | [DOCS/commands/ai-help.md](DOCS/commands/ai-help.md) |
 
 ## Installation
@@ -530,6 +532,39 @@ When `--query` is absent, the entire standard input is read as the query. See [D
 **Where is the graph stored?**
 
 Under the roadmap's home directory at `~/.roadmaps/<name>/graph/` (a directory, permissions `0700`), created on first use of any `graph` subcommand. Removing the roadmap deletes its graph along with the rest of the home directory.
+
+---
+
+### Web Interface
+
+**What is `rmp web`?**
+
+A read-only, browser-based view of everything the CLI manages. It starts an HTTP server embedded in the `rmp` binary that lists every roadmap under `~/.roadmaps/` and lets you drill into a roadmap's tasks and sprints and an interactive visualisation of its knowledge graph. It only presents data; the CLI remains the sole write path.
+
+```bash
+# Start on the default loopback host and port and open the browser
+rmp web
+
+# Start without launching a browser; just print the served URL
+rmp web --no-open
+
+# Choose a port, or expose on the network (explicit opt-in)
+rmp web --port 9000
+rmp web --host 0.0.0.0 --port 9000
+```
+
+On startup the served URL is printed as JSON (`{"url": "http://127.0.0.1:8787"}`); the `url` reflects the actual bound host and port. When `--port` is omitted and `8787` is in use, the server falls back to an OS-chosen ephemeral port so it still starts.
+
+**What makes it different from every other command?**
+
+- **Read-only.** No route creates, edits, or deletes anything; serving a page writes no rows, no audit-log entry, and never checkpoints the graph store. Only `GET`/`HEAD` are accepted (any other method returns HTTP 405).
+- **No `-r` flag.** It is the one command exempt from the always-required-roadmap rule; it lists all roadmaps and you pick one in the browser.
+- **Long-lived.** It keeps serving until interrupted; `Ctrl+C` (`SIGINT`) or `SIGTERM` shuts it down gracefully (exit 0).
+- **Self-contained and offline.** Every asset (HTML, CSS, JavaScript, the vendored Cytoscape.js graph library) is embedded in the binary via `go:embed`; no page references a CDN or any remote origin, and the server makes no outbound request.
+- **Loopback by default.** It binds `127.0.0.1`; a non-loopback bind via `--host` is an explicit opt-in. Roadmap names from the URL are validated before any filesystem path is built (path-traversal guard).
+- **Responsive, mobile-first.** Every page, including the graph visualisation, adapts to small touch viewports.
+
+See [DOCS/commands/web.md](DOCS/commands/web.md) for the full route list and exit codes.
 
 ---
 

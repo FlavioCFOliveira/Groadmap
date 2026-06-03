@@ -1,0 +1,36 @@
+{{define "graph.html"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Groadmap — {{.Name}} graph</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1 class="topbar__title"><a class="topbar__home" href="/">Groadmap</a> / {{.Name}} / graph</h1>
+    <p class="topbar__subtitle">
+      <a class="btn btn--secondary" href="/roadmaps/{{.Name}}">Back to tasks &amp; sprints</a>
+    </p>
+  </header>
+
+  <main class="graph-main">
+    <div id="cy" class="cy" data-graph-url="/roadmaps/{{.Name}}/graph/data"></div>
+
+    <aside id="detail-panel" class="detail-panel" hidden>
+      <button type="button" id="detail-close" class="detail-panel__close" aria-label="Close details">&times;</button>
+      <h2 id="detail-title" class="detail-panel__title">Details</h2>
+      <dl id="detail-body" class="detail-panel__body"></dl>
+    </aside>
+
+    <div id="empty-graph" class="graph-empty" hidden>
+      <p>This roadmap has no knowledge graph yet.</p>
+      <p>Add nodes and edges with the CLI, for example:</p>
+      <pre class="empty-state__cmd">rmp graph create -r {{.Name}} --query "CREATE (n:Spec {key:'auth'})"</pre>
+    </div>
+  </main>
+
+  <script src="/static/cytoscape.min.js"></script>
+  <script src="/static/graph.js"></script>
+</body>
+</html>{{end}}

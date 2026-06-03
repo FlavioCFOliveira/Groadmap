@@ -37,6 +37,7 @@ func buildRegistry() *Registry {
 			buildAuditCommand(),
 			buildStatsCommand(),
 			buildGraphCommand(),
+			buildWebCommand(),
 			buildAIHelpCommand(),
 		},
 	}

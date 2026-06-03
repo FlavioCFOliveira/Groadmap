@@ -1,0 +1,94 @@
+# web
+
+## Description
+
+Start a read-only, browser-based view of the data the CLI manages. `rmp web` runs an HTTP server embedded in the `rmp` binary (Go standard-library `net/http`) that serves server-rendered HTML and embedded static assets, reading the same on-disk data under `~/.roadmaps/` that the CLI reads. The interface only presents data; it never changes it. The `rmp` CLI remains the sole write path.
+
+The deliverable is fully self-contained: every asset required to render and operate the interface (HTML templates, the stylesheet, all client JavaScript including the vendored Cytoscape.js knowledge-graph library, and the favicon) is embedded into the binary with `go:embed`. The interface renders and functions fully offline, references no content delivery network or any other remote origin, and the running server makes no outbound network request. The interface is responsive and mobile-first.
+
+`rmp web` operates across all roadmaps: it lists every roadmap found under `~/.roadmaps/` and you drill into one from the browser. It is the one command that is exempt from the always-required-roadmap rule, so it does **not** accept the `-r` / `--roadmap` flag. It has no subcommands.
+
+Unlike every other command, `rmp web` is long-lived: it keeps serving until interrupted. Sending `SIGINT` (`Ctrl+C`) or `SIGTERM` shuts the server down gracefully and the process exits 0.
+
+## Synopsis
+
+```
+rmp web [options]
+```
+
+## Options
+
+| Short Flag | Long Flag | Type | Default | Description |
+|------------|-----------|------|---------|-------------|
+| - | `--host` | string | `127.0.0.1` | Bind host. The default is loopback only. Binding a non-loopback address (for example `0.0.0.0`) exposes the read-only interface on the network and is an explicit opt-in |
+| - | `--port` | integer | `8787` | Bind port (0-65535). When `--port` is omitted and `8787` is in use, the server falls back to an OS-chosen ephemeral port so it still starts. With an explicit `--port` there is no fallback. `--port 0` requests an ephemeral port |
+| - | `--no-open` | bool | false | Do not launch a browser; still start the server and print the served URL |
+| `-h` | `--help` | bool | false | Show command help |
+
+`rmp web` accepts no positional arguments. An unknown flag or an unexpected positional argument is an input error (exit code 2).
+
+## Output
+
+On successful startup the served URL is printed to stdout as a single JSON object, so the address is machine-readable even when no browser is opened:
+
+```json
+{
+  "url": "http://127.0.0.1:8787"
+}
+```
+
+The `url` reflects the actual bound host and port, including an ephemeral port chosen by the fallback. While running, the server serves HTML pages and a JSON graph-data endpoint; those are HTTP responses, not stdout output of the command.
+
+## Routes and Pages
+
+All routes serve `GET` and `HEAD` only. Any other HTTP method on any route returns HTTP `405`.
+
+| Route | Purpose | Response |
+|-------|---------|----------|
+| `/` | Roadmap index: every roadmap under `~/.roadmaps/`, with links to each detail and graph page (empty-state message when none) | HTML |
+| `/roadmaps/{name}` | Roadmap detail: that roadmap's tasks and sprints and their relationships, read from `project.db` | HTML |
+| `/roadmaps/{name}/graph` | Interactive knowledge-graph visualisation (Cytoscape.js, pan/zoom, touch, tap-to-inspect) | HTML |
+| `/roadmaps/{name}/graph/data` | The graph's nodes and edges for the visualisation | JSON |
+| `/static/...` | Embedded static assets (CSS, JS, vendored Cytoscape.js) | static file |
+
+`{name}` is validated against the roadmap-name rules (regex `^[a-z0-9_-]+$`, max 50 characters) before it is used to build any filesystem path; a name that fails validation, or a roadmap that does not exist, returns HTTP `404`. A request for a `/static/...` asset that is not embedded returns HTTP `404`. These HTTP statuses are distinct from the process exit codes below.
+
+## Exit Codes
+
+These are the exit codes of the `rmp web` **process** (distinct from the per-request HTTP statuses above).
+
+| Exit Code | Meaning |
+|-----------|---------|
+| 0 | Server started and was later stopped by `SIGINT` / `SIGTERM` (graceful shutdown) |
+| 1 | Requested host/port could not be bound (explicit `--port` in use, or host not assignable), or the data directory could not be read |
+| 2 | Unknown flag or unexpected positional argument |
+| 6 | `--port` value out of range 0-65535 or not an integer |
+
+## Examples
+
+```bash
+# Start on the default loopback host and port (opens the browser)
+rmp web
+
+# Start without launching a browser; just print the served URL
+rmp web --no-open
+
+# Start on a specific port
+rmp web --port 9000
+
+# Expose the read-only interface on the network (explicit opt-in)
+rmp web --host 0.0.0.0 --port 9000
+```
+
+## Read-Only and Security
+
+- **Read-only.** The interface exposes no route that creates, edits, or deletes any roadmap, task, sprint, audit entry, or graph element. Serving a page writes no rows and no audit-log entry. The graph store is opened read-only and a web read never triggers a checkpoint or write-ahead-log truncation.
+- **Loopback by default.** The server binds `127.0.0.1` by default, reachable only from the local machine. A non-loopback bind is an explicit, opt-in user choice.
+- **Path-traversal guard.** Roadmap names from the URL are validated before any filesystem path is built, so a crafted name cannot traverse outside `~/.roadmaps/`.
+- **Self-contained.** Every asset is served from the binary's embedded set; no page references a remote origin and the server makes no outbound request.
+
+## See Also
+
+- `SPEC/WEB.md` - full behaviour of the running server (routes, read-only data flow, self-contained delivery, mobile-first design, security)
+- `SPEC/COMMANDS.md` (Web Interface) - the command-line contract
+- `DOCS/commands/graph.md` - the knowledge graph the graph page visualises
