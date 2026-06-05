@@ -5,6 +5,72 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.1] - 2026-06-05
+
+Hardens the `rmp graph` knowledge-graph store by upgrading its backing engine,
+GoGraph, from `v0.1.0` to `v0.2.0`. The upgrade is a drop-in dependency change:
+no `rmp` command, flag, JSON output, exit code, on-disk graph format, or database
+schema is altered, and no `rmp` source change is required. A v0.2.0 usage
+evaluation confirmed that the existing consumers (`internal/commands/graph.go`
+and `internal/web/data.go`) are source-compatible, and the only behavioural
+change that reaches Groadmap strengthens existing error handling. Under Semantic
+Versioning 2.0.0 this is a **PATCH** release, fully backward compatible with
+`v1.9.0`. The database schema version is unchanged at `1.6.0`, so existing
+installations require no migration.
+
+### Changed
+
+- **`rmp graph` store hardened via GoGraph `v0.1.0` → `v0.2.0`** — the
+  knowledge-graph store that backs the `graph` command family is upgraded to
+  GoGraph `v0.2.0`, a reliability, ACID, and durability hardening release. The
+  consumed surface (`store/recovery`, `store/wal`, `store/txn`, `store/snapshot`,
+  `cypher`, `graph/lpg`, `graph/csr`) is unchanged at the API level; the
+  exact-tag pin in `go.mod` moves to `v0.2.0` and the indirect
+  `golang.org/x/exp` hash is refreshed. Specified across `SPEC/BUILD.md`,
+  `SPEC/GRAPH.md`, and `SPEC/ARCHITECTURE.md`, all reconciled to the `v0.2.0`
+  pin.
+
+### Fixed
+
+- **Fail-stop on genuine graph-store corruption** — `recovery.Open`, used by
+  both `rmp graph` and the read-only `rmp web` graph page, now returns a clean
+  error on genuine write-ahead-log corruption (CRC mismatch or unsupported
+  record version) instead of the `v0.1.0` behaviour of swallowing it and risking
+  further appends onto a damaged store. A benign crash-truncated WAL tail still
+  recovers cleanly, so the change only tightens the corruption path and leaves
+  the normal open path unaffected. Inherited crash-durability ordering fixes from
+  GoGraph also apply: the snapshot writer `fsync`s its staging directory before
+  the publish rename, autocommit writes are made durable before they become
+  visible, and the snapshot manifest now records the directed/multigraph shape so
+  a simple graph cannot silently become a multigraph after a reopen.
+
+### Security
+
+- **Two Go standard-library vulnerabilities resolved** — the GoGraph `v0.2.0`
+  upgrade pulls in the `go1.26.4` toolchain, which resolves **GO-2026-5039**
+  (`net/textproto`) and **GO-2026-5037** (`crypto/x509`), both reachable through
+  the dependency. `govulncheck ./...` was run against the upgraded module and
+  reports **"No vulnerabilities found."**
+
+### Documentation
+
+- **Regression Prevention principle** — `CLAUDE.md` gains a "Regression
+  Prevention" working principle. This is an internal, contributor-facing
+  governance change only, with no code, CLI, or runtime impact.
+
+### Known Issues
+
+One SPEC-vs-code divergence remains open and is unaffected by this release. It
+does not affect runtime behaviour and is tracked as a `spec` / `tech-debt`
+follow-up for a future `specification-manager` pass:
+
+- `SPEC/COMMANDS.md` documents the `audit stats` JSON keys `operations_count`,
+  `entity_type_count`, `first_entry`, `last_entry` and a `period.{since,until}`
+  block; the implementation emits `by_operation`, `by_entity_type`,
+  `first_entry_at`, `last_entry_at`, `total_entries` with no `period` object.
+
+[1.9.1]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.9.0...v1.9.1
+
 ## [1.9.0] - 2026-06-03
 
 Redesigns the read-only `rmp web` interface and restructures its navigation. The
