@@ -93,19 +93,19 @@ module path `github.com/FlavioCFOliveira/GoGraph`. GoGraph provides:
 - A durable, directory-based store combining a write-ahead log, atomic on-disk
   snapshots, and recovery on open (see [Concurrency and Recovery](#concurrency-and-recovery)).
 
-GoGraph requires Go 1.26 (toolchain 1.26.3). Adopting the graph feature
+GoGraph requires Go 1.26 (toolchain 1.26.4). Adopting the graph feature
 therefore raises Groadmap's minimum Go version from 1.25 to 1.26.4. The build
 implications are specified in `BUILD.md § Go Toolchain`.
 
 ### Dependency Maturity Risk
 
-GoGraph is consumed at the exact tag **v0.1.0**, its first published release. Because
-v0.1.0 is a v0 (pre-1.0) version, it is consumable directly at the bare module path
-`github.com/FlavioCFOliveira/GoGraph`, and `go.mod` pins the clean exact tag `v0.1.0`.
+GoGraph is consumed at the exact tag **v0.2.0**. Because
+v0.2.0 is a v0 (pre-1.0) version, it is consumable directly at the bare module path
+`github.com/FlavioCFOliveira/GoGraph`, and `go.mod` pins the clean exact tag `v0.2.0`.
 This exact-tag pin satisfies the pinning mitigation below directly. The pinned version
 is recorded in `BUILD.md § Go Toolchain`.
 
-As a `0.y.z` release, v0.1.0 signals under Semantic Versioning that GoGraph's public
+As a `0.y.z` release, v0.2.0 signals under Semantic Versioning that GoGraph's public
 API is not yet stable: it may change while the module matures toward `1.0.0`, and such
 changes can land without a major-version bump. The following residual risks remain:
 
