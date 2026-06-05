@@ -57,6 +57,14 @@ task; each cycle must produce a working result (a deliverable).
 - When you find pre-existing bugs, fix them on the spot, then resume the work
   you were doing when you found the bug.
 
+### Regression Prevention
+
+Whenever a bug is identified, you MUST add the regression test(s) needed to
+guarantee that the same bug cannot reappear as a consequence of future
+development. This applies to every bug — pre-existing or newly introduced — and
+the regression test is part of the SAME self-contained cycle that fixes the bug
+(see Self-Contained Development).
+
 ### Workflow: Specify → Implement → Test → Document
 
 Work ALWAYS follows these phases, in order:
@@ -361,6 +369,7 @@ this project (e.g., `specification-manager`, `roadmap-manager`, `go-developer`,
 | Requirements unclear / ambiguous / contradictory | ASK the user — provide options (a, b, c) with a recommendation; one question at a time |
 | New need discovered mid-task | Add task via `rmp`; resolve in the SAME cycle |
 | Pre-existing bug found | Fix on the spot, then resume the original work |
+| Bug identified (any) | Add regression test(s) in the SAME cycle so it cannot reappear |
 | Assess performance / completeness / correctness | Gather evidence; decide empirically |
 | Information insufficient | Consult Knowledge Graph first, then authoritative sources — never guess |
 | Code vs SPEC diverge | Follow SPEC, ask user |
@@ -384,6 +393,7 @@ this project (e.g., `specification-manager`, `roadmap-manager`, `go-developer`,
 - Ignore `go vet` or `go test` failures
 - Partial (non-self-contained) deliverables or tests created with skip
 - Leaving pre-existing bugs unfixed once found
+- Fixing a bug without adding the regression test(s) that prevent its recurrence
 - Committing without updating the Knowledge Graph
 - Destructive Git operations without confirmation
 - Security compromises (SQL injection, etc.)
