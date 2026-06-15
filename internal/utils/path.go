@@ -111,12 +111,17 @@ func VerifyPermissions(path string, expectedPerm os.FileMode) error {
 //   - Not be a Windows reserved name (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
 func ValidateRoadmapName(name string) error {
 	if name == "" {
-		return fmt.Errorf("%w: %w", ErrValidation, ErrRoadmapNameEmpty)
+		// SPEC/COMMANDS.md mandates this verbatim message (finding #60).
+		return ValidationMessage("Roadmap name is required", ErrRoadmapNameEmpty)
 	}
 
 	// Check maximum length
 	if len(name) > MaxRoadmapNameLength {
-		return fmt.Errorf("%w: must not exceed %d characters (got %d): %w", ErrValidation, MaxRoadmapNameLength, len(name), ErrRoadmapNameTooLong)
+		// SPEC/COMMANDS.md + SPEC/ARCHITECTURE.md mandate this verbatim message.
+		return &MessageError{
+			Msg:       fmt.Sprintf("Roadmap name must not exceed %d characters (got %d)", MaxRoadmapNameLength, len(name)),
+			Sentinels: []error{ErrValidation, ErrRoadmapNameTooLong},
+		}
 	}
 
 	// Check for flag confusion (names starting with '-')
@@ -138,7 +143,11 @@ func ValidateRoadmapName(name string) error {
 
 	// Validate against regex
 	if !ValidRoadmapNameRegex.MatchString(name) {
-		return fmt.Errorf("%w: %q must contain only lowercase letters, numbers, underscores, and hyphens: %w", ErrValidation, name, ErrInvalidRoadmapName)
+		// SPEC/COMMANDS.md mandates this verbatim message (finding #60).
+		return &MessageError{
+			Msg:       "Roadmap name must only contain lowercase letters, numbers, underscores, and hyphens",
+			Sentinels: []error{ErrValidation, ErrInvalidRoadmapName},
+		}
 	}
 
 	return nil

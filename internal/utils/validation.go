@@ -116,10 +116,14 @@ func ValidateIDString(s string, entity string) (int, error) {
 	}
 
 	// Parse the integer. The digit-only check above guarantees Atoi cannot
-	// fail on syntax, so any error here is an overflow.
+	// fail on syntax, so any error here is an overflow: an all-digits value
+	// larger than the platform int range. That is a magnitude/range failure,
+	// NOT bad syntax, so it is classified as ErrValidation (exit 6) — the same
+	// class as ValidateID's "exceeds maximum value" case, keeping both
+	// out-of-range paths consistent (finding #58).
 	id, err := strconv.Atoi(s)
 	if err != nil {
-		return 0, fmt.Errorf("%w: invalid %s ID: %q (must be a positive integer)", ErrInvalidInput, entity, s)
+		return 0, fmt.Errorf("%w: invalid %s ID: %q (exceeds maximum value %d)", ErrValidation, entity, s, MaxInt32)
 	}
 	if err := ValidateID(id, entity); err != nil {
 		return 0, err
