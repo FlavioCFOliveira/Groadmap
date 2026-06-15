@@ -548,6 +548,26 @@ func serializeValue(v expr.Value) any {
 	}
 }
 
+// printGraphNotifications writes each advisory notification attached to
+// result as a plain-text diagnostic line on stderr, one line per
+// notification (SPEC/GRAPH.md § Query Notifications as Diagnostics). The
+// line carries the notification's severity, its stable machine-readable
+// code, and its description. Notifications are advisory: they never change
+// the stdout success output or the exit code. A result with no
+// notifications writes nothing.
+//
+// It is surfaced generically: whatever notifications the engine attaches to
+// the result are emitted, whatever their code, severity, or category, so the
+// behaviour is not tied to any specific notification. The representative line
+// for the Cartesian-product warning reads:
+//
+//	INFORMATION Neo.ClientNotification.Statement.CartesianProductWarning: <description>
+func printGraphNotifications(result *cypher.Result) {
+	for _, n := range result.Notifications() {
+		fmt.Fprintf(os.Stderr, "%s %s: %s\n", n.Severity, n.Code, n.Description)
+	}
+}
+
 // serializeGraphResult drains result into a graphQueryResult. The
 // caller must close the result after this function returns.
 func serializeGraphResult(result *cypher.Result) (graphQueryResult, error) {
@@ -679,6 +699,12 @@ func runGraphRead(subcmd, allowed string, args []string) error {
 		return fmt.Errorf("%w: graph %s failed: %v", utils.ErrDatabase, subcmd, err)
 	}
 
+	// Surface any advisory notifications attached to the result as stderr
+	// diagnostics. The result is still open here (the deferred Close runs at
+	// return), so its notifications are available. Notifications never change
+	// the stdout success output or the exit code (SPEC FR10).
+	printGraphNotifications(result)
+
 	return utils.PrintJSON(out)
 }
 
@@ -791,6 +817,13 @@ func runGraphWrite(subcmd, allowed string, args []string) error {
 		}
 		output = out
 	}
+
+	// Surface any advisory notifications attached to the result as stderr
+	// diagnostics, after the result is fully drained and the output value is
+	// built, but BEFORE Close commits and releases the result. Notifications
+	// are parse-time advisories available as soon as RunInTx returns; they
+	// never change the stdout success output or the exit code (SPEC FR10).
+	printGraphNotifications(result)
 
 	// Commit is the durability boundary: Result.Close applies and commits
 	// the write transaction and returns the commit error. A commit failure

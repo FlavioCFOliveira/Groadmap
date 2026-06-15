@@ -57,6 +57,7 @@ TEST_MODULES = [
     "test_37_write_persistence_fidelity",
     "test_38_task_list_date_filters",
     "test_39_graph_guardrail_literals",
+    "test_40_graph_notifications",
 ]
 
 # Stress tests (run separately due to time/data volume)

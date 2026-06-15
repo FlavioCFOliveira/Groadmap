@@ -1539,6 +1539,15 @@ in `GRAPH.md § Subcommands and Guard-Rail Validation`.
   `GRAPH.md § Synchronous Checkpoint on Write`). A snapshot failure after a
   durable commit does not change the success output or the exit code; it is
   reported as a diagnostic on stderr while the command still exits 0.
+- Query notifications: the subcommand surfaces, as a plain-text diagnostic line
+  per notification on stderr, exactly the advisory notifications the engine
+  returns for the executed query (for example a Cartesian-product warning on a
+  disconnected multi-pattern `MATCH`). The surfacing is wired identically on the
+  read and the write path; the engine alone decides which queries and paths carry
+  notifications, so a query may produce none. Notifications do not change the
+  stdout success output or the exit code, and when the engine returns none the
+  subcommand writes nothing extra to stderr (see
+  `GRAPH.md § Query Notifications as Diagnostics`).
 - Errors: plain text to stderr, with the standard AI-agent hint.
 
 ### Exit Codes

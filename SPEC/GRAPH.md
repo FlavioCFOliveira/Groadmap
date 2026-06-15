@@ -15,6 +15,7 @@
   - [Operation Classes](#operation-classes)
   - [Per-Subcommand Validation Rules](#per-subcommand-validation-rules)
   - [Cypher Input Source and Precedence](#cypher-input-source-and-precedence)
+- [Query Notifications as Diagnostics](#query-notifications-as-diagnostics)
 - [Error Handling and Exit Codes](#error-handling-and-exit-codes)
 - [Concurrency and Recovery](#concurrency-and-recovery)
 - [Constraints](#constraints)
@@ -78,6 +79,15 @@ engine, and durable on-disk persistence.
    created on first use (see [Persistence Layout](#persistence-layout)).
 9. Errors are written as plain text to stderr and map to the existing exit-code
    conventions (see [Error Handling and Exit Codes](#error-handling-and-exit-codes)).
+10. Every graph subcommand that executes a query (`create`, `query`, `update`,
+    `delete`, `search`) surfaces, on stderr, exactly the advisory notifications
+    the engine returns for that query, as one plain-text diagnostic line per
+    notification. The surfacing is wired identically on the read path (`query`,
+    `search`) and the write path (`create`, `update`, `delete`). Groadmap does
+    not generate notifications; the engine alone decides which queries and which
+    execution paths carry them, and Groadmap emits whatever it is given (which may
+    be none). Notifications never change the stdout success output or the exit code
+    (see [Query Notifications as Diagnostics](#query-notifications-as-diagnostics)).
 
 ## Backing Engine: GoGraph
 
@@ -458,6 +468,66 @@ Precedence and rules:
 This is the one place in Groadmap where a command reads from standard input. The
 cross-cutting input rule is stated in `DATA_FORMATS.md § Input`.
 
+## Query Notifications as Diagnostics
+
+The Cypher engine may attach **advisory notifications** to a query result.
+A notification is computed at parse and plan time and is available as soon as the
+query has run; it is informational guidance, not an error. The classic example is
+a Cartesian-product warning: a `MATCH` with two or more patterns that share no
+variable forces the engine to combine every match of one pattern with every match
+of the other, which can be expensive and is usually unintended.
+
+Behaviour:
+
+1. Every graph subcommand that executes a query (`create`, `query`, `update`,
+   `delete`, and `search`) MUST, after the query has run, surface on stderr
+   exactly the notifications the engine returns for that query, as a
+   human-readable diagnostic line per notification. The surfacing is wired
+   identically on the read path (`query`, `search`) and the write path
+   (`create`, `update`, `delete`): each path emits whatever notifications the
+   engine attaches to its result. Groadmap does not generate notifications and
+   does not decide which queries or paths carry them; it only surfaces what the
+   engine supplies, which may be none. If the engine attaches a notification to a
+   given execution path, the corresponding subcommand surfaces it without further
+   change.
+2. Notifications are surfaced generically: the implementation emits whatever
+   notifications the engine returns for the query, whatever their code, severity,
+   or category. The set of notifications the engine produces may grow across
+   GoGraph versions; this behaviour is not limited to any specific notification
+   and does not hardcode the Cartesian-product case.
+3. Each emitted diagnostic line is plain text, one line per notification, and
+   includes at least the notification's severity, its stable machine-readable
+   code, and its description, in a readable form. A representative line for the
+   Cartesian-product warning reads:
+   `INFORMATION Neo.ClientNotification.Statement.CartesianProductWarning: this query builds a cartesian product between disconnected patterns.`
+4. Notifications are advisory and never change the outcome of the command. The
+   stdout output is exactly the existing success output, unchanged: the
+   `columns`/`rows` shape for a read or a `RETURN`-bearing write, or `{"ok": true}`
+   for a write with no `RETURN` clause (see
+   `DATA_FORMATS.md § Graph Query Result` and `DATA_FORMATS.md § Graph Write Result`).
+   The exit code is unaffected and remains 0 on success.
+5. A query that produces no notifications writes nothing extra to stderr.
+
+This is consistent with the existing stderr-diagnostic pattern: notifications use
+the same channel as the non-fatal checkpoint diagnostic on the write path (see
+functional requirement 7 and
+[Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)). A graph
+write invocation may therefore emit, on stderr, both any query notifications and,
+if a post-commit checkpoint fails, the non-fatal checkpoint diagnostic; neither
+changes the success stdout output or the exit code.
+
+The exact GoGraph notification accessor, the notification type, and its field
+names are implementation details for `go-developer`; this specification fixes the
+behaviour, not the Go API.
+
+The set of notifications that exist, and which execution paths (read, write, or
+both) carry them, are determined entirely by the backing engine. Groadmap's
+contract is to surface, on each path, exactly what the engine returns for the
+query it executed. Whether a notification appears for a given query on a given
+path therefore follows the engine's behaviour, and this specification does not
+promise that any particular subcommand will emit a notification for any
+particular query.
+
 ## Error Handling and Exit Codes
 
 Graph subcommands use the existing sentinel errors and exit-code mapping defined
@@ -603,6 +673,29 @@ Groadmap's usage model and expectations:
     is accepted as read-only and exits 0. The `delete` and `set` keywords appear
     only inside the string-literal value and are masked, so the masked query
     contains no writing clause.
+20. `rmp graph query -r <roadmap> --query "MATCH (a:Spec), (b:Code) RETURN a.key, b.path"`
+    runs a disconnected multi-pattern `MATCH` and surfaces a Cartesian-product
+    notification on stderr (a plain-text line carrying at least the severity, the
+    stable code, and the description). The stdout JSON is exactly the normal
+    `columns`/`rows` result, unchanged by the notification, and the exit code is 0
+    (see [Query Notifications as Diagnostics](#query-notifications-as-diagnostics)).
+21. `rmp graph query -r <roadmap> --query "MATCH (s:Spec) RETURN s.key"`, a query
+    that produces no notifications, writes nothing extra to stderr: stderr is empty
+    on success, while stdout carries the normal result and the exit code is 0.
+22. Notification surfacing is wired on both the read path and the write path,
+    and each path surfaces exactly the notifications the engine returns for the
+    query it executed:
+    - Read path: a read subcommand (`query` or `search`) running a query for
+      which the engine returns a notification emits the corresponding diagnostic
+      line on stderr; its stdout success output and exit code 0 remain unchanged.
+    - Write path: a write subcommand (`create`, `update`, or `delete`) surfaces
+      exactly the notifications the engine returns for the committed query, which
+      may be none. When the engine returns no notification for the write path,
+      the subcommand emits no notification line; in all cases its stdout JSON
+      success output and exit code 0 remain unchanged.
+    This holds with the pinned engine, where the write path returns no
+    notification, and remains correct without further change if a future engine
+    attaches notifications to the write path.
 
 ## See Also
 
