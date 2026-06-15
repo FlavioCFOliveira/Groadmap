@@ -3,7 +3,7 @@ module github.com/FlavioCFOliveira/Groadmap
 go 1.26.4
 
 require (
-	github.com/FlavioCFOliveira/GoGraph v0.2.0
+	github.com/FlavioCFOliveira/GoGraph v0.3.2
 	modernc.org/sqlite v1.51.0
 )
 
@@ -18,7 +18,7 @@ require (
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	golang.org/x/exp v0.0.0-20260603202125-055de637280b // indirect
-	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/sys v0.46.0 // indirect
 	modernc.org/cc/v4 v4.28.4 // indirect
 	modernc.org/ccgo/v4 v4.34.4 // indirect
 	modernc.org/libc v1.72.5 // indirect

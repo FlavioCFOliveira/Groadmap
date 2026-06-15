@@ -32,6 +32,7 @@ unknown roadmap = 4, no query = 2, guard-rail mismatch = 6).
 """
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -222,16 +223,42 @@ class TestGraphCheckpoint:
         assert self.wal_size() == 0, (
             f"delete must checkpoint and truncate the WAL, got {self.wal_size()}")
 
+    def staging_dir(self) -> Path:
+        # GoGraph assembles each snapshot in a sibling "<snapshot>.tmp"
+        # staging directory and publishes it with an atomic rename. Since
+        # GoGraph v0.3.0 the publish is a crash-atomic ".bak" swap
+        # (Rename(snapshot, snapshot.bak) -> Rename(snapshot.tmp, snapshot)),
+        # so it operates entirely at the graph/ (parent) level and never
+        # writes inside snapshot/ itself.
+        return self.graph_dir() / "snapshot.tmp"
+
     def _run_with_unwritable_snapshot(self, subcmd, query):
-        """Force a post-commit checkpoint failure by making snapshot/
-        read-only, then restore perms. Returns (exit_code, stdout, stderr)."""
-        snap = self.snapshot_dir()
-        snap.chmod(0o500)
+        """Force a post-commit checkpoint failure by blocking the snapshot
+        staging directory, then restore perms. Returns (exit_code, stdout,
+        stderr).
+
+        We pre-create the snapshot staging directory (graph/snapshot.tmp)
+        as a non-empty, read-only (0o500) directory: the checkpoint's
+        RemoveAll of the stale staging dir then fails with EACCES (it cannot
+        unlink the child inside a directory it has no write permission on),
+        so the snapshot write fails AFTER the durable WAL commit. Making the
+        live snapshot/ directory read-only no longer works: openGraphStore
+        chmods graph/ back to 0700 on every invocation, and the v0.3.0+
+        archive-swap publish renames at the graph/ (parent) level rather
+        than writing inside snapshot/ (SPEC/GRAPH.md FR7)."""
+        staging = self.staging_dir()
+        if staging.exists():
+            staging.chmod(0o700)
+            shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir(mode=0o700)
+        (staging / "blocker").write_text("blocker")
+        staging.chmod(0o500)
         try:
             return self.test.run_cmd(
                 ["graph", subcmd, "-r", self.roadmap, "--query", query], check=False)
         finally:
-            snap.chmod(0o700)
+            staging.chmod(0o700)
+            shutil.rmtree(staging, ignore_errors=True)
 
     def test_checkpoint_failure_is_non_fatal(self):
         # First successful write creates the snapshot dir.
