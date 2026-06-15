@@ -65,6 +65,13 @@ development. This applies to every bug — pre-existing or newly introduced — 
 the regression test is part of the SAME self-contained cycle that fixes the bug
 (see Self-Contained Development).
 
+### Separation of Responsibilities
+
+Every package, component, and function MUST follow a strict separation-of-
+responsibilities pattern in order to maximize code reuse. Each unit owns a
+single, well-defined responsibility; cross-cutting concerns are factored out
+rather than duplicated.
+
 ### Workflow: Specify → Implement → Test → Document
 
 Work ALWAYS follows these phases, in order:
@@ -220,6 +227,14 @@ each task.
   Always using `rmp` as the single source of truth.
 - Use the Knowledge Graph to identify the highest-leverage and foundational
   tasks and the extent of each task's impact, to optimize the execution path.
+- Highest-leverage tasks (greatest gain or impact), tasks that unblock other
+  tasks or features, and foundational tasks MUST always take priority. By
+  default, always work from the highest-gain tasks down to the least essential
+  ones.
+- When the work for a single task is substantially large — too large for one
+  task to be developed by a single AI agent (such as Claude Code) — that task
+  MUST be subdivided into parts, respecting the working principles already
+  defined (e.g. each part must be self-contained).
 
 ### Task Execution
 
@@ -229,12 +244,17 @@ use `rmp` to determine:
 2. Which task is next.
 3. The goal of the task being started, based on its description and its
    functional and technical requirements.
-4. Always validate that the acceptance criteria are observed before closing a
+4. Determine the most appropriate subagent for the task and delegate its
+   execution to that subagent.
+5. Always validate that the acceptance criteria are observed before closing a
    task.
-5. Ensure the task is closed with a short summary of what was done.
-6. After closing the task and before moving to the next one, make a git commit
+6. Ensure the task is closed with a short summary of what was done.
+7. After closing the task and before moving to the next one, make a git commit
    following best practices, explaining what was done.
-7. Update the Knowledge Graph.
+8. Update the Knowledge Graph.
+
+Whenever possible, adapt the model and the model's effort level to the
+requirements of each task's individual operations.
 
 Sprints and tasks are preferably executed sequentially. **Sprints MUST be
 executed sequentially.** Tasks may run in parallel only when there is
@@ -266,6 +286,18 @@ Create whatever nodes and edges make the most sense for the project and your
 activity. Use the graph together with tasks and sprints to coordinate the
 project's work. The Knowledge Graph is the **primary source of information** —
 both to query and to store the relationships you discover.
+
+### Knowledge Graph as Memory
+
+Use the Knowledge Graph as the memory of the project, the agents, and the
+skills. Take maximum advantage of the relational capabilities of the `rmp graph`
+graph database to optimize how you read and write your memories, and use this
+same method to avoid the token cost of reading files.
+
+**The Knowledge Graph MUST be the ONLY memory source you use.**
+
+WHENEVER the project's files change, you MUST update the Knowledge Graph so that
+your ability to understand the project is preserved.
 
 ---
 
