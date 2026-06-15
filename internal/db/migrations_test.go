@@ -19,7 +19,14 @@ func TestShouldApplyMigration(t *testing.T) {
 		{"current greater than target", "1.1.0", "1.0.0", false},
 		{"multiple version jumps", "1.0.0", "2.0.0", true},
 		{"patch version", "1.0.0", "1.0.1", true},
-		{"lexicographic order caveat", "1.0.9", "1.0.10", false}, // String comparison: "1.0.9" > "1.0.10"
+		// Regression for the lexicographic-comparison bug (finding #42): a string
+		// compare wrongly ordered "1.0.10" before "1.0.9" and "1.10.0" before
+		// "1.9.0", skipping migrations once a component reached two digits.
+		{"two-digit patch greater than one-digit", "1.0.9", "1.0.10", true},
+		{"one-digit patch not applied over two-digit", "1.0.10", "1.0.9", false},
+		{"two-digit minor greater than one-digit", "1.9.0", "1.10.0", true},
+		{"one-digit minor not applied over two-digit", "1.10.0", "1.9.0", false},
+		{"missing trailing component equals zero", "1.5", "1.5.0", false},
 	}
 
 	for _, tt := range tests {
@@ -30,6 +37,31 @@ func TestShouldApplyMigration(t *testing.T) {
 					tt.currentVersion, tt.targetVersion, result, tt.shouldApply)
 			}
 		})
+	}
+}
+
+// TestCompareVersions is a regression gate for finding #42: version components
+// must compare numerically, not lexicographically.
+func TestCompareVersions(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want int
+	}{
+		{"1.0.0", "1.0.0", 0},
+		{"1.0.0", "1.0.1", -1},
+		{"1.0.1", "1.0.0", 1},
+		{"1.9.0", "1.10.0", -1}, // numeric: 9 < 10
+		{"1.10.0", "1.9.0", 1},  // numeric: 10 > 9
+		{"1.0.9", "1.0.10", -1}, // numeric: 9 < 10
+		{"2.0.0", "1.99.99", 1}, // major dominates
+		{"1.5", "1.5.0", 0},     // missing trailing component == 0
+		{"1.5.0", "1.5", 0},     // symmetric
+		{"1.10.2", "1.10.10", -1},
+	}
+	for _, tt := range tests {
+		if got := compareVersions(tt.a, tt.b); got != tt.want {
+			t.Errorf("compareVersions(%q, %q) = %d, want %d", tt.a, tt.b, got, tt.want)
+		}
 	}
 }
 
@@ -170,7 +202,7 @@ func TestMigrationsOrder(t *testing.T) {
 	}
 
 	for i := 1; i < len(migrations); i++ {
-		if migrations[i].Version < migrations[i-1].Version {
+		if compareVersions(migrations[i].Version, migrations[i-1].Version) < 0 {
 			t.Errorf("Migrations not ordered: %s comes before %s",
 				migrations[i-1].Version, migrations[i].Version)
 		}

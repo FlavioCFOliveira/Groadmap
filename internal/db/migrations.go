@@ -3,6 +3,8 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"strconv"
+	"strings"
 )
 
 // MigrationFunc is a function that performs a schema migration.
@@ -73,11 +75,40 @@ func (db *DB) RunMigrations() error {
 }
 
 // shouldApplyMigration determines if a migration should be applied.
-// Returns true if targetVersion is greater than currentVersion.
+// Returns true if targetVersion is strictly greater than currentVersion.
 func shouldApplyMigration(currentVersion, targetVersion string) bool {
-	// Simple string comparison works for semantic versioning
-	// where versions are ordered lexicographically (e.g., "1.0.0" < "1.1.0")
-	return currentVersion < targetVersion
+	return compareVersions(currentVersion, targetVersion) < 0
+}
+
+// compareVersions compares two dotted version strings (e.g. "1.9.0", "1.10.0")
+// numerically, component by component. It returns -1 if a < b, 0 if equal, and
+// +1 if a > b. A lexicographic string comparison is WRONG for versions because
+// it orders "1.10.0" before "1.9.0" ("1" < "9"), which would skip migrations
+// once any version component reaches two digits. Missing trailing components
+// are treated as 0 (so "1.5" == "1.5.0"); non-numeric components compare as 0.
+func compareVersions(a, b string) int {
+	pa := strings.Split(a, ".")
+	pb := strings.Split(b, ".")
+	n := len(pa)
+	if len(pb) > n {
+		n = len(pb)
+	}
+	for i := 0; i < n; i++ {
+		var na, nb int
+		if i < len(pa) {
+			na, _ = strconv.Atoi(pa[i])
+		}
+		if i < len(pb) {
+			nb, _ = strconv.Atoi(pb[i])
+		}
+		if na < nb {
+			return -1
+		}
+		if na > nb {
+			return 1
+		}
+	}
+	return 0
 }
 
 // runMigration executes a single migration in a transaction.

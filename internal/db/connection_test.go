@@ -116,6 +116,53 @@ func TestConfigureConnection(t *testing.T) {
 	}
 }
 
+// TestPerConnectionPragmas is a regression gate for finding #41: the
+// connection-scoped PRAGMAs foreign_keys and busy_timeout must be set on EVERY
+// pooled connection, not just whichever single connection a one-shot
+// db.Exec("PRAGMA ...") happened to use. With SetMaxOpenConns(2), a second
+// connection materialized later previously inherited the SQLite defaults
+// (foreign_keys=OFF, busy_timeout=0), silently disabling ON DELETE CASCADE and
+// turning lock waits into immediate BUSY errors.
+func TestPerConnectionPragmas(t *testing.T) {
+	db, err := Open("testperconnpragma")
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+
+	// Pin two distinct pooled connections simultaneously. db.Conn reserves a
+	// connection from the pool, so holding c1 forces c2 onto a second physical
+	// connection (the one that previously missed the one-shot PRAGMAs).
+	c1, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("acquiring connection 1: %v", err)
+	}
+	defer c1.Close()
+	c2, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("acquiring connection 2: %v", err)
+	}
+	defer c2.Close()
+
+	for i, c := range []*sql.Conn{c1, c2} {
+		var fk, bt int
+		if err := c.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&fk); err != nil {
+			t.Fatalf("conn %d: reading foreign_keys: %v", i+1, err)
+		}
+		if err := c.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&bt); err != nil {
+			t.Fatalf("conn %d: reading busy_timeout: %v", i+1, err)
+		}
+		if fk != 1 {
+			t.Errorf("conn %d: foreign_keys=%d, want 1", i+1, fk)
+		}
+		if bt != DefaultBusyTimeout {
+			t.Errorf("conn %d: busy_timeout=%d, want %d", i+1, bt, DefaultBusyTimeout)
+		}
+	}
+}
+
 // ==================== RETRY LOGIC TESTS ====================
 
 func TestIsLockedError(t *testing.T) {

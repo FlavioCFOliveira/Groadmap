@@ -138,7 +138,16 @@ func Open(roadmapName string) (*DB, error) {
 	// sql.Open is documented as not actually establishing a connection — it
 	// only validates the driver — so wrapping it in retryWithBackoff was
 	// dead weight. Any failure here is immediate and not retryable.
-	sqlDB, err := sql.Open("sqlite", dbPath)
+	//
+	// foreign_keys and busy_timeout are CONNECTION-scoped PRAGMAs: a one-shot
+	// db.Exec only configures whichever single pooled connection services it,
+	// leaving the second pooled connection (SetMaxOpenConns(2)) on the SQLite
+	// defaults foreign_keys=OFF / busy_timeout=0 — so ON DELETE CASCADE would
+	// silently not fire and locked-database waits would return BUSY immediately.
+	// Carrying them in the DSN makes modernc.org/sqlite apply them on EVERY new
+	// connection. See SPEC/IMPLEMENTATION.md (foreign_keys on every connection;
+	// busy_timeout) and SPEC/DATABASE.md (CASCADE integrity).
+	sqlDB, err := sql.Open("sqlite", dsnWithPragmas(dbPath))
 	if err != nil {
 		return nil, fmt.Errorf("opening database %s: %w", roadmapName, err)
 	}
@@ -205,22 +214,29 @@ func OpenExisting(roadmapName string) (*DB, error) {
 	return Open(roadmapName)
 }
 
-// configureConnection sets up SQLite pragmas for safety and performance.
-func configureConnection(db *sql.DB) error {
-	// Enable foreign key constraints (required for cascading deletes)
-	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
-		return fmt.Errorf("enabling foreign keys: %w", err)
-	}
+// dsnWithPragmas builds a modernc.org/sqlite DSN that applies the
+// connection-scoped PRAGMAs (foreign_keys, busy_timeout) on EVERY pooled
+// connection. Unlike a one-shot db.Exec("PRAGMA ..."), the driver replays
+// these on each new connection it opens, so the safety/integrity guarantees
+// hold regardless of which pooled connection services a given query.
+// journal_mode=WAL is intentionally NOT set here: it is a persistent,
+// database-level setting (stored in the file header) and is configured once
+// in configureConnection.
+func dsnWithPragmas(dbPath string) string {
+	return fmt.Sprintf("%s?_pragma=foreign_keys(1)&_pragma=busy_timeout(%d)", dbPath, DefaultBusyTimeout)
+}
 
-	// Enable WAL mode for better concurrency
+// configureConnection sets up the persistent, database-level SQLite settings
+// and the connection pool. Connection-scoped PRAGMAs (foreign_keys,
+// busy_timeout) are NOT set here — they are carried in the DSN (see
+// dsnWithPragmas) so they apply to every pooled connection, not just the one
+// that happens to service this call.
+func configureConnection(db *sql.DB) error {
+	// Enable WAL mode for better concurrency. WAL is a persistent database-level
+	// setting recorded in the file header, so a single Exec suffices for the
+	// lifetime of the database (it survives reopen and applies to all connections).
 	if _, err := db.Exec("PRAGMA journal_mode = WAL"); err != nil {
 		return fmt.Errorf("enabling WAL mode: %w", err)
-	}
-
-	// Set busy timeout to avoid "database is locked" errors
-	// This makes SQLite wait up to DefaultBusyTimeout milliseconds before returning BUSY
-	if _, err := db.Exec(fmt.Sprintf("PRAGMA busy_timeout = %d", DefaultBusyTimeout)); err != nil {
-		return fmt.Errorf("setting busy timeout: %w", err)
 	}
 
 	// Configure connection pool for SQLite with WAL mode
