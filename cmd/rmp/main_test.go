@@ -3,10 +3,29 @@ package main
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/FlavioCFOliveira/Groadmap/internal/commands"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
+
+// TestCommandSummaryLines_CoversEveryRegisteredCommand is a regression gate for
+// finding #51: the global `rmp --help` command list is generated from the
+// registry, so EVERY registered top-level command (including `web`, which had
+// silently drifted out of the old hardcoded list) must appear by name.
+func TestCommandSummaryLines_CoversEveryRegisteredCommand(t *testing.T) {
+	out := commandSummaryLines()
+	for _, c := range commands.AppRegistry().Commands {
+		if !strings.Contains(out, c.Name) {
+			t.Errorf("global help command list is missing registered command %q; output:\n%s", c.Name, out)
+		}
+	}
+	// Explicitly guard the command that regressed.
+	if !strings.Contains(out, "web") {
+		t.Error("global help must list the 'web' command (finding #51)")
+	}
+}
 
 func TestHandleError_NilError(t *testing.T) {
 	code := handleError(nil)

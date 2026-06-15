@@ -63,7 +63,10 @@ func sprintCreate(args []string) error {
 
 	description, _ := result.Flags["Description"].(string)
 	if description == "" {
-		return fmt.Errorf("%w: missing required parameter: --description", utils.ErrRequired)
+		// "<sentinel>: --flag" so stderr matches the SPEC canonical shape
+		// ("Error: required parameter missing: --description") without the
+		// redundant doubled prefix (finding #54).
+		return fmt.Errorf("%w: --description", utils.ErrRequired)
 	}
 
 	var maxTasks *int

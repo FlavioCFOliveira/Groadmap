@@ -160,8 +160,8 @@ func TestTaskCreate_MissingTitle(t *testing.T) {
 	if err == nil {
 		t.Error("taskCreate without title expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "missing required parameter: --title") {
-		t.Errorf("expected 'missing required parameter: --title' error, got: %v", err)
+	if !strings.Contains(err.Error(), "required parameter missing: --title") {
+		t.Errorf("expected 'required parameter missing: --title' error, got: %v", err)
 	}
 }
 
@@ -174,8 +174,8 @@ func TestTaskCreate_MissingFunctionalRequirements(t *testing.T) {
 	if err == nil {
 		t.Error("taskCreate without functional requirements expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "missing required parameter: --functional-requirements") {
-		t.Errorf("expected 'missing required parameter: --functional-requirements' error, got: %v", err)
+	if !strings.Contains(err.Error(), "required parameter missing: --functional-requirements") {
+		t.Errorf("expected 'required parameter missing: --functional-requirements' error, got: %v", err)
 	}
 }
 
@@ -188,8 +188,8 @@ func TestTaskCreate_MissingTechnicalRequirements(t *testing.T) {
 	if err == nil {
 		t.Error("taskCreate without technical requirements expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "missing required parameter: --technical-requirements") {
-		t.Errorf("expected 'missing required parameter: --technical-requirements' error, got: %v", err)
+	if !strings.Contains(err.Error(), "required parameter missing: --technical-requirements") {
+		t.Errorf("expected 'required parameter missing: --technical-requirements' error, got: %v", err)
 	}
 }
 
@@ -202,8 +202,8 @@ func TestTaskCreate_MissingAcceptanceCriteria(t *testing.T) {
 	if err == nil {
 		t.Error("taskCreate without acceptance criteria expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "missing required parameter: --acceptance-criteria") {
-		t.Errorf("expected 'missing required parameter: --acceptance-criteria' error, got: %v", err)
+	if !strings.Contains(err.Error(), "required parameter missing: --acceptance-criteria") {
+		t.Errorf("expected 'required parameter missing: --acceptance-criteria' error, got: %v", err)
 	}
 }
 

@@ -105,8 +105,8 @@ func TestSprintCreate_MissingDescription(t *testing.T) {
 	if err == nil {
 		t.Error("sprintCreate without description expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "missing required parameter: --description") {
-		t.Errorf("expected 'missing required parameter: --description' error, got: %v", err)
+	if !strings.Contains(err.Error(), "required parameter missing: --description") {
+		t.Errorf("expected 'required parameter missing: --description' error, got: %v", err)
 	}
 }
 
