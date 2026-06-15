@@ -315,10 +315,36 @@ func sprintRemoveTasks(args []string) error {
 	ctx, cancel := db.WithQuickTimeout()
 	defer cancel()
 
-	// Verify sprint exists
-	_, err = database.GetSprint(ctx, sprintID)
+	// Verify sprint exists. Note: removing tasks from a CLOSED sprint is
+	// intentionally allowed — the SPEC/COMMANDS.md validation order for
+	// remove-tasks does not block CLOSED sprints, and the documented
+	// task-carryover workflow (move incomplete tasks out of a closed sprint
+	// into the next one) depends on it.
+	if _, err := database.GetSprint(ctx, sprintID); err != nil {
+		return err
+	}
+
+	// Fail-fast membership check: every task must currently belong to THIS
+	// sprint. Previously the DELETE ignored the sprint argument and removed by
+	// task_id alone, silently yanking a task out of whatever sprint it was
+	// actually in (data corruption). SPEC/COMMANDS.md § Sprint Task Management
+	// validation step 5 ("Task ID not in sprint -> exit 6"); finding #40.
+	members, err := database.GetSprintTasks(ctx, sprintID)
 	if err != nil {
 		return err
+	}
+	memberSet := make(map[int]struct{}, len(members))
+	for _, id := range members {
+		memberSet[id] = struct{}{}
+	}
+	missing := make([]int, 0, len(taskIDs))
+	for _, id := range taskIDs {
+		if _, ok := memberSet[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%w: task(s) not in sprint #%d: %v", utils.ErrValidation, sprintID, missing)
 	}
 
 	// Capture timestamp once for the entire operation
@@ -327,15 +353,26 @@ func sprintRemoveTasks(args []string) error {
 	// Remove within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
 		for _, taskID := range taskIDs {
-			// Remove from sprint_tasks
-			_, err := tx.Exec("DELETE FROM sprint_tasks WHERE task_id = ?", taskID)
-			if err != nil {
+			// Remove from sprint_tasks, scoped to the named sprint.
+			if _, err := tx.Exec(
+				"DELETE FROM sprint_tasks WHERE sprint_id = ? AND task_id = ?",
+				sprintID, taskID,
+			); err != nil {
 				return err
 			}
 
-			// Update task status to BACKLOG
-			_, err = tx.Exec("UPDATE tasks SET status = 'BACKLOG' WHERE id = ?", taskID)
-			if err != nil {
+			// Reset the task to BACKLOG, clearing ALL lifecycle timestamps and
+			// the completion summary. A task may have progressed to
+			// DOING/TESTING/COMPLETED while in the sprint, so leaving those
+			// fields populated on a BACKLOG task violates the state machine's
+			// reopening invariant (SPEC/STATE_MACHINE.md Reopening Behavior;
+			// finding #49). For an unstarted SPRINT task these are already NULL,
+			// so the clear is a harmless no-op.
+			if _, err := tx.Exec(
+				`UPDATE tasks SET status = 'BACKLOG', started_at = NULL, tested_at = NULL,
+				        closed_at = NULL, completion_summary = NULL WHERE id = ?`,
+				taskID,
+			); err != nil {
 				return err
 			}
 
@@ -343,7 +380,10 @@ func sprintRemoveTasks(args []string) error {
 				return err
 			}
 		}
-		return nil
+
+		// Compact the remaining positions to a contiguous 0..N-1 sequence so
+		// later sprint move-to operations order correctly (finding #50).
+		return db.CompactSprintPositionsTx(tx, sprintID)
 	})
 }
 

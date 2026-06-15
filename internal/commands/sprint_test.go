@@ -1,6 +1,8 @@
 package commands
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"strconv"
 	"strings"
@@ -605,5 +607,142 @@ func TestSprintMoveTasks_InvalidTaskID(t *testing.T) {
 	err := HandleSprint([]string{"move-tasks", "-r", testName, "1", "2", "notanumber"})
 	if err == nil {
 		t.Error("sprintMoveTasks with invalid task ID expected error, got nil")
+	}
+}
+
+// mkSprintTask creates a BACKLOG task and returns its ID (test helper).
+func mkSprintTask(t *testing.T, database *db.DB, title string) int {
+	t.Helper()
+	id, err := database.CreateTask(context.Background(), &models.Task{
+		Title: title, FunctionalRequirements: "f", TechnicalRequirements: "t",
+		AcceptanceCriteria: "a", Type: models.TypeTask, Status: models.StatusBacklog,
+		CreatedAt: utils.NowISO8601(),
+	})
+	if err != nil {
+		t.Fatalf("creating task %q: %v", title, err)
+	}
+	return id
+}
+
+// TestSprintRemoveTasks_MembershipGuard is a regression gate for finding #40:
+// `sprint remove-tasks` must only remove tasks that belong to the NAMED sprint.
+// Naming the wrong sprint must fail with exit 6 and leave the task untouched in
+// the sprint it actually belongs to (previously it deleted by task_id alone,
+// corrupting the other sprint).
+func TestSprintRemoveTasks_MembershipGuard(t *testing.T) {
+	testName := "testsprintremovemembership"
+	database, cleanup := setupTestTaskRoadmap(t, testName)
+	defer cleanup()
+	ctx := context.Background()
+
+	s1, err := database.CreateSprint(ctx, &models.Sprint{Description: "Sprint one", Status: models.SprintPending})
+	if err != nil {
+		t.Fatalf("creating sprint 1: %v", err)
+	}
+	s2, err := database.CreateSprint(ctx, &models.Sprint{Description: "Sprint two", Status: models.SprintPending})
+	if err != nil {
+		t.Fatalf("creating sprint 2: %v", err)
+	}
+	t1 := mkSprintTask(t, database, "Task in sprint one")
+	if err := database.AddTasksToSprint(ctx, s1, []int{t1}); err != nil {
+		t.Fatalf("adding task to sprint 1: %v", err)
+	}
+
+	// Removing t1 while naming s2 (where it is NOT a member) must fail-fast.
+	err = HandleSprint([]string{"remove-tasks", "-r", testName, strconv.Itoa(s2), strconv.Itoa(t1)})
+	if err == nil {
+		t.Fatal("expected membership error removing task from the wrong sprint, got nil")
+	}
+	if !errors.Is(err, utils.ErrValidation) {
+		t.Errorf("expected utils.ErrValidation (exit 6), got: %v", err)
+	}
+
+	// t1 must still belong to s1 and still be in SPRINT status.
+	members, err := database.GetSprintTasks(ctx, s1)
+	if err != nil {
+		t.Fatalf("reading sprint 1 members: %v", err)
+	}
+	if len(members) != 1 || members[0] != t1 {
+		t.Errorf("t1 must still be in sprint 1; members=%v", members)
+	}
+}
+
+// TestSprintRemoveTasks_ClearsLifecycleAndCompacts is a regression gate for
+// findings #49 and #50: removing a task from a sprint must reset it to BACKLOG
+// with ALL lifecycle dates/summary cleared (even when it had progressed to
+// COMPLETED), and the remaining tasks' positions must stay contiguous (0..N-1).
+func TestSprintRemoveTasks_ClearsLifecycleAndCompacts(t *testing.T) {
+	testName := "testsprintremovelifecycle"
+	database, cleanup := setupTestTaskRoadmap(t, testName)
+	defer cleanup()
+	ctx := context.Background()
+
+	s1, err := database.CreateSprint(ctx, &models.Sprint{Description: "Sprint one", Status: models.SprintPending})
+	if err != nil {
+		t.Fatalf("creating sprint: %v", err)
+	}
+	t1 := mkSprintTask(t, database, "Task one")
+	t2 := mkSprintTask(t, database, "Task two")
+	t3 := mkSprintTask(t, database, "Task three")
+	if err := database.AddTasksToSprint(ctx, s1, []int{t1, t2, t3}); err != nil {
+		t.Fatalf("adding tasks: %v", err)
+	}
+
+	// Drive t2 all the way to COMPLETED so it has started_at/tested_at/closed_at set.
+	for _, st := range []string{"DOING", "TESTING"} {
+		if err := HandleTask([]string{"stat", "-r", testName, strconv.Itoa(t2), st}); err != nil {
+			t.Fatalf("transition t2 -> %s: %v", st, err)
+		}
+	}
+	if err := HandleTask([]string{"stat", "-r", testName, strconv.Itoa(t2), "COMPLETED", "--summary", "all done"}); err != nil {
+		t.Fatalf("complete t2: %v", err)
+	}
+
+	// Remove the middle task t2 from the sprint.
+	if err := HandleSprint([]string{"remove-tasks", "-r", testName, strconv.Itoa(s1), strconv.Itoa(t2)}); err != nil {
+		t.Fatalf("remove-tasks: %v", err)
+	}
+
+	// #49: t2 must be BACKLOG with every lifecycle field cleared to NULL.
+	var status string
+	var started, tested, closed, summary sql.NullString
+	if err := database.QueryRowContext(ctx,
+		"SELECT status, started_at, tested_at, closed_at, completion_summary FROM tasks WHERE id = ?", t2,
+	).Scan(&status, &started, &tested, &closed, &summary); err != nil {
+		t.Fatalf("reading t2: %v", err)
+	}
+	if status != "BACKLOG" {
+		t.Errorf("t2 status = %q, want BACKLOG", status)
+	}
+	if started.Valid || tested.Valid || closed.Valid || summary.Valid {
+		t.Errorf("t2 lifecycle fields must be NULL after removal; got started=%v tested=%v closed=%v summary=%v",
+			started, tested, closed, summary)
+	}
+
+	// #50: remaining positions must be contiguous 0..N-1.
+	rows, err := database.QueryContext(ctx,
+		"SELECT task_id, position FROM sprint_tasks WHERE sprint_id = ? ORDER BY position ASC", s1)
+	if err != nil {
+		t.Fatalf("reading positions: %v", err)
+	}
+	defer rows.Close()
+	var positions []int
+	var remaining []int
+	for rows.Next() {
+		var tid, pos int
+		if err := rows.Scan(&tid, &pos); err != nil {
+			t.Fatalf("scanning position: %v", err)
+		}
+		remaining = append(remaining, tid)
+		positions = append(positions, pos)
+	}
+	if len(remaining) != 2 {
+		t.Fatalf("expected 2 remaining tasks, got %d (%v)", len(remaining), remaining)
+	}
+	for i, p := range positions {
+		if p != i {
+			t.Errorf("positions must be contiguous 0..N-1; got %v", positions)
+			break
+		}
 	}
 }

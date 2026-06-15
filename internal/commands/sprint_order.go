@@ -183,15 +183,15 @@ func sprintMoveTo(args []string) error {
 		return err
 	}
 
-	// Verify task belongs to sprint and get task count for position validation
+	// Verify the task belongs to the sprint. The target position is NOT
+	// range-checked here: per SPEC/COMMANDS.md § Move Task to Position, "If
+	// position >= task count, task is moved to the end" — an out-of-range
+	// position is CLAMPED (by MoveTaskToPosition, newPosition = taskCount-1),
+	// not rejected. This also keeps move-to consistent with `sprint bottom`,
+	// its SPEC-declared equivalent. Rejecting here was the bug (finding #47).
 	currentTasks, err := database.GetSprintTasks(ctx, sprintID)
 	if err != nil {
 		return err
-	}
-
-	taskCount := len(currentTasks)
-	if position >= taskCount {
-		return fmt.Errorf("%w: position must be less than task count (%d)", utils.ErrValidation, taskCount)
 	}
 
 	found := false
