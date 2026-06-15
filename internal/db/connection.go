@@ -214,6 +214,53 @@ func OpenExisting(roadmapName string) (*DB, error) {
 	return Open(roadmapName)
 }
 
+// OpenReadOnly opens an existing roadmap database for strictly read-only
+// access. Unlike Open/OpenExisting it does NOT run schema migrations (no DDL)
+// and opens every connection with query_only(true), so the SQLite engine
+// rejects any write — schema change, row mutation, or audit insert. This is
+// required by the web interface, which MUST NOT modify rows, write an audit
+// entry, or alter the schema (SPEC/WEB.md § Read-Only Data Flow / Security and
+// Constraints). Previously the web pages opened via OpenExisting -> Open, which
+// ran RunMigrations and could rewrite a stale-schema database on a mere read
+// (finding #43). journal_mode is intentionally not set (it is a write blocked
+// by query_only; the database is already WAL from creation).
+func OpenReadOnly(roadmapName string) (*DB, error) {
+	if err := utils.ValidateRoadmapName(roadmapName); err != nil {
+		return nil, err
+	}
+
+	exists, err := utils.RoadmapExists(roadmapName)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, fmt.Errorf("%w: roadmap %q", utils.ErrNotFound, roadmapName)
+	}
+
+	dbPath, err := utils.GetRoadmapPath(roadmapName)
+	if err != nil {
+		return nil, err
+	}
+
+	dsn := fmt.Sprintf("%s?_pragma=query_only(true)&_pragma=foreign_keys(1)&_pragma=busy_timeout(%d)", dbPath, DefaultBusyTimeout)
+	sqlDB, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("opening database %s: %w", roadmapName, err)
+	}
+
+	sqlDB.SetMaxOpenConns(2)
+	sqlDB.SetMaxIdleConns(1)
+	sqlDB.SetConnMaxLifetime(30 * time.Minute)
+	sqlDB.SetConnMaxIdleTime(10 * time.Minute)
+
+	return &DB{
+		DB:          sqlDB,
+		roadmapName: roadmapName,
+		queryCache:  NewQueryCache(),
+		batchProc:   NewBatchProcessor(100),
+	}, nil
+}
+
 // dsnWithPragmas builds a modernc.org/sqlite DSN that applies the
 // connection-scoped PRAGMAs (foreign_keys, busy_timeout) on EVERY pooled
 // connection. Unlike a one-shot db.Exec("PRAGMA ..."), the driver replays

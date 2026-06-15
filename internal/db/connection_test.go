@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
+	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
 // ==================== OPEN TESTS ====================
@@ -81,6 +83,59 @@ func TestOpenExisting_NotFound(t *testing.T) {
 	_, err := OpenExisting("nonexistentroadmap12345")
 	if err == nil {
 		t.Error("expected error for non-existent roadmap")
+	}
+}
+
+// TestOpenReadOnly_NoMigrationNoWrites is a regression gate for finding #43:
+// the web interface opens the database read-only, so OpenReadOnly must NOT run
+// schema migrations (no DDL on a stale-schema DB) and must reject every write
+// via query_only, while still serving reads.
+func TestOpenReadOnly_NoMigrationNoWrites(t *testing.T) {
+	roadmapName := "testreadonly"
+
+	// Ensure a clean slate: this test deliberately downgrades the schema
+	// version, so a leftover database from a prior run must not survive.
+	if dir, derr := utils.GetRoadmapDir(roadmapName); derr == nil {
+		os.RemoveAll(dir) // #nosec G104 -- best-effort pre-test cleanup
+		defer os.RemoveAll(dir)
+	}
+
+	// Create the database at the current schema, then simulate a stale schema
+	// by forcing an older recorded version.
+	rw, err := Open(roadmapName)
+	if err != nil {
+		t.Fatalf("failed to create roadmap: %v", err)
+	}
+	if _, err := rw.Exec("UPDATE _metadata SET value = '1.0.0' WHERE key = 'schema_version'"); err != nil {
+		rw.Close()
+		t.Fatalf("forcing stale schema version: %v", err)
+	}
+	rw.Close()
+
+	// Open read-only: this MUST NOT migrate the database back up.
+	ro, err := OpenReadOnly(roadmapName)
+	if err != nil {
+		t.Fatalf("OpenReadOnly failed: %v", err)
+	}
+	defer ro.Close()
+
+	var version string
+	if err := ro.QueryRow("SELECT value FROM _metadata WHERE key = 'schema_version'").Scan(&version); err != nil {
+		t.Fatalf("reading schema version: %v", err)
+	}
+	if version != "1.0.0" {
+		t.Errorf("OpenReadOnly migrated the schema (version is now %q); a read must not write DDL", version)
+	}
+
+	// Reads must still work.
+	var n int
+	if err := ro.QueryRow("SELECT COUNT(*) FROM tasks").Scan(&n); err != nil {
+		t.Errorf("read query failed under OpenReadOnly: %v", err)
+	}
+
+	// Writes must be rejected by query_only.
+	if _, err := ro.Exec("INSERT INTO _metadata (key, value) VALUES ('probe', 'x')"); err == nil {
+		t.Error("OpenReadOnly must reject writes (query_only), but the INSERT succeeded")
 	}
 }
 
