@@ -74,16 +74,21 @@ class TestEdgeCasesErrors:
         print("✓ Create task without required fields: each missing field returns exit 2 with field name")
 
     def test_get_nonexistent_task(self):
-        """Test getting non-existent task returns empty result."""
+        """task get on an unknown ID must fail-fast with exit 4 (finding #44).
+
+        Per SPEC/COMMANDS.md § Get Task(s), an unknown ID — including the
+        all-invalid case — must return exit 4 (not found), not a null/empty
+        result with exit 0.
+        """
         roadmap = self.test.create_roadmap()
 
-        # Getting non-existent task returns empty list with exit code 0
-        result = self.test.run_cmd_json(
-            ["task", "get", "-r", roadmap, "99999"]
+        exit_code, _, stderr = self.test.run_cmd(
+            ["task", "get", "-r", roadmap, "99999"], check=False
         )
-        assert result == [], f"Expected empty list, got {result}"
+        assert exit_code == 4, f"Expected exit 4 for unknown ID, got {exit_code}"
+        assert "not found" in stderr.lower(), f"Expected 'not found' message, got: {stderr}"
 
-        print("✓ Get nonexistent task test passed")
+        print("✓ Get nonexistent task fail-fast (exit 4) test passed")
 
     def test_edit_nonexistent_task(self):
         """Test editing non-existent task fails."""
@@ -305,24 +310,33 @@ class TestEdgeCasesErrors:
         print("✓ Boundary severity values test passed")
 
     def test_bulk_operations_with_mixed_valid_invalid_ids(self):
-        """Test bulk operations with mix of valid and invalid IDs."""
+        """Bulk prio with a mixed valid/invalid batch must fail-fast (finding #45).
+
+        Per SPEC/COMMANDS.md § Change Priority, any unknown ID in the batch must
+        fail with exit 4 BEFORE any mutation: valid tasks must be left unchanged
+        and no phantom audit rows written. Previously the valid tasks were
+        silently mutated and the command exited 0.
+        """
         roadmap = self.test.create_roadmap()
 
         task1 = self.test.create_task(roadmap, "Task 1", "Functional 1", "Technical 1", "Criteria 1")
         task2 = self.test.create_task(roadmap, "Task 2", "Functional 2", "Technical 2", "Criteria 2")
 
-        # Set priority with one invalid ID - valid tasks are updated
-        self.test.run_cmd(
-            ["task", "prio", "-r", roadmap, f"{task1},99999,{task2}", "5"]
+        # Set priority with one invalid ID - whole batch must fail-fast (exit 4).
+        exit_code, _, stderr = self.test.run_cmd(
+            ["task", "prio", "-r", roadmap, f"{task1},99999,{task2}", "5"],
+            check=False,
         )
+        assert exit_code == 4, f"mixed batch must fail with exit 4, got {exit_code}"
+        assert "not found" in stderr.lower(), f"expected 'not found' message, got: {stderr}"
 
-        # Verify valid tasks were updated
+        # Verify the valid tasks were NOT mutated (still default priority 0).
         result = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task1)])
-        assert result[0]["priority"] == 5
+        assert result[0]["priority"] == 0, "valid task must not be mutated on fail-fast"
         result = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task2)])
-        assert result[0]["priority"] == 5
+        assert result[0]["priority"] == 0, "valid task must not be mutated on fail-fast"
 
-        print("✓ Bulk operations with mixed valid/invalid IDs test passed")
+        print("✓ Bulk prio with mixed valid/invalid IDs fail-fasts (exit 4), no mutation")
 
     def test_remove_already_removed_task(self):
         """Test removing an already removed task fails."""
@@ -342,18 +356,22 @@ class TestEdgeCasesErrors:
         print("✓ Remove already removed task test passed")
 
     def test_edit_with_no_changes(self):
-        """Test editing task with no fields fails with exit 6 + 'no fields' message."""
+        """Editing a task with no fields is a successful no-op (finding #48).
+
+        Per SPEC/COMMANDS.md § Edit Task, "If no fields are specified, command
+        succeeds with no changes (exit code 0)" and produces no output.
+        """
         roadmap = self.test.create_roadmap()
         task_id = self.test.create_task(roadmap, "Task", "Functional", "Technical", "Criteria")
 
-        exit_code, _, stderr = self.test.run_cmd(
+        exit_code, stdout, stderr = self.test.run_cmd(
             ["task", "edit", "-r", roadmap, str(task_id)],
             check=False,
         )
-        assert exit_code == 6, f"edit with no fields must exit 6; got {exit_code}, stderr={stderr}"
-        assert "no fields" in stderr.lower(), f"stderr must say 'no fields'; got {stderr!r}"
+        assert exit_code == 0, f"edit with no fields must be a no-op (exit 0); got {exit_code}, stderr={stderr}"
+        assert stdout.strip() == "", f"no-op edit must produce no stdout; got {stdout!r}"
 
-        print("✓ Edit with no changes rejected with exit 6 + 'no fields' message")
+        print("✓ Edit with no changes is a successful no-op (exit 0, no output)")
 
     def test_help_commands(self):
         """Test help commands work."""

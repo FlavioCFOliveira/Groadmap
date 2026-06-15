@@ -440,6 +440,21 @@ func taskSetPriority(args []string) error {
 	}
 	defer database.Close()
 
+	ctx, cancel := db.WithQuickTimeout()
+	defer cancel()
+
+	// Fail-fast: every requested ID must exist before any mutation. Without
+	// this, nonexistent IDs returned exit 0, mutated valid tasks in a mixed
+	// batch, and wrote phantom audit rows for IDs that do not exist
+	// (SPEC/COMMANDS.md § Change Priority). Mirrors task remove/stat/reopen.
+	tasks, err := database.GetTasks(ctx, ids)
+	if err != nil {
+		return err
+	}
+	if len(tasks) != len(ids) {
+		return fmt.Errorf("%w: some tasks not found", utils.ErrNotFound)
+	}
+
 	// Capture timestamp once for the entire operation
 	now := utils.NowISO8601()
 
@@ -495,6 +510,21 @@ func taskSetSeverity(args []string) error {
 		return err
 	}
 	defer database.Close()
+
+	ctx, cancel := db.WithQuickTimeout()
+	defer cancel()
+
+	// Fail-fast: every requested ID must exist before any mutation. Without
+	// this, nonexistent IDs returned exit 0, mutated valid tasks in a mixed
+	// batch, and wrote phantom audit rows for IDs that do not exist
+	// (SPEC/COMMANDS.md § Change Severity). Mirrors task remove/stat/reopen.
+	tasks, err := database.GetTasks(ctx, ids)
+	if err != nil {
+		return err
+	}
+	if len(tasks) != len(ids) {
+		return fmt.Errorf("%w: some tasks not found", utils.ErrNotFound)
+	}
 
 	// Capture timestamp once for the entire operation
 	now := utils.NowISO8601()

@@ -151,9 +151,12 @@ class TestTaskDeletionBacklogOnly:
 
         self.test.run_cmd(["task", "remove", "-r", roadmap, str(task_id)])
 
-        # Verify task is gone (task get returns empty array when not found)
-        result = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])
-        assert result == [], f"Expected empty array after deletion, got: {result}"
+        # Verify task is gone: task get now fail-fasts with exit 4 on an unknown
+        # ID (finding #44), so the removed task must no longer resolve.
+        exit_code, _, stderr = self.test.run_cmd(
+            ["task", "get", "-r", roadmap, str(task_id)], check=False
+        )
+        assert exit_code == 4, f"removed task get must exit 4, got {exit_code}: {stderr}"
 
         print("✓ BACKLOG task removed successfully")
 

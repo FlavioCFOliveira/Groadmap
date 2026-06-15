@@ -38,7 +38,7 @@ import (
 // Side effects:
 //   - Updates task record in database
 //   - Logs TASK_UPDATE audit entry
-//   - Outputs updated task as JSON to stdout
+//   - Produces no stdout on success (exit 0), per SPEC/COMMANDS.md § Edit Task
 //
 // Complexity: O(1) - single database update
 //
@@ -84,11 +84,23 @@ func taskEdit(args []string) error {
 	if v, ok := result.Flags["Specialists"]; ok {
 		updates["specialists"] = strings.TrimSpace(v.(string))
 	}
+	// Validate priority/severity range BEFORE the UPDATE. Without this, an
+	// out-of-range value reached the SQLite CHECK constraint and surfaced as a
+	// generic constraint error (exit 1) instead of the documented validation
+	// error (exit 6) per SPEC/COMMANDS.md § Edit Task (finding #46).
 	if v, ok := result.Flags["Priority"]; ok {
-		updates["priority"] = v.(int)
+		p := v.(int)
+		if err := utils.ValidateNumericRange(p, 0, 9, "priority"); err != nil {
+			return err
+		}
+		updates["priority"] = p
 	}
 	if v, ok := result.Flags["Severity"]; ok {
-		updates["severity"] = v.(int)
+		s := v.(int)
+		if err := utils.ValidateNumericRange(s, 0, 9, "severity"); err != nil {
+			return err
+		}
+		updates["severity"] = s
 	}
 	if typeStr, ok := result.Flags["Type"].(string); ok {
 		parsed, parseErr := models.ParseTaskType(typeStr)
@@ -98,8 +110,12 @@ func taskEdit(args []string) error {
 		updates["type"] = string(parsed)
 	}
 
+	// No-op: per SPEC/COMMANDS.md § Edit Task ("If no fields are specified,
+	// command succeeds with no changes, exit code 0"), an edit with no fields
+	// is a successful no-op that produces no output and writes no audit entry —
+	// not a validation error (finding #48).
 	if len(updates) == 0 {
-		return fmt.Errorf("%w: no fields to update", utils.ErrValidation)
+		return nil
 	}
 
 	// Validate that required text fields are not set to empty

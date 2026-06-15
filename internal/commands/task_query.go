@@ -209,6 +209,15 @@ func taskGet(args []string) error {
 		return err
 	}
 
+	// Fail-fast: every requested ID must resolve to an existing task. Per
+	// SPEC/COMMANDS.md § Get Task(s) (Batch Operation Behavior) and the
+	// SPEC/ARCHITECTURE.md error example, any unknown ID — including the
+	// all-invalid case, which previously returned null/exit 0 — must fail with
+	// exit 4 (utils.ErrNotFound) rather than silently dropping the missing IDs.
+	if len(tasks) != len(ids) {
+		return fmt.Errorf("%w: some tasks not found", utils.ErrNotFound)
+	}
+
 	return utils.PrintJSON(tasks)
 }
 

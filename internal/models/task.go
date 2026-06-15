@@ -274,10 +274,14 @@ func (t *Task) Validate() error {
 		return fmt.Errorf("%w: specialists exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskSpecialists)
 	}
 	if t.Priority < 0 || t.Priority > 9 {
-		return fmt.Errorf("priority must be between 0 and 9, got %d: %w", t.Priority, ErrPriorityOutOfRange)
+		// Chain utils.ErrValidation so this maps to exit 6 (invalid data) per
+		// SPEC/ARCHITECTURE.md; the local ErrPriorityOutOfRange sentinel is kept
+		// for internal callers. Previously only the local sentinel was chained,
+		// so handleError fell through to exit 1 (finding #46).
+		return fmt.Errorf("%w: priority must be between 0 and 9, got %d: %w", utils.ErrValidation, t.Priority, ErrPriorityOutOfRange)
 	}
 	if t.Severity < 0 || t.Severity > 9 {
-		return fmt.Errorf("severity must be between 0 and 9, got %d: %w", t.Severity, ErrSeverityOutOfRange)
+		return fmt.Errorf("%w: severity must be between 0 and 9, got %d: %w", utils.ErrValidation, t.Severity, ErrSeverityOutOfRange)
 	}
 	if !IsValidTaskStatus(string(t.Status)) {
 		return fmt.Errorf("invalid status: %q: %w", t.Status, ErrInvalidStatus)
@@ -416,10 +420,10 @@ func (u *TaskUpdate) Validate() error {
 		return fmt.Errorf("%w: specialists exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskSpecialists)
 	}
 	if u.Priority != nil && (*u.Priority < 0 || *u.Priority > 9) {
-		return fmt.Errorf("priority must be between 0 and 9, got %d: %w", *u.Priority, ErrPriorityOutOfRange)
+		return fmt.Errorf("%w: priority must be between 0 and 9, got %d: %w", utils.ErrValidation, *u.Priority, ErrPriorityOutOfRange)
 	}
 	if u.Severity != nil && (*u.Severity < 0 || *u.Severity > 9) {
-		return fmt.Errorf("severity must be between 0 and 9, got %d: %w", *u.Severity, ErrSeverityOutOfRange)
+		return fmt.Errorf("%w: severity must be between 0 and 9, got %d: %w", utils.ErrValidation, *u.Severity, ErrSeverityOutOfRange)
 	}
 	return nil
 }

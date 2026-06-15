@@ -221,8 +221,9 @@ class TestWritePersistenceFidelity:
         r = self.test.create_roadmap("remove")
         a = self._mk(r, "Backlog removable")
         self.test.run_cmd(["task", "remove", "-r", r, str(a)])
-        gone = self.test.run_cmd_json(["task", "get", "-r", r, str(a)], check=False)
-        assert gone == [] or gone == {}, f"removed task must be gone: {gone}"
+        # task get now fail-fasts with exit 4 on the removed (unknown) ID (#44).
+        exit_code, _, _ = self.test.run_cmd(["task", "get", "-r", r, str(a)], check=False)
+        assert exit_code == 4, f"removed task get must exit 4, got {exit_code}"
         # non-BACKLOG cannot be removed
         s = self.test.create_sprint(r, "S")
         self.test.run_cmd(["sprint", "start", "-r", r, str(s)])
