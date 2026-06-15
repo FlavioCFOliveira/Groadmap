@@ -148,11 +148,14 @@ func (ts TaskStatus) CanTransitionTo(newStatus TaskStatus) bool {
 		return false
 	}
 
-	// Define valid transitions
+	// Define valid transitions. DOING's only valid target is TESTING:
+	// STATE_MACHINE.md forbids DOING -> SPRINT (the SPRINT status is set
+	// exclusively by `sprint add-tasks`, and the rejection rule blocks manual
+	// transitions to SPRINT from any source). Finding #55.
 	transitions := map[TaskStatus][]TaskStatus{
 		StatusBacklog:   {StatusSprint},
 		StatusSprint:    {StatusBacklog, StatusDoing},
-		StatusDoing:     {StatusSprint, StatusTesting},
+		StatusDoing:     {StatusTesting},
 		StatusTesting:   {StatusDoing, StatusCompleted},
 		StatusCompleted: {StatusBacklog},
 	}
@@ -195,10 +198,12 @@ func ValidateStatusTransition(currentStatus, newStatus string) error {
 
 // GetValidTransitions returns the list of valid next statuses for a given status.
 func GetValidTransitions(status TaskStatus) []TaskStatus {
+	// DOING -> SPRINT is intentionally absent: STATE_MACHINE.md forbids it
+	// (SPRINT is set only by `sprint add-tasks`). Finding #55.
 	transitions := map[TaskStatus][]TaskStatus{
 		StatusBacklog:   {StatusSprint},
 		StatusSprint:    {StatusBacklog, StatusDoing},
-		StatusDoing:     {StatusSprint, StatusTesting},
+		StatusDoing:     {StatusTesting},
 		StatusTesting:   {StatusDoing, StatusCompleted},
 		StatusCompleted: {StatusBacklog},
 	}

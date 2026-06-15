@@ -524,8 +524,9 @@ func TestCanTransitionTo(t *testing.T) {
 		{"SPRINT to DOING", StatusSprint, StatusDoing, true},
 		{"SPRINT to TESTING", StatusSprint, StatusTesting, false},
 
-		// DOING transitions
-		{"DOING to SPRINT", StatusDoing, StatusSprint, true},
+		// DOING transitions. DOING -> SPRINT is forbidden by STATE_MACHINE.md
+		// (SPRINT is set only by `sprint add-tasks`); finding #55.
+		{"DOING to SPRINT", StatusDoing, StatusSprint, false},
 		{"DOING to TESTING", StatusDoing, StatusTesting, true},
 		{"DOING to COMPLETED", StatusDoing, StatusCompleted, false},
 
@@ -825,7 +826,7 @@ func TestGetValidTransitions(t *testing.T) {
 	}{
 		{"BACKLOG", StatusBacklog, []TaskStatus{StatusSprint}},
 		{"SPRINT", StatusSprint, []TaskStatus{StatusBacklog, StatusDoing}},
-		{"DOING", StatusDoing, []TaskStatus{StatusSprint, StatusTesting}},
+		{"DOING", StatusDoing, []TaskStatus{StatusTesting}}, // finding #55: no DOING -> SPRINT
 		{"TESTING", StatusTesting, []TaskStatus{StatusDoing, StatusCompleted}},
 		{"COMPLETED", StatusCompleted, []TaskStatus{StatusBacklog}},
 		{"invalid status", TaskStatus("INVALID"), nil},

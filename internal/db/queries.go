@@ -1197,7 +1197,10 @@ func (db *DB) ListSprints(ctx context.Context, status *models.SprintStatus) ([]m
 	}
 	defer rows.Close()
 
-	var sprints []models.Sprint
+	// Initialize to a non-nil empty slice so an empty result marshals to JSON
+	// `[]`, not `null`, per SPEC/DATA_FORMATS.md Implementation Notes #6
+	// (finding #53).
+	sprints := []models.Sprint{}
 	for rows.Next() {
 		var sprint models.Sprint
 		var startedAt sql.NullString
@@ -1831,7 +1834,10 @@ func (db *DB) GetAuditEntries(ctx context.Context, f *AuditFilter) ([]models.Aud
 	}
 	defer rows.Close()
 
-	var entries []models.AuditEntry
+	// Initialize to a non-nil empty slice so an empty result marshals to JSON
+	// `[]`, not `null`, per SPEC/DATA_FORMATS.md Implementation Notes #6
+	// (finding #53).
+	entries := []models.AuditEntry{}
 	for rows.Next() {
 		var entry models.AuditEntry
 		err := rows.Scan(
