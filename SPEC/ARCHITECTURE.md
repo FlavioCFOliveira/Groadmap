@@ -127,7 +127,6 @@ Groadmap/
 │   │   ├── schema.go      # DDL, structure creation
 │   │   ├── migrations.go  # Database schema migrations
 │   │   ├── queries.go     # Parameterized SQL queries
-│   │   ├── cache.go       # Connection caching
 │   │   └── query_cache.go # Query template caching
 │   ├── models/
 │   │   ├── task.go        # Task structs, enums

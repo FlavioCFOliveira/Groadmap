@@ -1012,11 +1012,11 @@ rmp sprint reopen -r <name> <id>
 
 | Flag | Description |
 |------|-------------|
-| `--force` | (`sprint close` only) Close the sprint even if tasks are still in DOING or TESTING status. A warning listing the incomplete tasks is printed to stderr. |
+| `--force` | (`sprint close` only) Close the sprint even if tasks are still in SPRINT, DOING, or TESTING status. A warning listing the incomplete tasks is printed to stderr. |
 
 **Active-Task Safety Check (sprint close):**
 
-`sprint close` queries for tasks with status `DOING` or `TESTING` in the sprint before closing. If any exist and `--force` is not provided, the command returns exit code 6 with an error listing the task IDs and statuses. With `--force`, the sprint is closed and a warning is printed to stderr.
+`sprint close` queries for tasks with status `SPRINT`, `DOING`, or `TESTING` in the sprint before closing. If any exist and `--force` is not provided, the command returns exit code 6 with an error listing the task IDs and statuses. With `--force`, the sprint is closed and a warning is printed to stderr.
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
@@ -1095,7 +1095,15 @@ rmp sprint order -r <name> <sprint-id> <task-ids>
 - Task at index 1 gets position 1 (second)
 - And so on...
 
-**JSON Output (success):** No output, exit code 0.
+**JSON Output (success):** A JSON success object is written to stdout, exit code 0:
+
+```json
+{
+  "success": true,
+  "sprint_id": 1,
+  "task_order": [5, 3, 1, 4, 2]
+}
+```
 
 **Error Output:**
 
@@ -1127,7 +1135,16 @@ rmp sprint mvto -r <name> <sprint-id> <task-id> <position>
 - Moving to same position: No-op
 - Moving to position >= task count: Task is placed at the end
 
-**JSON Output (success):** No output, exit code 0.
+**JSON Output (success):** A JSON success object is written to stdout, exit code 0. The `position` field reflects the requested position:
+
+```json
+{
+  "success": true,
+  "sprint_id": 1,
+  "task_id": 5,
+  "position": 3
+}
+```
 
 **Error Output:**
 
@@ -1155,7 +1172,16 @@ rmp sprint swap -r <name> <sprint-id> <task-id-1> <task-id-2>
 - Positions are exchanged between the two tasks
 - No changes to other tasks
 
-**JSON Output (success):** No output, exit code 0.
+**JSON Output (success):** A JSON success object is written to stdout, exit code 0:
+
+```json
+{
+  "success": true,
+  "sprint_id": 1,
+  "task_id_1": 5,
+  "task_id_2": 3
+}
+```
 
 **Error Output:**
 

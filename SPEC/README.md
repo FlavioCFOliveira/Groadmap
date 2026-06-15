@@ -48,7 +48,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | SQL queries | `DATABASE.md § Main SQL Queries` |
 | Audit operations catalogue | `DATABASE.md § audit Table` |
 | Concurrency (WAL, pool, retry) | `IMPLEMENTATION.md § Concurrency Model` |
-| Query / connection caching | `IMPLEMENTATION.md § Query Caching` and `IMPLEMENTATION.md § Connection Caching` |
+| Query caching | `IMPLEMENTATION.md § Query Caching` |
 | Performance practices | `IMPLEMENTATION.md § Performance Considerations` |
 | Application version | `VERSION.md` |
 | Schema migrations | `VERSION.md § Migrations` |
