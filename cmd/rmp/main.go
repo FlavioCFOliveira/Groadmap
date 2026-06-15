@@ -267,7 +267,9 @@ Use "rmp [command] --help" for more information about a command.
 // was hardcoded and had silently dropped the `web` command (finding #51).
 func commandSummaryLines() string {
 	var b strings.Builder
-	for _, c := range commands.AppRegistry().Commands {
+	cmds := commands.AppRegistry().Commands
+	for i := range cmds {
+		c := &cmds[i]
 		name := c.Name
 		if len(c.Aliases) > 0 {
 			name += ", " + strings.Join(c.Aliases, ", ")

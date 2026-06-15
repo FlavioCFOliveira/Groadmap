@@ -19,7 +19,7 @@ type MessageError struct {
 	Sentinels []error
 }
 
-func (e *MessageError) Error() string  { return e.Msg }
+func (e *MessageError) Error() string   { return e.Msg }
 func (e *MessageError) Unwrap() []error { return e.Sentinels }
 
 // ValidationMessage builds a MessageError that wraps ErrValidation (exit 6)
