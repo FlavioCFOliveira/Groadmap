@@ -342,12 +342,60 @@ discriminator, and additionally inspects which writing clauses are present to
 distinguish creating, mutating, and deleting writes for the per-subcommand rules
 below.
 
+#### Literal-Aware Normalization
+
+Clause-class classification MUST run on a **masked normalization** of the query,
+never on the raw query string. The mask neutralizes the contents of Cypher
+string literals so that a clause keyword that appears only inside a property
+value can never affect classification.
+
+Both discriminators operate on the masked query: the read-vs-write
+determination (`cypher.QueryHasWritingClause`) AND the which-clauses-are-present
+checks. The guard rail builds the masked string from the raw query and feeds
+that masked string to BOTH discriminators. The query that is actually executed
+against the store is always the **original, unmodified** query; masking affects
+classification only.
+
+Masking rules:
+
+1. **String literals (mandatory).** Both single-quoted (`'...'`) and
+   double-quoted (`"..."`) Cypher string literals are masked. Masking replaces
+   the interior characters of each literal with a neutral placeholder character
+   (for example, a space), while leaving the surrounding query structure intact.
+   The quote delimiters and the overall positions of surrounding tokens are
+   preserved so that clause detection sees the same query shape with only the
+   literal contents neutralized.
+2. **Backslash escape sequences.** While scanning a string literal, a backslash
+   escape sequence (for example `\"`, `\'`, `\\`) does not terminate the literal:
+   an escaped quote is part of the literal value, not its closing delimiter. The
+   scanner honors these escapes so that a literal ends only at its true,
+   unescaped closing quote.
+3. **Comments and backtick identifiers (robustness).** For robustness, keyword
+   text inside line comments (`// ...` to end of line), block comments
+   (`/* ... */`), and backtick-quoted identifiers (`` `...` ``) MUST likewise not
+   influence classification, and is masked under the same neutralization. The
+   string-literal masking in rule 1 is the mandatory normative requirement; the
+   comment and backtick-identifier masking is an additional robustness
+   requirement applied by the same normalization.
+
+The masked classification remains a pure clause-class check. It still does NOT
+validate Cypher syntax: a syntactically invalid query that passes the masked
+clause check is still passed to the engine and rejected there (see note 3 under
+[Per-Subcommand Validation Rules](#per-subcommand-validation-rules) and
+[Error Handling and Exit Codes](#error-handling-and-exit-codes)). Whitespace
+trimming and all existing exit-code semantics (exit code 6 for an operation-class
+mismatch) are unchanged.
+
 ### Per-Subcommand Validation Rules
 
 Each subcommand accepts exactly the operation class listed below and rejects all
 others. A query that does not match is rejected with `utils.ErrValidation`
 (exit code 6) before execution; the graph is not opened for writing and no
 change is made (see [Error Handling and Exit Codes](#error-handling-and-exit-codes)).
+In the table below, every reference to a clause a query "contains" or to the
+result of `QueryHasWritingClause` is evaluated on the masked normalization of the
+query, not on the raw string (see
+[Literal-Aware Normalization](#literal-aware-normalization)).
 
 | Subcommand | Accepts | Rejects | Engine path |
 |------------|---------|---------|-------------|
@@ -372,6 +420,19 @@ Notes:
    syntax; a syntactically invalid query that passes the clause check is rejected
    by the engine at execution time and surfaces as an engine error (see
    [Error Handling and Exit Codes](#error-handling-and-exit-codes)).
+4. Classification ignores clause keywords that appear only inside Cypher string
+   literals (mandatory), and likewise inside comments and backtick-quoted
+   identifiers (robustness), because classification runs on the masked
+   normalization described in
+   [Literal-Aware Normalization](#literal-aware-normalization). Concretely:
+   - `graph create` accepts
+     `CREATE (m:Memory {body:"discusses delete, set and detach"})`, because the
+     words `delete`, `set`, and `detach` appear only inside the property value
+     and are masked before classification; the only real writing clause is
+     `CREATE`.
+   - `graph query` accepts
+     `MATCH (m) WHERE m.title = "mentions delete and set" RETURN m.key`, because
+     the masked query contains no writing clause and is therefore read-only.
 
 ### Cypher Input Source and Precedence
 
@@ -532,6 +593,16 @@ Groadmap's usage model and expectations:
     `RETURN`-mirroring shape or `{"ok": true}`) and exit code 0, and the checkpoint
     failure is reported as a diagnostic on stderr without changing the exit code
     (see [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)).
+18. `rmp graph create -r <roadmap> --query 'CREATE (m:Memory {body:"... node-delete ... MATCH...SET ..."})'`
+    is accepted and creates the node, exits 0. The `delete` and `set` keywords
+    appear only inside the string-literal property value and are masked before
+    classification (see
+    [Literal-Aware Normalization](#literal-aware-normalization)); the only
+    writing clause is `CREATE`.
+19. `rmp graph query -r <roadmap> --query 'MATCH (m) WHERE m.title = "mentions delete and set" RETURN m.key'`
+    is accepted as read-only and exits 0. The `delete` and `set` keywords appear
+    only inside the string-literal value and are masked, so the masked query
+    contains no writing clause.
 
 ## See Also
 

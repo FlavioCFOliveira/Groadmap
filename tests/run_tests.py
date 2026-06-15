@@ -56,6 +56,7 @@ TEST_MODULES = [
     "test_36_query_commands_correctness",
     "test_37_write_persistence_fidelity",
     "test_38_task_list_date_filters",
+    "test_39_graph_guardrail_literals",
 ]
 
 # Stress tests (run separately due to time/data volume)

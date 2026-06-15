@@ -283,16 +283,134 @@ func readQuery(args []string) (string, error) {
 	return q, nil
 }
 
+// maskCypherLiterals returns a copy of query in which the INTERIOR
+// characters of Cypher string literals, comments, and backtick-quoted
+// identifiers are replaced with spaces. Delimiter characters and the
+// overall length are preserved so that byte positions of every other
+// token are unchanged; only the neutralized spans differ.
+//
+// It is used solely for operation-class classification (see SPEC/GRAPH.md
+// § Literal-Aware Normalization): a clause keyword appearing only inside a
+// string literal, a comment, or a backtick identifier must not influence
+// the guard rail. The query actually executed against the store is always
+// the original, unmodified string.
+//
+// The scanner is a single left-to-right state machine so that nesting and
+// precedence are handled correctly: a quote inside a comment does not open
+// a literal, a comment marker inside a string is literal text, and a
+// backslash escape inside a quoted span does not terminate that span.
+//
+// Masked spans (interior neutralized to spaces, delimiters kept):
+//   - single-quoted string literals  '...'   (honors \\, \', \" escapes)
+//   - double-quoted string literals  "..."   (honors \\, \', \" escapes)
+//   - backtick-quoted identifiers    `...`
+//   - line comments                  // ... <EOL>
+//   - block comments                 /* ... */
+func maskCypherLiterals(query string) string {
+	const space = ' '
+	b := []byte(query)
+	n := len(b)
+	out := make([]byte, n)
+	copy(out, b)
+
+	// Scanner state. Exactly one of these is active at a time.
+	type state int
+	const (
+		stNormal   state = iota
+		stSingle         // inside '...'
+		stDouble         // inside "..."
+		stBacktick       // inside `...`
+		stLine           // inside // ... EOL
+		stBlock          // inside /* ... */
+	)
+
+	st := stNormal
+	for i := 0; i < n; i++ {
+		c := b[i]
+		switch st {
+		case stNormal:
+			switch {
+			case c == '\'':
+				st = stSingle
+			case c == '"':
+				st = stDouble
+			case c == '`':
+				st = stBacktick
+			case c == '/' && i+1 < n && b[i+1] == '/':
+				// Enter line comment; the // marker is non-structural for
+				// classification, so mask it together with the comment body.
+				st = stLine
+				out[i] = space
+				out[i+1] = space
+				i++
+			case c == '/' && i+1 < n && b[i+1] == '*':
+				// Enter block comment; mask the /* marker with the body.
+				st = stBlock
+				out[i] = space
+				out[i+1] = space
+				i++
+			}
+		case stSingle, stDouble:
+			// Backslash escapes a following character within quoted literals
+			// so an escaped quote does not close the literal. Mask both the
+			// backslash and the escaped character.
+			if c == '\\' && i+1 < n {
+				out[i] = space
+				out[i+1] = space
+				i++
+				continue
+			}
+			if (st == stSingle && c == '\'') || (st == stDouble && c == '"') {
+				st = stNormal // delimiter preserved
+				continue
+			}
+			out[i] = space
+		case stBacktick:
+			// Backtick identifiers do not process backslash escapes in Cypher.
+			if c == '`' {
+				st = stNormal // delimiter preserved
+				continue
+			}
+			out[i] = space
+		case stLine:
+			if c == '\n' {
+				st = stNormal // newline preserved as structure
+				continue
+			}
+			out[i] = space
+		case stBlock:
+			if c == '*' && i+1 < n && b[i+1] == '/' {
+				// Mask the closing */ marker and return to normal.
+				out[i] = space
+				out[i+1] = space
+				st = stNormal
+				i++
+				continue
+			}
+			out[i] = space
+		}
+	}
+
+	return string(out)
+}
+
 // validateGuardRail checks that query matches the operation class
 // required by subcmd. It returns ErrValidation when the class does not
 // match, with a message that names the subcommand and the expected class.
+//
+// Classification runs on the literal-masked normalization of the query
+// (see maskCypherLiterals and SPEC/GRAPH.md § Literal-Aware Normalization),
+// never on the raw string: a clause keyword that appears only inside a
+// string literal, comment, or backtick identifier must not affect the
+// guard rail. The original query is still what executes against the store.
 func validateGuardRail(subcmd, allowed, query string) error {
-	isWrite := cypher.QueryHasWritingClause(query)
+	masked := maskCypherLiterals(query)
+	isWrite := cypher.QueryHasWritingClause(masked)
 
 	switch subcmd {
 	case "create":
 		// Must be write, must have CREATE/MERGE, must not have SET/REMOVE/DELETE.
-		if !isWrite || !reCreate.MatchString(query) || reMutate.MatchString(query) || reDelete.MatchString(query) {
+		if !isWrite || !reCreate.MatchString(masked) || reMutate.MatchString(masked) || reDelete.MatchString(masked) {
 			return fmt.Errorf("%w: graph create accepts only CREATE/MERGE queries", utils.ErrValidation)
 		}
 	case "query", "search":
@@ -302,12 +420,12 @@ func validateGuardRail(subcmd, allowed, query string) error {
 		}
 	case "update":
 		// Must be write, must have SET/REMOVE, must not have CREATE/MERGE/DELETE.
-		if !isWrite || !reMutate.MatchString(query) || reCreate.MatchString(query) || reDelete.MatchString(query) {
+		if !isWrite || !reMutate.MatchString(masked) || reCreate.MatchString(masked) || reDelete.MatchString(masked) {
 			return fmt.Errorf("%w: graph update accepts only SET/REMOVE queries", utils.ErrValidation)
 		}
 	case "delete":
 		// Must be write, must have DELETE/DETACH, must not have CREATE/MERGE/SET/REMOVE.
-		if !isWrite || !reDelete.MatchString(query) || reCreate.MatchString(query) || reMutate.MatchString(query) {
+		if !isWrite || !reDelete.MatchString(masked) || reCreate.MatchString(masked) || reMutate.MatchString(masked) {
 			return fmt.Errorf("%w: graph delete accepts only DELETE/DETACH DELETE queries", utils.ErrValidation)
 		}
 	}
