@@ -434,35 +434,39 @@ class TestSprintTaskOrdering:
         # Get initial order
         initial_order = self._get_task_order(roadmap, sprint_id)
 
-        # Try move-to with negative position
+        # Genuinely invalid positions (negative, non-numeric) must be REJECTED
+        # and leave the order unchanged.
         exit_code, _, _ = self.test.run_cmd([
             "sprint", "move-to", "-r", roadmap, str(sprint_id),
             str(task_ids[0]), "-1"
         ], check=False)
-
         assert exit_code != 0, f"Move-to with negative position should fail, got exit code {exit_code}"
 
-        # Try move-to with position beyond task count
-        exit_code, _, _ = self.test.run_cmd([
-            "sprint", "move-to", "-r", roadmap, str(sprint_id),
-            str(task_ids[0]), "10"
-        ], check=False)
-
-        assert exit_code != 0, f"Move-to with position beyond count should fail, got exit code {exit_code}"
-
-        # Try move-to with non-numeric position
         exit_code, _, _ = self.test.run_cmd([
             "sprint", "move-to", "-r", roadmap, str(sprint_id),
             str(task_ids[0]), "abc"
         ], check=False)
-
         assert exit_code != 0, f"Move-to with non-numeric position should fail, got exit code {exit_code}"
 
-        # Verify order is unchanged
+        # Order is unchanged after the two genuinely-failed operations.
         current_order = self._get_task_order(roadmap, sprint_id)
-        assert current_order == initial_order, f"Order should remain unchanged after failed operations"
+        assert current_order == initial_order, "Order should remain unchanged after failed operations"
 
-        print("Move to invalid position rejected test passed")
+        # Move-to with position beyond task count CLAMPS to the end (finding #47):
+        # per SPEC/COMMANDS.md "If position >= task count, task is moved to the
+        # end" (consistent with `sprint bottom`). It must succeed (exit 0), not
+        # fail, and the task must land in the last position.
+        exit_code, _, _ = self.test.run_cmd([
+            "sprint", "move-to", "-r", roadmap, str(sprint_id),
+            str(task_ids[0]), "10"
+        ], check=False)
+        assert exit_code == 0, f"Move-to beyond count must clamp to end (exit 0), got {exit_code}"
+        clamped_order = self._get_task_order(roadmap, sprint_id)
+        assert clamped_order[-1] == task_ids[0], (
+            f"task moved beyond count must be last; order={clamped_order}, task={task_ids[0]}"
+        )
+
+        print("Move to invalid position rejected / out-of-range clamped test passed")
 
     def test_reorder_single_task(self):
         """Test reorder with single task (should be no-op)."""

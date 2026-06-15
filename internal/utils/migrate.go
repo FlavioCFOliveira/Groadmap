@@ -67,6 +67,18 @@ func migrateLegacyLayout(warn *os.File) error {
 		return fmt.Errorf("reading data directory %s: %w", dataDir, ErrDatabase)
 	}
 
+	// Re-verify the data directory's own 0700 posture. SPEC/ARCHITECTURE.md
+	// requires directory permissions to be (re)verified to 0700 after every
+	// layout migration; the per-roadmap loop below only hardens each roadmap
+	// home (~/.roadmaps/<name>/), never the ~/.roadmaps container itself, so a
+	// loosened data directory would survive a migration unnoticed (finding #59).
+	if err := os.Chmod(dataDir, DataDirPerm); err != nil {
+		return fmt.Errorf("setting permissions on data directory %s: %v: %w", dataDir, err, ErrDatabase)
+	}
+	if err := VerifyPermissions(dataDir, DataDirPerm); err != nil {
+		return fmt.Errorf("verifying data directory permissions: %v: %w", err, ErrDatabase)
+	}
+
 	for _, entry := range entries {
 		// Candidates are top-level REGULAR files ending in ".db".
 		// Everything else is silently skipped and left completely

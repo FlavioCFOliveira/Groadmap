@@ -593,7 +593,7 @@ Groadmap's usage model and expectations:
    previous invocation opens cleanly. A graph whose store is corrupt or unreadable
    surfaces as `utils.ErrDatabase` (exit code 1); there is no automatic graph-store
    repair in this first version.
-4. The graph store is independent of the SQLite connection cache and SQLite WAL
+4. The graph store is independent of the SQLite layer and the SQLite WAL
    model described in `IMPLEMENTATION.md § Concurrency Model`; the two persistence
    mechanisms do not share connections, locks, or transactions.
 

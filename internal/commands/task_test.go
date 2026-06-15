@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -159,8 +160,8 @@ func TestTaskCreate_MissingTitle(t *testing.T) {
 	if err == nil {
 		t.Error("taskCreate without title expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "missing required parameter: --title") {
-		t.Errorf("expected 'missing required parameter: --title' error, got: %v", err)
+	if !strings.Contains(err.Error(), "required parameter missing: --title") {
+		t.Errorf("expected 'required parameter missing: --title' error, got: %v", err)
 	}
 }
 
@@ -173,8 +174,8 @@ func TestTaskCreate_MissingFunctionalRequirements(t *testing.T) {
 	if err == nil {
 		t.Error("taskCreate without functional requirements expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "missing required parameter: --functional-requirements") {
-		t.Errorf("expected 'missing required parameter: --functional-requirements' error, got: %v", err)
+	if !strings.Contains(err.Error(), "required parameter missing: --functional-requirements") {
+		t.Errorf("expected 'required parameter missing: --functional-requirements' error, got: %v", err)
 	}
 }
 
@@ -187,8 +188,8 @@ func TestTaskCreate_MissingTechnicalRequirements(t *testing.T) {
 	if err == nil {
 		t.Error("taskCreate without technical requirements expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "missing required parameter: --technical-requirements") {
-		t.Errorf("expected 'missing required parameter: --technical-requirements' error, got: %v", err)
+	if !strings.Contains(err.Error(), "required parameter missing: --technical-requirements") {
+		t.Errorf("expected 'required parameter missing: --technical-requirements' error, got: %v", err)
 	}
 }
 
@@ -201,8 +202,8 @@ func TestTaskCreate_MissingAcceptanceCriteria(t *testing.T) {
 	if err == nil {
 		t.Error("taskCreate without acceptance criteria expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "missing required parameter: --acceptance-criteria") {
-		t.Errorf("expected 'missing required parameter: --acceptance-criteria' error, got: %v", err)
+	if !strings.Contains(err.Error(), "required parameter missing: --acceptance-criteria") {
+		t.Errorf("expected 'required parameter missing: --acceptance-criteria' error, got: %v", err)
 	}
 }
 
@@ -375,6 +376,89 @@ func TestTaskGet_MultipleIDs(t *testing.T) {
 	}
 }
 
+// TestTaskGet_FailFastUnknownID is a regression gate for finding #44: per
+// SPEC/COMMANDS.md § Get Task(s) (fail-fast batch behavior), any unknown ID —
+// including the all-invalid case (previously null/exit 0) and the mixed batch
+// case (previously silently dropped) — must fail with utils.ErrNotFound
+// (exit 4).
+func TestTaskGet_FailFastUnknownID(t *testing.T) {
+	testName := "testtaskgetfailfast"
+	database, cleanup := setupTestTaskRoadmap(t, testName)
+	defer cleanup()
+
+	if _, err := database.CreateTask(context.Background(), &models.Task{
+		Priority: 1, Severity: 1, Status: models.StatusBacklog,
+		Title: "Existing task", FunctionalRequirements: "f",
+		TechnicalRequirements: "t", AcceptanceCriteria: "a",
+		CreatedAt: utils.NowISO8601(),
+	}); err != nil {
+		t.Fatalf("failed to create task: %v", err)
+	}
+
+	for _, tc := range []struct{ name, ids string }{
+		{"all invalid", "999"},
+		{"mixed valid and invalid", "1,999"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := HandleTask([]string{"get", "-r", testName, tc.ids})
+			if err == nil {
+				t.Fatalf("%s: expected not-found error, got nil", tc.name)
+			}
+			if !errors.Is(err, utils.ErrNotFound) {
+				t.Errorf("%s: expected utils.ErrNotFound (exit 4), got: %v", tc.name, err)
+			}
+		})
+	}
+}
+
+// TestTaskMutate_FailFastUnknownID is a regression gate for finding #45:
+// `task prio` / `task sev` must verify existence first. Nonexistent IDs must
+// fail with utils.ErrNotFound (exit 4) and write NO audit rows, instead of
+// succeeding (exit 0) and logging phantom audit entries.
+func TestTaskMutate_FailFastUnknownID(t *testing.T) {
+	testName := "testtaskmutatefailfast"
+	database, cleanup := setupTestTaskRoadmap(t, testName)
+	defer cleanup()
+
+	if _, err := database.CreateTask(context.Background(), &models.Task{
+		Priority: 1, Severity: 1, Status: models.StatusBacklog,
+		Title: "Existing task", FunctionalRequirements: "f",
+		TechnicalRequirements: "t", AcceptanceCriteria: "a",
+		CreatedAt: utils.NowISO8601(),
+	}); err != nil {
+		t.Fatalf("failed to create task: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"prio unknown id", []string{"prio", "-r", testName, "999", "5"}},
+		{"sev unknown id", []string{"sev", "-r", testName, "999", "5"}},
+		{"prio mixed batch", []string{"prio", "-r", testName, "1,999", "5"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := HandleTask(tc.args)
+			if err == nil {
+				t.Fatalf("%s: expected not-found error, got nil", tc.name)
+			}
+			if !errors.Is(err, utils.ErrNotFound) {
+				t.Errorf("%s: expected utils.ErrNotFound (exit 4), got: %v", tc.name, err)
+			}
+		})
+	}
+
+	// No phantom audit rows for the nonexistent task #999 must remain.
+	var phantom int
+	if err := database.QueryRowContext(context.Background(),
+		"SELECT COUNT(*) FROM audit WHERE entity_id = 999").Scan(&phantom); err != nil {
+		t.Fatalf("counting audit rows: %v", err)
+	}
+	if phantom != 0 {
+		t.Errorf("expected 0 audit rows for nonexistent task #999, got %d", phantom)
+	}
+}
+
 // ==================== taskEdit Tests ====================
 
 func TestTaskEdit_NoRoadmap(t *testing.T) {
@@ -409,17 +493,16 @@ func TestTaskEdit_InvalidID(t *testing.T) {
 	}
 }
 
+// TestTaskEdit_NoFields is a regression gate for finding #48: per
+// SPEC/COMMANDS.md § Edit Task, an edit with no fields is a successful no-op
+// (exit 0, no output, no audit entry), NOT a validation error.
 func TestTaskEdit_NoFields(t *testing.T) {
 	testName := "testtaskeditnofields"
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"edit", "-r", testName, "1"})
-	if err == nil {
-		t.Error("taskEdit with no fields expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "no fields to update") {
-		t.Errorf("expected 'no fields to update' error, got: %v", err)
+	if err := HandleTask([]string{"edit", "-r", testName, "1"}); err != nil {
+		t.Errorf("taskEdit with no fields must be a no-op (exit 0), got error: %v", err)
 	}
 }
 
@@ -431,6 +514,33 @@ func TestTaskEdit_InvalidPriority(t *testing.T) {
 	err := HandleTask([]string{"edit", "-r", testName, "1", "-p", "invalid"})
 	if err == nil {
 		t.Error("taskEdit with invalid priority expected error, got nil")
+	}
+}
+
+// TestTaskEdit_OutOfRangePriority is a regression gate for finding #46: an
+// out-of-range (but numeric) priority/severity on `task edit` must fail with
+// utils.ErrValidation (exit 6), not leak the raw SQLite CHECK error (exit 1).
+func TestTaskEdit_OutOfRangePriority(t *testing.T) {
+	testName := "testtaskeditpriorange"
+	_, cleanup := setupTestTaskRoadmap(t, testName)
+	defer cleanup()
+
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"priority above max", []string{"edit", "-r", testName, "1", "-p", "99"}},
+		{"severity above max", []string{"edit", "-r", testName, "1", "--severity", "50"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := HandleTask(tc.args)
+			if err == nil {
+				t.Fatalf("%s: expected validation error, got nil", tc.name)
+			}
+			if !errors.Is(err, utils.ErrValidation) {
+				t.Errorf("%s: expected utils.ErrValidation (exit 6), got: %v", tc.name, err)
+			}
+		})
 	}
 }
 

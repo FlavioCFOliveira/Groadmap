@@ -1,7 +1,38 @@
 // Package utils provides utility functions for the Groadmap CLI application.
 package utils
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
+
+// MessageError carries a SPEC-mandated, human-readable message while still
+// chaining one or more sentinel errors for errors.Is-based exit-code mapping.
+// Its Error() returns ONLY the message (no sentinel prefix), so messages the
+// SPEC specifies verbatim render exactly as documented — e.g.
+// "Error: Roadmap name must not exceed 50 characters (got 60)" rather than
+// "Error: validation error: ...: roadmap name too long". Unwrap returns the
+// full sentinel chain (Go 1.20+ multi-error semantics), so both
+// errors.Is(err, ErrValidation) and errors.Is(err, ErrRoadmapNameTooLong) hold.
+type MessageError struct {
+	Msg       string
+	Sentinels []error
+}
+
+func (e *MessageError) Error() string   { return e.Msg }
+func (e *MessageError) Unwrap() []error { return e.Sentinels }
+
+// ValidationMessage builds a MessageError that wraps ErrValidation (exit 6)
+// plus any additional sentinels, rendering exactly the provided message.
+func ValidationMessage(msg string, extra ...error) error {
+	return &MessageError{Msg: msg, Sentinels: append([]error{ErrValidation}, extra...)}
+}
+
+// ValidationMessagef is the fmt.Sprintf-style variant of ValidationMessage.
+// (Note: it takes no extra sentinels; use ValidationMessage for those.)
+func ValidationMessagef(format string, a ...any) error {
+	return &MessageError{Msg: fmt.Sprintf(format, a...), Sentinels: []error{ErrValidation}}
+}
 
 // Sentinel errors for common error conditions.
 // These errors can be used with errors.Is for reliable error checking.

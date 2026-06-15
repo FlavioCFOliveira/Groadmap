@@ -112,7 +112,7 @@ func loadRoadmapNames() ([]string, error) {
 // (resolveRoadmap); this function trusts name is a validated, existing
 // roadmap.
 func loadSprints(ctx context.Context, name string) (sprintsData, error) {
-	database, err := db.OpenExisting(name)
+	database, err := db.OpenReadOnly(name)
 	if err != nil {
 		return sprintsData{}, err
 	}
@@ -153,7 +153,7 @@ func loadSprints(ctx context.Context, name string) (sprintsData, error) {
 // (resolveRoadmap); this function trusts name is a validated, existing
 // roadmap.
 func loadTasks(ctx context.Context, name string) (tasksData, error) {
-	database, err := db.OpenExisting(name)
+	database, err := db.OpenReadOnly(name)
 	if err != nil {
 		return tasksData{}, err
 	}
@@ -203,7 +203,7 @@ func dedupeSprintTasks(views []sprintView) []models.Task {
 // utils.ErrNotFound (from db.GetSprint) when no sprint with that id belongs to
 // the roadmap, which the handler maps to HTTP 404.
 func loadSprint(ctx context.Context, name string, id int) (sprintPageData, error) {
-	database, err := db.OpenExisting(name)
+	database, err := db.OpenReadOnly(name)
 	if err != nil {
 		return sprintPageData{}, err
 	}

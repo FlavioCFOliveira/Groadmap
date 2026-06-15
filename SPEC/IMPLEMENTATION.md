@@ -13,7 +13,6 @@ This file contains the implementation strategies that support the contracts defi
   - [Anti-Patterns to Avoid](#anti-patterns-to-avoid)
   - [Race Condition Testing](#race-condition-testing)
 - [Query Caching](#query-caching)
-- [Connection Caching](#connection-caching)
 - [Graph Store Concurrency](#graph-store-concurrency)
 - [Performance Considerations](#performance-considerations)
 - [See Also](#see-also)
@@ -205,90 +204,6 @@ func (bp *BatchProcessor) ProcessChunks(ids []int, fn func(chunk []int) error) e
 - Batch processing handles 1000+ IDs efficiently
 - Thread-safe implementation verified with concurrent access
 
-## Connection Caching
-
-The database layer implements connection caching to eliminate connection establishment overhead (10-50ms per command) by reusing database connections within the same process lifetime.
-
-### Problem Statement
-
-Every CLI command opens and closes the database connection, incurring:
-- **Connection establishment:** 5-20ms
-- **Schema validation:** 2-10ms
-- **File descriptor operations:** 3-10ms
-- **Total overhead:** 10-50ms per command
-
-### Cache Design
-
-A process-level connection cache that:
-- Keys connections by roadmap name
-- Returns existing connections when available
-- Validates connection health before reuse
-- Cleans up on process exit
-
-### Data Structures
-
-```go
-// ConnectionCache manages database connections for the process lifetime
-type ConnectionCache struct {
-    connections map[string]*CachedConnection
-    mu          sync.RWMutex
-    cleanupOnce sync.Once
-}
-
-// CachedConnection wraps a database connection with metadata
-type CachedConnection struct {
-    db          *DB
-    roadmapName string
-    createdAt   time.Time
-    lastUsed    time.Time
-    useCount    int
-}
-```
-
-### Cache Operations
-
-```go
-// OpenCached returns a cached connection for the roadmap, or creates a new one
-func (cc *ConnectionCache) OpenCached(roadmapName string) (*DB, error)
-
-// Get retrieves a cached connection without creating a new one
-func (cc *ConnectionCache) Get(roadmapName string) *DB
-
-// Store adds a connection to the cache
-func (cc *ConnectionCache) Store(roadmapName string, db *DB)
-
-// Remove deletes a connection from the cache
-func (cc *ConnectionCache) Remove(roadmapName string)
-
-// HealthCheck verifies a connection is still alive
-func (cc *ConnectionCache) HealthCheck(db *DB) error
-
-// CloseAll closes all cached connections
-func (cc *ConnectionCache) CloseAll() error
-```
-
-### Global Cache Instance
-
-```go
-// globalCache is the process-level connection cache
-var globalCache = NewConnectionCache()
-
-// OpenCached is a convenience function that uses the global cache
-func OpenCached(roadmapName string) (*DB, error)
-
-// CloseAllCached closes all cached connections
-func CloseAllCached() error
-```
-
-### Performance Requirements
-
-- Second command reuses existing connection
-- Connection health check validates liveness
-- Dead connections are removed from cache and recreated
-- Process exit closes all cached connections
-- Concurrent access to cache is thread-safe
-- Memory usage remains stable (no connection leaks)
-
 ## Graph Store Concurrency
 
 The knowledge graph is backed by the GoGraph store, which is a separate
@@ -308,10 +223,9 @@ from the snapshot and log.
 1. The `rmp` CLI is a short-lived process. Each `rmp graph` invocation opens the
    roadmap's graph store, runs exactly one query, commits any write, checkpoints
    after a successful write (see [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)),
-   closes the store, and exits. The store is **not** held open across invocations
-   and is **not** part of the SQLite connection cache (see
-   [Connection Caching](#connection-caching)). The two persistence mechanisms
-   share no connections, locks, or transactions.
+   closes the store, and exits. The store is **not** held open across invocations,
+   and it shares no connections, locks, or transactions with the SQLite layer.
+   The two persistence mechanisms are fully independent.
 2. Read subcommands open the store, run the query through the engine's read path,
    stream the result to stdout, and close. Write subcommands run the query through
    the engine's transactional path so the change is committed atomically, then

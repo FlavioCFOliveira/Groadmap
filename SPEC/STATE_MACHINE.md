@@ -66,19 +66,21 @@ Tasks can be in one of the following states:
                 +-----------+
 ```
 
-Legend: arrows labelled with the command that triggers the transition. Transitions marked `(automatic)` are not user-callable via `task stat`; see Section "Valid Transitions" for the full rule set.
+Legend: arrows labelled with the command that triggers the transition. Transitions marked `(automatic)` are not user-callable via `task stat`; see Section "Valid Transitions" for the full rule set. For readability the diagram draws the `task reopen` return-to-BACKLOG edge only from `SPRINT` and `COMPLETED`; `task reopen` also returns a task to `BACKLOG` from `DOING` and `TESTING` (any non-BACKLOG state).
 
 ### Valid Transitions
 
 | From State | Valid To States | How |
 |------------|-----------------|-----|
 | `BACKLOG` | `SPRINT` | Automatic only (via `sprint add-tasks`) |
-| `SPRINT` | `BACKLOG`, `DOING` | `BACKLOG` is automatic (via `sprint remove-tasks` or `sprint remove`); `DOING` is manual (via `task stat`) |
-| `DOING` | `TESTING` | Manual (via `task stat`) |
-| `TESTING` | `DOING`, `COMPLETED` | Manual (via `task stat`; `COMPLETED` accepts optional `--summary`) |
+| `SPRINT` | `BACKLOG`, `DOING` | `BACKLOG` is automatic (via `sprint remove-tasks` or `sprint remove`) or manual (via `task reopen`); `DOING` is manual (via `task stat`) |
+| `DOING` | `TESTING`, `BACKLOG` | `TESTING` is manual (via `task stat`); `BACKLOG` is manual (via `task reopen`) |
+| `TESTING` | `DOING`, `COMPLETED`, `BACKLOG` | `DOING` and `COMPLETED` are manual (via `task stat`; `COMPLETED` accepts optional `--summary`); `BACKLOG` is manual (via `task reopen`) |
 | `COMPLETED` | `BACKLOG` | Manual (via `task stat` or `task reopen`); clears `completion_summary` |
 
-**Rejection rule:** Manual `task stat <ids> SPRINT` is rejected with exit code 6 from any source state. The SPRINT status is set exclusively by `sprint add-tasks`, which atomically links the task to a sprint via the `sprint_tasks` table. Returning a task to its sprint after starting work is therefore not supported via `task stat`.
+**Rejection rule:** Manual `task stat <ids> SPRINT` is rejected with exit code 6 from any source state. The SPRINT status is set exclusively by `sprint add-tasks`, which atomically links the task to a sprint via the `sprint_tasks` table. In particular, the `DOING → SPRINT` transition is invalid: returning a task to its sprint after starting work is not supported via `task stat`.
+
+**`task reopen`:** The `task reopen` command is a manual transition distinct from `task stat` and from the automatic `SPRINT → BACKLOG` side effect of sprint operations. It transitions a task from any non-BACKLOG state (`SPRINT`, `DOING`, `TESTING`, or `COMPLETED`) back to `BACKLOG`. It clears all lifecycle timestamps (`started_at`, `tested_at`, `closed_at`) and `completion_summary` to NULL, and removes the task's `sprint_tasks` association. See `COMMANDS.md § Reopen Task`.
 
 ### Task Deletion Precondition
 
@@ -95,7 +97,7 @@ This rule preserves the audit trail of work that progressed past `BACKLOG`. The 
 | Transition Type | How Triggered | Command |
 |-----------------|---------------|---------|
 | **Automatic** | Status changed as side effect of sprint operations | `sprint add-tasks`, `sprint remove-tasks`, `sprint remove` |
-| **Manual** | Status changed explicitly via task command | `task stat` |
+| **Manual** | Status changed explicitly via task command | `task stat`, `task reopen` |
 
 #### Automatic Transitions
 
@@ -112,7 +114,10 @@ This rule preserves the audit trail of work that progressed past `BACKLOG`. The 
 | **DOING → TESTING** | Task is ready for testing | Set `tested_at` to current timestamp |
 | **TESTING → DOING** | Testing failed, return to development | No date changes |
 | **TESTING → COMPLETED** | Testing passed, task is complete | Set `closed_at` to current timestamp; optionally set `completion_summary` |
-| **COMPLETED → BACKLOG** | Task is reopened for rework | Clear `started_at`, `tested_at`, `closed_at`, `completion_summary` to NULL |
+| **COMPLETED → BACKLOG** | Task is reopened for rework (via `task stat` or `task reopen`) | Clear `started_at`, `tested_at`, `closed_at`, `completion_summary` to NULL |
+| **SPRINT → BACKLOG** (via `task reopen`) | Task is reopened from a sprint without starting work | Clear `started_at`, `tested_at`, `closed_at`, `completion_summary` to NULL; remove `sprint_tasks` association |
+| **DOING → BACKLOG** (via `task reopen`) | In-progress task is reopened | Clear `started_at`, `tested_at`, `closed_at`, `completion_summary` to NULL; remove `sprint_tasks` association |
+| **TESTING → BACKLOG** (via `task reopen`) | In-testing task is reopened | Clear `started_at`, `tested_at`, `closed_at`, `completion_summary` to NULL; remove `sprint_tasks` association |
 
 #### Sub-task Hierarchy Guard
 
@@ -156,11 +161,17 @@ The following fields track the task lifecycle and are managed automatically by t
 
 #### Reopening Behavior
 
-When a task is reopened (COMPLETED → BACKLOG):
+A task is reopened to `BACKLOG` in one of two ways:
+- `task stat <ids> BACKLOG`, valid from `COMPLETED` (and from `SPRINT`).
+- `task reopen <ids>`, valid from any non-BACKLOG state (`SPRINT`, `DOING`, `TESTING`, or `COMPLETED`).
+
+In both cases:
 - All lifecycle dates (`started_at`, `tested_at`, `closed_at`) are reset to NULL
 - `completion_summary` is reset to NULL
 - `created_at` is preserved (original creation time)
 - This allows the task to go through the full lifecycle again
+
+In addition, `task reopen` removes the task's `sprint_tasks` association, fully detaching the task from any sprint.
 
 #### Date Format
 
@@ -190,7 +201,7 @@ The state machine is designed to:
 
 1. **Prevent invalid workflows**: Tasks must follow a logical progression
 2. **Support agile practices**: Tasks can move back (e.g., from TESTING to DOING)
-3. **Enable reopening**: Completed tasks can be reopened to BACKLOG
+3. **Enable reopening**: Tasks in any non-BACKLOG state can be reopened to BACKLOG via `task reopen`; completed tasks can also be reopened via `task stat`
 4. **Maintain clarity**: Each state has a clear meaning and purpose
 
 ## Sprint State Machine

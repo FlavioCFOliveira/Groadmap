@@ -47,6 +47,30 @@ func mustReadFile(t *testing.T, path string) string {
 	return string(b)
 }
 
+// TestMigrateLegacyLayout_HardensDataDir is a regression gate for finding #59:
+// SPEC/ARCHITECTURE.md requires directory permissions to be (re)verified to
+// 0700 after every layout migration. The per-roadmap loop only hardened each
+// roadmap home, leaving a loosened ~/.roadmaps data directory unfixed.
+func TestMigrateLegacyLayout_HardensDataDir(t *testing.T) {
+	dataDir := withTempDataDir(t)
+	writeLegacyDB(t, dataDir, "paymentservice", "DBCONTENT")
+
+	// Loosen the data directory's permissions to simulate a pre-existing
+	// insecure posture.
+	if err := os.Chmod(dataDir, 0o755); err != nil {
+		t.Fatalf("loosening data dir perms: %v", err)
+	}
+
+	if err := MigrateLegacyLayout(); err != nil {
+		t.Fatalf("MigrateLegacyLayout returned error: %v", err)
+	}
+
+	// The data directory itself must be re-secured to 0700.
+	if err := VerifyPermissions(dataDir, DataDirPerm); err != nil {
+		t.Errorf("data directory must be re-secured to 0700 after migration: %v", err)
+	}
+}
+
 func TestMigrateLegacyLayout_HappyPathNoSidecars(t *testing.T) {
 	dataDir := withTempDataDir(t)
 

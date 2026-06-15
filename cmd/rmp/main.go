@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/aihelp"
@@ -238,14 +239,7 @@ func printHelp() {
 Usage: rmp [command] [subcommand] [arguments] [options]
 
 Commands:
-  roadmap, road    Create, list, and remove roadmaps (~/.roadmaps/<name>/project.db)
-  task, t          Manage tasks across statuses BACKLOG/SPRINT/DOING/TESTING/COMPLETED
-  sprint, s        Manage sprints and their task membership/ordering
-  backlog, bl      Query BACKLOG-status tasks (planning view for tasks not yet in a sprint)
-  audit, aud       Query the per-roadmap audit log
-  stats            Roadmap-wide statistics (sprint counts, task distribution, velocity)
-  graph            Manage the knowledge graph (Cypher: create/query/update/delete/search)
-
+%s
 Choosing a task-listing command:
   rmp task list            All tasks in a roadmap, any status (filter with --status, etc.)
   rmp backlog list         Only BACKLOG tasks (subset of 'task list' with --status BACKLOG)
@@ -264,5 +258,26 @@ Global Options:
   -v, --version    Show version
 
 Use "rmp [command] --help" for more information about a command.
-`, appName)
+`, appName, commandSummaryLines())
+}
+
+// commandSummaryLines renders the global-help command list directly from the
+// command registry (the single source of truth per SPEC/ARCHITECTURE.md), so
+// the list can never drift from the registered commands. Previously this block
+// was hardcoded and had silently dropped the `web` command (finding #51).
+func commandSummaryLines() string {
+	var b strings.Builder
+	cmds := commands.AppRegistry().Commands
+	for i := range cmds {
+		c := &cmds[i]
+		name := c.Name
+		if len(c.Aliases) > 0 {
+			name += ", " + strings.Join(c.Aliases, ", ")
+		}
+		// Trim the trailing period registry summaries carry, to match the
+		// established one-line help style.
+		summary := strings.TrimSuffix(c.Summary, ".")
+		fmt.Fprintf(&b, "  %-16s %s\n", name, summary)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }

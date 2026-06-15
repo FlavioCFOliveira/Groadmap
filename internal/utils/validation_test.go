@@ -1,9 +1,64 @@
 package utils
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
+
+// TestValidateIDString_OverflowExitClass is a regression gate for finding #58:
+// an int64-overflowing all-digits ID must map to ErrValidation (exit 6), the
+// same class as an in-range value that exceeds the valid ID maximum — NOT
+// ErrInvalidInput (exit 2), which is reserved for genuine syntax errors.
+func TestValidateIDString_OverflowExitClass(t *testing.T) {
+	_, err := ValidateIDString("999999999999999999999", "task")
+	if err == nil {
+		t.Fatal("expected error for overflowing ID, got nil")
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Errorf("overflow ID must wrap ErrValidation (exit 6), got: %v", err)
+	}
+	if errors.Is(err, ErrInvalidInput) {
+		t.Errorf("overflow ID must NOT be classified as ErrInvalidInput (exit 2): %v", err)
+	}
+
+	// A genuine syntax error (non-digit) stays ErrInvalidInput (exit 2).
+	_, err = ValidateIDString("12abc", "task")
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Errorf("non-numeric ID must remain ErrInvalidInput (exit 2), got: %v", err)
+	}
+}
+
+// TestValidateRoadmapName_SpecVerbatimMessages is a regression gate for finding
+// #60: the roadmap-name validation messages must match SPEC/COMMANDS.md verbatim
+// (no sentinel prefix) while still wrapping ErrValidation (exit 6).
+func TestValidateRoadmapName_SpecVerbatimMessages(t *testing.T) {
+	cases := []struct {
+		name    string
+		input   string
+		wantMsg string
+	}{
+		{"empty", "", "Roadmap name is required"},
+		{"too long", strings.Repeat("a", MaxRoadmapNameLength+1),
+			"Roadmap name must not exceed 50 characters (got 51)"},
+		{"invalid chars", "Bad_UPPER",
+			"Roadmap name must only contain lowercase letters, numbers, underscores, and hyphens"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateRoadmapName(tc.input)
+			if err == nil {
+				t.Fatalf("expected error for %q", tc.input)
+			}
+			if err.Error() != tc.wantMsg {
+				t.Errorf("message = %q, want SPEC-verbatim %q", err.Error(), tc.wantMsg)
+			}
+			if !errors.Is(err, ErrValidation) {
+				t.Errorf("must wrap ErrValidation (exit 6): %v", err)
+			}
+		})
+	}
+}
 
 func TestValidateID(t *testing.T) {
 	tests := []struct {
@@ -113,8 +168,12 @@ func TestValidateIDString(t *testing.T) {
 		{"negative", "-1", "task", 0, true, "must be positive"},
 		{"negative large", "-999", "task", 0, true, "must be positive"},
 
-		// Invalid - overflow
+		// Invalid - overflow (exceeds the valid ID range, parses into int64)
 		{"overflow", "99999999999999999", "task", 0, true, "exceeds maximum"},
+		// Invalid - int64 overflow (too big for Atoi). Regression for finding
+		// #58: classified as a magnitude/range failure ("exceeds maximum"),
+		// consistent with the in-range overflow above, not a syntax error.
+		{"int64 overflow", "999999999999999999999", "task", 0, true, "exceeds maximum"},
 	}
 
 	for _, tt := range tests {

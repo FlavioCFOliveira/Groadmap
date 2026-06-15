@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/FlavioCFOliveira/GoGraph/cypher"
@@ -255,11 +256,29 @@ func readQuery(args []string) (string, error) {
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--query", "-q":
-			if i+1 < len(args) {
-				queryVal = args[i+1]
-				queryFound = true
-				i++
+			// SPEC/GRAPH.md precedence rule 4: when --query is present but its
+			// value is missing — there is no following token, or the next token
+			// is itself a flag (so no value was supplied) — the command fails
+			// with exit 2 rather than silently falling back to stdin (finding
+			// #26) or swallowing the following flag as the value (finding #27).
+			// A Cypher query never begins with '-', so a leading dash means the
+			// value is absent.
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				return "", fmt.Errorf("%w: no query supplied", utils.ErrRequired)
 			}
+			queryVal = args[i+1]
+			queryFound = true
+			i++
+		default:
+			// Graph queries are supplied ONLY via --query or stdin (SPEC/GRAPH.md
+			// § Cypher Input Source and Precedence); there are no other graph
+			// flags and no positional query. Reject anything else as malformed
+			// input (exit 2) instead of silently ignoring it, matching the
+			// cross-cutting unknown-flag rule in SPEC/ARCHITECTURE.md (finding #28).
+			if strings.HasPrefix(args[i], "-") {
+				return "", fmt.Errorf("%w: unknown flag: %s", utils.ErrInvalidInput, args[i])
+			}
+			return "", fmt.Errorf("%w: unexpected argument %q (graph queries use --query or stdin)", utils.ErrInvalidInput, args[i])
 		}
 	}
 
@@ -747,6 +766,34 @@ func checkpointGraph(g *lpg.Graph[string, float64], w *wal.Writer, graphDir stri
 	return nil
 }
 
+// acquireGraphWriteLock takes an exclusive, non-blocking advisory lock
+// (flock) on the graph store for the duration of a write. Two concurrent
+// `rmp graph` writers must NOT interleave their open -> commit -> checkpoint ->
+// WAL-truncate sequences: a second writer that loaded the graph before the
+// first's commit would, on checkpoint, write a FULL snapshot of its own
+// (stale) in-memory graph — missing the first writer's committed change — and
+// then truncate the WAL that still held it, silently losing an acknowledged
+// write. Per SPEC/GRAPH.md § Concurrency and Recovery rule 2, a concurrent
+// write must surface as utils.ErrDatabase (exit 1) rather than corrupt the
+// store, so the lock is acquired non-blocking (LOCK_NB) and contention is
+// reported as ErrDatabase. The returned release closure unlocks and closes the
+// lock file; flock is also released automatically if the process dies.
+func acquireGraphWriteLock(graphDir string) (func(), error) {
+	lockPath := filepath.Join(graphDir, "write.lock")
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600) // #nosec G304 -- lockPath is derived from a validated roadmap name under ~/.roadmaps
+	if err != nil {
+		return nil, fmt.Errorf("%w: opening graph write lock: %v", utils.ErrDatabase, err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("%w: graph store is busy: a concurrent write is in progress", utils.ErrDatabase)
+	}
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = f.Close()
+	}, nil
+}
+
 // runGraphWrite is the shared implementation for write subcommands
 // (create, update, delete). It opens the WAL store with retry,
 // runs the query in a transaction, and serialises the result.
@@ -769,6 +816,14 @@ func runGraphWrite(subcmd, allowed string, args []string) error {
 	if err != nil {
 		return err
 	}
+
+	// Serialise concurrent writers to prevent the lost-write corruption
+	// described in acquireGraphWriteLock. Held until after the checkpoint.
+	releaseLock, err := acquireGraphWriteLock(graphDir)
+	if err != nil {
+		return err
+	}
+	defer releaseLock()
 
 	res, err := recovery.Open[string, float64](graphDir, graphReadOpts)
 	if err != nil {

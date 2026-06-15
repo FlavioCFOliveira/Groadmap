@@ -51,7 +51,9 @@ var (
 // literal in a query. Computed at package init.
 var (
 	// sqlActiveTaskStatuses lists the three non-terminal statuses a task can
-	// hold while it sits inside a sprint: SPRINT, DOING, TESTING.
+	// hold while it sits inside a sprint: SPRINT, DOING, TESTING. Used for
+	// sprint capacity accounting (a merely-assigned SPRINT task still occupies
+	// a slot).
 	sqlActiveTaskStatuses = "('" + string(models.StatusSprint) + "', '" +
 		string(models.StatusDoing) + "', '" + string(models.StatusTesting) + "')"
 	// sqlStatusCompleted and sqlSprintClosed are inlined into stats queries
@@ -1195,7 +1197,10 @@ func (db *DB) ListSprints(ctx context.Context, status *models.SprintStatus) ([]m
 	}
 	defer rows.Close()
 
-	var sprints []models.Sprint
+	// Initialize to a non-nil empty slice so an empty result marshals to JSON
+	// `[]`, not `null`, per SPEC/DATA_FORMATS.md Implementation Notes #6
+	// (finding #53).
+	sprints := []models.Sprint{}
 	for rows.Next() {
 		var sprint models.Sprint
 		var startedAt sql.NullString
@@ -1378,6 +1383,46 @@ func (db *DB) GetActiveSprintTasks(ctx context.Context, sprintID int) ([]models.
 	defer rows.Close()
 
 	return scanTasksWithDeps(rows)
+}
+
+// CompactSprintPositionsTx renumbers a sprint's task positions to a contiguous
+// 0..N-1 sequence (preserving the current order), eliminating gaps left by a
+// removal. MoveTaskToPosition's shift arithmetic assumes contiguous positions,
+// so any operation that deletes sprint_tasks rows must compact afterwards.
+// Runs inside an existing transaction. Position carries no UNIQUE constraint,
+// so the sequential re-assignment cannot collide.
+func CompactSprintPositionsTx(tx *sql.Tx, sprintID int) error {
+	rows, err := tx.Query(
+		"SELECT task_id FROM sprint_tasks WHERE sprint_id = ? ORDER BY position ASC, task_id ASC",
+		sprintID,
+	)
+	if err != nil {
+		return fmt.Errorf("reading sprint positions: %w", err)
+	}
+	var ordered []int
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			rows.Close() // #nosec G104 -- best-effort close in error path
+			return fmt.Errorf("scanning sprint position: %w", err)
+		}
+		ordered = append(ordered, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close() // #nosec G104 -- best-effort close in error path
+		return fmt.Errorf("iterating sprint positions: %w", err)
+	}
+	rows.Close() // #nosec G104 -- explicit close before issuing writes on the same tx
+
+	for i, id := range ordered {
+		if _, err := tx.Exec(
+			"UPDATE sprint_tasks SET position = ? WHERE sprint_id = ? AND task_id = ?",
+			i, sprintID, id,
+		); err != nil {
+			return fmt.Errorf("compacting sprint positions: %w", err)
+		}
+	}
+	return nil
 }
 
 // GetSprintTasksFull retrieves full task objects for a sprint, ordered by position or priority.
@@ -1789,7 +1834,10 @@ func (db *DB) GetAuditEntries(ctx context.Context, f *AuditFilter) ([]models.Aud
 	}
 	defer rows.Close()
 
-	var entries []models.AuditEntry
+	// Initialize to a non-nil empty slice so an empty result marshals to JSON
+	// `[]`, not `null`, per SPEC/DATA_FORMATS.md Implementation Notes #6
+	// (finding #53).
+	entries := []models.AuditEntry{}
 	for rows.Next() {
 		var entry models.AuditEntry
 		err := rows.Scan(

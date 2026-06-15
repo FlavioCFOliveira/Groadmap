@@ -921,6 +921,6 @@ Or check magic bytes: SQLite files start with `"SQLite format 3\x00"`
 
 ## See Also
 
-- Query and connection caching strategies → `IMPLEMENTATION.md § Query Caching` / `IMPLEMENTATION.md § Connection Caching`
+- Query caching strategy → `IMPLEMENTATION.md § Query Caching`
 - Schema migrations and version history → `VERSION.md § Migrations`
 - Concurrency model (WAL, pool, retry) → `IMPLEMENTATION.md § Concurrency Model`

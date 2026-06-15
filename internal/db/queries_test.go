@@ -1383,3 +1383,28 @@ func TestWithCustomTimeout(t *testing.T) {
 		t.Errorf("expected deadline around %v, got %v", expectedDeadline, deadline)
 	}
 }
+
+// TestEmptyListsAreNonNil is a regression gate for finding #53: ListSprints and
+// GetAuditEntries must return a non-nil empty slice (so the command layer
+// marshals JSON `[]`, not `null`) per SPEC/DATA_FORMATS.md Implementation Notes #6.
+func TestEmptyListsAreNonNil(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+	ctx := testContext()
+
+	sprints, err := db.ListSprints(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListSprints: %v", err)
+	}
+	if sprints == nil {
+		t.Error("ListSprints must return a non-nil empty slice, got nil (marshals to JSON null)")
+	}
+
+	entries, err := db.GetAuditEntries(ctx, &AuditFilter{})
+	if err != nil {
+		t.Fatalf("GetAuditEntries: %v", err)
+	}
+	if entries == nil {
+		t.Error("GetAuditEntries must return a non-nil empty slice, got nil (marshals to JSON null)")
+	}
+}

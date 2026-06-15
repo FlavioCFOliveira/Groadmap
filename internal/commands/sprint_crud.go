@@ -63,7 +63,10 @@ func sprintCreate(args []string) error {
 
 	description, _ := result.Flags["Description"].(string)
 	if description == "" {
-		return fmt.Errorf("%w: missing required parameter: --description", utils.ErrRequired)
+		// "<sentinel>: --flag" so stderr matches the SPEC canonical shape
+		// ("Error: required parameter missing: --description") without the
+		// redundant doubled prefix (finding #54).
+		return fmt.Errorf("%w: --description", utils.ErrRequired)
 	}
 
 	var maxTasks *int
@@ -320,9 +323,14 @@ func sprintRemove(args []string) error {
 
 	// Delete within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
-		// First reset task statuses
+		// First reset task statuses to BACKLOG, clearing ALL lifecycle
+		// timestamps and the completion summary. Tasks may have progressed to
+		// DOING/TESTING/COMPLETED inside the sprint, so leaving those fields set
+		// on a BACKLOG task violates the state machine's reopening invariant
+		// (SPEC/STATE_MACHINE.md Reopening Behavior; finding #49).
 		_, resetErr := tx.Exec(
-			`UPDATE tasks SET status = 'BACKLOG' WHERE id IN (
+			`UPDATE tasks SET status = 'BACKLOG', started_at = NULL, tested_at = NULL,
+			        closed_at = NULL, completion_summary = NULL WHERE id IN (
 				SELECT task_id FROM sprint_tasks WHERE sprint_id = ?
 			)`,
 			sprintID,

@@ -81,18 +81,22 @@ func taskCreate(args []string) error {
 		taskType = parsed
 	}
 
-	// Validate required fields (preserve exact error messages for compatibility)
+	// Validate required fields. The message is "<sentinel>: --flag" so the
+	// rendered stderr matches the SPEC canonical exactly — e.g.
+	// "Error: required parameter missing: --title" (SPEC/HELP.md,
+	// SPEC/DATA_FORMATS.md). Previously it embedded a redundant "missing
+	// required parameter:" prefix, doubling the sentinel text (finding #54).
 	if title == "" {
-		return fmt.Errorf("%w: missing required parameter: --title", utils.ErrRequired)
+		return fmt.Errorf("%w: --title", utils.ErrRequired)
 	}
 	if functionalReqs == "" {
-		return fmt.Errorf("%w: missing required parameter: --functional-requirements", utils.ErrRequired)
+		return fmt.Errorf("%w: --functional-requirements", utils.ErrRequired)
 	}
 	if technicalReqs == "" {
-		return fmt.Errorf("%w: missing required parameter: --technical-requirements", utils.ErrRequired)
+		return fmt.Errorf("%w: --technical-requirements", utils.ErrRequired)
 	}
 	if acceptanceCriteria == "" {
-		return fmt.Errorf("%w: missing required parameter: --acceptance-criteria", utils.ErrRequired)
+		return fmt.Errorf("%w: --acceptance-criteria", utils.ErrRequired)
 	}
 
 	// Validate --parent value is a positive integer. The flag parser has

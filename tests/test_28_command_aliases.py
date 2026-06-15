@@ -118,11 +118,14 @@ class TestSubcommandAliases:
             title="One-shot probe to be removed via the rm alias",
             functional_requirements="Verifying alias 'rm'.",
             technical_requirements="Single create+remove cycle.",
-            acceptance_criteria="task get returns [] after rm.",
+            acceptance_criteria="task get exits 4 after rm.",
         )
         self.test.run_cmd(["task", "rm", "-r", self.roadmap, str(rmtask)])
-        result = self.test.run_cmd_json(["task", "get", "-r", self.roadmap, str(rmtask)])
-        assert result == [], f"rm alias should delete; got {result}"
+        # task get now fail-fasts with exit 4 on the removed (unknown) ID (#44).
+        exit_code, _, _ = self.test.run_cmd(
+            ["task", "get", "-r", self.roadmap, str(rmtask)], check=False
+        )
+        assert exit_code == 4, f"rm alias should delete; get must exit 4, got {exit_code}"
         print("✓ 'rm' alias = 'remove' (task)")
 
     def test_remove_aliases_roadmap(self):

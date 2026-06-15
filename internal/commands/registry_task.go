@@ -80,7 +80,7 @@ func buildTaskCommand() Command {
 				ExitCodes:   []int{0, 2, 3, 4, 6},
 				Examples: []Example{
 					{Title: "Create a task", Cmd: `rmp task create -r myproject -t "Fix bug" -fr "User can login" -tr "Update auth" -ac "Login works"`, Stdout: `{"id":42}`, Exit: 0},
-					{Title: "Missing required", Cmd: "rmp task create -r myproject", Stderr: "Error: missing required flag: --title", Exit: 2},
+					{Title: "Missing required", Cmd: "rmp task create -r myproject", Stderr: "Error: required parameter missing: --title", Exit: 2},
 				},
 			},
 			{
