@@ -60,6 +60,7 @@ TEST_MODULES = [
     "test_40_graph_notifications",
     "test_41_graph_concurrency_input",
     "test_42_security_audit",
+    "test_43_sprint_order_field",
 ]
 
 # Stress tests (run separately due to time/data volume)

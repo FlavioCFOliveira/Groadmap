@@ -216,6 +216,29 @@ the code (e.g. `printTaskStatHelp`, `printSprintCloseHelp`,
 `printBacklogShowNextHelp`). The family help additionally summarises the
 subcommands and shared invariants.
 
+### Sprint family help specifics
+
+The `sprint` family help and the `sprint create` / `sprint update` subcommand
+helps follow the same structure template as every other family but MUST
+additionally make the sprint execution-order field explicit, because its rules
+cannot be inferred from the generic template. Both the plain-text help and the
+machine-readable AI Agent Contract (`rmp --ai-help`) MUST document the field:
+
+1. **The `--order` flag.** State, on `sprint create` and `sprint update`, that
+   `--order <n>` sets the sprint execution order; that the value must be a positive
+   integer greater than zero (`> 0`); that it must be unique across the roadmap; and
+   that on `sprint create` the flag is optional and the next available value is
+   auto-assigned when it is omitted. See `COMMANDS.md § Create Sprint` and
+   `COMMANDS.md § Update Sprint`.
+2. **Order immutability after close.** State, in the family-help "Workflow / rules"
+   block and on `sprint update`, that a sprint's `order` can be changed only while
+   the sprint is `PENDING` or `OPEN`, and that once the sprint is `CLOSED` its
+   `order` is immutable (any change is rejected with exit code 6). See
+   `STATE_MACHINE.md § Sprint Order Immutability`.
+3. **Collision exit code.** State that an `--order` value already used by another
+   sprint is rejected with exit code 5 (resource already exists), distinct from the
+   exit code 6 used for a non-positive or non-integer value.
+
 ### Graph family help specifics
 
 The `graph` family help and each graph subcommand help follow the same

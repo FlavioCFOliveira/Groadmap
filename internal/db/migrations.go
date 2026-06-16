@@ -56,6 +56,11 @@ var migrations = []Migration{
 		Name:    "Add title column to sprints table",
 		Apply:   migrateV1_6_0_toV1_7_0,
 	},
+	{
+		Version: "1.8.0",
+		Name:    "Add order_index column and unique index to sprints table",
+		Apply:   migrateV1_7_0_toV1_8_0,
+	},
 }
 
 // RunMigrations executes all pending migrations in a transaction.
@@ -322,6 +327,71 @@ func migrateV1_6_0_toV1_7_0(tx *sql.Tx) error {
 		`UPDATE sprints SET title = 'Sprint ' || id WHERE title = ''`,
 	); err != nil {
 		return fmt.Errorf("backfilling sprint titles: %w", err)
+	}
+
+	return nil
+}
+
+// migrateV1_7_0_toV1_8_0 adds the required order_index column to the sprints
+// table and backfills every existing sprint with a deterministic, collision-free
+// execution order, so pre-existing sprints satisfy the NOT NULL, > 0, and
+// uniqueness invariants before the unique index is created.
+//
+// SQLite cannot add a bare NOT NULL column to a populated table, so the column is
+// added with a temporary DEFAULT 0 and then every row is overwritten with a
+// unique positive value (1, 2, 3, ...) ordered by created_at ascending, then id
+// ascending as the tie-breaker. The unique index is created only after the
+// backfill, once every row holds a distinct positive value.
+//
+// Idempotent: the ADD COLUMN is guarded by columnExists; the backfill is a
+// deterministic full-table assignment that yields the same result on every run;
+// and the index creation uses CREATE UNIQUE INDEX IF NOT EXISTS. Re-applying the
+// migration on an already-migrated database is therefore a no-op.
+func migrateV1_7_0_toV1_8_0(tx *sql.Tx) error {
+	exists, err := columnExists(tx, "sprints", "order_index")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		// Temporary DEFAULT 0 lets the ADD COLUMN succeed against existing rows
+		// under NOT NULL; the backfill below overwrites every row with a unique
+		// positive value before the unique index is created. The CHECK(order_index
+		// > 0) constraint is intentionally NOT included on the ALTER: SQLite
+		// evaluates a column CHECK against the DEFAULT for every existing row at
+		// ADD COLUMN time, so a "> 0" CHECK with DEFAULT 0 would fail on a
+		// populated table. The constraint lives in the fresh-schema CREATE TABLE
+		// (SPEC/DATABASE.md § sprints Table); the > 0 invariant on migrated
+		// databases is upheld by the deterministic positive backfill below and by
+		// application-level validation on every write.
+		if _, err := tx.Exec(
+			`ALTER TABLE sprints ADD COLUMN order_index INTEGER NOT NULL DEFAULT 0`,
+		); err != nil {
+			return fmt.Errorf("adding order_index column: %w", err)
+		}
+	}
+
+	// Backfill a deterministic, unique, positive execution order across all
+	// sprints, ordered by created_at ascending, then id ascending as the
+	// tie-breaker. The correlated count yields 1 for the earliest row and N for
+	// the latest, so the result is always a dense 1..N sequence with no
+	// collisions. Running it again is harmless: it recomputes the same values.
+	if _, err := tx.Exec(`
+		UPDATE sprints
+		SET order_index = (
+			SELECT COUNT(*)
+			FROM sprints AS s2
+			WHERE s2.created_at < sprints.created_at
+			   OR (s2.created_at = sprints.created_at AND s2.id <= sprints.id)
+		)
+	`); err != nil {
+		return fmt.Errorf("backfilling sprint order_index: %w", err)
+	}
+
+	// Create the unique index that enforces order uniqueness across the roadmap.
+	if _, err := tx.Exec(
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_sprints_order ON sprints(order_index)`,
+	); err != nil {
+		return fmt.Errorf("creating idx_sprints_order: %w", err)
 	}
 
 	return nil

@@ -528,7 +528,8 @@ how the `rmp web` process itself terminates.
   read from that roadmap's `project.db`.
 - **Sprint details.** The page shows all details of the sprint, using the fields
   defined for the `Sprint` model in `MODELS.md § Sprint`: the sprint `id`, its
-  status, its description, its capacity (`max_tasks`, which may be unset meaning
+  status, its `title`, its description, its execution `order` (a positive integer,
+  unique across the roadmap), its capacity (`max_tasks`, which may be unset meaning
   unlimited capacity), `created_at`, `started_at`, `closed_at`, and `task_count`.
   The page presents the sprint status clearly (the status enum and lifecycle are
   defined in `MODELS.md § Enums` and `STATE_MACHINE.md § Sprint State Machine`).
@@ -1152,7 +1153,8 @@ Rules:
     to that sprint's page at `/roadmaps/{name}/sprints/{id}`.
 14. `GET /roadmaps/{name}/sprints/{id}` for a sprint of an existing roadmap returns
     HTTP 200 and an HTML page showing all details of that sprint (id, status,
-    description, capacity `max_tasks`, `created_at`, `started_at`, `closed_at`, and
+    `title`, description, execution `order`, capacity `max_tasks`, `created_at`,
+    `started_at`, `closed_at`, and
     `task_count`) and the sprint's task list in `sprint_tasks` order (the planned
     in-sprint execution order); the page contains no form, button, or link that
     submits a change. A request whose `{id}` is not a valid integer, or is an

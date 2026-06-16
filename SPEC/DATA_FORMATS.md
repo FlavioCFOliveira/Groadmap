@@ -146,13 +146,15 @@ Example with a capacity limit set (`max_tasks` is an integer):
 {
   "id": 1,
   "status": "OPEN",
+  "title": "Sprint 1",
   "description": "Sprint 1 - Setup and architecture",
   "tasks": [1, 2, 3, 5],
   "task_count": 4,
   "created_at": "2026-03-12T09:00:00.000Z",
   "started_at": "2026-03-12T10:00:00.000Z",
   "closed_at": null,
-  "max_tasks": 10
+  "max_tasks": 10,
+  "order": 1
 }
 ```
 
@@ -162,17 +164,19 @@ Example with unlimited capacity (`max_tasks` is `null`):
 {
   "id": 2,
   "status": "PENDING",
+  "title": "Sprint 2",
   "description": "Sprint 2 - Open scope",
   "tasks": [],
   "task_count": 0,
   "created_at": "2026-03-13T09:00:00.000Z",
   "started_at": null,
   "closed_at": null,
-  "max_tasks": null
+  "max_tasks": null,
+  "order": 2
 }
 ```
 
-**Note:** The `tasks` and `task_count` fields are computed at runtime from the `sprint_tasks` junction table and are not stored in the `sprints` table. The `max_tasks` field is always present in the JSON output (never omitted); it is `null` when no capacity limit is set and an integer otherwise.
+**Note:** The `tasks` and `task_count` fields are computed at runtime from the `sprint_tasks` junction table and are not stored in the `sprints` table. The `max_tasks` field is always present in the JSON output (never omitted); it is `null` when no capacity limit is set and an integer otherwise. The `order` field is always present: it is a positive integer (`> 0`), unique across the roadmap, and is stored in the `order_index` column (the JSON name is `order` because `ORDER` is a reserved SQL keyword). See `MODELS.md § Sprint Field Constraints`.
 
 ### Audit Entry
 
@@ -684,7 +688,7 @@ same contract under `commands`.
       "purpose": "Populate the backlog with one task per work item. Repeat once per task. Each invocation returns the new task ID on stdout."
     },
     {
-      "command": "rmp sprint create -r <name> -t <title> -d <description> [--max-tasks <n>]",
+      "command": "rmp sprint create -r <name> -t <title> -d <description> [--max-tasks <n>] [--order <n>]",
       "purpose": "Create the first sprint in PENDING state. Returns the new sprint ID on stdout."
     },
     {

@@ -218,3 +218,35 @@ PENDING → OPEN → CLOSED
 2. **OPEN**: Active sprint (started via `rmp sprint start`).
 3. **CLOSED**: Completed sprint (closed via `rmp sprint close`).
 4. **REOPEN**: Moving from `CLOSED` back to `OPEN`.
+
+### Sprint Order Immutability
+
+Every sprint carries an `order` value (stored in the `order_index` column): a
+positive integer (`> 0`), unique across the roadmap, that records the natural,
+sequential execution order of sprints. The full definition of the field lives in
+`MODELS.md § Sprint Field Constraints`; this section defines how its mutability
+depends on the sprint lifecycle state.
+
+| Sprint status | `order` mutable? | How |
+|---------------|------------------|-----|
+| `PENDING` | Yes | `sprint update --order <n>` |
+| `OPEN` | Yes | `sprint update --order <n>` |
+| `CLOSED` | No | Any attempt to change it is rejected with exit code 6 |
+
+**Rules:**
+
+1. While a sprint is `PENDING` or `OPEN`, its `order` can be changed via
+   `sprint update --order <n>`. The new value MUST be a positive integer (`> 0`,
+   rejected with exit code 6 otherwise) and MUST NOT collide with another
+   sprint's `order` (a collision is rejected with exit code 5; see
+   `COMMANDS.md § Update Sprint` and `DATABASE.md § Update Sprint Order`).
+2. Once a sprint is `CLOSED`, its `order` becomes immutable: it permanently
+   records the historical execution position of the sprint. Any attempt to change
+   the `order` of a `CLOSED` sprint is rejected with exit code 6 and the message
+   `"Error: sprint #N order cannot be changed — sprint is CLOSED"`. The constraint
+   is enforced by the application layer; the SQLite DDL does not include a `CHECK`
+   or trigger for this rule.
+3. Reordering is a single-sprint operation. Changing one sprint's `order` does not
+   cascade to other sprints; the caller chooses a free value. The unique index
+   `idx_sprints_order` guarantees no two sprints ever share an `order` value (see
+   `DATABASE.md § sprints Table`).

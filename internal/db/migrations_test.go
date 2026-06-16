@@ -398,8 +398,8 @@ func TestMigrateV1_2_0_toV1_3_0(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSchemaVersion failed: %v", err)
 	}
-	if version != "1.7.0" {
-		t.Errorf("schema_version = %q, want %q", version, "1.7.0")
+	if version != "1.8.0" {
+		t.Errorf("schema_version = %q, want %q", version, "1.8.0")
 	}
 
 	// Running migrations again must be idempotent
@@ -411,7 +411,7 @@ func TestMigrateV1_2_0_toV1_3_0(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSchemaVersion after idempotent run failed: %v", err)
 	}
-	if version != "1.7.0" {
-		t.Errorf("schema_version after idempotent migration = %q, want %q", version, "1.7.0")
+	if version != "1.8.0" {
+		t.Errorf("schema_version after idempotent migration = %q, want %q", version, "1.8.0")
 	}
 }

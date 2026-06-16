@@ -239,6 +239,7 @@ class TestWritePersistenceFidelity:
     def test_sprint_create_update(self):
         r = self.test.create_roadmap("sprint_cu")
         sid = self.test.run_cmd_json(["sprint", "create", "-r", r,
+                                      "-t", "Sprint Alpha",
                                       "-d", "Sprint Alpha", "--max-tasks", "10"])["id"]
         s = self._sprint(r, sid)
         assert s["description"] == "Sprint Alpha" and s["max_tasks"] == 10, s
@@ -354,7 +355,8 @@ class TestWritePersistenceFidelity:
 
     def test_add_tasks_capacity_guard(self):
         r = self.test.create_roadmap("capacity")
-        sid = self.test.run_cmd_json(["sprint", "create", "-r", r, "-d", "Capped",
+        sid = self.test.run_cmd_json(["sprint", "create", "-r", r, "-t", "Capped",
+            "-d", "Capped",
                                       "--max-tasks", "2"])["id"]
         self.test.run_cmd(["sprint", "start", "-r", r, str(sid)])
         ids = [self._mk(r, f"C{i}") for i in range(3)]

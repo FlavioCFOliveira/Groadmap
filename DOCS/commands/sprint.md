@@ -46,14 +46,21 @@ Creates a new sprint in the specified roadmap.
 | `-r` | `--roadmap` | string | - | Roadmap name (required) |
 | `-t` | `--title` | string | - | Sprint title, max 255 chars (required) |
 | `-d` | `--description` | string | - | Sprint description, max 2048 chars (required) |
+| | `--order` | integer | auto | Execution order; positive integer, unique across sprints. When omitted, auto-assigned to `MAX(order) + 1` (first sprint is `1`) |
 | | `--max-tasks` | integer | - | Capacity cap on active tasks; cannot be removed once set |
 
 **Output:** JSON object with the created sprint ID
+
+**The `order` field** indicates the natural, sequential order in which sprints
+must be executed. It must be a positive integer (`> 0`) and unique across all
+sprints in the roadmap. A non-positive or non-integer value exits with code 6;
+an order already used by another sprint exits with code 5.
 
 **Examples:**
 ```bash
 rmp sprint create -r project1 -t "Initial Setup" -d "Sprint 1 - Initial Setup"
 rmp sprint new -r project1 -t "Features" -d "Sprint 2 - Features"
+rmp sprint create -r project1 -t "Hardening" -d "Sprint 3 - Hardening" --order 3
 ```
 
 **Example output:**
@@ -79,7 +86,7 @@ Gets detailed information about a specific sprint.
 |------------|------------|------|-----------|
 | `-r` | `--roadmap` | string | Roadmap name (required) |
 
-**Output:** JSON Sprint object, including its `title` and `description` fields
+**Output:** JSON Sprint object, including its `title`, `description`, and `order` fields
 
 **Example:**
 ```bash
@@ -382,8 +389,9 @@ rmp sprint mv-tasks -r project1 2 3 5,6,7
 
 ### update
 
-Updates a sprint's title, description, or capacity cap. At least one of
-`--title`, `--description`, or `--max-tasks` must be provided.
+Updates a sprint's title, description, capacity cap, or execution order. At
+least one of `--title`, `--description`, `--max-tasks`, or `--order` must be
+provided.
 
 **Usage:** `rmp sprint update [OPTIONS] <id>` or `rmp sprint upd [OPTIONS] <id>`
 
@@ -398,12 +406,21 @@ Updates a sprint's title, description, or capacity cap. At least one of
 | `-r` | `--roadmap` | string | Roadmap name (required) |
 | `-t` | `--title` | string | New title, max 255 chars (optional) |
 | `-d` | `--description` | string | New description, max 2048 chars (optional) |
+| | `--order` | integer | New execution order; positive and unique (optional) |
 | | `--max-tasks` | integer | New capacity cap on active tasks (optional) |
+
+**Order immutability:** the `--order` value may only be changed while the sprint
+is `PENDING` or `OPEN`. Once a sprint is `CLOSED` its order is immutable and
+attempting to change it exits with code 6, preserving the historical execution
+record. (Reopening a sprint returns it to `OPEN`, making its order editable
+again.) A non-positive value exits with code 6; an order already used by another
+sprint exits with code 5.
 
 **Examples:**
 ```bash
 rmp sprint update -r project1 1 -t "Setup and Config"
 rmp sprint update -r project1 1 -d "Sprint 1 - Setup and Config"
+rmp sprint update -r project1 1 --order 2
 rmp sprint upd -r project1 1 -t "Updated title" -d "Updated description"
 ```
 

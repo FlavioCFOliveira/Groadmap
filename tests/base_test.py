@@ -151,11 +151,19 @@ class GroadmapTestBase:
         result = self.run_cmd_json(cmd)
         return result["id"]
 
-    def create_sprint(self, roadmap: str, description: str) -> int:
-        """Create a sprint and return its ID."""
+    def create_sprint(self, roadmap: str, description: str, title: str = "") -> int:
+        """Create a sprint and return its ID.
+
+        Args:
+            roadmap: Roadmap name
+            description: Sprint description (also used as title when title is omitted)
+            title: Sprint title; defaults to description when not supplied
+        """
+        sprint_title = title if title else description
         result = self.run_cmd_json([
             "sprint", "create",
             "-r", roadmap,
+            "-t", sprint_title,
             "-d", description
         ])
         return result["id"]
@@ -210,9 +218,10 @@ class GroadmapTestBase:
         "subtask_count", "depends_on", "blocks",
     ])
     SPRINT_KEYS = frozenset([
-        "id", "status", "description",
+        "id", "title", "status", "description",
         "created_at", "started_at", "closed_at",
         "max_tasks", "tasks", "task_count",
+        "order",
     ])
 
     @classmethod

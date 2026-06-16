@@ -483,6 +483,7 @@ class TestSecurityAudit:
         rm = self.test.create_roadmap()
         for bad in ["2147483648", "9999999999999"]:
             code, _, _ = self._run(["sprint", "create", "-r", rm,
+                                    "-t", "capacity probe",
                                     "-d", "capacity probe", f"--max-tasks={bad}"])
             assert code == 6, (
                 f"OPEN #85: --max-tasks={bad} accepted (exit {code}); "

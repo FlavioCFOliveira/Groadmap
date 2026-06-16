@@ -7,7 +7,7 @@ import (
 )
 
 // SchemaVersion is the current database schema version.
-const SchemaVersion = "1.7.0"
+const SchemaVersion = "1.8.0"
 
 // CreateSchema creates all database tables and indexes.
 // This implements the DDL from SPEC/DATABASE.md.
@@ -62,7 +62,8 @@ CREATE TABLE IF NOT EXISTS sprints (
     created_at TEXT NOT NULL,
     started_at TEXT,
     closed_at TEXT,
-    max_tasks INTEGER
+    max_tasks INTEGER,
+    order_index INTEGER NOT NULL CHECK(order_index > 0)  -- Sprint execution order; positive (> 0), unique across the roadmap (idx_sprints_order). Named order_index because ORDER is a reserved SQL keyword.
 );
 
 CREATE INDEX IF NOT EXISTS idx_sprints_status ON sprints(status);
@@ -70,6 +71,10 @@ CREATE INDEX IF NOT EXISTS idx_sprints_created_at ON sprints(created_at);
 
 -- Enforce at most one OPEN sprint at a time (prevents TOCTOU races between concurrent processes).
 CREATE UNIQUE INDEX IF NOT EXISTS idx_one_open_sprint ON sprints(status) WHERE status = 'OPEN';
+
+-- Enforce uniqueness of the sprint execution order across the roadmap. A colliding
+-- value fails this index and is surfaced to the caller as exit code 5 (ErrAlreadyExists).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sprints_order ON sprints(order_index);
 `
 
 	// Sprint tasks junction table

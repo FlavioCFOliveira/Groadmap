@@ -75,6 +75,7 @@ Each roadmap is stored in an individual SQLite database. The schema is designed 
 |  - started_at (TEXT ISO8601, NULL)     |
 |  - closed_at (TEXT ISO8601, NULL)      |
 |  - max_tasks (INTEGER, NULL)           |
+|  - order_index (INTEGER, UNIQUE, >0)   |
 +----------------------------------------+
 |           sprint_tasks                 |
 |  - sprint_id (FK → sprints.id)         |
@@ -161,12 +162,19 @@ CREATE TABLE IF NOT EXISTS sprints (
     created_at TEXT NOT NULL,  -- ISO 8601 UTC
     started_at TEXT,           -- ISO 8601 UTC, NULL if not started
     closed_at TEXT,            -- ISO 8601 UTC, NULL if not closed
-    max_tasks INTEGER          -- NULL means unlimited capacity
+    max_tasks INTEGER,         -- NULL means unlimited capacity
+    order_index INTEGER NOT NULL CHECK(order_index > 0)  -- Sprint execution order; positive integer (> 0), unique across the roadmap (see idx_sprints_order). Column named order_index because ORDER is a reserved SQL keyword.
 );
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_sprints_status ON sprints(status);
 CREATE INDEX IF NOT EXISTS idx_sprints_created_at ON sprints(created_at);
+
+-- Uniqueness of the sprint execution order across the roadmap.
+-- Enforces that no two sprints share the same order_index value; an attempt to
+-- insert or update a colliding value fails the constraint and is surfaced to the
+-- caller as exit code 5 (see ARCHITECTURE.md § Exit Codes, ErrAlreadyExists).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sprints_order ON sprints(order_index);
 ```
 
 ### `sprint_tasks` Table (1:N Relationship)
@@ -244,7 +252,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 - `SPRINT_START` - Sprint started (PENDING → OPEN)
 - `SPRINT_CLOSE` - Sprint closed (OPEN → CLOSED)
 - `SPRINT_REOPEN` - Sprint reopened (CLOSED → OPEN)
-- `SPRINT_UPDATE` - Sprint title, description, or capacity updated via `sprint update`
+- `SPRINT_UPDATE` - Sprint title, description, capacity, or execution order updated via `sprint update`
 - `SPRINT_ADD_TASK` - Task added to sprint
 - `SPRINT_REMOVE_TASK` - Task removed from sprint
 - `SPRINT_MOVE_TASK` - Task moved between sprints
@@ -290,7 +298,7 @@ CREATE TABLE IF NOT EXISTS _metadata (
 
 -- Insert schema version on creation
 INSERT INTO _metadata (key, value) VALUES
-    ('schema_version', '1.7.0'),
+    ('schema_version', '1.8.0'),
     ('created_at', '2026-03-20T00:00:00.000Z'),
     ('application', 'Groadmap');
 ```
@@ -545,8 +553,36 @@ DELETE FROM tasks WHERE id = ?;
 #### Create Sprint
 
 ```sql
-INSERT INTO sprints (title, description, created_at) VALUES (?, ?, ?);
+-- When the caller does not supply an explicit order, compute the next available
+-- value as MAX(order_index) + 1 (the first sprint in an empty roadmap gets 1).
+SELECT COALESCE(MAX(order_index), 0) + 1 AS next_order FROM sprints;
+
+-- Insert the new sprint with its execution order.
+INSERT INTO sprints (title, description, created_at, order_index) VALUES (?, ?, ?, ?);
 ```
+
+**Order assignment:** When the caller supplies `--order`, that value is used and
+validated for the `> 0` and uniqueness invariants; a colliding value fails the
+`idx_sprints_order` unique index and is surfaced as exit code 5. When the caller
+omits `--order`, the value `MAX(order_index) + 1` is used, which is always unique
+and `> 0`. The `SELECT next_order` and the `INSERT` MUST run inside the same
+transaction so that two concurrent creations cannot compute the same
+`next_order` value; the unique index is the final backstop if they do.
+
+#### Update Sprint Order
+
+```sql
+-- Allowed only while the sprint status is PENDING or OPEN. A colliding value
+-- fails idx_sprints_order and is surfaced as exit code 5.
+UPDATE sprints SET order_index = ? WHERE id = ?;
+```
+
+**Application-level precondition:** Before executing this statement, the
+application MUST verify that the sprint's `status` is not `CLOSED`. A sprint in
+`CLOSED` status has an immutable `order_index`; an attempt to change it is
+rejected with exit code 6 (see `STATE_MACHINE.md § Sprint Order Immutability`).
+The new value MUST be a positive integer (`> 0`); a value `<= 0` is rejected with
+exit code 6 before the statement runs.
 
 #### Add Tasks to Sprint
 
@@ -805,6 +841,13 @@ so that the database never reaches a state where `tasks.status` and the
    membership check, the re-parenting of the `sprint_tasks` rows, and writing the
    `SPRINT_MOVE_TASK` audit entries (one per task) MUST all occur in the same
    transaction. A committed move can never exist without its audit record.
+6. **Creating a sprint with an auto-assigned order (`CreateSprint`).** When the
+   caller omits `--order`, computing `MAX(order_index) + 1`, inserting the
+   `sprints` row with that value, and writing the `SPRINT_CREATE` audit entry MUST
+   all occur in the same transaction, so two concurrent creations cannot read the
+   same `MAX` and then both insert it. The `idx_sprints_order` unique index is the
+   final backstop: if a race still produces a collision, the second insert fails
+   the constraint and the whole transaction rolls back, surfaced as exit code 5.
 
 These guarantees extend the general transactional-integrity requirement in
 `ARCHITECTURE.md § Security Guarantees` (every modification, including its audit
@@ -848,6 +891,8 @@ Fields are organized to match the optimized Go struct layout (Content, Tracking,
 | created_at | TEXT | NOT NULL, ISO 8601 format |
 | started_at | TEXT | NULLABLE, ISO 8601 format |
 | closed_at | TEXT | NULLABLE, ISO 8601 format |
+| max_tasks | INTEGER | NULLABLE, NULL means unlimited capacity |
+| order_index | INTEGER | NOT NULL, CHECK(order_index > 0), UNIQUE across the roadmap via `idx_sprints_order`; sprint execution order. Column named `order_index` because `ORDER` is a reserved SQL keyword |
 
 ### Sprint_Tasks
 

@@ -189,6 +189,7 @@ type Sprint struct {
     StartedAt   *string      `json:"started_at"`       // Nullable
     ClosedAt    *string      `json:"closed_at"`        // Nullable
     MaxTasks    *int         `json:"max_tasks"`        // Nullable; NULL means unlimited capacity
+    Order       int          `json:"order"`            // Sprint execution order; positive integer (> 0), unique across the roadmap; stored in column order_index
 }
 ```
 
@@ -196,6 +197,7 @@ type Sprint struct {
 
 - `Title`: Required (NOT NULL), maximum 255 characters. Same cap as the task `Title` field. Subject to the Free-Text Control-Character Constraint above.
 - `Description`: Maximum 2048 characters (free text covering sprint goal, scope, and non-goals).
+- `Order`: Required (NOT NULL), positive integer strictly greater than zero (`> 0`), and unique across every sprint in the roadmap. It records the natural, sequential execution order of sprints: the sprint with the lowest `Order` value executes first. Two sprints can never share the same `Order` value. The value is auto-assigned on creation when the caller does not supply one (see `COMMANDS.md § Create Sprint`) and can be changed while the sprint is `PENDING` or `OPEN`. Once the sprint is `CLOSED`, the `Order` value becomes immutable and can never change again, because it then represents the historical execution record (see `STATE_MACHINE.md § Sprint Order Immutability`). The JSON field name is `order`; the underlying database column is named `order_index`, because `ORDER` is a reserved SQL keyword (see `DATABASE.md § sprints Table`).
 
 ### Audit Entry
 Maps to the `audit` table.

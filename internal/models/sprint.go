@@ -12,6 +12,9 @@ import (
 var (
 	ErrInvalidSprintStatus = errors.New("invalid sprint status")
 	ErrDescriptionRequired = errors.New("description is required")
+	// ErrInvalidSprintOrder indicates a sprint execution order that is not a
+	// positive integer greater than zero.
+	ErrInvalidSprintOrder = errors.New("invalid sprint order")
 	// ErrTitleRequired ("title is required") is shared with task validation and
 	// declared in task.go; sprint Validate reuses it for the required Title field.
 )
@@ -90,6 +93,11 @@ type Sprint struct {
 	Tasks       []int        `json:"tasks"`
 	ID          int          `json:"id"`
 	TaskCount   int          `json:"task_count"`
+	// Order is the sprint execution order: a positive integer (> 0), unique
+	// across the roadmap. The sprint with the lowest Order executes first. It is
+	// stored in the order_index column (ORDER is a reserved SQL keyword). See
+	// SPEC/MODELS.md § Sprint Field Constraints.
+	Order int `json:"order"`
 }
 
 // Validate checks if the sprint data is valid.
@@ -108,6 +116,13 @@ func (s *Sprint) Validate() error {
 	}
 	if !IsValidSprintStatus(string(s.Status)) {
 		return fmt.Errorf("invalid status: %q: %w", s.Status, ErrInvalidSprintStatus)
+	}
+	// Order must be a positive integer strictly greater than zero. The value is
+	// auto-assigned (MAX+1) when the caller omits --order, so by the time
+	// Validate runs it is always set; a non-positive value indicates a bug or an
+	// invalid explicit value (SPEC/MODELS.md § Sprint Field Constraints).
+	if s.Order <= 0 {
+		return fmt.Errorf("%w: order must be a positive integer greater than zero (got %d)", ErrInvalidSprintOrder, s.Order)
 	}
 
 	// Validate dates

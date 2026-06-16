@@ -143,6 +143,7 @@ class TestSubcommandAliases:
         """`sprint new` is equivalent to `sprint create`."""
         result = self.test.run_cmd_json([
             "sprint", "new", "-r", self.roadmap,
+            "-t", "Sprint created through the new alias",
             "-d", "Sprint created through the new alias",
         ])
         assert "id" in result and result["id"] > 0
@@ -162,7 +163,7 @@ class TestSubcommandAliases:
     def test_update_upd_alias_sprint(self):
         """`sprint upd` is equivalent to `sprint update`."""
         sprint = self.test.run_cmd_json([
-            "sprint", "create", "-r", self.roadmap, "-d", "Initial description",
+            "sprint", "create", "-r", self.roadmap, "-t", "Initial description", "-d", "Initial description",
         ])
         self.test.run_cmd([
             "sprint", "upd", "-r", self.roadmap, str(sprint["id"]),

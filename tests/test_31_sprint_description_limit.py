@@ -52,6 +52,7 @@ class TestSprintDescriptionLimit:
         result = self.test.run_cmd_json([
             "sprint", "create",
             "-r", self.roadmap,
+            "-t", "Boundary length description test",
             "-d", desc,
         ])
         assert "id" in result, f"expected sprint id in response, got {result!r}"
@@ -66,7 +67,7 @@ class TestSprintDescriptionLimit:
     def test_create_rejects_one_over_max(self):
         desc = "a" * (EXPECTED_MAX + 1)
         exit_code, _, stderr = self.test.run_cmd(
-            ["sprint", "create", "-r", self.roadmap, "-d", desc],
+            ["sprint", "create", "-r", self.roadmap, "-t", "Over-limit description test", "-d", desc],
             check=False,
         )
         assert exit_code != 0, "sprint create with description over limit must fail"

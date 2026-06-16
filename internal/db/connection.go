@@ -36,9 +36,25 @@ const (
 // SQLite primary result codes for busy/locked conditions.
 // See https://www.sqlite.org/rescode.html.
 const (
-	sqliteBusy   = 5
-	sqliteLocked = 6
+	sqliteBusy       = 5
+	sqliteLocked     = 6
+	sqliteConstraint = 19 // SQLITE_CONSTRAINT primary result code
 )
+
+// IsUniqueConstraintErr reports whether err is a SQLite UNIQUE/PRIMARY-KEY
+// constraint violation, inspecting the structured primary result code
+// (SQLITE_CONSTRAINT = 19) rather than matching strings. Used to translate an
+// order_index collision into ErrAlreadyExists (exit code 5).
+func IsUniqueConstraintErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	var coded sqliteCoded
+	if errors.As(err, &coded) {
+		return coded.Code()&0xFF == sqliteConstraint
+	}
+	return false
+}
 
 // sqliteCoded is satisfied by modernc.org/sqlite's *sqlite.Error.
 // Using an interface keeps the check structural and testable without

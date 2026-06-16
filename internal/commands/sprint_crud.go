@@ -2,13 +2,30 @@ package commands
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
+
+// parseSprintOrderFlag parses and validates the raw --order flag value. It
+// returns the parsed order on success. A non-integer value or a value <= 0 is
+// rejected with exit code 6 (ErrValidation), matching SPEC/COMMANDS.md
+// § Create Sprint / § Update Sprint.
+func parseSprintOrderFlag(raw string) (int, error) {
+	order, convErr := strconv.Atoi(strings.TrimSpace(raw))
+	if convErr != nil {
+		return 0, fmt.Errorf("%w: --order must be a positive integer greater than zero", utils.ErrValidation)
+	}
+	if order <= 0 {
+		return 0, fmt.Errorf("%w: --order must be a positive integer greater than zero (got %d)", utils.ErrValidation, order)
+	}
+	return order, nil
+}
 
 // sprintList lists sprints.
 func sprintList(args []string) error {
@@ -99,6 +116,16 @@ func sprintCreate(args []string) error {
 		maxTasks = &mt
 	}
 
+	// --order is optional on create: when supplied it must be a positive integer
+	// and unique; when omitted the next value MAX(order_index)+1 is auto-assigned.
+	explicitOrder := 0
+	if rawOrder, ok := result.Flags["Order"].(string); ok {
+		explicitOrder, err = parseSprintOrderFlag(rawOrder)
+		if err != nil {
+			return err
+		}
+	}
+
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {
 		return err
@@ -114,20 +141,38 @@ func sprintCreate(args []string) error {
 		Description: description,
 		CreatedAt:   now,
 		MaxTasks:    maxTasks,
+		Order:       explicitOrder, // 0 means auto-assign; Validate runs after assignment
 	}
 
-	if err := sprint.Validate(); err != nil {
-		return err
-	}
-
-	// Create within transaction with audit
+	// Create within transaction with audit. The next_order SELECT, the INSERT,
+	// and the audit row run in one transaction so concurrent creations cannot
+	// share an order; the idx_sprints_order unique index is the final backstop
+	// (SPEC/DATABASE.md § Transactional Atomicity Guarantees #6).
 	var sprintID int
 	err = database.WithTransaction(func(tx *sql.Tx) error {
+		orderIndex := explicitOrder
+		if orderIndex <= 0 {
+			if selErr := tx.QueryRow(
+				`SELECT COALESCE(MAX(order_index), 0) + 1 FROM sprints`,
+			).Scan(&orderIndex); selErr != nil {
+				return fmt.Errorf("computing next sprint order: %w", selErr)
+			}
+		}
+		sprint.Order = orderIndex
+
+		// Validate the fully-populated sprint (order is now assigned) before insert.
+		if vErr := sprint.Validate(); vErr != nil {
+			return vErr
+		}
+
 		insertResult, insertErr := tx.Exec(
-			`INSERT INTO sprints (status, title, description, created_at, max_tasks) VALUES (?, ?, ?, ?, ?)`,
-			sprint.Status, sprint.Title, sprint.Description, sprint.CreatedAt, sprint.MaxTasks,
+			`INSERT INTO sprints (status, title, description, created_at, max_tasks, order_index) VALUES (?, ?, ?, ?, ?, ?)`,
+			sprint.Status, sprint.Title, sprint.Description, sprint.CreatedAt, sprint.MaxTasks, orderIndex,
 		)
 		if insertErr != nil {
+			if db.IsUniqueConstraintErr(insertErr) {
+				return fmt.Errorf("%w: sprint order %d is already in use", utils.ErrAlreadyExists, orderIndex)
+			}
 			return insertErr
 		}
 
@@ -260,9 +305,19 @@ func sprintUpdate(args []string) error {
 	title, _ := result.Flags["Title"].(string)
 	description, _ := result.Flags["Description"].(string)
 	_, hasMaxTasks := result.Flags["MaxTasks"]
+	rawOrder, hasOrder := result.Flags["Order"].(string)
 
-	if title == "" && description == "" && !hasMaxTasks {
-		return fmt.Errorf("%w: at least one of --title, --description or --max-tasks is required", utils.ErrRequired)
+	if title == "" && description == "" && !hasMaxTasks && !hasOrder {
+		return fmt.Errorf("%w: at least one of --title, --description, --max-tasks or --order is required", utils.ErrRequired)
+	}
+
+	// --order, when supplied, must be a positive integer greater than zero.
+	newOrder := 0
+	if hasOrder {
+		newOrder, err = parseSprintOrderFlag(rawOrder)
+		if err != nil {
+			return err
+		}
 	}
 
 	if title != "" && len(title) > models.MaxSprintTitle {
@@ -306,12 +361,30 @@ func sprintUpdate(args []string) error {
 	now := utils.NowISO8601()
 
 	// Build dynamic SET clause based on provided flags. Columns are collected
-	// in a stable order (title, description, max_tasks) so the generated SQL is
-	// deterministic. Column names are hardcoded literals — only values are bound
-	// as parameters — so the assembled query is injection-safe.
+	// in a stable order (title, description, max_tasks, order_index) so the
+	// generated SQL is deterministic. Column names are hardcoded literals — only
+	// values are bound as parameters — so the assembled query is injection-safe.
 	return database.WithTransaction(func(tx *sql.Tx) error {
-		setParts := make([]string, 0, 3)
-		args := make([]any, 0, 4)
+		// When --order is requested, the sprint's status must not be CLOSED: a
+		// CLOSED sprint's order is immutable (SPEC/STATE_MACHINE.md § Sprint Order
+		// Immutability). Read the status inside the transaction so the precondition
+		// and the UPDATE are atomic. Doubling as the existence check.
+		if hasOrder {
+			var status string
+			statusErr := tx.QueryRow("SELECT status FROM sprints WHERE id = ?", sprintID).Scan(&status)
+			if errors.Is(statusErr, sql.ErrNoRows) {
+				return fmt.Errorf("%w: sprint %d not found", utils.ErrNotFound, sprintID)
+			}
+			if statusErr != nil {
+				return statusErr
+			}
+			if status == string(models.SprintClosed) {
+				return fmt.Errorf("%w: sprint #%d order cannot be changed — sprint is CLOSED", utils.ErrValidation, sprintID)
+			}
+		}
+
+		setParts := make([]string, 0, 4)
+		args := make([]any, 0, 5)
 
 		if title != "" {
 			setParts = append(setParts, "title = ?")
@@ -325,11 +398,20 @@ func sprintUpdate(args []string) error {
 			setParts = append(setParts, "max_tasks = ?")
 			args = append(args, maxTasks)
 		}
+		if hasOrder {
+			setParts = append(setParts, "order_index = ?")
+			args = append(args, newOrder)
+		}
 		args = append(args, sprintID)
 		query := fmt.Sprintf("UPDATE sprints SET %s WHERE id = ?", strings.Join(setParts, ", "))
 
 		updateResult, updateErr := tx.Exec(query, args...)
 		if updateErr != nil {
+			// An order_index collision fails idx_sprints_order; surface it as
+			// ErrAlreadyExists (exit code 5).
+			if hasOrder && db.IsUniqueConstraintErr(updateErr) {
+				return fmt.Errorf("%w: sprint order %d is already in use", utils.ErrAlreadyExists, newOrder)
+			}
 			return updateErr
 		}
 

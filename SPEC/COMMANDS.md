@@ -843,8 +843,8 @@ rmp sprint ls -r <name>
 ### Create Sprint
 
 ```bash
-rmp sprint create -r <name> -t "Title" -d "Description" [--max-tasks <n>]
-rmp sprint new -r <name> -t "Title" -d "Description" [--max-tasks <n>]
+rmp sprint create -r <name> -t "Title" -d "Description" [--max-tasks <n>] [--order <n>]
+rmp sprint new -r <name> -t "Title" -d "Description" [--max-tasks <n>] [--order <n>]
 ```
 
 **Options:**
@@ -854,6 +854,13 @@ rmp sprint new -r <name> -t "Title" -d "Description" [--max-tasks <n>]
   for unlimited capacity). When provided, MUST be a positive integer in the range
   `1`-`10000`. A value `< 1` or `> 10000`, or a non-integer value, is rejected with
   exit code 6.
+- `--order <n>` - Sprint execution order (optional). The natural, sequential order
+  in which sprints are executed; the sprint with the lowest `--order` value runs
+  first. When provided, MUST be a positive integer strictly greater than zero
+  (`> 0`) and MUST NOT already be used by another sprint in the roadmap. When
+  omitted, the next available value is auto-assigned as the highest existing
+  `order` plus one (the first sprint in a roadmap receives `1`). See
+  `MODELS.md § Sprint Field Constraints` and `DATABASE.md § Create Sprint`.
 
 **Title Validation:**
 
@@ -871,6 +878,9 @@ The sprint `title` is also subject to the Control-Character Constraint described
 |----------|-----------|---------------|
 | `--max-tasks` `< 1` or `> 10000` | 6 | "Error: --max-tasks must be between 1 and 10000 (got N)" |
 | `--max-tasks` non-integer | 6 | "Error: --max-tasks must be an integer between 1 and 10000" |
+| `--order` `<= 0` | 6 | "Error: --order must be a positive integer greater than zero (got N)" |
+| `--order` non-integer | 6 | "Error: --order must be a positive integer greater than zero" |
+| `--order` already used by another sprint | 5 | "Error: sprint order N is already in use" |
 
 **Output (success):** `{"id": 1}`, exit code 0.
 
@@ -1267,8 +1277,8 @@ rmp sprint bottom -r <name> <sprint-id> <task-id>
 ### Update Sprint
 
 ```bash
-rmp sprint update -r <name> <id> [-t "New Title"] [-d "New Description"] [--max-tasks <n>]
-rmp sprint upd -r <name> <id> [-t "New Title"] [-d "New Description"] [--max-tasks <n>]
+rmp sprint update -r <name> <id> [-t "New Title"] [-d "New Description"] [--max-tasks <n>] [--order <n>]
+rmp sprint upd -r <name> <id> [-t "New Title"] [-d "New Description"] [--max-tasks <n>] [--order <n>]
 ```
 
 **Options:**
@@ -1277,8 +1287,13 @@ rmp sprint upd -r <name> <id> [-t "New Title"] [-d "New Description"] [--max-tas
 - `--max-tasks <n>` - New capacity limit. MUST be a positive integer in the range
   `1`-`10000`. A value `< 1` or `> 10000`, or a non-integer value, is rejected with
   exit code 6.
+- `--order <n>` - New sprint execution order. MUST be a positive integer strictly
+  greater than zero (`> 0`) and MUST NOT already be used by another sprint. The
+  order can be changed only while the sprint is `PENDING` or `OPEN`; once the
+  sprint is `CLOSED`, its order is immutable and any change is rejected with exit
+  code 6 (see `STATE_MACHINE.md § Sprint Order Immutability`).
 
-At least one of `--title`, `--description`, or `--max-tasks` is required.
+At least one of `--title`, `--description`, `--max-tasks`, or `--order` is required.
 
 **Title Validation:**
 
@@ -1298,11 +1313,16 @@ The sprint `title` is also subject to the Control-Character Constraint described
 |----------|-----------|---------------|
 | `--max-tasks` `< 1` or `> 10000` | 6 | "Error: --max-tasks must be between 1 and 10000 (got N)" |
 | `--max-tasks` non-integer | 6 | "Error: --max-tasks must be an integer between 1 and 10000" |
+| `--order` `<= 0` | 6 | "Error: --order must be a positive integer greater than zero (got N)" |
+| `--order` non-integer | 6 | "Error: --order must be a positive integer greater than zero" |
+| `--order` on a CLOSED sprint | 6 | "Error: sprint #N order cannot be changed — sprint is CLOSED" |
+| `--order` already used by another sprint | 5 | "Error: sprint order N is already in use" |
 
 **Output (success):** No output, exit code 0.
 
-**Audit:** A sprint title change is recorded under the existing `SPRINT_UPDATE`
-operation (see `DATABASE.md § audit Table`); no new audit operation is introduced.
+**Audit:** A sprint title, description, capacity, or order change is recorded under
+the existing `SPRINT_UPDATE` operation (see `DATABASE.md § audit Table`); no new
+audit operation is introduced.
 
 ### Remove Sprint
 

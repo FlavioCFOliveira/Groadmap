@@ -124,10 +124,16 @@ func (fp *FlagParser) Parse(args []string) (*ParseResult, error) {
 			// The next token is the value unless it looks like a flag. A token
 			// beginning with '-' is normally treated as a flag, NOT a value — but
 			// a negative integer (e.g. "-1") is a legitimate value for an int
-			// flag. Accepting it here lets out-of-range negatives reach the
-			// flag's range validation and surface as the documented exit 6,
+			// flag, and also for the order flag (parsed as a string so the handler
+			// can map a non-positive / non-integer value to exit code 6 rather than
+			// the generic int-parse exit code 2). Accepting it here lets the value
+			// reach the handler's validation and surface as the documented exit 6,
 			// instead of a misleading "requires a value" exit 2 (finding #64).
-			if i+1 >= len(args) || (strings.HasPrefix(args[i+1], "-") && !(def.Type == "int" && isNegativeInteger(args[i+1]))) {
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("%w: %s requires a value", utils.ErrRequired, flagName)
+			}
+			acceptNegInt := isNegativeInteger(args[i+1]) && (def.Type == "int" || def.Field == "Order")
+			if strings.HasPrefix(args[i+1], "-") && !acceptNegInt {
 				return nil, fmt.Errorf("%w: %s requires a value", utils.ErrRequired, flagName)
 			}
 			value = args[i+1]
@@ -290,6 +296,10 @@ var (
 		{Name: "--title", Short: "-t", Field: "Title", Type: "string"},
 		{Name: "--description", Short: "-d", Field: "Description", Type: "string"},
 		{Name: "--max-tasks", Field: "MaxTasks", Type: "int"},
+		// --order is parsed as a string so the handler can enforce the
+		// non-integer / non-positive cases as exit code 6 (ErrValidation) with the
+		// SPEC-mandated messages, rather than the generic int-parse exit code 2.
+		{Name: "--order", Field: "Order", Type: "string"},
 	}
 
 	// SprintListFlags defines flags for sprint listing.

@@ -37,7 +37,7 @@ Examples:
 
 // printSprintCreateHelp — `rmp sprint create`.
 func printSprintCreateHelp() {
-	fmt.Print(`Usage: rmp sprint create -r <roadmap> -t <title> -d <description> [--max-tasks <n>]
+	fmt.Print(`Usage: rmp sprint create -r <roadmap> -t <title> -d <description> [--max-tasks <n>] [--order <n>]
 
 Creates a new sprint in PENDING status. The sprint will not accept work
 until it is moved to OPEN via 'rmp sprint start <id>'.
@@ -58,6 +58,13 @@ Optional:
                                   'sprint add-tasks' refuses to push the active
                                   task count past <n>. Cannot be removed once
                                   set, only changed to another positive integer.
+  --order <n>                     Sprint execution order: a positive integer
+                                  (> 0), unique across the roadmap; the sprint
+                                  with the lowest --order executes first. When
+                                  omitted, the next available value (the highest
+                                  existing order plus one; 1 for the first sprint)
+                                  is auto-assigned. A value already used by
+                                  another sprint is rejected (exit 5).
 
 Output (stdout JSON):
   {"id": <new-sprint-id>}
@@ -66,11 +73,13 @@ Exit codes:
   0  Success
   2  Missing -t or -d
   3  Missing -r
-  6  Title/description too long, or --max-tasks <= 0
+  5  --order value already used by another sprint
+  6  Title/description too long, --max-tasks <= 0, or --order not a positive integer
 
 Examples:
   rmp sprint create -r myproject -t "Auth hardening" -d "Sprint 1 — Auth hardening"
   rmp sprint new -r myproject -t "Capacity sprint" -d "Capacity-bounded sprint" --max-tasks 12
+  rmp sprint create -r myproject -t "Sprint 3" -d "Third sprint" --order 3
 `)
 }
 
@@ -143,15 +152,23 @@ Examples:
 
 // printSprintUpdateHelp — `rmp sprint update`.
 func printSprintUpdateHelp() {
-	fmt.Print(`Usage: rmp sprint update -r <roadmap> <sprint-id> [-t <title>] [-d <text>] [--max-tasks <n>]
+	fmt.Print(`Usage: rmp sprint update -r <roadmap> <sprint-id> [-t <title>] [-d <text>] [--max-tasks <n>] [--order <n>]
 
-Edits the title, description, or capacity cap of an existing sprint. At
-least one of -t, -d or --max-tasks must be supplied.
+Edits the title, description, capacity cap, or execution order of an
+existing sprint. At least one of -t, -d, --max-tasks or --order must be
+supplied.
 
 The capacity cap can be changed to any positive integer; it cannot be
 removed once set, and there is no validation against the sprint's
 current active task count (an over-capacity cap simply blocks future
 'sprint add-tasks').
+
+The execution order (--order) can be changed only while the sprint is
+PENDING or OPEN. Once the sprint is CLOSED, its order is immutable and
+any change is rejected with exit code 6, because it then records the
+historical execution position. The new value must be a positive integer
+(> 0) and must not already be used by another sprint (a collision is
+rejected with exit code 5).
 
 Aliases: upd.
 
@@ -163,20 +180,25 @@ At least one of:
   -t, --title <text>              New title (max 255 chars)
   -d, --description <text>        New description (max 2048 chars)
   --max-tasks <n>                 New capacity cap; must be >= 1
+  --order <n>                     New execution order; positive integer (> 0),
+                                  unique across the roadmap. Allowed only while
+                                  PENDING or OPEN; immutable once CLOSED.
 
 Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
-  2  None of -t, -d or --max-tasks given
+  2  None of -t, -d, --max-tasks or --order given
   3  Missing -r
   4  Sprint not found
-  6  --max-tasks < 1, or title/description exceeds the max length
+  5  --order value already used by another sprint
+  6  --max-tasks < 1, title/description too long, --order not positive, or --order on a CLOSED sprint
 
 Examples:
   rmp sprint update -r myproject 5 -t "Auth + observability"
   rmp sprint update -r myproject 5 -d "Sprint 1 — Auth + observability"
   rmp sprint upd -r myproject 5 --max-tasks 15
+  rmp sprint update -r myproject 5 --order 2
 `)
 }
 

@@ -791,7 +791,7 @@ func (db *DB) GetOpenSprint(ctx context.Context) (*models.Sprint, error) {
 	// Single query using JSON aggregation to get sprint data and task IDs
 	err := db.QueryRowContext(ctx,
 		`SELECT
-			s.id, s.status, s.title, s.description, s.created_at, s.started_at, s.closed_at, s.max_tasks,
+			s.id, s.status, s.title, s.description, s.created_at, s.started_at, s.closed_at, s.max_tasks, s.order_index,
 			COALESCE(json_group_array(DISTINCT st.task_id), '[]') as tasks
 		 FROM sprints s
 		 LEFT JOIN sprint_tasks st ON s.id = st.sprint_id
@@ -808,6 +808,7 @@ func (db *DB) GetOpenSprint(ctx context.Context) (*models.Sprint, error) {
 		&startedAt,
 		&closedAt,
 		&maxTasks,
+		&sprint.Order,
 		&tasksJSON,
 	)
 
@@ -1069,17 +1070,39 @@ func (db *DB) hasTransitiveDependency(ctx context.Context, fromID, targetID int)
 // ==================== SPRINT QUERIES ====================
 
 // CreateSprint inserts a new sprint and returns its ID.
+//
+// The execution order is taken from sprint.Order when it is a positive value;
+// otherwise the next available value MAX(order_index)+1 is auto-assigned (the
+// first sprint in an empty roadmap gets 1). The SELECT next_order and the INSERT
+// run inside the same transaction so two concurrent creations cannot compute the
+// same value; the idx_sprints_order unique index is the final backstop and a
+// collision surfaces as utils.ErrAlreadyExists (exit code 5). See
+// SPEC/DATABASE.md § Create Sprint and § Transactional Atomicity Guarantees #6.
 func (db *DB) CreateSprint(ctx context.Context, sprint *models.Sprint) (int, error) {
 	var sprintID int
-	err := retryWithBackoff("create sprint", func() error {
-		result, err := db.ExecContext(ctx,
-			`INSERT INTO sprints (title, status, description, created_at) VALUES (?, ?, ?, ?)`,
+	err := db.WithTransaction(func(tx *sql.Tx) error {
+		orderIndex := sprint.Order
+		if orderIndex <= 0 {
+			if err := tx.QueryRow(
+				`SELECT COALESCE(MAX(order_index), 0) + 1 FROM sprints`,
+			).Scan(&orderIndex); err != nil {
+				return fmt.Errorf("computing next sprint order: %w", err)
+			}
+		}
+
+		result, err := tx.Exec(
+			`INSERT INTO sprints (title, status, description, created_at, max_tasks, order_index) VALUES (?, ?, ?, ?, ?, ?)`,
 			sprint.Title,
 			sprint.Status,
 			sprint.Description,
 			sprint.CreatedAt,
+			sprint.MaxTasks,
+			orderIndex,
 		)
 		if err != nil {
+			if IsUniqueConstraintErr(err) {
+				return fmt.Errorf("%w: sprint order %d is already in use", utils.ErrAlreadyExists, orderIndex)
+			}
 			return fmt.Errorf("inserting sprint: %w", err)
 		}
 
@@ -1089,6 +1112,7 @@ func (db *DB) CreateSprint(ctx context.Context, sprint *models.Sprint) (int, err
 		}
 
 		sprintID = int(id)
+		sprint.Order = orderIndex
 		return nil
 	})
 
@@ -1113,7 +1137,7 @@ func (db *DB) GetSprint(ctx context.Context, id int) (*models.Sprint, error) {
 	// json_group_array returns a JSON array of task IDs
 	err := db.QueryRowContext(ctx,
 		`SELECT
-			s.id, s.status, s.title, s.description, s.created_at, s.started_at, s.closed_at, s.max_tasks,
+			s.id, s.status, s.title, s.description, s.created_at, s.started_at, s.closed_at, s.max_tasks, s.order_index,
 			COALESCE(json_group_array(DISTINCT st.task_id), '[]') as tasks
 		 FROM sprints s
 		 LEFT JOIN sprint_tasks st ON s.id = st.sprint_id
@@ -1129,6 +1153,7 @@ func (db *DB) GetSprint(ctx context.Context, id int) (*models.Sprint, error) {
 		&startedAt,
 		&closedAt,
 		&maxTasks,
+		&sprint.Order,
 		&tasksJSON,
 	)
 
@@ -1184,7 +1209,7 @@ func parseJSONIntArray(jsonStr string) ([]int, error) {
 
 // ListSprints retrieves all sprints with optional status filter.
 func (db *DB) ListSprints(ctx context.Context, status *models.SprintStatus) ([]models.Sprint, error) {
-	query := `SELECT id, status, title, description, created_at, started_at, closed_at, max_tasks FROM sprints WHERE 1=1`
+	query := `SELECT id, status, title, description, created_at, started_at, closed_at, max_tasks, order_index FROM sprints WHERE 1=1`
 	args := []any{}
 
 	if status != nil {
@@ -1219,6 +1244,7 @@ func (db *DB) ListSprints(ctx context.Context, status *models.SprintStatus) ([]m
 			&startedAt,
 			&closedAt,
 			&maxTasks,
+			&sprint.Order,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning sprint row: %w", err)

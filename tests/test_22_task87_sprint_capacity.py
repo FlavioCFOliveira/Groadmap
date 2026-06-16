@@ -63,6 +63,7 @@ class TestAC1SprintCreateMaxTasks:
         roadmap = self.test.create_roadmap()
         sprint_id = self.test.run_cmd_json([
             "sprint", "create", "-r", roadmap,
+            "-t", "Sprint Alpha - OAuth2 and DB connection pool refactor",
             "-d", "Sprint Alpha - OAuth2 and DB connection pool refactor",
             "--max-tasks", "3",
         ])["id"]
@@ -77,6 +78,7 @@ class TestAC1SprintCreateMaxTasks:
         roadmap = self.test.create_roadmap()
         sprint_id = self.test.run_cmd_json([
             "sprint", "create", "-r", roadmap,
+            "-t", "Sprint for single critical security fix",
             "-d", "Sprint for single critical security fix",
             "--max-tasks", "1",
         ])["id"]
@@ -91,6 +93,7 @@ class TestAC1SprintCreateMaxTasks:
         roadmap = self.test.create_roadmap()
         sprint_id = self.test.run_cmd_json([
             "sprint", "create", "-r", roadmap,
+            "-t", "Bulk migration sprint with large task pool",
             "-d", "Bulk migration sprint with large task pool",
             "--max-tasks", "100",
         ])["id"]
@@ -119,6 +122,7 @@ class TestAC2CapacityEnforcement:
     def _make_capped_sprint(self, roadmap, cap):
         sprint_id = self.test.run_cmd_json([
             "sprint", "create", "-r", roadmap,
+            "-t", f"Capped sprint capacity={cap} for rate limiting tests",
             "-d", f"Capped sprint capacity={cap} for rate limiting tests",
             "--max-tasks", str(cap),
         ])["id"]
@@ -206,6 +210,7 @@ class TestAC3SprintShowFields:
         roadmap = self.test.create_roadmap()
         sprint_id = self.test.run_cmd_json([
             "sprint", "create", "-r", roadmap,
+            "-t", "Sprint Beta - API rate limiting and monitoring setup",
             "-d", "Sprint Beta - API rate limiting and monitoring setup",
             "--max-tasks", "4",
         ])["id"]
@@ -238,6 +243,7 @@ class TestAC3SprintShowFields:
         roadmap = self.test.create_roadmap()
         sprint_id = self.test.run_cmd_json([
             "sprint", "create", "-r", roadmap,
+            "-t", "Sprint Gamma - verify active task counting",
             "-d", "Sprint Gamma - verify active task counting",
             "--max-tasks", "5",
         ])["id"]
@@ -280,6 +286,7 @@ class TestAC4UnlimitedSprint:
         roadmap = self.test.create_roadmap()
         sprint_id = self.test.run_cmd_json([
             "sprint", "create", "-r", roadmap,
+            "-t", "Sprint Delta - unlimited capacity for backlog grooming",
             "-d", "Sprint Delta - unlimited capacity for backlog grooming",
         ])["id"]
         self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint_id)])
@@ -305,6 +312,7 @@ class TestAC4UnlimitedSprint:
         roadmap = self.test.create_roadmap()
         sprint_id = self.test.run_cmd_json([
             "sprint", "create", "-r", roadmap,
+            "-t", "Sprint Epsilon - no capacity restriction on large backlog",
             "-d", "Sprint Epsilon - no capacity restriction on large backlog",
         ])["id"]
         self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint_id)])
@@ -342,6 +350,7 @@ class TestAC5SprintUpdateMaxTasks:
         roadmap = self.test.create_roadmap()
         sprint_id = self.test.run_cmd_json([
             "sprint", "create", "-r", roadmap,
+            "-t", "Sprint Zeta - initial capacity 2, to be expanded",
             "-d", "Sprint Zeta - initial capacity 2, to be expanded",
             "--max-tasks", "2",
         ])["id"]
@@ -360,6 +369,7 @@ class TestAC5SprintUpdateMaxTasks:
         roadmap = self.test.create_roadmap()
         sprint_id = self.test.run_cmd_json([
             "sprint", "create", "-r", roadmap,
+            "-t", "Sprint Eta - capacity reduction scenario",
             "-d", "Sprint Eta - capacity reduction scenario",
             "--max-tasks", "10",
         ])["id"]
@@ -378,6 +388,7 @@ class TestAC5SprintUpdateMaxTasks:
         roadmap = self.test.create_roadmap()
         sprint_id = self.test.run_cmd_json([
             "sprint", "create", "-r", roadmap,
+            "-t", "Sprint Theta - originally unlimited, gaining capacity limit",
             "-d", "Sprint Theta - originally unlimited, gaining capacity limit",
         ])["id"]
 
@@ -412,6 +423,7 @@ class TestAC6CapacityPctZero:
         roadmap = self.test.create_roadmap()
         sprint_id = self.test.run_cmd_json([
             "sprint", "create", "-r", roadmap,
+            "-t", "Sprint Iota - freshly created with capacity limit set",
             "-d", "Sprint Iota - freshly created with capacity limit set",
             "--max-tasks", "4",
         ])["id"]
@@ -444,6 +456,7 @@ class TestAC6CapacityPctZero:
         roadmap = self.test.create_roadmap()
         sprint_id = self.test.run_cmd_json([
             "sprint", "create", "-r", roadmap,
+            "-t", "Sprint Iota - freshly created with capacity limit set",
             "-d", "Sprint Iota - freshly created with capacity limit set",
             "--max-tasks", "4",
         ])["id"]
@@ -476,6 +489,7 @@ class TestAC7SchemaMigration:
         roadmap = self.test.create_roadmap()
         sprint_id = self.test.run_cmd_json([
             "sprint", "create", "-r", roadmap,
+            "-t", "Pre-capacity sprint (omits --max-tasks, simulating pre-migration row)",
             "-d", "Pre-capacity sprint (omits --max-tasks, simulating pre-migration row)",
         ])["id"]
 
@@ -488,11 +502,13 @@ class TestAC7SchemaMigration:
         roadmap = self.test.create_roadmap()
         capped_id = self.test.run_cmd_json([
             "sprint", "create", "-r", roadmap,
+            "-t", "Capped sprint - infrastructure security hardening",
             "-d", "Capped sprint - infrastructure security hardening",
             "--max-tasks", "6",
         ])["id"]
         unlimited_id = self.test.run_cmd_json([
             "sprint", "create", "-r", roadmap,
+            "-t", "Unlimited sprint - exploratory research tasks",
             "-d", "Unlimited sprint - exploratory research tasks",
         ])["id"]
 
@@ -537,6 +553,7 @@ class TestMaxTasksInputValidation:
         roadmap = self.test.create_roadmap()
         exit_code, _, stderr = self.test.run_cmd(
             ["sprint", "create", "-r", roadmap,
+             "-t", "Sprint with zero capacity",
              "-d", "Sprint with zero capacity", "--max-tasks", "0"],
             check=False,
         )
@@ -547,6 +564,7 @@ class TestMaxTasksInputValidation:
         roadmap = self.test.create_roadmap()
         exit_code, _, stderr = self.test.run_cmd(
             ["sprint", "create", "-r", roadmap,
+             "-t", "Sprint with negative capacity",
              "-d", "Sprint with negative capacity", "--max-tasks", "-5"],
             check=False,
         )
@@ -557,6 +575,7 @@ class TestMaxTasksInputValidation:
         roadmap = self.test.create_roadmap()
         exit_code, _, stderr = self.test.run_cmd(
             ["sprint", "create", "-r", roadmap,
+             "-t", "Sprint with string capacity",
              "-d", "Sprint with string capacity", "--max-tasks", "ten"],
             check=False,
         )
@@ -567,6 +586,7 @@ class TestMaxTasksInputValidation:
         roadmap = self.test.create_roadmap()
         exit_code, _, stderr = self.test.run_cmd(
             ["sprint", "create", "-r", roadmap,
+             "-t", "Sprint with float capacity",
              "-d", "Sprint with float capacity", "--max-tasks", "2.5"],
             check=False,
         )
@@ -577,6 +597,7 @@ class TestMaxTasksInputValidation:
         roadmap = self.test.create_roadmap()
         sprint_id = self.test.run_cmd_json([
             "sprint", "create", "-r", roadmap,
+            "-t", "Sprint for update validation test",
             "-d", "Sprint for update validation test", "--max-tasks", "3",
         ])["id"]
         exit_code, _, _ = self.test.run_cmd(
