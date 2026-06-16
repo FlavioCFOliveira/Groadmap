@@ -795,6 +795,15 @@ so that the database never reaches a state where `tasks.status` and the
    add tasks between the count and the insert and thereby exceed the cap. The
    capacity is enforced atomically within the insert transaction, so the committed
    member count can never exceed `max_tasks`.
+4. **Adding tasks to a sprint (`AddTasksToSprint`).** Inserting the
+   `sprint_tasks` rows, updating those tasks' status to `SPRINT`, and writing
+   the `SPRINT_ADD_TASK` audit entries (one per task) MUST all occur in the same
+   transaction. A committed membership change can never exist without its audit
+   record.
+5. **Moving tasks between sprints (`MoveTasksBetweenSprints`).** The source-sprint
+   membership check, the re-parenting of the `sprint_tasks` rows, and writing the
+   `SPRINT_MOVE_TASK` audit entries (one per task) MUST all occur in the same
+   transaction. A committed move can never exist without its audit record.
 
 These guarantees extend the general transactional-integrity requirement in
 `ARCHITECTURE.md § Security Guarantees` (every modification, including its audit

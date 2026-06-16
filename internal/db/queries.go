@@ -1592,6 +1592,18 @@ func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int)
 		}); err != nil {
 			return err
 		}
+
+		// Audit: one SPRINT_ADD_TASK entry per task, written INSIDE this same
+		// transaction so a committed membership change can never exist without
+		// its audit record. Writing the audit in a separate post-commit call
+		// would leave a window where the insert is durable but the audit is not
+		// (SPEC/DATABASE.md § Transactional Atomicity Guarantees #4;
+		// ARCHITECTURE.md § Security Guarantees).
+		for range taskIDs {
+			if err := LogAuditTx(tx, models.OpSprintAddTask, models.EntitySprint, sprintID, now); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 }
@@ -1679,6 +1691,16 @@ func (db *DB) MoveTasksBetweenSprints(ctx context.Context, fromID, toID int, tas
 
 		// Intentionally NOT updating tasks.status: the task keeps whatever
 		// status it had (BACKLOG/SPRINT/DOING/TESTING/COMPLETED).
+
+		// Audit: one SPRINT_MOVE_TASK entry per task, written INSIDE this same
+		// transaction as the re-parenting so a committed move can never exist
+		// without its audit record (SPEC/DATABASE.md § Transactional Atomicity
+		// Guarantees #5; ARCHITECTURE.md § Security Guarantees).
+		for range taskIDs {
+			if err := LogAuditTx(tx, models.OpSprintMoveTask, models.EntitySprint, toID, now); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 }

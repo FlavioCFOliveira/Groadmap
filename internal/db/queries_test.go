@@ -851,6 +851,195 @@ func TestRemoveTasksFromSprint(t *testing.T) {
 	}
 }
 
+// countAuditByOp returns the number of audit rows for a given operation.
+func countAuditByOp(t *testing.T, db *DB, op models.AuditOperation) int {
+	t.Helper()
+	opStr := string(op)
+	entries, err := db.GetAuditEntries(testContext(), &AuditFilter{Operation: &opStr})
+	if err != nil {
+		t.Fatalf("failed to query audit entries for %q: %v", opStr, err)
+	}
+	return len(entries)
+}
+
+// TestAddTasksToSprint_WritesAuditAtomically is a regression test guaranteeing
+// that AddTasksToSprint records one SPRINT_ADD_TASK audit entry per task in the
+// SAME transaction as the membership change (SPEC/DATABASE.md § Transactional
+// Atomicity Guarantees #4). A prior implementation logged the audit in a
+// separate post-commit batch call, which could leave a committed membership
+// change with no audit record if the batch failed.
+func TestAddTasksToSprint_WritesAuditAtomically(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	sprintID, _ := db.CreateSprint(testContext(), &models.Sprint{
+		Status:      models.SprintPending,
+		Description: "Authentication hardening sprint",
+		CreatedAt:   time.Now().Format(time.RFC3339),
+	})
+
+	taskIDs := make([]int, 0, 3)
+	for i := 0; i < 3; i++ {
+		id, _ := db.CreateTask(testContext(), &models.Task{
+			Priority:               1,
+			Severity:               1,
+			Status:                 models.StatusBacklog,
+			Title:                  "Rotate signing keys",
+			FunctionalRequirements: "Reduce key compromise blast radius",
+			TechnicalRequirements:  "Implement rotation job",
+			AcceptanceCriteria:     "Keys rotate every 24h",
+			CreatedAt:              time.Now().Format(time.RFC3339),
+		})
+		taskIDs = append(taskIDs, id)
+	}
+
+	before := countAuditByOp(t, db, models.OpSprintAddTask)
+	if err := db.AddTasksToSprint(testContext(), sprintID, taskIDs); err != nil {
+		t.Fatalf("failed to add tasks to sprint: %v", err)
+	}
+	after := countAuditByOp(t, db, models.OpSprintAddTask)
+
+	if got := after - before; got != len(taskIDs) {
+		t.Errorf("expected %d SPRINT_ADD_TASK audit entries, got %d", len(taskIDs), got)
+	}
+}
+
+// TestAddTasksToSprint_NoAuditOnFailedTransaction guarantees atomicity in the
+// failure direction: when the membership insert rolls back (here, a max_tasks
+// capacity violation), NO SPRINT_ADD_TASK audit entry is left behind.
+func TestAddTasksToSprint_NoAuditOnFailedTransaction(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	sprintID, _ := db.CreateSprint(testContext(), &models.Sprint{
+		Status:      models.SprintPending,
+		Description: "Capacity-capped sprint",
+		CreatedAt:   time.Now().Format(time.RFC3339),
+	})
+	// CreateSprint does not persist max_tasks; set the cap explicitly so the
+	// 2-task add below violates it and rolls back.
+	if _, err := db.ExecContext(testContext(),
+		"UPDATE sprints SET max_tasks = ? WHERE id = ?", 1, sprintID); err != nil {
+		t.Fatalf("setting max_tasks: %v", err)
+	}
+
+	taskIDs := make([]int, 0, 2)
+	for i := 0; i < 2; i++ {
+		id, _ := db.CreateTask(testContext(), &models.Task{
+			Priority:               1,
+			Severity:               1,
+			Status:                 models.StatusBacklog,
+			Title:                  "Add rate limiting",
+			FunctionalRequirements: "Prevent abuse",
+			TechnicalRequirements:  "Token bucket",
+			AcceptanceCriteria:     "429 on overflow",
+			CreatedAt:              time.Now().Format(time.RFC3339),
+		})
+		taskIDs = append(taskIDs, id)
+	}
+
+	before := countAuditByOp(t, db, models.OpSprintAddTask)
+	// Adding 2 tasks to a sprint capped at 1 must fail and roll back entirely.
+	if err := db.AddTasksToSprint(testContext(), sprintID, taskIDs); err == nil {
+		t.Fatal("expected capacity violation error, got nil")
+	}
+	after := countAuditByOp(t, db, models.OpSprintAddTask)
+
+	if after != before {
+		t.Errorf("expected no audit entries after rolled-back add, got %d new", after-before)
+	}
+}
+
+// TestMoveTasksBetweenSprints_WritesAuditAtomically is a regression test
+// guaranteeing that MoveTasksBetweenSprints records one SPRINT_MOVE_TASK audit
+// entry per task in the SAME transaction as the re-parenting (SPEC/DATABASE.md §
+// Transactional Atomicity Guarantees #5).
+func TestMoveTasksBetweenSprints_WritesAuditAtomically(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	fromID, _ := db.CreateSprint(testContext(), &models.Sprint{
+		Status:      models.SprintPending,
+		Description: "Source sprint",
+		CreatedAt:   time.Now().Format(time.RFC3339),
+	})
+	toID, _ := db.CreateSprint(testContext(), &models.Sprint{
+		Status:      models.SprintPending,
+		Description: "Destination sprint",
+		CreatedAt:   time.Now().Format(time.RFC3339),
+	})
+
+	taskIDs := make([]int, 0, 2)
+	for i := 0; i < 2; i++ {
+		id, _ := db.CreateTask(testContext(), &models.Task{
+			Priority:               1,
+			Severity:               1,
+			Status:                 models.StatusBacklog,
+			Title:                  "Migrate audit indexes",
+			FunctionalRequirements: "Speed up audit queries",
+			TechnicalRequirements:  "Add composite index",
+			AcceptanceCriteria:     "Query under 10ms",
+			CreatedAt:              time.Now().Format(time.RFC3339),
+		})
+		taskIDs = append(taskIDs, id)
+	}
+	if err := db.AddTasksToSprint(testContext(), fromID, taskIDs); err != nil {
+		t.Fatalf("failed to seed source sprint: %v", err)
+	}
+
+	before := countAuditByOp(t, db, models.OpSprintMoveTask)
+	if err := db.MoveTasksBetweenSprints(testContext(), fromID, toID, taskIDs); err != nil {
+		t.Fatalf("failed to move tasks between sprints: %v", err)
+	}
+	after := countAuditByOp(t, db, models.OpSprintMoveTask)
+
+	if got := after - before; got != len(taskIDs) {
+		t.Errorf("expected %d SPRINT_MOVE_TASK audit entries, got %d", len(taskIDs), got)
+	}
+}
+
+// TestMoveTasksBetweenSprints_NoAuditOnFailedTransaction guarantees that a
+// rejected move (a task that is not a member of the source sprint) leaves no
+// SPRINT_MOVE_TASK audit entry behind.
+func TestMoveTasksBetweenSprints_NoAuditOnFailedTransaction(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	fromID, _ := db.CreateSprint(testContext(), &models.Sprint{
+		Status:      models.SprintPending,
+		Description: "Source sprint",
+		CreatedAt:   time.Now().Format(time.RFC3339),
+	})
+	toID, _ := db.CreateSprint(testContext(), &models.Sprint{
+		Status:      models.SprintPending,
+		Description: "Destination sprint",
+		CreatedAt:   time.Now().Format(time.RFC3339),
+	})
+
+	// Task exists but is NOT a member of the source sprint, so the move must
+	// fail the membership check and roll back.
+	orphanID, _ := db.CreateTask(testContext(), &models.Task{
+		Priority:               1,
+		Severity:               1,
+		Status:                 models.StatusBacklog,
+		Title:                  "Unassigned task",
+		FunctionalRequirements: "N/A",
+		TechnicalRequirements:  "N/A",
+		AcceptanceCriteria:     "N/A",
+		CreatedAt:              time.Now().Format(time.RFC3339),
+	})
+
+	before := countAuditByOp(t, db, models.OpSprintMoveTask)
+	if err := db.MoveTasksBetweenSprints(testContext(), fromID, toID, []int{orphanID}); err == nil {
+		t.Fatal("expected membership validation error, got nil")
+	}
+	after := countAuditByOp(t, db, models.OpSprintMoveTask)
+
+	if after != before {
+		t.Errorf("expected no audit entries after rolled-back move, got %d new", after-before)
+	}
+}
+
 // ==================== AUDIT TESTS ====================
 
 func TestLogAuditEntry(t *testing.T) {

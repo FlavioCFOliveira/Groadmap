@@ -157,25 +157,6 @@ func sprintStats(args []string) error {
 	return utils.PrintJSON(stats)
 }
 
-// logAuditForTasks logs audit entries for multiple tasks in a sprint using batch insert.
-func logAuditForTasks(ctx context.Context, database *db.DB, sprintID int, op models.AuditOperation, count int) error {
-	if count == 0 {
-		return nil
-	}
-
-	entries := make([]*models.AuditEntry, count)
-	now := utils.NowISO8601()
-	for i := 0; i < count; i++ {
-		entries[i] = &models.AuditEntry{
-			Operation:   string(op),
-			EntityType:  string(models.EntitySprint),
-			EntityID:    sprintID,
-			PerformedAt: now,
-		}
-	}
-	return database.LogAuditEntriesBatch(ctx, entries)
-}
-
 // sprintAddTasks adds one or more tasks to a sprint and updates their status.
 //
 // Parameters:
@@ -284,10 +265,11 @@ func sprintAddTasks(args []string) error {
 		}
 	}
 
-	if err := database.AddTasksToSprint(ctx, sprintID, taskIDs); err != nil {
-		return err
-	}
-	return logAuditForTasks(ctx, database, sprintID, models.OpSprintAddTask, len(taskIDs))
+	// AddTasksToSprint writes the membership change AND its SPRINT_ADD_TASK
+	// audit entries inside one transaction, so the audit can never be lost
+	// after a committed insert (SPEC/DATABASE.md § Transactional Atomicity
+	// Guarantees #4).
+	return database.AddTasksToSprint(ctx, sprintID, taskIDs)
 }
 
 // sprintRemoveTasks removes tasks from a sprint.
@@ -452,8 +434,9 @@ func sprintMoveTasks(args []string) error {
 	// preserving each task's status. Unlike AddTasksToSprint, this neither
 	// forces status to SPRINT nor applies the destination's max-tasks cap;
 	// it also validates that every task is currently in the source sprint.
-	if err := database.MoveTasksBetweenSprints(ctx, fromID, toID, taskIDs); err != nil {
-		return err
-	}
-	return logAuditForTasks(ctx, database, toID, models.OpSprintMoveTask, len(taskIDs))
+	// MoveTasksBetweenSprints writes the re-parenting AND its SPRINT_MOVE_TASK
+	// audit entries inside one transaction, so the audit can never be lost
+	// after a committed move (SPEC/DATABASE.md § Transactional Atomicity
+	// Guarantees #5).
+	return database.MoveTasksBetweenSprints(ctx, fromID, toID, taskIDs)
 }
