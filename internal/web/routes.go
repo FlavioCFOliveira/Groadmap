@@ -3,6 +3,7 @@ package web
 import (
 	"io/fs"
 	"net/http"
+	"strings"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
@@ -44,6 +45,15 @@ func (f noDirFS) Open(name string) (fs.File, error) {
 // headers on every response — including the 404/405 produced by the fallback
 // handler and the static file server — before delegating to next
 // (SPEC/WEB.md § Security Headers).
+//
+// It is also the single authoritative location for the cache policy: every
+// data-derived response carries Cache-Control: no-store, while embedded static
+// assets under /static/... are excluded and remain cacheable (SPEC/WEB.md
+// § Cache Policy). Setting it here — the outermost layer that runs on every
+// response, including the fallback handler's data-state-dependent 404/405/500 —
+// covers all dynamic pages, the JSON data endpoint, and those error responses
+// in one place. It is deliberately NOT duplicated in renderHTML/renderJSON, so
+// the no-store guarantee has exactly one source of truth and cannot diverge.
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
@@ -51,6 +61,13 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "same-origin")
+		// Embedded static assets are immutable and stay cacheable; every other
+		// response is data-derived (computed from the SQLite DB or the GoGraph
+		// store, including the data-state-dependent 404/405/500) and must never
+		// be re-presented from a stale cache (SPEC/WEB.md § Cache Policy).
+		if !strings.HasPrefix(r.URL.Path, "/static/") {
+			h.Set("Cache-Control", "no-store")
+		}
 		next.ServeHTTP(w, r)
 	})
 }

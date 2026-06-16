@@ -9,6 +9,7 @@
 - [Bind Address and Port Selection](#bind-address-and-port-selection)
 - [HTTP Server Timeouts](#http-server-timeouts)
 - [Security Headers](#security-headers)
+- [Cache Policy](#cache-policy)
 - [Routes and Pages](#routes-and-pages)
   - [Roadmap Index Page](#roadmap-index-page)
   - [Roadmap Sprints Page](#roadmap-sprints-page)
@@ -373,6 +374,57 @@ Notes:
 3. The headers apply to every HTML response. The graph data endpoint, which returns
    JSON, is additionally subject to the HTML-safe JSON encoding required in
    [Graph Data Endpoint](#graph-data-endpoint).
+4. Data-derived responses additionally carry the `Cache-Control: no-store` header
+   required in [Cache Policy](#cache-policy), so the freshly read database or graph
+   state is never masked by a client-side or intermediary cache.
+
+## Cache Policy
+
+The web interface MUST never re-present stale data. Every response whose body is
+computed from current data MUST reflect the exact current state of the roadmap
+database or the knowledge-graph store on every request. The server already reads
+the SQLite database and the GoGraph store fresh on every request and holds no
+server-side data cache (see [Read-Only Data Flow](#read-only-data-flow)). This
+section closes the remaining gap: it prevents the browser or any intermediary
+HTTP cache from re-presenting a previously fetched dynamic response and thereby
+showing a state that no longer matches the data.
+
+1. **`Cache-Control: no-store` on every data-derived response.** Every
+   data-derived response — that is, every response whose body is computed from the
+   roadmap database or the knowledge-graph store — MUST carry the HTTP response
+   header `Cache-Control: no-store`. This covers:
+   - the roadmap index page (`/`);
+   - the roadmap sprints page (`/roadmaps/{name}`);
+   - the roadmap tasks page (`/roadmaps/{name}/tasks`);
+   - the roadmap sprint page (`/roadmaps/{name}/sprints/{id}`);
+   - the knowledge-graph page shell (`/roadmaps/{name}/graph`);
+   - the graph data endpoint (`/roadmaps/{name}/graph/data`).
+
+   It also covers the data-state-dependent error responses — for example a
+   `404 Not Found` for a roadmap or a sprint that does not exist, and a `500` from
+   a read failure — because whether such a path is found depends on the current
+   database or store state, so those responses are themselves data-derived.
+2. **`no-store`, not merely `no-cache`.** `Cache-Control: no-store` is the chosen
+   directive. The response MUST NOT be stored by any cache, so a reload, a
+   back/forward navigation, or a re-fetch always re-reads the current database or
+   store state rather than re-presenting a stored copy. This is the mechanism that
+   guarantees the read-only data-flow promise — that each request opens the data,
+   reads the current state, and serves it (see
+   [Read-Only Data Flow](#read-only-data-flow)) — is observable to the user and is
+   not masked by a client-side cache.
+3. **Static assets are excluded and remain cacheable.** Embedded static assets
+   under `/static/...` (the vendored Tabler CSS and JavaScript, the D3.js bundle
+   and the d3-sankey plugin, the fonts, the icons and images, the favicon, and the
+   local scripts and stylesheet) are not data: they are immutable assets embedded
+   in the binary (see [Embedded Asset Categories](#embedded-asset-categories)).
+   They are explicitly EXCLUDED from the `no-store` rule and remain cacheable by
+   the client. The `no-store` requirement targets data-derived responses only.
+4. **Observable counterpart of the read-only data flow.** This policy is
+   consistent with, and the observable counterpart of, the existing read-only
+   data-flow guarantee: each request opens the data, reads the current state, and
+   releases the handle (see [Read-Only Data Flow](#read-only-data-flow)). The
+   `no-store` header ensures the freshly read state is what the user actually sees,
+   rather than a previously cached response.
 
 ## Routes and Pages
 
@@ -684,7 +736,11 @@ tasks.
 ## Read-Only Data Flow
 
 The web interface reads the same on-disk data the CLI reads, through the same
-location rules, and never writes to it.
+location rules, and never writes to it. Each request opens the data, reads the
+current state, and releases the handle; the freshly read state is what the user
+sees, and the `Cache-Control: no-store` header on every data-derived response
+(see [Cache Policy](#cache-policy)) ensures no client-side or intermediary cache
+re-presents an earlier, now-stale response in its place.
 
 ### Tasks and Sprints from SQLite
 
@@ -1088,7 +1144,15 @@ Rules:
    configured with explicit ReadHeaderTimeout, WriteTimeout, and IdleTimeout values
    so a slow or idle client cannot exhaust server resources (see
    [HTTP Server Timeouts](#http-server-timeouts)).
-10. **No new write path.** The web interface does not become a second source of
+10. **No stale data; `no-store` on data-derived responses.** Every data-derived
+   response (the roadmap index page, the roadmap sprints page, the roadmap tasks
+   page, the roadmap sprint page, the knowledge-graph page shell, the graph data
+   endpoint, and the data-state-dependent error responses) carries
+   `Cache-Control: no-store`, so no client-side or intermediary cache re-presents a
+   state that no longer matches the database or store. Embedded `/static/...`
+   assets are immutable and are excluded from this rule, remaining cacheable (see
+   [Cache Policy](#cache-policy)).
+11. **No new write path.** The web interface does not become a second source of
    truth. The CLI and its SQLite databases and GoGraph stores remain the sole
    source of truth and the sole write path; the web interface is a view over them.
 
@@ -1271,6 +1335,16 @@ Rules:
 36. Binding a non-loopback host (for example `rmp web --host 0.0.0.0`) prints a
     network-exposure warning to stderr, while binding a loopback host (the default,
     or `rmp web --host 127.0.0.1`) prints no such warning.
+37. Every data-derived response carries the `Cache-Control: no-store` header: the
+    roadmap index page (`/`), the roadmap sprints page (`/roadmaps/{name}`), the
+    roadmap tasks page (`/roadmaps/{name}/tasks`), the roadmap sprint page
+    (`/roadmaps/{name}/sprints/{id}`), the knowledge-graph page shell
+    (`/roadmaps/{name}/graph`), the graph data endpoint
+    (`/roadmaps/{name}/graph/data`), and the data-state-dependent error responses
+    (for example a `404` for a missing roadmap or sprint and a `500` from a read
+    failure). A response for a `/static/...` asset does **not** carry
+    `Cache-Control: no-store` and remains cacheable (see
+    [Cache Policy](#cache-policy)).
 
 ## See Also
 
