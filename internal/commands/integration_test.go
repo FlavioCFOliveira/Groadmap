@@ -199,6 +199,7 @@ func TestIntegration_TaskLifecycle(t *testing.T) {
 		err := HandleSprint([]string{
 			"create",
 			"-r", testRoadmap,
+			"-t", "Integration milestone",
 			"-d", "Integration test sprint",
 		})
 		if err != nil {
@@ -262,6 +263,7 @@ func TestIntegration_SprintLifecycle(t *testing.T) {
 		err := HandleSprint([]string{
 			"create",
 			"-r", testRoadmap,
+			"-t", "Integration milestone",
 			"-d", "Integration test sprint",
 		})
 		if err != nil {

@@ -3,6 +3,7 @@ package commands
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
@@ -61,6 +62,22 @@ func sprintCreate(args []string) error {
 		return err
 	}
 
+	title, _ := result.Flags["Title"].(string)
+	if title == "" {
+		// "<sentinel>: --flag" so stderr matches the SPEC canonical shape
+		// ("Error: required parameter missing: --title") without the
+		// redundant doubled prefix (finding #54).
+		return fmt.Errorf("%w: --title", utils.ErrRequired)
+	}
+	if len(title) > models.MaxSprintTitle {
+		return fmt.Errorf("%w: title exceeds maximum length of %d characters", utils.ErrFieldTooLarge, models.MaxSprintTitle)
+	}
+	// Reject control / bidi / format code points (SPEC/MODELS.md § Free-Text
+	// Control-Character Constraint).
+	if err := utils.ValidateNoControlChars(title, "title"); err != nil {
+		return err
+	}
+
 	description, _ := result.Flags["Description"].(string)
 	if description == "" {
 		// "<sentinel>: --flag" so stderr matches the SPEC canonical shape
@@ -93,6 +110,7 @@ func sprintCreate(args []string) error {
 
 	sprint := &models.Sprint{
 		Status:      models.SprintPending,
+		Title:       title,
 		Description: description,
 		CreatedAt:   now,
 		MaxTasks:    maxTasks,
@@ -106,8 +124,8 @@ func sprintCreate(args []string) error {
 	var sprintID int
 	err = database.WithTransaction(func(tx *sql.Tx) error {
 		insertResult, insertErr := tx.Exec(
-			`INSERT INTO sprints (status, description, created_at, max_tasks) VALUES (?, ?, ?, ?)`,
-			sprint.Status, sprint.Description, sprint.CreatedAt, sprint.MaxTasks,
+			`INSERT INTO sprints (status, title, description, created_at, max_tasks) VALUES (?, ?, ?, ?, ?)`,
+			sprint.Status, sprint.Title, sprint.Description, sprint.CreatedAt, sprint.MaxTasks,
 		)
 		if insertErr != nil {
 			return insertErr
@@ -239,11 +257,23 @@ func sprintUpdate(args []string) error {
 		return err
 	}
 
+	title, _ := result.Flags["Title"].(string)
 	description, _ := result.Flags["Description"].(string)
 	_, hasMaxTasks := result.Flags["MaxTasks"]
 
-	if description == "" && !hasMaxTasks {
-		return fmt.Errorf("%w: at least one of --description or --max-tasks is required", utils.ErrRequired)
+	if title == "" && description == "" && !hasMaxTasks {
+		return fmt.Errorf("%w: at least one of --title, --description or --max-tasks is required", utils.ErrRequired)
+	}
+
+	if title != "" && len(title) > models.MaxSprintTitle {
+		return fmt.Errorf("%w: title exceeds maximum length of %d characters", utils.ErrFieldTooLarge, models.MaxSprintTitle)
+	}
+	// Reject control / bidi / format code points (SPEC/MODELS.md § Free-Text
+	// Control-Character Constraint).
+	if title != "" {
+		if err := utils.ValidateNoControlChars(title, "title"); err != nil {
+			return err
+		}
 	}
 
 	if description != "" && len(description) > models.MaxSprintDescription {
@@ -275,22 +305,28 @@ func sprintUpdate(args []string) error {
 	// Capture timestamp once for the entire operation
 	now := utils.NowISO8601()
 
-	// Build dynamic SET clause based on provided flags.
+	// Build dynamic SET clause based on provided flags. Columns are collected
+	// in a stable order (title, description, max_tasks) so the generated SQL is
+	// deterministic. Column names are hardcoded literals — only values are bound
+	// as parameters — so the assembled query is injection-safe.
 	return database.WithTransaction(func(tx *sql.Tx) error {
-		var query string
-		var args []any
+		setParts := make([]string, 0, 3)
+		args := make([]any, 0, 4)
 
-		switch {
-		case description != "" && hasMaxTasks:
-			query = "UPDATE sprints SET description = ?, max_tasks = ? WHERE id = ?"
-			args = []any{description, maxTasks, sprintID}
-		case description != "":
-			query = "UPDATE sprints SET description = ? WHERE id = ?"
-			args = []any{description, sprintID}
-		default:
-			query = "UPDATE sprints SET max_tasks = ? WHERE id = ?"
-			args = []any{maxTasks, sprintID}
+		if title != "" {
+			setParts = append(setParts, "title = ?")
+			args = append(args, title)
 		}
+		if description != "" {
+			setParts = append(setParts, "description = ?")
+			args = append(args, description)
+		}
+		if hasMaxTasks {
+			setParts = append(setParts, "max_tasks = ?")
+			args = append(args, maxTasks)
+		}
+		args = append(args, sprintID)
+		query := fmt.Sprintf("UPDATE sprints SET %s WHERE id = ?", strings.Join(setParts, ", "))
 
 		updateResult, updateErr := tx.Exec(query, args...)
 		if updateErr != nil {

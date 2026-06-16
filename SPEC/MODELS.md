@@ -111,7 +111,7 @@ Maps to the `tasks` table and `Task` JSON object.
 
 All free-text fields — `Title`, `FunctionalRequirements`, `TechnicalRequirements`,
 `AcceptanceCriteria`, `CompletionSummary`, and `Specialists` (and the `Sprint`
-`Description` field) — MUST reject control characters. The application rejects an
+`Title` and `Description` fields) — MUST reject control characters. The application rejects an
 input that contains any of the following code points, with exit code 6, before the
 value is stored:
 
@@ -181,6 +181,7 @@ Maps to the `sprints` table and `Sprint` JSON object.
 type Sprint struct {
     ID          int          `json:"id"`
     Status      SprintStatus `json:"status"`
+    Title       string       `json:"title"`            // Sprint title, required (NOT NULL), max 255 chars
     Description string       `json:"description"`      // Sprint description, max 2048 chars
     Tasks       []int        `json:"tasks"`            // Computed from sprint_tasks (ordered by position)
     TaskCount   int          `json:"task_count"`       // Computed
@@ -193,6 +194,7 @@ type Sprint struct {
 
 #### Sprint Field Constraints
 
+- `Title`: Required (NOT NULL), maximum 255 characters. Same cap as the task `Title` field. Subject to the Free-Text Control-Character Constraint above.
 - `Description`: Maximum 2048 characters (free text covering sprint goal, scope, and non-goals).
 
 ### Audit Entry
@@ -330,6 +332,7 @@ type SprintProgress struct {
 // Used for the 'rmp sprint show' command.
 type SprintShowResult struct {
     SprintID                int                     `json:"sprint_id"`
+    SprintTitle             string                  `json:"sprint_title"`
     SprintDescription       string                  `json:"sprint_description"`
     Status                  SprintStatus            `json:"status"`
     Summary                 SprintSummary           `json:"summary"`
@@ -348,6 +351,7 @@ type SprintShowResult struct {
 | Field | Type | Description |
 |-------|------|-------------|
 | `sprint_id` | int | Sprint identifier |
+| `sprint_title` | string | Sprint title text |
 | `sprint_description` | string | Sprint description text |
 | `status` | SprintStatus | Current sprint status |
 | `summary` | SprintSummary | Task counts by category (pending, in_progress, completed) |

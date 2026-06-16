@@ -791,7 +791,7 @@ func (db *DB) GetOpenSprint(ctx context.Context) (*models.Sprint, error) {
 	// Single query using JSON aggregation to get sprint data and task IDs
 	err := db.QueryRowContext(ctx,
 		`SELECT
-			s.id, s.status, s.description, s.created_at, s.started_at, s.closed_at, s.max_tasks,
+			s.id, s.status, s.title, s.description, s.created_at, s.started_at, s.closed_at, s.max_tasks,
 			COALESCE(json_group_array(DISTINCT st.task_id), '[]') as tasks
 		 FROM sprints s
 		 LEFT JOIN sprint_tasks st ON s.id = st.sprint_id
@@ -802,6 +802,7 @@ func (db *DB) GetOpenSprint(ctx context.Context) (*models.Sprint, error) {
 	).Scan(
 		&sprint.ID,
 		&sprint.Status,
+		&sprint.Title,
 		&sprint.Description,
 		&sprint.CreatedAt,
 		&startedAt,
@@ -1072,7 +1073,8 @@ func (db *DB) CreateSprint(ctx context.Context, sprint *models.Sprint) (int, err
 	var sprintID int
 	err := retryWithBackoff("create sprint", func() error {
 		result, err := db.ExecContext(ctx,
-			`INSERT INTO sprints (status, description, created_at) VALUES (?, ?, ?)`,
+			`INSERT INTO sprints (title, status, description, created_at) VALUES (?, ?, ?, ?)`,
+			sprint.Title,
 			sprint.Status,
 			sprint.Description,
 			sprint.CreatedAt,
@@ -1111,7 +1113,7 @@ func (db *DB) GetSprint(ctx context.Context, id int) (*models.Sprint, error) {
 	// json_group_array returns a JSON array of task IDs
 	err := db.QueryRowContext(ctx,
 		`SELECT
-			s.id, s.status, s.description, s.created_at, s.started_at, s.closed_at, s.max_tasks,
+			s.id, s.status, s.title, s.description, s.created_at, s.started_at, s.closed_at, s.max_tasks,
 			COALESCE(json_group_array(DISTINCT st.task_id), '[]') as tasks
 		 FROM sprints s
 		 LEFT JOIN sprint_tasks st ON s.id = st.sprint_id
@@ -1121,6 +1123,7 @@ func (db *DB) GetSprint(ctx context.Context, id int) (*models.Sprint, error) {
 	).Scan(
 		&sprint.ID,
 		&sprint.Status,
+		&sprint.Title,
 		&sprint.Description,
 		&sprint.CreatedAt,
 		&startedAt,
@@ -1181,7 +1184,7 @@ func parseJSONIntArray(jsonStr string) ([]int, error) {
 
 // ListSprints retrieves all sprints with optional status filter.
 func (db *DB) ListSprints(ctx context.Context, status *models.SprintStatus) ([]models.Sprint, error) {
-	query := `SELECT id, status, description, created_at, started_at, closed_at, max_tasks FROM sprints WHERE 1=1`
+	query := `SELECT id, status, title, description, created_at, started_at, closed_at, max_tasks FROM sprints WHERE 1=1`
 	args := []any{}
 
 	if status != nil {
@@ -1210,6 +1213,7 @@ func (db *DB) ListSprints(ctx context.Context, status *models.SprintStatus) ([]m
 		err := rows.Scan(
 			&sprint.ID,
 			&sprint.Status,
+			&sprint.Title,
 			&sprint.Description,
 			&sprint.CreatedAt,
 			&startedAt,

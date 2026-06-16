@@ -35,11 +35,12 @@ func buildSprintCommand() Command {
 				Name: "create", Aliases: []string{"new"},
 				Summary:     "Create a new sprint (PENDING).",
 				Description: "Creates a new sprint in PENDING status.",
-				Usage:       "rmp sprint create -r <roadmap> -d <description> [--max-tasks <n>]",
+				Usage:       "rmp sprint create -r <roadmap> -t <title> -d <description> [--max-tasks <n>]",
 				HelpPrinter: printSprintCreateHelp,
 				Handler:     sprintCreate,
 				Flags: []Flag{
 					sharedRoadmapFlag(),
+					{Long: "--title", Short: "-t", Type: "string", Required: true, MaxLength: 255, Description: "Sprint title."},
 					{Long: "--description", Short: "-d", Type: "string", Required: true, MaxLength: 2048, Description: "Sprint description."},
 					{Long: "--max-tasks", Type: "integer", HasRange: true, RangeMin: 1, Description: "Capacity cap on active tasks; cannot be removed once set."},
 					helpFlag(),
@@ -49,7 +50,7 @@ func buildSprintCommand() Command {
 				Idempotent:  false,
 				ExitCodes:   []int{0, 2, 3, 6},
 				Examples: []Example{
-					{Title: "Create", Cmd: `rmp sprint create -r myproject -d "Sprint 1"`, Stdout: `{"id":1}`, Exit: 0},
+					{Title: "Create", Cmd: `rmp sprint create -r myproject -t "Authentication hardening" -d "Sprint 1"`, Stdout: `{"id":1}`, Exit: 0},
 				},
 			},
 			{
@@ -82,7 +83,7 @@ func buildSprintCommand() Command {
 					{Name: "sprint-id", Type: "integer", Required: true, Description: "Integer sprint id."},
 				},
 				Flags:       []Flag{sharedRoadmapFlag(), helpFlag()},
-				Output:      SuccessOutput{Kind: "object", Schema: "{sprint_id, sprint_description, status, max_tasks, capacity_pct, current_load, task_order, summary, progress, severity_distribution, criticality_distribution}"},
+				Output:      SuccessOutput{Kind: "object", Schema: "{sprint_id, sprint_title, sprint_description, status, max_tasks, capacity_pct, current_load, task_order, summary, progress, severity_distribution, criticality_distribution}"},
 				SideEffects: SideEffects{Database: "Read-only.", Filesystem: "None.", Network: "None."},
 				Idempotent:  true,
 				ExitCodes:   []int{0, 3, 4},
@@ -92,9 +93,9 @@ func buildSprintCommand() Command {
 			},
 			{
 				Name: "update", Aliases: []string{"upd"},
-				Summary:     "Update sprint description or capacity cap.",
-				Description: "Edits the description or capacity cap of an existing sprint. At least one option required.",
-				Usage:       "rmp sprint update -r <roadmap> <sprint-id> [-d <text>] [--max-tasks <n>]",
+				Summary:     "Update sprint title, description or capacity cap.",
+				Description: "Edits the title, description or capacity cap of an existing sprint. At least one option required.",
+				Usage:       "rmp sprint update -r <roadmap> <sprint-id> [-t <title>] [-d <text>] [--max-tasks <n>]",
 				HelpPrinter: printSprintUpdateHelp,
 				Handler:     sprintUpdate,
 				Positional: []Argument{
@@ -102,6 +103,7 @@ func buildSprintCommand() Command {
 				},
 				Flags: []Flag{
 					sharedRoadmapFlag(),
+					{Long: "--title", Short: "-t", Type: "string", MaxLength: 255, Description: "New title."},
 					{Long: "--description", Short: "-d", Type: "string", MaxLength: 2048, Description: "New description."},
 					{Long: "--max-tasks", Type: "integer", HasRange: true, RangeMin: 1, Description: "New capacity cap."},
 					helpFlag(),

@@ -51,6 +51,11 @@ var migrations = []Migration{
 		Name:    "Add task_dependencies table for blocking relationships",
 		Apply:   migrateV1_5_0_toV1_6_0,
 	},
+	{
+		Version: "1.7.0",
+		Name:    "Add title column to sprints table",
+		Apply:   migrateV1_6_0_toV1_7_0,
+	},
 }
 
 // RunMigrations executes all pending migrations in a transaction.
@@ -284,6 +289,39 @@ CREATE TABLE IF NOT EXISTS task_dependencies (
 		`CREATE INDEX IF NOT EXISTS idx_task_deps_depends_on ON task_dependencies(depends_on_task_id)`,
 	); err != nil {
 		return fmt.Errorf("creating idx_task_deps_depends_on: %w", err)
+	}
+
+	return nil
+}
+
+// migrateV1_6_0_toV1_7_0 adds the required title column to the sprints table and
+// backfills existing rows with a deterministic title derived from the sprint id.
+//
+// SQLite cannot add a bare NOT NULL column to a populated table, so the column is
+// added with DEFAULT ” and then every backfilled row receives the literal title
+// 'Sprint ' || id. The backfill is restricted to rows whose title is still the
+// empty-string default, so re-running the migration never clobbers a real title.
+// Idempotent: the ADD COLUMN is guarded by columnExists, so re-applying the
+// migration on a database that already has the column is a no-op (not an error).
+func migrateV1_6_0_toV1_7_0(tx *sql.Tx) error {
+	exists, err := columnExists(tx, "sprints", "title")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		if _, err := tx.Exec(
+			`ALTER TABLE sprints ADD COLUMN title TEXT NOT NULL DEFAULT '' CHECK(length(title) <= 255)`,
+		); err != nil {
+			return fmt.Errorf("adding title column: %w", err)
+		}
+	}
+
+	// Backfill only rows still holding the empty-string default so a second
+	// apply does not overwrite titles set after the first migration.
+	if _, err := tx.Exec(
+		`UPDATE sprints SET title = 'Sprint ' || id WHERE title = ''`,
+	); err != nil {
+		return fmt.Errorf("backfilling sprint titles: %w", err)
 	}
 
 	return nil

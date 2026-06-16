@@ -44,14 +44,16 @@ Creates a new sprint in the specified roadmap.
 | Short Flag | Long Flag | Type | Default | Description |
 |------------|------------|------|--------|-------------|
 | `-r` | `--roadmap` | string | - | Roadmap name (required) |
-| `-d` | `--description` | string | - | Sprint description (required) |
+| `-t` | `--title` | string | - | Sprint title, max 255 chars (required) |
+| `-d` | `--description` | string | - | Sprint description, max 2048 chars (required) |
+| | `--max-tasks` | integer | - | Capacity cap on active tasks; cannot be removed once set |
 
 **Output:** JSON object with the created sprint ID
 
 **Examples:**
 ```bash
-rmp sprint create -r project1 -d "Sprint 1 - Initial Setup"
-rmp sprint new -r project1 -d "Sprint 2 - Features"
+rmp sprint create -r project1 -t "Initial Setup" -d "Sprint 1 - Initial Setup"
+rmp sprint new -r project1 -t "Features" -d "Sprint 2 - Features"
 ```
 
 **Example output:**
@@ -77,7 +79,7 @@ Gets detailed information about a specific sprint.
 |------------|------------|------|-----------|
 | `-r` | `--roadmap` | string | Roadmap name (required) |
 
-**Output:** JSON Sprint object
+**Output:** JSON Sprint object, including its `title` and `description` fields
 
 **Example:**
 ```bash
@@ -113,6 +115,7 @@ rmp sprint show -r project1 1
 ```json
 {
   "sprint_id": 1,
+  "sprint_title": "Initial Setup",
   "sprint_description": "Sprint 1 - Initial Setup",
   "status": "OPEN",
   "summary": {
@@ -146,7 +149,8 @@ rmp sprint show -r project1 1
 | Field | Type | Description |
 |-------|------|-------------|
 | `sprint_id` | integer | Sprint identifier |
-| `sprint_description` | string | Sprint description/name |
+| `sprint_title` | string | Sprint title |
+| `sprint_description` | string | Sprint description |
 | `status` | string | Sprint status (OPEN, CLOSED) |
 | `summary.total_tasks` | integer | Total number of tasks in sprint |
 | `summary.pending` | integer | Tasks with status BACKLOG or SPRINT |
@@ -378,7 +382,8 @@ rmp sprint mv-tasks -r project1 2 3 5,6,7
 
 ### update
 
-Updates a sprint's description.
+Updates a sprint's title, description, or capacity cap. At least one of
+`--title`, `--description`, or `--max-tasks` must be provided.
 
 **Usage:** `rmp sprint update [OPTIONS] <id>` or `rmp sprint upd [OPTIONS] <id>`
 
@@ -391,12 +396,15 @@ Updates a sprint's description.
 | Short Flag | Long Flag | Type | Description |
 |------------|------------|------|-----------|
 | `-r` | `--roadmap` | string | Roadmap name (required) |
-| `-d` | `--description` | string | New description (required) |
+| `-t` | `--title` | string | New title, max 255 chars (optional) |
+| `-d` | `--description` | string | New description, max 2048 chars (optional) |
+| | `--max-tasks` | integer | New capacity cap on active tasks (optional) |
 
 **Examples:**
 ```bash
+rmp sprint update -r project1 1 -t "Setup and Config"
 rmp sprint update -r project1 1 -d "Sprint 1 - Setup and Config"
-rmp sprint upd -r project1 1 -d "Updated description"
+rmp sprint upd -r project1 1 -t "Updated title" -d "Updated description"
 ```
 
 ---

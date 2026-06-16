@@ -103,7 +103,7 @@ rmp task get 1,2,3
 rmp task next
 
 # Create a sprint
-rmp sprint create -d "Sprint 1 - Setup"
+rmp sprint create -t "Setup" -d "Sprint 1 - Setup"
 
 # Add tasks to sprint
 rmp sprint add-tasks 1 1,2,3
@@ -320,15 +320,16 @@ rmp task blocking 5            # Tasks that depend on task 5 and are waiting for
 
 **How do I create a sprint with capacity control?**
 ```bash
-rmp sprint create -d "Sprint 5 - Auth module"
-rmp sprint create -d "Sprint 5 - Auth module" --max-tasks 8   # Cap at 8 tasks
+rmp sprint create -t "Auth module" -d "Sprint 5 - Auth module"
+rmp sprint create -t "Auth module" -d "Sprint 5 - Auth module" --max-tasks 8   # Cap at 8 tasks
 ```
 
 **How do I update a sprint?**
 ```bash
+rmp sprint update <id> -t "New title"
 rmp sprint update <id> -d "New description"
 rmp sprint update <id> --max-tasks 10        # Update capacity limit
-rmp sprint upd <id> -d "New description" --max-tasks 10
+rmp sprint upd <id> -t "New title" -d "New description" --max-tasks 10
 ```
 
 **How do I add tasks to a sprint?**

@@ -7,7 +7,7 @@ import (
 )
 
 // SchemaVersion is the current database schema version.
-const SchemaVersion = "1.6.0"
+const SchemaVersion = "1.7.0"
 
 // CreateSchema creates all database tables and indexes.
 // This implements the DDL from SPEC/DATABASE.md.
@@ -57,6 +57,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id ON tasks(parent_task_id);
 CREATE TABLE IF NOT EXISTS sprints (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING', 'OPEN', 'CLOSED')),
+    title TEXT NOT NULL CHECK(length(title) <= 255),
     description TEXT NOT NULL,
     created_at TEXT NOT NULL,
     started_at TEXT,

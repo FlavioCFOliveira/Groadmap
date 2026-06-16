@@ -368,6 +368,7 @@ func TestOutputValidation_SprintCreate_JSONStructure(t *testing.T) {
 	output := captureOutput(t, func() {
 		if err := HandleSprint([]string{
 			"create", "-r", roadmap,
+			"-t", "Core authentication",
 			"-d", "Sprint 01: Core authentication and authorisation features",
 		}); err != nil {
 			t.Errorf("sprintCreate error = %v", err)
@@ -389,6 +390,7 @@ func TestOutputValidation_SprintCreate_DBState(t *testing.T) {
 	output := captureOutput(t, func() {
 		if err := HandleSprint([]string{
 			"create", "-r", roadmap,
+			"-t", "Payment integration",
 			"-d", "Sprint 02: Payment integration and billing workflows",
 		}); err != nil {
 			t.Errorf("sprintCreate error = %v", err)
@@ -421,10 +423,11 @@ func TestOutputValidation_SprintList_JSONArray(t *testing.T) {
 		"Sprint 03: API design and documentation",
 	}
 
-	for _, desc := range descriptions {
+	for i, desc := range descriptions {
 		d := desc
+		title := fmt.Sprintf("Milestone %d", i+1)
 		_ = captureOutput(t, func() {
-			_ = HandleSprint([]string{"create", "-r", roadmap, "-d", d})
+			_ = HandleSprint([]string{"create", "-r", roadmap, "-t", title, "-d", d})
 		})
 	}
 
@@ -514,6 +517,7 @@ func TestOutputValidation_SprintShow_JSONStructure(t *testing.T) {
 	sprintOut := captureOutput(t, func() {
 		_ = HandleSprint([]string{
 			"create", "-r", roadmap,
+			"-t", "Search index",
 			"-d", "Sprint 01: Search index implementation and relevance tuning",
 		})
 	})
@@ -711,6 +715,7 @@ func TestOutputValidation_TaskStat_DBState(t *testing.T) {
 	sprintOut := captureOutput(t, func() {
 		_ = HandleSprint([]string{
 			"create", "-r", roadmap,
+			"-t", "Notification system",
 			"-d", "Sprint 01: Notification system implementation",
 		})
 	})

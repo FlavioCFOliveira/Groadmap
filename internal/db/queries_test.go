@@ -557,6 +557,7 @@ func TestCreateSprint(t *testing.T) {
 
 	sprint := &models.Sprint{
 		Status:      models.SprintPending,
+		Title:       "Test sprint",
 		Description: "Test sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
@@ -581,6 +582,54 @@ func TestCreateSprint(t *testing.T) {
 	}
 }
 
+// TestSprintTitlePersistence is the regression gate for the sprints.title field:
+// CreateSprint must persist the title and both GetSprint and ListSprints must
+// return it.
+func TestSprintTitlePersistence(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	const wantTitle = "Authentication hardening"
+	sprint := &models.Sprint{
+		Status:      models.SprintPending,
+		Title:       wantTitle,
+		Description: "Harden the auth subsystem against credential leakage",
+		CreatedAt:   time.Now().Format(time.RFC3339),
+	}
+
+	id, err := db.CreateSprint(testContext(), sprint)
+	if err != nil {
+		t.Fatalf("CreateSprint failed: %v", err)
+	}
+
+	// GetSprint must return the persisted title.
+	got, err := db.GetSprint(testContext(), id)
+	if err != nil {
+		t.Fatalf("GetSprint failed: %v", err)
+	}
+	if got.Title != wantTitle {
+		t.Errorf("GetSprint title = %q, want %q", got.Title, wantTitle)
+	}
+
+	// ListSprints must return the persisted title.
+	sprints, err := db.ListSprints(testContext(), nil)
+	if err != nil {
+		t.Fatalf("ListSprints failed: %v", err)
+	}
+	var found bool
+	for i := range sprints {
+		if sprints[i].ID == id {
+			found = true
+			if sprints[i].Title != wantTitle {
+				t.Errorf("ListSprints title = %q, want %q", sprints[i].Title, wantTitle)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("ListSprints did not return created sprint %d", id)
+	}
+}
+
 func TestGetSprint(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -588,6 +637,7 @@ func TestGetSprint(t *testing.T) {
 	// Create sprint
 	sprint := &models.Sprint{
 		Status:      models.SprintPending,
+		Title:       "Test sprint",
 		Description: "Test sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
@@ -620,6 +670,7 @@ func TestListSprints(t *testing.T) {
 	for _, status := range statuses {
 		sprint := &models.Sprint{
 			Status:      status,
+			Title:       "Sprint",
 			Description: "Sprint",
 			CreatedAt:   time.Now().Format(time.RFC3339),
 		}
@@ -655,6 +706,7 @@ func TestUpdateSprint(t *testing.T) {
 	// Create sprint
 	sprint := &models.Sprint{
 		Status:      models.SprintPending,
+		Title:       "Original",
 		Description: "Original",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
@@ -690,6 +742,7 @@ func TestUpdateSprintStatus(t *testing.T) {
 	// Create sprint
 	sprint := &models.Sprint{
 		Status:      models.SprintPending,
+		Title:       "Test",
 		Description: "Test",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
@@ -733,6 +786,7 @@ func TestDeleteSprint(t *testing.T) {
 	// Create sprint
 	sprint := &models.Sprint{
 		Status:      models.SprintPending,
+		Title:       "To delete",
 		Description: "To delete",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
@@ -759,6 +813,7 @@ func TestAddTasksToSprint(t *testing.T) {
 	// Create sprint
 	sprint := &models.Sprint{
 		Status:      models.SprintPending,
+		Title:       "Test sprint",
 		Description: "Test sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
@@ -813,6 +868,7 @@ func TestRemoveTasksFromSprint(t *testing.T) {
 	// Create sprint
 	sprint := &models.Sprint{
 		Status:      models.SprintPending,
+		Title:       "Test sprint",
 		Description: "Test sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
@@ -874,6 +930,7 @@ func TestAddTasksToSprint_WritesAuditAtomically(t *testing.T) {
 
 	sprintID, _ := db.CreateSprint(testContext(), &models.Sprint{
 		Status:      models.SprintPending,
+		Title:       "Authentication hardening sprint",
 		Description: "Authentication hardening sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	})
@@ -913,6 +970,7 @@ func TestAddTasksToSprint_NoAuditOnFailedTransaction(t *testing.T) {
 
 	sprintID, _ := db.CreateSprint(testContext(), &models.Sprint{
 		Status:      models.SprintPending,
+		Title:       "Capacity-capped sprint",
 		Description: "Capacity-capped sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	})
@@ -960,11 +1018,13 @@ func TestMoveTasksBetweenSprints_WritesAuditAtomically(t *testing.T) {
 
 	fromID, _ := db.CreateSprint(testContext(), &models.Sprint{
 		Status:      models.SprintPending,
+		Title:       "Source sprint",
 		Description: "Source sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	})
 	toID, _ := db.CreateSprint(testContext(), &models.Sprint{
 		Status:      models.SprintPending,
+		Title:       "Destination sprint",
 		Description: "Destination sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	})
@@ -1007,11 +1067,13 @@ func TestMoveTasksBetweenSprints_NoAuditOnFailedTransaction(t *testing.T) {
 
 	fromID, _ := db.CreateSprint(testContext(), &models.Sprint{
 		Status:      models.SprintPending,
+		Title:       "Source sprint",
 		Description: "Source sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	})
 	toID, _ := db.CreateSprint(testContext(), &models.Sprint{
 		Status:      models.SprintPending,
+		Title:       "Destination sprint",
 		Description: "Destination sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	})
@@ -1165,6 +1227,7 @@ func TestGetSprintTasks(t *testing.T) {
 	// Create sprint
 	sprint := &models.Sprint{
 		Status:      models.SprintPending,
+		Title:       "Test sprint",
 		Description: "Test sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
@@ -1259,6 +1322,7 @@ func TestGetSprintTasksFull(t *testing.T) {
 	// Create sprint
 	sprint := &models.Sprint{
 		Status:      models.SprintPending,
+		Title:       "Test sprint",
 		Description: "Test sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}

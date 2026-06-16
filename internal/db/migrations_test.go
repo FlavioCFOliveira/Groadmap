@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"strconv"
 	"testing"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
@@ -97,6 +98,7 @@ func TestRunMigrations_UpToDate(t *testing.T) {
 
 	// Create a sprint and add tasks to test position column
 	sprint := &models.Sprint{
+		Title:       "Test Sprint",
 		Description: "Test Sprint",
 		Status:      models.SprintPending,
 	}
@@ -153,6 +155,7 @@ func TestMigrateV1_0_0_toV1_1_0(t *testing.T) {
 
 	// Create sprint and tasks before migration
 	sprint := &models.Sprint{
+		Title:       "Test Sprint",
 		Description: "Test Sprint",
 		Status:      models.SprintPending,
 	}
@@ -192,6 +195,117 @@ func TestMigrateV1_0_0_toV1_1_0(t *testing.T) {
 	).Scan(&position)
 	if err != nil {
 		t.Errorf("Failed to query position column: %v", err)
+	}
+}
+
+// TestMigrateV1_6_0_toV1_7_0 is the regression gate for the sprints.title
+// migration. It builds a v1.6.0-shape sprints table (no title column), inserts a
+// couple of rows, runs the migration, and asserts that every row receives the
+// deterministic title 'Sprint ' || id and that the new column is NOT NULL. It
+// also asserts that a second apply is a no-op and never clobbers a real title.
+func TestMigrateV1_6_0_toV1_7_0(t *testing.T) {
+	sqlDB, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("failed to open in-memory database: %v", err)
+	}
+	defer sqlDB.Close()
+
+	// v1.6.0-shape sprints table: no title column.
+	if _, err := sqlDB.Exec(`
+		CREATE TABLE sprints (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			status TEXT NOT NULL DEFAULT 'PENDING',
+			description TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			started_at TEXT,
+			closed_at TEXT,
+			max_tasks INTEGER
+		)`); err != nil {
+		t.Fatalf("creating v1.6.0 sprints table: %v", err)
+	}
+
+	// Insert two rows in the pre-title shape.
+	for _, desc := range []string{"Authentication hardening", "Q3 performance push"} {
+		if _, err := sqlDB.Exec(
+			"INSERT INTO sprints (status, description, created_at) VALUES ('PENDING', ?, '2026-01-01T00:00:00.000Z')",
+			desc,
+		); err != nil {
+			t.Fatalf("seeding sprint %q: %v", desc, err)
+		}
+	}
+
+	// Apply the migration inside a transaction.
+	tx, err := sqlDB.Begin()
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	if err := migrateV1_6_0_toV1_7_0(tx); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("migrateV1_6_0_toV1_7_0: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit tx: %v", err)
+	}
+
+	// The title column must now exist and be NOT NULL.
+	var notNull int
+	if err := sqlDB.QueryRow(
+		`SELECT "notnull" FROM pragma_table_info('sprints') WHERE name = 'title'`,
+	).Scan(&notNull); err != nil {
+		t.Fatalf("title column not found after migration: %v", err)
+	}
+	if notNull != 1 {
+		t.Errorf("title column notnull = %d, want 1 (NOT NULL)", notNull)
+	}
+
+	// Every row must carry the deterministic backfilled title.
+	assertBackfilledTitles := func(stage string) {
+		rows, err := sqlDB.Query("SELECT id, title FROM sprints ORDER BY id")
+		if err != nil {
+			t.Fatalf("[%s] querying titles: %v", stage, err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id int
+			var title string
+			if err := rows.Scan(&id, &title); err != nil {
+				t.Fatalf("[%s] scanning title: %v", stage, err)
+			}
+			want := "Sprint " + strconv.Itoa(id)
+			if title != want {
+				t.Errorf("[%s] sprint %d title = %q, want %q", stage, id, title, want)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("[%s] iterating titles: %v", stage, err)
+		}
+	}
+	assertBackfilledTitles("first apply")
+
+	// Set a real title on row 1, then re-apply: the migration must be idempotent
+	// and must NOT clobber the existing real title.
+	if _, err := sqlDB.Exec("UPDATE sprints SET title = 'Real custom title' WHERE id = 1"); err != nil {
+		t.Fatalf("setting real title: %v", err)
+	}
+
+	tx2, err := sqlDB.Begin()
+	if err != nil {
+		t.Fatalf("begin tx2: %v", err)
+	}
+	if err := migrateV1_6_0_toV1_7_0(tx2); err != nil {
+		_ = tx2.Rollback()
+		t.Fatalf("second migrateV1_6_0_toV1_7_0: %v", err)
+	}
+	if err := tx2.Commit(); err != nil {
+		t.Fatalf("commit tx2: %v", err)
+	}
+
+	var title1 string
+	if err := sqlDB.QueryRow("SELECT title FROM sprints WHERE id = 1").Scan(&title1); err != nil {
+		t.Fatalf("re-reading title: %v", err)
+	}
+	if title1 != "Real custom title" {
+		t.Errorf("idempotent re-apply clobbered real title: got %q, want %q", title1, "Real custom title")
 	}
 }
 
@@ -284,8 +398,8 @@ func TestMigrateV1_2_0_toV1_3_0(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSchemaVersion failed: %v", err)
 	}
-	if version != "1.6.0" {
-		t.Errorf("schema_version = %q, want %q", version, "1.6.0")
+	if version != "1.7.0" {
+		t.Errorf("schema_version = %q, want %q", version, "1.7.0")
 	}
 
 	// Running migrations again must be idempotent
@@ -297,7 +411,7 @@ func TestMigrateV1_2_0_toV1_3_0(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSchemaVersion after idempotent run failed: %v", err)
 	}
-	if version != "1.6.0" {
-		t.Errorf("schema_version after idempotent migration = %q, want %q", version, "1.6.0")
+	if version != "1.7.0" {
+		t.Errorf("schema_version after idempotent migration = %q, want %q", version, "1.7.0")
 	}
 }

@@ -12,6 +12,8 @@ import (
 var (
 	ErrInvalidSprintStatus = errors.New("invalid sprint status")
 	ErrDescriptionRequired = errors.New("description is required")
+	// ErrTitleRequired ("title is required") is shared with task validation and
+	// declared in task.go; sprint Validate reuses it for the required Title field.
 )
 
 // SprintStatus represents the current state of a sprint.
@@ -71,6 +73,7 @@ func (ss SprintStatus) CanReopen() bool {
 
 // Sprint field size limits
 const (
+	MaxSprintTitle       = 255
 	MaxSprintDescription = 2048
 )
 
@@ -80,6 +83,7 @@ type Sprint struct {
 	StartedAt   *string      `json:"started_at"`
 	ClosedAt    *string      `json:"closed_at"`
 	MaxTasks    *int         `json:"max_tasks"`
+	Title       string       `json:"title"`
 	Description string       `json:"description"`
 	CreatedAt   string       `json:"created_at"`
 	Status      SprintStatus `json:"status"`
@@ -90,6 +94,12 @@ type Sprint struct {
 
 // Validate checks if the sprint data is valid.
 func (s *Sprint) Validate() error {
+	if s.Title == "" {
+		return ErrTitleRequired
+	}
+	if len(s.Title) > MaxSprintTitle {
+		return fmt.Errorf("%w: title exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxSprintTitle)
+	}
 	if s.Description == "" {
 		return ErrDescriptionRequired
 	}
@@ -319,6 +329,7 @@ type SprintProgress struct {
 type SprintShowResult struct {
 	MaxTasks                *int                    `json:"max_tasks"`
 	CapacityPct             *float64                `json:"capacity_pct"`
+	SprintTitle             string                  `json:"sprint_title"`
 	SprintDescription       string                  `json:"sprint_description"`
 	Status                  SprintStatus            `json:"status"`
 	TaskOrder               []int                   `json:"task_order"`
@@ -335,6 +346,7 @@ type SprintShowResult struct {
 func CalculateSprintShowResult(sprint *Sprint, tasks []Task) SprintShowResult {
 	result := SprintShowResult{
 		SprintID:          sprint.ID,
+		SprintTitle:       sprint.Title,
 		SprintDescription: sprint.Description,
 		Status:            sprint.Status,
 		MaxTasks:          sprint.MaxTasks,

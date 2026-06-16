@@ -287,6 +287,7 @@ var (
 
 	// SprintCreateFlags defines flags for sprint creation and update.
 	SprintCreateFlags = []FlagDef{
+		{Name: "--title", Short: "-t", Field: "Title", Type: "string"},
 		{Name: "--description", Short: "-d", Field: "Description", Type: "string"},
 		{Name: "--max-tasks", Field: "MaxTasks", Type: "int"},
 	}

@@ -69,6 +69,7 @@ Each roadmap is stored in an individual SQLite database. The schema is designed 
 |           sprints                      |
 |  - id (PK, AUTOINCREMENT)              |
 |  - status (TEXT)                       |
+|  - title (TEXT)                        |
 |  - description (TEXT)                  |
 |  - created_at (TEXT ISO8601)           |
 |  - started_at (TEXT ISO8601, NULL)     |
@@ -155,6 +156,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id ON tasks(parent_task_id);
 CREATE TABLE IF NOT EXISTS sprints (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING', 'OPEN', 'CLOSED')),
+    title TEXT NOT NULL CHECK(length(title) <= 255),  -- Sprint title, max 255 chars
     description TEXT NOT NULL,
     created_at TEXT NOT NULL,  -- ISO 8601 UTC
     started_at TEXT,           -- ISO 8601 UTC, NULL if not started
@@ -242,7 +244,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 - `SPRINT_START` - Sprint started (PENDING → OPEN)
 - `SPRINT_CLOSE` - Sprint closed (OPEN → CLOSED)
 - `SPRINT_REOPEN` - Sprint reopened (CLOSED → OPEN)
-- `SPRINT_UPDATE` - Sprint description updated
+- `SPRINT_UPDATE` - Sprint title, description, or capacity updated via `sprint update`
 - `SPRINT_ADD_TASK` - Task added to sprint
 - `SPRINT_REMOVE_TASK` - Task removed from sprint
 - `SPRINT_MOVE_TASK` - Task moved between sprints
@@ -288,7 +290,7 @@ CREATE TABLE IF NOT EXISTS _metadata (
 
 -- Insert schema version on creation
 INSERT INTO _metadata (key, value) VALUES
-    ('schema_version', '1.6.0'),
+    ('schema_version', '1.7.0'),
     ('created_at', '2026-03-20T00:00:00.000Z'),
     ('application', 'Groadmap');
 ```
@@ -543,7 +545,7 @@ DELETE FROM tasks WHERE id = ?;
 #### Create Sprint
 
 ```sql
-INSERT INTO sprints (description, created_at) VALUES (?, ?);
+INSERT INTO sprints (title, description, created_at) VALUES (?, ?, ?);
 ```
 
 #### Add Tasks to Sprint
@@ -841,6 +843,7 @@ Fields are organized to match the optimized Go struct layout (Content, Tracking,
 |--------|------|-------------|
 | id | INTEGER | PK, AUTOINCREMENT |
 | status | TEXT | NOT NULL, DEFAULT 'PENDING', CHECK enum values |
+| title | TEXT | NOT NULL, CHECK length <= 255 chars, sprint title |
 | description | TEXT | NOT NULL |
 | created_at | TEXT | NOT NULL, ISO 8601 format |
 | started_at | TEXT | NULLABLE, ISO 8601 format |
@@ -927,10 +930,11 @@ The following length constraints are enforced at the database level using CHECK 
 
 | Field | Maximum Length | Constraint |
 |-------|----------------|------------|
-| `title` | 255 characters | `CHECK(length(title) <= 255)` |
-| `functional_requirements` | 4096 characters | `CHECK(length(functional_requirements) <= 4096)` |
-| `technical_requirements` | 4096 characters | `CHECK(length(technical_requirements) <= 4096)` |
-| `acceptance_criteria` | 4096 characters | `CHECK(length(acceptance_criteria) <= 4096)` |
+| `tasks.title` | 255 characters | `CHECK(length(title) <= 255)` |
+| `tasks.functional_requirements` | 4096 characters | `CHECK(length(functional_requirements) <= 4096)` |
+| `tasks.technical_requirements` | 4096 characters | `CHECK(length(technical_requirements) <= 4096)` |
+| `tasks.acceptance_criteria` | 4096 characters | `CHECK(length(acceptance_criteria) <= 4096)` |
+| `sprints.title` | 255 characters | `CHECK(length(title) <= 255)` |
 
 **Application-Level Validation Only:**
 

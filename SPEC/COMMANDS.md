@@ -71,7 +71,7 @@ The following fields have mandatory length constraints enforced by the applicati
 
 All free-text fields — task `title`, `functional_requirements`,
 `technical_requirements`, `acceptance_criteria`, `completion_summary`,
-`specialists`, and sprint `description` — reject control characters. An input that
+`specialists`, and sprint `title` and `description` — reject control characters. An input that
 contains any of the following is rejected with exit code 6 before it is stored:
 
 - ASCII control bytes below `0x20`, except TAB (`0x09`), LF (`0x0A`), and CR
@@ -241,7 +241,7 @@ The `web` command is deliberately **not** in this list. `rmp web` operates acros
 ```bash
 # Always provide -r:
 rmp task list -r myproject
-rmp sprint create -r myproject -d "Sprint 1"
+rmp sprint create -r myproject -t "Sprint 1" -d "Sprint 1 goal"
 rmp stats -r myproject
 ```
 
@@ -843,16 +843,27 @@ rmp sprint ls -r <name>
 ### Create Sprint
 
 ```bash
-rmp sprint create -r <name> -d "Description" [--max-tasks <n>]
-rmp sprint new -r <name> -d "Description" [--max-tasks <n>]
+rmp sprint create -r <name> -t "Title" -d "Description" [--max-tasks <n>]
+rmp sprint new -r <name> -t "Title" -d "Description" [--max-tasks <n>]
 ```
 
 **Options:**
+- `-t, --title <text>` - Sprint title (required), maximum 255 characters
 - `-d, --description <text>` - Sprint description (required)
 - `--max-tasks <n>` - Maximum number of tasks allowed in the sprint (optional; omit
   for unlimited capacity). When provided, MUST be a positive integer in the range
   `1`-`10000`. A value `< 1` or `> 10000`, or a non-integer value, is rejected with
   exit code 6.
+
+**Title Validation:**
+
+| Scenario | Exit Code | stderr Output |
+|----------|-----------|---------------|
+| Title is empty or missing | 6 | "Error: Title is required" |
+| Title exceeds 255 characters | 6 | "Error: Title must not exceed 255 characters (got N)" |
+
+The sprint `title` is also subject to the Control-Character Constraint described in
+`Field Validation` above.
 
 **Bound Validation:**
 
@@ -869,7 +880,7 @@ rmp sprint new -r <name> -d "Description" [--max-tasks <n>]
 rmp sprint get -r <name> <id>
 ```
 
-**JSON Output:** Single Sprint object.
+**JSON Output:** Single Sprint object, including the sprint `title` and `description` fields.
 
 ### List Sprint Tasks
 
@@ -962,6 +973,7 @@ rmp sprint show -r <name> <id>
 ```json
 {
   "sprint_id": 5,
+  "sprint_title": "Sprint 12",
   "sprint_description": "Sprint 12 - March 2026",
   "status": "OPEN",
   "max_tasks": 25,
@@ -999,7 +1011,8 @@ rmp sprint show -r <name> <id>
 | Field | Type | Description |
 |-------|------|-------------|
 | `sprint_id` | integer | Sprint identifier |
-| `sprint_description` | string | Sprint description/name |
+| `sprint_title` | string | Sprint title |
+| `sprint_description` | string | Sprint description |
 | `status` | string | Sprint status (OPEN, CLOSED) |
 | `max_tasks` | integer or null | Sprint capacity cap (maximum number of tasks the sprint may hold), or null when no cap is set |
 | `capacity_pct` | float or null | Percentage of capacity used, computed from `current_load` against `max_tasks`. null when no cap is set |
@@ -1254,17 +1267,30 @@ rmp sprint bottom -r <name> <sprint-id> <task-id>
 ### Update Sprint
 
 ```bash
-rmp sprint update -r <name> <id> [-d "New Description"] [--max-tasks <n>]
-rmp sprint upd -r <name> <id> [-d "New Description"] [--max-tasks <n>]
+rmp sprint update -r <name> <id> [-t "New Title"] [-d "New Description"] [--max-tasks <n>]
+rmp sprint upd -r <name> <id> [-t "New Title"] [-d "New Description"] [--max-tasks <n>]
 ```
 
 **Options:**
+- `-t, --title <text>` - New sprint title, maximum 255 characters
 - `-d, --description <text>` - New sprint description
 - `--max-tasks <n>` - New capacity limit. MUST be a positive integer in the range
   `1`-`10000`. A value `< 1` or `> 10000`, or a non-integer value, is rejected with
   exit code 6.
 
-At least one of `--description` or `--max-tasks` is required.
+At least one of `--title`, `--description`, or `--max-tasks` is required.
+
+**Title Validation:**
+
+When `--title` is provided, it is validated before updating:
+
+| Scenario | Exit Code | stderr Output |
+|----------|-----------|---------------|
+| Title is empty | 6 | "Error: Title cannot be empty" |
+| Title exceeds 255 characters | 6 | "Error: Title must not exceed 255 characters (got N)" |
+
+The sprint `title` is also subject to the Control-Character Constraint described in
+`Field Validation` above.
 
 **Bound Validation:**
 
@@ -1274,6 +1300,9 @@ At least one of `--description` or `--max-tasks` is required.
 | `--max-tasks` non-integer | 6 | "Error: --max-tasks must be an integer between 1 and 10000" |
 
 **Output (success):** No output, exit code 0.
+
+**Audit:** A sprint title change is recorded under the existing `SPRINT_UPDATE`
+operation (see `DATABASE.md § audit Table`); no new audit operation is introduced.
 
 ### Remove Sprint
 

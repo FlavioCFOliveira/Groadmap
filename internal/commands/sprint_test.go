@@ -101,7 +101,9 @@ func TestSprintCreate_MissingDescription(t *testing.T) {
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"create", "-r", testName})
+	// Provide a title so the missing-description path is exercised (title is
+	// validated before description).
+	err := HandleSprint([]string{"create", "-r", testName, "-t", "Authentication hardening"})
 	if err == nil {
 		t.Error("sprintCreate without description expected error, got nil")
 	}
@@ -110,12 +112,29 @@ func TestSprintCreate_MissingDescription(t *testing.T) {
 	}
 }
 
+// TestSprintCreate_MissingTitle verifies that omitting --title is rejected with
+// the canonical "required parameter missing: --title" error (title is the first
+// required field validated).
+func TestSprintCreate_MissingTitle(t *testing.T) {
+	testName := "testsprintcreatetitle"
+	_, cleanup := setupTestTaskRoadmap(t, testName)
+	defer cleanup()
+
+	err := HandleSprint([]string{"create", "-r", testName, "-d", "Test sprint description"})
+	if err == nil {
+		t.Error("sprintCreate without title expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "required parameter missing: --title") {
+		t.Errorf("expected 'required parameter missing: --title' error, got: %v", err)
+	}
+}
+
 func TestSprintCreate_Success(t *testing.T) {
 	testName := "testsprintcreatesuccess"
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleSprint([]string{"create", "-r", testName, "-d", "Test sprint description"})
+	err := HandleSprint([]string{"create", "-r", testName, "-t", "Authentication hardening", "-d", "Test sprint description"})
 	if err != nil {
 		t.Errorf("sprintCreate error = %v", err)
 	}
@@ -214,6 +233,108 @@ func TestSprintUpdate_MissingDescription(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "--description") && !strings.Contains(err.Error(), "--max-tasks") {
 		t.Errorf("expected error referencing --description or --max-tasks, got: %v", err)
+	}
+}
+
+// ==================== Sprint title regression tests ====================
+
+// TestSprintCreate_TitleTooLong verifies a title above the 255-char cap is
+// rejected with utils.ErrFieldTooLarge.
+func TestSprintCreate_TitleTooLong(t *testing.T) {
+	testName := "testsprinttitletoolong"
+	_, cleanup := setupTestTaskRoadmap(t, testName)
+	defer cleanup()
+
+	longTitle := strings.Repeat("a", models.MaxSprintTitle+1)
+	err := HandleSprint([]string{"create", "-r", testName, "-t", longTitle, "-d", "Valid description"})
+	if err == nil {
+		t.Fatal("sprintCreate with over-long title expected error, got nil")
+	}
+	if !errors.Is(err, utils.ErrFieldTooLarge) {
+		t.Errorf("expected ErrFieldTooLarge, got: %v", err)
+	}
+}
+
+// TestSprintCreate_TitleControlChars verifies a title containing control
+// characters is rejected by the Free-Text Control-Character Constraint.
+func TestSprintCreate_TitleControlChars(t *testing.T) {
+	testName := "testsprinttitlectrl"
+	_, cleanup := setupTestTaskRoadmap(t, testName)
+	defer cleanup()
+
+	err := HandleSprint([]string{"create", "-r", testName, "-t", "Bad\x07title", "-d", "Valid description"})
+	if err == nil {
+		t.Fatal("sprintCreate with control-char title expected error, got nil")
+	}
+}
+
+// TestSprintCreate_TitleRoundTrip verifies the happy path: a created sprint's
+// title round-trips through `sprint get`.
+func TestSprintCreate_TitleRoundTrip(t *testing.T) {
+	testName := "testsprinttitleroundtrip"
+	_, cleanup := setupTestTaskRoadmap(t, testName)
+	defer cleanup()
+
+	const wantTitle = "Q3 performance push"
+	createOut := captureOutput(t, func() {
+		if err := HandleSprint([]string{"create", "-r", testName, "-t", wantTitle, "-d", "Tune hot paths"}); err != nil {
+			t.Fatalf("sprintCreate error = %v", err)
+		}
+	})
+	sprintID := int(parseJSONObject(t, createOut)["id"].(float64))
+
+	getOut := captureOutput(t, func() {
+		if err := HandleSprint([]string{"get", "-r", testName, strconv.Itoa(sprintID)}); err != nil {
+			t.Fatalf("sprintGet error = %v", err)
+		}
+	})
+	obj := parseJSONObject(t, getOut)
+	if got, _ := obj["title"].(string); got != wantTitle {
+		t.Errorf("sprint get title = %q, want %q", got, wantTitle)
+	}
+}
+
+// TestSprintUpdate_TitleOnly verifies that --title alone is an accepted update,
+// changes the persisted title, and writes a SPRINT_UPDATE audit row.
+func TestSprintUpdate_TitleOnly(t *testing.T) {
+	testName := "testsprintupdatetitle"
+	database, cleanup := setupTestTaskRoadmap(t, testName)
+	defer cleanup()
+
+	createOut := captureOutput(t, func() {
+		if err := HandleSprint([]string{"create", "-r", testName, "-t", "Initial title", "-d", "Initial description"}); err != nil {
+			t.Fatalf("sprintCreate error = %v", err)
+		}
+	})
+	sprintID := int(parseJSONObject(t, createOut)["id"].(float64))
+
+	const newTitle = "Authentication hardening"
+	if err := HandleSprint([]string{"update", "-r", testName, strconv.Itoa(sprintID), "-t", newTitle}); err != nil {
+		t.Fatalf("sprintUpdate with only --title error = %v", err)
+	}
+
+	// The persisted title must reflect the update.
+	sprint, err := database.GetSprint(context.Background(), sprintID)
+	if err != nil {
+		t.Fatalf("GetSprint error = %v", err)
+	}
+	if sprint.Title != newTitle {
+		t.Errorf("updated title = %q, want %q", sprint.Title, newTitle)
+	}
+
+	// A SPRINT_UPDATE audit row must exist for this sprint.
+	history, err := database.GetEntityHistory(context.Background(), string(models.EntitySprint), sprintID)
+	if err != nil {
+		t.Fatalf("GetEntityHistory error = %v", err)
+	}
+	var sawUpdate bool
+	for i := range history {
+		if history[i].Operation == string(models.OpSprintUpdate) {
+			sawUpdate = true
+		}
+	}
+	if !sawUpdate {
+		t.Errorf("expected a %s audit entry for sprint %d, got %+v", models.OpSprintUpdate, sprintID, history)
 	}
 }
 
@@ -417,6 +538,7 @@ func TestSprintOpenTasks_EmptySprint(t *testing.T) {
 	defer cancel()
 	sprintID, err := database.CreateSprint(ctx, &models.Sprint{
 		Status:      models.SprintPending,
+		Title:       "Sprint without tasks for open-tasks happy-path test",
 		Description: "Sprint without tasks for open-tasks happy-path test",
 		CreatedAt:   utils.NowISO8601(),
 	})
@@ -438,6 +560,7 @@ func TestSprintOpenTasks_OrderByPriorityFlag(t *testing.T) {
 	defer cancel()
 	sprintID, err := database.CreateSprint(ctx, &models.Sprint{
 		Status:      models.SprintPending,
+		Title:       "Sprint for order-by-priority verification",
 		Description: "Sprint for order-by-priority verification",
 		CreatedAt:   utils.NowISO8601(),
 	})
@@ -635,11 +758,11 @@ func TestSprintRemoveTasks_MembershipGuard(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	s1, err := database.CreateSprint(ctx, &models.Sprint{Description: "Sprint one", Status: models.SprintPending})
+	s1, err := database.CreateSprint(ctx, &models.Sprint{Title: "Velocity baseline", Description: "Sprint one", Status: models.SprintPending})
 	if err != nil {
 		t.Fatalf("creating sprint 1: %v", err)
 	}
-	s2, err := database.CreateSprint(ctx, &models.Sprint{Description: "Sprint two", Status: models.SprintPending})
+	s2, err := database.CreateSprint(ctx, &models.Sprint{Title: "Hardening pass", Description: "Sprint two", Status: models.SprintPending})
 	if err != nil {
 		t.Fatalf("creating sprint 2: %v", err)
 	}
@@ -677,7 +800,7 @@ func TestSprintRemoveTasks_ClearsLifecycleAndCompacts(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	s1, err := database.CreateSprint(ctx, &models.Sprint{Description: "Sprint one", Status: models.SprintPending})
+	s1, err := database.CreateSprint(ctx, &models.Sprint{Title: "Velocity baseline", Description: "Sprint one", Status: models.SprintPending})
 	if err != nil {
 		t.Fatalf("creating sprint: %v", err)
 	}

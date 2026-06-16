@@ -5,7 +5,7 @@
 | Component | Version | File |
 |-----------|---------|------|
 | Application | v1.9.1 | `cmd/rmp/main.go` |
-| Database Schema | v1.6.0 | `internal/db/schema.go` |
+| Database Schema | v1.7.0 | `internal/db/schema.go` |
 
 The SPEC itself is not versioned (see `SPEC/README.md` and `CLAUDE.md` § Versioning Policy). Git tags are the canonical record of past application and schema versions.
 
@@ -29,7 +29,7 @@ This version is:
 The database schema version is managed separately via `internal/db/schema.go`:
 
 ```go
-const SchemaVersion = "1.6.0"
+const SchemaVersion = "1.7.0"
 ```
 
 - Used for database migrations
@@ -68,7 +68,7 @@ The `_metadata` table records the active schema version. Migration steps and the
 
 ### Current Schema Version
 
-`SchemaVersion = "1.6.0"` (defined in `internal/db/schema.go`).
+`SchemaVersion = "1.7.0"` (defined in `internal/db/schema.go`).
 
 ### Migration Commands
 
@@ -99,6 +99,32 @@ ALTER TABLE tasks ADD COLUMN completion_summary TEXT CHECK(completion_summary IS
 -- Update schema version
 UPDATE _metadata SET value = '1.3.0' WHERE key = 'schema_version';
 ```
+
+### Migration 1.6.0 → 1.7.0
+
+Adds the required `title` column to the `sprints` table and backfills every
+existing sprint with a deterministic title derived from its identifier, so that
+pre-existing sprints satisfy the `NOT NULL` constraint after the column is added.
+
+```sql
+-- Add the title column only when it does not already exist (see
+-- DATABASE.md § Migration Idempotency). When absent, run:
+ALTER TABLE sprints ADD COLUMN title TEXT NOT NULL DEFAULT '' CHECK(length(title) <= 255);
+
+-- Backfill each existing sprint with the literal title 'Sprint ' || id
+-- (for example, sprint 5 becomes "Sprint 5")
+UPDATE sprints SET title = 'Sprint ' || id;
+
+-- Update schema version
+UPDATE _metadata SET value = '1.7.0' WHERE key = 'schema_version';
+```
+
+This migration is idempotent: the `ADD COLUMN` step is guarded by the
+column-existence check specified in `DATABASE.md § Migration Idempotency`, so
+re-running the migration set against an already-migrated database is a no-op
+rather than an error. Fresh databases created at schema version 1.7.0 receive the
+`title TEXT NOT NULL` column directly from the `sprints` CREATE TABLE statement
+and require no backfill.
 
 ## Release Process
 

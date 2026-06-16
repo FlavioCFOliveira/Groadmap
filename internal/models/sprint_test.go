@@ -15,6 +15,7 @@ func TestSprintValidate(t *testing.T) {
 		{
 			name: "valid sprint",
 			sprint: Sprint{
+				Title:       "Authentication hardening",
 				Description: "Test Sprint",
 				Status:      SprintPending,
 				CreatedAt:   "2024-01-15T10:00:00.000Z",
@@ -24,6 +25,7 @@ func TestSprintValidate(t *testing.T) {
 		{
 			name: "empty description",
 			sprint: Sprint{
+				Title:       "Authentication hardening",
 				Description: "",
 				Status:      SprintPending,
 				CreatedAt:   "2024-01-15T10:00:00.000Z",
@@ -33,6 +35,7 @@ func TestSprintValidate(t *testing.T) {
 		{
 			name: "description too long",
 			sprint: Sprint{
+				Title:       "Authentication hardening",
 				Description: string(make([]byte, MaxSprintDescription+1)),
 				Status:      SprintPending,
 				CreatedAt:   "2024-01-15T10:00:00.000Z",
@@ -42,6 +45,7 @@ func TestSprintValidate(t *testing.T) {
 		{
 			name: "invalid status",
 			sprint: Sprint{
+				Title:       "Authentication hardening",
 				Description: "Test Sprint",
 				Status:      "INVALID",
 				CreatedAt:   "2024-01-15T10:00:00.000Z",
@@ -51,6 +55,7 @@ func TestSprintValidate(t *testing.T) {
 		{
 			name: "invalid created_at date",
 			sprint: Sprint{
+				Title:       "Authentication hardening",
 				Description: "Test Sprint",
 				Status:      SprintPending,
 				CreatedAt:   "invalid-date",
@@ -60,6 +65,7 @@ func TestSprintValidate(t *testing.T) {
 		{
 			name: "started_at before created_at",
 			sprint: Sprint{
+				Title:       "Authentication hardening",
 				Description: "Test Sprint",
 				Status:      SprintOpen,
 				CreatedAt:   "2024-01-15T10:00:00.000Z",
@@ -70,6 +76,7 @@ func TestSprintValidate(t *testing.T) {
 		{
 			name: "closed_at before started_at",
 			sprint: Sprint{
+				Title:       "Authentication hardening",
 				Description: "Test Sprint",
 				Status:      SprintClosed,
 				CreatedAt:   "2024-01-15T10:00:00.000Z",
@@ -81,6 +88,7 @@ func TestSprintValidate(t *testing.T) {
 		{
 			name: "valid dates in order",
 			sprint: Sprint{
+				Title:       "Authentication hardening",
 				Description: "Test Sprint",
 				Status:      SprintClosed,
 				CreatedAt:   "2024-01-15T10:00:00.000Z",
@@ -92,10 +100,31 @@ func TestSprintValidate(t *testing.T) {
 		{
 			name: "closed_at before created_at (no started_at)",
 			sprint: Sprint{
+				Title:       "Authentication hardening",
 				Description: "Test Sprint",
 				Status:      SprintClosed,
 				CreatedAt:   "2024-01-15T10:00:00.000Z",
 				ClosedAt:    strPtr("2024-01-14T10:00:00.000Z"),
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty title",
+			sprint: Sprint{
+				Title:       "",
+				Description: "Test Sprint",
+				Status:      SprintPending,
+				CreatedAt:   "2024-01-15T10:00:00.000Z",
+			},
+			wantErr: true,
+		},
+		{
+			name: "title too long",
+			sprint: Sprint{
+				Title:       string(make([]byte, MaxSprintTitle+1)),
+				Description: "Test Sprint",
+				Status:      SprintPending,
+				CreatedAt:   "2024-01-15T10:00:00.000Z",
 			},
 			wantErr: true,
 		},

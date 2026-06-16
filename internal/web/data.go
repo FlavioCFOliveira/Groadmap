@@ -124,12 +124,12 @@ func loadSprints(ctx context.Context, name string) (sprintsData, error) {
 	}
 
 	views := make([]sprintView, 0, len(sprints))
-	for _, sp := range sprints {
-		orderedTasks, terr := sprintOrderedTasks(ctx, database, sp.ID)
+	for i := range sprints {
+		orderedTasks, terr := sprintOrderedTasks(ctx, database, sprints[i].ID)
 		if terr != nil {
 			return sprintsData{}, terr
 		}
-		views = append(views, sprintView{Sprint: sp, Tasks: orderedTasks})
+		views = append(views, sprintView{Sprint: sprints[i], Tasks: orderedTasks})
 	}
 
 	upcoming, current, closed := classifySprints(views)

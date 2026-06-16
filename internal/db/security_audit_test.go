@@ -34,6 +34,7 @@ func newTestSprintWithCap(t *testing.T, db *DB, desc string, cap int) int {
 	t.Helper()
 	id, err := db.CreateSprint(testContext(), &models.Sprint{
 		Status:      models.SprintPending,
+		Title:       desc,
 		Description: desc,
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	})

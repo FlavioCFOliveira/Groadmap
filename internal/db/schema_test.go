@@ -63,8 +63,8 @@ func TestSchemaVersion(t *testing.T) {
 		t.Fatalf("failed to get schema version: %v", err)
 	}
 
-	if version != "1.6.0" {
-		t.Errorf("expected schema version 1.6.0, got %s", version)
+	if version != "1.7.0" {
+		t.Errorf("expected schema version 1.7.0, got %s", version)
 	}
 }
 
@@ -88,8 +88,8 @@ func TestForeignKeyConstraints(t *testing.T) {
 
 	// Test 1: Insert a sprint
 	result, err := sqlDB.Exec(
-		"INSERT INTO sprints (status, description, created_at) VALUES (?, ?, ?)",
-		"PENDING", "Test Sprint", "2024-01-15T10:00:00.000Z",
+		"INSERT INTO sprints (status, title, description, created_at) VALUES (?, ?, ?, ?)",
+		"PENDING", "Authentication hardening", "Test Sprint", "2024-01-15T10:00:00.000Z",
 	)
 	if err != nil {
 		t.Fatalf("failed to insert sprint: %v", err)

@@ -462,6 +462,7 @@ func TestBoundary_SQLInjection_SprintDescription(t *testing.T) {
 		if err := HandleSprint([]string{
 			"create",
 			"-r", roadmap,
+			"-t", "Injection probe sprint",
 			"-d", injectionDesc,
 		}); err != nil {
 			t.Errorf("sprintCreate with SQL-injection description error = %v", err)

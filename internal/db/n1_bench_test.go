@@ -29,6 +29,7 @@ func BenchmarkGetSprint_N1Optimization(b *testing.B) {
 			// Create sprint
 			sprint := &models.Sprint{
 				Status:      models.SprintPending,
+				Title:       "Test Sprint",
 				Description: "Test Sprint",
 				CreatedAt:   "2026-03-18T10:00:00.000Z",
 			}
@@ -95,6 +96,7 @@ func BenchmarkGetSprint_SimulatedOldApproach(b *testing.B) {
 			// Create sprint
 			sprint := &models.Sprint{
 				Status:      models.SprintPending,
+				Title:       "Test Sprint",
 				Description: "Test Sprint",
 				CreatedAt:   "2026-03-18T10:00:00.000Z",
 			}

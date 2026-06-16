@@ -212,6 +212,7 @@ func TestConcurrentSprintCreation(t *testing.T) {
 
 			sprint := &models.Sprint{
 				Status:      models.SprintPending,
+				Title:       "Concurrent sprint",
 				Description: "Concurrent sprint",
 				CreatedAt:   time.Now().Format(time.RFC3339),
 			}
@@ -249,6 +250,7 @@ func TestConcurrentSprintTaskOperations(t *testing.T) {
 	// Create a sprint
 	sprint := &models.Sprint{
 		Status:      models.SprintPending,
+		Title:       "Test sprint",
 		Description: "Test sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
@@ -446,6 +448,7 @@ func TestHighConcurrencyStress(t *testing.T) {
 				case 2: // Create sprint
 					sprint := &models.Sprint{
 						Status:      models.SprintPending,
+						Title:       "Stress test sprint",
 						Description: "Stress test sprint",
 						CreatedAt:   time.Now().Format(time.RFC3339),
 					}

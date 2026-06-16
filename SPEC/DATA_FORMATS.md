@@ -684,7 +684,7 @@ same contract under `commands`.
       "purpose": "Populate the backlog with one task per work item. Repeat once per task. Each invocation returns the new task ID on stdout."
     },
     {
-      "command": "rmp sprint create -r <name> -d <description> [--max-tasks <n>]",
+      "command": "rmp sprint create -r <name> -t <title> -d <description> [--max-tasks <n>]",
       "purpose": "Create the first sprint in PENDING state. Returns the new sprint ID on stdout."
     },
     {

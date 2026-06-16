@@ -50,6 +50,7 @@ func seedRoadmap(t *testing.T, name string) string {
 
 	sprint := &models.Sprint{
 		Status:      models.SprintPending,
+		Title:       "Ship the read-only web UI for roadmap inspection",
 		Description: "Ship the read-only web UI for roadmap inspection",
 		CreatedAt:   now,
 	}

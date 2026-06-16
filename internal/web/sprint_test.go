@@ -73,6 +73,7 @@ func seedSprintFixture(t *testing.T, name string) sprintFixture {
 	mkSprint := func(desc string) int {
 		id, serr := database.CreateSprint(ctx, &models.Sprint{
 			Status:      models.SprintPending,
+			Title:       desc,
 			Description: desc,
 			CreatedAt:   now,
 		})
