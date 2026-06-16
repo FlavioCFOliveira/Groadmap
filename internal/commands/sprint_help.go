@@ -37,7 +37,7 @@ Examples:
 
 // printSprintCreateHelp — `rmp sprint create`.
 func printSprintCreateHelp() {
-	fmt.Print(`Usage: rmp sprint create -r <roadmap> -d <description> [--max-tasks <n>]
+	fmt.Print(`Usage: rmp sprint create -r <roadmap> -t <title> -d <description> [--max-tasks <n>]
 
 Creates a new sprint in PENDING status. The sprint will not accept work
 until it is moved to OPEN via 'rmp sprint start <id>'.
@@ -50,6 +50,7 @@ Aliases: new.
 
 Required:
   -r, --roadmap <name>            Target roadmap
+  -t, --title <text>              Sprint title (max 255 chars)
   -d, --description <text>        Sprint description (max 2048 chars)
 
 Optional:
@@ -63,13 +64,13 @@ Output (stdout JSON):
 
 Exit codes:
   0  Success
-  2  Missing -d
+  2  Missing -t or -d
   3  Missing -r
-  6  --max-tasks <= 0
+  6  Title/description too long, or --max-tasks <= 0
 
 Examples:
-  rmp sprint create -r myproject -d "Sprint 1 — Auth hardening"
-  rmp sprint new -r myproject -d "Capacity-bounded sprint" --max-tasks 12
+  rmp sprint create -r myproject -t "Auth hardening" -d "Sprint 1 — Auth hardening"
+  rmp sprint new -r myproject -t "Capacity sprint" -d "Capacity-bounded sprint" --max-tasks 12
 `)
 }
 
@@ -142,10 +143,10 @@ Examples:
 
 // printSprintUpdateHelp — `rmp sprint update`.
 func printSprintUpdateHelp() {
-	fmt.Print(`Usage: rmp sprint update -r <roadmap> <sprint-id> [-d <text>] [--max-tasks <n>]
+	fmt.Print(`Usage: rmp sprint update -r <roadmap> <sprint-id> [-t <title>] [-d <text>] [--max-tasks <n>]
 
-Edits the description or capacity cap of an existing sprint. At least
-one of -d or --max-tasks must be supplied.
+Edits the title, description, or capacity cap of an existing sprint. At
+least one of -t, -d or --max-tasks must be supplied.
 
 The capacity cap can be changed to any positive integer; it cannot be
 removed once set, and there is no validation against the sprint's
@@ -159,6 +160,7 @@ Required:
   <sprint-id>                     Integer sprint id
 
 At least one of:
+  -t, --title <text>              New title (max 255 chars)
   -d, --description <text>        New description (max 2048 chars)
   --max-tasks <n>                 New capacity cap; must be >= 1
 
@@ -166,12 +168,13 @@ Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
-  2  Neither -d nor --max-tasks given
+  2  None of -t, -d or --max-tasks given
   3  Missing -r
   4  Sprint not found
-  6  --max-tasks < 1, or description exceeds the max length
+  6  --max-tasks < 1, or title/description exceeds the max length
 
 Examples:
+  rmp sprint update -r myproject 5 -t "Auth + observability"
   rmp sprint update -r myproject 5 -d "Sprint 1 — Auth + observability"
   rmp sprint upd -r myproject 5 --max-tasks 15
 `)

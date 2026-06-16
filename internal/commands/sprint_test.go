@@ -869,3 +869,28 @@ func TestSprintRemoveTasks_ClearsLifecycleAndCompacts(t *testing.T) {
 		}
 	}
 }
+
+// TestSprintHelpMentionsTitle is a regression test guarding against the human
+// help text drifting out of sync with the flag set. The sprint title flag is
+// REQUIRED on `sprint create` and optional on `sprint update`, so both static
+// help screens MUST advertise -t/--title (a prior version omitted it even
+// though the flag was enforced and present in --ai-help).
+func TestSprintHelpMentionsTitle(t *testing.T) {
+	cases := []struct {
+		name string
+		fn   func()
+	}{
+		{"create", printSprintCreateHelp},
+		{"update", printSprintUpdateHelp},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := captureStdout(t, tc.fn)
+			for _, want := range []string{"-t, --title", "--title <text>"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("sprint %s help missing %q; got:\n%s", tc.name, want, out)
+				}
+			}
+		})
+	}
+}
