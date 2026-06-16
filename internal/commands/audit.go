@@ -301,7 +301,7 @@ Valid entity types (for --entity-type filter and 'history' arg):
 
 Valid operations (for --operation filter):
   Task ops:   TASK_CREATE, TASK_UPDATE, TASK_DELETE, TASK_STATUS_CHANGE,
-              TASK_PRIORITY_CHANGE, TASK_SEVERITY_CHANGE, TASK_TYPE_CHANGE,
+              TASK_PRIORITY_CHANGE, TASK_SEVERITY_CHANGE,
               TASK_REOPEN, TASK_ASSIGN, TASK_UNASSIGN,
               TASK_ADD_DEP, TASK_REMOVE_DEP
   Sprint ops: SPRINT_CREATE, SPRINT_UPDATE, SPRINT_DELETE,

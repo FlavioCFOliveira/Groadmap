@@ -26,7 +26,6 @@ const (
 	OpTaskStatusChange   AuditOperation = "TASK_STATUS_CHANGE"
 	OpTaskPriorityChange AuditOperation = "TASK_PRIORITY_CHANGE"
 	OpTaskSeverityChange AuditOperation = "TASK_SEVERITY_CHANGE"
-	OpTaskTypeChange     AuditOperation = "TASK_TYPE_CHANGE"
 	OpTaskReopen         AuditOperation = "TASK_REOPEN"
 
 	// Sprint operations
@@ -62,7 +61,6 @@ var ValidAuditOperations = []AuditOperation{
 	OpTaskStatusChange,
 	OpTaskPriorityChange,
 	OpTaskSeverityChange,
-	OpTaskTypeChange,
 	OpTaskReopen,
 	OpSprintCreate,
 	OpSprintUpdate,

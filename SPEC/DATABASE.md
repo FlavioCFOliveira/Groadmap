@@ -229,10 +229,9 @@ CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 - `TASK_CREATE` - New task created
 - `TASK_DELETE` - Task deleted (only allowed while in BACKLOG; see Delete Task precondition)
 - `TASK_STATUS_CHANGE` - Status change (BACKLOG ↔ DOING ↔ TESTING → COMPLETED, plus COMPLETED → BACKLOG; SPRINT transitions are logged as `SPRINT_ADD_TASK` / `SPRINT_REMOVE_TASK`)
-- `TASK_TYPE_CHANGE` - Type change (USER_STORY, TASK, BUG, SUB_TASK, EPIC, REFACTOR, CHORE, SPIKE, DESIGN_UX, IMPROVEMENT)
-- `TASK_PRIORITY_CHANGE` - Priority change (0-9)
-- `TASK_SEVERITY_CHANGE` - Severity change (0-9)
-- `TASK_UPDATE` - Generic update (title, functional_requirements, technical_requirements, acceptance_criteria, specialists)
+- `TASK_PRIORITY_CHANGE` - Priority change (0-9) via `task priority`
+- `TASK_SEVERITY_CHANGE` - Severity change (0-9) via `task severity`
+- `TASK_UPDATE` - Generic update via `task edit` (title, type, functional_requirements, technical_requirements, acceptance_criteria, specialists). A type change made through `task edit` is recorded here, not under a dedicated operation.
 - `TASK_REOPEN` - Task returned to BACKLOG via `task reopen`; lifecycle timestamps cleared and sprint_tasks row removed
 - `TASK_ADD_DEP` - Dependency added (logged against both task_id and depends_on_task_id)
 - `TASK_REMOVE_DEP` - Dependency removed (logged against both task_id and depends_on_task_id)

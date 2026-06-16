@@ -38,7 +38,6 @@ Lists audit log entries with optional filters.
 - `TASK_STATUS_CHANGE` - Task status changed
 - `TASK_PRIORITY_CHANGE` - Task priority changed
 - `TASK_SEVERITY_CHANGE` - Task severity changed
-- `TASK_TYPE_CHANGE` - Task type changed
 
 **Sprint Operations:**
 - `SPRINT_CREATE` - Sprint created
