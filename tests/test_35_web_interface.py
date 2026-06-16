@@ -205,14 +205,14 @@ class TestWebInterface:
         deadlock. Polling a file for the pretty-printed {"url": ...} object
         is deterministic and EOF-independent.
 
-        The default bind host is now 0.0.0.0 (all interfaces), which would
-        expose a network-listening socket for the duration of every running-
-        server scenario (SPEC/WEB.md § Bind Address and Port Selection). These
-        route/lifecycle scenarios only need a reachable server, not network
-        exposure, so unless the caller already pins --host we restrict the
-        listener to loopback (the documented --host 127.0.0.1 opt-in). The
-        default-host behaviour itself is asserted separately, on the printed
-        URL, in test_default_host_is_all_interfaces.
+        The default bind host is 127.0.0.1 (loopback), reachable only from the
+        local machine (SPEC/WEB.md § Bind Address and Port Selection). These
+        route/lifecycle scenarios only need a reachable server, so unless the
+        caller already pins --host we pin the loopback default explicitly; this
+        also avoids the network-exposure warning that a non-loopback bind would
+        print. The default-host behaviour itself is asserted separately, on the
+        printed URL, in test_default_host_is_loopback, and the warning in
+        test_network_exposure_warns_on_stderr.
         """
         extra_args = list(extra_args or [])
         if not any(a == "--host" or a.startswith("--host=") for a in extra_args):
@@ -391,13 +391,13 @@ class TestWebInterface:
         )
 
     # ====================================================================
-    # AC1/AC2: startup URL object; all-interfaces default with loopback opt-in
+    # AC1/AC2: startup URL object; loopback default with network opt-in
     # ====================================================================
 
     def test_startup_prints_url_object_and_serves(self):
-        # _start pins --host 127.0.0.1 (loopback opt-in) so the suite does not
-        # leave an all-interfaces listener bound; the default-host value is
-        # asserted on the printed URL in test_default_host_is_all_interfaces.
+        # _start pins --host 127.0.0.1 (the loopback default) explicitly; the
+        # default-host value is asserted on the printed URL in
+        # test_default_host_is_loopback.
         proc, port = self._start(["--port", "0"])
         # AC1: the URL reflects the actual bind.
         status, _, _ = self._req(port, "/")
@@ -405,18 +405,19 @@ class TestWebInterface:
         # AC2: server is up without a browser (we passed --no-open); URL printed.
         assert port > 0
 
-    def test_default_host_is_all_interfaces(self):
-        """AC1: with no --host the printed URL host is 0.0.0.0 (all interfaces).
+    def test_default_host_is_loopback(self):
+        """AC1: with no --host the printed URL host is 127.0.0.1 (loopback).
 
-        We start the server with the default host but an explicit ephemeral
-        --port 0 (so the test does not race the real 8787), read the printed
-        startup URL, assert its host component, and immediately stop the
-        server. The assertion is on the printed URL, and the all-interfaces
-        listener exists only for the brief window before teardown signals the
-        process, so the suite does not leave a network-listening socket bound.
+        The default bind host is loopback, so the read-only interface is
+        reachable only from the local machine; exposing it on the network is
+        the explicit --host 0.0.0.0 opt-in (SPEC/WEB.md § Bind Address and Port
+        Selection, item 1). We start with the default host but an explicit
+        ephemeral --port 0 (so the test does not race the real 8787), read the
+        printed startup URL, assert its host component, and confirm no
+        network-exposure warning is printed on stderr for a loopback bind.
         """
-        # Bypass _start's loopback pin: launch directly with no --host so the
-        # process resolves the real default. Reuse the same stdout-file polling.
+        # Launch directly with no --host so the process resolves the real
+        # default. Reuse the same stdout-file polling.
         out = tempfile.TemporaryFile(mode="w+")
         err = tempfile.TemporaryFile(mode="w+")
         proc = subprocess.Popen(
@@ -433,9 +434,55 @@ class TestWebInterface:
         )
         # url is http://<host>:<port>; the host is the default bind host.
         host = url[len("http://"):].rsplit(":", 1)[0]
-        assert host == "0.0.0.0", (
-            f"default bind host must be 0.0.0.0 (all interfaces); got {host!r} "
+        assert host == "127.0.0.1", (
+            f"default bind host must be 127.0.0.1 (loopback); got {host!r} "
             f"from url {url!r}"
+        )
+        # A loopback bind prints no network-exposure warning on stderr.
+        stderr = self._drain(err)
+        assert "reachable from the network" not in stderr, (
+            f"loopback default must NOT print a network-exposure warning; "
+            f"stderr={stderr!r}"
+        )
+        code = self._stop(proc, signal.SIGTERM)
+        assert code == 0, f"graceful SIGTERM shutdown must exit 0, got {code}"
+
+    def test_network_exposure_warns_on_stderr(self):
+        """AC: binding a non-loopback host prints a network-exposure warning to
+        stderr while the startup URL object still goes to stdout (SPEC/WEB.md
+        § Bind Address and Port Selection, item 3).
+
+        We pass the explicit --host 0.0.0.0 opt-in with an ephemeral --port 0,
+        so the all-interfaces listener exists only for the brief window before
+        teardown signals the process.
+        """
+        out = tempfile.TemporaryFile(mode="w+")
+        err = tempfile.TemporaryFile(mode="w+")
+        proc = subprocess.Popen(
+            [self.cli, "web", "--no-open", "--host", "0.0.0.0", "--port", "0"],
+            stdout=out, stderr=err, text=True, env=self._env(),
+        )
+        proc.out_file = out
+        proc.err_file = err
+        self._procs.append(proc)
+        url = self._read_startup_url(proc)
+        assert url is not None, (
+            "server did not print a startup URL; "
+            f"exit={proc.poll()} stderr={self._drain(err)}"
+        )
+        # The startup URL object still goes to stdout, with the requested host.
+        host = url[len("http://"):].rsplit(":", 1)[0]
+        assert host == "0.0.0.0", (
+            f"explicit --host 0.0.0.0 must be reflected in the URL; got {host!r}"
+        )
+        # The warning goes to stderr, naming the bound host.
+        stderr = self._drain(err)
+        assert "reachable from the network" in stderr, (
+            f"non-loopback bind must print a network-exposure warning to stderr; "
+            f"stderr={stderr!r}"
+        )
+        assert "0.0.0.0" in stderr, (
+            f"warning must name the bound host; stderr={stderr!r}"
         )
         # Stop promptly so the all-interfaces listener is not left bound.
         code = self._stop(proc, signal.SIGTERM)

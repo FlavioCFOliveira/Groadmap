@@ -20,14 +20,13 @@ func TestParseArgs_Defaults(t *testing.T) {
 	if opts.host != defaultHost {
 		t.Errorf("host = %q, want %q", opts.host, defaultHost)
 	}
-	// With no --host the resolved default binds all interfaces (0.0.0.0),
-	// reachable from the network; restricting to loopback is the explicit
-	// --host 127.0.0.1 opt-in (SPEC/WEB.md § Bind Address and Port Selection,
+	// With no --host the resolved default binds loopback (127.0.0.1), reachable
+	// only from the local machine; exposing it on the network is the explicit
+	// --host 0.0.0.0 opt-in (SPEC/WEB.md § Bind Address and Port Selection,
 	// item 1). Asserting the literal here guards the default value itself, not
-	// just that it equals the constant. We assert the parsed option rather than
-	// binding, so the test opens no all-interfaces listening socket.
-	if opts.host != "0.0.0.0" {
-		t.Errorf("default host = %q, want 0.0.0.0 (all interfaces)", opts.host)
+	// just that it equals the constant.
+	if opts.host != "127.0.0.1" {
+		t.Errorf("default host = %q, want 127.0.0.1 (loopback)", opts.host)
 	}
 	if opts.port != defaultPort {
 		t.Errorf("port = %d, want %d", opts.port, defaultPort)
@@ -53,14 +52,14 @@ func TestParseArgs_HelpTokens(t *testing.T) {
 }
 
 // TestParseArgs_HostAndPort exercises the host/port override path. It passes
-// --host 127.0.0.1, which is also the documented loopback opt-in that
-// restricts the otherwise network-exposed default (0.0.0.0) to the local
-// machine (SPEC/WEB.md § Bind Address and Port Selection, item 2). Both the
-// `--flag value` and `--flag=value` forms are covered.
+// --host 0.0.0.0, the documented network-exposure opt-in that overrides the
+// loopback default (127.0.0.1) to bind all interfaces (SPEC/WEB.md § Bind
+// Address and Port Selection, item 2). Both the `--flag value` and
+// `--flag=value` forms are covered.
 func TestParseArgs_HostAndPort(t *testing.T) {
 	cases := [][]string{
-		{"--host", "127.0.0.1", "--port", "9000", "--no-open"},
-		{"--host=127.0.0.1", "--port=9000", "--no-open"},
+		{"--host", "0.0.0.0", "--port", "9000", "--no-open"},
+		{"--host=0.0.0.0", "--port=9000", "--no-open"},
 	}
 	for _, args := range cases {
 		opts, showHelp, err := parseArgs(args)
@@ -70,14 +69,40 @@ func TestParseArgs_HostAndPort(t *testing.T) {
 		if showHelp {
 			t.Fatalf("%v: showHelp = true", args)
 		}
-		if opts.host != "127.0.0.1" {
-			t.Errorf("%v: host = %q, want 127.0.0.1 (loopback opt-in)", args, opts.host)
+		if opts.host != "0.0.0.0" {
+			t.Errorf("%v: host = %q, want 0.0.0.0 (exposure opt-in)", args, opts.host)
 		}
 		if opts.port != 9000 || !opts.portExplicit {
 			t.Errorf("%v: port = %d explicit=%v, want 9000 true", args, opts.port, opts.portExplicit)
 		}
 		if !opts.noOpen {
 			t.Errorf("%v: noOpen = false, want true", args)
+		}
+	}
+}
+
+// TestIsLoopbackHost verifies the loopback classification that decides whether
+// the network-exposure warning is printed (SPEC/WEB.md § Bind Address and Port
+// Selection, item 3). Loopback addresses (incl. the whole 127.0.0.0/8 range,
+// ::1, and the "localhost" literal) print no warning; 0.0.0.0, routable IPs,
+// and bare hostnames are treated as network-exposed.
+func TestIsLoopbackHost(t *testing.T) {
+	cases := []struct {
+		host string
+		want bool
+	}{
+		{"127.0.0.1", true},
+		{"127.0.0.2", true},
+		{"::1", true},
+		{"localhost", true},
+		{"0.0.0.0", false},
+		{"192.168.1.10", false},
+		{"::", false},
+		{"example.com", false},
+	}
+	for _, c := range cases {
+		if got := isLoopbackHost(c.host); got != c.want {
+			t.Errorf("isLoopbackHost(%q) = %v, want %v", c.host, got, c.want)
 		}
 	}
 }

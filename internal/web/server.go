@@ -46,6 +46,17 @@ func serve(opts options) error {
 	//    one under the ephemeral fallback or --port 0) and print the URL.
 	actualPort := ln.Addr().(*net.TCPAddr).Port
 	url := "http://" + net.JoinHostPort(opts.host, strconv.Itoa(actualPort))
+
+	// When the resolved bind host is not a loopback address the interface is
+	// reachable from the network: warn on stderr (informational only; it does
+	// not change the exit code or prevent startup). Loopback binds print no
+	// warning (SPEC/WEB.md § Bind Address and Port Selection, item 3). The
+	// warning is written before the success object so a caller that reads
+	// stdout for the URL is unaffected.
+	if !isLoopbackHost(opts.host) {
+		fmt.Fprintf(os.Stderr, "warning: web interface is reachable from the network (bound to %s); use --host 127.0.0.1 to restrict to this machine\n", opts.host)
+	}
+
 	if perr := utils.PrintJSON(map[string]string{"url": url}); perr != nil {
 		_ = ln.Close()
 		return perr
@@ -94,6 +105,39 @@ func bindListener(opts options) (net.Listener, error) {
 	return fbLn, nil
 }
 
+// isLoopbackHost reports whether host resolves to a loopback bind address, so
+// the caller can decide whether the network-exposure warning is needed. The
+// literal "localhost" is treated as loopback (it resolves to 127.0.0.1/::1);
+// "127.0.0.1", "::1", and any other address in the loopback range
+// (for example 127.0.0.2) are loopback. Any address that does not parse as a
+// loopback IP — including 0.0.0.0, a routable IP, or a hostname — is treated as
+// non-loopback and therefore network-exposed (SPEC/WEB.md § Bind Address and
+// Port Selection, item 3).
+func isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
+// newServer builds the configured http.Server: the security-hardened handler
+// plus the three mandatory timeouts that protect the read-only server from
+// resource exhaustion by slow or idle connections (SPEC/WEB.md § HTTP Server
+// Timeouts). ReadHeaderTimeout bounds slow-header (Slowloris) connections,
+// WriteTimeout bounds a slow-reading client stalling the response, and
+// IdleTimeout bounds idle keep-alive connections.
+func newServer() *http.Server {
+	return &http.Server{
+		Handler:           handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+}
+
 // runServer serves HTTP on ln until SIGINT/SIGTERM, then shuts down
 // gracefully. It returns nil on a clean shutdown (exit 0) and a wrapped
 // ErrDatabase when Serve fails for any reason other than the expected
@@ -110,10 +154,7 @@ func runServer(ln net.Listener) error {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
 
-	srv := &http.Server{
-		Handler:           buildMux(),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
+	srv := newServer()
 
 	serveErr := make(chan error, 1)
 	go func() {

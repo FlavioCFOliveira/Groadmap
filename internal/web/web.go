@@ -9,12 +9,13 @@ import (
 )
 
 // Default bind address and port for the web interface. The default host is
-// 0.0.0.0, so the interface binds all interfaces and is reachable from the
-// network; restricting it to the local machine is the explicit opt-in
-// --host 127.0.0.1 (loopback). The default port is 8787 with an ephemeral
-// fallback when it is busy (see SPEC/WEB.md § Bind Address and Port Selection).
+// 127.0.0.1 (loopback), so the interface is reachable only from the local
+// machine; exposing it on the network is the explicit opt-in --host 0.0.0.0
+// (or any non-loopback address), which also prints a network-exposure warning
+// to stderr at startup. The default port is 8787 with an ephemeral fallback
+// when it is busy (see SPEC/WEB.md § Bind Address and Port Selection).
 const (
-	defaultHost = "0.0.0.0"
+	defaultHost = "127.0.0.1"
 	defaultPort = 8787
 
 	minPort = 0
@@ -24,7 +25,7 @@ const (
 // options carries the resolved command-line configuration for one
 // `rmp web` invocation.
 type options struct {
-	// host is the bind host (default 0.0.0.0, all interfaces).
+	// host is the bind host (default 127.0.0.1, loopback only).
 	host string
 	// port is the requested bind port (default 8787).
 	port int
@@ -146,9 +147,9 @@ func flagValue(name, inlineVal string, hasInline bool, args []string, i int) (va
 // PrintHelp writes the `rmp web` help text to stdout. The text follows the
 // skeleton in SPEC/HELP.md § Web command help specifics and makes explicit
 // the three behaviours an agent cannot infer from the generic template:
-// no -r/--roadmap flag, read-only but exposed to the network by default
-// (with --host 127.0.0.1 as the loopback opt-in), and the long-lived process
-// that runs until interrupted.
+// no -r/--roadmap flag, read-only and loopback-only by default (with
+// --host 0.0.0.0 as the explicit network-exposure opt-in), and the long-lived
+// process that runs until interrupted.
 func PrintHelp() {
 	fmt.Print(`Usage: rmp web [options]
 
@@ -158,24 +159,25 @@ and knowledge graph. The web interface never writes; the rmp CLI
 remains the sole write path. rmp web does not take -r/--roadmap: it
 lists all roadmaps and you select one in the browser.
 
-The interface binds all interfaces (0.0.0.0) by default, so it is
-reachable from the network, not only from the local machine; use
---host 127.0.0.1 to restrict it to loopback. --host and --port override
-the bind address. Unlike every other command, rmp web starts a server
-that keeps running until interrupted (Ctrl+C / SIGINT or SIGTERM); on
-startup it prints the served URL and, unless --no-open is given, opens
-your default browser at it.
+The interface binds loopback (127.0.0.1) by default, so it is reachable
+only from the local machine; to expose it on the network pass the
+explicit opt-in --host 0.0.0.0 (all interfaces), which also prints a
+network-exposure warning to stderr. --host and --port override the bind
+address. Unlike every other command, rmp web starts a server that keeps
+running until interrupted (Ctrl+C / SIGINT or SIGTERM); on startup it
+prints the served URL and, unless --no-open is given, opens your default
+browser at it.
 
 Options:
-  --host <address>   Bind host. Default 0.0.0.0 (all interfaces, reachable
-                     from the network). Use --host 127.0.0.1 for loopback only.
+  --host <address>   Bind host. Default 127.0.0.1 (loopback, local machine
+                     only). Use --host 0.0.0.0 to expose on the network.
   --port <number>    Bind port 0-65535. Default 8787; falls back to an
                      ephemeral port if 8787 is in use and --port is not set.
   --no-open          Do not launch a browser; just print the served URL.
   -h, --help         Show this help message
 
 Output (stdout JSON):
-  On startup: {"url": "http://0.0.0.0:8787"} (reflects the bound host/port)
+  On startup: {"url": "http://127.0.0.1:8787"} (reflects the bound host/port)
 
 Exit codes:
   0   Server started and was stopped by Ctrl+C / SIGINT / SIGTERM

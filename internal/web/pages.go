@@ -199,13 +199,17 @@ func renderHTML(w http.ResponseWriter, name string, data any) {
 
 // renderJSON writes v as pretty-printed JSON with two-space indentation and
 // a trailing newline, consistent with all other Groadmap JSON output
-// (SPEC/DATA_FORMATS.md § Implementation Notes). HTML escaping is disabled
-// because the payload is consumed by the page's fetch() as JSON, not
-// interpolated into HTML.
+// (SPEC/DATA_FORMATS.md § Implementation Notes). HTML escaping is kept ON
+// (the encoder's default) as defence-in-depth: <, >, and & in roadmap-derived
+// strings are emitted as <, >, and &, so the JSON can never be
+// mistaken for or broken out into executable HTML if it is ever read as a
+// document. graph.js consumes the payload via fetch()+JSON.parse and renders
+// strings with D3 .text()/textContent, where the unicode escapes are decoded
+// back to the identical characters — the visualisation is unchanged
+// (SPEC/WEB.md § Graph Data Endpoint).
 func renderJSON(w http.ResponseWriter, v any) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(v); err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)

@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 // vendoredAssets enumerates the vendored Tabler / Inter / D3 asset paths that
@@ -380,6 +381,98 @@ func TestStatic_VendoredAssetsServed(t *testing.T) {
 		if rec.Body.Len() == 0 {
 			t.Errorf("GET %s: empty body", tc.path)
 		}
+	}
+}
+
+// TestStatic_NoDirectoryListing asserts the noDirFS wrapper suppresses
+// browseable directory listings: requesting a static directory (with or
+// without a trailing slash) is a 404, while an individual file inside it still
+// serves 200 (SPEC/WEB.md § Static Assets, finding #70).
+func TestStatic_NoDirectoryListing(t *testing.T) {
+	mux := buildMux()
+
+	// The trailing-slash directory forms are what http.FileServer would
+	// otherwise render as a browseable listing; noDirFS turns them into 404s.
+	// (The no-slash forms are a 307 redirect to the slash form from the mux,
+	// which is normal routing, not a listing, so they are not probed here.)
+	dirs := []string{"/static/", "/static/vendor/"}
+	for _, path := range dirs {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s: status = %d, want 404 (no directory listing)", path, rec.Code)
+		}
+	}
+
+	// Individual files inside those directories still resolve.
+	files := []string{"/static/graph.js", "/static/vendor/d3/d3.min.js"}
+	for _, path := range files {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s: status = %d, want 200", path, rec.Code)
+		}
+	}
+}
+
+// TestSecurityHeaders asserts the outermost security-header middleware sets the
+// four hardening headers on every response — including the 404 produced by the
+// fallback handler and the suppressed static directory listing (SPEC/WEB.md
+// § Security Headers, finding #71).
+func TestSecurityHeaders(t *testing.T) {
+	h := handler()
+
+	wantHeaders := map[string]string{
+		"Content-Security-Policy": contentSecurityPolicy,
+		"X-Content-Type-Options":  "nosniff",
+		"X-Frame-Options":         "DENY",
+		"Referrer-Policy":         "same-origin",
+	}
+	// The CSP literal must match the SPEC table exactly.
+	const wantCSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'"
+	if contentSecurityPolicy != wantCSP {
+		t.Fatalf("contentSecurityPolicy = %q, want %q", contentSecurityPolicy, wantCSP)
+	}
+
+	// Cover a found path (graph file), a 404 (unknown path), a suppressed
+	// directory listing, and a 405 (non-read method on a known path).
+	type probe struct {
+		method, path string
+	}
+	probes := []probe{
+		{http.MethodGet, "/static/graph.js"},
+		{http.MethodGet, "/no/such/page"},
+		{http.MethodGet, "/static/"},
+		{http.MethodPost, "/"},
+	}
+	for _, p := range probes {
+		req := httptest.NewRequest(p.method, p.path, nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		for k, want := range wantHeaders {
+			if got := rec.Header().Get(k); got != want {
+				t.Errorf("%s %s: header %s = %q, want %q", p.method, p.path, k, got, want)
+			}
+		}
+	}
+}
+
+// TestServerTimeouts asserts the HTTP server is configured with all three
+// mandatory timeouts (SPEC/WEB.md § HTTP Server Timeouts, finding #69), which
+// has no dynamic HTTP probe and is verified here by inspecting the struct the
+// server builds.
+func TestServerTimeouts(t *testing.T) {
+	srv := newServer()
+	if srv.ReadHeaderTimeout != 10*time.Second {
+		t.Errorf("ReadHeaderTimeout = %v, want 10s", srv.ReadHeaderTimeout)
+	}
+	if srv.WriteTimeout != 30*time.Second {
+		t.Errorf("WriteTimeout = %v, want 30s", srv.WriteTimeout)
+	}
+	if srv.IdleTimeout != 120*time.Second {
+		t.Errorf("IdleTimeout = %v, want 120s", srv.IdleTimeout)
 	}
 }
 
