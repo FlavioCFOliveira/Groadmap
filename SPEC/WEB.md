@@ -727,6 +727,10 @@ the Roadmap Sprints Page is visually identical to the single Roadmap Sprint Page
   properties of a node or an edge when the user selects it. Node and edge labels,
   types, and properties shown come directly from the graph data (see
   [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
+  A property value that the user authored as multi-line free-text (for example a
+  node's specification text or notes) is shown preserving its source line breaks
+  rather than collapsing them, consistent with
+  [Frontend Rules](#frontend-rules), rule 6.
   The visualisation MUST be usable without a mouse: it supports touch gestures
   (pan, pinch-to-zoom, and tap to select and inspect) and surfaces node and edge
   detail through tap or selection rather than relying on mouse hover, so the page
@@ -969,15 +973,20 @@ read from the host filesystem at runtime.
    (newlines) in it. Where the interface renders such authored free-text — the
    task long free-text fields (`functional_requirements`,
    `technical_requirements`, `acceptance_criteria`, and `completion_summary`) in
-   the task detail modal, and a sprint's `description` wherever it is shown — the
-   interface preserves the author's line breaks rather than collapsing them under
-   HTML's default whitespace handling. The text still wraps within its container,
-   so preserving line breaks introduces no forced horizontal scrolling, and the
-   text is still rendered through `html/template`'s contextual auto-escaping (rule
-   1): it is never rendered as raw HTML. This rule is the general statement of the
-   behaviour; the [Task Detail Modal](#task-detail-modal),
-   [Roadmap Sprints Page](#roadmap-sprints-page), and
-   [Roadmap Sprint Page](#roadmap-sprint-page) sections reference it.
+   the task detail modal, a sprint's `description` wherever it is shown, and the
+   property values shown in the knowledge-graph detail panel when a node or edge
+   is selected — the interface preserves the author's line breaks rather than
+   collapsing them under HTML's default whitespace handling. The text still wraps
+   within its container, so preserving line breaks introduces no forced
+   horizontal scrolling, and the text is still emitted as the element's text
+   content (never as raw HTML): the server-rendered fields through
+   `html/template`'s contextual auto-escaping (rule 1), and the graph detail panel
+   values through the DOM `textContent` property. This rule is the general
+   statement of the behaviour; the [Task Detail Modal](#task-detail-modal),
+   [Roadmap Sprints Page](#roadmap-sprints-page),
+   [Roadmap Sprint Page](#roadmap-sprint-page), and
+   [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page) sections
+   reference it.
 
 ### UI Framework
 

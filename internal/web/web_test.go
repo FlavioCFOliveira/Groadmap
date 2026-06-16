@@ -251,6 +251,37 @@ func TestEmbeddedCSS_HiddenAttributeWins(t *testing.T) {
 	}
 }
 
+// regression: a property value shown in the knowledge-graph detail panel may be
+// multi-line free-text the user authored through the CLI (a node's specification
+// text, notes, etc.). Without `white-space: pre-wrap` the browser collapses the
+// authored line breaks, so the text renders as one run and the structure the
+// author intended is lost (SPEC/WEB.md § Frontend Rules, rule 6). The
+// `.detail-panel__value` rule preserves the line breaks while still wrapping.
+func TestEmbeddedCSS_DetailPanelValuePreservesLineBreaks(t *testing.T) {
+	css, err := staticFS.ReadFile("static/style.css")
+	if err != nil {
+		t.Fatalf("reading embedded style.css: %v", err)
+	}
+	if !contains(stripSpace(string(css)), ".detail-panel__value{white-space:pre-wrap") {
+		t.Errorf("style.css must apply `white-space: pre-wrap` to .detail-panel__value so the graph detail panel preserves authored line breaks; not found")
+	}
+}
+
+// regression: the CSS rule above only takes effect if graph.js actually tags the
+// detail-panel value elements with the `detail-panel__value` class. This test
+// ties the two together so removing the class assignment fails the build, not
+// just silently dropping line-break preservation in the graph detail panel
+// (SPEC/WEB.md § Frontend Rules, rule 6).
+func TestEmbeddedGraphJS_DetailValueCarriesPreWrapClass(t *testing.T) {
+	js, err := staticFS.ReadFile("static/graph.js")
+	if err != nil {
+		t.Fatalf("reading embedded graph.js: %v", err)
+	}
+	if !contains(stripSpace(string(js)), `dd.className="detail-panel__value"`) {
+		t.Errorf("graph.js must assign the `detail-panel__value` class to each detail-panel value element so the pre-wrap CSS applies; not found")
+	}
+}
+
 // stripSpace removes all ASCII whitespace so a CSS-rule assertion is
 // insensitive to source formatting.
 func stripSpace(s string) string {

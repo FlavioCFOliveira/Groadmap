@@ -75,6 +75,11 @@
     var dt = document.createElement("dt");
     dt.textContent = label;
     var dd = document.createElement("dd");
+    // A property value may be multi-line free-text the user authored through the
+    // CLI; this class preserves its source line breaks rather than letting HTML
+    // collapse them (SPEC/WEB.md § Frontend Rules, rule 6). Value is assigned via
+    // textContent, so it is never interpreted as HTML.
+    dd.className = "detail-panel__value";
     dd.textContent = value;
     panelBody.appendChild(dt);
     panelBody.appendChild(dd);

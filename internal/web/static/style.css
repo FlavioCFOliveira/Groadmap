@@ -36,10 +36,12 @@
    without forcing horizontal scrolling, so it stays readable on small
    viewports (SPEC/WEB.md § Frontend Rules, rule 6). This covers the task
    detail modal's long free-text fields (functional/technical requirements,
-   acceptance criteria, completion summary) and a sprint's description wherever
-   it is shown (the sprints page tabs and the sprint detail page). */
+   acceptance criteria, completion summary), a sprint's description wherever it
+   is shown (the sprints page tabs and the sprint detail page), and the property
+   values rendered into the knowledge-graph detail panel. */
 .task-modal__text,
-.sprint-description {
+.sprint-description,
+.detail-panel__value {
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
