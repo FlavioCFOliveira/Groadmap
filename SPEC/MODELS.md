@@ -107,6 +107,37 @@ Maps to the `tasks` table and `Task` JSON object.
 - `Specialists`: Maximum 500 characters (comma-separated list of specialist names)
 - `CompletionSummary`: Maximum 4096 characters (optional, set only on close)
 
+**Free-Text Control-Character Constraint:**
+
+All free-text fields — `Title`, `FunctionalRequirements`, `TechnicalRequirements`,
+`AcceptanceCriteria`, `CompletionSummary`, and `Specialists` (and the `Sprint`
+`Description` field) — MUST reject control characters. The application rejects an
+input that contains any of the following code points, with exit code 6, before the
+value is stored:
+
+1. **ASCII control bytes below `0x20`**, with three exceptions that are permitted:
+   TAB (`0x09`), LF (`0x0A`, line feed), and CR (`0x0D`, carriage return). Every
+   other byte in the range `0x00`-`0x1F` is rejected.
+2. **DEL (`0x7F`)**.
+3. **Unicode bidirectional and format control code points:** `U+200E`
+   (LEFT-TO-RIGHT MARK), `U+200F` (RIGHT-TO-LEFT MARK), `U+202A`-`U+202E`
+   (the embedding and override controls), `U+2066`-`U+2069` (the isolate
+   controls), and `U+FEFF` (zero-width no-break space / byte-order mark).
+
+Rationale: forbidding these code points prevents terminal escape-sequence injection
+(CWE-150) when field values are echoed to a terminal, and prevents Trojan Source
+attacks (CVE-2021-42574) in which bidirectional control characters reorder how
+text is displayed without changing its stored bytes. This constraint applies to
+every field listed above on every command that accepts the field
+(see `COMMANDS.md § Field Validation`).
+
+**Specialists List-Separator Constraint:**
+
+The `Specialists` field is a comma-separated list of specialist names. The comma
+(`,`) is reserved as the list separator: an individual specialist name MUST NOT
+contain a comma. An input in which a single name contains a comma is rejected with
+exit code 6. This keeps the list unambiguous to split on the comma delimiter.
+
 ```go
 // Task represents a task in the roadmap.
 // Field order optimized for memory layout (240 bytes, zero padding on 64-bit systems).
@@ -124,7 +155,7 @@ type Task struct {
     CreatedAt              string     `json:"created_at"`               // ISO 8601 UTC, auto-set on creation
 
     // Group 2: Nullable tracking fields - lifecycle timestamps and parent link (48 bytes: 6 x 8)
-    Specialists        *string `json:"specialists"`          // Comma-separated specialists, nullable, max 500 chars
+    Specialists        *string `json:"specialists"`          // Comma-separated specialists, nullable, max 500 chars; no individual name may contain a comma
     StartedAt          *string `json:"started_at"`           // ISO 8601 UTC, auto-set on DOING transition
     TestedAt           *string `json:"tested_at"`            // ISO 8601 UTC, auto-set on TESTING transition
     ClosedAt           *string `json:"closed_at"`            // ISO 8601 UTC, auto-set on COMPLETED transition

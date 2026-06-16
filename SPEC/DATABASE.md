@@ -17,10 +17,13 @@
   - [Sprints](#sprints)
   - [Audit](#audit)
 - [Relationships](#relationships)
+  - [Transactional Atomicity Guarantees](#transactional-atomicity-guarantees)
 - [Data Constraints](#data-constraints)
 - [Performance Optimization](#performance-optimization)
 - [Field Length Validation](#field-length-validation)
 - [SQLite Validation](#sqlite-validation)
+- [Migration Idempotency (ALTER TABLE ADD COLUMN)](#migration-idempotency-alter-table-add-column)
+- [Audit Result Limit](#audit-result-limit)
 - [See Also](#see-also)
 
 ## Overview
@@ -30,8 +33,8 @@ Each roadmap is stored in an individual SQLite database. The schema is designed 
 ### Physical Location and Naming
 
 - Each roadmap has its own home directory at `~/.roadmaps/<name>/`, where `<name>` is the roadmap name. The home directory uses `0700` permissions, owner-only.
-- The SQLite database is named `project.db` and lives inside that directory at `~/.roadmaps/<name>/project.db` with `0600` permissions.
-- SQLite sidecars (`project.db-wal`, `project.db-shm`) live alongside the database in the same directory.
+- The SQLite database is named `project.db` and lives inside that directory at `~/.roadmaps/<name>/project.db` with `0600` permissions. The `project.db` file MUST be created with `0600` permissions from the outset, not created with the process umask and chmod-ed afterwards: there must be no window in which the file is more permissive than `0600`.
+- SQLite sidecars (`project.db-wal`, `project.db-shm`) live alongside the database in the same directory and MUST also use `0600` permissions, identical to `project.db`. Because the sidecars can contain the same data pages as the main database, they are held to the same owner-only permission as `project.db`.
 - The data directory layout, its permission model, and the automatic migration from the legacy `~/.roadmaps/<name>.db` layout are specified in `ARCHITECTURE.md § Directory Structure` and `ARCHITECTURE.md § Filesystem Layout Migration`.
 
 ## Naming Conventions
@@ -497,6 +500,8 @@ WHERE sprint_id = ?
 UPDATE sprint_tasks SET position = ? WHERE sprint_id = ? AND task_id = ?;
 ```
 
+**Validation:** The target position must be an integer between 0 and 2147483647 (MaxInt32) inclusive. A value less than 0 or greater than 2147483647 is rejected as a validation error.
+
 **Behavior:**
 - Moving to position 0 places the task at the beginning
 - Moving to a position >= task count places the task at the end
@@ -767,6 +772,34 @@ DELETE FROM audit WHERE performed_at < ?;
 - When deleting sprint, relationships in `sprint_tasks` are removed (`ON DELETE CASCADE`)
 - Tasks are never automatically deleted, only disassociated
 
+### Transactional Atomicity Guarantees
+
+The following multi-statement operations MUST run inside a single SQL transaction
+so that the database never reaches a state where `tasks.status` and the
+`sprint_tasks` membership diverge:
+
+1. **Sprint deletion (`DeleteSprint`).** Resetting the member tasks' status to
+   `BACKLOG`, deleting the `sprint_tasks` rows, deleting the `sprints` row, and
+   writing the `SPRINT_DELETE` audit entry MUST all occur in the same transaction.
+   Either every step commits or none does. A partial commit that left tasks marked
+   `SPRINT` while their sprint or their `sprint_tasks` rows were gone is forbidden.
+2. **Removing tasks from a sprint (`RemoveTasksFromSprint`).** Deleting the
+   affected `sprint_tasks` rows, resetting those tasks' status to `BACKLOG`, and
+   writing the audit entry MUST occur in the same transaction. `tasks.status` and
+   `sprint_tasks` membership are always consistent at every committed state.
+3. **Sprint capacity enforcement (`max_tasks`).** When `max_tasks` is set, the
+   capacity check (current member count against `max_tasks`) and the insertion of
+   the new `sprint_tasks` rows MUST occur **inside the same transaction** as a
+   single atomic operation. The check and the insert MUST NOT be separated by a
+   time-of-check-to-time-of-use (TOCTOU) window in which a concurrent writer could
+   add tasks between the count and the insert and thereby exceed the cap. The
+   capacity is enforced atomically within the insert transaction, so the committed
+   member count can never exceed `max_tasks`.
+
+These guarantees extend the general transactional-integrity requirement in
+`ARCHITECTURE.md § Security Guarantees` (every modification, including its audit
+entry, is wrapped in one transaction) to these specific sprint operations.
+
 ---
 
 ## Data Constraints
@@ -916,6 +949,50 @@ SELECT name FROM sqlite_master WHERE type='table' AND name='_metadata';
 ```
 
 Or check magic bytes: SQLite files start with `"SQLite format 3\x00"`
+
+---
+
+## Migration Idempotency (ALTER TABLE ADD COLUMN)
+
+SQLite's `ALTER TABLE ... ADD COLUMN` is not itself idempotent: re-running it for
+a column that already exists raises a "duplicate column name" error. Because a
+migration may be applied to a database that has already been partially or fully
+migrated, every migration that adds a column MUST guard the `ADD COLUMN` with a
+**column-existence check** before executing it. The check queries
+`pragma_table_info(<table>)` for the target column name and performs the
+`ALTER TABLE ... ADD COLUMN` only when the column is absent:
+
+```sql
+-- Add the column only when it does not already exist
+SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = 'completion_summary';
+-- If the count is 0, run:
+ALTER TABLE tasks ADD COLUMN completion_summary TEXT;
+```
+
+This makes each such migration idempotent: applying it to a database that already
+has the column is a no-op rather than an error, so re-running the migration set is
+safe. Any statement in this specification or in `VERSION.md § Migrations` that
+claims a migration is idempotent MUST be backed by this column-existence guard for
+every `ADD COLUMN` step; a bare `ALTER TABLE ... ADD COLUMN` without the guard is
+not idempotent and is not permitted. The schema-migration mechanism and its version
+history are specified in `VERSION.md § Migrations`.
+
+---
+
+## Audit Result Limit
+
+The number of audit entries a single query may return is bounded by a server-side
+hard cap, `MaxAuditLimit`, defined in `internal/models/consts.go` with the value
+**500**. This cap applies to the audit-entry result sets produced by
+`audit list` and the other audit read paths:
+
+1. The `audit list --limit <n>` flag MUST be a positive integer in the range
+   `1`-`MaxAuditLimit` (1-500). A value below 1 or above `MaxAuditLimit`, or a
+   non-integer value, is rejected with exit code 6 (see
+   `COMMANDS.md § List Audit Log`). The audit-list query is never issued with an
+   unbounded or larger-than-`MaxAuditLimit` `LIMIT`.
+2. `MaxAuditLimit` is the single source of truth for the audit result-set cap;
+   `COMMANDS.md` references this value rather than restating it independently.
 
 ---
 

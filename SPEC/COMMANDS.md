@@ -67,6 +67,30 @@ The following fields have mandatory length constraints enforced by the applicati
 - **Error format:** Plain text to stderr with descriptive message
 - **Exit code:** 6 for validation errors (see `ARCHITECTURE.md` — Exit Codes for canonical mapping)
 
+### Control-Character Constraint (All Free-Text Fields)
+
+All free-text fields — task `title`, `functional_requirements`,
+`technical_requirements`, `acceptance_criteria`, `completion_summary`,
+`specialists`, and sprint `description` — reject control characters. An input that
+contains any of the following is rejected with exit code 6 before it is stored:
+
+- ASCII control bytes below `0x20`, except TAB (`0x09`), LF (`0x0A`), and CR
+  (`0x0D`), which are permitted.
+- DEL (`0x7F`).
+- Unicode bidirectional and format control code points `U+200E`, `U+200F`,
+  `U+202A`-`U+202E`, `U+2066`-`U+2069`, and `U+FEFF`.
+
+This guards against terminal escape-sequence injection (CWE-150) and Trojan Source
+attacks (CVE-2021-42574). The canonical definition is in
+`MODELS.md § Free-Text Control-Character Constraint`.
+
+### Specialists List-Separator Constraint
+
+The `specialists` field is a comma-separated list. The comma is reserved as the
+list separator, so an individual specialist name MUST NOT contain a comma. An input
+in which a single name contains a comma is rejected with exit code 6. The canonical
+definition is in `MODELS.md § Specialists List-Separator Constraint`.
+
 ### Validation Error Messages
 
 | Scenario | Error Message (stderr) |
@@ -825,7 +849,17 @@ rmp sprint new -r <name> -d "Description" [--max-tasks <n>]
 
 **Options:**
 - `-d, --description <text>` - Sprint description (required)
-- `--max-tasks <n>` - Maximum number of tasks allowed in the sprint (optional; omit for unlimited capacity)
+- `--max-tasks <n>` - Maximum number of tasks allowed in the sprint (optional; omit
+  for unlimited capacity). When provided, MUST be a positive integer in the range
+  `1`-`10000`. A value `< 1` or `> 10000`, or a non-integer value, is rejected with
+  exit code 6.
+
+**Bound Validation:**
+
+| Scenario | Exit Code | stderr Output |
+|----------|-----------|---------------|
+| `--max-tasks` `< 1` or `> 10000` | 6 | "Error: --max-tasks must be between 1 and 10000 (got N)" |
+| `--max-tasks` non-integer | 6 | "Error: --max-tasks must be an integer between 1 and 10000" |
 
 **Output (success):** `{"id": 1}`, exit code 0.
 
@@ -1127,7 +1161,7 @@ rmp sprint mvto -r <name> <sprint-id> <task-id> <position>
 **Arguments:**
 - `sprint-id` - Sprint identifier
 - `task-id` - Task to move
-- `position` - Target position (0-based). If position >= task count, task is moved to the end.
+- `position` - Target position (0-based). Must be an integer between 0 and 2147483647 (MaxInt32) inclusive. If position >= task count, task is moved to the end.
 
 **Behavior:**
 - Moving UP: Tasks between new position and current position-1 shift down by 1
@@ -1152,7 +1186,7 @@ rmp sprint mvto -r <name> <sprint-id> <task-id> <position>
 |----------|-----------|---------------|
 | Sprint not found | 4 | "Sprint not found" |
 | Task not in sprint | 6 | "Task N is not in sprint" |
-| Invalid position | 6 | "Position must be a non-negative integer" |
+| Invalid position | 6 | "Position must be an integer between 0 and 2147483647" |
 
 #### Swap Tasks
 
@@ -1226,9 +1260,18 @@ rmp sprint upd -r <name> <id> [-d "New Description"] [--max-tasks <n>]
 
 **Options:**
 - `-d, --description <text>` - New sprint description
-- `--max-tasks <n>` - New capacity limit (positive integer)
+- `--max-tasks <n>` - New capacity limit. MUST be a positive integer in the range
+  `1`-`10000`. A value `< 1` or `> 10000`, or a non-integer value, is rejected with
+  exit code 6.
 
 At least one of `--description` or `--max-tasks` is required.
+
+**Bound Validation:**
+
+| Scenario | Exit Code | stderr Output |
+|----------|-----------|---------------|
+| `--max-tasks` `< 1` or `> 10000` | 6 | "Error: --max-tasks must be between 1 and 10000 (got N)" |
+| `--max-tasks` non-integer | 6 | "Error: --max-tasks must be an integer between 1 and 10000" |
 
 **Output (success):** No output, exit code 0.
 
@@ -1293,10 +1336,24 @@ rmp audit ls -r <name>
 **Options:**
 - `-o, --operation <type>` - Filter by operation (CREATE, UPDATE, etc.)
 - `-e, --entity-type <type>` - Filter by entity (TASK, SPRINT, ROADMAP)
-- `--entity-id <id>` - Filter by specific entity ID
+- `--entity-id <id>` - Filter by specific entity ID. MUST be a positive integer in
+  the range `1`-`2147483647` (`MaxInt32`). A value `< 1` or `> 2147483647`, or a
+  non-integer value, is rejected with exit code 6.
 - `--since <date>` - ISO 8601 date
 - `--until <date>` - ISO 8601 date
-- `-l, --limit <n>` - Limit results
+- `-l, --limit <n>` - Limit the number of results. MUST be a positive integer in
+  the range `1`-`500`. The maximum is the server-side cap `MaxAuditLimit` (500;
+  see `DATABASE.md § Audit Result Limit`). A value `< 1` or `> 500`, or a
+  non-integer value, is rejected with exit code 6.
+
+**Bound Validation:**
+
+| Scenario | Exit Code | stderr Output |
+|----------|-----------|---------------|
+| `--limit` `< 1` or `> 500` | 6 | "Error: --limit must be between 1 and 500 (got N)" |
+| `--limit` non-integer | 6 | "Error: --limit must be an integer between 1 and 500" |
+| `--entity-id` `< 1` or `> 2147483647` | 6 | "Error: --entity-id must be between 1 and 2147483647 (got N)" |
+| `--entity-id` non-integer | 6 | "Error: --entity-id must be an integer between 1 and 2147483647" |
 
 **JSON Output:** Array of AuditEntry objects.
 
@@ -1308,6 +1365,18 @@ rmp audit hist -r <name> -e <type> <id>
 ```
 
 **Description:** Shows all audit entries related to a specific task or sprint.
+
+**Arguments:**
+- `<id>` - Entity identifier. MUST be a positive integer in the range
+  `1`-`2147483647` (`MaxInt32`). A value `< 1` or `> 2147483647`, or a non-integer
+  value, is rejected with exit code 6.
+
+**Bound Validation:**
+
+| Scenario | Exit Code | stderr Output |
+|----------|-----------|---------------|
+| `<id>` `< 1` or `> 2147483647` | 6 | "Error: entity ID must be between 1 and 2147483647 (got N)" |
+| `<id>` non-integer | 6 | "Error: entity ID must be an integer between 1 and 2147483647" |
 
 **JSON Output:** Array of AuditEntry objects.
 
@@ -1740,10 +1809,13 @@ rmp web --no-open
 
 ### Options
 
-- `--host <address>` - Bind host. Default `0.0.0.0` (binds all interfaces),
-  which exposes the read-only interface on the network. Restricting the
-  interface to the local machine is the explicit opt-in `--host 127.0.0.1`
-  (loopback only) (see `WEB.md § Security and Constraints`).
+- `--host <address>` - Bind host. Default `127.0.0.1` (loopback only), so the
+  read-only interface is reachable only from the local machine. Exposing the
+  interface on the network is the explicit opt-in `--host 0.0.0.0` (binds all
+  interfaces), or any other non-loopback address. When a non-loopback host is
+  bound, the server prints a warning to stderr that the interface is reachable
+  from the network (see `WEB.md § Bind Address and Port Selection` and
+  `WEB.md § Security and Constraints`).
 - `--port <number>` - Bind port, an integer in the range 0-65535. Default `8787`.
   When `--port` is omitted and the default port `8787` is already in use, the
   server falls back to an operating-system-chosen ephemeral port so it still
@@ -1765,7 +1837,7 @@ unknown flag is an input error (exit code 2).
   is opened:
 
   ```json
-  {"url": "http://0.0.0.0:8787"}
+  {"url": "http://127.0.0.1:8787"}
   ```
 
   The `url` reflects the actual bound host and port, including an ephemeral port
@@ -1805,7 +1877,7 @@ interface introduces no new codes.
 
 | Scenario | Exit Code | stderr Output (illustrative) |
 |----------|-----------|------------------------------|
-| Explicit `--port` already in use | 1 | "Error: cannot bind 0.0.0.0:8787: address already in use" |
+| Explicit `--port` already in use | 1 | "Error: cannot bind 127.0.0.1:8787: address already in use" |
 | Host not assignable | 1 | "Error: cannot bind 10.0.0.5:8787: cannot assign requested address" |
 | `--port` out of range | 6 | "Error: --port must be an integer between 0 and 65535 (got 70000)" |
 | `--port` not an integer | 6 | "Error: --port must be an integer between 0 and 65535 (got \"notanumber\")" |

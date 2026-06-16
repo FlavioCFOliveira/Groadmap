@@ -341,16 +341,32 @@ The guard rail classifies a query by the Cypher clauses it contains:
 | `CREATE`, `MERGE` | Adds nodes or edges | Write (creating) |
 | `SET`, `REMOVE` | Mutates properties or labels on existing elements | Write (mutating) |
 | `DELETE`, `DETACH DELETE` | Removes nodes or edges | Write (deleting) |
-| `MATCH ... RETURN` only, with no writing clause | Reads and returns data | Read-only |
+| `CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, `DROP CONSTRAINT` | Mutates the graph schema (indexes, constraints) | DDL (schema-mutating) |
+| `MATCH ... RETURN` only, with no writing clause and no DDL clause | Reads and returns data | Read-only |
 
 A query is a **writing query** when GoGraph's `cypher.QueryHasWritingClause`
 reports that it contains any writing clause (`CREATE`, `MERGE`, `SET`, `REMOVE`,
-`DELETE`, or `DETACH DELETE`). A query is **read-only** when it contains no
-writing clause.
+`DELETE`, or `DETACH DELETE`). A query is **read-only** when it contains neither a
+writing clause nor a DDL clause.
 The guard rail uses `QueryHasWritingClause` as the primary read-vs-write
 discriminator, and additionally inspects which writing clauses are present to
 distinguish creating, mutating, and deleting writes for the per-subcommand rules
 below.
+
+**DDL (Data Definition Language) in the guard-rail context.** DDL means a Cypher
+clause that mutates the graph **schema** rather than its data: specifically
+`CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, and `DROP CONSTRAINT`. These
+clauses are schema-mutating and are therefore **not** read-only, even though the
+two-word `CREATE INDEX` / `CREATE CONSTRAINT` forms begin with the `CREATE`
+keyword and the `DROP` forms contain no data-writing clause. The guard rail MUST
+detect a DDL clause independently of `QueryHasWritingClause`, because the
+read-only contract of the read subcommands forbids any schema-mutating DDL, not
+only data-writing (DML) clauses. A query that contains any DDL clause is treated as
+schema-mutating for classification purposes. The detection of DDL clauses, like all
+clause-class classification, runs on the masked normalization of the query (see
+[Literal-Aware Normalization](#literal-aware-normalization)), so a DDL keyword that
+appears only inside a string literal, a comment, or a backtick-quoted identifier
+does not trigger DDL classification.
 
 #### Literal-Aware Normalization
 
@@ -409,11 +425,11 @@ query, not on the raw string (see
 
 | Subcommand | Accepts | Rejects | Engine path |
 |------------|---------|---------|-------------|
-| `graph create` | A writing query whose only writing clauses are `CREATE` and/or `MERGE`. | Read-only queries; any query containing `SET`, `REMOVE`, `DELETE`, or `DETACH DELETE`. | Transactional write |
-| `graph query` | A read-only query (`MATCH ... RETURN`, no writing clause). | Any query for which `QueryHasWritingClause` is true (contains `CREATE`, `MERGE`, `SET`, `REMOVE`, `DELETE`, or `DETACH DELETE`). | Read |
-| `graph update` | A writing query whose writing clauses are `SET` and/or `REMOVE` (mutations on existing elements). | Read-only queries; queries containing `CREATE`, `MERGE`, `DELETE`, or `DETACH DELETE`. | Transactional write |
-| `graph delete` | A writing query whose writing clauses are `DELETE` and/or `DETACH DELETE`. | Read-only queries; queries containing `CREATE`, `MERGE`, `SET`, or `REMOVE`. | Transactional write |
-| `graph search` | A read-only query, intended for traversal and pattern matching, including variable-length paths (for example `-[*1..3]-`). | Any query for which `QueryHasWritingClause` is true. | Read |
+| `graph create` | A writing query whose only writing clauses are `CREATE` and/or `MERGE`. | Read-only queries; any query containing `SET`, `REMOVE`, `DELETE`, or `DETACH DELETE`; any DDL clause. | Transactional write |
+| `graph query` | A read-only query (`MATCH ... RETURN`, no writing clause and no DDL clause). | Any query for which `QueryHasWritingClause` is true (contains `CREATE`, `MERGE`, `SET`, `REMOVE`, `DELETE`, or `DETACH DELETE`); any query containing a DDL clause (`CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, `DROP CONSTRAINT`). | Read |
+| `graph update` | A writing query whose writing clauses are `SET` and/or `REMOVE` (mutations on existing elements). | Read-only queries; queries containing `CREATE`, `MERGE`, `DELETE`, or `DETACH DELETE`; any DDL clause. | Transactional write |
+| `graph delete` | A writing query whose writing clauses are `DELETE` and/or `DETACH DELETE`. | Read-only queries; queries containing `CREATE`, `MERGE`, `SET`, or `REMOVE`; any DDL clause. | Transactional write |
+| `graph search` | A read-only query, intended for traversal and pattern matching, including variable-length paths (for example `-[*1..3]-`). | Any query for which `QueryHasWritingClause` is true; any query containing a DDL clause. | Read |
 
 Notes:
 
@@ -443,6 +459,16 @@ Notes:
    - `graph query` accepts
      `MATCH (m) WHERE m.title = "mentions delete and set" RETURN m.key`, because
      the masked query contains no writing clause and is therefore read-only.
+5. **DDL is rejected by the read subcommands.** The read subcommands (`query` and
+   `search`) accept only read-only queries; a schema-mutating DDL clause
+   (`CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, or `DROP CONSTRAINT`) is
+   **not** read-only and is rejected with `utils.ErrValidation` (exit code 6) and
+   the message "graph query accepts only read-only queries". The read-only contract
+   forbids schema-mutating DDL, not only data-writing (DML) clauses, because a DDL
+   clause changes the graph's schema and is therefore not a read. The write
+   subcommands (`create`, `update`, `delete`) likewise reject DDL: each accepts
+   only its own data-writing clause class, and DDL is outside every one of those
+   classes (see the Rejects column above).
 
 ### Cypher Input Source and Precedence
 

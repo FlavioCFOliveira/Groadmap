@@ -7,6 +7,8 @@
 - [Command Surface](#command-surface)
 - [Server Lifecycle](#server-lifecycle)
 - [Bind Address and Port Selection](#bind-address-and-port-selection)
+- [HTTP Server Timeouts](#http-server-timeouts)
+- [Security Headers](#security-headers)
 - [Routes and Pages](#routes-and-pages)
   - [Roadmap Index Page](#roadmap-index-page)
   - [Roadmap Sprints Page](#roadmap-sprints-page)
@@ -109,10 +111,12 @@ task detail modal that displays all of the task's fields (see
    server is stopped (see [Server Lifecycle](#server-lifecycle)).
 2. The server binds to a host and a port chosen as specified in
    [Bind Address and Port Selection](#bind-address-and-port-selection). By default
-   the server binds all interfaces (`0.0.0.0`), so the read-only interface is
-   reachable from every network point of the machine. The bind host and port are
-   overridable by flag; restricting the interface to the local machine is the
-   explicit opt-in `--host 127.0.0.1`.
+   the server binds the loopback interface (`127.0.0.1`), so the read-only
+   interface is reachable only from the local machine. The bind host and port are
+   overridable by flag; exposing the interface on the network is the explicit
+   opt-in `--host 0.0.0.0` (or any other non-loopback address). When a non-loopback
+   host is bound, the server prints a warning to stderr that the interface is
+   reachable from the network.
 3. `rmp web` does **not** require the `-r` / `--roadmap` flag. The web interface
    discovers all roadmaps under `~/.roadmaps/` and lets the user drill into any
    one of them from the index page. This is the one user-facing command that
@@ -247,7 +251,9 @@ Key contract points, repeated here only to make this file self-contained
   `COMMANDS.md § Roadmap Selection (Always Required)` lists the families it
   applies to (`task`, `sprint`, `backlog`, `audit`, `stats`, `graph`); `web` is
   deliberately not in that list.
-- Flags: `--host <address>` (default `0.0.0.0`, bind all interfaces),
+- Flags: `--host <address>` (default `127.0.0.1`, loopback only; binding a
+  non-loopback host such as `0.0.0.0` exposes the interface on the network and
+  prints a warning to stderr),
   `--port <number>` (default `8787`, with the fallback behaviour in
   [Bind Address and Port Selection](#bind-address-and-port-selection)),
   `--no-open` (do not launch a browser), and `-h, --help`.
@@ -264,9 +270,13 @@ For an `rmp web` invocation the implementation:
    [Bind Address and Port Selection](#bind-address-and-port-selection)) and binds
    a TCP listener. A bind failure (for example, the port is already in use or the
    host is not assignable) is a fatal startup error (see
-   [Error Handling and Exit Codes](#error-handling-and-exit-codes)).
-3. Registers the read-only routes (see [Routes and Pages](#routes-and-pages)) and
-   starts serving.
+   [Error Handling and Exit Codes](#error-handling-and-exit-codes)). When the
+   resolved host is not a loopback address, the server prints a network-exposure
+   warning to stderr (see
+   [Bind Address and Port Selection](#bind-address-and-port-selection)).
+3. Registers the read-only routes (see [Routes and Pages](#routes-and-pages)),
+   configures the HTTP server timeouts (see
+   [HTTP Server Timeouts](#http-server-timeouts)), and starts serving.
 4. Prints to stdout the URL the server is listening on, so the user can open it
    manually if no browser is launched. The startup line is the single
    machine-readable success object described in `COMMANDS.md § Web Interface`.
@@ -287,30 +297,82 @@ database or a graph store open across requests.
 
 ## Bind Address and Port Selection
 
-1. **Default host.** The server binds all interfaces (`0.0.0.0`) by default. With
-   the default host the read-only interface is reachable from every network point
-   of the machine, not only from the local machine.
+1. **Default host.** The server binds the loopback interface (`127.0.0.1`) by
+   default. With the default host the read-only interface is reachable only from
+   the local machine, not from any other network point.
 2. **Host override.** `--host <address>` overrides the bind host. A user who wants
-   to restrict the interface to the local machine passes the explicit opt-in
-   `--host 127.0.0.1` (the loopback interface). The default binds all interfaces;
-   restricting to loopback, or binding any other specific address, is an explicit
-   user choice, and the security note in
-   [Security and Constraints](#security-and-constraints) applies.
-3. **Default port.** The default port is `8787`. When `--port` is not given, the
+   to expose the interface on the network passes the explicit opt-in
+   `--host 0.0.0.0` (all interfaces), or any other non-loopback address. Exposing
+   the interface beyond loopback is an explicit user choice, and the security note
+   in [Security and Constraints](#security-and-constraints) applies.
+3. **Network-exposure warning.** When the resolved bind host is not a loopback
+   address (it is neither `127.0.0.1`, nor `::1`, nor any other address in the
+   loopback range), the server prints a warning to stderr stating that the
+   read-only interface is reachable from the network. The warning is informational
+   only: it does not change the exit code and does not prevent the server from
+   starting. Binding a loopback address prints no such warning.
+4. **Default port.** The default port is `8787`. When `--port` is not given, the
    server attempts to bind `8787`. If `8787` is already in use, the server falls
    back to an ephemeral port chosen by the operating system (binding port `0`),
    so that `rmp web` starts successfully even when the default port is taken. The
    actual chosen port is reported in the startup line and the served URL.
-4. **Explicit port.** `--port <number>` requests a specific port. When an
+5. **Explicit port.** `--port <number>` requests a specific port. When an
    explicit port is given, the server does **not** fall back to an ephemeral
    port: if the requested port cannot be bound, the command fails with a bind
    error (see [Error Handling and Exit Codes](#error-handling-and-exit-codes)),
    because the user asked for that exact port. `--port 0` explicitly requests an
    operating-system-chosen ephemeral port and always succeeds when a port is
    available.
-5. **Port range.** A `--port` value MUST be an integer in the range `0`-`65535`.
+6. **Port range.** A `--port` value MUST be an integer in the range `0`-`65535`.
    A value outside that range, or a non-integer value, is an invalid flag value
    (`utils.ErrValidation`, exit code 6).
+
+## HTTP Server Timeouts
+
+The embedded HTTP server MUST be configured with explicit timeouts so that a slow
+or stalled client connection cannot hold server resources indefinitely. The
+`net/http` server is configured with all of the following:
+
+1. **ReadHeaderTimeout: 10 seconds.** The maximum time allowed to read a request's
+   headers. This bounds slow-header (Slowloris-style) connections.
+2. **WriteTimeout: 30 seconds.** The maximum time allowed for writing a response,
+   measured from the end of the request header read. This bounds a slow-reading
+   client that stalls the response.
+3. **IdleTimeout: 120 seconds.** The maximum time a keep-alive connection is kept
+   open while idle between requests. This bounds idle keep-alive connections.
+
+These three timeouts are mandatory. They protect the read-only server from
+resource exhaustion by slow or idle connections and apply uniformly to every
+route.
+
+## Security Headers
+
+Every HTML response the server returns MUST carry the following HTTP response
+headers. These headers harden the read-only interface against content injection,
+clickjacking, and content-type sniffing:
+
+| Header | Value |
+|--------|-------|
+| `Content-Security-Policy` | `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'` |
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `DENY` |
+| `Referrer-Policy` | `same-origin` |
+
+Notes:
+
+1. The Content-Security-Policy restricts every resource type to the server's own
+   origin (`'self'`), which is consistent with the self-contained, no-remote-origin
+   asset model (see [Self-Contained Deliverable](#self-contained-deliverable)). It
+   allows inline styles (`style-src 'self' 'unsafe-inline'`) and `data:` image
+   sources (`img-src 'self' data:`) because the vendored Tabler framework and the
+   D3.js visualisation use them; it forbids inline and remote scripts
+   (`script-src 'self'`), forbids the page from being framed (`frame-ancestors
+   'none'`), and restricts `<base>` to the same origin (`base-uri 'self'`).
+2. `X-Frame-Options: DENY` reinforces `frame-ancestors 'none'` for clients that do
+   not honour the Content-Security-Policy frame directive.
+3. The headers apply to every HTML response. The graph data endpoint, which returns
+   JSON, is additionally subject to the HTML-safe JSON encoding required in
+   [Graph Data Endpoint](#graph-data-endpoint).
 
 ## Routes and Pages
 
@@ -549,6 +611,13 @@ how the `rmp web` process itself terminates.
   exactly as `graph query` and `graph search` do (see
   `GRAPH.md § Engine Construction and Lifecycle`). It MUST NOT run any writing
   clause and MUST NOT checkpoint or truncate the write-ahead log.
+- **HTML-safe JSON.** The endpoint MUST emit HTML-safe JSON: HTML escaping MUST be
+  enabled in the JSON encoder so that the characters `<`, `>`, and `&` are
+  serialized as their Unicode escape sequences (`<`, `>`, and `&`).
+  This ensures that graph node and edge labels or property values containing those
+  characters cannot break out of a script or HTML context if the JSON is ever
+  embedded in a page, and is consistent with the output-escaping rule in
+  [Security and Constraints](#security-and-constraints).
 
 ### Static Assets
 
@@ -560,6 +629,13 @@ how the `rmp web` process itself terminates.
   request path to an arbitrary path on the host filesystem. A request for an asset
   that is not in the embedded set is answered with HTTP `404 Not Found` (see
   [Security and Constraints](#security-and-constraints)).
+- **No directory listings.** The static handler MUST NOT serve a directory
+  listing. A request for a directory path under `/static/` (for example
+  `/static/` or `/static/vendor/`) is answered with HTTP `404 Not Found`, never
+  with an index or a listing of the directory's contents. A request for an
+  individual asset file that exists in the embedded set is served normally with
+  HTTP `200 OK`. This prevents the embedded asset tree from being enumerated
+  through the server.
 
 ### Task Detail Modal
 
@@ -950,14 +1026,15 @@ Rules:
 
 ## Security and Constraints
 
-1. **Exposed to the network by default.** The server binds all interfaces
-   (`0.0.0.0`) by default, so the read-only interface is reachable from every
-   network point of the machine, not only from the local machine. Restricting the
-   interface to the local machine is the explicit opt-in `--host 127.0.0.1`
-   (the loopback interface). The interface remains read-only regardless of bind
-   address; exposing read access to the network is the default behaviour and is
-   the user's responsibility, and restricting that exposure to loopback is the
-   user's explicit choice.
+1. **Loopback by default; network exposure is opt-in.** The server binds the
+   loopback interface (`127.0.0.1`) by default, so the read-only interface is
+   reachable only from the local machine. Exposing the interface on the network is
+   the explicit opt-in `--host 0.0.0.0` (all interfaces), or any other non-loopback
+   address. When a non-loopback host is bound, the server prints a warning to
+   stderr that the interface is reachable from the network (see
+   [Bind Address and Port Selection](#bind-address-and-port-selection)). The
+   interface remains read-only regardless of bind address; exposing read access to
+   the network is an explicit user choice and the user's responsibility.
 2. **Read-only.** The interface never writes. It exposes no route that creates,
    edits, or deletes roadmap data, tasks, sprints, audit entries, or graph
    elements. The server accepts only `GET` and `HEAD`; every other method returns
@@ -994,7 +1071,23 @@ Rules:
    structure. Task data carried to the page as a JSON data island for the task
    detail modal, and graph data delivered as JSON to the visualisation, are encoded
    as JSON, not interpolated into HTML.
-7. **No new write path.** The web interface does not become a second source of
+7. **Security headers on every HTML response.** Every HTML response carries the
+   Content-Security-Policy, X-Content-Type-Options (`nosniff`), X-Frame-Options
+   (`DENY`), and Referrer-Policy (`same-origin`) headers specified in
+   [Security Headers](#security-headers). The Content-Security-Policy restricts
+   every resource to the server's own origin, consistent with the no-remote-origin
+   asset model.
+8. **HTML-safe JSON on the graph data endpoint.** The graph data endpoint emits
+   HTML-safe JSON (`<`, `>`, and `&` serialized as Unicode escape sequences), so
+   roadmap-derived graph text cannot break an HTML or script context (see
+   [Graph Data Endpoint](#graph-data-endpoint)).
+9. **No directory listings; bounded connection timeouts.** The static handler
+   never serves a directory listing: a request for a directory under `/static/`
+   returns HTTP `404` (see [Static Assets](#static-assets)). The HTTP server is
+   configured with explicit ReadHeaderTimeout, WriteTimeout, and IdleTimeout values
+   so a slow or idle client cannot exhaust server resources (see
+   [HTTP Server Timeouts](#http-server-timeouts)).
+10. **No new write path.** The web interface does not become a second source of
    truth. The CLI and its SQLite databases and GoGraph stores remain the sole
    source of truth and the sole write path; the web interface is a view over them.
 
@@ -1003,8 +1096,10 @@ Rules:
 1. `rmp web` starts a server, prints the served URL to stdout as the success
    object defined in `COMMANDS.md § Web Interface`, and (unless `--no-open` is
    given) opens the default browser at that URL. With no flags it binds
-   `0.0.0.0:8787` (all interfaces). Passing `--host 127.0.0.1` restricts the
-   bind to the loopback interface.
+   `127.0.0.1:8787` (loopback only) and prints no network-exposure warning.
+   Passing `--host 0.0.0.0` binds all interfaces and prints a warning to stderr
+   that the read-only interface is reachable from the network; the process still
+   starts and the exit-related behaviour is unchanged.
 2. `rmp web --no-open` starts the server and prints the URL without launching a
    browser.
 3. `rmp web --port 8787` when port 8787 is already in use fails with exit code 1
@@ -1106,7 +1201,9 @@ Rules:
 21. A `POST`, `PUT`, `PATCH`, or `DELETE` request to any route returns HTTP 405.
 22. A request for a `/static/...` path that is not in the embedded asset set
     returns HTTP 404, and no `/static/...` request can read a file outside the
-    embedded asset set.
+    embedded asset set. A request for a directory path under `/static/` (for
+    example `/static/` or `/static/vendor/`) returns HTTP 404 and never a directory
+    listing, while a request for an individual embedded asset file returns HTTP 200.
 23. Every page the interface serves loads all of its assets — the vendored Tabler
     CSS and JavaScript, the D3.js graph library and the d3-sankey plugin, the
     Tabler Icons webfont, the Inter font, and every other script, stylesheet, font,
@@ -1156,6 +1253,22 @@ Rules:
     newlines rather than collapsing them, while the text still wraps without forced
     horizontal scrolling and remains HTML-escaped through `html/template` (never
     rendered as raw HTML).
+33. Every HTML response carries the security headers: `Content-Security-Policy`
+    with the value `default-src 'self'; script-src 'self'; style-src 'self'
+    'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self';
+    frame-ancestors 'none'; base-uri 'self'`, `X-Content-Type-Options: nosniff`,
+    `X-Frame-Options: DENY`, and `Referrer-Policy: same-origin` (see
+    [Security Headers](#security-headers)).
+34. The embedded HTTP server is configured with `ReadHeaderTimeout` of 10 seconds,
+    `WriteTimeout` of 30 seconds, and `IdleTimeout` of 120 seconds (see
+    [HTTP Server Timeouts](#http-server-timeouts)).
+35. `GET /roadmaps/{name}/graph/data` returns JSON in which the characters `<`,
+    `>`, and `&` appearing in graph-derived strings are emitted as their Unicode
+    escape sequences (`<`, `>`, `&`), proving HTML escaping is enabled
+    in the JSON encoder (see [Graph Data Endpoint](#graph-data-endpoint)).
+36. Binding a non-loopback host (for example `rmp web --host 0.0.0.0`) prints a
+    network-exposure warning to stderr, while binding a loopback host (the default,
+    or `rmp web --host 127.0.0.1`) prints no such warning.
 
 ## See Also
 

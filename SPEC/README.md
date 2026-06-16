@@ -24,7 +24,12 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Self-contained web binary (offline, no CDN, embedded asset categories) | `WEB.md § Self-Contained Deliverable` |
 | Responsive / mobile-first web design | `WEB.md § Responsive and Mobile-First Design` |
 | Web UI framework (Tabler admin shell, dark theme) | `WEB.md § UI Framework` |
+| Web HTTP security headers (CSP, X-Frame-Options, etc.) | `WEB.md § Security Headers` |
+| Web HTTP server timeouts (read-header, write, idle) | `WEB.md § HTTP Server Timeouts` |
 | Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
+| Free-text control-character constraint (CWE-150 / Trojan Source) | `MODELS.md § Free-Text Control-Character Constraint` |
+| Audit result-set cap (`MaxAuditLimit`) | `DATABASE.md § Audit Result Limit` |
+| Migration idempotency (ALTER TABLE ADD COLUMN guard) | `DATABASE.md § Migration Idempotency (ALTER TABLE ADD COLUMN)` |
 | `graph` command syntax / subcommands | `COMMANDS.md § Graph Management` |
 | Graph query result JSON / property-type mapping | `DATA_FORMATS.md § Graph Query Result` |
 | Cypher input via flag or stdin | `GRAPH.md § Cypher Input Source and Precedence` |
@@ -41,6 +46,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | State transitions (Sprint) | `STATE_MACHINE.md § Sprint State Machine` |
 | System design / modules | `ARCHITECTURE.md` |
 | Data directory layout / permissions | `ARCHITECTURE.md § Directory Structure` |
+| Filesystem safety (no symlink following, CWE-59) | `ARCHITECTURE.md § Security Guarantees` |
 | Filesystem layout migration (per-roadmap directories) | `ARCHITECTURE.md § Filesystem Layout Migration` |
 | Error handling / sentinel errors | `ARCHITECTURE.md § Error Handling` |
 | Exit codes | `ARCHITECTURE.md § Exit Codes` |
@@ -129,7 +135,8 @@ To prevent drift across SPEC files, the following topics have a single authorita
 
 - Roadmap data directory: `~/.roadmaps/` with permissions `0700`.
 - Per-roadmap home directory: `~/.roadmaps/<name>/` with permissions `0700`. The directory name is the roadmap name and is the container for all files the application uses for that roadmap.
-- Individual roadmap databases: `~/.roadmaps/<name>/project.db` with permissions `0600` (sidecars `project.db-wal`, `project.db-shm` alongside).
+- Individual roadmap databases: `~/.roadmaps/<name>/project.db` with permissions `0600`, created with mode `0600` from the outset (no umask-derived window). The SQLite sidecars `project.db-wal` and `project.db-shm` live alongside and use the same `0600` permissions.
+- Neither the data directory nor any roadmap home directory may be a symbolic link; `rmp` refuses to follow a symlink when creating, opening, or migrating a roadmap directory (CWE-59). See `ARCHITECTURE.md § Directory Structure` and `ARCHITECTURE.md § Security Guarantees`.
 - Per-roadmap knowledge graph store: `~/.roadmaps/<name>/graph/` (a directory) with permissions `0700`, created on first use of the `graph` command. See `GRAPH.md § Persistence Layout`.
 - Roadmaps in the legacy `~/.roadmaps/<name>.db` layout are migrated automatically to the current layout at startup. See `ARCHITECTURE.md § Filesystem Layout Migration`.
 
