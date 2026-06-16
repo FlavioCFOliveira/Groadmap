@@ -34,6 +34,21 @@ var (
 	reCreate = regexp.MustCompile(`(?i)\b(CREATE|MERGE)\b`)
 	reMutate = regexp.MustCompile(`(?i)\b(SET|REMOVE)\b`)
 	reDelete = regexp.MustCompile(`(?i)\b(DELETE|DETACH)\b`)
+	// reDDL matches the schema-mutating DDL clauses (SPEC/GRAPH.md
+	// § Operation Classes): CREATE INDEX, DROP INDEX, CREATE CONSTRAINT,
+	// DROP CONSTRAINT. The CREATE/DROP keyword and the INDEX/CONSTRAINT
+	// keyword may be separated by arbitrary whitespace, so the matcher is
+	// whitespace-tolerant (\s+ between the two words). It is applied to the
+	// literal-masked query, so a DDL keyword appearing only inside a string
+	// literal, comment, or backtick identifier cannot trigger it.
+	//
+	// GoGraph exports cypher/ir.IsDDL, but it is case- and whitespace-
+	// sensitive (it returns false for "create index" or "CREATE   INDEX"),
+	// so it cannot be used as a security guard rail: a writer could bypass
+	// it with non-canonical casing or spacing. A Groadmap-local regex mirrors
+	// the existing reCreate/reMutate/reDelete discriminators and is robust to
+	// both, matching how the guard rail classifies every other clause.
+	reDDL = regexp.MustCompile(`(?i)\b(CREATE|DROP)\s+(INDEX|CONSTRAINT)\b`)
 )
 
 // graphQueryResult is the JSON shape returned by read subcommands and
@@ -425,6 +440,29 @@ func maskCypherLiterals(query string) string {
 func validateGuardRail(subcmd, allowed, query string) error {
 	masked := maskCypherLiterals(query)
 	isWrite := cypher.QueryHasWritingClause(masked)
+	isDDL := reDDL.MatchString(masked)
+
+	// DDL (CREATE INDEX, DROP INDEX, CREATE CONSTRAINT, DROP CONSTRAINT) is a
+	// schema-mutating clause class that is outside every subcommand's accepted
+	// class (SPEC/GRAPH.md § Per-Subcommand Validation Rules note 5): the read
+	// subcommands accept only read-only queries and DDL is not read-only, and
+	// the write subcommands each accept only their own data-writing clause.
+	// QueryHasWritingClause does not flag DDL (and the two-word CREATE INDEX /
+	// CREATE CONSTRAINT forms would otherwise satisfy the create accept check),
+	// so DDL is rejected up front for ALL subcommands, with the per-subcommand
+	// message that names the class each one does accept.
+	if isDDL {
+		switch subcmd {
+		case "query", "search":
+			return fmt.Errorf("%w: graph %s accepts only %s queries", utils.ErrValidation, subcmd, allowed)
+		case "create":
+			return fmt.Errorf("%w: graph create accepts only CREATE/MERGE queries", utils.ErrValidation)
+		case "update":
+			return fmt.Errorf("%w: graph update accepts only SET/REMOVE queries", utils.ErrValidation)
+		case "delete":
+			return fmt.Errorf("%w: graph delete accepts only DELETE/DETACH DELETE queries", utils.ErrValidation)
+		}
+	}
 
 	switch subcmd {
 	case "create":
