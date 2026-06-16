@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
@@ -36,13 +37,25 @@ func serve(opts options) error {
 		return fmt.Errorf("%w: cannot read data directory ~/.roadmaps: %v", utils.ErrDatabase, err)
 	}
 
-	// 2. Bind a TCP listener, applying the port-selection rules.
+	// 2. Ensure every served roadmap's SQLite schema is current. The web
+	//    server's per-request loaders open each database with
+	//    OpenReadOnly/query_only and therefore CANNOT run migrations (finding
+	//    #43: a read must never rewrite a stale-schema database). If `rmp web`
+	//    is the first command run after a binary upgrade that bumped the
+	//    schema, the read-only queries would reference columns the stale file
+	//    lacks and the affected pages would fail. Migrating once here, before
+	//    any read-only connection is opened, keeps the per-request path
+	//    strictly read-only while guaranteeing automatic, no-input migration
+	//    (SPEC/WEB.md § Startup Schema Migration).
+	migrateRoadmapsAtStartup()
+
+	// 3. Bind a TCP listener, applying the port-selection rules.
 	ln, err := bindListener(opts)
 	if err != nil {
 		return err
 	}
 
-	// 3. Determine the actual bound port (which differs from the requested
+	// 4. Determine the actual bound port (which differs from the requested
 	//    one under the ephemeral fallback or --port 0) and print the URL.
 	actualPort := ln.Addr().(*net.TCPAddr).Port
 	url := "http://" + net.JoinHostPort(opts.host, strconv.Itoa(actualPort))
@@ -62,15 +75,46 @@ func serve(opts options) error {
 		return perr
 	}
 
-	// 4. Best-effort browser launch. A failed launch is not fatal: the URL
-	//    has already been printed (SPEC/WEB.md § Server Lifecycle, step 5).
+	// 5. Best-effort browser launch. A failed launch is not fatal: the URL
+	//    has already been printed (SPEC/WEB.md § Server Lifecycle).
 	if !opts.noOpen {
 		openBrowser(url)
 	}
 
-	// 5. Serve and wait for a termination signal, then shut down
+	// 6. Serve and wait for a termination signal, then shut down
 	//    gracefully.
 	return runServer(ln)
+}
+
+// migrateRoadmapsAtStartup brings every existing roadmap's SQLite schema up to
+// the current version exactly once, at server startup, before any read-only
+// request connection is opened. It opens each roadmap via the normal writable
+// db.Open path — which runs RunMigrations and is idempotent (a no-op when the
+// schema is already current) — and closes it immediately. This is the web
+// server's ONLY write to the databases; per-request handlers open read-only
+// (db.OpenReadOnly/query_only) and never migrate (SPEC/WEB.md § Startup Schema
+// Migration; Read-Only Data Flow — finding #43).
+//
+// Best-effort and non-fatal: a roadmap that cannot be listed, opened, or
+// migrated is logged to stderr and skipped so the server still starts for the
+// remaining roadmaps. The stale roadmap simply surfaces its underlying error
+// on its own routes, exactly as it would have without this step. This mirrors
+// the best-effort tone of the legacy-layout sweep and the network-exposure
+// warning.
+func migrateRoadmapsAtStartup() {
+	names, err := utils.ListRoadmaps()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: cannot list roadmaps for startup schema migration: %v\n", err)
+		return
+	}
+	for _, name := range names {
+		database, err := db.Open(name)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: startup schema migration skipped for roadmap %q: %v\n", name, err)
+			continue
+		}
+		_ = database.Close() // #nosec G104 -- best-effort startup migration; close error is non-actionable
+	}
 }
 
 // bindListener resolves the bind address and returns a listening TCP

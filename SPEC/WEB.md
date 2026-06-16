@@ -6,6 +6,7 @@
 - [Functional Requirements](#functional-requirements)
 - [Command Surface](#command-surface)
 - [Server Lifecycle](#server-lifecycle)
+- [Startup Schema Migration](#startup-schema-migration)
 - [Bind Address and Port Selection](#bind-address-and-port-selection)
 - [HTTP Server Timeouts](#http-server-timeouts)
 - [Security Headers](#security-headers)
@@ -277,7 +278,11 @@ For an `rmp web` invocation the implementation:
    `0700` if absent, consistent with the CLI). The filesystem layout migration
    sweep runs at startup before this, as on every `rmp` invocation (see
    `ARCHITECTURE.md § Filesystem Layout Migration`).
-2. Resolves the bind host and port (see
+2. Migrates the SQLite schema of every existing roadmap to the current schema
+   version, automatically and without user input, before binding the listener or
+   serving any request (see
+   [Startup Schema Migration](#startup-schema-migration)).
+3. Resolves the bind host and port (see
    [Bind Address and Port Selection](#bind-address-and-port-selection)) and binds
    a TCP listener. A bind failure (for example, the port is already in use or the
    host is not assignable) is a fatal startup error (see
@@ -285,16 +290,16 @@ For an `rmp web` invocation the implementation:
    resolved host is not a loopback address, the server prints a network-exposure
    warning to stderr (see
    [Bind Address and Port Selection](#bind-address-and-port-selection)).
-3. Registers the read-only routes (see [Routes and Pages](#routes-and-pages)),
+4. Registers the read-only routes (see [Routes and Pages](#routes-and-pages)),
    configures the HTTP server timeouts (see
    [HTTP Server Timeouts](#http-server-timeouts)), and starts serving.
-4. Prints to stdout the URL the server is listening on, so the user can open it
+5. Prints to stdout the URL the server is listening on, so the user can open it
    manually if no browser is launched. The startup line is the single
    machine-readable success object described in `COMMANDS.md § Web Interface`.
-5. Unless `--no-open` is given, attempts to open the user's default browser at
+6. Unless `--no-open` is given, attempts to open the user's default browser at
    the served URL. A failure to launch a browser is **not** fatal: the server
    keeps running and the URL has already been printed.
-6. Serves requests until the process receives an interrupt signal (`SIGINT`, for
+7. Serves requests until the process receives an interrupt signal (`SIGINT`, for
    example `Ctrl+C`) or a termination signal (`SIGTERM`). On either signal the
    server shuts down gracefully: it stops accepting new connections, allows
    in-flight requests a brief bounded period to complete, closes any graph store
@@ -305,6 +310,69 @@ command whose process is expected to keep running rather than complete a single
 operation and exit. Each incoming request opens the data it needs read-only,
 serves the response, and releases the handle; the server does not hold a roadmap
 database or a graph store open across requests.
+
+## Startup Schema Migration
+
+At startup, before it binds the listener and before it serves any request,
+`rmp web` ensures that every existing roadmap's SQLite schema is migrated to the
+current schema version. This guarantees that the per-request read-only handlers
+never query a stale-schema database. Because the per-request data loaders open
+each database strictly read-only (see
+[Tasks and Sprints from SQLite](#tasks-and-sprints-from-sqlite)), they never run
+a schema migration themselves; the startup step is therefore where the web
+interface satisfies the project-wide rule that any invocation needing the current
+schema migrates to it automatically, without user input.
+
+1. **One-time startup step.** The schema migration runs once, during startup, as
+   part of the server-lifecycle step that precedes binding the listener (see
+   [Server Lifecycle](#server-lifecycle)). It does not run per request.
+2. **Migrates every existing roadmap.** The server discovers every roadmap under
+   `~/.roadmaps/`, using the same discovery rule the index page uses (each
+   immediate subdirectory of `~/.roadmaps/` that contains a `project.db`; see
+   [Roadmap Index Page](#roadmap-index-page) and
+   `ARCHITECTURE.md § Directory Structure`, location rule 9). For each discovered
+   roadmap, the server opens that roadmap's `project.db` through the **normal
+   writable open path**, which runs the schema migrations defined in
+   `VERSION.md § Migrations`, and then closes the database immediately. The open
+   is performed solely to run the migrations; the server holds no database open
+   after this step (see [Server Lifecycle](#server-lifecycle)).
+3. **Idempotent.** Opening a database through the writable path runs the schema
+   migrations, which are idempotent: a database already at the current schema
+   version is left unchanged, so the startup migration is a no-op for any roadmap
+   that is already current and only rewrites a database whose schema is behind the
+   current version (see `VERSION.md § Migrations` and
+   `DATABASE.md § Migration Idempotency (ALTER TABLE ADD COLUMN)`).
+4. **Automatic, no user input.** The startup migration happens automatically. It
+   requires no flag, no confirmation, and no other user input. A user who starts
+   `rmp web` after upgrading the binary therefore reaches a fully usable interface
+   without being asked to migrate anything first.
+5. **Ordered before any read-only connection.** The startup migration is the only
+   path on which the web interface writes to a roadmap database, and it completes
+   before the server binds the listener and before any per-request read-only
+   connection is opened. There is therefore no contention between the startup
+   migration and the live read-only handlers: by the time a request is served,
+   every database is already at the current schema version and is opened only
+   read-only (see [Read-Only Data Flow](#read-only-data-flow)).
+6. **Per-roadmap failure is best-effort and non-fatal.** If a roadmap's database
+   cannot be migrated (for example, it is unreadable, locked by another writer, or
+   corrupt), the server logs an informational message to stderr naming that
+   roadmap and the reason, and continues with the remaining roadmaps. A migration
+   failure for one roadmap does **not** prevent the server from starting and does
+   **not** prevent the other roadmaps from being served. This mirrors the
+   best-effort, non-fatal tone of the legacy-layout migration sweep's
+   conflict-skip warning and of the network-exposure warning (see
+   `ARCHITECTURE.md § Filesystem Layout Migration` and
+   [Bind Address and Port Selection](#bind-address-and-port-selection)). A roadmap
+   that could not be migrated remains at its on-disk schema version; a later
+   request that needs a column the stale schema lacks surfaces as an internal read
+   error (HTTP 500) on the affected route, exactly as any other read failure does
+   (see [Routes and Pages](#routes-and-pages)).
+7. **Knowledge-graph store unaffected.** This startup step migrates only the
+   SQLite schema. The roadmap's GoGraph knowledge-graph store under
+   `~/.roadmaps/<name>/graph/` is a separate persistence layer with its own
+   on-open recovery and is not touched by the SQLite schema migration; it
+   continues to be opened read-only on demand by graph requests (see
+   [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
 
 ## Bind Address and Port Selection
 
@@ -854,7 +922,14 @@ re-presents an earlier, now-stale response in its place.
 2. The server opens the database for reading only. It MUST NOT modify rows, MUST
    NOT write an audit entry, and MUST NOT alter the schema. A web read produces no
    audit-log entry, because the audit log records changes and a read is not a
-   change (see `DATABASE.md § audit Table`).
+   change (see `DATABASE.md § audit Table`). In particular, a per-request read
+   MUST NOT run a schema migration: the read-only open path opens the database
+   with SQLite `query_only` set, so it can never rewrite a stale-schema database.
+   The schema is brought to the current version once, at startup, before any
+   read-only connection is opened (see
+   [Startup Schema Migration](#startup-schema-migration)); the startup migration
+   is the only path on which the web interface writes to a roadmap database, and
+   it is the only place the schema is altered.
 3. Each request opens the database, reads what it needs, renders the page, and
    releases the handle. Concurrency against SQLite follows the existing model in
    `IMPLEMENTATION.md § Concurrency Model`; a web read is an ordinary reader and
@@ -1477,6 +1552,24 @@ Rules:
     `33% - P:8 A:3 C:18 - T:55` (18 of 55 completed rounds to 33%).
 40. Every sprint card under the Próximos and Concluídos tabs of the roadmap
     sprints page displays that sprint's total number of tasks.
+41. When `rmp web` starts against a roadmap whose on-disk `project.db` is at an
+    older schema version than the binary expects, the server migrates that
+    roadmap's schema to the current version automatically at startup, before
+    binding the listener and without any user input, so that the roadmap's sprints
+    page, tasks page, and sprint page subsequently return HTTP 200 rather than an
+    HTTP 500 caused by a missing column. A roadmap already at the current schema
+    version is left unchanged (the startup migration is a no-op for it). Per-request
+    handlers open every database read-only (SQLite `query_only`) and never run a
+    migration; the startup migration is the only path on which the web interface
+    writes to a roadmap database (see
+    [Startup Schema Migration](#startup-schema-migration) and
+    [Tasks and Sprints from SQLite](#tasks-and-sprints-from-sqlite)).
+42. When a single roadmap cannot be migrated at startup (for example its database
+    is unreadable, locked, or corrupt), `rmp web` logs an informational message to
+    stderr naming that roadmap and still starts, serving every other roadmap; the
+    failed roadmap remains at its on-disk schema, and a later request that needs a
+    column its stale schema lacks surfaces as an HTTP 500 on the affected route
+    (see [Startup Schema Migration](#startup-schema-migration)).
 
 ## See Also
 
@@ -1489,6 +1582,9 @@ Rules:
   `GRAPH.md § Synchronous Checkpoint on Write`
 - Roadmap discovery, data directory layout, and permissions →
   `ARCHITECTURE.md § Directory Structure`
+- SQLite schema migrations the startup step runs, and their idempotency →
+  `VERSION.md § Migrations` and
+  `DATABASE.md § Migration Idempotency (ALTER TABLE ADD COLUMN)`
 - Web module responsibilities and command lifecycle →
   `ARCHITECTURE.md § Modules and Responsibilities` and
   `ARCHITECTURE.md § Command Lifecycle`

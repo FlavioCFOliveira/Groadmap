@@ -225,8 +225,16 @@ pinning requirements are in `BUILD.md § Go Toolchain`.
 - Reads the same on-disk data the CLI reads: tasks and sprints from each
   roadmap's `project.db` (via the existing read queries in `DATABASE.md`) and the
   knowledge graph from each roadmap's `graph/` store (via the GoGraph engine's
-  read path, exactly as `graph query`/`search` open it). It performs **no** write
-  and triggers **no** graph checkpoint.
+  read path, exactly as `graph query`/`search` open it). Every per-request handler
+  opens its data **read-only**: it performs **no** write to a roadmap database, no
+  audit entry, no schema change, and triggers **no** graph checkpoint.
+- Performs one writing step, at startup only: before binding the listener it opens
+  each existing roadmap's `project.db` through the normal writable open path to run
+  the SQLite schema migrations (idempotent; automatic; no user input), then closes
+  it. This guarantees the per-request read-only handlers never query a stale-schema
+  database. The startup migration is the only path on which `rmp web` writes to a
+  roadmap database, and it precedes any read-only connection (see
+  `WEB.md § Startup Schema Migration` and `VERSION.md § Migrations`).
 - Validates roadmap names taken from the URL path against the central
   roadmap-name rules before using them to resolve any filesystem path, so a
   crafted path cannot traverse outside `~/.roadmaps/` (see Security Guarantees).

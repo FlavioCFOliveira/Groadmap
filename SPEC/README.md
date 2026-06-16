@@ -20,6 +20,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Web sprint page (`/roadmaps/{name}/sprints/{id}`) | `WEB.md § Roadmap Sprint Page` |
 | Web shared sprint presentation sub-template (status summary line, detail block shared by sprint page and Actual tab) | `WEB.md § Shared Sprint Presentation Sub-Template` |
 | Web task detail modal (read-only task popup) | `WEB.md § Task Detail Modal` |
+| Web startup schema migration (automatic, no-input, before serving) | `WEB.md § Startup Schema Migration` |
 | `rmp web` command syntax / flags | `COMMANDS.md § Web Interface` |
 | Web graph data endpoint JSON shape | `DATA_FORMATS.md § Graph View Data` |
 | Self-contained web binary (offline, no CDN, embedded asset categories) | `WEB.md § Self-Contained Deliverable` |
