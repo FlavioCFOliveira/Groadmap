@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"strconv"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
@@ -171,6 +170,11 @@ func auditList(args []string) error {
 		until = &normalized
 	}
 	if l, ok := result.Flags["Limit"].(int); ok {
+		// Bound the limit to 1..MaxAuditLimit (SPEC/COMMANDS.md § Audit List).
+		// Out-of-range values are rejected with exit code 6.
+		if l < 1 || l > models.MaxAuditLimit {
+			return fmt.Errorf("%w: --limit must be between 1 and %d (got %d)", utils.ErrValidation, models.MaxAuditLimit, l)
+		}
 		limit = l
 	}
 
@@ -215,10 +219,12 @@ func auditHistory(args []string) error {
 	}
 	entityType := remaining[0]
 
-	// Parse entity ID
-	entityID, err := strconv.Atoi(remaining[1])
+	// Parse and validate entity ID as a positive int in 1..MaxInt32, consistent
+	// with `task get` (SPEC/COMMANDS.md § Entity History). Non-positive or
+	// out-of-range values are rejected with exit code 6.
+	entityID, err := utils.ValidateIDString(remaining[1], "entity")
 	if err != nil {
-		return fmt.Errorf("%w: invalid entity ID: %s", utils.ErrInvalidInput, remaining[1])
+		return err
 	}
 
 	database, err := db.OpenExisting(roadmapName)

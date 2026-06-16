@@ -10,6 +10,48 @@ import (
 // MaxInt32 is the maximum valid ID value (prevents integer overflow).
 const MaxInt32 = math.MaxInt32 // 2,147,483,647
 
+// ValidateNoControlChars rejects free-text input that contains control or
+// Unicode bidirectional/format code points, returning an ErrValidation-wrapped
+// error (exit 6) otherwise nil. It enforces SPEC/MODELS.md § Free-Text
+// Control-Character Constraint, blocking terminal escape-sequence injection
+// (CWE-150) and Trojan Source attacks (CVE-2021-42574).
+//
+// Rejected code points:
+//   - ASCII control bytes below 0x20, EXCEPT TAB (0x09), LF (0x0A) and CR (0x0D)
+//   - DEL (0x7F)
+//   - Unicode bidi/format controls: U+200E, U+200F, U+202A-U+202E,
+//     U+2066-U+2069, and U+FEFF
+//
+// Legitimate Unicode (accents, emoji, CJK, etc.) is accepted unchanged.
+func ValidateNoControlChars(value, fieldName string) error {
+	for _, r := range value {
+		switch {
+		case r == '\t' || r == '\n' || r == '\r':
+			// Explicitly permitted whitespace controls.
+			continue
+		case r < 0x20 || r == 0x7F:
+			return fmt.Errorf("%w: %s: control characters are not allowed", ErrValidation, fieldName)
+		case isBidiOrFormatControl(r):
+			return fmt.Errorf("%w: %s: control characters are not allowed", ErrValidation, fieldName)
+		}
+	}
+	return nil
+}
+
+// isBidiOrFormatControl reports whether r is one of the Unicode
+// bidirectional/format code points forbidden in free-text fields.
+func isBidiOrFormatControl(r rune) bool {
+	switch r {
+	case 0x200E, // LEFT-TO-RIGHT MARK
+		0x200F,                                 // RIGHT-TO-LEFT MARK
+		0x202A, 0x202B, 0x202C, 0x202D, 0x202E, // embedding/override controls
+		0x2066, 0x2067, 0x2068, 0x2069, // isolate controls
+		0xFEFF: // zero-width no-break space / BOM
+		return true
+	}
+	return false
+}
+
 // ValidateID validates that an ID is positive and within safe limits.
 // Returns an error if the ID is invalid, nil otherwise.
 //

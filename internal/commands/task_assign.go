@@ -36,6 +36,17 @@ func taskAssign(args []string) error {
 	if specialist == "" {
 		return fmt.Errorf("%w: specialist name cannot be empty", utils.ErrValidation)
 	}
+	// Reject control / bidi / format code points (SPEC/MODELS.md § Free-Text
+	// Control-Character Constraint).
+	if err := utils.ValidateNoControlChars(specialist, "specialists"); err != nil {
+		return err
+	}
+	// The comma is reserved as the list separator: an individual specialist name
+	// MUST NOT contain a comma, or it would be silently split into two names on
+	// read-back (SPEC/MODELS.md § Specialists List-Separator Constraint).
+	if strings.Contains(specialist, ",") {
+		return fmt.Errorf("%w: specialist name cannot contain commas", utils.ErrValidation)
+	}
 
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {

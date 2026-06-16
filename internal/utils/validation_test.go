@@ -194,3 +194,68 @@ func TestValidateIDString(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateNoControlChars_AcceptsLegitimateText is a regression gate for the
+// Free-Text Control-Character Constraint (SPEC/MODELS.md): legitimate Unicode —
+// accents, emoji, CJK — and the three permitted whitespace controls (TAB, LF,
+// CR) must be accepted unchanged (findings #82, #83).
+func TestValidateNoControlChars_AcceptsLegitimateText(t *testing.T) {
+	accepted := []struct {
+		name  string
+		value string
+	}{
+		{"empty", ""},
+		{"ascii", "Refactor the auth module"},
+		{"accents", "Implementação de migração à base"},
+		{"emoji", "Ship the release 🚀 today"},
+		{"cjk", "ユーザー認証を実装する 实现用户认证"},
+		{"tab", "column1\tcolumn2"},
+		{"newline", "line one\nline two"},
+		{"carriage-return", "line one\r\nline two"},
+		{"mixed-permitted-whitespace", "a\tb\nc\rd"},
+	}
+	for _, tc := range accepted {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := ValidateNoControlChars(tc.value, "title"); err != nil {
+				t.Errorf("ValidateNoControlChars(%q) = %v, want nil", tc.value, err)
+			}
+		})
+	}
+}
+
+// TestValidateNoControlChars_RejectsControlAndBidi is a regression gate that the
+// forbidden control / DEL / bidi-format code points are rejected with an
+// ErrValidation-wrapped error (exit 6) (SPEC/MODELS.md; findings #82, #83).
+func TestValidateNoControlChars_RejectsControlAndBidi(t *testing.T) {
+	rejected := []struct {
+		name  string
+		value string
+	}{
+		{"NUL", "before\x00after"},
+		{"ESC", "before\x1bafter"},
+		{"BEL", "alert\x07here"},
+		{"unit-separator", "a\x1fb"},
+		{"DEL", "before\x7fafter"},
+		{"LRM-U+200E", "text\u200emore"},
+		{"RLM-U+200F", "text\u200fmore"},
+		{"LRE-U+202A", "text\u202amore"},
+		{"RLO-U+202E", "Trojan\u202eSource"},
+		{"LRI-U+2066", "text\u2066more"},
+		{"PDI-U+2069", "text\u2069more"},
+		{"BOM-U+FEFF", "text\ufeffmore"},
+	}
+	for _, tc := range rejected {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateNoControlChars(tc.value, "title")
+			if err == nil {
+				t.Fatalf("ValidateNoControlChars(%q) = nil, want error", tc.value)
+			}
+			if !errors.Is(err, ErrValidation) {
+				t.Errorf("ValidateNoControlChars(%q) error = %v, want wrapped ErrValidation", tc.value, err)
+			}
+			if !strings.Contains(err.Error(), "title") {
+				t.Errorf("error %q should name the field", err.Error())
+			}
+		})
+	}
+}

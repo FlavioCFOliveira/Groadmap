@@ -159,6 +159,34 @@ func taskEdit(args []string) error {
 		}
 	}
 
+	// Reject control / bidi / format code points in every free-text field that is
+	// being set (SPEC/MODELS.md § Free-Text Control-Character Constraint).
+	for _, field := range []string{"title", "functional_requirements", "technical_requirements", "acceptance_criteria", "specialists"} {
+		v, ok := updates[field]
+		if !ok {
+			continue
+		}
+		s, ok := v.(string)
+		if !ok {
+			continue
+		}
+		if err := utils.ValidateNoControlChars(s, field); err != nil {
+			return err
+		}
+	}
+
+	// Specialists list-separator constraint: no individual name may contain a
+	// comma (SPEC/MODELS.md § Specialists List-Separator Constraint).
+	if v, ok := updates["specialists"]; ok {
+		if s, ok := v.(string); ok && s != "" {
+			for _, name := range models.ParseSpecialists(s) {
+				if strings.Contains(name, ",") {
+					return fmt.Errorf("%w: specialist name cannot contain commas", utils.ErrValidation)
+				}
+			}
+		}
+	}
+
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {
 		return err

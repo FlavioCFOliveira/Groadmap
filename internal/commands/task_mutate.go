@@ -181,6 +181,13 @@ func taskSetStatus(args []string) error {
 	if completionSummary != nil && len(*completionSummary) > models.MaxTaskCompletionSummary {
 		return fmt.Errorf("%w: completion_summary exceeds maximum length of %d characters", utils.ErrFieldTooLarge, models.MaxTaskCompletionSummary)
 	}
+	// Reject control / bidi / format code points (SPEC/MODELS.md § Free-Text
+	// Control-Character Constraint).
+	if completionSummary != nil {
+		if err := utils.ValidateNoControlChars(*completionSummary, "completion_summary"); err != nil {
+			return err
+		}
+	}
 
 	database, err := db.OpenExisting(roadmapName)
 	if err != nil {

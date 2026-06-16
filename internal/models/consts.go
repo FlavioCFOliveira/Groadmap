@@ -28,4 +28,18 @@ const (
 const (
 	// MaxSprintDescriptionLength is the maximum length for sprint descriptions
 	MaxSprintDescriptionLength = 2048
+
+	// MaxSprintMaxTasks is the maximum value accepted for a sprint's --max-tasks
+	// capacity cap. A value above this is rejected with exit code 6
+	// (SPEC/COMMANDS.md § Create/Update Sprint).
+	MaxSprintMaxTasks = 10000
+)
+
+// Audit result limits
+const (
+	// MaxAuditLimit is the maximum number of audit entries that may be requested
+	// in a single list operation. It bounds the CLI --limit flag (exit 6 when
+	// exceeded) and is reused as the server-side cap in the DB layer
+	// (SPEC/COMMANDS.md § Audit List, SPEC/DATABASE.md § Audit Result Limit).
+	MaxAuditLimit = 500
 )

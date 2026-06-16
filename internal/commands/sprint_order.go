@@ -161,11 +161,12 @@ func sprintMoveTo(args []string) error {
 	}
 
 	position, err := strconv.Atoi(remaining[2])
-	if err != nil || position < 0 {
-		// 'position' is a non-negative-integer domain value, so any invalid
-		// form — non-numeric or negative — is a value-validation failure
-		// (exit 6 / ErrValidation per SPEC/ARCHITECTURE.md).
-		return fmt.Errorf("%w: position must be a non-negative integer", utils.ErrValidation)
+	if err != nil || position < 0 || position > utils.MaxInt32 {
+		// 'position' is a 0-based domain value bounded to [0, MaxInt32], so any
+		// invalid form — non-numeric, negative, or above the upper bound — is a
+		// value-validation failure (exit 6 / ErrValidation per
+		// SPEC/COMMANDS.md § Move Task to Position).
+		return fmt.Errorf("%w: Position must be an integer between 0 and %d", utils.ErrValidation, utils.MaxInt32)
 	}
 
 	database, err := db.OpenExisting(roadmapName)

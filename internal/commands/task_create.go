@@ -99,6 +99,34 @@ func taskCreate(args []string) error {
 		return fmt.Errorf("%w: --acceptance-criteria", utils.ErrRequired)
 	}
 
+	// Reject control / bidi / format code points in all free-text fields
+	// (SPEC/MODELS.md § Free-Text Control-Character Constraint). Performed after
+	// TrimSpace, mirroring the existing field-validation order.
+	for _, f := range []struct {
+		value string
+		name  string
+	}{
+		{title, "title"},
+		{functionalReqs, "functional-requirements"},
+		{technicalReqs, "technical-requirements"},
+		{acceptanceCriteria, "acceptance-criteria"},
+		{specialists, "specialists"},
+	} {
+		if err := utils.ValidateNoControlChars(f.value, f.name); err != nil {
+			return err
+		}
+	}
+
+	// Specialists list-separator constraint: an individual specialist name MUST
+	// NOT contain a comma (SPEC/MODELS.md § Specialists List-Separator Constraint).
+	if specialists != "" {
+		for _, name := range models.ParseSpecialists(specialists) {
+			if strings.Contains(name, ",") {
+				return fmt.Errorf("%w: specialist name cannot contain commas", utils.ErrValidation)
+			}
+		}
+	}
+
 	// Validate --parent value is a positive integer. The flag parser has
 	// already parsed the token as an int, so a value < 1 is an out-of-range
 	// value, not a syntax error: ErrValidation (exit 6) per SPEC.

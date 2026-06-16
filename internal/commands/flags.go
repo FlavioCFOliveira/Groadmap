@@ -121,7 +121,13 @@ func (fp *FlagParser) Parse(args []string) (*ParseResult, error) {
 		if hasInline {
 			value = inlineValue
 		} else {
-			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+			// The next token is the value unless it looks like a flag. A token
+			// beginning with '-' is normally treated as a flag, NOT a value — but
+			// a negative integer (e.g. "-1") is a legitimate value for an int
+			// flag. Accepting it here lets out-of-range negatives reach the
+			// flag's range validation and surface as the documented exit 6,
+			// instead of a misleading "requires a value" exit 2 (finding #64).
+			if i+1 >= len(args) || (strings.HasPrefix(args[i+1], "-") && !(def.Type == "int" && isNegativeInteger(args[i+1]))) {
 				return nil, fmt.Errorf("%w: %s requires a value", utils.ErrRequired, flagName)
 			}
 			value = args[i+1]
@@ -300,7 +306,7 @@ var (
 	AuditListFlags = []FlagDef{
 		{Name: "--operation", Short: "-o", Field: "Operation", Type: "string"},
 		{Name: "--entity-type", Short: "-e", Field: "EntityType", Type: "string"},
-		{Name: "--entity-id", Field: "EntityID", Type: "int", DisplayName: "entity ID"},
+		{Name: "--entity-id", Field: "EntityID", Type: "int", DisplayName: "entity ID", Validator: validateAuditEntityID},
 		{Name: "--since", Field: "Since", Type: "string"},
 		{Name: "--until", Field: "Until", Type: "string"},
 		{Name: "--limit", Short: "-l", Field: "Limit", Type: "int", DisplayName: "limit"},
@@ -312,3 +318,32 @@ var (
 		{Name: "--until", Field: "Until", Type: "string"},
 	}
 )
+
+// isNegativeInteger reports whether s is a syntactically valid negative integer
+// token ("-" followed by one or more digits), so the flag parser can accept it
+// as an int-flag value rather than mistaking it for a flag.
+func isNegativeInteger(s string) bool {
+	if len(s) < 2 || s[0] != '-' {
+		return false
+	}
+	for _, r := range s[1:] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// validateAuditEntityID bounds the audit --entity-id flag to a positive integer
+// in 1..MaxInt32 (SPEC/COMMANDS.md § Audit List). A non-positive or out-of-range
+// value is rejected with exit code 6 (ErrValidation).
+func validateAuditEntityID(parsed any) error {
+	id, ok := parsed.(int)
+	if !ok {
+		return nil
+	}
+	if id < 1 || id > utils.MaxInt32 {
+		return fmt.Errorf("%w: --entity-id must be between 1 and %d (got %d)", utils.ErrValidation, utils.MaxInt32, id)
+	}
+	return nil
+}

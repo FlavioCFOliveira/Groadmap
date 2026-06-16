@@ -68,11 +68,16 @@ func sprintCreate(args []string) error {
 		// redundant doubled prefix (finding #54).
 		return fmt.Errorf("%w: --description", utils.ErrRequired)
 	}
+	// Reject control / bidi / format code points (SPEC/MODELS.md § Free-Text
+	// Control-Character Constraint).
+	if err := utils.ValidateNoControlChars(description, "description"); err != nil {
+		return err
+	}
 
 	var maxTasks *int
 	if mt, ok := result.Flags["MaxTasks"].(int); ok {
-		if mt < 1 {
-			return fmt.Errorf("%w: --max-tasks must be a positive integer", utils.ErrValidation)
+		if mt < 1 || mt > models.MaxSprintMaxTasks {
+			return fmt.Errorf("%w: --max-tasks must be between 1 and %d (got %d)", utils.ErrValidation, models.MaxSprintMaxTasks, mt)
 		}
 		maxTasks = &mt
 	}
@@ -244,12 +249,19 @@ func sprintUpdate(args []string) error {
 	if description != "" && len(description) > models.MaxSprintDescription {
 		return fmt.Errorf("%w: description exceeds maximum length of %d characters", utils.ErrFieldTooLarge, models.MaxSprintDescription)
 	}
+	// Reject control / bidi / format code points (SPEC/MODELS.md § Free-Text
+	// Control-Character Constraint).
+	if description != "" {
+		if err := utils.ValidateNoControlChars(description, "description"); err != nil {
+			return err
+		}
+	}
 
 	var maxTasks *int
 	if hasMaxTasks {
 		mt := result.Flags["MaxTasks"].(int)
-		if mt < 1 {
-			return fmt.Errorf("%w: --max-tasks must be a positive integer", utils.ErrValidation)
+		if mt < 1 || mt > models.MaxSprintMaxTasks {
+			return fmt.Errorf("%w: --max-tasks must be between 1 and %d (got %d)", utils.ErrValidation, models.MaxSprintMaxTasks, mt)
 		}
 		maxTasks = &mt
 	}
