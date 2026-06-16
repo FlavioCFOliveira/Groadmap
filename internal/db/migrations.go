@@ -140,14 +140,40 @@ func (db *DB) runMigration(migration Migration) error {
 	return nil
 }
 
+// columnExists reports whether table already has a column named column.
+//
+// SQLite's `ALTER TABLE … ADD COLUMN` is not idempotent: re-running it for an
+// existing column raises "duplicate column name". Because a migration may be
+// applied to a database that has already been partially or fully migrated, every
+// ADD COLUMN step guards itself with this check and skips the ALTER when the
+// column is already present (SPEC/DATABASE.md § Migration Idempotency). The query
+// is parameterized; table is a compile-time literal at every call site.
+func columnExists(tx *sql.Tx, table, column string) (bool, error) {
+	var count int
+	query := fmt.Sprintf("SELECT COUNT(*) FROM pragma_table_info('%s') WHERE name = ?", table) // #nosec G201 -- table is a constant literal at every call site; column value is parameterized
+	if err := tx.QueryRow(query, column).Scan(&count); err != nil {
+		return false, fmt.Errorf("checking column %s.%s: %w", table, column, err)
+	}
+	return count > 0, nil
+}
+
 // migrateV1_0_0_toV1_1_0 adds the position column to sprint_tasks table.
 // It initializes existing tasks with sequential positions based on their order.
+//
+// Idempotent: the ADD COLUMN is guarded by columnExists, so re-applying the
+// migration on a database that already has the column is a no-op (not an error).
 func migrateV1_0_0_toV1_1_0(tx *sql.Tx) error {
-	// Add position column with DEFAULT 0
-	if _, err := tx.Exec(
-		`ALTER TABLE sprint_tasks ADD COLUMN position INTEGER NOT NULL DEFAULT 0`,
-	); err != nil {
-		return fmt.Errorf("adding position column: %w", err)
+	// Add position column with DEFAULT 0 only when it does not already exist.
+	exists, err := columnExists(tx, "sprint_tasks", "position")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		if _, err := tx.Exec(
+			`ALTER TABLE sprint_tasks ADD COLUMN position INTEGER NOT NULL DEFAULT 0`,
+		); err != nil {
+			return fmt.Errorf("adding position column: %w", err)
+		}
 	}
 
 	// Add index for sprint task ordering
@@ -192,10 +218,17 @@ func migrateV1_1_0_toV1_2_0(tx *sql.Tx) error {
 
 // migrateV1_3_0_toV1_4_0 adds the max_tasks column to the sprints table.
 // The column is optional (NULL by default) and enables sprint capacity management.
-// The migration is idempotent: ALTER TABLE … ADD COLUMN is a no-op when the column already exists.
+// Idempotent: the ADD COLUMN is guarded by columnExists, so re-applying the
+// migration on a database that already has the column is a no-op (not an error).
 func migrateV1_3_0_toV1_4_0(tx *sql.Tx) error {
-	_, err := tx.Exec(`ALTER TABLE sprints ADD COLUMN max_tasks INTEGER`)
+	exists, err := columnExists(tx, "sprints", "max_tasks")
 	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	if _, err := tx.Exec(`ALTER TABLE sprints ADD COLUMN max_tasks INTEGER`); err != nil {
 		return fmt.Errorf("adding max_tasks column: %w", err)
 	}
 	return nil
@@ -203,12 +236,19 @@ func migrateV1_3_0_toV1_4_0(tx *sql.Tx) error {
 
 // migrateV1_4_0_toV1_5_0 adds the parent_task_id column and its index to the tasks table.
 // The column is optional (NULL by default) and enables sub-task hierarchy.
-// The migration is idempotent: ALTER TABLE … ADD COLUMN is a no-op when the column already exists.
+// Idempotent: the ADD COLUMN is guarded by columnExists and the index uses
+// CREATE INDEX IF NOT EXISTS, so re-applying the migration is a no-op.
 func migrateV1_4_0_toV1_5_0(tx *sql.Tx) error {
-	if _, err := tx.Exec(
-		`ALTER TABLE tasks ADD COLUMN parent_task_id INTEGER REFERENCES tasks(id)`,
-	); err != nil {
-		return fmt.Errorf("adding parent_task_id column: %w", err)
+	exists, err := columnExists(tx, "tasks", "parent_task_id")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		if _, err := tx.Exec(
+			`ALTER TABLE tasks ADD COLUMN parent_task_id INTEGER REFERENCES tasks(id)`,
+		); err != nil {
+			return fmt.Errorf("adding parent_task_id column: %w", err)
+		}
 	}
 
 	if _, err := tx.Exec(
@@ -251,12 +291,19 @@ CREATE TABLE IF NOT EXISTS task_dependencies (
 
 // migrateV1_2_0_toV1_3_0 adds the completion_summary column to the tasks table.
 // The column is optional (NULL by default) and capped at 4096 characters.
-// The migration is idempotent: ALTER TABLE … ADD COLUMN is a no-op when the column already exists in SQLite.
+// Idempotent: the ADD COLUMN is guarded by columnExists, so re-applying the
+// migration on a database that already has the column is a no-op (not an error).
 func migrateV1_2_0_toV1_3_0(tx *sql.Tx) error {
-	_, err := tx.Exec(
-		`ALTER TABLE tasks ADD COLUMN completion_summary TEXT CHECK(completion_summary IS NULL OR length(completion_summary) <= 4096)`,
-	)
+	exists, err := columnExists(tx, "tasks", "completion_summary")
 	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	if _, err := tx.Exec(
+		`ALTER TABLE tasks ADD COLUMN completion_summary TEXT CHECK(completion_summary IS NULL OR length(completion_summary) <= 4096)`,
+	); err != nil {
 		return fmt.Errorf("adding completion_summary column: %w", err)
 	}
 	return nil

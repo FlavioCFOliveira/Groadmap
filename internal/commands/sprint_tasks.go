@@ -267,7 +267,12 @@ func sprintAddTasks(args []string) error {
 		return fmt.Errorf("%w: task(s) not found: %v", utils.ErrNotFound, missing)
 	}
 
-	// Enforce capacity limit when max_tasks is set.
+	// Friendly capacity pre-check when max_tasks is set. This is a fast
+	// feedback path only: the authoritative, race-free enforcement lives inside
+	// AddTasksToSprint's transaction (SPEC/DATABASE.md § Transactional Atomicity
+	// Guarantees #3, finding #67), which closes the TOCTOU window that this
+	// standalone read cannot. The error contract here matches the transactional
+	// one so the message is identical regardless of which check trips first.
 	if sprint.MaxTasks != nil {
 		activeTasks, activeErr := database.GetActiveSprintTasks(ctx, sprintID)
 		if activeErr != nil {

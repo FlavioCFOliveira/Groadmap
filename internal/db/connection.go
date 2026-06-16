@@ -135,6 +135,30 @@ func Open(roadmapName string) (*DB, error) {
 		isNew = true
 	}
 
+	// For a NEW database, pre-create the file with 0600 BEFORE sql.Open touches
+	// it, so the descriptor never exists at umask-derived (potentially
+	// world-readable) permissions (finding #77, SPEC/DATABASE.md § file
+	// permissions). O_EXCL guarantees we are the creator; if a concurrent
+	// process created it first we fall back to treating it as existing. The
+	// post-schema os.Chmod + VerifyPermissions below remain as belt-and-braces.
+	if isNew {
+		f, err := os.OpenFile(dbPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, utils.DBFilePerm)
+		if err != nil {
+			if os.IsExist(err) {
+				// Lost the race: another process created it. Treat as existing.
+				isNew = false
+			} else {
+				return nil, fmt.Errorf("pre-creating database %s: %w", roadmapName, err)
+			}
+		} else {
+			// Close the descriptor immediately; sql.Open reopens the path. The
+			// file now exists at 0600 with no umask window.
+			if cerr := f.Close(); cerr != nil {
+				return nil, fmt.Errorf("closing pre-created database %s: %w", roadmapName, cerr)
+			}
+		}
+	}
+
 	// sql.Open is documented as not actually establishing a connection — it
 	// only validates the driver — so wrapping it in retryWithBackoff was
 	// dead weight. Any failure here is immediate and not retryable.
@@ -194,6 +218,20 @@ func Open(roadmapName string) (*DB, error) {
 		}); err != nil {
 			db.Close() // #nosec G104 -- cleanup call in error path, original error returned
 			return nil, fmt.Errorf("running migrations: %w", err)
+		}
+	}
+
+	// Tighten the WAL/SHM sidecars to 0600 (finding #78, SPEC/DATABASE.md §
+	// file permissions). WAL mode is enabled in configureConnection and the
+	// schema-creation/migration writes above create project.db-wal /
+	// project.db-shm; SQLite creates these with the process umask, so they can
+	// be world-readable despite holding the same data pages as project.db.
+	// Best-effort: a sidecar may legitimately be absent (e.g. checkpointed
+	// away), so a missing file or chmod error is ignored.
+	for _, suffix := range []string{"-wal", "-shm"} {
+		p := dbPath + suffix
+		if _, err := os.Stat(p); err == nil {
+			_ = os.Chmod(p, utils.DBFilePerm) // #nosec G104 -- best-effort hardening; absence/failure is non-fatal
 		}
 	}
 

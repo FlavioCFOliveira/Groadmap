@@ -1303,21 +1303,30 @@ func (db *DB) UpdateSprintStatus(ctx context.Context, id int, status models.Spri
 }
 
 // DeleteSprint deletes a sprint by ID.
+//
+// Resetting the member tasks' status to BACKLOG, deleting the sprint row
+// (cascade removes sprint_tasks), and writing the SPRINT_DELETE audit entry all
+// run inside a single transaction so the database never reaches a partial state
+// where tasks remain marked SPRINT while their sprint or sprint_tasks rows are
+// gone (SPEC/DATABASE.md § Transactional Atomicity Guarantees, finding #65).
+// WithTransaction already provides lock-retry, so no outer retryWithBackoff is
+// needed.
 func (db *DB) DeleteSprint(ctx context.Context, id int) error {
-	return retryWithBackoff("delete sprint", func() error {
+	now := utils.NowISO8601()
+
+	return db.WithTransaction(func(tx *sql.Tx) error {
 		// First reset task status for tasks in this sprint
-		_, err := db.ExecContext(ctx,
+		if _, err := tx.Exec(
 			`UPDATE tasks SET status = ? WHERE id IN (
 				SELECT task_id FROM sprint_tasks WHERE sprint_id = ?
 			)`,
 			models.StatusBacklog, id,
-		)
-		if err != nil {
+		); err != nil {
 			return fmt.Errorf("resetting task statuses: %w", err)
 		}
 
 		// Delete sprint (cascade will remove sprint_tasks entries)
-		result, err := db.ExecContext(ctx, "DELETE FROM sprints WHERE id = ?", id)
+		result, err := tx.Exec("DELETE FROM sprints WHERE id = ?", id)
 		if err != nil {
 			return fmt.Errorf("deleting sprint: %w", err)
 		}
@@ -1330,7 +1339,7 @@ func (db *DB) DeleteSprint(ctx context.Context, id int) error {
 			return fmt.Errorf("%w: sprint %d", utils.ErrNotFound, id)
 		}
 
-		return nil
+		return LogAuditTx(tx, models.OpSprintDelete, models.EntitySprint, id, now)
 	})
 }
 
@@ -1497,6 +1506,43 @@ func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int)
 	return db.WithTransaction(func(tx *sql.Tx) error {
 		now := utils.NowISO8601()
 
+		// Authoritative capacity enforcement (finding #67). When max_tasks is
+		// set, the current active-member count and this batch must not exceed
+		// the cap. Performing the check INSIDE the insert transaction closes the
+		// TOCTOU window that exists when the CLI checks capacity in a separate
+		// read transaction: two concurrent `sprint add-tasks` could each pass a
+		// standalone pre-check and both insert, overflowing the cap. The single
+		// SQLite writer serializes these transactions, so the committed member
+		// count can never exceed max_tasks (SPEC/DATABASE.md § Transactional
+		// Atomicity Guarantees #3). The CLI keeps a friendly pre-check for fast
+		// feedback, but this transaction is the source of truth.
+		var maxTasks sql.NullInt64
+		if err := tx.QueryRow(
+			"SELECT max_tasks FROM sprints WHERE id = ?",
+			sprintID,
+		).Scan(&maxTasks); err != nil {
+			return fmt.Errorf("querying sprint capacity: %w", err)
+		}
+		if maxTasks.Valid {
+			var activeCount int
+			if err := tx.QueryRow(
+				`SELECT COUNT(*) FROM sprint_tasks st
+				   INNER JOIN tasks t ON t.id = st.task_id
+				 WHERE st.sprint_id = ? AND t.status IN `+sqlActiveTaskStatuses,
+				sprintID,
+			).Scan(&activeCount); err != nil {
+				return fmt.Errorf("counting active sprint tasks: %w", err)
+			}
+			if activeCount+len(taskIDs) > int(maxTasks.Int64) {
+				// Preserve the exact CLI error contract (utils.ErrValidation ->
+				// exit 6) and message format so callers see identical behavior
+				// whether the friendly pre-check or this authoritative check
+				// trips first.
+				return fmt.Errorf("%w: adding %d task(s) would exceed sprint #%d capacity (%d/%d tasks active)",
+					utils.ErrValidation, len(taskIDs), sprintID, activeCount, maxTasks.Int64)
+			}
+		}
+
 		// Get current max position for this sprint within the transaction
 		var maxPos sql.NullInt64
 		err := tx.QueryRow(
@@ -1638,15 +1684,22 @@ func (db *DB) MoveTasksBetweenSprints(ctx context.Context, fromID, toID int, tas
 }
 
 // RemoveTasksFromSprint removes tasks from a sprint.
+//
+// Deleting the affected sprint_tasks rows and resetting those tasks' status to
+// BACKLOG run inside a single transaction so sprint_tasks membership and
+// tasks.status can never diverge at any committed state (SPEC/DATABASE.md §
+// Transactional Atomicity Guarantees, finding #66). WithTransaction already
+// provides lock-retry, so no outer retryWithBackoff is needed.
 func (db *DB) RemoveTasksFromSprint(ctx context.Context, taskIDs []int) error {
 	if len(taskIDs) == 0 {
 		return nil
 	}
 
-	return retryWithBackoff("remove tasks from sprint", func() error {
+	return db.WithTransaction(func(tx *sql.Tx) error {
 		// Batch both writes so large id sets stay within SQLite's variable
 		// limit. Delete the sprint membership first, then reset task status to
-		// BACKLOG via the cached template (OpRemoveTasksFromSprint).
+		// BACKLOG via the cached template (OpRemoveTasksFromSprint). Both passes
+		// run through the same tx so they commit or roll back together.
 
 		// Delete from sprint_tasks. The membership DELETE is not one of the
 		// cached operations, so build its IN-clause from cached placeholders.
@@ -1657,7 +1710,7 @@ func (db *DB) RemoveTasksFromSprint(ctx context.Context, taskIDs []int) error {
 			for _, id := range chunk {
 				args = append(args, id)
 			}
-			if _, err := db.ExecContext(ctx, query, args...); err != nil {
+			if _, err := tx.Exec(query, args...); err != nil {
 				return fmt.Errorf("removing tasks from sprint: %w", err)
 			}
 			return nil
@@ -1673,7 +1726,7 @@ func (db *DB) RemoveTasksFromSprint(ctx context.Context, taskIDs []int) error {
 			for _, id := range chunk {
 				args = append(args, id)
 			}
-			if _, err := db.ExecContext(ctx, query, args...); err != nil {
+			if _, err := tx.Exec(query, args...); err != nil {
 				return fmt.Errorf("updating task statuses: %w", err)
 			}
 			return nil
@@ -1790,6 +1843,14 @@ func (db *DB) GetAuditEntries(ctx context.Context, f *AuditFilter) ([]models.Aud
 	if f == nil {
 		f = &AuditFilter{}
 	}
+	// Defense-in-depth server-side hard cap (finding #64). The CLI already
+	// rejects out-of-range --limit values (SPEC/DATABASE.md § Audit Result
+	// Limit), but a programmatic caller could pass 0 (unbounded) or a value
+	// above MaxAuditLimit. Clamp here so the query is never issued with an
+	// unbounded or larger-than-MaxAuditLimit LIMIT, mirroring ListTasks.
+	if f.Limit <= 0 || f.Limit > models.MaxAuditLimit {
+		f.Limit = models.MaxAuditLimit
+	}
 	// Build the query with strings.Builder so we don't allocate a new
 	// backing string for every appended clause.
 	var qb strings.Builder
@@ -1819,10 +1880,10 @@ func (db *DB) GetAuditEntries(ctx context.Context, f *AuditFilter) ([]models.Aud
 	}
 
 	qb.WriteString(" ORDER BY performed_at DESC")
-	if f.Limit > 0 {
-		qb.WriteString(" LIMIT ?")
-		args = append(args, f.Limit)
-	}
+	// f.Limit is always > 0 here (clamped above), so the LIMIT clause is
+	// always present and bounded by MaxAuditLimit.
+	qb.WriteString(" LIMIT ?")
+	args = append(args, f.Limit)
 	if f.Offset > 0 {
 		qb.WriteString(" OFFSET ?")
 		args = append(args, f.Offset)

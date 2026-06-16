@@ -139,6 +139,78 @@ func TestOpenReadOnly_NoMigrationNoWrites(t *testing.T) {
 	}
 }
 
+// ==================== FILE PERMISSION TESTS ====================
+
+// TestOpenCreatesDBWith0600 verifies a freshly created project.db has exactly
+// 0600 permissions, with no umask-derived window in which it was more permissive
+// (finding #77, SPEC/DATABASE.md § file permissions). HOME is redirected to a
+// temp dir so the test is hermetic.
+func TestOpenCreatesDBWith0600(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	roadmapName := "permcheck"
+
+	db, err := Open(roadmapName)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	dbPath, err := utils.GetRoadmapPath(roadmapName)
+	if err != nil {
+		t.Fatalf("GetRoadmapPath: %v", err)
+	}
+	info, err := os.Stat(dbPath)
+	if err != nil {
+		t.Fatalf("stat project.db: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != os.FileMode(utils.DBFilePerm) {
+		t.Errorf("project.db permissions = %o, want %o", perm, utils.DBFilePerm)
+	}
+}
+
+// TestOpenChmodsWALSidecars verifies the WAL/SHM sidecars are tightened to 0600
+// after the database is opened and written (finding #78, SPEC/DATABASE.md § file
+// permissions). The WAL is created by the schema-creation write under WAL mode.
+func TestOpenChmodsWALSidecars(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	roadmapName := "walperm"
+
+	db, err := Open(roadmapName)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	// Force a write so the WAL sidecar definitely exists, then reopen so Open's
+	// post-setup chmod runs over the present sidecars.
+	if _, err := db.Exec("INSERT INTO _metadata (key, value) VALUES ('probe', 'x')"); err != nil {
+		db.Close()
+		t.Fatalf("probe write: %v", err)
+	}
+	db.Close()
+
+	db2, err := Open(roadmapName)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer db2.Close()
+
+	dbPath, err := utils.GetRoadmapPath(roadmapName)
+	if err != nil {
+		t.Fatalf("GetRoadmapPath: %v", err)
+	}
+
+	for _, suffix := range []string{"-wal", "-shm"} {
+		p := dbPath + suffix
+		info, statErr := os.Stat(p)
+		if statErr != nil {
+			// A checkpointed-away sidecar may legitimately be absent.
+			continue
+		}
+		if perm := info.Mode().Perm(); perm != os.FileMode(utils.DBFilePerm) {
+			t.Errorf("%s permissions = %o, want %o", p, perm, utils.DBFilePerm)
+		}
+	}
+}
+
 // ==================== CONNECTION CONFIG TESTS ====================
 
 func TestConfigureConnection(t *testing.T) {
