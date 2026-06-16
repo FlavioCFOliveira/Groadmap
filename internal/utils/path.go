@@ -59,12 +59,41 @@ func GetDataDir() (string, error) {
 	return dataDir, nil
 }
 
+// assertNotSymlink refuses to operate on a path that already exists as a
+// symbolic link. SPEC/ARCHITECTURE.md (Security Guarantees / Directory
+// Structure) mandates that ~/.roadmaps and each roadmap home directory MUST NOT
+// be symbolic links: rmp must refuse rather than follow a symlink, because the
+// permission-hardening (os.Chmod) and the database write would otherwise be
+// redirected through the link to a target outside ~/.roadmaps.
+//
+// os.Lstat does NOT follow symlinks, so it observes the link itself rather than
+// its target. A non-existent path is fine (it will be created as a real
+// directory); only an existing symlink is refused. Any other stat error is
+// surfaced unchanged so genuine I/O failures are not masked.
+func assertNotSymlink(path string) error {
+	fi, err := os.Lstat(path)
+	if err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%w: %s is a symbolic link; refusing to use it as a roadmap directory", ErrInvalidInput, path)
+	}
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 // EnsureDataDir creates the data directory if it doesn't exist.
 // Sets permissions to 0700 (owner only) for security.
 // Verifies that permissions were set correctly after creation.
 func EnsureDataDir() error {
 	dataDir, err := GetDataDir()
 	if err != nil {
+		return err
+	}
+
+	// Refuse to follow a symlink planted at ~/.roadmaps: the os.Chmod below
+	// would otherwise harden permissions on the link's external target
+	// (finding #75).
+	if err := assertNotSymlink(dataDir); err != nil {
 		return err
 	}
 
@@ -196,6 +225,13 @@ func EnsureRoadmapDir(name string) error {
 
 	dir, err := GetRoadmapDir(name)
 	if err != nil {
+		return err
+	}
+
+	// Refuse to follow a symlink planted at ~/.roadmaps/<name>: the os.Chmod
+	// below and the subsequent project.db write would otherwise be redirected
+	// through the link to a target outside ~/.roadmaps (finding #72).
+	if err := assertNotSymlink(dir); err != nil {
 		return err
 	}
 

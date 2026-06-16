@@ -58,6 +58,18 @@ func migrateLegacyLayout(warn *os.File) error {
 		return err
 	}
 
+	// Refuse to operate on a symlinked data directory BEFORE the os.Chmod
+	// below: if ~/.roadmaps is itself a symbolic link, the chmod would harden
+	// permissions on the link's external target (finding #75). The migration
+	// sweep runs at startup before any command, so this is the first place a
+	// symlinked ~/.roadmaps is touched; it must refuse rather than follow the
+	// link, consistent with EnsureDataDir (SPEC/ARCHITECTURE.md Security
+	// Guarantees / Directory Structure). This is a refuse-condition, surfaced
+	// as ErrInvalidInput (exit 6), not a per-roadmap skip.
+	if err := assertNotSymlink(dataDir); err != nil {
+		return err
+	}
+
 	entries, err := os.ReadDir(dataDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -170,6 +182,17 @@ func migrateOneRoadmap(dataDir, name string, warn *os.File) error {
 	//    subsequent Chmod (re)applies and the later VerifyPermissions confirms
 	//    the 0700 posture on it. Step 2 has already guaranteed project.db is
 	//    absent, so reusing the directory cannot clobber an existing database.
+	// Refuse to migrate through a symlink planted at ~/.roadmaps/<name>: the
+	// MkdirAll/Chmod/Rename below would otherwise redirect the migrated
+	// database through the link to a target outside ~/.roadmaps (finding #74).
+	// SPEC/ARCHITECTURE.md forbids a roadmap directory being a symbolic link;
+	// consistent with the per-roadmap error handling, returning here causes
+	// this one roadmap to be SKIPPED with a non-fatal warning while the sweep
+	// continues with the remaining candidates.
+	if err := assertNotSymlink(roadmapDir); err != nil {
+		return fmt.Errorf("%w: %w", err, ErrDatabase)
+	}
+
 	if err := os.MkdirAll(roadmapDir, DataDirPerm); err != nil {
 		return fmt.Errorf("creating roadmap directory %s: %v: %w", roadmapDir, err, ErrDatabase)
 	}
