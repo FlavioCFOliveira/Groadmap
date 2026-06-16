@@ -28,9 +28,9 @@ import (
 //
 // The three sprint slices are disjoint partitions of the roadmap's sprints by
 // status (SPEC/WEB.md § Roadmap Sprints Page):
-//   - SprintsUpcoming: PENDING sprints, ascending id (predicted execution order).
+//   - SprintsUpcoming: PENDING sprints, ascending sprint Order (next to execute first).
 //   - SprintsCurrent:  OPEN sprints (zero, one, or more), ascending id.
-//   - SprintsClosed:   CLOSED sprints, closed_at descending (nil/empty last).
+//   - SprintsClosed:   CLOSED sprints, descending sprint Order (last executed first).
 //
 // ModalTasks carries the tasks for which the page renders a task detail modal:
 // the OPEN sprints' member tasks (those shown clickable on the Actual tab),
@@ -58,15 +58,86 @@ type tasksData struct {
 	Tasks  []models.Task
 }
 
+// sprintCompletion is the precomputed per-sprint completion summary the shared
+// sprint presentation sub-template renders as its status summary line. It is
+// derived ONLY from the sprint's own loaded member tasks (no extra DB query),
+// using the shared models.CalculateSprintSummary categorisation so it never
+// diverges from models.CalculateSprintShowResult (SPEC/WEB.md § Shared Sprint
+// Presentation Sub-Template, sprint status summary line). Precomputing it keeps
+// the template declarative: the template reads fields instead of computing.
+type sprintCompletion struct {
+	Pending    int // P: tasks in BACKLOG or SPRINT.
+	InProgress int // A ("Abertas"): tasks in DOING or TESTING.
+	Completed  int // C: tasks in COMPLETED.
+	Total      int // T: total member tasks.
+	Pct        int // completion percentage, rounded to the nearest integer (0 when Total == 0).
+}
+
+// newSprintCompletion builds the completion summary for one sprint from its
+// loaded member tasks. It reuses models.CalculateSprintSummary (the same
+// categorisation models.CalculateSprintShowResult encodes) so the web summary
+// and the CLI sprint report agree exactly.
+func newSprintCompletion(tasks []models.Task) sprintCompletion {
+	summary := models.CalculateSprintSummary(tasks)
+	return sprintCompletion{
+		Pending:    summary.Pending,
+		InProgress: summary.InProgress,
+		Completed:  summary.Completed,
+		Total:      summary.TotalTasks,
+		Pct:        summary.CompletionPercentage(),
+	}
+}
+
+// Line renders the sprint status summary line in the exact documented format
+// `<pct>% - P:<p> A:<a> C:<c> - T:<t>` (for example `33% - P:8 A:3 C:18 - T:55`).
+// It is the single place the format string lives, so both call sites of the
+// shared sub-template produce a byte-identical line (SPEC/WEB.md § Shared Sprint
+// Presentation Sub-Template, sprint status summary line).
+func (c sprintCompletion) Line() string {
+	return fmt.Sprintf("%d%% - P:%d A:%d C:%d - T:%d",
+		c.Pct, c.Pending, c.InProgress, c.Completed, c.Total)
+}
+
 // sprintView pairs a sprint with its ordered member tasks. Tasks preserves
 // the planned in-sprint execution order (sprint_tasks position order) and
 // carries each task's full record, so the Actual tab and the sprint page can
-// show every task's status without a second lookup. Field order places the
-// slice header before the embedded Sprint value to keep the pointer-scan
-// prefix minimal (govet fieldalignment).
+// show every task's status without a second lookup. Summary is the precomputed
+// completion summary the Actual tab's shared sub-template renders. Field order
+// places the slice header before the embedded Sprint value to keep the
+// pointer-scan prefix minimal (govet fieldalignment).
 type sprintView struct {
-	Tasks  []models.Task
-	Sprint models.Sprint
+	Tasks   []models.Task
+	Sprint  models.Sprint
+	Summary sprintCompletion
+}
+
+// Detail returns the shared context object the "sprintDetail" sub-template
+// consumes for one OPEN sprint on the Actual tab. Both call sites (the Actual
+// tab and the single sprint page) feed the sub-template the identical shape, so
+// a sprint renders identically in both places (SPEC/WEB.md § Shared Sprint
+// Presentation Sub-Template). The roadmap Name is threaded through so the
+// sub-template can build sprint links.
+//
+// The value receiver is deliberate: html/template invokes this method on a
+// (copied) range element on the Actual tab, and a pointer receiver would not be
+// in the value's method set, so the template call would silently fail.
+//
+//nolint:gocritic // value receiver required by html/template (see comment above)
+func (v sprintView) Detail(name string) sprintDetail {
+	return sprintDetail{Name: name, Sprint: v.Sprint, Tasks: v.Tasks, Summary: v.Summary}
+}
+
+// sprintDetail is the single context shape the shared "sprintDetail"
+// sub-template renders. The Roadmap Sprint Page and each OPEN sprint on the
+// Actual tab both build one of these and hand it to the same sub-template, so
+// the full sprint detail block is byte-identical everywhere it appears
+// (SPEC/WEB.md § Shared Sprint Presentation Sub-Template; Acceptance Criterion
+// 38).
+type sprintDetail struct {
+	Name    string
+	Tasks   []models.Task
+	Sprint  models.Sprint
+	Summary sprintCompletion
 }
 
 // sprintPageData is the view model handed to the roadmap sprint template. It
@@ -74,10 +145,25 @@ type sprintView struct {
 // in-sprint execution order, each clickable to open the read-only task detail
 // modal (SPEC/WEB.md § Roadmap Sprint Page). It is read-only.
 type sprintPageData struct {
-	Name   string
-	Chrome chrome
-	Tasks  []models.Task
-	Sprint models.Sprint
+	Name    string
+	Chrome  chrome
+	Tasks   []models.Task
+	Sprint  models.Sprint
+	Summary sprintCompletion
+}
+
+// Detail returns the shared context object the "sprintDetail" sub-template
+// consumes for the single sprint page, identical in shape to the one the Actual
+// tab feeds the same sub-template (SPEC/WEB.md § Shared Sprint Presentation
+// Sub-Template).
+//
+// The value receiver is deliberate: renderHTML passes a sprintPageData value
+// (not a pointer) to ExecuteTemplate, so a pointer-receiver Detail would not be
+// in the dot's method set and the sprint.html template call would fail.
+//
+//nolint:gocritic // value receiver required by html/template (see comment above)
+func (d sprintPageData) Detail() sprintDetail {
+	return sprintDetail{Name: d.Name, Sprint: d.Sprint, Tasks: d.Tasks, Summary: d.Summary}
 }
 
 // graphView is the JSON shape returned by the graph data endpoint
@@ -129,7 +215,11 @@ func loadSprints(ctx context.Context, name string) (sprintsData, error) {
 		if terr != nil {
 			return sprintsData{}, terr
 		}
-		views = append(views, sprintView{Sprint: sprints[i], Tasks: orderedTasks})
+		views = append(views, sprintView{
+			Sprint:  sprints[i],
+			Tasks:   orderedTasks,
+			Summary: newSprintCompletion(orderedTasks),
+		})
 	}
 
 	upcoming, current, closed := classifySprints(views)
@@ -219,7 +309,12 @@ func loadSprint(ctx context.Context, name string, id int) (sprintPageData, error
 		return sprintPageData{}, err
 	}
 
-	return sprintPageData{Name: name, Sprint: *sprint, Tasks: orderedTasks}, nil
+	return sprintPageData{
+		Name:    name,
+		Sprint:  *sprint,
+		Tasks:   orderedTasks,
+		Summary: newSprintCompletion(orderedTasks),
+	}, nil
 }
 
 // sprintOrderedTasks resolves a sprint's member tasks in the planned in-sprint
@@ -234,14 +329,17 @@ func sprintOrderedTasks(ctx context.Context, database *db.DB, sprintID int) ([]m
 	return database.GetSprintTasksFull(ctx, sprintID, nil, false)
 }
 
-// classifySprints partitions a roadmap's sprints into the three detail-page
-// tabs by status and orders each group as the detail page presents it
-// (SPEC/WEB.md § Roadmap Detail Page; Acceptance Criterion 11):
-//   - upcoming: PENDING, ascending id (predicted execution order; the next
-//     sprint to start appears first).
+// classifySprints partitions a roadmap's sprints into the three sprints-page
+// tabs by status and orders each group as the page presents it (SPEC/WEB.md
+// § Roadmap Sprints Page; Acceptance Criterion 12):
+//   - upcoming: PENDING, ascending sprint Order (the unique execution order;
+//     the next sprint to execute, lowest Order, appears first).
 //   - current:  OPEN, ascending id.
-//   - closed:   CLOSED, closed_at descending; a sprint with a nil or empty
-//     closed_at sorts last, with descending id as the tiebreak.
+//   - closed:   CLOSED, descending sprint Order (the last in execution order,
+//     highest Order, appears first).
+//
+// Sprint Order is a positive integer unique across the roadmap (MODELS.md
+// § Sprint), so the ordering is total and needs no tiebreak.
 //
 // A sprint whose status is none of PENDING/OPEN/CLOSED is dropped from all
 // groups; the sprint status enum is closed (MODELS.md § Enums), so this is
@@ -263,47 +361,16 @@ func classifySprints(views []sprintView) (upcoming, current, closed []sprintView
 	}
 
 	sort.SliceStable(upcoming, func(i, j int) bool {
-		return upcoming[i].Sprint.ID < upcoming[j].Sprint.ID
+		return upcoming[i].Sprint.Order < upcoming[j].Sprint.Order
 	})
 	sort.SliceStable(current, func(i, j int) bool {
 		return current[i].Sprint.ID < current[j].Sprint.ID
 	})
 	sort.SliceStable(closed, func(i, j int) bool {
-		return closedSprintBefore(&closed[i].Sprint, &closed[j].Sprint)
+		return closed[i].Sprint.Order > closed[j].Sprint.Order
 	})
 
 	return upcoming, current, closed
-}
-
-// closedSprintBefore reports whether closed sprint a should sort before b in
-// the Concluídos tab: most recently closed first (closed_at descending). A
-// sprint with no usable closed_at value sorts after any sprint that has one;
-// when neither has a closed_at, or the two closed_at values are equal, the
-// tiebreak is descending id (SPEC/WEB.md § Roadmap Detail Page, Concluídos).
-func closedSprintBefore(a, b *models.Sprint) bool {
-	ca, aok := closedAtValue(a)
-	cb, bok := closedAtValue(b)
-
-	switch {
-	case aok && bok:
-		if ca != cb {
-			return ca > cb // descending closed_at: later timestamp first
-		}
-	case aok != bok:
-		return aok // the one WITH a closed_at sorts first
-	}
-	// Equal closed_at, or both missing: descending id tiebreak.
-	return a.ID > b.ID
-}
-
-// closedAtValue returns a sprint's closed_at timestamp and whether it is a
-// usable (non-nil, non-empty) value. ISO 8601 UTC timestamps sort correctly
-// as strings, so string comparison gives chronological order without parsing.
-func closedAtValue(s *models.Sprint) (string, bool) {
-	if s.ClosedAt == nil || *s.ClosedAt == "" {
-		return "", false
-	}
-	return *s.ClosedAt, true
 }
 
 // loadGraphView reads a roadmap's knowledge graph read-only and returns its

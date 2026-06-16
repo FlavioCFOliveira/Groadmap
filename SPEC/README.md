@@ -18,6 +18,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Web roadmap sprints page / landing (`/roadmaps/{name}`, sprint tabs Próximos / Actual / Concluídos) | `WEB.md § Roadmap Sprints Page` |
 | Web roadmap tasks page (`/roadmaps/{name}/tasks`, full task table) | `WEB.md § Roadmap Tasks Page` |
 | Web sprint page (`/roadmaps/{name}/sprints/{id}`) | `WEB.md § Roadmap Sprint Page` |
+| Web shared sprint presentation sub-template (status summary line, detail block shared by sprint page and Actual tab) | `WEB.md § Shared Sprint Presentation Sub-Template` |
 | Web task detail modal (read-only task popup) | `WEB.md § Task Detail Modal` |
 | `rmp web` command syntax / flags | `COMMANDS.md § Web Interface` |
 | Web graph data endpoint JSON shape | `DATA_FORMATS.md § Graph View Data` |

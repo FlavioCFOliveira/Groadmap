@@ -429,3 +429,89 @@ func containsSubstr(s, substr string) bool {
 	}
 	return false
 }
+
+// mkStatusTask builds a Task with only the status set, sufficient for sprint
+// summary categorisation tests (the summary counts by status only).
+func mkStatusTask(status TaskStatus) Task {
+	return Task{Status: status}
+}
+
+// TestCategorizeTaskStatus asserts the shared status-to-category mapping that
+// both CalculateSprintShowResult and the web sprint summary depend on: pending =
+// BACKLOG + SPRINT, in-progress = DOING + TESTING, completed = COMPLETED
+// (SPEC/WEB.md § Shared Sprint Presentation Sub-Template).
+func TestCategorizeTaskStatus(t *testing.T) {
+	cases := []struct {
+		status TaskStatus
+		want   TaskStatusCategory
+	}{
+		{StatusBacklog, CategoryPending},
+		{StatusSprint, CategoryPending},
+		{StatusDoing, CategoryInProgress},
+		{StatusTesting, CategoryInProgress},
+		{StatusCompleted, CategoryCompleted},
+		{TaskStatus("UNKNOWN"), CategoryOther},
+	}
+	for _, c := range cases {
+		if got := CategorizeTaskStatus(c.status); got != c.want {
+			t.Errorf("CategorizeTaskStatus(%q) = %d, want %d", c.status, got, c.want)
+		}
+	}
+}
+
+// TestCalculateSprintSummary asserts the per-bucket counts and totals over a
+// representative status mix, and that the counts match the categorisation
+// CalculateSprintShowResult produces over the same tasks (the two must never
+// diverge).
+func TestCalculateSprintSummary(t *testing.T) {
+	tasks := []Task{
+		mkStatusTask(StatusBacklog),   // pending
+		mkStatusTask(StatusSprint),    // pending
+		mkStatusTask(StatusSprint),    // pending
+		mkStatusTask(StatusDoing),     // in-progress
+		mkStatusTask(StatusTesting),   // in-progress
+		mkStatusTask(StatusCompleted), // completed
+		mkStatusTask(StatusCompleted), // completed
+	}
+
+	got := CalculateSprintSummary(tasks)
+	want := SprintSummary{TotalTasks: 7, Pending: 3, InProgress: 2, Completed: 2}
+	if got != want {
+		t.Errorf("CalculateSprintSummary = %+v, want %+v", got, want)
+	}
+
+	// Must agree with the full report's summary over the same tasks.
+	full := CalculateSprintShowResult(&Sprint{ID: 1, Status: SprintOpen}, tasks)
+	if full.Summary != want {
+		t.Errorf("CalculateSprintShowResult.Summary = %+v, want %+v (must match CalculateSprintSummary)", full.Summary, want)
+	}
+}
+
+// TestSprintSummary_CompletionPercentage covers the rounding rule and the
+// zero-task case (0%) for the completion percentage shown in the sprint status
+// summary line (SPEC/WEB.md § Shared Sprint Presentation Sub-Template).
+func TestSprintSummary_CompletionPercentage(t *testing.T) {
+	cases := []struct {
+		name      string
+		completed int
+		total     int
+		want      int
+	}{
+		{"zero tasks is 0%", 0, 0, 0},
+		{"none completed is 0%", 0, 10, 0},
+		{"all completed is 100%", 10, 10, 100},
+		{"two thirds rounds to 67%", 2, 3, 67},
+		{"one third rounds to 33%", 1, 3, 33},
+		{"18 of 55 rounds to 33%", 18, 55, 33}, // SPEC AC39 worked example
+		{"half rounds to 50%", 1, 2, 50},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := SprintSummary{TotalTasks: c.total, Completed: c.completed}
+			if got := s.CompletionPercentage(); got != c.want {
+				t.Errorf("CompletionPercentage(completed=%d,total=%d) = %d, want %d",
+					c.completed, c.total, got, c.want)
+			}
+		})
+	}
+}

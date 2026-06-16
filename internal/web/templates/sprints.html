@@ -42,47 +42,22 @@
               </ul>
               <div class="tab-content mt-3">
 
-                {{/* Actual: the OPEN sprint(s), each showing its tasks with status. Active by default. */}}
+                {{/* Actual: the OPEN sprint(s), each rendered through the shared
+                     sprintDetail sub-template so it is visually identical to the
+                     single Roadmap Sprint Page (SPEC/WEB.md § Shared Sprint
+                     Presentation Sub-Template; Acceptance Criterion 38). Active by
+                     default. A clickable sprint header links to the sprint's own
+                     page. */}}
                 <div id="tab-current" class="tab-pane active show" role="tabpanel">
                   {{if .SprintsCurrent}}
-                  <div class="row row-cards">
                     {{range .SprintsCurrent}}
-                    <div class="col-12 col-lg-6">
-                      <div class="card card-sm">
-                        <div class="card-header">
-                          <h4 class="card-title mb-0">
-                            <a href="/roadmaps/{{$.Name}}/sprints/{{.Sprint.ID}}" class="text-reset">Sprint #{{.Sprint.ID}}</a>
-                          </h4>
-                          <div class="card-actions"><span class="badge bg-blue-lt">{{.Sprint.Status}}</span></div>
-                        </div>
-                        <div class="card-body">
-                          <p class="sprint-description">{{.Sprint.Description}}</p>
-                          <div class="text-secondary mb-1">Tasks:</div>
-                          {{if .Tasks}}
-                          <div class="table-responsive">
-                            <table class="table table-sm table-vcenter card-table">
-                              <thead>
-                                <tr><th>ID</th><th>Title</th><th>Status</th></tr>
-                              </thead>
-                              <tbody>
-                                {{range .Tasks}}
-                                <tr class="task-row" data-bs-toggle="modal" data-bs-target="#task-modal-{{.ID}}" tabindex="0" role="button" aria-label="Open details for task #{{.ID}}">
-                                  <td>#{{.ID}}</td>
-                                  <td>{{.Title}}</td>
-                                  <td><span class="badge bg-blue-lt">{{.Status}}</span></td>
-                                </tr>
-                                {{end}}
-                              </tbody>
-                            </table>
-                          </div>
-                          {{else}}
-                          <span class="text-secondary">No tasks assigned.</span>
-                          {{end}}
-                        </div>
+                    <div class="mb-4">
+                      <div class="mb-2">
+                        <a href="/roadmaps/{{$.Name}}/sprints/{{.Sprint.ID}}" class="h4 text-reset">Sprint #{{.Sprint.ID}}</a>
                       </div>
+{{template "sprintDetail" (.Detail $.Name)}}
                     </div>
                     {{end}}
-                  </div>
                   {{else}}
                   <div class="empty">
                     <p class="empty-title">No open sprint</p>
@@ -131,6 +106,7 @@
                         </div>
                         <div class="card-body">
                           <p class="mb-1 sprint-description">{{.Sprint.Description}}</p>
+                          <div class="text-secondary">{{len .Tasks}} task(s)</div>
                           <span class="text-secondary">Closed: {{with .Sprint.ClosedAt}}{{.}}{{else}}&mdash;{{end}}</span>
                         </div>
                       </a>

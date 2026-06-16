@@ -15,6 +15,7 @@
   - [Roadmap Sprints Page](#roadmap-sprints-page)
   - [Roadmap Tasks Page](#roadmap-tasks-page)
   - [Roadmap Sprint Page](#roadmap-sprint-page)
+  - [Shared Sprint Presentation Sub-Template](#shared-sprint-presentation-sub-template)
   - [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page)
   - [Graph Data Endpoint](#graph-data-endpoint)
   - [Static Assets](#static-assets)
@@ -83,9 +84,13 @@ The web interface exposes the following kinds of page for each roadmap:
 2. A roadmap sprints page that is the roadmap's landing page, served at
    `/roadmaps/{name}` and read from its SQLite `project.db`. It presents the
    roadmap's sprints as three tabs (Próximos, Actual, Concluídos), with **Actual**
-   active by default, expands the OPEN ("current") sprint or sprints under Actual
-   with their member tasks, and links each sprint to its own page. It does not
-   render the full tasks table.
+   active by default. Under Actual it renders the OPEN ("current") sprint or
+   sprints with the same full sprint detail block the single Roadmap Sprint Page
+   renders, through a shared sprint presentation sub-template, so an OPEN sprint
+   looks identical on the Actual tab and on its own page (see
+   [Shared Sprint Presentation Sub-Template](#shared-sprint-presentation-sub-template)).
+   The Próximos and Concluídos tabs list their sprints as cards that link to each
+   sprint's own page. It does not render the full tasks table.
 3. A roadmap tasks page, served at `/roadmaps/{name}/tasks` and read from that
    roadmap's `project.db`. It presents the full task table of the roadmap (every
    task, any status), with each task row clickable to open the read-only task
@@ -138,14 +143,19 @@ task detail modal that displays all of the task's fields (see
    with **Actual** active by default. The interface classifies each sprint into a
    tab by its status: a `PENDING` sprint appears under Próximos, an `OPEN` sprint
    under Actual, and a `CLOSED` sprint under Concluídos. Próximos lists PENDING
-   sprints ordered by predicted execution order (ascending sprint `id`, next
-   first); Actual lists the OPEN sprint or sprints, expanded with their member
-   tasks, and shows the status of all of those tasks; Concluídos lists CLOSED
-   sprints ordered by most recently closed first (`closed_at` descending, sprints
-   without a `closed_at` last). Each sprint shown in any tab is a clickable link to
-   that sprint's own page. The sprints page does not render the full tasks table
-   (see [Roadmap Sprints Page](#roadmap-sprints-page) and
-   [Roadmap Sprint Page](#roadmap-sprint-page)).
+   sprints ordered by ascending sprint `Order` (the unique execution order; the
+   next sprint to execute, lowest `Order`, first); Actual renders the OPEN sprint
+   or sprints, each through the shared sprint presentation sub-template, so each
+   OPEN sprint shows the same full detail block (the sprint metadata datagrid and
+   the full member-tasks table) that the single Roadmap Sprint Page shows;
+   Concluídos lists CLOSED sprints ordered by descending sprint `Order` (the
+   last/highest-`Order` closed sprint first). Each sprint shown in any tab is a
+   clickable link to that sprint's own page, and each sprint card in the Próximos
+   and Concluídos tabs shows that sprint's total task count. The sprints page does
+   not render the full tasks table (see
+   [Roadmap Sprints Page](#roadmap-sprints-page),
+   [Roadmap Sprint Page](#roadmap-sprint-page), and
+   [Shared Sprint Presentation Sub-Template](#shared-sprint-presentation-sub-template)).
 7. The roadmap tasks page shows the selected roadmap's full task table — every
    task of the roadmap, of any status — with the fields and relationships already
    defined in `MODELS.md` and `DATABASE.md`, read from that roadmap's `project.db`.
@@ -508,21 +518,30 @@ how the `rmp web` process itself terminates.
   sprint into exactly one tab by its `Sprint` status (`MODELS.md § Sprint`, status
   enum in `MODELS.md § Enums`): a `PENDING` sprint goes to Próximos, an `OPEN`
   sprint to Actual, and a `CLOSED` sprint to Concluídos.
-  - **Actual** (the default active tab) lists the OPEN sprint or sprints — those
-    in progress — expanded with their member tasks, and shows the state of all of
-    those tasks, presenting each task with its status. The member tasks are listed
-    in the planned in-sprint execution order (the `sprint_tasks` order; see
-    `MODELS.md § Sprint` and `DATABASE.md § Relationships`). When no sprint is
-    OPEN, the Actual tab shows a clear empty-state message and no sprint.
+  - **Actual** (the default active tab) presents the OPEN sprint or sprints —
+    those in progress. Each OPEN sprint is rendered through the shared sprint
+    presentation sub-template (see
+    [Shared Sprint Presentation Sub-Template](#shared-sprint-presentation-sub-template)),
+    so an OPEN sprint shows on the Actual tab the same full detail block the
+    single Roadmap Sprint Page shows for it: the sprint status summary line, the
+    sprint metadata datagrid, and the full member-tasks table in planned in-sprint
+    execution order (the `sprint_tasks` order; see `MODELS.md § Sprint` and
+    `DATABASE.md § Relationships`), with each task row clickable to open the task
+    detail modal. The Actual tab therefore shows the full sprint detail block per
+    OPEN sprint, not a reduced card. When no sprint is OPEN, the Actual tab shows a
+    clear empty-state message and no sprint.
   - **Próximos** lists the PENDING sprints — planned but not yet started — ordered
-    by predicted execution order. Because a sprint carries no planned-date field,
-    the predicted execution order is the creation order: ascending sprint `id`,
-    so the next sprint to start appears first. When no sprint is PENDING, the
-    Próximos tab shows a clear empty-state message.
-  - **Concluídos** lists the CLOSED sprints ordered by most recently closed first:
-    descending `closed_at`. A CLOSED sprint that has no `closed_at` value sorts
-    last. When no sprint is CLOSED, the Concluídos tab shows a clear empty-state
-    message.
+    by ascending sprint `Order` (the unique sprint execution order; see
+    `MODELS.md § Sprint`). The sprint with the lowest `Order`, the next sprint to
+    execute, appears first. Each PENDING sprint is shown as a card that links to
+    the sprint's own page and displays the sprint's total task count. When no
+    sprint is PENDING, the Próximos tab shows a clear empty-state message.
+  - **Concluídos** lists the CLOSED sprints ordered by descending sprint `Order`
+    (the unique sprint execution order; see `MODELS.md § Sprint`). The CLOSED
+    sprint with the highest `Order`, the last in execution order, appears first.
+    Each CLOSED sprint is shown as a card that links to the sprint's own page and
+    displays the sprint's total task count. When no sprint is CLOSED, the
+    Concluídos tab shows a clear empty-state message.
   - Every sprint shown in any of the three tabs is a clickable link to that
     sprint's own page at `/roadmaps/{name}/sprints/{id}` (see
     [Roadmap Sprint Page](#roadmap-sprint-page)). On the Actual tab, the member
@@ -577,7 +596,15 @@ how the `rmp web` process itself terminates.
 
 - **Route:** `GET /roadmaps/{name}/sprints/{id}`
 - **Content:** A read-only presentation of a single sprint of the named roadmap,
-  read from that roadmap's `project.db`.
+  read from that roadmap's `project.db`. The page renders the sprint through the
+  shared sprint presentation sub-template (see
+  [Shared Sprint Presentation Sub-Template](#shared-sprint-presentation-sub-template)),
+  the same sub-template the Actual tab of the Roadmap Sprints Page uses for an
+  OPEN sprint, so a sprint is presented identically on its own page and on the
+  Actual tab.
+- **Sprint status summary line.** At the top of the sprint presentation the page
+  shows the sprint status summary line defined in
+  [Shared Sprint Presentation Sub-Template](#shared-sprint-presentation-sub-template).
 - **Sprint details.** The page shows all details of the sprint, using the fields
   defined for the `Sprint` model in `MODELS.md § Sprint`: the sprint `id`, its
   status, its `title`, its description, its execution `order` (a positive integer,
@@ -606,6 +633,73 @@ how the `rmp web` process itself terminates.
   HTTP status mapping in [Routes and Pages](#routes-and-pages)).
 - **Read-only.** The page renders data only. It contains no form, button, or
   link that submits a change; there is no edit affordance of any kind.
+
+### Shared Sprint Presentation Sub-Template
+
+A single shared sub-template (a template "partial") renders the full sprint
+detail block. Both the single Roadmap Sprint Page and the Actual tab of the
+Roadmap Sprints Page render a sprint through this same sub-template, so a sprint
+and its content are presented identically everywhere they appear in full. This is
+the mechanism that guarantees the Actual (current/open) sprint presentation on
+the Roadmap Sprints Page is visually identical to the single Roadmap Sprint Page.
+
+1. **Single source of presentation.** There is one shared sub-template for the
+   full sprint detail block. The Roadmap Sprint Page renders the requested sprint
+   through it, and the Actual tab of the Roadmap Sprints Page renders each OPEN
+   sprint through it. Neither caller defines its own divergent sprint layout; both
+   produce the identical block for the same sprint data.
+
+2. **What the sub-template renders.** For one sprint, the sub-template renders, in
+   order:
+   - the **sprint status summary line** (defined below);
+   - the **sprint metadata datagrid** with the sprint's `ID`, `Status`,
+     `Capacity` (the `max_tasks` value, shown as "Unlimited" when unset), `Tasks`
+     (the sprint's `task_count`), `Created` (`created_at`), `Started`
+     (`started_at`), and `Closed` (`closed_at`); the fields are defined for the
+     `Sprint` model in `MODELS.md § Sprint` and are not redefined here;
+   - the **full member-tasks table** listing the sprint's tasks in planned
+     in-sprint execution order (the `sprint_tasks` order; see `MODELS.md § Sprint`
+     and `DATABASE.md § Relationships`), with the columns `ID`, `Title`, `Status`,
+     `Type`, `Priority`, and `Severity`. Each task row is clickable and opens the
+     read-only task detail modal for that task (see
+     [Task Detail Modal](#task-detail-modal)). When the sprint has no tasks, the
+     sub-template shows a clear empty-state message in place of the table.
+
+3. **Sprint status summary line.** At the top of the sub-template the sub-template
+   renders one indicative, complementary line that summarises the sprint's task
+   completion. Its exact format is:
+
+   `<pct>% - P:<p> A:<a> C:<c> - T:<t>`
+
+   for example `69% - P:8 A:3 C:18 - T:55`. The components are:
+   - `<pct>` is the sprint **completion percentage**: the number of `COMPLETED`
+     tasks divided by the total number of tasks in the sprint, expressed as a
+     percentage and **rounded to the nearest integer percent**. When the sprint
+     has no tasks, the completion percentage is `0%`.
+   - `P` (`<p>`) is the **pending** count: the number of the sprint's tasks in the
+     `BACKLOG` or `SPRINT` status.
+   - `A` (`<a>`) is the **open/in-progress** count ("Abertas"): the number of the
+     sprint's tasks in the `DOING` or `TESTING` status.
+   - `C` (`<c>`) is the **completed** count: the number of the sprint's tasks in
+     the `COMPLETED` status.
+   - `T` (`<t>`) is the **total** number of tasks in the sprint.
+
+   All five values refer only to the sprint's own member tasks; no task outside
+   the sprint is counted. The status-to-category mapping (pending = `BACKLOG` +
+   `SPRINT`, open/in-progress = `DOING` + `TESTING`, completed = `COMPLETED`; the
+   task status enum is defined in `MODELS.md § Enums`) is exactly the
+   categorisation `models.CalculateSprintShowResult` already produces (its
+   `Summary.Pending`, `Summary.InProgress`, and `Summary.Completed` counters and
+   its `Summary.TotalTasks`); the summary line reuses that categorisation rather
+   than defining a new one.
+
+4. **Read-only.** The sub-template renders data only. It contains no form, button,
+   or link that submits a change; the only interaction is opening the read-only
+   task detail modal from a task row.
+
+5. **Authored line breaks.** Wherever the sub-template renders the sprint's
+   `description`, it preserves the author's line breaks as specified in
+   [Frontend Rules](#frontend-rules), rule 6.
 
 ### Roadmap Knowledge-Graph Page
 
@@ -1184,8 +1278,12 @@ Rules:
    with an empty-state message; the absence of roadmaps is not an error.
 8. `GET /roadmaps/{name}` for an existing roadmap returns HTTP 200 and an HTML
    page that renders the roadmap's sprints page: the roadmap's sprints as three
-   tabs with the **Actual** tab active by default and the OPEN sprint or sprints
-   expanded under Actual with their member tasks, using the fields and
+   tabs with the **Actual** tab active by default, and each OPEN sprint rendered
+   under Actual through the shared sprint presentation sub-template — the same
+   sub-template the single Roadmap Sprint Page uses — so each OPEN sprint shows the
+   full sprint detail block (the sprint status summary line, the sprint metadata
+   datagrid, and the full member-tasks table in planned in-sprint execution order
+   with clickable task rows), not a reduced card, using the fields and
    relationships defined in `MODELS.md` and `DATABASE.md`. The page does **not**
    render the full tasks table, and it contains no form, button, or link that
    submits a change.
@@ -1208,11 +1306,13 @@ Rules:
     page loads.
 12. On the roadmap sprints page, sprints are classified into the tabs by their
     status: every `PENDING` sprint appears under Próximos ordered by ascending
-    sprint `id`; every `OPEN` sprint appears under Actual, expanded with its member
-    tasks in in-sprint order and the status of each of those tasks shown; every
-    `CLOSED` sprint appears under Concluídos ordered by `closed_at` descending,
-    with any CLOSED sprint lacking a `closed_at` value sorted last. A tab with no
-    matching sprint shows a clear empty-state message.
+    sprint `Order` (the unique execution order; lowest `Order`, the next sprint to
+    execute, first); every `OPEN` sprint appears under Actual, rendered through the
+    shared sprint presentation sub-template (full detail block, member tasks in
+    in-sprint order with the status of each shown); every `CLOSED` sprint appears
+    under Concluídos ordered by descending sprint `Order` (highest `Order`, the
+    last in execution order, first). A tab with no matching sprint shows a clear
+    empty-state message.
 13. On the roadmap sprints page, every sprint shown in any tab is a clickable link
     to that sprint's page at `/roadmaps/{name}/sprints/{id}`.
 14. `GET /roadmaps/{name}/sprints/{id}` for a sprint of an existing roadmap returns
@@ -1314,8 +1414,8 @@ Rules:
     line breaks: the task detail modal's long free-text fields
     (`functional_requirements`, `technical_requirements`, `acceptance_criteria`,
     and `completion_summary`) and a sprint's `description` — shown on the roadmap
-    sprints page (the Actual-tab expanded sprint and the Próximos and Concluídos
-    sprint cards) and on the roadmap sprint page — each display the author's
+    sprints page (each OPEN sprint rendered under the Actual tab and the Próximos
+    and Concluídos sprint cards) and on the roadmap sprint page — each display the author's
     newlines rather than collapsing them, while the text still wraps without forced
     horizontal scrolling and remains HTML-escaped through `html/template` (never
     rendered as raw HTML).
@@ -1345,6 +1445,29 @@ Rules:
     failure). A response for a `/static/...` asset does **not** carry
     `Cache-Control: no-store` and remains cacheable (see
     [Cache Policy](#cache-policy)).
+38. An OPEN sprint's presentation under the Actual tab of the roadmap sprints page
+    is identical to that sprint's presentation on its own Roadmap Sprint Page:
+    both render the same shared sprint presentation sub-template, producing the
+    same sprint status summary line, the same sprint metadata datagrid (`ID`,
+    `Status`, `Capacity`, `Tasks`, `Created`, `Started`, `Closed`), and the same
+    full member-tasks table (`ID`, `Title`, `Status`, `Type`, `Priority`,
+    `Severity`) in planned in-sprint execution order with each task row clickable
+    to open the read-only task detail modal (see
+    [Shared Sprint Presentation Sub-Template](#shared-sprint-presentation-sub-template)).
+39. At the top of every full sprint presentation (the Roadmap Sprint Page and each
+    OPEN sprint on the Actual tab), a sprint status summary line is shown in the
+    exact format `<pct>% - P:<p> A:<a> C:<c> - T:<t>` (for example
+    `69% - P:8 A:3 C:18 - T:55`), where `<pct>` is the completion percentage
+    (`COMPLETED` tasks divided by total tasks, rounded to the nearest integer
+    percent, and `0%` when the sprint has no tasks), `P` is the count of the
+    sprint's tasks in `BACKLOG` or `SPRINT`, `A` is the count in `DOING` or
+    `TESTING`, `C` is the count in `COMPLETED`, and `T` is the sprint's total task
+    count; every value counts only the sprint's own member tasks. For a sprint
+    with, for example, 55 member tasks of which 8 are pending, 3 in progress, and
+    18 completed (with the remaining 26 in other statuses), the line reads
+    `33% - P:8 A:3 C:18 - T:55` (18 of 55 completed rounds to 33%).
+40. Every sprint card under the Próximos and Concluídos tabs of the roadmap
+    sprints page displays that sprint's total number of tasks.
 
 ## See Also
 

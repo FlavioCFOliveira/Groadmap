@@ -103,6 +103,108 @@
   The long free-text fields render inside .task-modal__text blocks that wrap and
   preserve their line breaks.
 */}}
+{{/*
+  sprintDetail renders the full sprint presentation block for ONE sprint and is
+  the single source of presentation shared by the Roadmap Sprint Page and each
+  OPEN sprint on the Actual tab of the Roadmap Sprints Page, so a sprint looks
+  identical in both places (SPEC/WEB.md § Shared Sprint Presentation
+  Sub-Template; Acceptance Criteria 38/39).
+
+  Dot is a web.sprintDetail: .Name (roadmap), .Sprint (models.Sprint), .Tasks
+  (member tasks in planned in-sprint execution order), and .Summary
+  (the precomputed completion summary). It renders, in order: the sprint status
+  summary line, the sprint metadata datagrid, and the full member-tasks table
+  with each row clickable to open the read-only task detail modal. The caller is
+  responsible for rendering one taskModal per shown task.
+
+  The "Tasks" datagrid value uses len .Tasks (the loaded member tasks) rather
+  than .Sprint.TaskCount: ListSprints does not populate TaskCount, so the Actual
+  tab would otherwise show 0. The loaded task count is authoritative for both
+  call sites (SPEC/WEB.md § Shared Sprint Presentation Sub-Template).
+*/}}
+{{define "sprintDetail"}}          <div class="sprint-summary-line h3 mb-3" data-role="sprint-summary">{{.Summary.Line}}</div>
+
+          <div class="card mb-3">
+            <div class="card-header">
+              <h3 class="card-title">Sprint details</h3>
+            </div>
+            <div class="card-body">
+              <p class="sprint-description">{{.Sprint.Description}}</p>
+              <div class="datagrid">
+                <div class="datagrid-item">
+                  <div class="datagrid-title">ID</div>
+                  <div class="datagrid-content">#{{.Sprint.ID}}</div>
+                </div>
+                <div class="datagrid-item">
+                  <div class="datagrid-title">Status</div>
+                  <div class="datagrid-content"><span class="badge bg-blue-lt">{{.Sprint.Status}}</span></div>
+                </div>
+                <div class="datagrid-item">
+                  <div class="datagrid-title">Capacity</div>
+                  <div class="datagrid-content">{{with .Sprint.MaxTasks}}{{.}}{{else}}Unlimited{{end}}</div>
+                </div>
+                <div class="datagrid-item">
+                  <div class="datagrid-title">Tasks</div>
+                  <div class="datagrid-content">{{len .Tasks}}</div>
+                </div>
+                <div class="datagrid-item">
+                  <div class="datagrid-title">Created</div>
+                  <div class="datagrid-content text-secondary">{{.Sprint.CreatedAt}}</div>
+                </div>
+                <div class="datagrid-item">
+                  <div class="datagrid-title">Started</div>
+                  <div class="datagrid-content text-secondary">{{with .Sprint.StartedAt}}{{.}}{{else}}&mdash;{{end}}</div>
+                </div>
+                <div class="datagrid-item">
+                  <div class="datagrid-title">Closed</div>
+                  <div class="datagrid-content text-secondary">{{with .Sprint.ClosedAt}}{{.}}{{else}}&mdash;{{end}}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h3 class="card-title">Tasks <span class="badge bg-secondary-lt ms-2">{{len .Tasks}}</span></h3>
+              <div class="card-actions text-secondary">In planned execution order</div>
+            </div>
+            {{if .Tasks}}
+            <div class="table-responsive">
+              <table class="table table-vcenter card-table">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Title</th>
+                    <th>Status</th>
+                    <th>Type</th>
+                    <th>Priority</th>
+                    <th>Severity</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {{range .Tasks}}
+                  <tr class="task-row" data-bs-toggle="modal" data-bs-target="#task-modal-{{.ID}}" tabindex="0" role="button" aria-label="Open details for task #{{.ID}}">
+                    <td>#{{.ID}}</td>
+                    <td>{{.Title}}</td>
+                    <td><span class="badge bg-blue-lt">{{.Status}}</span></td>
+                    <td>{{.Type}}</td>
+                    <td>{{.Priority}}</td>
+                    <td>{{.Severity}}</td>
+                  </tr>
+                  {{end}}
+                </tbody>
+              </table>
+            </div>
+            {{else}}
+            <div class="card-body">
+              <div class="empty">
+                <p class="empty-title">No tasks in this sprint</p>
+                <p class="empty-subtitle text-secondary">This sprint has no tasks assigned yet.</p>
+              </div>
+            </div>
+            {{end}}
+          </div>{{end}}
+
 {{define "taskModal"}}  <div class="modal modal-blur fade" id="task-modal-{{.ID}}" tabindex="-1" aria-labelledby="task-modal-{{.ID}}-title" aria-hidden="true">
     <div class="modal-dialog modal-lg modal-dialog-scrollable modal-dialog-centered" role="document">
       <div class="modal-content">

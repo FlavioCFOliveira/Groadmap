@@ -332,6 +332,79 @@ type SprintSummary struct {
 	Completed  int `json:"completed"`
 }
 
+// TaskStatusCategory groups the task status enum into the three sprint-summary
+// buckets used everywhere a sprint's completion is reported: pending,
+// in-progress, and completed (SPEC/WEB.md § Shared Sprint Presentation
+// Sub-Template, sprint status summary line).
+type TaskStatusCategory int
+
+// Task status categories. The mapping is the single source of truth for how a
+// task status counts toward a sprint summary; CalculateSprintShowResult and the
+// web sprint summary both derive their counts from it.
+const (
+	// CategoryPending covers BACKLOG and SPRINT.
+	CategoryPending TaskStatusCategory = iota
+	// CategoryInProgress covers DOING and TESTING.
+	CategoryInProgress
+	// CategoryCompleted covers COMPLETED.
+	CategoryCompleted
+	// CategoryOther covers any status outside the three buckets above (the
+	// status enum is closed, so this is defensive only).
+	CategoryOther
+)
+
+// CategorizeTaskStatus maps a task status to its sprint-summary category
+// (pending = BACKLOG + SPRINT, in-progress = DOING + TESTING, completed =
+// COMPLETED). It is the shared categorisation reused by CalculateSprintShowResult
+// and by the web sprint completion summary, so the two never diverge.
+func CategorizeTaskStatus(status TaskStatus) TaskStatusCategory {
+	switch status {
+	case StatusBacklog, StatusSprint:
+		return CategoryPending
+	case StatusDoing, StatusTesting:
+		return CategoryInProgress
+	case StatusCompleted:
+		return CategoryCompleted
+	default:
+		return CategoryOther
+	}
+}
+
+// CalculateSprintSummary counts a sprint's member tasks into the pending,
+// in-progress, completed, and total buckets, using the shared
+// CategorizeTaskStatus mapping. It computes only the counts (no percentages or
+// severity distribution), so callers that need just the completion summary —
+// such as the read-only web sprint presentation — can avoid the full
+// CalculateSprintShowResult computation. All counts refer only to the tasks
+// passed in; no task outside the slice is considered.
+func CalculateSprintSummary(tasks []Task) SprintSummary {
+	summary := SprintSummary{TotalTasks: len(tasks)}
+	for i := range tasks {
+		switch CategorizeTaskStatus(tasks[i].Status) {
+		case CategoryPending:
+			summary.Pending++
+		case CategoryInProgress:
+			summary.InProgress++
+		case CategoryCompleted:
+			summary.Completed++
+		case CategoryOther:
+			// Not counted in any summary bucket (defensive; enum is closed).
+		}
+	}
+	return summary
+}
+
+// CompletionPercentage returns the sprint completion percentage —
+// COMPLETED tasks over total tasks — rounded to the nearest integer percent.
+// It is 0 when there are no tasks, matching the summary-line rule in
+// SPEC/WEB.md § Shared Sprint Presentation Sub-Template.
+func (s SprintSummary) CompletionPercentage() int {
+	if s.TotalTasks == 0 {
+		return 0
+	}
+	return int(math.Round(float64(s.Completed) * 100.0 / float64(s.TotalTasks)))
+}
+
 // SprintProgress represents the progress percentages for a sprint.
 type SprintProgress struct {
 	PendingPercentage    float64 `json:"pending_percentage"`
@@ -378,14 +451,17 @@ func CalculateSprintShowResult(sprint *Sprint, tasks []Task) SprintShowResult {
 		// Add task ID to order (tasks should already be ordered by position)
 		result.TaskOrder = append(result.TaskOrder, tasks[i].ID)
 
-		// Count by status category (preserving existing summary semantics)
-		switch tasks[i].Status {
-		case StatusBacklog, StatusSprint:
+		// Count by status category using the shared categorisation, so this
+		// summary and the web sprint completion summary never diverge.
+		switch CategorizeTaskStatus(tasks[i].Status) {
+		case CategoryPending:
 			result.Summary.Pending++
-		case StatusDoing, StatusTesting:
+		case CategoryInProgress:
 			result.Summary.InProgress++
-		case StatusCompleted:
+		case CategoryCompleted:
 			result.Summary.Completed++
+		case CategoryOther:
+			// Not counted in any summary bucket (defensive; enum is closed).
 		}
 
 		// current_load: all incomplete tasks assigned to the sprint

@@ -29,26 +29,39 @@ func seededTask(now, title string) *models.Task {
 	}
 }
 
-// seedSprintFixture creates a roadmap with three sprints — one PENDING, one
-// OPEN, two CLOSED — and member tasks, so the sprints-page classification and
+// seedSprintFixture creates a roadmap with sprints — two PENDING, one OPEN, two
+// CLOSED — and member tasks, so the sprints-page classification, ordering, and
 // the sprint page can be exercised against genuine SQLite data. It returns the
-// roadmap name and the ids it created. The two CLOSED sprints get distinct
-// closed_at timestamps (set directly via the embedded *sql.DB) so the
-// closed_at-descending order in the Concluídos tab is deterministic.
+// roadmap name and the ids it created.
 //
-// Sprint creation order (ascending id): PENDING(1), CLOSED-older, OPEN, then
-// CLOSED-newer. Sprint ids therefore do NOT match closed_at order, so the
-// Concluídos assertion proves the sort is by closed_at, not by id.
+// Each sprint is created with an EXPLICIT execution Order chosen to diverge from
+// creation order (and therefore from id order), so the Próximos (Order ASC) and
+// Concluídos (Order DESC) ordering assertions prove the sort is driven by
+// Sprint.Order, not by id.
+//
+//   - pendingID     created first  (lowest id)  -> Order 30
+//   - pendingID2    created second               -> Order 10  (lower Order than pendingID)
+//   - closedLower   created third                -> Order 15
+//   - openID        created fourth               -> Order 99
+//   - closedHigher  created last   (highest id)  -> Order 40  (higher Order than closedLower)
+//
+// Próximos (Order ASC) must therefore list pendingID2 (10) before pendingID
+// (30) even though pendingID has the LOWER id. Concluídos (Order DESC) must list
+// closedHigher (40) before closedLower (15); closedHigher has the higher id, so
+// to make the assertion discriminate between Order and id, closedHigher also
+// gets the EARLIER closed_at — proving the sort is by Order, not by id or
+// closed_at.
 type sprintFixture struct {
-	name        string
-	pendingID   int
-	openID      int
-	closedOlder int
-	closedNewer int
-	openTaskID  int
-	pendTaskID  int
-	pendTaskID2 int
-	openTaskID2 int
+	name         string
+	pendingID    int
+	pendingID2   int
+	openID       int
+	closedLower  int // lower Order (15)
+	closedHigher int // higher Order (40)
+	openTaskID   int
+	pendTaskID   int
+	pendTaskID2  int
+	openTaskID2  int
 }
 
 func seedSprintFixture(t *testing.T, name string) sprintFixture {
@@ -70,12 +83,17 @@ func seedSprintFixture(t *testing.T, name string) sprintFixture {
 		}
 		return id
 	}
-	mkSprint := func(desc string) int {
+	// mkSprint creates a PENDING sprint with an EXPLICIT execution Order. The
+	// fixture chooses Order values that deliberately diverge from creation order
+	// (and therefore from id order), so the sprints-page ordering assertions
+	// prove the sort is driven by Sprint.Order, not by id.
+	mkSprint := func(desc string, order int) int {
 		id, serr := database.CreateSprint(ctx, &models.Sprint{
 			Status:      models.SprintPending,
 			Title:       desc,
 			Description: desc,
 			CreatedAt:   now,
+			Order:       order,
 		})
 		if serr != nil {
 			t.Fatalf("creating sprint %q: %v", desc, serr)
@@ -85,21 +103,27 @@ func seedSprintFixture(t *testing.T, name string) sprintFixture {
 
 	f := sprintFixture{name: name}
 
-	// 1) PENDING sprint (stays PENDING) with two member tasks (ascending ids).
-	f.pendingID = mkSprint("Plan the read-only web sprint presentation")
+	// 1) First PENDING sprint (lowest id) with a HIGHER Order (30), so it must
+	//    appear AFTER pendingID2 under Próximos (Order ASC) despite the lower id.
+	f.pendingID = mkSprint("Plan the read-only web sprint presentation", 30)
 	f.pendTaskID = mkTask("Classify sprints into Proximos, Actual, Concluidos tabs")
-	f.pendTaskID2 = mkTask("Order Proximos by ascending sprint id")
+	f.pendTaskID2 = mkTask("Order Proximos by ascending sprint order")
 	if aerr := database.AddTasksToSprint(ctx, f.pendingID, []int{f.pendTaskID, f.pendTaskID2}); aerr != nil {
 		t.Fatalf("adding tasks to pending sprint: %v", aerr)
 	}
 
-	// 2) An OLDER closed sprint (created before the OPEN sprint, so it has a
-	//    lower id than the newer closed sprint).
-	f.closedOlder = mkSprint("Ship the initial knowledge-graph viewer")
-	setClosed(t, database, f.closedOlder, "2026-01-10T09:00:00Z")
+	// 2) Second PENDING sprint with a LOWER Order (10): the next sprint to
+	//    execute, so it heads the Próximos tab even though its id is higher.
+	f.pendingID2 = mkSprint("Vendor the Tabler admin shell and dark theme", 10)
 
-	// 3) OPEN sprint with two member tasks (the Actual tab shows their status).
-	f.openID = mkSprint("Deliver the sprint detail page and task modal")
+	// 3) A CLOSED sprint with the LOWER Order (15) and the LATER closed_at, so
+	//    Order-descending ranks it AFTER closedHigher while closed_at-descending
+	//    would rank it FIRST — proving the Concluídos sort is by Order.
+	f.closedLower = mkSprint("Ship the initial knowledge-graph viewer", 15)
+	setClosed(t, database, f.closedLower, "2026-05-20T18:30:00Z")
+
+	// 4) OPEN sprint with two member tasks (the Actual tab shows their status).
+	f.openID = mkSprint("Deliver the sprint detail page and task modal", 99)
 	f.openTaskID = mkTask("Build the read-only sprint page route and template")
 	f.openTaskID2 = mkTask("Render one task detail modal per shown task")
 	if aerr := database.AddTasksToSprint(ctx, f.openID, []int{f.openTaskID, f.openTaskID2}); aerr != nil {
@@ -109,13 +133,11 @@ func seedSprintFixture(t *testing.T, name string) sprintFixture {
 		t.Fatalf("opening sprint: %v", serr)
 	}
 
-	// 4) A NEWER closed sprint (higher id, but a LATER closed_at than the older
-	//    one), so closed_at-descending ranks it first while id-descending would
-	//    also — to break that ambiguity, the older sprint has a LOWER id AND an
-	//    EARLIER closed_at, and we additionally verify a closed sprint with NO
-	//    closed_at sorts last below.
-	f.closedNewer = mkSprint("Harden the web read path against malformed input")
-	setClosed(t, database, f.closedNewer, "2026-05-20T18:30:00Z")
+	// 5) A CLOSED sprint (highest id) with the HIGHER Order (40) and the EARLIER
+	//    closed_at: Order-descending ranks it FIRST in Concluídos, while id and
+	//    closed_at would each rank it differently, so the assertion isolates Order.
+	f.closedHigher = mkSprint("Harden the web read path against malformed input", 40)
+	setClosed(t, database, f.closedHigher, "2026-01-10T09:00:00Z")
 
 	return f
 }
@@ -179,7 +201,7 @@ func TestSprints_SprintClassificationAndLinks(t *testing.T) {
 	body := servePage(t, mux, "/roadmaps/"+f.name)
 
 	// Every sprint links to its own page.
-	for _, id := range []int{f.pendingID, f.openID, f.closedOlder, f.closedNewer} {
+	for _, id := range []int{f.pendingID, f.pendingID2, f.openID, f.closedLower, f.closedHigher} {
 		link := "/roadmaps/" + f.name + "/sprints/" + itoa(id)
 		if !strings.Contains(body, link) {
 			t.Errorf("detail page missing sprint link %q", link)
@@ -192,10 +214,18 @@ func TestSprints_SprintClassificationAndLinks(t *testing.T) {
 	upcoming := paneSlice(t, body, `<div id="tab-upcoming"`)
 	closed := paneSlice(t, body, `<div id="tab-closed"`)
 
-	// PENDING -> Próximos.
-	if !strings.Contains(upcoming, "/sprints/"+itoa(f.pendingID)) {
-		t.Errorf("PENDING sprint #%d not under the Próximos tab", f.pendingID)
+	// PENDING -> Próximos, ordered by ascending Order: pendingID2 (Order 10)
+	// must precede pendingID (Order 30) even though pendingID2 has the HIGHER id,
+	// proving the sort is by Sprint.Order, not by id.
+	idxPend2 := strings.Index(upcoming, "/sprints/"+itoa(f.pendingID2))
+	idxPend := strings.Index(upcoming, "/sprints/"+itoa(f.pendingID))
+	if idxPend2 < 0 || idxPend < 0 {
+		t.Fatalf("both PENDING sprints must appear under Próximos; pend2=%d pend=%d", idxPend2, idxPend)
 	}
+	if idxPend2 > idxPend {
+		t.Errorf("Próximos order wrong: sprint #%d (Order 10) must precede sprint #%d (Order 30) despite its higher id", f.pendingID2, f.pendingID)
+	}
+
 	// OPEN -> Actual, and the Actual pane shows the OPEN sprint's task statuses.
 	if !strings.Contains(current, "/sprints/"+itoa(f.openID)) {
 		t.Errorf("OPEN sprint #%d not under the Actual tab", f.openID)
@@ -207,37 +237,40 @@ func TestSprints_SprintClassificationAndLinks(t *testing.T) {
 		t.Errorf("Actual tab does not show the OPEN sprint's task status badge")
 	}
 
-	// CLOSED -> Concluídos, ordered closed_at descending: the NEWER closed
-	// sprint (2026-05) appears before the OLDER one (2026-01), even though the
-	// newer one has the higher id (so this proves the closed_at sort).
-	idxNewer := strings.Index(closed, "/sprints/"+itoa(f.closedNewer))
-	idxOlder := strings.Index(closed, "/sprints/"+itoa(f.closedOlder))
-	if idxNewer < 0 || idxOlder < 0 {
-		t.Fatalf("both CLOSED sprints must appear under Concluídos; newer=%d older=%d", idxNewer, idxOlder)
+	// CLOSED -> Concluídos, ordered by descending Order: closedHigher (Order 40)
+	// must precede closedLower (Order 15). closedHigher has the higher id AND the
+	// EARLIER closed_at, so neither an id-descending nor a closed_at-descending
+	// sort would produce this order — only Order-descending does.
+	idxHigher := strings.Index(closed, "/sprints/"+itoa(f.closedHigher))
+	idxLower := strings.Index(closed, "/sprints/"+itoa(f.closedLower))
+	if idxHigher < 0 || idxLower < 0 {
+		t.Fatalf("both CLOSED sprints must appear under Concluídos; higher=%d lower=%d", idxHigher, idxLower)
 	}
-	if idxNewer > idxOlder {
-		t.Errorf("Concluídos order wrong: newer-closed sprint #%d must precede older-closed sprint #%d", f.closedNewer, f.closedOlder)
+	if idxHigher > idxLower {
+		t.Errorf("Concluídos order wrong: sprint #%d (Order 40) must precede sprint #%d (Order 15)", f.closedHigher, f.closedLower)
 	}
 }
 
 // TestClassifySprints_OrderingRules unit-tests the classification and ordering
-// comparator directly with crafted sprints, covering the closed_at-descending
-// order, the nil/empty closed_at-sorts-last rule, and the descending-id
-// tiebreak — the parts that are awkward to force through real data
-// (SPEC/WEB.md § Roadmap Detail Page; Acceptance Criterion 11).
+// directly with crafted sprints: Próximos by ascending Sprint.Order, Concluídos
+// by descending Sprint.Order, and Actual by ascending id. The Order values are
+// chosen so they diverge from id order, so the assertion proves the sort is
+// driven by Order, not by id (SPEC/WEB.md § Roadmap Sprints Page; Acceptance
+// Criterion 12).
 func TestClassifySprints_OrderingRules(t *testing.T) {
-	at := func(s string) *string { return &s }
-
 	views := []sprintView{
-		{Sprint: models.Sprint{ID: 5, Status: models.SprintPending}},
-		{Sprint: models.Sprint{ID: 2, Status: models.SprintPending}},
-		{Sprint: models.Sprint{ID: 9, Status: models.SprintOpen}},
-		{Sprint: models.Sprint{ID: 3, Status: models.SprintOpen}},
-		{Sprint: models.Sprint{ID: 7, Status: models.SprintClosed, ClosedAt: at("2026-03-01T00:00:00Z")}},
-		{Sprint: models.Sprint{ID: 1, Status: models.SprintClosed, ClosedAt: at("2026-06-01T00:00:00Z")}},
-		{Sprint: models.Sprint{ID: 8, Status: models.SprintClosed, ClosedAt: nil}},                        // no closed_at -> last
-		{Sprint: models.Sprint{ID: 4, Status: models.SprintClosed, ClosedAt: at("")}},                     // empty closed_at -> last
-		{Sprint: models.Sprint{ID: 6, Status: models.SprintClosed, ClosedAt: at("2026-03-01T00:00:00Z")}}, // tie with #7
+		// PENDING: id-ascending would yield [2, 5]; Order (10, 30) inverts that
+		// to [5, 2], so the assertion proves the sort is by Order, not id.
+		{Sprint: models.Sprint{ID: 5, Status: models.SprintPending, Order: 10}},
+		{Sprint: models.Sprint{ID: 2, Status: models.SprintPending, Order: 30}},
+		// OPEN: id-ascending order (3 before 9).
+		{Sprint: models.Sprint{ID: 9, Status: models.SprintOpen, Order: 1}},
+		{Sprint: models.Sprint{ID: 3, Status: models.SprintOpen, Order: 2}},
+		// CLOSED: ids and Order deliberately uncorrelated.
+		{Sprint: models.Sprint{ID: 7, Status: models.SprintClosed, Order: 15}},
+		{Sprint: models.Sprint{ID: 1, Status: models.SprintClosed, Order: 40}},
+		{Sprint: models.Sprint{ID: 8, Status: models.SprintClosed, Order: 5}},
+		{Sprint: models.Sprint{ID: 4, Status: models.SprintClosed, Order: 25}},
 	}
 
 	up, cur, cl := classifySprints(views)
@@ -255,14 +288,15 @@ func TestClassifySprints_OrderingRules(t *testing.T) {
 		}
 	}
 
-	// Próximos: ascending id.
-	assertIDs("Próximos", up, []int{2, 5})
-	// Actual: ascending id.
+	// Próximos: ascending Order -> #5 (Order 10) before #2 (Order 30). Since #5
+	// has the HIGHER id, id-ascending would give [2, 5]; getting [5, 2] proves
+	// the sort is by Order.
+	assertIDs("Próximos", up, []int{5, 2})
+	// Actual: ascending id -> [3, 9].
 	assertIDs("Actual", cur, []int{3, 9})
-	// Concluídos: closed_at descending; #1 (2026-06) first, then the
-	// 2026-03 tie (#7 and #6, descending id => #7 before #6), then the two
-	// with no usable closed_at last, descending id => #8 before #4.
-	assertIDs("Concluídos", cl, []int{1, 7, 6, 8, 4})
+	// Concluídos: descending Order -> #1 (40), #4 (25), #7 (15), #8 (5). The id
+	// order is uncorrelated, so this proves the sort is by Order, not id.
+	assertIDs("Concluídos", cl, []int{1, 4, 7, 8})
 }
 
 // TestSprintPage_HappyPath drives handleSprint against a sprint of an existing
