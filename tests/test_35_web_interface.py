@@ -795,6 +795,30 @@ class TestWebInterface:
         assert "task-modal__text" in body, "task long-text must use the preserving class"
         assert multiline_fr in body, "task free-text must preserve the author's line breaks"
 
+    def test_graph_detail_panel_preserves_line_breaks(self):
+        """The knowledge-graph detail panel preserves authored line breaks in the
+        property values it shows (SPEC/WEB.md § Frontend Rules rule 6): the
+        client script tags each value element with the detail-panel__value class
+        (assigning the value through textContent, never as HTML), and the
+        stylesheet renders that class with white-space: pre-wrap. The panel is
+        populated by JavaScript, so the contract is verified on the served
+        assets that wire it."""
+        proc, port = self._start(["--port", "0"])
+        _, _, js = self._req(port, "/static/graph.js")
+        assert 'dd.className = "detail-panel__value"' in js, (
+            "graph.js must tag each detail-panel value element with the "
+            "line-break-preserving class"
+        )
+        assert "dd.textContent = value" in js, (
+            "graph.js must assign the property value through textContent, never "
+            "as raw HTML"
+        )
+        _, _, css = self._req(port, "/static/style.css")
+        assert ".detail-panel__value" in css, "stylesheet must target .detail-panel__value"
+        assert "white-space: pre-wrap" in css, (
+            "the stylesheet must preserve authored line breaks (white-space: pre-wrap)"
+        )
+
     # ====================================================================
     # AC14: read-only task detail modal — wiring, content, no edit control
     # ====================================================================
