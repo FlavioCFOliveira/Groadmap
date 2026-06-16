@@ -5,6 +5,192 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.0] - 2026-06-16
+
+A feature and reliability release. It introduces a required, human-readable
+**sprint title** and a unique **sprint execution-order** field; sharpens the
+read-only `rmp web` interface (never-stale responses, a shared sprint
+presentation, preserved free-text line breaks, and a hardened HTTP server);
+surfaces GoGraph query notifications as diagnostics; and lands a 32-finding
+reliability/spec-conformance audit and a 23-finding security audit, each with a
+permanent regression gate. The knowledge-graph engine GoGraph is upgraded
+`v0.2.0` → `v0.3.2`. Under Semantic Versioning 2.0.0 this is a **MINOR** release:
+all changes are additive or corrective and remain backward compatible with
+`v1.9.1`, with the single migration-bearing exception that `sprint create` now
+requires `--title` (see Changed and Upgrade Notes). The database schema advances
+to `1.8.0` through two automatic, idempotent migrations; existing installations
+upgrade transparently on first run.
+
+### Added
+
+- **Required sprint title** — sprints now carry a human-readable title in
+  addition to their description, so a sprint is identifiable at a glance in
+  listings and stand-ups. `sprint create` requires `-t/--title` (max 255
+  characters); `sprint update` accepts an optional `-t/--title`. The schema adds
+  a `title TEXT NOT NULL CHECK(length(title) <= 255)` column (migration to schema
+  `1.7.0`, backfilling existing sprints as `Sprint <id>`). `sprint show` output
+  gains a `sprint_title` field. Specified across `SPEC/MODELS.md`,
+  `SPEC/DATABASE.md`, `SPEC/COMMANDS.md`, `SPEC/DATA_FORMATS.md`, and
+  `SPEC/VERSION.md`.
+- **Unique sprint execution-order field** — every sprint carries a unique,
+  positive execution order. `sprint create` accepts an optional `--order` (auto-
+  assigned to `MAX+1` when omitted); `sprint update` may edit it while the sprint
+  is `PENDING` or `OPEN` and rejects edits on a `CLOSED` sprint (exit 6). The
+  schema adds `order_index INTEGER NOT NULL CHECK(order_index > 0)` plus a unique
+  index (migration to schema `1.8.0`, deterministically backfilling `1..N` by
+  creation order). Order collisions map to exit 5. `sprint get`/`list` expose the
+  `order` field. Specified across `SPEC/MODELS.md`, `SPEC/DATABASE.md`,
+  `SPEC/STATE_MACHINE.md`, `SPEC/COMMANDS.md`, `SPEC/HELP.md`,
+  `SPEC/DATA_FORMATS.md`, `SPEC/WEB.md`, and `SPEC/VERSION.md`.
+- **Graph query notifications as diagnostics** — `rmp graph query`/`search` now
+  print each GoGraph query notification (for example the Neo4j-compatible
+  `CartesianProductWarning` for a disconnected multi-pattern `MATCH`) as a
+  plain-text line to stderr in the form `<Severity> <Code>: <Description>`. The
+  stdout success JSON and exit codes are unchanged, so JSON-parsing consumers are
+  unaffected. Specified in `SPEC/GRAPH.md`.
+
+### Changed
+
+- **`sprint create` now requires `--title`** — a previously non-existent flag is
+  now mandatory on `sprint create`. Scripts that create sprints must pass
+  `-t/--title`; calls without it fail with exit 6
+  (`required parameter missing: --title`). This is the only backward-incompatible
+  command-line change in the release; see Upgrade Notes.
+- **Unified sprint presentation in `rmp web`** — a shared `{{sprintDetail}}`
+  sub-template renders the full sprint block (completion summary, metadata
+  datagrid, and member-task table) identically on the sprint page and the Actual
+  tab of the sprints page, so the two views can no longer diverge. The CLI
+  `sprint show` report and the web summary now share
+  `CategorizeTaskStatus`/`CalculateSprintSummary`/`CompletionPercentage`, so their
+  figures are guaranteed consistent. Specified in `SPEC/WEB.md`.
+- **GoGraph upgraded `v0.2.0` → `v0.3.2`** — the engine behind `rmp graph` and the
+  read-only graph page of `rmp web` adopts upstream robustness, security, Cypher,
+  and durability hardening. The release line is API-additive over `v0.2.0`; no
+  consumed exported identifier was removed or renamed. v0.3.2 specifically fixes a
+  recovery panic present in v0.3.0/v0.3.1 when reopening a `v0.2.0`-written store,
+  which is why the pin targets v0.3.2. The indirect `golang.org/x/sys` hash is
+  refreshed and the toolchain directive is `go1.26.4`. Specified across
+  `SPEC/BUILD.md`, `SPEC/GRAPH.md`, and `SPEC/ARCHITECTURE.md`.
+
+### Fixed
+
+#### Reliability and SPEC conformance (audit findings #39–#63)
+
+- **Concurrent graph-write data loss (#39, CRITICAL)** — `rmp graph` writes now
+  take an exclusive, non-blocking file lock for the whole write (open → commit →
+  checkpoint → WAL-truncate). Two concurrent writers could otherwise interleave so
+  one writer's snapshot checkpoint overwrote the other's committed-but-unseen
+  write and then truncated the WAL that still held it, silently losing an
+  acknowledged write. Contention now surfaces as exit 1.
+- **Per-connection PRAGMAs (#41) and version comparison (#42)** — `foreign_keys`
+  and `busy_timeout` are now carried in the SQLite DSN so every pooled connection
+  applies them (a one-shot `Exec` had left the second pooled connection with
+  `foreign_keys=OFF`, silently disabling `ON DELETE CASCADE`). Migration gating now
+  compares versions numerically, so `1.9.0` versus `1.10.0` orders correctly and
+  migrations are no longer skipped once a component reaches two digits.
+- **Read-only web database access (#43)** — `rmp web` opens roadmap databases with
+  `query_only` and without running migrations, so a mere page view can never
+  rewrite a stale-schema `project.db`.
+- **Task-command correctness (#44–#46, #48)** — `task get`, `task priority`, and
+  `task severity` fail fast with exit 4 on unknown IDs (no phantom audit rows,
+  no partial mutation in a mixed batch); out-of-range priority/severity returns
+  exit 6; a no-field `task edit` is a successful no-op.
+- **Sprint task management (#40, #47, #49, #50)** — `sprint remove-tasks` is scoped
+  to the named sprint (membership-checked, exit 6 otherwise), resets reverted tasks
+  to `BACKLOG` clearing their lifecycle timestamps and completion summary, and
+  compacts remaining positions to a contiguous sequence; `move-to` clamps an
+  out-of-range position to the end.
+- **State-machine and empty-list contracts (#53, #55)** — the `DOING → SPRINT`
+  manual transition is forbidden (SPRINT is set exclusively by
+  `sprint add-tasks`); empty sprint and audit lists marshal to `[]`, never `null`.
+- **SPEC-verbatim messages and exit codes (#54, #58, #59, #60)** — required-
+  parameter and roadmap-name error messages match the SPEC canonical text exactly;
+  an int64-overflowing all-digit ID is a range failure (exit 6); the data
+  directory's `0700` permission is re-applied and verified on every layout
+  migration.
+- **Global help generated from the registry (#51)** — `rmp --help` builds its
+  command list from the single command registry instead of a hardcoded block that
+  had silently dropped the `web` command.
+- **Atomic sprint add/move-task audit (#65–#67)** — `AddTasksToSprint` and
+  `MoveTasksBetweenSprints` write their audit rows inside the same transaction as
+  the membership change; sprint capacity is enforced inside the transaction,
+  closing a TOCTOU window. `DeleteSprint` and `RemoveTasksFromSprint` run their
+  multi-statement mutations in a single transaction so task status and membership
+  can never diverge.
+- **Idempotent migrations (#68)** — `ALTER TABLE ADD COLUMN` migrations are guarded
+  by a `pragma_table_info` column-existence check.
+- **Audit catalogue and help cleanup** — the unused `TASK_TYPE_CHANGE` audit
+  operation is removed (a task type change is recorded as `TASK_UPDATE`); the
+  `audit list --operation` help, SPEC, and code now agree.
+
+### Security (audit findings #64–#87)
+
+- **`rmp web` server hardening (#69–#71, #73, #76)** — added `WriteTimeout` (30 s)
+  and `IdleTimeout` (120 s) to mitigate slowloris-style denial of service; `/static/`
+  directory requests return 404 (no embedded-tree disclosure); a strict security-
+  header set (Content-Security-Policy, `X-Content-Type-Options: nosniff`,
+  `X-Frame-Options: DENY`, `Referrer-Policy: same-origin`) is applied to every
+  response; `/graph/data` emits HTML-safe JSON; the default bind host is now
+  `127.0.0.1`, and a non-loopback bind prints a network-exposure warning to stderr.
+- **Never serve stale data** — `Cache-Control: no-store` is set on every data-
+  derived response (all dynamic pages, the `/graph/data` endpoint, and data-state-
+  dependent error responses) at the single outermost middleware choke point, so no
+  client or intermediary cache can re-present a database/store state that has since
+  changed. Immutable `/static/` assets stay cacheable.
+- **Symlink following refused (#72, #74, #75)** — the data directory, roadmap
+  directories, and the legacy-layout migration are guarded by an `Lstat` symlink
+  check, so a pre-placed symlink can no longer redirect a `project.db` write or a
+  `0700` `chmod` outside `~/.roadmaps`.
+- **Bounded results and secure file permissions (#64, #77, #78)** — `GetAuditEntries`
+  hard-caps its result set; a new `project.db` is created with
+  `O_CREATE|O_EXCL` mode `0600` before `sql.Open`, eliminating the umask-derived
+  world-readable window, and the `-wal`/`-shm` sidecars are `chmod`-ed to `0600`.
+- **Input validation hardening (#82–#87)** — CLI free-text inputs reject ASCII
+  control characters (except TAB/LF/CR), DEL, and Unicode bidirectional/format code
+  points, blocking terminal-escape injection and Trojan Source (CVE-2021-42574);
+  specialist names containing the list-separator comma are rejected; audit IDs,
+  `--entity-id`, `--limit`, sprint `--max-tasks`, and sprint `move-to` positions are
+  bounded.
+- **Read-only graph guard-rail rejects DDL (#79, #80)** — the `query`/`search`
+  guard-rail rejects `CREATE`/`DROP INDEX|CONSTRAINT` using a case- and whitespace-
+  insensitive matcher on the literal-masked query string (GoGraph's own check was
+  case/whitespace-sensitive and bypassable). DDL keywords inside string literals are
+  not misclassified, so legitimate read queries and the knowledge-graph memory store
+  still pass.
+
+### Documentation
+
+- `CLAUDE.md` gained "Separation of Responsibilities", prioritization, and
+  "Knowledge Graph as Memory" working principles (internal, contributor-facing).
+- `SPEC/IMPLEMENTATION.md` removed an unimplemented "Connection Caching" section
+  so the specification reflects the real code (#63); four further SPEC-vs-code
+  contradictions were reconciled (#56, #61, #62).
+- `DOCS/commands/sprint.md` and `DOCS/commands/audit.md` synced with the new
+  `--title`/`--order` flags and the trimmed audit-operation catalogue.
+
+### Tests
+
+- New E2E suites: `tests/test_40_graph_notifications.py`,
+  `tests/test_41_graph_concurrency_input.py`,
+  `tests/test_42_security_audit.py` (8 standing defense assertions plus 15 finding
+  regression probes for #64–#87), and `tests/test_43_sprint_order_field.py`.
+- The full battery is green: `go test -count=1 ./...` (7 packages PASS),
+  `gofmt -l .` clean, `go vet ./...` 0 issues, `golangci-lint run ./...` 0 issues,
+  `go build` succeeds, and `python3 tests/run_tests.py` reports **42/42** (100 %).
+
+### Known Issues
+
+One SPEC-vs-code divergence remains open and is unaffected by this release. It does
+not affect runtime behaviour and is tracked as a `spec` / `tech-debt` follow-up for
+a future `specification-manager` pass:
+
+- `SPEC/COMMANDS.md` documents the `audit stats` JSON keys `operations_count`,
+  `entity_type_count`, `first_entry`, `last_entry` and a `period.{since,until}`
+  block; the implementation emits `by_operation`, `by_entity_type`,
+  `first_entry_at`, `last_entry_at`, `total_entries` with no `period` object.
+
+[1.10.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.9.1...v1.10.0
+
 ## [1.9.1] - 2026-06-05
 
 Hardens the `rmp graph` knowledge-graph store by upgrading its backing engine,
