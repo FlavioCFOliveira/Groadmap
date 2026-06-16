@@ -5,6 +5,74 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] - 2026-06-16
+
+A reliability release for the read-only `rmp web` server. It makes `rmp web`
+**auto-migrate every served roadmap's SQLite schema once at startup**, before the
+HTTP listener binds, so that the web interface can no longer return HTTP 500 when
+it is the first command run against a roadmap whose on-disk schema predates a
+binary schema bump. The migration runs through the writable `db.Open` path
+(idempotent `RunMigrations`, a no-op when the schema is already current) and never
+touches the per-request data path, which remains strictly read-only
+(`OpenReadOnly` with `query_only`), preserving the read-only invariant (finding
+#43). Under Semantic Versioning 2.0.0 this is a **MINOR** release: the change is
+additive and fully backward compatible with `v1.10.0`. No `rmp` command, flag,
+JSON output, exit code, or on-disk format is altered. The database schema version
+is unchanged at `1.8.0`; this release adds no migration of its own and only
+applies the already-defined migrations earlier in the `rmp web` lifecycle.
+
+### Added
+
+- **Startup schema migration for `rmp web`** — `serve()` now runs a new
+  `migrateRoadmapsAtStartup()` step after `EnsureDataDir` and before the listener
+  binds. It enumerates every roadmap via `utils.ListRoadmaps()`, opens each one
+  through the writable `db.Open` path (which runs the idempotent
+  `RunMigrations`, a no-op when the schema is already current), then closes it.
+  A per-roadmap list, open, or migration failure is logged to stderr and is
+  **non-fatal**: the server still starts and serves the remaining roadmaps.
+  Specified in `SPEC/WEB.md` (§ Startup Schema Migration, Server Lifecycle step 2,
+  Acceptance Criteria 41/42) and `SPEC/ARCHITECTURE.md` (§ internal/web).
+
+### Fixed
+
+- **`rmp web` sprints page returned HTTP 500 on a stale schema** — when `rmp web`
+  was the first command run after a binary schema bump on a roadmap whose
+  `project.db` predated schema `1.7.0`/`1.8.0`, the sprints page
+  (`GET /roadmaps/{name}`) failed with HTTP 500 because the read-only query
+  referenced columns absent from the stale file (`sprints.title`,
+  `sprints.order_index`). The per-request loaders open the database read-only
+  (`OpenReadOnly`, `query_only`) and therefore cannot migrate it. Migrating once
+  at startup, before any read-only connection is opened, closes this gap and makes
+  migration automatic and input-free while keeping every per-request connection
+  strictly read-only — no write, no audit row, and no schema change occurs on a
+  read (finding #43 preserved).
+
+### Tests
+
+- New regression suite `internal/web/startup_migration_test.go` (6 tests) covering:
+  stale-to-current schema migration at startup, the sprints page recovering from
+  HTTP 500 to 200, the non-fatal behaviour when one roadmap is broken,
+  multi-roadmap migration, idempotency against an already-current schema, and the
+  read-only invariant (no audit row and no `schema_version` change across `GET`
+  requests).
+- The full battery is green this release cycle: `go test -count=1 ./...`
+  (7 packages PASS), `gofmt -l .` clean, `go vet ./...` 0 issues,
+  `golangci-lint run ./...` 0 issues, `go build` succeeds (`rmp --version` reports
+  `1.11.0`), and `python3 tests/run_tests.py` reports **42/42** (100 %).
+
+### Known Issues
+
+One SPEC-vs-code divergence remains open and is unaffected by this release. It does
+not affect runtime behaviour and is tracked as a `spec` / `tech-debt` follow-up for
+a future `specification-manager` pass:
+
+- `SPEC/COMMANDS.md` documents the `audit stats` JSON keys `operations_count`,
+  `entity_type_count`, `first_entry`, `last_entry` and a `period.{since,until}`
+  block; the implementation emits `by_operation`, `by_entity_type`,
+  `first_entry_at`, `last_entry_at`, `total_entries` with no `period` object.
+
+[1.11.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.10.0...v1.11.0
+
 ## [1.10.0] - 2026-06-16
 
 A feature and reliability release. It introduces a required, human-readable
