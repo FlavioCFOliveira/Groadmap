@@ -59,6 +59,7 @@ TEST_MODULES = [
     "test_39_graph_guardrail_literals",
     "test_40_graph_notifications",
     "test_41_graph_concurrency_input",
+    "test_42_security_audit",
 ]
 
 # Stress tests (run separately due to time/data volume)
