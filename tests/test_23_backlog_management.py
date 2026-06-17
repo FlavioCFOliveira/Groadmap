@@ -173,6 +173,50 @@ class TestBacklogList:
 
         print("✓ invalid --sort rejected with exit 6")
 
+    def test_backlog_list_invalid_type_rejected(self):
+        """Regression (task #100): an unknown --type value must be classified
+        as a validation error (exit 6), not a generic failure (exit 1).
+
+        The bug was that backlog.go returned the bare error from
+        models.ParseTaskType, which wraps only ErrInvalidTaskType (not
+        utils.ErrValidation), so handleError fell through to exit 1. The fix
+        re-wraps it in utils.ErrValidation at the call site — matching
+        task create/edit and SPEC/COMMANDS.md, which promise exit 6.
+        """
+        exit_code, stdout, stderr = self.test.run_cmd(
+            ["backlog", "list", "-r", self.roadmap, "--type", "WRONG"],
+            check=False,
+        )
+        assert exit_code == 6, (
+            f"invalid --type must exit 6 (validation), got {exit_code}; stderr={stderr}"
+        )
+        # Errors are plain text on stderr, never JSON on stdout.
+        assert stderr.strip(), "invalid --type must write a plain-text error to stderr"
+        assert "type" in stderr.lower(), f"stderr must mention the bad type; got {stderr!r}"
+        assert not stdout.strip(), f"errors must not emit stdout; got {stdout!r}"
+
+        print("✓ invalid --type rejected with exit 6")
+
+    def test_backlog_list_valid_type_exit_zero(self):
+        """A valid --type value (TASK) must succeed with exit 0.
+
+        Guards against the fix over-broadening rejection: the seeded tasks are
+        all TASK-typed, so the listing returns them and exits cleanly.
+        """
+        exit_code, stdout, _ = self.test.run_cmd(
+            ["backlog", "list", "-r", self.roadmap, "--type", "TASK"],
+            check=False,
+        )
+        assert exit_code == 0, f"valid --type TASK must exit 0, got {exit_code}"
+        # JSON on stdout for the success path.
+        import json as _json
+        rows = _json.loads(stdout)
+        assert all(row["type"] == "TASK" for row in rows), (
+            f"all returned tasks must be TASK-typed; got {[r['type'] for r in rows]}"
+        )
+
+        print("✓ valid --type TASK exits 0")
+
     def test_backlog_list_limit(self):
         """--limit N caps the result count."""
         result = self.test.run_cmd_json(

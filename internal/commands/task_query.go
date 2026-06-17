@@ -75,7 +75,7 @@ func taskList(args []string) error {
 	if typeStr, ok := result.Flags["Type"].(string); ok {
 		tt, parseErr := models.ParseTaskType(typeStr)
 		if parseErr != nil {
-			return parseErr
+			return fmt.Errorf("%w: %s", utils.ErrValidation, parseErr.Error())
 		}
 		filter.TaskType = &tt
 	}
