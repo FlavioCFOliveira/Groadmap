@@ -83,7 +83,41 @@ func TestSprintList_InvalidStatus(t *testing.T) {
 
 	err := HandleSprint([]string{"list", "-r", testName, "--status", "INVALID"})
 	if err == nil {
-		t.Error("sprintList with invalid status expected error, got nil")
+		t.Fatal("sprintList with invalid status expected error, got nil")
+	}
+	// Regression: a bad --status enum value must map to utils.ErrValidation
+	// (exit 6), not leak ParseSprintStatus's model-level sentinel as a generic
+	// runtime error (exit 1).
+	if !errors.Is(err, utils.ErrValidation) {
+		t.Errorf("expected utils.ErrValidation (exit 6), got: %v", err)
+	}
+}
+
+// TestSprintTasks_InvalidStatus is a regression guard: the --status filter on
+// `sprint tasks` is wired via the -s short flag (matching task list / backlog
+// list), and a bad enum value must map to utils.ErrValidation (exit 6) rather
+// than leak ParseTaskStatus's model sentinel as a generic runtime error (exit 1).
+func TestSprintTasks_InvalidStatus(t *testing.T) {
+	testName := "testsprinttasksinvalidstatus"
+	database, cleanup := setupTestTaskRoadmap(t, testName)
+	defer cleanup()
+
+	ctx := context.Background()
+	sprintID, err := database.CreateSprint(ctx, &models.Sprint{
+		Title:       "Sprint 1",
+		Description: "first",
+		Status:      models.SprintPending,
+	})
+	if err != nil {
+		t.Fatalf("CreateSprint: %v", err)
+	}
+
+	err = HandleSprint([]string{"tasks", "-r", testName, strconv.Itoa(sprintID), "-s", "INVALID"})
+	if err == nil {
+		t.Fatal("sprintTasks with invalid status expected error, got nil")
+	}
+	if !errors.Is(err, utils.ErrValidation) {
+		t.Errorf("expected utils.ErrValidation (exit 6), got: %v", err)
 	}
 }
 

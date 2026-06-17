@@ -29,12 +29,12 @@ Filters:
   -o, --operation <op>            Filter by operation. See 'rmp audit --help'
                                   for the full operation enum.
   -e, --entity-type <type>        TASK or SPRINT
-  --entity-id <id>                Integer id within the entity type
+  --entity-id <id>                Positive integer 1-2147483647 within the entity type
   --since <date>                  Inclusive lower bound on performed_at
                                   (ISO 8601 with millisecond precision, e.g.
                                   2026-01-01T00:00:00.000Z; date-only also accepted)
   --until <date>                  Inclusive upper bound
-  -l, --limit <n>                 Maximum entries returned (default 100)
+  -l, --limit <n>                 Maximum entries returned (range 1-500, default 100)
 
 Output (stdout JSON):
   Array of audit entries:
@@ -43,8 +43,10 @@ Output (stdout JSON):
 
 Exit codes:
   0  Success
+  2  Non-integer --limit or --entity-id (rejected by the flag parser as misuse)
   3  Missing -r
-  6  Invalid operation, entity-type, or date format
+  6  Invalid operation, entity-type, or date format, --limit out of 1-500,
+     or --entity-id out of 1-2147483647
 
 Examples:
   rmp audit list -r myproject
@@ -67,15 +69,16 @@ Aliases: hist.
 Required:
   -r, --roadmap <name>            Target roadmap
   <entity-type>                   TASK or SPRINT
-  <entity-id>                     Integer id within the entity type
+  <entity-id>                     Positive integer 1-2147483647 within the entity type
 
 Output (stdout JSON):
   Array of audit entries (same shape as 'audit list').
 
 Exit codes:
   0  Success
+  2  Non-integer <entity-id>
   3  Missing -r
-  6  Bad entity-type value or non-integer id
+  6  Bad entity-type value, or <entity-id> out of range (<1 or >2147483647)
 
 Examples:
   rmp audit history -r myproject TASK 1
@@ -102,8 +105,8 @@ Optional:
 Output (stdout JSON):
   {
     "total_entries": <int>,
-    "first_entry_at": "<ISO 8601 or empty>",
-    "last_entry_at":  "<ISO 8601 or empty>",
+    "first_entry_at": "<ISO 8601>" or null (when there are no entries),
+    "last_entry_at":  "<ISO 8601>" or null (when there are no entries),
     "by_operation":  {"TASK_CREATE": <int>, "TASK_UPDATE": <int>, ...},
     "by_entity_type": {"TASK": <int>, "SPRINT": <int>}
   }
@@ -296,6 +299,8 @@ func auditStats(args []string) error {
 func printAuditHelp() {
 	fmt.Print(`Usage: rmp audit [command] [arguments] [options]
 
+Aliases: aud.
+
 Valid entity types (for --entity-type filter and 'history' arg):
   TASK, SPRINT
 
@@ -324,12 +329,13 @@ Options (shared):
   -h, --help                      Show this help message
 
 Options (list):
-  -o, --operation <type>          Filter by operation (see Valid operations above)
+  -o, --operation <op>            Filter by operation (see Valid operations above)
   -e, --entity-type <type>        Filter by entity type (TASK or SPRINT)
   --entity-id <id>                Filter by specific entity numeric id
+                                  (positive integer 1-2147483647)
   --since <date>                  Lower bound on performed_at (inclusive)
   --until <date>                  Upper bound on performed_at (inclusive)
-  -l, --limit <n>                 Maximum rows returned (default: 100)
+  -l, --limit <n>                 Maximum rows returned (range 1-500, default 100)
 
 Options (stats):
   --since <date>                  Aggregation window start
@@ -343,8 +349,10 @@ Output (stdout JSON):
 
 Exit codes:
   0   Success
+  2   Non-integer --limit or --entity-id (rejected by the flag parser as misuse)
   3   No roadmap specified (-r missing)
-  6   Validation error (bad operation/entity-type/date format)
+  6   Validation error (bad operation/entity-type/date, --limit out of 1-500,
+       or --entity-id out of 1-2147483647)
 
 Examples:
   rmp audit list -r myproject

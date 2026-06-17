@@ -124,7 +124,13 @@ func TestTaskList_InvalidStatus(t *testing.T) {
 
 	err := HandleTask([]string{"list", "-r", testName, "-s", "INVALID"})
 	if err == nil {
-		t.Error("taskList with invalid status expected error, got nil")
+		t.Fatal("taskList with invalid status expected error, got nil")
+	}
+	// Regression: a bad --status enum value must map to utils.ErrValidation
+	// (exit 6), not leak ParseTaskStatus's model-level sentinel as a generic
+	// runtime error (exit 1). See SPEC/COMMANDS.md § Task List.
+	if !errors.Is(err, utils.ErrValidation) {
+		t.Errorf("expected utils.ErrValidation (exit 6), got: %v", err)
 	}
 }
 

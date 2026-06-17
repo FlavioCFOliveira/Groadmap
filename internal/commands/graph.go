@@ -44,7 +44,7 @@ type graphOKResult struct {
 
 // printGraphHelp prints the family-level help for rmp graph.
 func printGraphHelp() {
-	fmt.Print(`Usage: rmp graph <subcommand> -r <roadmap> [--query <cypher>]
+	fmt.Print(`Usage: rmp graph <subcommand> -r <roadmap> [-q <cypher>]
 
 Manage the knowledge graph for a roadmap using Cypher queries.
 Each subcommand validates that the supplied query matches its operation class
@@ -60,7 +60,7 @@ Subcommands:
 
 Options:
   -r, --roadmap <name>    Target roadmap (required)
-  --query <cypher>        Cypher query string; reads stdin when absent
+  -q, --query <cypher>    Cypher query string; reads stdin when absent
   -h, --help              Show this help message
 
 Output (stdout JSON):
@@ -85,16 +85,22 @@ Examples:
 }
 
 func printGraphCreateHelp() {
-	fmt.Print(`Usage: rmp graph create -r <roadmap> [--query <cypher>]
+	fmt.Print(`Usage: rmp graph create -r <roadmap> [-q <cypher>]
 
 Execute a CREATE or MERGE query against the roadmap's knowledge graph.
 The query MUST contain CREATE and/or MERGE clauses and MUST NOT contain
 SET, REMOVE, DELETE, or DETACH DELETE.
 
-Options:
-  -r, --roadmap <name>    Target roadmap (required)
-  --query <cypher>        Cypher query; reads stdin when absent
+Required:
+  -r, --roadmap <name>    Target roadmap
+  -q, --query <cypher>    Cypher query; read from stdin when this flag is absent
+
+Optional:
   -h, --help              Show this help message
+
+Output (stdout JSON):
+  Without a RETURN clause:  {"ok": true}
+  With a RETURN clause:     {"columns": [...], "rows": [[...], ...]}
 
 Exit codes:
   0   Success
@@ -111,15 +117,20 @@ Examples:
 }
 
 func printGraphQueryHelp() {
-	fmt.Print(`Usage: rmp graph query -r <roadmap> [--query <cypher>]
+	fmt.Print(`Usage: rmp graph query -r <roadmap> [-q <cypher>]
 
 Execute a read-only MATCH ... RETURN query against the roadmap's knowledge
 graph. The query MUST NOT contain any writing clause.
 
-Options:
-  -r, --roadmap <name>    Target roadmap (required)
-  --query <cypher>        Cypher query; reads stdin when absent
+Required:
+  -r, --roadmap <name>    Target roadmap
+  -q, --query <cypher>    Cypher query; read from stdin when this flag is absent
+
+Optional:
   -h, --help              Show this help message
+
+Output (stdout JSON):
+  {"columns": [...], "rows": [[...], ...]}
 
 Exit codes:
   0   Success
@@ -136,16 +147,22 @@ Examples:
 }
 
 func printGraphUpdateHelp() {
-	fmt.Print(`Usage: rmp graph update -r <roadmap> [--query <cypher>]
+	fmt.Print(`Usage: rmp graph update -r <roadmap> [-q <cypher>]
 
 Execute a SET or REMOVE query against the roadmap's knowledge graph.
 The query MUST contain SET and/or REMOVE clauses and MUST NOT contain
 CREATE, MERGE, DELETE, or DETACH DELETE.
 
-Options:
-  -r, --roadmap <name>    Target roadmap (required)
-  --query <cypher>        Cypher query; reads stdin when absent
+Required:
+  -r, --roadmap <name>    Target roadmap
+  -q, --query <cypher>    Cypher query; read from stdin when this flag is absent
+
+Optional:
   -h, --help              Show this help message
+
+Output (stdout JSON):
+  Without a RETURN clause:  {"ok": true}
+  With a RETURN clause:     {"columns": [...], "rows": [[...], ...]}
 
 Exit codes:
   0   Success
@@ -157,20 +174,27 @@ Exit codes:
 
 Examples:
   rmp graph update -r myproject --query "MATCH (n:Spec {key:'auth'}) SET n.status='done'"
+  echo "MATCH (n:Spec {key:'auth'}) REMOVE n.status" | rmp graph update -r myproject
 `)
 }
 
 func printGraphDeleteHelp() {
-	fmt.Print(`Usage: rmp graph delete -r <roadmap> [--query <cypher>]
+	fmt.Print(`Usage: rmp graph delete -r <roadmap> [-q <cypher>]
 
 Execute a DELETE or DETACH DELETE query against the roadmap's knowledge
 graph. The query MUST contain DELETE and/or DETACH DELETE and MUST NOT
 contain CREATE, MERGE, SET, or REMOVE.
 
-Options:
-  -r, --roadmap <name>    Target roadmap (required)
-  --query <cypher>        Cypher query; reads stdin when absent
+Required:
+  -r, --roadmap <name>    Target roadmap
+  -q, --query <cypher>    Cypher query; read from stdin when this flag is absent
+
+Optional:
   -h, --help              Show this help message
+
+Output (stdout JSON):
+  Without a RETURN clause:  {"ok": true}
+  With a RETURN clause:     {"columns": [...], "rows": [[...], ...]}
 
 Exit codes:
   0   Success
@@ -182,20 +206,26 @@ Exit codes:
 
 Examples:
   rmp graph delete -r myproject --query "MATCH (n:Spec {key:'auth'}) DETACH DELETE n"
+  rmp graph delete -r myproject --query "MATCH (:Spec)-[r:DEPENDS_ON]->(:Spec) DELETE r"
 `)
 }
 
 func printGraphSearchHelp() {
-	fmt.Print(`Usage: rmp graph search -r <roadmap> [--query <cypher>]
+	fmt.Print(`Usage: rmp graph search -r <roadmap> [-q <cypher>]
 
 Execute a read-only traversal query against the roadmap's knowledge graph.
 Variable-length path patterns (e.g. -[*1..3]-) are supported. The query
 MUST NOT contain any writing clause.
 
-Options:
-  -r, --roadmap <name>    Target roadmap (required)
-  --query <cypher>        Cypher query; reads stdin when absent
+Required:
+  -r, --roadmap <name>    Target roadmap
+  -q, --query <cypher>    Cypher query; read from stdin when this flag is absent
+
+Optional:
   -h, --help              Show this help message
+
+Output (stdout JSON):
+  {"columns": [...], "rows": [[...], ...]}
 
 Exit codes:
   0   Success
@@ -207,6 +237,7 @@ Exit codes:
 
 Examples:
   rmp graph search -r myproject --query "MATCH p=(a)-[*1..3]-(b) RETURN p"
+  rmp graph search -r myproject --query "MATCH p=(s:Spec)-[:DEPENDS_ON*1..3]->(d:Spec) RETURN p"
 `)
 }
 

@@ -31,7 +31,9 @@ Required:
   -r, --roadmap <name>            Target roadmap
 
 Filters:
-  -p, --priority <min>            priority >= <min> (0-9)
+  -p, --priority <min>            Keep tasks with priority >= <min>. No 0-9
+                                  validation is enforced; out-of-range numbers
+                                  are accepted and simply match accordingly.
   -y, --type <type>               One of: USER_STORY, TASK, BUG, SUB_TASK,
                                   EPIC, REFACTOR, CHORE, SPIKE, DESIGN_UX, IMPROVEMENT
 
@@ -46,8 +48,9 @@ Output (stdout JSON):
 
 Exit codes:
   0  Success
+  2  Non-integer --limit (rejected by the flag parser as misuse)
   3  Missing -r
-  6  Bad --type, --sort, --priority, or --limit value
+  6  Bad --type or --sort value, or out-of-range --limit
 
 Examples:
   rmp backlog list -r myproject
@@ -200,20 +203,24 @@ func backlogShowNext(args []string) error {
 func printBacklogHelp() {
 	fmt.Print(`Usage: rmp backlog [command] [arguments] [options]
 
+Aliases: bl.
+
 Commands:
-  list, ls [OPTIONS]         	List all tasks in the backlog
-  show-next [count] [OPTIONS]  	Show top N backlog tasks by priority for sprint planning
+  list, ls [OPTIONS]            List all tasks in the backlog
+  show-next [count] [OPTIONS]   Show top N backlog tasks by priority for sprint planning
 
 Options:
-  -r, --roadmap <name>       	REQUIRED. Target roadmap.
-  -p, --priority <min>       	Filter: keep tasks with priority >= <min> (range 0-9)
-  -y, --type <type>          	Filter by task type. Valid: USER_STORY, TASK, BUG, SUB_TASK,
-                             	EPIC, REFACTOR, CHORE, SPIKE, DESIGN_UX, IMPROVEMENT
-  --sort <field>             	Sort order: priority (default), created, status, severity
-  -l, --limit <n>            	Maximum number of tasks to return (1-100, default 100;
-                             	applies to 'list'. 'show-next' uses its own [count]
-                             	positional, default 5, max 100 silently clamped)
-  -h, --help                 	Show this help message
+  -r, --roadmap <name>          REQUIRED. Target roadmap.
+  -p, --priority <min>          Filter: keep tasks with priority >= <min>. No 0-9
+                                validation is enforced on this value; out-of-range
+                                numbers are accepted and simply match accordingly.
+  -y, --type <type>             Filter by task type. Valid: USER_STORY, TASK, BUG, SUB_TASK,
+                                EPIC, REFACTOR, CHORE, SPIKE, DESIGN_UX, IMPROVEMENT
+  --sort <field>                Sort order: priority (default), created, status, severity
+  -l, --limit <n>               Maximum number of tasks to return (1-100, default 100;
+                                applies to 'list'. 'show-next' uses its own [count]
+                                positional, default 5, max 100 silently clamped)
+  -h, --help                    Show this help message
 
 Output (stdout JSON):
   Both subcommands return an array of task objects with status == BACKLOG.
@@ -221,8 +228,10 @@ Output (stdout JSON):
 
 Exit codes:
   0   Success
+  2   Non-integer --limit on 'list' (rejected by the flag parser as misuse)
   3   No roadmap specified (-r missing)
-  6   Validation error (bad type/sort/limit/count value)
+  6   Validation error (bad --type/--sort, out-of-range --limit, or
+       non-numeric/non-positive [count] on 'show-next')
 
 Examples:
   rmp backlog list -r groadmap

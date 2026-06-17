@@ -197,7 +197,37 @@ class TestAuditReporting:
         assert "by_operation" in result
         assert result["total_entries"] >= 3
 
+        # With entries present, timestamps must be real ISO 8601 UTC strings,
+        # not null and not empty.
+        assert result["first_entry_at"] is not None
+        assert result["last_entry_at"] is not None
+        assert isinstance(result["first_entry_at"], str) and result["first_entry_at"] != ""
+        assert isinstance(result["last_entry_at"], str) and result["last_entry_at"] != ""
+        assert result["first_entry_at"] <= result["last_entry_at"]
+
         print("✓ Audit stats test passed")
+
+    def test_audit_stats_empty_log_null_timestamps(self):
+        """Regression: empty audit stats must emit JSON null (not "") for
+        first_entry_at/last_entry_at per SPEC/COMMANDS.md and DATA_FORMATS.md."""
+        roadmap = self.test.create_roadmap()
+
+        # No activity beyond roadmap creation; restrict the window to a past
+        # range guaranteed to contain no entries so the result set is empty.
+        result = self.test.run_cmd_json([
+            "audit", "stats", "-r", roadmap,
+            "--since", "2000-01-01T00:00:00.000Z",
+            "--until", "2000-01-02T00:00:00.000Z",
+        ])
+
+        assert result["total_entries"] == 0
+        # Keys must be present and explicitly null (Python None), never "".
+        assert "first_entry_at" in result
+        assert "last_entry_at" in result
+        assert result["first_entry_at"] is None
+        assert result["last_entry_at"] is None
+
+        print("✓ Audit stats empty-log null timestamps test passed")
 
     def test_audit_date_range_filter(self):
         """Test audit log date range filtering."""

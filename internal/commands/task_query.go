@@ -56,7 +56,12 @@ func taskList(args []string) error {
 	if statusStr, ok := result.Flags["Status"].(string); ok {
 		s, parseErr := models.ParseTaskStatus(statusStr)
 		if parseErr != nil {
-			return parseErr
+			// A bad --status enum value is a value-validation failure (exit 6),
+			// not a generic runtime error (exit 1). ParseTaskStatus returns a
+			// model-level sentinel the exit-code mapper does not recognise, so
+			// wrap it in utils.ErrValidation to land on exit 6, matching every
+			// other enum filter (e.g. --type) and SPEC/COMMANDS.md.
+			return fmt.Errorf("%w: %s", utils.ErrValidation, parseErr.Error())
 		}
 		filter.Status = &s
 	}

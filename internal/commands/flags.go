@@ -309,7 +309,7 @@ var (
 
 	// SprintTasksFlags defines flags for listing tasks in a sprint.
 	SprintTasksFlags = []FlagDef{
-		{Name: "--status", Field: "Status", Type: "string"},
+		{Name: "--status", Short: "-s", Field: "Status", Type: "string"},
 		{Name: "--order-by-priority", Field: "OrderByPriority", Type: "bool"},
 	}
 

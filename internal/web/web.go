@@ -162,9 +162,9 @@ lists all roadmaps and you select one in the browser.
 The interface binds loopback (127.0.0.1) by default, so it is reachable
 only from the local machine; to expose it on the network pass the
 explicit opt-in --host 0.0.0.0 (all interfaces), which also prints a
-network-exposure warning to stderr. --host and --port override the bind
-address. Unlike every other command, rmp web starts a server that keeps
-running until interrupted (Ctrl+C / SIGINT or SIGTERM); on startup it
+network-exposure warning to stderr. --host overrides the bind host; --port
+overrides the port. Unlike every other command, rmp web starts a server that
+keeps running until interrupted (Ctrl+C / SIGINT or SIGTERM); on startup it
 prints the served URL and, unless --no-open is given, opens your default
 browser at it.
 

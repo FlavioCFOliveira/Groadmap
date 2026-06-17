@@ -25,6 +25,8 @@ func printRoadmapListHelp() {
 Lists every roadmap under ~/.roadmaps/. Each roadmap is the immediate
 subdirectory of ~/.roadmaps/ that contains a project.db database.
 
+Aliases: ls.
+
 Arguments: (none)
 Options:   -h, --help
 
@@ -53,6 +55,8 @@ Creates the roadmap home directory ~/.roadmaps/<name>/ (mode 0700) and the
 SQLite database ~/.roadmaps/<name>/project.db (mode 0600) inside it.
 Initialises the SQLite schema and records the current schema version.
 
+Aliases: new.
+
 Arguments:
   <name>   Required. Must match ^[a-z0-9_-]+$ and be at most 50 characters.
            Reserved Windows names (CON, PRN, COM1..9, ...) are rejected.
@@ -64,6 +68,7 @@ Output (stdout JSON):
 
 Exit codes:
   0   Success
+  2   Roadmap name argument missing
   5   A roadmap with that name already exists
   6   Invalid roadmap name (bad regex match, length, or reserved word)
 
@@ -93,6 +98,7 @@ Output: empty (exit 0 on success).
 
 Exit codes:
   0   Success
+  2   Roadmap name argument missing
   4   Roadmap not found
   6   Invalid roadmap name
 
@@ -242,6 +248,8 @@ func requireRoadmap(args []string) (string, []string, error) {
 func printRoadmapHelp() {
 	fmt.Print(`Usage: rmp roadmap [command] [arguments]
 
+Aliases: road.
+
 Roadmap names must match the regex ^[a-z0-9_-]+$ and not exceed 50 characters.
 Each roadmap lives in its own home directory ~/.roadmaps/<name>/ (mode 0700),
 with the SQLite database at ~/.roadmaps/<name>/project.db (mode 0600).
@@ -261,6 +269,7 @@ Output (stdout JSON):
 
 Exit codes:
   0   Success
+  2   Unknown subcommand, or required roadmap-name argument missing
   4   Roadmap not found (remove only)
   5   Roadmap already exists (create only)
   6   Invalid roadmap name (regex or length violation)

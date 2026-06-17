@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -1312,6 +1313,74 @@ func TestGetAuditStats(t *testing.T) {
 
 	if stats.TotalEntries != 5 {
 		t.Errorf("expected 5 entries in date range, got %d", stats.TotalEntries)
+	}
+}
+
+// TestGetAuditStatsNullableTimestamps is a regression test for the bug where an
+// empty/no-match audit-stats result emitted "first_entry_at": "" and
+// "last_entry_at": "" (empty strings) instead of JSON null. SPEC/COMMANDS.md and
+// SPEC/DATA_FORMATS.md require these fields to be null when no entries match and
+// real ISO 8601 UTC timestamps otherwise.
+func TestGetAuditStatsNullableTimestamps(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// Empty audit log: timestamps must be nil (serialized as JSON null).
+	stats, err := db.GetAuditStats(testContext(), nil, nil)
+	if err != nil {
+		t.Fatalf("failed to get audit stats on empty log: %v", err)
+	}
+	if stats.TotalEntries != 0 {
+		t.Errorf("expected 0 total entries on empty log, got %d", stats.TotalEntries)
+	}
+	if stats.FirstEntryAt != nil {
+		t.Errorf("expected FirstEntryAt nil on empty log, got %q", *stats.FirstEntryAt)
+	}
+	if stats.LastEntryAt != nil {
+		t.Errorf("expected LastEntryAt nil on empty log, got %q", *stats.LastEntryAt)
+	}
+
+	// Verify the empty result marshals both keys to literal JSON null.
+	raw, err := json.Marshal(stats)
+	if err != nil {
+		t.Fatalf("failed to marshal empty stats: %v", err)
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("failed to unmarshal stats JSON: %v", err)
+	}
+	for _, key := range []string{"first_entry_at", "last_entry_at"} {
+		v, ok := decoded[key]
+		if !ok {
+			t.Errorf("expected key %q to be present in JSON output", key)
+			continue
+		}
+		if string(v) != "null" {
+			t.Errorf("expected %q to be JSON null on empty log, got %s", key, v)
+		}
+	}
+
+	// Non-empty audit log: timestamps must be real ISO 8601 UTC strings.
+	const ts = "2026-01-15T10:30:00.000Z"
+	entry := &models.AuditEntry{
+		Operation:   "TASK_CREATE",
+		EntityType:  "TASK",
+		EntityID:    1,
+		PerformedAt: ts,
+	}
+	if _, err := db.LogAuditEntry(testContext(), entry); err != nil {
+		t.Fatalf("failed to log audit entry: %v", err)
+	}
+
+	stats, err = db.GetAuditStats(testContext(), nil, nil)
+	if err != nil {
+		t.Fatalf("failed to get audit stats on non-empty log: %v", err)
+	}
+	if stats.FirstEntryAt == nil || *stats.FirstEntryAt != ts {
+		t.Errorf("expected FirstEntryAt %q, got %v", ts, stats.FirstEntryAt)
+	}
+	if stats.LastEntryAt == nil || *stats.LastEntryAt != ts {
+		t.Errorf("expected LastEntryAt %q, got %v", ts, stats.LastEntryAt)
 	}
 }
 

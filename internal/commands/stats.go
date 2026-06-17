@@ -45,15 +45,14 @@ func HandleStats(args []string) error {
 func printStatsHelp() {
 	fmt.Print(`Usage: rmp stats [options]
 
-Description:
-  Provides comprehensive statistics about a roadmap, including sprint and task distribution,
-  and average velocity across the last 5 closed sprints.
+Provides comprehensive statistics about a roadmap, including sprint and
+task distribution, and average velocity across the last 5 closed sprints.
 
 Options:
-  -r, --roadmap <name>    	REQUIRED. Target roadmap.
-  -h, --help             	Show this help message
+  -r, --roadmap <name>    REQUIRED. Target roadmap.
+  -h, --help              Show this help message
 
-JSON Output:
+Output (stdout JSON):
   {
     "roadmap": "project-name",
     "sprints": {

@@ -240,22 +240,25 @@ Usage: rmp [command] [subcommand] [arguments] [options]
 
 Commands:
 %s
+
 Choosing a task-listing command:
-  rmp task list            All tasks in a roadmap, any status (filter with --status, etc.)
-  rmp backlog list         Only BACKLOG tasks (subset of 'task list' with --status BACKLOG)
-  rmp sprint tasks <id>    Tasks that belong to one specific sprint (any status)
+  rmp task list                All tasks in a roadmap, any status (filter with --status, etc.)
+  rmp backlog list             Only BACKLOG tasks (subset of 'task list' with --status BACKLOG)
+  rmp sprint tasks <id>        Tasks that belong to one specific sprint (any status)
   rmp sprint open-tasks <id>   Tasks in a sprint with status SPRINT/DOING/TESTING (excludes COMPLETED)
-  rmp task next [num]      Top-priority tasks from the currently OPEN sprint (planning shortcut)
+  rmp task next [num]          Top-priority tasks from the currently OPEN sprint (planning shortcut)
   rmp backlog show-next [n]    Top-priority BACKLOG tasks (sprint-planning shortcut)
 
 I/O conventions:
-  - Every command except 'rmp roadmap' and global help requires -r <roadmap>.
+  - Every command requires -r <roadmap>, except 'rmp roadmap', 'rmp web',
+    the AI contract (--ai-help/ai-help), and global help/version.
   - Successful output is JSON on stdout; errors are plain text on stderr.
   - All timestamps in JSON use ISO 8601 UTC: YYYY-MM-DDTHH:mm:ss.sssZ.
 
 Global Options:
   -h, --help       Show this help message
   -v, --version    Show version
+  --ai-help        Emit the AI Agent Contract (machine-readable JSON)
 
 Use "rmp [command] --help" for more information about a command.
 `, appName, commandSummaryLines())

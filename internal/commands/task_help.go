@@ -102,8 +102,9 @@ Examples:
 func printTaskGetHelp() {
 	fmt.Print(`Usage: rmp task get -r <roadmap> <task-ids>
 
-Returns one or more tasks by id. Each id is checked: if any id is missing,
-the request fails fast with exit 4 and no rows are returned.
+Returns one or more tasks by id. Each id is checked: if any id does not
+exist in the roadmap, the request fails fast with exit 4 and no rows are
+returned.
 
 Required:
   -r, --roadmap <name>            Target roadmap
@@ -115,9 +116,9 @@ Output (stdout JSON):
 
 Exit codes:
   0  Success
+  2  Invalid id syntax (non-integer or non-positive id)
   3  Missing -r
   4  At least one id does not exist
-  6  Invalid id syntax
 
 Examples:
   rmp task get -r myproject 1
@@ -220,6 +221,7 @@ Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
+  2  Invalid id syntax (non-integer or non-positive id)
   3  Missing -r
   4  At least one id does not exist
   6  At least one task is not in BACKLOG, or has active subtasks
@@ -240,7 +242,7 @@ Changes the status of one or more tasks. The status machine is strict:
     SPRINT      -> DOING | BACKLOG
     DOING       -> TESTING
     TESTING     -> DOING | COMPLETED
-    COMPLETED   -> BACKLOG  (alias of 'task reopen')
+    COMPLETED   -> BACKLOG  (equivalent to 'task reopen')
 
   Forbidden:
     'task stat <id> SPRINT'   (exit 6) — use 'sprint add-tasks' instead.
@@ -269,6 +271,7 @@ Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
+  2  Invalid id syntax (non-integer or non-positive id), or missing <new-status>
   3  Missing -r
   4  At least one task id does not exist
   6  Invalid status, invalid transition, manual SPRINT attempt, --summary
@@ -287,11 +290,12 @@ Examples:
 func printTaskReopenHelp() {
 	fmt.Print(`Usage: rmp task reopen -r <roadmap> <task-ids>
 
-Resets the listed tasks to BACKLOG status and clears their started_at,
-tested_at, closed_at, and completion_summary fields. Equivalent to
-'task stat <ids> BACKLOG' from a SPRINT/DOING/TESTING/COMPLETED source,
-but more explicit and slightly more permissive (also tolerates ids that
-are already in BACKLOG — they are skipped with a stderr note).
+Resets a task to BACKLOG from any non-BACKLOG status
+(SPRINT/DOING/TESTING/COMPLETED), clearing started_at/tested_at/closed_at/
+completion_summary. Unlike 'task stat <ids> BACKLOG' (accepted only from
+SPRINT or COMPLETED), reopen works from DOING and TESTING too. It is also
+slightly more permissive: ids already in BACKLOG are skipped with a stderr
+note rather than rejected.
 
 Required:
   -r, --roadmap <name>            Target roadmap
@@ -301,9 +305,9 @@ Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
+  2  Invalid id syntax (non-integer or non-positive id)
   3  Missing -r
   4  At least one id does not exist
-  6  Invalid id syntax
 
 Examples:
   rmp task reopen -r myproject 7
@@ -329,6 +333,7 @@ Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
+  2  Invalid id syntax (non-integer or non-positive id)
   3  Missing -r
   4  Task not found
   6  Priority out of range or non-numeric
@@ -357,6 +362,7 @@ Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
+  2  Invalid id syntax (non-integer or non-positive id)
   3  Missing -r
   4  Task not found
   6  Severity out of range or non-numeric
@@ -386,6 +392,7 @@ Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
+  2  Invalid id syntax (non-integer or non-positive id)
   3  Missing -r
   4  Task not found
   6  Specialist value pushes specialists past 500 chars
@@ -415,6 +422,7 @@ Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
+  2  Invalid id syntax (non-integer or non-positive id)
   3  Missing -r
   4  Task not found
 
@@ -440,6 +448,7 @@ Output (stdout JSON):
 
 Exit codes:
   0  Success
+  2  Invalid id syntax (non-integer or non-positive id)
   3  Missing -r
   4  Parent task not found
 
@@ -467,9 +476,10 @@ Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
+  2  Invalid id syntax (non-integer or non-positive id), or a missing id argument
   3  Missing -r
   4  Either task does not exist
-  6  Self-dependency, would create a cycle, or invalid id syntax
+  6  Self-dependency, or would create a cycle
 
 Examples:
   rmp task add-dep -r myproject 10 7          # task 10 depends on task 7
@@ -496,6 +506,7 @@ Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
+  2  Invalid id syntax (non-integer or non-positive id)
   3  Missing -r
   4  No such edge
 
@@ -523,6 +534,7 @@ Output (stdout JSON):
 
 Exit codes:
   0  Success
+  2  Invalid id syntax (non-integer or non-positive id)
   3  Missing -r
   4  Task not found
 
@@ -544,11 +556,13 @@ Required:
   <task-id>                       Integer task id
 
 Output (stdout JSON):
-  Array of task objects (downstream dependents). Empty array (exit 0)
-  if nothing depends on this task.
+  Array of task objects: all dependents regardless of status (contrast:
+  'task blockers' returns only incomplete dependencies). Empty array
+  (exit 0) if nothing depends on this task.
 
 Exit codes:
   0  Success
+  2  Invalid id syntax (non-integer or non-positive id)
   3  Missing -r
   4  Task not found
 

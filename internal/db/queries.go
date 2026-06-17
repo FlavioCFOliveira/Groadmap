@@ -2056,13 +2056,15 @@ func (db *DB) GetAuditStats(ctx context.Context, since, until *string) (*models.
 		stats.ByOperation[op] += cnt
 		stats.ByEntityType[ent] += cnt
 		if minAt.Valid {
-			if stats.FirstEntryAt == "" || minAt.String < stats.FirstEntryAt {
-				stats.FirstEntryAt = minAt.String
+			if stats.FirstEntryAt == nil || minAt.String < *stats.FirstEntryAt {
+				v := minAt.String
+				stats.FirstEntryAt = &v
 			}
 		}
 		if maxAt.Valid {
-			if maxAt.String > stats.LastEntryAt {
-				stats.LastEntryAt = maxAt.String
+			if stats.LastEntryAt == nil || maxAt.String > *stats.LastEntryAt {
+				v := maxAt.String
+				stats.LastEntryAt = &v
 			}
 		}
 	}

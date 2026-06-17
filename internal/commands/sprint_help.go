@@ -54,10 +54,10 @@ Required:
   -d, --description <text>        Sprint description (max 2048 chars)
 
 Optional:
-  --max-tasks <n>                 Hard cap on active tasks (n >= 1). When set,
-                                  'sprint add-tasks' refuses to push the active
-                                  task count past <n>. Cannot be removed once
-                                  set, only changed to another positive integer.
+  --max-tasks <n>                 Hard cap on active tasks (range 1-10000). When
+                                  set, 'sprint add-tasks' refuses to push the
+                                  active task count past <n>. Cannot be removed
+                                  once set, only changed to another value in range.
   --order <n>                     Sprint execution order: a positive integer
                                   (> 0), unique across the roadmap; the sprint
                                   with the lowest --order executes first. When
@@ -74,7 +74,7 @@ Exit codes:
   2  Missing -t or -d
   3  Missing -r
   5  --order value already used by another sprint
-  6  Title/description too long, --max-tasks <= 0, or --order not a positive integer
+  6  Title/description too long, --max-tasks outside 1-10000, or --order not a positive integer
 
 Examples:
   rmp sprint create -r myproject -t "Auth hardening" -d "Sprint 1 — Auth hardening"
@@ -179,7 +179,7 @@ Required:
 At least one of:
   -t, --title <text>              New title (max 255 chars)
   -d, --description <text>        New description (max 2048 chars)
-  --max-tasks <n>                 New capacity cap; must be >= 1
+  --max-tasks <n>                 New capacity cap; range 1-10000
   --order <n>                     New execution order; positive integer (> 0),
                                   unique across the roadmap. Allowed only while
                                   PENDING or OPEN; immutable once CLOSED.
@@ -192,7 +192,7 @@ Exit codes:
   3  Missing -r
   4  Sprint not found
   5  --order value already used by another sprint
-  6  --max-tasks < 1, title/description too long, --order not positive, or --order on a CLOSED sprint
+  6  --max-tasks outside 1-10000, title/description too long, --order not positive, or --order on a CLOSED sprint
 
 Examples:
   rmp sprint update -r myproject 5 -t "Auth + observability"
@@ -331,21 +331,23 @@ Examples:
 
 // printSprintTasksHelp — `rmp sprint tasks`.
 func printSprintTasksHelp() {
-	fmt.Print(`Usage: rmp sprint tasks -r <roadmap> <sprint-id> [--order-by-priority]
+	fmt.Print(`Usage: rmp sprint tasks -r <roadmap> <sprint-id> [-s <state>] [--order-by-priority]
 
 Lists every task assigned to <sprint-id>, regardless of status (so
 COMPLETED tasks are included). Use 'sprint open-tasks' to exclude
 COMPLETED.
 
 Default order is by sprint position ASC. With --order-by-priority,
-the result is re-ordered priority DESC then position ASC.
+the result is sorted by priority DESC, then sprint position ASC.
 
 Required:
   -r, --roadmap <name>            Target roadmap
   <sprint-id>                     Integer sprint id
 
 Optional:
-  --order-by-priority             Re-sort by priority DESC
+  -s, --status <state>            Filter by exact status: BACKLOG, SPRINT,
+                                  DOING, TESTING, COMPLETED (invalid value -> exit 6)
+  --order-by-priority             Sort by priority DESC, then sprint position ASC
 
 Output (stdout JSON):
   Array of task objects.
@@ -354,9 +356,11 @@ Exit codes:
   0  Success
   3  Missing -r
   4  Sprint not found
+  6  Invalid --status value
 
 Examples:
   rmp sprint tasks -r myproject 5
+  rmp sprint tasks -r myproject 5 -s DOING
   rmp sprint tasks -r myproject 5 --order-by-priority
 `)
 }
@@ -374,7 +378,7 @@ Required:
   <sprint-id>                     Integer sprint id
 
 Optional:
-  --order-by-priority             Sort by priority DESC; otherwise sprint position
+  --order-by-priority             Sort by priority DESC, then sprint position ASC
 
 Output (stdout JSON):
   Array of task objects (excludes BACKLOG and COMPLETED).

@@ -38,23 +38,23 @@ Status workflow (per SPEC/STATE_MACHINE.md):
     - 'task reopen' (or 'stat BACKLOG' from COMPLETED) clears started_at, tested_at, closed_at, completion_summary.
 
 Commands:
-  list, ls [OPTIONS]                List tasks (any status; filter with --status)
-  create, new [OPTIONS]             Create a new task (lands in BACKLOG)
-  get <ids>                         Get tasks by id (CSV, no spaces)
-  next [num]                        Get next [num] incomplete tasks from the OPEN sprint
-  edit <id> [OPTIONS]               Edit fields of a task (status NOT editable here)
-  remove, rm <ids>                  Remove task(s) — BACKLOG only, no active subtasks
-  stat, set-status <ids> <status>   Set task status (manual transitions; SPRINT is rejected)
-  reopen <ids>                      Reopen task(s) to BACKLOG, clearing lifecycle timestamps
-  prio, set-priority <ids> <prio>   Set task priority (0-9) for one or many tasks
-  sev, set-severity <ids> <sev>     Set task severity (0-9) for one or many tasks
-  assign <id> <specialist>          Add specialist to task (idempotent; stderr note on dup)
-  unassign <id> <specialist>        Remove specialist from task (idempotent)
-  subtasks <id>                     List direct subtasks (one level; no grand-children)
-  add-dep <id> <dep-id>             Declare task <id> depends on task <dep-id> (cycles rejected)
-  remove-dep <id> <dep-id>          Remove the dependency edge created by add-dep
-  blockers <id>                     List tasks blocking <id> (incomplete dependencies)
-  blocking <id>                     List tasks that depend on <id> (reverse of blockers)
+  list, ls [OPTIONS]                          List tasks (any status; filter with --status)
+  create, new [OPTIONS]                       Create a new task (lands in BACKLOG)
+  get <task-ids>                              Get tasks by id (CSV, no spaces)
+  next [num]                                  Get next [num] incomplete tasks from the OPEN sprint
+  edit <task-id> [OPTIONS]                    Edit fields of a task (status NOT editable here)
+  remove, rm <task-ids>                       Remove task(s) — BACKLOG only, no active subtasks
+  stat, set-status <task-ids> <new-status>    Set task status (manual transitions; SPRINT is rejected)
+  reopen <task-ids>                           Reopen task(s) to BACKLOG, clearing lifecycle timestamps
+  prio, set-priority <task-ids> <priority>    Set task priority (0-9) for one or many tasks
+  sev, set-severity <task-ids> <severity>     Set task severity (0-9) for one or many tasks
+  assign <task-id> <specialist>               Add specialist to task (idempotent; stderr note on dup)
+  unassign <task-id> <specialist>             Remove specialist from task (idempotent)
+  subtasks <task-id>                          List direct subtasks (one level; no grand-children)
+  add-dep <task-id> <blocker-id>              Declare <task-id> depends on <blocker-id> (cycles rejected)
+  remove-dep <task-id> <blocker-id>           Remove the dependency edge created by add-dep
+  blockers <task-id>                          List tasks blocking <task-id> (incomplete dependencies)
+  blocking <task-id>                          List tasks that depend on <task-id> (reverse of blockers)
 
 Options (shared by most subcommands):
   -r, --roadmap <name>              REQUIRED. Target roadmap.

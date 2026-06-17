@@ -161,7 +161,10 @@ type Roadmap struct {
 type AuditStats struct {
 	ByOperation  map[string]int `json:"by_operation"`
 	ByEntityType map[string]int `json:"by_entity_type"`
-	FirstEntryAt string         `json:"first_entry_at"`
-	LastEntryAt  string         `json:"last_entry_at"`
-	TotalEntries int            `json:"total_entries"`
+	// FirstEntryAt and LastEntryAt are nil (serialized as JSON null) when no
+	// audit entries match; otherwise they point to ISO 8601 UTC timestamps.
+	// The keys are always present per SPEC/DATA_FORMATS.md, so no omitempty.
+	FirstEntryAt *string `json:"first_entry_at"`
+	LastEntryAt  *string `json:"last_entry_at"`
+	TotalEntries int     `json:"total_entries"`
 }
