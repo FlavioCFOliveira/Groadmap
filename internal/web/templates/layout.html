@@ -123,7 +123,10 @@
 {{define "sprintCard"}}                    <div class="col-12 col-lg-6">
                       <a href="/roadmaps/{{.Name}}/sprints/{{.Sprint.ID}}" class="card card-sm card-link text-reset">
                         <div class="card-header">
-                          <h4 class="card-title mb-0">Sprint #{{.Sprint.ID}}</h4>
+                          <div>
+                            <div class="card-subtitle text-secondary">Sprint #{{.Sprint.ID}}</div>
+                            <h4 class="card-title mb-0">{{.Sprint.Title}}</h4>
+                          </div>
                           <div class="card-actions"><span class="badge bg-blue-lt">{{.Sprint.Status}}</span></div>
                         </div>
                         <div class="card-body">
@@ -160,12 +163,20 @@
               <p class="sprint-description">{{.Sprint.Description}}</p>
               <div class="datagrid">
                 <div class="datagrid-item">
+                  <div class="datagrid-title">Title</div>
+                  <div class="datagrid-content">{{.Sprint.Title}}</div>
+                </div>
+                <div class="datagrid-item">
                   <div class="datagrid-title">ID</div>
                   <div class="datagrid-content">#{{.Sprint.ID}}</div>
                 </div>
                 <div class="datagrid-item">
                   <div class="datagrid-title">Status</div>
                   <div class="datagrid-content"><span class="badge bg-blue-lt">{{.Sprint.Status}}</span></div>
+                </div>
+                <div class="datagrid-item">
+                  <div class="datagrid-title">Order</div>
+                  <div class="datagrid-content">{{.Sprint.Order}}</div>
                 </div>
                 <div class="datagrid-item">
                   <div class="datagrid-title">Capacity</div>

@@ -688,6 +688,11 @@ how the `rmp web` process itself terminates.
   Roadmap Sprints Page renders every sprint, including the OPEN sprint, as a
   compact card through the shared sprint-card partial instead (see
   [Shared Sprint-Card Partial](#shared-sprint-card-partial)).
+- **Page header.** The page header presents the sprint `title` (the required
+  title defined for the `Sprint` model in `MODELS.md § Sprint`) alongside the text
+  `Sprint #<ID>` (the sprint's `id`), so the sprint is identifiable by both its
+  title and its id. The page does not redefine these fields; `MODELS.md` remains
+  canonical.
 - **Sprint status summary line.** At the top of the sprint presentation the page
   shows the sprint status summary line defined in
   [Sprint Detail Sub-Template](#sprint-detail-sub-template).
@@ -736,9 +741,11 @@ other sprint and is not expanded inline.
    Concluídos.
 
 2. **What the card renders.** For one sprint, the card renders, in order:
-   - a **header** showing the text `Sprint #<ID>` (the sprint's `id`; see
-     `MODELS.md § Sprint`) together with a **status badge** for the sprint's
-     status (the status enum is defined in `MODELS.md § Enums`);
+   - a **header** showing the sprint `title` (the sprint's required `title`; see
+     `MODELS.md § Sprint`) together with (or directly under) the text
+     `Sprint #<ID>` (the sprint's `id`) and a **status badge** for the sprint's
+     status (the status enum is defined in `MODELS.md § Enums`), so the sprint is
+     identifiable at a glance in the Próximos, Actual, and Concluídos listings;
    - the sprint **description** text;
    - a **footer** showing the sprint's total task count (the sprint's
      `task_count`; see `MODELS.md § Sprint`).
@@ -771,11 +778,13 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
 2. **What the sub-template renders.** For one sprint, the sub-template renders, in
    order:
    - the **sprint status summary line** (defined below);
-   - the **sprint metadata datagrid** with the sprint's `ID`, `Status`,
-     `Capacity` (the `max_tasks` value, shown as "Unlimited" when unset), `Tasks`
-     (the sprint's `task_count`), `Created` (`created_at`), `Started`
-     (`started_at`), and `Closed` (`closed_at`); the fields are defined for the
-     `Sprint` model in `MODELS.md § Sprint` and are not redefined here;
+   - the **sprint metadata datagrid** with the sprint's `ID`, `Title` (the
+     sprint's required `title`), `Status`, `Order` (the sprint's execution
+     `order`, a positive integer unique across the roadmap), `Capacity` (the
+     `max_tasks` value, shown as "Unlimited" when unset), `Tasks` (the sprint's
+     `task_count`), `Created` (`created_at`), `Started` (`started_at`), and
+     `Closed` (`closed_at`); the fields are defined for the `Sprint` model in
+     `MODELS.md § Sprint` and are not redefined here;
    - the **full member-tasks table** listing the sprint's tasks in planned
      in-sprint execution order (the `sprint_tasks` order; see `MODELS.md § Sprint`
      and `DATABASE.md § Relationships`), with the columns `ID`, `Title`, `Status`,
@@ -1880,8 +1889,9 @@ Rules:
    tabs with the **Actual** tab active by default, and every sprint in every tab —
    including each OPEN sprint under Actual — rendered through the single shared
    sprint-card partial, so all sprints share identical card markup (a header
-   `Sprint #<ID>` with a status badge, the sprint description, and a footer task
-   count) and each card links to the sprint's own page. The OPEN sprint under
+   showing the sprint `title` together with `Sprint #<ID>` and a status badge,
+   the sprint description, and a footer task count) and each card links to the
+   sprint's own page. The OPEN sprint under
    Actual is shown with the same card as the other sprints and is not expanded into
    an inline member-tasks table or per-task modals, using the fields and
    relationships defined in `MODELS.md` and `DATABASE.md`. The page does **not**
@@ -1916,16 +1926,20 @@ Rules:
     tabs and is not expanded into an inline task table or per-task modals. A tab
     with no matching sprint shows a clear empty-state message.
 13. On the roadmap sprints page, every sprint card in any tab shows a header
-    (`Sprint #<ID>` with a status badge), the sprint description, and a footer with
-    that sprint's total task count, and is a clickable link to that sprint's page at
+    presenting the sprint `title` together with `Sprint #<ID>` and a status badge,
+    the sprint description, and a footer with that sprint's total task count, and
+    is a clickable link to that sprint's page at
     `/roadmaps/{name}/sprints/{id}`.
 14. `GET /roadmaps/{name}/sprints/{id}` for a sprint of an existing roadmap returns
     HTTP 200 and an HTML page showing all details of that sprint (id, status,
     `title`, description, execution `order`, capacity `max_tasks`, `created_at`,
     `started_at`, `closed_at`, and
     `task_count`) and the sprint's task list in `sprint_tasks` order (the planned
-    in-sprint execution order); the page contains no form, button, or link that
-    submits a change. A request whose `{id}` is not a valid integer, or is an
+    in-sprint execution order); the page header presents the sprint `title`
+    alongside `Sprint #<ID>`, and the sprint metadata datagrid shows the sprint
+    `Title` and the execution `Order` in addition to the ID, Status, Capacity,
+    Tasks, Created, Started, and Closed fields; the page contains no form, button,
+    or link that submits a change. A request whose `{id}` is not a valid integer, or is an
     integer that is not a sprint of the named roadmap, returns HTTP 404, and a
     request whose `{name}` is invalid or nonexistent returns HTTP 404.
 15. Clicking a task anywhere it is shown clickable — the tasks page's task table
