@@ -121,6 +121,27 @@ func TestSprintTasks_InvalidStatus(t *testing.T) {
 	}
 }
 
+// TestSprintBottom_SprintNotFound is a regression guard for the bug where
+// `sprint bottom` skipped the sprint-existence check that `sprint top` and
+// `sprint move-to` perform. For a non-existent sprint, GetSprintTasks returns
+// an empty set and the membership check reported a misleading
+// "task does not belong to sprint" (utils.ErrValidation, exit 6) instead of
+// the correct "sprint not found" (utils.ErrNotFound, exit 4). bottom must now
+// behave identically to top.
+func TestSprintBottom_SprintNotFound(t *testing.T) {
+	testName := "testsprintbottomnotfound"
+	_, cleanup := setupTestTaskRoadmap(t, testName)
+	defer cleanup()
+
+	err := HandleSprint([]string{"bottom", "-r", testName, "99999", "1"})
+	if err == nil {
+		t.Fatal("sprintBottom on a non-existent sprint expected error, got nil")
+	}
+	if !errors.Is(err, utils.ErrNotFound) {
+		t.Errorf("expected utils.ErrNotFound (exit 4) for a missing sprint, got: %v", err)
+	}
+}
+
 // ==================== sprintCreate Tests ====================
 
 func TestSprintCreate_NoRoadmap(t *testing.T) {

@@ -101,6 +101,7 @@ func buildTaskCommand() Command {
 				Examples: []Example{
 					{Title: "Single task", Cmd: "rmp task get -r myproject 1", Exit: 0},
 					{Title: "Bulk", Cmd: "rmp task get -r myproject 1,3,5", Exit: 0},
+					{Title: "Unknown id", Cmd: "rmp task get -r myproject 99999", Stderr: "Error: resource not found: some tasks not found", Exit: 4},
 				},
 			},
 			{
@@ -121,6 +122,7 @@ func buildTaskCommand() Command {
 				Examples: []Example{
 					{Title: "Next task", Cmd: "rmp task next -r myproject", Exit: 0},
 					{Title: "Next 5", Cmd: "rmp task next -r myproject 5", Exit: 0},
+					{Title: "No open sprint", Cmd: "rmp task next -r myproject", Stderr: "Error: resource not found: no sprint is currently open. Use 'rmp sprint start <id>' to open a sprint first", Exit: 4},
 				},
 			},
 			{
@@ -141,6 +143,7 @@ func buildTaskCommand() Command {
 				Examples: []Example{
 					{Title: "Change title", Cmd: `rmp task edit -r myproject 42 -t "Updated title"`, Exit: 0},
 					{Title: "Change priority", Cmd: "rmp task edit -r myproject 42 -p 8", Exit: 0},
+					{Title: "Unknown task", Cmd: `rmp task edit -r myproject 99999 -t "x"`, Stderr: "Error: resource not found: task 99999 not found", Exit: 4},
 				},
 			},
 			{
@@ -207,6 +210,7 @@ func buildTaskCommand() Command {
 				Examples: []Example{
 					{Title: "Reopen one", Cmd: "rmp task reopen -r myproject 7", Exit: 0},
 					{Title: "Reopen bulk", Cmd: "rmp task reopen -r myproject 1,3,5", Exit: 0},
+					{Title: "Unknown id", Cmd: "rmp task reopen -r myproject 99999", Stderr: "Error: resource not found: some tasks not found", Exit: 4},
 				},
 			},
 			{
@@ -227,6 +231,7 @@ func buildTaskCommand() Command {
 				ExitCodes:   []int{0, 3, 4, 6},
 				Examples: []Example{
 					{Title: "Bulk reprioritise", Cmd: "rmp task prio -r myproject 1,2,3 8", Exit: 0},
+					{Title: "Unknown id", Cmd: "rmp task prio -r myproject 99999 5", Stderr: "Error: resource not found: some tasks not found", Exit: 4},
 				},
 			},
 			{
@@ -247,6 +252,7 @@ func buildTaskCommand() Command {
 				ExitCodes:   []int{0, 3, 4, 6},
 				Examples: []Example{
 					{Title: "Single", Cmd: "rmp task sev -r myproject 5 9", Exit: 0},
+					{Title: "Unknown id", Cmd: "rmp task sev -r myproject 99999 5", Stderr: "Error: resource not found: some tasks not found", Exit: 4},
 				},
 			},
 			{
@@ -267,6 +273,7 @@ func buildTaskCommand() Command {
 				ExitCodes:   []int{0, 3, 4, 6},
 				Examples: []Example{
 					{Title: "Assign", Cmd: "rmp task assign -r myproject 7 alice", Exit: 0},
+					{Title: "Unknown task", Cmd: "rmp task assign -r myproject 99999 alice", Stderr: "Error: resource not found: task 99999 not found", Exit: 4},
 				},
 			},
 			{
@@ -287,6 +294,7 @@ func buildTaskCommand() Command {
 				ExitCodes:   []int{0, 3, 4},
 				Examples: []Example{
 					{Title: "Unassign", Cmd: "rmp task unassign -r myproject 7 alice", Exit: 0},
+					{Title: "Unknown task", Cmd: "rmp task unassign -r myproject 99999 alice", Stderr: "Error: resource not found: task 99999 not found", Exit: 4},
 				},
 			},
 			{
@@ -306,6 +314,7 @@ func buildTaskCommand() Command {
 				ExitCodes:   []int{0, 3, 4},
 				Examples: []Example{
 					{Title: "List subtasks", Cmd: "rmp task subtasks -r myproject 5", Exit: 0},
+					{Title: "Unknown task", Cmd: "rmp task subtasks -r myproject 99999", Stderr: "Error: resource not found: task 99999", Exit: 4},
 				},
 			},
 			{
@@ -326,6 +335,7 @@ func buildTaskCommand() Command {
 				ExitCodes:   []int{0, 3, 4, 6},
 				Examples: []Example{
 					{Title: "Add dep", Cmd: "rmp task add-dep -r myproject 10 7", Exit: 0},
+					{Title: "Unknown dependent task", Cmd: "rmp task add-dep -r myproject 99999 7", Stderr: "Error: task #99999 not found: resource not found: task 99999", Exit: 4},
 				},
 			},
 			{
@@ -346,6 +356,7 @@ func buildTaskCommand() Command {
 				ExitCodes:   []int{0, 3, 4},
 				Examples: []Example{
 					{Title: "Remove dep", Cmd: "rmp task remove-dep -r myproject 10 7", Exit: 0},
+					{Title: "No such dependency", Cmd: "rmp task remove-dep -r myproject 99999 88888", Stderr: "Error: resource not found: dependency from task #99999 to task #88888 not found", Exit: 4},
 				},
 			},
 			{
@@ -365,6 +376,7 @@ func buildTaskCommand() Command {
 				ExitCodes:   []int{0, 3, 4},
 				Examples: []Example{
 					{Title: "Blockers", Cmd: "rmp task blockers -r myproject 10", Exit: 0},
+					{Title: "Unknown task", Cmd: "rmp task blockers -r myproject 99999", Stderr: "Error: resource not found: task 99999", Exit: 4},
 				},
 			},
 			{
@@ -384,6 +396,7 @@ func buildTaskCommand() Command {
 				ExitCodes:   []int{0, 3, 4},
 				Examples: []Example{
 					{Title: "Blocking", Cmd: "rmp task blocking -r myproject 7", Exit: 0},
+					{Title: "Unknown task", Cmd: "rmp task blocking -r myproject 99999", Stderr: "Error: resource not found: task 99999", Exit: 4},
 				},
 			},
 		},

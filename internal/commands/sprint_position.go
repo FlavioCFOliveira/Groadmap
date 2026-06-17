@@ -64,6 +64,16 @@ func sprintBottom(args []string) error {
 	ctx, cancel := db.WithQuickTimeout()
 	defer cancel()
 
+	// Verify sprint exists first, mirroring sprintMoveToPosition (used by
+	// `top`/`move-to`). Without this, a non-existent sprint yields an empty
+	// task set from GetSprintTasks and the membership check below would
+	// report a misleading "task does not belong to sprint" (exit 6) instead
+	// of the correct "sprint not found" (exit 4). Keeping the check here
+	// makes `top` and `bottom` behave identically for a missing sprint.
+	if _, err = database.GetSprint(ctx, sprintID); err != nil {
+		return err
+	}
+
 	// Get task count to determine bottom position
 	currentTasks, err := database.GetSprintTasks(ctx, sprintID)
 	if err != nil {

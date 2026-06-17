@@ -170,10 +170,19 @@ type FlagEntry struct {
 	Required bool `json:"required"`
 }
 
-// Range is the bounded-integer constraint used by flag entries.
+// Range is the bounded-integer constraint used by flag entries. Max is
+// a pointer so an unbounded-above integer (RangeMin set, no RangeMax)
+// omits the `max` key entirely rather than serialising the misleading
+// `"max": 0`. See generator.buildFlag for the omission rule.
+// Range field order is intentional: JSON emits `min` before `max` to match
+// SPEC/DATA_FORMATS.md examples (Implementation Notes: maintain field order
+// as defined in examples). The fieldalignment win (8 bytes) is irrelevant —
+// Range is emitted at most once per flag per process.
+//
+//nolint:govet // fieldalignment: SPEC-mandated JSON field order wins.
 type Range struct {
-	Min int `json:"min"`
-	Max int `json:"max"`
+	Min int  `json:"min"`
+	Max *int `json:"max,omitempty"`
 }
 
 // PositionalArgument projects internal/commands.Argument. Enum is null
@@ -240,35 +249,24 @@ type SubcommandEntry struct {
 	Idempotent            bool                 `json:"idempotent"`
 }
 
-// CommandEntry projects internal/commands.Command. For families with
-// HasSubcommand == false (leaf families like `stats`), the generator
-// flattens the single inner Subcommand into the CommandEntry: the
-// flags, usage, examples, and exit codes are promoted to this level
-// and Subcommands is left nil so the JSON omits the key entirely. For
-// HasSubcommand == true families, the leaf fields are zero/nil and
-// Subcommands carries the real payload.
+// CommandEntry projects internal/commands.Command. Every command —
+// branching family or single-action leaf — carries its actions in the
+// Subcommands array, so an agent can traverse the whole CLI uniformly
+// through commands[].subcommands[] without special-casing leaf
+// commands (SPEC/DATA_FORMATS.md § Single-action commands). For a
+// single-action command (`ai-help`, `stats`, `web`) the array holds
+// exactly one element whose name repeats the command's own name.
+//
+// Aliases, Prerequisites, and Subcommands are always-present arrays:
+// they serialise as `[]` (never `null`) when empty, per
+// SPEC/DATA_FORMATS.md § Empty-array serialization.
 type CommandEntry struct {
-	Name          string   `json:"name"`
-	Aliases       []string `json:"aliases"`
-	Summary       string   `json:"summary"`
-	Description   string   `json:"description"`
-	Prerequisites []string `json:"prerequisites"`
-
-	// Leaf-family promotion fields. Populated only when the family has
-	// no subcommand token (HasSubcommand==false). All carry omitempty
-	// so they vanish from the JSON for branching families.
-	Usage                 string               `json:"usage,omitempty"`
-	PositionalArguments   []PositionalArgument `json:"positional_arguments,omitempty"`
-	Flags                 []FlagEntry          `json:"flags,omitempty"`
-	MutualExclusionGroups [][]string           `json:"mutual_exclusion_groups,omitempty"`
-	StdoutOnSuccess       *SuccessOutput       `json:"stdout_on_success,omitempty"`
-	SideEffects           *SideEffects         `json:"side_effects,omitempty"`
-	Idempotent            *bool                `json:"idempotent,omitempty"`
-	ExitCodes             []int                `json:"exit_codes,omitempty"`
-	Examples              []ExampleEntry       `json:"examples,omitempty"`
-
-	// Subcommands is populated only for branching families.
-	Subcommands []SubcommandEntry `json:"subcommands,omitempty"`
+	Name          string            `json:"name"`
+	Aliases       []string          `json:"aliases"`
+	Summary       string            `json:"summary"`
+	Description   string            `json:"description"`
+	Prerequisites []string          `json:"prerequisites"`
+	Subcommands   []SubcommandEntry `json:"subcommands"`
 }
 
 // Workflow is the JSON shape of a `common_workflows` entry. The

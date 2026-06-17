@@ -228,6 +228,7 @@ func buildStatsCommand() Command {
 				ExitCodes:   []int{0, 3, 4},
 				Examples: []Example{
 					{Title: "Show stats", Cmd: "rmp stats -r myproject", Exit: 0},
+					{Title: "Roadmap not found", Cmd: "rmp stats -r missing", Stderr: "Error: resource not found: roadmap \"missing\"", Exit: 4},
 				},
 			},
 		},
@@ -298,6 +299,7 @@ func buildBacklogCommand() Command {
 				Examples: []Example{
 					{Title: "Top 5 backlog tasks", Cmd: "rmp backlog show-next -r myproject", Exit: 0},
 					{Title: "Top 10", Cmd: "rmp backlog show-next -r myproject 10", Exit: 0},
+					{Title: "Non-numeric count", Cmd: "rmp backlog show-next -r myproject abc", Stderr: "Error: validation error: count must be a positive integer", Exit: 6},
 				},
 			},
 		},
@@ -346,6 +348,7 @@ func buildAuditCommand() Command {
 				Examples: []Example{
 					{Title: "All audit entries", Cmd: "rmp audit list -r myproject", Exit: 0},
 					{Title: "Filter by operation", Cmd: "rmp audit list -r myproject -o TASK_STATUS_CHANGE -e TASK", Exit: 0},
+					{Title: "Invalid operation filter", Cmd: "rmp audit list -r myproject -o BOGUS_OP", Stderr: "Error: validation error: invalid operation: BOGUS_OP", Exit: 6},
 				},
 			},
 			{
@@ -371,6 +374,7 @@ func buildAuditCommand() Command {
 				Examples: []Example{
 					{Title: "Task history", Cmd: "rmp audit history -r myproject TASK 1", Exit: 0},
 					{Title: "Sprint history", Cmd: "rmp audit history -r myproject SPRINT 3", Exit: 0},
+					{Title: "Invalid entity type", Cmd: "rmp audit history -r myproject BOGUS 1", Stderr: "Error: validation error: invalid entity type: BOGUS", Exit: 6},
 				},
 			},
 			{
@@ -396,6 +400,7 @@ func buildAuditCommand() Command {
 				Examples: []Example{
 					{Title: "Aggregate stats", Cmd: "rmp audit stats -r myproject", Exit: 0},
 					{Title: "Bounded window", Cmd: "rmp audit stats -r myproject --since 2026-01-01 --until 2026-01-31", Exit: 0},
+					{Title: "Invalid date", Cmd: "rmp audit stats -r myproject --since not-a-date", Stderr: "Error: validation error: invalid date format: not-a-date", Exit: 6},
 				},
 			},
 		},

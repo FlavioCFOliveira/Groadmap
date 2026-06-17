@@ -709,7 +709,7 @@ MUST NOT show `null` in place of an empty array.
 | `idempotent` | boolean | True when repeated invocations with the same arguments produce the same end state. |
 | `exit_codes` | array of integer | Exit codes the subcommand can emit, in ascending order. Always includes `0`. |
 | `prerequisites` | array of string | Preconditions the agent must ensure before invoking (e.g. roadmap exists, sprint is open). |
-| `examples` | array of object | Each entry: `{title, cmd, stdout, stderr, exit}`. Must contain at least one success example and at least one failure example per subcommand. |
+| `examples` | array of object | Each entry: `{title, cmd, stdout, stderr, exit}`. Must contain at least one success example, and at least one failure example for every subcommand that has a failure mode (i.e. whose `exit_codes` include a non-zero code). A subcommand whose only exit code is 0 (e.g. `roadmap list`) is exempt from the failure-example requirement. |
 
 ### `common_workflows` array entry
 

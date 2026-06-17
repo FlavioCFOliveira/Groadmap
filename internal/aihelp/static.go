@@ -35,7 +35,7 @@ func staticConventions() Conventions {
 		RoadmapFlag: RoadmapFlag{
 			Short:       "-r",
 			Long:        "--roadmap",
-			RequiredFor: "every command except roadmap list/create/remove and the help/version/ai-help commands",
+			RequiredFor: "every command except roadmap list/create/remove, web, and the help/version/ai-help commands",
 		},
 		ListSeparator: ",",
 		AIAgentEnvVar: AIAgentEnvVar{

@@ -150,54 +150,38 @@ func buildCommands(reg *commands.Registry, scope Scope) ([]CommandEntry, error) 
 	return []CommandEntry{buildCommand(cmd, scope.Subcommand)}, nil
 }
 
-// buildCommand projects one commands.Command into a CommandEntry. When
-// filterSubcommand is non-empty, the produced Subcommands array
-// contains only the matching subcommand. Leaf families (HasSubcommand
-// false) are flattened: their single Subcommand's fields are promoted
-// to the CommandEntry level and Subcommands is left nil.
+// buildCommand projects one commands.Command into a CommandEntry. Both
+// branching families and single-action leaf commands carry their
+// actions in the Subcommands array (SPEC/DATA_FORMATS.md § Single-action
+// commands): the contract is NOT flattened. For a leaf command the
+// registry stores its single action with an empty Name; the contract
+// repeats the command's own name on that one subcommand so traversal is
+// uniform. When filterSubcommand is non-empty (subcommand-scope), the
+// produced Subcommands array contains only the matching subcommand.
 func buildCommand(c *commands.Command, filterSubcommand string) CommandEntry {
 	entry := CommandEntry{
 		Name:          c.Name,
-		Aliases:       nilSliceIfEmpty(c.Aliases),
+		Aliases:       emptySliceIfNil(c.Aliases),
 		Summary:       c.Summary,
 		Description:   c.Description,
-		Prerequisites: nilSliceIfEmpty(c.Prerequisites),
+		Prerequisites: emptySliceIfNil(c.Prerequisites),
+		Subcommands:   make([]SubcommandEntry, 0, len(c.Subcommands)),
 	}
 
-	if !c.HasSubcommand {
-		// Leaf family (e.g. `stats`). Promote the single inner
-		// Subcommand's fields onto the CommandEntry. The flattening
-		// preserves the SPEC's promise that any contract slice
-		// describes a runnable invocation without needing a
-		// subcommands[] wrapper around a single anonymous entry.
-		if len(c.Subcommands) == 1 {
-			sub := &c.Subcommands[0]
-			entry.Usage = sub.Usage
-			entry.PositionalArguments = buildPositionalList(sub.Positional)
-			entry.Flags = buildFlagList(sub.Flags)
-			entry.MutualExclusionGroups = sub.MutexGroups
-			so := buildSuccessOutput(sub.Output)
-			entry.StdoutOnSuccess = &so
-			se := buildSideEffects(sub.SideEffects)
-			entry.SideEffects = &se
-			idem := sub.Idempotent
-			entry.Idempotent = &idem
-			entry.ExitCodes = sub.ExitCodes
-			entry.Examples = buildExampleList(sub.Examples)
-		}
-		return entry
-	}
-
-	// Branching family — emit subcommands.
-	subs := make([]SubcommandEntry, 0, len(c.Subcommands))
 	for i := range c.Subcommands {
 		s := &c.Subcommands[i]
+		// Single-action leaf: the registry leaves Name empty; surface
+		// the command's own name so commands[].subcommands[] is
+		// uniformly traversable and never carries an anonymous entry.
+		name := s.Name
+		if !c.HasSubcommand && name == "" {
+			name = c.Name
+		}
 		if filterSubcommand != "" && !subcommandMatches(s, filterSubcommand) {
 			continue
 		}
-		subs = append(subs, buildSubcommand(s))
+		entry.Subcommands = append(entry.Subcommands, buildSubcommand(s, name))
 	}
-	entry.Subcommands = subs
 	return entry
 }
 
@@ -218,24 +202,28 @@ func subcommandMatches(s *commands.Subcommand, name string) bool {
 	return false
 }
 
-// buildSubcommand projects one commands.Subcommand.
-func buildSubcommand(s *commands.Subcommand) SubcommandEntry {
+// buildSubcommand projects one commands.Subcommand. name overrides the
+// emitted name (used to repeat a single-action command's own name on
+// its lone, empty-named action); pass s.Name for ordinary subcommands.
+// Every array-typed field is rendered as `[]` when empty, never `null`
+// (SPEC/DATA_FORMATS.md § Empty-array serialization).
+func buildSubcommand(s *commands.Subcommand, name string) SubcommandEntry {
 	so := buildSuccessOutput(s.Output)
 	se := buildSideEffects(s.SideEffects)
 	entry := SubcommandEntry{
-		Name:                  s.Name,
-		Aliases:               nilSliceIfEmpty(s.Aliases),
+		Name:                  name,
+		Aliases:               emptySliceIfNil(s.Aliases),
 		Summary:               s.Summary,
 		Description:           s.Description,
 		Usage:                 s.Usage,
 		PositionalArguments:   buildPositionalList(s.Positional),
 		Flags:                 buildFlagList(s.Flags),
-		MutualExclusionGroups: nilGroupsIfEmpty(s.MutexGroups),
+		MutualExclusionGroups: emptyGroupsIfNil(s.MutexGroups),
 		StdoutOnSuccess:       so,
 		SideEffects:           se,
 		Idempotent:            s.Idempotent,
 		ExitCodes:             s.ExitCodes,
-		Prerequisites:         nilSliceIfEmpty(s.Prerequisites),
+		Prerequisites:         emptySliceIfNil(s.Prerequisites),
 		Examples:              buildExampleList(s.Examples),
 	}
 	if s.ReadsStdin {
@@ -273,7 +261,16 @@ func buildFlag(f *commands.Flag) FlagEntry {
 		MutuallyExclusiveWith: nilSliceIfEmpty(f.MutuallyExclusiveWith),
 	}
 	if f.HasRange {
-		entry.Range = &Range{Min: f.RangeMin, Max: f.RangeMax}
+		// An unbounded-above integer (RangeMin > 0, RangeMax == 0) must
+		// NOT serialise as "max": 0, which reads as a zero ceiling.
+		// Emit a min-only range by leaving Max nil (omitempty) in that
+		// case; otherwise carry the declared upper bound.
+		r := &Range{Min: f.RangeMin}
+		if f.RangeMax != 0 {
+			max := f.RangeMax
+			r.Max = &max
+		}
+		entry.Range = r
 	}
 	if f.MinLength != 0 {
 		v := f.MinLength
@@ -448,12 +445,9 @@ func stringPtrOrNil(s string) *string {
 
 // nilSliceIfEmpty returns nil for an empty slice and the original
 // slice otherwise. Combined with omitempty struct tags, this hides
-// trivially-empty arrays from the JSON (e.g. an Aliases-less command
-// does not emit `"aliases": []`).
-//
-// We deliberately do NOT apply this to fields the SPEC requires as
-// always-present arrays (examples, exit_codes, flags, subcommands of
-// branching families, common_workflows, pitfalls).
+// trivially-empty OPTIONAL arrays from the JSON. It is used only for
+// fields the SPEC marks as "absent when not applicable" (the flag-level
+// mutually_exclusive_with field), NOT for the always-present arrays.
 func nilSliceIfEmpty[T any](s []T) []T {
 	if len(s) == 0 {
 		return nil
@@ -461,13 +455,24 @@ func nilSliceIfEmpty[T any](s []T) []T {
 	return s
 }
 
-// nilGroupsIfEmpty is the [][]string flavour of nilSliceIfEmpty. Go
-// generics handle the slice-of-slice case correctly via nilSliceIfEmpty
-// already, but keeping a typed wrapper makes the intent obvious at
-// the call site for the mutual-exclusion field. Currently unused
-// alias of the generic; kept as a single-line for readability.
-func nilGroupsIfEmpty(g [][]string) [][]string {
-	return nilSliceIfEmpty(g)
+// emptySliceIfNil returns a non-nil empty slice for an empty/nil input
+// and the original slice otherwise. It is the inverse intent of
+// nilSliceIfEmpty: it guarantees a JSON `[]` (never `null`) for the
+// array fields the SPEC mandates as always-present — aliases,
+// prerequisites, subcommands, positional_arguments, examples
+// (SPEC/DATA_FORMATS.md § Empty-array serialization).
+func emptySliceIfNil[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
+}
+
+// emptyGroupsIfNil is the [][]string flavour of emptySliceIfNil for the
+// mutual_exclusion_groups field, which the SPEC also mandates as an
+// always-present array.
+func emptyGroupsIfNil(g [][]string) [][]string {
+	return emptySliceIfNil(g)
 }
 
 // boolPtr returns a pointer to the given bool value. Used to populate

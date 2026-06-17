@@ -525,6 +525,129 @@ class TestAIHelpInvalidScopeExit:
         print("✓ rmp ai-help <stray> exits 2 with Error: on stderr")
 
 
+class TestAIHelpWebBindContract:
+    """Regression guard: the contract must report the `web` command's
+    default bind host as loopback 127.0.0.1, never 0.0.0.0.
+
+    The runtime default (internal/web/web.go: defaultHost = "127.0.0.1")
+    and SPEC/WEB.md § Bind Address and Port Selection are canonical:
+    `rmp web` binds loopback by default and --host 0.0.0.0 is the
+    explicit network-exposure opt-in. The machine-readable contract in
+    internal/commands/registry_web.go previously hard-coded 0.0.0.0,
+    diverging from real behaviour and misleading AI agents into believing
+    the server is network-exposed by default. These assertions pin the
+    contract to the loopback truth so the divergence cannot reappear.
+    """
+
+    def setup_method(self):
+        self.test = GroadmapTestBase()
+        self.test.setup()
+        self.cli = self.test.cli_path
+
+    def teardown_method(self):
+        self.test.teardown()
+
+    def _web_command(self, scope_args):
+        _, out, _ = _run_raw(self.cli, scope_args)
+        doc = json.loads(out)
+        cmds = doc.get("commands", [])
+        web = next((c for c in cmds if c.get("name") == "web"), None)
+        assert web is not None, (
+            f"contract for {scope_args} must include the 'web' command; "
+            f"got {[c.get('name') for c in cmds]}"
+        )
+        return web
+
+    def _action_node(self, web_cmd):
+        # Per SPEC/DATA_FORMATS.md § Single-action commands, the web
+        # command carries its action in a one-element subcommands array
+        # (name repeats "web"); the action-level fields (stdout_on_success,
+        # examples, ...) live on that subcommand, not the command object.
+        # Fall back to the command object for the legacy flattened shape.
+        subs = web_cmd.get("subcommands") or []
+        if subs:
+            return subs[0]
+        return web_cmd
+
+    def _host_flag(self, web_cmd):
+        # The contract collapses web's single empty-name subcommand, so the
+        # --host flag is published directly on the web command object. Fall
+        # back to a subcommands tree if the shape ever changes.
+        flag_sources = [web_cmd.get("flags", [])]
+        for sub in web_cmd.get("subcommands", []):
+            flag_sources.append(sub.get("flags", []))
+        for flags in flag_sources:
+            for flag in flags:
+                if flag.get("long") == "--host":
+                    return flag
+        raise AssertionError("web command must declare a --host flag")
+
+    def test_host_default_is_loopback_in_scoped_contract(self):
+        web = self._web_command(["web", "--ai-help"])
+        host_flag = self._host_flag(web)
+        assert host_flag.get("default") == "127.0.0.1", (
+            "web --host default must be loopback 127.0.0.1 (matches "
+            "internal/web/web.go and SPEC/WEB.md); got "
+            f"{host_flag.get('default')!r}"
+        )
+        print("✓ web --ai-help: --host default is loopback 127.0.0.1")
+
+    def test_host_default_is_loopback_in_root_contract(self):
+        web = self._web_command(["--ai-help"])
+        host_flag = self._host_flag(web)
+        assert host_flag.get("default") == "127.0.0.1", (
+            "root contract web --host default must be 127.0.0.1; got "
+            f"{host_flag.get('default')!r}"
+        )
+        print("✓ rmp --ai-help: web --host default is loopback 127.0.0.1")
+
+    def test_host_default_is_never_all_interfaces(self):
+        # The previous bug shipped 0.0.0.0 as the --host *default*. Guard
+        # that specific field: 0.0.0.0 is only ever the explicit opt-in,
+        # never the default the contract advertises.
+        for scope in (["web", "--ai-help"], ["--ai-help"]):
+            web = self._web_command(scope)
+            default = str(self._host_flag(web).get("default"))
+            assert default != "0.0.0.0", (
+                f"{scope}: web --host default must not be 0.0.0.0 "
+                "(that is the network-exposed opt-in, not the default)"
+            )
+            assert default == "127.0.0.1", (
+                f"{scope}: web --host default must be loopback; got {default!r}"
+            )
+        print("✓ web --host default is never 0.0.0.0 in any scope")
+
+    def test_default_stdout_url_is_loopback(self):
+        # The example/stdout URL samples for the default invocation must
+        # use the loopback address, not the all-interfaces address.
+        web = self._web_command(["web", "--ai-help"])
+        action = self._action_node(web)
+        default_url = str(action.get("stdout_on_success", ""))
+        # The default-success sample URL (not the explicit-opt-in examples)
+        # must be loopback.
+        assert "127.0.0.1:8787" in default_url or "host:port" in default_url, (
+            f"web stdout_on_success sample must be loopback; got {default_url!r}"
+        )
+        assert "http://0.0.0.0" not in default_url, (
+            "web default success URL must not be the all-interfaces address"
+        )
+        # Examples whose command is exactly `rmp web` or `rmp web --no-open`
+        # (no --host) describe the default and must print the loopback URL.
+        for ex in action.get("examples", []):
+            cmd = ex.get("cmd", "")
+            if "--host" not in cmd and ex.get("stdout"):
+                assert "http://0.0.0.0" not in ex["stdout"], (
+                    f"default-invocation example {cmd!r} must not print "
+                    f"0.0.0.0; got {ex['stdout']!r}"
+                )
+                if "http://" in ex["stdout"]:
+                    assert "127.0.0.1" in ex["stdout"], (
+                        f"default-invocation example {cmd!r} must print the "
+                        f"loopback URL; got {ex['stdout']!r}"
+                    )
+        print("✓ web default-invocation URLs are loopback 127.0.0.1")
+
+
 def _run_all():
     """Run every test class sequentially and report a summary."""
     suites = [
@@ -536,6 +659,7 @@ def _run_all():
         TestAIHelpHintDeduplication,
         TestAIHelpFlagPrecedence,
         TestAIHelpInvalidScopeExit,
+        TestAIHelpWebBindContract,
     ]
     passed = 0
     failed = 0

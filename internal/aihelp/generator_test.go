@@ -743,21 +743,36 @@ func TestGenerate_EveryRegistryCommandSurfaces(t *testing.T) {
 			t.Errorf("commands[%d].name = %q, registry = %q", i, name, regCmd.Name)
 		}
 
+		// Every command — branching family or single-action leaf — carries
+		// its actions in the subcommands array (SPEC/DATA_FORMATS.md §
+		// Single-action commands). The contract is never flattened.
+		subsRaw, present := entry["subcommands"]
+		if !present {
+			t.Errorf("command %q missing subcommands key (must be present, never flattened)", name)
+			continue
+		}
+		subs := subsRaw.([]any)
+		if len(subs) != len(regCmd.Subcommands) {
+			t.Errorf("commands[%d=%s].subcommands count = %d, want %d", i, name, len(subs), len(regCmd.Subcommands))
+		}
+
 		if regCmd.HasSubcommand {
-			subs := entry["subcommands"].([]any)
-			if len(subs) != len(regCmd.Subcommands) {
-				t.Errorf("commands[%d=%s].subcommands count = %d, want %d", i, name, len(subs), len(regCmd.Subcommands))
-			}
-		} else {
-			// Leaf family: subcommands key must be absent (omitempty).
-			if _, present := entry["subcommands"]; present {
-				t.Errorf("leaf command %q must not have subcommands key", name)
-			}
-			// Leaf-promoted fields must be present.
-			for _, k := range []string{"usage", "flags", "stdout_on_success", "side_effects", "idempotent", "exit_codes", "examples"} {
-				if _, present := entry[k]; !present {
-					t.Errorf("leaf command %q missing promoted field %q", name, k)
-				}
+			continue
+		}
+
+		// Single-action leaf: exactly one subcommand whose name repeats
+		// the command's own name and which carries the action fields.
+		if len(subs) != 1 {
+			t.Errorf("single-action command %q must have exactly one subcommand, got %d", name, len(subs))
+			continue
+		}
+		sub := subs[0].(map[string]any)
+		if sub["name"] != name {
+			t.Errorf("single-action command %q subcommand name = %v, want %q", name, sub["name"], name)
+		}
+		for _, k := range []string{"usage", "flags", "stdout_on_success", "side_effects", "idempotent", "exit_codes", "examples"} {
+			if _, ok := sub[k]; !ok {
+				t.Errorf("single-action command %q subcommand missing field %q", name, k)
 			}
 		}
 	}
@@ -817,7 +832,12 @@ func TestGenerate_FlagNullVsAbsentDistinction(t *testing.T) {
 	}
 }
 
-func TestGenerate_LeafCommandStatsFlattens(t *testing.T) {
+// TestGenerate_LeafCommandStatsNested asserts the SPEC/DATA_FORMATS.md §
+// Single-action commands shape: a leaf command (`stats`) is NOT flattened.
+// It carries a one-element subcommands array whose lone entry repeats the
+// command's own name and holds the action fields (usage, flags, ...). The
+// command object itself must NOT carry promoted usage/flags keys.
+func TestGenerate_LeafCommandStatsNested(t *testing.T) {
 	out := generateOrFatal(t, ScopeCommand("stats"))
 	m := unmarshalAsMap(t, out)
 	cmds := m["commands"].([]any)
@@ -826,17 +846,27 @@ func TestGenerate_LeafCommandStatsFlattens(t *testing.T) {
 	}
 	entry := cmds[0].(map[string]any)
 
-	// Subcommands must be absent for the leaf family.
-	if v, present := entry["subcommands"]; present {
-		t.Errorf("leaf command 'stats' has subcommands key: %v", v)
+	// The command object must not carry flattened action fields.
+	for _, k := range []string{"usage", "flags", "stdout_on_success", "side_effects", "idempotent", "exit_codes"} {
+		if _, present := entry[k]; present {
+			t.Errorf("single-action command 'stats' must not carry flattened field %q at command level", k)
+		}
 	}
-	// Promoted fields must be present.
-	if _, ok := entry["usage"].(string); !ok {
-		t.Error("stats.usage must be a string")
+
+	subs, ok := entry["subcommands"].([]any)
+	if !ok || len(subs) != 1 {
+		t.Fatalf("stats must have a one-element subcommands array, got %v", entry["subcommands"])
 	}
-	flags, ok := entry["flags"].([]any)
+	sub := subs[0].(map[string]any)
+	if sub["name"] != "stats" {
+		t.Errorf("stats lone subcommand name = %v, want \"stats\"", sub["name"])
+	}
+	if _, ok := sub["usage"].(string); !ok {
+		t.Error("stats subcommand usage must be a string")
+	}
+	flags, ok := sub["flags"].([]any)
 	if !ok || len(flags) == 0 {
-		t.Error("stats.flags must be a non-empty array (at minimum --roadmap and --help)")
+		t.Error("stats subcommand flags must be a non-empty array (at minimum --roadmap and --help)")
 	}
 }
 

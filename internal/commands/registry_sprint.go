@@ -29,6 +29,7 @@ func buildSprintCommand() Command {
 				ExitCodes:   []int{0, 3, 6},
 				Examples: []Example{
 					{Title: "All sprints", Cmd: "rmp sprint list -r myproject", Exit: 0},
+					{Title: "Invalid status filter", Cmd: "rmp sprint list -r myproject --status INVALID", Stderr: "Error: validation error: invalid sprint status: \"INVALID\": invalid sprint status", Exit: 6},
 				},
 			},
 			{
@@ -42,7 +43,7 @@ func buildSprintCommand() Command {
 					sharedRoadmapFlag(),
 					{Long: "--title", Short: "-t", Type: "string", Required: true, MaxLength: 255, Description: "Sprint title."},
 					{Long: "--description", Short: "-d", Type: "string", Required: true, MaxLength: 2048, Description: "Sprint description."},
-					{Long: "--max-tasks", Type: "integer", HasRange: true, RangeMin: 1, Description: "Capacity cap on active tasks; cannot be removed once set."},
+					{Long: "--max-tasks", Type: "integer", HasRange: true, RangeMin: 1, RangeMax: 10000, Description: "Capacity cap on active tasks; cannot be removed once set."},
 					{Long: "--order", Type: "integer", HasRange: true, RangeMin: 1, Description: "Sprint execution order; positive integer (> 0), unique across the roadmap. Optional: auto-assigned to the highest existing order plus one when omitted. A value already used by another sprint is rejected with exit code 5."},
 					helpFlag(),
 				},
@@ -52,6 +53,7 @@ func buildSprintCommand() Command {
 				ExitCodes:   []int{0, 2, 3, 5, 6},
 				Examples: []Example{
 					{Title: "Create", Cmd: `rmp sprint create -r myproject -t "Authentication hardening" -d "Sprint 1"`, Stdout: `{"id":1}`, Exit: 0},
+					{Title: "Missing required title", Cmd: `rmp sprint create -r myproject -d "Sprint 1"`, Stderr: "Error: required parameter missing: --title", Exit: 2},
 				},
 			},
 			{
@@ -71,6 +73,7 @@ func buildSprintCommand() Command {
 				ExitCodes:   []int{0, 3, 4},
 				Examples: []Example{
 					{Title: "Get sprint", Cmd: "rmp sprint get -r myproject 5", Exit: 0},
+					{Title: "Sprint not found", Cmd: "rmp sprint get -r myproject 99999", Stderr: "Error: resource not found: sprint 99999", Exit: 4},
 				},
 			},
 			{
@@ -90,6 +93,7 @@ func buildSprintCommand() Command {
 				ExitCodes:   []int{0, 3, 4},
 				Examples: []Example{
 					{Title: "Show", Cmd: "rmp sprint show -r myproject 5", Exit: 0},
+					{Title: "Sprint not found", Cmd: "rmp sprint show -r myproject 99999", Stderr: "Error: resource not found: sprint 99999", Exit: 4},
 				},
 			},
 			{
@@ -106,7 +110,7 @@ func buildSprintCommand() Command {
 					sharedRoadmapFlag(),
 					{Long: "--title", Short: "-t", Type: "string", MaxLength: 255, Description: "New title."},
 					{Long: "--description", Short: "-d", Type: "string", MaxLength: 2048, Description: "New description."},
-					{Long: "--max-tasks", Type: "integer", HasRange: true, RangeMin: 1, Description: "New capacity cap."},
+					{Long: "--max-tasks", Type: "integer", HasRange: true, RangeMin: 1, RangeMax: 10000, Description: "New capacity cap."},
 					{Long: "--order", Type: "integer", HasRange: true, RangeMin: 1, Description: "New sprint execution order; positive integer (> 0), unique across the roadmap. Allowed only while the sprint is PENDING or OPEN; once CLOSED the order is immutable and a change is rejected with exit code 6. A value already used by another sprint is rejected with exit code 5."},
 					helpFlag(),
 				},
@@ -116,6 +120,7 @@ func buildSprintCommand() Command {
 				ExitCodes:   []int{0, 2, 3, 4, 5, 6},
 				Examples: []Example{
 					{Title: "Update description", Cmd: `rmp sprint update -r myproject 5 -d "New desc"`, Exit: 0},
+					{Title: "Sprint not found", Cmd: `rmp sprint update -r myproject 99999 -d "x"`, Stderr: "Error: resource not found: sprint 99999 not found", Exit: 4},
 				},
 			},
 			{
@@ -135,6 +140,7 @@ func buildSprintCommand() Command {
 				ExitCodes:   []int{0, 3, 4},
 				Examples: []Example{
 					{Title: "Remove sprint", Cmd: "rmp sprint remove -r myproject 5", Exit: 0},
+					{Title: "Sprint not found", Cmd: "rmp sprint remove -r myproject 99999", Stderr: "Error: resource not found: sprint 99999 not found", Exit: 4},
 				},
 			},
 			{
@@ -154,6 +160,7 @@ func buildSprintCommand() Command {
 				ExitCodes:   []int{0, 3, 4, 6},
 				Examples: []Example{
 					{Title: "Start sprint", Cmd: "rmp sprint start -r myproject 5", Exit: 0},
+					{Title: "Sprint not found", Cmd: "rmp sprint start -r myproject 99999", Stderr: "Error: resource not found: sprint 99999", Exit: 4},
 				},
 			},
 			{
@@ -178,6 +185,7 @@ func buildSprintCommand() Command {
 				Examples: []Example{
 					{Title: "Close clean", Cmd: "rmp sprint close -r myproject 5", Exit: 0},
 					{Title: "Force close", Cmd: "rmp sprint close -r myproject 5 --force", Exit: 0},
+					{Title: "Sprint not found", Cmd: "rmp sprint close -r myproject 99999", Stderr: "Error: resource not found: sprint 99999", Exit: 4},
 				},
 			},
 			{
@@ -197,13 +205,14 @@ func buildSprintCommand() Command {
 				ExitCodes:   []int{0, 3, 4, 6},
 				Examples: []Example{
 					{Title: "Reopen", Cmd: "rmp sprint reopen -r myproject 5", Exit: 0},
+					{Title: "Sprint not found", Cmd: "rmp sprint reopen -r myproject 99999", Stderr: "Error: resource not found: sprint 99999", Exit: 4},
 				},
 			},
 			{
 				Name:        "tasks",
 				Summary:     "List ALL tasks in sprint (incl. COMPLETED).",
-				Description: "Lists every task assigned to <sprint-id>, regardless of status.",
-				Usage:       "rmp sprint tasks -r <roadmap> <sprint-id> [--order-by-priority]",
+				Description: "Lists every task assigned to <sprint-id>, regardless of status, optionally filtered by exact task status.",
+				Usage:       "rmp sprint tasks -r <roadmap> <sprint-id> [-s <state>] [--order-by-priority]",
 				HelpPrinter: printSprintTasksHelp,
 				Handler:     sprintTasks,
 				Positional: []Argument{
@@ -211,15 +220,18 @@ func buildSprintCommand() Command {
 				},
 				Flags: []Flag{
 					sharedRoadmapFlag(),
+					{Long: "--status", Short: "-s", Type: "enum", Enum: "TaskStatus", Description: "Filter by exact task status (BACKLOG, SPRINT, DOING, TESTING, COMPLETED)."},
 					{Long: "--order-by-priority", Type: "boolean", Description: "Re-sort by priority DESC; default is sprint position ASC."},
 					helpFlag(),
 				},
 				Output:      SuccessOutput{Kind: "array", Schema: "Array of task objects."},
 				SideEffects: SideEffects{Database: "Read-only.", Filesystem: "None.", Network: "None."},
 				Idempotent:  true,
-				ExitCodes:   []int{0, 3, 4},
+				ExitCodes:   []int{0, 3, 4, 6},
 				Examples: []Example{
 					{Title: "All sprint tasks", Cmd: "rmp sprint tasks -r myproject 5", Exit: 0},
+					{Title: "Filter by status", Cmd: "rmp sprint tasks -r myproject 5 -s DOING", Exit: 0},
+					{Title: "Invalid status", Cmd: "rmp sprint tasks -r myproject 5 -s INVALID", Stderr: "Error: validation error: invalid task status: \"INVALID\": invalid task status", Exit: 6},
 				},
 			},
 			{
@@ -243,6 +255,7 @@ func buildSprintCommand() Command {
 				ExitCodes:   []int{0, 3, 4},
 				Examples: []Example{
 					{Title: "Open tasks", Cmd: "rmp sprint open-tasks -r myproject 5", Exit: 0},
+					{Title: "Sprint not found", Cmd: "rmp sprint open-tasks -r myproject 99999", Stderr: "Error: resource not found: sprint 99999", Exit: 4},
 				},
 			},
 			{
@@ -262,6 +275,7 @@ func buildSprintCommand() Command {
 				ExitCodes:   []int{0, 3, 4},
 				Examples: []Example{
 					{Title: "Stats", Cmd: "rmp sprint stats -r myproject 5", Exit: 0},
+					{Title: "Sprint not found", Cmd: "rmp sprint stats -r myproject 99999", Stderr: "Error: resource not found: sprint 99999", Exit: 4},
 				},
 			},
 			{
@@ -282,6 +296,7 @@ func buildSprintCommand() Command {
 				ExitCodes:   []int{0, 3, 4, 6},
 				Examples: []Example{
 					{Title: "Add tasks", Cmd: "rmp sprint add-tasks -r myproject 5 1,3,7", Exit: 0},
+					{Title: "Sprint not found", Cmd: "rmp sprint add-tasks -r myproject 99999 1", Stderr: "Error: resource not found: sprint 99999", Exit: 4},
 				},
 			},
 			{
@@ -302,6 +317,7 @@ func buildSprintCommand() Command {
 				ExitCodes:   []int{0, 3, 4},
 				Examples: []Example{
 					{Title: "Remove tasks", Cmd: "rmp sprint remove-tasks -r myproject 5 1,3,7", Exit: 0},
+					{Title: "Sprint not found", Cmd: "rmp sprint remove-tasks -r myproject 99999 1", Stderr: "Error: resource not found: sprint 99999", Exit: 4},
 				},
 			},
 			{
@@ -323,6 +339,7 @@ func buildSprintCommand() Command {
 				ExitCodes:   []int{0, 3, 4, 6},
 				Examples: []Example{
 					{Title: "Move", Cmd: "rmp sprint move-tasks -r myproject 5 8 3,7", Exit: 0},
+					{Title: "Source sprint not found", Cmd: "rmp sprint move-tasks -r myproject 99999 8 1", Stderr: "Error: resource not found: from sprint: resource not found: sprint 99999", Exit: 4},
 				},
 			},
 			{
@@ -343,6 +360,7 @@ func buildSprintCommand() Command {
 				ExitCodes:   []int{0, 3, 4, 6},
 				Examples: []Example{
 					{Title: "Reorder", Cmd: "rmp sprint reorder -r myproject 5 3,1,7,2", Exit: 0},
+					{Title: "Sprint not found", Cmd: "rmp sprint reorder -r myproject 99999 1", Stderr: "Error: resource not found: sprint 99999", Exit: 4},
 				},
 			},
 			{
@@ -364,6 +382,7 @@ func buildSprintCommand() Command {
 				ExitCodes:   []int{0, 3, 4, 6},
 				Examples: []Example{
 					{Title: "Move to top", Cmd: "rmp sprint move-to -r myproject 5 7 0", Exit: 0},
+					{Title: "Sprint not found", Cmd: "rmp sprint move-to -r myproject 99999 1 0", Stderr: "Error: resource not found: sprint 99999", Exit: 4},
 				},
 			},
 			{
@@ -385,6 +404,7 @@ func buildSprintCommand() Command {
 				ExitCodes:   []int{0, 3, 4, 6},
 				Examples: []Example{
 					{Title: "Swap", Cmd: "rmp sprint swap -r myproject 5 3 7", Exit: 0},
+					{Title: "Sprint not found", Cmd: "rmp sprint swap -r myproject 99999 1 2", Stderr: "Error: resource not found: sprint 99999", Exit: 4},
 				},
 			},
 			{
@@ -405,6 +425,7 @@ func buildSprintCommand() Command {
 				ExitCodes:   []int{0, 3, 4},
 				Examples: []Example{
 					{Title: "Top", Cmd: "rmp sprint top -r myproject 5 7", Exit: 0},
+					{Title: "Sprint not found", Cmd: "rmp sprint top -r myproject 99999 7", Stderr: "Error: resource not found: sprint 99999", Exit: 4},
 				},
 			},
 			{
@@ -425,6 +446,7 @@ func buildSprintCommand() Command {
 				ExitCodes:   []int{0, 3, 4},
 				Examples: []Example{
 					{Title: "Bottom", Cmd: "rmp sprint bottom -r myproject 5 7", Exit: 0},
+					{Title: "Sprint not found", Cmd: "rmp sprint bottom -r myproject 99999 7", Stderr: "Error: resource not found: sprint 99999", Exit: 4},
 				},
 			},
 		},
