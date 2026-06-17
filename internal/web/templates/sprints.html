@@ -42,22 +42,20 @@
               </ul>
               <div class="tab-content mt-3">
 
-                {{/* Actual: the OPEN sprint(s), each rendered through the shared
-                     sprintDetail sub-template so it is visually identical to the
-                     single Roadmap Sprint Page (SPEC/WEB.md § Shared Sprint
-                     Presentation Sub-Template; Acceptance Criterion 38). Active by
-                     default. A clickable sprint header links to the sprint's own
-                     page. */}}
+                {{/* Actual: the OPEN sprint(s), each rendered through the SAME
+                     shared sprintCard partial the other two tabs use, so all
+                     sprints share identical card markup. The OPEN sprint is NOT
+                     expanded into an inline task table or per-task modals; the
+                     full sprint detail block lives only on the single Roadmap
+                     Sprint Page (SPEC/WEB.md § Shared Sprint-Card Partial;
+                     Acceptance Criteria 8/12/38). Active by default. */}}
                 <div id="tab-current" class="tab-pane active show" role="tabpanel">
                   {{if .SprintsCurrent}}
+                  <div class="row row-cards">
                     {{range .SprintsCurrent}}
-                    <div class="mb-4">
-                      <div class="mb-2">
-                        <a href="/roadmaps/{{$.Name}}/sprints/{{.Sprint.ID}}" class="h4 text-reset">Sprint #{{.Sprint.ID}}</a>
-                      </div>
-{{template "sprintDetail" (.Detail $.Name)}}
-                    </div>
+{{template "sprintCard" (.Card $.Name)}}
                     {{end}}
+                  </div>
                   {{else}}
                   <div class="empty">
                     <p class="empty-title">No open sprint</p>
@@ -66,23 +64,12 @@
                   {{end}}
                 </div>
 
-                {{/* Próximos: PENDING sprints, ascending id. */}}
+                {{/* Próximos: PENDING sprints, ascending sprint Order. */}}
                 <div id="tab-upcoming" class="tab-pane" role="tabpanel">
                   {{if .SprintsUpcoming}}
                   <div class="row row-cards">
                     {{range .SprintsUpcoming}}
-                    <div class="col-12 col-lg-6">
-                      <a href="/roadmaps/{{$.Name}}/sprints/{{.Sprint.ID}}" class="card card-sm card-link text-reset">
-                        <div class="card-header">
-                          <h4 class="card-title mb-0">Sprint #{{.Sprint.ID}}</h4>
-                          <div class="card-actions"><span class="badge bg-blue-lt">{{.Sprint.Status}}</span></div>
-                        </div>
-                        <div class="card-body">
-                          <p class="mb-1 sprint-description">{{.Sprint.Description}}</p>
-                          <span class="text-secondary">{{len .Tasks}} task(s)</span>
-                        </div>
-                      </a>
-                    </div>
+{{template "sprintCard" (.Card $.Name)}}
                     {{end}}
                   </div>
                   {{else}}
@@ -93,24 +80,12 @@
                   {{end}}
                 </div>
 
-                {{/* Concluídos: CLOSED sprints, closed_at descending. */}}
+                {{/* Concluídos: CLOSED sprints, descending sprint Order. */}}
                 <div id="tab-closed" class="tab-pane" role="tabpanel">
                   {{if .SprintsClosed}}
                   <div class="row row-cards">
                     {{range .SprintsClosed}}
-                    <div class="col-12 col-lg-6">
-                      <a href="/roadmaps/{{$.Name}}/sprints/{{.Sprint.ID}}" class="card card-sm card-link text-reset">
-                        <div class="card-header">
-                          <h4 class="card-title mb-0">Sprint #{{.Sprint.ID}}</h4>
-                          <div class="card-actions"><span class="badge bg-blue-lt">{{.Sprint.Status}}</span></div>
-                        </div>
-                        <div class="card-body">
-                          <p class="mb-1 sprint-description">{{.Sprint.Description}}</p>
-                          <div class="text-secondary">{{len .Tasks}} task(s)</div>
-                          <span class="text-secondary">Closed: {{with .Sprint.ClosedAt}}{{.}}{{else}}&mdash;{{end}}</span>
-                        </div>
-                      </a>
-                    </div>
+{{template "sprintCard" (.Card $.Name)}}
                     {{end}}
                   </div>
                   {{else}}
@@ -134,11 +109,6 @@
       </footer>
     </div>
   </div>
-
-  {{/* One read-only task detail modal per task shown clickable on the Actual
-       tab: the OPEN sprints' member tasks, deduplicated by id so each modal id
-       is rendered exactly once (SPEC/WEB.md § Task Detail Modal). */}}
-  {{range .ModalTasks}}{{template "taskModal" .}}{{end}}
 
   <script src="/static/vendor/tabler/tabler.min.js"></script>
 </body>

@@ -69,14 +69,17 @@ func TestNewSprintCompletion_CountsAndLine(t *testing.T) {
 	}
 }
 
-// TestSprintDetail_SharedBlockAndSummaryLine asserts that the Actual tab of the
-// roadmap sprints page and the single Roadmap Sprint Page render the SAME shared
-// sprint presentation sub-template for the OPEN sprint: both carry the exact
-// summary line, the metadata datagrid (ID/Status/Capacity/Tasks/Created/
-// Started/Closed), and the full member-tasks table headers
-// (ID/Title/Status/Type/Priority/Severity) in execution order (SPEC/WEB.md
-// § Shared Sprint Presentation Sub-Template; Acceptance Criteria 38/39).
-func TestSprintDetail_SharedBlockAndSummaryLine(t *testing.T) {
+// TestSprintDetail_FullBlockOnlyOnSprintPage asserts that the full sprint detail
+// block — the exact summary line, the metadata datagrid (ID/Status/Capacity/
+// Tasks/Created/Started/Closed), and the full member-tasks table headers
+// (ID/Title/Status/Type/Priority/Severity) in execution order — is rendered ONLY
+// on the single Roadmap Sprint Page, and that the Actual tab of the roadmap
+// sprints page does NOT render it for the OPEN sprint: there the OPEN sprint is
+// shown through the shared sprint-card partial, with no summary line, no
+// datagrid, no member-tasks table, and no per-task modal (SPEC/WEB.md § Shared
+// Sprint-Card Partial, § Sprint Detail Sub-Template; Acceptance Criteria
+// 8/12/38/39).
+func TestSprintDetail_FullBlockOnlyOnSprintPage(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	f := seedSprintFixture(t, "web-shared-detail")
 	mux := buildMux()
@@ -89,16 +92,10 @@ func TestSprintDetail_SharedBlockAndSummaryLine(t *testing.T) {
 	sprintsPage := servePage(t, mux, "/roadmaps/"+f.name)
 	sprintPage := servePage(t, mux, "/roadmaps/"+f.name+"/sprints/"+itoa(f.openID))
 
-	// Slice the Actual pane out of the sprints page so the assertions target the
-	// OPEN sprint's block, not some other tab.
+	// Slice the Actual pane out of the sprints page so the absence assertions
+	// target the OPEN sprint's card, not some other tab.
 	current := paneSlice(t, sprintsPage, `<div id="tab-current"`)
 
-	pages := map[string]string{
-		"sprints page (Actual tab)": current,
-		"single sprint page":        sprintPage,
-	}
-
-	// Markers that must appear in the shared block on BOTH call sites.
 	datagridTitles := []string{
 		">ID<", ">Status<", ">Capacity<", ">Tasks<", ">Created<", ">Started<", ">Closed<",
 	}
@@ -107,34 +104,98 @@ func TestSprintDetail_SharedBlockAndSummaryLine(t *testing.T) {
 		"<th>Type</th>", "<th>Priority</th>", "<th>Severity</th>",
 	}
 
-	for label, body := range pages {
-		// Exact summary line in the documented format.
-		if !strings.Contains(body, wantLine) {
-			t.Errorf("%s: missing exact summary line %q", label, wantLine)
+	// The single sprint page MUST carry the full detail block.
+	if !strings.Contains(sprintPage, wantLine) {
+		t.Errorf("single sprint page: missing exact summary line %q", wantLine)
+	}
+	if !strings.Contains(sprintPage, `data-role="sprint-summary"`) {
+		t.Errorf("single sprint page: missing the sprint summary line element")
+	}
+	for _, m := range datagridTitles {
+		if !strings.Contains(sprintPage, m) {
+			t.Errorf("single sprint page: detail block missing datagrid title %q", m)
 		}
-		if !strings.Contains(body, `data-role="sprint-summary"`) {
-			t.Errorf("%s: missing the sprint summary line element", label)
+	}
+	for _, h := range tableHeaders {
+		if !strings.Contains(sprintPage, h) {
+			t.Errorf("single sprint page: detail block missing task table header %q", h)
 		}
-		// The metadata datagrid.
-		for _, m := range datagridTitles {
-			if !strings.Contains(body, m) {
-				t.Errorf("%s: shared detail block missing datagrid title %q", label, m)
-			}
+	}
+	if !strings.Contains(sprintPage, "Build the read-only sprint page route and template") {
+		t.Errorf("single sprint page: detail block missing the OPEN sprint's member task")
+	}
+	if !strings.Contains(sprintPage, `data-bs-target="#task-modal-`+itoa(f.openTaskID)+`"`) {
+		t.Errorf("single sprint page: member task row not wired to its task modal")
+	}
+
+	// The Actual tab MUST NOT carry any part of the full detail block.
+	if strings.Contains(current, wantLine) || strings.Contains(current, `data-role="sprint-summary"`) {
+		t.Errorf("Actual tab must not render the sprint status summary line")
+	}
+	for _, m := range datagridTitles {
+		if strings.Contains(current, m) {
+			t.Errorf("Actual tab must not render the metadata datagrid title %q", m)
 		}
-		// The full member-tasks table headers (Type/Priority/Severity prove it is
-		// the full table, not the old reduced Actual-tab card).
-		for _, h := range tableHeaders {
-			if !strings.Contains(body, h) {
-				t.Errorf("%s: shared detail block missing task table header %q", label, h)
-			}
+	}
+	for _, h := range tableHeaders {
+		if strings.Contains(current, h) {
+			t.Errorf("Actual tab must not render the member-tasks table header %q", h)
 		}
-		// The OPEN sprint's member task is listed and clickable to its modal.
-		if !strings.Contains(body, "Build the read-only sprint page route and template") {
-			t.Errorf("%s: shared detail block missing the OPEN sprint's member task", label)
+	}
+	if strings.Contains(current, `data-bs-target="#task-modal-`) {
+		t.Errorf("Actual tab must not render a per-task modal trigger")
+	}
+	// The OPEN sprint IS present on the Actual tab, as a card linking to its page.
+	if !strings.Contains(current, "/sprints/"+itoa(f.openID)) {
+		t.Errorf("Actual tab missing the OPEN sprint card link")
+	}
+	if !strings.Contains(current, "2 task(s)") {
+		t.Errorf("Actual tab card does not show the OPEN sprint's task count")
+	}
+}
+
+// TestSprintsPage_SharedCardAcrossAllTabs asserts that all three tabs of the
+// roadmap sprints page render their sprints through the SINGLE shared
+// sprint-card partial, so the card markup is identical across Próximos, Actual,
+// and Concluídos. It checks the partial's distinctive markup (the
+// "card card-sm card-link" link wrapping a "Sprint #<ID>" header and a
+// "task(s)" footer) appears in every populated pane, and that the total number
+// of cards equals the total number of sprints — proving no tab uses a divergent
+// layout and the OPEN sprint is a card, not an expanded block (SPEC/WEB.md
+// § Shared Sprint-Card Partial; Acceptance Criteria 8/12/13/38).
+func TestSprintsPage_SharedCardAcrossAllTabs(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	f := seedSprintFixture(t, "web-shared-card")
+	mux := buildMux()
+
+	body := servePage(t, mux, "/roadmaps/"+f.name)
+
+	const cardMarker = `class="card card-sm card-link text-reset"`
+
+	// The fixture seeds 5 sprints (2 PENDING, 1 OPEN, 2 CLOSED); every one must be
+	// rendered as exactly one shared card.
+	if got := strings.Count(body, cardMarker); got != 5 {
+		t.Errorf("expected 5 shared sprint cards (one per sprint), found %d", got)
+	}
+
+	// Each populated pane uses the shared card markup, proving no tab diverges.
+	panes := map[string]string{
+		"Próximos":   paneSlice(t, body, `<div id="tab-upcoming"`),
+		"Actual":     paneSlice(t, body, `<div id="tab-current"`),
+		"Concluídos": paneSlice(t, body, `<div id="tab-closed"`),
+	}
+	for label, pane := range panes {
+		if !strings.Contains(pane, cardMarker) {
+			t.Errorf("%s tab does not render the shared sprint-card markup", label)
 		}
-		if !strings.Contains(body, `data-bs-target="#task-modal-`+itoa(f.openTaskID)+`"`) {
-			t.Errorf("%s: member task row not wired to its task modal", label)
+		if !strings.Contains(pane, "task(s)") {
+			t.Errorf("%s tab card does not show a task-count footer", label)
 		}
+	}
+
+	// Every card carries a status badge in its header (Acceptance Criterion 13).
+	if got := strings.Count(body, `<div class="card-actions"><span class="badge bg-blue-lt">`); got != 5 {
+		t.Errorf("expected 5 card status badges (one per card), found %d", got)
 	}
 }
 

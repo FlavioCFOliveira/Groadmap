@@ -37,30 +37,89 @@
       </div>
       <div class="page-body">
         <div class="container-fluid h-100">
-          <div class="card graph-card">
-            <div id="graph" class="graph" data-graph-url="/roadmaps/{{.Name}}/graph/data"></div>
-
-            <aside id="detail-panel" class="detail-panel card" hidden>
-              <div class="card-header">
-                <h3 id="detail-title" class="card-title detail-panel__title">Details</h3>
-                <div class="card-actions">
-                  <button type="button" id="detail-close" class="btn-close" aria-label="Close details"></button>
+          <form id="query-bar" class="graph-query-bar card mb-3" novalidate>
+            <div class="card-body">
+              <div class="graph-query-bar__row">
+                <div class="graph-query-bar__field">
+                  <label for="query-input" class="form-label graph-query-bar__label">Cypher query</label>
+                  <textarea id="query-input" class="form-control graph-query-bar__input" rows="2"
+                    spellcheck="false" autocapitalize="off" autocomplete="off"
+                    aria-label="Cypher query">MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r, m</textarea>
+                </div>
+                <div class="graph-query-bar__controls">
+                  <button type="submit" id="query-run" class="btn btn-primary graph-query-bar__run">
+                    <i class="ti ti-search me-1"></i>Search
+                  </button>
+                  <div class="graph-query-bar__limit">
+                    <label for="limit-select" class="form-label graph-query-bar__label">Node limit</label>
+                    <select id="limit-select" class="form-select graph-limit-select" aria-label="Node limit">
+                      <option value="50">50</option>
+                      <option value="100" selected>100</option>
+                      <option value="250">250</option>
+                      <option value="500">500</option>
+                      <option value="1000">1000</option>
+                      <option value="3000">3000</option>
+                    </select>
+                  </div>
                 </div>
               </div>
-              <div class="card-body">
-                <dl id="detail-body" class="datagrid detail-panel__body mb-0"></dl>
+              <p id="query-error" class="graph-query-bar__error" role="alert" hidden></p>
+            </div>
+          </form>
+          <div class="card graph-card">
+            <aside id="labels-sidebar" class="labels-sidebar" aria-label="Graph labels">
+              <div class="labels-sidebar__toolbar">
+                <button type="button" id="labels-toggle" class="btn btn-icon btn-sm labels-sidebar__toggle"
+                  aria-expanded="true" aria-controls="labels-sidebar-body" title="Collapse labels"
+                  aria-label="Collapse labels">
+                  <i id="labels-toggle-icon" class="ti ti-layout-sidebar-left-collapse"></i>
+                </button>
+              </div>
+              <div id="labels-sidebar-body" class="labels-sidebar__body">
+                <div class="labels-sidebar__section">
+                  <h3 class="labels-sidebar__heading">
+                    <span class="labels-sidebar__heading-text">Node labels</span>
+                    <span id="node-labels-total" class="labels-sidebar__total badge bg-secondary-lt">0</span>
+                  </h3>
+                  <ul id="node-labels" class="labels-sidebar__list" role="list"></ul>
+                  <p id="node-labels-empty" class="labels-sidebar__empty text-secondary" hidden>None</p>
+                </div>
+                <div class="labels-sidebar__section">
+                  <h3 class="labels-sidebar__heading">
+                    <span class="labels-sidebar__heading-text">Edge types</span>
+                    <span id="edge-types-total" class="labels-sidebar__total badge bg-secondary-lt">0</span>
+                  </h3>
+                  <ul id="edge-types" class="labels-sidebar__list" role="list"></ul>
+                  <p id="edge-types-empty" class="labels-sidebar__empty text-secondary" hidden>None</p>
+                </div>
               </div>
             </aside>
 
-            <div id="empty-graph" class="graph-empty" hidden>
-              <div class="empty">
-                <div class="empty-icon"><i class="ti ti-affiliate-off" style="font-size:2.5rem;"></i></div>
-                <p class="empty-title">No knowledge graph yet</p>
-                <p class="empty-subtitle text-secondary">
-                  This roadmap has no knowledge graph yet. Add nodes and edges with the CLI, for example:
-                </p>
-                <div class="empty-action">
-                  <pre class="text-secondary mb-0"><code>rmp graph create -r {{.Name}} --query "CREATE (n:Spec {key:'auth'})"</code></pre>
+            <div class="graph-region">
+              <div id="graph" class="graph" data-graph-url="/roadmaps/{{.Name}}/graph/data"></div>
+
+              <aside id="detail-panel" class="detail-panel card" hidden>
+                <div class="card-header">
+                  <h3 id="detail-title" class="card-title detail-panel__title">Details</h3>
+                  <div class="card-actions">
+                    <button type="button" id="detail-close" class="btn-close" aria-label="Close details"></button>
+                  </div>
+                </div>
+                <div class="card-body">
+                  <dl id="detail-body" class="datagrid detail-panel__body mb-0"></dl>
+                </div>
+              </aside>
+
+              <div id="empty-graph" class="graph-empty" hidden>
+                <div class="empty">
+                  <div class="empty-icon"><i class="ti ti-affiliate-off" style="font-size:2.5rem;"></i></div>
+                  <p class="empty-title">No knowledge graph yet</p>
+                  <p class="empty-subtitle text-secondary">
+                    This roadmap has no knowledge graph yet. Add nodes and edges with the CLI, for example:
+                  </p>
+                  <div class="empty-action">
+                    <pre class="text-secondary mb-0"><code>rmp graph create -r {{.Name}} --query "CREATE (n:Spec {key:'auth'})"</code></pre>
+                  </div>
                 </div>
               </div>
             </div>

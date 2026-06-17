@@ -38,6 +38,69 @@
   var panelClose = document.getElementById("detail-close");
   var layoutSelect = document.getElementById("layout-select");
 
+  // Query-bar elements (SPEC/WEB.md § Graph Query Bar). The query box is
+  // pre-filled with the default query in the template; the Search button
+  // re-fetches the data endpoint with the current query text (q) and the
+  // current dropdown value (limit) and re-renders in the selected layout.
+  var queryForm = document.getElementById("query-bar");
+  var queryInput = document.getElementById("query-input");
+  var limitSelect = document.getElementById("limit-select");
+  var queryError = document.getElementById("query-error");
+
+  // Labels-sidebar elements (SPEC/WEB.md § Graph Labels Sidebar). The lists are
+  // populated client-side from the same fetched graph data; no new request.
+  var nodeLabelsList = document.getElementById("node-labels");
+  var edgeTypesList = document.getElementById("edge-types");
+  var nodeLabelsEmpty = document.getElementById("node-labels-empty");
+  var edgeTypesEmpty = document.getElementById("edge-types-empty");
+  // Section-total elements (SPEC/WEB.md § Graph Labels Sidebar, rule 11). They
+  // show the distinct-node total and the edge total alongside each section
+  // header, recomputed from the fetched data on every search.
+  var nodeLabelsTotal = document.getElementById("node-labels-total");
+  var edgeTypesTotal = document.getElementById("edge-types-total");
+
+  // Collapse/expand control (SPEC/WEB.md § Graph Labels Sidebar, rule 12). The
+  // sidebar starts expanded on every page load; collapsing only changes the
+  // sidebar's own visibility and the canvas width, never the highlight, layout,
+  // search, or detail panel.
+  var labelsSidebar = document.getElementById("labels-sidebar");
+  var labelsToggle = document.getElementById("labels-toggle");
+  var labelsToggleIcon = document.getElementById("labels-toggle-icon");
+
+  // Highlight selection state. Two Sets hold the currently active node labels
+  // and edge types; the highlighted set is the union of both (rule 5). They are
+  // module-level so the selection survives a layout re-render (rule 8): the new
+  // SVG is re-dimmed from this same state after every render.
+  var activeLabels = Object.create(null);
+  var activeTypes = Object.create(null);
+  // Marker attributes carried by every rendered node/edge group so the
+  // layout-agnostic applyHighlight()/applyEmphasis() can decide dim vs.
+  // highlight without knowing the datum shape of each layout.
+  var ATTR_NODE_LABELS = "data-node-labels";
+  var ATTR_EDGE_TYPE = "data-edge-type";
+  // Identity markers used by neighbor focus (SPEC/WEB.md § Roadmap
+  // Knowledge-Graph Page, "Neighbor focus on node selection"). Every rendered
+  // node group carries its node id; every rendered edge group carries its two
+  // endpoint ids, so applyEmphasis() can dim by the focused node's first-degree
+  // (undirected) neighbourhood by reading the DOM alone, the same dim-not-remove
+  // mechanism the labels highlight uses.
+  var ATTR_NODE_ID = "data-node-id";
+  var ATTR_EDGE_SOURCE = "data-edge-source";
+  var ATTR_EDGE_TARGET = "data-edge-target";
+
+  // focusedNodeId is the single module-level neighbor-focus state. When non-null
+  // a node is focused: applyEmphasis() governs canvas dimming from its
+  // first-degree neighbourhood and the labels-sidebar highlight is NOT applied
+  // (focus takes precedence; SPEC/WEB.md § Graph Labels Sidebar, rule 8). When
+  // null no node is focused and applyEmphasis() delegates to applyHighlight()
+  // (the labels state) — or the normal non-dimmed view when nothing is active.
+  // It survives a layout re-render so render() can reapply the same focus.
+  var focusedNodeId = null;
+  // Separator used to pack a node's label list into a single attribute value.
+  // The unit separator (U+001F) cannot occur in a label, so a packed value can
+  // be split back unambiguously.
+  var LABELS_SEP = String.fromCharCode(31);
+
   // Tabler dark-theme palette (matches the prior styling intent): light node
   // captions, blue node fill, muted slate edges, amber selection accent.
   var COLOR_NODE = "#4299e1";
@@ -68,6 +131,356 @@
     if (panelEl) {
       panelEl.hidden = true;
     }
+  }
+
+  // ---- Labels sidebar: inventory, rendering, and highlight -----------------
+
+  // hasActiveSelection reports whether any node-label or edge-type entry is
+  // currently toggled on. When nothing is active the canvas shows its normal,
+  // non-dimmed view (SPEC/WEB.md § Graph Labels Sidebar, rule 6).
+  function hasActiveSelection() {
+    return Object.keys(activeLabels).length > 0 || Object.keys(activeTypes).length > 0;
+  }
+
+  // tagNodes / tagEdges stamp every rendered node/edge group with a marker
+  // attribute carrying its labels (packed) or its type, so applyHighlight() can
+  // decide dim vs. highlight by reading the DOM alone — independent of the
+  // datum shape each layout binds. labelsOf/typeOf extract those from the bound
+  // datum.
+  function tagNodes(selection, labelsOf, idOf) {
+    selection.attr(ATTR_NODE_LABELS, function (d) {
+      var labels = labelsOf(d) || [];
+      return labels.join(LABELS_SEP);
+    });
+    // Stamp the node id too, so neighbor focus can dim by neighbourhood from the
+    // DOM. idOf is supplied by every layout because each binds a different datum
+    // shape (force/arc/sankey/patents: n.id; bundling: leaf.data.name; chord:
+    // model.nodes[g.index].id); a missing accessor leaves the attribute empty.
+    selection.attr(ATTR_NODE_ID, function (d) {
+      return idOf ? String(idOf(d)) : "";
+    });
+  }
+
+  function tagEdges(selection, typeOf, endpointsOf) {
+    selection.attr(ATTR_EDGE_TYPE, function (d) {
+      return typeOf(d) || "";
+    });
+    // Stamp the edge endpoints so neighbor focus can decide whether an edge is
+    // incident to the focused node. endpointsOf returns {source, target} as node
+    // ids; a missing accessor leaves both empty and the edge is treated as not
+    // incident to any node (it dims under focus).
+    selection.attr(ATTR_EDGE_SOURCE, function (d) {
+      var e = endpointsOf ? endpointsOf(d) : null;
+      return e ? String(e.source) : "";
+    });
+    selection.attr(ATTR_EDGE_TARGET, function (d) {
+      var e = endpointsOf ? endpointsOf(d) : null;
+      return e ? String(e.target) : "";
+    });
+  }
+
+  // linkEndpoints resolves a force/arc/sankey/patents link datum's endpoint ids
+  // regardless of whether the layout has rewritten source/target into node
+  // objects (the force simulation and sankey do) or left them as string ids.
+  function linkEndpoints(l) {
+    var s = (l.source && typeof l.source === "object") ? l.source.id : l.source;
+    var t = (l.target && typeof l.target === "object") ? l.target.id : l.target;
+    return { source: s, target: t };
+  }
+
+  // neighborSet computes the first-degree, UNDIRECTED neighbourhood of the
+  // focused node from the in-memory model (SPEC/WEB.md § Roadmap Knowledge-Graph
+  // Page, "Neighbor focus on node selection"; Acceptance Criterion 54). It walks
+  // the model's links by their startId/endId (mapped to source/target in
+  // buildModel) and includes every node reachable by one edge in EITHER
+  // direction — the target of an outgoing edge or the source of an incoming
+  // edge. The returned set always contains the focused node itself. Computed
+  // entirely client-side from already-fetched data; no request, no write.
+  function neighborSet(nodeId) {
+    var set = Object.create(null);
+    set[nodeId] = true;
+    if (!graphModel) {
+      return set;
+    }
+    graphModel.links.forEach(function (l) {
+      var ep = linkEndpoints(l);
+      var s = String(ep.source);
+      var t = String(ep.target);
+      if (s === nodeId) {
+        set[t] = true;
+      } else if (t === nodeId) {
+        set[s] = true;
+      }
+    });
+    return set;
+  }
+
+  // applyHighlight re-scans the rendered SVG and toggles the .is-dimmed class on
+  // every tagged node and edge element according to the current selection. It is
+  // called after every render so a layout change re-applies the same highlight
+  // (rule 8). With no active selection every element is un-dimmed (rule 6).
+  function applyHighlight() {
+    var svg = graphEl.querySelector("svg.graph-svg");
+    if (!svg) {
+      return;
+    }
+    var active = hasActiveSelection();
+
+    var nodes = svg.querySelectorAll("[" + ATTR_NODE_LABELS + "]");
+    var i;
+    for (i = 0; i < nodes.length; i++) {
+      var packed = nodes[i].getAttribute(ATTR_NODE_LABELS);
+      var matched = false;
+      if (active && packed !== "") {
+        var labels = packed.split(LABELS_SEP);
+        for (var j = 0; j < labels.length; j++) {
+          if (activeLabels[labels[j]]) {
+            matched = true;
+            break;
+          }
+        }
+      }
+      // A node matches when it carries any active label. When a selection is
+      // active and the node matches none of it, the node is dimmed.
+      setDimmed(nodes[i], active && !matched);
+    }
+
+    var edges = svg.querySelectorAll("[" + ATTR_EDGE_TYPE + "]");
+    for (i = 0; i < edges.length; i++) {
+      var etype = edges[i].getAttribute(ATTR_EDGE_TYPE);
+      var ematched = active && etype !== "" && !!activeTypes[etype];
+      setDimmed(edges[i], active && !ematched);
+    }
+  }
+
+  function setDimmed(el, dimmed) {
+    if (dimmed) {
+      el.classList.add("is-dimmed");
+    } else {
+      el.classList.remove("is-dimmed");
+    }
+  }
+
+  // applyFocusDimming dims the canvas by the focused node's first-degree,
+  // undirected neighbourhood: the focused node and its neighbours stay
+  // emphasised, every other node is dimmed; an edge stays emphasised only when
+  // it is incident to the focused node (one of its endpoints is the focused
+  // node), every other edge is dimmed. It reuses the same .is-dimmed
+  // dim-not-remove mechanism the labels highlight uses, so no element is added
+  // or removed (SPEC/WEB.md § Roadmap Knowledge-Graph Page, "Neighbor focus on
+  // node selection"; Acceptance Criterion 54).
+  function applyFocusDimming(svg) {
+    var keep = neighborSet(focusedNodeId);
+
+    var nodes = svg.querySelectorAll("[" + ATTR_NODE_ID + "]");
+    var i;
+    for (i = 0; i < nodes.length; i++) {
+      var id = nodes[i].getAttribute(ATTR_NODE_ID);
+      // A node with no id tag (should not happen for a focused render) dims so
+      // the emphasis stays restricted to the resolvable neighbourhood.
+      setDimmed(nodes[i], !(id !== "" && keep[id]));
+    }
+
+    var edges = svg.querySelectorAll("[" + ATTR_EDGE_SOURCE + "]");
+    for (i = 0; i < edges.length; i++) {
+      var s = edges[i].getAttribute(ATTR_EDGE_SOURCE);
+      var t = edges[i].getAttribute(ATTR_EDGE_TARGET);
+      var incident = (s === focusedNodeId) || (t === focusedNodeId);
+      setDimmed(edges[i], !incident);
+    }
+  }
+
+  // applyEmphasis is the SINGLE source of truth for canvas dimming. Neighbor
+  // focus takes precedence over the labels-sidebar highlight (SPEC/WEB.md
+  // § Graph Labels Sidebar, rule 8; Acceptance Criterion 56): when a node is
+  // focused it governs the dimming and the labels selection is NOT applied to
+  // the canvas; otherwise it delegates to applyHighlight() (the labels state),
+  // which itself shows the normal non-dimmed view when no entry is active. Every
+  // render-time re-application and every focus/background/panel handler routes
+  // through here, so there is exactly one dimming decision path.
+  function applyEmphasis() {
+    var svg = graphEl.querySelector("svg.graph-svg");
+    if (!svg) {
+      return;
+    }
+    if (focusedNodeId !== null) {
+      applyFocusDimming(svg);
+    } else {
+      applyHighlight();
+    }
+  }
+
+  // focusNode enters (or moves) neighbor focus onto a node and reapplies the
+  // emphasis. Selecting a different node while one is focused moves the focus to
+  // the new node without an intervening clear (Acceptance Criterion 55).
+  function focusNode(nodeId) {
+    focusedNodeId = String(nodeId);
+    applyEmphasis();
+  }
+
+  // clearFocus leaves neighbor focus and restores the prior view: when the focus
+  // is cleared the canvas returns to the labels-sidebar highlight state if any
+  // entry is still active, otherwise to the normal non-dimmed view — both handled
+  // by applyEmphasis() delegating to applyHighlight() once focusedNodeId is null
+  // (Acceptance Criterion 55). It does not itself close the panel; callers that
+  // implement a clear gesture pair it with hidePanel().
+  function clearFocus() {
+    if (focusedNodeId === null) {
+      return;
+    }
+    focusedNodeId = null;
+    applyEmphasis();
+  }
+
+  // onNodeSelected is the shared node-click handler every layout wires. It opens
+  // the node's detail panel and drives neighbor focus through ONE consistent
+  // rule: re-selecting the already-focused node is a clear gesture (close panel +
+  // clear focus together); selecting any other node moves the focus to it and
+  // opens its detail. This keeps the detail panel and the neighbor-focus emphasis
+  // opened and cleared together (SPEC/WEB.md § Roadmap Knowledge-Graph Page,
+  // "Clearing neighbor focus"; Acceptance Criterion 55).
+  function onNodeSelected(node) {
+    var id = String(node.id);
+    if (focusedNodeId === id) {
+      hidePanel();
+      clearFocus();
+      return;
+    }
+    showDetail(nodeTitle(node), node.props);
+    focusNode(id);
+  }
+
+  // dismissSelection is the shared clear gesture for an empty-canvas tap and for
+  // closing the detail panel: it closes the panel and clears the neighbor focus
+  // together (Acceptance Criterion 55).
+  function dismissSelection() {
+    hidePanel();
+    clearFocus();
+  }
+
+  // buildInventory derives the node-label and edge-type inventories with counts
+  // from the in-memory model (rule 1, rule 10), plus the two section totals
+  // (rule 11). A node counts towards each of its labels; a node with no label
+  // contributes to no per-label entry but still counts towards nodeTotal.
+  // Returns the two sorted entry arrays and the two section totals:
+  //   - nodeTotal is the count of DISTINCT nodes in the model (the model's
+  //     nodes are already deduplicated by id when built; see buildModel and the
+  //     endpoint's per-id dedup, Acceptance Criterion 49). It is the
+  //     distinct-node count, NOT the sum of per-label counts: a multi-label
+  //     node inflates the per-label sum but counts once here, and an unlabelled
+  //     node counts here while appearing in no per-label entry.
+  //   - typeTotal is the count of edges. Every edge has exactly one type, so it
+  //     equals the sum of the per-type counts.
+  // Each entry array is sorted by name in ascending, case-sensitive code-point
+  // order (rule 2).
+  function buildInventory(model) {
+    var labelCounts = Object.create(null);
+    model.nodes.forEach(function (n) {
+      (n.labels || []).forEach(function (label) {
+        labelCounts[label] = (labelCounts[label] || 0) + 1;
+      });
+    });
+
+    var typeCounts = Object.create(null);
+    model.links.forEach(function (l) {
+      var t = l.etype || "";
+      if (t === "") {
+        return;
+      }
+      typeCounts[t] = (typeCounts[t] || 0) + 1;
+    });
+
+    return {
+      labels: toSortedEntries(labelCounts),
+      types: toSortedEntries(typeCounts),
+      nodeTotal: model.nodes.length,
+      typeTotal: model.links.length
+    };
+  }
+
+  // toSortedEntries turns a {name: count} map into an array of {name, count}
+  // sorted by name in ascending code-point order, deterministic per rule 2.
+  function toSortedEntries(counts) {
+    return Object.keys(counts)
+      .sort(function (a, b) {
+        return a < b ? -1 : (a > b ? 1 : 0);
+      })
+      .map(function (name) {
+        return { name: name, count: counts[name] };
+      });
+  }
+
+  // renderSidebar builds the two sidebar sections from the inventory. Each entry
+  // is a toggle button (touch-friendly, rule 9) that flips its selection and
+  // re-applies the highlight. An empty section shows a muted empty-state (rule 3).
+  function renderSidebar(model) {
+    var inv = buildInventory(model);
+    // Section totals (rule 11): the distinct-node total and the edge total are
+    // shown alongside the headers, kept distinct from the per-entry sums. In an
+    // empty graph both totals render as 0 (rule 3).
+    if (nodeLabelsTotal) {
+      nodeLabelsTotal.textContent = String(inv.nodeTotal);
+    }
+    if (edgeTypesTotal) {
+      edgeTypesTotal.textContent = String(inv.typeTotal);
+    }
+    fillSection(nodeLabelsList, nodeLabelsEmpty, inv.labels, activeLabels);
+    fillSection(edgeTypesList, edgeTypesEmpty, inv.types, activeTypes);
+  }
+
+  function fillSection(listEl, emptyEl2, entries, activeSet) {
+    if (!listEl) {
+      return;
+    }
+    listEl.innerHTML = "";
+    if (entries.length === 0) {
+      if (emptyEl2) {
+        emptyEl2.hidden = false;
+      }
+      return;
+    }
+    if (emptyEl2) {
+      emptyEl2.hidden = true;
+    }
+    entries.forEach(function (entry) {
+      var li = document.createElement("li");
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "labels-sidebar__item";
+      if (activeSet[entry.name]) {
+        btn.classList.add("is-active");
+      }
+      btn.setAttribute("aria-pressed", activeSet[entry.name] ? "true" : "false");
+
+      var nameSpan = document.createElement("span");
+      nameSpan.className = "labels-sidebar__name";
+      // textContent never interprets the value as HTML, so a label or type that
+      // contains markup characters cannot alter the page structure.
+      nameSpan.textContent = entry.name;
+
+      var countSpan = document.createElement("span");
+      countSpan.className = "labels-sidebar__count badge bg-blue-lt";
+      countSpan.textContent = String(entry.count);
+
+      btn.appendChild(nameSpan);
+      btn.appendChild(countSpan);
+
+      btn.addEventListener("click", function () {
+        if (activeSet[entry.name]) {
+          delete activeSet[entry.name];
+          btn.classList.remove("is-active");
+          btn.setAttribute("aria-pressed", "false");
+        } else {
+          activeSet[entry.name] = true;
+          btn.classList.add("is-active");
+          btn.setAttribute("aria-pressed", "true");
+        }
+        applyHighlight();
+      });
+
+      li.appendChild(btn);
+      listEl.appendChild(li);
+    });
   }
 
   // Render a label/value pair into the detail panel.
@@ -108,7 +521,10 @@
   }
 
   if (panelClose) {
-    panelClose.addEventListener("click", hidePanel);
+    // Closing the detail panel is a clear gesture: it closes the panel and
+    // clears the neighbor focus together (SPEC/WEB.md § Roadmap Knowledge-Graph
+    // Page, "Clearing neighbor focus"; Acceptance Criterion 55).
+    panelClose.addEventListener("click", dismissSelection);
   }
 
   // buildModel derives the D3 model from the data endpoint's JSON. nodes carry
@@ -222,11 +638,13 @@
       });
     svg.call(zoom);
 
-    // Tapping empty background (the SVG itself, not a node/edge) dismisses the
-    // detail panel.
+    // Tapping empty background (the SVG itself, not a node/edge) is a clear
+    // gesture: it dismisses the detail panel and clears the neighbor focus
+    // together (SPEC/WEB.md § Roadmap Knowledge-Graph Page, "Clearing neighbor
+    // focus"; Acceptance Criterion 55).
     svg.on("click", function (event) {
       if (event.target === svg.node()) {
-        hidePanel();
+        dismissSelection();
       }
     });
 
@@ -279,6 +697,7 @@
         event.stopPropagation();
         showDetail(l.etype || "Edge", l.props);
       });
+    tagEdges(link, function (l) { return l.etype; }, linkEndpoints);
 
     var node = root.append("g")
       .selectAll("g")
@@ -287,8 +706,9 @@
       .style("cursor", "pointer")
       .on("click", function (event, n) {
         event.stopPropagation();
-        showDetail(nodeTitle(n), n.props);
+        onNodeSelected(n);
       });
+    tagNodes(node, function (n) { return n.labels; }, function (n) { return n.id; });
 
     node.append("circle")
       .attr("r", 8)
@@ -373,7 +793,7 @@
       posById[n.id] = n;
     });
 
-    root.append("g")
+    var arcLink = root.append("g")
       .attr("fill", "none")
       .attr("stroke", COLOR_EDGE)
       .attr("stroke-width", 1.5)
@@ -397,6 +817,7 @@
         event.stopPropagation();
         showDetail(l.etype || "Edge", l.props);
       });
+    tagEdges(arcLink, function (l) { return l.etype; }, linkEndpoints);
 
     var node = root.append("g")
       .selectAll("g")
@@ -406,8 +827,9 @@
       .style("cursor", "pointer")
       .on("click", function (event, n) {
         event.stopPropagation();
-        showDetail(nodeTitle(n), n.props);
+        onNodeSelected(n);
       });
+    tagNodes(node, function (n) { return n.labels; }, function (n) { return n.id; });
 
     node.append("circle")
       .attr("r", 6)
@@ -484,7 +906,7 @@
       return;
     }
 
-    root.append("g")
+    var sankeyLink = root.append("g")
       .attr("fill", "none")
       .attr("stroke", COLOR_EDGE)
       .attr("stroke-opacity", 0.5)
@@ -498,6 +920,9 @@
         event.stopPropagation();
         showDetail(l.etype || "Edge", l.props);
       });
+    // After the sankey layout runs, each link's source/target are node objects
+    // carrying our id; linkEndpoints resolves them.
+    tagEdges(sankeyLink, function (l) { return l.etype; }, linkEndpoints);
 
     var node = root.append("g")
       .selectAll("g")
@@ -506,8 +931,9 @@
       .style("cursor", "pointer")
       .on("click", function (event, n) {
         event.stopPropagation();
-        showDetail(nodeTitle(n), n.props);
+        onNodeSelected(n);
       });
+    tagNodes(node, function (n) { return n.labels; }, function (n) { return n.id; });
 
     node.append("rect")
       .attr("x", function (n) { return n.x0; })
@@ -611,7 +1037,7 @@
       .radius(function (n) { return n.y; })
       .angle(function (n) { return n.x; });
 
-    root.append("g")
+    var bundleLink = root.append("g")
       .attr("fill", "none")
       .attr("stroke", COLOR_EDGE)
       .attr("stroke-opacity", 0.6)
@@ -624,6 +1050,10 @@
         event.stopPropagation();
         showDetail(l.etype || "Edge", l.props);
       });
+    // Bundled-link endpoints are hierarchy leaves whose node id is leaf.data.name.
+    tagEdges(bundleLink, function (l) { return l.etype; }, function (l) {
+      return { source: l.source.data.name, target: l.target.data.name };
+    });
 
     var leaf = root.append("g")
       .selectAll("g")
@@ -635,8 +1065,9 @@
       .style("cursor", "pointer")
       .on("click", function (event, n) {
         event.stopPropagation();
-        showDetail(nodeTitle({ id: n.data.name, labels: n.data.labels }), n.data.props);
+        onNodeSelected({ id: n.data.name, labels: n.data.labels, props: n.data.props });
       });
+    tagNodes(leaf, function (n) { return n.data.labels; }, function (n) { return n.data.name; });
 
     leaf.append("circle")
       .attr("r", 4)
@@ -746,6 +1177,7 @@
         event.stopPropagation();
         showDetail(l.etype || "Edge", l.props);
       });
+    tagEdges(link, function (l) { return l.etype; }, linkEndpoints);
 
     // Per-link type label, drawn on a hidden mid-link reference path so the text
     // sits beside the curve. The label colour matches the link.
@@ -766,8 +1198,9 @@
       .style("cursor", "pointer")
       .on("click", function (event, n) {
         event.stopPropagation();
-        showDetail(nodeTitle(n), n.props);
+        onNodeSelected(n);
       });
+    tagNodes(node, function (n) { return n.labels; }, function (n) { return n.id; });
 
     node.append("circle")
       .attr("r", 7)
@@ -945,6 +1378,12 @@
       .selectAll("g")
       .data(chords.groups)
       .join("g");
+    // Each group <g> stands for one node; tag it with that node's labels and id
+    // so the sidebar highlight and neighbor focus dim/undim chord groups like any
+    // other node element.
+    tagNodes(group,
+      function (g) { return model.nodes[g.index].labels; },
+      function (g) { return model.nodes[g.index].id; });
 
     group.append("path")
       .attr("fill", function (g) { return groupColor(g.index); })
@@ -953,8 +1392,7 @@
       .style("cursor", "pointer")
       .on("click", function (event, g) {
         event.stopPropagation();
-        var node = model.nodes[g.index];
-        showDetail(nodeTitle(node), node.props);
+        onNodeSelected(model.nodes[g.index]);
       });
 
     // Group captions around the rim, rotated to follow the circle.
@@ -974,7 +1412,7 @@
     // Ribbons. The dependency variant colours each ribbon by its SOURCE group so
     // dependencies fan out from each node; otherwise ribbons take the target's
     // colour. Tap a ribbon -> the representative edge's detail when resolvable.
-    root.append("g")
+    var ribbons = root.append("g")
       .attr("fill-opacity", 0.72)
       .selectAll("path")
       .data(chords)
@@ -997,11 +1435,25 @@
           showDetail("Relationship", { from: from.caption, to: to.caption });
         }
       });
+    // Tag each ribbon with the relationship type of its representative edge so
+    // the edge-type highlight dims/undims chord ribbons consistently, and with
+    // its source/target group node ids so neighbor focus treats a ribbon touching
+    // the focused node's group as incident.
+    tagEdges(ribbons,
+      function (c) {
+        var edge = edgeAt[c.source.index][c.target.index];
+        return edge ? edge.etype : "";
+      },
+      function (c) {
+        return {
+          source: model.nodes[c.source.index].id,
+          target: model.nodes[c.target.index].id
+        };
+      });
   }
 
-  // Highlight selection across layouts is conveyed through the detail panel and
-  // the accent colour on hover/active states in CSS; the accent constant is
-  // referenced so a future selected-state can reuse it consistently.
+  // COLOR_EDGE_LABEL is referenced by the patents layout's per-link captions; the
+  // accent constant is mirrored by the sidebar's active-entry style in CSS.
   void COLOR_ACCENT;
   void COLOR_EDGE_LABEL;
 
@@ -1043,6 +1495,16 @@
         renderForce(false);
         break;
     }
+
+    // Re-apply the current emphasis to the freshly rendered SVG so a layout
+    // change preserves it (SPEC/WEB.md § Graph Labels Sidebar, rule 8;
+    // Acceptance Criterion 56). applyEmphasis() is the single dimming decision
+    // path: if a node is focused it reapplies the neighbor focus (same node,
+    // neighbours, and incident edges) to the re-rendered layout; otherwise it
+    // reapplies the labels-sidebar highlight. Each layout has stamped its
+    // node/edge elements with the marker and identity attributes synchronously
+    // above, so the tags are in place by now.
+    applyEmphasis();
   }
 
   if (layoutSelect) {
@@ -1069,22 +1531,193 @@
     }, 200);
   });
 
-  fetch(dataUrl, { headers: { Accept: "application/json" } })
-    .then(function (resp) {
-      if (!resp.ok) {
-        throw new Error("graph data request failed: " + resp.status);
-      }
-      return resp.json();
-    })
-    .then(function (data) {
-      graphModel = buildModel(data);
-      if (graphModel.nodes.length === 0) {
-        showEmpty();
-        return;
-      }
+  // ---- Labels sidebar: collapse / expand -----------------------------------
+
+  // setSidebarCollapsed toggles the sidebar between expanded and collapsed
+  // (SPEC/WEB.md § Graph Labels Sidebar, rule 12; Acceptance Criterion 52).
+  // Collapsing changes ONLY the sidebar's own visibility and the canvas width:
+  // it adds a class the stylesheet uses to contract the column (leaving just the
+  // toggle icon visible) and to widen the canvas, swaps the toggle icon between
+  // the collapse and expand glyphs, and updates the control's accessible state.
+  // It never touches the highlight selection (activeLabels/activeTypes are left
+  // intact), never re-renders or re-fetches the graph model, and never opens or
+  // closes the detail panel — so an active highlight survives a collapse/expand
+  // cycle untouched. Because the graph SVG is sized in CSS percentages of the
+  // canvas region (see style.css .graph / .graph-svg), the canvas width change
+  // reflows the SVG without a re-render; the debounced window resize handler
+  // already keeps the layout fitted, and we trigger one render afterwards so the
+  // force layouts re-fit to the new width while preserving the (untouched)
+  // highlight via render()'s applyHighlight() call.
+  function setSidebarCollapsed(collapsed) {
+    if (!labelsSidebar || !labelsToggle) {
+      return;
+    }
+    if (collapsed) {
+      labelsSidebar.classList.add("is-collapsed");
+    } else {
+      labelsSidebar.classList.remove("is-collapsed");
+    }
+    labelsToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    labelsToggle.setAttribute("title", collapsed ? "Expand labels" : "Collapse labels");
+    labelsToggle.setAttribute("aria-label", collapsed ? "Expand labels" : "Collapse labels");
+    if (labelsToggleIcon) {
+      labelsToggleIcon.className = collapsed
+        ? "ti ti-layout-sidebar-left-expand"
+        : "ti ti-layout-sidebar-left-collapse";
+    }
+    // Re-fit the current layout to the new canvas width. This re-render keeps
+    // the active highlight (render() re-applies it) and does not change the
+    // layout, run a search, or alter the detail panel state.
+    if (graphModel && graphModel.nodes.length > 0) {
       render(layoutSelect ? layoutSelect.value : "patents");
-    })
-    .catch(function () {
-      showEmpty();
+    }
+  }
+
+  if (labelsToggle) {
+    labelsToggle.addEventListener("click", function () {
+      // Toggle on the live DOM state so the control is a single toggle: collapse
+      // an expanded sidebar, expand a collapsed one. Default state is expanded
+      // (the template renders no is-collapsed class), so the first tap collapses.
+      var nowCollapsed = !labelsSidebar.classList.contains("is-collapsed");
+      setSidebarCollapsed(nowCollapsed);
     });
+  }
+
+  // ---- Query bar: search, fetch, and in-place error surfacing --------------
+
+  // showQueryError displays a clear, read-only, in-place message in the query
+  // bar and leaves the graph already shown in place; it triggers no write and no
+  // navigation (SPEC/WEB.md § Query-Bar Error Handling, rule 4). The three
+  // distinct messages — not read-only, invalid limit, query failed to execute —
+  // come straight from the endpoint's classified error so the user knows what to
+  // fix (rules 1-3).
+  function showQueryError(message) {
+    if (!queryError) {
+      return;
+    }
+    queryError.textContent = message;
+    queryError.hidden = false;
+  }
+
+  function clearQueryError() {
+    if (queryError) {
+      queryError.hidden = true;
+      queryError.textContent = "";
+    }
+  }
+
+  // buildDataUrl appends the current query box text (q) and the current limit
+  // dropdown value (limit) as URL query parameters. The request stays GET-only
+  // with no body (SPEC/WEB.md § Graph Query Bar, rule 4; § Graph Data Endpoint).
+  function buildDataUrl() {
+    var params = [];
+    if (queryInput) {
+      params.push("q=" + encodeURIComponent(queryInput.value));
+    }
+    if (limitSelect) {
+      params.push("limit=" + encodeURIComponent(limitSelect.value));
+    }
+    if (params.length === 0) {
+      return dataUrl;
+    }
+    return dataUrl + (dataUrl.indexOf("?") === -1 ? "?" : "&") + params.join("&");
+  }
+
+  // applyData renders a freshly fetched graph payload: it rebuilds the in-memory
+  // model, recomputes the labels-sidebar inventory and counts from the new
+  // result (so the sidebar always reflects the graph currently shown — Graph
+  // Query Bar rule 8 and Labels Sidebar rule 10), and re-renders the graph in
+  // the currently selected layout (or shows the empty state when there are no
+  // nodes).
+  function applyData(data) {
+    graphModel = buildModel(data);
+    // A search fetches a new graph, so any prior neighbor focus is discarded and
+    // the new result renders in its labels-sidebar highlight state if any entry
+    // is active, otherwise in the normal view (SPEC/WEB.md § Roadmap
+    // Knowledge-Graph Page, "Neighbor focus coexists with ... the query bar";
+    // Acceptance Criterion 56). Clearing the focus directly (not through
+    // dismissSelection) avoids a redundant applyEmphasis() before the re-render,
+    // which itself reapplies the emphasis through render().
+    focusedNodeId = null;
+    renderSidebar(graphModel);
+    if (graphModel.nodes.length === 0) {
+      hidePanel();
+      showEmpty();
+      clearGraph();
+      return;
+    }
+    hideEmpty();
+    render(layoutSelect ? layoutSelect.value : "patents");
+  }
+
+  // runSearch fetches the data endpoint with the current query and limit, then
+  // renders the result or surfaces a distinct in-place error. On page load it
+  // performs this same fetch once with the default query and default limit
+  // (SPEC/WEB.md § Graph Query Bar, rule 4). A failure is non-fatal: the page
+  // does not crash and the graph already shown (if any) is left in place.
+  function runSearch() {
+    clearQueryError();
+    fetch(buildDataUrl(), { headers: { Accept: "application/json" } })
+      .then(function (resp) {
+        // The endpoint returns a structured JSON error with HTTP 400 for a
+        // classified query-bar failure (not read-only, invalid limit, or
+        // execution failure). Parse the body either way so the distinct message
+        // can be shown; only a non-OK, non-400 status is treated as a hard
+        // failure.
+        return resp.json().then(function (body) {
+          return { ok: resp.ok, status: resp.status, body: body };
+        });
+      })
+      .then(function (res) {
+        if (res.ok) {
+          applyData(res.body);
+          return;
+        }
+        // A classified query-bar error carries { error, kind }. Show the
+        // server-provided message in place; the graph already shown stays.
+        if (res.body && res.body.error) {
+          showQueryError(res.body.error);
+          return;
+        }
+        showQueryError("The graph could not be loaded (status " + res.status + ").");
+      })
+      .catch(function () {
+        showQueryError("The graph could not be loaded. Check the query and try again.");
+      });
+  }
+
+  if (queryForm) {
+    queryForm.addEventListener("submit", function (event) {
+      // Keep the request GET-only and stay on the page: prevent the form's
+      // default navigation and drive the fetch ourselves (no POST, no reload).
+      event.preventDefault();
+      runSearch();
+    });
+  }
+
+  // Keyboard accelerator: Ctrl+Enter (and Cmd+Enter on macOS) in the focused
+  // query box triggers the search exactly as the Search button does
+  // (SPEC/WEB.md § Graph Query Bar, rule 5; Acceptance Criterion 53). It reuses
+  // the existing search path rather than duplicating it: requestSubmit() fires
+  // the form's submit event identically to clicking the type="submit" Search
+  // button, so the same handler runs the same validation, fetch, and re-render.
+  // Plain Enter is left untouched, so it still inserts a newline and the user
+  // can compose a multi-line query freely.
+  if (queryInput && queryForm) {
+    queryInput.addEventListener("keydown", function (event) {
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        event.preventDefault();
+        if (typeof queryForm.requestSubmit === "function") {
+          queryForm.requestSubmit();
+        } else {
+          // Fallback for the rare engine without requestSubmit: drive the same
+          // search trigger the submit handler uses.
+          runSearch();
+        }
+      }
+    });
+  }
+
+  // Initial load performs the same fetch with the default query and limit.
+  runSearch();
 })();

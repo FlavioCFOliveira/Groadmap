@@ -49,6 +49,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -558,18 +559,28 @@ class TestWebInterface:
     # Sprints page and tasks page are read-only and write no audit entry
     # ====================================================================
 
-    def test_sprints_page_shows_sprints_not_full_task_table(self):
-        """The sprints landing page renders the sprints (and the Actual tab's
-        OPEN-sprint task list) but NOT the full task table, which now lives at
-        /roadmaps/{name}/tasks (SPEC/WEB.md § Roadmap Sprints Page)."""
+    def test_sprints_page_shows_sprint_cards_not_full_task_table(self):
+        """The sprints landing page renders every sprint as a compact shared
+        sprint card (header, description, task-count footer) but NOT the full
+        task table and NOT any inline member-task list or modal — those live on
+        the tasks page and the single sprint page (SPEC/WEB.md § Shared
+        Sprint-Card Partial; Acceptance Criteria 8/38)."""
         proc, port = self._start(["--port", "0"])
         status, headers, body = self._req(port, f"/roadmaps/{ROADMAP}")
         assert status == 200
         assert headers.get("content-type", "").startswith("text/html")
-        assert "authentication hardening sprint" in body.lower(), "must show sprints"
-        # The OPEN sprint's member task surfaces under the Actual tab.
-        assert "passwordless login" in body.lower(), (
-            "Actual tab must show the OPEN sprint's task title"
+        assert "authentication hardening sprint" in body.lower(), "must show sprint cards"
+        # The shared sprint-card markup renders each sprint as a card link.
+        assert 'class="card card-sm card-link text-reset"' in body, (
+            "the sprints page must render sprints through the shared sprint-card partial"
+        )
+        # The OPEN sprint is shown as a card, NOT expanded: its member-task title
+        # and any per-task modal trigger must be absent from the sprints page.
+        assert "passwordless login" not in body.lower(), (
+            "the OPEN sprint must not be expanded into an inline task list on the sprints page"
+        )
+        assert "data-bs-target=\"#task-modal-" not in body, (
+            "the sprints page must render no per-task modal trigger"
         )
         # The full task table (its 15-column header) belongs to the tasks page,
         # not the sprints page. The <th>Specialists</th> header is unique to the
@@ -577,10 +588,9 @@ class TestWebInterface:
         assert "<th>Specialists</th>" not in body, (
             "the sprints page must NOT render the full task table"
         )
-        # The PENDING-sprint task is not a member of any OPEN sprint, so it must
-        # not appear on the sprints page (it appears on the tasks page).
+        # The PENDING-sprint task is not surfaced on the sprints page either.
         assert "add webauthn passkey support" not in body.lower(), (
-            "non-OPEN-sprint tasks must not appear on the sprints page"
+            "member-task titles must not appear on the sprints page"
         )
         # No edit affordance: no form and no write-method submission.
         assert "<form" not in body.lower(), "sprints page must contain no form"
@@ -688,18 +698,25 @@ class TestWebInterface:
         upcoming = pane('<div id="tab-upcoming"')
         closed = pane('<div id="tab-closed"')
 
-        # PENDING -> Próximos, OPEN -> Actual (with task statuses), CLOSED -> Concluídos.
+        # PENDING -> Próximos, OPEN -> Actual, CLOSED -> Concluídos, each rendered
+        # through the shared sprint-card partial.
         assert f"/sprints/{self.pending_sid}" in upcoming, "PENDING sprint not under Próximos"
         assert f"/sprints/{self.open_sid}" in current, "OPEN sprint not under Actual"
         assert f"/sprints/{self.closed_sid}" in closed, "CLOSED sprint not under Concluídos"
 
-        # The Actual tab shows the OPEN sprint's task statuses.
-        assert "passwordless login" in current.lower(), (
-            "Actual tab must show the OPEN sprint's task title"
+        # The Actual tab shows the OPEN sprint as a card (header + task count),
+        # NOT an expanded member-task list (SPEC/WEB.md § Shared Sprint-Card
+        # Partial; Acceptance Criteria 8/12/38).
+        assert 'class="card card-sm card-link text-reset"' in current, (
+            "Actual tab must render the OPEN sprint through the shared sprint-card partial"
         )
-        assert ">SPRINT</span>" in current, (
-            "Actual tab must show each OPEN-sprint task's status"
+        assert "passwordless login" not in current.lower(), (
+            "Actual tab must not expand the OPEN sprint into an inline task list"
         )
+        assert "data-bs-target=\"#task-modal-" not in current, (
+            "Actual tab must render no per-task modal trigger"
+        )
+        assert "task(s)" in current, "Actual tab card must show the sprint's task count"
 
     # ====================================================================
     # AC13: sprint page — all details, task order, 404/405 rules
@@ -826,8 +843,11 @@ class TestWebInterface:
     def test_task_modal_wiring_and_content(self):
         proc, port = self._start(["--port", "0"])
         t1 = self.open_task_ids[0]
+        # The task detail modal appears on the tasks page and the single sprint
+        # page. The sprints landing page renders compact sprint cards only and
+        # opens no task detail modal (SPEC/WEB.md § Task Detail Modal, § Shared
+        # Sprint-Card Partial; Acceptance Criteria 8/15/38).
         for path in (
-            f"/roadmaps/{ROADMAP}",
             f"/roadmaps/{ROADMAP}/tasks",
             f"/roadmaps/{ROADMAP}/sprints/{self.open_sid}",
         ):
@@ -926,12 +946,181 @@ class TestWebInterface:
         assert positions == sorted(positions), (
             "layout dropdown options are out of the required order"
         )
-        # Mobile patent suits is the default selected option (exactly one preselected).
+        # Mobile patent suits is the default selected option (exactly one
+        # layout option preselected). The page also carries the query bar's
+        # node-limit dropdown, whose default value 100 is itself a preselected
+        # <option ... selected> (AC45), so the page now has two preselected
+        # options overall; scope the uniqueness check to the layout options.
         assert re.search(
             r'<option value="patents"[^>]*\bselected\b', body, re.I
         ), "Mobile patent suits must be the preselected default layout"
-        assert body.count("selected>") == 1, (
+        layout_selected = sum(
+            1 for value, _ in layouts
+            if re.search(rf'<option value="{value}"[^>]*\bselected\b', body, re.I)
+        )
+        assert layout_selected == 1, (
             "exactly one layout option must be preselected (the Mobile patent suits default)"
+        )
+
+    def test_labels_sidebar_totals_and_collapse_control(self):
+        """The labels sidebar renders, in each section header, an absolute total
+        element the client populates, and a touch-friendly collapse/expand
+        control at its top built with the page's Tabler icon font; the served
+        assets carry the client logic that derives the totals (distinct-node
+        total and edge total, kept distinct from the per-label sums) and toggles
+        the sidebar without disturbing the highlight, layout, search, or detail
+        panel (SPEC/WEB.md § Graph Labels Sidebar rules 11-12, Acceptance
+        Criteria 43/51/52). The totals and the toggle act client-side, so the
+        contract is verified on the page shell and the served scripts/styles."""
+        proc, port = self._start(["--port", "0"])
+
+        # The page shell carries the per-section total containers and the
+        # collapse/expand control, which defaults to expanded on load.
+        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/graph")
+        for marker in (
+            'id="node-labels-total"',
+            'id="edge-types-total"',
+            'id="labels-toggle"',
+            "ti-layout-sidebar-left-collapse",
+            'aria-expanded="true"',
+        ):
+            assert marker in body, f"graph page missing labels-sidebar marker {marker!r}"
+        # The collapse control sits at the top of the sidebar, before the section
+        # headers, and each header is accompanied by its total element.
+        i_sidebar = body.index('id="labels-sidebar"')
+        i_toggle = body.index('id="labels-toggle"')
+        i_node_total = body.index('id="node-labels-total"')
+        i_edge_total = body.index('id="edge-types-total"')
+        i_graph = body.index('id="graph"')
+        assert i_sidebar < i_toggle < i_node_total < i_edge_total < i_graph, (
+            "the collapse control and section totals are out of the required order"
+        )
+
+        # The viewer script derives the section totals client-side from the
+        # fetched data: the node total is the distinct-node count (the deduped
+        # node array length), NOT the sum of the per-label counts, and the edge
+        # total is the edge count.
+        _, _, js = self._req(port, "/static/graph.js")
+        assert "nodeTotal: model.nodes.length" in js, (
+            "graph.js node total must be the distinct-node count, not the per-label sum"
+        )
+        assert "typeTotal: model.links.length" in js, (
+            "graph.js edge total must be the fetched-edge count"
+        )
+        assert 'getElementById("node-labels-total")' in js
+        assert 'getElementById("edge-types-total")' in js
+
+        # The collapse/expand toggle logic is wired and is a pure visibility
+        # toggle: it must not run a search, reset the highlight selection, or
+        # touch the detail panel / empty state.
+        assert 'getElementById("labels-toggle")' in js
+        assert "setSidebarCollapsed" in js
+        assert "is-collapsed" in js
+        assert "ti-layout-sidebar-left-expand" in js, (
+            "the toggle icon must swap to the expand glyph when collapsed"
+        )
+        start = js.index("function setSidebarCollapsed(")
+        end = js.index("\n  }\n", start)
+        toggle_body = js[start:end]
+        for forbidden in ("runSearch", "activeLabels = ", "activeTypes = ", "hidePanel", "showEmpty"):
+            assert forbidden not in toggle_body, (
+                f"setSidebarCollapsed() must not {forbidden!r}: collapsing changes only "
+                "sidebar visibility and canvas width"
+            )
+
+        # The stylesheet carries the section-total badge and the collapsed-state
+        # rules (hide the body; contract the column so the canvas takes the full
+        # width on a wide viewport).
+        _, _, css = self._req(port, "/static/style.css")
+        for token in (
+            ".labels-sidebar__total",
+            ".labels-sidebar__toggle",
+            ".labels-sidebar.is-collapsed .labels-sidebar__body",
+            ".labels-sidebar.is-collapsed",
+        ):
+            assert token in css, f"style.css missing collapsed/total rule {token!r}"
+
+    def test_neighbor_focus_on_node_selection(self):
+        """Selecting a node puts the canvas into neighbor focus: the served viewer
+        script carries a single focus state, an undirected first-degree
+        neighbourhood computed client-side from the model's links (startId/endId
+        mapped to source/target), one unified emphasis function that gives focus
+        precedence over the labels highlight and reuses the same dim-not-remove
+        mechanism, the consistent clear gestures (panel close, empty-canvas tap,
+        re-select), and the layout/search coexistence (render reapplies the
+        current emphasis; a search clears the focus). Neighbor focus is computed
+        and applied entirely client-side, so the contract is verified on the
+        served script, consistent with the existing server-side-only test
+        approach for the graph page (SPEC/WEB.md § Roadmap Knowledge-Graph Page,
+        "Neighbor focus on node selection"; § Graph Labels Sidebar rule 8;
+        Acceptance Criteria 54-56)."""
+        proc, port = self._start(["--port", "0"])
+        _, _, js = self._req(port, "/static/graph.js")
+
+        # Single module-level focus state plus the unified emphasis/neighbourhood
+        # and clear/select helpers.
+        for token in (
+            "focusedNodeId",
+            "function neighborSet(",
+            "function applyEmphasis(",
+            "function applyFocusDimming(",
+            "function clearFocus(",
+            "function onNodeSelected(",
+            "function dismissSelection(",
+            "data-node-id",
+            "data-edge-source",
+            "data-edge-target",
+        ):
+            assert token in js, f"graph.js missing neighbor-focus token {token!r}"
+
+        # One source of truth: the focus state is declared exactly once.
+        assert js.count("var focusedNodeId") == 1, (
+            "graph.js must declare the focus state once (single dimming source of truth)"
+        )
+
+        # Focus reuses the SAME dim-not-remove mechanism the labels highlight uses.
+        assert "is-dimmed" in js, "neighbor focus must dim with the .is-dimmed class, not remove elements"
+
+        # applyEmphasis is the single dimming path: focus takes precedence,
+        # otherwise it delegates to the labels highlight.
+        emp = js[js.index("function applyEmphasis(") :]
+        emp = emp[: emp.index("\n  }\n")]
+        assert "focusedNodeId !== null" in emp, (
+            "applyEmphasis() must branch on the focus state (focus precedence over labels)"
+        )
+        assert "applyFocusDimming" in emp and "applyHighlight()" in emp, (
+            "applyEmphasis() must dim by neighbourhood when focused and delegate to "
+            "applyHighlight() otherwise (one dimming path)"
+        )
+
+        # The neighbourhood is UNDIRECTED and derived from the model's links.
+        nb = js[js.index("function neighborSet(") :]
+        nb = nb[: nb.index("\n  }\n")]
+        assert "s === nodeId" in nb and "t === nodeId" in nb, (
+            "neighborSet() must be undirected: include a neighbour when the focused "
+            "node is either the source OR the target of an edge"
+        )
+        assert "graphModel.links" in nb, (
+            "neighborSet() must compute the neighbourhood client-side from graphModel.links"
+        )
+
+        # render() reapplies the CURRENT emphasis so a layout change preserves a
+        # neighbor focus too.
+        assert "applyEmphasis();" in js[js.index("function render(") :], (
+            "render() must call applyEmphasis() to preserve the current focus/highlight"
+        )
+
+        # Unified clear gestures: closing the panel and tapping empty canvas both
+        # clear the focus together with the panel.
+        assert 'panelClose.addEventListener("click", dismissSelection)' in js, (
+            "closing the detail panel must clear the neighbor focus too"
+        )
+
+        # A search clears the focus as part of rendering the new result.
+        ad = js[js.index("function applyData(") :]
+        ad = ad[: ad.index("\n  }\n")]
+        assert "focusedNodeId = null" in ad, (
+            "applyData() (the search re-render path) must clear the neighbor focus"
         )
 
     def test_graph_data_endpoint_shape(self):
@@ -976,6 +1165,184 @@ class TestWebInterface:
         assert status == 200
         assert json.loads(body) == {"nodes": [], "edges": []}
         assert not graph_dir.exists(), "reading an absent graph must not create graph/"
+
+    # ====================================================================
+    # AC45-AC50: graph query bar (q / limit parameters on graph/data)
+    # ====================================================================
+
+    @staticmethod
+    def _graph_data(port, q=None, limit=None):
+        """Build /graph/data with URL-encoded q and limit, GET it, return JSON."""
+        params = {}
+        if q is not None:
+            params["q"] = q
+        if limit is not None:
+            params["limit"] = limit
+        path = f"/roadmaps/{ROADMAP}/graph/data"
+        if params:
+            path += "?" + urllib.parse.urlencode(params)
+        return path
+
+    def test_query_bar_present_with_default_query_and_limits(self):
+        """AC45: the graph page renders the query bar with the default query
+        pre-filled, a Search button, and the six-value node-limit dropdown with
+        100 selected by default."""
+        proc, port = self._start(["--port", "0"])
+        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/graph")
+        assert 'id="query-input"' in body, "query bar must render the editable query box"
+        # The default query sits in a <textarea> (RCDATA), where html/template
+        # does not entity-escape '>', so it renders literally.
+        assert "MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r, m" in body, (
+            "query box must be pre-filled with the default query"
+        )
+        assert 'id="query-run"' in body, "query bar must render the Search button"
+        assert 'id="limit-select"' in body, "query bar must render the node-limit dropdown"
+        for value in ("50", "100", "250", "500", "1000", "3000"):
+            assert f'value="{value}"' in body, f"limit dropdown missing option {value}"
+        assert re.search(
+            r'<option value="100"[^>]*\bselected\b', body, re.I
+        ), "node limit 100 must be the preselected default"
+
+    def test_query_bar_ctrl_enter_accelerator(self):
+        """AC53: graph.js wires a Ctrl+Enter keyboard accelerator on the focused
+        query box that triggers the search exactly as the Search button does,
+        reusing the existing search path (the form submit) instead of
+        duplicating the search logic; plain Enter is left untouched."""
+        proc, port = self._start(["--port", "0"])
+        _, _, js = self._req(port, "/static/graph.js")
+        # The accelerator is wired as a keydown handler on the query box and
+        # fires on the Ctrl+Enter chord, suppressing the default newline.
+        assert 'queryInput.addEventListener("keydown"' in js, (
+            "graph.js must wire a keydown accelerator on the query box"
+        )
+        assert "event.ctrlKey" in js, "the accelerator must trigger on Ctrl+Enter"
+        assert 'event.key === "Enter"' in js, "the accelerator must gate on the Enter key"
+        # It reuses the Search submit path (requestSubmit fires the same submit
+        # event the type="submit" Search button does), never a duplicated fetch.
+        keydown = js.index('queryInput.addEventListener("keydown"')
+        handler = js[keydown:keydown + js[keydown:].index("\n    });")]
+        assert "requestSubmit" in handler, (
+            "Ctrl+Enter must reuse the Search submit path via requestSubmit(), "
+            "not duplicate the search logic"
+        )
+
+    def test_query_bar_default_q_is_backward_compatible(self):
+        """AC46: a request with no q runs the default query and returns the full
+        graph, exactly as before the query bar existed."""
+        proc, port = self._start(["--port", "0"])
+        # No q parameter.
+        status, _, body = self._req(port, self._graph_data(port))
+        assert status == 200
+        baseline = json.loads(body)
+        # The explicit default query yields the same full-graph view.
+        status, _, body = self._req(
+            port,
+            self._graph_data(port, q="MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r, m"),
+        )
+        assert status == 200
+        explicit = json.loads(body)
+        assert len(explicit["nodes"]) == len(baseline["nodes"])
+        assert len(explicit["edges"]) == len(baseline["edges"])
+        assert len(baseline["nodes"]) >= 2 and len(baseline["edges"]) >= 1
+
+    def test_query_bar_rejects_write_and_ddl_without_executing(self):
+        """AC47: a writing or DDL query is rejected (HTTP 400, kind
+        not_read_only) before execution; the store is unchanged."""
+        proc, port = self._start(["--port", "0"])
+        before = json.loads(self._req(port, self._graph_data(port))[2])
+        write_queries = [
+            "MATCH (n) DELETE n",
+            "MATCH (n) DETACH DELETE n",
+            "CREATE (x:Spec {key:'injected-by-web'})",
+            "MATCH (n:Spec) SET n.compromised = true",
+            "CREATE INDEX ON :Spec(key)",
+            "create   index spec_idx",  # non-canonical spacing/casing
+        ]
+        for q in write_queries:
+            status, _, body = self._req(port, self._graph_data(port, q=q))
+            assert status == 400, f"write query not rejected with 400: {q!r}"
+            err = json.loads(body)
+            assert err.get("kind") == "not_read_only", (
+                f"query {q!r} not classified as not_read_only: {err}"
+            )
+        # The store is unchanged: the default read returns the same node count
+        # and no injected node appeared.
+        after = json.loads(self._req(port, self._graph_data(port))[2])
+        assert len(after["nodes"]) == len(before["nodes"]), (
+            "rejected write queries must not change the store"
+        )
+        for n in after["nodes"]:
+            assert n["properties"].get("key") != "injected-by-web", (
+                "a rejected CREATE must not have inserted a node"
+            )
+
+    def test_query_bar_literal_masking_not_falsely_rejected(self):
+        """AC47: write keywords only inside a string literal are accepted as
+        read-only and executed; a genuine DELETE is rejected."""
+        proc, port = self._start(["--port", "0"])
+        accepted = 'MATCH (m) WHERE m.key = "mentions delete and set and create" RETURN m'
+        status, _, _ = self._req(port, self._graph_data(port, q=accepted))
+        assert status == 200, "literal-only write keywords must be accepted as read-only"
+
+        rejected = 'MATCH (m) WHERE m.key = "mentions delete" DELETE m'
+        status, _, body = self._req(port, self._graph_data(port, q=rejected))
+        assert status == 400
+        assert json.loads(body).get("kind") == "not_read_only"
+
+    def test_query_bar_limit_injection_and_invalid_limit(self):
+        """AC48: an invalid limit is rejected (not clamped); allowed limits are
+        accepted; a user LIMIT is respected over the dropdown value."""
+        proc, port = self._start(["--port", "0"])
+        for bad in ("7", "0", "5000", "abc"):
+            status, _, body = self._req(port, self._graph_data(port, limit=bad))
+            assert status == 400, f"invalid limit {bad!r} not rejected"
+            assert json.loads(body).get("kind") == "invalid_limit"
+        for ok in ("50", "100", "250", "500", "1000", "3000"):
+            status, _, _ = self._req(port, self._graph_data(port, limit=ok))
+            assert status == 200, f"allowed limit {ok!r} rejected"
+        # A user-supplied LIMIT 1 is respected even with a larger dropdown value:
+        # the result is capped at one returned row's worth of elements.
+        status, _, body = self._req(
+            port, self._graph_data(port, q="MATCH (n) RETURN n LIMIT 1", limit="3000")
+        )
+        assert status == 200
+        assert len(json.loads(body)["nodes"]) == 1, "user LIMIT 1 must be respected"
+
+    def test_query_bar_execution_failure_distinct_from_rejection(self):
+        """AC50: a read-only query that fails in the engine (invalid syntax)
+        surfaces kind=execution, distinct from a read-only rejection."""
+        proc, port = self._start(["--port", "0"])
+        status, _, body = self._req(port, self._graph_data(port, q="MATCH (n) RETURN"))
+        assert status == 400
+        assert json.loads(body).get("kind") == "execution", (
+            "an execution failure must be distinct from a read-only rejection"
+        )
+
+    def test_query_bar_extraction_dedup_and_orphan_drop(self):
+        """AC49: every returned edge endpoint resolves to a node in the same
+        response (orphan edges dropped, ids deduplicated)."""
+        proc, port = self._start(["--port", "0"])
+        # A query that returns nodes and relationships through a path, exercising
+        # the recursive walk and dedup.
+        status, _, body = self._req(
+            port, self._graph_data(port, q="MATCH p=(a)-[r]->(b) RETURN p")
+        )
+        assert status == 200
+        data = json.loads(body)
+        node_ids = {n["id"] for n in data["nodes"]}
+        for e in data["edges"]:
+            assert e["startId"] in node_ids and e["endId"] in node_ids, (
+                "every edge endpoint must resolve to a node in the same response"
+            )
+        # ids are unique (deduplicated).
+        ids = [n["id"] for n in data["nodes"]]
+        assert len(ids) == len(set(ids)), "node ids must be deduplicated"
+
+    def test_query_bar_search_stays_get_only(self):
+        """AC46: the query bar drives a GET; POST to the data endpoint is 405."""
+        proc, port = self._start(["--port", "0"])
+        status, _, _ = self._req(port, f"/roadmaps/{ROADMAP}/graph/data", method="POST")
+        assert status == 405, "the graph data endpoint must remain GET/HEAD only"
 
     # ====================================================================
     # AC14: read-only - non-read methods rejected

@@ -168,14 +168,35 @@ func handleGraphPage(w http.ResponseWriter, r *http.Request) {
 // shape. The graph is read read-only; a roadmap with no graph yet returns
 // {"nodes":[],"edges":[]} (SPEC/DATA_FORMATS.md § Graph View Data). The
 // {name} is validated and confirmed to exist before any read.
+//
+// The endpoint accepts two optional URL query parameters the page's query bar
+// sends: q (the Cypher query to run; the default full-graph query when absent)
+// and limit (the node limit; default 100 when absent). It stays GET/HEAD only;
+// there is no POST and no request body (SPEC/WEB.md § Graph Data Endpoint;
+// § Graph Query Bar). The user-supplied query is validated as read-only by the
+// shared guard-rail BEFORE execution, so a writing or DDL query never runs.
+//
+// A classified query-bar failure (the query was rejected as not read-only, the
+// limit was invalid, or the accepted query failed in the engine) is returned to
+// the client as a structured, read-only JSON error with HTTP 400 so the page can
+// surface the distinct in-place, non-fatal message; the failure triggers no
+// write, no checkpoint, and no navigation (SPEC/WEB.md § Query-Bar Error
+// Handling). Any other (internal I/O) error is a 500.
 func handleGraphData(w http.ResponseWriter, r *http.Request) {
 	name, ok := resolveRoadmap(w, r)
 	if !ok {
 		return
 	}
 
-	view, err := loadGraphView(r.Context(), name)
+	view, err := loadGraphView(r.Context(), name, r.URL.Query().Get("q"), r.URL.Query().Get("limit"))
 	if err != nil {
+		if qe, isQE := asGraphQueryError(err); isQE {
+			// A classified query-bar failure is a client-visible, non-fatal
+			// condition: return it as a structured JSON error with 400 so the
+			// page can show the distinct in-place message. No write occurred.
+			renderJSONStatus(w, http.StatusBadRequest, map[string]any{"error": qe.Reason, "kind": qe.Kind})
+			return
+		}
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -208,6 +229,17 @@ func renderHTML(w http.ResponseWriter, name string, data any) {
 // back to the identical characters — the visualisation is unchanged
 // (SPEC/WEB.md § Graph Data Endpoint).
 func renderJSON(w http.ResponseWriter, v any) {
+	renderJSONStatus(w, http.StatusOK, v)
+}
+
+// renderJSONStatus is renderJSON with an explicit HTTP status, used for the
+// structured, read-only query-bar error responses (HTTP 400) the graph data
+// endpoint returns (SPEC/WEB.md § Query-Bar Error Handling). The body is
+// buffered and encoded first, so a Content-Type header and the status line are
+// written together and never after the body, and an encode failure still yields
+// a clean 500 rather than a half-written response. HTML escaping stays ON, as in
+// renderJSON.
+func renderJSONStatus(w http.ResponseWriter, status int, v any) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetIndent("", "  ")
@@ -216,5 +248,6 @@ func renderJSON(w http.ResponseWriter, v any) {
 		return
 	}
 	w.Header().Set("Content-Type", contentTypeJSON)
+	w.WriteHeader(status)
 	_, _ = buf.WriteTo(w)
 }

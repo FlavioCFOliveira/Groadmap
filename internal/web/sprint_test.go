@@ -122,7 +122,8 @@ func seedSprintFixture(t *testing.T, name string) sprintFixture {
 	f.closedLower = mkSprint("Ship the initial knowledge-graph viewer", 15)
 	setClosed(t, database, f.closedLower, "2026-05-20T18:30:00Z")
 
-	// 4) OPEN sprint with two member tasks (the Actual tab shows their status).
+	// 4) OPEN sprint with two member tasks (its card footer shows "2 task(s)"; the
+	//    member tasks themselves are shown only on the single sprint page).
 	f.openID = mkSprint("Deliver the sprint detail page and task modal", 99)
 	f.openTaskID = mkTask("Build the read-only sprint page route and template")
 	f.openTaskID2 = mkTask("Render one task detail modal per shown task")
@@ -226,15 +227,27 @@ func TestSprints_SprintClassificationAndLinks(t *testing.T) {
 		t.Errorf("Próximos order wrong: sprint #%d (Order 10) must precede sprint #%d (Order 30) despite its higher id", f.pendingID2, f.pendingID)
 	}
 
-	// OPEN -> Actual, and the Actual pane shows the OPEN sprint's task statuses.
+	// OPEN -> Actual, rendered through the SAME shared sprint-card partial as the
+	// other tabs: the card links to the sprint page and shows the description and
+	// the task count, but it does NOT expand into an inline member-tasks table or
+	// per-task modals (SPEC/WEB.md § Shared Sprint-Card Partial; Acceptance
+	// Criteria 8/12/38).
 	if !strings.Contains(current, "/sprints/"+itoa(f.openID)) {
 		t.Errorf("OPEN sprint #%d not under the Actual tab", f.openID)
 	}
-	if !strings.Contains(current, "Build the read-only sprint page route and template") {
-		t.Errorf("Actual tab does not show the OPEN sprint's task title")
+	if !strings.Contains(current, "Deliver the sprint detail page and task modal") {
+		t.Errorf("Actual tab does not show the OPEN sprint's description in its card")
 	}
-	if !strings.Contains(current, `<span class="badge bg-blue-lt">SPRINT</span>`) {
-		t.Errorf("Actual tab does not show the OPEN sprint's task status badge")
+	if !strings.Contains(current, "2 task(s)") {
+		t.Errorf("Actual tab card does not show the OPEN sprint's task count")
+	}
+	// The OPEN sprint must NOT be expanded: no member-task title and no per-task
+	// modal trigger on the sprints landing page.
+	if strings.Contains(current, "Build the read-only sprint page route and template") {
+		t.Errorf("Actual tab must not show the OPEN sprint's member task title (no inline table)")
+	}
+	if strings.Contains(current, `data-bs-target="#task-modal-`) {
+		t.Errorf("Actual tab must not render a per-task modal trigger")
 	}
 
 	// CLOSED -> Concluídos, ordered by descending Order: closedHigher (Order 40)
@@ -252,18 +265,19 @@ func TestSprints_SprintClassificationAndLinks(t *testing.T) {
 }
 
 // TestClassifySprints_OrderingRules unit-tests the classification and ordering
-// directly with crafted sprints: Próximos by ascending Sprint.Order, Concluídos
-// by descending Sprint.Order, and Actual by ascending id. The Order values are
-// chosen so they diverge from id order, so the assertion proves the sort is
-// driven by Order, not by id (SPEC/WEB.md § Roadmap Sprints Page; Acceptance
-// Criterion 12).
+// directly with crafted sprints: Próximos by ascending Sprint.Order, Actual by
+// ascending Sprint.Order, and Concluídos by descending Sprint.Order. The Order
+// values are chosen so they diverge from id order in every group, so each
+// assertion proves the sort is driven by Order, not by id (SPEC/WEB.md § Roadmap
+// Sprints Page; Acceptance Criterion 12).
 func TestClassifySprints_OrderingRules(t *testing.T) {
 	views := []sprintView{
 		// PENDING: id-ascending would yield [2, 5]; Order (10, 30) inverts that
 		// to [5, 2], so the assertion proves the sort is by Order, not id.
 		{Sprint: models.Sprint{ID: 5, Status: models.SprintPending, Order: 10}},
 		{Sprint: models.Sprint{ID: 2, Status: models.SprintPending, Order: 30}},
-		// OPEN: id-ascending order (3 before 9).
+		// OPEN: id-ascending would yield [3, 9]; Order (1 for id 9, 2 for id 3)
+		// inverts that to [9, 3], so the assertion proves the sort is by Order.
 		{Sprint: models.Sprint{ID: 9, Status: models.SprintOpen, Order: 1}},
 		{Sprint: models.Sprint{ID: 3, Status: models.SprintOpen, Order: 2}},
 		// CLOSED: ids and Order deliberately uncorrelated.
@@ -292,8 +306,10 @@ func TestClassifySprints_OrderingRules(t *testing.T) {
 	// has the HIGHER id, id-ascending would give [2, 5]; getting [5, 2] proves
 	// the sort is by Order.
 	assertIDs("Próximos", up, []int{5, 2})
-	// Actual: ascending id -> [3, 9].
-	assertIDs("Actual", cur, []int{3, 9})
+	// Actual: ascending Order -> #9 (Order 1) before #3 (Order 2). Since #9 has
+	// the HIGHER id, id-ascending would give [3, 9]; getting [9, 3] proves the
+	// sort is by Order.
+	assertIDs("Actual", cur, []int{9, 3})
 	// Concluídos: descending Order -> #1 (40), #4 (25), #7 (15), #8 (5). The id
 	// order is uncorrelated, so this proves the sort is by Order, not id.
 	assertIDs("Concluídos", cl, []int{1, 4, 7, 8})
@@ -391,14 +407,15 @@ func TestSprintPage_NotFoundCases(t *testing.T) {
 }
 
 // TestTaskModal_WiringAndContent asserts the read-only task detail modal
-// mechanism on every page that shows clickable tasks: the tasks page, the
-// sprints landing page's Actual tab, and the sprint page. Each clickable task
-// is wired with data-bs-toggle="modal" to a matching modal element, the modal
-// shows the long free-text fields, and it contains no form/input/submit. The
-// asserted task (f.openTaskID) is a member of the OPEN sprint, so its modal is
-// rendered on the sprints page's Actual tab and on the sprint page, and it also
-// appears in the full task table on the tasks page (SPEC/WEB.md § Task Detail
-// Modal; Acceptance Criterion 15).
+// mechanism on every page that shows clickable tasks: the tasks page and the
+// sprint page. Each clickable task is wired with data-bs-toggle="modal" to a
+// matching modal element, the modal shows the long free-text fields, and it
+// contains no form/input/submit. The asserted task (f.openTaskID) is a member of
+// the OPEN sprint, so its modal is rendered on the sprint page, and it also
+// appears in the full task table on the tasks page. The sprints landing page is
+// deliberately excluded: it renders every sprint as a compact card and opens no
+// task detail modal (SPEC/WEB.md § Task Detail Modal, § Shared Sprint-Card
+// Partial; Acceptance Criteria 8/15/38).
 func TestTaskModal_WiringAndContent(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	f := seedSprintFixture(t, "web-task-modal")
@@ -406,7 +423,6 @@ func TestTaskModal_WiringAndContent(t *testing.T) {
 
 	for _, path := range []string{
 		"/roadmaps/" + f.name + "/tasks",                     // tasks page (full task table)
-		"/roadmaps/" + f.name,                                // sprints landing page (Actual tab)
 		"/roadmaps/" + f.name + "/sprints/" + itoa(f.openID), // sprint page
 	} {
 		body := servePage(t, mux, path)

@@ -345,6 +345,19 @@ visualisation. The endpoint reads the graph **read-only**, the same way
 `rmp graph query`/`search` do (see `GRAPH.md § Engine Construction and
 Lifecycle`); it never writes and never checkpoints.
 
+The endpoint accepts two optional URL query parameters, `q` (the Cypher query to
+run, URL-encoded) and `limit` (the node-limit value), that the graph page's query
+bar sends. When `q` is absent or empty, the endpoint runs the default query
+`MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r, m`, which yields the same
+full-graph view a request with no parameters always produced (backward
+compatible). User-supplied `q` is validated as **read-only** before execution
+(reusing the graph guard-rail) and the resolved `limit` is applied as a `LIMIT`
+clause only when the query does not already contain a top-level `LIMIT`. The full
+parameter contract, the read-only guard-rail, the limit-injection rule, and the
+failure modes are specified in `WEB.md § Graph Data Endpoint` and
+`WEB.md § Query-Bar Error Handling`; this section specifies only the response
+shape, which is identical regardless of which query produced it.
+
 This is the canonical specification of the graph view-data shape. It **reuses**
 the graph-element and property-type conventions already defined in
 [Graph Query Result](#graph-query-result); it does not introduce a new element
@@ -383,7 +396,12 @@ Rules:
    [Property-Type Mapping](#property-type-mapping) recursively.
 3. Every `startId` and `endId` in `edges` references the `id` of a node present
    in the same `nodes` array, so the visualisation can resolve every edge's
-   endpoints from the one response.
+   endpoints from the one response. The endpoint builds the response by collecting
+   every node and relationship that appears anywhere in the query result
+   (recursively, deduplicated by `id`) and then **dropping** any relationship whose
+   start or end node was not collected, rather than inventing a synthetic endpoint;
+   this drop is what guarantees this invariant for an arbitrary user-supplied query
+   (see `WEB.md § Graph Data Endpoint`).
 4. `id`, `startId`, and `endId` are GoGraph's internal storage identifiers
    (`uint64`), **ephemeral** and not stable business keys, exactly as defined in
    [Graph element mapping](#graph-element-mapping) rule 4. They are used only to
@@ -394,6 +412,11 @@ Rules:
 5. The result is pretty-printed with two-space indentation and a trailing
    newline, consistent with all other JSON output (see
    [Implementation Notes](#implementation-notes)).
+6. This response is the sole data source for the graph page's labels sidebar
+   (`WEB.md § Graph Labels Sidebar`): the page derives the node-label inventory and
+   counts from the nodes' `labels` arrays and the edge-type inventory and counts
+   from the edges' `type` field, client-side, from this same response. That feature
+   consumes this shape and does not change it; no field is added here for it.
 
 ---
 

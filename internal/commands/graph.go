@@ -13,7 +13,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -26,29 +25,8 @@ import (
 	"github.com/FlavioCFOliveira/GoGraph/store/snapshot"
 	"github.com/FlavioCFOliveira/GoGraph/store/txn"
 	"github.com/FlavioCFOliveira/GoGraph/store/wal"
+	"github.com/FlavioCFOliveira/Groadmap/internal/cypherguard"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
-)
-
-// Writing-clause discriminators used by the per-subcommand guard rails.
-var (
-	reCreate = regexp.MustCompile(`(?i)\b(CREATE|MERGE)\b`)
-	reMutate = regexp.MustCompile(`(?i)\b(SET|REMOVE)\b`)
-	reDelete = regexp.MustCompile(`(?i)\b(DELETE|DETACH)\b`)
-	// reDDL matches the schema-mutating DDL clauses (SPEC/GRAPH.md
-	// § Operation Classes): CREATE INDEX, DROP INDEX, CREATE CONSTRAINT,
-	// DROP CONSTRAINT. The CREATE/DROP keyword and the INDEX/CONSTRAINT
-	// keyword may be separated by arbitrary whitespace, so the matcher is
-	// whitespace-tolerant (\s+ between the two words). It is applied to the
-	// literal-masked query, so a DDL keyword appearing only inside a string
-	// literal, comment, or backtick identifier cannot trigger it.
-	//
-	// GoGraph exports cypher/ir.IsDDL, but it is case- and whitespace-
-	// sensitive (it returns false for "create index" or "CREATE   INDEX"),
-	// so it cannot be used as a security guard rail: a writer could bypass
-	// it with non-canonical casing or spacing. A Groadmap-local regex mirrors
-	// the existing reCreate/reMutate/reDelete discriminators and is robust to
-	// both, matching how the guard rail classifies every other clause.
-	reDDL = regexp.MustCompile(`(?i)\b(CREATE|DROP)\s+(INDEX|CONSTRAINT)\b`)
 )
 
 // graphQueryResult is the JSON shape returned by read subcommands and
@@ -317,130 +295,29 @@ func readQuery(args []string) (string, error) {
 	return q, nil
 }
 
-// maskCypherLiterals returns a copy of query in which the INTERIOR
-// characters of Cypher string literals, comments, and backtick-quoted
-// identifiers are replaced with spaces. Delimiter characters and the
-// overall length are preserved so that byte positions of every other
-// token are unchanged; only the neutralized spans differ.
-//
-// It is used solely for operation-class classification (see SPEC/GRAPH.md
-// § Literal-Aware Normalization): a clause keyword appearing only inside a
-// string literal, a comment, or a backtick identifier must not influence
-// the guard rail. The query actually executed against the store is always
-// the original, unmodified string.
-//
-// The scanner is a single left-to-right state machine so that nesting and
-// precedence are handled correctly: a quote inside a comment does not open
-// a literal, a comment marker inside a string is literal text, and a
-// backslash escape inside a quoted span does not terminate that span.
-//
-// Masked spans (interior neutralized to spaces, delimiters kept):
-//   - single-quoted string literals  '...'   (honors \\, \', \" escapes)
-//   - double-quoted string literals  "..."   (honors \\, \', \" escapes)
-//   - backtick-quoted identifiers    `...`
-//   - line comments                  // ... <EOL>
-//   - block comments                 /* ... */
+// maskCypherLiterals returns a copy of query with the interior characters of
+// Cypher string literals, comments, and backtick-quoted identifiers neutralized
+// to spaces, used solely for operation-class classification (SPEC/GRAPH.md
+// § Literal-Aware Normalization). It delegates to the shared guard-rail package
+// so the CLI and the read-only web endpoint mask identically; see
+// cypherguard.MaskLiterals for the full contract.
 func maskCypherLiterals(query string) string {
-	const space = ' '
-	b := []byte(query)
-	n := len(b)
-	out := make([]byte, n)
-	copy(out, b)
-
-	// Scanner state. Exactly one of these is active at a time.
-	type state int
-	const (
-		stNormal   state = iota
-		stSingle         // inside '...'
-		stDouble         // inside "..."
-		stBacktick       // inside `...`
-		stLine           // inside // ... EOL
-		stBlock          // inside /* ... */
-	)
-
-	st := stNormal
-	for i := 0; i < n; i++ {
-		c := b[i]
-		switch st {
-		case stNormal:
-			switch {
-			case c == '\'':
-				st = stSingle
-			case c == '"':
-				st = stDouble
-			case c == '`':
-				st = stBacktick
-			case c == '/' && i+1 < n && b[i+1] == '/':
-				// Enter line comment; the // marker is non-structural for
-				// classification, so mask it together with the comment body.
-				st = stLine
-				out[i] = space
-				out[i+1] = space
-				i++
-			case c == '/' && i+1 < n && b[i+1] == '*':
-				// Enter block comment; mask the /* marker with the body.
-				st = stBlock
-				out[i] = space
-				out[i+1] = space
-				i++
-			}
-		case stSingle, stDouble:
-			// Backslash escapes a following character within quoted literals
-			// so an escaped quote does not close the literal. Mask both the
-			// backslash and the escaped character.
-			if c == '\\' && i+1 < n {
-				out[i] = space
-				out[i+1] = space
-				i++
-				continue
-			}
-			if (st == stSingle && c == '\'') || (st == stDouble && c == '"') {
-				st = stNormal // delimiter preserved
-				continue
-			}
-			out[i] = space
-		case stBacktick:
-			// Backtick identifiers do not process backslash escapes in Cypher.
-			if c == '`' {
-				st = stNormal // delimiter preserved
-				continue
-			}
-			out[i] = space
-		case stLine:
-			if c == '\n' {
-				st = stNormal // newline preserved as structure
-				continue
-			}
-			out[i] = space
-		case stBlock:
-			if c == '*' && i+1 < n && b[i+1] == '/' {
-				// Mask the closing */ marker and return to normal.
-				out[i] = space
-				out[i+1] = space
-				st = stNormal
-				i++
-				continue
-			}
-			out[i] = space
-		}
-	}
-
-	return string(out)
+	return cypherguard.MaskLiterals(query)
 }
 
-// validateGuardRail checks that query matches the operation class
-// required by subcmd. It returns ErrValidation when the class does not
-// match, with a message that names the subcommand and the expected class.
+// validateGuardRail checks that query matches the operation class required by
+// subcmd. It returns ErrValidation when the class does not match, with a
+// message that names the subcommand and the expected class.
 //
-// Classification runs on the literal-masked normalization of the query
-// (see maskCypherLiterals and SPEC/GRAPH.md § Literal-Aware Normalization),
-// never on the raw string: a clause keyword that appears only inside a
-// string literal, comment, or backtick identifier must not affect the
-// guard rail. The original query is still what executes against the store.
+// Classification runs on the literal-masked normalization of the query, never
+// on the raw string (SPEC/GRAPH.md § Literal-Aware Normalization): a clause
+// keyword appearing only inside a string literal, comment, or backtick
+// identifier must not affect the guard rail. The original query is still what
+// executes against the store. The masking and clause-class detection are owned
+// by the shared cypherguard package, so the CLI guard rail and the read-only
+// web graph data endpoint apply the exact same classification.
 func validateGuardRail(subcmd, allowed, query string) error {
-	masked := maskCypherLiterals(query)
-	isWrite := cypher.QueryHasWritingClause(masked)
-	isDDL := reDDL.MatchString(masked)
+	c := cypherguard.Classify(query)
 
 	// DDL (CREATE INDEX, DROP INDEX, CREATE CONSTRAINT, DROP CONSTRAINT) is a
 	// schema-mutating clause class that is outside every subcommand's accepted
@@ -451,7 +328,7 @@ func validateGuardRail(subcmd, allowed, query string) error {
 	// CREATE CONSTRAINT forms would otherwise satisfy the create accept check),
 	// so DDL is rejected up front for ALL subcommands, with the per-subcommand
 	// message that names the class each one does accept.
-	if isDDL {
+	if c.DDL {
 		switch subcmd {
 		case "query", "search":
 			return fmt.Errorf("%w: graph %s accepts only %s queries", utils.ErrValidation, subcmd, allowed)
@@ -467,22 +344,22 @@ func validateGuardRail(subcmd, allowed, query string) error {
 	switch subcmd {
 	case "create":
 		// Must be write, must have CREATE/MERGE, must not have SET/REMOVE/DELETE.
-		if !isWrite || !reCreate.MatchString(masked) || reMutate.MatchString(masked) || reDelete.MatchString(masked) {
+		if !c.Write || !c.Create || c.Mutate || c.Delete {
 			return fmt.Errorf("%w: graph create accepts only CREATE/MERGE queries", utils.ErrValidation)
 		}
 	case "query", "search":
 		// Must be read-only.
-		if isWrite {
+		if c.Write {
 			return fmt.Errorf("%w: graph %s accepts only %s queries", utils.ErrValidation, subcmd, allowed)
 		}
 	case "update":
 		// Must be write, must have SET/REMOVE, must not have CREATE/MERGE/DELETE.
-		if !isWrite || !reMutate.MatchString(masked) || reCreate.MatchString(masked) || reDelete.MatchString(masked) {
+		if !c.Write || !c.Mutate || c.Create || c.Delete {
 			return fmt.Errorf("%w: graph update accepts only SET/REMOVE queries", utils.ErrValidation)
 		}
 	case "delete":
 		// Must be write, must have DELETE/DETACH, must not have CREATE/MERGE/SET/REMOVE.
-		if !isWrite || !reDelete.MatchString(masked) || reCreate.MatchString(masked) || reMutate.MatchString(masked) {
+		if !c.Write || !c.Delete || c.Create || c.Mutate {
 			return fmt.Errorf("%w: graph delete accepts only DELETE/DETACH DELETE queries", utils.ErrValidation)
 		}
 	}

@@ -16,8 +16,12 @@
   - [Roadmap Sprints Page](#roadmap-sprints-page)
   - [Roadmap Tasks Page](#roadmap-tasks-page)
   - [Roadmap Sprint Page](#roadmap-sprint-page)
-  - [Shared Sprint Presentation Sub-Template](#shared-sprint-presentation-sub-template)
+  - [Shared Sprint-Card Partial](#shared-sprint-card-partial)
+  - [Sprint Detail Sub-Template](#sprint-detail-sub-template)
   - [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page)
+  - [Graph Query Bar](#graph-query-bar)
+  - [Query-Bar Error Handling](#query-bar-error-handling)
+  - [Graph Labels Sidebar](#graph-labels-sidebar)
   - [Graph Data Endpoint](#graph-data-endpoint)
   - [Static Assets](#static-assets)
   - [Task Detail Modal](#task-detail-modal)
@@ -85,13 +89,16 @@ The web interface exposes the following kinds of page for each roadmap:
 2. A roadmap sprints page that is the roadmap's landing page, served at
    `/roadmaps/{name}` and read from its SQLite `project.db`. It presents the
    roadmap's sprints as three tabs (Próximos, Actual, Concluídos), with **Actual**
-   active by default. Under Actual it renders the OPEN ("current") sprint or
-   sprints with the same full sprint detail block the single Roadmap Sprint Page
-   renders, through a shared sprint presentation sub-template, so an OPEN sprint
-   looks identical on the Actual tab and on its own page (see
-   [Shared Sprint Presentation Sub-Template](#shared-sprint-presentation-sub-template)).
-   The Próximos and Concluídos tabs list their sprints as cards that link to each
-   sprint's own page. It does not render the full tasks table.
+   active by default. Every sprint in every tab — including the OPEN ("current")
+   sprint or sprints under Actual — is rendered through a single shared
+   sprint-card partial, so all sprints share identical card markup across the
+   three tabs. Each card shows a header ("Sprint #<ID>" with a status badge), the
+   sprint description, and a footer with the sprint's task count, and links to that
+   sprint's own page. The Actual tab does not expand the OPEN sprint into an inline
+   task table or per-task modals; the full sprint detail block is shown only on the
+   single Roadmap Sprint Page (see
+   [Shared Sprint-Card Partial](#shared-sprint-card-partial)). It does not render
+   the full tasks table.
 3. A roadmap tasks page, served at `/roadmaps/{name}/tasks` and read from that
    roadmap's `project.db`. It presents the full task table of the roadmap (every
    task, any status), with each task row clickable to open the read-only task
@@ -143,20 +150,22 @@ task detail modal that displays all of the task's fields (see
    tabs, labelled **Próximos**, **Actual**, and **Concluídos** from left to right,
    with **Actual** active by default. The interface classifies each sprint into a
    tab by its status: a `PENDING` sprint appears under Próximos, an `OPEN` sprint
-   under Actual, and a `CLOSED` sprint under Concluídos. Próximos lists PENDING
-   sprints ordered by ascending sprint `Order` (the unique execution order; the
-   next sprint to execute, lowest `Order`, first); Actual renders the OPEN sprint
-   or sprints, each through the shared sprint presentation sub-template, so each
-   OPEN sprint shows the same full detail block (the sprint metadata datagrid and
-   the full member-tasks table) that the single Roadmap Sprint Page shows;
-   Concluídos lists CLOSED sprints ordered by descending sprint `Order` (the
-   last/highest-`Order` closed sprint first). Each sprint shown in any tab is a
-   clickable link to that sprint's own page, and each sprint card in the Próximos
-   and Concluídos tabs shows that sprint's total task count. The sprints page does
-   not render the full tasks table (see
+   under Actual, and a `CLOSED` sprint under Concluídos. Every sprint in every tab
+   is rendered through the single shared sprint-card partial, so all sprints share
+   identical card markup across the three tabs; each card shows a header
+   ("Sprint #<ID>" with a status badge), the sprint description, and a footer with
+   that sprint's total task count, and links to the sprint's own page. The OPEN
+   sprint or sprints under Actual are rendered with this same card; the Actual tab
+   does not expand the OPEN sprint into an inline task table or per-task modals.
+   Próximos lists PENDING sprints ordered by ascending sprint `Order` (the unique
+   execution order; the next sprint to execute, lowest `Order`, first); Actual lists
+   the OPEN sprint or sprints ordered by ascending sprint `Order`; Concluídos lists
+   CLOSED sprints ordered by descending sprint `Order` (the last/highest-`Order`
+   closed sprint first). Each sprint shown in any tab is a clickable link to that
+   sprint's own page. The sprints page does not render the full tasks table (see
    [Roadmap Sprints Page](#roadmap-sprints-page),
    [Roadmap Sprint Page](#roadmap-sprint-page), and
-   [Shared Sprint Presentation Sub-Template](#shared-sprint-presentation-sub-template)).
+   [Shared Sprint-Card Partial](#shared-sprint-card-partial)).
 7. The roadmap tasks page shows the selected roadmap's full task table — every
    task of the roadmap, of any status — with the fields and relationships already
    defined in `MODELS.md` and `DATABASE.md`, read from that roadmap's `project.db`.
@@ -174,9 +183,9 @@ task detail modal that displays all of the task's fields (see
    `project.db`. It is served at `/roadmaps/{name}/sprints/{id}`, is read-only, and
    returns HTTP `404 Not Found` when `{id}` is not a valid integer or is not a
    sprint of the named roadmap (see [Roadmap Sprint Page](#roadmap-sprint-page)).
-10. Anywhere a task is shown clickable — the tasks page's task table, the Actual
-   tab's task list, and the sprint page's task list — selecting the task opens a
-   read-only task detail modal that displays all of the task's fields. The modal
+10. Anywhere a task is shown clickable — the tasks page's task table and the sprint
+   page's task list — selecting the task opens a read-only task detail modal that
+   displays all of the task's fields. The modal
    only displays data: it contains no form, no edit control, and no submit action,
    and it requires no new server endpoint and no new write path (see
    [Task Detail Modal](#task-detail-modal)).
@@ -188,8 +197,18 @@ task detail modal that displays all of the task's fields (see
    Disjoint force-directed graph, Mobile patent suits (the **default**), Arc diagram,
    Sankey diagram, Hierarchical edge bundling, Chord diagram, Directed chord diagram,
    and Chord dependency diagram — selectable through a dropdown, and layouts that need a
-   constrained data shape degrade gracefully (see
+   constrained data shape degrade gracefully. The page also presents a labels
+   sidebar column, inside the graph card to the left of the canvas, that lists
+   every node label and every edge type in the graph with a count for each and
+   lets the user highlight the matching elements without removing the rest. At the
+   top of the page a query bar lets the user drive the graph from a single editable
+   Cypher query, with a Search button and a node-limit dropdown; the query is
+   validated as read-only before execution, reusing the graph guard-rail, and a
+   writing or DDL query is rejected and not executed (see
    [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page),
+   [Graph Query Bar](#graph-query-bar),
+   [Graph Data Endpoint](#graph-data-endpoint),
+   [Graph Labels Sidebar](#graph-labels-sidebar),
    [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library),
    and
    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
@@ -517,7 +536,7 @@ produced from embedded `html/template` templates. Page routes return HTML
 | `/roadmaps/{name}/tasks` | GET, HEAD | Roadmap tasks page (full task table) | HTML |
 | `/roadmaps/{name}/sprints/{id}` | GET, HEAD | Roadmap sprint page (all sprint details and the sprint's task list) | HTML |
 | `/roadmaps/{name}/graph` | GET, HEAD | Roadmap knowledge-graph page (interactive visualisation) | HTML |
-| `/roadmaps/{name}/graph/data` | GET, HEAD | Graph nodes and edges for the visualisation | JSON |
+| `/roadmaps/{name}/graph/data` | GET, HEAD | Graph nodes and edges for the visualisation (optional `q` Cypher query and `limit` node-limit parameters; see [Graph Data Endpoint](#graph-data-endpoint)) | JSON |
 | `/static/...` | GET, HEAD | Embedded static assets (CSS, JS, vendored D3.js graph library) | static file |
 
 Path-parameter rules:
@@ -585,42 +604,40 @@ how the `rmp web` process itself terminates.
   sprint or sprints — is the active tab on landing. The interface classifies each
   sprint into exactly one tab by its `Sprint` status (`MODELS.md § Sprint`, status
   enum in `MODELS.md § Enums`): a `PENDING` sprint goes to Próximos, an `OPEN`
-  sprint to Actual, and a `CLOSED` sprint to Concluídos.
+  sprint to Actual, and a `CLOSED` sprint to Concluídos. Every sprint in every tab
+  is rendered through the single shared sprint-card partial (see
+  [Shared Sprint-Card Partial](#shared-sprint-card-partial)), so all sprints share
+  identical card markup across the three tabs. The three tabs differ only in which
+  sprints they contain and in the order those sprints appear.
   - **Actual** (the default active tab) presents the OPEN sprint or sprints —
-    those in progress. Each OPEN sprint is rendered through the shared sprint
-    presentation sub-template (see
-    [Shared Sprint Presentation Sub-Template](#shared-sprint-presentation-sub-template)),
-    so an OPEN sprint shows on the Actual tab the same full detail block the
-    single Roadmap Sprint Page shows for it: the sprint status summary line, the
-    sprint metadata datagrid, and the full member-tasks table in planned in-sprint
-    execution order (the `sprint_tasks` order; see `MODELS.md § Sprint` and
-    `DATABASE.md § Relationships`), with each task row clickable to open the task
-    detail modal. The Actual tab therefore shows the full sprint detail block per
-    OPEN sprint, not a reduced card. When no sprint is OPEN, the Actual tab shows a
-    clear empty-state message and no sprint.
+    those in progress — ordered by ascending sprint `Order` (the unique sprint
+    execution order; see `MODELS.md § Sprint`). Each OPEN sprint is shown with the
+    shared sprint-card partial, the same card the other two tabs use. The Actual
+    tab does not expand the OPEN sprint into an inline task table or per-task
+    modals; the full sprint detail block is shown only on the single Roadmap
+    Sprint Page (see [Roadmap Sprint Page](#roadmap-sprint-page)). When no sprint
+    is OPEN, the Actual tab shows a clear empty-state message and no card.
   - **Próximos** lists the PENDING sprints — planned but not yet started — ordered
     by ascending sprint `Order` (the unique sprint execution order; see
     `MODELS.md § Sprint`). The sprint with the lowest `Order`, the next sprint to
-    execute, appears first. Each PENDING sprint is shown as a card that links to
-    the sprint's own page and displays the sprint's total task count. When no
-    sprint is PENDING, the Próximos tab shows a clear empty-state message.
+    execute, appears first. When no sprint is PENDING, the Próximos tab shows a
+    clear empty-state message.
   - **Concluídos** lists the CLOSED sprints ordered by descending sprint `Order`
     (the unique sprint execution order; see `MODELS.md § Sprint`). The CLOSED
     sprint with the highest `Order`, the last in execution order, appears first.
-    Each CLOSED sprint is shown as a card that links to the sprint's own page and
-    displays the sprint's total task count. When no sprint is CLOSED, the
-    Concluídos tab shows a clear empty-state message.
+    When no sprint is CLOSED, the Concluídos tab shows a clear empty-state message.
   - Every sprint shown in any of the three tabs is a clickable link to that
     sprint's own page at `/roadmaps/{name}/sprints/{id}` (see
-    [Roadmap Sprint Page](#roadmap-sprint-page)). On the Actual tab, the member
-    tasks shown for an OPEN sprint are also clickable and open the task detail
-    modal (see [Task Detail Modal](#task-detail-modal)).
+    [Roadmap Sprint Page](#roadmap-sprint-page)). The sprints page itself shows no
+    member tasks and opens no task detail modal; member tasks are clickable on the
+    single Roadmap Sprint Page and on the tasks page (see
+    [Task Detail Modal](#task-detail-modal)).
 - **Sprint description line breaks.** Wherever a sprint's `description` text is
-  shown on this page — the expanded OPEN sprint under the Actual tab, and the
-  sprint cards under Próximos and Concluídos — the description renders preserving
-  the author's line breaks (newlines), because the description is multi-line as
-  authored through the CLI; the text still wraps, so no forced horizontal
-  scrolling is introduced (see [Frontend Rules](#frontend-rules), rule 6).
+  shown in a sprint card on this page — across all three tabs — the description
+  renders preserving the author's line breaks (newlines), because the description
+  is multi-line as authored through the CLI; the text still wraps, so no forced
+  horizontal scrolling is introduced (see [Frontend Rules](#frontend-rules),
+  rule 6).
 - **Relationships shown.** The page surfaces, in a read-only view, the
   relationships already modelled in the data: task-to-sprint membership (including
   task order within a sprint). The presentation MUST reflect the same
@@ -665,14 +682,15 @@ how the `rmp web` process itself terminates.
 - **Route:** `GET /roadmaps/{name}/sprints/{id}`
 - **Content:** A read-only presentation of a single sprint of the named roadmap,
   read from that roadmap's `project.db`. The page renders the sprint through the
-  shared sprint presentation sub-template (see
-  [Shared Sprint Presentation Sub-Template](#shared-sprint-presentation-sub-template)),
-  the same sub-template the Actual tab of the Roadmap Sprints Page uses for an
-  OPEN sprint, so a sprint is presented identically on its own page and on the
-  Actual tab.
+  sprint detail sub-template (see
+  [Sprint Detail Sub-Template](#sprint-detail-sub-template)), which produces the
+  full sprint detail block. This full detail block is shown only on this page; the
+  Roadmap Sprints Page renders every sprint, including the OPEN sprint, as a
+  compact card through the shared sprint-card partial instead (see
+  [Shared Sprint-Card Partial](#shared-sprint-card-partial)).
 - **Sprint status summary line.** At the top of the sprint presentation the page
   shows the sprint status summary line defined in
-  [Shared Sprint Presentation Sub-Template](#shared-sprint-presentation-sub-template).
+  [Sprint Detail Sub-Template](#sprint-detail-sub-template).
 - **Sprint details.** The page shows all details of the sprint, using the fields
   defined for the `Sprint` model in `MODELS.md § Sprint`: the sprint `id`, its
   status, its `title`, its description, its execution `order` (a positive integer,
@@ -702,20 +720,53 @@ how the `rmp web` process itself terminates.
 - **Read-only.** The page renders data only. It contains no form, button, or
   link that submits a change; there is no edit affordance of any kind.
 
-### Shared Sprint Presentation Sub-Template
+### Shared Sprint-Card Partial
 
-A single shared sub-template (a template "partial") renders the full sprint
-detail block. Both the single Roadmap Sprint Page and the Actual tab of the
-Roadmap Sprints Page render a sprint through this same sub-template, so a sprint
-and its content are presented identically everywhere they appear in full. This is
-the mechanism that guarantees the Actual (current/open) sprint presentation on
-the Roadmap Sprints Page is visually identical to the single Roadmap Sprint Page.
+A single shared sub-template (a template "partial") renders the sprint card. All
+three tabs of the Roadmap Sprints Page — Próximos, Actual, and Concluídos —
+render every sprint through this same partial, so all sprints share identical
+card markup across the three tabs. The card is the only sprint presentation on
+the Roadmap Sprints Page; the OPEN sprint under Actual uses the same card as every
+other sprint and is not expanded inline.
 
-1. **Single source of presentation.** There is one shared sub-template for the
-   full sprint detail block. The Roadmap Sprint Page renders the requested sprint
-   through it, and the Actual tab of the Roadmap Sprints Page renders each OPEN
-   sprint through it. Neither caller defines its own divergent sprint layout; both
-   produce the identical block for the same sprint data.
+1. **Single source of card markup.** There is one shared partial for the sprint
+   card, and every tab renders each of its sprints through it. No tab defines its
+   own divergent card layout; the OPEN sprint under Actual is rendered with the
+   same card as a PENDING sprint under Próximos and a CLOSED sprint under
+   Concluídos.
+
+2. **What the card renders.** For one sprint, the card renders, in order:
+   - a **header** showing the text `Sprint #<ID>` (the sprint's `id`; see
+     `MODELS.md § Sprint`) together with a **status badge** for the sprint's
+     status (the status enum is defined in `MODELS.md § Enums`);
+   - the sprint **description** text;
+   - a **footer** showing the sprint's total task count (the sprint's
+     `task_count`; see `MODELS.md § Sprint`).
+
+3. **Clickable link.** The whole card is a clickable link to that sprint's own
+   page at `/roadmaps/{name}/sprints/{id}` (see
+   [Roadmap Sprint Page](#roadmap-sprint-page)). The card shows no member tasks and
+   opens no task detail modal.
+
+4. **Read-only.** The card renders data only. It contains no form, button, or link
+   that submits a change; its only interaction is navigating to the sprint's own
+   page.
+
+5. **Authored line breaks.** Where the card renders the sprint's `description`, it
+   preserves the author's line breaks as specified in
+   [Frontend Rules](#frontend-rules), rule 6.
+
+### Sprint Detail Sub-Template
+
+A sub-template (a template "partial") renders the full sprint detail block. The
+single Roadmap Sprint Page renders a sprint through this sub-template. The full
+detail block appears only on the Roadmap Sprint Page; the Roadmap Sprints Page
+shows sprints as compact cards through the shared sprint-card partial instead (see
+[Shared Sprint-Card Partial](#shared-sprint-card-partial)).
+
+1. **Single source of detail presentation.** There is one sub-template for the
+   full sprint detail block, and the Roadmap Sprint Page renders the requested
+   sprint through it.
 
 2. **What the sub-template renders.** For one sprint, the sub-template renders, in
    order:
@@ -777,6 +828,19 @@ the Roadmap Sprints Page is visually identical to the single Roadmap Sprint Page
   library (and the d3-sankey plugin) from `/static/...` and fetches the graph's
   nodes and edges as JSON from the graph data endpoint
   (`/roadmaps/{name}/graph/data`).
+- **Query bar.** At the top of the page, above the graph card, a query bar lets
+  the user drive the graph from a single editable Cypher query, with a Search
+  button and a node-limit dropdown. On page load the query box holds the default
+  query and the graph shows the full-graph view. The query bar is specified in
+  [Graph Query Bar](#graph-query-bar); its failure modes are specified in
+  [Query-Bar Error Handling](#query-bar-error-handling).
+- **Graph card layout.** The visualisation is presented inside a Tabler card. The
+  card holds two regions side by side: a labels sidebar column on the left and the
+  graph canvas on the right. The labels sidebar lists the graph's node labels and
+  edge types and lets the user highlight elements interactively; it is specified in
+  [Graph Labels Sidebar](#graph-labels-sidebar). The labels sidebar and the
+  visualisation read from the same already-fetched graph data; the sidebar adds no
+  new request and no new endpoint.
 - **Layout selection.** The page provides a dropdown (select control) that lets
   the user choose which layout renders the graph, offering the complete set of
   layouts from the "Networks" section of the D3 gallery: Force-directed graph,
@@ -804,6 +868,63 @@ the Roadmap Sprints Page is visually identical to the single Roadmap Sprint Page
   detail through tap or selection rather than relying on mouse hover, so the page
   is fully usable on touch devices (see
   [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
+  Selecting an element in the canvas to inspect its detail works independently of
+  the labels-sidebar highlight state and of the layout dropdown: a label highlight
+  dims non-matching elements but does not prevent the user from selecting any
+  element and opening its detail (see
+  [Graph Labels Sidebar](#graph-labels-sidebar)).
+- **Neighbor focus on node selection.** Selecting a node in the canvas, in
+  addition to opening that node's detail panel, puts the graph into a **neighbor
+  focus** state centred on the selected node. In neighbor focus the page
+  emphasises the selected node, its **first-degree neighbours**, and the **edges
+  incident to** the selected node; every other element — second-degree nodes and
+  beyond, and every edge not incident to the selected node — is **dimmed**
+  (rendered at a reduced opacity) rather than removed from the canvas. The dimming
+  uses the same dim-not-remove mechanism the labels sidebar uses for its highlight
+  (see [Graph Labels Sidebar](#graph-labels-sidebar), rule 4), so the full graph
+  stays visible and the focused neighbourhood is seen in its surrounding context.
+  The first-degree neighbourhood is **undirected** for this purpose: it includes
+  every node reachable from the selected node by exactly one edge in **either
+  direction** (a target of an outgoing edge or a source of an incoming edge), and
+  the incident edges emphasised are the edges between the selected node and those
+  neighbours, regardless of edge direction. Neighbor focus emphasises and dims
+  elements only; it never adds or removes nodes or edges.
+- **Clearing neighbor focus.** Neighbor focus is cleared by a single, consistent
+  clear gesture: selecting the same focused node again, selecting an empty area of
+  the canvas (a point on no node and no edge), or closing the node detail panel.
+  Any of these gestures both closes the detail panel and clears the neighbor
+  focus, so the detail panel and the neighbor-focus emphasis are opened and
+  cleared together. Clearing the focus restores the **prior view**: if any labels
+  sidebar entries are still active, the canvas returns to the labels-sidebar
+  highlight state (see [Graph Labels Sidebar](#graph-labels-sidebar)); otherwise
+  it returns to the normal, non-dimmed view. Selecting a different node while a
+  node is already focused moves the focus to the newly selected node (its detail
+  panel opens and its neighbourhood becomes the emphasised set) without an
+  intervening clear.
+- **Neighbor focus takes precedence over the labels-sidebar highlight.** While a
+  node is focused, the neighbor-focus emphasis governs the canvas dimming and the
+  labels-sidebar highlight is **not** applied to the canvas: an active label or
+  type selection in the sidebar does not drive canvas dimming while a node is
+  focused. The sidebar's selected entries may remain visually selected in the
+  sidebar itself, but they take effect on the canvas only once the focus is
+  cleared (see [Graph Labels Sidebar](#graph-labels-sidebar), rule 8).
+- **Neighbor focus coexists with the layout dropdown and the query bar.** Changing
+  the layout in the layout dropdown re-renders the same graph data; the page
+  reapplies the current neighbor focus to the re-rendered layout, emphasising the
+  same selected node, first-degree neighbours, and incident edges. Running a
+  search from the query bar (see [Graph Query Bar](#graph-query-bar)) **clears the
+  neighbor focus** together with re-rendering the new result: because the search
+  fetches a new graph, any prior focus is discarded and the new result renders in
+  its labels-sidebar highlight state if any entries are active, otherwise in the
+  normal view. Neighbor focus is **touch-friendly**: it is driven by the same tap
+  to select that opens the detail panel, and cleared by the same tap gestures,
+  consistent with the page's existing touch interaction (see
+  [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
+- **Client-side only, read-only preserved.** Neighbor focus is computed and
+  applied entirely **client-side**, in the page's JavaScript, from the graph data
+  the page already holds. It adds no new server endpoint, no new server-side
+  computation, and no write path, and it changes neither the graph data endpoint's
+  response shape nor the read-only behaviour of the page.
 - **Empty graph.** A roadmap that has never used the `graph` command, or whose
   graph is empty, renders successfully and shows an empty-graph state. Reading a
   roadmap that has no graph yet behaves the same way the read subcommands do: it
@@ -811,6 +932,304 @@ the Roadmap Sprints Page is visually identical to the single Roadmap Sprint Page
   read, the web interface MUST open the graph store read-only and MUST NOT cause a
   write or a checkpoint, so reading an empty graph through the web interface does
   not create snapshot files.
+
+### Graph Query Bar
+
+The query bar is a control rendered at the top of the knowledge-graph page, above
+the graph card (see [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page)).
+It lets the user drive the visualisation from a single editable Cypher query
+instead of a fixed full-graph read, while keeping the page and the server strictly
+read-only. The query bar reads from, and re-renders, the same graph data the page
+already consumes; it adds no new endpoint and no write path.
+
+1. **One editable query drives the graph.** The page renders the graph from one
+   Cypher query. This replaces the previous fixed pair of reads
+   (`MATCH (n) RETURN n` for nodes and `MATCH ()-[r]->() RETURN r` for edges): a
+   single query now produces both the nodes and the edges, through the
+   result-to-graph extraction the graph data endpoint performs (see
+   [Graph Data Endpoint](#graph-data-endpoint)).
+
+2. **Default query.** On page load the query box is pre-filled with the
+   **default query**
+
+   `MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r, m`
+
+   and the user can edit it. The default query produces the same full-graph view
+   the page produced before the query bar existed: all nodes, plus all
+   relationships, subject to the selected node limit. The default query is the
+   single source of the page's initial graph and is identical to the query the
+   graph data endpoint runs when its `q` parameter is absent (see
+   [Graph Data Endpoint](#graph-data-endpoint)).
+
+3. **Controls, left to right.** The query bar presents three controls in a fixed
+   left-to-right order:
+   - a **query box** (a multi-line text input) that shows the current Cypher query
+     and is editable; on page load it holds the default query;
+   - a **Search button** to the right of the query box that re-runs the query
+     currently in the box and re-renders the graph from the result;
+   - a **node-limit dropdown** (a select control) to the right of the Search
+     button, offering exactly the six values `50`, `100`, `250`, `500`, `1000`,
+     and `3000`, with `100` selected by default.
+
+4. **Search re-runs the query.** Selecting the Search button re-fetches the graph
+   data endpoint (`GET /roadmaps/{name}/graph/data`) with the current query box
+   text as the `q` parameter and the current dropdown value as the `limit`
+   parameter, then re-renders the graph from the response in the currently selected
+   layout. The request stays GET-only; the query text and the limit are passed as
+   URL query parameters and no request body, no `POST`, and no new endpoint is
+   introduced (see [Graph Data Endpoint](#graph-data-endpoint)). On page load the
+   page performs this same fetch once with the default query and the default limit.
+
+5. **Keyboard accelerator: Ctrl+Enter searches.** When the query box has focus,
+   pressing Ctrl+Enter triggers the search exactly as selecting the Search button
+   does: the same fetch to the graph data endpoint
+   (`GET /roadmaps/{name}/graph/data`) with the current query box text as the `q`
+   parameter and the current dropdown value as the `limit` parameter, the same
+   read-only guard-rail and limit validation, the same re-render of the graph in the
+   currently selected layout, and the same in-place error surfacing on failure (see
+   rule 4, [Graph Data Endpoint](#graph-data-endpoint), and
+   [Query-Bar Error Handling](#query-bar-error-handling)). Ctrl+Enter is an
+   accelerator for the existing Search action and introduces no other behaviour.
+   Plain Enter in the query box is unchanged: it inserts a newline and does not
+   trigger a search, so the user can compose a multi-line query freely.
+
+6. **Node limit applied by the endpoint.** The dropdown value is the `limit`
+   parameter sent on the request. The endpoint applies it as a `LIMIT` clause only
+   when the user's query does not already contain a top-level `LIMIT`, so a user
+   who writes their own `LIMIT` keeps it and the dropdown value is not applied; the
+   injection and precedence rule is specified in
+   [Graph Data Endpoint](#graph-data-endpoint).
+
+7. **Read-only.** The query bar submits only read-only Cypher. A query containing
+   a writing clause or a DDL clause is rejected by the endpoint's read-only
+   guard-rail before execution and never runs (see
+   [Graph Data Endpoint](#graph-data-endpoint) and
+   [Query-Bar Error Handling](#query-bar-error-handling)). The query bar offers no
+   create, edit, or delete affordance; running a query through it never writes to
+   the store, never checkpoints, and never truncates the write-ahead log,
+   consistent with the read-only contract of the whole interface (see
+   [Security and Constraints](#security-and-constraints) and
+   [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
+
+8. **Error surfacing.** When a search fails — because the query is rejected as not
+   read-only, because the limit is invalid, or because the query fails to execute —
+   the page shows a clear, read-only message in place and does not crash, exactly
+   as the layout degradation does; the distinct cases are specified in
+   [Query-Bar Error Handling](#query-bar-error-handling).
+
+9. **Coexistence with the other graph controls.** The query bar coexists with the
+   layout dropdown, the labels sidebar, and the node/edge detail panel (see
+   [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library),
+   [Graph Labels Sidebar](#graph-labels-sidebar), and
+   [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page)). After a
+   successful search the graph re-renders with the currently selected layout, and
+   the labels sidebar inventory and counts recompute client-side from the new
+   result (the new set of nodes' `labels` arrays and edges' `type` fields), so the
+   sidebar always reflects the graph currently shown.
+
+10. **Touch- and small-viewport-usable.** The query box, the Search button, and the
+    limit dropdown are touch-friendly controls that fit a small viewport without
+    forcing horizontal overflow, consistent with
+    [Responsive and Mobile-First Design](#responsive-and-mobile-first-design).
+
+### Query-Bar Error Handling
+
+A search driven by the query bar can fail for distinct reasons, and the page MUST
+surface each clearly and in place without crashing, consistent with the graceful
+layout degradation already specified (see
+[Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library),
+rule 5). The failure modes are kept distinct so the user understands what to fix.
+
+1. **Query rejected: not read-only.** When the submitted query contains a writing
+   clause or a DDL clause, the endpoint's read-only guard-rail rejects it before
+   execution (see [Graph Data Endpoint](#graph-data-endpoint)) and the query is
+   never run. The page surfaces a clear message stating that the query was rejected
+   because it is not read-only, distinct from an execution failure. The graph
+   already shown is left in place; the rejection changes nothing in the store.
+
+2. **Invalid limit.** When the `limit` parameter is not one of the six allowed
+   values (`50`, `100`, `250`, `500`, `1000`, `3000`), the endpoint rejects the
+   request as an invalid limit and does not execute the query; the page surfaces a
+   clear message naming the invalid limit. Because the limit values originate from
+   the page's own dropdown, this state is normally only reachable by a crafted
+   request, but the endpoint rejects it rather than guessing a value.
+
+3. **Query failed to execute.** When the submitted query is accepted as read-only
+   but then fails in the engine — for example, invalid Cypher syntax — the page
+   surfaces a clear message stating that the query failed to execute, distinct from
+   the read-only rejection in case 1. A syntactically invalid read-only query is an
+   execution failure, not a guard-rail rejection, mirroring the CLI behaviour where
+   a query that passes the clause check is still rejected by the engine at execution
+   time (see `GRAPH.md § Per-Subcommand Validation Rules`, note 3).
+
+4. **In-place, read-only, non-fatal.** In every case the message is shown in place
+   on the page, the page does not crash, and the failure triggers no write and no
+   navigation, exactly as the layout-degradation message does. The user can edit
+   the query or change the limit and search again.
+
+### Graph Labels Sidebar
+
+The labels sidebar is a column rendered inside the graph card, to the left of the
+graph canvas (see [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page)).
+It gives the user a complete inventory of the graph's labels and edge types with
+counts, and lets the user highlight the matching elements on the canvas. It is a
+read-only, in-page control: it triggers no server request, no navigation, and no
+write.
+
+1. **Two sections.** The sidebar lists all labels present in the graph, organised
+   into two clearly separated sections, each with a section header:
+   - **Node labels.** The section header shows the title and, alongside it, the
+     section total: the total number of **distinct nodes** in the current graph
+     result. Below the header, the section lists one entry per distinct node label
+     present in the graph (for example `Spec`, `Code`, `Memory`, `Decision`). Each
+     entry shows the label name and a counter with the number of nodes that carry
+     that label. A node that carries more than one label counts towards each of its
+     labels, so the per-label counts may sum to more than the section total; the
+     section total is the distinct-node count, not the sum of the per-label
+     counts. A node that carries no label (its `labels` array is empty; see
+     `DATA_FORMATS.md § Graph element mapping`, rule 2) contributes to no
+     node-label entry but still counts towards the section total, because the
+     section total counts distinct nodes regardless of their labels.
+   - **Edge types.** The section header shows the title and, alongside it, the
+     section total: the total number of **edges** in the current graph result.
+     Below the header, the section lists one entry per distinct relationship type
+     present in the graph (for example `IMPLEMENTS`, `DEPENDS_ON`). Each entry
+     shows the type name and a counter with the number of edges of that type.
+     Every edge has exactly one type, so the per-type counts sum to the section
+     total.
+
+2. **Deterministic ordering.** Within each section, the entries are sorted
+   deterministically by their name (ascending, case-sensitive code-point order),
+   so the sidebar renders the same order for the same graph on every request. The
+   two sections are always shown in the fixed order Node labels first, then Edge
+   types.
+
+3. **Empty sections and empty graph.** Each section is handled gracefully when it
+   has no entries: a graph with nodes but no labels shows an empty Node labels
+   section with a clear empty-state indication, a graph with no edges shows an
+   empty Edge types section with a clear empty-state indication, and an empty graph
+   (no nodes and no edges) renders the sidebar with both sections empty. When a
+   section has no entries, its section total renders as `0`; in an empty graph both
+   section totals are `0`. An empty graph is a valid state, consistent with the
+   empty-graph behaviour of the page
+   (see [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page)) and the
+   empty graph view-data object (`DATA_FORMATS.md § Graph View Data`, rule 1). An
+   empty sidebar is never an error.
+
+4. **Highlight mode, not filter mode.** The sidebar is interactive and operates as
+   a highlight control, not a filter. Selecting a node-label entry highlights every
+   node that carries that label; selecting an edge-type entry highlights every edge
+   of that type. Non-matching elements are **dimmed** (rendered at a reduced
+   opacity) rather than removed from the canvas, so the full graph stays visible
+   and the highlighted elements are seen in their surrounding context. The sidebar
+   never adds or removes nodes or edges; it only changes how they are emphasised.
+
+5. **Combinable, multi-selection union.** More than one entry can be active at the
+   same time, across both sections. When several entries are active, the
+   highlighted set is the **union** of their selections: an element is highlighted
+   when it matches any active entry, and an element is dimmed only when it matches
+   no active entry. Node-label selections and edge-type selections combine in the
+   same union.
+
+6. **Toggle and clear.** Each entry is a toggle. Selecting an inactive entry makes
+   it active; selecting an active entry again toggles it off. When no entry is
+   active, the canvas shows its normal, non-dimmed view: clearing all selections
+   restores the normal view, with no element dimmed.
+
+7. **Selected-state indication.** Every active entry is visually indicated as
+   selected, so the user can see at a glance which labels and types are currently
+   highlighted, and which entries to toggle off to clear the highlight.
+
+8. **Coexistence with the other graph controls.** The highlight state coexists
+   with the query bar, the layout dropdown, and the node/edge detail panel:
+   - Changing the layout in the dropdown (see
+     [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library))
+     re-renders the same graph data; the active label and type selections continue
+     to apply to the re-rendered layout, highlighting the same logical elements.
+   - Running a search from the query bar (see [Graph Query Bar](#graph-query-bar))
+     re-fetches the graph data and re-renders the graph; the sidebar inventory and
+     counts recompute from the new result, so the sidebar always reflects the graph
+     currently shown.
+   - Selecting a node or an edge on the canvas to open its detail (see
+     [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page)) works whether
+     or not a highlight is active and whether or not the selected element is
+     currently dimmed; the highlight state does not block element selection or the
+     detail panel.
+   - Selecting a node also puts the canvas into **neighbor focus** (see
+     [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page)), which takes
+     **precedence** over this highlight: while a node is focused, the
+     neighbor-focus emphasis governs the canvas dimming and the active label and
+     type selections are not applied to the canvas, though they may remain visually
+     selected in the sidebar. When the focus is cleared, the canvas returns to this
+     highlight state if any entry is still active, otherwise to the normal,
+     non-dimmed view.
+
+9. **Touch-friendly.** Each sidebar entry is a touch-friendly hit target, and a tap
+   toggles its selection, consistent with the touch-friendly graph interaction (see
+   [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)). On a
+   small viewport the labels sidebar adapts to the available width together with the
+   graph card rather than forcing horizontal overflow.
+
+10. **Data source: derived client-side, no new endpoint.** The label and type
+    inventory and all counts are computed **client-side**, in the page's
+    JavaScript, from the same graph data the page already fetches from the existing
+    graph data endpoint (`GET /roadmaps/{name}/graph/data`,
+    `{"nodes": [...], "edges": [...]}`; see
+    [Graph Data Endpoint](#graph-data-endpoint) and
+    `DATA_FORMATS.md § Graph View Data`). The node-label entries and their counts
+    are derived from the `labels` arrays of the fetched nodes, and the edge-type
+    entries and their counts are derived from the `type` field of the fetched
+    edges. Computing the inventory client-side from the already-fetched data adds
+    **no** new server endpoint, no new server-side aggregation, and no new write
+    path, consistent with the read-only design of the graph page: the sidebar reads
+    from whatever graph data the page currently holds and triggers no request of its
+    own. When the query bar runs a search and the page re-fetches the graph data
+    (see [Graph Query Bar](#graph-query-bar)), the sidebar inventory and counts
+    recompute from the new response; the sidebar adds no fetch beyond the search the
+    user already triggered. The graph data endpoint's response shape is unchanged by
+    this feature.
+
+11. **Section totals derived client-side.** Each section header shows an absolute
+    total alongside its title: the Node labels header shows the total number of
+    distinct nodes in the current graph result, and the Edge types header shows the
+    total number of edges. Both totals are derived **client-side** from the same
+    already-fetched graph data as the per-entry inventory (rule 10): the node total
+    is the count of distinct fetched nodes (deduplicated by node `id`, as already
+    returned by the endpoint; see [Graph Data Endpoint](#graph-data-endpoint),
+    [Acceptance Criteria](#acceptance-criteria), criterion 49) and the edge total is
+    the count of fetched edges. Because a node carrying more than one label counts
+    towards each of its labels, the sum of the per-label entry counts may exceed the
+    distinct-node total; the Node labels total is the distinct-node count, **not**
+    the sum of the per-label counts. Every edge has exactly one type, so the Edge
+    types total equals the sum of the per-type entry counts. When the query bar runs
+    a search and the page re-fetches the graph data (see
+    [Graph Query Bar](#graph-query-bar)), both section totals recompute from the new
+    response together with the rest of the inventory, so the totals always reflect
+    the graph currently shown. The totals add no new server endpoint, no new
+    server-side aggregation, and no new write path.
+
+12. **Collapse and expand control.** The sidebar has an icon control at its top
+    that lets the user collapse (hide) or expand the sidebar column. The control is
+    a single toggle: tapping or selecting it collapses an expanded sidebar and
+    expands a collapsed one. When the sidebar is collapsed, the column contracts so
+    the graph canvas takes the full width of the graph card, and only the affordance
+    to expand it again (the icon control) remains visible; the label and type
+    entries are hidden while collapsed. When the sidebar is expanded, it shows the
+    section headers, their totals, and the entries as specified in the rules above.
+    The control is touch-friendly: it is a touch-friendly hit target that toggles on
+    tap, consistent with the touch-friendly sidebar entries (rule 9) and the
+    touch-friendly graph interaction (see
+    [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)). The
+    control uses the page's existing Tabler-based UI, consistent with the rest of
+    the graph card (see [UI Framework](#ui-framework)). The collapse and expand
+    control coexists with the other graph controls (rule 8): collapsing or expanding
+    the sidebar changes only the sidebar's own visibility and the canvas width, and
+    does not clear the active highlight selections, change the layout, run a search,
+    or open or close the detail panel; an active highlight remains active while the
+    sidebar is collapsed and is shown again, still active, when the sidebar is
+    expanded. The sidebar's default state is **expanded**. Persistence of the
+    collapsed or expanded state across page reloads is not specified; the only
+    required behaviour is that each page load starts with the sidebar expanded.
 
 ### Graph Data Endpoint
 
@@ -825,11 +1244,87 @@ the Roadmap Sprints Page is visually identical to the single Roadmap Sprint Page
   `DATA_FORMATS.md § Graph Query Result` (the node and relationship object shapes
   and the property-type-to-JSON mapping) rather than inventing a new element
   encoding.
-- **Read path.** The endpoint reads the graph read-only, opening the store via
-  recovery and running a read-only Cypher query through the engine's read path,
+- **Query parameters.** The endpoint accepts two optional URL query parameters
+  that the graph page's query bar (see
+  [Graph Query Bar](#graph-query-bar)) sends, and that drive which Cypher query
+  runs and how many results it returns:
+  - `q` — the Cypher query to run, URL-encoded. When `q` is absent or empty, the
+    endpoint runs the **default query**
+    `MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r, m`, which produces the same
+    full-graph view (all nodes, plus all relationships, subject to the limit) the
+    endpoint produced before the query bar existed. The endpoint is therefore
+    backward compatible: a request with no `q` behaves exactly as the previous
+    fixed full-graph read did.
+  - `limit` — the node-limit value selected in the page's limit dropdown. When
+    present it MUST be one of the six allowed values `50`, `100`, `250`, `500`,
+    `1000`, or `3000`; when absent the endpoint applies the default limit `100`
+    (matching the dropdown default). A `limit` value that is not one of the six
+    allowed values is rejected as an invalid limit (see
+    [Query-Bar Error Handling](#query-bar-error-handling)); the endpoint does not
+    clamp an out-of-range value to the nearest allowed value, and the query is not
+    executed.
+- **Read-only guard-rail (security-critical).** Before it executes any
+  user-supplied `q`, the endpoint MUST validate that the query is **read-only**,
+  reusing the exact guard-rail mechanism that the read subcommands `rmp graph
+  query` and `rmp graph search` use (see
+  `GRAPH.md § Subcommands and Guard-Rail Validation` and
+  `GRAPH.md § Literal-Aware Normalization`). The validation runs on the
+  **masked normalization** of the query (literal-aware masking via
+  `maskCypherLiterals` followed by `cypher.QueryHasWritingClause`, plus the
+  independent DDL rejection), never on the raw query string, exactly as the CLI
+  guard-rail does. A query is rejected, and **not executed**, when its masked
+  normalization contains any writing clause (`CREATE`, `MERGE`, `SET`, `REMOVE`,
+  `DELETE`, or `DETACH DELETE`) or any DDL clause (`CREATE INDEX`, `DROP INDEX`,
+  `CREATE CONSTRAINT`, or `DROP CONSTRAINT`). Because validation runs on the
+  masked normalization, a write or DDL keyword that appears only inside a string
+  literal, a comment, or a backtick-quoted identifier neither falsely trips the
+  rejection nor falsely passes a real writing clause: a query such as
+  `MATCH (m) WHERE m.title = "mentions delete and set" RETURN m` is accepted as
+  read-only, while `MATCH (n) DELETE n` is rejected. The query actually executed
+  against the store is the original, unmodified query; masking affects validation
+  only. The endpoint runs the accepted query through the engine's read path,
   exactly as `graph query` and `graph search` do (see
-  `GRAPH.md § Engine Construction and Lifecycle`). It MUST NOT run any writing
-  clause and MUST NOT checkpoint or truncate the write-ahead log.
+  `GRAPH.md § Engine Construction and Lifecycle`); it MUST NOT run any writing
+  clause, MUST NOT checkpoint or truncate the write-ahead log, MUST NOT write an
+  audit entry, and follows no write path. The page and the server stay strictly
+  read-only.
+- **Node-limit injection.** The endpoint applies the resolved `limit` (the
+  parameter value, or the default `100` when absent) by appending a top-level
+  `LIMIT <n>` clause to the query, **only when the user's query does not already
+  contain a top-level `LIMIT` clause**. The user's own `LIMIT` takes precedence
+  and is respected as-is: when the query already has a top-level `LIMIT`, the
+  endpoint injects nothing and the dropdown value is not applied. The
+  presence-of-`LIMIT` check is performed on the **masked normalization** of the
+  query (see `GRAPH.md § Literal-Aware Normalization`), so a `LIMIT` keyword that
+  appears only inside a string literal, a comment, or a backtick-quoted identifier
+  does not count as an existing top-level `LIMIT` and does not suppress injection.
+  The default query has no `LIMIT`, so a request that uses the default query
+  always has the resolved limit applied to it.
+- **Result-to-graph extraction.** The endpoint builds the
+  `{"nodes": [...], "edges": [...]}` response (see
+  `DATA_FORMATS.md § Graph View Data`) by walking the **entire** query result and
+  collecting every node (`expr.Node`) and every relationship
+  (`expr.Relationship`) value that appears **anywhere** in it: in any returned
+  column, and recursively inside lists, maps, and paths. The walk is exhaustive
+  and recursive, so a node or relationship nested inside a returned list, map, or
+  path is collected exactly as one returned directly in its own column is.
+  - **Deduplication.** Nodes are deduplicated by node `id` and relationships are
+    deduplicated by relationship `id`, so a node or relationship that the query
+    returns more than once (for example, the same node bound by several patterns,
+    or a relationship that appears both standalone and inside a path) contributes
+    exactly one entry to the response.
+  - **Orphan-edge dropping.** A relationship is included only when **both** its
+    start node and its end node are present in the collected node set. A
+    relationship whose start or end node was not collected is **dropped**; the
+    endpoint never invents a synthetic endpoint node to keep an edge. This
+    guarantees the `startId`/`endId` invariant of the view-data shape: every
+    `startId` and `endId` in the returned `edges` references the `id` of a node
+    present in the returned `nodes` array (see `DATA_FORMATS.md § Graph View Data`,
+    rule 3).
+  - With the default query, this extraction yields the full-graph view: `MATCH
+    (n)` collects every node, and the `OPTIONAL MATCH (n)-[r]->(m)` collects every
+    relationship together with both of its endpoints, so no relationship is
+    dropped as an orphan.
 - **HTML-safe JSON.** The endpoint MUST emit HTML-safe JSON: HTML escaping MUST be
   enabled in the JSON encoder so that the characters `<`, `>`, and `&` are
   serialized as their Unicode escape sequences (`<`, `>`, and `&`).
@@ -863,9 +1358,10 @@ one task. It is not a separate route; it is part of the pages that show clickabl
 tasks.
 
 - **Where it appears.** Anywhere a task is shown clickable: the task table on the
-  roadmap tasks page, the Actual tab's task list on the roadmap sprints page, and
-  the task list on the roadmap sprint page. Selecting a task opens the modal for
-  that task.
+  roadmap tasks page and the task list on the roadmap sprint page. The roadmap
+  sprints page shows no clickable tasks, because every sprint there is rendered as
+  a card with no member-tasks table. Selecting a task opens the modal for that
+  task.
 - **Fields shown.** The modal displays all of the task's fields as defined for the
   `Task` model in `MODELS.md § Task`: `id`, `title`, `status`, `type`, `priority`,
   `severity`, `functional_requirements`, `technical_requirements`,
@@ -915,8 +1411,9 @@ re-presents an earlier, now-stale response in its place.
    `~/.roadmaps/{name}/project.db` (see `ARCHITECTURE.md § Directory Structure`)
    and reads its sprints and tasks using the existing read queries defined in
    `DATABASE.md § Main SQL Queries`. The sprints page reads the roadmap's sprints
-   and, for each OPEN sprint on the Actual tab, its ordered member tasks; the tasks
-   page reads the roadmap's full task list. The task data the task detail modal
+   and each sprint's total task count for its card footer, but no member tasks,
+   because the page renders every sprint as a card with no member-tasks table; the
+   tasks page reads the roadmap's full task list. The task data the task detail modal
    displays comes from the same read queries; the modal adds no separate request.
    The web interface adds no new schema, no new table, and no new write query.
 2. The server opens the database for reading only. It MUST NOT modify rows, MUST
@@ -1277,13 +1774,31 @@ Rules:
    checkpoint or write-ahead-log truncation (see
    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
    SQLite reads write no rows and produce no audit-log entry.
-3. **Filesystem permission model is unchanged.** The web interface reads through
+3. **User-supplied Cypher is validated read-only before execution.** The graph
+   page's query bar lets the user submit an editable Cypher query to the graph
+   data endpoint as the `q` parameter (see [Graph Query Bar](#graph-query-bar) and
+   [Graph Data Endpoint](#graph-data-endpoint)). The endpoint MUST validate that
+   query as **read-only** before executing it, reusing the exact guard-rail the
+   read subcommands `rmp graph query` and `rmp graph search` use: the literal-aware
+   masked normalization (`maskCypherLiterals` then `cypher.QueryHasWritingClause`)
+   plus the independent DDL rejection (see
+   `GRAPH.md § Subcommands and Guard-Rail Validation` and
+   `GRAPH.md § Literal-Aware Normalization`). Validation runs on the masked
+   normalization, never on the raw string, so a write or DDL keyword inside a
+   string literal, comment, or backtick-quoted identifier neither falsely trips nor
+   falsely passes. A query containing any writing clause (`CREATE`, `MERGE`, `SET`,
+   `REMOVE`, `DELETE`, `DETACH DELETE`) or any DDL clause (`CREATE`/`DROP`
+   `INDEX`/`CONSTRAINT`) is rejected and **not executed**, and the page surfaces the
+   rejection (see [Query-Bar Error Handling](#query-bar-error-handling)). The query
+   bar opens no write path: an accepted query runs through the engine's read path
+   only, and never checkpoints or truncates the write-ahead log.
+4. **Filesystem permission model is unchanged.** The web interface reads through
    the existing locations and respects the existing permission model: `0700` for
    `~/.roadmaps/` and each roadmap home directory, `0600` for `project.db`, and
    `0700` for each `graph/` store (see `ARCHITECTURE.md § Directory Structure`).
    The web interface creates no new on-disk artefact for a read; it does not relax
    any permission.
-4. **No arbitrary filesystem serving; path-traversal guard.** The static handler
+5. **No arbitrary filesystem serving; path-traversal guard.** The static handler
    serves only assets from the embedded asset set, never an arbitrary host
    filesystem path. Roadmap names taken from the URL path are validated against
    the roadmap-name rules (regex `^[a-z0-9_-]+$`, maximum 50 characters) **before**
@@ -1292,37 +1807,37 @@ Rules:
    HTTP `404` and never reaches the filesystem (see
    [Routes and Pages](#routes-and-pages)). This mirrors the central roadmap-name
    validation gate the CLI applies (see `ARCHITECTURE.md § Security Guarantees`).
-5. **Self-contained assets, no CDN, no external calls.** Every asset a page loads
+6. **Self-contained assets, no CDN, no external calls.** Every asset a page loads
    is served from the local server's embedded assets, and the deliverable is the
    single `rmp` binary with zero external runtime dependency. No page references a
    content delivery network or any other remote origin, the interface functions
    fully offline, and the server makes no outbound network request (see
    [Self-Contained Deliverable](#self-contained-deliverable) and
    [Frontend and Embedded Assets](#frontend-and-embedded-assets)).
-6. **Output escaping.** Roadmap-derived text (task and sprint fields, including
+7. **Output escaping.** Roadmap-derived text (task and sprint fields, including
    the task fields shown in the task detail modal, and graph node and edge labels
    and property values) is rendered through `html/template`'s contextual
    auto-escaping, so data that contains HTML control characters cannot alter page
    structure. Task data carried to the page as a JSON data island for the task
    detail modal, and graph data delivered as JSON to the visualisation, are encoded
    as JSON, not interpolated into HTML.
-7. **Security headers on every HTML response.** Every HTML response carries the
+8. **Security headers on every HTML response.** Every HTML response carries the
    Content-Security-Policy, X-Content-Type-Options (`nosniff`), X-Frame-Options
    (`DENY`), and Referrer-Policy (`same-origin`) headers specified in
    [Security Headers](#security-headers). The Content-Security-Policy restricts
    every resource to the server's own origin, consistent with the no-remote-origin
    asset model.
-8. **HTML-safe JSON on the graph data endpoint.** The graph data endpoint emits
+9. **HTML-safe JSON on the graph data endpoint.** The graph data endpoint emits
    HTML-safe JSON (`<`, `>`, and `&` serialized as Unicode escape sequences), so
    roadmap-derived graph text cannot break an HTML or script context (see
    [Graph Data Endpoint](#graph-data-endpoint)).
-9. **No directory listings; bounded connection timeouts.** The static handler
+10. **No directory listings; bounded connection timeouts.** The static handler
    never serves a directory listing: a request for a directory under `/static/`
    returns HTTP `404` (see [Static Assets](#static-assets)). The HTTP server is
    configured with explicit ReadHeaderTimeout, WriteTimeout, and IdleTimeout values
    so a slow or idle client cannot exhaust server resources (see
    [HTTP Server Timeouts](#http-server-timeouts)).
-10. **No stale data; `no-store` on data-derived responses.** Every data-derived
+11. **No stale data; `no-store` on data-derived responses.** Every data-derived
    response (the roadmap index page, the roadmap sprints page, the roadmap tasks
    page, the roadmap sprint page, the knowledge-graph page shell, the graph data
    endpoint, and the data-state-dependent error responses) carries
@@ -1330,7 +1845,7 @@ Rules:
    state that no longer matches the database or store. Embedded `/static/...`
    assets are immutable and are excluded from this rule, remaining cacheable (see
    [Cache Policy](#cache-policy)).
-11. **No new write path.** The web interface does not become a second source of
+12. **No new write path.** The web interface does not become a second source of
    truth. The CLI and its SQLite databases and GoGraph stores remain the sole
    source of truth and the sole write path; the web interface is a view over them.
 
@@ -1362,12 +1877,13 @@ Rules:
    with an empty-state message; the absence of roadmaps is not an error.
 8. `GET /roadmaps/{name}` for an existing roadmap returns HTTP 200 and an HTML
    page that renders the roadmap's sprints page: the roadmap's sprints as three
-   tabs with the **Actual** tab active by default, and each OPEN sprint rendered
-   under Actual through the shared sprint presentation sub-template — the same
-   sub-template the single Roadmap Sprint Page uses — so each OPEN sprint shows the
-   full sprint detail block (the sprint status summary line, the sprint metadata
-   datagrid, and the full member-tasks table in planned in-sprint execution order
-   with clickable task rows), not a reduced card, using the fields and
+   tabs with the **Actual** tab active by default, and every sprint in every tab —
+   including each OPEN sprint under Actual — rendered through the single shared
+   sprint-card partial, so all sprints share identical card markup (a header
+   `Sprint #<ID>` with a status badge, the sprint description, and a footer task
+   count) and each card links to the sprint's own page. The OPEN sprint under
+   Actual is shown with the same card as the other sprints and is not expanded into
+   an inline member-tasks table or per-task modals, using the fields and
    relationships defined in `MODELS.md` and `DATABASE.md`. The page does **not**
    render the full tasks table, and it contains no form, button, or link that
    submits a change.
@@ -1389,16 +1905,20 @@ Rules:
     **Concluídos**, and the **Actual** tab is the active tab by default when the
     page loads.
 12. On the roadmap sprints page, sprints are classified into the tabs by their
-    status: every `PENDING` sprint appears under Próximos ordered by ascending
+    status and every sprint in every tab is rendered through the single shared
+    sprint-card partial, so all sprints share identical card markup across the
+    three tabs: every `PENDING` sprint appears under Próximos ordered by ascending
     sprint `Order` (the unique execution order; lowest `Order`, the next sprint to
-    execute, first); every `OPEN` sprint appears under Actual, rendered through the
-    shared sprint presentation sub-template (full detail block, member tasks in
-    in-sprint order with the status of each shown); every `CLOSED` sprint appears
-    under Concluídos ordered by descending sprint `Order` (highest `Order`, the
-    last in execution order, first). A tab with no matching sprint shows a clear
-    empty-state message.
-13. On the roadmap sprints page, every sprint shown in any tab is a clickable link
-    to that sprint's page at `/roadmaps/{name}/sprints/{id}`.
+    execute, first); every `OPEN` sprint appears under Actual ordered by ascending
+    sprint `Order`; every `CLOSED` sprint appears under Concluídos ordered by
+    descending sprint `Order` (highest `Order`, the last in execution order,
+    first). The OPEN sprint under Actual is shown with the same card as the other
+    tabs and is not expanded into an inline task table or per-task modals. A tab
+    with no matching sprint shows a clear empty-state message.
+13. On the roadmap sprints page, every sprint card in any tab shows a header
+    (`Sprint #<ID>` with a status badge), the sprint description, and a footer with
+    that sprint's total task count, and is a clickable link to that sprint's page at
+    `/roadmaps/{name}/sprints/{id}`.
 14. `GET /roadmaps/{name}/sprints/{id}` for a sprint of an existing roadmap returns
     HTTP 200 and an HTML page showing all details of that sprint (id, status,
     `title`, description, execution `order`, capacity `max_tasks`, `created_at`,
@@ -1408,8 +1928,8 @@ Rules:
     submits a change. A request whose `{id}` is not a valid integer, or is an
     integer that is not a sprint of the named roadmap, returns HTTP 404, and a
     request whose `{name}` is invalid or nonexistent returns HTTP 404.
-15. Clicking a task anywhere it is shown clickable — the tasks page's task table,
-    the Actual tab's task list, and the sprint page's task list — opens a modal
+15. Clicking a task anywhere it is shown clickable — the tasks page's task table
+    and the sprint page's task list — opens a modal
     popup that displays all of that task's fields (`id`, `title`, `status`, `type`,
     `priority`, `severity`, `functional_requirements`, `technical_requirements`,
     `acceptance_criteria`, `specialists`, `completion_summary`, `parent_task_id`,
@@ -1497,9 +2017,9 @@ Rules:
 32. Multi-line free-text authored through the CLI renders preserving its source
     line breaks: the task detail modal's long free-text fields
     (`functional_requirements`, `technical_requirements`, `acceptance_criteria`,
-    and `completion_summary`) and a sprint's `description` — shown on the roadmap
-    sprints page (each OPEN sprint rendered under the Actual tab and the Próximos
-    and Concluídos sprint cards) and on the roadmap sprint page — each display the author's
+    and `completion_summary`) and a sprint's `description` — shown in the sprint
+    cards on the roadmap sprints page (across all three tabs) and on the roadmap
+    sprint page — each display the author's
     newlines rather than collapsing them, while the text still wraps without forced
     horizontal scrolling and remains HTML-escaped through `html/template` (never
     rendered as raw HTML).
@@ -1529,17 +2049,19 @@ Rules:
     failure). A response for a `/static/...` asset does **not** carry
     `Cache-Control: no-store` and remains cacheable (see
     [Cache Policy](#cache-policy)).
-38. An OPEN sprint's presentation under the Actual tab of the roadmap sprints page
-    is identical to that sprint's presentation on its own Roadmap Sprint Page:
-    both render the same shared sprint presentation sub-template, producing the
-    same sprint status summary line, the same sprint metadata datagrid (`ID`,
-    `Status`, `Capacity`, `Tasks`, `Created`, `Started`, `Closed`), and the same
-    full member-tasks table (`ID`, `Title`, `Status`, `Type`, `Priority`,
-    `Severity`) in planned in-sprint execution order with each task row clickable
-    to open the read-only task detail modal (see
-    [Shared Sprint Presentation Sub-Template](#shared-sprint-presentation-sub-template)).
-39. At the top of every full sprint presentation (the Roadmap Sprint Page and each
-    OPEN sprint on the Actual tab), a sprint status summary line is shown in the
+38. On the roadmap sprints page, every sprint in every tab — Próximos, Actual, and
+    Concluídos — is rendered through the single shared sprint-card partial, so all
+    sprints use identical card markup. The OPEN sprint under the Actual tab is shown
+    with the same card as the other sprints: it shows the header (`Sprint #<ID>`
+    with a status badge), the sprint description, and the footer task count, and it
+    is not expanded into an inline sprint metadata datagrid, member-tasks table, or
+    per-task modals on the sprints page. The full sprint detail block (sprint status
+    summary line, metadata datagrid, and member-tasks table) is shown only on the
+    single Roadmap Sprint Page (see
+    [Shared Sprint-Card Partial](#shared-sprint-card-partial) and
+    [Sprint Detail Sub-Template](#sprint-detail-sub-template)).
+39. At the top of the full sprint presentation on the single Roadmap Sprint Page, a
+    sprint status summary line is shown in the
     exact format `<pct>% - P:<p> A:<a> C:<c> - T:<t>` (for example
     `69% - P:8 A:3 C:18 - T:55`), where `<pct>` is the completion percentage
     (`COMPLETED` tasks divided by total tasks, rounded to the nearest integer
@@ -1550,8 +2072,8 @@ Rules:
     with, for example, 55 member tasks of which 8 are pending, 3 in progress, and
     18 completed (with the remaining 26 in other statuses), the line reads
     `33% - P:8 A:3 C:18 - T:55` (18 of 55 completed rounds to 33%).
-40. Every sprint card under the Próximos and Concluídos tabs of the roadmap
-    sprints page displays that sprint's total number of tasks.
+40. Every sprint card under any tab of the roadmap sprints page — Próximos, Actual,
+    and Concluídos — displays that sprint's total number of tasks in its footer.
 41. When `rmp web` starts against a roadmap whose on-disk `project.db` is at an
     older schema version than the binary expects, the server migrates that
     roadmap's schema to the current version automatically at startup, before
@@ -1570,6 +2092,165 @@ Rules:
     failed roadmap remains at its on-disk schema, and a later request that needs a
     column its stale schema lacks surfaces as an HTTP 500 on the affected route
     (see [Startup Schema Migration](#startup-schema-migration)).
+43. On the roadmap knowledge-graph page, a labels sidebar column is rendered inside
+    the graph card to the left of the graph canvas. It lists, in two clearly
+    separated sections, every distinct node label with a count of the nodes that
+    carry it (a node with multiple labels counts towards each of its labels) and
+    every distinct edge type with a count of the edges of that type, with the
+    entries in each section sorted deterministically by name and the Node labels
+    section shown before the Edge types section. Each section header shows an
+    absolute total alongside its title: the Node labels header shows the total
+    number of distinct nodes in the current graph result and the Edge types header
+    shows the total number of edges. A section with no entries, and an
+    empty graph (both sections empty), render gracefully with a clear empty-state
+    indication and are not errors. The inventory and counts are computed
+    client-side from the data already fetched from `GET /roadmaps/{name}/graph/data`
+    (the `labels` arrays of the nodes and the `type` field of the edges); the
+    feature adds no new server endpoint and no new write path (see
+    [Graph Labels Sidebar](#graph-labels-sidebar)).
+44. The labels sidebar highlights rather than filters: selecting a node-label entry
+    highlights all nodes carrying that label and selecting an edge-type entry
+    highlights all edges of that type, while non-matching elements are dimmed
+    (reduced opacity) and remain on the canvas rather than being removed. Multiple
+    entries can be active at once across both sections, and the highlighted set is
+    the union of the active selections. Each entry is a toggle: selecting an active
+    entry again toggles it off, every active entry is visually indicated as
+    selected, and clearing all selections restores the normal non-dimmed view. The
+    highlight state coexists with the layout dropdown (the active selections still
+    apply after a layout change) and with the node/edge detail panel (selecting an
+    element on the canvas still opens its detail, even when that element is dimmed).
+    Each sidebar entry is a touch-friendly target that toggles on tap (see
+    [Graph Labels Sidebar](#graph-labels-sidebar)).
+45. The knowledge-graph page renders a query bar at the top of the page with three
+    controls in left-to-right order: an editable query box pre-filled on page load
+    with the default query `MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r, m`, a
+    Search button, and a node-limit dropdown offering exactly the six values `50`,
+    `100`, `250`, `500`, `1000`, and `3000` with `100` selected by default. On page
+    load the page fetches the graph data with the default query and the default
+    limit and renders the full-graph view (see [Graph Query Bar](#graph-query-bar)).
+46. Selecting the Search button re-fetches `GET /roadmaps/{name}/graph/data` with
+    the current query box text as the `q` parameter and the current dropdown value
+    as the `limit` parameter, and re-renders the graph from the response in the
+    currently selected layout. The request is GET-only and carries `q` and `limit`
+    as URL query parameters; no `POST`, no request body, and no new endpoint is
+    used. A request to `GET /roadmaps/{name}/graph/data` with **no** `q` parameter
+    runs the default query and returns the full-graph view, exactly as the endpoint
+    behaved before the query bar existed (backward compatible).
+47. A query submitted through the query bar that contains a writing clause
+    (`CREATE`, `MERGE`, `SET`, `REMOVE`, `DELETE`, or `DETACH DELETE`) or a DDL
+    clause (`CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, or `DROP CONSTRAINT`)
+    is rejected by the endpoint's read-only guard-rail **before execution** and is
+    **not executed**; the store is not modified, no checkpoint runs, and no
+    write-ahead-log truncation occurs, and the page surfaces a clear "query
+    rejected: not read-only" message distinct from an execution failure. The
+    guard-rail runs on the masked normalization of the query (literal-aware masking
+    plus `cypher.QueryHasWritingClause` and the DDL rejection), so a write or DDL
+    keyword that appears only inside a string literal, a comment, or a
+    backtick-quoted identifier does not trip the rejection: for example
+    `MATCH (m) WHERE m.title = "mentions delete and set" RETURN m` is accepted as
+    read-only and executes, while `MATCH (n) DELETE n` is rejected and does not
+    execute (see [Graph Data Endpoint](#graph-data-endpoint),
+    [Query-Bar Error Handling](#query-bar-error-handling), and
+    `GRAPH.md § Literal-Aware Normalization`).
+48. The endpoint applies the node limit by appending `LIMIT <n>` only when the
+    user's query does not already contain a top-level `LIMIT`: a request whose `q`
+    has no top-level `LIMIT` returns at most the resolved limit's worth of results
+    (the dropdown value, or `100` when `limit` is absent), while a request whose `q`
+    already contains its own top-level `LIMIT` keeps that `LIMIT` and the dropdown
+    value is not applied. The existing-`LIMIT` detection runs on the masked
+    normalization, so a `LIMIT` keyword appearing only inside a string literal, a
+    comment, or a backtick-quoted identifier does not count as an existing top-level
+    `LIMIT` and does not suppress injection. A `limit` parameter that is not one of
+    the six allowed values is rejected as an invalid limit and the query is not
+    executed; the page surfaces a clear invalid-limit message (see
+    [Graph Data Endpoint](#graph-data-endpoint) and
+    [Query-Bar Error Handling](#query-bar-error-handling)).
+49. The endpoint builds the `{"nodes": [...], "edges": [...]}` response by walking
+    the entire query result and collecting every node and every relationship that
+    appears anywhere in it — in any returned column and recursively inside lists,
+    maps, and paths — deduplicating nodes by node `id` and relationships by
+    relationship `id`. A relationship is included only when both its start node and
+    its end node are present in the collected node set; a relationship with a
+    missing endpoint is dropped and no synthetic endpoint node is created, so every
+    `startId` and `endId` in the returned `edges` references a node present in the
+    returned `nodes` (see [Graph Data Endpoint](#graph-data-endpoint) and
+    `DATA_FORMATS.md § Graph View Data`, rule 3).
+50. A query submitted through the query bar that is accepted as read-only but then
+    fails in the engine (for example, invalid Cypher syntax) surfaces a clear
+    "query failed to execute" message on the page, distinct from the "query
+    rejected: not read-only" message. In every query-bar failure case — read-only
+    rejection, invalid limit, or execution failure — the message is shown in place,
+    the page does not crash, and the failure triggers no write and no navigation,
+    consistent with the graceful layout degradation; the user can edit the query or
+    change the limit and search again (see
+    [Query-Bar Error Handling](#query-bar-error-handling)).
+51. The labels sidebar shows an absolute total in each section header, derived
+    client-side from the same already-fetched graph data as the per-entry
+    inventory: the Node labels header shows the total number of distinct nodes in
+    the current graph result and the Edge types header shows the total number of
+    edges. Because a node carrying multiple labels counts towards each of its
+    labels, the sum of the per-label entry counts may exceed the distinct-node
+    total; the Node labels total is the distinct-node count, not the sum of the
+    per-label counts, while the Edge types total equals the sum of the per-type
+    counts. The totals recompute on each search together with the rest of the
+    inventory, and in an empty graph both totals render as `0` without error. The
+    totals add no new server endpoint and no new write path (see
+    [Graph Labels Sidebar](#graph-labels-sidebar)).
+52. The labels sidebar has a touch-friendly icon control at its top that toggles the
+    sidebar between expanded and collapsed, built with the page's existing
+    Tabler-based UI. When collapsed, the sidebar column contracts so the graph
+    canvas takes the full width of the graph card and only the control to expand it
+    again remains visible; when expanded, the section headers, their totals, and the
+    entries are shown. Toggling the control changes only the sidebar's visibility
+    and the canvas width: it does not clear the active highlight selections, change
+    the layout, run a search, or open or close the detail panel, and an active
+    highlight remains active across a collapse and a subsequent expand. The sidebar
+    starts expanded on each page load; persistence of the collapsed or expanded
+    state across reloads is not required (see
+    [Graph Labels Sidebar](#graph-labels-sidebar)).
+53. With the query box focused, pressing Ctrl+Enter triggers the search exactly as
+    selecting the Search button does: it issues the same GET request to
+    `GET /roadmaps/{name}/graph/data` with the current query box text as the `q`
+    parameter and the current dropdown value as the `limit` parameter, applies the
+    same read-only guard-rail and limit validation, re-renders the graph in the
+    currently selected layout on success, and surfaces the same in-place error
+    messages on failure (see criterion 46). Ctrl+Enter is a keyboard accelerator for
+    the existing Search action and changes no other behaviour. Plain Enter in the
+    query box does not trigger a search; it inserts a newline so the user can compose
+    a multi-line query (see [Graph Query Bar](#graph-query-bar)).
+54. Selecting a node in the graph canvas opens that node's detail panel and puts
+    the canvas into neighbor focus: the selected node, its first-degree neighbours,
+    and the edges incident to the selected node are emphasised, and every other
+    element — second-degree nodes and beyond, and every edge not incident to the
+    selected node — is dimmed (reduced opacity) rather than removed, using the same
+    dim-not-remove mechanism as the labels-sidebar highlight. The first-degree
+    neighbourhood is undirected: it includes every node connected to the selected
+    node by exactly one edge in either direction (the target of an outgoing edge or
+    the source of an incoming edge) together with those incident edges. Neighbor
+    focus only emphasises and dims; it adds or removes no node or edge (see
+    [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page)).
+55. Neighbor focus is cleared by selecting the focused node again, selecting an
+    empty area of the canvas, or closing the node detail panel; any of these
+    gestures closes the detail panel and clears the focus together. Clearing the
+    focus restores the prior view: the canvas returns to the labels-sidebar
+    highlight state when any label or type entry is still active, otherwise to the
+    normal, non-dimmed view. Selecting a different node while one is focused moves
+    the focus to the new node without an intervening clear (see
+    [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page)).
+56. While a node is focused, neighbor focus takes precedence over the
+    labels-sidebar highlight: the neighbor-focus emphasis governs the canvas
+    dimming and an active label or type selection does not drive canvas dimming,
+    though the sidebar entries may stay visually selected in the sidebar. Changing
+    the layout in the layout dropdown reapplies the current neighbor focus to the
+    re-rendered layout, emphasising the same node, neighbours, and incident edges,
+    while running a search from the query bar clears the neighbor focus together
+    with re-rendering the new result. Neighbor focus is driven by the same
+    touch-friendly tap that opens and closes the detail panel, is computed and
+    applied entirely client-side from the already-fetched graph data, and adds no
+    new server endpoint and no write path, leaving the graph data endpoint's
+    response shape and the page's read-only behaviour unchanged (see
+    [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page) and
+    [Graph Labels Sidebar](#graph-labels-sidebar)).
 
 ## See Also
 
@@ -1580,6 +2261,10 @@ Rules:
 - Read-only graph access, recovery, and the checkpoint that web reads must avoid
   → `GRAPH.md § Engine Construction and Lifecycle` and
   `GRAPH.md § Synchronous Checkpoint on Write`
+- Read-only guard-rail and literal-aware masked normalization reused to validate
+  the query bar's user-supplied Cypher →
+  `GRAPH.md § Subcommands and Guard-Rail Validation` and
+  `GRAPH.md § Literal-Aware Normalization`
 - Roadmap discovery, data directory layout, and permissions →
   `ARCHITECTURE.md § Directory Structure`
 - SQLite schema migrations the startup step runs, and their idempotency →

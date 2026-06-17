@@ -104,11 +104,39 @@
   preserve their line breaks.
 */}}
 {{/*
+  sprintCard renders the single shared sprint card used by EVERY tab of the
+  Roadmap Sprints Page — Próximos, Actual, and Concluídos — so all sprints share
+  identical card markup across the three tabs. The OPEN sprint under Actual is
+  rendered with this same card as a PENDING or CLOSED sprint; it is never
+  expanded into an inline task table or per-task modals on the sprints page (the
+  full detail block lives only on the single Roadmap Sprint Page). The card is a
+  clickable link to the sprint's own page (SPEC/WEB.md § Shared Sprint-Card
+  Partial; Acceptance Criteria 8/12/13/38/40).
+
+  Dot is a web.sprintCard: .Name (roadmap), .Sprint (models.Sprint), and
+  .TaskCount (the sprint's loaded member-task count). The card shows, in order:
+  a header ("Sprint #<ID>" with a status badge), the sprint description (authored
+  line breaks preserved via the .sprint-description CSS; SPEC/WEB.md § Frontend
+  Rules, rule 6, and Acceptance Criterion 32), and a footer task count. The whole
+  card is one link and opens no task detail modal.
+*/}}
+{{define "sprintCard"}}                    <div class="col-12 col-lg-6">
+                      <a href="/roadmaps/{{.Name}}/sprints/{{.Sprint.ID}}" class="card card-sm card-link text-reset">
+                        <div class="card-header">
+                          <h4 class="card-title mb-0">Sprint #{{.Sprint.ID}}</h4>
+                          <div class="card-actions"><span class="badge bg-blue-lt">{{.Sprint.Status}}</span></div>
+                        </div>
+                        <div class="card-body">
+                          <p class="mb-1 sprint-description">{{.Sprint.Description}}</p>
+                          <span class="text-secondary">{{.TaskCount}} task(s)</span>
+                        </div>
+                      </a>
+                    </div>{{end}}
+
+{{/*
   sprintDetail renders the full sprint presentation block for ONE sprint and is
-  the single source of presentation shared by the Roadmap Sprint Page and each
-  OPEN sprint on the Actual tab of the Roadmap Sprints Page, so a sprint looks
-  identical in both places (SPEC/WEB.md § Shared Sprint Presentation
-  Sub-Template; Acceptance Criteria 38/39).
+  the single source of presentation shown only on the single Roadmap Sprint
+  Page (SPEC/WEB.md § Sprint Detail Sub-Template; Acceptance Criteria 38/39).
 
   Dot is a web.sprintDetail: .Name (roadmap), .Sprint (models.Sprint), .Tasks
   (member tasks in planned in-sprint execution order), and .Summary
@@ -118,9 +146,9 @@
   responsible for rendering one taskModal per shown task.
 
   The "Tasks" datagrid value uses len .Tasks (the loaded member tasks) rather
-  than .Sprint.TaskCount: ListSprints does not populate TaskCount, so the Actual
-  tab would otherwise show 0. The loaded task count is authoritative for both
-  call sites (SPEC/WEB.md § Shared Sprint Presentation Sub-Template).
+  than .Sprint.TaskCount: GetSprint populates TaskCount, but len .Tasks is the
+  authoritative count of the rows actually rendered here (SPEC/WEB.md § Sprint
+  Detail Sub-Template).
 */}}
 {{define "sprintDetail"}}          <div class="sprint-summary-line h3 mb-3" data-role="sprint-summary">{{.Summary.Line}}</div>
 

@@ -315,12 +315,333 @@ func TestGraphPage_LayoutDropdown(t *testing.T) {
 	}
 
 	// Mobile patent suits is the default: its option carries the selected
-	// attribute and no other option does.
+	// attribute and no OTHER layout option does. The page now also carries the
+	// query bar's node-limit dropdown, whose default (limit 100) is likewise a
+	// preselected <option ... selected> (SPEC/WEB.md § Graph Query Bar,
+	// Acceptance Criterion 45), so a page-wide "selected>" count is no longer 1.
+	// Scope the uniqueness check to the layout dropdown's own options instead.
 	if !strings.Contains(body, `<option value="patents" selected>`) {
 		t.Errorf("Mobile patent suits must be the preselected default layout")
 	}
-	if strings.Count(body, "selected>") != 1 {
-		t.Errorf("exactly one layout option must be preselected (the Mobile patent suits default)")
+	layoutSelected := 0
+	for _, opt := range options {
+		if strings.Contains(opt, " selected>") && strings.Contains(body, opt) {
+			layoutSelected++
+		}
+	}
+	if layoutSelected != 1 {
+		t.Errorf("exactly one layout option must be preselected (the Mobile patent suits default); got %d", layoutSelected)
+	}
+}
+
+// TestGraphPage_LabelsSidebar asserts the graph page renders the labels-sidebar
+// column inside the graph card, to the left of the canvas, with its two sections
+// (Node labels first, then Edge types), the per-section list and empty-state
+// containers the client populates, and the canvas region wrapper the sidebar
+// docks beside. The inventory and counts are computed client-side from the
+// already-fetched graph data, so the server renders only the empty containers;
+// this is the server-side-testable surface of the feature (SPEC/WEB.md § Graph
+// Labels Sidebar, Acceptance Criteria 43/44).
+func TestGraphPage_LabelsSidebar(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name := seedRoadmap(t, "platform-core")
+	mux := buildMux()
+
+	body := servePage(t, mux, "/roadmaps/"+name+"/graph")
+
+	// The sidebar container, its two section lists, and their empty-state
+	// elements are present for the client script to populate.
+	for _, marker := range []string{
+		`id="labels-sidebar"`,
+		`class="labels-sidebar"`,
+		`id="node-labels"`,
+		`id="node-labels-empty"`,
+		`id="edge-types"`,
+		`id="edge-types-empty"`,
+		`>Node labels<`,
+		`>Edge types<`,
+		`class="graph-region"`, // the canvas region the sidebar docks beside
+		// Per-section absolute total elements the client populates (rule 11,
+		// Acceptance Criteria 43/51).
+		`id="node-labels-total"`,
+		`id="edge-types-total"`,
+		// Collapse/expand control at the top of the sidebar (rule 12,
+		// Acceptance Criterion 52), built with the page's Tabler icon font.
+		`id="labels-toggle"`,
+		`ti-layout-sidebar-left-collapse`,
+		`aria-expanded="true"`, // default state on load is expanded
+	} {
+		if !strings.Contains(body, marker) {
+			t.Errorf("graph page missing labels-sidebar marker %q", marker)
+		}
+	}
+
+	// Fixed section order: Node labels before Edge types, and the sidebar before
+	// the graph canvas (it is the left column).
+	assertOrdered(t, "labels-sidebar structure", body, []string{
+		`id="labels-sidebar"`,
+		`id="labels-toggle"`, // the collapse/expand control sits at the top
+		`>Node labels<`,
+		`id="node-labels-total"`, // the section total accompanies its header
+		`id="node-labels"`,
+		`>Edge types<`,
+		`id="edge-types-total"`,
+		`id="edge-types"`,
+		`id="graph"`,
+	})
+}
+
+// TestGraphAssets_LabelsSidebarLogic asserts the client assets carry the
+// labels-sidebar implementation: graph.js derives the inventory and applies the
+// highlight (it references the sidebar element ids, the inventory builder, and
+// the highlight/dim entry points), and style.css styles the sidebar entries and
+// the dimmed-element state. These are static-asset invariants; the runtime
+// D3 behaviour is exercised by the browser, consistent with the existing
+// server-side-only test approach for the graph page (SPEC/WEB.md § Graph Labels
+// Sidebar, rule 4, rule 8, rule 10).
+func TestGraphAssets_LabelsSidebarLogic(t *testing.T) {
+	js, err := staticFS.ReadFile("static/graph.js")
+	if err != nil {
+		t.Fatalf("read embedded graph.js: %v", err)
+	}
+	jsText := string(js)
+	for _, token := range []string{
+		`getElementById("node-labels")`, // wires the node-label list
+		`getElementById("edge-types")`,  // wires the edge-type list
+		"buildInventory",                // client-side count derivation
+		"renderSidebar",                 // populates the sidebar from the data
+		"applyHighlight",                // dim/highlight entry point
+		"is-dimmed",                     // the dimming class toggled on elements
+		"is-active",                     // the selected-entry state
+		// Section totals derived client-side (rule 11, Acceptance Criterion 51):
+		// the node total is the distinct-node count and the edge total the edge
+		// count, kept distinct from the per-label sums.
+		`getElementById("node-labels-total")`,
+		`getElementById("edge-types-total")`,
+		"nodeTotal",          // the distinct-node total field
+		"typeTotal",          // the edge total field
+		"model.nodes.length", // node total = distinct fetched nodes, not the per-label sum
+		"model.links.length", // edge total = fetched edges
+		// Collapse/expand control logic (rule 12, Acceptance Criterion 52).
+		`getElementById("labels-toggle")`,
+		"setSidebarCollapsed",
+		"is-collapsed",
+		"ti-layout-sidebar-left-expand", // the icon swaps to the expand glyph when collapsed
+	} {
+		if !strings.Contains(jsText, token) {
+			t.Errorf("graph.js missing labels-sidebar token %q", token)
+		}
+	}
+	// The node total must be the distinct-node count, NOT the sum of per-label
+	// counts. The per-label counts are accumulated into labelCounts; the node
+	// total must not be derived from that map. Guard against a regression that
+	// sums the per-label entries by requiring the total to come from the node
+	// array length.
+	if !strings.Contains(jsText, "nodeTotal: model.nodes.length") {
+		t.Errorf("graph.js node total must be the distinct-node count (model.nodes.length), not the sum of per-label counts")
+	}
+	// The highlight must survive a layout change: render() re-applies the current
+	// emphasis. Dimming is now unified through applyEmphasis(), which delegates to
+	// applyHighlight() when no node is focused (SPEC/WEB.md § Graph Labels Sidebar,
+	// rule 8; Acceptance Criterion 56), so the labels highlight is preserved across
+	// a layout change through that single path.
+	reApply := strings.Index(jsText, "function render(")
+	applyAfter := strings.LastIndex(jsText, "applyEmphasis();")
+	if reApply < 0 || applyAfter < reApply {
+		t.Errorf("graph.js render() must call applyEmphasis() so a layout change preserves the selection/focus")
+	}
+	// Collapsing/expanding must not clear the highlight or run a search: the
+	// toggle handler must not reset the active selection sets nor call runSearch.
+	toggleStart := strings.Index(jsText, "function setSidebarCollapsed(")
+	toggleEnd := strings.Index(jsText[toggleStart:], "\n  }\n")
+	if toggleStart < 0 || toggleEnd < 0 {
+		t.Fatalf("graph.js setSidebarCollapsed() body not found")
+	}
+	toggleBody := jsText[toggleStart : toggleStart+toggleEnd]
+	for _, forbidden := range []string{"runSearch", "activeLabels = ", "activeTypes = ", "hidePanel", "showEmpty"} {
+		if strings.Contains(toggleBody, forbidden) {
+			t.Errorf("setSidebarCollapsed() must not %q: collapsing changes only sidebar visibility and canvas width, never the highlight, search, or detail panel", forbidden)
+		}
+	}
+
+	css, err := staticFS.ReadFile("static/style.css")
+	if err != nil {
+		t.Fatalf("read embedded style.css: %v", err)
+	}
+	cssText := string(css)
+	for _, token := range []string{
+		".labels-sidebar",                 // the sidebar column
+		".labels-sidebar__item",           // a touch-friendly entry
+		".labels-sidebar__item.is-active", // the selected state
+		".graph-svg .is-dimmed",           // the dimmed (reduced-opacity) state
+		".graph-region",                   // the canvas region wrapper
+		// Section-total badge in the header (rule 11).
+		".labels-sidebar__total",
+		// Collapse/expand control and collapsed-state rules (rule 12). The
+		// collapsed sidebar hides its body and, on a wide viewport, contracts
+		// the column so the canvas takes the full width.
+		".labels-sidebar__toggle",
+		".labels-sidebar.is-collapsed .labels-sidebar__body",
+		".labels-sidebar.is-collapsed",
+	} {
+		if !strings.Contains(cssText, token) {
+			t.Errorf("style.css missing labels-sidebar rule %q", token)
+		}
+	}
+}
+
+// TestGraphAssets_CtrlEnterAccelerator asserts graph.js wires the Ctrl+Enter
+// keyboard accelerator on the query box and that it reuses the existing search
+// trigger rather than duplicating the search logic (SPEC/WEB.md § Graph Query
+// Bar, rule 5; Acceptance Criterion 53). The accelerator is a static-asset
+// invariant; the runtime keydown behaviour is exercised by the browser and the
+// E2E suite, consistent with the existing server-side-only test approach for
+// graph.js.
+func TestGraphAssets_CtrlEnterAccelerator(t *testing.T) {
+	js, err := staticFS.ReadFile("static/graph.js")
+	if err != nil {
+		t.Fatalf("read embedded graph.js: %v", err)
+	}
+	jsText := string(js)
+
+	for _, token := range []string{
+		`queryInput.addEventListener("keydown"`, // the accelerator is wired on the query box
+		"event.ctrlKey",                         // Ctrl+Enter is the accelerator chord
+		`event.key === "Enter"`,                 // the Enter key gate
+		"event.preventDefault()",                // stop the default newline insertion on the chord
+	} {
+		if !strings.Contains(jsText, token) {
+			t.Errorf("graph.js missing Ctrl+Enter accelerator token %q", token)
+		}
+	}
+
+	// The accelerator must reuse the existing Search action, not duplicate the
+	// search logic. The Search button is a type="submit" control, so firing the
+	// form's submit event (requestSubmit) runs the same submit handler that
+	// drives runSearch(); a duplicated fetch in the keydown handler would be a
+	// regression. Verify the handler body invokes the shared trigger.
+	keydownStart := strings.Index(jsText, `queryInput.addEventListener("keydown"`)
+	if keydownStart < 0 {
+		t.Fatalf("graph.js keydown accelerator handler not found")
+	}
+	keydownEnd := strings.Index(jsText[keydownStart:], "\n    });")
+	if keydownEnd < 0 {
+		t.Fatalf("graph.js keydown accelerator handler body not delimited")
+	}
+	handlerBody := jsText[keydownStart : keydownStart+keydownEnd]
+	if !strings.Contains(handlerBody, "requestSubmit") {
+		t.Errorf("Ctrl+Enter handler must reuse the Search submit path via requestSubmit(), not duplicate the search logic")
+	}
+}
+
+// TestGraphAssets_NeighborFocus asserts graph.js carries the neighbor-focus
+// implementation: a single module-level focus state, an undirected first-degree
+// neighbourhood computed client-side from the model's links (startId/endId
+// mapped to source/target), a single unified emphasis function that gives focus
+// precedence over the labels highlight, the consistent clear gestures (panel
+// close, empty-canvas tap, re-select), and the layout/search coexistence (render
+// reapplies the current emphasis; a search clears the focus). These are
+// static-asset invariants; the runtime D3 behaviour is exercised by the browser
+// and the E2E suite, consistent with the existing server-side-only test approach
+// for graph.js (SPEC/WEB.md § Roadmap Knowledge-Graph Page, "Neighbor focus on
+// node selection"; § Graph Labels Sidebar, rule 8; Acceptance Criteria 54-56).
+func TestGraphAssets_NeighborFocus(t *testing.T) {
+	js, err := staticFS.ReadFile("static/graph.js")
+	if err != nil {
+		t.Fatalf("read embedded graph.js: %v", err)
+	}
+	jsText := string(js)
+
+	for _, token := range []string{
+		// Single module-level focus state (one source of truth).
+		"focusedNodeId",
+		// Undirected first-degree neighbourhood computation and the unified
+		// emphasis/clear/select functions.
+		"function neighborSet(",
+		"function applyEmphasis(",
+		"function applyFocusDimming(",
+		"function clearFocus(",
+		"function onNodeSelected(",
+		"function dismissSelection(",
+		// Focus reuses the SAME dim-not-remove mechanism as the labels highlight.
+		"is-dimmed",
+		// Identity tags neighbor focus reads from the DOM.
+		"data-node-id",
+		"data-edge-source",
+		"data-edge-target",
+	} {
+		if !strings.Contains(jsText, token) {
+			t.Errorf("graph.js missing neighbor-focus token %q", token)
+		}
+	}
+
+	// There must be exactly one focus state variable declaration: a single source
+	// of truth, not competing state.
+	if strings.Count(jsText, "var focusedNodeId") != 1 {
+		t.Errorf("graph.js must declare the focus state once (single source of truth)")
+	}
+
+	// applyEmphasis must be the single dimming decision path: when a node is
+	// focused it dims by neighbourhood, otherwise it delegates to applyHighlight()
+	// (the labels state). Verify the precedence branch and the delegation.
+	empStart := strings.Index(jsText, "function applyEmphasis(")
+	if empStart < 0 {
+		t.Fatalf("graph.js applyEmphasis() not found")
+	}
+	empBody := jsText[empStart:]
+	if end := strings.Index(empBody, "\n  }\n"); end > 0 {
+		empBody = empBody[:end]
+	}
+	if !strings.Contains(empBody, "focusedNodeId !== null") {
+		t.Errorf("applyEmphasis() must branch on the focus state so neighbor focus takes precedence")
+	}
+	if !strings.Contains(empBody, "applyFocusDimming") || !strings.Contains(empBody, "applyHighlight()") {
+		t.Errorf("applyEmphasis() must dim by neighbourhood when focused and delegate to applyHighlight() otherwise (one dimming path)")
+	}
+
+	// The neighbourhood must be UNDIRECTED: it includes a node whether the focused
+	// node is the link's source OR its target. Verify both endpoint comparisons.
+	nbStart := strings.Index(jsText, "function neighborSet(")
+	if nbStart < 0 {
+		t.Fatalf("graph.js neighborSet() not found")
+	}
+	nbBody := jsText[nbStart:]
+	if end := strings.Index(nbBody, "\n  }\n"); end > 0 {
+		nbBody = nbBody[:end]
+	}
+	if !strings.Contains(nbBody, "s === nodeId") || !strings.Contains(nbBody, "t === nodeId") {
+		t.Errorf("neighborSet() must be undirected: include neighbours when the focused node is either the source OR the target of an edge")
+	}
+	// The neighbourhood must be derived from the model's links (startId/endId
+	// mapped to source/target in buildModel), not from any server call.
+	if !strings.Contains(nbBody, "graphModel.links") {
+		t.Errorf("neighborSet() must compute the neighbourhood client-side from graphModel.links")
+	}
+
+	// render() must reapply the CURRENT emphasis (applyEmphasis), not just the
+	// labels highlight, so a layout change preserves a neighbor focus too.
+	renderStart := strings.Index(jsText, "function render(")
+	applyEmphAfter := strings.LastIndex(jsText, "applyEmphasis();")
+	if renderStart < 0 || applyEmphAfter < renderStart {
+		t.Errorf("render() must call applyEmphasis() so a layout change preserves the current focus/highlight")
+	}
+
+	// The clear gestures must be unified: the panel close and the empty-canvas tap
+	// both route through dismissSelection (panel close + focus clear together).
+	if !strings.Contains(jsText, `panelClose.addEventListener("click", dismissSelection)`) {
+		t.Errorf("closing the detail panel must clear the focus too (dismissSelection)")
+	}
+	// A search must clear the focus as part of rendering the new result.
+	applyDataStart := strings.Index(jsText, "function applyData(")
+	if applyDataStart < 0 {
+		t.Fatalf("graph.js applyData() not found")
+	}
+	applyDataBody := jsText[applyDataStart:]
+	if end := strings.Index(applyDataBody, "\n  }\n"); end > 0 {
+		applyDataBody = applyDataBody[:end]
+	}
+	if !strings.Contains(applyDataBody, "focusedNodeId = null") {
+		t.Errorf("applyData() (the search re-render path) must clear the neighbor focus")
 	}
 }
 
