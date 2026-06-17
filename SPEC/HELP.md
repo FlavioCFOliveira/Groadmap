@@ -238,6 +238,15 @@ machine-readable AI Agent Contract (`rmp --ai-help`) MUST document the field:
 3. **Collision exit code.** State that an `--order` value already used by another
    sprint is rejected with exit code 5 (resource already exists), distinct from the
    exit code 6 used for a non-positive or non-integer value.
+4. **The `sprint tasks` status filter.** State, on `sprint tasks`, that in
+   addition to `--order-by-priority` the subcommand accepts an optional
+   `-s, --status <state>` filter that restricts the result to tasks whose status
+   equals `<state>` (one of BACKLOG, SPRINT, DOING, TESTING, COMPLETED). Document
+   both the short form `-s` and the long form `--status`, consistent with the
+   sibling list commands (`task ls`, `backlog ls`). The handler parses the flag
+   and passes it to the sprint-task query. Without the flag, every task in the
+   sprint is returned regardless of status. A `<state>` value outside the valid
+   set is rejected with exit code 6. See `COMMANDS.md § List Sprint Tasks`.
 
 ### Graph family help specifics
 
@@ -268,12 +277,12 @@ or user cannot infer from the generic template:
    `--roadmap`: it lists all roadmaps and the user selects one in the browser.
    This is the one command exempt from the always-required-roadmap rule (see
    `COMMANDS.md § Roadmap Selection (Always Required)`).
-2. **Read-only, exposed to the network by default.** State that the interface is
-   read-only (the CLI remains the sole write path) and binds all interfaces
-   (`0.0.0.0`) by default, so it is reachable from the network; that
-   `--host 127.0.0.1` is the explicit opt-in to restrict it to the local machine;
-   and that `--host`/`--port` override the bind address, with the default-port
-   ephemeral fallback. See `WEB.md`.
+2. **Read-only, loopback by default.** State that the interface is read-only
+   (the CLI remains the sole write path) and binds loopback (`127.0.0.1`) by
+   default, so it is reachable only from the local machine; that
+   `--host 0.0.0.0` is the explicit opt-in to expose it on all interfaces
+   (network-reachable); and that `--host`/`--port` override the bind address,
+   with the default-port ephemeral fallback. See `WEB.md`.
 3. **Long-lived process.** State that the command starts a server that keeps
    running until interrupted (`Ctrl+C` / `SIGINT` or `SIGTERM`), unlike every
    other command, which completes and exits. On startup it prints the served
@@ -291,15 +300,15 @@ and knowledge graph. The web interface never writes; the rmp CLI
 remains the sole write path. rmp web does not take -r/--roadmap.
 
 Options:
-  --host <address>   Bind host. Default 0.0.0.0 (all interfaces, reachable
-                     from the network). Use --host 127.0.0.1 for loopback only.
+  --host <address>   Bind host. Default 127.0.0.1 (loopback, local machine
+                     only). Use --host 0.0.0.0 to expose on the network.
   --port <number>    Bind port 0-65535. Default 8787; falls back to an
                      ephemeral port if 8787 is in use and --port is not set.
   --no-open          Do not launch a browser; just print the served URL.
   -h, --help         Show this help message
 
 Output (stdout JSON):
-  On startup: {"url": "http://0.0.0.0:8787"} (reflects the bound host/port)
+  On startup: {"url": "http://127.0.0.1:8787"} (reflects the bound host/port)
 
 Exit codes:
   0   Server started and was stopped by Ctrl+C / SIGINT / SIGTERM
@@ -310,7 +319,7 @@ Exit codes:
 Examples:
   rmp web
   rmp web --port 9000
-  rmp web --host 127.0.0.1 --port 9000
+  rmp web --host 0.0.0.0 --port 9000
   rmp web --no-open
 ```
 

@@ -7,7 +7,7 @@
 **JSON output is reserved for query operations and record creation.**
 
 - **Query operations (JSON)**: `list`, `ls`, `get`, `next`, `tasks`, `stats`, `show`, `history`, `hist`.
-- **Server startup (JSON)**: `web` prints a single JSON object naming the served URL on successful startup (e.g. `{"url": "http://0.0.0.0:8787"}`), then keeps running; see `COMMANDS.md § Web Interface`. While running, the server returns HTTP responses (HTML pages and the JSON graph data endpoint), which are not command stdout output.
+- **Server startup (JSON)**: `web` prints a single JSON object naming the served URL on successful startup (e.g. `{"url": "http://127.0.0.1:8787"}`), then keeps running; see `COMMANDS.md § Web Interface`. While running, the server returns HTTP responses (HTML pages and the JSON graph data endpoint), which are not command stdout output.
 - **Creation operations (JSON)**: `create`, `new`. These commands return a JSON object containing the ID of the newly created record (e.g., `{"id": 42}`).
 - **Other database modifications (No output)**: Commands that update, delete, or change the state of entities (status, priority, etc.) respond with **no content** on success, signaling completion via exit code `0`.
 - **Help commands (Plain text)**: When no command is provided, or when using `-h` and `--help` flags, the application displays information in **plain text**, following traditional CLI application formats (not JSON).
@@ -509,7 +509,7 @@ other document**. Concretely:
   "roadmap_flag": {
     "short": "-r",
     "long": "--roadmap",
-    "required_for": "every command except roadmap list/create/remove and the help/version/ai-help commands"
+    "required_for": "every command except roadmap list/create/remove, web, and the help/version/ai-help commands"
   },
   "list_separator": ",",
   "ai_agent_env_var": {
@@ -573,6 +573,32 @@ least `--help` / `-h`, `--version` / `-v`, and `--ai-help`.
 }
 ```
 
+#### Single-action commands (no subcommands)
+
+Some commands have no subcommands: `ai-help`, `stats`, and `web`. These
+commands MUST use the SAME nested shape as every other command. The
+contract MUST NOT flatten a single-action command's flags, usage, exit
+codes, or other subcommand-level fields onto the top-level command
+object. Instead, the command object carries a `subcommands` array with
+exactly ONE element that describes the single action, using the
+`subcommands` array entry shape defined below.
+
+For a single-action command, the one-element `subcommands` entry repeats
+the command's own `name` (for example, the `web` command object contains
+one subcommand also named `web`). This guarantees that an agent can
+traverse every command uniformly through `commands[].subcommands[]`
+without special-casing the commands that happen to have a single action.
+
+#### Empty-array serialization
+
+Whenever a contract field of array type has no elements, it MUST
+serialize as an empty JSON array `[]`, never as `null`. This applies to
+every array-typed field, including `subcommands`, `aliases`,
+`prerequisites`, `positional_arguments`, `mutual_exclusion_groups`, and
+`examples`. This is the contract-level statement of the general rule in
+`Implementation Notes` (Empty arrays). Examples in this specification
+MUST NOT show `null` in place of an empty array.
+
 #### `subcommands` array entry
 
 ```json
@@ -626,7 +652,7 @@ least `--help` / `-h`, `--version` / `-v`, and `--ai-help`.
     "network": "None."
   },
   "idempotent": false,
-  "exit_codes": [0, 2, 3, 5, 6],
+  "exit_codes": [0, 2, 3, 4, 6],
   "prerequisites": [
     "An existing roadmap selected via -r/--roadmap."
   ],

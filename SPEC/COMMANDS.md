@@ -387,6 +387,17 @@ rmp task new -r <name> -t <title> -fr <fr> -tr <tr> -ac <ac>
 
 **Error Output:** Validation errors written to stderr with exit code 6.
 
+**Exit Codes:** The command emits `0`, `2`, `3`, `4`, or `6`:
+| Exit Code | Condition |
+|-----------|-----------|
+| 0 | Task created |
+| 2 | A required flag is missing |
+| 3 | Roadmap not specified |
+| 4 | `--parent` points to a task that does not exist |
+| 6 | Validation error (oversize field, invalid enum/range, invalid type) |
+
+There is no exit code 5 for this command: a missing `--parent` target is a not-found condition (exit 4), not an already-exists condition.
+
 ### Get Task(s)
 
 ```bash
@@ -501,8 +512,8 @@ Success (no open tasks in sprint):
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
-| No sprint is currently open | 6 | "No sprint is currently open. Use 'rmp sprint start' to open a sprint first." |
-| Invalid num argument (not a positive integer) | 2 | "Invalid argument: num must be a positive integer" |
+| No sprint is currently open | 4 | "No sprint is currently open. Use 'rmp sprint start <id>' to open a sprint first." |
+| Invalid num argument (non-numeric or < 1) | 6 | "num must be a positive integer" |
 | Roadmap not specified | 3 | "Error: Roadmap not specified. Use -r <name> or --roadmap <name>" |
 
 **Behavior Notes:**
@@ -825,6 +836,59 @@ All IDs are validated before any transitions are applied. If any ID is invalid, 
 
 **Audit:** Each reopened task is logged individually with operation `TASK_REOPEN`.
 
+### Assign Specialist
+
+```bash
+rmp task assign -r <name> <task-id> <specialist>
+```
+
+**Description:** Adds `<specialist>` to the comma-separated specialists list on
+`<task-id>`. The specialist label is kept as a single token. The operation is
+idempotent: assigning a name that is already present is a no-op and exits 0; in
+that case an informational note is written to stderr for transparency. The note
+is not an error, and callers parsing stderr as an error signal MUST ignore it.
+
+**Arguments (both positional, in this order):**
+- `<task-id>` - Integer task id.
+- `<specialist>` - Free-form specialist label, kept as one token.
+
+**Output (success):** Empty stdout, exit code 0.
+
+**Exit Codes:**
+
+| Exit Code | Condition |
+|-----------|-----------|
+| 0 | Specialist added, or already present (no-op) |
+| 3 | Missing `-r` |
+| 4 | Task not found |
+| 6 | The new value pushes the specialists list past 500 characters |
+
+### Unassign Specialist
+
+```bash
+rmp task unassign -r <name> <task-id> <specialist>
+```
+
+**Description:** Removes `<specialist>` from the task's specialists list. If the
+list becomes empty, the specialists field is set to NULL. The operation is
+idempotent: if the specialist is not present on the task, the call is a no-op and
+exits 0; in that case an informational note is written to stderr. The note is not
+an error.
+
+**Arguments (both positional, in this order):**
+- `<task-id>` - Integer task id.
+- `<specialist>` - Specialist label to remove.
+
+**Output (success):** Empty stdout, exit code 0.
+
+**Exit Codes:**
+
+| Exit Code | Condition |
+|-----------|-----------|
+| 0 | Specialist removed, or not present (no-op) |
+| 3 | Missing `-r` |
+| 4 | Task not found |
+
 ---
 
 ## Sprint Management
@@ -847,6 +911,11 @@ rmp sprint create -r <name> -t "Title" -d "Description" [--max-tasks <n>] [--ord
 rmp sprint new -r <name> -t "Title" -d "Description" [--max-tasks <n>] [--order <n>]
 ```
 
+**Required parameters:** BOTH `-t, --title` and `-d, --description` are mandatory.
+Omitting either one (or passing it empty) fails with exit code 2 and the message
+`Error: required parameter missing: --title` (or `--description`). Every example
+below supplies both.
+
 **Options:**
 - `-t, --title <text>` - Sprint title (required), maximum 255 characters
 - `-d, --description <text>` - Sprint description (required)
@@ -866,7 +935,8 @@ rmp sprint new -r <name> -t "Title" -d "Description" [--max-tasks <n>] [--order 
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
-| Title is empty or missing | 6 | "Error: Title is required" |
+| Title missing or empty | 2 | "Error: required parameter missing: --title" |
+| Description missing or empty | 2 | "Error: required parameter missing: --description" |
 | Title exceeds 255 characters | 6 | "Error: Title must not exceed 255 characters (got N)" |
 
 The sprint `title` is also subject to the Control-Character Constraint described in
@@ -895,14 +965,22 @@ rmp sprint get -r <name> <id>
 ### List Sprint Tasks
 
 ```bash
-rmp sprint tasks -r <name> <id> [--status <state>] [--order-by-priority]
+rmp sprint tasks -r <name> <id> [-s, --status <state>] [--order-by-priority]
 ```
 
 **JSON Output:** Array of Task objects associated with the sprint, ordered by position (default) or by priority if flag specified.
 
 **Options:**
-- `-s, --status <state>` - Filter by status
+- `-s, --status <state>` - Optional filter that restricts the result to tasks
+  whose status equals `<state>` (one of BACKLOG, SPRINT, DOING, TESTING,
+  COMPLETED). Both the short form `-s` and the long form `--status` are accepted,
+  consistent with the sibling list commands (`task ls`, `backlog ls`). The
+  handler parses this flag and passes it to the sprint-task query, so only
+  matching tasks are returned. Without it, every task in the sprint is returned
+  regardless of status.
 - `--order-by-priority` - Order by priority DESC, severity DESC (legacy ordering)
+
+**Exit Codes:** `0` (success), `3` (missing `-r`), `4` (sprint not found), `6` (invalid `-s, --status` value).
 
 ### List Incomplete Sprint Tasks (open-tasks)
 
@@ -1409,23 +1487,33 @@ rmp audit ls -r <name>
 ### Entity History
 
 ```bash
-rmp audit history -r <name> -e <type> <id>
-rmp audit hist -r <name> -e <type> <id>
+rmp audit history -r <name> <entity-type> <entity-id>
+rmp audit hist -r <name> <entity-type> <entity-id>
 ```
 
 **Description:** Shows all audit entries related to a specific task or sprint.
+Equivalent to `rmp audit list -r <name> -e <entity-type> --entity-id <entity-id>`
+without pagination.
 
-**Arguments:**
-- `<id>` - Entity identifier. MUST be a positive integer in the range
-  `1`-`2147483647` (`MaxInt32`). A value `< 1` or `> 2147483647`, or a non-integer
-  value, is rejected with exit code 6.
+**Arguments (both positional, in this order):**
+- `<entity-type>` - First positional. MUST be `TASK` or `SPRINT`. Any other value
+  is rejected with exit code 6. There is no `-e` flag form for this command: a
+  leading `-e` is parsed as the entity-type value and fails with
+  `Error: validation error: invalid entity type: -e`.
+- `<entity-id>` - Second positional. Entity identifier. MUST be an integer in the
+  range `1`-`2147483647` (`MaxInt32`).
 
-**Bound Validation:**
+**Validation:**
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
-| `<id>` `< 1` or `> 2147483647` | 6 | "Error: entity ID must be between 1 and 2147483647 (got N)" |
-| `<id>` non-integer | 6 | "Error: entity ID must be an integer between 1 and 2147483647" |
+| `<entity-type>` is not TASK or SPRINT | 6 | "Error: validation error: invalid entity type: X" |
+| `<entity-id>` is not an integer | 2 | "Error: invalid input: invalid entity ID: \"X\" (must be a positive integer)" |
+| `<entity-id>` `< 1` | 6 | "Error: validation error: invalid entity ID: 0 (must be positive)" |
+| `<entity-id>` `> 2147483647` | 6 | "Error: validation error: invalid entity ID: N (exceeds maximum value 2147483647)" |
+
+A non-integer entity id is a format/misuse error (exit code 2, `EXIT_MISUSE`); an
+integer that is out of the valid range is a validation error (exit code 6).
 
 **JSON Output:** Array of AuditEntry objects.
 
@@ -1501,6 +1589,16 @@ rmp backlog ls -r <name> [OPTIONS]
 - `-l, --limit <n>` - Maximum number of tasks to return
 
 **JSON Output:** Array of Task objects (same format as `rmp task list`).
+
+**Error Conditions:**
+
+| Scenario | Exit Code | stderr Output |
+|----------|-----------|---------------|
+| Invalid `--type` value | 6 | `Error: invalid task type: "X"` |
+
+An invalid `--type` value is a validation error and MUST exit with code 6,
+consistent with `rmp task list` (see List Tasks above). This is the canonical,
+required behaviour for the command.
 
 **Examples:**
 ```bash
@@ -1949,11 +2047,12 @@ interface introduces no new codes.
 | `web` | - |
 | `list` | `ls` |
 | `create` | `new` |
-| `remove` | `rm`, `delete` |
+| `remove` (under `task`, `sprint`) | `rm` |
 | `set-status` | `stat` |
 | `set-priority` | `prio` |
 | `set-severity` | `sev` |
 | `update` | `upd` |
+| `remove` (under `roadmap`) | `rm`, `delete` |
 | `history` | `hist` |
 | `add-tasks` | `add` |
 | `remove-tasks` | `rm-tasks` |
@@ -1963,3 +2062,8 @@ interface introduces no new codes.
 | `swap` | - |
 | `top` | - |
 | `bottom` | `btm` |
+
+**Note on the `delete` alias:** The `delete` alias is scoped to `roadmap remove`
+only. `task remove` and `sprint remove` accept the `rm` alias but NOT `delete`;
+`rmp task delete` and `rmp sprint delete` are rejected with
+`Error: invalid input: unknown <task|sprint> subcommand: delete`.

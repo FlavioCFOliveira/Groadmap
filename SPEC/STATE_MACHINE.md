@@ -40,15 +40,14 @@ Tasks can be in one of the following states:
                 |  BACKLOG  |<--------------------------+
                 +-----+-----+                           |
                       |                                 |
-        sprint add-   |  (automatic)                    |
-        tasks         v                                 | task stat BACKLOG
-                +-----------+   sprint remove-tasks     | (or task reopen)
+        sprint add-   |  (automatic)                    | task stat BACKLOG
+        tasks         v                                 | (or task reopen)
+                +-----------+   sprint remove-tasks     |
                 |  SPRINT   |---------------------------+
                 +-----+-----+   (automatic)             |
                       |                                 |
-       task stat      |     +---------------------------+
-       DOING          |     |   task stat BACKLOG       |
-                      v     |                           |
+       task stat      |                                 |
+       DOING          v                                 |
                 +-----------+                           |
               +>|   DOING   |                           |
               | +-----+-----+                           |
@@ -63,10 +62,11 @@ Tasks can be in one of the following states:
                       v                                 |
                 +-----------+                           |
                 | COMPLETED |---------------------------+
-                +-----------+
+                +-----------+   task stat BACKLOG
+                                (or task reopen)
 ```
 
-Legend: arrows labelled with the command that triggers the transition. Transitions marked `(automatic)` are not user-callable via `task stat`; see Section "Valid Transitions" for the full rule set. For readability the diagram draws the `task reopen` return-to-BACKLOG edge only from `SPRINT` and `COMPLETED`; `task reopen` also returns a task to `BACKLOG` from `DOING` and `TESTING` (any non-BACKLOG state).
+Legend: arrows labelled with the command that triggers the transition. Transitions marked `(automatic)` are not user-callable via `task stat`; see Section "Valid Transitions" for the full rule set. The right-hand return-to-BACKLOG edge is reachable via `task stat <id> BACKLOG` only from `SPRINT` and `COMPLETED`; from `DOING` and `TESTING`, `task stat <id> BACKLOG` is rejected (exit code 6), and the only command that returns those states to `BACKLOG` is `task reopen`. For readability the diagram does not draw the `task reopen` edges from `DOING` and `TESTING`, but `task reopen` returns a task to `BACKLOG` from any non-BACKLOG state (`SPRINT`, `DOING`, `TESTING`, or `COMPLETED`).
 
 ### Valid Transitions
 
@@ -79,6 +79,8 @@ Legend: arrows labelled with the command that triggers the transition. Transitio
 | `COMPLETED` | `BACKLOG` | Manual (via `task stat` or `task reopen`); clears `completion_summary` |
 
 **Rejection rule:** Manual `task stat <ids> SPRINT` is rejected with exit code 6 from any source state. The SPRINT status is set exclusively by `sprint add-tasks`, which atomically links the task to a sprint via the `sprint_tasks` table. In particular, the `DOING → SPRINT` transition is invalid: returning a task to its sprint after starting work is not supported via `task stat`.
+
+**`task stat` BACKLOG target rule:** `task stat <ids> BACKLOG` is accepted only from the `SPRINT` and `COMPLETED` source states. From `DOING` and `TESTING`, `task stat <ids> BACKLOG` is rejected with exit code 6. The only command that returns a task to `BACKLOG` from `DOING` or `TESTING` is `task reopen` (see below).
 
 **`task reopen`:** The `task reopen` command is a manual transition distinct from `task stat` and from the automatic `SPRINT → BACKLOG` side effect of sprint operations. It transitions a task from any non-BACKLOG state (`SPRINT`, `DOING`, `TESTING`, or `COMPLETED`) back to `BACKLOG`. It clears all lifecycle timestamps (`started_at`, `tested_at`, `closed_at`) and `completion_summary` to NULL, and removes the task's `sprint_tasks` association. See `COMMANDS.md § Reopen Task`.
 
@@ -162,8 +164,8 @@ The following fields track the task lifecycle and are managed automatically by t
 #### Reopening Behavior
 
 A task is reopened to `BACKLOG` in one of two ways:
-- `task stat <ids> BACKLOG`, valid from `COMPLETED` (and from `SPRINT`).
-- `task reopen <ids>`, valid from any non-BACKLOG state (`SPRINT`, `DOING`, `TESTING`, or `COMPLETED`).
+- `task stat <ids> BACKLOG`, valid only from `SPRINT` and `COMPLETED`. From `DOING` or `TESTING` this command is rejected with exit code 6.
+- `task reopen <ids>`, valid from any non-BACKLOG state (`SPRINT`, `DOING`, `TESTING`, or `COMPLETED`). This is the only command that returns a `DOING` or `TESTING` task to `BACKLOG`.
 
 In both cases:
 - All lifecycle dates (`started_at`, `tested_at`, `closed_at`) are reset to NULL
