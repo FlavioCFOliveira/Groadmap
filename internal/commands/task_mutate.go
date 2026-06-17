@@ -161,10 +161,11 @@ func taskSetStatus(args []string) error {
 		return err
 	}
 
-	// Parse status
+	// Parse status — an unrecognised value is a validation failure (exit 6 /
+	// ErrValidation per SPEC/ARCHITECTURE.md), not a generic failure (exit 1).
 	newStatus, err := models.ParseTaskStatus(remaining[1])
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", utils.ErrValidation, err)
 	}
 
 	// SPRINT is an automatic transition triggered exclusively by `sprint add-tasks`.

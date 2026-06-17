@@ -648,6 +648,292 @@ class TestAIHelpWebBindContract:
         print("✓ web default-invocation URLs are loopback 127.0.0.1")
 
 
+
+class TestAIHelpContractBinaryVersion:
+    """binary_version in the contract matches the version declared in main.go."""
+
+    def setup_method(self):
+        self.test = GroadmapTestBase()
+        self.test.setup()
+        self.cli = self.test.cli_path
+
+    def teardown_method(self):
+        self.test.teardown()
+
+    def test_binary_version_matches_main_go(self):
+        """contract tool.binary_version must match the version string in cmd/rmp/main.go."""
+        import re, pathlib
+        main_go = pathlib.Path(self.cli).parent.parent / "cmd" / "rmp" / "main.go"
+        text = main_go.read_text()
+        m = re.search(r'version\s*=\s*"([^"]+)"', text)
+        assert m, "could not parse version from cmd/rmp/main.go"
+        main_version = m.group(1)
+
+        _, out, _ = _run_raw(self.cli, ["--ai-help"])
+        doc = json.loads(out)
+        contract_version = doc.get("tool", {}).get("binary_version")
+        assert contract_version == main_version, (
+            f"contract tool.binary_version {contract_version!r} "
+            f"does not match cmd/rmp/main.go version {main_version!r}"
+        )
+        print(f"✓ contract tool.binary_version == {main_version!r} (matches main.go)")
+
+    def test_contract_ends_with_trailing_newline(self):
+        """The contract bytes must end with exactly one newline character."""
+        _, out, _ = _run_raw(self.cli, ["--ai-help"])
+        assert out.endswith(b"\n"), "contract must end with trailing newline"
+        assert not out.endswith(b"\n\n"), (
+            "contract must end with exactly ONE newline, not two"
+        )
+        print("✓ contract ends with exactly one trailing newline")
+
+
+class TestAIHelpContractSingleActionCommands:
+    """Single-action commands serialize as a one-element subcommands array."""
+
+    def setup_method(self):
+        self.test = GroadmapTestBase()
+        self.test.setup()
+        self.cli = self.test.cli_path
+
+    def teardown_method(self):
+        self.test.teardown()
+
+    def _find_command(self, doc, name):
+        for cmd in doc.get("commands", []):
+            if cmd.get("name") == name:
+                return cmd
+        return None
+
+    def test_stats_is_single_element_subcommands_array(self):
+        """stats command: subcommands must be a one-element list, not null."""
+        _, out, _ = _run_raw(self.cli, ["--ai-help"])
+        doc = json.loads(out)
+        cmd = self._find_command(doc, "stats")
+        assert cmd is not None, "stats command not in contract"
+        subs = cmd.get("subcommands")
+        assert subs is not None, "stats.subcommands must not be null"
+        assert isinstance(subs, list), f"stats.subcommands must be a list, got {type(subs).__name__}"
+        assert len(subs) == 1, (
+            f"stats is a single-action command: subcommands must have exactly 1 element, got {len(subs)}"
+        )
+        print("✓ stats.subcommands is a one-element list (single-action contract shape)")
+
+    def test_web_is_single_element_subcommands_array(self):
+        """web command: subcommands must be a one-element list, not null."""
+        _, out, _ = _run_raw(self.cli, ["--ai-help"])
+        doc = json.loads(out)
+        cmd = self._find_command(doc, "web")
+        assert cmd is not None, "web command not in contract"
+        subs = cmd.get("subcommands")
+        assert subs is not None, "web.subcommands must not be null"
+        assert isinstance(subs, list), f"web.subcommands must be a list, got {type(subs).__name__}"
+        assert len(subs) == 1, (
+            f"web is a single-action command: subcommands must have exactly 1 element, got {len(subs)}"
+        )
+        print("✓ web.subcommands is a one-element list (single-action contract shape)")
+
+    def test_ai_help_is_single_element_subcommands_array(self):
+        """ai-help command: subcommands must be a one-element list, not null."""
+        _, out, _ = _run_raw(self.cli, ["--ai-help"])
+        doc = json.loads(out)
+        cmd = self._find_command(doc, "ai-help")
+        assert cmd is not None, "ai-help command not in contract"
+        subs = cmd.get("subcommands")
+        assert subs is not None, "ai-help.subcommands must not be null"
+        assert isinstance(subs, list), (
+            f"ai-help.subcommands must be a list, got {type(subs).__name__}"
+        )
+        assert len(subs) == 1, (
+            f"ai-help is a single-action command: subcommands must have exactly 1 element, "
+            f"got {len(subs)}"
+        )
+        print("✓ ai-help.subcommands is a one-element list (single-action contract shape)")
+
+
+class TestAIHelpContractEmptyArrayFields:
+    """Empty array fields (subcommands, aliases, prerequisites) are [] never null."""
+
+    def setup_method(self):
+        self.test = GroadmapTestBase()
+        self.test.setup()
+        self.cli = self.test.cli_path
+
+    def teardown_method(self):
+        self.test.teardown()
+
+    def test_no_null_empty_array_fields(self):
+        """Walk the entire contract; subcommands/aliases/prerequisites must be [] not null."""
+        _, out, _ = _run_raw(self.cli, ["--ai-help"])
+        doc = json.loads(out)
+
+        null_paths = []
+
+        def walk(obj, path):
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    if k in ("subcommands", "aliases", "prerequisites") and v is None:
+                        null_paths.append(f"{path}.{k}")
+                    walk(v, f"{path}.{k}")
+            elif isinstance(obj, list):
+                for i, v in enumerate(obj):
+                    walk(v, f"{path}[{i}]")
+
+        walk(doc, "")
+        assert not null_paths, (
+            f"The following fields must be [] instead of null: {null_paths}"
+        )
+        print("✓ no subcommands/aliases/prerequisites fields are null (all are [])")
+
+
+class TestAIHelpContractRanges:
+    """Flag range metadata is correct: no max:0, --max-tasks is 1-10000, --order is min-only."""
+
+    def setup_method(self):
+        self.test = GroadmapTestBase()
+        self.test.setup()
+        self.cli = self.test.cli_path
+
+    def teardown_method(self):
+        self.test.teardown()
+
+    def _collect_flags(self, doc):
+        """Return list of (path, flag_dict) for every flag in the document."""
+        flags = []
+
+        def walk(obj, path):
+            if isinstance(obj, dict):
+                if "long" in obj and "type" in obj:
+                    flags.append((path, obj))
+                    return
+                for k, v in obj.items():
+                    walk(v, f"{path}.{k}")
+            elif isinstance(obj, list):
+                for i, v in enumerate(obj):
+                    walk(v, f"{path}[{i}]")
+
+        walk(doc, "")
+        return flags
+
+    def test_no_flag_has_range_max_zero(self):
+        """No flag must emit range.max == 0 (indicates a missing or zero-initialised value)."""
+        _, out, _ = _run_raw(self.cli, ["--ai-help"])
+        doc = json.loads(out)
+        bad = []
+        for path, flag in self._collect_flags(doc):
+            r = flag.get("range")
+            if isinstance(r, dict) and r.get("max") == 0:
+                bad.append((path, flag.get("long"), r))
+        assert not bad, (
+            f"Flags with range.max==0 (should be absent or positive): {bad}"
+        )
+        print("✓ no flag emits range.max == 0")
+
+    def test_max_tasks_range_is_1_to_10000(self):
+        """--max-tasks range must be {min:1, max:10000} wherever it appears."""
+        _, out, _ = _run_raw(self.cli, ["--ai-help"])
+        doc = json.loads(out)
+        found = False
+        for _, flag in self._collect_flags(doc):
+            if flag.get("long") == "--max-tasks":
+                found = True
+                r = flag.get("range")
+                assert isinstance(r, dict), f"--max-tasks range must be a dict, got {r!r}"
+                assert r.get("min") == 1, f"--max-tasks range.min must be 1, got {r.get('min')!r}"
+                assert r.get("max") == 10000, (
+                    f"--max-tasks range.max must be 10000, got {r.get('max')!r}"
+                )
+        assert found, "--max-tasks flag not found in contract"
+        print("✓ --max-tasks range is {min:1, max:10000}")
+
+    def test_order_range_is_min_only(self):
+        """--order range must have min:1 and must NOT have a max key."""
+        _, out, _ = _run_raw(self.cli, ["--ai-help"])
+        doc = json.loads(out)
+        found = False
+        for _, flag in self._collect_flags(doc):
+            if flag.get("long") == "--order":
+                found = True
+                r = flag.get("range")
+                assert isinstance(r, dict), f"--order range must be a dict, got {r!r}"
+                assert r.get("min") == 1, f"--order range.min must be 1, got {r.get('min')!r}"
+                assert "max" not in r, (
+                    f"--order range must be min-only (no max key); got {r!r}"
+                )
+        assert found, "--order flag not found in contract"
+        print("✓ --order range is min-only {min:1} with no max key")
+
+
+class TestAIHelpContractConventions:
+    """Contract conventions block is accurate."""
+
+    def setup_method(self):
+        self.test = GroadmapTestBase()
+        self.test.setup()
+        self.cli = self.test.cli_path
+
+    def teardown_method(self):
+        self.test.teardown()
+
+    def test_roadmap_flag_required_for_mentions_web(self):
+        """conventions.roadmap_flag.required_for must mention 'web'."""
+        _, out, _ = _run_raw(self.cli, ["--ai-help"])
+        doc = json.loads(out)
+        conv = doc.get("conventions", {})
+        rf = conv.get("roadmap_flag", {})
+        required_for = rf.get("required_for", "")
+        assert "web" in str(required_for).lower(), (
+            f"conventions.roadmap_flag.required_for must mention 'web'; "
+            f"got {required_for!r}"
+        )
+        print("✓ conventions.roadmap_flag.required_for mentions 'web'")
+
+
+class TestAIHelpContractExitExamples:
+    """Every subcommand with non-zero exit codes has at least one non-zero example."""
+
+    def setup_method(self):
+        self.test = GroadmapTestBase()
+        self.test.setup()
+        self.cli = self.test.cli_path
+
+    def teardown_method(self):
+        self.test.teardown()
+
+    def test_every_nonzero_exit_subcommand_has_nonzero_example(self):
+        """Subcommands that may exit non-zero must document it with an example.
+
+        roadmap list is explicitly exempt: its only exit code is 0, so it
+        need not (and must not) have a non-zero example.
+        """
+        _, out, _ = _run_raw(self.cli, ["--ai-help"])
+        doc = json.loads(out)
+
+        failures = []
+        for cmd in doc.get("commands", []):
+            cmd_name = cmd.get("name", "")
+            for sub in cmd.get("subcommands", []) or []:
+                sub_name = sub.get("name", "")
+                exit_codes = sub.get("exit_codes", []) or []
+                non_zero = [ec for ec in exit_codes if ec != 0]
+                if not non_zero:
+                    continue  # exempt (e.g. roadmap list with exit_codes == [0])
+                examples = sub.get("examples", []) or []
+                non_zero_ex = [ex for ex in examples if ex.get("exit", 0) != 0]
+                if not non_zero_ex:
+                    failures.append(
+                        f"{cmd_name} {sub_name}: exit_codes={exit_codes} but no example has exit != 0"
+                    )
+
+        assert not failures, (
+            "The following subcommands declare non-zero exit codes but have no matching "
+            "example with a non-zero exit field:\n" + "\n".join(f"  - {f}" for f in failures)
+        )
+        print(
+            "✓ every subcommand with non-zero exit codes has at least one non-zero example"
+        )
+
+
 def _run_all():
     """Run every test class sequentially and report a summary."""
     suites = [
@@ -660,6 +946,12 @@ def _run_all():
         TestAIHelpFlagPrecedence,
         TestAIHelpInvalidScopeExit,
         TestAIHelpWebBindContract,
+        TestAIHelpContractBinaryVersion,
+        TestAIHelpContractSingleActionCommands,
+        TestAIHelpContractEmptyArrayFields,
+        TestAIHelpContractRanges,
+        TestAIHelpContractConventions,
+        TestAIHelpContractExitExamples,
     ]
     passed = 0
     failed = 0
