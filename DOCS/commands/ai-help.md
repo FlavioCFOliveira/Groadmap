@@ -28,7 +28,11 @@ The flag `--ai-help` is a global flag recognised at every level of the command t
 
 ## Flags
 
-The `ai-help` command and the `--ai-help` flag take no flags of their own. The `-r` / `--roadmap` flag is ignored — the contract is a static description of the CLI and does not touch any roadmap database.
+The contract is a static description of the CLI and does not touch any roadmap database, so the `-r` / `--roadmap` flag is never required and is never used.
+
+- The `ai-help` top-level command accepts no positional arguments and no flags other than `--help`. Passing `-r`/`--roadmap` (or any other flag or argument) to `rmp ai-help` is rejected with exit code 2.
+- The `--ai-help` global flag, once it takes effect, emits the contract and ignores any trailing arguments. `rmp --ai-help -r <roadmap>` succeeds and emits the whole-CLI contract; the `-r` value is irrelevant.
+- When `--ai-help` is scoped to a command, place it after the command (and any subcommand). `rmp task -r <roadmap> --ai-help` emits the `task` contract. Note that `rmp -r <roadmap> --ai-help` fails with exit code 2, because `-r` is parsed as an unknown command name for the `--ai-help` scope.
 
 ## Output
 

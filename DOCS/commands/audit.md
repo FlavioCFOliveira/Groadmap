@@ -7,8 +7,10 @@ View audit log and entity history. All changes to tasks and sprints are automati
 ## Synopsis
 
 ```
-rmp audit [subcommand] [arguments] [flags]
+rmp audit <subcommand> -r <roadmap> [arguments] [flags]
 ```
+
+The `-r`/`--roadmap` flag is required for every audit subcommand; there is no default or active roadmap.
 
 ## Subcommands
 
@@ -16,18 +18,18 @@ rmp audit [subcommand] [arguments] [flags]
 
 Lists audit log entries with optional filters.
 
-**Usage:** `rmp audit list [OPTIONS]` or `rmp audit ls [OPTIONS]`
+**Usage:** `rmp audit list -r <roadmap> [filters]` or `rmp audit ls -r <roadmap> [filters]`
 
 **Flags:**
 | Short Flag | Long Flag | Type | Default | Description |
 |------------|------------|------|--------|-------------|
 | `-r` | `--roadmap` | string | - | Roadmap name (required) |
-| `-o` | `--operation` | string | - | Filter by operation type |
+| `-o` | `--operation` | string | - | Filter by operation type (see Operation Types below) |
 | `-e` | `--entity-type` | string | - | Filter by entity type: TASK, SPRINT |
-| N/A | `--entity-id` | int | - | Filter by specific entity ID |
-| N/A | `--since` | string | - | Include entries from this date (ISO 8601) |
-| N/A | `--until` | string | - | Include entries until this date (ISO 8601) |
-| `-l` | `--limit` | int | 100 | Limit number of results |
+| N/A | `--entity-id` | int | - | Filter by specific entity numeric id (positive integer, range 1-2147483647). A non-integer value is rejected by the flag parser as misuse (exit code 2); an out-of-range value fails validation (exit code 6) |
+| N/A | `--since` | string | - | Lower bound on `performed_at`, inclusive (ISO 8601 UTC; RFC 3339 variants accepted) |
+| N/A | `--until` | string | - | Upper bound on `performed_at`, inclusive (ISO 8601 UTC; RFC 3339 variants accepted) |
+| `-l` | `--limit` | int | 100 | Maximum rows returned (range 1-500). A non-integer value is rejected as misuse (exit code 2); an out-of-range value fails validation (exit code 6) |
 
 **Operation Types:**
 
@@ -38,6 +40,11 @@ Lists audit log entries with optional filters.
 - `TASK_STATUS_CHANGE` - Task status changed
 - `TASK_PRIORITY_CHANGE` - Task priority changed
 - `TASK_SEVERITY_CHANGE` - Task severity changed
+- `TASK_REOPEN` - Task reopened to BACKLOG
+- `TASK_ASSIGN` - Specialist assigned to a task
+- `TASK_UNASSIGN` - Specialist removed from a task
+- `TASK_ADD_DEP` - Dependency edge added between tasks
+- `TASK_REMOVE_DEP` - Dependency edge removed between tasks
 
 **Sprint Operations:**
 - `SPRINT_CREATE` - Sprint created
@@ -55,13 +62,14 @@ Lists audit log entries with optional filters.
 - `SPRINT_TASK_MOVE_POSITION` - Task moved to specific position
 - `SPRINT_TASK_SWAP` - Tasks swapped positions
 
-**Output:** JSON array of audit entries
+**Output:** JSON array of audit-entry objects, newest first (`performed_at` DESC). Each object has keys `id`, `operation`, `entity_type`, `entity_id`, and `performed_at`.
 
 **Examples:**
 ```bash
 rmp audit list -r project1
 rmp audit ls -r project1 -o TASK_STATUS_CHANGE
 rmp audit ls -r project1 -e TASK --since 2026-03-01T00:00:00.000Z
+rmp audit list -r project1 --since 2026-01-01 --until 2026-01-31 -l 500
 ```
 
 ---
@@ -70,13 +78,15 @@ rmp audit ls -r project1 -e TASK --since 2026-03-01T00:00:00.000Z
 
 Shows complete history for a specific entity (task or sprint).
 
-**Usage:** `rmp audit history [OPTIONS] <type> <id>` or `rmp audit hist [OPTIONS] <type> <id>`
+**Usage:** `rmp audit history -r <roadmap> <type> <id>` or `rmp audit hist -r <roadmap> <type> <id>`
+
+Equivalent to `rmp audit list -r <roadmap> -e <type> --entity-id <id>` without pagination. The entity type and id are **positional arguments**, not flags; there is no `-e` flag on `history`.
 
 **Arguments:**
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `type` | Yes | Entity type (see Entity Types below) |
-| `id` | Yes | Entity ID |
+| `type` | Yes | Entity type: TASK or SPRINT (see Entity Types below) |
+| `id` | Yes | Entity ID (integer) |
 
 **Entity Types:**
 - `TASK` - Tasks in the roadmap
@@ -91,8 +101,8 @@ Shows complete history for a specific entity (task or sprint).
 
 **Examples:**
 ```bash
-rmp audit history -r project1 -e TASK 42
-rmp audit hist -r project1 -e SPRINT 1
+rmp audit history -r project1 TASK 42
+rmp audit hist -r project1 SPRINT 1
 ```
 
 ---
@@ -101,16 +111,16 @@ rmp audit hist -r project1 -e SPRINT 1
 
 Shows audit statistics including operation counts and trends.
 
-**Usage:** `rmp audit stats [OPTIONS]`
+**Usage:** `rmp audit stats -r <roadmap> [--since <date>] [--until <date>]`
 
 **Flags:**
 | Short Flag | Long Flag | Type | Default | Description |
 |------------|------------|------|--------|-------------|
 | `-r` | `--roadmap` | string | - | Roadmap name (required) |
-| N/A | `--since` | string | - | Include entries from this date (ISO 8601) |
-| N/A | `--until` | string | - | Include entries until this date (ISO 8601) |
+| N/A | `--since` | string | - | Aggregation window start (ISO 8601 UTC; RFC 3339 variants accepted) |
+| N/A | `--until` | string | - | Aggregation window end (ISO 8601 UTC; RFC 3339 variants accepted) |
 
-**Output:** JSON statistics object
+**Output:** A single `AuditStats` JSON object with keys `total_entries`, `first_entry_at`, `last_entry_at`, `by_operation` (map of operation to count), and `by_entity_type` (map of entity type to count). On an empty result set (no matching entries), `first_entry_at` and `last_entry_at` are `null`.
 
 **Examples:**
 ```bash
@@ -144,9 +154,8 @@ All commands follow these conventions:
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 1 | General error |
-| 2 | Invalid arguments |
-| 3 | No roadmap selected |
-| 4 | Resource not found |
-| 5 | Resource already exists |
-| 6 | Invalid data |
+| 1 | General error (database failure) |
+| 2 | Misuse: non-integer `--limit` or `--entity-id` on `list`, or a non-integer positional `<entity-id>` on `history` (rejected by the parser) |
+| 3 | No roadmap selected (`-r` missing/required) |
+| 4 | Roadmap not found |
+| 6 | Validation error: invalid operation, entity-type, or date format; `--limit` out of range 1-500; `--entity-id` out of range 1-2147483647 |

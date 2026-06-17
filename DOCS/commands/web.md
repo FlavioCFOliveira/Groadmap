@@ -8,6 +8,8 @@ The deliverable is fully self-contained: every asset required to render and oper
 
 `rmp web` operates across all roadmaps: it lists every roadmap found under `~/.roadmaps/` and you drill into one from the browser. It is the one command that is exempt from the always-required-roadmap rule, so it does **not** accept the `-r` / `--roadmap` flag. It has no subcommands.
 
+By default the server binds the loopback interface (`127.0.0.1`), so the read-only interface is reachable only from the local machine. Exposing it on the network is the explicit opt-in `--host 0.0.0.0` (all interfaces), which also prints a network-exposure warning to stderr at startup.
+
 Unlike every other command, `rmp web` is long-lived: it keeps serving until interrupted. Sending `SIGINT` (`Ctrl+C`) or `SIGTERM` shuts the server down gracefully and the process exits 0.
 
 ## Synopsis
@@ -20,7 +22,7 @@ rmp web [options]
 
 | Short Flag | Long Flag | Type | Default | Description |
 |------------|-----------|------|---------|-------------|
-| - | `--host` | string | `0.0.0.0` | Bind host. The default binds all interfaces, which exposes the read-only interface on the network. Restricting the interface to the local machine is the explicit opt-in `--host 127.0.0.1` (loopback only) |
+| - | `--host` | string | `127.0.0.1` | Bind host. The default binds loopback only, so the read-only interface is reachable only from the local machine. Exposing it on the network is the explicit opt-in `--host 0.0.0.0` (all interfaces), which also prints a network-exposure warning to stderr |
 | - | `--port` | integer | `8787` | Bind port (0-65535). When `--port` is omitted and `8787` is in use, the server falls back to an OS-chosen ephemeral port so it still starts. With an explicit `--port` there is no fallback. `--port 0` requests an ephemeral port |
 | - | `--no-open` | bool | false | Do not launch a browser; still start the server and print the served URL |
 | `-h` | `--help` | bool | false | Show command help |
@@ -33,7 +35,7 @@ On successful startup the served URL is printed to stdout as a single JSON objec
 
 ```json
 {
-  "url": "http://0.0.0.0:8787"
+  "url": "http://127.0.0.1:8787"
 }
 ```
 
@@ -69,7 +71,7 @@ These are the exit codes of the `rmp web` **process** (distinct from the per-req
 ## Examples
 
 ```bash
-# Start on the default host (all interfaces) and port (opens the browser)
+# Start on the default host (loopback, local machine only) and port (opens the browser)
 rmp web
 
 # Start without launching a browser; just print the served URL
@@ -78,14 +80,14 @@ rmp web --no-open
 # Start on a specific port
 rmp web --port 9000
 
-# Restrict the read-only interface to the local machine (loopback opt-in)
-rmp web --host 127.0.0.1 --port 9000
+# Expose the read-only interface on the network (all interfaces; prints a warning)
+rmp web --host 0.0.0.0 --port 9000
 ```
 
 ## Read-Only and Security
 
 - **Read-only.** The interface exposes no route that creates, edits, or deletes any roadmap, task, sprint, audit entry, or graph element. Serving a page writes no rows and no audit-log entry. The graph store is opened read-only and a web read never triggers a checkpoint or write-ahead-log truncation.
-- **Exposed to the network by default.** The server binds all interfaces (`0.0.0.0`) by default, so the read-only interface is reachable from every network point of the machine. Restricting it to the local machine via `--host 127.0.0.1` (loopback only) is the explicit opt-in.
+- **Loopback by default.** The server binds the loopback interface (`127.0.0.1`) by default, so the read-only interface is reachable only from the local machine. Exposing it on the network via `--host 0.0.0.0` (all interfaces, or any other non-loopback address) is the explicit opt-in; doing so prints a network-exposure warning to stderr at startup.
 - **Path-traversal guard.** Roadmap names from the URL are validated before any filesystem path is built, so a crafted name cannot traverse outside `~/.roadmaps/`.
 - **Tabler dark-theme UI.** The interface is built on the vendored Tabler admin-dashboard framework in its dark theme (navigation sidebar that collapses to a hamburger menu on small viewports, top navbar, page headers, Tabler cards/tables/badges).
 - **Self-contained.** Every asset (HTML, CSS, JavaScript, the vendored Tabler framework and D3.js with the d3-sankey plugin, the Tabler Icons webfont, and the Inter font) is served from the binary's embedded set under `/static/`; no page references a CDN, a remote font host, or any other remote origin, and the server makes no outbound request.

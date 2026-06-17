@@ -196,6 +196,6 @@ All subcommands follow these conventions:
 | 0 | Query executed successfully |
 | 1 | Cypher failed to parse or execute, or the graph store could not be opened, read, or written |
 | 2 | No query supplied (`--query` absent and stdin empty, or `--query` empty/whitespace) |
-| 3 | No roadmap selected and none provided via `-r` |
-| 4 | Selected roadmap does not exist |
+| 3 | No roadmap selected (`-r` missing/required) |
+| 4 | Roadmap not found (the roadmap given via `-r` does not exist) |
 | 6 | The query's operation class does not match the subcommand |

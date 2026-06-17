@@ -2,7 +2,7 @@
 
 ## Description
 
-Roadmap management - the top-level containers for tasks and sprints. Each roadmap lives in its own directory `~/.roadmaps/<name>/`, which holds the roadmap's SQLite database at `~/.roadmaps/<name>/project.db`.
+Roadmap management — the top-level containers for tasks and sprints. Each roadmap lives in its own directory `~/.roadmaps/<name>/`, which holds the roadmap's SQLite database at `~/.roadmaps/<name>/project.db`.
 
 ## Synopsis
 
@@ -45,7 +45,7 @@ Creates a new roadmap.
 **Arguments:**
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `name` | Yes | Roadmap name (alphanumeric, hyphens, underscores) |
+| `name` | Yes | Roadmap name. Must match the regex `^[a-z0-9_-]+$`, be at most 50 characters, and not be a reserved Windows name (CON, PRN, COM1..9, ...). |
 
 **Output:** JSON object with the created roadmap name
 
@@ -81,23 +81,6 @@ rmp road rm oldproject
 
 ---
 
-### use
-
-Selects a roadmap as the default for subsequent commands. Avoids repeating the `--roadmap` flag in every command.
-
-**Usage:** `rmp roadmap use <name>` or `rmp road use <name>`
-
-**Arguments:**
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `name` | Yes | Name of the roadmap to select |
-
-**Examples:**
-```bash
-rmp roadmap use myproject
-rmp road use myproject
-```
-
 ## Aliases
 
 | Command | Alias |
@@ -112,7 +95,6 @@ rmp road use myproject
 - Each roadmap lives in its own home directory `~/.roadmaps/<name>/`, which holds the SQLite database `~/.roadmaps/<name>/project.db` (plus its `-wal`/`-shm` sidecars). This directory is the roadmap's home for all of its files, including future per-roadmap artefacts.
 - The `~/.roadmaps/` directory and each `~/.roadmaps/<name>/` directory have permissions `0700` (owner only); `project.db` has permissions `0600`.
 - Legacy roadmaps stored in the old `~/.roadmaps/<name>.db` layout are migrated automatically to `~/.roadmaps/<name>/project.db` on the next `rmp` invocation, without data loss.
-- The `.current` file in `~/.roadmaps/` stores the roadmap selected by `use`
 
 ## Output Format
 
@@ -125,8 +107,6 @@ All commands follow these conventions:
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 1 | General error |
-| 2 | Invalid arguments |
-| 3 | No roadmap selected |
-| 4 | Resource not found |
-| 5 | Resource already exists |
+| 4 | Roadmap not found (`remove` only) |
+| 5 | Roadmap already exists (`create` only) |
+| 6 | Invalid roadmap name (regex, length, or reserved word) |

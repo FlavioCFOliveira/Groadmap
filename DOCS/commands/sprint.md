@@ -21,22 +21,22 @@ Lists sprints in the selected roadmap.
 **Flags:**
 | Short Flag | Long Flag | Type | Default | Description |
 |------------|------------|------|--------|-------------|
-| `-r` | `--roadmap` | string | - | Roadmap name (required if no default set) |
-| `-s` | `--status` | string | - | Filter by status: PENDING, OPEN, CLOSED |
+| `-r` | `--roadmap` | string | - | Roadmap name (required) |
+| | `--status` | string | - | Filter by status: PENDING, OPEN, CLOSED |
 
 **Output:** JSON array of Sprint objects
 
 **Examples:**
 ```bash
 rmp sprint list -r project1
-rmp sprint ls -r project1 -s OPEN
+rmp sprint ls -r project1 --status OPEN
 ```
 
 ---
 
 ### create
 
-Creates a new sprint in the specified roadmap.
+Creates a new sprint (status `PENDING`) in the specified roadmap. Both `-t`/`--title` and `-d`/`--description` are mandatory; omitting either fails with exit code 2.
 
 **Usage:** `rmp sprint create [OPTIONS]` or `rmp sprint new [OPTIONS]`
 
@@ -44,10 +44,10 @@ Creates a new sprint in the specified roadmap.
 | Short Flag | Long Flag | Type | Default | Description |
 |------------|------------|------|--------|-------------|
 | `-r` | `--roadmap` | string | - | Roadmap name (required) |
-| `-t` | `--title` | string | - | Sprint title, max 255 chars (required) |
-| `-d` | `--description` | string | - | Sprint description, max 2048 chars (required) |
-| | `--order` | integer | auto | Execution order; positive integer, unique across sprints. When omitted, auto-assigned to `MAX(order) + 1` (first sprint is `1`) |
-| | `--max-tasks` | integer | - | Capacity cap on active tasks; cannot be removed once set |
+| `-t` | `--title` | string | - | Sprint title, max 255 chars. **Required** on create |
+| `-d` | `--description` | string | - | Sprint description, max 2048 chars. **Required** on create |
+| | `--order` | integer | auto | Execution order; positive integer (`> 0`), unique across sprints. When omitted, auto-assigned to `MAX(order) + 1` (first sprint is `1`) |
+| | `--max-tasks` | integer | - | Capacity cap on active tasks (range 1-10000); cannot be removed once set |
 
 **Output:** JSON object with the created sprint ID
 
@@ -125,6 +125,10 @@ rmp sprint show -r project1 1
   "sprint_title": "Initial Setup",
   "sprint_description": "Sprint 1 - Initial Setup",
   "status": "OPEN",
+  "max_tasks": null,
+  "capacity_pct": null,
+  "current_load": 12,
+  "task_order": [5, 3, 8, 1, 9, 2, 7, 4, 6, 10],
   "summary": {
     "total_tasks": 20,
     "pending": 8,
@@ -158,7 +162,11 @@ rmp sprint show -r project1 1
 | `sprint_id` | integer | Sprint identifier |
 | `sprint_title` | string | Sprint title |
 | `sprint_description` | string | Sprint description |
-| `status` | string | Sprint status (OPEN, CLOSED) |
+| `status` | string | Sprint status (PENDING, OPEN, CLOSED) |
+| `max_tasks` | integer or null | Capacity cap on active tasks; `null` when uncapped |
+| `capacity_pct` | float or null | `current_load / max_tasks * 100`; `null` when uncapped |
+| `current_load` | integer | Count of active tasks (SPRINT, DOING, TESTING) |
+| `task_order` | array of integers | Task IDs in sprint position order |
 | `summary.total_tasks` | integer | Total number of tasks in sprint |
 | `summary.pending` | integer | Tasks with status BACKLOG or SPRINT |
 | `summary.in_progress` | integer | Tasks with status DOING or TESTING |
@@ -186,23 +194,52 @@ Lists tasks assigned to a specific sprint.
 | Short Flag | Long Flag | Type | Default | Description |
 |------------|------------|------|--------|-------------|
 | `-r` | `--roadmap` | string | - | Roadmap name (required) |
-| `-s` | `--status` | string | - | Filter by task status |
-| N/A | `--order-by-priority` | bool | false | Order by priority DESC, severity DESC instead of position |
+| `-s` | `--status` | enum | - | Filter by exact task status: `BACKLOG`, `SPRINT`, `DOING`, `TESTING`, `COMPLETED`. An invalid value fails with exit code 6. Applies to `tasks` only, not `open-tasks` |
+| | `--order-by-priority` | bool | false | Order by priority DESC, then sprint position ASC, instead of position only |
+
+Lists ALL tasks in the sprint, including COMPLETED ones. Default order is by sprint position ASC. Use `--status` to restrict to one status, or `open-tasks` to list only incomplete tasks.
 
 **Output:** JSON array of Task objects
 
 **Examples:**
 ```bash
 rmp sprint tasks -r project1 1
-rmp sprint tasks -r project1 1 -s DOING
+rmp sprint tasks -r project1 1 --status DOING
 rmp sprint tasks -r project1 1 --order-by-priority
+```
+
+---
+
+### open-tasks
+
+Lists only the actively-open tasks of a sprint, i.e. tasks whose status is SPRINT, DOING, or TESTING. BACKLOG and COMPLETED tasks are excluded. Useful for stand-ups and burndown tracking.
+
+**Usage:** `rmp sprint open-tasks [OPTIONS] <sprint-id>`
+
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `sprint-id` | Yes | Sprint ID |
+
+**Flags:**
+| Short Flag | Long Flag | Type | Default | Description |
+|------------|------------|------|--------|-------------|
+| `-r` | `--roadmap` | string | - | Roadmap name (required) |
+| | `--order-by-priority` | bool | false | Sort by priority DESC; otherwise by sprint position ASC |
+
+**Output:** JSON array of Task objects (excludes BACKLOG and COMPLETED)
+
+**Examples:**
+```bash
+rmp sprint open-tasks -r project1 1
+rmp sprint open-tasks -r project1 1 --order-by-priority
 ```
 
 ---
 
 ### stats
 
-Shows statistics for a sprint including task counts by status.
+Shows statistics for a sprint: per-status counts, completion percentage, the ordered task IDs, a burndown series (one entry per day on which tasks were completed), velocity (tasks/day), and elapsed days.
 
 **Usage:** `rmp sprint stats [OPTIONS] <id>`
 
@@ -236,9 +273,38 @@ rmp sprint stats -r project1 1
     "TESTING": 1,
     "COMPLETED": 3
   },
-  "task_order": [5, 3, 8, 1, 9, 2, 7, 4, 6, 10]
+  "task_order": [5, 3, 8, 1, 9, 2, 7, 4, 6, 10],
+  "burndown": [
+    {"date": "2026-06-15", "tasks_remaining": 9},
+    {"date": "2026-06-16", "tasks_remaining": 7}
+  ],
+  "velocity": 0.0,
+  "days_elapsed": 2,
+  "days_remaining": null
 }
 ```
+
+**Output Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `sprint_id` | integer | Sprint identifier |
+| `total_tasks` | integer | Total number of tasks in the sprint |
+| `completed_tasks` | integer | Tasks with status COMPLETED |
+| `progress_percentage` | float | Completion percentage (0.0-100.0) |
+| `status_distribution` | object | Count of tasks per status |
+| `task_order` | array of integers | Task IDs in sprint position order |
+| `burndown` | array | One entry per day on which tasks completed; empty when none completed |
+| `velocity` | float | Tasks completed per day |
+| `days_elapsed` | integer or null | Days the sprint has run |
+| `days_remaining` | integer or null | Always `null` (the Sprint model has no end date) |
+
+**Notes:**
+
+- `velocity` is `0.0` for PENDING and OPEN sprints, and for CLOSED sprints with zero completed tasks. It is only meaningful for CLOSED sprints.
+- `days_elapsed` is `null` for PENDING sprints and for OPEN sprints with no `started_at`. For CLOSED sprints it spans `started_at` to `closed_at`.
+- `days_remaining` is ALWAYS `null`, because the Sprint model has no end date to count down to.
+- `burndown` is empty when no tasks have been completed in the sprint.
 
 ---
 
@@ -267,9 +333,9 @@ rmp sprint start -r project1 1
 
 ### close
 
-Closes a sprint, changing its status from OPEN to CLOSED.
+Closes a sprint, changing its status from OPEN to CLOSED. By default, the close is rejected (exit code 6) if any task in the sprint is still SPRINT, DOING, or TESTING. Pass `--force` to close anyway; a warning is then printed to stderr. Closing sets `closed_at` to the current timestamp.
 
-**Usage:** `rmp sprint close [OPTIONS] <id>`
+**Usage:** `rmp sprint close [OPTIONS] <id> [--force]`
 
 **Arguments:**
 | Argument | Required | Description |
@@ -277,13 +343,15 @@ Closes a sprint, changing its status from OPEN to CLOSED.
 | `id` | Yes | Sprint ID to close |
 
 **Flags:**
-| Short Flag | Long Flag | Type | Description |
-|------------|------------|------|-----------|
-| `-r` | `--roadmap` | string | Roadmap name (required) |
+| Short Flag | Long Flag | Type | Default | Description |
+|------------|------------|------|--------|-------------|
+| `-r` | `--roadmap` | string | - | Roadmap name (required) |
+| | `--force` | bool | false | Close even when the sprint has active (SPRINT/DOING/TESTING) tasks |
 
-**Example:**
+**Examples:**
 ```bash
 rmp sprint close -r project1 1
+rmp sprint close -r project1 1 --force
 ```
 
 ---
@@ -428,7 +496,7 @@ rmp sprint upd -r project1 1 -t "Updated title" -d "Updated description"
 
 ### remove
 
-Removes a sprint permanently. Tasks in the sprint are not deleted.
+Removes a sprint permanently. Member tasks are not deleted; their status reverts to `BACKLOG`.
 
 **Usage:** `rmp sprint remove [OPTIONS] <id>` or `rmp sprint rm [OPTIONS] <id>`
 
@@ -661,23 +729,18 @@ PENDING → OPEN → CLOSED
 
 ## Field Limits and Constraints
 
-| Field | Required | Max Length | Description |
-|-------|----------|------------|-------------|
-| `description` | Yes | 500 chars | Sprint description |
+| Field | Required | Max Length / Range | Description |
+|-------|----------|--------------------|-------------|
+| `title` | Yes (on create) | 255 chars | Sprint title |
+| `description` | Yes (on create) | 2048 chars | Sprint description |
+| `max-tasks` | No | 1-10000 | Capacity cap on active tasks; cannot be removed once set |
+| `order` | No | positive integer (`> 0`), unique | Execution order across the roadmap; auto-assigned when omitted; immutable once the sprint is CLOSED |
 
 ### Sprint Status Values
 
 - `PENDING` - Sprint created but not started
 - `OPEN` - Sprint in progress
 - `CLOSED` - Sprint finished
-
-### Sprint Lifecycle
-
-```
-PENDING → OPEN → CLOSED
-   ↑              ↓
-   └──────────────┘ (reopen)
-```
 
 ## Output Format
 
@@ -690,9 +753,9 @@ All commands follow these conventions:
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 1 | General error |
-| 2 | Invalid arguments |
-| 3 | No roadmap selected |
-| 4 | Resource not found |
-| 5 | Resource already exists |
-| 6 | Invalid data |
+| 1 | General error (database failure) |
+| 2 | Misuse (missing required argument, bad syntax) |
+| 3 | No roadmap selected (`-r` missing) |
+| 4 | Sprint not found |
+| 5 | `--order` value already used by another sprint (`create` / `update`) |
+| 6 | Validation error: bad enum; `--max-tasks` outside 1-10000; closing while SPRINT/DOING/TESTING tasks remain without `--force`; opening while another sprint is OPEN; changing `--order` on a CLOSED sprint |
