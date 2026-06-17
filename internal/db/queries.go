@@ -1973,6 +1973,22 @@ func (db *DB) GetAuditEntries(ctx context.Context, f *AuditFilter) ([]models.Aud
 	return entries, nil
 }
 
+// CountAuditEntries returns the total number of rows in the audit table.
+//
+// It is a lightweight COUNT(*) used by paginating callers (for example the
+// read-only web audit log page) to compute the total page count without
+// reading any row. It is read-only and never writes an audit entry.
+//
+// Returns 0 (no error) when the audit table is empty.
+func (db *DB) CountAuditEntries(ctx context.Context) (int, error) {
+	var total int
+	err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit`).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("counting audit entries: %w", err)
+	}
+	return total, nil
+}
+
 // GetEntityHistory retrieves audit history for a specific entity.
 func (db *DB) GetEntityHistory(ctx context.Context, entityType string, entityID int) ([]models.AuditEntry, error) {
 	return db.GetAuditEntries(ctx, &AuditFilter{

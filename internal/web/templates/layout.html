@@ -59,6 +59,12 @@
               <span class="nav-link-title">Tasks</span>
             </a>
           </li>
+          <li class="nav-item{{if eq $.Chrome.Active "audit"}} active{{end}}">
+            <a class="nav-link" href="/roadmaps/{{.}}/audit">
+              <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-history"></i></span>
+              <span class="nav-link-title">Audit</span>
+            </a>
+          </li>
           <li class="nav-item{{if eq $.Chrome.Active "graph"}} active{{end}}">
             <a class="nav-link" href="/roadmaps/{{.}}/graph">
               <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-affiliate"></i></span>

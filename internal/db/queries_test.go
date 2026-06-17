@@ -1163,6 +1163,45 @@ func TestGetAuditEntries(t *testing.T) {
 	}
 }
 
+// TestCountAuditEntries verifies CountAuditEntries returns the exact total
+// number of audit rows, including 0 for an empty table, so a paginating caller
+// (the web audit log page) can compute the total page count.
+func TestCountAuditEntries(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// Empty table -> 0, no error.
+	total, err := db.CountAuditEntries(testContext())
+	if err != nil {
+		t.Fatalf("CountAuditEntries on empty table: %v", err)
+	}
+	if total != 0 {
+		t.Errorf("expected 0 entries on empty table, got %d", total)
+	}
+
+	// Insert a known number of rows and re-count.
+	const inserted = 7
+	for i := 0; i < inserted; i++ {
+		entry := &models.AuditEntry{
+			Operation:   "TASK_CREATE",
+			EntityType:  "TASK",
+			EntityID:    i + 1,
+			PerformedAt: time.Now().UTC().Format(time.RFC3339),
+		}
+		if _, err := db.LogAuditEntry(testContext(), entry); err != nil {
+			t.Fatalf("seeding audit entry %d: %v", i, err)
+		}
+	}
+
+	total, err = db.CountAuditEntries(testContext())
+	if err != nil {
+		t.Fatalf("CountAuditEntries after seeding: %v", err)
+	}
+	if total != inserted {
+		t.Errorf("expected %d entries, got %d", inserted, total)
+	}
+}
+
 // ==================== TRANSACTION TESTS ====================
 
 func TestWithTransaction_Commit(t *testing.T) {

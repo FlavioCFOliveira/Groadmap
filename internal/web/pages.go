@@ -104,6 +104,48 @@ func handleTasks(w http.ResponseWriter, r *http.Request) {
 	renderHTML(w, "tasks.html", data)
 }
 
+// handleAudit renders a roadmap's audit log page: one page of the full audit
+// log (every operation and entity type) as a read-only table ordered by
+// performed_at DESC, with a Previous/Next pagination footer (SPEC/WEB.md
+// § Roadmap Audit Log Page). The {name} is validated and confirmed to exist
+// before any data read (resolveRoadmap); an invalid or unknown name yields 404,
+// an internal read error yields 500.
+//
+// The page query parameter is parsed defensively and never errors: an absent,
+// empty, non-integer, or garbage value resolves to page 1, and any out-of-range
+// value is clamped to the nearest valid page inside loadAudit (page < 1 -> 1,
+// page > last -> last). The audit page therefore never returns 404 for an
+// out-of-range or unparseable page; it renders 200 with the clamped page
+// (SPEC/WEB.md § Routes and Pages, audit page status mapping).
+func handleAudit(w http.ResponseWriter, r *http.Request) {
+	name, ok := resolveRoadmap(w, r)
+	if !ok {
+		return
+	}
+
+	// Parse the page parameter defensively. strconv.Atoi rejects empty,
+	// non-integer, and out-of-range text; on any failure we fall back to page 1,
+	// which loadAudit then clamps against the real total. An absent parameter is
+	// the empty string and also falls back to 1. No error path here ever yields
+	// a non-200 status (SPEC/WEB.md § Roadmap Audit Log Page).
+	requestedPage, err := strconv.Atoi(r.URL.Query().Get("page"))
+	if err != nil {
+		requestedPage = 1
+	}
+
+	data, err := loadAudit(r.Context(), name, requestedPage)
+	if err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	data.Chrome = chrome{
+		Title:   "Groadmap — " + name + " / Audit",
+		Roadmap: name,
+		Active:  "audit",
+	}
+	renderHTML(w, "audit.html", data)
+}
+
 // handleSprint renders a single sprint's page: all of its fields and its task
 // list in planned in-sprint execution order. The {name} is validated and
 // confirmed to exist before any data read (resolveRoadmap). The {id} path

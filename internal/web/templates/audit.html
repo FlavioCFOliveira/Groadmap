@@ -1,0 +1,105 @@
+{{define "audit.html"}}<!doctype html>
+<html lang="en" data-bs-theme="dark">
+<head>
+{{template "head" .}}
+</head>
+<body class="layout-fluid">
+  <div class="page">
+{{template "sidebar" .}}
+    <div class="page-wrapper">
+{{template "topnavbar" .}}
+      <div class="page-header d-print-none">
+        <div class="container-fluid">
+          <div class="row align-items-center">
+            <div class="col">
+              <div class="page-pretitle">Roadmap</div>
+              <h2 class="page-title">{{.Name}} <span class="text-secondary">/ Audit</span></h2>
+            </div>
+            <div class="col-auto ms-auto">
+              <a class="btn btn-outline-secondary" href="/roadmaps/{{.Name}}/graph"><i class="ti ti-affiliate me-1"></i>Knowledge graph</a>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="page-body">
+        <div class="container-fluid">
+
+          {{/*
+            Read-only audit log: one fixed-size page of audit entries ordered by
+            performed_at DESC (most recent first). No clickable row, no modal, no
+            edit affordance (SPEC/WEB.md § Roadmap Audit Log Page). The footer
+            holds plain GET pagination links that change only the page query
+            parameter; there is no form and no write path.
+          */}}
+          <div class="card" id="audit">
+            <div class="card-header">
+              <h3 class="card-title">Audit log</h3>
+              <div class="card-actions text-secondary">Most recent first</div>
+            </div>
+            {{if .Entries}}
+            <div class="table-responsive">
+              <table class="table table-vcenter card-table">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Operation</th>
+                    <th>Entity Type</th>
+                    <th>Entity ID</th>
+                    <th>Performed At</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {{range .Entries}}
+                  <tr>
+                    <td>{{.ID}}</td>
+                    <td>{{.Operation}}</td>
+                    <td>{{.EntityType}}</td>
+                    <td>{{.EntityID}}</td>
+                    <td class="text-nowrap text-secondary">{{.PerformedAt}}</td>
+                  </tr>
+                  {{end}}
+                </tbody>
+              </table>
+            </div>
+            {{else}}
+            <div class="card-body">
+              <div class="empty">
+                <p class="empty-title">No audit entries yet</p>
+                <p class="empty-subtitle text-secondary">This roadmap has no audit log entries. Audit entries are recorded by the rmp CLI as roadmap data changes.</p>
+              </div>
+            </div>
+            {{end}}
+            <div class="card-footer d-flex align-items-center">
+              <p class="m-0 text-secondary">Page {{.Page}} of {{.TotalPages}}</p>
+              <ul class="pagination m-0 ms-auto">
+                <li class="page-item{{if not .HasPrev}} disabled{{end}}">
+                  {{if .HasPrev}}
+                  <a class="page-link" href="?page={{.PrevPage}}"><i class="ti ti-chevron-left"></i> prev</a>
+                  {{else}}
+                  <span class="page-link" aria-disabled="true"><i class="ti ti-chevron-left"></i> prev</span>
+                  {{end}}
+                </li>
+                <li class="page-item{{if not .HasNext}} disabled{{end}}">
+                  {{if .HasNext}}
+                  <a class="page-link" href="?page={{.NextPage}}">next <i class="ti ti-chevron-right"></i></a>
+                  {{else}}
+                  <span class="page-link" aria-disabled="true">next <i class="ti ti-chevron-right"></i></span>
+                  {{end}}
+                </li>
+              </ul>
+            </div>
+          </div>
+
+        </div>
+      </div>
+      <footer class="footer footer-transparent d-print-none">
+        <div class="container-fluid text-secondary text-center">
+          Read-only. The rmp CLI remains the sole write path.
+        </div>
+      </footer>
+    </div>
+  </div>
+
+  <script src="/static/vendor/tabler/tabler.min.js"></script>
+</body>
+</html>{{end}}

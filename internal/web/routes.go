@@ -112,6 +112,16 @@ func buildMux() *http.ServeMux {
 	mux.HandleFunc("GET /roadmaps/{name}/tasks", handleTasks)
 	mux.HandleFunc("HEAD /roadmaps/{name}/tasks", handleTasks)
 
+	// Roadmap audit log page: the full audit log, paginated. A distinct, more
+	// specific pattern than /roadmaps/{name}; Go 1.22+ ServeMux routes the
+	// literal "audit" segment here and {name} alone to handleSprints without
+	// conflict, exactly as the tasks, sprints/{id}, and graph patterns do. The
+	// optional page query parameter is parsed and clamped inside the handler;
+	// an out-of-range or garbage page renders 200 (clamped), never 404
+	// (SPEC/WEB.md § Roadmap Audit Log Page).
+	mux.HandleFunc("GET /roadmaps/{name}/audit", handleAudit)
+	mux.HandleFunc("HEAD /roadmaps/{name}/audit", handleAudit)
+
 	// Roadmap sprint page. {id} is parsed and validated inside the handler;
 	// a non-integer id, or an id that is not a sprint of the roadmap, is a 404
 	// (SPEC/WEB.md § Routes and Pages, path-parameter rule 3).

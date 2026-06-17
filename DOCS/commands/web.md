@@ -51,6 +51,7 @@ All routes serve `GET` and `HEAD` only. Any other HTTP method on any route retur
 | `/roadmaps/{name}` | Roadmap sprints page and landing page: that roadmap's sprints in three tabs (Próximos / Actual / Concluídos, Actual default), the OPEN sprint expanded with its tasks; each sprint links to its own page. Selecting a roadmap on the index lands here | HTML |
 | `/roadmaps/{name}/tasks` | Roadmap tasks page: that roadmap's full task table (every task, any status); clicking a task opens a read-only modal with all task fields | HTML |
 | `/roadmaps/{name}/sprints/{id}` | Dedicated sprint page: all sprint details and the task list in planned execution order; each task opens the task detail modal | HTML |
+| `/roadmaps/{name}/audit` | Roadmap audit log page: that roadmap's full audit log (columns ID, Operation, Entity Type, Entity ID, Performed At), ordered by Performed At descending (most recent first), paginated at 100 entries per page via the `page` query parameter (1-based, default 1; out-of-range or non-numeric values are clamped to the nearest valid page) with Previous/Next controls and a "Page X of Y" indicator | HTML |
 | `/roadmaps/{name}/graph` | Interactive knowledge-graph visualisation (D3.js; selectable Networks-section layouts via a dropdown, default Mobile patent suits; pan/zoom, touch, tap-to-inspect) | HTML |
 | `/roadmaps/{name}/graph/data` | The graph's nodes and edges for the visualisation | JSON |
 | `/static/...` | Embedded static assets (CSS, JS, vendored Tabler framework and D3.js + d3-sankey, fonts) | static file |

@@ -16,6 +16,7 @@
   - [Roadmap Sprints Page](#roadmap-sprints-page)
   - [Roadmap Tasks Page](#roadmap-tasks-page)
   - [Roadmap Sprint Page](#roadmap-sprint-page)
+  - [Roadmap Audit Log Page](#roadmap-audit-log-page)
   - [Shared Sprint-Card Partial](#shared-sprint-card-partial)
   - [Sprint Detail Sub-Template](#sprint-detail-sub-template)
   - [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page)
@@ -66,9 +67,10 @@ The interface is built on the Tabler admin-dashboard framework and presents a
 Tabler admin-shell layout in Tabler's dark theme across every page: a
 navigation sidebar, a top navbar, page headers, and Tabler cards, tables, and
 badges. The sidebar lists the roadmaps and, within a roadmap, links to that
-roadmap's Sprints, Tasks, and Graph views: the Sprints link points to the
+roadmap's Sprints, Tasks, Audit, and Graph views: the Sprints link points to the
 roadmap's landing page at `/roadmaps/{name}`, the Tasks link points to
-`/roadmaps/{name}/tasks`, and the Graph link points to `/roadmaps/{name}/graph`;
+`/roadmaps/{name}/tasks`, the Audit link points to `/roadmaps/{name}/audit`, and
+the Graph link points to `/roadmaps/{name}/graph`;
 the sidebar highlights whichever of these views is active. Tabler and its assets
 are vendored
 and served locally, never from a content delivery network or any remote origin
@@ -106,7 +108,12 @@ The web interface exposes the following kinds of page for each roadmap:
 4. A roadmap sprint page that shows all details of a single sprint and the
    sprint's task list in planned in-sprint execution order, read from that
    roadmap's `project.db`.
-5. A roadmap knowledge-graph page that shows that roadmap's knowledge graph,
+5. A roadmap audit log page, served at `/roadmaps/{name}/audit` and read from
+   that roadmap's `project.db`. It presents the roadmap's full audit log — every
+   audit entry of any operation and entity type — as a read-only table ordered by
+   the audit entry's `performed_at` timestamp descending (most recently performed
+   operation first), paginated at a fixed page size of 100 entries per page.
+6. A roadmap knowledge-graph page that shows that roadmap's knowledge graph,
    read from its GoGraph store under `~/.roadmaps/<name>/graph/`, as an
    interactive node-link visualisation.
 
@@ -183,13 +190,24 @@ task detail modal that displays all of the task's fields (see
    `project.db`. It is served at `/roadmaps/{name}/sprints/{id}`, is read-only, and
    returns HTTP `404 Not Found` when `{id}` is not a valid integer or is not a
    sprint of the named roadmap (see [Roadmap Sprint Page](#roadmap-sprint-page)).
-10. Anywhere a task is shown clickable — the tasks page's task table and the sprint
+10. The roadmap audit log page shows the selected roadmap's full audit log — every
+   audit entry of any operation and entity type — with the `AuditEntry` fields
+   already defined in `MODELS.md` and `DATABASE.md`, read from that roadmap's
+   `project.db`. It is served at `/roadmaps/{name}/audit`, is read-only, and
+   presents the entries as a table ordered by the audit entry's `performed_at`
+   timestamp descending (the most recently performed operation first). The page is
+   paginated at a fixed page size of 100 entries per page, with the page selected
+   by a 1-based `page` query parameter that defaults to 1 when absent and is
+   clamped to the nearest valid page; an empty audit log renders successfully with
+   a clear empty-state message (see
+   [Roadmap Audit Log Page](#roadmap-audit-log-page)).
+11. Anywhere a task is shown clickable — the tasks page's task table and the sprint
    page's task list — selecting the task opens a read-only task detail modal that
    displays all of the task's fields. The modal
    only displays data: it contains no form, no edit control, and no submit action,
    and it requires no new server endpoint and no new write path (see
    [Task Detail Modal](#task-detail-modal)).
-11. The roadmap knowledge-graph page shows the selected roadmap's knowledge graph
+12. The roadmap knowledge-graph page shows the selected roadmap's knowledge graph
    as an interactive node-link visualisation rendered with **D3.js**, read from
    that roadmap's GoGraph store, opened read-only exactly as the `graph query` and
    `graph search` subcommands open it. The page offers the complete set of
@@ -212,12 +230,12 @@ task detail modal that displays all of the task's fields (see
    [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library),
    and
    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
-12. Read access to a knowledge graph through the web interface MUST NOT write to
+13. Read access to a knowledge graph through the web interface MUST NOT write to
     the store and MUST NOT trigger the synchronous checkpoint or write-ahead-log
     truncation that write subcommands perform (see
     [Security and Constraints](#security-and-constraints) and
     `GRAPH.md § Synchronous Checkpoint on Write`).
-13. **The deliverable is fully self-contained.** The shipped `rmp` binary MUST
+14. **The deliverable is fully self-contained.** The shipped `rmp` binary MUST
    embed every component required to render and operate the web interface, with
    zero external runtime dependency. Every asset category — HTML templates, the
    stylesheet, all client JavaScript (including the D3.js knowledge-graph
@@ -230,7 +248,7 @@ task detail modal that displays all of the task's fields (see
    [Self-Contained Deliverable](#self-contained-deliverable),
    [Embedded Asset Categories](#embedded-asset-categories), and
    [Security and Constraints](#security-and-constraints)).
-14. **No runtime network fetch.** No page references a script, stylesheet, font,
+15. **No runtime network fetch.** No page references a script, stylesheet, font,
     image, or any other asset from a remote origin: no content delivery network,
     no Google Fonts or other remote font, script, or style host, and no external
     API. The interface renders and functions fully offline, with only the single
@@ -239,27 +257,29 @@ task detail modal that displays all of the task's fields (see
     request of its own (see
     [Self-Contained Deliverable](#self-contained-deliverable) and
     [Frontend and Embedded Assets](#frontend-and-embedded-assets)).
-15. **Responsive and mobile-first.** The web interface MUST be designed
+16. **Responsive and mobile-first.** The web interface MUST be designed
     responsive and mobile-first: base styles target small phone-sized viewports
     first and progressively enhance for larger tablet and desktop viewports
     through `min-width` media queries, and every page adapts fluidly across
     viewport sizes. This requirement applies to every page — the roadmap index,
-    the roadmap sprints page, the roadmap tasks page, the roadmap sprint page, and
-    the knowledge-graph page — and to the interactive components, including the
+    the roadmap sprints page, the roadmap tasks page, the roadmap sprint page, the
+    roadmap audit log page, and the knowledge-graph page — and to the interactive
+    components, including the
     sprint tabs, the task detail modal, and the interactive knowledge-graph
     visualisation, which MUST all remain usable on touch and small-viewport devices
     (see [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
-16. **Tabler admin-shell layout in the dark theme.** The interface presents a
+17. **Tabler admin-shell layout in the dark theme.** The interface presents a
     Tabler admin-shell layout in Tabler's dark theme across every page: a
     navigation sidebar (listing the roadmaps and, within a roadmap, that
-    roadmap's Sprints, Tasks, and Graph views, resolving to `/roadmaps/{name}`,
-    `/roadmaps/{name}/tasks`, and `/roadmaps/{name}/graph` respectively and
+    roadmap's Sprints, Tasks, Audit, and Graph views, resolving to
+    `/roadmaps/{name}`, `/roadmaps/{name}/tasks`, `/roadmaps/{name}/audit`, and
+    `/roadmaps/{name}/graph` respectively and
     highlighting the active view), a top navbar, page headers, and Tabler cards,
     tables, and badges. The interface is built on the vendored Tabler framework;
     on small viewports the navigation sidebar collapses to an off-canvas
     (hamburger) menu (see [UI Framework](#ui-framework) and
     [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
-17. Startup failures (for example, the chosen port is already in use, the data
+18. Startup failures (for example, the chosen port is already in use, the data
     directory is unreadable, or a flag value is invalid) are reported as plain
     text to stderr and map to the existing exit codes; no new exit code is
     introduced (see [Error Handling and Exit Codes](#error-handling-and-exit-codes)).
@@ -494,6 +514,7 @@ showing a state that no longer matches the data.
    - the roadmap sprints page (`/roadmaps/{name}`);
    - the roadmap tasks page (`/roadmaps/{name}/tasks`);
    - the roadmap sprint page (`/roadmaps/{name}/sprints/{id}`);
+   - the roadmap audit log page (`/roadmaps/{name}/audit`);
    - the knowledge-graph page shell (`/roadmaps/{name}/graph`);
    - the graph data endpoint (`/roadmaps/{name}/graph/data`).
 
@@ -535,6 +556,7 @@ produced from embedded `html/template` templates. Page routes return HTML
 | `/roadmaps/{name}` | GET, HEAD | Roadmap sprints page (landing; sprint tabs) | HTML |
 | `/roadmaps/{name}/tasks` | GET, HEAD | Roadmap tasks page (full task table) | HTML |
 | `/roadmaps/{name}/sprints/{id}` | GET, HEAD | Roadmap sprint page (all sprint details and the sprint's task list) | HTML |
+| `/roadmaps/{name}/audit` | GET, HEAD | Roadmap audit log page (full audit log, paginated; optional `page` parameter; see [Roadmap Audit Log Page](#roadmap-audit-log-page)) | HTML |
 | `/roadmaps/{name}/graph` | GET, HEAD | Roadmap knowledge-graph page (interactive visualisation) | HTML |
 | `/roadmaps/{name}/graph/data` | GET, HEAD | Graph nodes and edges for the visualisation (optional `q` Cypher query and `limit` node-limit parameters; see [Graph Data Endpoint](#graph-data-endpoint)) | JSON |
 | `/static/...` | GET, HEAD | Embedded static assets (CSS, JS, vendored D3.js graph library) | static file |
@@ -563,6 +585,7 @@ HTTP status mapping for page and data routes:
 | Page or data served successfully | 200 |
 | Roadmap name invalid, or roadmap not found | 404 |
 | Sprint `{id}` not a valid integer, or not a sprint of the roadmap | 404 |
+| Audit `page` parameter out of range, non-integer, or garbage | 200 (clamped to nearest valid page; see [Roadmap Audit Log Page](#roadmap-audit-log-page)) |
 | Non-read HTTP method on any route | 405 |
 | Unhandled internal error reading data (I/O, corrupt store) | 500 |
 
@@ -724,6 +747,62 @@ how the `rmp web` process itself terminates.
   HTTP status mapping in [Routes and Pages](#routes-and-pages)).
 - **Read-only.** The page renders data only. It contains no form, button, or
   link that submits a change; there is no edit affordance of any kind.
+
+### Roadmap Audit Log Page
+
+- **Route:** `GET /roadmaps/{name}/audit`
+- **Content:** A read-only presentation of the named roadmap's **full audit
+  log** — every audit entry of any operation and any entity type — read from that
+  roadmap's `project.db` (the `audit` table). The page renders the entries as a
+  server-rendered HTML table. It is read-only: it shows no clickable row action, no
+  modal, and no edit affordance of any kind.
+- **Columns.** The table shows the `AuditEntry` fields defined for the audit entry
+  in `MODELS.md § Audit Entry` and `DATABASE.md § audit Table`: the entry `ID`, the
+  `Operation`, the `Entity Type`, the `Entity ID`, and the `Performed At` timestamp
+  (the ISO 8601 UTC timestamp). The page does not redefine these fields;
+  `MODELS.md` and `DATABASE.md` remain canonical.
+- **Ordering.** The entries are ordered by the audit entry's `performed_at`
+  timestamp **descending**, so the most recently performed operation appears first.
+  `performed_at` is the audit entry's completion timestamp. This is the same
+  ordering the existing audit data access uses (`ORDER BY performed_at DESC`; see
+  `DATABASE.md § Audit`); the page introduces no new ordering.
+- **Pagination.** The table is paginated at a **fixed page size of 100 entries per
+  page**. The page is selected by a `page` query parameter that is 1-based and
+  defaults to `1` when absent. The total page count is `ceil(total_entries / 100)`,
+  and there is **always at least 1 page**, even when the audit log holds zero
+  entries.
+- **Pagination is clamped, not strict.** The `page` parameter is **clamped** to the
+  nearest valid page rather than producing an error: a `page` value below 1, a
+  non-integer or otherwise unparseable `page` value, and a `page` value beyond the
+  last page are each clamped to the nearest valid page (`1` or the last page). A
+  clamped request renders successfully with HTTP 200; the audit page never returns
+  HTTP 404 for an out-of-range or garbage `page` value. The `{name}` part is still
+  validated exactly as on the other roadmap routes (an invalid or nonexistent
+  `{name}` returns HTTP 404; see below).
+- **Empty state.** When the roadmap's audit log is empty, the page renders
+  successfully (HTTP 200) with a clear empty-state message and shows **page 1 of 1**.
+  An empty audit log is not an error.
+- **Pagination controls.** The page footer shows read-only Previous and Next
+  navigation controls and a "Page X of Y" indicator, using plain, accessible Tabler
+  pagination markup. The **Previous** control is disabled or absent on the first
+  page, and the **Next** control is disabled or absent on the last page. The
+  controls are `GET` links that change only the `page` query parameter: there is no
+  form and no write path, fully consistent with the read-only nature of the
+  interface.
+- **Defense in depth: within the audit hard cap.** The data layer clamps an
+  unbounded or oversized audit limit to `MaxAuditLimit` (value **500**; see
+  `DATABASE.md § Audit Result Limit`). A fixed 100-entries-per-page request is
+  always within that cap, so the page-size request never exceeds the hard cap.
+- **Path parameters.** `{name}` is validated against the roadmap-name rules exactly
+  as on the other roadmap routes (the path-traversal guard in
+  [Routes and Pages](#routes-and-pages) and
+  [Security and Constraints](#security-and-constraints)); an invalid or nonexistent
+  `{name}` returns HTTP `404 Not Found`.
+- **Read-only.** The page renders data only. It contains no form, button, or link
+  that submits a change; there is no edit affordance of any kind. Reading the audit
+  log writes no row and produces no new audit entry, because a read is not a change
+  (see [Tasks and Sprints from SQLite](#tasks-and-sprints-from-sqlite) and
+  `DATABASE.md § audit Table`).
 
 ### Shared Sprint-Card Partial
 
@@ -1415,14 +1494,19 @@ re-presents an earlier, now-stale response in its place.
 
 ### Tasks and Sprints from SQLite
 
-1. For a roadmap sprints request, a roadmap tasks request, or a roadmap sprint
-   request, the server resolves the roadmap's database at
+1. For a roadmap sprints request, a roadmap tasks request, a roadmap sprint
+   request, or a roadmap audit log request, the server resolves the roadmap's
+   database at
    `~/.roadmaps/{name}/project.db` (see `ARCHITECTURE.md § Directory Structure`)
-   and reads its sprints and tasks using the existing read queries defined in
+   and reads its sprints, tasks, and audit entries using the existing read queries
+   defined in
    `DATABASE.md § Main SQL Queries`. The sprints page reads the roadmap's sprints
    and each sprint's total task count for its card footer, but no member tasks,
    because the page renders every sprint as a card with no member-tasks table; the
-   tasks page reads the roadmap's full task list. The task data the task detail modal
+   tasks page reads the roadmap's full task list; the audit log page reads the
+   roadmap's audit entries ordered by `performed_at` descending, one fixed-size page
+   at a time (see [Roadmap Audit Log Page](#roadmap-audit-log-page) and
+   `DATABASE.md § Audit`). The task data the task detail modal
    displays comes from the same read queries; the modal adds no separate request.
    The web interface adds no new schema, no new table, and no new write query.
 2. The server opens the database for reading only. It MUST NOT modify rows, MUST
@@ -1575,8 +1659,9 @@ read from the host filesystem at runtime.
    JavaScript framework (built on Bootstrap). Tabler provides the admin-shell
    layout — the navigation sidebar, the top navbar, page headers, and the cards,
    tables, badges, and buttons used across every page. The sidebar's per-roadmap
-   links resolve to the roadmap's three views — Sprints at `/roadmaps/{name}` (the
-   landing page), Tasks at `/roadmaps/{name}/tasks`, and Graph at
+   links resolve to the roadmap's four views — Sprints at `/roadmaps/{name}` (the
+   landing page), Tasks at `/roadmaps/{name}/tasks`, Audit at
+   `/roadmaps/{name}/audit`, and Graph at
    `/roadmaps/{name}/graph` — and the sidebar highlights whichever of these is the
    active view. Tabler also provides the tabs used for the sprint presentation on
    the roadmap sprints page and the modal used for the task detail popup.
@@ -1683,16 +1768,18 @@ experience is the baseline that larger viewports enhance.
    sized hit targets.
 3. **Applies to every page.** The mobile-first, responsive requirement applies to
    every page: the roadmap index page, the roadmap sprints page (the sprint tabs),
-   the roadmap tasks page (the full task table), the roadmap sprint page, and the
-   knowledge-graph page.
+   the roadmap tasks page (the full task table), the roadmap sprint page, the
+   roadmap audit log page (the audit table), and the knowledge-graph page.
 4. **Usable tabular data on narrow screens.** The roadmap sprints page, the
-   roadmap tasks page, and the roadmap sprint page present sprint and task data
+   roadmap tasks page, the roadmap sprint page, and the roadmap audit log page
+   present sprint, task, and audit data
    that is tabular by nature. This data MUST remain usable on narrow screens, for
    example through responsive or stacked tables or an equivalent layout that
    avoids horizontal overflow, while still presenting the fields and relationships
    defined for those pages (see [Roadmap Sprints Page](#roadmap-sprints-page),
-   [Roadmap Tasks Page](#roadmap-tasks-page), and
-   [Roadmap Sprint Page](#roadmap-sprint-page)).
+   [Roadmap Tasks Page](#roadmap-tasks-page),
+   [Roadmap Sprint Page](#roadmap-sprint-page), and
+   [Roadmap Audit Log Page](#roadmap-audit-log-page)).
 5. **Touch- and small-viewport-usable sprint tabs and task modal.** The three
    sprint tabs on the roadmap sprints page (Próximos, Actual, Concluídos) and the
    task detail modal MUST remain usable on touch input and on small viewports. The
@@ -1848,7 +1935,8 @@ Rules:
    [HTTP Server Timeouts](#http-server-timeouts)).
 11. **No stale data; `no-store` on data-derived responses.** Every data-derived
    response (the roadmap index page, the roadmap sprints page, the roadmap tasks
-   page, the roadmap sprint page, the knowledge-graph page shell, the graph data
+   page, the roadmap sprint page, the roadmap audit log page, the knowledge-graph
+   page shell, the graph data
    endpoint, and the data-state-dependent error responses) carries
    `Cache-Control: no-store`, so no client-side or intermediary cache re-presents a
    state that no longer matches the database or store. Embedded `/static/...`
@@ -1952,11 +2040,12 @@ Rules:
     control, and no submit action, and it triggers no new server request and no new
     write path. The modal and the sprint tabs are usable on touch input and on a
     small phone-sized viewport.
-16. The admin-shell sidebar's per-roadmap links target the two distinct endpoints:
-    the Sprints link points to `/roadmaps/{name}` (the landing page) and the Tasks
-    link points to `/roadmaps/{name}/tasks`; the sidebar highlights whichever of
-    the two is the active view, and the Graph link points to
-    `/roadmaps/{name}/graph`.
+16. The admin-shell sidebar's per-roadmap links target the four distinct endpoints:
+    the Sprints link points to `/roadmaps/{name}` (the landing page), the Tasks
+    link points to `/roadmaps/{name}/tasks`, the Audit link points to
+    `/roadmaps/{name}/audit`, and the Graph link points to
+    `/roadmaps/{name}/graph`; the sidebar highlights whichever of the four is the
+    active view.
 17. `GET /roadmaps/{name}/graph` for an existing roadmap returns HTTP 200 and an
     HTML page that loads the vendored D3.js library (and the d3-sankey plugin) from
     `/static/...` (not from any remote origin) and renders an interactive node-link
@@ -1979,7 +2068,8 @@ Rules:
     that has never been written, the graph store directory contains no `snapshot/`
     subdirectory and no checkpoint has run, proving the web read path is read-only
     (see `GRAPH.md § Synchronous Checkpoint on Write`).
-20. Serving roadmap sprints pages, roadmap tasks pages, and roadmap sprint pages
+20. Serving roadmap sprints pages, roadmap tasks pages, roadmap sprint pages, and
+    roadmap audit log pages
     produces **no** new audit-log entry in the roadmap's `project.db` (a read is
     not a change).
 21. A `POST`, `PUT`, `PATCH`, or `DELETE` request to any route returns HTTP 405.
@@ -2010,11 +2100,13 @@ Rules:
     page renders and functions fully, including the knowledge-graph visualisation,
     with no network egress.
 27. On a small phone-sized viewport, the roadmap index page, the roadmap sprints
-    page, the roadmap tasks page, the roadmap sprint page, and the knowledge-graph
+    page, the roadmap tasks page, the roadmap sprint page, the roadmap audit log
+    page, and the knowledge-graph
     page each render without horizontal scrolling, with readable typography and
     touch-friendly hit targets, demonstrating the mobile-first base styles.
-28. On the roadmap sprints page, the roadmap tasks page, and the roadmap sprint
-    page at a narrow viewport, the sprint and task data remains usable without
+28. On the roadmap sprints page, the roadmap tasks page, the roadmap sprint
+    page, and the roadmap audit log page at a narrow viewport, the sprint, task,
+    and audit data remains usable without
     horizontal overflow (for example through responsive or stacked tables or an
     equivalent layout) while still showing the fields and relationships defined for
     those pages.
@@ -2023,7 +2115,7 @@ Rules:
     Tabler CSS framework in use is vendored and served from `/static/...`.
 30. Every page renders in the Tabler admin-shell layout — a navigation sidebar
     (listing the roadmaps and, within a roadmap, that roadmap's Sprints, Tasks,
-    and Graph views), a top navbar, and a page header — using Tabler cards,
+    Audit, and Graph views), a top navbar, and a page header — using Tabler cards,
     tables, and badges, and the interface renders in Tabler's dark theme.
 31. On a small phone-sized viewport, the admin-shell navigation sidebar is not
     shown expanded inline; it collapses to an off-canvas (hamburger) menu that the
@@ -2056,7 +2148,8 @@ Rules:
 37. Every data-derived response carries the `Cache-Control: no-store` header: the
     roadmap index page (`/`), the roadmap sprints page (`/roadmaps/{name}`), the
     roadmap tasks page (`/roadmaps/{name}/tasks`), the roadmap sprint page
-    (`/roadmaps/{name}/sprints/{id}`), the knowledge-graph page shell
+    (`/roadmaps/{name}/sprints/{id}`), the roadmap audit log page
+    (`/roadmaps/{name}/audit`), the knowledge-graph page shell
     (`/roadmaps/{name}/graph`), the graph data endpoint
     (`/roadmaps/{name}/graph/data`), and the data-state-dependent error responses
     (for example a `404` for a missing roadmap or sprint and a `500` from a read
@@ -2265,6 +2358,35 @@ Rules:
     response shape and the page's read-only behaviour unchanged (see
     [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page) and
     [Graph Labels Sidebar](#graph-labels-sidebar)).
+57. `GET /roadmaps/{name}/audit` for an existing roadmap returns HTTP 200 and an
+    HTML page that renders the roadmap's full audit log as a read-only table whose
+    columns are the `AuditEntry` fields defined in `MODELS.md` and `DATABASE.md`
+    (`ID`, `Operation`, `Entity Type`, `Entity ID`, and `Performed At`), with the
+    entries ordered by `performed_at` descending (most recently performed operation
+    first). The table is read-only: it has no clickable row action, no modal, and no
+    edit affordance, and the page contains no form, button, or link that submits a
+    change. `GET /roadmaps/{name}/audit` for a non-existent roadmap, or a request
+    whose `{name}` violates the roadmap-name rules, returns HTTP 404 without touching
+    the filesystem outside `~/.roadmaps/` (see
+    [Roadmap Audit Log Page](#roadmap-audit-log-page)).
+58. The audit log page is paginated at a fixed page size of 100 entries per page,
+    selected by a 1-based `page` query parameter that defaults to 1 when absent. The
+    total page count is `ceil(total_entries / 100)` with a minimum of 1 page. A
+    `page` value below 1, a non-integer or garbage `page` value, and a `page` value
+    beyond the last page are each clamped to the nearest valid page (1 or the last
+    page) and still return HTTP 200; the audit page never returns HTTP 404 for an
+    out-of-range or unparseable `page` value. When the audit log is empty, the page
+    returns HTTP 200 with a clear empty-state message and shows page 1 of 1 (see
+    [Roadmap Audit Log Page](#roadmap-audit-log-page)).
+59. The audit log page footer shows read-only Previous and Next navigation controls
+    and a "Page X of Y" indicator, using accessible Tabler pagination markup. The
+    Previous control is disabled or absent on the first page and the Next control is
+    disabled or absent on the last page. The controls are `GET` links that change
+    only the `page` query parameter — no form and no write path. A fixed
+    100-entries-per-page request is always within the audit hard cap
+    (`MaxAuditLimit` = 500; see `DATABASE.md § Audit Result Limit`), so the page-size
+    request never exceeds the cap (see
+    [Roadmap Audit Log Page](#roadmap-audit-log-page)).
 
 ## See Also
 
@@ -2289,6 +2411,10 @@ Rules:
   `ARCHITECTURE.md § Command Lifecycle`
 - Task and Sprint fields presented in the sprints page, the tasks page, the sprint
   page, and the task detail modal → `MODELS.md` and `DATABASE.md`
+- `AuditEntry` fields, the audit read query and its `performed_at DESC` ordering,
+  and the audit result-set hard cap presented on the audit log page →
+  `MODELS.md § Audit Entry`, `DATABASE.md § audit Table`, `DATABASE.md § Audit`,
+  and `DATABASE.md § Audit Result Limit`
 - Sprint status enum and lifecycle that classify sprints into the sprints-page tabs
   → `MODELS.md § Enums` and `STATE_MACHINE.md § Sprint State Machine`
 - Embedded asset bundling, the vendored Tabler framework and D3.js (with

@@ -643,6 +643,170 @@ class TestWebInterface:
         )
 
     # ====================================================================
+    # Audit log page: full log, performed_at DESC, paginated, clamped
+    # ====================================================================
+
+    def test_audit_page_lists_entries_ordered_desc(self):
+        """The audit log page renders the roadmap's full audit log as a read-only
+        table with the AuditEntry columns (ID, Operation, Entity Type, Entity ID,
+        Performed At), ordered by performed_at DESC, with no edit affordance
+        (SPEC/WEB.md § Roadmap Audit Log Page)."""
+        proc, port = self._start(["--port", "0"])
+        status, headers, body = self._req(port, f"/roadmaps/{ROADMAP}/audit")
+        assert status == 200
+        assert headers.get("content-type", "").startswith("text/html")
+
+        # The five AuditEntry column headers are present.
+        for col in ("Operation", "Entity Type", "Entity ID", "Performed At"):
+            assert f"<th>{col}</th>" in body, f"audit table missing the {col!r} column"
+
+        # The populated roadmap exercised create/update operations through the
+        # CLI, so its audit log is non-empty: a real operation name appears.
+        assert "TASK_CREATE" in body or "SPRINT_CREATE" in body, (
+            "audit page must list the recorded CLI operations"
+        )
+
+        # Ordered performed_at DESC: every rendered timestamp is non-increasing.
+        # The Performed At cell carries a unique class; extract them in document
+        # order and assert monotonic non-increasing.
+        stamps = re.findall(
+            r'<td class="text-nowrap text-secondary">([^<]+)</td>', body
+        )
+        assert len(stamps) >= 2, "expected several audit rows in the populated roadmap"
+        assert stamps == sorted(stamps, reverse=True), (
+            f"audit rows must be ordered performed_at DESC; got {stamps}"
+        )
+
+        # Read-only: no form, no input, no write-method submission.
+        low = body.lower()
+        assert "<form" not in low, "audit page must contain no form"
+        assert "<input" not in low, "audit page must contain no input"
+        assert not re.search(r'method=["\']?(post|put|patch|delete)', body, re.I), (
+            "audit page must not submit any change"
+        )
+        # Read-only: no clickable row / modal trigger on the audit table.
+        assert 'data-bs-target="#task-modal-' not in body, (
+            "audit page must render no clickable row / task modal"
+        )
+
+    def test_audit_page_pagination_and_clamping(self):
+        """The audit page is paginated at 100 entries per page, selected by a
+        1-based ?page= parameter, clamped (never 404) for out-of-range or garbage
+        values, with a 'Page X of Y' indicator and Previous/Next controls bounded
+        at the first/last page (SPEC/WEB.md § Roadmap Audit Log Page)."""
+        # Build a roadmap with more than 100 audit entries. Each task create is
+        # one audit operation; creating 130 tasks yields >= 130 audit rows, so the
+        # log spans at least two 100-entry pages.
+        self._run(["roadmap", "create", "audit_paging"])
+        for i in range(130):
+            self.test.create_task(
+                "audit_paging",
+                f"Harden subsystem component {i:03d}",
+                "Eliminate an identified attack surface in the subsystem",
+                "Apply the documented mitigation and add a regression test",
+                "The mitigation holds under the regression test",
+            )
+        proc, port = self._start(["--port", "0"])
+
+        # Page 1 of a multi-page log: a "Page 1 of N" (N >= 2) indicator, a Next
+        # link, and no active Previous link.
+        status, _, body = self._req(port, "/roadmaps/audit_paging/audit?page=1")
+        assert status == 200
+        m = re.search(r"Page 1 of (\d+)", body)
+        assert m, "page 1 must show a 'Page 1 of N' indicator"
+        total_pages = int(m.group(1))
+        assert total_pages >= 2, f"expected >= 2 pages, got {total_pages}"
+        assert 'href="?page=2"' in body, "page 1 must offer an active Next link"
+        assert 'href="?page=0"' not in body, "page 1 must not offer an active Previous link"
+        # Exactly 100 data rows on a full first page.
+        rows = body.count('<td class="text-nowrap text-secondary">')
+        assert rows == 100, f"a full first page must show 100 rows, got {rows}"
+
+        # The last page: an active Previous link, no active Next link.
+        status, _, last = self._req(
+            port, f"/roadmaps/audit_paging/audit?page={total_pages}"
+        )
+        assert status == 200
+        assert f"Page {total_pages} of {total_pages}" in last
+        assert f'href="?page={total_pages - 1}"' in last, (
+            "the last page must offer an active Previous link"
+        )
+        assert f'href="?page={total_pages + 1}"' not in last, (
+            "the last page must not offer an active Next link"
+        )
+
+        # Clamping: page=0, a negative page, garbage, and a far-too-large page all
+        # render 200 (never 404), clamped to the nearest valid page.
+        for q, want in (
+            ("page=0", "Page 1 of"),
+            ("page=-5", "Page 1 of"),
+            ("page=abc", "Page 1 of"),
+            ("page=", "Page 1 of"),
+            ("page=99999", f"Page {total_pages} of {total_pages}"),
+        ):
+            status, _, b = self._req(port, f"/roadmaps/audit_paging/audit?{q}")
+            assert status == 200, f"{q!r} must clamp to 200, never 404; got {status}"
+            assert want in b, f"{q!r} must clamp to {want!r}"
+
+    def test_audit_page_empty_state(self):
+        """A roadmap whose audit log is empty renders 200 with an empty-state
+        message and 'Page 1 of 1', with no active pagination controls
+        (SPEC/WEB.md § Roadmap Audit Log Page, empty state)."""
+        # A brand-new roadmap, before any auditable operation, has an empty log.
+        self._run(["roadmap", "create", "audit_blank"])
+        proc, port = self._start(["--port", "0"])
+        status, _, body = self._req(port, "/roadmaps/audit_blank/audit")
+        assert status == 200, "an empty audit log must render 200, not an error"
+        assert "Page 1 of 1" in body, "empty audit log must show 'Page 1 of 1'"
+        low = body.lower()
+        assert "no audit" in low, "empty audit log must show a clear empty-state message"
+        # No active prev/next pagination links on a single empty page.
+        assert 'href="?page=' not in body, (
+            "an empty single-page audit log must have no active pagination link"
+        )
+
+    def test_audit_page_name_guard_and_methods(self):
+        """The audit route validates {name} (invalid/nonexistent -> 404) and is
+        GET/HEAD only (a write method -> 405) (SPEC/WEB.md § Roadmap Audit Log
+        Page, path parameters; Routes and Pages, status mapping)."""
+        proc, port = self._start(["--port", "0"])
+        # Invalid name (uppercase), encoded traversal, and nonexistent -> 404.
+        assert self._req(port, "/roadmaps/INVALID/audit")[0] == 404
+        assert self._req(port, "/roadmaps/..%2fetc/audit")[0] == 404
+        assert self._req(port, "/roadmaps/no_such_roadmap/audit")[0] == 404
+        # Non-read methods -> 405 on the registered audit route.
+        for method in ("POST", "PUT", "PATCH", "DELETE"):
+            status, _, _ = self._req(port, f"/roadmaps/{ROADMAP}/audit", method=method)
+            assert status == 405, f"{method} audit route must be 405, got {status}"
+
+    def test_audit_page_cache_control_no_store(self):
+        """The audit response is data-derived, so it carries Cache-Control:
+        no-store, ensuring a freshly read audit log is never served stale
+        (SPEC/WEB.md § Cache Policy)."""
+        proc, port = self._start(["--port", "0"])
+        _, headers, _ = self._req(port, f"/roadmaps/{ROADMAP}/audit")
+        assert headers.get("cache-control") == "no-store", (
+            "the audit page must carry Cache-Control: no-store"
+        )
+
+    def test_audit_page_read_writes_no_audit_entry(self):
+        """Reading the audit log writes no row and produces no new audit entry —
+        a read is not a change (SPEC/WEB.md § Roadmap Audit Log Page,
+        read-only)."""
+        before = json.loads(self._run(["audit", "stats", "-r", ROADMAP])[1]).get(
+            "total_entries"
+        )
+        proc, port = self._start(["--port", "0"])
+        for page in (1, 2, 99999, 0):
+            assert self._req(port, f"/roadmaps/{ROADMAP}/audit?page={page}")[0] == 200
+        after = json.loads(self._run(["audit", "stats", "-r", ROADMAP])[1]).get(
+            "total_entries"
+        )
+        assert before == after, (
+            f"reading the audit page changed the audit log: {before} -> {after}"
+        )
+
+    # ====================================================================
     # AC10/AC11/AC12: sprint tabs, classification + ordering, sprint links
     # ====================================================================
 
@@ -1354,6 +1518,7 @@ class TestWebInterface:
             "/",
             f"/roadmaps/{ROADMAP}",
             f"/roadmaps/{ROADMAP}/tasks",
+            f"/roadmaps/{ROADMAP}/audit",
             f"/roadmaps/{ROADMAP}/graph",
             f"/roadmaps/{ROADMAP}/graph/data",
             "/static/style.css",
@@ -1398,7 +1563,7 @@ class TestWebInterface:
 
     def test_pages_reference_no_remote_origin(self):
         proc, port = self._start(["--port", "0"])
-        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/tasks", f"/roadmaps/{ROADMAP}/graph"):
+        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/tasks", f"/roadmaps/{ROADMAP}/audit", f"/roadmaps/{ROADMAP}/graph"):
             _, _, body = self._req(port, path)
             for ref in self._asset_refs(body):
                 assert not ref.startswith(("http://", "https://", "//")), (
@@ -1414,7 +1579,7 @@ class TestWebInterface:
 
     def test_every_page_has_viewport_meta(self):
         proc, port = self._start(["--port", "0"])
-        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/tasks", f"/roadmaps/{ROADMAP}/graph"):
+        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/tasks", f"/roadmaps/{ROADMAP}/audit", f"/roadmaps/{ROADMAP}/graph"):
             _, _, body = self._req(port, path)
             assert re.search(r'<meta[^>]*name=["\']viewport["\']', body, re.I), (
                 f"page {path} missing responsive viewport meta tag"
@@ -1440,7 +1605,7 @@ class TestWebInterface:
         attribute on its root element.
         """
         proc, port = self._start(["--port", "0"])
-        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/tasks", f"/roadmaps/{ROADMAP}/graph"):
+        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/tasks", f"/roadmaps/{ROADMAP}/audit", f"/roadmaps/{ROADMAP}/graph"):
             _, _, body = self._req(port, path)
             assert re.search(
                 r"<html[^>]*\bdata-bs-theme\s*=\s*[\"']dark[\"']", body, re.I
@@ -1457,7 +1622,7 @@ class TestWebInterface:
         proof of the responsive sidebar.
         """
         proc, port = self._start(["--port", "0"])
-        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/tasks", f"/roadmaps/{ROADMAP}/graph"):
+        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/tasks", f"/roadmaps/{ROADMAP}/audit", f"/roadmaps/{ROADMAP}/graph"):
             _, _, body = self._req(port, path)
             for marker in (
                 "navbar-vertical",   # vertical sidebar
@@ -1478,11 +1643,13 @@ class TestWebInterface:
         for path in (
             f"/roadmaps/{ROADMAP}",
             f"/roadmaps/{ROADMAP}/tasks",
+            f"/roadmaps/{ROADMAP}/audit",
             f"/roadmaps/{ROADMAP}/graph",
         ):
             _, _, body = self._req(port, path)
             assert f'href="/roadmaps/{ROADMAP}"' in body, "sidebar must link the roadmap's Sprints (landing)"
             assert f'href="/roadmaps/{ROADMAP}/tasks"' in body, "sidebar must link the roadmap's Tasks"
+            assert f'href="/roadmaps/{ROADMAP}/audit"' in body, "sidebar must link the roadmap's Audit"
             assert f'href="/roadmaps/{ROADMAP}/graph"' in body, "sidebar must link the roadmap's Graph"
             # The old combined-page anchors must be gone.
             assert f"/roadmaps/{ROADMAP}#tasks" not in body, "stale #tasks anchor must be removed"
@@ -1518,7 +1685,7 @@ class TestWebInterface:
     def test_pages_load_vendored_tabler_assets(self):
         """AC16/AC22: every page loads the vendored Tabler CSS/JS from /static/."""
         proc, port = self._start(["--port", "0"])
-        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/tasks", f"/roadmaps/{ROADMAP}/graph"):
+        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/tasks", f"/roadmaps/{ROADMAP}/audit", f"/roadmaps/{ROADMAP}/graph"):
             _, _, body = self._req(port, path)
             assert "/static/vendor/tabler/tabler.min.css" in body, (
                 f"page {path} must load the vendored Tabler CSS"
@@ -1545,7 +1712,7 @@ class TestWebInterface:
             r'<link[^>]*\bhref=["\']([^"\']+)["\'][^>]*\brel=["\']?stylesheet["\']?',
             re.I,
         )
-        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/tasks", f"/roadmaps/{ROADMAP}/graph"):
+        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/tasks", f"/roadmaps/{ROADMAP}/audit", f"/roadmaps/{ROADMAP}/graph"):
             _, _, body = self._req(port, path)
             hrefs = link_re.findall(body) + link_re2.findall(body)
             assert hrefs, f"page {path} declares no stylesheet link"

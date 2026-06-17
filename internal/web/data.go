@@ -121,6 +121,36 @@ type tasksData struct {
 	Tasks  []models.Task
 }
 
+// auditPageSize is the fixed number of audit entries shown per page on the
+// read-only audit log page (SPEC/WEB.md § Roadmap Audit Log Page, pagination).
+// It is well within the data layer's MaxAuditLimit hard cap (500), so a
+// single-page request never exceeds that cap.
+const auditPageSize = 100
+
+// auditData is the view model handed to the roadmap audit log template. It
+// presents one page of the roadmap's full audit log — every operation and
+// entity type — ordered by performed_at DESC, with the read-only pagination
+// footer state precomputed so the template stays declarative (SPEC/WEB.md
+// § Roadmap Audit Log Page). It is read-only; reading the audit log writes no
+// row and produces no new audit entry.
+//
+// Page and TotalPages are 1-based and clamped: Page is always in [1,
+// TotalPages] and TotalPages is always at least 1 (even for an empty log), so
+// the template can render "Page X of Y" and the Previous/Next controls without
+// any further arithmetic. HasPrev is false on the first page and HasNext is
+// false on the last page.
+type auditData struct {
+	Name       string
+	Chrome     chrome
+	Entries    []models.AuditEntry
+	Page       int
+	TotalPages int
+	PrevPage   int
+	NextPage   int
+	HasPrev    bool
+	HasNext    bool
+}
+
 // sprintCompletion is the precomputed per-sprint completion summary the shared
 // sprint presentation sub-template renders as its status summary line. It is
 // derived ONLY from the sprint's own loaded member tasks (no extra DB query),
@@ -330,6 +360,76 @@ func loadTasks(ctx context.Context, name string) (tasksData, error) {
 	}
 
 	return tasksData{Name: name, Tasks: tasks}, nil
+}
+
+// loadAudit reads one page of a roadmap's full audit log read-only for the
+// audit log page. It opens the roadmap database, counts the total audit rows to
+// compute the total page count, clamps the requested page into the valid range,
+// reads exactly that page of entries ordered by performed_at DESC, and returns
+// the precomputed pagination footer state (SPEC/WEB.md § Roadmap Audit Log
+// Page). The database handle is released before the function returns; no row is
+// written and no audit entry is produced (SPEC/WEB.md § Tasks and Sprints from
+// SQLite).
+//
+// requestedPage is the already-parsed 1-based page (a non-integer or garbage
+// page parameter is parsed to a sentinel by the handler; this function clamps
+// any value, however out of range, into [1, totalPages]). Clamping happens
+// AFTER the total is known, so a page beyond the last page resolves to the last
+// page and a page below 1 resolves to 1. The page is never rejected: an
+// out-of-range page renders successfully, never a 404 (SPEC/WEB.md § Roadmap
+// Audit Log Page, pagination is clamped, not strict).
+//
+// The caller is responsible for the {name} validation and existence check
+// (resolveRoadmap); this function trusts name is a validated, existing roadmap.
+func loadAudit(ctx context.Context, name string, requestedPage int) (auditData, error) {
+	database, err := db.OpenReadOnly(name)
+	if err != nil {
+		return auditData{}, err
+	}
+	defer database.Close() //nolint:errcheck // read-only handle; close error is non-actionable
+
+	total, err := database.CountAuditEntries(ctx)
+	if err != nil {
+		return auditData{}, err
+	}
+
+	// Total pages is ceil(total / pageSize), with a floor of 1 so an empty
+	// audit log still renders "Page 1 of 1" (SPEC/WEB.md § Roadmap Audit Log
+	// Page, empty state). Integer ceil without floats: (total + size - 1) / size.
+	totalPages := (total + auditPageSize - 1) / auditPageSize
+	if totalPages < 1 {
+		totalPages = 1
+	}
+
+	// Clamp the requested page into [1, totalPages]. A value below 1 (including
+	// the handler's parse-failure sentinel) clamps to 1; a value beyond the last
+	// page clamps to the last page. The page is never rejected.
+	page := requestedPage
+	if page < 1 {
+		page = 1
+	}
+	if page > totalPages {
+		page = totalPages
+	}
+
+	entries, err := database.GetAuditEntries(ctx, &db.AuditFilter{
+		Limit:  auditPageSize,
+		Offset: (page - 1) * auditPageSize,
+	})
+	if err != nil {
+		return auditData{}, err
+	}
+
+	return auditData{
+		Name:       name,
+		Entries:    entries,
+		Page:       page,
+		TotalPages: totalPages,
+		PrevPage:   page - 1,
+		NextPage:   page + 1,
+		HasPrev:    page > 1,
+		HasNext:    page < totalPages,
+	}, nil
 }
 
 // loadSprint reads a single sprint of a roadmap read-only and returns the
