@@ -5,6 +5,83 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.0] - 2026-06-17
+
+A combined release that pairs read-only `rmp web` interface enhancements with a
+full review of the command-line help surface and the machine-readable AI Agent
+Contract. The web interface gains a graph query bar, a clickable labels sidebar,
+neighbour focus, unified sprint cards, and now surfaces each sprint's title and
+execution order. In parallel, every plain-text help printer was revised for
+correctness and completeness, the `rmp --ai-help` contract was normalised, and a
+set of documented-but-divergent exit codes was corrected so that the runtime now
+matches the published contract. The `GoGraph` dependency is bumped to `v0.4.0`.
+
+Under Semantic Versioning 2.0.0 this is a **MINOR** release: it adds
+backward-compatible functionality (web features, richer help, contract
+completeness) and corrects exit codes to match the already-documented contract.
+No JSON success schema is removed or renamed, and the database schema version is
+unchanged. The corrected exit codes are aligned to the values the contract and
+help already promised, so they restore — rather than break — the documented
+behaviour.
+
+### Added
+
+- **Web — graph query bar, labels sidebar, neighbour focus.** The read-only
+  `rmp web` graph view gains an interactive query bar, a labels sidebar with
+  click-to-highlight, and neighbour-focus navigation, plus unified sprint cards
+  for a consistent layout. Specified in `SPEC/WEB.md`.
+- **Web — sprint title and execution order surfaced.** The read-only UI now
+  displays each sprint's title and its execution order, so the served pages
+  reflect the same ordering the CLI uses.
+- **`sprint tasks` — `-s` short alias for `--status`.** The `sprint tasks`
+  command now accepts `-s` as a short alias for `--status`, matching the
+  documented contract.
+
+### Changed
+
+- **Plain-text help revised across all commands.** Every plain-text help printer
+  was reviewed and corrected for accuracy, formatting, and completeness, so the
+  on-screen help now faithfully describes the runtime behaviour.
+- **AI Agent Contract normalised and completed.** `rmp --ai-help` was reworked
+  for internal consistency: nested single-action commands are represented
+  uniformly; empty arrays are emitted as `[]` rather than `null`; min-only ranges
+  no longer carry a misleading `max: 0`; `--max-tasks` advertises its `1-10000`
+  range; the `roadmap_flag` web exemption is documented; `sprint tasks` exposes
+  `-s`/`--status`; and failure examples are included for commands with non-zero
+  exit codes.
+- **SPEC reconciled with verified runtime behaviour.** The help-related
+  specifications (`SPEC/HELP.md`, `SPEC/COMMANDS.md`, and related files) were
+  reconciled with the behaviour confirmed empirically against the binary.
+
+### Fixed
+
+- **Invalid `--type` on list commands now exits 6.** Passing an invalid
+  `--type` to `backlog list` and `task list` now exits with code 6 (invalid
+  data) instead of 1, matching the documented exit-code contract.
+- **Invalid `--status` on list commands now exits 6.** Passing an invalid
+  `--status` to `task list`, `sprint list`, `sprint tasks`, and `task stat` now
+  exits with code 6 instead of 1.
+- **`audit stats` emits `null` for empty-set timestamps.** On an empty result
+  set, the first/last timestamps are now emitted as JSON `null` rather than an
+  empty string `""`.
+- **`sprint bottom` on a missing sprint now exits 4.** Targeting a non-existent
+  sprint with `sprint bottom` now exits with code 4 (not found) instead of 6.
+
+### Dependencies
+
+- **`GoGraph` bumped to `v0.4.0`** and module dependencies refreshed
+  (`go.mod`, `go.sum`).
+
+### Internal
+
+- **New and extended test coverage.** Adds the help-content unit suite
+  (`internal/commands/help_content_test.go`) and the help/exit-code end-to-end
+  contract suite (`tests/test_44_help_and_exitcode_contract.py`), and extends the
+  AI-contract E2E suite (`tests/test_30_aihelp_contract.py`) to lock in the
+  revised help text and contract invariants.
+
+[1.12.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.11.0...v1.12.0
+
 ## [1.11.0] - 2026-06-16
 
 A reliability release for the read-only `rmp web` server. It makes `rmp web`
