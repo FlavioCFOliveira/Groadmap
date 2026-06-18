@@ -251,6 +251,52 @@ func TestHandleAudit_PrevNextEdges(t *testing.T) {
 	}
 }
 
+// TestHandleAudit_NumberedBarRendering verifies the rendered audit.html footer
+// contains the numbered Tabler pagination bar: GET links to the visible page
+// numbers, a single active (non-link) item for the current page, and a
+// collapsed ellipsis for the wide gap (SPEC/WEB.md § Roadmap Audit Log Page,
+// pagination controls and sliding window with ellipsis). It drives a genuine
+// many-page roadmap so the bar exercises both anchors, the window, and an
+// ellipsis on at least one side.
+func TestHandleAudit_NumberedBarRendering(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	// 800 entries -> 8 pages. Page 4 -> window [2..6], anchors 1 and 8; the gap
+	// between the window high (6) and the last anchor (8) is exactly page 7,
+	// rendered directly, while there is no low-side gap (1 and 2 contiguous).
+	// Bar: 1 2 3 [4] 5 6 7 8 -> every page shown, no ellipsis on this page.
+	// Use page 6 instead to force an ellipsis: window [4..8] reaches anchor 8,
+	// low gap 2..3 (two pages) collapses to one ellipsis -> 1 ... 4 5 [6] 7 8.
+	name := seedRoadmapWithAudit(t, "web-audit-numbered", 800)
+
+	body := getAudit(t, name, "page=6").Body.String()
+
+	// Active current page: a non-link active item carrying aria-current.
+	if !contains(body, `aria-current="page"`) {
+		t.Errorf("numbered bar missing aria-current active item; body=%q", body)
+	}
+	if contains(body, `href="?page=6"`) {
+		t.Errorf("current page 6 must be the active item, not a link")
+	}
+	// Anchors and window are GET links to their pages.
+	for _, n := range []string{"1", "4", "5", "7", "8"} {
+		if !contains(body, `href="?page=`+n+`"`) {
+			t.Errorf("numbered bar missing GET link to page %s; body=%q", n, body)
+		}
+	}
+	// The two-page low-side gap (pages 2..3) collapses to a single ellipsis;
+	// pages 2 and 3 are not linked.
+	if !contains(body, "&hellip;") {
+		t.Errorf("numbered bar missing collapsed ellipsis for the low-side gap")
+	}
+	if contains(body, `href="?page=2"`) || contains(body, `href="?page=3"`) {
+		t.Errorf("hidden pages 2/3 must not be linked behind the ellipsis")
+	}
+	// Chevrons: Previous active (page 5), Next active (page 7) on a middle page.
+	if !contains(body, `href="?page=5"`) {
+		t.Errorf("middle page must render an active Previous chevron to page 5")
+	}
+}
+
 // TestHandleAudit_NameGuardAndMethod verifies the {name} guard returns 404 for
 // an invalid or nonexistent roadmap, and that a non-read HTTP method returns
 // 405 (SPEC/WEB.md § Roadmap Audit Log Page, path parameters; Routes and

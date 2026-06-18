@@ -138,11 +138,17 @@ const auditPageSize = 100
 // TotalPages] and TotalPages is always at least 1 (even for an empty log), so
 // the template can render "Page X of Y" and the Previous/Next controls without
 // any further arithmetic. HasPrev is false on the first page and HasNext is
-// false on the last page.
+// false on the last page. PageItems is the precomputed ordered sequence of
+// numbered-bar slots (page numbers, the active current page, and collapsed
+// ellipses) the template renders for the numbered pagination bar, so the
+// sliding-window-with-ellipsis rules live in one tested helper rather than in
+// the template (SPEC/WEB.md § Roadmap Audit Log Page, sliding window with
+// ellipsis).
 type auditData struct {
 	Name       string
 	Chrome     chrome
 	Entries    []models.AuditEntry
+	PageItems  []pageItem
 	Page       int
 	TotalPages int
 	PrevPage   int
@@ -423,6 +429,7 @@ func loadAudit(ctx context.Context, name string, requestedPage int) (auditData, 
 	return auditData{
 		Name:       name,
 		Entries:    entries,
+		PageItems:  paginationItems(page, totalPages),
 		Page:       page,
 		TotalPages: totalPages,
 		PrevPage:   page - 1,

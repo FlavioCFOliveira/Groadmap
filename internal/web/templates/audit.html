@@ -71,19 +71,36 @@
             {{end}}
             <div class="card-footer d-flex align-items-center">
               <p class="m-0 text-secondary">Page {{.Page}} of {{.TotalPages}}</p>
+              {{/*
+                Numbered Tabler pagination bar (SPEC/WEB.md § Roadmap Audit Log
+                Page, pagination controls). The Previous (‹) and Next (›)
+                chevrons frame the page numbers; each visible number is a GET
+                link except the active current page, and each collapsed gap is a
+                disabled, non-interactive ellipsis. The whole bar is read-only:
+                only GET links and inert items, no form and no write path.
+              */}}
               <ul class="pagination m-0 ms-auto">
                 <li class="page-item{{if not .HasPrev}} disabled{{end}}">
                   {{if .HasPrev}}
-                  <a class="page-link" href="?page={{.PrevPage}}"><i class="ti ti-chevron-left"></i> prev</a>
+                  <a class="page-link" href="?page={{.PrevPage}}" aria-label="Previous"><i class="ti ti-chevron-left"></i></a>
                   {{else}}
-                  <span class="page-link" aria-disabled="true"><i class="ti ti-chevron-left"></i> prev</span>
+                  <span class="page-link" aria-label="Previous" aria-disabled="true"><i class="ti ti-chevron-left"></i></span>
                   {{end}}
                 </li>
+                {{range .PageItems}}
+                {{if .IsEllipsis}}
+                <li class="page-item disabled"><span class="page-link" aria-disabled="true">&hellip;</span></li>
+                {{else if .IsCurrent}}
+                <li class="page-item active" aria-current="page"><span class="page-link">{{.Number}}</span></li>
+                {{else}}
+                <li class="page-item"><a class="page-link" href="?page={{.Number}}">{{.Number}}</a></li>
+                {{end}}
+                {{end}}
                 <li class="page-item{{if not .HasNext}} disabled{{end}}">
                   {{if .HasNext}}
-                  <a class="page-link" href="?page={{.NextPage}}">next <i class="ti ti-chevron-right"></i></a>
+                  <a class="page-link" href="?page={{.NextPage}}" aria-label="Next"><i class="ti ti-chevron-right"></i></a>
                   {{else}}
-                  <span class="page-link" aria-disabled="true">next <i class="ti ti-chevron-right"></i></span>
+                  <span class="page-link" aria-label="Next" aria-disabled="true"><i class="ti ti-chevron-right"></i></span>
                   {{end}}
                 </li>
               </ul>

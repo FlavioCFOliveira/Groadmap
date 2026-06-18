@@ -782,13 +782,45 @@ how the `rmp web` process itself terminates.
 - **Empty state.** When the roadmap's audit log is empty, the page renders
   successfully (HTTP 200) with a clear empty-state message and shows **page 1 of 1**.
   An empty audit log is not an error.
-- **Pagination controls.** The page footer shows read-only Previous and Next
-  navigation controls and a "Page X of Y" indicator, using plain, accessible Tabler
-  pagination markup. The **Previous** control is disabled or absent on the first
-  page, and the **Next** control is disabled or absent on the last page. The
-  controls are `GET` links that change only the `page` query parameter: there is no
-  form and no write path, fully consistent with the read-only nature of the
-  interface.
+- **Pagination controls.** The page footer shows a read-only **numbered
+  pagination bar** in the Tabler style (the first option at
+  `https://preview.tabler.io/pagination.html`), rendered in the shape
+  `‹ 1 … 4 5 6 … 20 ›`. Each visible page number is a `GET` link to that page
+  (`?page=N`), except the current page, which is rendered as the **active**
+  (non-link, visually highlighted) item. A **Previous** chevron (`‹`) and a
+  **Next** chevron (`›`) frame the numbers. The **Previous** chevron is disabled or
+  absent on the first page, and the **Next** chevron is disabled or absent on the
+  last page. All controls are `GET` links that change only the `page` query
+  parameter: there is no form and no write path, fully consistent with the
+  read-only nature of the interface.
+- **Sliding window with ellipsis.** The numbered bar uses a sliding window of page
+  numbers centred on the current page, and always anchors **page 1** and **page
+  `TotalPages`** at the two extremities. The rules are deterministic so that
+  implementation and tests agree exactly:
+  1. The bar always shows page `1` and page `TotalPages`.
+  2. The bar always shows a contiguous window around the current page: every page
+     in the range `[current - 2, current + 2]`, clamped to `[1, TotalPages]`
+     (the current page and up to two neighbours on each side).
+  3. The gap between the first anchor (`1`) and the window, and the gap between the
+     window and the last anchor (`TotalPages`), are each collapsed to a single
+     **ellipsis** (`…`) item. The ellipsis is a non-interactive item: it is not a
+     link.
+  4. When such a gap is exactly one page wide, that single page number is rendered
+     directly instead of an ellipsis; an ellipsis never stands in for a single
+     hidden page.
+  5. When the total page count is small enough that the anchors and the window
+     already cover every page, every page number is shown and no ellipsis appears.
+- **"Page X of Y" indicator.** The page footer keeps the textual "Page X of Y"
+  indicator alongside the numbered pagination bar. It is a read-only, accessible
+  affordance that states the current page and the total page count in words; it
+  reflects the same `page` value and `TotalPages` total as the numbered bar.
+- **Pagination markup.** The pagination bar uses accessible Tabler pagination
+  markup: a `ul.pagination` list whose items are `li.page-item` elements, with each
+  link rendered as `a.page-link`. The current page item carries the `active` state,
+  and a disabled **Previous** or **Next** chevron and the ellipsis item carry the
+  `disabled` state. `aria` attributes mark the disabled chevrons and the
+  active/current page so the bar is fully accessible. The markup contains only
+  `GET` links and inert items: no form, no button, and no write path.
 - **Defense in depth: within the audit hard cap.** The data layer clamps an
   unbounded or oversized audit limit to `MaxAuditLimit` (value **500**; see
   `DATABASE.md § Audit Result Limit`). A fixed 100-entries-per-page request is
