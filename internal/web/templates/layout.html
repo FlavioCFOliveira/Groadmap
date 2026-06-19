@@ -45,7 +45,8 @@
           </li>
           {{with .Chrome.Roadmap}}
           <li class="nav-item mt-3">
-            <span class="nav-link text-muted text-uppercase fw-bold" style="font-size:0.75rem;letter-spacing:0.04em;">{{.}}</span>
+            <hr class="navbar-divider">
+            <h2 class="navbar-heading subheader">{{.}}</h2>
           </li>
           <li class="nav-item{{if eq $.Chrome.Active "sprints"}} active{{end}}">
             <a class="nav-link" href="/roadmaps/{{.}}">
