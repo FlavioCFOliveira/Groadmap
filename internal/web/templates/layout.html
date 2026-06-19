@@ -29,12 +29,12 @@
       <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#sidebar-menu" aria-controls="sidebar-menu" aria-expanded="false" aria-label="Toggle navigation">
         <span class="navbar-toggler-icon"></span>
       </button>
-      <div class="navbar-brand navbar-brand-autodark">
+      <h1 class="navbar-brand navbar-brand-autodark">
         <a href="/" class="text-decoration-none d-flex align-items-center">
           <img src="/static/favicon.svg" width="28" height="28" alt="" class="me-2">
           <span class="fw-bold">Groadmap</span>
         </a>
-      </div>
+      </h1>
       <div class="collapse navbar-collapse" id="sidebar-menu">
         <ul class="navbar-nav pt-lg-3">
           <li class="nav-item{{if eq .Chrome.Active "roadmaps"}} active{{end}}">
@@ -45,7 +45,8 @@
           </li>
           {{with .Chrome.Roadmap}}
           <li class="nav-item mt-3">
-            <span class="nav-link text-muted text-uppercase fw-bold" style="font-size:0.75rem;letter-spacing:0.04em;">{{.}}</span>
+            <hr class="navbar-divider">
+            <h2 class="navbar-heading subheader">{{.}}</h2>
           </li>
           <li class="nav-item{{if eq $.Chrome.Active "sprints"}} active{{end}}">
             <a class="nav-link" href="/roadmaps/{{.}}">
@@ -133,7 +134,7 @@
                             <div class="card-subtitle text-secondary">Sprint #{{.Sprint.ID}}</div>
                             <h4 class="card-title mb-0">{{.Sprint.Title}}</h4>
                           </div>
-                          <div class="card-actions"><span class="badge bg-blue-lt">{{.Sprint.Status}}</span></div>
+                          <div class="card-actions"><span class="badge {{sprintStatusBadge .Sprint.Status}}">{{.Sprint.Status}}</span></div>
                         </div>
                         <div class="card-body">
                           <p class="mb-1 sprint-description">{{.Sprint.Description}}</p>
@@ -178,7 +179,7 @@
                 </div>
                 <div class="datagrid-item">
                   <div class="datagrid-title">Status</div>
-                  <div class="datagrid-content"><span class="badge bg-blue-lt">{{.Sprint.Status}}</span></div>
+                  <div class="datagrid-content"><span class="badge {{sprintStatusBadge .Sprint.Status}}">{{.Sprint.Status}}</span></div>
                 </div>
                 <div class="datagrid-item">
                   <div class="datagrid-title">Order</div>
@@ -231,10 +232,10 @@
                   <tr class="task-row" data-bs-toggle="modal" data-bs-target="#task-modal-{{.ID}}" tabindex="0" role="button" aria-label="Open details for task #{{.ID}}">
                     <td>#{{.ID}}</td>
                     <td>{{.Title}}</td>
-                    <td><span class="badge bg-blue-lt">{{.Status}}</span></td>
+                    <td><span class="badge {{taskStatusBadge .Status}}">{{.Status}}</span></td>
                     <td>{{.Type}}</td>
-                    <td>{{.Priority}}</td>
-                    <td>{{.Severity}}</td>
+                    <td><span class="badge {{priorityBadge .Priority}}">{{.Priority}}</span></td>
+                    <td><span class="badge {{severityBadge .Severity}}">{{.Severity}}</span></td>
                   </tr>
                   {{end}}
                 </tbody>
@@ -258,7 +259,7 @@
             <div class="text-secondary">Task #{{.ID}}</div>
             <h5 class="modal-title" id="task-modal-{{.ID}}-title">{{.Title}}</h5>
           </div>
-          <span class="badge bg-blue-lt ms-auto me-2">{{.Status}}</span>
+          <span class="badge {{taskStatusBadge .Status}} ms-auto me-2">{{.Status}}</span>
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
         <div class="modal-body">
@@ -269,11 +270,11 @@
             </div>
             <div class="datagrid-item">
               <div class="datagrid-title">Priority</div>
-              <div class="datagrid-content">{{.Priority}}</div>
+              <div class="datagrid-content"><span class="badge {{priorityBadge .Priority}}">{{.Priority}}</span></div>
             </div>
             <div class="datagrid-item">
               <div class="datagrid-title">Severity</div>
-              <div class="datagrid-content">{{.Severity}}</div>
+              <div class="datagrid-content"><span class="badge {{severityBadge .Severity}}">{{.Severity}}</span></div>
             </div>
             <div class="datagrid-item">
               <div class="datagrid-title">Specialists</div>

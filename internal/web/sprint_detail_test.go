@@ -194,8 +194,27 @@ func TestSprintsPage_SharedCardAcrossAllTabs(t *testing.T) {
 	}
 
 	// Every card carries a status badge in its header (Acceptance Criterion 13).
-	if got := strings.Count(body, `<div class="card-actions"><span class="badge bg-blue-lt">`); got != 5 {
-		t.Errorf("expected 5 card status badges (one per card), found %d", got)
+	// The badge colour is now the semantic Tabler variant for the sprint's status
+	// (SPEC/WEB.md § Status, Priority, and Severity Badge Colours), so the count
+	// is taken across all card-header status-badge variants rather than a single
+	// fixed colour: the fixture seeds 2 PENDING (bg-secondary-lt), 1 OPEN
+	// (bg-blue-lt), and 2 CLOSED (bg-green-lt).
+	statusBadges := strings.Count(body, `<div class="card-actions"><span class="badge bg-secondary-lt">`) +
+		strings.Count(body, `<div class="card-actions"><span class="badge bg-blue-lt">`) +
+		strings.Count(body, `<div class="card-actions"><span class="badge bg-green-lt">`)
+	if statusBadges != 5 {
+		t.Errorf("expected 5 card status badges (one per card), found %d", statusBadges)
+	}
+	// Assert the semantic mapping is actually applied per status, not a single
+	// fixed colour: PENDING -> secondary, OPEN -> blue, CLOSED -> green.
+	if got := strings.Count(body, `<div class="card-actions"><span class="badge bg-secondary-lt">`); got != 2 {
+		t.Errorf("expected 2 PENDING cards with bg-secondary-lt status badge, found %d", got)
+	}
+	if got := strings.Count(body, `<div class="card-actions"><span class="badge bg-blue-lt">`); got != 1 {
+		t.Errorf("expected 1 OPEN card with bg-blue-lt status badge, found %d", got)
+	}
+	if got := strings.Count(body, `<div class="card-actions"><span class="badge bg-green-lt">`); got != 2 {
+		t.Errorf("expected 2 CLOSED cards with bg-green-lt status badge, found %d", got)
 	}
 }
 

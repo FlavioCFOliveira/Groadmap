@@ -188,6 +188,102 @@ func TestSprints_SprintTabsLabelsAndDefault(t *testing.T) {
 	}
 }
 
+// TestSprints_CardHeaderTabs asserts the sprints page tab control follows
+// Tabler's "card with tabs" example: the nav-tabs list lives INSIDE the card
+// header as a single
+// <ul class="nav nav-tabs card-header-tabs" data-bs-toggle="tabs" role="tablist">,
+// with no card-title in the header and no nav-tabs list in the card body. Tab
+// activation is Bootstrap-native (data-bs-toggle="tabs" on the ul). The three
+// Portuguese tab labels and their count badges are present, and Actual is the
+// default-active tab with its pane carrying "active show" (SPEC/WEB.md
+// § UI Framework rule 9, § Roadmap Sprints Page; Acceptance Criterion 60).
+func TestSprints_CardHeaderTabs(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	f := seedSprintFixture(t, "web-card-header-tabs")
+	mux := buildMux()
+
+	body := servePage(t, mux, "/roadmaps/"+f.name)
+
+	// The card header carries the Tabler card-header-tabs nav list with the
+	// Bootstrap-native data-bs-toggle="tabs" on the ul itself.
+	header := cardHeaderSlice(t, body)
+	wantUL := `<ul class="nav nav-tabs card-header-tabs sprint-tabs" data-bs-toggle="tabs" role="tablist">`
+	if !strings.Contains(header, wantUL) {
+		t.Errorf("card header missing the Tabler card-header-tabs nav list; want %q", wantUL)
+	}
+	// The header MUST NOT carry a card title: the tabs ARE the header.
+	if strings.Contains(header, "card-title") {
+		t.Errorf("card header must not contain a card-title; the tab list is the header")
+	}
+	// The nav-tabs list must NOT live in the card body anymore.
+	bodySlice := cardBodySlice(t, body)
+	if strings.Contains(bodySlice, "nav-tabs") {
+		t.Errorf("nav-tabs list must live in the card header, not the card body")
+	}
+	if !strings.Contains(bodySlice, `<div class="tab-content">`) {
+		t.Errorf("the tab panes must remain in the card body's tab-content")
+	}
+
+	// All three tab labels and their count badges are present.
+	for _, label := range []string{">Próximos ", ">Actual ", ">Concluídos "} {
+		if !strings.Contains(header, label) {
+			t.Errorf("card header missing tab label %q", label)
+		}
+	}
+	// Each tab badge renders its count: 2 PENDING, 1 OPEN, 2 CLOSED.
+	for _, badge := range []string{
+		`<span class="badge bg-secondary-lt ms-1">2</span>`, // Próximos count
+		`<span class="badge bg-secondary-lt ms-1">1</span>`, // Actual count
+	} {
+		if !strings.Contains(header, badge) {
+			t.Errorf("card header missing count badge %q", badge)
+		}
+	}
+
+	// Each trigger is a Tabler nav-link with data-bs-toggle="tab"; Actual carries
+	// the active state and is the only aria-selected tab.
+	activeTab := `<a href="#tab-current" class="nav-link active" data-bs-toggle="tab" role="tab" aria-selected="true">Actual`
+	if !strings.Contains(header, activeTab) {
+		t.Errorf("Actual tab is not the active trigger in the header; missing %q", activeTab)
+	}
+	if strings.Count(body, `aria-selected="true"`) != 1 {
+		t.Errorf("exactly one tab must be aria-selected=\"true\" (the Actual default)")
+	}
+	// The Actual pane is the active/shown pane by default.
+	if !strings.Contains(bodySlice, `<div id="tab-current" class="tab-pane active show"`) {
+		t.Errorf("the Actual tab pane is not the active/shown pane by default")
+	}
+}
+
+// cardHeaderSlice returns the substring of the sprints page body covering the
+// card header (from the card-header opening div to the start of the card-body),
+// so assertions target the header specifically rather than the whole page.
+func cardHeaderSlice(t *testing.T, body string) string {
+	t.Helper()
+	start := strings.Index(body, `<div class="card-header">`)
+	if start < 0 {
+		t.Fatalf("card-header not found in sprints page")
+	}
+	rest := body[start:]
+	end := strings.Index(rest, `<div class="card-body">`)
+	if end < 0 {
+		t.Fatalf("card-body marker not found after card-header")
+	}
+	return rest[:end]
+}
+
+// cardBodySlice returns the substring of the sprints page body from the
+// card-body opening div to the end of the card, so assertions can confirm the
+// tab panes live in the body while the nav-tabs list does not.
+func cardBodySlice(t *testing.T, body string) string {
+	t.Helper()
+	start := strings.Index(body, `<div class="card-body">`)
+	if start < 0 {
+		t.Fatalf("card-body not found in sprints page")
+	}
+	return body[start:]
+}
+
 // TestSprints_SprintClassificationAndLinks asserts each sprint is classified
 // into the correct tab by status and that every sprint links to its page. The
 // PENDING sprint must be under Próximos, the OPEN sprint (with its tasks'

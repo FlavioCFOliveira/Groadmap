@@ -10,10 +10,10 @@
 {{template "topnavbar" .}}
       <div class="page-header d-print-none">
         <div class="container-fluid">
-          <div class="row align-items-center">
+          <div class="row g-2 align-items-center">
             <div class="col">
               <div class="page-pretitle">{{.Name}} / Sprint #{{.Sprint.ID}}</div>
-              <h2 class="page-title">{{.Sprint.Title}} <span class="badge bg-blue-lt ms-2">{{.Sprint.Status}}</span></h2>
+              <h2 class="page-title">{{.Sprint.Title}} <span class="badge {{sprintStatusBadge .Sprint.Status}} ms-2">{{.Sprint.Status}}</span></h2>
             </div>
             <div class="col-auto ms-auto">
               <a class="btn btn-outline-secondary" href="/roadmaps/{{.Name}}"><i class="ti ti-arrow-left me-1"></i>Back to sprints</a>
@@ -29,8 +29,12 @@
         </div>
       </div>
       <footer class="footer footer-transparent d-print-none">
-        <div class="container-fluid text-secondary text-center">
-          Read-only. The rmp CLI remains the sole write path.
+        <div class="container-fluid">
+          <div class="row text-center align-items-center flex-row-reverse">
+            <div class="col-12 text-secondary">
+              Read-only. The rmp CLI remains the sole write path.
+            </div>
+          </div>
         </div>
       </footer>
     </div>

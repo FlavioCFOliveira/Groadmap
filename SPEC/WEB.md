@@ -34,6 +34,7 @@
   - [Embedded Asset Categories](#embedded-asset-categories)
   - [Frontend Rules](#frontend-rules)
   - [UI Framework](#ui-framework)
+  - [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours)
   - [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library)
 - [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)
 - [Error Handling and Exit Codes](#error-handling-and-exit-codes)
@@ -631,7 +632,13 @@ how the `rmp web` process itself terminates.
   is rendered through the single shared sprint-card partial (see
   [Shared Sprint-Card Partial](#shared-sprint-card-partial)), so all sprints share
   identical card markup across the three tabs. The three tabs differ only in which
-  sprints they contain and in the order those sprints appear.
+  sprints they contain and in the order those sprints appear. The tab control itself
+  follows Tabler's "card with tabs" example: the tab list is a single
+  `<ul class="nav nav-tabs card-header-tabs" data-bs-toggle="tabs" role="tablist">`
+  inside the card header, and tab activation uses Bootstrap's native tabs behaviour
+  (see [UI Framework](#ui-framework), rule 9). The status badge each card shows uses
+  the semantic colour mapping in
+  [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours).
   - **Actual** (the default active tab) presents the OPEN sprint or sprints —
     those in progress — ordered by ascending sprint `Order` (the unique sprint
     execution order; see `MODELS.md § Sprint`). Each OPEN sprint is shown with the
@@ -855,8 +862,11 @@ other sprint and is not expanded inline.
    - a **header** showing the sprint `title` (the sprint's required `title`; see
      `MODELS.md § Sprint`) together with (or directly under) the text
      `Sprint #<ID>` (the sprint's `id`) and a **status badge** for the sprint's
-     status (the status enum is defined in `MODELS.md § Enums`), so the sprint is
-     identifiable at a glance in the Próximos, Actual, and Concluídos listings;
+     status (the status enum is defined in `MODELS.md § Enums`), coloured by the
+     semantic mapping in
+     [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
+     so the sprint is identifiable at a glance in the Próximos, Actual, and
+     Concluídos listings;
    - the sprint **description** text;
    - a **footer** showing the sprint's total task count (the sprint's
      `task_count`; see `MODELS.md § Sprint`).
@@ -899,7 +909,10 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
    - the **full member-tasks table** listing the sprint's tasks in planned
      in-sprint execution order (the `sprint_tasks` order; see `MODELS.md § Sprint`
      and `DATABASE.md § Relationships`), with the columns `ID`, `Title`, `Status`,
-     `Type`, `Priority`, and `Severity`. Each task row is clickable and opens the
+     `Type`, `Priority`, and `Severity`. The `Status`, `Priority`, and `Severity`
+     cells render their values as Tabler badges coloured by the semantic mapping in
+     [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours).
+     Each task row is clickable and opens the
      read-only task detail modal for that task (see
      [Task Detail Modal](#task-detail-modal)). When the sprint has no tasks, the
      sub-template shows a clear empty-state message in place of the table.
@@ -1722,6 +1735,142 @@ read from the host filesystem at runtime.
    `BUILD.md § Vendored Web Assets`, not a silent code change. No version number
    is pinned here; the vendored Tabler version lives in the committed distribution
    under git.
+8. **Faithful Tabler fidelity.** Every web template faithfully follows the
+   official Tabler examples, adapted only to the project domain (the read-only
+   roadmap, sprint, task, audit, and graph pages). When a template needs a
+   component that Tabler already provides — cards, card tabs, page headers,
+   tables, pagination, badges, empty states, the navigation sidebar, the modal —
+   the template starts from the closest official Tabler example and reuses its
+   class and structure idioms, adapting only the data and labels to the roadmap
+   domain. A template MUST NOT hand-roll a component Tabler already provides, and
+   MUST NOT diverge from the Tabler example's markup structure where Tabler offers
+   a direct equivalent. This fidelity rule applies to every template in the web
+   asset set. The specific fidelity requirements that follow from this principle —
+   card tabs (rule 9), semantic status badges (see
+   [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours)),
+   no presentational inline styles (rule 10), and the minor markup-fidelity
+   adjustments (rule 11) — are concrete applications of it.
+9. **Card tabs follow Tabler's "card with tabs" example.** The Roadmap Sprints
+   Page tab control (the three tabs Próximos, Actual, Concluídos; see
+   [Roadmap Sprints Page](#roadmap-sprints-page)) follows Tabler's "card with
+   tabs" example exactly: the tab list is a single
+   `<ul class="nav nav-tabs card-header-tabs" data-bs-toggle="tabs" role="tablist">`
+   placed **inside** the card's `card-header`. The page MUST NOT instead put a card
+   title in the header with the `nav-tabs` list in the card body; the tab list lives
+   in the card header as the Tabler example shows. Tab activation uses Bootstrap's
+   native tabs behaviour through the `data-bs-toggle="tabs"` attribute (Tabler is
+   built on Bootstrap; see rule 1), not a hand-rolled show/hide script. Each tab's
+   trigger is a Tabler `nav-link` (`<a class="nav-link" data-bs-toggle="tab">`), and
+   the **Actual** tab is the one carrying the `active` state on page load. The three
+   tabs and their counts or badges, and the default-active Actual tab, are preserved
+   exactly as specified in [Roadmap Sprints Page](#roadmap-sprints-page).
+10. **No presentational inline styles.** Templates MUST NOT carry presentational
+    inline `style="..."` attributes. All styling lives in the vendored Tabler
+    classes and utilities, or in the project override stylesheet (`static/style.css`),
+    served from `/static/...` (see
+    [Embedded Asset Categories](#embedded-asset-categories)). In particular, the
+    navigation sidebar's section label and the empty-state icon sizing carry no
+    inline `style`: the sidebar section separator follows Tabler's vertical-navbar
+    subheader and `hr` idiom (a Tabler navbar subheader and divider, not an
+    inline-styled label), and any presentational sizing such as the empty-state
+    icon's dimensions lives in a Tabler utility class or in `static/style.css`. This
+    keeps the markup faithful to the Tabler examples and keeps presentation out of
+    the templates, consistent with the Content-Security-Policy in
+    [Security Headers](#security-headers) (which already permits the framework's own
+    `style-src 'unsafe-inline'` for Tabler, while the project's own styling stays in
+    the stylesheet).
+11. **Minor markup-fidelity adjustments.** The templates follow Tabler's markup
+    idioms in these specific places, as markup-fidelity adjustments that change
+    neither the read-only nature of the interface nor the content shown:
+    - **Page-header rows** use Tabler's `row g-2 align-items-center` gutter and
+      alignment classes, as the Tabler page-header example does.
+    - **The sidebar brand** uses the Tabler `<h1 class="navbar-brand
+      navbar-brand-autodark">` element, as the Tabler vertical-navbar example does.
+    - **The footer** follows Tabler's footer row structure, as the Tabler footer
+      example does.
+    These adjustments only align the markup with the Tabler examples; they introduce
+    no new page, no new content, and no write path, and the pages remain read-only.
+
+### Status, Priority, and Severity Badge Colours
+
+Status, priority, and severity are presented as Tabler badges. The badges MUST use
+**semantically meaningful** Tabler colour variants rather than a single fixed
+colour, so the colour carries the meaning of the value at a glance. The mapping is
+deterministic: a given enum value always maps to the same Tabler badge colour
+variant, everywhere a badge for that value is shown. The badge colour variants are
+Tabler's "light" badge utilities (the `bg-*-lt` classes), consistent with Tabler's
+badge examples and its dark theme.
+
+This subsection defines the only authoritative mapping. The badges use the
+canonical enums already defined elsewhere and introduce no new enum value: the task
+status enum and sprint status enum are defined in `MODELS.md § Enums`, the task
+status lifecycle in `STATE_MACHINE.md § Task State Machine`, the sprint status
+lifecycle in `STATE_MACHINE.md § Sprint State Machine`, and the `priority` and
+`severity` integer ranges (`0`-`9`) in `MODELS.md § Task`. The severity bands reuse
+the canonical criticality ranges defined in `COMMANDS.md § Show Sprint`
+(low `0`-`2`, medium `3`-`5`, high `6`-`7`, critical `8`-`9`); this file does not
+redefine them.
+
+**Task status (`TaskStatus`) → Tabler badge colour:**
+
+| Task status | Meaning | Badge variant |
+|-------------|---------|---------------|
+| `COMPLETED` | Work finished | `bg-green-lt` |
+| `TESTING` | In testing / awaiting verification | `bg-yellow-lt` |
+| `DOING` | In progress | `bg-blue-lt` |
+| `SPRINT` | Assigned to a sprint, not yet started | `bg-cyan-lt` |
+| `BACKLOG` | Neutral / not yet planned into a sprint | `bg-secondary-lt` |
+
+**Sprint status (`SprintStatus`) → Tabler badge colour:**
+
+| Sprint status | Meaning | Badge variant |
+|---------------|---------|---------------|
+| `CLOSED` | Sprint completed | `bg-green-lt` |
+| `OPEN` | Sprint in progress (current) | `bg-blue-lt` |
+| `PENDING` | Neutral / not yet started | `bg-secondary-lt` |
+
+**Priority (`priority`, integer `0`-`9`) → Tabler badge colour:**
+
+| Priority band | Range | Badge variant |
+|---------------|-------|---------------|
+| High | `7`-`9` | `bg-red-lt` |
+| Medium | `4`-`6` | `bg-yellow-lt` |
+| Low | `0`-`3` | `bg-secondary-lt` |
+
+**Severity (`severity`, integer `0`-`9`) → Tabler badge colour:**
+
+| Severity band | Range | Badge variant |
+|---------------|-------|---------------|
+| Critical | `8`-`9` | `bg-red-lt` |
+| High | `6`-`7` | `bg-orange-lt` |
+| Medium | `3`-`5` | `bg-yellow-lt` |
+| Low | `0`-`2` | `bg-secondary-lt` |
+
+Rules:
+
+1. **Deterministic and total.** Every value of each enum maps to exactly one badge
+   colour variant in the tables above. The priority and severity bands together
+   cover the whole `0`-`9` range with no gap and no overlap, so every valid integer
+   value resolves to exactly one band.
+2. **Applied consistently everywhere a badge is shown.** The same mapping is applied
+   wherever a status, priority, or severity badge appears: the tasks table (see
+   [Roadmap Tasks Page](#roadmap-tasks-page)), the sprint detail member-tasks table
+   (see [Sprint Detail Sub-Template](#sprint-detail-sub-template)), the task detail
+   modal (see [Task Detail Modal](#task-detail-modal)), the sprint cards (see
+   [Shared Sprint-Card Partial](#shared-sprint-card-partial)), the Roadmap Sprint
+   Page header and metadata datagrid (see [Roadmap Sprint Page](#roadmap-sprint-page)
+   and [Sprint Detail Sub-Template](#sprint-detail-sub-template)), and the sprint
+   tabs on the Roadmap Sprints Page (see [Roadmap Sprints Page](#roadmap-sprints-page)).
+   A status, priority, or severity badge anywhere in the interface uses the variant
+   the relevant table above assigns to its value; no badge uses a single fixed
+   colour across differing values.
+3. **No new enum value.** The mapping introduces no status, priority, or severity
+   value that is not already defined in `MODELS.md` and `STATE_MACHINE.md`. Should a
+   new enum value or a revised band be introduced there, this table is updated in the
+   same change so that the mapping stays total.
+4. **Faithful to Tabler.** The badge markup follows Tabler's badge example (a
+   Tabler `badge` element carrying the `bg-*-lt` colour utility); the templates do
+   not hand-roll a badge component (see [UI Framework](#ui-framework), rule 8).
 
 ### Knowledge-Graph Visualisation Library
 
@@ -2419,6 +2568,44 @@ Rules:
     (`MaxAuditLimit` = 500; see `DATABASE.md § Audit Result Limit`), so the page-size
     request never exceeds the cap (see
     [Roadmap Audit Log Page](#roadmap-audit-log-page)).
+60. The Roadmap Sprints Page tab control follows Tabler's "card with tabs" example:
+    the tab list is a single
+    `<ul class="nav nav-tabs card-header-tabs" data-bs-toggle="tabs" role="tablist">`
+    placed inside the card header (not a card title in the header with a separate
+    `nav-tabs` list in the card body), tab activation uses Bootstrap's native tabs
+    behaviour via `data-bs-toggle="tabs"`, and the three tabs (Próximos, Actual,
+    Concluídos) with their counts or badges and the default-active **Actual** tab are
+    preserved exactly as specified (see [UI Framework](#ui-framework), rule 9, and
+    [Roadmap Sprints Page](#roadmap-sprints-page)).
+61. Every status, priority, and severity badge uses the semantically meaningful
+    Tabler colour variant assigned to its value in
+    [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
+    not a single fixed colour: a `COMPLETED` task and a `CLOSED` sprint render
+    `bg-green-lt`, a `DOING` task and an `OPEN` sprint render `bg-blue-lt`, a
+    `TESTING` task renders `bg-yellow-lt`, a `SPRINT` task renders `bg-cyan-lt`, and a
+    `BACKLOG` task and a `PENDING` sprint render `bg-secondary-lt`; a priority in
+    `7`-`9` renders `bg-red-lt`, `4`-`6` renders `bg-yellow-lt`, and `0`-`3` renders
+    `bg-secondary-lt`; a severity in `8`-`9` renders `bg-red-lt`, `6`-`7` renders
+    `bg-orange-lt`, `3`-`5` renders `bg-yellow-lt`, and `0`-`2` renders
+    `bg-secondary-lt`. The same value maps to the same colour everywhere a badge for
+    it is shown — the tasks table, the sprint detail member-tasks table, the task
+    detail modal, the sprint cards, the Roadmap Sprint Page header and metadata
+    datagrid, and the sprints-page tabs — and the mapping introduces no enum value
+    beyond those defined in `MODELS.md` and `STATE_MACHINE.md`.
+62. No template carries a presentational inline `style="..."` attribute: all styling
+    is provided by vendored Tabler classes and utilities or by the project override
+    stylesheet (`static/style.css`). In particular, the navigation sidebar's section
+    label uses Tabler's vertical-navbar subheader and `hr` divider idiom rather than
+    an inline-styled label, and the empty-state icon's sizing lives in a Tabler
+    utility class or in `static/style.css` rather than in an inline `style`
+    attribute (see [UI Framework](#ui-framework), rule 10).
+63. The templates follow Tabler's markup idioms in the minor markup-fidelity places:
+    page-header rows use Tabler's `row g-2 align-items-center` gutter and alignment
+    classes, the sidebar brand uses the Tabler
+    `<h1 class="navbar-brand navbar-brand-autodark">` element, and the footer follows
+    Tabler's footer row structure. These are markup-fidelity adjustments only: the
+    read-only nature of the interface and the content shown are unchanged (see
+    [UI Framework](#ui-framework), rule 11).
 
 ## See Also
 
@@ -2449,6 +2636,11 @@ Rules:
   and `DATABASE.md § Audit Result Limit`
 - Sprint status enum and lifecycle that classify sprints into the sprints-page tabs
   → `MODELS.md § Enums` and `STATE_MACHINE.md § Sprint State Machine`
+- Task and sprint status enums, the task and sprint lifecycles, and the
+  `priority`/`severity` integer ranges and criticality bands that the badge colour
+  mapping uses → `MODELS.md § Enums`, `MODELS.md § Task`,
+  `STATE_MACHINE.md § Task State Machine`, `STATE_MACHINE.md § Sprint State Machine`,
+  and `COMMANDS.md § Show Sprint`
 - Embedded asset bundling, the vendored Tabler framework and D3.js (with
   d3-sankey) assets, and the self-contained-binary build verification →
   `BUILD.md § Vendored Web Assets`

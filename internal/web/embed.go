@@ -49,5 +49,11 @@ func init() {
 	}
 	staticSubFS = sub
 
-	pageTemplates = template.Must(template.ParseFS(templatesFS, "templates/*.html"))
+	// The badge FuncMap MUST be registered before parsing so the templates can
+	// call the semantic colour helpers (taskStatusBadge, sprintStatusBadge,
+	// priorityBadge, severityBadge) at execution time (SPEC/WEB.md § Status,
+	// Priority, and Severity Badge Colours; see badge.go).
+	pageTemplates = template.Must(
+		template.New("").Funcs(badgeFuncMap).ParseFS(templatesFS, "templates/*.html"),
+	)
 }
