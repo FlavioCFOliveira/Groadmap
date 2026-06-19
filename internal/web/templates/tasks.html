@@ -10,7 +10,7 @@
 {{template "topnavbar" .}}
       <div class="page-header d-print-none">
         <div class="container-fluid">
-          <div class="row align-items-center">
+          <div class="row g-2 align-items-center">
             <div class="col">
               <div class="page-pretitle">Roadmap</div>
               <h2 class="page-title">{{.Name}} <span class="text-secondary">/ Tasks</span></h2>
@@ -86,8 +86,12 @@
         </div>
       </div>
       <footer class="footer footer-transparent d-print-none">
-        <div class="container-fluid text-secondary text-center">
-          Read-only. The rmp CLI remains the sole write path.
+        <div class="container-fluid">
+          <div class="row text-center align-items-center flex-row-reverse">
+            <div class="col-12 text-secondary">
+              Read-only. The rmp CLI remains the sole write path.
+            </div>
+          </div>
         </div>
       </footer>
     </div>
