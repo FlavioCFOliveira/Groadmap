@@ -5,6 +5,67 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.0] - 2026-06-19
+
+A web-focused release that adds a read-only Roadmap Audit Log page to the
+`rmp web` interface and completes a Tabler-fidelity pass across all served
+templates. The new Audit Log page exposes the roadmap's audit trail in the
+browser with numbered Tabler pagination, while the fidelity pass aligns the web
+UI with the Tabler design system: semantic colour-coded badges for status,
+priority, and severity; sprint tabs migrated to the Tabler `card-header-tabs`
+pattern; all inline styles removed in favour of Tabler and project CSS; and a
+set of minor markup corrections (grid gaps, heading hierarchy, footer). The web
+specification (`SPEC/WEB.md`) is extended with explicit Tabler-fidelity rules
+for templates.
+
+Under Semantic Versioning 2.0.0 this is a **MINOR** release: it adds
+backward-compatible functionality (a new read-only page) and refines the
+existing read-only presentation. No `rmp` command, flag, or JSON success schema
+is removed or renamed, the on-disk graph format is unchanged, and the database
+schema version remains `1.8.0`.
+
+### Added
+
+- **Web — read-only Roadmap Audit Log page.** The `rmp web` interface gains a
+  new read-only page that surfaces the roadmap's audit trail in the browser. The
+  page is served from the embedded templates and reads through the same strictly
+  read-only data path as the rest of the web UI. Specified in `SPEC/WEB.md`.
+- **Web — numbered Tabler pagination on the Audit Log page.** The Audit Log page
+  paginates its entries with a numbered Tabler pagination control, so large
+  audit trails are navigable page by page.
+
+### Changed
+
+- **Web — semantic Tabler badge colours for status, priority, and severity.**
+  Status, priority, and severity values are now rendered as semantically
+  colour-coded Tabler badges, making state and importance visually
+  distinguishable across the served pages.
+- **Web — sprint tabs migrated to the Tabler `card-header-tabs` pattern.** The
+  sprint tabs now use Tabler's `card-header-tabs` markup, aligning the sprint
+  views with the Tabler design system.
+- **Web — inline styles removed from templates.** All inline `style` attributes
+  were removed from the templates; presentation is now driven exclusively by
+  Tabler and the project's `style.css`.
+- **Web — minor Tabler markup fidelity.** Several small markup corrections bring
+  the templates closer to Tabler conventions, including grid gap utilities
+  (`g-2`), an `h1` brand heading, and footer markup.
+- **SPEC — Tabler-fidelity rules for web templates.** `SPEC/WEB.md` is extended
+  with explicit rules governing Tabler fidelity for the web templates, and the
+  web documentation notes the semantic colour-coded status/priority/severity
+  badges.
+
+### Internal
+
+- New web unit suites covering the Audit Log page (`internal/web/audit_test.go`),
+  semantic badges (`internal/web/badge_test.go`), pagination
+  (`internal/web/pagination_test.go`), the no-inline-style invariant
+  (`internal/web/inline_style_test.go`), Tabler-fidelity markup
+  (`internal/web/tabler_fidelity_test.go`), and sprint rendering
+  (`internal/web/sprint_test.go`).
+- New audit-log query support in `internal/db/queries.go` with accompanying
+  unit tests (`internal/db/queries_test.go`).
+- Extended web end-to-end coverage in `tests/test_35_web_interface.py`.
+
 ## [1.12.0] - 2026-06-17
 
 A combined release that pairs read-only `rmp web` interface enhancements with a
@@ -80,6 +141,7 @@ behaviour.
   AI-contract E2E suite (`tests/test_30_aihelp_contract.py`) to lock in the
   revised help text and contract invariants.
 
+[1.13.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.12.0...v1.13.0
 [1.12.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.11.0...v1.12.0
 
 ## [1.11.0] - 2026-06-16
