@@ -13,7 +13,7 @@
           <div class="row align-items-center">
             <div class="col">
               <div class="page-pretitle">{{.Name}} / Sprint #{{.Sprint.ID}}</div>
-              <h2 class="page-title">{{.Sprint.Title}} <span class="badge bg-blue-lt ms-2">{{.Sprint.Status}}</span></h2>
+              <h2 class="page-title">{{.Sprint.Title}} <span class="badge {{sprintStatusBadge .Sprint.Status}} ms-2">{{.Sprint.Status}}</span></h2>
             </div>
             <div class="col-auto ms-auto">
               <a class="btn btn-outline-secondary" href="/roadmaps/{{.Name}}"><i class="ti ti-arrow-left me-1"></i>Back to sprints</a>

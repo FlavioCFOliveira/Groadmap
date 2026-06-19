@@ -825,9 +825,12 @@ func TestTasksPage_PreservesAllTaskFields(t *testing.T) {
 		}
 	}
 
-	// Status as a Tabler badge.
-	if !strings.Contains(body, `<span class="badge bg-blue-lt">`) {
-		t.Errorf("tasks page status not rendered as a Tabler badge")
+	// Status as a Tabler badge, coloured by the semantic mapping: the seeded
+	// task is added to a sprint, so its status is SPRINT, which maps to the
+	// bg-cyan-lt variant (SPEC/WEB.md § Status, Priority, and Severity Badge
+	// Colours).
+	if !strings.Contains(body, `<td><span class="badge bg-cyan-lt">SPRINT</span></td>`) {
+		t.Errorf("tasks page status not rendered as the semantic Tabler badge for SPRINT")
 	}
 
 	// The full task table is the tasks page's content; it carries no sprint

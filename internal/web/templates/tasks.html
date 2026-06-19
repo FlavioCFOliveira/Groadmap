@@ -55,10 +55,10 @@
                   <tr class="task-row" data-bs-toggle="modal" data-bs-target="#task-modal-{{.ID}}" tabindex="0" role="button" aria-label="Open details for task #{{.ID}}">
                     <td>{{.ID}}</td>
                     <td>{{.Title}}</td>
-                    <td><span class="badge bg-blue-lt">{{.Status}}</span></td>
+                    <td><span class="badge {{taskStatusBadge .Status}}">{{.Status}}</span></td>
                     <td>{{.Type}}</td>
-                    <td>{{.Priority}}</td>
-                    <td>{{.Severity}}</td>
+                    <td><span class="badge {{priorityBadge .Priority}}">{{.Priority}}</span></td>
+                    <td><span class="badge {{severityBadge .Severity}}">{{.Severity}}</span></td>
                     <td>{{with .Specialists}}{{.}}{{else}}&mdash;{{end}}</td>
                     <td>{{with .ParentTaskID}}#{{.}}{{else}}&mdash;{{end}}</td>
                     <td>{{.SubtaskCount}}</td>
