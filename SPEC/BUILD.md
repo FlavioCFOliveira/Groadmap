@@ -20,18 +20,18 @@ directive automatically.
 
 | Module | Path | Version | Purpose |
 |--------|------|---------|---------|
-| GoGraph | `github.com/FlavioCFOliveira/GoGraph` | Exact tag **v0.3.2** | Labelled property graph, Cypher engine, and durable store backing the `graph` command. See `GRAPH.md`. |
+| GoGraph | `github.com/FlavioCFOliveira/GoGraph` | Exact tag **v0.6.0** | Labelled property graph, Cypher engine, and durable store backing the `graph` command. See `GRAPH.md`. |
 
 Rules:
 
 1. GoGraph MUST be pinned to an exact, immutable version in `go.mod`, not a
    floating reference (no branch or moving target), so that builds are
    reproducible and the on-disk graph format is stable.
-2. GoGraph is consumed at the exact tag **v0.3.2**. Because v0.3.2 is a v0 (pre-1.0)
+2. GoGraph is consumed at the exact tag **v0.6.0**. Because v0.6.0 is a v0 (pre-1.0)
    version, it is consumable directly at the bare module path
    `github.com/FlavioCFOliveira/GoGraph`, and `go.mod` pins the clean exact tag
-   `v0.3.2`. This exact-tag pin satisfies Rule 1.
-3. v0.3.2 is a `0.y.z` release, so GoGraph's public API is not yet stable and may
+   `v0.6.0`. This exact-tag pin satisfies Rule 1.
+3. v0.6.0 is a `0.y.z` release, so GoGraph's public API is not yet stable and may
    change while the module matures toward `1.0.0`. The residual risks (pre-1.0 API
    instability and on-disk format change across pre-1.0 releases) and their
    mitigations are in `GRAPH.md § Dependency Maturity Risk`. Upgrading GoGraph is a
