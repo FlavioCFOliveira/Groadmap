@@ -5,6 +5,61 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.1] - 2026-06-29
+
+A maintenance release that refreshes third-party dependencies and remediates
+every finding from the 2026-06-29 release-readiness audit. The headline fix
+restores correct parsing of Cypher queries supplied through the `--query` flag
+when the value begins with a negative numeric literal (for example `-1` or
+`-0.5`), which were previously rejected as a missing flag value. The release also
+upgrades the embedded GoGraph engine and the SQLite driver, and reconciles the
+GoGraph pin across the specification. Internal hardening completes the cycle: the
+`gosec` security gate is now green, the `internal/cypherguard` package reaches
+full unit-test coverage, and a new end-to-end test pins the `rmp audit stats`
+JSON key set against regressions.
+
+Under Semantic Versioning 2.0.0 this is a **PATCH** release: it contains a
+backward-compatible bug fix and dependency maintenance only. No `rmp` command,
+flag, or JSON success schema is added, removed, or renamed; the GoGraph upgrade
+is additive with no exported API break and no on-disk store migration; and the
+database schema version remains `1.8.0`.
+
+### Changed
+
+- **Dependencies — GoGraph upgraded to `v0.6.0`.** The embedded GoGraph
+  knowledge-graph engine moves from `v0.4.0` to `v0.6.0`. The upgrade is a
+  pre-1.0 additive change: no exported Go API is broken and the on-disk graph
+  store requires no migration.
+- **Dependencies — SQLite driver refreshed.** `modernc.org/sqlite` moves from
+  `v1.52.0` to `v1.53.0` and its `modernc.org/libc` runtime from `v1.73.4` to
+  `v1.73.5`.
+- **Specification — GoGraph pin reconciled.** The GoGraph version pin recorded in
+  `SPEC/BUILD.md`, `SPEC/GRAPH.md`, and `SPEC/ARCHITECTURE.md` is reconciled from
+  `v0.3.2` to `v0.6.0`, so the specification matches the module the project
+  actually builds against.
+
+### Fixed
+
+- **Graph — `--query` values beginning with a negative number are accepted.**
+  The `rmp graph query` / `search` family of commands now accepts a `--query`
+  value that starts with a negative numeric literal (for example `-1` or
+  `-0.5`). Such values were previously misclassified as a missing flag value and
+  rejected; only genuine flag forms (`--x`, `-<letter>`) are treated as flags.
+  The refined contract is documented in `SPEC/GRAPH.md`, "Cypher Input Source and
+  Precedence", rule 4.
+
+### Internal
+
+- **Security gate green.** The `gosec` security scan now reports zero issues; the
+  eight verified-safe findings raised during the audit are annotated with
+  `#nosec` and justified in place. `make check` runs the security gate as part of
+  the standard validation battery.
+- **`internal/cypherguard` fully covered.** New unit tests raise the package from
+  0 % to 100 % statement coverage.
+- **Audit-stats key regression test.** A new end-to-end test pins the JSON key
+  set returned by `rmp audit stats`, guarding the command's output contract
+  against accidental change.
+
 ## [1.13.0] - 2026-06-19
 
 A web-focused release that adds a read-only Roadmap Audit Log page to the
@@ -141,6 +196,7 @@ behaviour.
   AI-contract E2E suite (`tests/test_30_aihelp_contract.py`) to lock in the
   revised help text and contract invariants.
 
+[1.13.1]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.13.0...v1.13.1
 [1.13.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.12.0...v1.13.0
 [1.12.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.11.0...v1.12.0
 
