@@ -486,8 +486,21 @@ Precedence and rules:
    used as the query.
 3. When `--query` is absent and standard input is empty (or not connected), the
    command fails with `utils.ErrRequired` (exit code 2): no query was supplied.
-4. When `--query` is present but its value is empty or whitespace only, the
-   command fails with `utils.ErrRequired` (exit code 2).
+4. When `--query` is present, its value is the token that immediately follows it.
+   The command fails with `utils.ErrRequired` (exit code 2) whenever that value is
+   absent. The value is absent in either of these cases:
+   - There is no following token, or the following token is empty or contains only
+     whitespace.
+   - The following token is flag-like: it begins with `--` (a long flag), or with a
+     single `-` immediately followed by an ASCII letter (a short flag). A flag-like
+     token is the next flag the user supplied, not a query value, so it is never
+     silently swallowed as the query.
+
+   A following token that begins with `-` immediately followed by a digit or a
+   decimal point (a negative numeric literal such as `-1` or `-0.5`) is not
+   flag-like. It is a legitimate query value: the command accepts it and passes it
+   to the engine like any other query, and the engine then accepts or rejects it on
+   its own Cypher-validity merits.
 5. Leading and trailing whitespace is trimmed from the query before the guard-rail
    check and before execution.
 

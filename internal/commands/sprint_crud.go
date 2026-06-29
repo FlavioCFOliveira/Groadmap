@@ -408,7 +408,7 @@ func sprintUpdate(args []string) error {
 			args = append(args, newOrder)
 		}
 		args = append(args, sprintID)
-		query := fmt.Sprintf("UPDATE sprints SET %s WHERE id = ?", strings.Join(setParts, ", "))
+		query := fmt.Sprintf("UPDATE sprints SET %s WHERE id = ?", strings.Join(setParts, ", ")) // #nosec G201 -- setParts are hard-coded literal column clauses ("title = ?", "description = ?", "max_tasks = ?", "order_index = ?"); every user value is bound via tx.Exec parameters, no user data is concatenated into SQL
 
 		updateResult, updateErr := tx.Exec(query, args...)
 		if updateErr != nil {

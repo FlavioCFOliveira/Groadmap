@@ -262,11 +262,34 @@ func openGraphStore(roadmapName string) (graphDir string, err error) {
 	if mkErr := os.MkdirAll(graphDir, 0700); mkErr != nil {
 		return "", fmt.Errorf("%w: creating graph directory: %v", utils.ErrDatabase, mkErr)
 	}
-	if chErr := os.Chmod(graphDir, 0700); chErr != nil {
+	if chErr := os.Chmod(graphDir, 0700); chErr != nil { // #nosec G302 -- 0700 on a DIRECTORY is mandated by SPEC (CLAUDE.md §10: 0700 for the ~/.roadmaps tree); gosec G302 false-positives on directory permissions
 		return "", fmt.Errorf("%w: setting graph directory permissions: %v", utils.ErrDatabase, chErr)
 	}
 
 	return graphDir, nil
+}
+
+// isFlagLike reports whether tok is a command-line flag rather than a query
+// value. A flag-like token begins with "--" (a long flag) or with a single
+// "-" immediately followed by an ASCII letter (a short flag such as "-q").
+//
+// A token that begins with "-" immediately followed by an ASCII digit or a
+// decimal point — a negative numeric literal such as "-1" or "-0.5" — is NOT
+// flag-like; it is a legitimate query value passed through to the engine, which
+// validates it on its own Cypher-validity merits (SPEC/GRAPH.md precedence
+// rule 4). A bare "-" is neither a flag nor a numeric literal and is likewise
+// treated as a value. The check is byte-wise to stay allocation-free on the
+// argument-parsing path.
+func isFlagLike(tok string) bool {
+	if strings.HasPrefix(tok, "--") {
+		return true
+	}
+	// A single leading '-' is a short flag only when an ASCII letter follows it.
+	if len(tok) >= 2 && tok[0] == '-' {
+		c := tok[1]
+		return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+	}
+	return false
 }
 
 // readQuery extracts the Cypher query from args. It consumes --query /
@@ -282,12 +305,15 @@ func readQuery(args []string) (string, error) {
 		case "--query", "-q":
 			// SPEC/GRAPH.md precedence rule 4: when --query is present but its
 			// value is missing — there is no following token, or the next token
-			// is itself a flag (so no value was supplied) — the command fails
+			// is itself flag-like (so no value was supplied) — the command fails
 			// with exit 2 rather than silently falling back to stdin (finding
 			// #26) or swallowing the following flag as the value (finding #27).
-			// A Cypher query never begins with '-', so a leading dash means the
-			// value is absent.
-			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+			// A flag-like token begins with "--" or with "-"+letter; a leading
+			// dash alone is no longer treated as absent, because "-1"/"-0.5" are
+			// negative numeric literals — legitimate query values handed to the
+			// engine for validation (finding #81). Empty or whitespace-only
+			// values are caught by the TrimSpace check below.
+			if i+1 >= len(args) || isFlagLike(args[i+1]) {
 				return "", fmt.Errorf("%w: no query supplied", utils.ErrRequired)
 			}
 			queryVal = args[i+1]
@@ -299,7 +325,11 @@ func readQuery(args []string) (string, error) {
 			// flags and no positional query. Reject anything else as malformed
 			// input (exit 2) instead of silently ignoring it, matching the
 			// cross-cutting unknown-flag rule in SPEC/ARCHITECTURE.md (finding #28).
-			if strings.HasPrefix(args[i], "-") {
+			// Only genuine flags ("--…" or "-"+letter) are reported as an
+			// unknown flag; a bare token such as "-1" is a stray positional, not
+			// a flag, so it is reported as an unexpected argument (finding #81).
+			// Both map to ErrInvalidInput (exit 2).
+			if isFlagLike(args[i]) {
 				return "", fmt.Errorf("%w: unknown flag: %s", utils.ErrInvalidInput, args[i])
 			}
 			return "", fmt.Errorf("%w: unexpected argument %q (graph queries use --query or stdin)", utils.ErrInvalidInput, args[i])
@@ -708,7 +738,7 @@ func checkpointGraph(g *lpg.Graph[string, float64], w *wal.Writer, graphDir stri
 	// Keep the snapshot directory consistent with the 0700 graphDir
 	// permissions set in openGraphStore. Best-effort: a failure here does
 	// not invalidate the durable snapshot.
-	_ = os.Chmod(snapDir, 0700)
+	_ = os.Chmod(snapDir, 0700) // #nosec G302 -- 0700 on a DIRECTORY is mandated by SPEC (CLAUDE.md §10: 0700 for the ~/.roadmaps tree); gosec G302 false-positives on directory permissions
 	return nil
 }
 

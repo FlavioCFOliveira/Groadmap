@@ -158,6 +158,7 @@ func Open(roadmapName string) (*DB, error) {
 	// process created it first we fall back to treating it as existing. The
 	// post-schema os.Chmod + VerifyPermissions below remain as belt-and-braces.
 	if isNew {
+		// #nosec G304 -- dbPath is the internal per-roadmap path ~/.roadmaps/<name>/project.db; <name> is validated by ValidateRoadmapName upstream (no traversal), and this O_EXCL pre-create at 0600 is the fix for security finding #77
 		f, err := os.OpenFile(dbPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, utils.DBFilePerm)
 		if err != nil {
 			if os.IsExist(err) {
@@ -375,13 +376,15 @@ func (db *DB) WithTransaction(fn func(*sql.Tx) error) error {
 
 		defer func() {
 			if r := recover(); r != nil {
-				tx.Rollback() //nolint:errcheck // rollback in panic recovery, original panic takes precedence  // #nosec G104
+				// #nosec G104 -- rollback during panic recovery; the original panic is re-raised below and takes precedence over any rollback error
+				tx.Rollback() //nolint:errcheck // rollback in panic recovery, original panic takes precedence
 				panic(r)
 			}
 		}()
 
 		if err := fn(tx); err != nil {
-			tx.Rollback() //nolint:errcheck // rollback after error, original error is returned to caller  // #nosec G104
+			// #nosec G104 -- rollback after a failed operation; the original error is returned to the caller and takes precedence over any rollback error
+			tx.Rollback() //nolint:errcheck // rollback after error, original error is returned to caller
 			return err
 		}
 

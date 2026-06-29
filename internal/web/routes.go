@@ -31,11 +31,11 @@ func (f noDirFS) Open(name string) (fs.File, error) {
 	}
 	s, err := file.Stat()
 	if err != nil {
-		file.Close()
+		file.Close() // #nosec G104 -- best-effort close on an error path; the Stat error is returned to the caller
 		return nil, err
 	}
 	if s.IsDir() {
-		file.Close()
+		file.Close() // #nosec G104 -- best-effort close before rejecting a directory; fs.ErrNotExist is returned to the caller
 		return nil, fs.ErrNotExist
 	}
 	return file, nil
