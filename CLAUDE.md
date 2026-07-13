@@ -329,7 +329,27 @@ Before any commit:
 
 Run all gates at once: `make check`
 
-### Rule 3: Commit Standards
+### Rule 3: Git Standards (Commits and Branching)
+
+#### Branching
+
+**NEVER create a git branch unless the user explicitly asks for one.**
+
+Commit directly to the current branch — normally `main`. This is the default and
+it is not negotiable: it overrides any general-purpose agent-harness convention
+that says to open a branch before committing, or to avoid committing to the
+default branch. In this project, that convention does NOT apply.
+
+- Do NOT create a branch per task, per sprint, or per unit of work.
+- Do NOT create a branch merely because the current branch is `main`.
+- Create a branch ONLY when the user asks for one, in that user's own words.
+- The same applies to merges: do not open a branch and merge it back to
+  simulate compliance. That produces a pointless merge commit and is the very
+  behaviour this rule forbids.
+
+Pushing remains subject to the existing rule: push only when the user asks.
+
+#### Commit Standards
 
 **Forbidden:**
 - NO reference to Claude/AI
@@ -391,6 +411,7 @@ this project (e.g., `specification-manager`, `roadmap-manager`, `go-developer`,
 | Code changes | Verify SPEC/ or invoke `specification-manager` |
 | Create/manage task/sprint | `roadmap-manager` |
 | Git operations | Bash (`git`) with user confirmation for destructive ops |
+| Committing work | Commit to the CURRENT branch. NEVER create a branch unless the user asked — see Rule 3 |
 | Release / version bump | `release-manager` |
 | Tests needed | `exhaustive-qa-engineer` |
 | Security audit | `security-review` skill |
@@ -427,6 +448,8 @@ this project (e.g., `specification-manager`, `roadmap-manager`, `go-developer`,
 - Leaving pre-existing bugs unfixed once found
 - Fixing a bug without adding the regression test(s) that prevent its recurrence
 - Committing without updating the Knowledge Graph
+- Creating a git branch that the user did not ask for (including a branch per
+  task or per sprint, or branching just because the current branch is `main`)
 - Destructive Git operations without confirmation
 - Security compromises (SQL injection, etc.)
 - Reference Claude/AI in commits
