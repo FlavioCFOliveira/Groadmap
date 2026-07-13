@@ -1,12 +1,5 @@
 # Application Version Specification
 
-## Current Version
-
-| Component | Version | File |
-|-----------|---------|------|
-| Application | v1.11.0 | `cmd/rmp/main.go` |
-| Database Schema | v1.8.0 | `internal/db/schema.go` |
-
 The SPEC itself is not versioned (see `SPEC/README.md` and `CLAUDE.md` § Versioning Policy). Git tags are the canonical record of past application and schema versions.
 
 ## Versioning Strategy
@@ -16,7 +9,7 @@ The SPEC itself is not versioned (see `SPEC/README.md` and `CLAUDE.md` § Versio
 The application version is defined in `cmd/rmp/main.go`:
 
 ```go
-const version = "1.11.0"
+const version = "X.Y.Z"
 ```
 
 This version is:
@@ -29,7 +22,7 @@ This version is:
 The database schema version is managed separately via `internal/db/schema.go`:
 
 ```go
-const SchemaVersion = "1.8.0"
+const SchemaVersion = "X.Y.Z"
 ```
 
 - Used for database migrations
@@ -190,10 +183,11 @@ and require no backfill.
 
 ## Release Process
 
-1. Update the version constant in `cmd/rmp/main.go`
-2. Update the `Current Version` table in this file
-3. Create the git tag: `git tag -a v<version> -m "Release v<version>"`
-4. Push the tag: `git push origin v<version>`
-5. The release workflow builds binaries and uploads artefacts
+1. Bump the version constant in `cmd/rmp/main.go`
+2. Update `CHANGELOG.md` and add the release notes file `release-notes/v<version>-<date>.md`
+3. Commit the changes
+4. Create the annotated git tag: `git tag -a v<version> -m "Release v<version>"`
+5. Push `main` and the tag: `git push origin main && git push origin v<version>`
+6. On the tag push, the `.github/workflows/release.yml` workflow builds the binaries and publishes the GitHub release
 
 Past releases are discoverable via `git tag --list` and `git log v<previous>..v<current>` — no Version History table is kept here.
