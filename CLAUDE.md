@@ -23,14 +23,20 @@ When you ask the user:
 This covers product decisions, scope decisions, and any judgment call not fully
 determined by these instructions or the SPEC.
 
+**Boundary between acting and asking.** Obvious, low-risk corrections — for
+example, a pre-existing bug whose fix is unambiguous — proceed immediately. Any
+decision that changes the scope, the expected behavior, the architecture, or the
+requirements MUST be put to the user first.
+
 ### Never Guess
 
-All work in this project MUST be based EXCLUSIVELY on knowledge you already
-have. Never guess the intended answer. When your information is insufficient:
+All work in this project MUST be based EXCLUSIVELY on verified knowledge. Never
+guess the intended answer. When your information is insufficient:
 - Consult the **Knowledge Graph** first — it is the primary source, both to
   query and to record the relationships you discover (see Section 5).
-- Then search the internet in official or authoritative sources, papers, books,
-  or domain experts to determine the best result.
+- Then search official or authoritative sources — specifications, RFCs,
+  standards, papers, books, or reference authors in the field — to determine the
+  best result.
 
 ### Measure to Decide
 
@@ -38,12 +44,29 @@ Whenever you must assess performance, completeness (whether something is
 finished), or correctness, ALWAYS gather evidence from the project itself.
 Decide empirically — never by assumption.
 
+### Decision Framework: Correct → Safe → Fast
+
+To determine what the project must deliver — in evaluations and audits as much
+as during implementation — apply this order of priority:
+
+1. **Is it correct?** Does the result meet the objective, the project SPEC, and
+   the applicable authoritative sources (RFCs, standards, etc.)?
+2. **Is it safe?** Does the decision or the task introduce any characteristic or
+   behavior that compromises the safe use of the deliverable?
+3. **Is it fast?** Is it as fast as it can be without compromising correctness or
+   safety? What can be done to maximize the deliverable's performance?
+
+If these criteria conflict, or if you cannot satisfy them, ASK the user
+immediately how to proceed, presenting the available options.
+
 ### Production-Grade by Default
 
-Across the entire workflow (analysis → planning → development → testing), the
-objective is always a **production-grade** result. Apply maximum knowledge and
-maximum diligence so that every cycle produces code that is ready for production
-use.
+**EVERY** action you perform — development, fixes, evaluations, analyses,
+audits, documentation, and anything else — MUST be carried out to production
+standards. Across the entire workflow (analysis → planning → development →
+testing → documentation), the objective is always a **production-grade** result.
+Apply maximum knowledge and maximum diligence so that every cycle produces work
+that is ready for production use.
 
 ### Self-Contained Development
 
@@ -165,8 +188,9 @@ If a change to the SPEC needs a narrative beyond the diff, write it in the commi
 │                                │ (truth)     │                  │
 │                                └─────────────┘                  │
 │                                                                 │
-│   Supporting: exhaustive-qa-engineer, release-manager,          │
-│   doc-manager, security-review, review, simplify                │
+│   Supporting: knowledge-authority, exhaustive-qa-engineer,      │
+│   release-manager, doc-manager, security-review, review,        │
+│   simplify                                                      │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -176,6 +200,7 @@ If a change to the SPEC needs a narrative beyond the diff, write it in the commi
 |---------------|------|----------------|-----------|
 | **specification-manager** | agent | SPEC/ creation and maintenance | MUST be first step. NEVER derives from code. Sole owner of `SPEC/`. |
 | **roadmap-manager** | skill | Roadmap/sprint/task management via `rmp` CLI | Source of truth via `rmp`. NEVER implements code directly. |
+| **knowledge-authority** | skill | Knowledge Graph: bootstrap, query, update, sync via `rmp graph` | Sole manager of the KG. Query it BEFORE reading files. Never guesses. |
 | **go-developer** | agent | Go implementation, refactor, review, performance | ONLY after SPEC exists. Validates build/test/vet/fmt/lint. |
 | **exhaustive-qa-engineer** | agent | Testing, edge cases, security/robustness validation | Critical features, pre-release, schema changes. |
 | **release-manager** | agent | Release coordination, version bump, CHANGELOG | Triggered by release requests. Runs full validation gates. |
@@ -196,6 +221,18 @@ If a change to the SPEC needs a narrative beyond the diff, write it in the commi
 
 **Step 3: SQLite** stores as source of truth.
 
+### Working Team (All Subagents)
+
+The table above defines the default routing; it is not a closed list. Your
+working team is **every subagent available** — global, user-level, or
+project-local.
+
+- Use them collaboratively and complementarily, so that each task is completed
+  with the maximum confidence, effectiveness, and assertiveness.
+- Each subagent MUST contribute proactively with its own specialty.
+- Whenever a task falls within a specialist's domain, delegate to that
+  specialist instead of doing the work yourself.
+
 ---
 
 ## 4. Planning & Task Execution
@@ -203,6 +240,9 @@ If a change to the SPEC needs a narrative beyond the diff, write it in the commi
 Use the `rmp` CLI (the system's roadmap-management tool) to plan and coordinate
 execution. `rmp` is the **SINGLE SOURCE OF TRUTH** for planning and task
 execution in this project — no other mechanism may be used for this purpose.
+
+Every operation on Tasks or Sprints MUST go through the `roadmap-manager` skill,
+which is the interface to the `rmp` CLI.
 
 Use the **Knowledge Graph** (Section 5) to understand the project, its
 components, and how they relate, so you can identify the scope and impact of
@@ -256,17 +296,20 @@ use `rmp` to determine:
 Whenever possible, adapt the model and the model's effort level to the
 requirements of each task's individual operations.
 
-Sprints and tasks are preferably executed sequentially. **Sprints MUST be
-executed sequentially.** Tasks may run in parallel only when there is
-justification for it.
+**Task and sprint execution is sequential.** Sprints MUST be executed
+sequentially, and so MUST the tasks inside them.
+
+Evaluations and audits MAY run in parallel, but such parallel execution MUST
+ALWAYS be authorized by the user beforehand.
 
 ---
 
 ## 5. Knowledge Graph
 
-Use `rmp`'s Graph (Groadmap) features to create, maintain (update), and query a
-knowledge graph of the project. This graph **MUST CONTAIN EVERYTHING** useful to
-know about the project. Examples:
+The Knowledge Graph MUST be managed through the `knowledge-authority` skill,
+which drives `rmp`'s Graph (Groadmap) features to create, maintain (update), and
+query a knowledge graph of the project. This graph **MUST CONTAIN EVERYTHING**
+useful to know about the project. Examples:
 - What features exist; where each is specified; where each is implemented; which
   tests exist and what they test.
 - The components, how they relate, and the dependencies between them.
@@ -309,6 +352,7 @@ your ability to understand the project is preserved.
 |-----------|---------------|
 | New feature/changes | `specification-manager` FIRST |
 | Create/manage task/sprint | `roadmap-manager` |
+| Knowledge Graph: query, update, sync | `knowledge-authority` |
 | Code implementation, refactor, performance | `go-developer` |
 | Git operations | Bash (`git`) — see Rule 3 |
 | Releases / version bump | `release-manager` |
@@ -397,9 +441,10 @@ type(scope): subject
 ```
 
 Project-local skill set is intentionally minimal; most agents/skills used in
-this project (e.g., `specification-manager`, `roadmap-manager`, `go-developer`,
-`exhaustive-qa-engineer`, `release-manager`, `review`, `security-review`,
-`simplify`) are provided by the global Claude Code configuration.
+this project (e.g., `specification-manager`, `roadmap-manager`,
+`knowledge-authority`, `go-developer`, `exhaustive-qa-engineer`,
+`release-manager`, `review`, `security-review`, `simplify`) are provided by the
+global Claude Code configuration.
 
 ---
 
@@ -410,6 +455,8 @@ this project (e.g., `specification-manager`, `roadmap-manager`, `go-developer`,
 | New feature | `specification-manager` FIRST |
 | Code changes | Verify SPEC/ or invoke `specification-manager` |
 | Create/manage task/sprint | `roadmap-manager` |
+| Need a project fact (what exists, where it lives) | `knowledge-authority` — query the KG BEFORE reading files |
+| Knowledge Graph update after a commit | `knowledge-authority` |
 | Git operations | Bash (`git`) with user confirmation for destructive ops |
 | Committing work | Commit to the CURRENT branch. NEVER create a branch unless the user asked — see Rule 3 |
 | Release / version bump | `release-manager` |
@@ -420,10 +467,14 @@ this project (e.g., `specification-manager`, `roadmap-manager`, `go-developer`,
 | SPEC exists, implement | `go-developer` |
 | PR review | `review` skill |
 | Requirements unclear / ambiguous / contradictory | ASK the user — provide options (a, b, c) with a recommendation; one question at a time |
+| Change to scope, behavior, architecture, or requirements | ASK the user BEFORE acting |
+| Obvious, low-risk fix (e.g. unambiguous bug) | Proceed immediately; no need to ask |
 | New need discovered mid-task | Add task via `rmp`; resolve in the SAME cycle |
 | Pre-existing bug found | Fix on the spot, then resume the original work |
 | Bug identified (any) | Add regression test(s) in the SAME cycle so it cannot reappear |
 | Assess performance / completeness / correctness | Gather evidence; decide empirically |
+| Trade-off between correctness, safety, and speed | Apply Correct → Safe → Fast; if they conflict, ASK the user |
+| Parallel evaluations or audits | Allowed ONLY with prior user authorization |
 | Information insufficient | Consult Knowledge Graph first, then authoritative sources — never guess |
 | Code vs SPEC diverge | Follow SPEC, ask user |
 
@@ -436,8 +487,10 @@ this project (e.g., `specification-manager`, `roadmap-manager`, `go-developer`,
 - Derive SPEC from existing code
 - Make product decisions without user
 - Make decisions alone when instructions are unclear, ambiguous, or contradictory (always ASK)
+- Change scope, expected behavior, architecture, or requirements without asking the user first
 - Guess instead of consulting the Knowledge Graph or authoritative sources
 - Decide on performance/completeness/correctness without empirical evidence
+- Trade correctness or safety for speed (the order is Correct → Safe → Fast)
 - Create task-specific spec files
 - Duplicate functional areas
 - Add versioning, dates, or change history to SPEC files (git is the source of truth)
@@ -447,6 +500,9 @@ this project (e.g., `specification-manager`, `roadmap-manager`, `go-developer`,
 - Partial (non-self-contained) deliverables or tests created with skip
 - Leaving pre-existing bugs unfixed once found
 - Fixing a bug without adding the regression test(s) that prevent its recurrence
+- Executing tasks or sprints in parallel (execution is sequential)
+- Running evaluations or audits in parallel without explicit user authorization
+- Managing the Knowledge Graph outside the `knowledge-authority` skill
 - Committing without updating the Knowledge Graph
 - Creating a git branch that the user did not ask for (including a branch per
   task or per sprint, or branching just because the current branch is `main`)
