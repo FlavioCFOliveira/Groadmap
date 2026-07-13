@@ -8,30 +8,42 @@ This specification defines the build system, cross-compilation targets, and CI/C
 
 ### Minimum Go Version
 
-Groadmap requires **Go 1.26.4** (or later). This is raised from the
-previous minimum of Go 1.25 to satisfy the GoGraph dependency, which sets the
-1.26 minor floor. The `go` directive in `go.mod` MUST declare `go 1.26.4` (or
-later), and the CI and release toolchains MUST use the Go version that matches
-the `go` directive (Go 1.26.4 or later). The CI and release workflows obtain
-that version from `go.mod` via `go-version-file: go.mod`, so they track the
-directive automatically.
+Groadmap requires **Go 1.26.5** (or later). This section is the authoritative
+statement of the required Go version; other specification files point here rather
+than restate it. Two independent constraints set this floor:
+
+1. **Minor floor (Go 1.26), set by the GoGraph dependency.** GoGraph declares Go
+   1.26 as its minimum, so Groadmap cannot build on an earlier minor version. See
+   `GRAPH.md § Dependency Maturity Risk` for the dependency itself.
+2. **Patch floor (Go 1.26.5), set by a security requirement.** The Go standard
+   library's `crypto/tls` is affected by GO-2026-5856, an Encrypted Client Hello
+   privacy leak, in Go 1.26.4 and earlier; the fix ships in Go 1.26.5. This is a
+   toolchain vulnerability, not a module vulnerability: it is remediated by the
+   toolchain version alone, and no dependency change can remediate it.
+
+The `go` directive in `go.mod` MUST declare `go 1.26.5` (or later), and the CI and
+release toolchains MUST use the Go version that matches the `go` directive (Go
+1.26.5 or later). The CI and release workflows obtain that version from `go.mod`
+via `go-version-file: go.mod`, so they track the directive automatically.
+
+Groadmap MUST NOT be built or released with a toolchain older than Go 1.26.5.
 
 ### External Dependencies
 
 | Module | Path | Version | Purpose |
 |--------|------|---------|---------|
-| GoGraph | `github.com/FlavioCFOliveira/GoGraph` | Exact tag **v0.6.0** | Labelled property graph, Cypher engine, and durable store backing the `graph` command. See `GRAPH.md`. |
+| GoGraph | `github.com/FlavioCFOliveira/GoGraph` | Exact tag **v0.7.0** | Labelled property graph, Cypher engine, and durable store backing the `graph` command. See `GRAPH.md`. |
 
 Rules:
 
 1. GoGraph MUST be pinned to an exact, immutable version in `go.mod`, not a
    floating reference (no branch or moving target), so that builds are
    reproducible and the on-disk graph format is stable.
-2. GoGraph is consumed at the exact tag **v0.6.0**. Because v0.6.0 is a v0 (pre-1.0)
+2. GoGraph is consumed at the exact tag **v0.7.0**. Because v0.7.0 is a v0 (pre-1.0)
    version, it is consumable directly at the bare module path
    `github.com/FlavioCFOliveira/GoGraph`, and `go.mod` pins the clean exact tag
-   `v0.6.0`. This exact-tag pin satisfies Rule 1.
-3. v0.6.0 is a `0.y.z` release, so GoGraph's public API is not yet stable and may
+   `v0.7.0`. This exact-tag pin satisfies Rule 1.
+3. v0.7.0 is a `0.y.z` release, so GoGraph's public API is not yet stable and may
    change while the module matures toward `1.0.0`. The residual risks (pre-1.0 API
    instability and on-disk format change across pre-1.0 releases) and their
    mitigations are in `GRAPH.md § Dependency Maturity Risk`. Upgrading GoGraph is a
@@ -152,7 +164,7 @@ Rules:
 **Jobs:**
 
 1. **test**
-   - Use Go 1.26.4 or later (see `Go Toolchain`)
+   - Use Go 1.26.5 or later (see `Go Toolchain`)
    - Run `go fmt`, `go vet`
    - Run `go test ./...`
    - Validate code quality before build
