@@ -56,6 +56,11 @@ Options (shared):
 Options (create / update):
   -t, --title <text>                       Sprint title (max 255 chars). REQUIRED on create.
   -d, --description <text>                 Sprint description (max 2048 chars). REQUIRED on create.
+                                           Must state the high-level (macro) goal of the development
+                                           effort the sprint delivers: a new development, a fix, a
+                                           refactoring, or another kind of change. Together with the
+                                           title, it must give a human or an AI agent a clear macro
+                                           idea of what the sprint's tasks are specifically aimed at.
   --max-tasks <n>                          Capacity cap on active tasks (range 1-10000; cannot
                                            be removed once set)
   --order <n>                              Execution order: positive integer (>0), unique across
@@ -108,8 +113,8 @@ Exit codes:
 
 Examples:
   rmp sprint list -r myproject
-  rmp sprint create -r myproject -t "Sprint 1" -d "First iteration"
-  rmp sprint create -r myproject -t "Capacity sprint" -d "Capacity-bounded sprint" --max-tasks 12
+  rmp sprint create -r myproject -t "Auth hardening" -d "Deliver session-based authentication for every write command."
+  rmp sprint create -r myproject -t "Ordering fixes" -d "Fix the task-ordering defects reported in v1.12." --max-tasks 12
   rmp sprint start -r myproject 1
   rmp sprint add-tasks -r myproject 1 1,2,3
   rmp sprint open-tasks -r myproject 1

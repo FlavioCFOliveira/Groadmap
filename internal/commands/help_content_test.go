@@ -17,6 +17,12 @@
 //  6. No hard TAB characters appear in any help output.
 //  7. Regression: task stat with an unrecognised status wraps ErrValidation
 //     (exit 6), not a bare ErrInvalidTaskStatus (exit 1).
+//  8. The sprint -d/--description flag is self-documenting on every help
+//     surface: the sprint family help, sprint create --help and
+//     sprint update --help all state that the description carries the
+//     high-level (macro) goal of the development effort the sprint delivers
+//     (SPEC/HELP.md § Sprint family help specifics item 5;
+//     SPEC/MODELS.md § Sprint Field Constraints).
 package commands
 
 import (
@@ -302,5 +308,202 @@ func TestHelpContent_TaskStatInvalidStatusWrapsErrValidation(t *testing.T) {
 				"(exit 6 / EXIT_INVALID_DATA); got error that does NOT wrap it: %v",
 			err,
 		)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 8. Sprint --description flag documents its macro-goal semantics everywhere.
+// ---------------------------------------------------------------------------
+
+// sprintDescriptionSemanticsFragments are the two sentences that every help
+// surface documenting the sprint -d/--description flag MUST carry, per
+// SPEC/HELP.md § Sprint family help specifics item 5. They are asserted on
+// whitespace-normalised help text so the assertion survives line wrapping
+// and re-indentation of the surrounding block, but still fails the moment
+// the guidance itself is removed or reworded.
+var sprintDescriptionSemanticsFragments = []string{
+	"high-level (macro) goal of the development effort the sprint delivers",
+	"clear macro idea of what the sprint's tasks are specifically aimed at",
+}
+
+// normalizeHelpText collapses every run of whitespace (spaces, newlines and
+// the column padding used by the help printers) into a single space, so a
+// sentence that the printer wraps across several aligned lines can be matched
+// as one contiguous substring.
+func normalizeHelpText(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// TestHelpContent_SprintDescriptionFlagDocumentsMacroGoal verifies that the
+// sprint description field is self-documenting on the three plain-text help
+// surfaces that expose the -d/--description flag: the sprint family help,
+// `sprint create --help` (where the flag is mandatory) and
+// `sprint update --help` (where it is optional and documents a NEW value with
+// identical semantics).
+//
+// A caller must not be able to read the help and conclude that any free text
+// will do: the description carries the high-level (macro) goal of the
+// development effort the sprint delivers, and together with the title it must
+// convey what the sprint's tasks aim at. Detailed scope, technical detail and
+// acceptance conditions live in the sprint's tasks, not in this field.
+func TestHelpContent_SprintDescriptionFlagDocumentsMacroGoal(t *testing.T) {
+	reg := AppRegistry()
+	sprintCmd := reg.FindCommand("sprint")
+	if sprintCmd == nil {
+		t.Fatal("sprint command missing from registry")
+	}
+
+	surfaces := []struct {
+		label string
+		argv  []string
+	}{
+		{label: "rmp sprint --help", argv: []string{"--help"}},
+		{label: "rmp sprint create --help", argv: []string{"create", "--help"}},
+		{label: "rmp sprint update --help", argv: []string{"update", "--help"}},
+	}
+
+	for _, s := range surfaces {
+		out := captureStdout(t, func() {
+			_ = sprintCmd.DispatchFamily(s.argv)
+		})
+		if !strings.Contains(out, "-d, --description") {
+			t.Errorf("%s: missing the -d, --description flag entry", s.label)
+			continue
+		}
+		normalized := normalizeHelpText(out)
+		for _, want := range sprintDescriptionSemanticsFragments {
+			if !strings.Contains(normalized, want) {
+				t.Errorf(
+					"%s: -d, --description help does not state its macro-goal semantics; "+
+						"missing %q (SPEC/HELP.md § Sprint family help specifics item 5)",
+					s.label, want,
+				)
+			}
+		}
+	}
+}
+
+// TestHelpContent_SprintDescriptionFlagRegistryDescription verifies the same
+// semantics on the registry Flag.Description strings, which are the source of
+// truth projected into the machine-readable AI Agent Contract (`--ai-help`)
+// as the flags[] "description" field. The end-to-end JSON projection is
+// asserted in internal/aihelp (TestGenerate_SprintDescriptionFlagSemantics);
+// this test pins the registry data itself and additionally guards the
+// single-line requirement (no embedded newlines in a contract string).
+func TestHelpContent_SprintDescriptionFlagRegistryDescription(t *testing.T) {
+	reg := AppRegistry()
+	sprintCmd := reg.FindCommand("sprint")
+	if sprintCmd == nil {
+		t.Fatal("sprint command missing from registry")
+	}
+
+	for _, subName := range []string{"create", "update"} {
+		sub := sprintCmd.FindSubcommand(subName)
+		if sub == nil {
+			t.Fatalf("sprint %s missing from registry", subName)
+		}
+
+		var desc string
+		var found bool
+		for _, f := range sub.Flags {
+			if f.Long == "--description" {
+				desc = f.Description
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("sprint %s: --description flag missing from the registry", subName)
+			continue
+		}
+
+		if strings.ContainsAny(desc, "\n\r") {
+			t.Errorf(
+				"sprint %s: --description contract text must be a single-line string "+
+					"(no embedded newlines); got %q",
+				subName, desc,
+			)
+		}
+		for _, want := range sprintDescriptionSemanticsFragments {
+			if !strings.Contains(desc, want) {
+				t.Errorf(
+					"sprint %s: --description contract text does not state its macro-goal "+
+						"semantics; missing %q (SPEC/HELP.md § Sprint family help specifics item 5)",
+					subName, want,
+				)
+			}
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 9. Sprint description EXAMPLES in plain-text help are macro-goal statements.
+// ---------------------------------------------------------------------------
+
+// isMacroGoalDescriptionExample reports whether a sprint description used in a
+// help EXAMPLE reads as a macro-goal statement rather than a label. The check is
+// mechanical on purpose: an angle-bracket placeholder (a slot for the caller's
+// own value) is accepted; anything else must be a sentence — at least five words
+// and a terminating period. Label-style values an agent must not imitate
+// ("Sprint 1", "Third sprint", "New desc", "x") fail both halves.
+//
+// Agents copy the examples, not the prose, so a label-style example printed
+// directly under the paragraph that forbids labels teaches the opposite of the
+// rule. See SPEC/HELP.md § Sprint family help specifics item 5.
+func isMacroGoalDescriptionExample(v string) bool {
+	if strings.HasPrefix(v, "<") && strings.HasSuffix(v, ">") {
+		return true
+	}
+	return len(strings.Fields(v)) >= 5 && strings.HasSuffix(v, ".")
+}
+
+// descriptionExampleValues extracts every value passed to -d "..." /
+// --description "..." in a single help line.
+func descriptionExampleValues(line string) []string {
+	var vals []string
+	for _, flag := range []string{`-d "`, `--description "`} {
+		rest := line
+		for {
+			i := strings.Index(rest, flag)
+			if i < 0 {
+				break
+			}
+			rest = rest[i+len(flag):]
+			end := strings.Index(rest, `"`)
+			if end < 0 {
+				break
+			}
+			vals = append(vals, rest[:end])
+			rest = rest[end+1:]
+		}
+	}
+	return vals
+}
+
+// TestHelpContent_SprintDescriptionExamplesAreMacroGoals walks every help output
+// in the registry and asserts that each `rmp sprint …` example line that passes
+// -d/--description carries a genuine macro-goal statement.
+//
+// Regression guard: the flag prose stated the macro-goal rule while the examples
+// beneath it still read `-d "Sprint 1 — Auth hardening"`, `-d "Third sprint"`
+// and `-d "Capacity-bounded sprint"` — labels, i.e. exactly the behaviour the
+// prose forbids.
+func TestHelpContent_SprintDescriptionExamplesAreMacroGoals(t *testing.T) {
+	for _, pair := range allHelpOutputs(t) {
+		for _, line := range strings.Split(pair.out, "\n") {
+			if !strings.Contains(line, "rmp sprint ") {
+				continue
+			}
+			for _, v := range descriptionExampleValues(line) {
+				if !isMacroGoalDescriptionExample(v) {
+					t.Errorf(
+						"%s: example uses the sprint description %q, which is a label rather than a "+
+							"macro-goal statement; examples are what agents copy, so they must state the "+
+							"high-level (macro) goal of the development effort the sprint delivers\n  line: %s",
+						pair.label, v, strings.TrimSpace(line),
+					)
+				}
+			}
+		}
 	}
 }

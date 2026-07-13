@@ -51,7 +51,14 @@ Aliases: new.
 Required:
   -r, --roadmap <name>            Target roadmap
   -t, --title <text>              Sprint title (max 255 chars)
-  -d, --description <text>        Sprint description (max 2048 chars)
+  -d, --description <text>        Sprint description (max 2048 chars). REQUIRED
+                                  on create. It must state the high-level (macro)
+                                  goal of the development effort the sprint
+                                  delivers: a new development, a fix, a
+                                  refactoring, or another kind of change.
+                                  Together with the title, it must give a human
+                                  or an AI agent a clear macro idea of what the
+                                  sprint's tasks are specifically aimed at.
 
 Optional:
   --max-tasks <n>                 Hard cap on active tasks (range 1-10000). When
@@ -77,9 +84,9 @@ Exit codes:
   6  Title/description too long, --max-tasks outside 1-10000, or --order not a positive integer
 
 Examples:
-  rmp sprint create -r myproject -t "Auth hardening" -d "Sprint 1 — Auth hardening"
-  rmp sprint new -r myproject -t "Capacity sprint" -d "Capacity-bounded sprint" --max-tasks 12
-  rmp sprint create -r myproject -t "Sprint 3" -d "Third sprint" --order 3
+  rmp sprint create -r myproject -t "Auth hardening" -d "Deliver session-based authentication for every write command."
+  rmp sprint new -r myproject -t "Ordering fixes" -d "Fix the task-ordering defects reported in v1.12." --max-tasks 12
+  rmp sprint create -r myproject -t "Storage refactor" -d "Refactor persistence onto a single write path." --order 3
 `)
 }
 
@@ -178,7 +185,14 @@ Required:
 
 At least one of:
   -t, --title <text>              New title (max 255 chars)
-  -d, --description <text>        New description (max 2048 chars)
+  -d, --description <text>        New sprint description (max 2048 chars). It
+                                  must state the high-level (macro) goal of the
+                                  development effort the sprint delivers: a new
+                                  development, a fix, a refactoring, or another
+                                  kind of change. Together with the title, it
+                                  must give a human or an AI agent a clear macro
+                                  idea of what the sprint's tasks are
+                                  specifically aimed at.
   --max-tasks <n>                 New capacity cap; range 1-10000
   --order <n>                     New execution order; positive integer (> 0),
                                   unique across the roadmap. Allowed only while
@@ -196,7 +210,7 @@ Exit codes:
 
 Examples:
   rmp sprint update -r myproject 5 -t "Auth + observability"
-  rmp sprint update -r myproject 5 -d "Sprint 1 — Auth + observability"
+  rmp sprint update -r myproject 5 -d "Deliver authentication and request tracing for every write command."
   rmp sprint upd -r myproject 5 --max-tasks 15
   rmp sprint update -r myproject 5 --order 2
 `)

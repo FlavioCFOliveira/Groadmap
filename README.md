@@ -96,8 +96,8 @@ rmp task get -r myproject 1,2,3
 # Get next task from the open sprint (ordered by sprint task order)
 rmp task next -r myproject
 
-# Create a sprint
-rmp sprint create -r myproject -t "Setup" -d "Sprint 1 - Setup"
+# Create a sprint (-d states the sprint's high-level goal)
+rmp sprint create -r myproject -t "Auth hardening" -d "Deliver session-based authentication for every write command."
 
 # Add tasks to the sprint
 rmp sprint add-tasks -r myproject 1 1,2,3
@@ -321,19 +321,20 @@ rmp task blocking -r <name> 5            # Tasks that depend on task 5 and are w
 
 **How do I create a sprint?**
 ```bash
-rmp sprint create -r <name> -t "Auth module" -d "Sprint 5 - Auth module"
-rmp sprint create -r <name> -t "Auth module" -d "Sprint 5 - Auth module" --max-tasks 8   # Cap at 8 active tasks
-rmp sprint create -r <name> -t "Auth module" -d "Sprint 5 - Auth module" --order 5        # Set the execution order
+rmp sprint create -r <name> -t "Auth module" -d "Deliver session-based authentication for every write command."
+rmp sprint create -r <name> -t "Auth module" -d "Deliver session-based authentication for every write command." --max-tasks 8   # Cap at 8 active tasks
+rmp sprint create -r <name> -t "Auth module" -d "Deliver session-based authentication for every write command." --order 5        # Set the execution order
 ```
+- `-d, --description` must state the sprint's high-level (macro) goal - the development effort it delivers (a new development, a fix, a refactoring, or another kind of change). Together with the title, it must tell a human or an AI agent what the sprint's tasks are aimed at. Detail belongs in the tasks, not here; `"Sprint 5"` is not a description.
 - `--order` is a positive integer, unique across the roadmap; the sprint with the lowest order executes first. When omitted, the next available value is auto-assigned.
 
 **How do I update a sprint?**
 ```bash
-rmp sprint update -r <name> <id> -t "New title"
-rmp sprint update -r <name> <id> -d "New description"
+rmp sprint update -r <name> <id> -t "Auth and tracing"
+rmp sprint update -r <name> <id> -d "Deliver authentication and request tracing for every write command."
 rmp sprint update -r <name> <id> --max-tasks 10        # Update the capacity limit
 rmp sprint update -r <name> <id> --order 2             # Change the execution order (PENDING/OPEN only)
-rmp sprint upd -r <name> <id> -t "New title" -d "New description" --max-tasks 10
+rmp sprint upd -r <name> <id> -t "Storage refactor" -d "Refactor persistence onto a single write path." --max-tasks 10
 ```
 
 **How do I add tasks to a sprint?**

@@ -220,9 +220,9 @@ subcommands and shared invariants.
 
 The `sprint` family help and the `sprint create` / `sprint update` subcommand
 helps follow the same structure template as every other family but MUST
-additionally make the sprint execution-order field explicit, because its rules
-cannot be inferred from the generic template. Both the plain-text help and the
-machine-readable AI Agent Contract (`rmp --ai-help`) MUST document the field:
+additionally make the sprint-specific rules below explicit, because they cannot
+be inferred from the generic template. Both the plain-text help and the
+machine-readable AI Agent Contract (`rmp --ai-help`) MUST document them:
 
 1. **The `--order` flag.** State, on `sprint create` and `sprint update`, that
    `--order <n>` sets the sprint execution order; that the value must be a positive
@@ -247,6 +247,48 @@ machine-readable AI Agent Contract (`rmp --ai-help`) MUST document the field:
    and passes it to the sprint-task query. Without the flag, every task in the
    sprint is returned regardless of status. A `<state>` value outside the valid
    set is rejected with exit code 6. See `COMMANDS.md § List Sprint Tasks`.
+5. **The `--description` flag semantics.** The help for `-d, --description` MUST
+   state what the field is *for*, not only its length cap: a caller must not be
+   able to read the help and conclude that any free text will do. The help MUST
+   state that the description carries the high-level (macro) goal of the
+   development effort the sprint delivers, and that title and description together
+   convey what the sprint's tasks aim at. The canonical definition of the field is
+   `MODELS.md § Sprint Field Constraints`; the help text below is the wording that
+   states it to the caller.
+
+   On `sprint create` the flag is mandatory, so it appears in the `Required:` block
+   and its help text reads exactly:
+
+   ```
+     -d, --description <text>        Sprint description (max 2048 chars). REQUIRED
+                                     on create. It must state the high-level (macro)
+                                     goal of the development effort the sprint
+                                     delivers: a new development, a fix, a
+                                     refactoring, or another kind of change.
+                                     Together with the title, it must give a human
+                                     or an AI agent a clear macro idea of what the
+                                     sprint's tasks are specifically aimed at.
+   ```
+
+   On `sprint update` the flag is optional, so it appears in the `Optional:` block
+   and its help text reads exactly the same text with the requiredness sentence
+   adapted, because the flag documents a NEW description with the same semantics:
+
+   ```
+     -d, --description <text>        New sprint description (max 2048 chars). It
+                                     must state the high-level (macro) goal of the
+                                     development effort the sprint delivers: a new
+                                     development, a fix, a refactoring, or another
+                                     kind of change. Together with the title, it
+                                     must give a human or an AI agent a clear macro
+                                     idea of what the sprint's tasks are
+                                     specifically aimed at.
+   ```
+
+   In the AI Agent Contract, the `flags[]` entry for `--description` on both
+   `sprint create` and `sprint update` MUST carry the same semantics in its
+   `description` string. See `COMMANDS.md § Create Sprint` and
+   `COMMANDS.md § Update Sprint`.
 
 ### Graph family help specifics
 

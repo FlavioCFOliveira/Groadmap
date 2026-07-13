@@ -241,7 +241,7 @@ The `web` command is deliberately **not** in this list. `rmp web` operates acros
 ```bash
 # Always provide -r:
 rmp task list -r myproject
-rmp sprint create -r myproject -t "Sprint 1" -d "Sprint 1 goal"
+rmp sprint create -r myproject -t "Sprint 1" -d "Deliver the first working persistence layer for roadmaps."
 rmp stats -r myproject
 ```
 
@@ -918,7 +918,13 @@ below supplies both.
 
 **Options:**
 - `-t, --title <text>` - Sprint title (required), maximum 255 characters
-- `-d, --description <text>` - Sprint description (required)
+- `-d, --description <text>` - Sprint description (required), maximum 2048
+  characters. The description MUST state the high-level (macro) goal of the
+  development effort the sprint delivers: a new development, a fix, a refactoring,
+  or another kind of change. Together with the title, it MUST give a human reader
+  or an AI agent a clear macro idea of what the sprint's tasks are specifically
+  aimed at. See `MODELS.md § Sprint Field Constraints` for the canonical definition
+  of the field.
 - `--max-tasks <n>` - Maximum number of tasks allowed in the sprint (optional; omit
   for unlimited capacity). When provided, MUST be a positive integer in the range
   `1`-`10000`. A value `< 1` or `> 10000`, or a non-integer value, is rejected with
@@ -1062,7 +1068,7 @@ rmp sprint show -r <name> <id>
 {
   "sprint_id": 5,
   "sprint_title": "Sprint 12",
-  "sprint_description": "Sprint 12 - March 2026",
+  "sprint_description": "Refactor the task-ordering engine so that sprint positions stay stable across bulk moves.",
   "status": "OPEN",
   "max_tasks": 25,
   "capacity_pct": 56.0,
@@ -1361,7 +1367,13 @@ rmp sprint upd -r <name> <id> [-t "New Title"] [-d "New Description"] [--max-tas
 
 **Options:**
 - `-t, --title <text>` - New sprint title, maximum 255 characters
-- `-d, --description <text>` - New sprint description
+- `-d, --description <text>` - New sprint description, maximum 2048 characters. The
+  new value carries exactly the same semantics as on creation: it MUST state the
+  high-level (macro) goal of the development effort the sprint delivers (a new
+  development, a fix, a refactoring, or another kind of change), and together with
+  the title it MUST give a human reader or an AI agent a clear macro idea of what
+  the sprint's tasks are specifically aimed at. See
+  `MODELS.md § Sprint Field Constraints` for the canonical definition of the field.
 - `--max-tasks <n>` - New capacity limit. MUST be a positive integer in the range
   `1`-`10000`. A value `< 1` or `> 10000`, or a non-integer value, is rejected with
   exit code 6.

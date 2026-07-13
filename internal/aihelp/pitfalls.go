@@ -55,7 +55,7 @@ func staticPitfalls() []Pitfall {
 			Description: "Calling `sprint add-tasks` against a sprint in CLOSED state. Closed sprints are " +
 				"immutable; use a PENDING or OPEN sprint, or create a new one.",
 			WrongExample:   "rmp sprint add-tasks -r myproject 3 42,43",
-			CorrectExample: "rmp sprint create -r myproject -d \"Sprint 8\" && rmp sprint add-tasks -r myproject 8 42,43",
+			CorrectExample: "rmp sprint create -r myproject -t \"Auth hardening\" -d \"Deliver session-based authentication for every write command.\" && rmp sprint add-tasks -r myproject 8 42,43",
 			Reference:      "sprint add-tasks; enums.SprintStatus CLOSED value.",
 		},
 		{

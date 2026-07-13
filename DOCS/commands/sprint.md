@@ -45,11 +45,21 @@ Creates a new sprint (status `PENDING`) in the specified roadmap. Both `-t`/`--t
 |------------|------------|------|--------|-------------|
 | `-r` | `--roadmap` | string | - | Roadmap name (required) |
 | `-t` | `--title` | string | - | Sprint title, max 255 chars. **Required** on create |
-| `-d` | `--description` | string | - | Sprint description, max 2048 chars. **Required** on create |
+| `-d` | `--description` | string | - | Sprint description, max 2048 chars. **Required** on create. Must state the sprint's high-level (macro) goal - see below |
 | | `--order` | integer | auto | Execution order; positive integer (`> 0`), unique across sprints. When omitted, auto-assigned to `MAX(order) + 1` (first sprint is `1`) |
 | | `--max-tasks` | integer | - | Capacity cap on active tasks (range 1-10000); cannot be removed once set |
 
 **Output:** JSON object with the created sprint ID
+
+**The `description` field** must state the high-level (macro) goal of the
+development effort the sprint delivers: a new development, a fix, a refactoring,
+or another kind of change. Together with the `title`, it must give a human reader
+or an AI agent a clear macro idea of what the sprint's tasks are specifically
+aimed at. It states the macro goal only - detailed scope, technical detail, and
+acceptance conditions belong in the sprint's tasks, which specify them in full
+through their functional requirements, technical requirements, and acceptance
+criteria. A label such as `"Sprint 3"` or a restatement of the title does not
+satisfy this contract.
 
 **The `order` field** indicates the natural, sequential order in which sprints
 must be executed. It must be a positive integer (`> 0`) and unique across all
@@ -58,9 +68,9 @@ an order already used by another sprint exits with code 5.
 
 **Examples:**
 ```bash
-rmp sprint create -r project1 -t "Initial Setup" -d "Sprint 1 - Initial Setup"
-rmp sprint new -r project1 -t "Features" -d "Sprint 2 - Features"
-rmp sprint create -r project1 -t "Hardening" -d "Sprint 3 - Hardening" --order 3
+rmp sprint create -r project1 -t "Auth hardening" -d "Deliver session-based authentication for every write command."
+rmp sprint new -r project1 -t "Ordering fixes" -d "Fix the task-ordering defects reported in v1.12."
+rmp sprint create -r project1 -t "Storage refactor" -d "Refactor persistence onto a single write path." --order 3
 ```
 
 **Example output:**
@@ -122,8 +132,8 @@ rmp sprint show -r project1 1
 ```json
 {
   "sprint_id": 1,
-  "sprint_title": "Initial Setup",
-  "sprint_description": "Sprint 1 - Initial Setup",
+  "sprint_title": "Auth hardening",
+  "sprint_description": "Deliver session-based authentication for every write command.",
   "status": "OPEN",
   "max_tasks": null,
   "capacity_pct": null,
@@ -473,7 +483,7 @@ provided.
 |------------|------------|------|-----------|
 | `-r` | `--roadmap` | string | Roadmap name (required) |
 | `-t` | `--title` | string | New title, max 255 chars (optional) |
-| `-d` | `--description` | string | New description, max 2048 chars (optional) |
+| `-d` | `--description` | string | New description, max 2048 chars (optional). Carries the same semantics as on create: it must state the sprint's high-level (macro) goal |
 | | `--order` | integer | New execution order; positive and unique (optional) |
 | | `--max-tasks` | integer | New capacity cap on active tasks (optional) |
 
@@ -486,10 +496,10 @@ sprint exits with code 5.
 
 **Examples:**
 ```bash
-rmp sprint update -r project1 1 -t "Setup and Config"
-rmp sprint update -r project1 1 -d "Sprint 1 - Setup and Config"
+rmp sprint update -r project1 1 -t "Auth and tracing"
+rmp sprint update -r project1 1 -d "Deliver authentication and request tracing for every write command."
 rmp sprint update -r project1 1 --order 2
-rmp sprint upd -r project1 1 -t "Updated title" -d "Updated description"
+rmp sprint upd -r project1 1 -t "Storage refactor" -d "Refactor persistence onto a single write path."
 ```
 
 ---
@@ -732,7 +742,7 @@ PENDING → OPEN → CLOSED
 | Field | Required | Max Length / Range | Description |
 |-------|----------|--------------------|-------------|
 | `title` | Yes (on create) | 255 chars | Sprint title |
-| `description` | Yes (on create) | 2048 chars | Sprint description |
+| `description` | Yes (on create) | 2048 chars | Sprint description: the high-level (macro) goal of the development effort the sprint delivers (macro goal only; detail belongs in the sprint's tasks) |
 | `max-tasks` | No | 1-10000 | Capacity cap on active tasks; cannot be removed once set |
 | `order` | No | positive integer (`> 0`), unique | Execution order across the roadmap; auto-assigned when omitted; immutable once the sprint is CLOSED |
 

@@ -878,3 +878,241 @@ func TestGenerate_Deterministic(t *testing.T) {
 		t.Errorf("Generate is non-deterministic")
 	}
 }
+
+// ------------------------------------------------------------------
+// Sprint --description flag semantics in the machine-readable contract.
+// ------------------------------------------------------------------
+
+// TestGenerate_SprintDescriptionFlagSemantics asserts that the AI Agent
+// Contract emitted for `sprint create` and `sprint update` documents what the
+// sprint description field is *for*, not merely its length cap: the flags[]
+// entry for --description must state that the value carries the high-level
+// (macro) goal of the development effort the sprint delivers and that, together
+// with the title, it conveys what the sprint's tasks aim at.
+//
+// See SPEC/HELP.md § Sprint family help specifics item 5 and
+// SPEC/MODELS.md § Sprint Field Constraints. An agent reading only the contract
+// (the canonical machine-readable surface) must be able to write a conforming
+// description without opening the plain-text help.
+//
+// The contract strings are single-line by construction: JSON tolerates escaped
+// newlines, but a wrapped description would be reproduced verbatim by agents,
+// so the absence of embedded newlines is asserted too.
+func TestGenerate_SprintDescriptionFlagSemantics(t *testing.T) {
+	wantFragments := []string{
+		"high-level (macro) goal of the development effort the sprint delivers",
+		"clear macro idea of what the sprint's tasks are specifically aimed at",
+	}
+
+	for _, subName := range []string{"create", "update"} {
+		out := generateOrFatal(t, ScopeSubcommand("sprint", subName))
+		m := unmarshalAsMap(t, out)
+
+		cmds, ok := m["commands"].([]any)
+		if !ok || len(cmds) != 1 {
+			t.Fatalf("sprint %s scope: expected exactly 1 command, got %v", subName, m["commands"])
+		}
+		subs, ok := cmds[0].(map[string]any)["subcommands"].([]any)
+		if !ok || len(subs) != 1 {
+			t.Fatalf("sprint %s scope: expected exactly 1 subcommand, got %v", subName, subs)
+		}
+		flags, ok := subs[0].(map[string]any)["flags"].([]any)
+		if !ok {
+			t.Fatalf("sprint %s: flags array missing from the contract", subName)
+		}
+
+		var desc string
+		var found bool
+		for _, f := range flags {
+			entry := f.(map[string]any)
+			if entry["long"] == "--description" {
+				desc, _ = entry["description"].(string)
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("sprint %s: --description flag missing from the contract flags[]", subName)
+		}
+
+		if strings.ContainsAny(desc, "\n\r") {
+			t.Errorf(
+				"sprint %s: --description contract text must be a single-line string "+
+					"(no embedded newlines); got %q",
+				subName, desc,
+			)
+		}
+		for _, want := range wantFragments {
+			if !strings.Contains(desc, want) {
+				t.Errorf(
+					"sprint %s --ai-help: flags[--description].description does not state its "+
+						"macro-goal semantics; missing %q\ngot: %q",
+					subName, want, desc,
+				)
+			}
+		}
+	}
+}
+
+// ------------------------------------------------------------------
+// Sprint description EXAMPLES across the whole contract.
+// ------------------------------------------------------------------
+
+// sprintDescriptionValues extracts every value passed to -d / --description
+// in a command string. Returns nil when the command passes neither.
+func sprintDescriptionValues(cmd string) []string {
+	var vals []string
+	for _, flag := range []string{`-d "`, `--description "`} {
+		rest := cmd
+		for {
+			i := strings.Index(rest, flag)
+			if i < 0 {
+				break
+			}
+			rest = rest[i+len(flag):]
+			end := strings.Index(rest, `"`)
+			if end < 0 {
+				break
+			}
+			vals = append(vals, rest[:end])
+			rest = rest[end+1:]
+		}
+	}
+	return vals
+}
+
+// isMacroGoalStatement reports whether a sprint description example reads as a
+// macro-goal STATEMENT rather than a label. Two mechanical criteria, chosen so
+// the check is objective and cheap:
+//
+//   - an angle-bracket placeholder (e.g. <macro-goal-description>) is accepted:
+//     it is a slot for the caller's own value, not a value to copy verbatim;
+//   - anything else must be a sentence: at least five words and a terminating
+//     period. Label-style values an agent must not imitate — "Sprint 1",
+//     "New desc", "Third sprint", "x" — fail both halves.
+//
+// The rule exists because agents copy the EXAMPLES, not the prose: a label-style
+// example sitting under a paragraph that forbids labels teaches the wrong thing.
+// See SPEC/HELP.md § Sprint family help specifics item 5 and
+// SPEC/MODELS.md § Sprint Field Constraints.
+func isMacroGoalStatement(v string) bool {
+	if strings.HasPrefix(v, "<") && strings.HasSuffix(v, ">") {
+		return true
+	}
+	return len(strings.Fields(v)) >= 5 && strings.HasSuffix(v, ".")
+}
+
+// contractCommandStrings collects every executable command string the contract
+// exposes to an agent: subcommand examples (with their declared exit code),
+// common-workflow steps, and pitfall wrong/correct examples. Steps and pitfall
+// examples carry no exit field, so they are recorded with exit 0 (they are
+// presented as commands that work).
+type contractCommand struct {
+	label string
+	cmd   string
+	exit  int
+}
+
+func contractCommandStrings(t *testing.T) []contractCommand {
+	t.Helper()
+	m := unmarshalAsMap(t, generateOrFatal(t, ScopeAll()))
+
+	var out []contractCommand
+	for _, c := range m["commands"].([]any) {
+		cmd := c.(map[string]any)
+		cmdName, _ := cmd["name"].(string)
+		subs, _ := cmd["subcommands"].([]any)
+		for _, s := range subs {
+			sub := s.(map[string]any)
+			subName, _ := sub["name"].(string)
+			examples, _ := sub["examples"].([]any)
+			for _, e := range examples {
+				ex := e.(map[string]any)
+				cmdStr, _ := ex["cmd"].(string)
+				exit := 0
+				if f, ok := ex["exit"].(float64); ok {
+					exit = int(f)
+				}
+				out = append(out, contractCommand{
+					label: "example of `" + cmdName + " " + subName + "`",
+					cmd:   cmdStr,
+					exit:  exit,
+				})
+			}
+		}
+	}
+	for _, w := range m["common_workflows"].([]any) {
+		wf := w.(map[string]any)
+		name, _ := wf["name"].(string)
+		steps, _ := wf["steps"].([]any)
+		for _, s := range steps {
+			step := s.(map[string]any)
+			cmdStr, _ := step["command"].(string)
+			out = append(out, contractCommand{label: "workflow " + name + " step", cmd: cmdStr})
+		}
+	}
+	for _, p := range m["pitfalls"].([]any) {
+		pf := p.(map[string]any)
+		id, _ := pf["id"].(string)
+		wrong, _ := pf["wrong_example"].(string)
+		correct, _ := pf["correct_example"].(string)
+		out = append(out,
+			contractCommand{label: "pitfall " + id + " wrong_example", cmd: wrong},
+			contractCommand{label: "pitfall " + id + " correct_example", cmd: correct},
+		)
+	}
+	return out
+}
+
+// TestGenerate_SprintDescriptionExamplesAreMacroGoals asserts that every example
+// in the contract that passes -d/--description to a sprint command carries a
+// genuine macro-goal statement. Regression guard for the case where the flag
+// PROSE stated the rule while the examples right beside it ("Sprint 1",
+// "New desc", "x") demonstrated the exact behaviour the rule forbids.
+func TestGenerate_SprintDescriptionExamplesAreMacroGoals(t *testing.T) {
+	for _, cc := range contractCommandStrings(t) {
+		if !strings.Contains(cc.cmd, "rmp sprint ") {
+			continue
+		}
+		for _, v := range sprintDescriptionValues(cc.cmd) {
+			if !isMacroGoalStatement(v) {
+				t.Errorf(
+					"%s: sprint description example %q is a label, not a macro-goal statement "+
+						"(agents copy examples, not prose); it must state the high-level (macro) goal "+
+						"of the development effort the sprint delivers\n  command: %s",
+					cc.label, v, cc.cmd,
+				)
+			}
+		}
+	}
+}
+
+// TestGenerate_SprintCreateExamplesCarryRequiredFlags asserts that every
+// contract command invoking `sprint create` and presented as working (a
+// zero-exit example, a workflow step, or a pitfall correct_example) supplies
+// BOTH mandatory flags, --title and --description. Examples that declare a
+// non-zero exit are exempt: they exist precisely to demonstrate the failure of
+// omitting one.
+//
+// Regression guard: the `add_tasks_to_closed_sprint` pitfall's correct_example
+// and both `sprint create` workflow steps omitted -t/--title entirely, so an
+// agent copying them would have hit exit 2 (required parameter missing).
+func TestGenerate_SprintCreateExamplesCarryRequiredFlags(t *testing.T) {
+	for _, cc := range contractCommandStrings(t) {
+		if !strings.Contains(cc.cmd, "rmp sprint create") && !strings.Contains(cc.cmd, "rmp sprint new") {
+			continue
+		}
+		if cc.exit != 0 {
+			continue // deliberate failure fixture
+		}
+		hasTitle := strings.Contains(cc.cmd, "-t ") || strings.Contains(cc.cmd, "--title ")
+		hasDesc := strings.Contains(cc.cmd, "-d ") || strings.Contains(cc.cmd, "--description ")
+		if !hasTitle || !hasDesc {
+			t.Errorf(
+				"%s: `sprint create` is presented as a working command but omits a mandatory flag "+
+					"(--title present: %v, --description present: %v); as written it exits 2\n  command: %s",
+				cc.label, hasTitle, hasDesc, cc.cmd,
+			)
+		}
+	}
+}

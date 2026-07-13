@@ -49,8 +49,8 @@ func staticWorkflows() []Workflow {
 					Purpose: "Populate the backlog with one task per work item. Repeat once per task; each invocation returns the new task ID on stdout.",
 				},
 				{
-					Command: "rmp sprint create -r <name> -d \"<description>\" --max-tasks <n>",
-					Purpose: "Create the first sprint in PENDING state. Returns the new sprint ID on stdout.",
+					Command: "rmp sprint create -r <name> -t \"<title>\" -d \"<macro-goal-description>\" --max-tasks <n>",
+					Purpose: "Create the first sprint in PENDING state. Both --title and --description are mandatory; the description must state the high-level (macro) goal of the development effort the sprint delivers. Returns the new sprint ID on stdout.",
 				},
 				{
 					Command: "rmp sprint add-tasks -r <name> <sprint-id> <task-id-1,task-id-2,...>",
@@ -78,8 +78,8 @@ func staticWorkflows() []Workflow {
 					Purpose: "Inspect the current backlog and identify the task IDs to include in the next sprint.",
 				},
 				{
-					Command: "rmp sprint create -r <name> -d \"<description>\" --max-tasks <n>",
-					Purpose: "Create the new sprint in PENDING state. Returns the new sprint ID on stdout.",
+					Command: "rmp sprint create -r <name> -t \"<title>\" -d \"<macro-goal-description>\" --max-tasks <n>",
+					Purpose: "Create the new sprint in PENDING state. Both --title and --description are mandatory; the description must state the high-level (macro) goal of the development effort the sprint delivers. Returns the new sprint ID on stdout.",
 				},
 				{
 					Command: "rmp sprint add-tasks -r <name> <sprint-id> <task-id-1,task-id-2,...>",

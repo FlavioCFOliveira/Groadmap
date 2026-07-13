@@ -36,6 +36,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Web HTTP server timeouts (read-header, write, idle) | `WEB.md § HTTP Server Timeouts` |
 | Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
 | Free-text control-character constraint (CWE-150 / Trojan Source) | `MODELS.md § Free-Text Control-Character Constraint` |
+| Sprint `description` semantics (must state the sprint's high-level goal) | `MODELS.md § Sprint Field Constraints` |
 | Audit result-set cap (`MaxAuditLimit`) | `DATABASE.md § Audit Result Limit` |
 | Migration idempotency (ALTER TABLE ADD COLUMN guard) | `DATABASE.md § Migration Idempotency (ALTER TABLE ADD COLUMN)` |
 | `graph` command syntax / subcommands | `COMMANDS.md § Graph Management` |

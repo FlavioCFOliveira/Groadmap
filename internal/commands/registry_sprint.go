@@ -42,7 +42,7 @@ func buildSprintCommand() Command {
 				Flags: []Flag{
 					sharedRoadmapFlag(),
 					{Long: "--title", Short: "-t", Type: "string", Required: true, MaxLength: 255, Description: "Sprint title."},
-					{Long: "--description", Short: "-d", Type: "string", Required: true, MaxLength: 2048, Description: "Sprint description."},
+					{Long: "--description", Short: "-d", Type: "string", Required: true, MaxLength: 2048, Description: "Sprint description. Must state the high-level (macro) goal of the development effort the sprint delivers: a new development, a fix, a refactoring, or another kind of change. Together with the title, it must give a human or an AI agent a clear macro idea of what the sprint's tasks are specifically aimed at. Detailed scope, technical detail, and acceptance conditions belong in the sprint's tasks, not here."},
 					{Long: "--max-tasks", Type: "integer", HasRange: true, RangeMin: 1, RangeMax: 10000, Description: "Capacity cap on active tasks; cannot be removed once set."},
 					{Long: "--order", Type: "integer", HasRange: true, RangeMin: 1, Description: "Sprint execution order; positive integer (> 0), unique across the roadmap. Optional: auto-assigned to the highest existing order plus one when omitted. A value already used by another sprint is rejected with exit code 5."},
 					helpFlag(),
@@ -52,8 +52,8 @@ func buildSprintCommand() Command {
 				Idempotent:  false,
 				ExitCodes:   []int{0, 2, 3, 5, 6},
 				Examples: []Example{
-					{Title: "Create", Cmd: `rmp sprint create -r myproject -t "Authentication hardening" -d "Sprint 1"`, Stdout: `{"id":1}`, Exit: 0},
-					{Title: "Missing required title", Cmd: `rmp sprint create -r myproject -d "Sprint 1"`, Stderr: "Error: required parameter missing: --title", Exit: 2},
+					{Title: "Create", Cmd: `rmp sprint create -r myproject -t "Authentication hardening" -d "Deliver session-based authentication for every write command."`, Stdout: `{"id":1}`, Exit: 0},
+					{Title: "Missing required title", Cmd: `rmp sprint create -r myproject -d "Deliver session-based authentication for every write command."`, Stderr: "Error: required parameter missing: --title", Exit: 2},
 				},
 			},
 			{
@@ -98,8 +98,8 @@ func buildSprintCommand() Command {
 			},
 			{
 				Name: "update", Aliases: []string{"upd"},
-				Summary:     "Update sprint title, description or capacity cap.",
-				Description: "Edits the title, description or capacity cap of an existing sprint. At least one option required.",
+				Summary:     "Update sprint title, description, capacity cap or execution order.",
+				Description: "Edits the title, description, capacity cap or execution order of an existing sprint. At least one option required.",
 				Usage:       "rmp sprint update -r <roadmap> <sprint-id> [-t <title>] [-d <text>] [--max-tasks <n>] [--order <n>]",
 				HelpPrinter: printSprintUpdateHelp,
 				Handler:     sprintUpdate,
@@ -109,7 +109,7 @@ func buildSprintCommand() Command {
 				Flags: []Flag{
 					sharedRoadmapFlag(),
 					{Long: "--title", Short: "-t", Type: "string", MaxLength: 255, Description: "New title."},
-					{Long: "--description", Short: "-d", Type: "string", MaxLength: 2048, Description: "New description."},
+					{Long: "--description", Short: "-d", Type: "string", MaxLength: 2048, Description: "New sprint description. Carries the same semantics as on create: it must state the high-level (macro) goal of the development effort the sprint delivers: a new development, a fix, a refactoring, or another kind of change. Together with the title, it must give a human or an AI agent a clear macro idea of what the sprint's tasks are specifically aimed at. Detailed scope, technical detail, and acceptance conditions belong in the sprint's tasks, not here."},
 					{Long: "--max-tasks", Type: "integer", HasRange: true, RangeMin: 1, RangeMax: 10000, Description: "New capacity cap."},
 					{Long: "--order", Type: "integer", HasRange: true, RangeMin: 1, Description: "New sprint execution order; positive integer (> 0), unique across the roadmap. Allowed only while the sprint is PENDING or OPEN; once CLOSED the order is immutable and a change is rejected with exit code 6. A value already used by another sprint is rejected with exit code 5."},
 					helpFlag(),
@@ -119,8 +119,8 @@ func buildSprintCommand() Command {
 				Idempotent:  true,
 				ExitCodes:   []int{0, 2, 3, 4, 5, 6},
 				Examples: []Example{
-					{Title: "Update description", Cmd: `rmp sprint update -r myproject 5 -d "New desc"`, Exit: 0},
-					{Title: "Sprint not found", Cmd: `rmp sprint update -r myproject 99999 -d "x"`, Stderr: "Error: resource not found: sprint 99999 not found", Exit: 4},
+					{Title: "Update description", Cmd: `rmp sprint update -r myproject 5 -d "Deliver authentication and request tracing for every write command."`, Exit: 0},
+					{Title: "Sprint not found", Cmd: `rmp sprint update -r myproject 99999 -d "Refactor persistence onto a single write path."`, Stderr: "Error: resource not found: sprint 99999 not found", Exit: 4},
 				},
 			},
 			{

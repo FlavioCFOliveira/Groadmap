@@ -29,8 +29,13 @@ C. Help content structural checks (binary-level):
    12. Every graph subcommand (create/query/update/delete/search) help
        contains "Output (stdout JSON):" and "-q" / "--query".
    13. No hard TAB character in any help output for any command.
+   14. rmp sprint --help, rmp sprint create --help and rmp sprint update --help
+       document the macro-goal semantics of the -d/--description flag.
+   15. The --ai-help JSON contract carries the same --description semantics for
+       both sprint create and sprint update.
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -66,6 +71,14 @@ TASK_SUBS = [
     "add-dep", "remove-dep", "blockers", "blocking",
 ]
 GRAPH_SUBS = ["create", "query", "update", "delete", "search"]
+
+# Sentences that every surface documenting the sprint -d/--description flag
+# must carry (plain-text help and the --ai-help JSON contract alike), per
+# SPEC/HELP.md section "Sprint family help specifics" item 5.
+DESCRIPTION_SEMANTICS_FRAGMENTS = [
+    "high-level (macro) goal of the development effort the sprint delivers",
+    "clear macro idea of what the sprint's tasks are specifically aimed at",
+]
 
 
 def _run(cli_path, args, env_overrides=None):
@@ -380,6 +393,77 @@ class TestHelpContentBinary:
         assert "-s" in out, "sprint tasks --help: missing -s short form"
         assert "--status" in out, "sprint tasks --help: missing --status flag"
         print("✓ sprint tasks --help: -s, --status documented")
+
+    def test_sprint_helps_document_description_macro_goal(self):
+        """The -d/--description flag must be self-documenting on every sprint
+        help surface: the family help, sprint create --help and
+        sprint update --help must all state that the description carries the
+        high-level (macro) goal of the development effort the sprint delivers.
+
+        See SPEC/HELP.md section 'Sprint family help specifics' item 5 and
+        SPEC/MODELS.md section 'Sprint Field Constraints'.
+        """
+        for argv in (["sprint", "--help"],
+                     ["sprint", "create", "--help"],
+                     ["sprint", "update", "--help"]):
+            out = self._help(argv)
+            label = "rmp " + " ".join(argv)
+            assert "-d, --description" in out, (
+                f"{label}: missing the -d, --description flag entry"
+            )
+            # The help printers wrap the sentence across aligned columns, so
+            # match on whitespace-normalised text.
+            normalized = " ".join(out.split())
+            for fragment in DESCRIPTION_SEMANTICS_FRAGMENTS:
+                assert fragment in normalized, (
+                    f"{label}: -d, --description does not state its macro-goal "
+                    f"semantics; missing {fragment!r}"
+                )
+        print("✓ sprint / sprint create / sprint update --help: --description macro-goal documented")
+
+    def test_sprint_ai_help_description_flag_documents_macro_goal(self):
+        """The --ai-help JSON contract must carry the same --description
+        semantics for sprint create and sprint update, as a single-line string.
+        """
+        _, stdout, _ = _run(self.cli, ["--ai-help"], {"HOME": self.home})
+        try:
+            contract = json.loads(stdout)
+        except json.JSONDecodeError as exc:
+            raise AssertionError(
+                f"rmp --ai-help did not return valid JSON: {exc}\n  stdout={stdout[:400]!r}"
+            ) from exc
+
+        sprint_cmd = next(
+            (c for c in contract.get("commands", []) if c.get("name") == "sprint"),
+            None,
+        )
+        assert sprint_cmd is not None, "sprint family missing from the --ai-help contract"
+
+        for sub_name in ("create", "update"):
+            sub = next(
+                (s for s in sprint_cmd.get("subcommands", []) if s.get("name") == sub_name),
+                None,
+            )
+            assert sub is not None, f"sprint {sub_name} missing from the --ai-help contract"
+
+            flags = sub.get("flags", [])
+            desc_flags = [f for f in flags if f.get("long") == "--description"]
+            assert desc_flags, (
+                f"sprint {sub_name}: --description missing from --ai-help flags; "
+                f"flags present: {[f.get('long') for f in flags]}"
+            )
+            desc = desc_flags[0].get("description") or ""
+
+            assert "\n" not in desc and "\r" not in desc, (
+                f"sprint {sub_name}: --description contract text must be a single-line "
+                f"string (no embedded newlines); got {desc!r}"
+            )
+            for fragment in DESCRIPTION_SEMANTICS_FRAGMENTS:
+                assert fragment in desc, (
+                    f"sprint {sub_name} --ai-help: flags[--description].description does "
+                    f"not state its macro-goal semantics; missing {fragment!r}\n  got: {desc!r}"
+                )
+        print("✓ sprint create / sprint update --ai-help: --description macro-goal documented")
 
     def test_graph_subcommand_helps_have_output_block_and_query_short_form(self):
         """Every graph subcommand help has 'Output (stdout JSON):' and -q/--query."""

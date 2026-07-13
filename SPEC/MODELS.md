@@ -182,7 +182,7 @@ type Sprint struct {
     ID          int          `json:"id"`
     Status      SprintStatus `json:"status"`
     Title       string       `json:"title"`            // Sprint title, required (NOT NULL), max 255 chars
-    Description string       `json:"description"`      // Sprint description, max 2048 chars
+    Description string       `json:"description"`      // Sprint description, required (NOT NULL), max 2048 chars; states the sprint's high-level (macro) goal
     Tasks       []int        `json:"tasks"`            // Computed from sprint_tasks (ordered by position)
     TaskCount   int          `json:"task_count"`       // Computed
     CreatedAt   string       `json:"created_at"`
@@ -196,7 +196,13 @@ type Sprint struct {
 #### Sprint Field Constraints
 
 - `Title`: Required (NOT NULL), maximum 255 characters. Same cap as the task `Title` field. Subject to the Free-Text Control-Character Constraint above.
-- `Description`: Maximum 2048 characters (free text covering sprint goal, scope, and non-goals).
+- `Description`: Required (NOT NULL), maximum 2048 characters. Subject to the Free-Text Control-Character Constraint above. This field is the canonical statement of the sprint's purpose, and it carries the following semantics on every command that writes it (`sprint create` and `sprint update`):
+  - The `Description` MUST state the high-level (macro) goal of the development effort that the sprint delivers: a new development, a fix, a refactoring, or another kind of change.
+  - Together with the sprint `Title`, the `Description` MUST give a human reader or an AI agent a clear macro idea of what the sprint's tasks are specifically aimed at.
+  - The `Description` states the macro goal only. Detailed scope, technical detail, and acceptance conditions do not belong in the `Description`: the tasks that compose the sprint specify them in full, through their `FunctionalRequirements`, `TechnicalRequirements`, and `AcceptanceCriteria` fields (see the `Task` model above).
+  - The `Description` states the goal of the sprint as a whole. It does not enumerate the individual tasks of the sprint.
+
+  See `COMMANDS.md § Create Sprint` and `COMMANDS.md § Update Sprint` for the flag that writes this field, and `HELP.md § Sprint family help specifics` for the help text that states these semantics to the caller.
 - `Order`: Required (NOT NULL), positive integer strictly greater than zero (`> 0`), and unique across every sprint in the roadmap. It records the natural, sequential execution order of sprints: the sprint with the lowest `Order` value executes first. Two sprints can never share the same `Order` value. The value is auto-assigned on creation when the caller does not supply one (see `COMMANDS.md § Create Sprint`) and can be changed while the sprint is `PENDING` or `OPEN`. Once the sprint is `CLOSED`, the `Order` value becomes immutable and can never change again, because it then represents the historical execution record (see `STATE_MACHINE.md § Sprint Order Immutability`). The JSON field name is `order`; the underlying database column is named `order_index`, because `ORDER` is a reserved SQL keyword (see `DATABASE.md § sprints Table`).
 
 ### Audit Entry
