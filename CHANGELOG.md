@@ -5,6 +5,107 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.2] - 2026-07-13
+
+A maintenance release that refreshes every module dependency, raises the Go
+floor to **1.26.5** to remediate a toolchain security advisory, and specifies the
+sprint `description` field as the sprint's macro goal. The headline dependency
+change is the embedded GoGraph knowledge-graph engine, which moves from `v0.6.0`
+to `v0.7.0` and brings two write-correctness fixes to the `rmp graph` command
+family, along with a broad denial-of-service hardening pass across the graph
+store. No `rmp` source behaviour changes in this release.
+
+Under Semantic Versioning 2.0.0 this is a **PATCH** release: it contains
+backward-compatible fixes, dependency maintenance, and documentation only. No
+`rmp` command, flag, or JSON success schema is added, removed, or renamed; no
+exit code changes; the GoGraph upgrade is additive with no exported API break and
+no on-disk store migration; and the database schema version remains `1.8.0`. The
+Go floor moves only in its *patch* component (1.26.4 to 1.26.5) within the Go
+1.26 minor floor that has been required since v1.7.0, so it changes no language
+version and breaks no consumer: Groadmap exposes no importable Go API (every
+package other than `cmd/rmp` lives under `internal/`), and released binaries are
+distributed prebuilt.
+
+### Security
+
+- **Go floor raised to 1.26.5 (GO-2026-5856).** The Go standard library's
+  `crypto/tls` is affected by GO-2026-5856, an Encrypted Client Hello privacy
+  leak, in Go 1.26.4 and earlier; the fix ships in Go 1.26.5. This is a
+  *toolchain* vulnerability, not a module vulnerability: it is remediated by the
+  toolchain version alone, and no dependency change can remediate it. The `go`
+  directive in `go.mod` now declares `go 1.26.5`, and Groadmap MUST NOT be built
+  or released with an older toolchain. `govulncheck ./...` reports no
+  vulnerabilities. See `SPEC/BUILD.md`, "Go Toolchain".
+
+### Fixed
+
+- **Graph — `MERGE` now applies whole-pattern match-or-create semantics.**
+  Delivered by the GoGraph `v0.7.0` upgrade. A `MERGE` of a pattern with a fresh
+  endpoint was previously silently incomplete; the most common Cypher
+  graph-building idiom now either fully applies or is rejected with a typed
+  error. This affects every `rmp graph update` and `rmp graph create` query that
+  uses `MERGE`.
+- **Graph — parallel edges are rejected instead of silently dropped.** Delivered
+  by the GoGraph `v0.7.0` upgrade. On a non-multigraph engine (the documented
+  default), writing a parallel edge previously discarded the write silently; it
+  is now rejected with a typed error, closing a write-loss gap.
+- **AI Agent Contract — `sprint update` summary now lists `--order`.** The
+  machine-readable contract (`rmp --ai-help`) described `sprint update` as
+  editing "title, description or capacity cap", omitting the execution-order
+  field that the subcommand has accepted since v1.10.0. The summary and
+  description now state all four editable fields.
+
+### Changed
+
+- **Sprint `description` is specified as the sprint's macro goal.** The
+  `description` field of a sprint is now specified, on every surface that states
+  it, as the high-level (macro) goal of the development effort the sprint
+  delivers: a new development, a fix, a refactoring, or another kind of change.
+  Together with the title, it must give a human reader or an AI agent a clear
+  macro idea of what the sprint's tasks are aimed at. The field states the macro
+  goal only: detailed scope, technical detail, and acceptance conditions belong
+  to the sprint's tasks, which carry them in their functional requirements,
+  technical requirements, and acceptance criteria. A label such as `"Sprint 3"`
+  no longer satisfies the documented contract. The semantics are stated in the
+  plain-text help for `sprint create` and `sprint update`, in the AI Agent
+  Contract, in `SPEC/MODELS.md`, `SPEC/COMMANDS.md`, `SPEC/HELP.md`, and in the
+  command documentation and README examples. This is a documentation and
+  specification change: the field was already mandatory on `sprint create`, and
+  no validation behaviour changes.
+- **Dependencies — GoGraph upgraded to `v0.7.0`.** The embedded GoGraph
+  knowledge-graph engine moves from `v0.6.0` to `v0.7.0`. Beyond the two write
+  fixes above, the upgrade lands a security and denial-of-service hardening pass
+  across the graph store: a size-bounded manifest, symlink rejection on every
+  file the engine opens by name (including the write-ahead log and snapshots),
+  bounded allocation of frame payloads, and memory ceilings in the Cypher engine.
+  It also adds eight openCypher builtin functions (`elementId`, `timestamp`,
+  `randomUUID`, `isNaN`, and the `toStringList` / `toIntegerList` / `toFloatList`
+  / `toBooleanList` family), which become available to `rmp graph query`. The
+  upgrade is a pre-1.0 additive change: no exported Go API is broken and the
+  on-disk graph store requires no migration.
+- **Dependencies — transitive modules refreshed.** `github.com/RoaringBitmap/roaring/v2`
+  moves from `v2.18.2` to `v2.21.0`, `github.com/bits-and-blooms/bitset` from
+  `v1.24.5` to `v1.24.6`, `golang.org/x/sys` from `v0.46.0` to `v0.47.0`,
+  `golang.org/x/exp` to its `2026-07-09` snapshot, and `modernc.org/libc` from
+  `v1.73.5` to `v1.74.1`. `modernc.org/sqlite` remains at `v1.53.0`.
+- **Specification — version state removed from `SPEC/VERSION.md`.** The
+  `Current Version` table and the Version History it implied are removed, and the
+  documented release process is aligned with the process the project actually
+  follows. Git tags and `git log` are now the single source of truth for the
+  history of the specification, in line with the project's versioning policy.
+  `SPEC/BUILD.md` becomes the authoritative statement of the required Go version,
+  and the other specification files point to it rather than restate it.
+
+### Internal
+
+- **Help-content unit tests.** New unit tests cover the AI Agent Contract
+  generator (`internal/aihelp`) and the command help content
+  (`internal/commands`), pinning the sprint `description` semantics in both the
+  generated contract and the plain-text help.
+- **End-to-end contract coverage extended.** The help and exit-code contract
+  suite gains two cases asserting that the sprint `description` macro-goal
+  semantics are stated in the plain-text help and in `rmp --ai-help`.
+
 ## [1.13.1] - 2026-06-29
 
 A maintenance release that refreshes third-party dependencies and remediates
@@ -196,6 +297,7 @@ behaviour.
   AI-contract E2E suite (`tests/test_30_aihelp_contract.py`) to lock in the
   revised help text and contract invariants.
 
+[1.13.2]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.13.1...v1.13.2
 [1.13.1]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.13.0...v1.13.1
 [1.13.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.12.0...v1.13.0
 [1.12.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.11.0...v1.12.0
