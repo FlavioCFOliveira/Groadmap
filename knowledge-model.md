@@ -50,7 +50,9 @@ depends on, or a third-party web asset vendored into the binary.
 | `language` | yes | `Go` for packages and Go modules; for vendored web assets, the comma-separated languages they ship (`CSS,JavaScript`, `CSS,Webfont`, `JavaScript`). |
 | `version` | no | Pinned version. Omitted when upstream declares none, as the Inter webfont does; never inferred. |
 | `licence` | no | Upstream licence of an `external-dependency`, as recorded in `internal/web/static/vendor/LICENSES.md`. |
+| `summary` | no | What the component is and what it owns. |
 | `released_in` | no | Release tag that first shipped the pinned version. |
+| `release_commit`, `release_date` | no | Commit and date at which the pinned version was adopted. The dependency's own facts, not provenance. |
 | `last_commit`, `last_commit_date` | yes | Provenance. |
 
 Third-party code is never a `CodeFile`. The files vendored under
@@ -111,6 +113,7 @@ specified by a `Spec`, implemented by `CodeFile`s and verified by `Test`s.
 | `status` | yes | `implemented` or `planned`. |
 | `area` | no | Functional area, matching a `Spec.area`. |
 | `summary` | no | Longer description of the capability. |
+| `rmp_task` | no | Integer id of the `rmp` task that delivered the capability. The task itself lives in the roadmap database, not in the graph. |
 | `last_commit`, `last_commit_date` | yes | Provenance. |
 
 ### Release
