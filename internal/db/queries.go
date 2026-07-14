@@ -196,6 +196,24 @@ func (db *DB) ListTasks(ctx context.Context, filter *TaskListFilter) ([]models.T
 		filter.Limit = models.MaxTaskLimit
 	}
 
+	query, args := buildListTasksQuery(filter)
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("listing tasks: %w", err)
+	}
+	defer rows.Close()
+
+	return scanTasksWithDeps(rows)
+}
+
+// buildListTasksQuery assembles the SQL and bind arguments ListTasks executes.
+// Assembly is separated from execution so that the index tests can take the
+// query plan of the exact SQL production runs, rather than of a lookalike
+// (SPEC/DATABASE.md § Performance Optimization).
+//
+// The caller is responsible for clamping filter.Limit beforehand.
+func buildListTasksQuery(filter *TaskListFilter) (string, []any) {
 	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
 		        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
 		        t.priority, t.severity,
@@ -249,13 +267,7 @@ func (db *DB) ListTasks(ctx context.Context, filter *TaskListFilter) ([]models.T
 	query += " LIMIT ?"
 	args = append(args, filter.Limit)
 
-	rows, err := db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("listing tasks: %w", err)
-	}
-	defer rows.Close()
-
-	return scanTasksWithDeps(rows)
+	return query, args
 }
 
 // UpdateTask updates a task's fields with the provided values.
@@ -1373,10 +1385,16 @@ func (db *DB) DeleteSprint(ctx context.Context, id int) error {
 	})
 }
 
+// sprintTasksLookupQuery is the membership lookup idx_sprint_tasks_lookup
+// exists for (SPEC/DATABASE.md § Performance Optimization). It is a named
+// constant so the index tests can take the query plan of the exact SQL
+// production runs, rather than of a lookalike.
+const sprintTasksLookupQuery = `SELECT task_id FROM sprint_tasks WHERE sprint_id = ? ORDER BY task_id`
+
 // GetSprintTasks retrieves all tasks in a sprint.
 func (db *DB) GetSprintTasks(ctx context.Context, sprintID int) ([]int, error) {
 	rows, err := db.QueryContext(ctx,
-		`SELECT task_id FROM sprint_tasks WHERE sprint_id = ? ORDER BY task_id`,
+		sprintTasksLookupQuery,
 		sprintID,
 	)
 	if err != nil {
@@ -1903,6 +1921,25 @@ func (db *DB) GetAuditEntries(ctx context.Context, f *AuditFilter) ([]models.Aud
 	if f.Limit <= 0 || f.Limit > models.MaxAuditLimit {
 		f.Limit = models.MaxAuditLimit
 	}
+
+	query, args := buildAuditEntriesQuery(f)
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying audit entries: %w", err)
+	}
+	defer rows.Close()
+
+	return scanAuditEntries(rows)
+}
+
+// buildAuditEntriesQuery assembles the SQL and bind arguments GetAuditEntries
+// executes. Assembly is separated from execution so that the index tests can
+// take the query plan of the exact SQL production runs, rather than of a
+// lookalike (SPEC/DATABASE.md § Performance Optimization).
+//
+// The caller is responsible for clamping f.Limit beforehand.
+func buildAuditEntriesQuery(f *AuditFilter) (string, []any) {
 	// Build the query with strings.Builder so we don't allocate a new
 	// backing string for every appended clause.
 	var qb strings.Builder
@@ -1941,12 +1978,11 @@ func (db *DB) GetAuditEntries(ctx context.Context, f *AuditFilter) ([]models.Aud
 		args = append(args, f.Offset)
 	}
 
-	rows, err := db.QueryContext(ctx, qb.String(), args...)
-	if err != nil {
-		return nil, fmt.Errorf("querying audit entries: %w", err)
-	}
-	defer rows.Close()
+	return qb.String(), args
+}
 
+// scanAuditEntries materialises the rows GetAuditEntries selected.
+func scanAuditEntries(rows *sql.Rows) ([]models.AuditEntry, error) {
 	// Initialize to a non-nil empty slice so an empty result marshals to JSON
 	// `[]`, not `null`, per SPEC/DATA_FORMATS.md Implementation Notes #6
 	// (finding #53).

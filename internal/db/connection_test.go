@@ -474,3 +474,82 @@ func TestGetEntityHistory(t *testing.T) {
 		t.Error("expected at least one history entry for new task")
 	}
 }
+
+// TestIsUniqueConstraintErr_OnlyUniquenessViolations is a regression gate.
+//
+// IsUniqueConstraintErr used to mask the SQLite result code down to its primary
+// code (SQLITE_CONSTRAINT = 19), which every constraint kind shares. A CHECK or
+// NOT NULL violation therefore answered true and was reported to the user as
+// "sprint order N is already in use" with ErrAlreadyExists (exit code 5),
+// hiding the real failure. Only the extended codes distinguish them:
+// UNIQUE 2067 and PRIMARY KEY 1555 versus CHECK 275 and NOT NULL 1299.
+func TestIsUniqueConstraintErr_OnlyUniquenessViolations(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	const insertSprint = `INSERT INTO sprints (title, status, description, created_at, order_index) VALUES (?, ?, ?, ?, ?)`
+	const validCreatedAt = "2026-01-01T00:00:00.000Z"
+
+	if _, err := db.Exec(insertSprint, "Ship the audit retention policy", "PENDING", "Retain audit rows for a year.", validCreatedAt, 1); err != nil {
+		t.Fatalf("seeding a valid sprint must succeed: %v", err)
+	}
+
+	if _, err := db.Exec(`CREATE TABLE pk_probe (a INTEGER, b INTEGER, PRIMARY KEY (a, b))`); err != nil {
+		t.Fatalf("creating the primary-key probe table: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO pk_probe (a, b) VALUES (1, 1)`); err != nil {
+		t.Fatalf("seeding the primary-key probe table: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		exec func() error
+		want bool
+	}{
+		{
+			name: "unique violation on the sprint order index",
+			exec: func() error {
+				_, err := db.Exec(insertSprint, "Collide on the order index", "PENDING", "Same order.", validCreatedAt, 1)
+				return err
+			},
+			want: true,
+		},
+		{
+			name: "primary-key violation on a composite key",
+			exec: func() error {
+				_, err := db.Exec(`INSERT INTO pk_probe (a, b) VALUES (1, 1)`)
+				return err
+			},
+			want: true,
+		},
+		{
+			name: "check violation on an invalid sprint status",
+			exec: func() error {
+				_, err := db.Exec(insertSprint, "Invalid status", "NONSENSE", "Not a status.", validCreatedAt, 2)
+				return err
+			},
+			want: false,
+		},
+		{
+			name: "not-null violation on a missing sprint title",
+			exec: func() error {
+				_, err := db.Exec(insertSprint, nil, "PENDING", "No title.", validCreatedAt, 3)
+				return err
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.exec()
+			if err == nil {
+				t.Fatal("the statement was expected to violate a constraint, but it succeeded")
+			}
+			if got := IsUniqueConstraintErr(err); got != tt.want {
+				t.Errorf("IsUniqueConstraintErr() = %v, want %v; reporting this as a uniqueness collision "+
+					"would surface the wrong message and the wrong exit code. underlying error: %v", got, tt.want, err)
+			}
+		})
+	}
+}

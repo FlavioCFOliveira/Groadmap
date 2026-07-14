@@ -33,25 +33,36 @@ const (
 	QueryTimeout = 30 * time.Second
 )
 
-// SQLite primary result codes for busy/locked conditions.
-// See https://www.sqlite.org/rescode.html.
+// SQLite result codes. See https://www.sqlite.org/rescode.html.
+//
+// The constraint codes are EXTENDED codes: SQLITE_CONSTRAINT (19) is the
+// primary code shared by every constraint kind, so it cannot tell a uniqueness
+// collision apart from a CHECK (275) or NOT NULL (1299) violation. Only the
+// extended code can.
 const (
-	sqliteBusy       = 5
-	sqliteLocked     = 6
-	sqliteConstraint = 19 // SQLITE_CONSTRAINT primary result code
+	sqliteBusy                   = 5
+	sqliteLocked                 = 6
+	sqliteConstraintPrimaryKey   = 1555 // SQLITE_CONSTRAINT_PRIMARYKEY
+	sqliteConstraintUniqueViolat = 2067 // SQLITE_CONSTRAINT_UNIQUE
 )
 
-// IsUniqueConstraintErr reports whether err is a SQLite UNIQUE/PRIMARY-KEY
-// constraint violation, inspecting the structured primary result code
-// (SQLITE_CONSTRAINT = 19) rather than matching strings. Used to translate an
-// order_index collision into ErrAlreadyExists (exit code 5).
+// IsUniqueConstraintErr reports whether err is a SQLite UNIQUE or PRIMARY-KEY
+// constraint violation, and only those. Callers translate it into
+// ErrAlreadyExists (exit code 5), so it must not answer true for a CHECK, NOT
+// NULL or FOREIGN KEY violation: those are different failures and must not be
+// reported to the user as an "already in use" collision.
+//
+// The check is on the extended result code, not the primary one. Masking down
+// to the primary code (19) makes every constraint kind look like a uniqueness
+// collision, which is exactly the bug this guards against.
 func IsUniqueConstraintErr(err error) bool {
 	if err == nil {
 		return false
 	}
 	var coded sqliteCoded
 	if errors.As(err, &coded) {
-		return coded.Code()&0xFF == sqliteConstraint
+		code := coded.Code()
+		return code == sqliteConstraintUniqueViolat || code == sqliteConstraintPrimaryKey
 	}
 	return false
 }
