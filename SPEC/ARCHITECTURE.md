@@ -201,9 +201,9 @@ Each package implements:
   `DATA_FORMATS.md § Graph Query Result`.
 
 **External dependency note.** GoGraph requires Go 1.26 and is consumed at the exact
-tag **v0.7.0**. Because v0.7.0 is a v0 (pre-1.0) version,
+tag **v0.8.0**. Because v0.8.0 is a v0 (pre-1.0) version,
 it is consumable directly at the bare module path and `go.mod` pins the clean exact tag
-`v0.7.0`. GoGraph MUST be pinned to an exact version in `go.mod`. The risk analysis and
+`v0.8.0`. GoGraph MUST be pinned to an exact version in `go.mod`. The risk analysis and
 required mitigations are in `GRAPH.md § Dependency Maturity Risk`; the toolchain and
 pinning requirements are in `BUILD.md § Go Toolchain`.
 

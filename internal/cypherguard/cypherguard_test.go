@@ -217,6 +217,30 @@ func TestClassify(t *testing.T) {
 			want:  cypherguard.Classes{Create: true, DDL: true},
 		},
 		{
+			// The legacy ON ... ASSERT form is still accepted and applied by the
+			// GoGraph engine as an alias of the modern FOR ... REQUIRE form, so
+			// the guard rail must classify it as DDL exactly the same way. This
+			// case exists to fail loudly if reDDL is ever narrowed to the modern
+			// spelling, which would let a legacy constraint DDL slip through a
+			// read-only subcommand.
+			name:  "legacy create constraint ON ASSERT form is DDL not a write",
+			query: "CREATE CONSTRAINT unique_task_title ON (n:Task) ASSERT n.title IS UNIQUE",
+			want:  cypherguard.Classes{Create: true, DDL: true},
+		},
+		{
+			name:  "create constraint is not null is DDL not a write",
+			query: "CREATE CONSTRAINT title_exists FOR (n:Task) REQUIRE n.title IS NOT NULL",
+			want:  cypherguard.Classes{Create: true, DDL: true},
+		},
+		{
+			// The name-before-IF-NOT-EXISTS ordering the engine accepts. NOT and
+			// EXISTS are not writing keywords, so the classes are unchanged from
+			// the plain create constraint form.
+			name:  "create constraint if not exists is DDL not a write",
+			query: "CREATE CONSTRAINT unique_task_title IF NOT EXISTS FOR (n:Task) REQUIRE n.title IS UNIQUE",
+			want:  cypherguard.Classes{Create: true, DDL: true},
+		},
+		{
 			name:  "drop constraint is DDL not a write",
 			query: "DROP CONSTRAINT unique_task_title",
 			want:  cypherguard.Classes{DDL: true},
@@ -235,6 +259,22 @@ func TestClassify(t *testing.T) {
 			name:  "lowercase create index is DDL not a write",
 			query: "create index task_idx for (n:Task) on (n.status)",
 			want:  cypherguard.Classes{Create: true, DDL: true},
+		},
+		{
+			name:  "lowercase legacy create constraint is DDL not a write",
+			query: "create constraint c1 on (n:Task) assert n.title is unique",
+			want:  cypherguard.Classes{Create: true, DDL: true},
+		},
+		{
+			// Same evasion shape as the multi-space CREATE INDEX case above:
+			// IsDDL is single-space sensitive, so it does not recognize the
+			// padded form and the query falls through to the writing keyword
+			// check (Write=true), while the whitespace-tolerant reDDL still
+			// flags DDL=true. Casing and padding therefore cannot smuggle a
+			// legacy constraint DDL past the guard rail.
+			name:  "lowercase legacy create constraint with extra spaces is both write and DDL",
+			query: "create   constraint c1 on (n:Task) assert n.title is unique",
+			want:  cypherguard.Classes{Write: true, Create: true, DDL: true},
 		},
 		{
 			name:  "mixed case write create",
@@ -332,6 +372,12 @@ func TestIsReadOnly(t *testing.T) {
 		{name: "create index DDL is not read-only", query: "CREATE INDEX task_idx FOR (n:Task) ON (n.status)", want: false},
 		{name: "drop index DDL is not read-only", query: "DROP INDEX task_idx", want: false},
 		{name: "create constraint DDL is not read-only", query: "CREATE CONSTRAINT c1 FOR (n:Task) REQUIRE n.title IS UNIQUE", want: false},
+		{name: "legacy create constraint ON ASSERT DDL is not read-only", query: "CREATE CONSTRAINT unique_task_title ON (n:Task) ASSERT n.title IS UNIQUE", want: false},
+		{name: "create constraint is not null DDL is not read-only", query: "CREATE CONSTRAINT title_exists FOR (n:Task) REQUIRE n.title IS NOT NULL", want: false},
+		{name: "create constraint if not exists DDL is not read-only", query: "CREATE CONSTRAINT unique_task_title IF NOT EXISTS FOR (n:Task) REQUIRE n.title IS UNIQUE", want: false},
+		{name: "lowercase legacy create constraint DDL is not read-only", query: "create constraint c1 on (n:Task) assert n.title is unique", want: false},
+		{name: "multi-space legacy create constraint DDL is not read-only", query: "create   constraint c1 on (n:Task) assert n.title is unique", want: false},
+		{name: "drop constraint DDL is not read-only", query: "DROP CONSTRAINT unique_task_title", want: false},
 		{name: "multi-space create index DDL is not read-only", query: "CREATE   INDEX task_idx FOR (n:Task) ON (n.status)", want: false},
 		{name: "case-insensitive delete is not read-only", query: "match (n:Task {id: 1}) delete n", want: false},
 		{name: "leading whitespace before write is not read-only", query: "\n\t  CREATE (n:Task {title: 'Indented'})", want: false},
