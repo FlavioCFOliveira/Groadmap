@@ -63,6 +63,7 @@ TEST_MODULES = [
     "test_43_sprint_order_field",
     "test_44_help_and_exitcode_contract",
     "test_45_audit_stats_keys",
+    "test_46_graph_parallel_edge_predicates",
 ]
 
 # Stress tests (run separately due to time/data volume)

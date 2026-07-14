@@ -111,13 +111,13 @@ authoritative statement of the required Go version and of the build implications
 
 ### Dependency Maturity Risk
 
-GoGraph is consumed at the exact tag **v0.8.0**. Because
-v0.8.0 is a v0 (pre-1.0) version, it is consumable directly at the bare module path
-`github.com/FlavioCFOliveira/GoGraph`, and `go.mod` pins the clean exact tag `v0.8.0`.
+GoGraph is consumed at the exact tag **v0.8.1**. Because
+v0.8.1 is a v0 (pre-1.0) version, it is consumable directly at the bare module path
+`github.com/FlavioCFOliveira/GoGraph`, and `go.mod` pins the clean exact tag `v0.8.1`.
 This exact-tag pin satisfies the pinning mitigation below directly. The pinned version
 is recorded in `BUILD.md § Go Toolchain`.
 
-As a `0.y.z` release, v0.8.0 signals under Semantic Versioning that GoGraph's public
+As a `0.y.z` release, v0.8.1 signals under Semantic Versioning that GoGraph's public
 API is not yet stable: it may change while the module matures toward `1.0.0`, and such
 changes can land without a major-version bump. The following residual risks remain:
 
