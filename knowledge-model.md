@@ -71,7 +71,7 @@ A non-test source file authored by the project. Test sources are `Test` nodes, n
 | `path` | yes | Same as `key`. |
 | `file` | yes | Base name. |
 | `package` | yes | Owning component's path. |
-| `language` | yes | `Go`, `HTML`, `CSS`, `JavaScript` or `SVG`. |
+| `language` | yes | `Go`, `Python`, `HTML`, `CSS`, `JavaScript` or `SVG`. |
 | `last_commit`, `last_commit_date` | yes | Provenance. |
 
 ### Spec
@@ -153,10 +153,10 @@ Every edge carries `last_commit` and `last_commit_date`.
 
 | Edge | From | To | Meaning |
 |---|---|---|---|
-| `PART_OF` | `CodeFile`, `Test` | `Component` | The file belongs to the component that owns its directory. Derived from the filesystem. |
+| `PART_OF` | `CodeFile`, `Test` | `Component` | The file belongs to the component that owns its directory. Derived from the filesystem. A `contract` test has no file and therefore no `PART_OF`. |
 | `DEPENDS_ON` | `Component` | `Component` | The component imports the other. Derived from the real import graph (`go list`). |
 | `DEPENDS_ON` | `Requirement` | `Requirement` | The capability cannot work without the other. |
-| `TESTS` | `Test` | `Component` | The test exercises the component. |
+| `TESTS` | `Test` | `Component` | The test exercises the component. A `unit` test exercises the component it belongs to; an `e2e` test belongs to the `tests` harness component but exercises `cmd/rmp`, the binary it drives as a black box. |
 | `SPECIFIES` | `Spec` | `Requirement` | The document specifies the capability. |
 | `IMPLEMENTED_BY` | `Requirement` | `CodeFile` | The file implements the capability. |
 | `VERIFIED_BY` | `Requirement` | `Test` | The test verifies the capability. |
