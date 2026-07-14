@@ -132,6 +132,21 @@ A published version of the binary.
 | `published`, `published_at`, `assets` | no | Publication state. |
 | `last_commit`, `last_commit_date` | yes | Provenance. |
 
+### Doc
+
+A user-facing documentation file: the per-command pages under `DOCS/commands/` and the
+repository `README.md`. Distinct from `Spec`, which is the project's technical
+specification: the two have different audiences and different owners (`doc-manager` versus
+`specification-manager`). The key is the repository-relative path, which also avoids
+colliding with the `Spec` node whose key is the bare name `README.md`.
+
+| Property | Required | Notes |
+|---|---|---|
+| `key` | yes | Repository-relative path, e.g. `DOCS/commands/task.md`. |
+| `path` | yes | Same as `key`. |
+| `file` | yes | Base name. |
+| `last_commit`, `last_commit_date` | yes | Provenance. |
+
 ### Memory
 
 The project's prose memory: a durable, non-obvious fact that would otherwise have to be
@@ -157,10 +172,9 @@ Every edge carries `last_commit` and `last_commit_date`.
 | `DEPENDS_ON` | `Component` | `Component` | The component imports the other. Derived from the real import graph (`go list`). |
 | `DEPENDS_ON` | `Requirement` | `Requirement` | The capability cannot work without the other. |
 | `TESTS` | `Test` | `Component` | The test exercises the component. A `unit` test exercises the component it belongs to; an `e2e` test belongs to the `tests` harness component but exercises `cmd/rmp`, the binary it drives as a black box. |
-| `SPECIFIES` | `Spec` | `Requirement` | The document specifies the capability. |
-| `IMPLEMENTED_BY` | `Requirement` | `CodeFile` | The file implements the capability. |
+| `SPECIFIES` | `Spec` | `Requirement` | The document specifies the capability. This is the single canonical direction: there is deliberately no inverse edge type, so a query never has to test both ways round. |
+| `IMPLEMENTED_BY` | `Requirement` | `CodeFile`, `Doc` | The artefact implements the capability. |
 | `VERIFIED_BY` | `Requirement` | `Test` | The test verifies the capability. |
-| `SPECIFIED_BY` | `Requirement` | `Spec` | Inverse of `SPECIFIES`, used where the requirement is the natural starting point. |
 | `FULFILS` | `Requirement` | `Memory` | The capability is the subject of the recorded memory. |
 | `INCLUDES` | `Release` | `Memory` | The release is the subject of the recorded memory. |
 | `NEXT_RELEASE` | `Release` | `Release` | Chronological succession of releases. |
