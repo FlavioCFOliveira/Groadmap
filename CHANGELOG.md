@@ -5,6 +5,95 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.3] - 2026-07-14
+
+A correctness release. The embedded GoGraph knowledge-graph engine moves from
+`v0.7.0` through `v0.8.0` to `v0.8.1`, which fixes a Cypher pattern-evaluator bug
+that made relationship-type matching unreliable over **parallel edges** — two or
+more relationships of different types between the same ordered pair of nodes.
+That bug silently corrupted the results of the canonical "find the gaps" query
+shape, `WHERE NOT (n)-[:TYPE]->()`, so completeness and coverage audits run
+through `rmp graph query`, `rmp graph search`, and the `rmp web` query bar could
+report relationships as missing when they were present. This release also
+corrects a SQLite error-classification bug that could report a non-uniqueness
+constraint failure as an "already in use" collision, and it restores the
+integrity of two test suites that were not testing what they claimed to test.
+
+Under Semantic Versioning 2.0.0 this is a **PATCH** release: it contains
+backward-compatible bug fixes, test-integrity work, and documentation only. No
+`rmp` command, flag, or JSON success schema is added, removed, or renamed. No
+exit code changes meaning. The GoGraph upgrade is API-additive and confined to
+the read path — no `rmp` call site changed, no write, commit, or recovery path is
+touched, and there is **no on-disk graph store migration**. The database schema
+version remains `1.8.0`, so there is no SQLite migration either.
+
+### Fixed
+
+- **Graph — relationship-type matching over parallel edges.** Delivered by the
+  GoGraph `v0.8.1` upgrade. Up to `v0.8.0`, pattern-predicate and
+  pattern-comprehension relationship-type matching inspected only the **first**
+  stored relationship type between an ordered pair of nodes. Over parallel edges,
+  every non-first type was therefore reported as absent, and a bound relationship
+  variable's `type(r)` could report the wrong type. Concretely, over
+  `(a)-[:FIRST]->(b)` and `(a)-[:SECOND]->(b)`, the predicate
+  `WHERE NOT (a)-[:SECOND]->()` wrongly returned `a` — claiming an edge that
+  exists is missing — while the positive form `WHERE (a)-[:SECOND]->()` wrongly
+  returned nothing. The first-stored type always answered correctly, which is
+  precisely why the defect stayed hidden. The engine now tests **every**
+  relationship type of the endpoint pair, across the outgoing, incoming,
+  undirected, variable-length, and comprehension paths. This reaches users
+  through `rmp graph query`, `rmp graph search`, and the `rmp web`
+  knowledge-graph query bar, which all run the same engine. Guarded by the new
+  end-to-end suite `tests/test_46_graph_parallel_edge_predicates.py`.
+- **Database — only genuine uniqueness violations are reported as collisions.**
+  `IsUniqueConstraintErr` masked the SQLite result code down to the **primary**
+  code `SQLITE_CONSTRAINT` (19), which is shared by every constraint kind. A
+  `CHECK`, `NOT NULL`, or `FOREIGN KEY` violation was therefore indistinguishable
+  from a uniqueness collision, and on the sprint insert and update paths it was
+  reported to the user as `sprint order N is already in use` with exit code 5
+  (`EXIT_EXISTS`). The check is now made on the **extended** result codes —
+  `SQLITE_CONSTRAINT_UNIQUE` (2067) and `SQLITE_CONSTRAINT_PRIMARYKEY` (1555) —
+  so a non-uniqueness constraint failure now surfaces as the failure it actually
+  is. Exit code 5 keeps its meaning; it is simply no longer emitted for failures
+  that are not collisions. Guarded by
+  `TestIsUniqueConstraintErr_OnlyUniquenessViolations`.
+
+### Changed
+
+- **Dependency refresh.**
+
+  | Module | From | To | Kind |
+  |--------|------|----|------|
+  | `github.com/FlavioCFOliveira/GoGraph` | `v0.7.0` | `v0.8.1` | Direct |
+
+  No other module changed. Beyond the parallel-edge fix, GoGraph `v0.8.0` widened
+  the Cypher DDL surface, accepting the modern
+  `CREATE CONSTRAINT ... FOR ... REQUIRE ...` grammar alongside the legacy
+  `ON ... ASSERT` form. Groadmap continues to **reject all DDL** in every
+  `rmp graph` subcommand; the guard-rail contract is now pinned by regression
+  tests in `internal/cypherguard` covering both grammars.
+
+### Internal
+
+- **Database index tests now verify the real schema and the real queries.** The
+  index tests built their own local schema and their own lookalike SQL, so they
+  could pass while the production schema or the production query drifted away
+  from the index they claimed to exercise. Query assembly is now separated from
+  query execution (`buildListTasksQuery`, `buildAuditEntriesQuery`, and the named
+  `sprintTasksLookupQuery` constant), so the tests take the query plan of the
+  exact SQL production runs, against the real schema. This is a
+  behaviour-preserving refactor. See `SPEC/DATABASE.md`, "Performance
+  Optimization".
+- **Model memory layout is asserted, not logged.** The struct-size benchmark
+  logged the layout with `b.Logf` and asserted nothing, so a regression in the
+  memory layout pinned by `SPEC/MODELS.md` could not fail the build. It is now a
+  real test (`TestSpecifiedStructSizes`) that asserts the specified sizes, scoped
+  to 64-bit targets as the specification states.
+- **Knowledge-graph model documented.** `knowledge-model.md` is added as the
+  authoritative description of the project knowledge graph's shape: the
+  normalized node schema, the structural edges re-derived from the code, and the
+  traceability and provenance contract.
+
 ## [1.13.2] - 2026-07-13
 
 A maintenance release that refreshes every module dependency, raises the Go
@@ -297,6 +386,7 @@ behaviour.
   AI-contract E2E suite (`tests/test_30_aihelp_contract.py`) to lock in the
   revised help text and contract invariants.
 
+[1.13.3]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.13.2...v1.13.3
 [1.13.2]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.13.1...v1.13.2
 [1.13.1]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.13.0...v1.13.1
 [1.13.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.12.0...v1.13.0
