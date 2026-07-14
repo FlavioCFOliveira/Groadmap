@@ -451,7 +451,7 @@ Group 4: Int fields (4 × 8 = 32 bytes)
   ID, Priority, Severity, SubtaskCount
 ```
 
-**SprintStats struct (136 bytes, zero padding on 64-bit):**
+**SprintStats struct (112 bytes, zero padding on 64-bit):**
 ```
 Group 1: Reference-type fields (3 × 8 = 24 bytes)
   StatusDistribution (map header), DaysElapsed (*int), DaysRemaining (*int)
