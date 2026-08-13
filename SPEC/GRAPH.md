@@ -148,6 +148,27 @@ changes can land without a major-version bump. The following residual risks rema
    directory remains owned by GoGraph and is not specified by Groadmap (see
    [Persistence Layout](#persistence-layout), rule 5).
 
+3. **A widened Cypher clause surface.** The guard rail classifies a query by the
+   clauses it contains, so the set of clauses the engine accepts is part of
+   Groadmap's integration surface even though no Go symbol expresses it. When the
+   engine learns a new clause family, queries that the previous engine rejected as
+   a syntax error start executing, and each subcommand's accepted class widens
+   without a line of Groadmap changing. This is invisible to the two checks an
+   upgrade would otherwise rely on: a diff of removed or re-signed exported
+   symbols finds nothing, because nothing was removed, and re-running the
+   acceptance criteria finds nothing, because no existing criterion mentions a
+   clause that did not previously exist.
+
+   This has already happened. The engine gained the `FOREACH` updating clause and
+   the `SHOW CONSTRAINTS` / `SHOW INDEXES` schema-introspection commands, and it
+   extended its own `cypher/ir.IsDDL` predicate to report the latter as DDL —
+   which, because `cypher.QueryHasWritingClause` returns false for anything
+   `IsDDL` accepts, made a schema-introspection command classify as neither a
+   write nor DDL and so pass the read-only check. The outcome is the one this
+   specification now mandates (see
+   [Schema Introspection](#schema-introspection)), but it was reached by omission
+   rather than by decision, which is what mitigation 5 below exists to prevent.
+
 Mitigations required by this specification:
 
 1. Groadmap MUST pin GoGraph to an exact version in `go.mod` (a specific immutable
@@ -168,6 +189,18 @@ Mitigations required by this specification:
    rewriting the directory in the new one. Backward compatibility MUST NOT be inferred
    from release notes alone, because Groadmap has no migration path of its own for a
    graph it can no longer open. An upgrade that fails this check MUST NOT be released.
+5. **The guard rail's clause surface MUST be re-verified against the new engine,
+   and every operation class this specification names MUST be pinned by a
+   regression test.** Before an upgrade is released, the classes in
+   [Operation Classes](#operation-classes) MUST be re-checked against the engine
+   being adopted: each class MUST still be classified as specified, and any clause
+   family the new engine accepts that this specification does not name MUST be
+   classified deliberately — specified into an existing class or into a new one —
+   rather than left to fall through the discriminators. A regression test MUST
+   assert the accepted and rejected class of every subcommand for every named
+   clause family, so that a later upgrade which widens the surface fails the test
+   instead of passing unnoticed. Symbol-level compatibility is NOT sufficient
+   evidence here: the surface can widen with no symbol change at all.
 
 ### Engine Construction and Lifecycle
 
@@ -204,6 +237,21 @@ accept `map[string]any`, or `cypher.BindParams` followed by `Run` / `RunInTx`).
 The exact Go types, function signatures, and any wrapper structs are
 implementation details for `go-developer`; this specification fixes the
 behaviour, not the Go API.
+
+**Engine options.** The implementation constructs the engine with the pinned
+engine's default options and MUST NOT disable a query-planner access path
+without measured evidence, gathered against a graph of representative size, that
+the default is worse for Groadmap's own workload. The engine ships planner
+optimisations that can regress a particular query shape, and it documents them;
+adopting a non-default option on the strength of an upstream note alone would be
+tuning by assumption. The pinned engine's known selective-multi-label regression
+is the worked example: it is reachable only through the parallel-scan tier, that
+tier is gated on a live node count above a threshold of tens of thousands of
+nodes, and a roadmap knowledge graph of a few hundred nodes cannot reach the gate
+at all, so the option that would suppress it stays at its default and Groadmap
+keeps the intra-query parallelism the default provides. The rule is that an
+engine default is changed on evidence measured against this project's own graph,
+never on an upstream release note.
 
 ### Synchronous Checkpoint on Write
 
@@ -371,12 +419,13 @@ The guard rail classifies a query by the Cypher clauses it contains:
 | `SET`, `REMOVE` | Mutates properties or labels on existing elements | Write (mutating) |
 | `DELETE`, `DETACH DELETE` | Removes nodes or edges | Write (deleting) |
 | `CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, `DROP CONSTRAINT` | Mutates the graph schema (indexes, constraints) | DDL (schema-mutating) |
-| `MATCH ... RETURN` only, with no writing clause and no DDL clause | Reads and returns data | Read-only |
+| `SHOW INDEXES`, `SHOW INDEX`, `SHOW CONSTRAINTS`, `SHOW CONSTRAINT`, each with an optional `YIELD` / `WHERE` / `RETURN` projection tail | Lists the registered schema without altering it | Schema introspection (read-only) |
+| `MATCH ... RETURN`, or a schema-introspection command, with no writing clause and no DDL clause | Reads and returns data | Read-only |
 
 A query is a **writing query** when GoGraph's `cypher.QueryHasWritingClause`
 reports that it contains any writing clause (`CREATE`, `MERGE`, `SET`, `REMOVE`,
 `DELETE`, or `DETACH DELETE`). A query is **read-only** when it contains neither a
-writing clause nor a DDL clause.
+writing clause nor a DDL clause; a schema-introspection command is read-only.
 The guard rail uses `QueryHasWritingClause` as the primary read-vs-write
 discriminator, and additionally inspects which writing clauses are present to
 distinguish creating, mutating, and deleting writes for the per-subcommand rules
@@ -396,6 +445,41 @@ clause-class classification, runs on the masked normalization of the query (see
 [Literal-Aware Normalization](#literal-aware-normalization)), so a DDL keyword that
 appears only inside a string literal, a comment, or a backtick-quoted identifier
 does not trigger DDL classification.
+
+#### Schema Introspection
+
+**Schema introspection is a read-only class of its own.** A schema-introspection
+command — `SHOW INDEXES`, `SHOW CONSTRAINTS`, their singular aliases `SHOW INDEX`
+and `SHOW CONSTRAINT`, and any of them followed by a `YIELD` / `WHERE` / `RETURN`
+projection tail — lists the schema that is registered on the graph. It reads; it
+creates, drops, and alters nothing. It is therefore **accepted by the read
+subcommands** (`query` and `search`) and **rejected by the write subcommands**
+(`create`, `update`, `delete`), each of which accepts only its own data-writing
+clause class.
+
+The guard rail MUST classify schema introspection **deliberately**, by
+recognising the statement form, and MUST NOT arrive at the read-only verdict by
+the absence of every other class. The distinction is not cosmetic: a verdict
+reached because nothing matched cannot be reviewed and cannot be tested for
+intent, and it silently absorbs whatever clause family the engine gains next.
+Recognition is anchored to the start of the statement, so an identifier, a label,
+or a property named `show` elsewhere in a query does not make that query an
+introspection command. Like every other clause-class check it runs on the masked
+normalization (see [Literal-Aware Normalization](#literal-aware-normalization)),
+so a `SHOW` keyword that appears only inside a string literal, a comment, or a
+backtick-quoted identifier does not trigger the classification.
+
+**This classification is Groadmap's, and it is deliberately narrower than the
+engine's.** GoGraph reports schema introspection as DDL from its own
+`cypher/ir.IsDDL` predicate, which folds `SHOW` in with `CREATE INDEX` and its
+siblings, and `cypher.QueryHasWritingClause` consequently reports a
+schema-introspection command as **not** a writing query. Groadmap does not adopt
+that grouping, because the two behave differently against the property this guard
+rail protects: `CREATE INDEX` and `DROP INDEX` change the graph's schema, while
+`SHOW INDEXES` only reports it. Groadmap's DDL class is therefore exactly the
+four schema-**mutating** forms, and schema introspection is a separate,
+read-only class. Where the engine's grouping and this specification disagree,
+this specification governs what each subcommand accepts.
 
 #### Literal-Aware Normalization
 
@@ -454,11 +538,11 @@ query, not on the raw string (see
 
 | Subcommand | Accepts | Rejects | Engine path |
 |------------|---------|---------|-------------|
-| `graph create` | A writing query whose only writing clauses are `CREATE` and/or `MERGE`. | Read-only queries; any query containing `SET`, `REMOVE`, `DELETE`, or `DETACH DELETE`; any DDL clause. | Transactional write |
-| `graph query` | A read-only query (`MATCH ... RETURN`, no writing clause and no DDL clause). | Any query for which `QueryHasWritingClause` is true (contains `CREATE`, `MERGE`, `SET`, `REMOVE`, `DELETE`, or `DETACH DELETE`); any query containing a DDL clause (`CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, `DROP CONSTRAINT`). | Read |
-| `graph update` | A writing query whose writing clauses are `SET` and/or `REMOVE` (mutations on existing elements). | Read-only queries; queries containing `CREATE`, `MERGE`, `DELETE`, or `DETACH DELETE`; any DDL clause. | Transactional write |
-| `graph delete` | A writing query whose writing clauses are `DELETE` and/or `DETACH DELETE`. | Read-only queries; queries containing `CREATE`, `MERGE`, `SET`, or `REMOVE`; any DDL clause. | Transactional write |
-| `graph search` | A read-only query, intended for traversal and pattern matching, including variable-length paths (for example `-[*1..3]-`). | Any query for which `QueryHasWritingClause` is true; any query containing a DDL clause. | Read |
+| `graph create` | A writing query whose only writing clauses are `CREATE` and/or `MERGE`. | Read-only queries; any query containing `SET`, `REMOVE`, `DELETE`, or `DETACH DELETE`; any DDL clause; any schema-introspection command. | Transactional write |
+| `graph query` | A read-only query: `MATCH ... RETURN` with no writing clause and no DDL clause, or a schema-introspection command. | Any query for which `QueryHasWritingClause` is true (contains `CREATE`, `MERGE`, `SET`, `REMOVE`, `DELETE`, or `DETACH DELETE`); any query containing a DDL clause (`CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, `DROP CONSTRAINT`). | Read |
+| `graph update` | A writing query whose writing clauses are `SET` and/or `REMOVE` (mutations on existing elements). | Read-only queries; queries containing `CREATE`, `MERGE`, `DELETE`, or `DETACH DELETE`; any DDL clause; any schema-introspection command. | Transactional write |
+| `graph delete` | A writing query whose writing clauses are `DELETE` and/or `DETACH DELETE`. | Read-only queries; queries containing `CREATE`, `MERGE`, `SET`, or `REMOVE`; any DDL clause; any schema-introspection command. | Transactional write |
+| `graph search` | A read-only query, intended for traversal and pattern matching, including variable-length paths (for example `-[*1..3]-`); a schema-introspection command is likewise accepted. | Any query for which `QueryHasWritingClause` is true; any query containing a DDL clause. | Read |
 
 Notes:
 
@@ -498,6 +582,25 @@ Notes:
    subcommands (`create`, `update`, `delete`) likewise reject DDL: each accepts
    only its own data-writing clause class, and DDL is outside every one of those
    classes (see the Rejects column above).
+6. **Schema introspection is accepted by the read subcommands and rejected by
+   the write subcommands.** `graph query` and `graph search` accept a
+   schema-introspection command because it reads the schema without altering it
+   (see [Schema Introspection](#schema-introspection)). The write subcommands
+   reject it for the same reason they reject a read-only `MATCH`: it carries none
+   of the data-writing clauses they accept, so it is rejected with
+   `utils.ErrValidation` (exit code 6) and that subcommand's own message.
+7. **`FOREACH` is a writing clause and is classified by the clauses its body
+   contains.** `FOREACH (x IN list | <updating clauses>)` runs its body once per
+   list element. Its body may contain only `CREATE`, `MERGE`, `SET`, `REMOVE`,
+   `DELETE`, `DETACH DELETE`, or a nested `FOREACH`, so every `FOREACH` that has
+   an effect carries at least one of the six writing keywords, and the guard rail
+   classifies it by those keywords: a `FOREACH` whose body sets a property is a
+   mutating write valid only under `graph update`, one whose body creates is a
+   creating write valid only under `graph create`, and every `FOREACH` is rejected
+   by `graph query` and `graph search`. The classification is therefore correct
+   without a `FOREACH` discriminator of its own, but it rests on that containment
+   property rather than on the keyword `FOREACH`, so the property MUST be pinned
+   by regression tests rather than left as an emergent consequence.
 
 ### Cypher Input Source and Precedence
 
@@ -790,6 +893,36 @@ Groadmap's usage model and expectations:
     This holds with the pinned engine, where the write path returns no
     notification, and remains correct without further change if a future engine
     attaches notifications to the write path.
+23. `rmp graph query -r <roadmap> --query "SHOW INDEXES"` is accepted as a
+    schema-introspection command and exits 0, returning the engine's schema
+    listing in the normal `columns`/`rows` shape. The same holds for
+    `SHOW CONSTRAINTS`, for the singular `SHOW INDEX` / `SHOW CONSTRAINT`
+    aliases, for any of them under `graph search`, and for a form carrying a
+    `YIELD` / `WHERE` / `RETURN` projection tail such as
+    `SHOW INDEXES YIELD name RETURN name`.
+24. `rmp graph create`, `rmp graph update`, and `rmp graph delete` each reject
+    `SHOW INDEXES` with exit code 6 and that subcommand's own guard-rail message,
+    because a schema-introspection command carries none of the data-writing
+    clauses those subcommands accept.
+25. A `SHOW` keyword that appears only inside a string literal, a comment, or a
+    backtick-quoted identifier does not make a query a schema-introspection
+    command, and an identifier, label, or property named `show` elsewhere in a
+    query does not either: for example
+    `rmp graph query --query 'MATCH (n) WHERE n.title = "SHOW INDEXES" RETURN n.key'`
+    is accepted as an ordinary read, and
+    `rmp graph create --query 'CREATE (n:Panel {show:"indexes"})'` is accepted as
+    an ordinary creating write.
+26. `rmp graph query --query "MATCH (n:Spec) FOREACH (x IN [1] | SET n.seen = true)"`
+    is rejected with exit code 6, and so is the same query under `graph search`,
+    because `FOREACH` is classified by the writing clauses its body contains. The
+    same query is accepted by `graph update` and rejected by `graph create` and
+    `graph delete`; a `FOREACH` whose body creates is accepted by `graph create`
+    and rejected by `graph update` and `graph delete`; and a nested `FOREACH` is
+    classified by the innermost body's writing clauses in the same way.
+27. The four schema-mutating DDL forms remain rejected by every subcommand with
+    exit code 6 regardless of keyword case and of the amount of whitespace
+    between the two keywords: `create index`, `CREATE   INDEX`, `Drop Constraint`
+    and their siblings are each rejected exactly as the canonical spelling is.
 
 ## See Also
 
