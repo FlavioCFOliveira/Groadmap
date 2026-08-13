@@ -4,6 +4,11 @@ This file contains the implementation strategies that support the contracts defi
 
 ## Table of Contents
 
+- [Database Connections](#database-connections)
+  - [Entry Point](#entry-point)
+  - [DSN Construction](#dsn-construction)
+  - [Where Each PRAGMA Is Applied](#where-each-pragma-is-applied)
+  - [Read-Only Connections](#read-only-connections)
 - [Concurrency Model](#concurrency-model)
   - [WAL Mode](#wal-mode)
   - [Connection Pooling](#connection-pooling)
@@ -16,6 +21,103 @@ This file contains the implementation strategies that support the contracts defi
 - [Graph Store Concurrency](#graph-store-concurrency)
 - [Performance Considerations](#performance-considerations)
 - [See Also](#see-also)
+
+## Database Connections
+
+Every roadmap database is opened by `internal/db`, and only by `internal/db`. This
+section is the contract for how a connection is established: the entry point, the
+form of the DSN, and which settings travel in the DSN rather than being executed
+against an already-open connection. `BUILD.md § SQLite Driver Rules` governs the
+driver version itself.
+
+### Entry Point
+
+Databases MUST be opened with `sqlite.NewConnector(dsn)` followed by
+`sql.OpenDB(connector)`, never with `sql.Open("sqlite", dsn)`.
+
+`NewConnector` returns a `driver.Connector` backed by the same driver the package
+registers as `"sqlite"`, so a connection it opens is identical to one `sql.Open`
+would have opened. What differs is when a bad DSN is reported. `sql.Open` only
+looks up the registered driver; because `modernc.org/sqlite` deliberately does not
+implement `driver.DriverContext`, the DSN is not examined there at all, and a
+defect in it surfaces later, from whichever query first forces the pool to dial.
+`NewConnector` checks what can be checked without touching the filesystem — that
+the query string parses, and that the `vfs` parameters do not conflict — so the
+error is attributed to opening the database, which is where it belongs. Values
+that require an open database, such as an out-of-range PRAGMA value, are still
+reported when the connection is made.
+
+Neither function connects, so the connection-pool settings below keep their
+meaning and are applied to the returned `*sql.DB` exactly as before.
+
+### DSN Construction
+
+The DSN MUST be a SQLite `file:` URI with the database path percent-encoded. It
+MUST NOT be built by concatenating the path with a `?` and a query string.
+
+The reason is that the driver splits a DSN at the first `?` and, when the string
+is not prefixed with `file:`, treats everything before it as the filename and
+everything after it as driver parameters. A path containing `?` therefore opens a
+different file from the one intended and feeds its own tail to the parameter
+parser — which, since the driver gained validated shorthand keys, can disable
+foreign-key enforcement or downgrade `synchronous` on a connection the application
+believes it configured itself. Percent-encoding the path removes the possibility:
+no character in a path can terminate the path component or introduce a parameter.
+
+The construction follows <https://www.sqlite.org/uri.html>:
+
+1. Convert every `\` to `/`. This matters only on Windows.
+2. Prepend `/` when the path begins with a drive letter, so a Windows path becomes
+   `/C:/Users/...`.
+3. Percent-encode the result and emit it as the path component of a `file:` URI.
+
+The driver passes `SQLITE_OPEN_URI` and, for a `file:`-prefixed DSN, hands the
+whole string to SQLite rather than truncating it, so SQLite decodes the path
+itself. Query parameters SQLite does not recognise are passed through to the VFS
+and ignored, so the driver's own parameters are inert to it.
+
+### Where Each PRAGMA Is Applied
+
+A PRAGMA is connection-scoped or database-level, and that determines where it is
+set. Setting a connection-scoped PRAGMA with a one-shot `Exec` is a defect: it
+configures whichever single pooled connection services that call and leaves the
+others on the SQLite defaults, so referential integrity or lock-waiting silently
+depends on which connection a query lands on.
+
+| PRAGMA | Scope | Applied | Value |
+|--------|-------|---------|-------|
+| `busy_timeout` | Connection | DSN, `_busy_timeout` | `10000` |
+| `foreign_keys` | Connection | DSN, `_foreign_keys` | `1` |
+| `query_only` | Connection | DSN, `_query_only` | `1`, read-only opens only |
+| `journal_mode` | Database | One `Exec` after opening | `WAL` |
+
+Connection-scoped PRAGMAs MUST be carried in the DSN using the driver's validated
+shorthand keys, not the verbatim `_pragma=name(value)` form. `_pragma` values are
+executed as written and are not validated, and they are the one parameter class
+that can still fail partway through a DSN, leaving the settings ahead of the
+failure already applied. The shorthand keys are validated against a fixed accepted
+set before any parameter is applied, and are applied in an order the driver fixes
+— `_busy_timeout` first, `_query_only` last — independent of the order they are
+written in.
+
+Only the primary key names are used. Each of these keys has an alias (`_fk`,
+`_timeout`), and when a key and its alias both appear the alias wins; supplying
+both is therefore a trap and is forbidden.
+
+`journal_mode` is database-level: WAL is recorded in the file header, survives
+reopening, and applies to every connection, so it is set once with a single `Exec`
+after the database is opened and MUST NOT be carried in the DSN.
+
+### Read-Only Connections
+
+The web interface opens databases read-only. Such a connection carries
+`_query_only=1` in addition to the connection-scoped PRAGMAs above, so the SQLite
+engine itself rejects every write — schema change, row mutation, and audit insert
+alike — rather than relying on the calling code to refrain from writing. A
+read-only open also runs no migrations, since DDL is a write. `journal_mode` is
+not set on these connections: it is a write, and the database is already in WAL
+mode from creation. `WEB.md § Read-Only Data Flow` states the requirement this
+serves.
 
 ## Concurrency Model
 
@@ -33,6 +135,9 @@ WAL mode provides:
 - **Readers don't block writers**: Multiple readers can access the database while a writer is active
 - **Writers don't block readers**: Readers see a consistent snapshot of the database
 - **Better performance**: Especially for read-heavy workloads
+
+It is set once per database rather than per connection; see
+[Where Each PRAGMA Is Applied](#where-each-pragma-is-applied).
 
 ### Connection Pooling
 
@@ -65,6 +170,10 @@ A busy timeout is configured to prevent immediate failures when the database is 
 ```sql
 PRAGMA busy_timeout = 10000;  -- 10 seconds
 ```
+
+It is connection-scoped and therefore carried in the DSN, so that it holds on
+every pooled connection and not only on the one that would have serviced a
+one-shot `Exec`; see [Where Each PRAGMA Is Applied](#where-each-pragma-is-applied).
 
 ### Retry Logic
 

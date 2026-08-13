@@ -6,7 +6,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -199,7 +202,7 @@ func Open(roadmapName string) (*DB, error) {
 	// Carrying them in the DSN makes modernc.org/sqlite apply them on EVERY new
 	// connection. See SPEC/IMPLEMENTATION.md (foreign_keys on every connection;
 	// busy_timeout) and SPEC/DATABASE.md (CASCADE integrity).
-	sqlDB, err := sql.Open("sqlite", dsnWithPragmas(dbPath))
+	sqlDB, err := sql.Open("sqlite", dsnFor(dbPath, false))
 	if err != nil {
 		return nil, fmt.Errorf("opening database %s: %w", roadmapName, err)
 	}
@@ -308,8 +311,7 @@ func OpenReadOnly(roadmapName string) (*DB, error) {
 		return nil, err
 	}
 
-	dsn := fmt.Sprintf("%s?_pragma=query_only(true)&_pragma=foreign_keys(1)&_pragma=busy_timeout(%d)", dbPath, DefaultBusyTimeout)
-	sqlDB, err := sql.Open("sqlite", dsn)
+	sqlDB, err := sql.Open("sqlite", dsnFor(dbPath, true))
 	if err != nil {
 		return nil, fmt.Errorf("opening database %s: %w", roadmapName, err)
 	}
@@ -327,22 +329,68 @@ func OpenReadOnly(roadmapName string) (*DB, error) {
 	}, nil
 }
 
-// dsnWithPragmas builds a modernc.org/sqlite DSN that applies the
-// connection-scoped PRAGMAs (foreign_keys, busy_timeout) on EVERY pooled
-// connection. Unlike a one-shot db.Exec("PRAGMA ..."), the driver replays
-// these on each new connection it opens, so the safety/integrity guarantees
-// hold regardless of which pooled connection services a given query.
-// journal_mode=WAL is intentionally NOT set here: it is a persistent,
-// database-level setting (stored in the file header) and is configured once
-// in configureConnection.
-func dsnWithPragmas(dbPath string) string {
-	return fmt.Sprintf("%s?_pragma=foreign_keys(1)&_pragma=busy_timeout(%d)", dbPath, DefaultBusyTimeout)
+// dsnFor builds the DSN that modernc.org/sqlite opens dbPath with, carrying the
+// connection-scoped PRAGMAs (foreign_keys, busy_timeout, and query_only when
+// readOnly) so the driver applies them to EVERY pooled connection. Unlike a
+// one-shot db.Exec("PRAGMA ..."), which configures only whichever connection
+// services that call, the driver replays these on each connection it opens, so
+// the integrity and lock-waiting guarantees hold regardless of which pooled
+// connection a given query lands on. journal_mode=WAL is intentionally NOT set
+// here: it is a persistent, database-level setting (stored in the file header)
+// and is configured once in configureConnection.
+//
+// The DSN is a SQLite file: URI with the path percent-encoded, NEVER
+// dbPath+"?"+params. The driver splits a DSN at the first '?' and, unless the
+// string starts with "file:", keeps only what precedes it as the filename, so a
+// path containing '?' opens a DIFFERENT file and hands its own tail to the
+// parameter parser -- which since driver v1.55.0 recognises keys that turn off
+// foreign_keys or downgrade synchronous. The roadmap name is validated upstream,
+// but the home directory the path is rooted in is not. Percent-encoding makes
+// every character in the path inert.
+//
+// See SPEC/IMPLEMENTATION.md § DSN Construction and https://www.sqlite.org/uri.html.
+func dsnFor(dbPath string, readOnly bool) string {
+	params := fmt.Sprintf("_pragma=foreign_keys(1)&_pragma=busy_timeout(%d)", DefaultBusyTimeout)
+	if readOnly {
+		params = "_pragma=query_only(true)&" + params
+	}
+	return "file:" + uriPath(dbPath) + "?" + params
+}
+
+// uriPath renders a filesystem path as the path component of a SQLite file:
+// URI, following https://www.sqlite.org/uri.html: backslashes become forward
+// slashes, a leading drive letter gets a '/' in front of it, and the result is
+// percent-encoded. An absolute path is returned with the empty-authority "//"
+// prefix (file:///path); a relative one without it (file:path), which is the
+// form SQLite documents for relative filenames.
+func uriPath(path string) string {
+	// ToSlash is a no-op outside Windows.
+	p := filepath.ToSlash(path)
+
+	// "On windows only, if the filename begins with a drive letter, prepend a
+	// single '/' character." The test is the drive letter itself rather than
+	// runtime.GOOS, so it cannot turn a relative path into an absolute one.
+	if len(p) >= 2 && p[1] == ':' && isASCIILetter(p[0]) {
+		p = "/" + p
+	}
+
+	escaped := (&url.URL{Path: p}).EscapedPath()
+	if strings.HasPrefix(p, "/") {
+		return "//" + escaped
+	}
+	return escaped
+}
+
+// isASCIILetter reports whether c is an unaccented A-Z or a-z, the only
+// characters SQLite accepts as a Windows drive letter.
+func isASCIILetter(c byte) bool {
+	return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z')
 }
 
 // configureConnection sets up the persistent, database-level SQLite settings
 // and the connection pool. Connection-scoped PRAGMAs (foreign_keys,
 // busy_timeout) are NOT set here — they are carried in the DSN (see
-// dsnWithPragmas) so they apply to every pooled connection, not just the one
+// dsnFor) so they apply to every pooled connection, not just the one
 // that happens to service this call.
 func configureConnection(db *sql.DB) error {
 	// Enable WAL mode for better concurrency. WAL is a persistent database-level

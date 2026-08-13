@@ -98,7 +98,8 @@ Groadmap implements several security layers to protect user data and ensure syst
 ### 3. Robustness and Reliability
 - **CLI Robustness**: The argument parser is designed to handle extremely large inputs and malicious characters without crashing or panicking.
 - **No SQL Injection**: All database interactions use parameterized queries via SQLite's prepared statements. Bulk ID parameters are converted to integers before query construction.
-- **Foreign Key Enforcement**: `PRAGMA foreign_keys = ON;` must be enabled on every database connection to ensure referential integrity and trigger cascading deletes.
+- **Foreign Key Enforcement**: `PRAGMA foreign_keys = ON;` must be enabled on every database connection to ensure referential integrity and trigger cascading deletes. Because it is connection-scoped, it is carried in the DSN rather than executed against an already-open connection, so it cannot depend on which pooled connection services a query; see `IMPLEMENTATION.md § Database Connections`.
+- **Inert Database Paths**: The DSN is a `file:` URI with the database path percent-encoded, so no character in the path can redirect the open to another file or introduce a connection parameter. The roadmap name is validated, but the home directory the path is rooted in is not; see `IMPLEMENTATION.md § DSN Construction`.
 - **Bulk Operation Limits**: Commands handling bulk task IDs (e.g., `rmp task get`) must batch operations into sets of 500 or fewer to stay safely within SQLite's `SQLITE_LIMIT_VARIABLE_NUMBER`.
 - **Transactional Integrity**: All database modifications (CREATE, UPDATE, DELETE, STATUS_CHANGE) MUST be wrapped in an explicit SQL transaction. The audit log entry for the operation MUST be written within the same transaction to ensure atomicity and consistency.
 - **XSS Prevention**: User inputs that might be rendered in other contexts are sanitized to remove HTML tags and dangerous attributes.
