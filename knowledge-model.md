@@ -178,7 +178,7 @@ Every edge carries `last_commit` and `last_commit_date`.
 | `FULFILS` | `Requirement` | `Memory` | The capability is the subject of the recorded memory. |
 | `INCLUDES` | `Release` | `Memory` | The release is the subject of the recorded memory. |
 | `NEXT_RELEASE` | `Release` | `Release` | Chronological succession of releases. |
-| `SEE_ALSO` | `Memory` | `Memory`, `Spec` | Cross-reference from a memory to related knowledge. |
+| `SEE_ALSO` | `Memory` | `Memory`, `Spec`, `Component` | Cross-reference from a memory to related knowledge. A `Component` target records that the memory carries knowledge about that component which the component's own properties cannot hold, such as a pinning constraint no validation gate can check. |
 
 ## Core traceability chain
 

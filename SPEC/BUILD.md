@@ -30,11 +30,15 @@ Groadmap MUST NOT be built or released with a toolchain older than Go 1.26.5.
 
 ### External Dependencies
 
+Groadmap has exactly two direct module dependencies. Both are listed below, and
+each one is governed by its own set of rules.
+
 | Module | Path | Version | Purpose |
 |--------|------|---------|---------|
 | GoGraph | `github.com/FlavioCFOliveira/GoGraph` | Exact tag **v0.11.0** | Labelled property graph, Cypher engine, and durable store backing the `graph` command. See `GRAPH.md`. |
+| SQLite driver | `modernc.org/sqlite` | Exact version **v1.56.0** | Pure-Go SQLite driver backing every roadmap database (`~/.roadmaps/<name>/project.db`). It is the storage engine for all task, sprint, and audit data: `internal/db` registers it under the driver name `sqlite` and opens every database connection through it. Being pure Go, it needs no C toolchain and builds under `CGO_ENABLED=0`. See `DATABASE.md` for the schema it stores and `ARCHITECTURE.md § internal/db/` for the layer that opens it. |
 
-Rules:
+#### GoGraph Rules
 
 1. GoGraph MUST be pinned to an exact, immutable version in `go.mod`, not a
    floating reference (no branch or moving target), so that builds are
@@ -51,6 +55,60 @@ Rules:
    before release.
 4. `go.sum` MUST record the checksum of the pinned version. The build MUST fail
    if the module checksum does not match.
+
+#### SQLite Driver Rules
+
+1. `modernc.org/sqlite` MUST be pinned to an exact, immutable version in `go.mod`,
+   not a floating reference, so that builds are reproducible and every build of a
+   given commit runs the same storage engine against the same on-disk database
+   format. The driver is consumed at the exact version **v1.56.0**. `go.sum` MUST
+   record the checksum of that version, and the build MUST fail if the checksum
+   does not match.
+2. **`modernc.org/libc` and `modernc.org/memory` MUST be pinned to exactly the
+   versions that `modernc.org/sqlite`'s own `go.mod` requires, and never to a later
+   release.** For the pinned driver version, those versions are
+   `modernc.org/libc v1.74.4` and `modernc.org/memory v1.11.0`. Both modules are
+   indirect dependencies of Groadmap, but their versions are not free to float:
+   pinning them to the driver's own required versions is a standing instruction
+   from the driver's author, restated in its release notes and tracked upstream as
+   GitLab issue #177.
+
+   The mechanism is that `modernc.org/sqlite` does not link the C SQLite library.
+   It ships the SQLite amalgamation transpiled into Go, and that transpiled code
+   executes inside `modernc.org/libc`, a Go implementation of the C runtime
+   (`modernc.org/memory` is the allocator that `modernc.org/libc` in turn
+   requires). The driver's transpiled sources are generated against one specific
+   `modernc.org/libc` version, and its release notes state that correct operation
+   requires that matching version. A newer `modernc.org/libc` is therefore not a
+   drop-in replacement: the mismatch is a runtime risk inside the storage engine —
+   the component that owns the project's durable data — and not a compilation
+   error. The coupling MUST be respected as stated rather than worked around:
+   upstream retracted its own release `modernc.org/sqlite v1.33.0`, which was an
+   attempt to resolve issue #177, because it broke client modules.
+3. **No validation gate can detect a violation of Rule 2.** A build carrying a
+   mismatched `modernc.org/libc` or `modernc.org/memory` version compiles cleanly,
+   passes `go vet`, passes the unit tests, passes `golangci-lint`, passes the
+   `gosec` security scan, and passes the full E2E suite. Every gate that
+   `make check` runs therefore reports success, because not one of them compares
+   the pinned versions against the driver's requirements. A green build is NOT
+   evidence that the pins are correct, and neither is a clean security scan.
+   Checking the two pins is a required manual step, and it MUST be performed
+   whenever a dependency version changes and before any release.
+4. **The pins MUST be re-derived after any `go get -u`.** A dependency refresh
+   such as `go get -u ./...` floats `modernc.org/libc` and `modernc.org/memory` to
+   their own latest releases and silently breaks Rule 2. After any such refresh,
+   the required versions MUST be re-read from the driver's own `go.mod` inside the
+   module cache — `$(go env GOMODCACHE)/modernc.org/sqlite@<version>/go.mod`, which
+   is the authoritative statement of what the consumed driver requires — and, if
+   the pins have drifted, reset to those exact versions with
+   `go get modernc.org/libc@<version> modernc.org/memory@<version>`.
+5. **The permanent "update available" report for these two modules is the expected
+   state.** Because `modernc.org/libc` and `modernc.org/memory` release more often
+   than the driver that pins them, `go list -m -u all` normally reports an
+   available update for both while Rule 2 is satisfied. That report MUST be left
+   alone: acting on it is exactly what breaks Rule 2. These two pins change only as
+   part of a `modernc.org/sqlite` upgrade, and they then change to whatever the new
+   driver version's `go.mod` requires — not to the newest available release.
 
 ## Vendored Web Assets
 
@@ -300,6 +358,7 @@ rmp-{version}-{target}.tar.gz
 ### Build Verification
 - [ ] All matrix targets build successfully
 - [ ] Binaries are statically linked (`CGO_ENABLED=0`)
+- [ ] `go.mod` pins both direct dependencies to exact versions, and the `modernc.org/libc` and `modernc.org/memory` versions match exactly the versions required by the pinned `modernc.org/sqlite`. This is verified by reading the driver's own `go.mod` in the module cache, because no gate detects a mismatch — neither any gate run by `make check` (format, vet, test, build, `golangci-lint`, `gosec`) nor the E2E suite (see External Dependencies, SQLite Driver Rules 2 and 3)
 - [ ] Archive naming follows convention: `rmp-{version}-{target}.{ext}`
 - [ ] Every web asset category (HTML templates, the stylesheet including the vendored Tabler CSS framework, all client JS including the vendored Tabler JavaScript and D3.js with the d3-sankey plugin and their dependencies, web fonts including the Inter font and the Tabler Icons webfont, icons and images, and the favicon) is embedded via `go:embed`; the build uses the Go toolchain only, with no Node.js or `node_modules` step (see Vendored Web Assets)
 - [ ] The web interface is fully self-contained: with networking disabled and with only the `rmp` binary present on disk (no sidecar files and no separate assets directory), `rmp web` serves the full UI — every page and the knowledge-graph visualisation render and function with no network egress (see Vendored Web Assets and `WEB.md § Self-Contained Deliverable`)
