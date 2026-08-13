@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
@@ -70,9 +70,11 @@ func IsUniqueConstraintErr(err error) bool {
 	return false
 }
 
-// sqliteCoded is satisfied by modernc.org/sqlite's *sqlite.Error.
-// Using an interface keeps the check structural and testable without
-// importing the driver here.
+// sqliteCoded is satisfied by modernc.org/sqlite's *sqlite.Error. The check
+// stays structural rather than a type assertion against that concrete type:
+// it is what lets the classification above be tested with a fake, and it keeps
+// the error handling independent of the driver even though the package now
+// imports it for NewConnector.
 type sqliteCoded interface {
 	Code() int
 }
@@ -190,9 +192,15 @@ func Open(roadmapName string) (*DB, error) {
 		}
 	}
 
-	// sql.Open is documented as not actually establishing a connection — it
-	// only validates the driver — so wrapping it in retryWithBackoff was
-	// dead weight. Any failure here is immediate and not retryable.
+	// NewConnector reaches the same driver sql.Open("sqlite", ...) would, so
+	// the connections are identical, but it examines the DSN. sql.Open does
+	// not: it only looks up the registered driver, and because
+	// modernc.org/sqlite deliberately does not implement driver.DriverContext,
+	// a malformed DSN went unreported until whichever query first forced the
+	// pool to dial — surfacing mid-command and attributed to that query rather
+	// than to opening the database. Neither function connects, so this failure
+	// is immediate and not retryable; wrapping it in retryWithBackoff would be
+	// dead weight. See SPEC/IMPLEMENTATION.md § Entry Point.
 	//
 	// foreign_keys and busy_timeout are CONNECTION-scoped PRAGMAs: a one-shot
 	// db.Exec only configures whichever single pooled connection services it,
@@ -202,10 +210,11 @@ func Open(roadmapName string) (*DB, error) {
 	// Carrying them in the DSN makes modernc.org/sqlite apply them on EVERY new
 	// connection. See SPEC/IMPLEMENTATION.md (foreign_keys on every connection;
 	// busy_timeout) and SPEC/DATABASE.md (CASCADE integrity).
-	sqlDB, err := sql.Open("sqlite", dsnFor(dbPath, false))
+	connector, err := sqlite.NewConnector(dsnFor(dbPath, false))
 	if err != nil {
 		return nil, fmt.Errorf("opening database %s: %w", roadmapName, err)
 	}
+	sqlDB := sql.OpenDB(connector)
 
 	// Configure connection with retry logic
 	if err := retryWithBackoff("configuring database", func() error {
@@ -311,10 +320,11 @@ func OpenReadOnly(roadmapName string) (*DB, error) {
 		return nil, err
 	}
 
-	sqlDB, err := sql.Open("sqlite", dsnFor(dbPath, true))
+	connector, err := sqlite.NewConnector(dsnFor(dbPath, true))
 	if err != nil {
 		return nil, fmt.Errorf("opening database %s: %w", roadmapName, err)
 	}
+	sqlDB := sql.OpenDB(connector)
 
 	sqlDB.SetMaxOpenConns(2)
 	sqlDB.SetMaxIdleConns(1)

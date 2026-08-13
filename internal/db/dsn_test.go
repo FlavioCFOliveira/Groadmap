@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"modernc.org/sqlite"
 )
 
 // ==================== DSN CONSTRUCTION TESTS ====================
@@ -119,6 +121,31 @@ func TestDSNRejectsAnInvalidValueOutright(t *testing.T) {
 				t.Errorf("a DSN carrying %s connected; the driver must reject the value", bad)
 			}
 		})
+	}
+}
+
+// TestConnectorRejectsAMalformedDSN pins the reason Open and OpenReadOnly go
+// through sqlite.NewConnector rather than sql.Open. sql.Open only looks up the
+// registered driver, and because modernc.org/sqlite deliberately does not
+// implement driver.DriverContext it never examines the DSN, so a defect in one
+// went unreported until whichever query first forced the pool to dial.
+// NewConnector checks what can be checked without touching the filesystem, so
+// the error is attributed to opening the database.
+func TestConnectorRejectsAMalformedDSN(t *testing.T) {
+	// An invalid percent-escape makes the query string unparseable, which is
+	// exactly the class NewConnector is documented to reject up front.
+	const malformed = "file:///tmp/project.db?_busy_timeout=%zz"
+
+	if _, err := sqlite.NewConnector(malformed); err == nil {
+		t.Error("NewConnector accepted a DSN whose query string does not parse; the open-time check this package relies on is not happening")
+	}
+
+	// The DSN this package actually builds must of course be accepted.
+	if _, err := sqlite.NewConnector(dsnFor("/home/dev/.roadmaps/platform/project.db", false)); err != nil {
+		t.Errorf("NewConnector rejected the DSN dsnFor produces: %v", err)
+	}
+	if _, err := sqlite.NewConnector(dsnFor("/home/dev/.roadmaps/platform/project.db", true)); err != nil {
+		t.Errorf("NewConnector rejected the read-only DSN dsnFor produces: %v", err)
 	}
 }
 
