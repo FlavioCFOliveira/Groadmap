@@ -1,7 +1,8 @@
 // Package cypherguard is the single source of truth for Groadmap's Cypher
 // guard-rail: the literal-aware masking and the clause-class classification
-// that decide whether a query is read-only, a writing query, or schema-mutating
-// DDL (SPEC/GRAPH.md § Subcommands and Guard-Rail Validation and
+// that decide whether a query is read-only, a writing query, schema-mutating
+// DDL, or a schema-introspection command (SPEC/GRAPH.md § Subcommands and
+// Guard-Rail Validation, § Schema Introspection, and
 // § Literal-Aware Normalization).
 //
 // The logic lives here, rather than in package commands, because two callers
@@ -42,13 +43,37 @@ var (
 	// may be separated by arbitrary whitespace, so the matcher is
 	// whitespace-tolerant (\s+ between the two words).
 	//
-	// GoGraph exports cypher/ir.IsDDL, but it is case- and whitespace-sensitive
-	// (it returns false for "create index" or "CREATE   INDEX"), so it cannot be
-	// used as a security guard rail: a writer could bypass it with non-canonical
-	// casing or spacing. This Groadmap-local regex mirrors the writing-clause
-	// discriminators and is robust to both, matching how the guard rail
-	// classifies every other clause.
+	// GoGraph exports cypher/ir.IsDDL, but it still cannot serve as a security
+	// guard rail, because it compares the statement against the literal prefixes
+	// "CREATE INDEX", "DROP INDEX", "CREATE CONSTRAINT" and "DROP CONSTRAINT",
+	// each carrying exactly one space. Any other spacing between the two keywords
+	// — "CREATE   INDEX", or a keyword pair split across lines — is not a prefix
+	// of those literals, so IsDDL returns false and a writer could present
+	// schema-mutating DDL that the engine executes and the check does not see.
+	// (Its other two historical limitations are gone: it now folds ASCII case, so
+	// "create index" is recognised, and it skips leading comments before testing
+	// the prefix. Only the whitespace gap remains, and one gap is enough to
+	// disqualify it here.) This Groadmap-local regex mirrors the writing-clause
+	// discriminators and is tolerant of case and of arbitrary whitespace,
+	// matching how the guard rail classifies every other clause.
 	reDDL = regexp.MustCompile(`(?i)\b(CREATE|DROP)\s+(INDEX|CONSTRAINT)\b`)
+	// reIntrospect matches the schema-introspection commands Groadmap admits as
+	// read-only: SHOW INDEXES / SHOW INDEX / SHOW CONSTRAINTS / SHOW CONSTRAINT,
+	// each optionally followed by a YIELD / WHERE / RETURN projection tail
+	// (SPEC/GRAPH.md § Schema Introspection).
+	//
+	// It is anchored at the start of the statement (\A), because SHOW introduces
+	// a statement and is not a clause that may appear anywhere in one: anchoring
+	// is what keeps a label, variable, or property named "show" — as in
+	// CREATE (n:Panel {show: 'indexes'}) — from being read as an introspection
+	// command. Leading whitespace is allowed, which also covers a leading
+	// comment: MaskLiterals neutralizes a comment to spaces before this runs.
+	//
+	// The two plurals are spelled differently on purpose: INDEX pluralises to
+	// INDEXES, so the optional part is the two-letter "ES", whereas CONSTRAINT
+	// takes a bare "S". Writing the first as INDEXES? would match INDEXE and
+	// INDEXES and silently NOT match the singular SHOW INDEX.
+	reIntrospect = regexp.MustCompile(`(?i)\A\s*SHOW\s+(?:INDEX(?:ES)?|CONSTRAINTS?)\b`)
 )
 
 // MaskLiterals returns a copy of query in which the INTERIOR characters of
@@ -188,6 +213,23 @@ type Classes struct {
 	// because the read-only contract forbids schema-mutating DDL, not only
 	// data-writing clauses (SPEC/GRAPH.md § Operation Classes).
 	DDL bool
+	// Introspect is true when the masked query is a schema-introspection command
+	// (SHOW INDEXES, SHOW INDEX, SHOW CONSTRAINTS, SHOW CONSTRAINT, with an
+	// optional YIELD / WHERE / RETURN projection tail). Introspection lists the
+	// registered schema without altering it, so it is read-only, and it is a
+	// class of its own rather than a case of DDL: DDL here means schema-MUTATING
+	// (SPEC/GRAPH.md § Schema Introspection).
+	//
+	// The field exists so the read-only verdict for these commands is a
+	// recognised decision rather than the result of no discriminator matching.
+	// The engine reports introspection through its own cypher/ir.IsDDL predicate,
+	// which folds SHOW in with the schema-mutating forms; because
+	// cypher.QueryHasWritingClause returns false for whatever IsDDL accepts, an
+	// introspection command reaches Classify as neither a write nor Groadmap's
+	// DDL, and would otherwise be admitted purely by omission — a verdict that
+	// cannot be reviewed and that silently absorbs whatever clause family the
+	// engine gains next.
+	Introspect bool
 }
 
 // Classify masks query's literals and reports the clause classes it contains.
@@ -198,25 +240,42 @@ type Classes struct {
 func Classify(query string) Classes {
 	masked := MaskLiterals(query)
 	return Classes{
-		Write:  cypher.QueryHasWritingClause(masked),
-		Create: reCreate.MatchString(masked),
-		Mutate: reMutate.MatchString(masked),
-		Delete: reDelete.MatchString(masked),
-		DDL:    reDDL.MatchString(masked),
+		Write:      cypher.QueryHasWritingClause(masked),
+		Create:     reCreate.MatchString(masked),
+		Mutate:     reMutate.MatchString(masked),
+		Delete:     reDelete.MatchString(masked),
+		DDL:        reDDL.MatchString(masked),
+		Introspect: reIntrospect.MatchString(masked),
 	}
 }
 
 // IsReadOnly reports whether query is read-only: it contains neither a writing
-// clause (cypher.QueryHasWritingClause on the masked query) nor any DDL clause.
+// clause (cypher.QueryHasWritingClause on the masked query) nor any
+// schema-mutating DDL clause. Two shapes qualify — an ordinary reading query,
+// and a schema-introspection command, which lists the registered schema without
+// altering it.
+//
 // This is the exact read-vs-write contract the read subcommands `graph query`
 // and `graph search` enforce, and the contract the read-only web graph data
 // endpoint reuses to validate a user-supplied query before executing it
-// (SPEC/GRAPH.md § Per-Subcommand Validation Rules note 5; SPEC/WEB.md § Graph
-// Data Endpoint, read-only guard-rail). Classification runs on the masked
-// normalization, so a write or DDL keyword that appears only inside a string
-// literal, comment, or backtick identifier does not make a read-only query be
-// rejected, and a real writing or DDL clause is always caught.
+// (SPEC/GRAPH.md § Per-Subcommand Validation Rules notes 5 and 6; SPEC/WEB.md
+// § Graph Data Endpoint, read-only guard-rail). Classification runs on the
+// masked normalization, so a write, DDL, or SHOW keyword that appears only
+// inside a string literal, comment, or backtick identifier does not affect the
+// verdict, and a real writing or DDL clause is always caught.
 func IsReadOnly(query string) bool {
 	c := Classify(query)
-	return !c.Write && !c.DDL
+	switch {
+	case c.Write, c.DDL:
+		// A data-writing clause or a schema-mutating DDL clause disqualifies the
+		// query outright, whatever else it contains.
+		return false
+	case c.Introspect:
+		// Schema introspection is read-only because it was classified as such,
+		// not because nothing else matched (SPEC/GRAPH.md § Schema Introspection).
+		return true
+	default:
+		// An ordinary reading query: no writing clause, no DDL, no introspection.
+		return true
+	}
 }
