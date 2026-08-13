@@ -129,7 +129,10 @@ func staticPitfalls() []Pitfall {
 			ID: "graph_guard_rail_mismatch",
 			Description: "Using the wrong graph subcommand for the query's operation class. Each subcommand " +
 				"is a guard rail: `create` accepts only CREATE/MERGE, `update` only SET/REMOVE, `delete` only " +
-				"DELETE/DETACH DELETE, and `query`/`search` only read-only MATCH queries. Supplying a query " +
+				"DELETE/DETACH DELETE, and `query`/`search` only read-only queries — a MATCH ... RETURN, or a " +
+				"schema-introspection command (SHOW INDEXES / SHOW CONSTRAINTS and their singular aliases), " +
+				"which lists the schema without altering it. Schema-mutating DDL (CREATE INDEX, DROP INDEX, " +
+				"CREATE CONSTRAINT, DROP CONSTRAINT) is rejected by every subcommand. Supplying a query " +
 				"whose clauses do not match exits with code 6 and makes no change to the graph.",
 			WrongExample:   "rmp graph query -r myproject --query \"CREATE (n:Spec {key:'auth'})\"",
 			CorrectExample: "rmp graph create -r myproject --query \"CREATE (n:Spec {key:'auth'})\"",

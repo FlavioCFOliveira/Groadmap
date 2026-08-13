@@ -52,7 +52,7 @@ is read from standard input.
 
 Subcommands:
   create   Execute a CREATE / MERGE query (adds nodes or edges)
-  query    Execute a read-only MATCH ... RETURN query
+  query    Execute a read-only MATCH ... RETURN or SHOW query
   update   Execute a SET / REMOVE query (mutates existing elements)
   delete   Execute a DELETE / DETACH DELETE query (removes nodes or edges)
   search   Execute a read-only traversal query (variable-length paths, etc.)
@@ -121,6 +121,10 @@ func printGraphQueryHelp() {
 Execute a read-only MATCH ... RETURN query against the roadmap's knowledge
 graph. The query MUST NOT contain any writing clause.
 
+Schema introspection is also accepted: SHOW INDEXES and SHOW CONSTRAINTS (and
+their singular aliases), optionally followed by a YIELD / WHERE / RETURN
+projection. They list the registered schema and change nothing.
+
 Required:
   -r, --roadmap <name>    Target roadmap
   -q, --query <cypher>    Cypher query; read from stdin when this flag is absent
@@ -141,6 +145,7 @@ Exit codes:
 
 Examples:
   rmp graph query -r myproject --query "MATCH (n:Spec) RETURN n.key"
+  rmp graph query -r myproject --query "SHOW INDEXES"
   echo "MATCH (n) RETURN count(n)" | rmp graph query -r myproject
 `)
 }
@@ -216,6 +221,10 @@ Execute a read-only traversal query against the roadmap's knowledge graph.
 Variable-length path patterns (e.g. -[*1..3]-) are supported. The query
 MUST NOT contain any writing clause.
 
+Schema introspection is also accepted: SHOW INDEXES and SHOW CONSTRAINTS (and
+their singular aliases), optionally followed by a YIELD / WHERE / RETURN
+projection. They list the registered schema and change nothing.
+
 Required:
   -r, --roadmap <name>    Target roadmap
   -q, --query <cypher>    Cypher query; read from stdin when this flag is absent
@@ -237,6 +246,7 @@ Exit codes:
 Examples:
   rmp graph search -r myproject --query "MATCH p=(a)-[*1..3]-(b) RETURN p"
   rmp graph search -r myproject --query "MATCH p=(s:Spec)-[:DEPENDS_ON*1..3]->(d:Spec) RETURN p"
+  rmp graph search -r myproject --query "SHOW CONSTRAINTS YIELD name RETURN name"
 `)
 }
 

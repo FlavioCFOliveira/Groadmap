@@ -46,7 +46,9 @@ rmp graph create -r backend-platform \
 
 ### query
 
-Reads from the graph and returns the result columns and rows. Read-only: any query containing a writing clause (`CREATE`, `MERGE`, `SET`, `REMOVE`, `DELETE`, `DETACH DELETE`) is rejected by the guard rail.
+Reads from the graph and returns the result columns and rows. Read-only: any query containing a writing clause (`CREATE`, `MERGE`, `SET`, `REMOVE`, `DELETE`, `DETACH DELETE`) is rejected by the guard rail, as is any schema-mutating DDL clause (`CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, `DROP CONSTRAINT`).
+
+Schema introspection is accepted: `SHOW INDEXES` and `SHOW CONSTRAINTS`, their singular aliases `SHOW INDEX` and `SHOW CONSTRAINT`, and any of them followed by a `YIELD` / `WHERE` / `RETURN` projection. These list the registered schema without altering it, so they are read-only; the write subcommands reject them.
 
 **Usage:** `rmp graph query -r <roadmap> [--query <cypher>]`
 
@@ -67,6 +69,9 @@ rmp graph query -r backend-platform \
 
 # Read the query from standard input
 echo "MATCH (n) RETURN count(n)" | rmp graph query -r backend-platform
+
+# Introspect the registered schema
+rmp graph query -r backend-platform --query "SHOW INDEXES"
 ```
 
 ---
@@ -121,7 +126,7 @@ rmp graph delete -r backend-platform \
 
 ### search
 
-Read-only traversal and pattern matching, including variable-length paths (for example `-[*1..3]-`). Semantically the traversal-oriented sibling of `query`; it enforces the same read-only guard rail.
+Read-only traversal and pattern matching, including variable-length paths (for example `-[*1..3]-`). Semantically the traversal-oriented sibling of `query`; it enforces the same read-only guard rail, and so accepts schema introspection on the same terms.
 
 **Usage:** `rmp graph search -r <roadmap> [--query <cypher>]`
 
@@ -147,11 +152,16 @@ Each subcommand accepts only Cypher whose operation class matches it; everything
 
 | Subcommand | Operation | Accepts | Rejects |
 |------------|-----------|---------|---------|
-| `create` | Create nodes/edges | Writing query whose only writing clauses are `CREATE` and/or `MERGE` | Read-only queries; `SET`, `REMOVE`, `DELETE`, `DETACH DELETE` |
-| `query` | Read | Read-only query (`MATCH ... RETURN`, no writing clause) | Any writing clause |
-| `update` | Mutate existing | Writing query whose writing clauses are `SET` and/or `REMOVE` | Read-only queries; `CREATE`, `MERGE`, `DELETE`, `DETACH DELETE` |
-| `delete` | Remove | Writing query whose writing clauses are `DELETE` and/or `DETACH DELETE` | Read-only queries; `CREATE`, `MERGE`, `SET`, `REMOVE` |
-| `search` | Read (traversal) | Read-only query, including variable-length paths (e.g. `-[*1..3]-`) | Any writing clause |
+| `create` | Create nodes/edges | Writing query whose only writing clauses are `CREATE` and/or `MERGE` | Read-only queries; `SET`, `REMOVE`, `DELETE`, `DETACH DELETE`; DDL; schema introspection |
+| `query` | Read | Read-only query (`MATCH ... RETURN`, no writing clause), or a schema-introspection command | Any writing clause; any DDL clause |
+| `update` | Mutate existing | Writing query whose writing clauses are `SET` and/or `REMOVE` | Read-only queries; `CREATE`, `MERGE`, `DELETE`, `DETACH DELETE`; DDL; schema introspection |
+| `delete` | Remove | Writing query whose writing clauses are `DELETE` and/or `DETACH DELETE` | Read-only queries; `CREATE`, `MERGE`, `SET`, `REMOVE`; DDL; schema introspection |
+| `search` | Read (traversal) | Read-only query, including variable-length paths (e.g. `-[*1..3]-`), or a schema-introspection command | Any writing clause; any DDL clause |
+
+Two clause families are worth naming explicitly:
+
+- **Schema introspection** (`SHOW INDEXES`, `SHOW INDEX`, `SHOW CONSTRAINTS`, `SHOW CONSTRAINT`, each with an optional `YIELD` / `WHERE` / `RETURN` tail) lists the registered schema without altering it, so it is read-only. It is distinct from **DDL** (`CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, `DROP CONSTRAINT`), which mutates the schema and is rejected by every subcommand.
+- **`FOREACH`** is a writing clause, classified by the clauses its body contains. `FOREACH (x IN list | SET ...)` is a mutating write valid only under `update`; `FOREACH (x IN list | CREATE ...)` is a creating write valid only under `create`; every `FOREACH` is rejected by `query` and `search`.
 
 ## Query Input Source and Precedence
 

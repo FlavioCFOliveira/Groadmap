@@ -522,10 +522,10 @@ rmp graph delete -r myproject \
 
 Each subcommand is a guard rail that accepts only Cypher whose operation class matches it, rejecting everything else (exit code 6) before execution:
 - `create` — add nodes/edges (`CREATE` / `MERGE`)
-- `query` — read (`MATCH ... RETURN`, read-only)
+- `query` — read (`MATCH ... RETURN`, read-only); also accepts schema introspection (`SHOW INDEXES` / `SHOW CONSTRAINTS`)
 - `update` — mutate existing elements (`SET` / `REMOVE`)
 - `delete` — remove nodes/edges (`DELETE` / `DETACH DELETE`)
-- `search` — read-only traversal, including variable-length paths (e.g. `-[*1..3]-`)
+- `search` — read-only traversal, including variable-length paths (e.g. `-[*1..3]-`); schema introspection is likewise accepted
 
 **Can I pipe a query instead of using `--query`?**
 ```bash
