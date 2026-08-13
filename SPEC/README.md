@@ -116,7 +116,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Web graph view-data JSON shape | `DATA_FORMATS.md § Graph View Data` |
 | Web UI framework (Tabler admin shell, dark theme) | `WEB.md § UI Framework` |
 | Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
-| Graph store concurrency / single-writer / recovery | `IMPLEMENTATION.md § Graph Store Concurrency` |
+| Graph store concurrency / writer serialisation / recovery | `IMPLEMENTATION.md § Graph Store Concurrency` |
 | Minimum Go version and external dependencies | `BUILD.md § Go Toolchain` |
 | Help text canonical | code in `internal/commands/*.go` (structure in `HELP.md`) |
 | AI agent contract JSON schema | `DATA_FORMATS.md § AI Agent Contract` |

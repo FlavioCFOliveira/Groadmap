@@ -210,13 +210,41 @@ The knowledge graph is backed by the GoGraph store, which is a separate
 persistence mechanism from SQLite. This section specifies how Groadmap uses that
 store at runtime. The feature itself is specified in `GRAPH.md`.
 
-### Single-Writer Transactional Model
+### Transactional Model and Writer Serialisation
 
-GoGraph's store is single-writer and transactional: writes are serialised through
-one writer while reads observe a consistent committed snapshot. Durability comes
-from a write-ahead log (with CRC32C integrity checks) plus atomic on-disk
-snapshots; opening the store runs recovery to restore the last committed state
-from the snapshot and log.
+GoGraph's store is transactional, and MVCC is its only concurrency-control
+mechanism. Reads observe a consistent committed snapshot. Independent write
+transactions are not excluded from one another inside a single process: a
+write-write collision is detected rather than prevented, on a first-updater-wins
+basis, and the losing transaction receives a retriable serialization-conflict
+error. Groadmap does not rely on that intra-process behaviour, because the CLI runs
+exactly one transaction per short-lived process; that one-transaction-per-process
+model is why the conflict path is not reachable today. Groadmap likewise uses none
+of the engine's MVCC-specific entry points and issues no `MERGE` of its own, so the
+engine's concurrency semantics are not observable through the CLI as it stands.
+
+Groadmap does not depend on the engine to serialise its writers. It serialises them
+itself, at the process level: a write invocation acquires an exclusive, non-blocking
+advisory lock on a lock file that Groadmap maintains in the roadmap's graph
+directory, before the store is opened, and holds it until after the checkpoint. A
+second write invocation that finds the lock held fails immediately rather than
+waiting, and the operating system releases the lock when the holding process exits,
+so a crashed invocation does not strand it. Read invocations do not take this lock.
+This is the lock referred to throughout
+[Write Contention and Recovery](#write-contention-and-recovery).
+
+The lock deliberately spans the whole open, commit, checkpoint, and
+write-ahead-log truncation sequence rather than the transaction alone. That is the
+span that must not interleave: a second writer that had loaded the graph before the
+first writer's commit would checkpoint a full snapshot of its own stale in-memory
+graph and then truncate the write-ahead log that still held the first writer's
+committed change, silently losing an acknowledged write. Because the sequence is
+wider than a transaction, no engine-level writer exclusion would have covered it in
+any case.
+
+Durability comes from a write-ahead log (with CRC32C integrity checks) plus atomic
+on-disk snapshots; opening the store runs recovery to restore the last committed
+state from the snapshot and log.
 
 ### Process Model
 
@@ -233,9 +261,10 @@ from the snapshot and log.
 
 ### Write Contention and Recovery
 
-1. Because the store is single-writer, two concurrent `rmp graph` write
-   invocations against the **same** roadmap may contend for the writer. The losing
-   invocation MUST fail fast rather than hang indefinitely or corrupt the store.
+1. Because a write invocation acquires Groadmap's exclusive graph write lock
+   before opening the store, two concurrent `rmp graph` write invocations against
+   the **same** roadmap contend for that lock. The losing invocation MUST fail fast
+   rather than hang indefinitely or corrupt the store.
 2. The contention/lock failure surfaces as `utils.ErrDatabase` (exit code 1),
    consistent with treating the graph store as a database-class dependency.
 3. A bounded retry on a graph-store lock uses the **same** bounded
@@ -258,12 +287,14 @@ checkpoint. The feature-level behaviour is specified in
 `GRAPH.md § Synchronous Checkpoint on Write`; this section records the runtime
 implications.
 
-1. **Single-writer ordering.** The checkpoint runs under the store's existing
-   single-writer model. It runs after the transaction commit, holds no separate
-   lock, and does not change the read path. Two concurrent writers against the
-   same roadmap still serialise through the one writer exactly as specified in
+1. **Checkpoint ordering.** The checkpoint runs inside the invocation that already
+   holds the graph write lock. It runs after the transaction commit, acquires no
+   separate lock, and does not change the read path. Two concurrent writers against
+   the same roadmap still serialise on that one lock exactly as specified in
    [Write Contention and Recovery](#write-contention-and-recovery); the checkpoint
-   does not introduce a new contention point beyond the write itself.
+   does not introduce a new contention point beyond the write itself. Holding the
+   lock until the checkpoint completes is what makes the sequence safe, as described
+   in [Transactional Model and Writer Serialisation](#transactional-model-and-writer-serialisation).
 2. **Durability boundary.** The transaction commit is the durability boundary. The
    committed change survives recovery from the write-ahead log regardless of the
    checkpoint outcome. The snapshot is self-sufficient (it carries the

@@ -111,13 +111,13 @@ authoritative statement of the required Go version and of the build implications
 
 ### Dependency Maturity Risk
 
-GoGraph is consumed at the exact tag **v0.8.1**. Because
-v0.8.1 is a v0 (pre-1.0) version, it is consumable directly at the bare module path
-`github.com/FlavioCFOliveira/GoGraph`, and `go.mod` pins the clean exact tag `v0.8.1`.
+GoGraph is consumed at the exact tag **v0.11.0**. Because
+v0.11.0 is a v0 (pre-1.0) version, it is consumable directly at the bare module path
+`github.com/FlavioCFOliveira/GoGraph`, and `go.mod` pins the clean exact tag `v0.11.0`.
 This exact-tag pin satisfies the pinning mitigation below directly. The pinned version
 is recorded in `BUILD.md § Go Toolchain`.
 
-As a `0.y.z` release, v0.8.1 signals under Semantic Versioning that GoGraph's public
+As a `0.y.z` release, v0.11.0 signals under Semantic Versioning that GoGraph's public
 API is not yet stable: it may change while the module matures toward `1.0.0`, and such
 changes can land without a major-version bump. The following residual risks remain:
 
@@ -128,8 +128,25 @@ changes can land without a major-version bump. The following residual risks rema
 2. **On-disk format change across pre-1.0 releases.** The store's snapshot and
    write-ahead-log format may change between `0.y` releases, which could make a graph
    written by one release unreadable by a later one. There is no graph-format
-   migration mechanism in Groadmap in this version, so a `0.y` on-disk-format change
-   could make an existing graph unreadable.
+   migration mechanism in Groadmap in this version: Groadmap cannot convert a graph
+   directory that the pinned engine refuses to open, so it depends entirely on the
+   engine reading the format its predecessor wrote. An on-disk-format change that the
+   newer engine does not read would therefore make an existing graph unreadable.
+
+   A format change of this kind has already occurred, and the engine absorbed it. The
+   snapshot's `labels.bin` component moved from format version 1 to format version 2:
+   the edge record gained a slot field, so that a relationship type on parallel edges
+   survives a checkpoint. Reading format version 1 is retained upstream as the
+   deliberate upgrade path, so a graph directory written by the earlier release opens
+   unchanged under the later one. The migration is **one-way**: because every
+   successful Groadmap write checkpoints synchronously (see
+   [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)), the first
+   write after the upgrade rewrites `labels.bin` in place at format version 2, and the
+   older release does not read format version 2. Reverting to an earlier pinned engine
+   after a write is therefore not an available recovery step. Naming this component
+   records the evidence behind mitigation 4 below; the internal layout of the graph
+   directory remains owned by GoGraph and is not specified by Groadmap (see
+   [Persistence Layout](#persistence-layout), rule 5).
 
 Mitigations required by this specification:
 
@@ -141,6 +158,16 @@ Mitigations required by this specification:
    is absorbed in one integration layer rather than spread across the codebase.
 3. Upgrading GoGraph is a change that MUST be re-validated against the acceptance
    criteria in this file before release.
+4. **An existing graph directory MUST remain readable across a GoGraph upgrade, and
+   this MUST be demonstrated empirically rather than assumed.** Before an upgrade is
+   released, a graph directory written under the previously pinned version MUST be
+   opened with the new version and verified to read back the same content: the same
+   node count, the same relationship count, and the same distribution of relationship
+   types. A write MUST then be executed against that same directory and the
+   verification repeated, so that the check covers both reading the old format and
+   rewriting the directory in the new one. Backward compatibility MUST NOT be inferred
+   from release notes alone, because Groadmap has no migration path of its own for a
+   graph it can no longer open. An upgrade that fails this check MUST NOT be released.
 
 ### Engine Construction and Lifecycle
 
@@ -601,11 +628,36 @@ Rules:
 
 ## Concurrency and Recovery
 
-GoGraph's store uses a single-writer transactional model: writes are serialised
-through one writer, while reads observe a consistent committed state. Durability
-is provided by a write-ahead log with CRC32C integrity checks plus atomic on-disk
-snapshots; on opening the store, GoGraph runs recovery to restore the last
-committed state from the snapshot and log.
+GoGraph's store is transactional, and MVCC is its only concurrency-control
+mechanism. Reads observe a consistent committed state. Independent write
+transactions are not excluded from one another inside a single process: a
+write-write collision is detected rather than prevented, on a first-updater-wins
+basis, and the losing transaction receives a retriable serialization-conflict
+error. Groadmap does not rely on that intra-process behaviour, because each
+`rmp graph` invocation is a separate short-lived process that runs exactly one
+transaction; that one-transaction-per-process model is why the conflict path is
+not reachable today.
+
+Groadmap does not depend on the engine to serialise its writers. It serialises
+them itself, at the process level: before opening the store, a write invocation
+acquires an exclusive, non-blocking advisory lock on the roadmap's graph
+directory, and holds it across the whole open, commit, checkpoint, and
+write-ahead-log truncation sequence. A second write invocation that finds the lock
+held fails immediately rather than waiting. The operating system releases the lock
+when the holding process exits, so an invocation that crashes does not strand it.
+Read invocations do not take this lock.
+
+The lock covers the full sequence, not just the transaction, because that is the
+span that must not interleave: a second writer that had loaded the graph before the
+first writer's commit would checkpoint a full snapshot of its own stale in-memory
+graph and then truncate the write-ahead log that still held the first writer's
+committed change, silently losing an acknowledged write. Because the sequence
+Groadmap needs serialised is wider than a transaction, no engine-level writer
+exclusion would have covered it in any case.
+
+Durability is provided by a write-ahead log with CRC32C integrity checks plus
+atomic on-disk snapshots; on opening the store, GoGraph runs recovery to restore
+the last committed state from the snapshot and log.
 
 Groadmap's usage model and expectations:
 
@@ -613,14 +665,15 @@ Groadmap's usage model and expectations:
    runs one query, commits any write, checkpoints after a successful write (see
    [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)), and
    closes the store. The process does not hold the store open across invocations.
-2. Because the store is single-writer, two concurrent `rmp graph` write
-   invocations against the **same** roadmap may contend for the writer. The
-   implementation MUST surface a contention or lock failure as `utils.ErrDatabase`
-   (exit code 1) rather than corrupting the store or hanging indefinitely. The
-   checkpoint that follows a successful write runs under the same single-writer
-   model: it does not add a separate lock, does not change the read path, and two
-   concurrent writers still serialise. The retry and timeout behaviour for graph
-   writes is specified in `IMPLEMENTATION.md § Graph Store Concurrency`.
+2. Because a write invocation takes that exclusive lock before opening the store,
+   two concurrent `rmp graph` write invocations against the **same** roadmap
+   contend for it. The implementation MUST surface a contention or lock failure as
+   `utils.ErrDatabase` (exit code 1) rather than corrupting the store or hanging
+   indefinitely. The checkpoint that follows a successful write runs inside the
+   invocation that already holds the lock: it adds no separate lock, does not
+   change the read path, and two concurrent writers still serialise. The retry and
+   timeout behaviour for graph writes is specified in
+   `IMPLEMENTATION.md § Graph Store Concurrency`.
 3. Recovery on open restores the last committed state from the snapshot and the
    write-ahead-log tail. Because every successful write now writes a self-sufficient
    snapshot and truncates the log (see
@@ -745,5 +798,5 @@ Groadmap's usage model and expectations:
 - Standard input as a Cypher source → `DATA_FORMATS.md § Input`
 - GoGraph integration, directory layout, error handling → `ARCHITECTURE.md`
 - Go 1.26 toolchain bump and the GoGraph dependency → `BUILD.md § Go Toolchain`
-- Single-writer store, recovery, write contention, and the synchronous checkpoint trade-off → `IMPLEMENTATION.md § Graph Store Concurrency`
+- Writer serialisation, recovery, write contention, and the synchronous checkpoint trade-off → `IMPLEMENTATION.md § Graph Store Concurrency`
 - Help skeleton and AI-help entry for `graph` → `HELP.md`
