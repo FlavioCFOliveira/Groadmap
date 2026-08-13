@@ -64,6 +64,10 @@ jobs:
             goarch: arm64
           - goos: freebsd
             goarch: amd64
+          - goos: openbsd
+            goarch: amd64
+          - goos: openbsd
+            goarch: arm64
     steps:
       - name: Checkout code
         uses: actions/checkout@v6.0.2

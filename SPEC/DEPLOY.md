@@ -70,6 +70,26 @@ sudo mv rmp /usr/local/bin/
 
 ## Platform Detection
 
+### Operating System Detection
+
+The installation script detects the operating system via `uname -s` and maps it
+to the `{goos}` half of an archive name:
+
+| `uname -s` | `{goos}` |
+|------------|----------|
+| `Linux*` | linux |
+| `Darwin*` | darwin |
+| `FreeBSD*` | freebsd |
+| `OpenBSD*` | openbsd |
+| `CYGWIN*`, `MINGW*`, `MSYS*` | windows |
+
+Every operating system in `BUILD.md § Supported Build Targets` MUST appear here.
+A release that ships an archive the script cannot ask for is a release that
+cannot be installed on the platform it was built for.
+
+**Unsupported operating systems:** any `uname -s` not listed above is reported as
+unsupported and the script exits with code 1.
+
 ### Architecture Detection
 
 The installation script detects architecture via `uname -m`:
@@ -195,6 +215,7 @@ Releases are created automatically when a tag matching `v*` pattern is pushed:
      - macOS: amd64, arm64
      - Windows: amd64, arm64
      - FreeBSD: amd64
+     - OpenBSD: amd64, arm64
    - Build flags for production:
      - `-s -w`: Strip debug info and DWARF tables
      - `-trimpath`: Remove build paths for reproducible builds
@@ -224,6 +245,8 @@ with the archive format each platform ships.
 | Windows | amd64 | - | zip |
 | Windows | arm64 | - | zip |
 | FreeBSD | amd64 | - | tar.gz |
+| OpenBSD | amd64 | - | tar.gz |
+| OpenBSD | arm64 | - | tar.gz |
 
 ### Binary Naming Convention
 
@@ -240,7 +263,7 @@ rmp-{version}-{os}-{arch}.{ext}
 ### Release Assets
 
 Each release includes:
-- Binary archives for all supported platforms (9 total)
+- Binary archives for all supported platforms (11 total)
 - SHA256 checksums for each archive
 - Automatic release notes generated from commits
 

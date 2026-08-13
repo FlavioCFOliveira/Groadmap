@@ -40,6 +40,8 @@ var supportedBuildTargets = []buildTarget{
 	{goos: "windows", goarch: "amd64", name: "windows-amd64"},
 	{goos: "windows", goarch: "arm64", name: "windows-arm64"},
 	{goos: "freebsd", goarch: "amd64", name: "freebsd-amd64"},
+	{goos: "openbsd", goarch: "amd64", name: "openbsd-amd64"},
+	{goos: "openbsd", goarch: "arm64", name: "openbsd-arm64"},
 }
 
 // TestSupportedBuildTargetsCompile is the regression gate for task #136: the

@@ -43,6 +43,7 @@ detect_os() {
         Linux*)     os="linux" ;;
         Darwin*)    os="darwin" ;;
         FreeBSD*)   os="freebsd" ;;
+        OpenBSD*)   os="openbsd" ;;
         CYGWIN*|MINGW*|MSYS*) os="windows" ;;
         *)          os="unknown" ;;
     esac

@@ -194,6 +194,18 @@ Rules:
 | windows | amd64 | - | windows-amd64 | Windows x86_64 |
 | windows | arm64 | - | windows-arm64 | Windows ARM64 |
 | freebsd | amd64 | - | freebsd-amd64 | FreeBSD x86_64 |
+| openbsd | amd64 | - | openbsd-amd64 | OpenBSD x86_64 |
+| openbsd | arm64 | - | openbsd-arm64 | OpenBSD ARM64 |
+
+Eleven targets in total. The two OpenBSD targets became available with
+`modernc.org/sqlite` v1.56.0, which added `openbsd/amd64` and `openbsd/arm64` to
+its own supported-platform table; the storage engine was the only component that
+could have held them back, since the binary is pure Go and links no C library.
+
+**OpenBSD is build-verified, not runtime-verified.** Both targets cross-compile
+under `CGO_ENABLED=0` and their architecture is confirmed with `file`, but no
+OpenBSD host is used to execute the resulting binaries. They are released on the
+same terms as every other target the project cannot run locally.
 
 ### Raspberry Pi Support
 
@@ -439,6 +451,7 @@ rmp-{version}-{target}.tar.gz
 ### Architecture Verification
 - [ ] Use `file` command to verify binary architecture matches target
 - [ ] ARM binaries show correct ARM version (ARMv6, ARMv7)
+- [ ] BSD binaries report the expected OS in the ELF note: `file` shows `version 1 (FreeBSD)` for the FreeBSD target and `version 1 (OpenBSD)` for both OpenBSD targets. This is the only verification these targets receive, since none of them is executed (see Supported Build Targets)
 
 ### CI/CD Verification
 - [ ] Workflow triggers on tag push
