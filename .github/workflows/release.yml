@@ -39,9 +39,8 @@ jobs:
     name: Build Release Binaries
     needs: test
     runs-on: ubuntu-latest
-    # Windows is excluded: the GoGraph dependency uses syscall.Kill
-    # (Unix-only) in its WAL crash-injection layer; cross-compilation
-    # to Windows fails with "undefined: syscall.Kill".
+    # This matrix is the full set of Primary Platforms in
+    # SPEC/BUILD.md § Supported Build Targets, in the same order.
     strategy:
       matrix:
         include:
@@ -58,6 +57,10 @@ jobs:
           - goos: darwin
             goarch: amd64
           - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: windows
             goarch: arm64
           - goos: freebsd
             goarch: amd64
@@ -86,7 +89,13 @@ jobs:
           if [ "${{ matrix.goos }}" = "linux" ]; then
             ldflags="${ldflags} -extldflags '-static'"
           fi
-          go build -trimpath -ldflags="${ldflags}" -o "dist/rmp" ./cmd/rmp
+          # Windows executables need the .exe suffix to be runnable, and
+          # install.sh expects that name inside the archive.
+          binary="rmp"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            binary="rmp.exe"
+          fi
+          go build -trimpath -ldflags="${ldflags}" -o "dist/${binary}" ./cmd/rmp
           if [ -n "${{ matrix.goarm }}" ]; then
             echo "Built ${{ matrix.goos }}/${{ matrix.goarch }}v${{ matrix.goarm }}"
           else
@@ -107,8 +116,17 @@ jobs:
             arch_suffix="${goarch}"
           fi
 
-          archive_name="rmp-${version}-${goos}-${arch_suffix}.tar.gz"
-          tar -czf "dist/${archive_name}" -C dist rmp
+          # Archive format per SPEC/BUILD.md § Release Workflow ("or .zip for
+          # Windows") and SPEC/DEPLOY.md § Build Matrix: Windows ships a .zip
+          # holding rmp.exe, every other target a .tar.gz holding rmp. The name
+          # follows rmp-{version}-{target}.{ext} in both cases.
+          if [ "${goos}" = "windows" ]; then
+            archive_name="rmp-${version}-${goos}-${arch_suffix}.zip"
+            (cd dist && zip -q "${archive_name}" rmp.exe)
+          else
+            archive_name="rmp-${version}-${goos}-${arch_suffix}.tar.gz"
+            tar -czf "dist/${archive_name}" -C dist rmp
+          fi
           echo "ARCHIVE=${archive_name}" >> $GITHUB_OUTPUT
 
       - name: Generate checksum
@@ -154,7 +172,10 @@ jobs:
         run: |
           version="${{ steps.get_version.outputs.VERSION }}"
           shopt -s nullglob
-          artifacts=(dist/*.tar.gz dist/*.sha256)
+          # Windows targets ship .zip, every other target .tar.gz; both must be
+          # attached to the release. nullglob above keeps a missing pattern from
+          # being passed through literally.
+          artifacts=(dist/*.tar.gz dist/*.zip dist/*.sha256)
 
           if gh release view "${version}" &>/dev/null; then
             echo "Release ${version} already exists. Uploading new artifacts..."

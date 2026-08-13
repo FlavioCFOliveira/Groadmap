@@ -258,11 +258,27 @@ download_binary() {
 
     # Extract the binary from archive
     if [ "$os" = "windows" ]; then
-        # For Windows, we would need unzip, but this script targets Linux/macOS primarily
-        # For now, just move the downloaded file (assuming it's the binary directly)
-        mv "$tmp_dir/${archive_name}" "$tmp_file" 2>/dev/null || {
+        # Windows releases ship a .zip holding rmp.exe at the archive root
+        # (see .github/workflows/release.yml). Extracting it needs unzip. If
+        # unzip is missing, install nothing and say so: moving the archive into
+        # place would leave a .zip file sitting under the binary's name, which
+        # fails only later and for no obvious reason.
+        if ! command -v unzip >/dev/null 2>&1; then
             rm -rf "$tmp_dir"
-            error "Failed to process downloaded archive"
+            error "unzip is required to install ${BINARY_NAME} on ${os}, but it was not found."
+            error "Install unzip and run this script again, or download and extract the archive manually:"
+            error "  ${download_url}"
+            exit 1
+        fi
+        if ! unzip -oq "$tmp_dir/${archive_name}" -d "$tmp_dir" 2>/dev/null; then
+            rm -rf "$tmp_dir"
+            error "Failed to extract archive"
+            exit 1
+        fi
+        # Mirror the tar.gz branch below: the binary sits at the archive root.
+        mv "$tmp_dir/${BINARY_NAME}${ext}" "$tmp_file" 2>/dev/null || {
+            rm -rf "$tmp_dir"
+            error "Failed to extract binary from archive"
             exit 1
         }
     else

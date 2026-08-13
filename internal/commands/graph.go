@@ -14,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/FlavioCFOliveira/GoGraph/cypher"
@@ -742,30 +741,40 @@ func checkpointGraph(g *lpg.Graph[string, float64], w *wal.Writer, graphDir stri
 	return nil
 }
 
-// acquireGraphWriteLock takes an exclusive, non-blocking advisory lock
-// (flock) on the graph store for the duration of a write. Two concurrent
-// `rmp graph` writers must NOT interleave their open -> commit -> checkpoint ->
-// WAL-truncate sequences: a second writer that loaded the graph before the
-// first's commit would, on checkpoint, write a FULL snapshot of its own
-// (stale) in-memory graph — missing the first writer's committed change — and
-// then truncate the WAL that still held it, silently losing an acknowledged
-// write. Per SPEC/GRAPH.md § Concurrency and Recovery rule 2, a concurrent
-// write must surface as utils.ErrDatabase (exit 1) rather than corrupt the
-// store, so the lock is acquired non-blocking (LOCK_NB) and contention is
-// reported as ErrDatabase. The returned release closure unlocks and closes the
-// lock file; flock is also released automatically if the process dies.
+// acquireGraphWriteLock takes an exclusive, non-blocking advisory lock on the
+// graph store for the duration of a write. Two concurrent `rmp graph` writers
+// must NOT interleave their open -> commit -> checkpoint -> WAL-truncate
+// sequences: a second writer that loaded the graph before the first's commit
+// would, on checkpoint, write a FULL snapshot of its own (stale) in-memory
+// graph — missing the first writer's committed change — and then truncate the
+// WAL that still held it, silently losing an acknowledged write. Per
+// SPEC/GRAPH.md § Concurrency and Recovery rule 2, a concurrent write must
+// surface as utils.ErrDatabase (exit 1) rather than corrupt the store, so the
+// lock is acquired non-blocking and contention is reported as ErrDatabase. The
+// returned release closure unlocks and closes the lock file; the operating
+// system also releases the lock automatically if the process dies.
+//
+// This function owns the whole contract — lock-file path, file handle
+// lifetime, error wrapping, and the release closure. Only the lock and unlock
+// primitives themselves are platform-specific, because no single system call
+// provides them everywhere: lockGraphWriteFile and unlockGraphWriteFile are
+// implemented with flock(2) in graph_lock_unix.go and with LockFileEx /
+// UnlockFileEx in graph_lock_windows.go. Both implementations MUST be
+// exclusive and MUST fail immediately on contention rather than wait.
 func acquireGraphWriteLock(graphDir string) (func(), error) {
 	lockPath := filepath.Join(graphDir, "write.lock")
 	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600) // #nosec G304 -- lockPath is derived from a validated roadmap name under ~/.roadmaps
 	if err != nil {
 		return nil, fmt.Errorf("%w: opening graph write lock: %v", utils.ErrDatabase, err)
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := lockGraphWriteFile(f); err != nil {
+		// Close before returning: the handle must not leak on the
+		// contention path, which is the path taken most often.
 		_ = f.Close()
 		return nil, fmt.Errorf("%w: graph store is busy: a concurrent write is in progress", utils.ErrDatabase)
 	}
 	return func() {
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = unlockGraphWriteFile(f)
 		_ = f.Close()
 	}, nil
 }
