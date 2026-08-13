@@ -256,7 +256,7 @@ env:
 - Validate formatting
 - Static analysis with `go vet`
 
-## Static Analysis (Lint)
+## Static Analysis
 
 ### Linter: golangci-lint
 
@@ -319,6 +319,51 @@ Intentional deviations are documented in `.golangci.yml`:
 | `internal/utils/time.go` package-level sentinels | Package-level `fmt.Errorf` declarations are permitted sentinel definitions |
 | `*_test.go` files | Test helpers and deferred cleanups use idiomatic error-ignoring patterns |
 
+### Security Scan: gosec
+
+The project scans its Go source for security defects with
+[gosec](https://github.com/securego/gosec). The scan is a validation gate, not an
+optional check: `make check` runs it alongside the other five gates (see
+`Validation Gates`).
+
+**Install:**
+```bash
+go install github.com/securego/gosec/v2/cmd/gosec@latest
+```
+
+**Run:**
+```bash
+gosec -exclude-dir=.claude/worktrees ./...
+# or via Makefile:
+make security
+```
+
+`gosec` exits with status 1 when it reports at least one issue and with status 0
+when it reports none, so any finding that is not suppressed fails the gate.
+
+**Scope exclusion (`-exclude-dir=.claude/worktrees`).** `gosec` does not expand
+`./...` the way the Go toolchain does. `go build ./...` and `go list ./...` skip
+directories whose names begin with a dot, whereas `gosec` walks the tree and
+analyses the Go files it finds beneath them. `.claude/worktrees` is a scratch
+location for temporary git worktrees and holds no committed project source.
+Without the exclusion, a Go file placed there would be analysed as though it were
+project source and its findings would fail the gate. The flag keeps the scan
+scoped to the repository's own packages. A directory that carries its own
+`go.mod` belongs to a different module and is outside the scan either way.
+
+**Accepted findings.** A finding that the project has reviewed and accepted is
+annotated with a `#nosec` comment at the site in the Go source, which suppresses
+that finding. The repository also carries `.gosec.yaml`, a commented record of
+accepted findings and the reason each one is accepted. That file is a record for
+reviewers, not scan configuration: the invocation above passes no `-conf` flag,
+and `gosec` applies a configuration file only when `-conf` names one.
+
+**The gate is local-only.** No pipeline runs `gosec`. Neither
+`.github/workflows/ci.yml` nor `.github/workflows/release.yml` invokes it, so the
+scan runs only where a developer or a release engineer runs `make check` or
+`make security` on a local machine. A green CI run is therefore not evidence that
+the security gate passed.
+
 ## Build Commands
 
 ### Local Build
@@ -344,6 +389,33 @@ GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -o ./bin/rmp-linux-armv7 ./
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ./bin/rmp-linux-arm64 ./cmd/rmp
 ```
 
+### Validation Gates
+
+`make check` is the aggregate validation command. It runs the six gates below, in
+the order the target declares them, and every one of them MUST pass before a
+commit.
+
+```bash
+make check
+```
+
+| Target | Command | Purpose |
+|--------|---------|---------|
+| `fmt` | `go fmt ./...` | Format the source |
+| `vet` | `go vet ./...` | Standard static analysis |
+| `test` | `go test ./...` | Unit tests |
+| `build` | `go build -o ./bin/rmp ./cmd/rmp` | Build the binary for the host platform |
+| `lint` | `golangci-lint run ./...` | Lint (see `Linter: golangci-lint`) |
+| `security` | `gosec -exclude-dir=.claude/worktrees ./...` | Security scan (see `Security Scan: gosec`) |
+
+Each gate is also available on its own, for example `make lint` or
+`make security`. Running the gates individually is a convenience during
+development; it does not replace `make check` before a commit.
+
+Two gates need a tool that the Go toolchain does not provide: `lint` needs
+`golangci-lint` and `security` needs `gosec`. The install command for each one is
+in its own section above.
+
 ## Artifact Structure
 
 ```
@@ -358,6 +430,7 @@ rmp-{version}-{target}.tar.gz
 ### Build Verification
 - [ ] All matrix targets build successfully
 - [ ] Binaries are statically linked (`CGO_ENABLED=0`)
+- [ ] `make check` passes: format, vet, unit tests, host build, `golangci-lint`, and the `gosec` security scan all succeed. The security scan reports no unsuppressed finding (see Validation Gates and Security Scan: gosec)
 - [ ] `go.mod` pins both direct dependencies to exact versions, and the `modernc.org/libc` and `modernc.org/memory` versions match exactly the versions required by the pinned `modernc.org/sqlite`. This is verified by reading the driver's own `go.mod` in the module cache, because no gate detects a mismatch — neither any gate run by `make check` (format, vet, test, build, `golangci-lint`, `gosec`) nor the E2E suite (see External Dependencies, SQLite Driver Rules 2 and 3)
 - [ ] Archive naming follows convention: `rmp-{version}-{target}.{ext}`
 - [ ] Every web asset category (HTML templates, the stylesheet including the vendored Tabler CSS framework, all client JS including the vendored Tabler JavaScript and D3.js with the d3-sankey plugin and their dependencies, web fonts including the Inter font and the Tabler Icons webfont, icons and images, and the favicon) is embedded via `go:embed`; the build uses the Go toolchain only, with no Node.js or `node_modules` step (see Vendored Web Assets)

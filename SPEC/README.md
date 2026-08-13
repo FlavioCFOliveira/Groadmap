@@ -69,6 +69,8 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Application version | `VERSION.md` |
 | Schema migrations | `VERSION.md § Migrations` |
 | Build / CI / lint | `BUILD.md` |
+| Validation gates (`make check` and the six targets it runs) | `BUILD.md § Validation Gates` |
+| Security scan (`gosec`, accepted findings, scope exclusion) | `BUILD.md § Security Scan: gosec` |
 | Installation / release | `DEPLOY.md` |
 
 ---
@@ -88,7 +90,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | `DATABASE.md` | Schema, queries, constraints, indexes |
 | `IMPLEMENTATION.md` | Concurrency, caching, performance strategies |
 | `VERSION.md` | Application and schema versioning, migrations |
-| `BUILD.md` | Build system, cross-compilation, CI/CD |
+| `BUILD.md` | Build system, cross-compilation, validation gates, CI/CD |
 | `DEPLOY.md` | Installation, distribution, release process |
 
 ---

@@ -194,6 +194,7 @@ Releases are created automatically when a tag matching `v*` pattern is pushed:
      - Linux: amd64, arm64, armv6, armv7
      - macOS: amd64, arm64
      - Windows: amd64, arm64
+     - FreeBSD: amd64
    - Build flags for production:
      - `-s -w`: Strip debug info and DWARF tables
      - `-trimpath`: Remove build paths for reproducible builds
@@ -208,6 +209,10 @@ Releases are created automatically when a tag matching `v*` pattern is pushed:
 
 ### Build Matrix
 
+The release workflow builds one archive per platform. The authoritative list of
+platforms is `BUILD.md § Supported Build Targets`; the table below restates it
+with the archive format each platform ships.
+
 | OS | Architecture | ARM Version | Output Format |
 |----|--------------|-------------|---------------|
 | Linux | amd64 | - | tar.gz |
@@ -218,6 +223,7 @@ Releases are created automatically when a tag matching `v*` pattern is pushed:
 | macOS | arm64 | - | tar.gz |
 | Windows | amd64 | - | zip |
 | Windows | arm64 | - | zip |
+| FreeBSD | amd64 | - | tar.gz |
 
 ### Binary Naming Convention
 
@@ -234,7 +240,7 @@ rmp-{version}-{os}-{arch}.{ext}
 ### Release Assets
 
 Each release includes:
-- Binary archives for all supported platforms (8 total)
+- Binary archives for all supported platforms (9 total)
 - SHA256 checksums for each archive
 - Automatic release notes generated from commits
 
