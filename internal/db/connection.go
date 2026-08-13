@@ -348,11 +348,22 @@ func OpenReadOnly(roadmapName string) (*DB, error) {
 // but the home directory the path is rooted in is not. Percent-encoding makes
 // every character in the path inert.
 //
+// The PRAGMAs travel as the driver's validated shorthand keys, not as the
+// verbatim _pragma=name(value) form. A _pragma value is executed exactly as
+// written and is never validated, and it is the one DSN parameter class that can
+// still fail partway through, leaving the settings ahead of the failure already
+// applied. The shorthand keys are checked against a fixed accepted set before
+// ANY parameter is applied, so a bad value fails the connection outright instead
+// of half-configuring it. Only the primary key names are used: each has an alias
+// (_fk, _timeout) and the alias wins when both appear, so supplying both is a
+// trap. The driver fixes the order it applies them in -- _busy_timeout first,
+// _query_only last -- independent of the order written here.
+//
 // See SPEC/IMPLEMENTATION.md § DSN Construction and https://www.sqlite.org/uri.html.
 func dsnFor(dbPath string, readOnly bool) string {
-	params := fmt.Sprintf("_pragma=foreign_keys(1)&_pragma=busy_timeout(%d)", DefaultBusyTimeout)
+	params := fmt.Sprintf("_busy_timeout=%d&_foreign_keys=1", DefaultBusyTimeout)
 	if readOnly {
-		params = "_pragma=query_only(true)&" + params
+		params += "&_query_only=1"
 	}
 	return "file:" + uriPath(dbPath) + "?" + params
 }
