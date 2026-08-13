@@ -331,6 +331,154 @@ func TestClassify(t *testing.T) {
 			query: "MATCH (n:Task {id: 5}) SET n.archived = true DELETE n",
 			want:  cypherguard.Classes{Write: true, Mutate: true, Delete: true},
 		},
+		// ── Schema introspection ────────────────────────────────────────────
+		// SHOW lists the registered schema and alters nothing, so it is
+		// read-only and it is NOT Groadmap's DDL, which means schema-MUTATING
+		// (SPEC/GRAPH.md § Schema Introspection). These cases pin the
+		// recognition itself: without Introspect the same queries would still
+		// read as read-only, but only because no discriminator matched, and the
+		// assertion would prove nothing about the classification.
+		{
+			name:  "show indexes is schema introspection",
+			query: "SHOW INDEXES",
+			want:  cypherguard.Classes{Introspect: true},
+		},
+		{
+			name:  "show constraints is schema introspection",
+			query: "SHOW CONSTRAINTS",
+			want:  cypherguard.Classes{Introspect: true},
+		},
+		{
+			// The singular aliases the engine accepts. This case is the reason
+			// the matcher spells the plural as INDEX(ES)? and not INDEXES?: the
+			// latter parses as INDEXE plus an optional S and does not match the
+			// singular at all.
+			name:  "singular show index is schema introspection",
+			query: "SHOW INDEX",
+			want:  cypherguard.Classes{Introspect: true},
+		},
+		{
+			name:  "singular show constraint is schema introspection",
+			query: "SHOW CONSTRAINT",
+			want:  cypherguard.Classes{Introspect: true},
+		},
+		{
+			name:  "lowercase show indexes is schema introspection",
+			query: "show indexes",
+			want:  cypherguard.Classes{Introspect: true},
+		},
+		{
+			name:  "mixed case show constraint is schema introspection",
+			query: "sHoW cOnStRaInT",
+			want:  cypherguard.Classes{Introspect: true},
+		},
+		{
+			name:  "show indexes with yield where return tail is schema introspection",
+			query: "SHOW INDEXES YIELD name, type WHERE type = 'RANGE' RETURN name",
+			want:  cypherguard.Classes{Introspect: true},
+		},
+		{
+			name:  "show constraints after a line comment is schema introspection",
+			query: "// list the registered constraints\nSHOW CONSTRAINTS",
+			want:  cypherguard.Classes{Introspect: true},
+		},
+		{
+			name:  "show indexes after a block comment is schema introspection",
+			query: "/* schema check */ SHOW INDEXES",
+			want:  cypherguard.Classes{Introspect: true},
+		},
+		{
+			name:  "show indexes after leading whitespace is schema introspection",
+			query: "\n\t  SHOW INDEXES",
+			want:  cypherguard.Classes{Introspect: true},
+		},
+		{
+			// Anchoring at the start of the statement is what stops a property
+			// named show from being read as an introspection command. The query
+			// is an ordinary creating write and must classify as one.
+			name:  "property named show is not schema introspection",
+			query: "CREATE (n:Panel {show: 'indexes'})",
+			want:  cypherguard.Classes{Write: true, Create: true},
+		},
+		{
+			name:  "label named Show is not schema introspection",
+			query: "MATCH (n:Show) RETURN n.title",
+			want:  cypherguard.Classes{},
+		},
+		{
+			name:  "show keyword inside a string literal is not schema introspection",
+			query: "MATCH (n:Doc) WHERE n.body = 'run SHOW INDEXES first' RETURN n.key",
+			want:  cypherguard.Classes{},
+		},
+		{
+			// A SHOW family the pinned engine does not implement. It is not an
+			// introspection command Groadmap admits, and it carries no writing
+			// or DDL clause either, so it classifies as nothing and reaches the
+			// engine, which rejects it as a syntax error — the division of labour
+			// SPEC/GRAPH.md § Per-Subcommand Validation Rules note 3 requires.
+			name:  "unimplemented show family is not schema introspection",
+			query: "SHOW FUNCTIONS",
+			want:  cypherguard.Classes{},
+		},
+		{
+			// Word-boundary guard: INDEXER and INDEXE both start with INDEX but
+			// are not the keyword, so neither is an introspection command.
+			name:  "show indexer is not schema introspection",
+			query: "SHOW INDEXER",
+			want:  cypherguard.Classes{},
+		},
+
+		// ── FOREACH ─────────────────────────────────────────────────────────
+		// FOREACH is a writing clause the engine gained after the version this
+		// guard rail was written against. It has no discriminator of its own:
+		// it is classified by the writing clauses its body contains, which is
+		// sound only because a FOREACH body may contain nothing but those
+		// clauses and a nested FOREACH (SPEC/GRAPH.md § Per-Subcommand
+		// Validation Rules note 7). These cases pin that property so a change
+		// to the classifier cannot open a write path through a read subcommand.
+		{
+			name:  "foreach with a set body is a write mutate",
+			query: "MATCH (s:Spec) FOREACH (x IN [1] | SET s.reviewed = true)",
+			want:  cypherguard.Classes{Write: true, Mutate: true},
+		},
+		{
+			name:  "foreach with a remove body is a write mutate",
+			query: "MATCH (s:Spec) FOREACH (x IN [1] | REMOVE s.draft)",
+			want:  cypherguard.Classes{Write: true, Mutate: true},
+		},
+		{
+			name:  "foreach with a create body is a write create",
+			query: "FOREACH (name IN ['auth', 'crypto'] | CREATE (:Spec {key: name}))",
+			want:  cypherguard.Classes{Write: true, Create: true},
+		},
+		{
+			name:  "foreach with a merge body is a write create",
+			query: "FOREACH (name IN ['auth', 'crypto'] | MERGE (:Spec {key: name}))",
+			want:  cypherguard.Classes{Write: true, Create: true},
+		},
+		{
+			name:  "foreach with a delete body is a write delete",
+			query: "MATCH p = (a:Spec)-[:DEPENDS_ON*]->(b:Spec) FOREACH (r IN relationships(p) | DELETE r)",
+			want:  cypherguard.Classes{Write: true, Delete: true},
+		},
+		{
+			name:  "foreach with a detach delete body is a write delete",
+			query: "MATCH p = (a:Spec)-[:DEPENDS_ON*]->(b:Spec) FOREACH (n IN nodes(p) | DETACH DELETE n)",
+			want:  cypherguard.Classes{Write: true, Delete: true},
+		},
+		{
+			name:  "nested foreach is classified by the innermost body",
+			query: "MATCH (s:Spec) FOREACH (a IN [[1, 2]] | FOREACH (b IN a | SET s.depth = b))",
+			want:  cypherguard.Classes{Write: true, Mutate: true},
+		},
+		{
+			// The keyword FOREACH on its own carries no class: only the writing
+			// clauses in its body do. A FOREACH mentioned inside a literal is
+			// masked away like any other keyword and changes nothing.
+			name:  "foreach keyword inside a string literal is not a write",
+			query: "MATCH (m:Memory) WHERE m.body = 'use FOREACH to fan out' RETURN m.key",
+			want:  cypherguard.Classes{},
+		},
 		{
 			name:  "empty query classifies as nothing",
 			query: "",
@@ -386,6 +534,20 @@ func TestIsReadOnly(t *testing.T) {
 		{name: "write keyword inside block comment stays read-only", query: "MATCH (n) /* later: SET n.flag */ RETURN n", want: true},
 		{name: "DDL keyword inside literal stays read-only", query: "MATCH (n:Task) WHERE n.note = 'consider CREATE INDEX here' RETURN n", want: true},
 		{name: "backtick label containing write keyword stays read-only", query: "MATCH (n:`Tasks To DELETE`) RETURN n", want: true},
+		{name: "show indexes is read-only", query: "SHOW INDEXES", want: true},
+		{name: "show constraints is read-only", query: "SHOW CONSTRAINTS", want: true},
+		{name: "singular show index is read-only", query: "SHOW INDEX", want: true},
+		{name: "singular show constraint is read-only", query: "SHOW CONSTRAINT", want: true},
+		{name: "lowercase show indexes is read-only", query: "show indexes", want: true},
+		{name: "show indexes with a projection tail is read-only", query: "SHOW INDEXES YIELD name, state WHERE state = 'ONLINE' RETURN name", want: true},
+		{name: "show constraints after a comment is read-only", query: "/* schema check */ SHOW CONSTRAINTS", want: true},
+		{name: "create index DDL is still not read-only despite the SHOW sibling", query: "CREATE INDEX spec_key_idx FOR (n:Spec) ON (n.key)", want: false},
+		{name: "foreach with a set body is not read-only", query: "MATCH (s:Spec) FOREACH (x IN [1] | SET s.reviewed = true)", want: false},
+		{name: "foreach with a create body is not read-only", query: "FOREACH (name IN ['auth'] | CREATE (:Spec {key: name}))", want: false},
+		{name: "foreach with a detach delete body is not read-only", query: "MATCH p = (a)-[*]->(b) FOREACH (n IN nodes(p) | DETACH DELETE n)", want: false},
+		{name: "nested foreach is not read-only", query: "MATCH (s:Spec) FOREACH (a IN [[1]] | FOREACH (b IN a | SET s.depth = b))", want: false},
+		{name: "property named show does not make a write read-only", query: "CREATE (n:Panel {show: 'indexes'})", want: false},
+		{name: "show keyword inside a literal stays an ordinary read", query: "MATCH (n:Doc) WHERE n.body = 'run SHOW INDEXES first' RETURN n.key", want: true},
 		{name: "empty query is read-only", query: "", want: true},
 		{name: "whitespace-only query is read-only", query: "   \n\t ", want: true},
 	}

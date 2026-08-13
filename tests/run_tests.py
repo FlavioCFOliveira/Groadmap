@@ -65,6 +65,7 @@ TEST_MODULES = [
     "test_45_audit_stats_keys",
     "test_46_graph_parallel_edge_predicates",
     "test_47_install_script_extraction",
+    "test_48_graph_clause_surface",
 ]
 
 # Stress tests (run separately due to time/data volume)
