@@ -334,6 +334,7 @@ Each release includes:
 
 ### Release Checklist
 
+- [ ] `govulncheck ./...` was run on the tree being released and its result acted on: no standard-library vulnerability is reachable from Groadmap's own code, and any reported-but-not-called vulnerability is recorded in the release notes (see `VERSION.md § Pre-Release Vulnerability Check`)
 - [ ] Every validation gate ran and passed in the release workflow, and no gate is reported as skipped, waived, or not installed (see `BUILD.md § Validation Gates`)
 - [ ] All binaries built successfully
 - [ ] SHA256 checksums generated
@@ -363,3 +364,10 @@ Each release includes:
 - [ ] Download URL format is correct
 - [ ] Archives extract correctly
 - [ ] Binary runs after manual installation
+
+### Release Process
+- [ ] `govulncheck ./...` was run on the exact tree being released, and its output is available for the release record
+- [ ] No standard-library vulnerability reachable from Groadmap's own code is present at the released commit. Should one be found, the Go floor is raised to the release that fixes it, in both `go.mod` and `BUILD.md § Go Toolchain`, and `govulncheck ./...` re-run clean before the tag is created (see `VERSION.md § Pre-Release Vulnerability Check`)
+- [ ] The Go version in `go.mod` and the floor named in `BUILD.md § Go Toolchain` are the same version
+- [ ] Any vulnerability reported but not called is recorded in the release notes rather than silently dropped
+- [ ] `govulncheck` is run as a release step only. It is not added to `make check`, to `.github/workflows/ci.yml`, or to `.github/workflows/release.yml`, and the gate set stays at the six gates of `BUILD.md § Validation Gates`

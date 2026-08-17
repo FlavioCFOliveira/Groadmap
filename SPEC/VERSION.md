@@ -183,11 +183,65 @@ and require no backfill.
 
 ## Release Process
 
-1. Bump the version constant in `cmd/rmp/main.go`
-2. Update `CHANGELOG.md` and add the release notes file `release-notes/v<version>-<date>.md`
-3. Commit the changes
-4. Create the annotated git tag: `git tag -a v<version> -m "Release v<version>"`
-5. Push `main` and the tag: `git push origin main && git push origin v<version>`
-6. On the tag push, the `.github/workflows/release.yml` workflow builds the binaries and publishes the GitHub release
+1. Run the pre-release vulnerability check on the tree being released and act on its result before going further (see Pre-Release Vulnerability Check)
+2. Bump the version constant in `cmd/rmp/main.go`
+3. Update `CHANGELOG.md` and add the release notes file `release-notes/v<version>-<date>.md`
+4. Commit the changes
+5. Create the annotated git tag: `git tag -a v<version> -m "Release v<version>"`
+6. Push `main` and the tag: `git push origin main && git push origin v<version>`
+7. On the tag push, the `.github/workflows/release.yml` workflow builds the binaries and publishes the GitHub release
 
 Past releases are discoverable via `git tag --list` and `git log v<previous>..v<current>` — no Version History table is kept here.
+
+### Pre-Release Vulnerability Check
+
+This check is a required step of every release. It is deliberately step 1,
+because a vulnerability found here changes `go.mod` and `SPEC/BUILD.md`, and
+those changes belong in the release commit rather than in a follow-up.
+
+Run it from the repository root, against the exact tree being released:
+
+```bash
+govulncheck ./...
+```
+
+The report separates vulnerabilities whose code is actually called from those
+merely present in the module graph. The release engineer treats the two
+differently:
+
+| What the report shows | What the release engineer does |
+|-----------------------|--------------------------------|
+| Nothing (`No vulnerabilities found`) | Continue to step 2 |
+| A standard-library vulnerability that **is called** | Stop. Raise the Go floor to the release that fixes it, as `BUILD.md § Go Toolchain` requires: set the `go` directive in `go.mod`, update `BUILD.md § Go Toolchain` to name the new floor and the advisories behind it, re-run `govulncheck ./...`, and continue only once it reports nothing. The release MUST NOT be published on the old floor |
+| A vulnerability outside the standard library that **is called** | Stop. Remediating it means changing a dependency, and the pins are governed by `BUILD.md § External Dependencies`, which forbids floating them casually. Refer the decision to the project owner, and do not publish the release while it is open |
+| A vulnerability that is reported but **not called** | Continue; it does not block the release. Record it in the release notes so the judgement is visible to whoever reads them |
+
+`govulncheck` exits 0 when it finds nothing and non-zero when it finds
+vulnerabilities, so a scripted release can test the exit status. The
+called-versus-not-called distinction, however, is read from the report itself,
+not from the exit status.
+
+**This check is not a validation gate.** The gate set is the six gates in
+`BUILD.md § Validation Gates`, enforced identically in all three places, and
+`govulncheck` is not one of them: neither `make check` nor either workflow runs
+it. Making it a gate would turn a pipeline red because an advisory was published
+between two commits, with nothing in the repository having changed. The
+obligation belongs to the release procedure instead, where a person reads the
+report and decides.
+
+**`govulncheck` is not pinned to a version**, unlike the tools behind the `lint`
+and `security` gates. Those are pinned so that a gate returns the same verdict
+everywhere it runs. This check is the opposite case: its purpose is to reflect
+the vulnerability database as it stands at release time, so a run that reported
+nothing before may legitimately report something now. Install it with:
+
+```bash
+go install golang.org/x/vuln/cmd/govulncheck@latest
+```
+
+**Why this step exists.** A release was prepared, passed `make check`, passed the
+full end-to-end suite, and was tagged — and its binaries would have shipped
+carrying four standard-library vulnerabilities reachable from Groadmap's own
+code, two of them on the `rmp web` request path. Every gate was green, because no
+gate inspects published advisories. Nothing in the procedure required anyone to
+look, so nobody did. This step is what requires someone to look.

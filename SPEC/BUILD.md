@@ -8,25 +8,66 @@ This specification defines the build system, cross-compilation targets, and CI/C
 
 ### Minimum Go Version
 
-Groadmap requires **Go 1.26.5** (or later). This section is the authoritative
+Groadmap requires **Go 1.26.6** (or later). This section is the authoritative
 statement of the required Go version; other specification files point here rather
 than restate it. Two independent constraints set this floor:
 
 1. **Minor floor (Go 1.26), set by the GoGraph dependency.** GoGraph declares Go
    1.26 as its minimum, so Groadmap cannot build on an earlier minor version. See
    `GRAPH.md § Dependency Maturity Risk` for the dependency itself.
-2. **Patch floor (Go 1.26.5), set by a security requirement.** The Go standard
-   library's `crypto/tls` is affected by GO-2026-5856, an Encrypted Client Hello
-   privacy leak, in Go 1.26.4 and earlier; the fix ships in Go 1.26.5. This is a
-   toolchain vulnerability, not a module vulnerability: it is remediated by the
-   toolchain version alone, and no dependency change can remediate it.
+2. **Patch floor (Go 1.26.6), set by a security requirement.** Four Go standard
+   library advisories are reachable from Groadmap's own code — the vulnerable
+   functions are called, not merely present in the module graph — and Go 1.26.6
+   is the release on the 1.26 line that fixes all four:
 
-The `go` directive in `go.mod` MUST declare `go 1.26.5` (or later), and the CI and
+| Advisory | Package | Defect fixed in Go 1.26.6 |
+|----------|---------|---------------------------|
+| GO-2026-6091 | `html/template` | JavaScript regexp context tracking |
+| GO-2026-6090 | `crypto/tls` | Post-handshake handshake messages accepted without limit |
+| GO-2026-6089 | `net/http` | `ReadHeaderTimeout` not applied to the unencrypted HTTP/2 check |
+| GO-2026-5972 | `encoding/asn1` | Maximum recursion depth not enforced |
+
+Two of the four, `html/template` and `net/http`, sit on the `rmp web` request
+path, which serves HTML over HTTP (see `WEB.md`). All four are toolchain
+vulnerabilities rather than module vulnerabilities: the toolchain version alone
+remediates them, and no dependency change can.
+
+**A reachable advisory raises the patch floor.** The patch component of the
+required version is a security floor, not routine version currency. It moves by
+this rule:
+
+- An advisory against the Go standard library that is **reachable** from
+  Groadmap's own code raises the floor to the release on the current minor line
+  that fixes it. This section is updated to name that release, and `go.mod` with
+  it.
+- An advisory that is reported but **not** called does not, by itself, raise the
+  floor. That distinction is what keeps the rule workable: without it, every
+  advisory anywhere in the module graph would move the floor.
+- `govulncheck` is what draws the distinction, reporting separately the
+  vulnerabilities whose code is called and those merely present. It is a
+  diagnostic tool, not one of the six gates in `Validation Gates`, and no gate
+  runs it.
+
+The rule is enforced as a required step of the release procedure: `govulncheck`
+MUST be run before a `v*` tag is created, and a reachable standard-library
+advisory MUST raise the floor before the release is published. That step, and
+what the release engineer does with each kind of result, is specified in
+`VERSION.md § Pre-Release Vulnerability Check`.
+
+The `go` directive in `go.mod` MUST declare `go 1.26.6` (or later), and the CI and
 release toolchains MUST use the Go version that matches the `go` directive (Go
-1.26.5 or later). The CI and release workflows obtain that version from `go.mod`
-via `go-version-file: go.mod`, so they track the directive automatically.
+1.26.6 or later). The CI and release workflows obtain that version from `go.mod`
+via `go-version-file: go.mod`, so they track the directive automatically and
+`go.mod` is the only place a pipeline reads it from. This specification and
+`go.mod` MUST agree.
 
-Groadmap MUST NOT be built or released with a toolchain older than Go 1.26.5.
+Because the `go` directive names the patch version, the toolchain enforces the
+floor itself: under the default `GOTOOLCHAIN=auto`, a machine whose installed Go
+is older downloads and uses the required toolchain instead of building with the
+wrong one, and a `GOTOOLCHAIN` pinned to an older release fails with an explicit
+error instead of building. The floor therefore needs no manual installation step.
+
+Groadmap MUST NOT be built or released with a toolchain older than Go 1.26.6.
 
 ### External Dependencies
 

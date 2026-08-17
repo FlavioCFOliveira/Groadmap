@@ -5,6 +5,474 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.0] - 2026-08-17
+
+A release that widens what the project can ship and tightens how it ships it. The
+build matrix grows from nine targets to **eleven**: `openbsd/amd64` and
+`openbsd/arm64` join it, and the two Windows targets — listed as Primary Platforms
+for several releases — now actually compile, having never done so. Schema
+introspection (`SHOW INDEXES` / `SHOW CONSTRAINTS`) becomes a specified,
+deliberately accepted read-only operation class on the `rmp graph` read
+subcommands and the read-only web query bar; it already executed, but only because
+the guard rail failed to recognise it. Underneath, the embedded GoGraph
+knowledge-graph engine moves three minor releases forward, from `v0.8.1` to
+`v0.11.0`, and the SQLite driver moves from `v1.53.0` to `v1.56.0`. Three database
+correctness and security fixes land, the most important of which stops a database
+**path** redirecting an open to a different file or switching off foreign-key
+enforcement. The **minimum Go version rises to 1.26.6**, remediating four standard
+library advisories reachable from Groadmap's own code, two of them on the `rmp web`
+request path. A release-pipeline hardening pass closes two defects affecting every
+artefact the project has published: archives shipped **without the project's
+licence file**, and a `v*` tag could publish binaries with neither the linter nor
+the security scanner having run anywhere in the pipeline.
+
+Under Semantic Versioning 2.0.0 this is a **MINOR** release: it adds
+backward-compatible functionality — two new build targets, two specified targets
+that now build and ship, and a newly specified accepted operation class. No `rmp`
+command, subcommand, flag, exit code, or JSON success schema is added, removed, or
+renamed, and no exit code changes meaning. The database schema version remains
+`1.8.0`, so there is **no SQLite migration**. The GoGraph upgrade, however, does
+carry a **one-way** on-disk rewrite of the graph store's `labels.bin` from snapshot
+format version 1 to version 2; see Upgrade Notes below. The Go floor rise is a
+build-time requirement, not a runtime contract change: it constrains who can
+compile the project, not what the binary does.
+
+### Added
+
+- **Two OpenBSD build targets; the matrix reaches eleven.** `openbsd/amd64` and
+  `openbsd/arm64` are now built and published as
+  `rmp-{version}-openbsd-{arch}.tar.gz`. `modernc.org/sqlite` `v1.56.0` added them
+  to its own supported-platform table, and the storage engine was the only
+  component that could have held them back — the binary is pure Go and links no C
+  library. Both are **build-verified, not runtime-verified**: the binaries are
+  cross-compiled and checked with `file(1)`, never executed, because no OpenBSD
+  host is available. A new Architecture Verification criterion pins that check (the
+  ELF note must read `version 1 (OpenBSD)`), and the same honest statement now
+  covers `freebsd/amd64`, which was in the same undocumented position. Found and
+  fixed in the same cycle: `install.sh` had no OpenBSD case in `detect_os`, so a
+  released OpenBSD archive could never have been installed by the documented
+  one-line installer. See `SPEC/BUILD.md § Supported Build Targets` and
+  `SPEC/DEPLOY.md § Platform Detection`.
+- **The two Windows targets compile and ship.** `SPEC/BUILD.md` listed
+  `windows/amd64` and `windows/arm64` among the Primary Platforms and required
+  every matrix target to build, but neither compiled: `acquireGraphWriteLock`
+  called `syscall.Flock` from a file with no build tag and no platform
+  counterpart, and that symbol does not exist on Windows. Seven of the nine targets
+  built; the break was invisible because no gate compiled the matrix. The system
+  calls now sit behind `lockGraphWriteFile` / `unlockGraphWriteFile`, implemented
+  with `flock(2)` (`LOCK_EX|LOCK_NB`, under `//go:build unix` rather than
+  `!windows`, which would also admit `plan9`, `js`, and `wasip1`) and with
+  `LockFileEx` (`LOCKFILE_EXCLUSIVE_LOCK|LOCKFILE_FAIL_IMMEDIATELY` — without the
+  second flag `LockFileEx` blocks, turning the immediate failure
+  `SPEC/GRAPH.md § Concurrency and Recovery` requires into a hang). The exclusion
+  contract is identical on both platforms. Guarded by
+  `cmd/rmp/build_targets_test.go`, which builds every target on every `go test` and
+  parses the Primary Platforms table out of the specification, and by
+  `internal/commands/graph_lock_test.go`.
+- **Schema introspection as a specified read-only operation class.**
+  `SHOW INDEX` / `SHOW INDEXES` / `SHOW CONSTRAINT` / `SHOW CONSTRAINTS`, in any
+  case and with an optional `YIELD` / `WHERE` / `RETURN` projection tail, are
+  accepted by `rmp graph query`, `rmp graph search`, and the read-only `rmp web`
+  query bar, and rejected by `rmp graph create`, `update`, and `delete`. The class
+  is published on every contract surface: the command help, the machine-readable AI
+  contract, `internal/aihelp/pitfalls.go`, `README.md`, and
+  `DOCS/commands/graph.md`. See `SPEC/GRAPH.md § Schema Introspection` and
+  acceptance criteria 23–27.
+
+### Fixed
+
+- **Graph guard rail — schema introspection is recognised, not admitted by
+  omission.** The engine gained the `SHOW` commands and the `FOREACH` clause, and
+  extended its own `cypher/ir.IsDDL` to report the former as DDL. Because
+  `cypher.QueryHasWritingClause` returns false for whatever `IsDDL` accepts, and
+  Groadmap's DDL discriminator matches only `(CREATE|DROP)\s+(INDEX|CONSTRAINT)`, a
+  `SHOW` query reached the guard rail as **neither a write nor DDL** and passed the
+  read-only check — a verdict reached because nothing matched, not because the
+  class had been judged read-only. Such a verdict cannot be reviewed, cannot be
+  tested for intent, and silently absorbs whatever clause family the engine gains
+  next. `Classes` now carries `Introspect`, set from a statement-anchored (`\A`),
+  case-insensitive matcher evaluated on the masked query, and `IsReadOnly` decides
+  through an explicit switch. The verdict is unchanged for every input that existed
+  before. Anchoring is what stops a label, variable, or property named `show` —
+  `CREATE (n:Panel {show:'indexes'})` — being read as an introspection command.
+  Groadmap's DDL class stays deliberately narrower than the engine's: `CREATE
+  INDEX` changes the schema, `SHOW INDEXES` only reports it. `FOREACH` carries no
+  discriminator of its own and is classified by the writing clauses its body
+  contains — sound only because a `FOREACH` body may hold nothing else, a
+  containment property now pinned by tests.
+- **Database — a database path can no longer redirect the open or inject
+  connection parameters.** `internal/db` built every DSN as
+  `fmt.Sprintf("%s?_pragma=...", dbPath)`. The driver splits a DSN at the first
+  `?` and, unless the string starts with `file:`, keeps only what precedes it as
+  the filename, so a database path containing `?` **opened a different file from
+  the one intended** and everything after the `?` was parsed as driver query
+  parameters. The blast radius grew with the driver upgrade: before `v1.55.0` the
+  shorthand keys did not exist, so a path tail spelling `_foreign_keys=0` or
+  `_synchronous=off` was ignored and the failure was a silent wrong-file open;
+  since `v1.55.0` those keys are recognised, so a path could **switch off
+  referential integrity or downgrade durability** on a connection the application
+  believed it had configured itself. The roadmap name is validated; the home
+  directory the path is rooted in is not. `dsnWithPragmas` gives way to
+  `dsnFor(dbPath, readOnly)` over a new `uriPath` helper following the SQLite URI
+  specification: convert `\` to `/`, prepend `/` to a leading drive letter,
+  percent-encode, and emit `file:///path` (absolute) or `file:path` (relative). The
+  drive-letter test is on the string rather than on `runtime.GOOS`, so it cannot
+  turn a relative path into an absolute one. Nothing changes for an ordinary path.
+  Guarded by `internal/db/dsn_test.go`, which reads the opened file back from
+  `pragma_database_list` rather than inferring it, under six hostile home
+  directories. See `SPEC/IMPLEMENTATION.md § Database Connections` and
+  `SPEC/ARCHITECTURE.md § Robustness and Reliability`.
+- **Database — connection PRAGMAs travel in the driver's validated DSN keys.**
+  `foreign_keys`, `busy_timeout`, and `query_only` travelled as
+  `_pragma=name(value)`, a form executed exactly as written and never validated,
+  and the one DSN parameter class that can fail partway through a DSN: a bad value
+  is rejected by SQLite only as it runs, **after every earlier `_pragma` has
+  already taken effect**, leaving the connection half-configured. Driver `v1.55.0`
+  added first-class keys for exactly these three settings, checked against a fixed
+  accepted set before any parameter is applied, so a malformed value fails the
+  connection outright. Only the primary key names are used: each has an alias
+  (`_fk`, `_timeout`) which wins when both are supplied, so carrying a key and its
+  alias together is a trap, avoided by construction. `journal_mode` stays out of
+  the DSN — it is database-level, recorded in the file header, and set once by
+  `configureConnection`. Measured on `v1.56.0`, both forms produce the same end
+  state, so this changes failure behaviour only, not steady-state behaviour.
+- **Database — every database opens through the driver's connector.**
+  `sql.Open` is documented as not connecting, and `modernc.org/sqlite` deliberately
+  does not implement `driver.DriverContext`, so the DSN was not examined there at
+  all: a defect in it surfaced not on opening the database but on **whichever query
+  first forced the pool to dial**, mid-command and attributed to that query.
+  `v1.56.0` added `NewConnector`, which validates as much of the DSN as can be
+  checked without touching the filesystem; `sql.OpenDB` builds the `*sql.DB` from
+  it and registers nothing process-globally. Connections are otherwise identical.
+  See `SPEC/IMPLEMENTATION.md § Entry Point`.
+- **Installer — unsupported architectures are rejected at detection, not at
+  download.** `install.sh` mapped `i386` and `i686` to `arch="386"` while the guard
+  that followed rejected only `"unknown"`, so a 32-bit x86 host passed straight
+  through platform detection and failed much later on an HTTP download for
+  `rmp-{version}-linux-386.tar.gz` — **an asset no release has ever produced**. The
+  user saw a download error instead of being told the platform is unsupported.
+  `detect_arch` now returns `"unsupported"` for an architecture it recognises but
+  the build does not serve, keeping `"unknown"` for one it does not recognise at
+  all, and the guard rejects both — rejecting only one is exactly how this defect
+  arose. Both guards report the raw `uname` output rather than the mapped name,
+  because the mapping is what failed, and the OS guard was given the same shape, so
+  the message for an unsupported operating system changes too. No working
+  installation is lost: no published binary has ever existed for 32-bit x86.
+  Guarded by `tests/test_49_install_platform_guards.py`, which asserts that nothing
+  is requested once a guard fires.
+- **Installer — the Windows branch extracts the archive.** It previously moved the
+  downloaded archive into place as `rmp.exe`, harmless only while no Windows asset
+  existed. Publishing `.zip` archives would have turned a clean download failure
+  into silent corruption — measured against the pre-fix script, it exited 0,
+  printed `SUCCESS`, and installed a file reported as Zip archive data. The branch
+  now requires `unzip` and extracts from the archive root; when `unzip` is missing
+  it installs nothing and exits 1, naming the tool and the manual download URL. The
+  Linux and macOS paths are unchanged and gain no new tool requirement. Guarded by
+  `tests/test_47_install_script_extraction.py`.
+
+### Security
+
+- **The minimum Go version rises from 1.26.5 to 1.26.6, remediating four reachable
+  standard-library advisories.** `govulncheck ./...` reported four Go standard
+  library vulnerabilities whose vulnerable functions are **called** by Groadmap's
+  own code, not merely present in the module graph:
+
+  | Advisory | Package | Defect | Reached via |
+  |----------|---------|--------|-------------|
+  | GO-2026-6091 | `html/template` | JavaScript regexp context tracking | `internal/web/pages.go` → `template.Template.ExecuteTemplate` |
+  | GO-2026-6090 | `crypto/tls` | Post-handshake messages accepted without limit | `internal/web/server.go` → `http.Server.Serve` |
+  | GO-2026-6089 | `net/http` | `ReadHeaderTimeout` not applied to the unencrypted HTTP/2 check | `internal/web/server.go` → `http.Server.Serve` |
+  | GO-2026-5972 | `encoding/asn1` | Maximum recursion depth not enforced | `internal/aihelp/hint.go` → `asn1.Unmarshal` |
+
+  **Two of the four — `html/template` and `net/http` — sit on the `rmp web` request
+  path**, which serves HTML over HTTP, so they are reachable by whoever can reach
+  the server. These are **toolchain** vulnerabilities rather than module
+  vulnerabilities: the toolchain version alone remediates them, and no dependency
+  change can. Go 1.26.6 is the release on the 1.26 line that fixes all four, so the
+  `go` directive in `go.mod` moves to `go 1.26.6` and
+  `SPEC/BUILD.md § Go Toolchain` moves with it. After the change,
+  `govulncheck ./...` reports **`No vulnerabilities found`, exit 0** — the four
+  reported-but-not-called advisories of the previous toolchain
+  (GO-2026-6218, GO-2026-5942, GO-2026-5026, GO-2026-6088) are fixed by the same
+  release and are gone too. Because the `go` directive names the patch version, the
+  floor enforces itself: under the default `GOTOOLCHAIN=auto` an older machine
+  fetches the required toolchain rather than building with the wrong one, and a
+  `GOTOOLCHAIN` pinned to an older release fails with an explicit error instead of
+  building. No manual installation step is added.
+- **`SPEC/BUILD.md § Go Toolchain` now states the rule that moves the floor.**
+  Previously the patch floor was a bare fact — `v1.13.2` raised it to `1.26.5` for
+  GO-2026-5856 — with nothing saying when it moves again, so each occurrence was
+  re-argued from scratch. The rule is now written down: **a standard-library
+  advisory reachable from Groadmap's own code raises the floor to the release that
+  fixes it; one that is reported but not called does not.** That distinction is what
+  keeps the rule workable — without it, every advisory anywhere in the module graph
+  would move the floor. `govulncheck` is what draws the distinction, and the
+  specification states plainly that it is a diagnostic, **not** one of the six
+  gates.
+- **A pre-release vulnerability check is now a required release step.**
+  `SPEC/VERSION.md § Release Process` gains a new **step 1, Pre-Release
+  Vulnerability Check**: `govulncheck ./...` MUST be run against the exact tree
+  being released, before the version bump, and its result acted on. It is
+  deliberately step 1 because a finding changes `go.mod` and `SPEC/BUILD.md`, and
+  those changes belong in the release commit rather than in a follow-up. An outcome
+  table tells the release engineer what to do with each kind of result: a called
+  standard-library vulnerability stops the release until the floor is raised; a
+  called vulnerability outside the standard library is referred to the project
+  owner, because the pins are governed by `SPEC/BUILD.md § External Dependencies`;
+  a reported-but-not-called vulnerability does not block, but MUST be recorded in
+  the release notes so the judgement is visible. The remaining steps are renumbered,
+  and `SPEC/DEPLOY.md § Release Checklist` gains the matching items.
+
+  **It is deliberately not a seventh gate.** Making it one would turn a pipeline red
+  because an advisory was published between two commits, with nothing in the
+  repository having changed; the specification therefore forbids adding it to
+  `make check`, `ci.yml`, or `release.yml`, and the gate set stays at six. For the
+  same reason `govulncheck` is **not pinned** to a version, unlike `golangci-lint`
+  and `gosec`: those are pinned so a gate returns the same verdict everywhere, while
+  this check exists precisely to reflect the vulnerability database as it stands at
+  release time. This step exists because of this release: it passed all six gates
+  and the full end-to-end suite, and would have shipped binaries carrying four
+  reachable advisories. Every gate was green, because no gate inspects published
+  advisories, and nothing in the procedure required anyone to look.
+- **Every published archive now carries the licence.**
+  `SPEC/BUILD.md § Artifact Structure` has always specified three entries per
+  archive — the binary, `LICENSE`, and `README.md` — while `release.yml` packed the
+  binary alone. **Every published archive of every target therefore shipped without
+  the project's licence file.** Both branches now ship all three (`tar.gz` with
+  `rmp`, `zip` with `rmp.exe`), and the rolling `dev` pre-release built by `ci.yml`
+  does the same. Verified by execution rather than by reading the YAML: `tar -tzf`
+  and `unzip -Z1` list exactly those entries, both shipped files are byte-identical
+  to the repository copies, the extracted binary runs, and the `install.sh`
+  extraction path still finds the binary in the enlarged archive. Two specification
+  gaps were closed first: the `zip`'s contents were never specified — the string
+  `.exe` appeared nowhere in `SPEC/` — and the `dev` pre-release sat outside the
+  block's scope by accident.
+- **One validation gate set, enforced locally, in CI, and at release.**
+  `release.yml` ran `go fmt`, `go vet`, and the tests, and nothing else; `ci.yml`
+  ran `golangci-lint` but never `gosec`. Only the local `make check` ran all six
+  gates. **A `v*` tag could therefore be pushed and binaries published with neither
+  the linter nor the security scan having run anywhere in the pipeline**, resting
+  entirely on the release engineer having run `make check` on their own machine.
+  Ten release-notes files between `v1.6.0` and `v1.13.0` record the security gate
+  as skipped because `gosec` was not installed on the release host, nine of them
+  citing "per project policy" — **no such policy was ever specified**.
+  `SPEC/BUILD.md` now promotes Validation Gates to a top-level section as the
+  single authoritative definition, states that a missing tool is a failure and
+  never a skip (probing for a tool and continuing without it, reporting a gate as
+  waived, and `continue-on-error` are each forbidden, and no release may report a
+  gate as skipped), and enumerates the only three permitted differences between the
+  three pipelines. `golangci-lint` is pinned to **v2.12.2** and `gosec` to
+  **v2.28.0**, and the pins bind local installations too, because `make lint` and
+  `make security` run whatever is on `PATH`. `ci.yml` also moves to least
+  privilege: `contents: read` at workflow level, with `contents: write` raised only
+  on the one job that writes to the repository. Each of the five gates was made to
+  fail on an injected violation, one at a time, running the exact commands the
+  steps run. Guarded by `cmd/rmp/workflow_gates_test.go`, which parses every
+  expected value out of `SPEC/BUILD.md` rather than restating it, so raising a pin
+  in the specification alone fails the test.
+
+### Changed
+
+- **Dependency refresh.**
+
+  | Module | From | To | Kind |
+  |--------|------|----|------|
+  | `github.com/FlavioCFOliveira/GoGraph` | `v0.8.1` | `v0.11.0` | Direct |
+  | `modernc.org/sqlite` | `v1.53.0` | `v1.56.0` | Direct |
+  | `golang.org/x/sys` | `v0.47.0` (indirect) | `v0.47.0` (direct) | Promoted |
+  | `github.com/RoaringBitmap/roaring/v2` | `v2.21.0` | `v2.24.0` | Indirect |
+  | `github.com/bits-and-blooms/bitset` | `v1.24.6` | `v1.25.0` | Indirect |
+  | `github.com/mattn/go-isatty` | `v0.0.22` | `v0.0.24` | Indirect |
+  | `golang.org/x/exp` | `20260709` snapshot | `20260813` snapshot | Indirect |
+  | `modernc.org/libc` | `v1.74.1` | `v1.74.4` | Indirect (pinned) |
+
+  The `go` directive moves from `1.26.5` to `1.26.6` for the security reason given
+  under Security above; **no `toolchain` directive is introduced**, so the `go`
+  directive remains the single place any pipeline reads the version from — the CI
+  and release workflows obtain it via `go-version-file: go.mod`.
+  `golang.org/x/sys` is promoted to direct because the Windows lock primitives call
+  it.
+
+  **GoGraph `v0.8.1` → `v0.11.0`.** No Go source file changed; the upgrade is
+  absorbed entirely by the existing integration layer. Across the eight consumed
+  packages, 12 exported symbols moved — `Graph.View`, `SetActiveConstraintCount`,
+  and `SetActiveIndexCount` were removed, while the six `snapshot.Write*`
+  functions, `txn.Tx.CommitWALOnly`, and `wal.Writer.SyncGroup` were re-signed —
+  and **Groadmap calls none of the twelve**. Of the 53 symbols it does consume, all
+  are present and call-compatible. The release's semantic changes are likewise
+  unreachable from the CLI, which calls neither `BeginReadTx`, `BeginTx`,
+  `MVCCStats`, nor `AllocateCommitTS`, and issues no `MERGE` of its own.
+
+  **The graph store's `labels.bin` migrates one-way.** On-disk compatibility was
+  demonstrated, not assumed: against a replica of the project's own graph directory
+  written under `v0.8.1`, the new binary read back 293 nodes and 802 relationships
+  with an unchanged relationship-type distribution; a write then succeeded and the
+  synchronous checkpoint **rewrote `labels.bin` from snapshot format version 1 to
+  version 2, in place**, after which the same counts and distribution still read
+  back. Reading version 1 is the retained upgrade path, and **the rewrite is
+  one-way** — once a `v1.14.0` binary has written to a graph store, an older
+  Groadmap cannot be expected to read it. This is not the SQLite schema, which is
+  unchanged at `1.8.0`. `SPEC/GRAPH.md § Dependency Maturity Risk` records the
+  format change under residual risk 2, with a new mitigation 4 requiring an
+  existing graph directory to be proven readable across a GoGraph upgrade
+  empirically, before release.
+
+  **The single-writer semaphore is retired.** `v0.11.0` removes the engine-level
+  semaphore that `SPEC/GRAPH.md`, `SPEC/IMPLEMENTATION.md`, and the `README.md`
+  index cited as the reason two concurrent writers serialise. Every promised
+  behaviour still holds, including failing fast with `utils.ErrDatabase` rather
+  than hanging or corrupting the store, but the reason is corrected to the real
+  mechanism: Groadmap's own exclusive non-blocking `flock` on `write.lock`, taken
+  before the store is opened and held across the whole open, commit, checkpoint,
+  and WAL-truncate sequence — a span wider than a transaction, which an
+  engine-level writer exclusion would never have covered.
+
+  **`modernc.org/sqlite` `v1.56.0`** patches the transpiled amalgamation for an
+  upstream SQLite 3.53.3 **data-corruption bug in journal rollback**: a crash while
+  committing a multi-database `ATTACH` transaction can leave the super-journal name
+  zeroed while its length and trailing magic survive; the checksum is a plain byte
+  sum, so an all-zero name still validates, and `pager_playback` then deletes the
+  hot journal without replaying it. Groadmap issues no `ATTACH`, so the exposure
+  was low. Caught and fixed while upgrading: `go get -u ./...` floated
+  `modernc.org/libc` to `v1.75.3` and `modernc.org/memory` to `v1.12.0`, silently
+  breaking the standing upstream requirement that downstream modules pin the exact
+  `libc` version the driver itself pins. `libc` is the transpiled C runtime the
+  SQLite amalgamation executes inside, so a mismatch is a runtime risk in the
+  storage engine rather than a compile error. The violation **passed every gate**
+  and surfaced only from the driver's CHANGELOG. `SPEC/BUILD.md § External
+  Dependencies` now governs the driver with its own rules, including the explicit
+  statement that no gate run by `make check` detects a violation, so a green build
+  is not evidence.
+
+- **The inert version `ldflag` is removed from both workflows.** Both built with
+  `-X main.version=...`, which **the linker silently ignores**: `cmd/rmp/main.go`
+  declares `version` inside a `const` block, and `-X` writes only to a
+  package-level `var`. Measured rather than reasoned — a build with
+  `-X main.version=9.9.9-PROOF` still reported `1.13.3`. The constant in
+  `cmd/rmp/main.go` has always been the real source of the version, and still is,
+  which is what `SPEC/VERSION.md` specifies. No binary changes behaviour, because
+  the flag was already inert; what is gone is a promise in the YAML that the next
+  reader would have trusted. The regression gate parses `main.go` with `go/ast`,
+  collects the package-level `const` names, and fails any `-X` naming one — first
+  asserting that `version` *is* a `const`, so flipping it to a `var` fails loudly
+  instead of quietly re-enabling the flag.
+- **Documented `golangci-lint` install command corrected.** It used the v1 module
+  path, which installs `v1.64.8` and cannot read this project's `version: "2"`
+  configuration, so anyone following the specification got a linter unable to lint
+  the repository. The path now carries the `/v2` suffix and the pinned version.
+- **Release artefact suffix notation corrected.** `SPEC/BUILD.md` wrote it as
+  `{goarch}{goarm}`, naming the ARM targets `linux-arm6` and `linux-arm7`, while
+  the workflow produces `linux-armv6` and `linux-armv7` — which is also what
+  `install.sh` asks for.
+
+### Internal
+
+- **The engine's Cypher clause surface is pinned per subcommand.** The
+  upgrade-validation method the project uses — a symbol diff plus a re-run of the
+  `GRAPH.md` acceptance criteria — is **structurally blind to a clause family being
+  added**: no symbol disappears, and no existing criterion names a clause that did
+  not previously exist. `SHOW` and `FOREACH` both entered that way.
+  `SPEC/GRAPH.md` gains residual risk 3 and mitigation 5, requiring the clause
+  surface to be re-verified and every named class pinned by a regression test
+  before an upgrade ships. New coverage: 24 cases across `TestClassify` and
+  `TestIsReadOnly`; 30 subtests in
+  `internal/commands/graph_clause_surface_test.go` pinning each subcommand's exact
+  guard-rail message; and 17 end-to-end tests in
+  `tests/test_48_graph_clause_surface.py` that assert outcomes rather than exit
+  codes — that a projection tail really projects, that a rejected `FOREACH` wrote
+  nothing, that an accepted `FOREACH` body ran on every matched row, and that a
+  rejected `CREATE INDEX` left the schema empty.
+- **A matcher bug caught before it shipped.** The first draft wrote `INDEXES?`,
+  which parses as `INDEXE` plus an optional `S` — matching `INDEXE` and `INDEXES`
+  but not the singular `SHOW INDEX`. It is now `INDEX(?:ES)?`.
+- **A stale rationale corrected.** The comment justifying the Groadmap-local DDL
+  regex claimed `cypher/ir.IsDDL` is "case- and whitespace-sensitive". The upgrade
+  falsified half of it: `IsDDL` now folds ASCII case and skips leading comments.
+  Only the whitespace claim survives, and every claim in the rewritten rationale
+  was verified against the pinned engine rather than read from release notes.
+- **Two specification gaps closed.** `gosec` was mandatory under `CLAUDE.md`
+  Rule 2 but documented nowhere, so the specification of the build system omitted
+  one of its own required gates; and the target count contradicted itself, with
+  `BUILD.md` listing nine Primary Platforms including `freebsd/amd64` while
+  `DEPLOY.md` listed eight and stated "8 total". `BUILD.md` matched reality — the
+  release workflow had been shipping `freebsd/amd64` all along — so `DEPLOY.md`
+  changed. `SPEC/DEPLOY.md` also gained a Diagnostic Output section tabulating the
+  five output helpers and ruling that no error path may bypass the error helper.
+- **`internal/cypherguard` keeps its leaf-dependency property**: standard library
+  plus the GoGraph `cypher` package only, so the CLI guard rail and the read-only
+  web endpoint cannot drift apart.
+
+### Known Issues
+
+Every item below was verified against the code at this tag by running it, not by
+carrying forward what a previous release recorded. Items that earlier entries
+listed and that are no longer true have been dropped rather than repeated; the
+historical entries themselves are left untouched, because they are the record of
+what was known at the time. In particular, the two SPEC-versus-code divergences
+recorded under `[1.3.0]` — the `ErrInvalidInput` exit-code mapping and the
+`audit stats` JSON keys — **are both resolved and are not carried forward**:
+`cmd/rmp/main.go` now maps `ErrInvalidInput` and `ErrRequired` to `ExitMisuse` (2)
+and `ErrValidation` and `ErrFieldTooLarge` to `ExitInvalidData` (6), matching
+`SPEC/ARCHITECTURE.md § Sentinel Error Catalogue`, and `SPEC/COMMANDS.md`
+documents exactly the five `audit stats` keys the binary emits.
+
+- **A stranded `snapshot.bak` in the graph directory stops every later checkpoint,
+  and the write still exits 0.** This is upstream GoGraph behaviour and the one
+  item here that can affect a user. The snapshot publish is a crash-atomic
+  three-step swap: archive the live snapshot to `snapshot.bak`, rename the staging
+  directory into place, then drop the backup. The pre-swap cleanup of a stale
+  backup is best-effort (`_ = fsys.RemoveAll(bak)`), so if the residue cannot be
+  removed — for example because of directory permissions — the archive rename then
+  fails against the non-empty `snapshot.bak` and the checkpoint returns an error.
+  Groadmap surfaces that error as `Warning: graph checkpoint failed: ...` on
+  **stderr** and returns exit code 0, which is required by
+  `SPEC/GRAPH.md` FR7: the commit is already durable, so a checkpoint failure MUST
+  NOT fail the write. The consequences are that automation checking only the exit
+  code or only stdout will not notice, and that the WAL is truncated only by a
+  successful checkpoint, so **it grows without bound** while the condition lasts.
+  No data is lost: the WAL is intact and recovery still works. It **self-heals** as
+  soon as the residue is cleared — remove `snapshot.bak` from
+  `~/.roadmaps/<roadmap>/graph/` and the next write checkpoints and truncates
+  normally. Watch stderr on `rmp graph create`, `update`, and `delete`.
+- **The graph read path builds an in-memory engine where `SPEC/GRAPH.md` specifies
+  a store-backed one.** `SPEC/GRAPH.md § Engine Construction and Lifecycle`
+  requires a persistent engine via `cypher.NewEngineWithStore`, stating that the
+  in-memory `NewEngine`, `NewEngineWithOptions`, and `NewEngineWithRegistry`
+  constructors are not used for persisted graphs. The write path
+  (`internal/commands/graph.go:840`) complies; the two read paths —
+  `internal/commands/graph.go:693` and `internal/web/data.go:652` — call
+  `cypher.NewEngine(res.Graph)`. **No user-visible difference has been
+  demonstrated**, and none is expected on the evidence available: both read paths
+  build the engine over a graph that `recovery.Open` has already loaded from the
+  on-disk snapshot and WAL, so a read still observes committed state, which the
+  end-to-end graph suites exercise across process exits. It is recorded as a
+  specification-conformance divergence, not as a data-correctness defect, and the
+  claim is deliberately limited to what the code supports. Tracked as `rmp` task
+  #149.
+- **The sprints web page renders plain count badges where `SPEC/WEB.md` requires
+  semantic ones.** The page's tab badges show counts without the status-derived
+  Tabler colour variant that `SPEC/WEB.md § Status, Priority, and Severity Badge
+  Colours` makes the single authoritative mapping. Presentation only: the counts
+  themselves are correct, and no data or `rmp` command output is affected. Tracked
+  as `rmp` task #127.
+- **`.gosec.yaml` documents three accepted finding classes while the code carries
+  six.** The file records G104, G201, and G304 with locations and justifications;
+  the sources also carry `#nosec` suppressions for **G204, G302, and G703**, which
+  are undocumented. The `security` gate is green and every suppression was
+  individually verified as safe when written, so this is a hygiene and auditability
+  gap rather than an unreviewed suppression: the record of *why* three classes are
+  accepted is missing, and nothing detects the drift. Internal; no user-facing
+  behaviour depends on it. Tracked as `rmp` task #141.
+- **Two knowledge-graph nodes share the key `README.md`.** `knowledge-model.md`
+  states that every node's `key` is globally unique across the graph, so that
+  `MATCH (n {key:'...'})` without a label is unambiguous. A `Doc` node and a `Spec`
+  node both carry the key `README.md`, so that query is ambiguous for this one
+  value. The model contradicts itself rather than merely being violated by the
+  data: it keys `Spec` nodes by bare file name and `Doc` nodes by repository-
+  relative path, and for `README.md` those two rules produce the same string. This
+  affects the project's own internal knowledge graph, not any user's roadmap data
+  and no `rmp` command output. Tracked as `rmp` task #155.
+
 ## [1.13.3] - 2026-07-14
 
 A correctness release. The embedded GoGraph knowledge-graph engine moves from
@@ -386,6 +854,7 @@ behaviour.
   AI-contract E2E suite (`tests/test_30_aihelp_contract.py`) to lock in the
   revised help text and contract invariants.
 
+[1.14.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.13.3...v1.14.0
 [1.13.3]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.13.2...v1.13.3
 [1.13.2]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.13.1...v1.13.2
 [1.13.1]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.13.0...v1.13.1
