@@ -237,6 +237,65 @@ func TestListTasks(t *testing.T) {
 	}
 }
 
+// TestListTasks_NilFilterAndCallerStructUntouched is the regression guard for two
+// defects in ListTasks: a nil filter dereferenced the pointer and crashed the
+// process, and a non-nil filter had its Limit rewritten in place, mutating memory
+// the caller owns (and racing when one filter value is shared by concurrent
+// readers).
+//
+// Both are asserted here, because both are contract-level: every field of
+// TaskListFilter is optional, so the struct itself is optional too, and a read must
+// not write to its argument.
+func TestListTasks_NilFilterAndCallerStructUntouched(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	for i := 0; i < 3; i++ {
+		task := &models.Task{
+			Priority:               i,
+			Severity:               i,
+			Status:                 models.StatusBacklog,
+			Title:                  "Harden the session store",
+			FunctionalRequirements: "Session tokens must be stored encrypted at rest",
+			TechnicalRequirements:  "Route every write through the encrypted store",
+			AcceptanceCriteria:     "No plaintext token reaches the database",
+			CreatedAt:              time.Now().Format(time.RFC3339),
+		}
+		if _, err := db.CreateTask(testContext(), task); err != nil {
+			t.Fatalf("seeding task %d: %v", i, err)
+		}
+	}
+
+	// A nil filter is "no filter": the default page, no panic.
+	tasks, err := db.ListTasks(testContext(), nil)
+	if err != nil {
+		t.Fatalf("a nil filter must be accepted: %v", err)
+	}
+	if len(tasks) != 3 {
+		t.Errorf("nil filter returned %d tasks, want 3", len(tasks))
+	}
+
+	// A supplied filter is read, never written: the zero Limit is clamped to the
+	// default internally and the caller's struct still reads 0 afterwards.
+	filter := &TaskListFilter{}
+	if _, err := db.ListTasks(testContext(), filter); err != nil {
+		t.Fatalf("listing with a zero-value filter: %v", err)
+	}
+	if filter.Limit != 0 {
+		t.Errorf("ListTasks rewrote the caller's filter: Limit = %d, want 0 (untouched)", filter.Limit)
+	}
+
+	// An over-large Limit is clamped internally, and again without a write-back.
+	oversized := &TaskListFilter{Limit: models.MaxTaskLimit + 1}
+	if _, err := db.ListTasks(testContext(), oversized); err != nil {
+		t.Fatalf("listing with an oversized limit: %v", err)
+	}
+	if oversized.Limit != models.MaxTaskLimit+1 {
+		t.Errorf("ListTasks rewrote the caller's filter: Limit = %d, want %d (untouched)",
+			oversized.Limit, models.MaxTaskLimit+1)
+	}
+}
+
 func TestUpdateTask(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()

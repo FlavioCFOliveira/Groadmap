@@ -1,4 +1,4 @@
-// Package commands — input handling shared by the comment subcommands.
+// Package commands — the comment subcommands, and the input handling they share.
 //
 // The four comment subcommands of the `task` family and the four of the `sprint`
 // family share one input contract (SPEC/COMMANDS.md § Comment Body Input Source
@@ -6,7 +6,11 @@
 // comment-type subset, and a `--body` that falls back to standard input. This
 // file holds the part of that contract which does not depend on which family is
 // being served, so both families share one implementation instead of carrying a
-// copy each.
+// copy each: the argument parsing, the standard-input fallback, the validation
+// dispatch and its ORDER, the transaction boundary, and the output shaping. What
+// is genuinely per-family — the accepted type set, the table, the audit
+// operation, the name the parent goes by — travels in a commentFamily value that
+// task_comments.go and sprint_comments.go each declare once.
 //
 // Two rules govern everything here and are the reason the body is handled by
 // hand rather than by the generic FlagParser:
@@ -24,12 +28,15 @@
 package commands
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
+	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
@@ -40,6 +47,11 @@ const (
 	commentBodyLong  = "--body"
 	commentBodyShort = "-b"
 )
+
+// commentEntity is the name the positional id of `comment-edit` and
+// `comment-remove` is reported under. Both subcommands take the COMMENT's own id
+// in both families, so unlike the parent's name this one is not per-family.
+const commentEntity = "comment"
 
 // commentTypeFlagDefs is the flag set the comment subcommands hand to the shared
 // flag parser: `--type` only.
@@ -227,6 +239,389 @@ func parseCommentTypeFlag(args []string) (string, bool, error) {
 func rejectUnknownFlags(args []string) error {
 	_, err := NewFlagParser(nil).Parse(args)
 	return err
+}
+
+// ==================== THE FOUR SUBCOMMAND BODIES ====================
+//
+// The `task` and `sprint` comment subcommands differ only in DATA: which type set
+// is accepted, which table the row belongs to, which audit operation is written,
+// and what the parent entity is called in a message. The steps they take — and
+// above all the ORDER of those steps, which SPEC/COMMANDS.md pins as behaviour and
+// not as style — are identical, so the steps exist once, here, and each family
+// supplies a commentFamily value (SPEC/COMMANDS.md § Sprint Comments: the sprint
+// subcommands "mirror the four task comment subcommands exactly").
+
+// commentFamily is the per-family half of a comment subcommand: everything the
+// four bodies below need in order to serve one entity, and nothing that is the
+// same for both.
+type commentFamily struct {
+	// parseType applies the family's OWN accepted set — the seven task values or
+	// the four sprint values — and produces the exit-6 refusal naming that set. It
+	// is what makes HYPOTHESIS, TEST and NOTE accepted values on a task comment and
+	// refusals on a sprint comment (SPEC/MODELS.md § Comment Type).
+	parseType func(string) (models.CommentType, error)
+
+	// parentExists reports utils.ErrNotFound when the parent entity is absent. Only
+	// the verdict is used, never the entity itself, so a family supplies the
+	// cheapest read that answers the question.
+	parentExists func(context.Context, *db.DB, int) error
+
+	// parentOf resolves a comment by its OWN id and returns the id of the entity it
+	// belongs to. Every mutation calls it first: it reports an unknown comment id
+	// before anything is written, and it supplies the parent id the audit entry
+	// names. The two comment id spaces are per table, so this is also what stops
+	// `sprint comment-edit 7` from reaching task_comments and vice versa.
+	parentOf func(context.Context, *db.DB, int) (int, error)
+
+	// insert, update and remove are the family's transactional writes. They take
+	// the caller's *sql.Tx, so the row and its audit entry commit together.
+	insert func(tx *sql.Tx, parentID int, commentType models.CommentType, body, createdAt string) (int, error)
+	update func(tx *sql.Tx, commentID int, change *db.CommentUpdate, updatedAt string) error
+	remove func(tx *sql.Tx, commentID int) error
+
+	// list returns the family's comment slice, oldest first, optionally filtered by
+	// type. The element type is erased because the two slices differ in nothing
+	// else and utils.PrintJSON takes any: the value would be boxed at the print
+	// call regardless, so erasing it here costs nothing and keeps one body.
+	list func(context.Context, *db.DB, int, *models.CommentType) (any, error)
+
+	// The three audit operations of the family (SPEC/DATABASE.md § audit Table).
+	opCreate models.AuditOperation
+	opUpdate models.AuditOperation
+	opDelete models.AuditOperation
+
+	// entityType is the audit entity every mutation is recorded against: TASK or
+	// SPRINT, always the PARENT's type — a comment is never an audit entity of its
+	// own (SPEC/DATA_FORMATS.md § Audit Entry).
+	entityType models.EntityType
+
+	// parentLabel names the parent in the messages `comment-add` and
+	// `comment-list` report: "task" / "sprint".
+	parentLabel string
+}
+
+// requireParent reports a missing parent as the exit-4 condition
+// SPEC/COMMANDS.md pins for the comment subcommands: "task 42 not found",
+// "sprint 7 not found".
+//
+// The parent readers word their own not-found message differently ("task 42",
+// "sprint 7"), so the verdict is re-worded here rather than reused. Any other
+// failure is passed through untouched, so a genuine database error stays a
+// database error (exit code 1) instead of being reported as a missing parent.
+func (f *commentFamily) requireParent(database *db.DB, parentID int) error {
+	ctx, cancel := db.WithQuickTimeout()
+	defer cancel()
+
+	if err := f.parentExists(ctx, database, parentID); err != nil {
+		if errors.Is(err, utils.ErrNotFound) {
+			return fmt.Errorf("%w: %s %d not found", utils.ErrNotFound, f.parentLabel, parentID)
+		}
+		return err
+	}
+	return nil
+}
+
+// logAudit writes the audit entry of one comment mutation. The entity is always
+// the PARENT — its type and its id — never the comment's own id and never a new
+// entity_type value invented for comments (SPEC/DATA_FORMATS.md § Audit Entry).
+func (f *commentFamily) logAudit(tx *sql.Tx, op models.AuditOperation, parentID int, now string) error {
+	return db.LogAuditTx(tx, op, f.entityType, parentID, now)
+}
+
+// commentAdd adds one comment to the entity named by the positional id.
+//
+// Usage:
+//
+//	rmp <family> comment-add -r <roadmap> <parent-id> --type <TYPE> [--body <text>]
+//
+// The validation order is the one SPEC/COMMANDS.md § Add Task Comment pins, and
+// which § Add Sprint Comment adopts unchanged with the sprint in place of the
+// task. The order is behaviour, not style: `--type` is checked for presence and
+// for value BEFORE the body is resolved, so a missing or invalid type never
+// leaves the command waiting on standard input for a body it is going to reject
+// anyway.
+//
+//  1. roadmap                       exit 3
+//  2. positional parent id          exit 2
+//  3. --type present                exit 2
+//  4. --type value, family's set    exit 6
+//  5. body from --body or stdin     exit 2
+//  6. parent exists                 exit 4
+//  7. body length / control chars   exit 6
+//  8. INSERT + the family's *_COMMENT_CREATE audit entry, one transaction
+//
+// Side effects: one row in the family's comment table and one audit entry against
+// the PARENT, committed together. Prints {"id": <new-comment-id>} on success.
+func commentAdd(f *commentFamily, args []string) error {
+	roadmapName, remaining, err := requireRoadmap(args)
+	if err != nil {
+		return err
+	}
+
+	parentID, rest, err := requireCommentPositionalID(remaining, f.parentLabel)
+	if err != nil {
+		return err
+	}
+
+	// Lexical only: the body is resolved at step 5, after the type verdict.
+	rest, body := extractCommentBody(rest)
+
+	typeRaw, typePresent, err := parseCommentTypeFlag(rest)
+	if err != nil {
+		return err
+	}
+	if !typePresent {
+		return fmt.Errorf("%w: --type", utils.ErrRequired)
+	}
+	commentType, err := f.parseType(typeRaw)
+	if err != nil {
+		return err
+	}
+
+	// On comment-add no other change is ever possible, so an absent --body always
+	// means "read standard input" (SPEC precedence rule 2).
+	raw, supplied, err := resolveCommentBody(body, true)
+	if err != nil {
+		return err
+	}
+	if !supplied {
+		return errNoCommentBody()
+	}
+
+	database, err := db.OpenExisting(roadmapName)
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+
+	if err := f.requireParent(database, parentID); err != nil {
+		return err
+	}
+
+	// The body as supplied, not the trimmed form: strings.TrimSpace strips VT and
+	// FF, both forbidden, so trimming before this call would drop them instead of
+	// rejecting them. The value to persist is the one this returns.
+	stored, err := models.ValidateCommentBody(raw)
+	if err != nil {
+		return err
+	}
+
+	// One timestamp for the row and its audit entry, so the two agree exactly.
+	now := utils.NowISO8601()
+
+	var commentID int
+	if err := database.WithTransaction(func(tx *sql.Tx) error {
+		id, insertErr := f.insert(tx, parentID, commentType, stored, now)
+		if insertErr != nil {
+			return insertErr
+		}
+		commentID = id
+		return f.logAudit(tx, f.opCreate, parentID, now)
+	}); err != nil {
+		return err
+	}
+
+	return utils.PrintJSON(map[string]int{"id": commentID})
+}
+
+// commentList returns one entity's comments, oldest first.
+//
+// Usage:
+//
+//	rmp <family> comment-list -r <roadmap> <parent-id> [--type <TYPE>]
+//
+// The order is the story the log tells, so it is created_at ascending with the
+// comment id as the tie-breaker (SPEC/COMMANDS.md § List Task Comments, § List
+// Sprint Comments). The result set is unbounded: there is no --limit, no --desc
+// and no pagination.
+//
+// `--type` filters; its value MUST belong to the family's own set, so a value
+// valid only on the other entity is rejected with exit code 6 rather than
+// silently matching nothing. Writes no audit entry: listing is a read.
+func commentList(f *commentFamily, args []string) error {
+	roadmapName, remaining, err := requireRoadmap(args)
+	if err != nil {
+		return err
+	}
+
+	parentID, rest, err := requireCommentPositionalID(remaining, f.parentLabel)
+	if err != nil {
+		return err
+	}
+
+	typeRaw, typePresent, err := parseCommentTypeFlag(rest)
+	if err != nil {
+		return err
+	}
+	var filter *models.CommentType
+	if typePresent {
+		commentType, parseErr := f.parseType(typeRaw)
+		if parseErr != nil {
+			return parseErr
+		}
+		filter = &commentType
+	}
+
+	database, err := db.OpenExisting(roadmapName)
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+
+	if err := f.requireParent(database, parentID); err != nil {
+		return err
+	}
+
+	ctx, cancel := db.WithDefaultTimeout()
+	defer cancel()
+
+	comments, err := f.list(ctx, database, parentID, filter)
+	if err != nil {
+		return err
+	}
+
+	// An empty log is an empty array, never null: the read layer returns an empty
+	// slice for an entity with nothing recorded yet.
+	return utils.PrintJSON(comments)
+}
+
+// commentEdit changes the type and/or the body of one existing comment.
+//
+// Usage:
+//
+//	rmp <family> comment-edit -r <roadmap> <comment-id> [--type <TYPE>] [--body <text>]
+//
+// The positional argument is the COMMENT's own id, not the id of the entity it
+// belongs to, and the two id spaces are independent: an id that exists in the
+// other family's table is a not-found condition here.
+//
+// At least one change is required, so unlike `task edit` this command does not
+// succeed as a no-op. A change is requested by a `--type` value, by a `--body`
+// value, or by a body arriving on standard input — which is why the flagless form
+// `comment-edit <comment-id> < revised.txt` is a valid edit and the decision is
+// made only after standard input has been resolved. Standard input is read ONLY
+// when `--type` is absent as well, so a type-only edit never waits for input.
+//
+// The edit replaces the body in place and stamps updated_at; the previous text is
+// not retained anywhere. Produces no output on success.
+func commentEdit(f *commentFamily, args []string) error {
+	roadmapName, remaining, err := requireRoadmap(args)
+	if err != nil {
+		return err
+	}
+
+	commentID, rest, err := requireCommentPositionalID(remaining, commentEntity)
+	if err != nil {
+		return err
+	}
+
+	rest, body := extractCommentBody(rest)
+
+	typeRaw, typePresent, err := parseCommentTypeFlag(rest)
+	if err != nil {
+		return err
+	}
+	var newType *models.CommentType
+	if typePresent {
+		// Before standard input is considered, so an invalid type cannot leave the
+		// command blocked on a terminal.
+		commentType, parseErr := f.parseType(typeRaw)
+		if parseErr != nil {
+			return parseErr
+		}
+		newType = &commentType
+	}
+
+	raw, supplied, err := resolveCommentBody(body, !typePresent)
+	if err != nil {
+		return err
+	}
+	if !supplied && newType == nil {
+		return errNoCommentChange()
+	}
+
+	database, err := db.OpenExisting(roadmapName)
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+
+	ctx, cancel := db.WithQuickTimeout()
+	defer cancel()
+
+	// Resolving the comment reports a missing id before any write and supplies the
+	// parent id the audit entry is written against.
+	parentID, err := f.parentOf(ctx, database, commentID)
+	if err != nil {
+		return err
+	}
+
+	var newBody *string
+	if supplied {
+		stored, valErr := models.ValidateCommentBody(raw)
+		if valErr != nil {
+			return valErr
+		}
+		newBody = &stored
+	}
+
+	now := utils.NowISO8601()
+	return database.WithTransaction(func(tx *sql.Tx) error {
+		if updErr := f.update(tx, commentID, &db.CommentUpdate{Type: newType, Body: newBody}, now); updErr != nil {
+			return updErr
+		}
+		return f.logAudit(tx, f.opUpdate, parentID, now)
+	})
+}
+
+// commentRemove deletes one comment.
+//
+// Usage:
+//
+//	rmp <family> comment-remove -r <roadmap> <comment-id>
+//
+// The positional argument is the COMMENT's own id. Exactly one id is accepted: no
+// comma-separated list, so the batch fail-fast rules of `task remove` do not
+// apply here.
+//
+// The row is removed outright — no soft delete, no recovery — but the audit entry
+// outlives it, so the parent's history still records that a comment existed and
+// was removed. Produces no output on success.
+func commentRemove(f *commentFamily, args []string) error {
+	roadmapName, remaining, err := requireRoadmap(args)
+	if err != nil {
+		return err
+	}
+
+	commentID, rest, err := requireCommentPositionalID(remaining, commentEntity)
+	if err != nil {
+		return err
+	}
+	if err := rejectUnknownFlags(rest); err != nil {
+		return err
+	}
+
+	database, err := db.OpenExisting(roadmapName)
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+
+	ctx, cancel := db.WithQuickTimeout()
+	defer cancel()
+
+	parentID, err := f.parentOf(ctx, database, commentID)
+	if err != nil {
+		return err
+	}
+
+	now := utils.NowISO8601()
+	return database.WithTransaction(func(tx *sql.Tx) error {
+		if delErr := f.remove(tx, commentID); delErr != nil {
+			return delErr
+		}
+		return f.logAudit(tx, f.opDelete, parentID, now)
+	})
 }
 
 // commentTypeFlag is the registry declaration of `-y, --type` on a comment

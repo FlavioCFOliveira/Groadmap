@@ -188,15 +188,28 @@ type TaskListFilter struct {
 
 // ListTasks retrieves tasks with optional filters.
 // Filters: status, minPriority, minSeverity, taskType, specialists, createdSince, createdUntil, sort, limit.
+//
+// A nil filter means "no filter at all" and is answered with the default page, as
+// in GetAuditEntries: every field of TaskListFilter is optional, so the whole
+// struct is too, and a nil pointer must not crash a read.
+//
+// The clamping is applied to a LOCAL COPY, so the caller's struct is never
+// mutated. That matters beyond tidiness: one filter value shared by concurrent
+// readers would otherwise be written by each of them, which is a data race on
+// caller memory rather than an internal detail.
 func (db *DB) ListTasks(ctx context.Context, filter *TaskListFilter) ([]models.Task, error) {
-	if filter.Limit < 1 {
-		filter.Limit = models.DefaultTaskLimit
+	effective := TaskListFilter{}
+	if filter != nil {
+		effective = *filter
 	}
-	if filter.Limit > models.MaxTaskLimit {
-		filter.Limit = models.MaxTaskLimit
+	if effective.Limit < 1 {
+		effective.Limit = models.DefaultTaskLimit
+	}
+	if effective.Limit > models.MaxTaskLimit {
+		effective.Limit = models.MaxTaskLimit
 	}
 
-	query, args := buildListTasksQuery(filter)
+	query, args := buildListTasksQuery(&effective)
 
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {

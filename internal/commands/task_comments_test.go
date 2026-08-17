@@ -21,10 +21,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"io"
 	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -77,35 +74,6 @@ func setupCommentRoadmap(t *testing.T, name string) *db.DB {
 	return database
 }
 
-// withStdin points os.Stdin at a real file holding content for the duration of
-// fn and returns whatever was left unread afterwards. The leftover is the
-// evidence for the precedence rules: a command that must NOT read standard input
-// leaves the content intact, and one that reads it to EOF leaves nothing.
-func withStdin(t *testing.T, content string, fn func()) string {
-	t.Helper()
-
-	path := filepath.Join(t.TempDir(), "stdin")
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatalf("writing the stdin fixture: %v", err)
-	}
-	f, err := os.Open(path) // #nosec G304 -- path is this test's own TempDir file
-	if err != nil {
-		t.Fatalf("opening the stdin fixture: %v", err)
-	}
-	defer func() { _ = f.Close() }()
-
-	restore := os.Stdin
-	os.Stdin = f
-	fn()
-	os.Stdin = restore
-
-	leftover, err := io.ReadAll(f)
-	if err != nil {
-		t.Fatalf("reading back the stdin fixture: %v", err)
-	}
-	return string(leftover)
-}
-
 // listComments reads a task's comments straight from the database, so an
 // assertion about what was stored never depends on the command that prints them.
 func listComments(t *testing.T, database *db.DB, taskID int) []models.TaskComment {
@@ -129,23 +97,13 @@ func getComment(t *testing.T, database *db.DB, id int) *models.TaskComment {
 	return comment
 }
 
-// countAudit counts the audit rows for one operation against one entity, which is
-// how every audit assertion in this file is phrased: the operation, the entity
-// TYPE, and the entity ID must all match the parent task.
-func countAudit(t *testing.T, database *db.DB, op models.AuditOperation, entityID int) int {
+// countAudit counts the audit rows for one comment operation against one task. It
+// fixes the entity type at TASK, which is the invariant this family asserts: every
+// task-comment operation is recorded against the parent TASK and never against a
+// sprint (SPEC/DATA_FORMATS.md § Audit Entry).
+func countAudit(t *testing.T, database *db.DB, op models.AuditOperation, taskID int) int {
 	t.Helper()
-
-	operation := string(op)
-	entityType := string(models.EntityTask)
-	entries, err := database.GetAuditEntries(context.Background(), &db.AuditFilter{
-		Operation:  &operation,
-		EntityType: &entityType,
-		EntityID:   &entityID,
-	})
-	if err != nil {
-		t.Fatalf("querying %s audit entries: %v", op, err)
-	}
-	return len(entries)
+	return countCommentAudit(t, database, op, models.EntityTask, taskID)
 }
 
 // addComment is the shorthand for seeding a comment through the command under
@@ -164,11 +122,6 @@ func addComment(t *testing.T, roadmap string, taskID int, commentType, body stri
 	if !strings.Contains(out, `"id"`) {
 		t.Fatalf("comment-add printed no id: %q", out)
 	}
-}
-
-// itoa keeps the argument lists readable without pulling strconv into every call.
-func itoa(n int) string {
-	return strconv.Itoa(n)
 }
 
 // ---------------------------------------------------------------------------
@@ -1027,8 +980,11 @@ func TestTaskCommentEdit_UnknownCommentAndIDSpaces(t *testing.T) {
 }
 
 // seedSprintComment creates one sprint and one comment on it, returning both ids.
-// It writes through the same transactional shape the sprint family will use, so
-// the fixture cannot drift from the production write path.
+// It writes through the same transactional shape the sprint family's own handlers
+// use — the insert and its SPRINT_COMMENT_CREATE audit entry in one transaction —
+// so this fixture cannot drift from the production write path. It deliberately does
+// not call sprintCommentAdd: a task-family test must not depend on the sprint
+// family's command surface to state a fact about task_comments.
 func seedSprintComment(t *testing.T, database *db.DB) (sprintID, commentID int) {
 	t.Helper()
 

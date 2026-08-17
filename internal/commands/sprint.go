@@ -1,6 +1,10 @@
 package commands
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/FlavioCFOliveira/Groadmap/internal/models"
+)
 
 // HandleSprint handles sprint commands via the central registry. See
 // HandleTask for the rationale; the dispatch lives in
@@ -10,11 +14,27 @@ func HandleSprint(args []string) error {
 }
 
 // printSprintHelp prints sprint command help.
+//
+// One "Valid comment types" block covers -y, --type, and one is enough: unlike the
+// task family, where the same spelling also carries a TaskType on list / create /
+// edit, the only sprint subcommands that accept -y, --type are the four comment-*
+// ones, and the flag always means a comment type there (SPEC/COMMANDS.md § Sprint
+// Comments; SPEC/HELP.md § Comment subcommand help specifics item 1). The list is
+// rendered from models.ValidSprintCommentTypes rather than typed out, so it cannot
+// go stale and cannot accidentally show the seven task values.
 func printSprintHelp() {
-	fmt.Print(`Usage: rmp sprint [command] [arguments] [options]
+	fmt.Printf(`Usage: rmp sprint [command] [arguments] [options]
 
 Valid sprint status values (for --status filter):
   PENDING (never started), OPEN (active), CLOSED
+
+Valid comment types (for -y, --type on 'comment-add', 'comment-list' and
+'comment-edit'):
+  %s
+  This is the only meaning -y, --type has in the sprint family. The set is
+  deliberately smaller than the task one: the task-only values HYPOTHESIS,
+  TEST and NOTE are rejected here (exit 6), because a sprint records how the
+  sprint went and not the execution diary of its individual tasks.
 
 Sprint lifecycle:
   create -> start (PENDING->OPEN) -> close (OPEN->CLOSED) -> reopen (CLOSED->OPEN)
@@ -48,6 +68,10 @@ Commands:
   swap <sprint> <task1> <task2>            Swap positions of two tasks
   top <sprint> <task>                      Move task to position 0
   bottom, btm <sprint> <task>              Move task to last position
+  comment-add, c-add <sprint-id>           Add one typed comment to a sprint's log
+  comment-list, c-ls <sprint-id>           List a sprint's comments, oldest first
+  comment-edit, c-edit <comment-id>        Change the type and/or body of one comment
+  comment-remove, c-rm <comment-id>        Delete one comment (irreversible)
 
 Options (shared):
   -r, --roadmap <name>                     REQUIRED. Target roadmap.
@@ -82,6 +106,32 @@ Options (tasks / open-tasks):
 Options (close):
   --force                                  Close even if SPRINT/DOING/TESTING tasks remain
 
+Options (comment-add / comment-list / comment-edit):
+  -y, --type <TYPE>                        Comment type (see the comment-type list
+                                           above). REQUIRED on comment-add, optional
+                                           filter on comment-list, optional new value
+                                           on comment-edit.
+  -b, --body <text>                        Comment text (max 4096 chars). On comment-add
+                                           and comment-edit the body may instead arrive
+                                           on standard input, read to EOF, when this flag
+                                           is absent — on comment-edit only if --type is
+                                           absent too, so a type-only edit never waits
+                                           for input. Supplying neither source is an
+                                           error (exit 2).
+
+Comment rules (per SPEC/COMMANDS.md § Sprint Comments):
+  - A sprint comment records the progression of the sprint: findings, decisions,
+    progress, and the reason behind a change to the sprint's own definition. Work
+    carried out inside one task belongs in that task's comments.
+  - Comments are accepted in every status, including CLOSED, and no comment
+    changes or gates a sprint's status.
+  - comment-add and comment-list take the SPRINT's id; comment-edit and
+    comment-remove take the COMMENT's own id. Sprint and task comment ids are
+    separate sequences, so 'sprint comment-edit 7' and 'task comment-edit 7'
+    address two unrelated comments.
+  - comment-edit requires at least one change (--type, --body, or a body on
+    standard input) and is rejected with exit 2 when none is requested.
+
 Output (stdout JSON):
   list                                     Array of sprint objects.
   get                                      Single sprint object.
@@ -99,17 +149,24 @@ Output (stdout JSON):
   update, remove, start, close, reopen     Empty (exit 0 on success).
   add-tasks, remove-tasks, move-tasks,
   reorder, move-to, swap, top, bottom      Empty (exit 0 on success).
+  comment-add                              {"id": <int>}
+  comment-list                             Array of comment objects.
+  comment-edit, comment-remove             Empty (exit 0 on success).
   Sprint object keys: id, status, description, created_at, started_at, closed_at,
   max_tasks, tasks (array of int), task_count.
+  Comment object keys: id, sprint_id, type, body, created_at, updated_at
+  (updated_at is null until the comment is first edited).
 
 Exit codes:
   0   Success
-  2   Misuse (missing required arg, bad syntax)
+  1   Database failure
+  2   Misuse (missing required arg, bad syntax, no comment body supplied)
   3   No roadmap specified (-r missing)
-  4   Sprint not found
+  4   Sprint or comment not found
   5   --order value already used by another sprint (create / update)
   6   Validation error (bad enum, --max-tasks outside 1-10000, close-without-force,
-       attempting to open while another sprint is OPEN, --order on a CLOSED sprint, etc.)
+       attempting to open while another sprint is OPEN, --order on a CLOSED sprint,
+       oversized or control-character comment body, etc.)
 
 Examples:
   rmp sprint list -r myproject
@@ -122,5 +179,10 @@ Examples:
   rmp sprint move-to -r myproject 1 5 0
   rmp sprint swap -r myproject 1 3 5
   rmp sprint close -r myproject 1 --force
-`)
+  rmp sprint comment-add -r myproject 3 --type DECISION --body "Dropped the second migration from this sprint."
+  rmp sprint comment-add -r myproject 3 --type PROGRESS < progress.txt
+  rmp sprint comment-list -r myproject 3 --type DECISION
+  rmp sprint comment-edit -r myproject 4 --type UPDATE
+  rmp sprint comment-remove -r myproject 4
+`, models.FormatCommentTypes(models.ValidSprintCommentTypes))
 }
