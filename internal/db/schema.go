@@ -7,7 +7,7 @@ import (
 )
 
 // SchemaVersion is the current database schema version.
-const SchemaVersion = "1.8.0"
+const SchemaVersion = "1.9.0"
 
 // CreateSchema creates all database tables and indexes.
 // This implements the DDL from SPEC/DATABASE.md.
@@ -138,8 +138,49 @@ CREATE INDEX IF NOT EXISTS idx_task_deps_task_id ON task_dependencies(task_id);
 CREATE INDEX IF NOT EXISTS idx_task_deps_depends_on ON task_dependencies(depends_on_task_id);
 `
 
-	// Execute all DDL statements
-	statements := []string{tasksDDL, sprintsDDL, sprintTasksDDL, auditDDL, metadataDDL, taskDependenciesDDL}
+	// Task comments table - the durable, typed record of the work carried out
+	// within the scope of a task (SPEC/DATABASE.md § task_comments Table).
+	taskCommentsDDL := `
+CREATE TABLE IF NOT EXISTS task_comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL,               -- Owning task
+    type TEXT NOT NULL CHECK(type IN ('FINDING', 'HYPOTHESIS', 'TEST', 'DECISION', 'PROGRESS', 'UPDATE', 'NOTE')),
+    body TEXT NOT NULL CHECK(length(body) <= 4096),  -- Comment text, max 4096 chars
+    created_at TEXT NOT NULL,               -- ISO 8601 UTC, set when the comment is created
+    updated_at TEXT,                        -- ISO 8601 UTC, NULL until the comment is edited
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);
+
+-- Composite index for comment listing
+-- Covers: the parent lookup and the chronological listing order in one index
+CREATE INDEX IF NOT EXISTS idx_task_comments_task_created ON task_comments(task_id, created_at ASC);
+`
+
+	// Sprint comments table - the progression record of a sprint. The type CHECK
+	// enumerates four values, not seven: HYPOTHESIS, TEST and NOTE are task-only
+	// (SPEC/DATABASE.md § sprint_comments Table).
+	sprintCommentsDDL := `
+CREATE TABLE IF NOT EXISTS sprint_comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sprint_id INTEGER NOT NULL,             -- Owning sprint
+    type TEXT NOT NULL CHECK(type IN ('FINDING', 'DECISION', 'PROGRESS', 'UPDATE')),
+    body TEXT NOT NULL CHECK(length(body) <= 4096),  -- Comment text, max 4096 chars
+    created_at TEXT NOT NULL,               -- ISO 8601 UTC, set when the comment is created
+    updated_at TEXT,                        -- ISO 8601 UTC, NULL until the comment is edited
+    FOREIGN KEY (sprint_id) REFERENCES sprints(id) ON DELETE CASCADE
+);
+
+-- Composite index for comment listing
+-- Covers: the parent lookup and the chronological listing order in one index
+CREATE INDEX IF NOT EXISTS idx_sprint_comments_sprint_created ON sprint_comments(sprint_id, created_at ASC);
+`
+
+	// Execute all DDL statements. The comment tables come last: each carries a
+	// foreign key onto a table declared above it.
+	statements := []string{
+		tasksDDL, sprintsDDL, sprintTasksDDL, auditDDL, metadataDDL, taskDependenciesDDL,
+		taskCommentsDDL, sprintCommentsDDL,
+	}
 	for _, ddl := range statements {
 		if _, err := db.Exec(ddl); err != nil {
 			return fmt.Errorf("executing schema DDL: %w", err)

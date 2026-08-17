@@ -160,7 +160,7 @@ CREATE TABLE IF NOT EXISTS task_dependencies (
 //  1. Builds a roadmap whose on-disk database is at schema v1.6.0 (sprints table
 //     lacks `title` and `order_index`).
 //  2. Calls migrateRoadmapsAtStartup() — the function introduced in server.go.
-//  3. Asserts the schema_version is now the current SchemaVersion (1.8.0).
+//  3. Asserts the schema_version is now the current db.SchemaVersion.
 //  4. Asserts both previously-missing columns exist in the sprints table.
 func TestMigrateRoadmapsAtStartup_StaleDBBecomesCurrentSchema(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())

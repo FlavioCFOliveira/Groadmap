@@ -61,6 +61,11 @@ var migrations = []Migration{
 		Name:    "Add order_index column and unique index to sprints table",
 		Apply:   migrateV1_7_0_toV1_8_0,
 	},
+	{
+		Version: "1.9.0",
+		Name:    "Add task_comments and sprint_comments tables for durable comment records",
+		Apply:   migrateV1_8_0_toV1_9_0,
+	},
 }
 
 // RunMigrations executes all pending migrations in a transaction.
@@ -392,6 +397,67 @@ func migrateV1_7_0_toV1_8_0(tx *sql.Tx) error {
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_sprints_order ON sprints(order_index)`,
 	); err != nil {
 		return fmt.Errorf("creating idx_sprints_order: %w", err)
+	}
+
+	return nil
+}
+
+// migrateV1_8_0_toV1_9_0 creates the two comment tables, task_comments and
+// sprint_comments, and the one index each of them needs (SPEC/VERSION.md
+// § Migration 1.8.0 → 1.9.0).
+//
+// The migration adds no column to any existing table, so the columnExists guard
+// used by every ALTER TABLE ADD COLUMN migration does not apply here: every
+// statement carries IF NOT EXISTS and is therefore inherently idempotent.
+//
+// There is no backfill. Comments are new data with no pre-existing source, so an
+// already-populated database migrates to two empty tables and every existing
+// task and sprint simply has no comments until one is written.
+//
+// The DDL is deliberately a copy of the statements in CreateSchema rather than a
+// shared constant: a migration is a historical record of the shape the schema had
+// at one version, so it must not follow a later change to the fresh-schema
+// definition. TestMigratedAndFreshCommentTablesAreIdentical asserts the two are
+// identical today, which is what SPEC/VERSION.md § Migration 1.8.0 → 1.9.0
+// guarantees; a future change to the comment tables belongs in a new migration,
+// not in this one.
+func migrateV1_8_0_toV1_9_0(tx *sql.Tx) error {
+	if _, err := tx.Exec(`
+CREATE TABLE IF NOT EXISTS task_comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL,               -- Owning task
+    type TEXT NOT NULL CHECK(type IN ('FINDING', 'HYPOTHESIS', 'TEST', 'DECISION', 'PROGRESS', 'UPDATE', 'NOTE')),
+    body TEXT NOT NULL CHECK(length(body) <= 4096),  -- Comment text, max 4096 chars
+    created_at TEXT NOT NULL,               -- ISO 8601 UTC, set when the comment is created
+    updated_at TEXT,                        -- ISO 8601 UTC, NULL until the comment is edited
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+)`); err != nil {
+		return fmt.Errorf("creating task_comments table: %w", err)
+	}
+
+	if _, err := tx.Exec(
+		`CREATE INDEX IF NOT EXISTS idx_task_comments_task_created ON task_comments(task_id, created_at ASC)`,
+	); err != nil {
+		return fmt.Errorf("creating idx_task_comments_task_created: %w", err)
+	}
+
+	if _, err := tx.Exec(`
+CREATE TABLE IF NOT EXISTS sprint_comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sprint_id INTEGER NOT NULL,             -- Owning sprint
+    type TEXT NOT NULL CHECK(type IN ('FINDING', 'DECISION', 'PROGRESS', 'UPDATE')),
+    body TEXT NOT NULL CHECK(length(body) <= 4096),  -- Comment text, max 4096 chars
+    created_at TEXT NOT NULL,               -- ISO 8601 UTC, set when the comment is created
+    updated_at TEXT,                        -- ISO 8601 UTC, NULL until the comment is edited
+    FOREIGN KEY (sprint_id) REFERENCES sprints(id) ON DELETE CASCADE
+)`); err != nil {
+		return fmt.Errorf("creating sprint_comments table: %w", err)
+	}
+
+	if _, err := tx.Exec(
+		`CREATE INDEX IF NOT EXISTS idx_sprint_comments_sprint_created ON sprint_comments(sprint_id, created_at ASC)`,
+	); err != nil {
+		return fmt.Errorf("creating idx_sprint_comments_sprint_created: %w", err)
 	}
 
 	return nil

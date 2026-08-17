@@ -21,6 +21,8 @@ var specComposite = []struct {
 	{"idx_tasks_priority_created", "tasks"},
 	{"idx_sprint_tasks_lookup", "sprint_tasks"},
 	{"idx_audit_date", "audit"},
+	{"idx_task_comments_task_created", "task_comments"},
+	{"idx_sprint_comments_sprint_created", "sprint_comments"},
 }
 
 // TestCompositeIndexesExistInProductionSchema asserts that every composite
