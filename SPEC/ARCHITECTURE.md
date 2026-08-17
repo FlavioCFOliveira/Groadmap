@@ -118,6 +118,7 @@ Groadmap/
 │   │   ├── roadmap.go     # Roadmap subcommands
 │   │   ├── task.go        # Task subcommands
 │   │   ├── sprint.go      # Sprint subcommands
+│   │   ├── comment.go     # Comment subcommands of the task and sprint families
 │   │   ├── graph.go       # Graph subcommands (GoGraph integration)
 │   │   └── web.go         # web command (starts the embedded HTTP server)
 │   ├── web/               # Embedded read-only HTTP server (net/http)
@@ -134,6 +135,7 @@ Groadmap/
 │   ├── models/
 │   │   ├── task.go        # Task structs, enums
 │   │   ├── sprint.go      # Sprint structs, enums
+│   │   ├── comment.go     # TaskComment and SprintComment structs, CommentType enum
 │   │   ├── roadmap.go     # Roadmap structures
 │   │   ├── audit.go       # Audit log structures
 │   │   └── consts.go      # Constants (limits, defaults)

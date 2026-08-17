@@ -200,7 +200,9 @@ help text must match the command contract in `COMMANDS.md`.
 | Global | `rmp --ai-help` / `rmp ai-help` | `COMMANDS.md § AI Help` |
 | Roadmap | `rmp roadmap [list \| create \| remove]` | `COMMANDS.md § Roadmap Management` |
 | Task | `rmp task [list \| create \| get \| next \| edit \| remove \| stat \| reopen \| prio \| sev \| assign \| unassign \| subtasks \| add-dep \| remove-dep \| blockers \| blocking]` | `COMMANDS.md § Task Management` |
+| Task | `rmp task [comment-add \| comment-list \| comment-edit \| comment-remove]` | `COMMANDS.md § Task Comments` |
 | Sprint | `rmp sprint [list \| create \| get \| show \| update \| remove]` | `COMMANDS.md § Sprint Management` |
+| Sprint | `rmp sprint [comment-add \| comment-list \| comment-edit \| comment-remove]` | `COMMANDS.md § Sprint Comments` |
 | Sprint | `rmp sprint [start \| close \| reopen]` | `COMMANDS.md § Sprint Lifecycle` |
 | Sprint | `rmp sprint [tasks \| open-tasks \| stats]` | `COMMANDS.md § Sprint Management` |
 | Sprint | `rmp sprint [add-tasks \| remove-tasks \| move-tasks]` | `COMMANDS.md § Sprint Task Assignment` |
@@ -290,6 +292,53 @@ machine-readable AI Agent Contract (`rmp --ai-help`) MUST document them:
    `description` string. See `COMMANDS.md § Create Sprint` and
    `COMMANDS.md § Update Sprint`.
 
+### Comment subcommand help specifics
+
+The eight comment subcommands — `comment-add`, `comment-list`, `comment-edit`,
+and `comment-remove`, under both `task` and `sprint` — follow the same structure
+template as every other subcommand but MUST additionally make three behaviours
+explicit, because a reader cannot infer them from the generic template:
+
+1. **The valid type set differs per family, and `--type` already means something
+   else in the `task` family.** The `-y, --type` flag has the same name in both
+   families and a different valid set in each. Each subcommand help MUST list the
+   values its own family accepts: the seven task values (`FINDING`,
+   `HYPOTHESIS`, `TEST`, `DECISION`, `PROGRESS`, `UPDATE`, `NOTE`) in the `task`
+   family, the four sprint values (`FINDING`, `DECISION`, `PROGRESS`, `UPDATE`)
+   in the `sprint` family. It MUST NOT show the task set on a sprint subcommand.
+
+   In the `task` family, `-y, --type` is also the flag that carries the ten
+   `TaskType` values on `task list`, `task create`, and `task edit`. The two
+   enums therefore share one flag spelling inside one family, so the family help
+   MUST carry two distinct "Valid values" blocks, each naming the subcommands its
+   block governs — one for the task types accepted by `list`, `create`, and
+   `edit`, one for the comment types accepted by the four comment subcommands —
+   and MUST NOT merge them into a single list of seventeen values. The `sprint`
+   family help carries one comment-type block, `--type` having no other meaning
+   there.
+
+   The same separation MUST hold in the machine-readable AI Agent Contract
+   (`rmp --ai-help`), where the two comment-type sets are two enum keys,
+   `TaskCommentType` and `SprintCommentType`: the enum an agent reaches from a
+   `sprint` comment subcommand's `--type` flag carries the four sprint values
+   only, and the enum reached from a `task` comment subcommand's `--type` flag
+   carries the seven task values, so the two sets are never conflated into a
+   single seven-value enum shared by both families, and neither is conflated with
+   `TaskType`. See `MODELS.md § Comment Type` and
+   `DATA_FORMATS.md § enums map entry`.
+2. **Body input.** State, on `comment-add` and `comment-edit`, that the comment
+   body comes from `-b, --body` or, when that flag is absent, from standard input
+   read to EOF, and that supplying neither is an error (exit code 2). On
+   `comment-edit`, state additionally that standard input is read only when
+   `--type` is absent as well, so a type-only edit does not wait for input. See
+   `COMMANDS.md § Comment Body Input Source and Precedence`.
+3. **Which id the command takes.** State, on `comment-edit` and
+   `comment-remove`, that the positional argument is the comment's own id and not
+   the id of the task or sprint it belongs to, and that task comment ids and
+   sprint comment ids are separate sequences. `comment-add` and `comment-list`
+   take the parent's id instead, and their help MUST name the argument
+   accordingly (`<task-id>` / `<sprint-id>`).
+
 ### Graph family help specifics
 
 The `graph` family help and each graph subcommand help follow the same
@@ -299,8 +348,9 @@ from the generic template:
 
 1. **Query input.** State that the Cypher query comes from the `--query`
    flag or, when the flag is absent, from standard input, and that
-   supplying neither is an error (exit code 2). This is the only command
-   in the CLI that reads standard input. See
+   supplying neither is an error (exit code 2). The `graph` subcommands and
+   the comment subcommands of the `task` and `sprint` families are the only
+   commands in the CLI that read standard input. See
    `GRAPH.md § Cypher Input Source and Precedence`.
 2. **Guard rail.** State, per subcommand, which Cypher operation class is
    accepted and that a mismatching query is rejected with exit code 6

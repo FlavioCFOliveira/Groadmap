@@ -6,9 +6,9 @@
 
 **JSON output is reserved for query operations and record creation.**
 
-- **Query operations (JSON)**: `list`, `ls`, `get`, `next`, `tasks`, `stats`, `show`, `history`, `hist`.
+- **Query operations (JSON)**: `list`, `ls`, `get`, `next`, `tasks`, `stats`, `show`, `history`, `hist`, `comment-list`, `c-ls`.
 - **Server startup (JSON)**: `web` prints a single JSON object naming the served URL on successful startup (e.g. `{"url": "http://127.0.0.1:8787"}`), then keeps running; see `COMMANDS.md § Web Interface`. While running, the server returns HTTP responses (HTML pages and the JSON graph data endpoint), which are not command stdout output.
-- **Creation operations (JSON)**: `create`, `new`. These commands return a JSON object containing the ID of the newly created record (e.g., `{"id": 42}`).
+- **Creation operations (JSON)**: `create`, `new`, `comment-add`, `c-add`. These commands return a JSON object containing the ID of the newly created record (e.g., `{"id": 42}`).
 - **Other database modifications (No output)**: Commands that update, delete, or change the state of entities (status, priority, etc.) respond with **no content** on success, signaling completion via exit code `0`.
 - **Help commands (Plain text)**: When no command is provided, or when using `-h` and `--help` flags, the application displays information in **plain text**, following traditional CLI application formats (not JSON).
 
@@ -19,23 +19,31 @@
 
 ### Input
 
-**Application inputs are via CLI parameters. The single exception is the
-`graph` command, which also accepts a Cypher query on standard input.**
+**Application inputs are via CLI parameters. Exactly two flag values may also
+arrive on standard input: the Cypher query of the `graph` subcommands, and the
+comment body of the comment subcommands of the `task` and `sprint` families.**
 
 - No JSON input
 - No configuration files
 - No interactive input
-- **Standard input:** used by the `graph` subcommands only, as an alternative
-  source for the `--query` Cypher string. Every other command ignores standard
-  input. See `GRAPH.md § Cypher Input Source and Precedence`.
+- **Standard input:** used as an alternative source for exactly two flag values,
+  and by no other command:
+  - the `--query` Cypher string of the `graph` subcommands (see
+    `GRAPH.md § Cypher Input Source and Precedence`);
+  - the `--body` comment text of `comment-add` and `comment-edit` under `task`
+    and `sprint` (see
+    `COMMANDS.md § Comment Body Input Source and Precedence`).
+
+  Every other command ignores standard input.
 
 **Accepted formats:**
 - Positional parameters: `rmp task create <name>`
 - Short flags: `-r <name>`, `-p 5`
 - Long flags: `--roadmap <name>`, `--priority 5`
 - Comma-separated lists: `1,2,3`
-- Standard input (graph only): the full stdin contents are read as the Cypher
-  query when `rmp graph <subcommand>` is invoked without `--query`.
+- Standard input: the full stdin contents are read as the Cypher query when
+  `rmp graph <subcommand>` is invoked without `--query`, and as the comment body
+  when a comment subcommand is invoked without `--body`.
 
 ---
 
@@ -178,6 +186,63 @@ Example with unlimited capacity (`max_tasks` is `null`):
 
 **Note:** The `tasks` and `task_count` fields are computed at runtime from the `sprint_tasks` junction table and are not stored in the `sprints` table. The `max_tasks` field is always present in the JSON output (never omitted); it is `null` when no capacity limit is set and an integer otherwise. The `order` field is always present: it is a positive integer (`> 0`), unique across the roadmap, and is stored in the `order_index` column (the JSON name is `order` because `ORDER` is a reserved SQL keyword). See `MODELS.md § Sprint Field Constraints`.
 
+### Task Comment
+
+One entry of a task's work log, as returned by `rmp task comment-list`. The fields are defined in `MODELS.md § Task Comment`.
+
+A comment that has never been edited (`updated_at` is `null`):
+
+```json
+{
+  "id": 12,
+  "task_id": 42,
+  "type": "FINDING",
+  "body": "The JWT middleware rejects tokens whose exp claim is exactly the current second. time.Now().After(exp) is false at equality, so the boundary second is accepted by the parser and refused by the handler.",
+  "created_at": "2026-03-12T11:15:00.000Z",
+  "updated_at": null
+}
+```
+
+A comment that has been edited (`updated_at` carries the edit timestamp):
+
+```json
+{
+  "id": 13,
+  "task_id": 42,
+  "type": "DECISION",
+  "body": "Token expiry is compared with !time.Now().Before(exp), so the boundary second expires. Rejected the alternative of widening the clock skew allowance, because it hides the boundary instead of defining it.",
+  "created_at": "2026-03-12T11:40:00.000Z",
+  "updated_at": "2026-03-12T14:05:00.000Z"
+}
+```
+
+**Notes:**
+- `updated_at` is always present in the JSON output; it is `null` while the comment has never been edited and an ISO 8601 UTC timestamp afterwards.
+- `type` is always present and never null; it is one of the seven values a task comment accepts.
+- `body` preserves the author's interior line breaks as `\n` escapes in JSON. Leading and trailing whitespace is trimmed before storage.
+- `rmp task comment-list` returns an array of these objects, oldest first, and `[]` when the task has no comments.
+
+### Sprint Comment
+
+One entry of a sprint's progression log, as returned by `rmp sprint comment-list`. The fields are defined in `MODELS.md § Sprint Comment`. The shape is identical to the task comment shape, with `sprint_id` in place of `task_id`.
+
+```json
+{
+  "id": 4,
+  "sprint_id": 7,
+  "type": "PROGRESS",
+  "body": "Authentication tasks 42 and 43 are closed; the rate-limit task 47 is still blocked on the shared Redis client decision, so the sprint carries one open dependency into its second week.",
+  "created_at": "2026-03-18T09:00:00.000Z",
+  "updated_at": null
+}
+```
+
+**Notes:**
+- `type` is one of the four values a sprint comment accepts: `FINDING`, `DECISION`, `PROGRESS`, `UPDATE`.
+- `rmp sprint comment-list` returns an array of these objects, oldest first, and `[]` when the sprint has no comments.
+
+**Comments are not embedded in task or sprint output.** The `Task` and `Sprint` JSON objects above carry no `comments` array and no `comment_count` field. `task get`, `task list`, `sprint get`, and `sprint show` return exactly the keys shown in their own examples. Comments are read only through `comment-list` and the read-only web interface.
+
 ### Audit Entry
 
 ```json
@@ -189,6 +254,8 @@ Example with unlimited capacity (`max_tasks` is `null`):
   "performed_at": "2026-03-12T15:30:00.000Z"
 }
 ```
+
+A comment operation is recorded against the parent entity, never against the comment: `TASK_COMMENT_CREATE` carries `entity_type: "TASK"` and the owning task's id in `entity_id`. See `DATABASE.md § audit Table`.
 
 ---
 
@@ -540,6 +607,17 @@ codes that are not produced by wrapping a sentinel error (e.g. `0`,
 
 Key: enum name (e.g. `TaskStatus`, `TaskType`, `SprintStatus`).
 
+**Comment types are exposed as two keys, not one.** `MODELS.md § Comment Type`
+defines a single `CommentType` enum and two valid subsets of it, one per entity.
+A `flags[].enum` value is a single key into this map, so the contract carries the
+two subsets as two separate entries: `TaskCommentType`, with the seven values a
+task comment accepts, and `SprintCommentType`, with the four values a sprint
+comment accepts. The `--type` flag of a `task` comment subcommand names
+`TaskCommentType`; the `--type` flag of a `sprint` comment subcommand names
+`SprintCommentType`. There is no `CommentType` key carrying all seven values for
+both families, so an agent reading the contract cannot offer a sprint a type that
+a sprint rejects (see `HELP.md § Comment subcommand help specifics`).
+
 ```json
 "TaskStatus": {
   "values": [
@@ -690,14 +768,14 @@ MUST NOT show `null` in place of an empty array.
 | `min_length` | integer or absent | no | Minimum string length when applicable. |
 | `description` | string | yes | One-sentence description of the flag's purpose. |
 | `mutually_exclusive_with` | array of string or absent | no | Long flag names that cannot be combined with this one. |
-| `stdin_fallback` | boolean or absent | no | `true` when the flag's value is read from standard input if the flag is omitted. Present and `true` only on the `graph` subcommands' `--query` flag. When `stdin_fallback` is `true`, `required` is `false` (the value may come from stdin instead), but the value is mandatory from one source or the other; supplying neither is an error. See `GRAPH.md § Cypher Input Source and Precedence`. |
+| `stdin_fallback` | boolean or absent | no | `true` when the flag's value is read from standard input if the flag is omitted. Present and `true` on the `graph` subcommands' `--query` flag and on the `--body` flag of the `comment-add` and `comment-edit` subcommands of the `task` and `sprint` families. When `stdin_fallback` is `true`, `required` is `false` (the value may come from stdin instead), but the value is mandatory from one source or the other; supplying neither is an error. The flag's own `description` states any condition under which the fallback does not apply: on `comment-edit` the body is read from stdin only when `--type` is absent as well, so a type-only edit does not wait for input. See `GRAPH.md § Cypher Input Source and Precedence` and `COMMANDS.md § Comment Body Input Source and Precedence`. |
 
 ### Field reference: subcommand-level fields
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `usage` | string | One-line usage signature. |
-| `reads_stdin` | boolean or absent | `true` when the subcommand reads standard input as an input source (the `graph` subcommands). Absent or `false` for every other subcommand, which ignores stdin. |
+| `reads_stdin` | boolean or absent | `true` when the subcommand reads standard input as an input source: the `graph` subcommands, and the `comment-add` and `comment-edit` subcommands of the `task` and `sprint` families. Absent or `false` for every other subcommand, which ignores stdin. |
 | `positional_arguments` | array of object | Each entry: `{name, type, required, description}`. |
 | `mutual_exclusion_groups` | array of array of string | Each inner array is a set of long flag names of which at most one may be supplied. |
 | `stdout_on_success.kind` | string | One of `object`, `array`, `empty`. `empty` is used by mutating commands that return no body. |

@@ -36,6 +36,13 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Web HTTP server timeouts (read-header, write, idle) | `WEB.md § HTTP Server Timeouts` |
 | Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
 | Free-text control-character constraint (CWE-150 / Trojan Source) | `MODELS.md § Free-Text Control-Character Constraint` |
+| Comment types (the one enum, and the per-entity valid subsets) | `MODELS.md § Comment Type` |
+| Task comment / sprint comment models and field constraints | `MODELS.md § Task Comment` and `MODELS.md § Sprint Comment` |
+| Comment subcommand syntax / flags (`comment-add`, `comment-list`, `comment-edit`, `comment-remove`) | `COMMANDS.md § Task Comments` and `COMMANDS.md § Sprint Comments` |
+| Comment body input via flag or stdin | `COMMANDS.md § Comment Body Input Source and Precedence` |
+| Comment JSON shape | `DATA_FORMATS.md § Task Comment` and `DATA_FORMATS.md § Sprint Comment` |
+| Comment tables, DDL, and cascade rules | `DATABASE.md § task_comments Table` and `DATABASE.md § sprint_comments Table` |
+| Web comment presentation (task modal timeline, sprint Comments card) | `WEB.md § Task Detail Modal` and `WEB.md § Sprint Detail Sub-Template` |
 | Sprint `description` semantics (must state the sprint's high-level goal) | `MODELS.md § Sprint Field Constraints` |
 | Audit result-set cap (`MaxAuditLimit`) | `DATABASE.md § Audit Result Limit` |
 | Migration idempotency (ALTER TABLE ADD COLUMN guard) | `DATABASE.md § Migration Idempotency (ALTER TABLE ADD COLUMN)` |
@@ -103,7 +110,9 @@ To prevent drift across SPEC files, the following topics have a single authorita
 |-------|------------------|
 | Exit codes (numeric values and sentinel names) | `ARCHITECTURE.md § Exit Codes` |
 | Sentinel errors and wrapping rules | `ARCHITECTURE.md § Error Handling` |
-| Enums (`TaskType`, `TaskStatus`, `SprintStatus`) | `MODELS.md § Enums` |
+| Enums (`TaskType`, `TaskStatus`, `SprintStatus`, `CommentType`) | `MODELS.md § Enums` |
+| Comment type per-entity valid subsets (task: 7 values, sprint: 4 values) | `MODELS.md § Comment Type` |
+| Comment body input source and precedence (`--body` or stdin) | `COMMANDS.md § Comment Body Input Source and Precedence` |
 | Memory layout / struct field ordering | `MODELS.md § Memory Layout Optimization` |
 | Task state transitions | `STATE_MACHINE.md § Task State Machine` |
 | Sprint state transitions | `STATE_MACHINE.md § Sprint State Machine` |

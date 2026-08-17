@@ -60,6 +60,29 @@ The following fields have mandatory length constraints enforced by the applicati
 | `acceptance_criteria` | Yes | 4096 chars | How to verify: completion criteria |
 | `completion_summary` | No | 4096 chars | Summary of work done; only accepted on `task stat` when target status is `COMPLETED` |
 
+### Comment Field Constraints
+
+The comment subcommands of the `task` and `sprint` families (`comment-add`, `comment-list`, `comment-edit`, `comment-remove`) share the following field constraints:
+
+| Field | Required | Max Length | Description |
+|-------|----------|------------|-------------|
+| `type` | Yes | - | Comment classification. Mandatory, no default. Task comments accept `FINDING`, `HYPOTHESIS`, `TEST`, `DECISION`, `PROGRESS`, `UPDATE`, `NOTE`; sprint comments accept `FINDING`, `DECISION`, `PROGRESS`, `UPDATE`. See `MODELS.md § Comment Type` for the canonical list |
+| `body` | Yes | 4096 chars | Comment text. Supplied through `--body` or, when that flag is absent, read in full from standard input |
+
+A `type` value outside the set the entity accepts is rejected with exit code 6 and a message naming the valid set for that entity. The `body` is subject to the Control-Character Constraint below.
+
+### Comment Body Input Source and Precedence
+
+The comment `body` is supplied either through the `--body` flag or on standard input. This is the same input mechanism the `graph` subcommands use for `--query` (see `GRAPH.md § Cypher Input Source and Precedence`); there is no `--body-file` flag and no path argument, so the commands open no file. The rules are:
+
+1. When `--body` is present and its value is neither empty nor whitespace only, that value is the body and standard input is **not** read.
+2. When `--body` is absent **and no other change was requested**, the entire standard input is read to EOF and used as the body. On `comment-add` no other change is ever possible, so an absent `--body` always means "read standard input". On `comment-edit` the body is read from standard input only when `--type` is also absent; when `--type` is present and `--body` is absent, only the type changes and standard input is not read, so a type-only edit never blocks waiting for input.
+3. When the body must come from standard input and standard input is empty, whitespace only, or not connected, the command fails with exit code 2. The message differs by subcommand, because the two subcommands are missing different things: on `comment-add` a body is mandatory and the message is "Error: required parameter missing: no comment body supplied"; on `comment-edit` the absent body means no change was requested at all, and the message is "Error: required parameter missing: at least one of --type or --body is required".
+4. When `--body` is present but its value is empty, whitespace only, or missing (no following token, or the following token is itself a flag), the command fails with exit code 2 and the message "Error: required parameter missing: no comment body supplied", in both subcommands. The command does not silently fall back to standard input in this case.
+5. Leading and trailing whitespace is trimmed before validation and before storage. Interior line breaks are preserved: a comment body is expected to be multi-line.
+
+**Validation order.** `--type` is validated — for presence on `comment-add`, and for value in both subcommands — before the body is resolved, so a missing or invalid type fails immediately instead of leaving the command waiting on standard input for a body it would reject anyway.
+
 ### Validation Behavior
 
 - **Whitespace trimming:** Leading and trailing whitespace is trimmed before validation
@@ -71,7 +94,7 @@ The following fields have mandatory length constraints enforced by the applicati
 
 All free-text fields — task `title`, `functional_requirements`,
 `technical_requirements`, `acceptance_criteria`, `completion_summary`,
-`specialists`, and sprint `title` and `description` — reject control characters. An input that
+`specialists`, sprint `title` and `description`, and the comment `body` — reject control characters. An input that
 contains any of the following is rejected with exit code 6 before it is stored:
 
 - ASCII control bytes below `0x20`, except TAB (`0x09`), LF (`0x0A`), and CR
@@ -99,6 +122,12 @@ definition is in `MODELS.md § Specialists List-Separator Constraint`.
 | Title is empty | "Error: Title is required" |
 | Requirements exceed 4096 chars | "Error: {Field} must not exceed 4096 characters (got N)" |
 | Requirements are empty | "Error: {Field} is required" |
+| Comment body exceeds 4096 chars | "Error: field exceeds maximum size: body exceeds maximum length of 4096 characters" |
+| Comment body not supplied | "Error: required parameter missing: no comment body supplied" |
+| Comment edit requests no change (no `--type`, no `--body`, no body on stdin) | "Error: required parameter missing: at least one of --type or --body is required" |
+| Comment type missing | "Error: required parameter missing: --type" |
+| Comment type invalid on a task | "Error: validation error: invalid comment type \"X\" for a task comment; valid types: FINDING, HYPOTHESIS, TEST, DECISION, PROGRESS, UPDATE, NOTE" |
+| Comment type invalid on a sprint | "Error: validation error: invalid comment type \"X\" for a sprint comment; valid types: FINDING, DECISION, PROGRESS, UPDATE" |
 
 ### Roadmap Name Validation
 
@@ -891,6 +920,212 @@ an error.
 
 ---
 
+### Task Comments
+
+A task comment is a durable, typed log entry attached to a task. Task comments record exclusively the work carried out within the scope of that task: findings, hypotheses raised and tested, tests run, decisions taken, progress, the reason behind a change to the task's definition, and notes. Read oldest first, the comments show how the work on the task progressed.
+
+The four subcommands below are flat subcommands of the `task` family, in the form `task comment-<verb>`. There is no separate `rmp comment` family, and there is no three-level `rmp task comment add` form.
+
+Three properties apply to all four and are not repeated in each block:
+
+- **Comment ids are per-family.** A comment id identifies a row in `task_comments`; the same number in the `sprint` family identifies an unrelated row in `sprint_comments`. `rmp task comment-edit 7` and `rmp sprint comment-edit 7` address different comments (see `DATABASE.md § task_comments Table`).
+- **Comments are accepted in every task status,** including `COMPLETED`. No comment subcommand checks or changes a task's status, and `task reopen` does not touch comments.
+- **`-y, --type` carries a different enum here than elsewhere in the `task` family.** On `task list`, `task create`, and `task edit`, `-y, --type` carries a `TaskType` value; on the four comment subcommands it carries a comment type. The flag spelling is deliberately reused, but the two enums are unrelated and never interchangeable: a `TaskType` value such as `BUG` is rejected on a comment subcommand with exit code 6, and a comment type such as `FINDING` is rejected on `task create` by that command's own type validation. Validation is therefore per subcommand, and the help and the AI Agent Contract keep the two sets apart (see `HELP.md § Comment subcommand help specifics`).
+
+#### Add Task Comment
+
+```bash
+rmp task comment-add -r <name> <task-id> --type <TYPE> --body "<text>"
+rmp task c-add -r <name> <task-id> -y <TYPE> -b "<text>"
+
+# Body read from standard input when --body is absent
+rmp task comment-add -r <name> <task-id> --type FINDING < finding.txt
+```
+
+**Description:** Adds one comment to the given task. The comment is stored with its type, its body, and a creation timestamp; `updated_at` starts null.
+
+**Aliases:** `c-add`
+
+**Arguments:**
+- `task-id` - Task ID (required, positive integer)
+
+**Options:**
+- `-r, --roadmap <name>` - REQUIRED. Target roadmap.
+- `-y, --type <TYPE>` - REQUIRED. Comment type. One of `FINDING`, `HYPOTHESIS`, `TEST`, `DECISION`, `PROGRESS`, `UPDATE`, `NOTE`. See `MODELS.md § Comment Type` for the canonical list and the meaning of each value.
+- `-b, --body <text>` - Comment text, maximum 4096 characters. When absent, the body is read in full from standard input (see `Comment Body Input Source and Precedence` above).
+
+**Validation Rules:**
+
+| Field | Constraint | Error Message (stderr) | Exit Code |
+|-------|------------|------------------------|-----------|
+| `task-id` | Positive integer | "Error: invalid input: invalid task ID: X" | 2 |
+| `type` | Present | "Error: required parameter missing: --type" | 2 |
+| `type` | One of the seven task values | "Error: validation error: invalid comment type \"X\" for a task comment; valid types: FINDING, HYPOTHESIS, TEST, DECISION, PROGRESS, UPDATE, NOTE" | 6 |
+| `body` | Supplied via `--body` or stdin | "Error: required parameter missing: no comment body supplied" | 2 |
+| `body` | Max 4096 chars | "Error: field exceeds maximum size: body exceeds maximum length of 4096 characters" | 6 |
+| `body` | No forbidden control characters | "Error: validation error: body: control characters are not allowed" | 6 |
+
+**Validation Order:**
+1. Resolve the roadmap; a missing `-r` fails with exit code 3.
+2. Parse the positional `task-id`; a non-integer or non-positive value fails with exit code 2.
+3. Verify `--type` is present; an absent flag fails with exit code 2.
+4. Validate the type value against the seven task values; an invalid value fails with exit code 6.
+5. Resolve the body from `--body` or standard input; no body fails with exit code 2.
+6. Verify the task exists; a missing task fails with exit code 4.
+7. Validate the body length and its control characters; a violation fails with exit code 6.
+8. Insert the comment and write the audit entry in one transaction.
+
+Steps 3 and 4 both precede step 5 deliberately: a missing or invalid `--type` is reported immediately, instead of leaving the command waiting on standard input for a body it is going to reject anyway.
+
+**JSON Output:** `{"id": 12}` — the id of the created comment, in the same shape `task create` uses. Exit code 0.
+
+**Error Conditions:**
+
+| Scenario | Exit Code | stderr |
+|----------|-----------|--------|
+| Task not found | 4 | `Error: resource not found: task 42 not found` |
+| Roadmap not specified | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
+| Roadmap not found | 4 | `Error: resource not found: roadmap "X" not found` |
+| Invalid task ID format | 2 | `Error: invalid input: invalid task ID: X` |
+| Missing task ID | 2 | `Error: required parameter missing: task ID required` |
+| Unknown flag | 2 | `Error: invalid input: unknown flag: --foo` |
+| Database failure | 1 | `Error: database error: <detail>` |
+
+**Audit:** Logged as `TASK_COMMENT_CREATE` against the parent task (`entity_type = TASK`, `entity_id = <task-id>`), in the same transaction as the insert. See `DATABASE.md § audit Table`.
+
+#### List Task Comments
+
+```bash
+rmp task comment-list -r <name> <task-id> [--type <TYPE>]
+rmp task c-ls -r <name> <task-id> [-y <TYPE>]
+```
+
+**Description:** Returns every comment of the given task, oldest first. The listing is the task's work log, so the order is the story it tells.
+
+**Aliases:** `c-ls`
+
+**Arguments:**
+- `task-id` - Task ID (required, positive integer)
+
+**Options:**
+- `-r, --roadmap <name>` - REQUIRED. Target roadmap.
+- `-y, --type <TYPE>` - Optional filter. Returns only the comments whose type equals `<TYPE>`. The value MUST be one of the seven task values; any other value is rejected with exit code 6.
+
+**Ordering:** `created_at` ascending, with the comment `id` ascending as the tie-breaker for comments created within the same millisecond.
+
+**Result-set size:** Unbounded. Every matching comment is returned. There is no `--limit` flag, no `--desc` flag, and no pagination, matching `sprint tasks`, which also returns a complete membership listing.
+
+**JSON Output:** Array of TaskComment objects (see `DATA_FORMATS.md § Task Comment`). An empty array `[]` when the task has no comments, or none of the requested type. Exit code 0.
+
+**Error Conditions:**
+
+| Scenario | Exit Code | stderr |
+|----------|-----------|--------|
+| Task not found | 4 | `Error: resource not found: task 42 not found` |
+| Invalid `--type` value | 6 | `Error: validation error: invalid comment type "X" for a task comment; valid types: FINDING, HYPOTHESIS, TEST, DECISION, PROGRESS, UPDATE, NOTE` |
+| Invalid task ID format | 2 | `Error: invalid input: invalid task ID: X` |
+| Missing task ID | 2 | `Error: required parameter missing: task ID required` |
+| Roadmap not specified | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
+
+**Audit:** None. Listing is a read and writes no audit entry.
+
+#### Edit Task Comment
+
+```bash
+rmp task comment-edit -r <name> <comment-id> [--type <TYPE>] [--body "<text>"]
+rmp task c-edit -r <name> <comment-id> [-y <TYPE>] [-b "<text>"]
+
+# New body read from standard input (no --type given)
+rmp task comment-edit -r <name> <comment-id> < revised.txt
+```
+
+**Description:** Changes the type and/or the body of one existing task comment, identified by the comment's own id. At least one of `--type` and `--body` is required.
+
+**Aliases:** `c-edit`
+
+**Arguments:**
+- `comment-id` - Comment ID (required, positive integer). This is the comment's id, **not** the id of the task it belongs to.
+
+**Options:**
+- `-r, --roadmap <name>` - REQUIRED. Target roadmap.
+- `-y, --type <TYPE>` - New comment type. One of the seven task values.
+- `-b, --body <text>` - New comment text, maximum 4096 characters. When `--body` is absent and `--type` is also absent, the new body is read in full from standard input; when `--type` is present and `--body` is absent, the body is left unchanged and standard input is not read (see `Comment Body Input Source and Precedence` above).
+
+**Replacement semantics:** The edit replaces the stored body in place and stamps `updated_at` with the edit's timestamp, so the JSON output of a later listing shows that the comment was altered. The previous text is not retained anywhere and cannot be recovered. This is a deliberate trade-off: the audit log records that an edit happened, not what it replaced.
+
+**Validation Rules:**
+
+| Field | Constraint | Error Message (stderr) | Exit Code |
+|-------|------------|------------------------|-----------|
+| `comment-id` | Positive integer | "Error: invalid input: invalid comment ID: X" | 2 |
+| change | At least one change requested: a `--type` value, a `--body` value, or a body on standard input | "Error: required parameter missing: at least one of --type or --body is required" | 2 |
+| `type` | One of the seven task values | "Error: validation error: invalid comment type \"X\" for a task comment; valid types: FINDING, HYPOTHESIS, TEST, DECISION, PROGRESS, UPDATE, NOTE" | 6 |
+| `body` | `--body` present but empty or whitespace only | "Error: required parameter missing: no comment body supplied" | 2 |
+| `body` | Max 4096 chars | "Error: field exceeds maximum size: body exceeds maximum length of 4096 characters" | 6 |
+| `body` | No forbidden control characters | "Error: validation error: body: control characters are not allowed" | 6 |
+
+**Validation Order:**
+1. Resolve the roadmap; a missing `-r` fails with exit code 3.
+2. Parse the positional `comment-id`; a non-integer or non-positive value fails with exit code 2.
+3. Validate the `--type` value when the flag is present; an invalid value fails with exit code 6, before standard input is considered.
+4. Resolve the new body when one is being set, from `--body` or from standard input; when neither `--type` nor a body is supplied, the command fails with exit code 2.
+5. Verify the comment exists in `task_comments`; a missing comment fails with exit code 4.
+6. Validate the body's length and control characters; a violation fails with exit code 6.
+7. Apply the update, stamp `updated_at`, and write the audit entry in one transaction.
+
+**No-op is not accepted.** Unlike `task edit`, which succeeds with exit code 0 when no field is given, `comment-edit` requires at least one change and fails with exit code 2 when none is requested. A change is requested by a `--type` value, by a `--body` value, or by a body arriving on standard input, so the flagless form `comment-edit <comment-id> < revised.txt` is a valid edit and not a no-op: the body on standard input is the change. Only the case where `--type` is absent, `--body` is absent, and standard input is empty, whitespace only, or not connected requests no change at all, and that is the case that fails with exit code 2 and the message "at least one of --type or --body is required". `task edit` can distinguish "no flags" from "flags to apply" without ambiguity; `comment-edit` cannot on the flags alone, because an absent `--body` with an absent `--type` is precisely the form that means "read the new body from standard input", so the decision is made after standard input has been resolved.
+
+**Output (success):** No output, exit code 0. This follows the convention for mutating commands (`task edit`, `sprint update`).
+
+**Error Conditions:**
+
+| Scenario | Exit Code | stderr |
+|----------|-----------|--------|
+| Comment not found | 4 | `Error: resource not found: task comment 13 not found` |
+| Roadmap not specified | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
+| Invalid comment ID format | 2 | `Error: invalid input: invalid comment ID: X` |
+| Missing comment ID | 2 | `Error: required parameter missing: comment ID required` |
+| Database failure | 1 | `Error: database error: <detail>` |
+
+A comment id that exists in `sprint_comments` but not in `task_comments` is a not-found condition here (exit code 4): the two id spaces are independent.
+
+**Audit:** Logged as `TASK_COMMENT_UPDATE` against the parent task (`entity_type = TASK`, `entity_id` = the id of the task the comment belongs to), in the same transaction as the update.
+
+#### Remove Task Comment
+
+```bash
+rmp task comment-remove -r <name> <comment-id>
+rmp task c-rm -r <name> <comment-id>
+```
+
+**Description:** Deletes one task comment, identified by the comment's own id. The row is removed outright; there is no soft delete and no recovery. The audit entry survives the row, so the task's history still records that a comment existed and was removed.
+
+**Aliases:** `c-rm`
+
+**Arguments:**
+- `comment-id` - Comment ID (required, positive integer). This is the comment's id, **not** the id of the task it belongs to.
+
+**Options:**
+- `-r, --roadmap <name>` - REQUIRED. Target roadmap.
+
+**Single-id command:** `comment-remove` takes exactly one comment id. It accepts no comma-separated list, so the batch fail-fast rules that govern `task remove` do not apply.
+
+**Output (success):** No output, exit code 0.
+
+**Error Conditions:**
+
+| Scenario | Exit Code | stderr |
+|----------|-----------|--------|
+| Comment not found | 4 | `Error: resource not found: task comment 13 not found` |
+| Roadmap not specified | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
+| Invalid comment ID format | 2 | `Error: invalid input: invalid comment ID: X` |
+| Missing comment ID | 2 | `Error: required parameter missing: comment ID required` |
+| Database failure | 1 | `Error: database error: <detail>` |
+
+**Audit:** Logged as `TASK_COMMENT_DELETE` against the parent task (`entity_type = TASK`, `entity_id` = the id of the task the comment belonged to), in the same transaction as the delete.
+
+---
+
 ## Sprint Management
 
 Command: `rmp sprint` (alias: `rmp s`)
@@ -1458,6 +1693,192 @@ When a sprint is removed, all tasks currently associated with it are automatical
 |----------|-----------|---------------|
 | Sprint not found | 4 | "Error: Sprint ID N not found" |
 | Roadmap not specified | 3 | "Error: Roadmap not specified. Use -r <name> or --roadmap <name>" |
+
+---
+
+### Sprint Comments
+
+A sprint comment is a durable, typed log entry attached to a sprint. Sprint comments record only the progression of the work during the sprint's development: findings, decisions taken, progress, and the reason behind a change to the sprint's definition. Work carried out inside one task belongs in that task's own comments, not here.
+
+The four subcommands below are flat subcommands of the `sprint` family, in the form `sprint comment-<verb>`, and they mirror the four task comment subcommands exactly (see `COMMANDS.md § Task Comments`). Two differences apply throughout:
+
+- **The accepted type set is smaller.** A sprint comment accepts `FINDING`, `DECISION`, `PROGRESS`, and `UPDATE`. The task-only values `HYPOTHESIS`, `TEST`, and `NOTE` are rejected with exit code 6.
+- **The id space is separate.** A comment id here identifies a row in `sprint_comments`. The same number in the `task` family identifies an unrelated row in `task_comments`.
+
+`-y, --type` has no other meaning in the `sprint` family: unlike the `task` family, where the same flag also carries a `TaskType` value on `list`, `create`, and `edit`, the only `sprint` subcommands that accept `-y, --type` are the four below, and the flag always means a comment type.
+
+Comments are accepted in every sprint status, including `CLOSED`. No comment subcommand checks or changes a sprint's status.
+
+#### Add Sprint Comment
+
+```bash
+rmp sprint comment-add -r <name> <sprint-id> --type <TYPE> --body "<text>"
+rmp sprint c-add -r <name> <sprint-id> -y <TYPE> -b "<text>"
+
+# Body read from standard input when --body is absent
+rmp sprint comment-add -r <name> <sprint-id> --type DECISION < decision.txt
+```
+
+**Description:** Adds one comment to the given sprint. The comment is stored with its type, its body, and a creation timestamp; `updated_at` starts null.
+
+**Aliases:** `c-add`
+
+**Arguments:**
+- `sprint-id` - Sprint ID (required, positive integer)
+
+**Options:**
+- `-r, --roadmap <name>` - REQUIRED. Target roadmap.
+- `-y, --type <TYPE>` - REQUIRED. Comment type. One of `FINDING`, `DECISION`, `PROGRESS`, `UPDATE`. See `MODELS.md § Comment Type` for the canonical list and the meaning of each value.
+- `-b, --body <text>` - Comment text, maximum 4096 characters. When absent, the body is read in full from standard input (see `Comment Body Input Source and Precedence` above).
+
+**Validation Rules:**
+
+| Field | Constraint | Error Message (stderr) | Exit Code |
+|-------|------------|------------------------|-----------|
+| `sprint-id` | Positive integer | "Error: invalid input: invalid sprint ID: X" | 2 |
+| `type` | Present | "Error: required parameter missing: --type" | 2 |
+| `type` | One of the four sprint values | "Error: validation error: invalid comment type \"X\" for a sprint comment; valid types: FINDING, DECISION, PROGRESS, UPDATE" | 6 |
+| `body` | Supplied via `--body` or stdin | "Error: required parameter missing: no comment body supplied" | 2 |
+| `body` | Max 4096 chars | "Error: field exceeds maximum size: body exceeds maximum length of 4096 characters" | 6 |
+| `body` | No forbidden control characters | "Error: validation error: body: control characters are not allowed" | 6 |
+
+**Validation Order:** identical to `task comment-add`, with the sprint in place of the task: roadmap, then `sprint-id` format, then `--type` presence, then the type value against the four sprint values, then the body, then the sprint's existence, then the body's length and control characters, then the insert and its audit entry in one transaction.
+
+**JSON Output:** `{"id": 4}` — the id of the created comment. Exit code 0.
+
+**Error Conditions:**
+
+| Scenario | Exit Code | stderr |
+|----------|-----------|--------|
+| Sprint not found | 4 | `Error: resource not found: sprint 7 not found` |
+| Roadmap not specified | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
+| Roadmap not found | 4 | `Error: resource not found: roadmap "X" not found` |
+| Invalid sprint ID format | 2 | `Error: invalid input: invalid sprint ID: X` |
+| Missing sprint ID | 2 | `Error: required parameter missing: sprint ID required` |
+| Unknown flag | 2 | `Error: invalid input: unknown flag: --foo` |
+| Database failure | 1 | `Error: database error: <detail>` |
+
+**Audit:** Logged as `SPRINT_COMMENT_CREATE` against the parent sprint (`entity_type = SPRINT`, `entity_id = <sprint-id>`), in the same transaction as the insert. See `DATABASE.md § audit Table`.
+
+#### List Sprint Comments
+
+```bash
+rmp sprint comment-list -r <name> <sprint-id> [--type <TYPE>]
+rmp sprint c-ls -r <name> <sprint-id> [-y <TYPE>]
+```
+
+**Description:** Returns every comment of the given sprint, oldest first.
+
+**Aliases:** `c-ls`
+
+**Arguments:**
+- `sprint-id` - Sprint ID (required, positive integer)
+
+**Options:**
+- `-r, --roadmap <name>` - REQUIRED. Target roadmap.
+- `-y, --type <TYPE>` - Optional filter. Returns only the comments whose type equals `<TYPE>`. The value MUST be one of the four sprint values; any other value, including a valid task-only value, is rejected with exit code 6.
+
+**Ordering:** `created_at` ascending, with the comment `id` ascending as the tie-breaker.
+
+**Result-set size:** Unbounded. There is no `--limit` flag, no `--desc` flag, and no pagination.
+
+**JSON Output:** Array of SprintComment objects (see `DATA_FORMATS.md § Sprint Comment`). An empty array `[]` when the sprint has no comments, or none of the requested type. Exit code 0.
+
+**Error Conditions:**
+
+| Scenario | Exit Code | stderr |
+|----------|-----------|--------|
+| Sprint not found | 4 | `Error: resource not found: sprint 7 not found` |
+| Invalid `--type` value | 6 | `Error: validation error: invalid comment type "X" for a sprint comment; valid types: FINDING, DECISION, PROGRESS, UPDATE` |
+| Invalid sprint ID format | 2 | `Error: invalid input: invalid sprint ID: X` |
+| Missing sprint ID | 2 | `Error: required parameter missing: sprint ID required` |
+| Roadmap not specified | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
+
+**Audit:** None. Listing is a read and writes no audit entry.
+
+#### Edit Sprint Comment
+
+```bash
+rmp sprint comment-edit -r <name> <comment-id> [--type <TYPE>] [--body "<text>"]
+rmp sprint c-edit -r <name> <comment-id> [-y <TYPE>] [-b "<text>"]
+
+# New body read from standard input (no --type given)
+rmp sprint comment-edit -r <name> <comment-id> < revised.txt
+```
+
+**Description:** Changes the type and/or the body of one existing sprint comment, identified by the comment's own id. At least one of `--type` and `--body` is required.
+
+**Aliases:** `c-edit`
+
+**Arguments:**
+- `comment-id` - Comment ID (required, positive integer). This is the comment's id, **not** the id of the sprint it belongs to.
+
+**Options:**
+- `-r, --roadmap <name>` - REQUIRED. Target roadmap.
+- `-y, --type <TYPE>` - New comment type. One of the four sprint values.
+- `-b, --body <text>` - New comment text, maximum 4096 characters. The standard-input rules are those of `task comment-edit`: standard input is read only when `--type` is also absent.
+
+**Replacement semantics:** identical to `task comment-edit`. The edit replaces the stored body in place and stamps `updated_at`; the previous text is not recoverable.
+
+**Validation Rules:**
+
+| Field | Constraint | Error Message (stderr) | Exit Code |
+|-------|------------|------------------------|-----------|
+| `comment-id` | Positive integer | "Error: invalid input: invalid comment ID: X" | 2 |
+| change | At least one change requested: a `--type` value, a `--body` value, or a body on standard input | "Error: required parameter missing: at least one of --type or --body is required" | 2 |
+| `type` | One of the four sprint values | "Error: validation error: invalid comment type \"X\" for a sprint comment; valid types: FINDING, DECISION, PROGRESS, UPDATE" | 6 |
+| `body` | `--body` present but empty or whitespace only | "Error: required parameter missing: no comment body supplied" | 2 |
+| `body` | Max 4096 chars | "Error: field exceeds maximum size: body exceeds maximum length of 4096 characters" | 6 |
+| `body` | No forbidden control characters | "Error: validation error: body: control characters are not allowed" | 6 |
+
+**Validation Order:** identical to `task comment-edit`, resolving the comment in `sprint_comments` and validating the type against the four sprint values. At least one change is required, counting a body on standard input as a change; requesting none is exit code 2.
+
+**Output (success):** No output, exit code 0.
+
+**Error Conditions:**
+
+| Scenario | Exit Code | stderr |
+|----------|-----------|--------|
+| Comment not found | 4 | `Error: resource not found: sprint comment 4 not found` |
+| Roadmap not specified | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
+| Invalid comment ID format | 2 | `Error: invalid input: invalid comment ID: X` |
+| Missing comment ID | 2 | `Error: required parameter missing: comment ID required` |
+| Database failure | 1 | `Error: database error: <detail>` |
+
+**Audit:** Logged as `SPRINT_COMMENT_UPDATE` against the parent sprint (`entity_type = SPRINT`, `entity_id` = the id of the sprint the comment belongs to), in the same transaction as the update.
+
+#### Remove Sprint Comment
+
+```bash
+rmp sprint comment-remove -r <name> <comment-id>
+rmp sprint c-rm -r <name> <comment-id>
+```
+
+**Description:** Deletes one sprint comment, identified by the comment's own id. The row is removed outright; the audit entry survives it.
+
+**Aliases:** `c-rm`
+
+**Arguments:**
+- `comment-id` - Comment ID (required, positive integer). This is the comment's id, **not** the id of the sprint it belongs to.
+
+**Options:**
+- `-r, --roadmap <name>` - REQUIRED. Target roadmap.
+
+**Single-id command:** `comment-remove` takes exactly one comment id and accepts no comma-separated list.
+
+**Output (success):** No output, exit code 0.
+
+**Error Conditions:**
+
+| Scenario | Exit Code | stderr |
+|----------|-----------|--------|
+| Comment not found | 4 | `Error: resource not found: sprint comment 4 not found` |
+| Roadmap not specified | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
+| Invalid comment ID format | 2 | `Error: invalid input: invalid comment ID: X` |
+| Missing comment ID | 2 | `Error: required parameter missing: comment ID required` |
+| Database failure | 1 | `Error: database error: <detail>` |
+
+**Audit:** Logged as `SPRINT_COMMENT_DELETE` against the parent sprint (`entity_type = SPRINT`, `entity_id` = the id of the sprint the comment belonged to), in the same transaction as the delete.
 
 ---
 
@@ -2074,6 +2495,18 @@ interface introduces no new codes.
 | `swap` | - |
 | `top` | - |
 | `bottom` | `btm` |
+| `comment-add` (under `task`, `sprint`) | `c-add` |
+| `comment-list` (under `task`, `sprint`) | `c-ls` |
+| `comment-edit` (under `task`, `sprint`) | `c-edit` |
+| `comment-remove` (under `task`, `sprint`) | `c-rm` |
+
+**Note on the comment aliases:** The four comment aliases follow the family's
+existing abbreviation rules: `comment` shortens to `c`, and the verb keeps the
+abbreviation it already has elsewhere in the CLI (`list` → `ls`, `remove` → `rm`),
+while `add` and `edit` have no shorter form anywhere and stay as they are. The
+hyphen is retained, as in `remove-tasks` → `rm-tasks` and `move-tasks` →
+`mv-tasks`. The same four aliases exist under both `task` and `sprint`, so the two
+families read identically.
 
 **Note on the `delete` alias:** The `delete` alias is scoped to `roadmap remove`
 only. `task remove` and `sprint remove` accept the `rm` alias but NOT `delete`;
