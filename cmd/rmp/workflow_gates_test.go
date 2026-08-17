@@ -1,6 +1,9 @@
 package main
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -447,6 +450,591 @@ func matrixTargets(t *testing.T, job *wfJob) []buildTarget {
 	return targets
 }
 
+// TestPublishedArchivesPackTheSpecifiedStructure is the regression gate for the
+// archives that shipped without the project's licence. SPEC/BUILD.md §
+// Artifact Structure has always listed three entries per archive — the binary,
+// LICENSE and README.md — while the workflows packed the binary alone, so every
+// published archive of every target omitted the licence file and nothing
+// noticed.
+//
+// The section governs every published archive, the release archives and the
+// rolling `dev` pre-release alike, so both workflows are checked. Everything
+// expected is parsed out of the specification and never restated here: an entry
+// added to its drawing, or a binary name changed in its Target OS table, fails
+// this test until the workflows ship it.
+func TestPublishedArchivesPackTheSpecifiedStructure(t *testing.T) {
+	spec := parseArtifactStructure(t)
+
+	for _, p := range pipelines() {
+		t.Run(filepath.Base(p.path), func(t *testing.T) {
+			wf := parseWorkflow(t, p.path)
+			build := mustJob(t, wf, p.buildJob)
+			commands := jobCommands(&build)
+
+			// Which archive forms a workflow must produce follows from the
+			// targets its build matrix covers: the release workflow builds
+			// Windows and so owes a .zip holding rmp.exe, while the CI
+			// fast-feedback subset has no Windows target and owes only the
+			// .tar.gz. SPEC/BUILD.md § Artifact Structure says as much, and
+			// adding a Windows target to the CI subset therefore makes this
+			// test demand the .zip form there too.
+			packSteps := make([]int, 0, len(spec.forms))
+			for _, form := range requiredForms(t, spec, &build, p.rel()) {
+				pack := packCommand(t, commands, packTool(t, form.format), p.rel())
+				assertArchiveMembers(t, pack, append([]string{form.binary}, spec.extras...), form.format, p.rel())
+				assertBinaryBuilt(t, commands, pack.step, form.binary, p.rel())
+				if !slices.Contains(packSteps, pack.step) {
+					packSteps = append(packSteps, pack.step)
+				}
+			}
+
+			// Measured behaviour: with a listed member absent, `tar` exits 2
+			// and fails the job, whereas `zip -q` exits 0 and silently writes
+			// an archive without it. The pack list alone is therefore not
+			// evidence that an entry ships, so the entries must also be staged
+			// into the directory the archive is built from.
+			for _, step := range packSteps {
+				assertStaged(t, commands, step, spec.extras, p.rel())
+			}
+		})
+	}
+}
+
+// artifactSpec is what SPEC/BUILD.md § Artifact Structure requires of every
+// published archive: the entries beside the binary, and the form the binary and
+// the archive take for each target operating system.
+type artifactSpec struct {
+	forms  []archiveForm
+	extras []string
+}
+
+// archiveForm is one row of the Target OS table in SPEC/BUILD.md § Artifact
+// Structure. An empty os is the row covering every other target OS.
+type archiveForm struct {
+	os     string
+	binary string
+	format string
+}
+
+// formFor returns the archive form a target operating system takes, falling
+// back to the row that covers every other OS.
+func (s artifactSpec) formFor(goos string) (archiveForm, bool) {
+	fallback, found := archiveForm{}, false
+	for _, form := range s.forms {
+		if form.os == goos {
+			return form, true
+		}
+		if form.os == "" {
+			fallback, found = form, true
+		}
+	}
+	return fallback, found
+}
+
+// requiredForms returns the distinct archive forms a build job must produce,
+// derived from the target operating systems in its matrix.
+func requiredForms(t *testing.T, spec artifactSpec, job *wfJob, rel string) []archiveForm {
+	t.Helper()
+
+	forms := make([]archiveForm, 0, len(spec.forms))
+	for _, target := range matrixTargets(t, job) {
+		form, ok := spec.formFor(target.goos)
+		if !ok {
+			t.Fatalf("%s: the build job targets %s, and SPEC/BUILD.md § Artifact Structure gives no archive "+
+				"form for it — its Target OS table names no row covering every other target OS",
+				rel, target.goos)
+		}
+		if !slices.Contains(forms, form) {
+			forms = append(forms, form)
+		}
+	}
+	return forms
+}
+
+// parseArtifactStructure reads SPEC/BUILD.md § Artifact Structure: the entries
+// the drawing lists, and the Target OS table that gives the binary entry's name
+// and the archive format for each operating system.
+//
+// The section deliberately carries no "###" subheading, because specSection
+// stops at the first line beginning with "#". Nothing here may introduce one.
+func parseArtifactStructure(t *testing.T) artifactSpec {
+	t.Helper()
+
+	raw, err := os.ReadFile(filepath.Clean(specBuildPath))
+	if err != nil {
+		t.Fatalf("reading the build specification: %v", err)
+	}
+	section := specSection(t, string(raw), "## Artifact Structure")
+
+	drawnBinary, extras := parseArtifactDrawing(t, section)
+	forms := parseArchiveForms(t, section)
+
+	// The drawing and the table are two statements about the same thing, so
+	// they must agree: the drawing shows the form every target uses except
+	// Windows, which is the table's fallback row.
+	fallback, ok := artifactSpec{forms: forms}.formFor("")
+	if !ok {
+		t.Fatalf("SPEC/BUILD.md § Artifact Structure: the Target OS table has no row covering every other " +
+			"target OS, so this test cannot tell what a non-Windows archive must hold")
+	}
+	if fallback.binary != drawnBinary {
+		t.Fatalf("SPEC/BUILD.md § Artifact Structure contradicts itself: the drawing marks %q as the binary "+
+			"entry while the Target OS table gives %q for every target OS but Windows. Repair the "+
+			"specification before this gate can hold the workflows to it.",
+			drawnBinary, fallback.binary)
+	}
+
+	return artifactSpec{forms: forms, extras: extras}
+}
+
+// parseArtifactDrawing reads the tree the section draws, returning the entry it
+// marks as the binary and every other entry, in the order the drawing lists
+// them.
+func parseArtifactDrawing(t *testing.T, section string) (string, []string) {
+	t.Helper()
+
+	block, ok := fencedBlock(section)
+	if !ok {
+		t.Fatalf("SPEC/BUILD.md § Artifact Structure no longer holds a fenced block drawing the archive " +
+			"layout; this test cannot tell what a published archive must contain")
+	}
+
+	binaries := make([]string, 0, 1)
+	extras := make([]string, 0, 4)
+	for line := range strings.Lines(block) {
+		line = strings.TrimRight(line, "\r\n")
+
+		// An entry is a line drawn under a tree connector. The block's first
+		// line is the archive's own file name and carries none, so it is not
+		// an entry.
+		trimmed := strings.TrimLeft(line, treeDrawing)
+		if !strings.ContainsAny(line[:len(line)-len(trimmed)], treeConnectors) {
+			continue
+		}
+		fields := strings.Fields(trimmed)
+		if len(fields) == 0 {
+			continue
+		}
+
+		annotation := ""
+		if _, after, found := strings.Cut(trimmed, "#"); found {
+			annotation = strings.ToLower(strings.TrimSpace(after))
+		}
+		if strings.Contains(annotation, "binary") {
+			binaries = append(binaries, fields[0])
+			continue
+		}
+		extras = append(extras, fields[0])
+	}
+
+	if len(binaries) != 1 {
+		t.Fatalf("SPEC/BUILD.md § Artifact Structure marks %d entries as the binary (%v), so this test cannot "+
+			"tell which archive member is the binary. It matters because Windows ships that member under "+
+			"another name, and the rest of the entries are compared literally.",
+			len(binaries), binaries)
+	}
+	if len(extras) == 0 {
+		t.Fatalf("SPEC/BUILD.md § Artifact Structure lists no entry besides the binary %q; the archive-contents "+
+			"gate would have nothing to enforce, so the drawing's format has changed and this reader must be "+
+			"fixed rather than the workflows", binaries[0])
+	}
+	return binaries[0], extras
+}
+
+// archiveFormHeader is the header row of the table that gives the binary
+// entry's name and the archive format per operating system. The section carries
+// a second table listing the published archives, so the right one is selected
+// by its header rather than by position.
+var archiveFormHeader = []string{"Target OS", "Binary entry", "Archive format"}
+
+// parseArchiveForms reads the Target OS table of SPEC/BUILD.md § Artifact
+// Structure. A cell naming a literal value does so in backticks; a cell of
+// prose ("Every other target OS") marks the fallback row.
+func parseArchiveForms(t *testing.T, section string) []archiveForm {
+	t.Helper()
+
+	forms := make([]archiveForm, 0, 2)
+	inTable := false
+	for line := range strings.Lines(section) {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "|") {
+			if inTable {
+				break // the table ended
+			}
+			continue
+		}
+
+		cells := splitTableRow(line)
+		if !inTable {
+			inTable = len(cells) >= len(archiveFormHeader) &&
+				slices.Equal(cells[:len(archiveFormHeader)], archiveFormHeader)
+			continue
+		}
+		if len(cells) < 3 || strings.HasPrefix(cells[0], "---") {
+			continue // separator row
+		}
+
+		if !backquotedToken(cells[1]) || !backquotedToken(cells[2]) {
+			t.Fatalf("SPEC/BUILD.md § Artifact Structure: the Target OS row %q does not name the binary entry "+
+				"and the archive format as literal values in backticks, so this test cannot read them "+
+				"unambiguously. Repair the table or this reader rather than letting the archive go unchecked.",
+				line)
+		}
+		form := archiveForm{binary: strings.Trim(cells[1], "`"), format: strings.Trim(cells[2], "`")}
+		if backquotedToken(cells[0]) {
+			form.os = strings.Trim(cells[0], "`")
+		}
+		forms = append(forms, form)
+	}
+
+	if len(forms) < 2 {
+		t.Fatalf("SPEC/BUILD.md § Artifact Structure: found %d rows in a table headed %v, expected at least "+
+			"one operating system and one fallback row. Without them this test cannot tell what each "+
+			"archive must hold.", len(forms), archiveFormHeader)
+	}
+	fallbacks := 0
+	for _, form := range forms {
+		if form.os == "" {
+			fallbacks++
+		}
+	}
+	if fallbacks != 1 {
+		t.Fatalf("SPEC/BUILD.md § Artifact Structure: the Target OS table has %d rows covering every other "+
+			"target OS (%v), expected exactly one. The archive form of an unlisted OS would be ambiguous.",
+			fallbacks, forms)
+	}
+	return forms
+}
+
+// splitTableRow returns a markdown table row's cells, trimmed of spaces.
+func splitTableRow(line string) []string {
+	cells := strings.Split(strings.Trim(line, "|"), "|")
+	for i := range cells {
+		cells[i] = strings.TrimSpace(cells[i])
+	}
+	return cells
+}
+
+// backquotedToken reports whether a table cell names a literal value — a single
+// token in backticks — rather than prose such as "Every other target OS".
+func backquotedToken(cell string) bool {
+	if len(cell) < 3 || cell[0] != '`' || cell[len(cell)-1] != '`' {
+		return false
+	}
+	inner := cell[1 : len(cell)-1]
+	return inner != "" && !strings.ContainsAny(inner, " `")
+}
+
+// packTool names the command that builds an archive of the given format.
+func packTool(t *testing.T, format string) string {
+	t.Helper()
+
+	switch {
+	case strings.Contains(format, "tar"):
+		return "tar"
+	case strings.Contains(format, "zip"):
+		return "zip"
+	}
+	t.Fatalf("SPEC/BUILD.md § Artifact Structure requires a %s archive, and this test does not know which "+
+		"command builds that format. Teach it the format rather than leaving the archive unchecked.", format)
+	return ""
+}
+
+// treeDrawing is everything that can precede an entry's name in the
+// specification's tree, and treeConnectors is the subset that proves a line is
+// an entry rather than an indented continuation.
+const (
+	treeDrawing    = "├└│─|\\+`- \t"
+	treeConnectors = "├└│─|\\+`"
+)
+
+// fencedBlock returns the body of the first fenced code block in a section.
+func fencedBlock(section string) (string, bool) {
+	_, after, found := strings.Cut(section, "```")
+	if !found {
+		return "", false
+	}
+	if _, after, found = strings.Cut(after, "\n"); !found {
+		return "", false
+	}
+	body, _, found := strings.Cut(after, "```")
+	return body, found
+}
+
+// artifactPack is one `tar` or `zip` invocation that builds an archive.
+type artifactPack struct {
+	members []string
+	tool    string
+	text    string
+	step    int
+}
+
+// packCommand finds the single invocation of a packing tool in a build job.
+func packCommand(t *testing.T, commands []wfCommand, tool, rel string) artifactPack {
+	t.Helper()
+
+	found := make([]artifactPack, 0, 2)
+	texts := make([]string, 0, 2)
+	for _, cmd := range commands {
+		words := shellWords(cmd.text)
+		if !slices.Contains(words, tool) {
+			continue
+		}
+		found = append(found, artifactPack{
+			tool: tool, text: cmd.text, step: cmd.step, members: packMembers(tool, words),
+		})
+		texts = append(texts, cmd.text)
+	}
+
+	if len(found) != 1 {
+		t.Fatalf("%s: the build job runs %d %s commands %q, but this test expects exactly one that packs the "+
+			"archive SPEC/BUILD.md § Artifact Structure requires for the targets in its matrix.",
+			rel, len(found), tool, texts)
+	}
+	if len(found[0].members) == 0 {
+		t.Fatalf("%s: no archive members could be read out of %q, so this test can no longer tell what the "+
+			"%s archive ships. The command's form changed: fix this reader rather than the workflow.",
+			rel, found[0].text, tool)
+	}
+	return found[0]
+}
+
+// packMembers returns the files a `tar` or `zip` command adds to an archive,
+// skipping the flags and the operands those flags consume.
+func packMembers(tool string, words []string) []string {
+	start := slices.Index(words, tool)
+	if start < 0 {
+		return nil
+	}
+
+	members := make([]string, 0, len(words))
+	// `tar` names its archive with -f, so its first bare operand is already a
+	// member; `zip` names its archive as the first bare operand.
+	archiveNamed := tool == "tar"
+	for i := start + 1; i < len(words); i++ {
+		word := words[i]
+		switch {
+		case strings.HasPrefix(word, "--"):
+			if word == "--file" || word == "--directory" {
+				i++ // long flag with a separate operand; the "--flag=value" form carries its own
+			}
+		case strings.HasPrefix(word, "-"):
+			if tool == "tar" && (word == "-C" || strings.Contains(word, "f")) {
+				i++ // the archive path (-f) or the directory to pack from (-C)
+			}
+		case !archiveNamed:
+			archiveNamed = true
+		default:
+			members = append(members, word)
+		}
+	}
+	return members
+}
+
+// assertArchiveMembers compares what a pack command ships against what the
+// specification requires.
+func assertArchiveMembers(t *testing.T, pack artifactPack, want []string, format, rel string) {
+	t.Helper()
+
+	missing := make([]string, 0, len(want))
+	for _, entry := range want {
+		if !slices.Contains(pack.members, entry) {
+			missing = append(missing, entry)
+		}
+	}
+	if len(missing) > 0 {
+		t.Errorf("%s: the %s archive is packed with %q and omits %q. SPEC/BUILD.md § Artifact Structure "+
+			"requires %q in every published archive. Shipping without them is the defect this test exists "+
+			"to prevent: every published archive once omitted the licence file exactly this way. Command: %s",
+			rel, format, pack.members, missing, want, pack.text)
+	}
+
+	unexpected := make([]string, 0, len(pack.members))
+	for _, member := range pack.members {
+		if !slices.Contains(want, member) {
+			unexpected = append(unexpected, member)
+		}
+	}
+	if len(unexpected) > 0 {
+		t.Errorf("%s: the %s archive also packs %q, which SPEC/BUILD.md § Artifact Structure does not list — "+
+			"it requires exactly %q and nothing else. Either the specification or the workflow is wrong. "+
+			"Command: %s", rel, format, unexpected, want, pack.text)
+	}
+}
+
+// assertBinaryBuilt requires the job to produce, outside the packing step
+// itself, the binary file name the archive lists. `zip` exits 0 when a listed
+// member is missing, so a build that stopped producing rmp.exe while the .zip
+// still listed it would publish an archive holding no binary at all and stay
+// green.
+//
+// What this proves is that the name appears in the job's other commands, which
+// is exact for a name like `rmp.exe` that can occur nowhere else. For the plain
+// binary name it is weaker, because the build command's package operand
+// (./cmd/rmp) ends in that name too — but that is the case `tar` already fails
+// loudly on, so nothing silent hides behind the looser half.
+func assertBinaryBuilt(t *testing.T, commands []wfCommand, packStep int, binary, rel string) {
+	t.Helper()
+
+	mention := regexp.MustCompile(`(^|[\s"'=/])` + regexp.QuoteMeta(binary) + `($|[\s"'])`)
+	for _, cmd := range commands {
+		if cmd.step != packStep && mention.MatchString(cmd.text) {
+			return
+		}
+	}
+	t.Errorf("%s: the archive lists %q, but no command in the build job outside the packing step names that "+
+		"file, so nothing in the job produces it. SPEC/BUILD.md § Artifact Structure requires the binary in "+
+		"every published archive, and `zip` would write one without it and still exit 0.", rel, binary)
+}
+
+// stagingTools are the commands that can put a file into the directory an
+// archive is packed from.
+var stagingTools = []string{"cp", "install", "ln", "mv", "rsync"}
+
+// assertStaged requires every specified entry to be placed into the directory
+// the archive is packed from.
+func assertStaged(t *testing.T, commands []wfCommand, step int, extras []string, rel string) {
+	t.Helper()
+
+	staged := make([]string, 0, len(commands))
+	for _, cmd := range commands {
+		if cmd.step != step {
+			continue
+		}
+		words := shellWords(cmd.text)
+		if len(words) > 1 && slices.Contains(stagingTools, words[0]) {
+			staged = append(staged, words[1:]...)
+		}
+	}
+
+	for _, entry := range extras {
+		if slices.Contains(staged, entry) {
+			continue
+		}
+		t.Errorf("%s: the archive step packs %q but never stages it into the directory the archive is built "+
+			"from (it stages %q). `zip` exits 0 and silently writes an archive without a member that does "+
+			"not exist, so a .zip would ship without %q while the job stayed green. SPEC/BUILD.md "+
+			"§ Artifact Structure requires it in every published archive.",
+			rel, entry, staged, entry)
+	}
+}
+
+// TestWorkflowsDoNotSetConstantsWithLdflags is the regression gate for rmp task
+// #157. Both workflows used to build with `-X main.version=<tag>`, but
+// cmd/rmp/main.go declares version in a const block and the linker's -X writes
+// only to a package-level var, so the flag was silently ignored: a build that
+// claimed to stamp the released version stamped nothing, and `rmp --version`
+// reported the constant regardless of the tag.
+//
+// The check is the general form of that defect rather than the single flag:
+// cmd/rmp/main.go is parsed with go/parser — standard library, so no dependency
+// is added — and any -X naming a symbol that file declares as a const fails the
+// test. Because SPEC/VERSION.md § Application Version requires `version` to be
+// that constant (asserted below), this subsumes the narrow criterion that
+// neither workflow may pass `-X main.version`.
+func TestWorkflowsDoNotSetConstantsWithLdflags(t *testing.T) {
+	constants := mainPackageConstants(t)
+
+	if !constants["version"] {
+		t.Fatalf("cmd/rmp/main.go does not declare `version` as a const, but SPEC/VERSION.md § Application "+
+			"Version specifies `const version = \"X.Y.Z\"` there as the single source of the application "+
+			"version. The consts it does declare are %v.", sortedKeys(constants))
+	}
+
+	for _, p := range pipelines() {
+		t.Run(filepath.Base(p.path), func(t *testing.T) {
+			wf := parseWorkflow(t, p.path)
+			for _, id := range wf.jobOrder {
+				job := wf.jobs[id]
+				for _, cmd := range jobCommands(&job) {
+					for _, match := range ldflagSymbol.FindAllStringSubmatch(cmd.text, -1) {
+						pkg, symbol := match[1], match[2]
+						if !isMainPackage(pkg) || !constants[symbol] {
+							continue
+						}
+						t.Errorf("%s: job %q passes `-X %s.%s=` to the linker, but cmd/rmp/main.go declares "+
+							"%s as a const. The linker writes -X only into a package-level var, so the flag "+
+							"is silently ignored and the build stamps nothing while claiming to. "+
+							"SPEC/VERSION.md § Application Version makes that constant the single source of "+
+							"the version. Command: %s",
+							p.rel(), id, pkg, symbol, symbol, cmd.text)
+					}
+				}
+			}
+		})
+	}
+}
+
+// ldflagSymbol matches a linker -X flag that assigns a package-level symbol,
+// in the forms `-X main.version=`, `-X=main.version=` and `-X 'main.version=`.
+// The trailing "=" is required, so prose mentioning the flag — such as the
+// comment in each workflow explaining why it is absent — does not match.
+var ldflagSymbol = regexp.MustCompile(`-X[ =]['"]?([A-Za-z0-9_./-]+)\.([A-Za-z_][A-Za-z0-9_]*)=`)
+
+// mainSourcePath is cmd/rmp/main.go. This test package lives in that same
+// directory, which is where `go test` sets the working directory.
+const mainSourcePath = "main.go"
+
+// mainPackageConstants returns the names cmd/rmp/main.go declares as constants.
+func mainPackageConstants(t *testing.T) map[string]bool {
+	t.Helper()
+
+	file, err := parser.ParseFile(token.NewFileSet(), filepath.Clean(mainSourcePath), nil, 0)
+	if err != nil {
+		t.Fatalf("parsing %s: %v", mainSourcePath, err)
+	}
+
+	constants := make(map[string]bool, 16)
+	for _, decl := range file.Decls {
+		general, ok := decl.(*ast.GenDecl)
+		if !ok || general.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range general.Specs {
+			values, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for _, name := range values.Names {
+				constants[name.Name] = true
+			}
+		}
+	}
+
+	if len(constants) == 0 {
+		t.Fatalf("%s declares no constants, which this test cannot be right about; fix the reader rather "+
+			"than the source", mainSourcePath)
+	}
+	return constants
+}
+
+// isMainPackage reports whether a -X flag's package part names the released
+// binary's package, which the linker accepts either as `main` or by its full
+// import path.
+func isMainPackage(pkg string) bool {
+	return pkg == "main" || strings.HasSuffix(pkg, "/cmd/rmp")
+}
+
+// sortedKeys returns a map's keys in a stable order, for failure messages.
+func sortedKeys(set map[string]bool) []string {
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+// shellWords splits a shell command into words, dropping the grouping
+// parentheses and the quotes around an argument.
+func shellWords(command string) []string {
+	words := strings.Fields(strings.NewReplacer("(", " ", ")", " ").Replace(command))
+	for i, word := range words {
+		words[i] = strings.Trim(word, `"'`)
+	}
+	return words
+}
+
 // -----------------------------------------------------------------------------
 // What the specification says
 // -----------------------------------------------------------------------------
@@ -659,17 +1247,23 @@ func loadGateJob(t *testing.T, p pipeline) *gateJob {
 			"see which gates run", p.rel(), p.gateJob)
 	}
 
-	gate := &gateJob{job: job, pipeline: p}
+	return &gateJob{job: job, pipeline: p, commands: jobCommands(&job)}
+}
+
+// jobCommands flattens a job's run steps into the shell commands it executes,
+// in order, dropping blank lines and comments.
+func jobCommands(job *wfJob) []wfCommand {
+	commands := make([]wfCommand, 0, len(job.steps))
 	for index, step := range job.steps {
 		for line := range strings.Lines(step.run) {
 			line = strings.TrimSpace(line)
 			if line == "" || strings.HasPrefix(line, "#") {
 				continue
 			}
-			gate.commands = append(gate.commands, wfCommand{text: line, step: index})
+			commands = append(commands, wfCommand{text: line, step: index})
 		}
 	}
-	return gate
+	return commands
 }
 
 // find returns the position of the first command satisfying match, or -1.

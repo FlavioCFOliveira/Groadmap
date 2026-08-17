@@ -638,12 +638,56 @@ same command over the same scope in all three places:
 
 ## Artifact Structure
 
+Every archive the project publishes carries the same three entries: the compiled
+binary, the licence, and the quick-start guide. The licence is not optional
+packaging — the project's licence travels with every binary the project
+distributes — so this structure governs every published archive without
+exception, the release archives and the rolling `dev` pre-release archive alike.
+
 ```
 rmp-{version}-{target}.tar.gz
 ├── rmp                    # Binary
-├── LICENSE               # License file
-└── README.md             # Quick start guide
+├── LICENSE                # License file
+└── README.md              # Quick start guide
 ```
+
+The three entries sit at the archive root. No entry is wrapped in a leading
+directory, so extracting an archive puts the binary in the current directory and
+the documented install step — extract, then move `rmp` onto the `PATH` (see
+`DEPLOY.md § Manual Installation`) — works exactly as written.
+
+**The binary entry's name and the archive's format both follow the target
+operating system.** The drawing above shows the `.tar.gz` form, which every
+target uses except Windows:
+
+| Target OS | Binary entry | Archive format |
+|-----------|--------------|----------------|
+| `windows` | `rmp.exe` | `.zip` |
+| Every other target OS | `rmp` | `.tar.gz` |
+
+The Windows executable MUST carry the `.exe` extension: Windows does not run it
+otherwise, and the installation script expects that name inside the archive. The
+other two entries are identical in both forms, under exactly the names `LICENSE`
+and `README.md`.
+
+**Every published archive is covered.** Two workflows publish archives, and this
+structure governs both:
+
+| Archive | Name | Published by |
+|---------|------|--------------|
+| Release archive | `rmp-{version}-{target}.{ext}` | The release workflow, for all eleven Primary Platforms |
+| Dev pre-release archive | `rmp-dev-{sha}-{target}.tar.gz` | The CI workflow, for the four-target fast-feedback subset |
+
+`{version}` is the `v*` tag being released, `{target}` is the Target Name from
+`Supported Build Targets`, `{ext}` is the format the table above gives for the
+target's operating system, and `{sha}` is the first seven characters of the
+commit the pre-release was built from. Every dev archive is a `.tar.gz` holding
+`rmp`, because the fast-feedback subset contains no Windows target; were one ever
+added to that subset, the format and binary-name rule above would apply to it
+exactly as it does to a release archive.
+
+Each archive is published alongside a `.sha256` checksum file. That file is a
+separate published asset, not a fourth entry inside the archive.
 
 ## Acceptance Criteria
 
@@ -653,6 +697,9 @@ rmp-{version}-{target}.tar.gz
 - [ ] `make check` passes: format, vet, unit tests, host build, `golangci-lint`, and the `gosec` security scan all succeed. The security scan reports no unsuppressed finding (see Validation Gates and Security Scan: gosec)
 - [ ] `go.mod` pins both direct dependencies to exact versions, and the `modernc.org/libc` and `modernc.org/memory` versions match exactly the versions required by the pinned `modernc.org/sqlite`. This is verified by reading the driver's own `go.mod` in the module cache, because no gate detects a mismatch — neither any gate run by `make check` (format, vet, test, build, `golangci-lint`, `gosec`) nor the E2E suite (see External Dependencies, SQLite Driver Rules 2 and 3)
 - [ ] Archive naming follows convention: `rmp-{version}-{target}.{ext}`
+- [ ] Every published archive holds exactly the three entries Artifact Structure lists, and nothing else. Listing a `.tar.gz` (`tar -tzf`) shows `rmp`, `LICENSE`, and `README.md`; listing a Windows `.zip` (`unzip -l`) shows `rmp.exe`, `LICENSE`, and `README.md`. Every entry is at the archive root, with no leading directory component
+- [ ] The dev pre-release archive holds the same three entries as a release archive. This is checked on a published `dev` asset, not only on a release asset, because both workflows pack archives and only one of them builds release tags
+- [ ] The `.sha256` file for each archive is published as a separate asset and is not an entry inside the archive
 - [ ] Every web asset category (HTML templates, the stylesheet including the vendored Tabler CSS framework, all client JS including the vendored Tabler JavaScript and D3.js with the d3-sankey plugin and their dependencies, web fonts including the Inter font and the Tabler Icons webfont, icons and images, and the favicon) is embedded via `go:embed`; the build uses the Go toolchain only, with no Node.js or `node_modules` step (see Vendored Web Assets)
 - [ ] The web interface is fully self-contained: with networking disabled and with only the `rmp` binary present on disk (no sidecar files and no separate assets directory), `rmp web` serves the full UI — every page and the knowledge-graph visualisation render and function with no network egress (see Vendored Web Assets and `WEB.md § Self-Contained Deliverable`)
 

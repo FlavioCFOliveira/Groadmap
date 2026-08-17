@@ -99,7 +99,11 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
         run: |
-          ldflags="-s -w -X main.version=dev-${{ github.sha }}"
+          # No -X main.version here: cmd/rmp/main.go declares version as a
+          # const, and the linker's -X writes only to a package-level var, so
+          # the flag was silently ignored. SPEC/VERSION.md makes that constant
+          # the single source of the version.
+          ldflags="-s -w"
           if [ "${{ matrix.goos }}" = "linux" ]; then
             ldflags="${ldflags} -extldflags '-static'"
           fi
@@ -111,7 +115,11 @@ jobs:
         run: |
           sha_short=$(echo "${{ github.sha }}" | cut -c1-7)
           archive_name="rmp-dev-${sha_short}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
-          tar -czf "dist/${archive_name}" -C dist rmp
+          # SPEC/BUILD.md § Artifact Structure governs every archive the project
+          # publishes, the rolling dev pre-release included: the binary, the
+          # LICENSE and the README.md quick-start guide.
+          cp LICENSE README.md dist/
+          tar -czf "dist/${archive_name}" -C dist rmp LICENSE README.md
           echo "ARCHIVE=${archive_name}" >> $GITHUB_OUTPUT
 
       - name: Generate checksum

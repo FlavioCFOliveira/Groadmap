@@ -107,8 +107,12 @@ jobs:
           GOARM: ${{ matrix.goarm }}
           CGO_ENABLED: 0
         run: |
-          version="${{ steps.get_version.outputs.VERSION }}"
-          ldflags="-s -w -X main.version=${version}"
+          # No -X main.version here: cmd/rmp/main.go declares version as a
+          # const, and the linker's -X writes only to a package-level var, so
+          # the flag was silently ignored -- the tag never reached the binary.
+          # SPEC/VERSION.md makes that constant the single source of the
+          # version, bumped as part of the release procedure.
+          ldflags="-s -w"
           if [ "${{ matrix.goos }}" = "linux" ]; then
             ldflags="${ldflags} -extldflags '-static'"
           fi
@@ -139,16 +143,23 @@ jobs:
             arch_suffix="${goarch}"
           fi
 
+          # SPEC/BUILD.md § Artifact Structure: an archive carries three entries
+          # -- the binary, the LICENSE, and the README.md quick-start guide.
+          # They are copied into dist/ first so both branches pack from one
+          # directory and the entries stay flat, with no leading path component
+          # for the installer to strip.
+          cp LICENSE README.md dist/
+
           # Archive format per SPEC/BUILD.md § Release Workflow ("or .zip for
           # Windows") and SPEC/DEPLOY.md § Build Matrix: Windows ships a .zip
           # holding rmp.exe, every other target a .tar.gz holding rmp. The name
           # follows rmp-{version}-{target}.{ext} in both cases.
           if [ "${goos}" = "windows" ]; then
             archive_name="rmp-${version}-${goos}-${arch_suffix}.zip"
-            (cd dist && zip -q "${archive_name}" rmp.exe)
+            (cd dist && zip -q "${archive_name}" rmp.exe LICENSE README.md)
           else
             archive_name="rmp-${version}-${goos}-${arch_suffix}.tar.gz"
-            tar -czf "dist/${archive_name}" -C dist rmp
+            tar -czf "dist/${archive_name}" -C dist rmp LICENSE README.md
           fi
           echo "ARCHIVE=${archive_name}" >> $GITHUB_OUTPUT
 
