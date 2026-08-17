@@ -87,8 +87,18 @@ Every operating system in `BUILD.md § Supported Build Targets` MUST appear here
 A release that ships an archive the script cannot ask for is a release that
 cannot be installed on the platform it was built for.
 
-**Unsupported operating systems:** any `uname -s` not listed above is reported as
-unsupported and the script exits with code 1.
+**Unsupported operating systems:** any `uname -s` not listed above is not a
+platform the build produces. `detect_os()` returns `unknown` for it, and the
+script rejects that value: it calls the `error` helper with the message
+
+```
+operating system {uname} is not supported. Supported systems: linux, darwin, freebsd, openbsd, windows. See SPEC/BUILD.md for the build matrix.
+```
+
+and exits with code 1. `{uname}` is the raw `uname -s` output for the host, the
+string the machine reported, not a mapped name. The resulting line on standard
+error is `ERROR: operating system {uname} is not supported. ...` (see
+Diagnostic Output).
 
 ### Architecture Detection
 
@@ -101,7 +111,26 @@ The installation script detects architecture via `uname -m`:
 | armv6l, armv6 | armv6 | {goos}-armv6 |
 | armv7l, armv7 | armv7 | {goos}-armv7 |
 
-**Unsupported architectures:** 32-bit x86 (`i386`, `i686`) and any other architecture not listed above are not produced by `BUILD.md`. The script exits with an error message: `"Error: architecture <uname> is not supported. Supported targets: amd64, arm64, armv6, armv7. See SPEC/BUILD.md for the build matrix."` and exit code 1.
+**Unsupported architectures:** 32-bit x86 (`i386`, `i686`) and any other
+architecture not listed above are not produced by `BUILD.md`. `detect_arch()`
+returns `unsupported` for an architecture it recognises but the build does not
+produce, and `unknown` for one it does not recognise at all. **The script MUST
+reject both values**, because neither can name an existing release asset. It
+calls the `error` helper with the message
+
+```
+architecture {uname} is not supported. Supported targets: amd64, arm64, armv6, armv7. See SPEC/BUILD.md for the build matrix.
+```
+
+and exits with code 1. `{uname}` is the raw `uname -m` output for the host — the
+string the machine reported, such as `i686` — and never the mapped architecture
+name, because the mapping is precisely what failed. The resulting line on
+standard error is `ERROR: architecture i686 is not supported. ...` (see
+Diagnostic Output).
+
+Rejecting these values is what keeps the failure early and legible. An
+unsupported architecture that reaches the download step instead produces a
+confusing failure fetching a release asset that was never built.
 
 ### ARM Variant Detection
 
@@ -142,6 +171,34 @@ is_raspberry_pi() {
 
 ## Installation Script Reference
 
+### Diagnostic Output
+
+The script writes every diagnostic to standard error through one of five
+helpers. Each helper prints a fixed uppercase level prefix, a colon, a space,
+and then the message it was given:
+
+| Helper | Line written to standard error |
+|--------|--------------------------------|
+| `info` | `INFO: {message}` |
+| `success` | `SUCCESS: {message}` |
+| `warn` | `WARNING: {message}` |
+| `error` | `ERROR: {message}` |
+| `prompt` | `PROMPT: {message}` |
+
+Two rules follow, and they govern every message this specification quotes:
+
+1. **No error path may bypass the `error` helper.** Every failure the script
+   reports goes through it, so every error line on standard error begins with
+   the same prefix.
+2. **A quoted message is the `{message}` argument, never the whole line.** The
+   helper supplies the `ERROR: ` prefix, so this specification never repeats it.
+   A message specified as `architecture i686 is not supported.` reaches standard
+   error as the line `ERROR: architecture i686 is not supported.`
+
+The level prefix is wrapped in ANSI colour escape sequences, so the raw bytes on
+standard error carry escape codes around the prefix. A test that asserts an exact
+message MUST compare the message text rather than the raw prefix bytes.
+
 ### Functions
 
 #### `detect_arch()`
@@ -152,8 +209,11 @@ Returns the architecture string for the current system.
 - `arm64` - 64-bit ARM systems
 - `armv6` - ARMv6 systems (Pi Zero/1)
 - `armv7` - ARMv7 systems (Pi 2/3/4 32-bit)
-- `unsupported` - Architecture detected but not produced by the build (e.g., `i386`, `i686`); script exits with error
-- `unknown` - Unrecognized architecture string
+- `unsupported` - Architecture detected but not produced by the build (e.g., `i386`, `i686`); the script rejects it and exits 1
+- `unknown` - Unrecognized architecture string; the script rejects it and exits 1
+
+Both values are rejected by the same guard, with the same message and the same
+exit code (see Architecture Detection).
 
 #### `is_raspberry_pi()`
 Detects if running on Raspberry Pi hardware.
@@ -288,6 +348,10 @@ Each release includes:
 - [ ] Downloads correct binary for detected platform
 - [ ] Installs binary with executable permissions
 - [ ] Provides helpful error messages on failure
+- [ ] An unsupported architecture fails before any download is attempted: on a host whose `uname -m` reports `i686`, the script exits 1 and standard error carries the line `ERROR: architecture i686 is not supported. Supported targets: amd64, arm64, armv6, armv7. See SPEC/BUILD.md for the build matrix.` No release asset is requested
+- [ ] The architecture guard rejects both values `detect_arch()` can return for a host the build does not serve, `unsupported` and `unknown`, with that same message and exit code
+- [ ] An unsupported operating system fails the same way: the script exits 1 and standard error carries the line `ERROR: operating system {uname} is not supported. Supported systems: linux, darwin, freebsd, openbsd, windows. See SPEC/BUILD.md for the build matrix.` with `{uname}` the raw `uname -s` output
+- [ ] Every failure the script reports goes through the `error` helper, so every error line begins with the `ERROR: ` prefix and no path prints a bare message (see Diagnostic Output)
 
 ### Raspberry Pi Support
 - [ ] Detects ARMv6 on Pi Zero/1

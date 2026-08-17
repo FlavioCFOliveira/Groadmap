@@ -111,7 +111,11 @@ detect_arch() {
                 arch="armv6"
             fi
             ;;
-        i386|i686)      arch="386" ;;
+        # Recognised, but the build does not produce it: SPEC/BUILD.md ships no
+        # 32-bit x86 target. Reported as unsupported rather than mapped to 386,
+        # which would ask the release for an asset that does not exist and fail
+        # late on the download instead of here.
+        i386|i686)      arch="unsupported" ;;
         *)              arch="unknown" ;;
     esac
     echo "$arch"
@@ -348,13 +352,19 @@ main() {
     local arch
     arch=$(detect_arch)
 
+    # Both guards reject before anything is downloaded, and both report the raw
+    # uname output rather than the mapped name, because the mapping is precisely
+    # what failed. Messages per SPEC/DEPLOY.md § Platform Detection; the ERROR:
+    # prefix comes from the error helper (see § Diagnostic Output).
     if [ "$os" = "unknown" ]; then
-        error "Unsupported operating system: $(uname -s)"
+        error "operating system $(uname -s) is not supported. Supported systems: linux, darwin, freebsd, openbsd, windows. See SPEC/BUILD.md for the build matrix."
         exit 1
     fi
 
-    if [ "$arch" = "unknown" ]; then
-        error "Unsupported architecture: $(uname -m). Supported targets: amd64, arm64, armv6, armv7."
+    # "unsupported" is a recognised architecture the build does not produce;
+    # "unknown" is one detect_arch does not recognise at all. Both stop here.
+    if [ "$arch" = "unsupported" ] || [ "$arch" = "unknown" ]; then
+        error "architecture $(uname -m) is not supported. Supported targets: amd64, arm64, armv6, armv7. See SPEC/BUILD.md for the build matrix."
         exit 1
     fi
 

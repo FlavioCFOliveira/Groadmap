@@ -66,6 +66,7 @@ TEST_MODULES = [
     "test_46_graph_parallel_edge_predicates",
     "test_47_install_script_extraction",
     "test_48_graph_clause_surface",
+    "test_49_install_platform_guards",
 ]
 
 # Stress tests (run separately due to time/data volume)
