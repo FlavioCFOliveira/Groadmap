@@ -5,6 +5,106 @@ All notable changes to **Groadmap** (`rmp`) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Comments on tasks and sprints: a durable record of findings and decisions.**
+  Groadmap recorded what work was planned and what state it was in, but nothing of
+  what was learned while doing it. A task or a sprint can now answer, months later
+  and to someone who was not there, what was tried, what was found, and why it went
+  the way it did. A comment is a typed, timestamped log entry attached to a task or
+  a sprint; a task or sprint holds as many as the work needs, and the log is read
+  oldest first, because the order is the story it tells.
+
+  Eight new subcommands, four in each family, in the flat form
+  `<family> comment-<verb>`. There is no separate `rmp comment` family and no
+  three-level `rmp task comment add` form.
+
+  | Subcommand | Alias | Takes | Purpose |
+  |------------|-------|-------|---------|
+  | `task comment-add` / `sprint comment-add` | `c-add` | the TASK's or SPRINT's id | Add one typed comment |
+  | `task comment-list` / `sprint comment-list` | `c-ls` | the TASK's or SPRINT's id | List the log, oldest first, optionally filtered by `--type` |
+  | `task comment-edit` / `sprint comment-edit` | `c-edit` | the COMMENT's own id | Change the type and/or the body |
+  | `task comment-remove` / `sprint comment-remove` | `c-rm` | the COMMENT's own id | Delete one comment, irreversibly |
+
+  `comment-add` emits `{"id": <int>}`, `comment-list` emits an array, and the two
+  mutating subcommands emit empty stdout on success, following the conventions the
+  rest of the CLI already uses.
+
+- **A per-entity comment type, mandatory and without a default.** A task comment
+  accepts `FINDING`, `HYPOTHESIS`, `TEST`, `DECISION`, `PROGRESS`, `UPDATE`, and
+  `NOTE`; a sprint comment accepts only `FINDING`, `DECISION`, `PROGRESS`, and
+  `UPDATE`. The asymmetry is deliberate: a sprint records how the sprint went, not
+  the execution diary of its individual tasks, so the three task-only values are
+  rejected on a sprint with exit code 6 and a message naming the valid set. The
+  database enforces the same two subsets independently, through a `CHECK`
+  constraint on each comment table.
+
+  `-y, --type` therefore carries two unrelated enums in the `task` family: a task
+  type on `list`, `create`, and `edit`, and a comment type on the comment
+  subcommands. A value from one set is rejected by the other. Each family's help
+  lists only its own set, and the AI Agent Contract exposes them as two separate
+  enum keys, `TaskCommentType` and `SprintCommentType`.
+
+- **A comment body from standard input.** The body is supplied through `--body` or,
+  when that flag is absent, read in full from standard input to EOF — the same
+  mechanism the `graph` subcommands already use for `--query`, so a multi-line
+  finding can be piped or redirected in without shell quoting. There is no
+  `--body-file` flag and no path argument; the commands open no file. On
+  `comment-edit` standard input is read only when `--type` is absent too, so a
+  type-only edit never blocks waiting for input. `--type` is validated before the
+  body is resolved, so a missing or invalid type fails immediately rather than
+  leaving the command waiting on input it would reject anyway. Bodies are trimmed
+  at the edges, preserve interior line breaks, are capped at 4096 characters, and
+  reject control characters like every other free-text field.
+
+- **Comments on the read-only web interface.** The task detail modal renders the
+  task's comments as a chronological timeline placed last in the modal body, and
+  the dedicated sprint page gains a Comments card, after the member-tasks card,
+  holding the sprint's own comments. Both show, per entry, the type as a neutral
+  badge, the creation timestamp, an edited marker when the comment has been
+  changed, and the body with the author's line breaks preserved; both show a clear
+  empty state when there is nothing recorded yet. The comments of every task
+  rendered on a page are loaded in one grouped query, never one query per task. The
+  interface displays comments and never writes them: the CLI remains the sole write
+  path.
+
+- **Six new audit operations.** `TASK_COMMENT_CREATE`, `TASK_COMMENT_UPDATE`,
+  `TASK_COMMENT_DELETE`, `SPRINT_COMMENT_CREATE`, `SPRINT_COMMENT_UPDATE`, and
+  `SPRINT_COMMENT_DELETE`. Each is written in the same transaction as the change it
+  records, and each is logged against the **parent** entity, never against the
+  comment: the entry names the task or the sprint, so a deleted comment still
+  leaves a trace that it existed and was removed. Listing comments is a read and
+  writes no audit entry.
+
+### Changed
+
+- **Database schema `1.8.0` → `1.9.0`.** Migration `1.8.0 → 1.9.0` adds the
+  `task_comments` and `sprint_comments` tables and one index each,
+  `idx_task_comments_task_created` and `idx_sprint_comments_sprint_created`, both
+  on `(parent_id, created_at ASC)` to serve the oldest-first read directly. The two
+  tables are independent, so comment ids are per-family: `rmp task comment-edit 7`
+  and `rmp sprint comment-edit 7` address two unrelated comments, and an id that
+  exists only in the other family is a not-found condition (exit code 4).
+
+### Notes
+
+- **Comments are strictly additive.** No existing command contract, exit code, or
+  state transition changes. Comments are accepted in every task and sprint status,
+  including `COMPLETED` and `CLOSED`; no comment subcommand checks or changes an
+  entity's status, no comment ever gates a transition, and `task reopen` does not
+  touch comments. The `Task` and `Sprint` JSON objects are unchanged: they carry no
+  `comments` array and no comment count, and comments are read only through
+  `comment-list` and the web interface.
+- **An edit is a replacement.** `comment-edit` replaces the stored body in place and
+  stamps `updated_at`; the previous text is not retained anywhere and cannot be
+  recovered. The audit log records that an edit happened, not what it replaced.
+- See `SPEC/COMMANDS.md § Task Comments` and `§ Sprint Comments`,
+  `SPEC/MODELS.md § Comment Type`, `SPEC/DATABASE.md § Comments`,
+  `SPEC/DATA_FORMATS.md § Task Comment`, `SPEC/WEB.md § Task Detail Modal`, and
+  `SPEC/VERSION.md § Migration 1.8.0 → 1.9.0`.
+
 ## [1.14.0] - 2026-08-17
 
 A release that widens what the project can ship and tightens how it ships it. The
