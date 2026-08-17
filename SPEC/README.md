@@ -69,7 +69,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Application version | `VERSION.md` |
 | Schema migrations | `VERSION.md § Migrations` |
 | Build / CI / lint | `BUILD.md` |
-| Validation gates (`make check` and the six targets it runs) | `BUILD.md § Validation Gates` |
+| Validation gates (the six gates, and their enforcement locally, in CI, and at release) | `BUILD.md § Validation Gates` |
 | Security scan (`gosec`, accepted findings, scope exclusion) | `BUILD.md § Security Scan: gosec` |
 | Installation / release | `DEPLOY.md` |
 
@@ -121,6 +121,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
 | Graph store concurrency / writer serialisation / recovery | `IMPLEMENTATION.md § Graph Store Concurrency` |
 | Minimum Go version and external dependencies | `BUILD.md § Go Toolchain` |
+| Validation gate set and where it is enforced (local, CI, release) | `BUILD.md § Validation Gates` |
 | Help text canonical | code in `internal/commands/*.go` (structure in `HELP.md`) |
 | AI agent contract JSON schema | `DATA_FORMATS.md § AI Agent Contract` |
 | AI agent contract generation rules | `ARCHITECTURE.md § AI Agent Contract Generation` |

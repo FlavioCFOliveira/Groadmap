@@ -227,28 +227,59 @@ same terms as every other target the project cannot run locally.
 
 ## GitHub Actions Workflow
 
+Two workflows run in GitHub Actions, and both enforce the complete validation
+gate set. `Validation Gates` — not this section — is the authoritative statement
+of which gates exist, what each one runs, and where each one is enforced. This
+section describes only the shape of each workflow: what triggers it, which jobs
+it declares, and the order those jobs run in.
+
+Both workflows take the Go toolchain from `go.mod` (`go-version-file: go.mod`),
+so both track the version required by `Go Toolchain`.
+
 ### Release Workflow
+
+**File:** `.github/workflows/release.yml`
 
 **Trigger:** Push of tags matching `v*`
 
 **Jobs:**
 
-1. **test**
-   - Use Go 1.26.5 or later (see `Go Toolchain`)
-   - Run `go fmt`, `go vet`
-   - Run `go test ./...`
-   - Validate code quality before build
+1. **test** (job name "Pre-release Tests")
+   - Runs every validation gate except `build`: `fmt`, `vet`, `lint`, `test`, and
+     `security`
+   - Installs the tools those gates need, `golangci-lint` and `gosec`; a tool
+     that is absent fails the job (see `Validation Gates`)
+   - Every gate MUST pass before the build job starts
 
-2. **build**
-   - Build binaries for all matrix targets
-   - Upload artifacts with naming: `release-{goos}-{goarch}{goarm}`
-   - Archive naming: `rmp-${version}-{target}.tar.gz` (or `.zip` for Windows)
+2. **build** — declares `needs: test`
+   - The `build` gate: builds the binary for all eleven Primary Platforms listed
+     in `Supported Build Targets`, in the same order
+   - Upload artifacts with naming: `release-{target}`
+   - Archive naming: `rmp-{version}-{target}.tar.gz` (or `.zip` for Windows)
+   - Generates a SHA256 checksum file for each archive
+
+   `{target}` above is the Target Name from `Supported Build Targets`. It is
+   `{goos}-{goarch}` for nine of the eleven targets, and for the two ARM targets
+   the ARM version follows a literal `v`: `linux-armv6` and `linux-armv7`. The
+   artifact for the ARMv6 target is therefore `release-linux-armv6` and its
+   archive `rmp-{version}-linux-armv6.tar.gz`. Writing that suffix as
+   `{goarch}{goarm}` would name them `linux-arm6` and `linux-arm7`, which is
+   neither what the workflow produces nor what the installation script asks for
+   (see `DEPLOY.md § Architecture Detection`).
+
+3. **release** — declares `needs: build`
+   - Downloads every build artifact and creates the GitHub release, attaching the
+     archives and their checksums
 
 **Permissions:**
 ```yaml
 permissions:
   contents: read
 ```
+
+The workflow grants `contents: read`. Only the `release` job, which creates the
+GitHub release, raises its own permission to `contents: write`; no other job
+writes to the repository.
 
 **Build Configuration:**
 ```yaml
@@ -261,27 +292,106 @@ env:
 
 ### CI Workflow
 
-**Trigger:** Pull requests to main branch
+**File:** `.github/workflows/ci.yml`
+
+**Trigger:** Push to the `main` branch, and pull requests targeting `main`
 
 **Jobs:**
-- Run tests
-- Validate formatting
-- Static analysis with `go vet`
+
+1. **test**
+   - Runs the same gates as the release workflow's gate job: `fmt`, `vet`,
+     `lint`, `test`, and `security`, installing `golangci-lint` and `gosec` in
+     the job
+   - Collects a coverage profile while running the `test` gate and uploads it.
+     The upload reports coverage; it is not a gate, and its failure does not fail
+     the job
+   - Every gate MUST pass before the build job starts
+
+2. **build** — declares `needs: test`
+   - The `build` gate: builds the four-target fast-feedback subset defined in
+     `Validation Gates`, for the rolling `dev` pre-release
+
+3. **dev-release** — declares `needs: build`
+   - Publishes the rolling `dev` pre-release. It runs only for a push to `main`,
+     never for a pull request
+
+**Permissions:**
+```yaml
+permissions:
+  contents: read
+```
+
+The CI workflow follows the same least-privilege pattern as the release
+workflow. It grants `contents: read` at workflow level, and only the
+`dev-release` job — the one job that writes to the repository, because it
+replaces the rolling `dev` release and its tag — raises its own permission to
+`contents: write`. The gate job and the build job read; neither may write.
 
 ## Static Analysis
 
+Two tools implement two of the validation gates: `golangci-lint` implements
+`lint`, and `gosec` implements `security`. Each has its own section below. The
+three rules in this preamble govern both of them.
+
+**Both tools are pinned to an exact version.** The pinned versions are
+`golangci-lint v2.12.2` and `gosec v2.28.0`. A tool's version is part of its
+gate's meaning, so the pin is what makes the gate mean the same thing in the
+three places that enforce it (see `Validation Gates`). Three reasons set this
+rule:
+
+1. Rules are added, changed, and retired between releases of either tool, so two
+   versions can disagree about the same source. Pinning keeps the finding set,
+   and therefore each gate's verdict, the same everywhere.
+2. It keeps the whole gate identical, not just the command. Scanned scope,
+   accepted suppressions, and the active rule set all follow from the version.
+3. An unpinned tool can fail a pipeline with no change in the repository. A
+   release that adds a rule would break a build that no commit touched. Every
+   input that decides whether a gate passes is pinned to an exact version in this
+   project — these two tools, and the modules the build compiles against
+   (GoGraph, the SQLite driver, and the two modules that driver requires) — and
+   the workflows likewise pin every GitHub Action they use to an exact version.
+
+**The pins bind local installations too.** `make lint` and `make security` run
+whichever `golangci-lint` and `gosec` the shell finds on `PATH`; neither target
+installs or verifies a version. A developer whose `PATH` resolves either tool to
+a different version is therefore not running the gate this specification
+defines, and `make check` on that machine does not mean what a green pipeline
+means. Install the pinned version of both tools, and re-check after any change
+to `PATH` or to how either tool was installed.
+
+**Where the pins live, and how they change.** Each tool's version appears in
+exactly three places: the tool's section below, `.github/workflows/ci.yml`, and
+`.github/workflows/release.yml`. All three MUST name the same version for a
+given tool. Raising either pin is a deliberate change, never an incidental one:
+it updates all three in the same commit, and the new version's findings MUST be
+reviewed before the change lands, because a tool upgrade can fail its gate on
+source that no commit modified.
+
 ### Linter: golangci-lint
 
-The project uses [golangci-lint](https://golangci-lint.run) for static analysis. Configuration is in `.golangci.yml`.
+The project uses [golangci-lint](https://golangci-lint.run) for static analysis.
+Configuration is in `.golangci.yml`, which declares `version: "2"` and therefore
+requires a golangci-lint v2 release. The pinned version is **v2.12.2**.
 
 **Install:**
 ```bash
-# macOS
-brew install golangci-lint
-
-# Any platform
-go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
 ```
+
+The module path MUST include the `/v2` suffix. The v1 path
+(`github.com/golangci/golangci-lint/cmd/golangci-lint`) is still published and
+still installs, but it resolves to the final v1 release, and a v1 binary cannot
+read this project's `version: "2"` configuration.
+
+A package manager may be used instead, provided it installs exactly the pinned
+version. `golangci-lint --version` reports the version it was built from, so it
+confirms which binary is on `PATH`.
+
+In the workflows, the pinned version is the `version` input passed to the
+`golangci-lint` GitHub Action: `version: v2.12.2`. This is separate from the pin
+on the action itself (`golangci/golangci-lint-action@v9.2.1`), which selects the
+action's code rather than the linter's. Both are exact, and neither substitutes
+for the other.
 
 **Run:**
 ```bash
@@ -335,13 +445,20 @@ Intentional deviations are documented in `.golangci.yml`:
 
 The project scans its Go source for security defects with
 [gosec](https://github.com/securego/gosec). The scan is a validation gate, not an
-optional check: `make check` runs it alongside the other five gates (see
-`Validation Gates`).
+optional check: it runs alongside the other five gates everywhere the gate set is
+enforced (see `Validation Gates`). The pinned version is **v2.28.0**.
 
 **Install:**
 ```bash
-go install github.com/securego/gosec/v2/cmd/gosec@latest
+go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
 ```
+
+**Verifying the installed version.** Unlike `golangci-lint`, `gosec` does not
+report a usable version when it is built by `go install`: `gosec --version`
+prints `dev`, because the release version is stamped by the project's own release
+build. It therefore cannot confirm the pin. Read the module version the binary
+was built from instead, with `go version -m "$(which gosec)"`, whose `mod` line
+names the version.
 
 **Run:**
 ```bash
@@ -370,11 +487,13 @@ accepted findings and the reason each one is accepted. That file is a record for
 reviewers, not scan configuration: the invocation above passes no `-conf` flag,
 and `gosec` applies a configuration file only when `-conf` names one.
 
-**The gate is local-only.** No pipeline runs `gosec`. Neither
-`.github/workflows/ci.yml` nor `.github/workflows/release.yml` invokes it, so the
-scan runs only where a developer or a release engineer runs `make check` or
-`make security` on a local machine. A green CI run is therefore not evidence that
-the security gate passed.
+**Where the gate runs.** The scan is not local-only. It runs in all three places
+that enforce the validation gates — the local `make check`, the CI workflow
+(`.github/workflows/ci.yml`), and the release workflow
+(`.github/workflows/release.yml`) — under the same invocation in each. A green CI
+run and a green release run are therefore evidence that the security gate passed.
+Each workflow installs `gosec` in the job that runs the scan: a host without
+`gosec` fails the job, and never skips the gate (see `Validation Gates`).
 
 ## Build Commands
 
@@ -401,11 +520,15 @@ GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -o ./bin/rmp-linux-armv7 ./
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ./bin/rmp-linux-arm64 ./cmd/rmp
 ```
 
-### Validation Gates
+## Validation Gates
 
-`make check` is the aggregate validation command. It runs the six gates below, in
-the order the target declares them, and every one of them MUST pass before a
-commit.
+Groadmap has exactly one set of validation gates, and this section is its single
+authoritative definition. The gate set is the six gates in the table below.
+Everything that enforces gates — the local pre-commit check, the CI workflow, and
+the release workflow — enforces this set, whole and unchanged.
+
+`make check` is the aggregate command that runs the six gates locally, in the
+order the target declares them, and every one of them MUST pass before a commit.
 
 ```bash
 make check
@@ -424,9 +547,94 @@ Each gate is also available on its own, for example `make lint` or
 `make security`. Running the gates individually is a convenience during
 development; it does not replace `make check` before a commit.
 
+### Where the Gate Set Is Enforced
+
+The same six gates run in three places, and they mean the same thing in each:
+
+1. **Locally, before every commit** — `make check`.
+2. **In the CI workflow** (`.github/workflows/ci.yml`), on every push to `main`
+   and on every pull request targeting `main`.
+3. **In the release workflow** (`.github/workflows/release.yml`), on every push
+   of a `v*` tag.
+
+There is no per-pipeline exception. No pipeline runs a subset of the gates, and
+no gate belongs to one place only. A green CI run and a green release run are
+therefore each evidence that all six gates passed, and a `v*` tag cannot publish
+a release unless the linter and the security scan both ran and reported nothing.
+
+In both workflows, the gates other than `build` run in the workflow's gate job,
+and the `build` gate is the workflow's build job. The build job MUST declare
+`needs:` on the gate job, and the job that publishes artefacts MUST declare
+`needs:` on the build job. No job may build or publish an artefact in parallel
+with the gates, or independently of them.
+
+### A Missing Tool Is a Failure, Never a Skip
+
 Two gates need a tool that the Go toolchain does not provide: `lint` needs
 `golangci-lint` and `security` needs `gosec`. The install command for each one is
-in its own section above.
+in its own section above. Both tools are pinned to an exact version, and every
+place that runs those gates — the two workflows and a developer's machine alike —
+installs the pinned version; see `Static Analysis`.
+
+Each workflow MUST install both tools in the job that runs those gates. All of
+the following are forbidden:
+
+- Testing whether a tool is present and continuing when it is absent.
+- Reporting a gate as passed, waived, or not applicable because its tool is
+  missing from the host.
+- Allowing a gate step to fail without failing its job, for example with
+  `continue-on-error`.
+
+If a tool cannot be installed, the job fails. No project policy permits skipping
+a gate, and none may be invented: a host that lacks `gosec` is a host that fails
+the run, not a host that is exempt from the security gate. The same rule governs
+a local run — whoever lacks either tool has not run `make check`.
+
+**No release may report a gate as skipped.** Every gate MUST have run and passed
+in the release workflow before a release is published. Release notes, release
+records, and every other release artefact MUST NOT report a gate as skipped,
+waived, not installed, or not applicable. If a gate did not run and pass, the
+release MUST NOT be published.
+
+### Permitted Differences Between the Three Pipelines
+
+The gate set does not change from one place to another, but three gates run with
+a wider scope in the workflows than they do locally. These are the only permitted
+differences: each one adds to the local gate, and none of them replaces or
+narrows it.
+
+1. **`fmt` fails instead of rewriting.** Locally, `go fmt ./...` rewrites a badly
+   formatted file in place. Both workflows run `go fmt ./...` and then
+   `git diff --exit-code`, so unformatted source fails the job instead of being
+   silently corrected inside the runner.
+2. **`test` runs with the race detector, and CI also measures coverage.** Locally
+   the gate is `go test ./...`. Both workflows run the suite verbosely and with
+   the race detector (`go test -v -race ./...`); the CI workflow additionally
+   writes a coverage profile (`-coverprofile=coverage.out`) and uploads it. The
+   coverage upload is reporting, not a gate, and its failure does not fail the
+   job.
+3. **`build` is a host build locally and a matrix build in the workflows.**
+   `make check` builds the binary for the host platform only. The CI workflow
+   builds a four-target fast-feedback subset — `linux/amd64`, `linux/arm64`,
+   `darwin/amd64`, and `darwin/arm64` — for the rolling `dev` pre-release. The
+   release workflow builds all eleven Primary Platforms and ships them. That
+   subset is a statement about feedback speed, not about portability: the `test`
+   gate compiles every Primary Platform wherever it runs, because the unit-test
+   suite cross-compiles the whole target table (see `Supported Build Targets`).
+   No supported target can therefore break unnoticed in any of the three places.
+
+Nothing else may differ. In particular, `vet`, `lint`, and `security` run the
+same command over the same scope in all three places:
+
+- `vet` runs `go vet ./...`.
+- `lint` runs `golangci-lint run ./...` at the pinned linter version, governed by
+  `.golangci.yml`. A workflow may run it through the official `golangci-lint`
+  GitHub Action, which installs the pinned version and runs that command; the
+  timeout a workflow passes to the action is an execution limit, not a change of
+  scope.
+- `security` runs `gosec -exclude-dir=.claude/worktrees ./...`, at the pinned
+  scanner version, so the scanned scope, the accepted `#nosec` suppressions, and
+  the rule set are identical everywhere.
 
 ## Artifact Structure
 
@@ -454,7 +662,17 @@ rmp-{version}-{target}.tar.gz
 - [ ] BSD binaries report the expected OS in the ELF note: `file` shows `version 1 (FreeBSD)` for the FreeBSD target and `version 1 (OpenBSD)` for both OpenBSD targets. This is the only verification these targets receive, since none of them is executed (see Supported Build Targets)
 
 ### CI/CD Verification
-- [ ] Workflow triggers on tag push
-- [ ] Test job passes before build
+- [ ] The release workflow triggers on the push of a `v*` tag, and the CI workflow triggers on a push to `main` and on a pull request targeting `main`
+- [ ] Each workflow file runs the complete gate set: reading `.github/workflows/ci.yml` and `.github/workflows/release.yml` shows a step for `fmt` (`go fmt ./...` followed by `git diff --exit-code`), `vet`, `lint`, `test`, and `security` in the gate job, plus a build job that is the `build` gate (see Validation Gates)
+- [ ] The gate set in each workflow file matches the `check` target of the `Makefile` gate for gate: no gate is present in one and absent from the other
+- [ ] Each workflow installs `golangci-lint` and `gosec` in the job that runs those gates. No step tests whether a tool is present and continues without it, and no gate step carries `continue-on-error`
+- [ ] Both workflows pin `gosec` to the exact version this specification names, installing it with the command the specification gives (`go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0`), and that version is one and the same in `.github/workflows/ci.yml`, in `.github/workflows/release.yml`, and in Security Scan: gosec. Confirm an installed scanner with `go version -m "$(which gosec)"`, whose `mod` line names the version; `gosec --version` prints `dev` for a `go install` build and proves nothing
+- [ ] Both workflows pin `golangci-lint` to the exact version this specification names, passing `version: v2.12.2` to the `golangci-lint` action, and that version is one and the same in `.github/workflows/ci.yml`, in `.github/workflows/release.yml`, and in Linter: golangci-lint. The action itself stays pinned to its own exact version, which is a separate pin. Confirm an installed linter with `golangci-lint --version`
+- [ ] The documented local install command for each tool installs the pinned version, and the linter it installs can actually run this project: the golangci-lint module path carries the `/v2` suffix, so `golangci-lint run ./...` reads `.golangci.yml` (`version: "2"`) instead of rejecting it
+- [ ] `gosec` runs in both workflows with the invocation the `security` gate defines (`gosec -exclude-dir=.claude/worktrees ./...`), so the scanned scope and the accepted `#nosec` suppressions are the same everywhere
+- [ ] Every gate fails its job when it fails: introducing one violation at a time — an unformatted file, a `go vet` finding, a failing test, a `golangci-lint` violation, and an unsuppressed `gosec` finding — fails the workflow run in each case, in both workflows
+- [ ] No artefact is built or published on a run whose gates did not pass: the build job declares `needs:` on the gate job, and the publishing job declares `needs:` on the build job
+- [ ] The release workflow builds all eleven Primary Platforms, and the CI build job builds the four-target fast-feedback subset (see Validation Gates, Permitted Differences Between the Three Pipelines)
 - [ ] Artifacts uploaded successfully
-- [ ] Permissions set to minimum required (`contents: read`)
+- [ ] Permissions set to minimum required in BOTH workflows: each grants `contents: read` at workflow level, and exactly one job in each raises that to `contents: write` — `release` in the release workflow, `dev-release` in the CI workflow. No gate job and no build job holds write permission
+- [ ] No release reports any gate as skipped, waived, not installed, or not applicable

@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   test:
@@ -33,20 +33,35 @@ jobs:
       - name: Run go vet
         run: go vet ./...
 
+      # The linter binary is pinned, not just the action: an unpinned linter can
+      # fail this job on a release nothing in the repository asked for. See
+      # SPEC/BUILD.md § Validation Gates.
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v9.2.1
         with:
-          version: latest
+          version: v2.12.2
           args: --timeout=5m
 
       - name: Run tests
         run: go test -v -race -coverprofile=coverage.out ./...
 
+      # Reporting, not a gate: its failure must not fail the job.
       - name: Upload coverage
         uses: codecov/codecov-action@v6.0.1
         with:
           files: ./coverage.out
           fail_ci_if_error: false
+
+      # gosec is pinned to the version SPEC/BUILD.md § Security Scan: gosec
+      # names, so the rule set, the scanned scope and the accepted #nosec
+      # suppressions are identical here, in the release workflow and in a local
+      # `make check`. A failure to install fails the job: the gate is never
+      # skipped.
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
+
+      - name: Run gosec
+        run: gosec -exclude-dir=.claude/worktrees ./...
 
   build:
     name: Build
@@ -116,6 +131,10 @@ jobs:
     name: Create Dev Release
     needs: build
     runs-on: ubuntu-latest
+    # The only job in this workflow that writes to the repository: it replaces
+    # the rolling `dev` release and its tag. The gate and build jobs read.
+    permissions:
+      contents: write
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - name: Checkout code

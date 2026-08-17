@@ -32,8 +32,27 @@ jobs:
       - name: Run go vet
         run: go vet ./...
 
+      # The linter binary is pinned, not just the action: an unpinned linter can
+      # fail this job on a release nothing in the repository asked for. See
+      # SPEC/BUILD.md § Validation Gates.
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v9.2.1
+        with:
+          version: v2.12.2
+          args: --timeout=5m
+
       - name: Run tests
         run: go test -v -race ./...
+
+      # gosec is pinned to the version SPEC/BUILD.md § Security Scan: gosec
+      # names, so the rule set, the scanned scope and the accepted #nosec
+      # suppressions are identical here, in CI and in a local `make check`.
+      # A failure to install fails the job: the gate is never skipped.
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
+
+      - name: Run gosec
+        run: gosec -exclude-dir=.claude/worktrees ./...
 
   build:
     name: Build Release Binaries

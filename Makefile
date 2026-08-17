@@ -16,11 +16,18 @@ fmt:
 vet:
 	go vet ./...
 
-# Run golangci-lint (install: brew install golangci-lint)
+# Run golangci-lint. Both tools below are pinned to an exact version, and the
+# pin binds local installations too: these targets run whatever is on PATH, so a
+# different version is not the gate SPEC/BUILD.md defines. The module path needs
+# the /v2 suffix -- a v1 binary cannot read .golangci.yml (version: "2").
+# install: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
 lint:
 	golangci-lint run ./...
 
-# Run gosec security scan (install: go install github.com/securego/gosec/v2/cmd/gosec@latest)
+# Run gosec security scan.
+# install: go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
+# Verify with `go version -m "$(shell which gosec)"`; gosec --version prints
+# "dev" for a go install build and proves nothing.
 security:
 	gosec -exclude-dir=.claude/worktrees ./...
 

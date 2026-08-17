@@ -192,7 +192,9 @@ Releases are created automatically when a tag matching `v*` pattern is pushed:
 1. Push git tag: `git tag -a v1.0.0 -m "Release v1.0.0"`
 2. Push tag: `git push origin v1.0.0`
 3. GitHub Actions workflow triggers automatically
-4. Tests run, binaries are built for all platforms
+4. The workflow runs the complete validation gate set (see
+   `BUILD.md § Validation Gates`); binaries are built for all platforms only
+   after every gate passes
 5. GitHub Release is created automatically with all assets attached
 
 ### GitHub Actions Workflow
@@ -206,7 +208,10 @@ Releases are created automatically when a tag matching `v*` pattern is pushed:
 
 1. **Pre-release Tests**
    - Run on ubuntu-latest
-   - Execute: `go fmt`, `go vet`, `go test -race`
+   - Execute every validation gate except `build`: `fmt`, `vet`, `lint`, `test`,
+     and `security`. The gate set, the exact command each gate runs, and the rule
+     that a missing tool fails the job instead of skipping the gate are specified
+     once in `BUILD.md § Validation Gates`
    - Must pass before building
 
 2. **Build Release Binaries**
@@ -269,6 +274,7 @@ Each release includes:
 
 ### Release Checklist
 
+- [ ] Every validation gate ran and passed in the release workflow, and no gate is reported as skipped, waived, or not installed (see `BUILD.md § Validation Gates`)
 - [ ] All binaries built successfully
 - [ ] SHA256 checksums generated
 - [ ] Release notes prepared
