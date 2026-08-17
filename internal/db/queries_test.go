@@ -56,6 +56,38 @@ func testContext() context.Context {
 	return context.Background()
 }
 
+// writeAuditEntry seeds one audit row through LogAuditTx — the function every
+// production writer calls — inside a transaction of its own.
+//
+// Fixtures go through the shipped write path deliberately. The package used to
+// expose a convenience method that inserted an audit row outside any
+// transaction; nothing but tests ever called it, so the rows these tests read
+// back were produced by SQL the binary never ran. It is gone (task #176), and
+// this helper is the replacement.
+//
+// It returns the error instead of failing the test, because the concurrency
+// tests count failures across goroutines rather than stopping at the first.
+func writeAuditEntry(db *DB, entry *models.AuditEntry) error {
+	return db.WithTransaction(func(tx *sql.Tx) error {
+		return LogAuditTx(tx,
+			models.AuditOperation(entry.Operation),
+			models.EntityType(entry.EntityType),
+			entry.EntityID,
+			entry.PerformedAt,
+		)
+	})
+}
+
+// seedAuditEntry is writeAuditEntry for the tests that must stop on failure.
+func seedAuditEntry(t *testing.T, db *DB, entry *models.AuditEntry) {
+	t.Helper()
+
+	if err := writeAuditEntry(db, entry); err != nil {
+		t.Fatalf("seeding audit entry (%s %s %d): %v",
+			entry.Operation, entry.EntityType, entry.EntityID, err)
+	}
+}
+
 // ==================== TASK TESTS ====================
 
 func TestCreateTask(t *testing.T) {
@@ -839,33 +871,6 @@ func TestUpdateSprintStatus(t *testing.T) {
 	}
 }
 
-func TestDeleteSprint(t *testing.T) {
-	db, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	// Create sprint
-	sprint := &models.Sprint{
-		Status:      models.SprintPending,
-		Title:       "To delete",
-		Description: "To delete",
-		CreatedAt:   time.Now().Format(time.RFC3339),
-	}
-
-	id, _ := db.CreateSprint(testContext(), sprint)
-
-	// Delete
-	err := db.DeleteSprint(testContext(), id)
-	if err != nil {
-		t.Fatalf("failed to delete sprint: %v", err)
-	}
-
-	// Verify
-	_, err = db.GetSprint(testContext(), id)
-	if err == nil {
-		t.Error("expected error after deleting sprint")
-	}
-}
-
 func TestAddTasksToSprint(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -1164,24 +1169,72 @@ func TestMoveTasksBetweenSprints_NoAuditOnFailedTransaction(t *testing.T) {
 
 // ==================== AUDIT TESTS ====================
 
-func TestLogAuditEntry(t *testing.T) {
+// TestLogAuditTxWritesEveryColumn pins the one audit writer the binary has.
+// It asserts the stored row field by field, not merely that an insert
+// succeeded: a writer that dropped a column, swapped operation with
+// entity_type, or wrote its own timestamp instead of the caller's would still
+// insert a row, and the audit log would be quietly wrong.
+func TestLogAuditTxWritesEveryColumn(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	entry := &models.AuditEntry{
-		Operation:   "TASK_CREATE",
-		EntityType:  "TASK",
-		EntityID:    1,
-		PerformedAt: time.Now().Format(time.RFC3339),
+	const performedAt = "2026-08-17T09:41:05.221Z"
+	if err := db.WithTransaction(func(tx *sql.Tx) error {
+		return LogAuditTx(tx, models.OpSprintDelete, models.EntitySprint, 42, performedAt)
+	}); err != nil {
+		t.Fatalf("LogAuditTx: %v", err)
 	}
 
-	id, err := db.LogAuditEntry(testContext(), entry)
+	entries, err := db.GetAuditEntries(testContext(), &AuditFilter{Limit: 10})
 	if err != nil {
-		t.Fatalf("failed to log audit entry: %v", err)
+		t.Fatalf("GetAuditEntries: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected exactly 1 audit row, got %d", len(entries))
 	}
 
-	if id == 0 {
-		t.Error("expected non-zero audit ID")
+	got := entries[0]
+	if got.Operation != string(models.OpSprintDelete) {
+		t.Errorf("operation = %q, want %q", got.Operation, models.OpSprintDelete)
+	}
+	if got.EntityType != string(models.EntitySprint) {
+		t.Errorf("entity_type = %q, want %q", got.EntityType, models.EntitySprint)
+	}
+	if got.EntityID != 42 {
+		t.Errorf("entity_id = %d, want 42", got.EntityID)
+	}
+	if got.PerformedAt != performedAt {
+		t.Errorf("performed_at = %q, want %q", got.PerformedAt, performedAt)
+	}
+	if got.ID == 0 {
+		t.Error("expected the row to carry a non-zero id")
+	}
+}
+
+// TestLogAuditTxRollsBackWithItsTransaction proves the audit row shares the
+// fate of the mutation it accompanies: SPEC/ARCHITECTURE.md § Security
+// Guarantees forbids a committed audit entry for a change that rolled back.
+func TestLogAuditTxRollsBackWithItsTransaction(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	err := db.WithTransaction(func(tx *sql.Tx) error {
+		if logErr := LogAuditTx(tx, models.OpTaskCreate, models.EntityTask, 7,
+			"2026-08-17T09:42:00.000Z"); logErr != nil {
+			return logErr
+		}
+		return errIntentional
+	})
+	if !errors.Is(err, errIntentional) {
+		t.Fatalf("expected the intentional error to surface, got %v", err)
+	}
+
+	total, err := db.CountAuditEntries(testContext())
+	if err != nil {
+		t.Fatalf("CountAuditEntries: %v", err)
+	}
+	if total != 0 {
+		t.Errorf("a rolled-back transaction left %d audit rows behind, want 0", total)
 	}
 }
 
@@ -1197,7 +1250,7 @@ func TestGetAuditEntries(t *testing.T) {
 			EntityID:    i + 1,
 			PerformedAt: time.Now().Format(time.RFC3339),
 		}
-		db.LogAuditEntry(testContext(), entry)
+		seedAuditEntry(t, db, entry)
 	}
 
 	// Get all entries
@@ -1247,9 +1300,7 @@ func TestCountAuditEntries(t *testing.T) {
 			EntityID:    i + 1,
 			PerformedAt: time.Now().UTC().Format(time.RFC3339),
 		}
-		if _, err := db.LogAuditEntry(testContext(), entry); err != nil {
-			t.Fatalf("seeding audit entry %d: %v", i, err)
-		}
+		seedAuditEntry(t, db, entry)
 	}
 
 	total, err = db.CountAuditEntries(testContext())
@@ -1388,7 +1439,7 @@ func TestGetAuditStats(t *testing.T) {
 			EntityID:    i + 1,
 			PerformedAt: time.Now().Format(time.RFC3339),
 		}
-		db.LogAuditEntry(testContext(), entry)
+		seedAuditEntry(t, db, entry)
 	}
 
 	// Get stats
@@ -1466,9 +1517,7 @@ func TestGetAuditStatsNullableTimestamps(t *testing.T) {
 		EntityID:    1,
 		PerformedAt: ts,
 	}
-	if _, err := db.LogAuditEntry(testContext(), entry); err != nil {
-		t.Fatalf("failed to log audit entry: %v", err)
-	}
+	seedAuditEntry(t, db, entry)
 
 	stats, err = db.GetAuditStats(testContext(), nil, nil)
 	if err != nil {
@@ -1555,7 +1604,7 @@ func TestGetAuditEntriesWithFilters(t *testing.T) {
 			EntityID:    e.entityID,
 			PerformedAt: time.Now().Format(time.RFC3339),
 		}
-		db.LogAuditEntry(testContext(), entry)
+		seedAuditEntry(t, db, entry)
 	}
 
 	// Test filter by entity type
@@ -1668,20 +1717,6 @@ func TestUpdateSprintStatus_NotFound(t *testing.T) {
 	defer cleanup()
 
 	err := db.UpdateSprintStatus(testContext(), 999, models.SprintOpen)
-	if err == nil {
-		t.Fatal("expected error for non-existent sprint")
-	}
-
-	if !errors.Is(err, utils.ErrNotFound) {
-		t.Errorf("expected ErrNotFound, got: %v", err)
-	}
-}
-
-func TestDeleteSprint_NotFound(t *testing.T) {
-	db, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	err := db.DeleteSprint(testContext(), 999)
 	if err == nil {
 		t.Fatal("expected error for non-existent sprint")
 	}

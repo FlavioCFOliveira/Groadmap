@@ -1357,46 +1357,16 @@ func (db *DB) UpdateSprintStatus(ctx context.Context, id int, status models.Spri
 	})
 }
 
-// DeleteSprint deletes a sprint by ID.
-//
-// Resetting the member tasks' status to BACKLOG, deleting the sprint row
-// (cascade removes sprint_tasks), and writing the SPRINT_DELETE audit entry all
-// run inside a single transaction so the database never reaches a partial state
-// where tasks remain marked SPRINT while their sprint or sprint_tasks rows are
-// gone (SPEC/DATABASE.md § Transactional Atomicity Guarantees, finding #65).
-// WithTransaction already provides lock-retry, so no outer retryWithBackoff is
-// needed.
-func (db *DB) DeleteSprint(ctx context.Context, id int) error {
-	now := utils.NowISO8601()
-
-	return db.WithTransaction(func(tx *sql.Tx) error {
-		// First reset task status for tasks in this sprint
-		if _, err := tx.Exec(
-			`UPDATE tasks SET status = ? WHERE id IN (
-				SELECT task_id FROM sprint_tasks WHERE sprint_id = ?
-			)`,
-			models.StatusBacklog, id,
-		); err != nil {
-			return fmt.Errorf("resetting task statuses: %w", err)
-		}
-
-		// Delete sprint (cascade will remove sprint_tasks entries)
-		result, err := tx.Exec("DELETE FROM sprints WHERE id = ?", id)
-		if err != nil {
-			return fmt.Errorf("deleting sprint: %w", err)
-		}
-
-		affected, err := result.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("checking rows affected: %w", err)
-		}
-		if affected == 0 {
-			return fmt.Errorf("%w: sprint %d", utils.ErrNotFound, id)
-		}
-
-		return LogAuditTx(tx, models.OpSprintDelete, models.EntitySprint, id, now)
-	})
-}
+// Sprint deletion has no method here on purpose. The whole operation — the
+// member tasks' reset to BACKLOG, the removal of the sprint_tasks rows, the
+// DELETE of the sprints row and the SPRINT_DELETE audit entry, in one
+// transaction (SPEC/DATABASE.md § Transactional Atomicity Guarantees, finding
+// #65) — lives in sprintRemove in internal/commands/sprint_crud.go, next to
+// every other sprint mutation. A second copy here would be unreachable from
+// the binary and therefore ungated: the copy that used to sit at this spot had
+// silently missed the finding-#49 fix that clears started_at, tested_at,
+// closed_at and completion_summary on the reset, because only the shipped copy
+// was ever exercised.
 
 // sprintTasksLookupQuery is the membership lookup idx_sprint_tasks_lookup
 // exists for (SPEC/DATABASE.md § Performance Optimization). It is a named
@@ -1819,10 +1789,19 @@ func (db *DB) RemoveTasksFromSprint(ctx context.Context, taskIDs []int) error {
 
 // ==================== AUDIT QUERIES ====================
 
-// LogAuditTx inserts an audit row inside an existing transaction. The 21+
-// transactional sites that write audit rows alongside a domain mutation
-// must call this rather than spelling out the INSERT manually — it keeps
-// the table layout in one place and lets writers stay terse.
+// LogAuditTx inserts an audit row inside an existing transaction. It is the
+// only audit writer in the package, and every transactional site that writes
+// an audit row alongside a domain mutation calls it rather than spelling out
+// the INSERT: that keeps the table layout in one place and lets writers stay
+// terse.
+//
+// It takes a *sql.Tx and not a *DB on purpose. SPEC/ARCHITECTURE.md § Security
+// Guarantees requires the audit entry for a modification to be written in the
+// same transaction as the modification itself, so an audit insert that opened
+// its own connection could commit a record for a change that later rolled
+// back. A convenience wrapper that inserted one row outside a transaction used
+// to live here, reachable only from test fixtures; it is gone, and the
+// fixtures now seed through this function, which is the path production runs.
 func LogAuditTx(tx *sql.Tx, op models.AuditOperation, entityType models.EntityType, entityID int, performedAt string) error {
 	_, err := tx.Exec(
 		`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
@@ -1832,69 +1811,6 @@ func LogAuditTx(tx *sql.Tx, op models.AuditOperation, entityType models.EntityTy
 		return fmt.Errorf("inserting audit entry: %w", err)
 	}
 	return nil
-}
-
-// LogAuditEntry inserts a new audit entry.
-func (db *DB) LogAuditEntry(ctx context.Context, entry *models.AuditEntry) (int, error) {
-	var auditID int
-	err := retryWithBackoff("log audit entry", func() error {
-		result, err := db.ExecContext(ctx,
-			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-			entry.Operation,
-			entry.EntityType,
-			entry.EntityID,
-			entry.PerformedAt,
-		)
-		if err != nil {
-			return fmt.Errorf("inserting audit entry: %w", err)
-		}
-
-		id, err := result.LastInsertId()
-		if err != nil {
-			return fmt.Errorf("getting last insert id: %w", err)
-		}
-
-		auditID = int(id)
-		return nil
-	})
-
-	if err != nil {
-		return 0, err
-	}
-
-	return auditID, nil
-}
-
-// LogAuditEntriesBatch inserts multiple audit entries using a prepared statement.
-// This is significantly faster than individual inserts for batch operations.
-func (db *DB) LogAuditEntriesBatch(ctx context.Context, entries []*models.AuditEntry) error {
-	if len(entries) == 0 {
-		return nil
-	}
-
-	return retryWithBackoff("log audit entries batch", func() error {
-		// Prepare the statement once for reuse
-		stmt, err := db.PrepareContext(ctx,
-			`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`)
-		if err != nil {
-			return fmt.Errorf("preparing audit statement: %w", err)
-		}
-		defer stmt.Close()
-
-		// Execute for each entry using the prepared statement
-		for _, entry := range entries {
-			_, err = stmt.ExecContext(ctx,
-				entry.Operation,
-				entry.EntityType,
-				entry.EntityID,
-				entry.PerformedAt,
-			)
-			if err != nil {
-				return fmt.Errorf("executing audit insert: %w", err)
-			}
-		}
-		return nil
-	})
 }
 
 // AuditFilter bundles every optional knob for GetAuditEntries. A nil

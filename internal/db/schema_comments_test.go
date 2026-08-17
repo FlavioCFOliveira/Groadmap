@@ -802,8 +802,8 @@ func commentSchemaSnapshot(t *testing.T, sqlDB *sql.DB) string {
 	return out.String()
 }
 
-// seedCommentParents creates one task and one sprint through the production
-// write paths and returns their ids, so comments have real parents to hang off.
+// seedCommentParents creates one task and one sprint and returns their ids, so
+// comments have real parents to hang off.
 func seedCommentParents(t *testing.T, db *DB) (taskID, sprintID int) {
 	t.Helper()
 	ctx := testContext()
@@ -830,6 +830,29 @@ func seedCommentParents(t *testing.T, db *DB) (taskID, sprintID int) {
 		t.Fatalf("creating task: %v", err)
 	}
 	return taskID, sprintID
+}
+
+// deleteParentRow removes one row from a comment parent table by id, so a test
+// that is about the schema's ON DELETE CASCADE triggers it directly instead of
+// through a helper whose own behaviour would then be under test too. The table
+// name is a test-supplied literal, never user input.
+func deleteParentRow(t *testing.T, db *DB, table string, id int) {
+	t.Helper()
+
+	// The table name is concatenated because SQL has no parameter for an
+	// identifier; it is a literal chosen by the caller in this file, never user
+	// input, and the id is bound.
+	result, err := db.ExecContext(testContext(), "DELETE FROM "+table+" WHERE id = ?", id)
+	if err != nil {
+		t.Fatalf("deleting %s %d: %v", table, id, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		t.Fatalf("rows affected deleting %s %d: %v", table, id, err)
+	}
+	if affected != 1 {
+		t.Fatalf("deleting %s %d removed %d rows, want 1", table, id, affected)
+	}
 }
 
 // insertComment inserts one comment and returns its id.

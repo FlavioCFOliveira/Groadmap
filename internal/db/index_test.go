@@ -266,9 +266,7 @@ func seedIndexFixture(t *testing.T, db *DB) indexFixtureIDs {
 			EntityID:    backlogIDs[i%len(backlogIDs)],
 			PerformedAt: utils.FormatISO8601(now.AddDate(0, 0, -i)),
 		}
-		if _, err := db.LogAuditEntry(ctx, entry); err != nil {
-			t.Fatalf("logging audit entry %d: %v", i, err)
-		}
+		seedAuditEntry(t, db, entry)
 	}
 
 	// Comments on several tasks and on the sprint, written through the production

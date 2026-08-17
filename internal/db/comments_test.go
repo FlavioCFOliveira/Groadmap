@@ -1216,12 +1216,12 @@ func TestCommentsCascadeThroughTheQueryLayer(t *testing.T) {
 	sprintCommentID := addSprintComment(t, db, sprintID, models.CommentProgress,
 		"Deleting the sprint must take this comment with it.", "2026-08-17T07:00:00.000Z")
 
-	if err := db.DeleteTask(testContext(), taskID); err != nil {
-		t.Fatalf("DeleteTask: %v", err)
-	}
-	if err := db.DeleteSprint(testContext(), sprintID); err != nil {
-		t.Fatalf("DeleteSprint: %v", err)
-	}
+	// The parents are deleted with a bare DELETE rather than through a helper:
+	// what is under test is the schema's ON DELETE CASCADE, so the fewer layers
+	// stand between the delete and the rule, the more precisely a failure points
+	// at the rule.
+	deleteParentRow(t, db, "tasks", taskID)
+	deleteParentRow(t, db, "sprints", sprintID)
 
 	if _, err := db.GetTaskComment(testContext(), taskCommentID); !errors.Is(err, utils.ErrNotFound) {
 		t.Errorf("the task comment survived its task: %v", err)
