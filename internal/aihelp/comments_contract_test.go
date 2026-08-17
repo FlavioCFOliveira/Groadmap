@@ -14,6 +14,10 @@
 //     {"values": []}: the registry named them, the static catalogue did not
 //     know them, and no test looked at anything but a hard-coded list of the
 //     enums that happened to exist at the time.
+//   - TestGenerate_EveryEnumValueCarriesADescription is its sibling one level
+//     finer: it fails for ANY published value whose description is empty. That
+//     is how AuditOperation shipped 29 values and 0 descriptions while the
+//     values gate above was green.
 //   - TestGenerate_CommentSubcommandsAgreeAcrossScopes compares the emitted
 //     subcommand objects across the three scopes instead of trusting the
 //     filter, so a scope that drops or rewrites a field is a failure.
@@ -91,7 +95,8 @@ func enumNamesOf(enums map[string]any) []string {
 }
 
 // ------------------------------------------------------------------
-// Class gate: no referenced enum may serialise with an empty value list.
+// Class gates: no referenced enum may serialise with an empty value
+// list, and no published value may serialise without a description.
 // ------------------------------------------------------------------
 
 // TestGenerate_EveryReferencedEnumHasValues walks the enum names the registry
@@ -130,6 +135,55 @@ func TestGenerate_EveryReferencedEnumHasValues(t *testing.T) {
 			t.Errorf("enums.%s is published but referenced by no flag or positional argument", name)
 		}
 	}
+}
+
+// TestGenerate_EveryEnumValueCarriesADescription is the sibling of the gate
+// above, one level finer. That one fails when a referenced enum publishes no
+// values at all; this one fails when a published value carries no description,
+// which is the same defect one degree less visible — the agent sees the value
+// exists and still cannot tell what it means, or how it differs from the value
+// next to it.
+//
+// It is registry-derived for the same reason: the enums it checks are the ones
+// the CLI actually references, so a newly referenced enum is covered the moment
+// a flag names it, with nobody having to extend a list here.
+//
+// The shipped instance was AuditOperation, which published 29 values and 0
+// descriptions while every other enum described all of its own. The argument in
+// static.go was that the operation names speak for themselves; they do not.
+// SPRINT_REORDER_TASKS and SPRINT_TASK_MOVE_POSITION are not distinguishable by
+// name, and the six comment operations do not say by name that they are recorded
+// against the parent entity rather than against the comment.
+func TestGenerate_EveryEnumValueCarriesADescription(t *testing.T) {
+	reg := commands.AppRegistry()
+	referenced := collectEnumNames(reg)
+	if len(referenced) == 0 {
+		t.Fatal("registry references no enums at all; the walk is broken")
+	}
+
+	enums := contractEnums(t, generateOrFatal(t, ScopeAll()))
+
+	// Counting, and reporting the count, is what keeps a silent regression to
+	// "checked nothing" visible: a gate that inspected zero values would
+	// otherwise pass exactly like a gate that inspected all of them.
+	checked := 0
+	for _, name := range referenced {
+		values := enumValueList(t, enums, name)
+		for i, v := range values {
+			checked++
+			if strings.TrimSpace(v.description) == "" {
+				t.Errorf("enums.%s.values[%d=%s].description is empty; every value the contract publishes "+
+					"must carry its description from the SPEC, because the contract is the only thing an "+
+					"agent reading it has. Add the value to enumDescriptions in static.go",
+					name, i, v.value)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatalf("no enum values were inspected across %d referenced enums, so this gate measured nothing",
+			len(referenced))
+	}
+	t.Logf("checked %d values across %d referenced enums", checked, len(referenced))
 }
 
 // ------------------------------------------------------------------

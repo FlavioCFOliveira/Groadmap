@@ -135,10 +135,15 @@ type EnumDefinition struct {
 	Values                []EnumValue `json:"values"`
 }
 
-// EnumValue is one member of an enum. Description is best-effort: it
-// is populated from SPEC/MODELS.md § Enums where the SPEC supplies a
-// description, and empty otherwise. The field is always present in the
-// JSON (never omitted) so consumers can rely on its key.
+// EnumValue is one member of an enum. Description carries the value's
+// short description from the SPEC — SPEC/MODELS.md § Enums for most
+// enums, SPEC/DATABASE.md § `audit` Table for AuditOperation. Every
+// published value is required to carry one, and
+// TestGenerate_EveryEnumValueCarriesADescription fails when any does
+// not; the type still permits the empty string so that a value nobody
+// described renders as "" and is caught by that gate, rather than
+// crashing the generator. The field is always present in the JSON
+// (never omitted) so consumers can rely on its key.
 type EnumValue struct {
 	Value       string `json:"value"`
 	Description string `json:"description"`
