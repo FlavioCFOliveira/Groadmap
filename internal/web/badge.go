@@ -120,14 +120,35 @@ func severityBadge(s int) string {
 	}
 }
 
+// commentTypeBadge returns the Tabler badge colour-variant class for a comment
+// type. It is the NEUTRAL bg-secondary-lt variant for every one of the seven
+// values, on a task comment and on a sprint comment alike (SPEC/WEB.md § Task
+// Detail Modal, type badge colour; Acceptance Criterion 66).
+//
+// The semantic colour mapping above covers task and sprint status, priority, and
+// severity only; it is deliberately NOT extended to comment types, and no
+// per-type colour is introduced. A comment type classifies an entry of a log; it
+// carries no urgency or progress meaning to colour-code, and colouring seven
+// values would compete visually with the status badges that do carry it.
+//
+// The helper exists rather than the class being written into the template so the
+// comment-type badge has one source, exactly like the four mappings above: the
+// task detail modal and the sprint Comments card cannot drift apart, and the
+// neutral-for-every-value rule is verifiable in one place.
+func commentTypeBadge(models.CommentType) string {
+	return badgeSecondary
+}
+
 // badgeFuncMap is the html/template FuncMap that exposes the semantic badge
 // colour helpers to every page template. It is merged into the template set at
-// parse time (see embed.go) so the templates can render a status, priority, or
-// severity badge with the deterministic Tabler colour variant the SPEC assigns
-// to each value (SPEC/WEB.md § Status, Priority, and Severity Badge Colours).
+// parse time (see embed.go) so the templates can render a status, priority,
+// severity, or comment-type badge with the deterministic Tabler colour variant
+// the SPEC assigns to each value (SPEC/WEB.md § Status, Priority, and Severity
+// Badge Colours; § Task Detail Modal, type badge colour).
 var badgeFuncMap = map[string]any{
 	"taskStatusBadge":   taskStatusBadge,
 	"sprintStatusBadge": sprintStatusBadge,
 	"priorityBadge":     priorityBadge,
 	"severityBadge":     severityBadge,
+	"commentTypeBadge":  commentTypeBadge,
 }
