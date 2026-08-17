@@ -45,9 +45,27 @@ const (
 const (
 	sqliteBusy                   = 5
 	sqliteLocked                 = 6
+	sqliteConstraintCheck        = 275  // SQLITE_CONSTRAINT_CHECK
+	sqliteConstraintForeignKey   = 787  // SQLITE_CONSTRAINT_FOREIGNKEY
+	sqliteConstraintNotNull      = 1299 // SQLITE_CONSTRAINT_NOTNULL
 	sqliteConstraintPrimaryKey   = 1555 // SQLITE_CONSTRAINT_PRIMARYKEY
 	sqliteConstraintUniqueViolat = 2067 // SQLITE_CONSTRAINT_UNIQUE
 )
+
+// extendedResultCode returns the SQLite EXTENDED result code carried by err, or
+// 0 when err is nil or carries no code. It is the single place the driver's
+// coded error is unwrapped, so every classification in this package
+// (IsUniqueConstraintErr, the comment write classifier) reads the same value.
+func extendedResultCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var coded sqliteCoded
+	if errors.As(err, &coded) {
+		return coded.Code()
+	}
+	return 0
+}
 
 // IsUniqueConstraintErr reports whether err is a SQLite UNIQUE or PRIMARY-KEY
 // constraint violation, and only those. Callers translate it into
@@ -59,15 +77,8 @@ const (
 // to the primary code (19) makes every constraint kind look like a uniqueness
 // collision, which is exactly the bug this guards against.
 func IsUniqueConstraintErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	var coded sqliteCoded
-	if errors.As(err, &coded) {
-		code := coded.Code()
-		return code == sqliteConstraintUniqueViolat || code == sqliteConstraintPrimaryKey
-	}
-	return false
+	code := extendedResultCode(err)
+	return code == sqliteConstraintUniqueViolat || code == sqliteConstraintPrimaryKey
 }
 
 // sqliteCoded is satisfied by modernc.org/sqlite's *sqlite.Error. The check

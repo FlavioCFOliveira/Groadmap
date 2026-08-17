@@ -2,7 +2,6 @@ package db
 
 import (
 	"database/sql"
-	"errors"
 	"strings"
 	"testing"
 
@@ -10,27 +9,15 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
-// SQLite extended constraint result codes. See https://www.sqlite.org/rescode.html.
-// The tests below assert on the EXTENDED code, not the primary SQLITE_CONSTRAINT
-// (19): only the extended code proves that the row was rejected by the specific
-// constraint under test (a CHECK, a foreign key, a NOT NULL) rather than by some
-// other constraint that happens to fail on the same statement.
-const (
-	sqliteConstraintCheck      = 275  // SQLITE_CONSTRAINT_CHECK
-	sqliteConstraintForeignKey = 787  // SQLITE_CONSTRAINT_FOREIGNKEY
-	sqliteConstraintNotNull    = 1299 // SQLITE_CONSTRAINT_NOTNULL
-)
-
-// constraintCode returns the SQLite extended result code carried by err, or 0
-// when err is nil or carries no code.
-func constraintCode(err error) int {
-	var coded sqliteCoded
-	if errors.As(err, &coded) {
-		return coded.Code()
-	}
-	return 0
-}
-
+// The tests below assert on the EXTENDED SQLite result code, not the primary
+// SQLITE_CONSTRAINT (19): only the extended code proves that the row was rejected
+// by the specific constraint under test (a CHECK, a foreign key, a NOT NULL)
+// rather than by some other constraint that happens to fail on the same
+// statement. The codes themselves (sqliteConstraintCheck, ...ForeignKey,
+// ...NotNull) and the extendedResultCode helper live in connection.go: the comment
+// write classifier added by rmp task #162 maps those same codes onto the project's
+// error sentinels, so tests and production read one definition.
+//
 // assertRejected asserts that err is a SQLite constraint violation with the
 // given extended result code, i.e. that the DATABASE rejected the write.
 func assertRejected(t *testing.T, what string, err error, wantCode int) {
@@ -39,7 +26,7 @@ func assertRejected(t *testing.T, what string, err error, wantCode int) {
 		t.Errorf("%s: the database accepted the row; it must be rejected by the constraint", what)
 		return
 	}
-	if got := constraintCode(err); got != wantCode {
+	if got := extendedResultCode(err); got != wantCode {
 		t.Errorf("%s: extended result code = %d, want %d (%v)", what, got, wantCode, err)
 	}
 }
@@ -304,9 +291,9 @@ func TestCommentIdsAreIndependentAutoincrementSequences(t *testing.T) {
 	taskID, sprintID := seedCommentParents(t, db)
 	now := utils.NowISO8601()
 
-	taskFirst := insertComment(t, db, "task_comments", "task_id", taskID, "FINDING",
+	taskFirst := insertCommentRow(t, db, "task_comments", "task_id", taskID, "FINDING",
 		"The connection pool saturates at 64 concurrent readers.", now)
-	sprintFirst := insertComment(t, db, "sprint_comments", "sprint_id", sprintID, "PROGRESS",
+	sprintFirst := insertCommentRow(t, db, "sprint_comments", "sprint_id", sprintID, "PROGRESS",
 		"Two of the six planned tasks are closed.", now)
 
 	if taskFirst != 1 || sprintFirst != 1 {
@@ -314,53 +301,85 @@ func TestCommentIdsAreIndependentAutoincrementSequences(t *testing.T) {
 			taskFirst, sprintFirst)
 	}
 
-	second := insertComment(t, db, "task_comments", "task_id", taskID, "DECISION",
+	second := insertCommentRow(t, db, "task_comments", "task_id", taskID, "DECISION",
 		"The pool size stays at 64; raising it moves the bottleneck to disk.", now)
 	if _, err := db.Exec("DELETE FROM task_comments WHERE id = ?", second); err != nil {
 		t.Fatalf("deleting task comment %d: %v", second, err)
 	}
-	third := insertComment(t, db, "task_comments", "task_id", taskID, "NOTE",
+	third := insertCommentRow(t, db, "task_comments", "task_id", taskID, "NOTE",
 		"Re-measure once the storage tier is upgraded.", now)
 	if third <= second {
 		t.Errorf("id after deleting %d = %d, want > %d: AUTOINCREMENT must not reuse ids", second, third, second)
 	}
 }
 
-// TestCommentIndexServesTheListingQuery asserts the index earns its place: the
-// listing query specified in SPEC/DATABASE.md § List Comments for One Parent is
-// planned onto it, with no full table scan and no temporary B-tree for the ORDER
-// BY. This is what makes (parent_id, created_at ASC) - rather than a plain index
-// on the parent key - the right shape. The production query builders arrive with
-// rmp task #162; when they do, the plan assertion belongs on their SQL, exactly
-// as TestCompositeIndexesServeTheProductionQueries does for the other indexes.
-func TestCommentIndexServesTheListingQuery(t *testing.T) {
+// TestCommentIndexShapeEarnsItsPlace proves WHY the index is composite. That the
+// production listings use it, take no full scan and need no temporary B-tree is
+// asserted on the production SQL in TestCompositeIndexesServeTheProductionQueries,
+// alongside every other composite index (that is where the placeholder rmp task
+// #160 left here has moved to, now that the query builders of #162 exist).
+//
+// What is proven here instead is the counterfactual the SPEC's rationale rests on
+// (SPEC/DATABASE.md § Index Design Rationale): the trailing created_at column is
+// what removes the sort step. The SAME production statement is planned twice - once
+// against the schema's (parent_id, created_at) index, once against a probe index on
+// the parent key alone - and only the second one has to sort. Replacing the
+// composite index with a plain one on the parent key would therefore silently
+// reintroduce a sort on every comment listing, and this test is what catches it.
+func TestCommentIndexShapeEarnsItsPlace(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
 	taskID, sprintID := seedCommentParents(t, db)
 	now := utils.NowISO8601()
 	for range 20 {
-		insertComment(t, db, "task_comments", "task_id", taskID, "PROGRESS",
+		insertCommentRow(t, db, "task_comments", "task_id", taskID, "PROGRESS",
 			"Progress entry recorded while the benchmark ran.", now)
-		insertComment(t, db, "sprint_comments", "sprint_id", sprintID, "PROGRESS",
+		insertCommentRow(t, db, "sprint_comments", "sprint_id", sprintID, "PROGRESS",
 			"Sprint progress entry recorded while the benchmark ran.", now)
 	}
 
-	for _, fx := range commentTablesFixture {
-		t.Run(fx.table, func(t *testing.T) {
-			query := "SELECT id, type, body, created_at, updated_at FROM " + fx.table +
-				" WHERE " + fx.parentCol + " = ? ORDER BY created_at ASC"
-			plan := queryPlan(t, db, query, 1)
+	listings := map[string]struct {
+		query     string
+		table     string
+		index     string
+		parentCol string
+		parentID  int
+	}{
+		"task_comments": {
+			query: taskCommentStmts.selectByParent, table: "task_comments",
+			index: "idx_task_comments_task_created", parentCol: "task_id", parentID: taskID,
+		},
+		"sprint_comments": {
+			query: sprintCommentStmts.selectByParent, table: "sprint_comments",
+			index: "idx_sprint_comments_sprint_created", parentCol: "sprint_id", parentID: sprintID,
+		},
+	}
 
-			if !strings.Contains(plan, fx.index) {
-				t.Errorf("the comment listing does not use %s.\nplan: %s\nquery: %s", fx.index, plan, query)
+	for name, fx := range listings {
+		t.Run(name, func(t *testing.T) {
+			composite := queryPlan(t, db, fx.query, fx.parentID)
+			if !strings.Contains(composite, fx.index) || strings.Contains(composite, "TEMP B-TREE") {
+				t.Fatalf("with %s in place the listing must be planned onto it with no sort.\nplan: %s",
+					fx.index, composite)
 			}
-			if strings.Contains(plan, "SCAN "+fx.table) {
-				t.Errorf("the comment listing falls back to a full scan of %s.\nplan: %s", fx.table, plan)
+
+			// Swap the composite index for one on the parent key alone. The test
+			// database is disposable, so this is a safe way to ask the planner what
+			// the other shape would cost.
+			if _, err := db.Exec("DROP INDEX " + fx.index); err != nil {
+				t.Fatalf("dropping %s: %v", fx.index, err)
 			}
-			if strings.Contains(plan, "TEMP B-TREE") {
-				t.Errorf("the comment listing sorts in a temporary B-tree; the index must supply the "+
-					"created_at order.\nplan: %s", plan)
+			probe := "probe_" + fx.table + "_parent_only"
+			if _, err := db.Exec("CREATE INDEX " + probe + " ON " + fx.table + "(" + fx.parentCol + ")"); err != nil {
+				t.Fatalf("creating the parent-key-only probe index: %v", err)
+			}
+
+			parentOnly := queryPlan(t, db, fx.query, fx.parentID)
+			if !strings.Contains(parentOnly, "TEMP B-TREE") {
+				t.Errorf("with only a parent-key index the listing plans without a sort (%s), so the "+
+					"trailing created_at column of %s would earn nothing and this test proves nothing; "+
+					"the assertion needs revisiting", parentOnly, fx.index)
 			}
 		})
 	}
@@ -420,13 +439,13 @@ func TestMigrateV1_8_0_toV1_9_0_OnNextOpen(t *testing.T) {
 	// Comments are writable on the migrated database, and the CHECK the
 	// migration installed is enforced there too.
 	now := utils.NowISO8601()
-	insertComment(t, database, "task_comments", "task_id", taskIDs[0], "HYPOTHESIS",
+	insertCommentRow(t, database, "task_comments", "task_id", taskIDs[0], "HYPOTHESIS",
 		"The acquirer report is one settlement window behind.", now)
-	insertComment(t, database, "task_comments", "task_id", taskIDs[0], "TEST",
+	insertCommentRow(t, database, "task_comments", "task_id", taskIDs[0], "TEST",
 		"Replayed yesterday's window: the totals match with a one-day shift.", now)
-	insertComment(t, database, "task_comments", "task_id", taskIDs[1], "FINDING",
+	insertCommentRow(t, database, "task_comments", "task_id", taskIDs[1], "FINDING",
 		"Two ledger entries carry the same external reference.", now)
-	insertComment(t, database, "sprint_comments", "sprint_id", sprintIDs[0], "DECISION",
+	insertCommentRow(t, database, "sprint_comments", "sprint_id", sprintIDs[0], "DECISION",
 		"Reconciliation runs after the acquirer window closes, not at midnight.", now)
 	_, err = database.Exec(
 		`INSERT INTO sprint_comments (sprint_id, type, body, created_at) VALUES (?, 'NOTE', ?, ?)`,
@@ -483,11 +502,11 @@ func TestCommentCascadeOnFreshDatabase(t *testing.T) {
 
 	taskID, sprintID := seedCommentParents(t, database)
 	now := utils.NowISO8601()
-	insertComment(t, database, "task_comments", "task_id", taskID, "FINDING",
+	insertCommentRow(t, database, "task_comments", "task_id", taskID, "FINDING",
 		"The velocity rule fires on refunds, which are not purchases.", now)
-	insertComment(t, database, "task_comments", "task_id", taskID, "DECISION",
+	insertCommentRow(t, database, "task_comments", "task_id", taskID, "DECISION",
 		"Refunds are excluded from the velocity window.", now)
-	insertComment(t, database, "sprint_comments", "sprint_id", sprintID, "FINDING",
+	insertCommentRow(t, database, "sprint_comments", "sprint_id", sprintID, "FINDING",
 		"Two of the five rules share a threshold that must be tuned together.", now)
 
 	assertRowCount(t, database, 2, "task comments before the delete", "SELECT COUNT(*) FROM task_comments")
@@ -545,7 +564,7 @@ func TestMigrateV1_8_0_toV1_9_0_DoubleRunIsANoOp(t *testing.T) {
 	apply("first")
 	before := schemaSnapshot(t, sqlDB)
 
-	commentID := insertComment(t, database, "task_comments", "task_id", taskID, "UPDATE",
+	commentID := insertCommentRow(t, database, "task_comments", "task_id", taskID, "UPDATE",
 		"Recorded between the two migration applies.", utils.NowISO8601())
 
 	apply("second")
@@ -814,7 +833,7 @@ func seedCommentParents(t *testing.T, db *DB) (taskID, sprintID int) {
 }
 
 // insertComment inserts one comment and returns its id.
-func insertComment(t *testing.T, db *DB, table, parentCol string, parentID int, typ, body, createdAt string) int {
+func insertCommentRow(t *testing.T, db *DB, table, parentCol string, parentID int, typ, body, createdAt string) int {
 	t.Helper()
 	res, err := db.Exec(
 		"INSERT INTO "+table+" ("+parentCol+", type, body, created_at) VALUES (?, ?, ?, ?)",
