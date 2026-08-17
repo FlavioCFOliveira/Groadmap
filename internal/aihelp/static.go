@@ -110,11 +110,68 @@ var enumDescriptions = map[string]map[string]string{
 		"status":   "Sort by status (state-machine order).",
 		"severity": "Sort by severity descending.",
 	},
+	// The comment types are published as TWO keys, not one: a
+	// flags[].enum value is a single key into this map, so the two
+	// per-entity subsets of the CommentType enum cannot share one entry
+	// without offering a sprint the three types a sprint rejects
+	// (SPEC/DATA_FORMATS.md § enums map entry). Both entries are built
+	// from one description table so the shared values are described
+	// once; see commentEnumDescriptions.
+	"TaskCommentType":   commentEnumDescriptions(models.ValidTaskCommentTypes),
+	"SprintCommentType": commentEnumDescriptions(models.ValidSprintCommentTypes),
 	// AuditOperation values: descriptions are derived directly from
 	// the operation name (e.g. TASK_CREATE → "task creation"), so
 	// rather than duplicate every operation we leave the descriptions
 	// empty here and let the generator emit empty-string descriptions
 	// for them. The operation names themselves are self-explanatory.
+}
+
+// commentTypeDescriptions is the one description per CommentType value,
+// transcribed from the table in SPEC/MODELS.md § Comment Type. It is keyed
+// by the model constant rather than by a bare string so a renamed or
+// removed constant fails to compile here instead of silently dropping a
+// description at runtime.
+//
+// The per-entity subsets are NOT encoded here: they are derived from
+// internal/models (the same slices the rejection messages and the family
+// helps render) by commentEnumDescriptions.
+var commentTypeDescriptions = map[models.CommentType]string{
+	models.CommentFinding: "Something discovered during the work: an observed behaviour, a measurement, " +
+		"a cause identified, a constraint that turned out to apply.",
+	models.CommentHypothesis: "A proposition raised to explain a problem or to guide the next step, " +
+		"stated before it is confirmed or refuted.",
+	models.CommentTest: "A test that was run and what it showed. Covers both automated tests and " +
+		"manual verification.",
+	models.CommentDecision: "A decision taken during the work, and the reasoning behind it.",
+	models.CommentProgress: "A statement of how the work advanced: what was done, what remains.",
+	models.CommentUpdate: "The reason behind a modification to the definition of the task or the sprint: " +
+		"something added, updated, removed, complemented, or clarified.",
+	models.CommentNote: "A remark that belongs in the log but fits none of the categories above.",
+}
+
+// Suffixes stating the per-entity subset a comment type belongs to. The
+// enums map is the only place in the contract that can carry this fact —
+// EnumDefinition has no per-entity field — so it travels in the value
+// description (SPEC/MODELS.md § Comment Type, Per-entity valid subsets).
+const (
+	commentTypeBothEntities = " Accepted on both a task comment and a sprint comment."
+	commentTypeTaskOnly     = " Accepted on a task comment only; on a sprint comment it is rejected with exit code 6."
+)
+
+// commentEnumDescriptions renders the description map for one per-entity
+// comment-type subset. Membership of the sprint subset is asked of
+// internal/models rather than restated here, so the "task only" marker
+// cannot drift from the validation that enforces it.
+func commentEnumDescriptions(types []models.CommentType) map[string]string {
+	out := make(map[string]string, len(types))
+	for _, t := range types {
+		suffix := commentTypeTaskOnly
+		if models.IsValidSprintCommentType(string(t)) {
+			suffix = commentTypeBothEntities
+		}
+		out[string(t)] = commentTypeDescriptions[t] + suffix
+	}
+	return out
 }
 
 // stateMachineRefs maps an enum name to the SPEC reference for its
@@ -132,41 +189,41 @@ var stateMachineRefs = map[string]string{
 func enumValues(name string) []string {
 	switch name {
 	case "TaskStatus":
-		out := make([]string, 0, len(models.ValidTaskStatuses))
-		for _, v := range models.ValidTaskStatuses {
-			out = append(out, string(v))
-		}
-		return out
+		return enumStrings(models.ValidTaskStatuses)
 	case "TaskType":
-		out := make([]string, 0, len(models.ValidTaskTypes))
-		for _, v := range models.ValidTaskTypes {
-			out = append(out, string(v))
-		}
-		return out
+		return enumStrings(models.ValidTaskTypes)
 	case "SprintStatus":
-		out := make([]string, 0, len(models.ValidSprintStatuses))
-		for _, v := range models.ValidSprintStatuses {
-			out = append(out, string(v))
-		}
-		return out
+		return enumStrings(models.ValidSprintStatuses)
 	case "AuditOperation":
-		out := make([]string, 0, len(models.ValidAuditOperations))
-		for _, v := range models.ValidAuditOperations {
-			out = append(out, string(v))
-		}
-		return out
+		return enumStrings(models.ValidAuditOperations)
 	case "AuditEntityType":
 		// EntityType has no Valid* slice in internal/models. The
 		// authoritative pair is declared as constants; mirror them
 		// here in the order they appear in models/audit.go.
 		return []string{string(models.EntityTask), string(models.EntitySprint)}
 	case "TaskSort":
-		out := make([]string, 0, len(models.ValidTaskSorts))
-		for _, v := range models.ValidTaskSorts {
-			out = append(out, string(v))
-		}
-		return out
+		return enumStrings(models.ValidTaskSorts)
+	case "TaskCommentType":
+		// The two comment-type keys are the same enum narrowed to the
+		// subset its entity accepts. Each reads its own canonical slice
+		// from internal/models, which is also what the rejection message
+		// and the family help render, so the three surfaces cannot drift.
+		return enumStrings(models.ValidTaskCommentTypes)
+	case "SprintCommentType":
+		return enumStrings(models.ValidSprintCommentTypes)
 	default:
 		return nil
 	}
+}
+
+// enumStrings converts a canonical enum slice from internal/models into
+// the []string the contract emits, preserving declaration order. The type
+// parameter is constrained to string-kinded types, which is what every
+// enum in internal/models is.
+func enumStrings[T ~string](values []T) []string {
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		out = append(out, string(v))
+	}
+	return out
 }

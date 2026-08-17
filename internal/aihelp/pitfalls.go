@@ -20,9 +20,11 @@
 // place to look for the authoritative answer.
 package aihelp
 
-// staticPitfalls returns the twelve canonical pitfalls required by
-// SPEC/DATA_FORMATS.md § AI Agent Contract. Fresh slice on every call,
-// matching the defensive-copy semantics of the other static helpers.
+// staticPitfalls returns the canonical pitfalls: the twelve mandated by
+// SPEC/DATA_FORMATS.md § AI Agent Contract plus the curated additions for
+// the surfaces the mandatory table predates (the graph guard rail, the
+// comment subcommands). Fresh slice on every call, matching the
+// defensive-copy semantics of the other static helpers.
 func staticPitfalls() []Pitfall {
 	return []Pitfall{
 		{
@@ -137,6 +139,30 @@ func staticPitfalls() []Pitfall {
 			WrongExample:   "rmp graph query -r myproject --query \"CREATE (n:Spec {key:'auth'})\"",
 			CorrectExample: "rmp graph create -r myproject --query \"CREATE (n:Spec {key:'auth'})\"",
 			Reference:      "graph create/query/update/delete/search; SPEC/GRAPH.md § Subcommands and Guard-Rail Validation.",
+		},
+		{
+			ID: "task_only_comment_type_on_sprint",
+			Description: "Using a task-only comment type on a sprint comment. HYPOTHESIS, TEST and NOTE are " +
+				"accepted on a task comment and rejected on a sprint comment with exit code 6, because a sprint " +
+				"comment records the progression of the work and not the execution diary of an individual task. " +
+				"The sprint set is FINDING, DECISION, PROGRESS, UPDATE; the two sets are published as two enums, " +
+				"SprintCommentType and TaskCommentType, so the valid values can be read off the contract before " +
+				"the call is made.",
+			WrongExample:   "rmp sprint comment-add -r myproject 7 --type HYPOTHESIS --body \"the velocity drop is caused by the migration work\"",
+			CorrectExample: "rmp sprint comment-add -r myproject 7 --type FINDING --body \"the velocity drop is caused by the migration work, measured over sprints 5 to 7\"",
+			Reference:      "sprint comment-add; enums.SprintCommentType vs enums.TaskCommentType; SPEC/MODELS.md § Comment Type.",
+		},
+		{
+			ID: "parse_comment_mutation_stdout",
+			Description: "Assuming every comment subcommand prints JSON. Only two do: `comment-add` returns " +
+				"{\"id\": <int>} with the new comment's own id, and `comment-list` returns an array of comment " +
+				"objects. `comment-edit` and `comment-remove` are mutations and deliberately print nothing on " +
+				"success — rely on the exit code, and read the result back with `comment-list` when the new state " +
+				"is needed. The id `comment-edit` and `comment-remove` take is the comment's own id returned by " +
+				"`comment-add`, not the id of the task or sprint it belongs to.",
+			WrongExample:   "edited=$(rmp task comment-edit -r myproject 12 --type DECISION) && echo \"$edited\"",
+			CorrectExample: "rmp task comment-edit -r myproject 12 --type DECISION && rmp task comment-list -r myproject 42",
+			Reference:      "task comment-edit; task comment-remove; task comment-add; conventions.stdout_on_success; see also pitfall parse_modification_stdout.",
 		},
 		{
 			ID: "graph_missing_query",

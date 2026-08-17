@@ -3,10 +3,11 @@ package commands
 
 func buildSprintCommand() Command {
 	return Command{
-		Name:          "sprint",
-		Aliases:       []string{"s"},
-		Summary:       "Manage sprints and their task membership/ordering.",
-		Description:   "Create, list, query, mutate, and order sprints and their task assignments.",
+		Name:    "sprint",
+		Aliases: []string{"s"},
+		Summary: "Manage sprints and their task membership/ordering.",
+		Description: "Create, list, query, mutate, and order sprints and their task assignments, and keep each " +
+			"sprint's append-oriented comment log (the comment-* subcommands).",
 		HelpPrinter:   printSprintHelp,
 		HasSubcommand: true,
 		Prerequisites: []string{"An existing roadmap selected via -r/--roadmap."},

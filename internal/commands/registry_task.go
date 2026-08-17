@@ -26,10 +26,11 @@ func taskCommonOptionalFlags() []Flag {
 
 func buildTaskCommand() Command {
 	return Command{
-		Name:          "task",
-		Aliases:       []string{"t"},
-		Summary:       "Manage tasks across statuses BACKLOG/SPRINT/DOING/TESTING/COMPLETED.",
-		Description:   "Create, list, query, edit, transition, and dependency-manage tasks within a roadmap.",
+		Name:    "task",
+		Aliases: []string{"t"},
+		Summary: "Manage tasks across statuses BACKLOG/SPRINT/DOING/TESTING/COMPLETED.",
+		Description: "Create, list, query, edit, transition, and dependency-manage tasks within a roadmap, " +
+			"and keep each task's append-oriented comment log (the comment-* subcommands).",
 		HelpPrinter:   printTaskHelp,
 		HasSubcommand: true,
 		Prerequisites: []string{"An existing roadmap selected via -r/--roadmap."},

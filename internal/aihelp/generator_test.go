@@ -695,14 +695,24 @@ func TestGenerate_CommonWorkflowsAndPitfalls_ScopeUnfiltered(t *testing.T) {
 	}
 }
 
+// TestGenerate_EnumsPopulated asserts the SHAPE of every enum the registry
+// references: the enum is present, carries at least one value, and every value
+// carries both the `value` and the `description` key.
+//
+// The name list is read from the registry rather than hard-coded. A hard-coded
+// list is how TaskCommentType and SprintCommentType shipped as {"values": []}:
+// the list named the enums that existed when it was written, so the two new
+// keys were never checked. The class gate lives in
+// TestGenerate_EveryReferencedEnumHasValues (comments_contract_test.go).
 func TestGenerate_EnumsPopulated(t *testing.T) {
 	out := generateOrFatal(t, ScopeAll())
 	m := unmarshalAsMap(t, out)
 	enums, _ := m["enums"].(map[string]any)
 
-	// Every enum name referenced by the registry must appear with at
-	// least one value.
-	wanted := []string{"TaskStatus", "TaskType", "SprintStatus", "AuditOperation", "AuditEntityType", "TaskSort"}
+	wanted := collectEnumNames(commands.AppRegistry())
+	if len(wanted) == 0 {
+		t.Fatal("registry references no enums at all; the walk is broken")
+	}
 	for _, name := range wanted {
 		def, ok := enums[name].(map[string]any)
 		if !ok {
