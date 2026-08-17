@@ -399,6 +399,158 @@ func buildTaskCommand() Command {
 					{Title: "Unknown task", Cmd: "rmp task blocking -r myproject 99999", Stderr: "Error: resource not found: task 99999", Exit: 4},
 				},
 			},
+			taskCommentAddSubcommand(),
+			taskCommentListSubcommand(),
+			taskCommentEditSubcommand(),
+			taskCommentRemoveSubcommand(),
+		},
+	}
+}
+
+// The four comment subcommands of the task family (SPEC/COMMANDS.md § Task
+// Comments). They are declared in their own constructors rather than inline
+// because each carries a long, self-contained contract, and because `-y, --type`
+// needs one paragraph per subcommand to keep it apart from the TaskType the same
+// flag spelling carries on list / create / edit.
+//
+// The type descriptions name TaskCommentType, the enum the sibling sprint
+// subcommands must NOT reach: the seven task values and the four sprint values are
+// two sets, never one (SPEC/HELP.md § Comment subcommand help specifics item 1).
+
+// taskCommentTypeDescription is the `--type` contract text shared by the four
+// subcommands, with the per-subcommand role prefixed by the caller.
+const taskCommentTypeDescription = "It carries a comment type here, NOT the TaskType that the same -y, --type " +
+	"spelling carries on task list / create / edit; a TaskType value such as BUG is rejected with exit code 6."
+
+func taskCommentAddSubcommand() Subcommand {
+	return Subcommand{
+		Name: "comment-add", Aliases: []string{"c-add"},
+		Summary:     "Add one typed comment to a task's work log.",
+		Description: "Adds one comment to the given task, stored with its type, its body and a creation timestamp; updated_at starts null. Comments are accepted in every task status, including COMPLETED, and no comment changes or gates a task's status.",
+		Usage:       "rmp task comment-add -r <roadmap> <task-id> --type <TYPE> [--body <text>]",
+		HelpPrinter: printTaskCommentAddHelp,
+		Handler:     taskCommentAdd,
+		ReadsStdin:  true,
+		Positional: []Argument{
+			{Name: "task-id", Type: "integer", Required: true, Description: "Integer id of the task the comment is attached to."},
+		},
+		Flags: []Flag{
+			sharedRoadmapFlag(),
+			commentTypeFlag("TaskCommentType", "REQUIRED. Comment type. "+taskCommentTypeDescription, true),
+			commentBodyFlag("Comment text, max 4096 characters. When the flag is absent the body is read in full from standard input; supplying neither is an error (exit code 2)."),
+			helpFlag(),
+		},
+		Output:      SuccessOutput{Kind: "object", Schema: `{"id": <int>} — the id of the created comment.`, Example: `{"id":12}`},
+		SideEffects: SideEffects{Database: "INSERT into task_comments plus a TASK_COMMENT_CREATE audit entry against the parent task; one transaction.", Filesystem: "None.", Network: "None."},
+		Idempotent:  false,
+		ExitCodes:   []int{0, 1, 2, 3, 4, 6},
+		Examples: []Example{
+			{
+				Title:  "Record a finding",
+				Cmd:    `rmp task comment-add -r myproject 42 --type FINDING --body "time.Now().After(exp) is false at equality, so the boundary second is accepted by the parser and refused by the handler."`,
+				Stdout: `{"id":12}`,
+				Exit:   0,
+			},
+			{
+				Title:  "Body from a pipe (no --body)",
+				Cmd:    `cat decision.txt | rmp task comment-add -r myproject 42 --type DECISION`,
+				Stdout: `{"id":13}`,
+				Exit:   0,
+			},
+			{
+				Title:  "Type outside the task comment set",
+				Cmd:    `rmp task comment-add -r myproject 42 --type BUG --body "..."`,
+				Stderr: `Error: validation error: invalid comment type "BUG" for a task comment; valid types: FINDING, HYPOTHESIS, TEST, DECISION, PROGRESS, UPDATE, NOTE`,
+				Exit:   6,
+			},
+			{
+				Title:  "No body from either source",
+				Cmd:    `rmp task comment-add -r myproject 42 --type NOTE < /dev/null`,
+				Stderr: "Error: required parameter missing: no comment body supplied",
+				Exit:   2,
+			},
+		},
+	}
+}
+
+func taskCommentListSubcommand() Subcommand {
+	return Subcommand{
+		Name: "comment-list", Aliases: []string{"c-ls"},
+		Summary:     "List a task's comments, oldest first.",
+		Description: "Returns every comment of the given task in the order the work happened: created_at ascending, with the comment id as the tie-breaker. The result set is unbounded — there is no --limit, no --desc and no pagination.",
+		Usage:       "rmp task comment-list -r <roadmap> <task-id> [--type <TYPE>]",
+		HelpPrinter: printTaskCommentListHelp,
+		Handler:     taskCommentList,
+		Positional: []Argument{
+			{Name: "task-id", Type: "integer", Required: true, Description: "Integer id of the task whose comments are listed."},
+		},
+		Flags: []Flag{
+			sharedRoadmapFlag(),
+			commentTypeFlag("TaskCommentType", "Optional filter: return only the comments of this type. "+taskCommentTypeDescription, false),
+			helpFlag(),
+		},
+		Output:      SuccessOutput{Kind: "array", Schema: "Array of task-comment objects (id, task_id, type, body, created_at, updated_at); [] when the task has no comments or none of the requested type.", Example: `[{"id":12,"task_id":42,"type":"FINDING","body":"...","created_at":"2026-03-12T11:15:00.000Z","updated_at":null}]`},
+		SideEffects: SideEffects{Database: "Read-only.", Filesystem: "None.", Network: "None."},
+		Idempotent:  true,
+		ExitCodes:   []int{0, 2, 3, 4, 6},
+		Examples: []Example{
+			{Title: "Whole work log", Cmd: "rmp task comment-list -r myproject 42", Exit: 0},
+			{Title: "Decisions only", Cmd: "rmp task comment-list -r myproject 42 --type DECISION", Exit: 0},
+			{Title: "Unknown task", Cmd: "rmp task comment-list -r myproject 99999", Stderr: "Error: resource not found: task 99999 not found", Exit: 4},
+		},
+	}
+}
+
+func taskCommentEditSubcommand() Subcommand {
+	return Subcommand{
+		Name: "comment-edit", Aliases: []string{"c-edit"},
+		Summary:     "Change the type and/or body of one task comment.",
+		Description: "Edits one existing task comment, identified by the comment's own id, and stamps updated_at. At least one of --type and --body is required: unlike task edit, this command does not succeed as a no-op. The previous body is not retained anywhere — the audit log records that an edit happened, not what it replaced.",
+		Usage:       "rmp task comment-edit -r <roadmap> <comment-id> [--type <TYPE>] [--body <text>]",
+		HelpPrinter: printTaskCommentEditHelp,
+		Handler:     taskCommentEdit,
+		ReadsStdin:  true,
+		Positional: []Argument{
+			{Name: "comment-id", Type: "integer", Required: true, Description: "Integer id of the COMMENT itself, not of the task it belongs to; task and sprint comment ids are separate sequences."},
+		},
+		Flags: []Flag{
+			sharedRoadmapFlag(),
+			commentTypeFlag("TaskCommentType", "New comment type. "+taskCommentTypeDescription, false),
+			commentBodyFlag("New comment text, max 4096 characters. When --body is absent AND --type is absent, the new body is read in full from standard input; when --type is present and --body is absent, the body is left unchanged and standard input is not read, so a type-only edit never waits for input."),
+			helpFlag(),
+		},
+		Output:      SuccessOutput{Kind: "empty"},
+		SideEffects: SideEffects{Database: "UPDATE task_comments plus a TASK_COMMENT_UPDATE audit entry against the parent task; one transaction.", Filesystem: "None.", Network: "None."},
+		Idempotent:  true,
+		ExitCodes:   []int{0, 1, 2, 3, 4, 6},
+		Examples: []Example{
+			{Title: "Reclassify", Cmd: "rmp task comment-edit -r myproject 12 --type DECISION", Exit: 0},
+			{Title: "Replace the body from a file", Cmd: "rmp task comment-edit -r myproject 12 < revised.txt", Exit: 0},
+			{Title: "Nothing requested", Cmd: "rmp task comment-edit -r myproject 12 < /dev/null", Stderr: "Error: required parameter missing: at least one of --type or --body is required", Exit: 2},
+			{Title: "Unknown comment", Cmd: `rmp task comment-edit -r myproject 99999 --type NOTE`, Stderr: "Error: resource not found: task comment 99999 not found", Exit: 4},
+		},
+	}
+}
+
+func taskCommentRemoveSubcommand() Subcommand {
+	return Subcommand{
+		Name: "comment-remove", Aliases: []string{"c-rm"},
+		Summary:     "Delete one task comment (irreversible).",
+		Description: "Deletes one task comment, identified by the comment's own id. The row is removed outright: there is no soft delete and no recovery. The audit entry outlives the row, so the task's history still records that a comment existed and was removed. Exactly one id is accepted — no comma-separated list.",
+		Usage:       "rmp task comment-remove -r <roadmap> <comment-id>",
+		HelpPrinter: printTaskCommentRemoveHelp,
+		Handler:     taskCommentRemove,
+		Positional: []Argument{
+			{Name: "comment-id", Type: "integer", Required: true, Description: "Integer id of the COMMENT itself, not of the task it belongs to; task and sprint comment ids are separate sequences."},
+		},
+		Flags:       []Flag{sharedRoadmapFlag(), helpFlag()},
+		Output:      SuccessOutput{Kind: "empty"},
+		SideEffects: SideEffects{Database: "DELETE from task_comments plus a TASK_COMMENT_DELETE audit entry against the parent task; one transaction.", Filesystem: "None.", Network: "None."},
+		Idempotent:  false,
+		ExitCodes:   []int{0, 1, 2, 3, 4},
+		Examples: []Example{
+			{Title: "Remove a comment", Cmd: "rmp task comment-remove -r myproject 12", Exit: 0},
+			{Title: "Unknown comment", Cmd: "rmp task comment-remove -r myproject 99999", Stderr: "Error: resource not found: task comment 99999 not found", Exit: 4},
 		},
 	}
 }

@@ -6,7 +6,11 @@
 // to also have read the family help to know how to call the subcommand.
 package commands
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/FlavioCFOliveira/Groadmap/internal/models"
+)
 
 // printTaskListHelp — `rmp task list`.
 func printTaskListHelp() {
@@ -568,5 +572,226 @@ Exit codes:
 
 Examples:
   rmp task blocking -r myproject 7
+`)
+}
+
+// taskCommentTypes renders the seven values a task comment accepts, exactly as
+// the rejection message and the AI Agent Contract publish them. The list is never
+// re-typed in a help body: models.FormatCommentTypes is the single source, so a
+// change to the accepted set cannot leave a stale list behind in the help
+// (SPEC/HELP.md § Comment subcommand help specifics item 1).
+func taskCommentTypes() string {
+	return models.FormatCommentTypes(models.ValidTaskCommentTypes)
+}
+
+// printTaskCommentAddHelp — `rmp task comment-add`.
+func printTaskCommentAddHelp() {
+	fmt.Printf(`Usage: rmp task comment-add -r <roadmap> <task-id> --type <TYPE> [--body <text>]
+
+Adds one typed entry to a task's work log: what was found, what was tried,
+what was decided and why. Comments are accepted in every task status,
+including COMPLETED, and no comment ever changes or gates a task's status.
+
+The positional argument is the TASK's id — the comment's own id is assigned
+by this command and printed on success.
+
+Aliases: c-add.
+
+Required:
+  -r, --roadmap <name>            Target roadmap
+  <task-id>                       Integer id of the task being commented on
+  -y, --type <TYPE>               Comment type; one of the values below
+
+Valid comment types (for -y, --type on the comment-* subcommands):
+  %s
+
+  Note: -y, --type carries a COMMENT type here. The same spelling carries a
+  TaskType on 'task list', 'task create' and 'task edit'; the two sets are
+  unrelated, so a TaskType value such as BUG is rejected with exit code 6.
+
+Optional:
+  -b, --body <text>               Comment text, max 4096 characters. When this
+                                  flag is absent the body is read in full from
+                                  standard input (a heredoc, a pipe or a file
+                                  redirect); supplying neither the flag nor a
+                                  non-empty standard input fails with exit 2.
+                                  Leading and trailing whitespace is trimmed;
+                                  interior line breaks are preserved.
+
+Validation order (a bad --type never leaves the command waiting on input):
+  roadmap, then <task-id>, then --type presence, then the --type value, then
+  the body, then the task's existence, then the body's length and control
+  characters, then the insert and its audit entry in one transaction.
+
+Output (stdout JSON):
+  {"id": <new-comment-id>}
+
+Exit codes:
+  0  Success
+  1  Database failure
+  2  Invalid <task-id>, missing --type, or no comment body supplied
+  3  Missing -r
+  4  Task not found (or roadmap not found)
+  6  Invalid --type value, body over 4096 characters, or control characters
+     in the body
+
+Examples:
+  rmp task comment-add -r myproject 42 --type FINDING \
+      --body "The expiry comparison is inclusive at the boundary second."
+  rmp task comment-add -r myproject 42 --type DECISION < decision.txt
+  cat finding.txt | rmp task comment-add -r myproject 42 -y FINDING
+  rmp task comment-add -r myproject 42 --type DECISION <<'BODY'
+Compare with !time.Now().Before(exp) so the boundary second expires.
+Rejected widening the clock-skew allowance: it hides the boundary.
+BODY
+`, taskCommentTypes())
+}
+
+// printTaskCommentListHelp — `rmp task comment-list`.
+func printTaskCommentListHelp() {
+	fmt.Printf(`Usage: rmp task comment-list -r <roadmap> <task-id> [--type <TYPE>]
+
+Returns every comment of the given task, oldest first: created_at ascending
+with the comment id as the tie-breaker. The order is the story the log
+tells, so read it top to bottom to follow how the work progressed.
+
+The positional argument is the TASK's id, not a comment id.
+
+Aliases: c-ls.
+
+Required:
+  -r, --roadmap <name>            Target roadmap
+  <task-id>                       Integer id of the task whose log is read
+
+Optional:
+  -y, --type <TYPE>               Return only the comments of this type. The
+                                  value MUST be one of the values below; any
+                                  other value fails with exit 6, including a
+                                  value that is valid only on a sprint comment.
+
+Valid comment types (for -y, --type on the comment-* subcommands):
+  %s
+
+  Note: -y, --type carries a COMMENT type here, not the TaskType carried by
+  the same spelling on 'task list', 'task create' and 'task edit'.
+
+Result-set size:
+  Unbounded. Every matching comment is returned; there is no --limit, no
+  --desc and no pagination.
+
+Output (stdout JSON):
+  Array of comment objects, oldest first. Keys: id, task_id, type, body,
+  created_at, updated_at (null until the comment is first edited).
+  Empty array (exit 0) when the task has no comments, or none of the
+  requested type.
+
+Exit codes:
+  0  Success
+  2  Invalid <task-id>, or an unknown flag
+  3  Missing -r
+  4  Task not found (or roadmap not found)
+  6  Invalid --type value
+
+Examples:
+  rmp task comment-list -r myproject 42
+  rmp task comment-list -r myproject 42 --type DECISION
+  rmp task c-ls -r myproject 42 -y FINDING
+`, taskCommentTypes())
+}
+
+// printTaskCommentEditHelp — `rmp task comment-edit`.
+func printTaskCommentEditHelp() {
+	fmt.Printf(`Usage: rmp task comment-edit -r <roadmap> <comment-id> [--type <TYPE>] [--body <text>]
+
+Changes the type and/or the body of one existing task comment and stamps
+updated_at, so a later listing shows that the comment was altered. The
+previous text is not retained anywhere and cannot be recovered: the audit
+log records that an edit happened, not what it replaced.
+
+The positional argument is the COMMENT's own id, NOT the id of the task it
+belongs to. Task comment ids and sprint comment ids are separate sequences,
+so an id that exists under 'sprint comment-edit' is not found here.
+
+Aliases: c-edit.
+
+Required:
+  -r, --roadmap <name>            Target roadmap
+  <comment-id>                    Integer id of the comment itself
+  At least one change: a --type value, a --body value, or a body on standard
+  input. Unlike 'task edit', a request with no change is rejected (exit 2),
+  not accepted as a no-op.
+
+Valid comment types (for -y, --type on the comment-* subcommands):
+  %s
+
+  Note: -y, --type carries a COMMENT type here, not the TaskType carried by
+  the same spelling on 'task list', 'task create' and 'task edit'.
+
+Optional:
+  -y, --type <TYPE>               New comment type; one of the values above
+  -b, --body <text>               New comment text, max 4096 characters. When
+                                  --body is absent AND --type is absent, the
+                                  new body is read in full from standard input,
+                                  so 'comment-edit <comment-id> < revised.txt'
+                                  is a valid edit. When --type is present and
+                                  --body is absent, the body is left unchanged
+                                  and standard input is NOT read, so a
+                                  type-only edit never waits for input.
+
+Output (stdout JSON):
+  Empty (exit 0 on success), as for 'task edit' and 'sprint update'.
+
+Exit codes:
+  0  Success
+  1  Database failure
+  2  Invalid <comment-id>, an empty --body value, or no change requested
+  3  Missing -r
+  4  Comment not found (or roadmap not found)
+  6  Invalid --type value, body over 4096 characters, or control characters
+     in the body
+
+Examples:
+  rmp task comment-edit -r myproject 12 --type DECISION
+  rmp task comment-edit -r myproject 12 \
+      --body "Superseded: the boundary second is now defined, not skewed."
+  rmp task comment-edit -r myproject 12 < revised.txt
+  rmp task c-edit -r myproject 12 -y NOTE -b "Kept for context only."
+`, taskCommentTypes())
+}
+
+// printTaskCommentRemoveHelp — `rmp task comment-remove`.
+func printTaskCommentRemoveHelp() {
+	fmt.Print(`Usage: rmp task comment-remove -r <roadmap> <comment-id>
+
+Deletes one task comment. The row is removed outright: there is no soft
+delete and no recovery. The audit entry outlives the row, so the task's
+history still records that a comment existed and was removed.
+
+The positional argument is the COMMENT's own id, NOT the id of the task it
+belongs to. Task comment ids and sprint comment ids are separate sequences,
+so an id that exists under 'sprint comment-remove' is not found here.
+
+Exactly one id is accepted: this command takes no comma-separated list, so
+the batch fail-fast rules of 'task remove' do not apply.
+
+Aliases: c-rm.
+
+Required:
+  -r, --roadmap <name>            Target roadmap
+  <comment-id>                    Integer id of the comment itself
+
+Output (stdout JSON):
+  Empty (exit 0 on success).
+
+Exit codes:
+  0  Success
+  1  Database failure
+  2  Invalid or missing <comment-id>, or an unknown flag
+  3  Missing -r
+  4  Comment not found (or roadmap not found)
+
+Examples:
+  rmp task comment-remove -r myproject 12
+  rmp task c-rm -r myproject 12
 `)
 }
