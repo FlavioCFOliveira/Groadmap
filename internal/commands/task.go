@@ -35,12 +35,14 @@ Valid status values (for --status filter and 'stat' setter):
 Valid task types (for -y, --type on 'list', 'create' and 'edit'):
   USER_STORY, TASK, BUG, SUB_TASK, EPIC, REFACTOR, CHORE, SPIKE, DESIGN_UX, IMPROVEMENT
 
-Valid comment types (for -y, --type on 'comment-add', 'comment-list',
-'comment-edit' and 'comment-remove'):
+Valid comment types (for -y, --type on 'comment-add', 'comment-list' and
+'comment-edit'):
   %s
   The same -y, --type spelling carries two unrelated enums in this family: a
-  task type on 'list'/'create'/'edit', a comment type on the comment-*
-  subcommands. A value from one set is rejected (exit 6) by the other.
+  task type on 'list'/'create'/'edit', a comment type on 'comment-add',
+  'comment-list' and 'comment-edit'. A value from one set is rejected (exit 6)
+  by the other. 'comment-remove' takes no -y, --type at all and rejects it
+  (exit 2).
 
 Numeric ranges:
   --priority, --severity      0-9 (0 = lowest, 9 = highest)

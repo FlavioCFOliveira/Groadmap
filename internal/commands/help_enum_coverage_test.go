@@ -22,6 +22,7 @@
 package commands
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -271,5 +272,165 @@ func TestAuditOperationBlock_HasCatchAllGroup(t *testing.T) {
 	if strings.Contains(auditOperationBlock(), last.label) {
 		t.Errorf("the catch-all group is rendered even though every operation matches an entity prefix:\n%s",
 			auditOperationBlock())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// A family help header that says "for -y, --type on 'a', 'b' and 'c'" is a
+// promise about the command surface, and the registry is the authority on
+// whether that promise holds.
+// ---------------------------------------------------------------------------
+
+// subcommandsNamedInEnumHeaders returns every subcommand name quoted inside a
+// "Valid ... (for <flag> on '...', '...' and '...')" header of one help output,
+// keyed by the flag the header attributes them to.
+//
+// The header legitimately wraps across lines, so the scan accumulates from the
+// "for" clause until the closing "):" rather than working line by line.
+func subcommandsNamedInEnumHeaders(out string) map[string][]string {
+	named := map[string][]string{}
+	lines := strings.Split(out, "\n")
+	for i, line := range lines {
+		idx := strings.Index(line, "(for ")
+		if idx < 0 || !strings.HasPrefix(strings.TrimSpace(line), "Valid ") {
+			continue
+		}
+		header := line[idx+len("(for "):]
+		for _, next := range lines[i+1:] {
+			if strings.Contains(header, "):") {
+				break
+			}
+			header += " " + strings.TrimSpace(next)
+		}
+		// An unterminated header means the help text no longer has the shape this
+		// scan assumes. Skipping it silently would make the gate vacuous, but the
+		// caller's minimum-attributions guard catches that, so skipping here is
+		// safe and keeps the helper total.
+		end := strings.Index(header, "):")
+		if end < 0 {
+			continue
+		}
+		header = header[:end]
+
+		// The flag the header attributes the values to: the long form is the
+		// discriminator, since the short form alone is ambiguous across families.
+		flag := ""
+		for _, token := range strings.FieldsFunc(header, func(r rune) bool { return r == ' ' || r == ',' }) {
+			if strings.HasPrefix(token, "--") {
+				flag = token
+				break
+			}
+		}
+		if flag == "" {
+			continue // a header that attributes its values to a positional, not a flag
+		}
+		for _, quoted := range regexp.MustCompile(`'([a-z][a-z-]*)'`).FindAllStringSubmatch(header, -1) {
+			named[flag] = append(named[flag], quoted[1])
+		}
+	}
+	return named
+}
+
+// TestHelpEnumCoverage_HeaderNamesOnlySubcommandsThatAcceptTheValues closes a
+// class of defect rather than one instance of it: a family help header that
+// attributes a set of enum values to a subcommand which cannot accept them at
+// all, so a reader who follows the help gets exit code 2.
+//
+// The shipped instance was `task --help`, whose comment-type header read
+// "for -y, --type on 'comment-add', 'comment-list', 'comment-edit' and
+// 'comment-remove'" while `task comment-remove --type NOTE` rejects the flag as
+// unknown. The sprint family got it right, which is exactly why a per-family
+// eyeball is not a gate: the two texts are written and maintained separately.
+//
+// A header may legitimately name a subcommand that takes the values
+// POSITIONALLY rather than through the flag — `task --help` names the 'stat'
+// setter for the status values and `audit --help` names the 'history' arg for
+// the entity types, both correctly. So the rule is not "declares the flag" but
+// "can accept these values at all": through the flag, or through a positional
+// argument carrying the same enum. The registry is the authority for both.
+//
+// The assertion is one-directional. A header is allowed to describe a subset,
+// so a subcommand that accepts the values without being named is not a defect.
+func TestHelpEnumCoverage_HeaderNamesOnlySubcommandsThatAcceptTheValues(t *testing.T) {
+	families := []struct {
+		name  string
+		build func() Command
+	}{
+		{"task", buildTaskCommand},
+		{"sprint", buildSprintCommand},
+		{"backlog", buildBacklogCommand},
+		{"audit", buildAuditCommand},
+		{"graph", buildGraphCommand},
+		{"roadmap", buildRoadmapCommand},
+	}
+
+	checked := 0
+	for _, family := range families {
+		command := family.build()
+
+		out := captureStdout(t, command.HelpPrinter)
+		headers := subcommandsNamedInEnumHeaders(out)
+		if len(headers) == 0 {
+			continue // this family publishes no enum header attributed to a flag
+		}
+
+		for flag, subcommands := range headers {
+			// Which enum does this flag carry? Read it off whichever subcommand
+			// declares it, so the positional comparison below is against the
+			// same enum rather than against any enum at all.
+			enum := ""
+			for _, sub := range command.Subcommands {
+				for _, declared := range sub.Flags {
+					if declared.Long == flag && declared.Enum != "" {
+						enum = declared.Enum
+					}
+				}
+			}
+
+			for _, name := range subcommands {
+				checked++
+
+				var sub *Subcommand
+				for i := range command.Subcommands {
+					if command.Subcommands[i].Name == name {
+						sub = &command.Subcommands[i]
+					}
+				}
+				if sub == nil {
+					t.Errorf("rmp %s --help attributes %s to subcommand %q, which the registry does not define",
+						family.name, flag, name)
+					continue
+				}
+
+				accepts := false
+				for _, declared := range sub.Flags {
+					if declared.Long == flag {
+						accepts = true
+					}
+				}
+				if !accepts && enum != "" {
+					// The values may arrive positionally instead, which the
+					// header signals in prose ("setter", "arg") and the registry
+					// records as a positional carrying the same enum.
+					for _, arg := range sub.Positional {
+						if arg.Enum == enum {
+							accepts = true
+						}
+					}
+				}
+				if !accepts {
+					t.Errorf("rmp %s --help says %s applies to %q, but that subcommand accepts those values "+
+						"neither as %s nor as a positional carrying enum %q, so following the help fails with "+
+						"exit 2 (unknown flag)", family.name, flag, name, flag, enum)
+				}
+			}
+		}
+	}
+
+	// Guard against the test silently measuring nothing, which is how a header
+	// scan regresses: a wording change that stops matching leaves it green.
+	if checked < 7 {
+		t.Fatalf("only %d header-to-subcommand attributions were checked; the header scan has stopped "+
+			"matching and the gate is now vacuous", checked)
 	}
 }

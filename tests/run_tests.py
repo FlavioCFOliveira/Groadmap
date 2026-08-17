@@ -67,6 +67,7 @@ TEST_MODULES = [
     "test_47_install_script_extraction",
     "test_48_graph_clause_surface",
     "test_49_install_platform_guards",
+    "test_50_task_and_sprint_comments",
 ]
 
 # Stress tests (run separately due to time/data volume)

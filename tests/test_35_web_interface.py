@@ -1042,6 +1042,289 @@ class TestWebInterface:
             assert 'type="submit"' not in low, f"{path}: modal page must contain no submit"
 
     # ====================================================================
+    # Comment log: the task detail modal timeline and the sprint Comments card
+    # (SPEC/WEB.md § Task Detail Modal, comments timeline; § Sprint Detail
+    # Sub-Template, Comments card)
+    # ====================================================================
+
+    def _seed_comments(self):
+        """Attach a realistic comment log to the OPEN sprint and its first task.
+
+        The bodies belong to this module's authentication domain, so the
+        rendered page reads like the project it models. One task comment is
+        edited, which is what makes the "edited" stamp reachable; the second
+        member task is deliberately left without comments so the modal empty
+        state is reachable on the same page.
+        """
+        t1, t2 = self.open_task_ids
+        bodies = {
+            "FINDING": "The magic-link token comparison used ==, so a token that "
+                       "differed only in its final byte still took a measurable "
+                       "amount of time longer to reject.",
+            "HYPOTHESIS": "Suspect the token's expiry is compared with After() "
+                          "rather than !Before(), which would accept the boundary "
+                          "second.",
+            "DECISION": "Decided to compare tokens with subtle.ConstantTimeCompare "
+                        "and to store only their hashes, so a leaked database row "
+                        "cannot be replayed as a login.",
+        }
+        ids = {}
+        for ctype, body in bodies.items():
+            ids[ctype] = json.loads(
+                self._run(["task", "comment-add", "-r", ROADMAP, str(t1),
+                           "--type", ctype, "--body", body])[1]
+            )["id"]
+        self.comment_bodies = bodies
+
+        # An edit, so exactly one entry carries the edited stamp.
+        self._run(["task", "comment-edit", "-r", ROADMAP, str(ids["HYPOTHESIS"]),
+                   "--type", "HYPOTHESIS",
+                   "--body", "Confirmed: the expiry used After(), so the boundary "
+                             "second was accepted by the parser and refused by the "
+                             "handler. Today's fix doesn't change the token lifetime."])
+        self.edited_comment_body = (
+            "Confirmed: the expiry used After(), so the boundary second was "
+            "accepted by the parser and refused by the handler. Today's fix "
+            "doesn't change the token lifetime."
+        )
+
+        self.sprint_comment_body = (
+            "Decided to close the hardening sprint with the passkey work "
+            "unstarted: the FIDO2 library review is still open and the remaining "
+            "tasks carry cleanly into the next sprint."
+        )
+        self._run(["sprint", "comment-add", "-r", ROADMAP, str(self.open_sid),
+                   "--type", "DECISION", "--body", self.sprint_comment_body])
+        self.commented_task = t1
+        self.uncommented_task = t2
+        return ids
+
+    @staticmethod
+    def _slice_task_modal(html, task_id):
+        """Return the markup of exactly one task modal.
+
+        Bounded on the opening tag rather than on id="task-modal-N" alone: the
+        modal's own title carries id="task-modal-N-title", so a naive search
+        would cut the slice short before the comment block.
+        """
+        opening = f'<div class="modal modal-blur fade" id="task-modal-{task_id}"'
+        start = html.find(opening)
+        assert start != -1, f"no modal element for task #{task_id}"
+        nxt = html.find('<div class="modal modal-blur fade" id="task-modal-',
+                        start + len(opening))
+        return html[start:nxt if nxt != -1 else len(html)]
+
+    @staticmethod
+    def _slice_sprint_comments_card(html):
+        """Return the sprint's own Comments card, up to the end of its timeline.
+
+        The card precedes the page's task modals, so bounding it on its own
+        first </ul> keeps a member task's comment log out of the slice — which
+        is what lets the card be tested for the sprint's comments alone.
+        """
+        start = html.find('<h3 class="card-title">Comments')
+        assert start != -1, "the sprint page carries no Comments card"
+        end = html.find("</ul>", start)
+        return html[start:end + 5] if end != -1 else html[start:]
+
+    @staticmethod
+    def _timeline(fragment):
+        """Return the <ul class="timeline"> block of a fragment, or ''."""
+        match = re.search(r'<ul class="timeline">.*?</ul>', fragment, re.S)
+        return match.group(0) if match else ""
+
+    @staticmethod
+    def _timeline_types(timeline):
+        return re.findall(r'<span class="badge bg-secondary-lt">(\w+)</span>', timeline)
+
+    def test_task_modal_renders_the_comment_timeline(self):
+        """The modal renders the log as Tabler's Timeline, one event per comment."""
+        self._seed_comments()
+        proc, port = self._start(["--port", "0"])
+        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/tasks")
+
+        modal = self._slice_task_modal(body, self.commented_task)
+        timeline = self._timeline(modal)
+        assert timeline, "the commented task's modal renders no timeline"
+
+        # The four Tabler classes and the message icon, once per comment.
+        assert modal.count('<li class="timeline-event">') == 3, modal.count(
+            '<li class="timeline-event">'
+        )
+        assert timeline.count(
+            '<div class="timeline-event-icon"><i class="ti ti-message"></i></div>'
+        ) == 3
+        assert timeline.count('<div class="card timeline-event-card">') == 3
+
+        # Every type badge is the neutral one: no per-type colour is introduced.
+        assert self._timeline_types(timeline) == ["FINDING", "HYPOTHESIS", "DECISION"]
+        assert not re.search(
+            r'<span class="badge bg-(?!secondary-lt)[a-z-]+">(?:FINDING|HYPOTHESIS|DECISION)',
+            timeline,
+        ), "a comment type badge is not the neutral bg-secondary-lt"
+
+        # Each entry shows its creation timestamp; only the edited one is stamped.
+        created = re.findall(
+            r'<span class="text-secondary">(\d{4}-\d{2}-\d{2}T[^<]+Z)</span>', timeline
+        )
+        assert len(created) == 3, created
+        assert created == sorted(created), f"timestamps out of order: {created}"
+        assert timeline.count('<span class="text-secondary">edited ') == 1, (
+            "exactly one comment was edited, so exactly one entry carries the stamp"
+        )
+
+        # The bodies are on the page, HTML-escaped rather than raw.
+        assert "measurable amount of time longer to reject" in body
+        assert "Today&#39;s fix doesn&#39;t change" in body, (
+            "an apostrophe in a comment body must arrive escaped"
+        )
+        assert "Today's fix doesn't change" not in body
+
+        # Read-only: the timeline offers no control and no link.
+        low = timeline.lower()
+        for forbidden in ("<form", "<input", "<button", "<a ", "<textarea"):
+            assert forbidden not in low, (
+                f"the comment timeline must be read-only, found {forbidden!r}"
+            )
+
+    def test_task_modal_comment_order_is_oldest_first(self):
+        """The modal's entries follow the log's order, oldest first."""
+        self._seed_comments()
+        proc, port = self._start(["--port", "0"])
+        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/tasks")
+
+        modal = self._slice_task_modal(body, self.commented_task)
+        timeline = self._timeline(modal)
+
+        # The rendered order must equal the order the CLI reports.
+        cli_log = json.loads(
+            self._run(["task", "comment-list", "-r", ROADMAP,
+                       str(self.commented_task)])[1]
+        )
+        assert self._timeline_types(timeline) == [c["type"] for c in cli_log]
+
+        # And on the body text, so a reordered render cannot pass on types alone.
+        positions = [timeline.find(c["body"].split(",")[0][:40]) for c in cli_log]
+        assert all(p != -1 for p in positions), positions
+        assert positions == sorted(positions), (
+            f"comment bodies rendered out of order: {positions}"
+        )
+
+    def test_task_modal_without_comments_shows_the_empty_state(self):
+        """A task with no comments shows the message, not an empty timeline.
+
+        Asserted on the uncommented task's OWN modal slice, on a page whose
+        other modal does render a timeline: a page-wide check could not tell
+        the two apart.
+        """
+        self._seed_comments()
+        proc, port = self._start(["--port", "0"])
+        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/tasks")
+
+        empty = self._slice_task_modal(body, self.uncommented_task)
+        assert "No comments have been recorded on this task yet." in empty
+        assert '<ul class="timeline">' not in empty, (
+            "a task with no comments must render no timeline"
+        )
+        assert "Comments" in empty, "the Comments section itself must still be present"
+
+        populated = self._slice_task_modal(body, self.commented_task)
+        assert "No comments have been recorded on this task yet." not in populated
+        assert '<ul class="timeline">' in populated
+
+    def test_sprint_page_comments_card_shows_only_the_sprints_own_comments(self):
+        """The Comments card is the SPRINT's log, counted in its own badge.
+
+        A member task's comments appear on the same page, inside that task's
+        modal, so the card is sliced out and checked on its own.
+        """
+        self._seed_comments()
+        proc, port = self._start(["--port", "0"])
+        status, _, body = self._req(port, f"/roadmaps/{ROADMAP}/sprints/{self.open_sid}")
+        assert status == 200
+
+        card = self._slice_sprint_comments_card(body)
+        badge = re.search(
+            r'<h3 class="card-title">Comments <span class="badge bg-secondary-lt ms-2">'
+            r"(\d+)</span></h3>",
+            card,
+        )
+        assert badge, f"the Comments card carries no count badge: {card[:200]!r}"
+        assert badge.group(1) == "1", (
+            f"the badge must count the sprint's own comments, got {badge.group(1)}"
+        )
+        assert "Oldest first" in card, "the card must state its ordering"
+
+        assert self.sprint_comment_body[:50] in card, "the sprint's comment is missing"
+        assert self._timeline_types(self._timeline(card)) == ["DECISION"]
+        for task_body in self.comment_bodies.values():
+            assert task_body[:50] not in card, (
+                "a member task's comment leaked into the sprint's Comments card"
+            )
+
+        # The member task's own log is still rendered, in its own modal.
+        modal = self._slice_task_modal(body, self.commented_task)
+        assert '<ul class="timeline">' in modal
+        assert self.comment_bodies["FINDING"][:50] in modal
+
+    def test_sprint_page_comments_card_empty_state(self):
+        """A sprint with no comments shows the Tabler empty panel and a zero badge."""
+        proc, port = self._start(["--port", "0"])
+        status, _, body = self._req(
+            port, f"/roadmaps/{ROADMAP}/sprints/{self.pending_sid}"
+        )
+        assert status == 200
+
+        card = body[body.find('<h3 class="card-title">Comments'):]
+        assert card, "the Comments card must be present even when empty"
+        assert '<span class="badge bg-secondary-lt ms-2">0</span>' in card[:200], card[:200]
+        assert "Nothing has been recorded on this sprint yet." in card
+        assert '<ul class="timeline">' not in card, (
+            "a sprint with no comments must render no timeline"
+        )
+
+    def test_roadmap_landing_page_renders_no_comment_log(self):
+        """The sprints landing page is the negative control: no comment surface.
+
+        It renders compact sprint cards only, so neither the timeline, nor the
+        Comments card, nor any comment body may appear there.
+        """
+        self._seed_comments()
+        proc, port = self._start(["--port", "0"])
+        status, _, body = self._req(port, f"/roadmaps/{ROADMAP}")
+        assert status == 200
+
+        assert '<ul class="timeline">' not in body
+        assert '<li class="timeline-event">' not in body
+        assert '<h3 class="card-title">Comments' not in body
+        assert "No comments have been recorded on this task yet." not in body
+        for task_body in self.comment_bodies.values():
+            assert task_body[:50] not in body
+        assert self.sprint_comment_body[:50] not in body
+
+    def test_comment_surfaces_are_read_only_get_and_head(self):
+        """The two comment-bearing routes answer GET/HEAD and write no audit entry."""
+        self._seed_comments()
+        proc, port = self._start(["--port", "0"])
+        paths = (
+            f"/roadmaps/{ROADMAP}/tasks",
+            f"/roadmaps/{ROADMAP}/sprints/{self.open_sid}",
+        )
+
+        before = json.loads(self._run(["audit", "stats", "-r", ROADMAP])[1])
+        for path in paths:
+            assert self._req(port, path)[0] == 200, path
+            assert self._req(port, path, method="HEAD")[0] == 200, path
+            for method in ("POST", "PUT", "PATCH", "DELETE"):
+                status, _, _ = self._req(port, path, method=method)
+                assert status == 405, f"{method} {path} must be 405, got {status}"
+        after = json.loads(self._run(["audit", "stats", "-r", ROADMAP])[1])
+        assert after["total_entries"] == before["total_entries"], (
+            "rendering the comment surfaces wrote audit entries: "
+            f"{before['total_entries']} -> {after['total_entries']}"
+        )
+
+    # ====================================================================
     # AC9: name validation / path-traversal guard
     # ====================================================================
 
