@@ -46,6 +46,7 @@ func TestHandleError_SentinelErrors(t *testing.T) {
 		{"ErrInvalidInput", utils.ErrInvalidInput, ExitMisuse},
 		{"ErrValidation", utils.ErrValidation, ExitInvalidData},
 		{"ErrRequired", utils.ErrRequired, ExitMisuse},
+		{"ErrDatabase", utils.ErrDatabase, ExitFailure},
 	}
 
 	for _, tt := range tests {
@@ -67,6 +68,17 @@ func TestHandleError_WrappedErrors(t *testing.T) {
 		{"wrapped ErrNotFound", fmt.Errorf("task: %w", utils.ErrNotFound), ExitNotFound},
 		{"wrapped ErrAlreadyExists", fmt.Errorf("roadmap: %w", utils.ErrAlreadyExists), ExitExists},
 		{"wrapped ErrNoRoadmap", fmt.Errorf("context: %w", utils.ErrNoRoadmap), ExitNoRoadmap},
+		// The open-time permission refusal: a database that cannot be brought
+		// to 0600 exits 1, and the sentinel is wrapped explicitly rather than
+		// left to the unclassified-error fallback (SPEC/ARCHITECTURE.md
+		// § Open-Time Permission Enforcement, C. Failure mode).
+		{
+			"wrapped ErrDatabase (cannot secure project.db)",
+			fmt.Errorf("%w: cannot secure /home/user/.roadmaps/project1/project.db to 0600: %s",
+				utils.ErrDatabase,
+				"chmod /home/user/.roadmaps/project1/project.db: operation not permitted"),
+			ExitFailure,
+		},
 	}
 
 	for _, tt := range tests {

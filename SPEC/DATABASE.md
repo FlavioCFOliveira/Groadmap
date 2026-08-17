@@ -36,9 +36,10 @@ Each roadmap is stored in an individual SQLite database. The schema is designed 
 ### Physical Location and Naming
 
 - Each roadmap has its own home directory at `~/.roadmaps/<name>/`, where `<name>` is the roadmap name. The home directory uses `0700` permissions, owner-only.
-- The SQLite database is named `project.db` and lives inside that directory at `~/.roadmaps/<name>/project.db` with `0600` permissions. The `project.db` file MUST be created with `0600` permissions from the outset, not created with the process umask and chmod-ed afterwards: there must be no window in which the file is more permissive than `0600`.
-- SQLite sidecars (`project.db-wal`, `project.db-shm`) live alongside the database in the same directory and MUST also use `0600` permissions, identical to `project.db`. Because the sidecars can contain the same data pages as the main database, they are held to the same owner-only permission as `project.db`.
-- The data directory layout, its permission model, and the automatic migration from the legacy `~/.roadmaps/<name>.db` layout are specified in `ARCHITECTURE.md § Directory Structure` and `ARCHITECTURE.md § Filesystem Layout Migration`.
+- The SQLite database is named `project.db` and lives inside that directory at `~/.roadmaps/<name>/project.db` with `0600` permissions.
+- SQLite sidecars (`project.db-wal`, `project.db-shm`) live alongside the database in the same directory. Because they can contain the same data pages as the main database, they are held to the same owner-only `0600` permission as `project.db`.
+- The permission model for these files and directories — when `0600` and `0700` are applied, when they are verified, what happens when `project.db` cannot be restricted to `0600`, how the sidecars are treated, and what the read-only open path does — is specified in one place only: `ARCHITECTURE.md § Open-Time Permission Enforcement`. That section is canonical; the values repeated above are a summary and must not be restated here in more detail or amended independently of it.
+- The data directory layout and the automatic migration from the legacy `~/.roadmaps/<name>.db` layout are specified in `ARCHITECTURE.md § Directory Structure` and `ARCHITECTURE.md § Filesystem Layout Migration`.
 
 ## Naming Conventions
 
@@ -1283,6 +1284,7 @@ hard cap, `MaxAuditLimit`, defined in `internal/models/consts.go` with the value
 
 ## See Also
 
+- Database file permissions (`0600`, when enforced, failure mode) → `ARCHITECTURE.md § Open-Time Permission Enforcement`
 - Query caching strategy → `IMPLEMENTATION.md § Query Caching`
 - Schema migrations and version history → `VERSION.md § Migrations`
 - Concurrency model (WAL, pool, retry) → `IMPLEMENTATION.md § Concurrency Model`

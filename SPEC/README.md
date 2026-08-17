@@ -62,7 +62,8 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | State transitions (Task) | `STATE_MACHINE.md § Task State Machine` |
 | State transitions (Sprint) | `STATE_MACHINE.md § Sprint State Machine` |
 | System design / modules | `ARCHITECTURE.md` |
-| Data directory layout / permissions | `ARCHITECTURE.md § Directory Structure` |
+| Data directory layout | `ARCHITECTURE.md § Directory Structure` |
+| File and directory permissions (`0700`, `0600`, enforcement, failure mode) | `ARCHITECTURE.md § Open-Time Permission Enforcement` |
 | Filesystem safety (no symlink following, CWE-59) | `ARCHITECTURE.md § Security Guarantees` |
 | Filesystem layout migration (per-roadmap directories) | `ARCHITECTURE.md § Filesystem Layout Migration` |
 | Error handling / sentinel errors | `ARCHITECTURE.md § Error Handling` |
@@ -110,6 +111,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 |-------|------------------|
 | Exit codes (numeric values and sentinel names) | `ARCHITECTURE.md § Exit Codes` |
 | Sentinel errors and wrapping rules | `ARCHITECTURE.md § Error Handling` |
+| Filesystem permission model (`0700` directories, `0600` database, when enforced, failure mode) | `ARCHITECTURE.md § Open-Time Permission Enforcement` |
 | Enums (`TaskType`, `TaskStatus`, `SprintStatus`, `CommentType`) | `MODELS.md § Enums` |
 | Comment type per-entity valid subsets (task: 7 values, sprint: 4 values) | `MODELS.md § Comment Type` |
 | Comment body input source and precedence (`--body` or stdin) | `COMMANDS.md § Comment Body Input Source and Precedence` |
@@ -157,7 +159,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 
 - Roadmap data directory: `~/.roadmaps/` with permissions `0700`.
 - Per-roadmap home directory: `~/.roadmaps/<name>/` with permissions `0700`. The directory name is the roadmap name and is the container for all files the application uses for that roadmap.
-- Individual roadmap databases: `~/.roadmaps/<name>/project.db` with permissions `0600`, created with mode `0600` from the outset (no umask-derived window). The SQLite sidecars `project.db-wal` and `project.db-shm` live alongside and use the same `0600` permissions.
+- Individual roadmap databases: `~/.roadmaps/<name>/project.db` with permissions `0600`, created with mode `0600` from the outset (no umask-derived window) and re-applied and re-verified every time `rmp` opens the database. A database that cannot be brought to `0600` fails the command. The SQLite sidecars `project.db-wal` and `project.db-shm` live alongside and use the same `0600` permissions, restricted opportunistically rather than as a hard guarantee. See `ARCHITECTURE.md § Open-Time Permission Enforcement`.
 - Neither the data directory nor any roadmap home directory may be a symbolic link; `rmp` refuses to follow a symlink when creating, opening, or migrating a roadmap directory (CWE-59). See `ARCHITECTURE.md § Directory Structure` and `ARCHITECTURE.md § Security Guarantees`.
 - Per-roadmap knowledge graph store: `~/.roadmaps/<name>/graph/` (a directory) with permissions `0700`, created on first use of the `graph` command. See `GRAPH.md § Persistence Layout`.
 - Roadmaps in the legacy `~/.roadmaps/<name>.db` layout are migrated automatically to the current layout at startup. See `ARCHITECTURE.md § Filesystem Layout Migration`.

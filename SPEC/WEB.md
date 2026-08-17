@@ -1663,7 +1663,12 @@ re-presents an earlier, now-stale response in its place.
    read-only connection is opened (see
    [Startup Schema Migration](#startup-schema-migration)); the startup migration
    is the only path on which the web interface writes to a roadmap database, and
-   it is the only place the schema is altered.
+   it is the only place the schema is altered. Restricting the database file's
+   permissions to `0600` is not a write in this sense and is the one filesystem
+   change the read-only open path may make: it alters no row, no audit entry, and
+   no schema, and it only ever tightens the mode. A database whose permissions
+   cannot be brought to `0600` is not served; the rule, including that refusal, is
+   `ARCHITECTURE.md § Open-Time Permission Enforcement`.
 3. Each request opens the database, reads what it needs, renders the page, and
    releases the handle. Concurrency against SQLite follows the existing model in
    `IMPLEMENTATION.md § Concurrency Model`; a web read is an ordinary reader and
