@@ -636,8 +636,13 @@ Precedence and rules:
 5. Leading and trailing whitespace is trimmed from the query before the guard-rail
    check and before execution.
 
-This is the one place in Groadmap where a command reads from standard input. The
-cross-cutting input rule is stated in `DATA_FORMATS.md § Input`.
+Standard input carries the Cypher query itself here: what the `graph` subcommands
+read from it is the instruction they execute, not a value they store. Other
+commands accept standard input as well, and the cross-cutting input rule is
+stated in `DATA_FORMATS.md § Input`, which is the canonical statement of every
+command that reads standard input: it lists the `--query` of the `graph`
+subcommands together with the `--body` of the comment subcommands of the `task`
+and `sprint` families.
 
 ## Query Notifications as Diagnostics
 
