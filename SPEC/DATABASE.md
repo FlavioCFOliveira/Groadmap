@@ -232,7 +232,7 @@ Logs all operations that change task or sprint state, enabling complete audit hi
 CREATE TABLE IF NOT EXISTS audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     operation TEXT NOT NULL,
-    entity_type TEXT NOT NULL,
+    entity_type TEXT NOT NULL CHECK(entity_type IN ('TASK', 'SPRINT')),
     entity_id INTEGER NOT NULL,
     performed_at TEXT NOT NULL  -- ISO 8601 UTC
 );
@@ -249,7 +249,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 
 **Fields:**
 - `operation`: Operation type (e.g., `TASK_STATUS_CHANGE`, `SPRINT_START`). Values validated by application.
-- `entity_type`: `'TASK'` or `'SPRINT'`. Values validated by application.
+- `entity_type`: `'TASK'` or `'SPRINT'`. Values validated by application and enforced by the column `CHECK`.
 - `entity_id`: Affected entity ID
 - `performed_at`: Operation timestamp
 
@@ -263,6 +263,8 @@ CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 - `TASK_SEVERITY_CHANGE` - Severity change (0-9) via `task severity`
 - `TASK_UPDATE` - Generic update via `task edit` (title, type, functional_requirements, technical_requirements, acceptance_criteria, specialists). A type change made through `task edit` is recorded here, not under a dedicated operation.
 - `TASK_REOPEN` - Task returned to BACKLOG via `task reopen`; lifecycle timestamps cleared and sprint_tasks row removed
+- `TASK_ASSIGN` - Specialist added to the task's specialists list via `task assign`; written only when the list actually changes, because assigning an already-assigned specialist is an idempotent no-op. A whole-list replacement made through `task edit` is recorded as `TASK_UPDATE` instead.
+- `TASK_UNASSIGN` - Specialist removed from the task's specialists list via `task unassign`; written only when the list actually changes, because removing a specialist that is not assigned is a no-op
 - `TASK_ADD_DEP` - Dependency added (logged against both task_id and depends_on_task_id)
 - `TASK_REMOVE_DEP` - Dependency removed (logged against both task_id and depends_on_task_id)
 - `TASK_COMMENT_CREATE` - Comment added to a task via `task comment-add` (logged against the parent task)
@@ -290,7 +292,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 
 **Comment operations are recorded against the parent entity.** The six comment operations write `entity_type = 'TASK'` with `entity_id` set to the owning task's id, or `entity_type = 'SPRINT'` with `entity_id` set to the owning sprint's id. They never write the comment's own id and never introduce a new `entity_type` value. Two consequences follow, both intended:
 
-1. The `entity_type` value set stays exactly `TASK` and `SPRINT`. No `COMMENT` entity type is introduced. Those two values are validated by the application on every write, and they are also the only two the audit read surface accepts, because `audit history` requires its first positional argument to be `TASK` or `SPRINT` and rejects anything else with exit code 6 (see `COMMANDS.md § Audit Log Management`). Introducing a third value would therefore widen a command contract and the catalogue above for no gain: a comment operation is always an operation on the task or the sprint that owns the comment, so the parent entity is the correct subject of the entry.
+1. The `entity_type` value set stays exactly `TASK` and `SPRINT`. No `COMMENT` entity type is introduced. The set is closed by the table definition itself: `entity_type` carries `CHECK(entity_type IN ('TASK', 'SPRINT'))`, so SQLite rejects a row naming any other entity type whatever the calling code intends. Those two values are validated by the application on every write, and they are also the only two the audit read surface accepts, because `audit history` requires its first positional argument to be `TASK` or `SPRINT` and rejects anything else with exit code 6 (see `COMMANDS.md § Audit Log Management`). Introducing a third value would therefore mean changing the table definition as well as widening a command contract and the catalogue above, all for no gain: a comment operation is always an operation on the task or the sprint that owns the comment, so the parent entity is the correct subject of the entry.
 2. The audit trail of a comment survives the comment. `task comment-remove` deletes the row from `task_comments`, but the `TASK_COMMENT_DELETE` entry remains in the audit log against the parent task, so the history of the task still records that a comment was written, edited, and removed. The comment's text is not recoverable from the audit log; the audit log records that the operations happened, not what they contained.
 
 **Entities:**
@@ -1104,7 +1106,7 @@ Fields are organized to match the optimized Go struct layout (Content, Tracking,
 |--------|------|-------------|
 | id | INTEGER | PK, AUTOINCREMENT |
 | operation | TEXT | NOT NULL |
-| entity_type | TEXT | NOT NULL |
+| entity_type | TEXT | NOT NULL, CHECK enum values: TASK, SPRINT |
 | entity_id | INTEGER | NOT NULL |
 | performed_at | TEXT | NOT NULL, ISO 8601 format |
 

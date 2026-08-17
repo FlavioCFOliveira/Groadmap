@@ -16,6 +16,13 @@
 // The per-family comment-type blocks are covered separately by
 // TestHelpContent_CommentTypeBlockIsPerFamily in help_content_test.go.
 //
+// (1) has a specification-side twin: TestSpecEnumCoverage_AuditCatalogueListsEveryOperation
+// in internal/models/spec_enum_coverage_test.go requires the same enum to be
+// covered by the canonical catalogue of SPEC/DATABASE.md. The help and the SPEC
+// are written and maintained separately, so neither gate substitutes for the
+// other; the twin lives in internal/models because that is where the enum — and
+// therefore the edit that introduces the defect — actually is.
+//
 // The wrapping helper introduced for (1) is unit-tested here too: it is the
 // only piece of layout logic in the help layer, so its column arithmetic is
 // pinned rather than eyeballed.
