@@ -494,35 +494,77 @@ class TestSecurityAudit:
                 f"OPEN #64: audit list --limit {bad} accepted (exit {code}); "
                 "expected exit 6 once the 1..100 cap is enforced")
 
+    def _assert_symlink_refusal(self, code, err, finding):
+        """The refusal contract for a symlinked roadmap directory.
+
+        SPEC/ARCHITECTURE.md states it twice -- § Directory Structure
+        (location rule 10) and § Security Guarantees -- and both say the
+        operation fails with `utils.ErrDatabase` and exit code 1.
+
+        The exit code is the machine-readable half of the contract: an AI
+        agent driving this binary branches on it. Exit 2 is documented as
+        MISUSE (a syntax or flag error), which a symbolic link on disk is
+        not, so exit 2 would misreport the condition. Task #186 moved the
+        refusal from exit 2 to exit 1; this assertion is its regression pin.
+        """
+        assert code == 1, (
+            f"OPEN {finding}: symlink refusal exited {code}, expected 1 "
+            "(utils.ErrDatabase). SPEC/ARCHITECTURE.md location rule 10 and "
+            "§ Security Guarantees both mandate exit 1; exit 2 is MISUSE and "
+            f"misclassifies a filesystem condition. stderr={err!r}")
+        assert "database error" in err, (
+            f"OPEN {finding}: refusal must render the ErrDatabase sentinel "
+            f"prefix; stderr={err!r}")
+        assert "is a symbolic link" in err, (
+            f"OPEN {finding}: refusal must say why it refused; stderr={err!r}")
+
     def test_finding_72_symlinked_roadmap_dir_not_followed(self):
         """#72 CWE-59: a pre-placed symlink at ~/.roadmaps/<name> must not
-        redirect the project.db write outside ~/.roadmaps."""
+        redirect the project.db write outside ~/.roadmaps, and must be
+        refused with exit 1 (utils.ErrDatabase) per SPEC/ARCHITECTURE.md."""
         home = self._fresh_home()
         # Materialise ~/.roadmaps (0700) via a first, legitimate roadmap.
         self._run(["roadmap", "create", "seed"], home=home, check=True)
         target = tempfile.mkdtemp(prefix="sec_target_")
         self._extra.append(target)
+        os.chmod(target, 0o755)
         link = self._roadmaps_dir(home) / "evil"
         os.symlink(target, link)
         # Attempt to create a roadmap whose dir is the attacker symlink.
-        self._run(["roadmap", "create", "evil"], home=home)
+        code, _, err = self._run(["roadmap", "create", "evil"], home=home)
+        self._assert_symlink_refusal(code, err, "#72")
         leaked = Path(target) / "project.db"
         assert not leaked.exists(), (
             f"OPEN #72: project.db was written through the symlink to {leaked}; "
             "creation must refuse or stay inside ~/.roadmaps")
+        # The refusal must precede every write AND every chmod through the link.
+        assert _mode(Path(target)) == 0o755, (
+            f"OPEN #72: external dir was re-chmod'd to {oct(_mode(Path(target)))}; "
+            "the refusal must happen before the 0700 hardening")
+        # The link itself is left in place; rmp refuses, it does not repair.
+        assert link.is_symlink(), "the symlink must be left untouched, not deleted"
+        assert os.readlink(link) == target, "the symlink target must be unchanged"
 
     def test_finding_75_roadmaps_symlink_chmod_not_followed(self):
         """#75 CWE-59: if ~/.roadmaps itself is a symlink, the tool must not
-        chmod the external target to 0700."""
+        chmod the external target to 0700, and must be refused with exit 1
+        (utils.ErrDatabase) per SPEC/ARCHITECTURE.md."""
         home = self._fresh_home()
         target = tempfile.mkdtemp(prefix="sec_rmtarget_")
         self._extra.append(target)
         os.chmod(target, 0o755)
-        os.symlink(target, self._roadmaps_dir(home))
-        self._run(["roadmap", "create", "viactl"], home=home)
+        link = self._roadmaps_dir(home)
+        os.symlink(target, link)
+        code, _, err = self._run(["roadmap", "create", "viactl"], home=home)
+        self._assert_symlink_refusal(code, err, "#75")
         assert _mode(Path(target)) == 0o755, (
             f"OPEN #75: external dir was re-chmod'd to {oct(_mode(Path(target)))}; "
             "a ~/.roadmaps symlink must be detected and refused, not followed")
+        # Nothing may be created inside the target through the link.
+        assert not list(Path(target).iterdir()), (
+            f"OPEN #75: files were created through the symlink into {target}: "
+            f"{[p.name for p in Path(target).iterdir()]}")
+        assert link.is_symlink(), "the symlink must be left untouched, not deleted"
 
     def test_finding_78_wal_sidecar_permissions(self):
         """#78 CWE-276: SQLite WAL/SHM sidecar files must be 0600, not the
