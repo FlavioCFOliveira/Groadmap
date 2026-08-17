@@ -736,12 +736,21 @@ func resolveGraphQuery(raw string) string {
 // inside a string literal, a comment, or a backtick identifier does not count as
 // an existing LIMIT and does not suppress injection. A user-authored top-level
 // LIMIT is respected as-is and the resolved dropdown value is not applied.
+// The injected clause is separated from the query by a NEWLINE, never by a
+// space. A query whose last line ends in a line comment ("MATCH (n) RETURN n //")
+// swallows anything appended on the same line, so a space-separated injection
+// landed INSIDE the comment and the limit was silently not applied: the endpoint
+// then returned the whole graph, defeating the cap it exists to enforce (proven
+// against a 252-node store, which returned all 252 nodes for "… RETURN n //"
+// instead of the resolved 100). A newline terminates the comment, so the clause
+// is always top-level and always applies. Cypher treats the newline as ordinary
+// whitespace, so every query that worked before is unaffected.
 func applyGraphLimit(query string, limit int) string {
 	masked := cypherguard.MaskLiterals(query)
 	if reTopLevelLimit.MatchString(masked) {
 		return query
 	}
-	return query + " LIMIT " + strconv.Itoa(limit)
+	return query + "\nLIMIT " + strconv.Itoa(limit)
 }
 
 // loadGraphView reads a roadmap's knowledge graph read-only and returns its

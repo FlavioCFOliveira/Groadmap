@@ -939,10 +939,12 @@ class TestTaskAndSprintComments:
         print("✓ the 4096-character limit is counted in characters, not bytes")
 
     def test_oversized_stdin_body_is_refused_and_never_truncated(self):
-        """A 70000-byte body on standard input is refused, proving a read to EOF.
+        """A 70000-byte body on standard input is refused, never truncated.
 
-        A reader that stopped at the limit would have silently stored a
-        truncated comment; the oversize verdict is what shows it drained.
+        The refusal is the point: a reader that silently kept the first 4096
+        characters would store a comment the author never wrote. The read itself
+        is bounded (see the test below), so the verdict comes from a retained
+        prefix that is already over the cap rather than from draining the stream.
         """
         oversized = (
             "Reconciliation replay log for the August cycle. " * 1500
@@ -955,6 +957,70 @@ class TestTaskAndSprintComments:
         )
         assert self.task_comments() == []
         print("✓ a 70000-byte body on standard input is refused, not truncated")
+
+    def test_oversized_stdin_body_is_refused_without_draining_the_writer(self):
+        """The body read is BOUNDED: an oversized stream is refused after a few
+        kilobytes instead of being buffered in full.
+
+        A security audit measured the unbounded read this replaces: 64 MiB of
+        input produced 246 MB of peak RSS, 256 MiB produced 868 MB and 512 MiB
+        produced 1.27 GB, all for a body that was always going to be refused —
+        so any pipeline feeding rmp from an untrusted source could drive the
+        machine into swap through a command whose largest acceptable input is
+        about 16 KiB.
+
+        The writer here keeps sending until the pipe breaks and reports how much
+        it managed to send. The bound asserted is deliberately generous (a pipe
+        buffer is 64 KiB, and the reader needs at most a couple of chunks), so
+        the test is stable while still failing outright if the reader ever goes
+        back to draining whatever it is offered.
+        """
+        chunk = b"a" * (64 * 1024)
+        offered = 64 * 1024 * 1024
+        env = os.environ.copy()
+        env["HOME"] = str(self.test.home_dir)
+        proc = subprocess.Popen(
+            [self.cli, "task", "comment-add", "-r", ROADMAP, str(self.task),
+             "--type", "TEST"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env=env,
+        )
+        self._procs.append(proc)
+
+        sent = 0
+        try:
+            while sent < offered:
+                proc.stdin.write(chunk)
+                proc.stdin.flush()
+                sent += len(chunk)
+        except (BrokenPipeError, OSError, ValueError):
+            # BrokenPipeError once rmp has exited; ValueError from a flush on the
+            # writer Python closed when the pipe broke. Both mean the same thing:
+            # the reader stopped before the writer ran out of data.
+            pass
+        finally:
+            try:
+                proc.stdin.close()
+            except (BrokenPipeError, OSError, ValueError):
+                pass
+
+        # communicate() would flush the writer Python already closed on the
+        # broken pipe (ValueError), so the streams are drained directly. Both are
+        # small — an error line on stderr, nothing on stdout — so a read to EOF
+        # cannot deadlock.
+        _stdout = proc.stdout.read()
+        stderr = proc.stderr.read()
+        proc.wait(timeout=30)
+        assert proc.returncode == EXIT_VALIDATION, (
+            f"an oversized body must be refused with exit {EXIT_VALIDATION}; "
+            f"got {proc.returncode}, stderr={stderr!r}")
+        assert b"body exceeds maximum length of 4096 characters" in stderr, stderr
+        assert sent < 8 * 1024 * 1024, (
+            f"the reader consumed at least {sent} bytes of the {offered} offered: "
+            f"the standard-input body read is no longer bounded")
+        assert self.task_comments() == [], "nothing may be stored"
+        print("✓ an oversized standard-input body is refused after "
+              f"{sent} bytes, not after draining the stream")
 
     def test_vertical_tab_and_form_feed_bodies_are_refused(self):
         """VT and FF are forbidden AND stripped by trimming, so the rule must

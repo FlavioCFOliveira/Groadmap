@@ -23,6 +23,7 @@ package cypherguard
 
 import (
 	"regexp"
+	"strings"
 
 	"github.com/FlavioCFOliveira/GoGraph/cypher"
 )
@@ -237,16 +238,57 @@ type Classes struct {
 // raw string, so keywords inside string literals, comments, or backtick
 // identifiers do not affect classification (SPEC/GRAPH.md § Literal-Aware
 // Normalization).
+//
+// Every discriminator is applied TWICE: to the masked text, and to the masked
+// text uppercased with strings.ToUpper — the transformation the engine itself
+// falls back to when it decides whether a statement is DDL. See
+// upperFoldedKeywords for why matching the masked text alone is not enough.
 func Classify(query string) Classes {
 	masked := MaskLiterals(query)
-	return Classes{
-		Write:      cypher.QueryHasWritingClause(masked),
-		Create:     reCreate.MatchString(masked),
-		Mutate:     reMutate.MatchString(masked),
-		Delete:     reDelete.MatchString(masked),
-		DDL:        reDDL.MatchString(masked),
-		Introspect: reIntrospect.MatchString(masked),
+	upper := upperFoldedKeywords(masked)
+	matches := func(re *regexp.Regexp) bool {
+		return re.MatchString(masked) || re.MatchString(upper)
 	}
+	return Classes{
+		Write:      cypher.QueryHasWritingClause(masked) || cypher.QueryHasWritingClause(upper),
+		Create:     matches(reCreate),
+		Mutate:     matches(reMutate),
+		Delete:     matches(reDelete),
+		DDL:        matches(reDDL),
+		Introspect: matches(reIntrospect),
+	}
+}
+
+// upperFoldedKeywords returns masked uppercased with strings.ToUpper, the exact
+// transformation the engine's DDL dispatcher applies before it decides whether
+// a statement is DDL.
+//
+// # Why the masked text alone is not enough (security-critical)
+//
+// The engine routes a statement to its DDL executor when cypher/ir.IsDDL is
+// true. IsDDL compares the statement against the "CREATE INDEX" / "DROP INDEX" /
+// "CREATE CONSTRAINT" / "DROP CONSTRAINT" prefixes byte-wise while folding ASCII
+// case, but the moment a NON-ASCII byte appears inside the prefix window it
+// falls back to strings.HasPrefix(strings.ToUpper(stmt), prefix) — and Unicode
+// uppercasing maps some non-ASCII letters ONTO ASCII ones. U+0131 (dotless i)
+// uppercases to 'I', so the engine reads "CREATE ıNDEX …" as CREATE INDEX and
+// executes it through cypher/ir.ParseDDL, which uppercases the same way.
+//
+// Go's (?i) flag is not that transformation: it applies Unicode simple case
+// FOLDING, whose orbit for 'I'/'i' does not contain U+0131. So `(?i)INDEX` does
+// NOT match "ıNDEX", and the guard rail classified such a statement as an
+// ordinary read while the engine executed it as schema DDL — a fail-OPEN
+// divergence reachable from `rmp graph query`/`search` and, worse, from an
+// unauthenticated GET on the read-only web graph data endpoint.
+//
+// Matching the uppercased copy as well makes the guard rail see every keyword
+// the engine can see, because any code point the engine's fallback folds onto an
+// ASCII keyword letter is folded the same way here. It can only ADD detections
+// (strings.ToUpper never turns an ASCII keyword letter into something else), so
+// no query that was correctly admitted before is rejected now: the extra matches
+// are exactly the spoofed keywords the engine would have acted on.
+func upperFoldedKeywords(masked string) string {
+	return strings.ToUpper(masked)
 }
 
 // IsReadOnly reports whether query is read-only: it contains neither a writing

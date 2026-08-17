@@ -25,17 +25,35 @@ const MaxInt32 = math.MaxInt32 // 2,147,483,647
 // Legitimate Unicode (accents, emoji, CJK, etc.) is accepted unchanged.
 func ValidateNoControlChars(value, fieldName string) error {
 	for _, r := range value {
-		switch {
-		case r == '\t' || r == '\n' || r == '\r':
-			// Explicitly permitted whitespace controls.
-			continue
-		case r < 0x20 || r == 0x7F:
-			return fmt.Errorf("%w: %s: control characters are not allowed", ErrValidation, fieldName)
-		case isBidiOrFormatControl(r):
-			return fmt.Errorf("%w: %s: control characters are not allowed", ErrValidation, fieldName)
+		if IsForbiddenControlChar(r) {
+			return ControlCharError(fieldName)
 		}
 	}
 	return nil
+}
+
+// IsForbiddenControlChar reports whether r is one of the code points
+// ValidateNoControlChars rejects. It is the rule itself, exposed one rune at a
+// time so a caller that consumes free text as a STREAM — the bounded comment
+// body reader in package models — applies the identical rule without first
+// materialising the whole value in memory.
+func IsForbiddenControlChar(r rune) bool {
+	switch {
+	case r == '\t' || r == '\n' || r == '\r':
+		// Explicitly permitted whitespace controls.
+		return false
+	case r < 0x20 || r == 0x7F:
+		return true
+	default:
+		return isBidiOrFormatControl(r)
+	}
+}
+
+// ControlCharError is the refusal ValidateNoControlChars returns, spelled once
+// so a streaming caller reports the identical message and the identical
+// sentinel (exit code 6) as the whole-value check.
+func ControlCharError(fieldName string) error {
+	return fmt.Errorf("%w: %s: control characters are not allowed", ErrValidation, fieldName)
 }
 
 // isBidiOrFormatControl reports whether r is one of the Unicode

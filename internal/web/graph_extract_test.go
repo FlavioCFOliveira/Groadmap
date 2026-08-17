@@ -22,7 +22,7 @@ func TestApplyGraphLimit_InjectsOnlyWhenAbsent(t *testing.T) {
 			name:  "no limit: appended",
 			query: "MATCH (n) RETURN n",
 			limit: 100,
-			want:  "MATCH (n) RETURN n LIMIT 100",
+			want:  "MATCH (n) RETURN n\nLIMIT 100",
 		},
 		{
 			name:  "user limit respected: not appended",
@@ -34,13 +34,28 @@ func TestApplyGraphLimit_InjectsOnlyWhenAbsent(t *testing.T) {
 			name:  "limit only inside string literal: still injected",
 			query: `MATCH (n) WHERE n.note = "limit 5" RETURN n`,
 			limit: 250,
-			want:  `MATCH (n) WHERE n.note = "limit 5" RETURN n LIMIT 250`,
+			want:  "MATCH (n) WHERE n.note = \"limit 5\" RETURN n\nLIMIT 250",
 		},
 		{
-			name:  "limit only inside line comment: still injected",
+			// The injected clause must land on its own line: appended on the
+			// SAME line it would sit inside the comment and never apply, which
+			// is how a trailing "//" defeated the cap entirely.
+			name:  "limit only inside line comment: still injected, on a new line",
 			query: "MATCH (n) RETURN n // limit 5",
 			limit: 50,
-			want:  "MATCH (n) RETURN n // limit 5 LIMIT 50",
+			want:  "MATCH (n) RETURN n // limit 5\nLIMIT 50",
+		},
+		{
+			name:  "bare trailing line comment cannot swallow the injected clause",
+			query: "MATCH (n) RETURN n //",
+			limit: 100,
+			want:  "MATCH (n) RETURN n //\nLIMIT 100",
+		},
+		{
+			name:  "trailing comment on its own last line cannot swallow the clause",
+			query: "MATCH (n) RETURN n\n// tail",
+			limit: 250,
+			want:  "MATCH (n) RETURN n\n// tail\nLIMIT 250",
 		},
 		{
 			name:  "lowercase user limit respected",

@@ -2,26 +2,80 @@
 #
 # Run: gosec -exclude-dir=.claude/worktrees ./...
 #
-# Accepted findings (annotated with #nosec in source code):
+# Accepted findings (annotated with #nosec in source code). This register is the
+# reviewer's index: every suppression in the tree appears below with the reason
+# that makes it safe. The counts total 52 and are the ones
+# `grep -roh '#nosec G[0-9]*' --include='*.go' . | sort | uniq -c` reports, so a
+# new suppression that is not listed here is a review failure. (A plain grep for
+# the string reports 53: the extra hit is prose about suppressions inside a
+# comment in cmd/rmp/workflow_gates_test.go, not a suppression.)
 #
-# G104 (CWE-703) - Errors unhandled
-#   Locations: db/connection.go, db/cache.go, commands/roadmap.go
-#   Reason: Intentional best-effort cleanup calls in error paths (db.Close(),
-#           tx.Rollback()) where the original error is already captured and
-#           returned, or cleanup is non-critical (WAL file removal on roadmap
-#           deletion).
+# G104 (CWE-703) - Errors unhandled  [15]
+#   Locations: db/connection.go (8), db/queries.go (3), web/routes.go (2),
+#              web/server.go (1), db/connection_test.go (1)
+#   Reason: Best-effort cleanup on error paths where the original error is
+#           already captured and returned, and where a failed cleanup cannot
+#           change the outcome: db.Close()/sqlDB.Close() after a failed open,
+#           tx.Rollback() after a failed operation or inside panic recovery,
+#           rows.Close() before issuing writes on the same transaction, the
+#           best-effort chmod of the SQLite -wal/-shm sidecars, the file close
+#           in the static-asset directory guard, the close of a database opened
+#           only to run the web server's startup migration, and a test's
+#           pre-run os.RemoveAll of its own roadmap directory.
 #
-# G201 (CWE-89) - SQL string formatting
-#   Locations: commands/task_edit.go, commands/task_mutate.go, db/queries.go
-#   Reason: fmt.Sprintf is used only to build dynamic IN (?,...,?) clauses
-#           or SET field=? lists for batch operations. Column names are
-#           internal constants derived from FlagParser field names. All user
-#           values are passed via parameterized ? placeholders. No user input
-#           is ever interpolated into the SQL string.
+# G201 (CWE-89) - SQL string formatting  [20]
+#   Locations: commands/task_mutate.go (9), db/queries.go (7),
+#              commands/task_edit.go (1), commands/sprint_crud.go (1),
+#              db/comments.go (1), db/migrations.go (1)
+#   Reason: fmt.Sprintf builds only (a) an IN (?,...,?) or VALUES (?,?,?,?)
+#           placeholder list produced by db.Placeholders / QueryCache, which can
+#           emit nothing but "?" separated by commas; (b) a SET clause joined
+#           from hard-coded "column = ?" fragments selected by a switch or by
+#           literal map keys; or (c) a table name that is a compile-time literal
+#           at every call site (db/migrations.go columnExists). Every user value
+#           travels as a bound ? parameter, so no user input is ever interpolated
+#           into a statement.
 #
-# G304 (CWE-22) - File inclusion via variable
-#   Locations: commands/roadmap.go
-#   Reason: Path is constructed as os.UserHomeDir() + ".roadmaps/.current".
-#           No user-controlled input affects the path suffix; the file stores
-#           the currently selected roadmap name and is written only by
-#           roadmapUse which validates the name before writing.
+# G204 (CWE-78) - Subprocess launched with variable  [3]
+#   Locations: web/server.go (3)
+#   Reason: The browser launcher runs the conventional per-platform program
+#           (xdg-open / open / rundll32) directly through exec.Command, with no
+#           shell, passing the internally built "http://host:port" URL as a
+#           single argument. No shell metacharacter can be interpreted, and the
+#           host comes from the validated --host flag.
+#
+# G302 (CWE-276) - Poor file permissions  [2]
+#   Locations: commands/graph.go (2)
+#   Reason: The 0700 mode is applied to DIRECTORIES (the graph store and its
+#           snapshot directory), where owner-only access requires the execute
+#           bit. 0700 on a directory is exactly what SPEC/ARCHITECTURE.md
+#           § Directory Structure and CLAUDE.md § 10 mandate for the
+#           ~/.roadmaps tree; gosec's file-oriented threshold does not apply.
+#
+# G304 (CWE-22) - File inclusion via variable  [10]
+#   Locations: utils/migrate_test.go (6), db/connection.go (1),
+#              commands/graph.go (1), commands/comments_test.go (1),
+#              web/comments_test.go (1)
+#   Reason: Production paths are built inside ~/.roadmaps/<name>/ from a roadmap
+#           name already validated against ^[a-z0-9_-]+$ (no separator, no ".."),
+#           with a fixed basename: project.db pre-created O_EXCL at 0600
+#           (db/connection.go) and the graph write.lock (commands/graph.go). The
+#           test paths are a stdin fixture the test itself wrote under its own
+#           t.TempDir() (commands/comments_test.go, utils/migrate_test.go) and the
+#           listing of this repository's own package directory that the escaping
+#           test reads to assert no template bypasses html/template
+#           (web/comments_test.go).
+#
+# G404 (CWE-338) - Weak random number generator  [1]
+#   Locations: models/comment_read_test.go (1)
+#   Reason: math/rand builds a deterministic differential-test corpus from a
+#           fixed seed so a failure is reproducible. No security decision, key,
+#           token, or identifier derives from it.
+#
+# G703 (CWE-22) - Potential file inclusion via variable  [1]
+#   Locations: web/data.go (1)
+#   Reason: os.Stat on ~/.roadmaps/<name>/graph, where <name> was validated by
+#           the route guard and again by utils.GetRoadmapDir before the path was
+#           built, so no path outside the data directory is reachable. The stat
+#           only decides whether the roadmap has a graph store yet; the read
+#           never creates it.

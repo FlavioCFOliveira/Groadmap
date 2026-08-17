@@ -3,7 +3,9 @@ package models
 import (
 	"errors"
 	"fmt"
+	"io"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
@@ -255,4 +257,183 @@ func ValidateCommentBody(body string) (string, error) {
 	}
 
 	return stored, nil
+}
+
+// commentBodyReadChunk is the size of one read from the body stream. It bounds
+// how much unvalidated input is held at any instant; the retained state is
+// bounded separately by the rune budget in commentBodyScanner.
+const commentBodyReadChunk = 4096
+
+// ReadCommentBody reads a comment body from src under a BOUNDED memory budget
+// and returns the value the body rules must be applied to. It returns an error
+// only for an I/O failure of the stream: every VERDICT about the body is left to
+// ValidateCommentBody, so the validation ORDER SPEC/COMMANDS.md pins for the
+// comment subcommands is unchanged (the parent-exists check at step 6 still
+// precedes the body's length and control-character rules at step 7).
+//
+// An empty return value means the stream carried no body at all — the caller
+// decides whether that is a missing parameter or a no-op, exactly as it does for
+// an absent --body flag.
+//
+// # Why this is not io.ReadAll
+//
+// The previous implementation drained the stream to EOF and only then measured
+// it against the 4096-character cap, so the process buffered whatever a hostile
+// writer chose to send before rejecting it. Measured on this program: 64 MiB of
+// input produced 246 MB of peak RSS, 256 MiB produced 868 MB, and 512 MiB
+// produced 1.27 GB — an amplification of roughly 2.5x to 4x (io.ReadAll's
+// doubling growth plus the []byte-to-string copy) for input that was always
+// going to be refused. A pipeline that feeds rmp from an untrusted source (a
+// fetched file, an agent's tool output) could therefore drive the machine into
+// swap or the OOM killer through a command whose largest acceptable input is
+// about 16 KiB (CWE-400 / CWE-789: allocation sized by attacker-controlled
+// input).
+//
+// # What it returns, and why every verdict is unchanged
+//
+// The returned value is not a truncation of the input: it is a value chosen so
+// that ValidateCommentBody reaches the SAME verdict on it that it would have
+// reached on the whole stream.
+//
+//   - A body within the cap and free of forbidden control characters returns as
+//     its trimmed form — byte for byte what TrimSpace would have produced,
+//     including bytes that are not valid UTF-8, which are retained as supplied
+//     rather than re-encoded through the replacement rune.
+//   - A body whose trimmed content exceeds the cap returns a prefix that is
+//     itself over the cap, so ValidateCommentBody reports the identical
+//     utils.ErrFieldTooLarge. Reading stops there: no later byte could change
+//     that verdict, and continuing to read is the cost this function exists to
+//     avoid.
+//   - A forbidden control character that occurred in the leading or trailing
+//     whitespace — which TrimSpace would have removed, which is why the rule is
+//     applied to the body AS SUPPLIED — is carried back by appending that one
+//     whitespace rune to the returned value. It is stripped again by the trim
+//     inside ValidateCommentBody, so it cannot affect the length verdict or the
+//     stored text, and it is only ever appended to a value that is about to be
+//     refused.
+//   - A body whose content is empty returns "" with no error even when its
+//     whitespace held a forbidden control character: TrimSpace strips VT and FF,
+//     so such a body counts as absent (exit code 2), which is what the
+//     read-everything-then-TrimSpace implementation did.
+func ReadCommentBody(src io.Reader) (string, error) {
+	var (
+		s     commentBodyScanner
+		chunk = make([]byte, commentBodyReadChunk)
+		carry []byte
+	)
+
+	for !s.done {
+		n, err := src.Read(chunk)
+		if n > 0 {
+			carry = append(carry, chunk[:n]...)
+			consumed := s.scan(carry, false)
+			carry = append(carry[:0], carry[consumed:]...)
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return "", fmt.Errorf("%w: reading the comment body from standard input: %v", utils.ErrDatabase, err)
+		}
+	}
+
+	// At end of stream an incomplete trailing sequence is no longer incomplete:
+	// it is malformed input, and decodes to one replacement rune per byte
+	// exactly as ranging over the equivalent string would.
+	if !s.done {
+		s.scan(carry, true)
+	}
+	return s.result(), nil
+}
+
+// commentBodyScanner accumulates the decision state ReadCommentBody carries
+// across chunk boundaries. Every retained buffer is bounded by MaxCommentBody
+// runes, so peak retention is independent of how much the writer sends.
+type commentBodyScanner struct {
+	content []byte // raw bytes of the content span, as supplied
+	pending []byte // whitespace after the content, still undecided
+	ctrlWS  []byte // raw bytes of the first forbidden rune seen outside the content
+	// done reports that the retained value already determines the verdict (the
+	// content is over the cap), so no further input can change it and reading
+	// stops.
+	done         bool
+	contentRunes int
+	pendingRunes int
+}
+
+// scan consumes as many whole runes as buf holds and returns how many bytes it
+// consumed. When atEOF is false it stops before a trailing incomplete sequence
+// so the next chunk can complete it; when true it decodes every remaining byte.
+func (s *commentBodyScanner) scan(buf []byte, atEOF bool) int {
+	consumed := 0
+	for consumed < len(buf) && !s.done {
+		if !atEOF && !utf8.FullRune(buf[consumed:]) {
+			break
+		}
+		r, size := utf8.DecodeRune(buf[consumed:])
+		s.rune(r, buf[consumed:consumed+size])
+		consumed += size
+	}
+	return consumed
+}
+
+// rune folds one decoded rune, together with the raw bytes it was decoded from,
+// into the scanner state. The RAW bytes are what gets retained: a body may
+// contain bytes that are not valid UTF-8, and re-encoding the decoded
+// replacement rune would silently rewrite what is stored.
+func (s *commentBodyScanner) rune(r rune, raw []byte) {
+	if unicode.IsSpace(r) {
+		s.space(r, raw)
+		return
+	}
+
+	// A non-space rune ends any pending whitespace run: that run is interior
+	// whitespace, which counts towards the cap and is part of the stored text.
+	if s.pendingRunes > 0 {
+		s.content = append(s.content, s.pending...)
+		s.contentRunes += s.pendingRunes
+		s.pending = s.pending[:0]
+		s.pendingRunes = 0
+	}
+	s.content = append(s.content, raw...)
+	s.contentRunes++
+	if s.contentRunes > MaxCommentBody {
+		// The retained value is already over the cap, which is the verdict
+		// ValidateCommentBody will reach; nothing further needs to be read.
+		s.done = true
+	}
+}
+
+// space folds a whitespace rune. Leading whitespace is dropped as it arrives;
+// whitespace after the content is buffered only until the buffered total is
+// enough to prove the cap is exceeded, which is what keeps an arbitrarily long
+// interior run (a body of "a", a gigabyte of spaces, then "b") bounded without
+// losing the over-cap verdict.
+func (s *commentBodyScanner) space(r rune, raw []byte) {
+	if utils.IsForbiddenControlChar(r) && s.ctrlWS == nil {
+		// Recorded, not reported: this rune sits in a span TrimSpace removes, so
+		// it is carried back at the end to let ValidateCommentBody see the body
+		// as supplied.
+		s.ctrlWS = append([]byte(nil), raw...)
+	}
+	if s.contentRunes == 0 {
+		return // leading whitespace: trimmed away, never retained
+	}
+	if s.contentRunes+s.pendingRunes > MaxCommentBody {
+		return // already enough buffered to settle the verdict either way
+	}
+	s.pending = append(s.pending, raw...)
+	s.pendingRunes++
+}
+
+// result returns the value the body rules are applied to, per the contract
+// documented on ReadCommentBody.
+func (s *commentBodyScanner) result() string {
+	if s.contentRunes == 0 {
+		return ""
+	}
+	if s.ctrlWS != nil {
+		return string(s.content) + string(s.ctrlWS)
+	}
+	return string(s.content)
 }

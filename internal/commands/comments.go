@@ -32,7 +32,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 
@@ -203,18 +202,20 @@ func resolveCommentBody(body commentBody, stdinFallback bool) (string, bool, err
 	return raw, true, nil
 }
 
-// readCommentBodyStdin reads standard input to EOF as the comment body.
+// readCommentBodyStdin reads the comment body from standard input under a
+// BOUNDED memory budget and returns it in the form the body rules produce.
+//
+// The bound is the point: models.ReadCommentBody applies the length rule as the
+// stream arrives and refuses the body the moment it cannot fit, instead of
+// buffering everything a writer chooses to send and only then measuring it. The
+// value it returns is already the canonical stored form, and the callers still
+// hand it to models.ValidateCommentBody, which is idempotent on that form — the
+// domain, not this layer, remains the single owner of the rules.
 //
 // A read failure is an I/O failure of the process, not bad user input, so it maps
-// to exit code 1 exactly as the graph subcommands' stdin read does. The
-// underlying error is interpolated with %v rather than wrapped, so a sentinel
-// hiding inside it cannot silently re-map the exit code.
+// to exit code 1 exactly as the graph subcommands' stdin read does.
 func readCommentBodyStdin() (string, error) {
-	raw, err := io.ReadAll(os.Stdin)
-	if err != nil {
-		return "", fmt.Errorf("%w: reading the comment body from standard input: %v", utils.ErrDatabase, err)
-	}
-	return string(raw), nil
+	return models.ReadCommentBody(os.Stdin)
 }
 
 // parseCommentTypeFlag runs the shared flag parser over what is left after the
