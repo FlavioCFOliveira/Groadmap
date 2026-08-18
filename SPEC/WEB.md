@@ -925,8 +925,18 @@ how the `rmp web` process itself terminates.
   be used, because it makes the match depend on the viewer's locale and would break
   the equivalence below for terms containing letters whose case mapping is
   locale-specific.
+
+  A task's searchable text is folded **once, by the server**. The client folds only
+  the term, and compares it against text the server already folded; no client-side
+  code folds a task's `title` or its reference. This makes the equivalence below
+  structural rather than coincidental: the two paths cannot disagree about a task's
+  text, because only one of them ever transforms it, and the single value both fold
+  is the term the user typed.
 - **Effect on the board.** A task that does not match is not shown. Everything the
-  board states about itself then refers to the **shown set**, not to the roadmap:
+  board states about itself then refers to the **shown set**, not to the roadmap.
+  This holds continuously: as the user types, the counts, the empty states, and the
+  no-match message are updated together with the cards, so the board is never left
+  stating something true of a previous term or of the unnarrowed roadmap:
   - Each column shows only its matching cards, in the order fixed by **Order within
     a column**, which the narrowing preserves.
   - **Each column's count is the number of cards that column is showing.** The
@@ -934,6 +944,10 @@ how the `rmp web` process itself terminates.
     while the column displayed fewer cards would state something false about what
     the user is looking at, which is exactly what **Count per column** exists to
     prevent.
+  - **"Shown" means visible to the user, not present in the document.** A card that
+    is present but marked as not visible is not shown: it counts towards nothing the
+    board states, and a column whose every card is in that state displays its empty
+    state exactly as a column with no such card would.
   - The five columns remain present and in order. Searching never drops, hides, or
     reorders a column.
   - A column left with no matching card shows its ordinary in-column empty state.
@@ -954,9 +968,23 @@ how the `rmp web` process itself terminates.
   - **An empty term leaves no parameter.** When the term is empty or entirely
     whitespace, `q` is **removed** from the URL rather than left present and empty:
     the unfiltered board's URL is the bare page URL.
-  - **Cold load applies the same term.** When the page is requested with a `q`
-    value, the **server** applies it and renders the already-narrowed board. The
-    page does not render every task and then narrow it after load.
+  - **Cold load arrives already narrowed.** When the page is requested with a `q`
+    value, the **server** applies the term, and the document it sends already
+    carries the narrowing in its final state: the narrowed column counts, the
+    in-column empty states, and the no-match message where nothing matches. Nothing
+    on the client applies the term after load. A document that arrived unnarrowed
+    and was narrowed by a script afterwards is forbidden: it would flash the
+    unfiltered board before narrowing it, and where scripting is unavailable it
+    would leave the URL carrying a term while the board ignored it.
+
+    The non-matching cards **may** be present in that document, provided they
+    arrive already marked as not visible and count towards nothing the board
+    states. Their presence is not a concession but the enabling condition for
+    **Live typing** above: clearing or widening the search restores cards, and a
+    card the document never carried could not be restored without going back to the
+    server, which would make the narrowing instantaneous in one direction only. The
+    rule forbids narrowing applied *after* load; it does not forbid cards *present*
+    in the document.
 - **Server and client produce the same board (the property that matters).** For any
   roadmap and any term, the board reached by typing that term into the search
   control and the board reached by requesting the page URL carrying that term in
@@ -3732,7 +3760,8 @@ Rules:
     that label — and is reachable and operable from the keyboard (see
     [Roadmap Tasks Page](#roadmap-tasks-page), **Header search control**).
 101. Typing a term narrows the board without a page reload, and every column count
-    equals the number of cards that column is then showing. A task matches when the
+    equals the number of cards that column is then showing — the cards visible to
+    the user, not the cards present in the document. A task matches when the
     term occurs, case-insensitively and as a substring, in that task's `title` or in
     its `#<id>` reference written with the leading `#`; both `42` and `#42` therefore
     find task 42. No other task field is matched: a term equal to a task's
@@ -3757,13 +3786,22 @@ Rules:
     search control and the board produced by requesting the page URL carrying that
     term in `q` are identical — the same cards, in the same columns, in the same
     order, with the same column counts and the same empty states — asserted by
-    comparing the two. A cold load with `q` is narrowed by the **server**; the page
-    does not render every task and narrow it afterwards.
+    comparing the two. The document served for a cold load with `q` already carries
+    the narrowing in its final state — the narrowed column counts, the in-column
+    empty states, and the no-match message where applicable — and nothing on the
+    client applies the term after load. Non-matching cards **may** be present in
+    that document provided they arrive already marked as not visible and count
+    towards nothing the board states; their presence is what lets clearing the
+    search restore them without a request to the server, as Acceptance Criterion 103
+    requires. What is forbidden is a document that arrives unnarrowed and is
+    narrowed by a script after load.
 105. No `q` value produces an error page: a term matching nothing, a term longer than
     any searchable text, and a `q` the server cannot decode each return HTTP 200,
     the last treated as though `q` were absent. Applying a term adds no database
     query: the page's read remains the full task list specified in Acceptance
-    Criterion 89, and narrowing in the browser issues no request at all.
+    Criterion 89, and narrowing in the browser issues no request at all. A task's
+    searchable text is folded once by the server and never by the client, so the two
+    paths cannot disagree about a task's text; the term is the only value both fold.
 106. A term containing HTML markup renders as visible characters and introduces no
     element, attribute, or script into the page: the server escapes it through
     `html/template` where it echoes it into the search input and into the no-match
