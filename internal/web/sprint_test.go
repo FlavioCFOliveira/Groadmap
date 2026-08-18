@@ -558,10 +558,20 @@ func TestTaskModal_WiringAndContent(t *testing.T) {
 			}
 		}
 
-		// Read-only: the page carries no form, input, or submit control.
+		// Read-only: no form and no submit control on either page. The tasks page
+		// carries exactly one input — the board's search box, which submits nothing
+		// and only changes which of the already-read tasks are shown (SPEC/WEB.md
+		// § Roadmap Tasks Page, Read-only).
 		low := strings.ToLower(body)
-		if strings.Contains(low, "<form") || strings.Contains(low, "<input") || strings.Contains(low, "type=\"submit\"") {
-			t.Errorf("page %s must be read-only: no form/input/submit", path)
+		if strings.Contains(low, "<form") || strings.Contains(low, `type="submit"`) {
+			t.Errorf("page %s must be read-only: no form and no submit control", path)
+		}
+		wantInputs := 0
+		if strings.HasSuffix(path, "/tasks") {
+			wantInputs = 1
+		}
+		if got := strings.Count(low, "<input"); got != wantInputs {
+			t.Errorf("page %s carries %d input elements, want %d", path, got, wantInputs)
 		}
 	}
 

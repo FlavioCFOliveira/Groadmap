@@ -279,6 +279,25 @@ func cardMarker(taskID int) string {
 	return `data-task-id="` + itoa(taskID) + `"`
 }
 
+// shownEmptyState reports whether a column is SHOWING its in-column empty state.
+//
+// The element is always in the document — the server and the browser express the
+// same state the same way, by toggling `hidden`, so a column emptied by a search
+// reads exactly like a column the roadmap left empty — so presence alone says
+// nothing and the attribute is what must be read.
+func shownEmptyState(column string) bool {
+	at := strings.Index(column, `data-role="task-board-column-empty"`)
+	if at < 0 {
+		return false
+	}
+	rest := column[at:]
+	end := strings.Index(rest, ">")
+	if end < 0 {
+		return false
+	}
+	return !strings.Contains(rest[:end], "hidden")
+}
+
 // cardOpen is the opening markup of a board card, used both to count cards and to
 // find a card's boundaries. The card is a real <button>: only a natively
 // activatable element turns Enter and Space into the click the modal data-api
@@ -851,7 +870,7 @@ func TestTaskBoard_EmptyStates(t *testing.T) {
 	sparse := seedRoadmap(t, "checkout-rollout")
 	for i, column := range boardColumns(t, servePage(t, mux, "/roadmaps/"+sparse+"/tasks")) {
 		status, count := columnHeader(t, column)
-		empty := strings.Contains(column, `data-role="task-board-column-empty"`)
+		empty := shownEmptyState(column)
 
 		if models.ValidTaskStatuses[i] == models.StatusSprint {
 			if empty {
@@ -889,7 +908,7 @@ func TestTaskBoard_EmptyStates(t *testing.T) {
 		if count != 0 {
 			t.Errorf("the empty board's column %s shows the count %d, want 0", status, count)
 		}
-		if !strings.Contains(column, `data-role="task-board-column-empty"`) {
+		if !shownEmptyState(column) {
 			t.Errorf("the empty board's column %s renders no empty state", status)
 		}
 		if strings.Contains(column, cardOpen) {
@@ -991,7 +1010,7 @@ func TestTasksPage_IssuesThreeReadsAndNoneMore(t *testing.T) {
 	f := seedBoardFixture(t, "payment-platform")
 	src := openCounting(t, f.name)
 
-	data, err := readTasks(context.Background(), src, f.name)
+	data, err := readTasks(context.Background(), src, f.name, "")
 	if err != nil {
 		t.Fatalf("readTasks: %v", err)
 	}
@@ -1047,7 +1066,7 @@ func TestTasksPage_IssuesThreeReadsAndNoneMore(t *testing.T) {
 		seedTasksWithComments(t, name, taskCount)
 		counted := openCounting(t, name)
 
-		if _, err := readTasks(context.Background(), counted, name); err != nil {
+		if _, err := readTasks(context.Background(), counted, name, ""); err != nil {
 			t.Fatalf("%d tasks: readTasks: %v", taskCount, err)
 		}
 		if counted.taskList != 1 || counted.groupedCommentCounts != 1 || counted.groupedTaskSprints != 1 {
@@ -1076,7 +1095,7 @@ func TestTasksPage_IssuesThreeReadsAndNoneMore(t *testing.T) {
 	seedTasksWithComments(t, emptyName, 0)
 	emptySrc := openCounting(t, emptyName)
 
-	emptyData, err := readTasks(context.Background(), emptySrc, emptyName)
+	emptyData, err := readTasks(context.Background(), emptySrc, emptyName, "")
 	if err != nil {
 		t.Fatalf("empty roadmap: readTasks: %v", err)
 	}

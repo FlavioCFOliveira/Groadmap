@@ -88,6 +88,9 @@ func handleSprints(w http.ResponseWriter, r *http.Request) {
 // Kanban board of five fixed columns — one per task status — with each card
 // clickable to open the read-only task detail modal (SPEC/WEB.md § Roadmap Tasks
 // Page). The page renders no task table; the board is its only task presentation.
+// An optional q parameter narrows the board to the tasks whose title or #id
+// reference contains it; the same term typed into the header search control
+// narrows the same board in the browser, and the two must agree.
 // The {name} is validated and confirmed to exist before any data read; an invalid
 // or unknown name yields 404 (handled by resolveRoadmap), an internal read error
 // yields 500.
@@ -97,7 +100,15 @@ func handleTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := loadTasks(r.Context(), name)
+	// The optional search term. Every string is a valid term, so nothing here can
+	// fail: a term that matches nothing renders an empty board with HTTP 200, and
+	// a q the server cannot decode is treated as absent, because url.Values.Get
+	// answers "" for a pair ParseQuery could not decode. The search never changes
+	// this route's status codes (SPEC/WEB.md § Roadmap Tasks Page, No malformed
+	// term is an error).
+	search := r.URL.Query().Get("q")
+
+	data, err := loadTasks(r.Context(), name, search)
 	if err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return

@@ -127,6 +127,12 @@ type sprintsData struct {
 // reads a comment body in order to display a number (SPEC/WEB.md § Roadmap Tasks
 // Page, read cost; SPEC/DATABASE.md § Count Comments for Many Parents (Grouped)).
 //
+// Match is whether the task satisfies the board's active search term. It is true
+// for every task when no term is active. A task that does not match stays in the
+// document — every card is in the page so the browser can narrow without a round
+// trip — but is not SHOWN, and does not count towards its column's badge
+// (SPEC/WEB.md § Roadmap Tasks Page, Effect on the board).
+//
 // Sprint is the sprint the task belongs to, or nil when it belongs to none — a
 // task belongs to at most one, which sprint_tasks.task_id's UNIQUE constraint
 // guarantees. It is populated only by the surface that shows it, the tasks page's
@@ -140,6 +146,7 @@ type taskView struct {
 	Sprint *db.SprintRef
 	models.Task
 	CommentCount int
+	Match        bool
 }
 
 // SpecialistsText returns the task's specialists as text, or the empty string
@@ -157,6 +164,21 @@ func (v *taskView) SpecialistsText() string {
 		return ""
 	}
 	return strings.TrimSpace(*v.Specialists)
+}
+
+// SearchText is the task's title folded to lower case, which the card carries so
+// the browser matches against the SAME text the server matched against.
+//
+// Folding the corpus once, here, is what keeps the two paths equivalent: the
+// script folds only the term the user typed, never the task text, so a difference
+// between Go's case conversion and the browser's cannot make the same term select
+// different tasks on the two paths (SPEC/WEB.md § Roadmap Tasks Page, Matching
+// rule; Server and client produce the same board).
+//
+// strings.ToLower is locale-independent — it applies Unicode's case mapping and
+// consults no locale — which is what the matching rule requires of both sides.
+func (v *taskView) SearchText() string {
+	return strings.ToLower(v.Title)
 }
 
 // HasMeta reports whether the card has at least one metadata indicator to show:
@@ -177,14 +199,52 @@ func (v *taskView) HasMeta() bool {
 		v.CommentCount > 0
 }
 
+// foldSearchTerm normalises a raw search term into the form the matching rule
+// compares with: surrounding whitespace stripped, folded to lower case.
+//
+// A term that is empty or entirely whitespace folds to the empty string, which is
+// no term at all and matches every task. Whitespace INSIDE the term survives and
+// is matched literally (SPEC/WEB.md § Roadmap Tasks Page, Matching rule).
+func foldSearchTerm(raw string) string {
+	return strings.ToLower(strings.TrimSpace(raw))
+}
+
+// matchesSearch reports whether the task matches an already-folded term.
+//
+// The searchable text is exactly the two things the card itself displays: the
+// task title, and the task reference written with its leading "#". Matching the
+// reference as the literal string "#42" is what lets both `42` and `#42` find task
+// 42 under the one substring rule, with no special case for either form.
+//
+// Every other field — `specialists` included — is deliberately outside the search:
+// the box answers "which task is this?" from what identifies a task on its card,
+// and matching an attribute would answer a different question through the same
+// control (SPEC/WEB.md § Roadmap Tasks Page, What the search matches).
+func (v *taskView) matchesSearch(folded string) bool {
+	if folded == "" {
+		return true
+	}
+	if strings.Contains(v.SearchText(), folded) {
+		return true
+	}
+	return strings.Contains("#"+strconv.Itoa(v.ID), folded)
+}
+
 // taskColumn is one column of the roadmap tasks page's Kanban board: a task
 // status, the cards of the tasks in that status, and the count its header shows.
 //
 // Tasks holds POINTERS into the page's flat task list rather than copies, so the
 // board and the task detail modals it opens are rendered from one set of values
-// and cannot drift apart. Count is len(Tasks), set where the column is built, so
-// the header badge and the rendered cards are counted once from the same slice
-// (SPEC/WEB.md § Roadmap Tasks Page, count per column; Acceptance Criterion 83).
+// and cannot drift apart. It holds every task of that status, including the ones a
+// search hides: the card stays in the document so the browser can show it again
+// without a round trip.
+//
+// Count is the number of tasks the column SHOWS — those whose Match is true — so
+// the header badge always states what the user is looking at. A count that kept
+// reporting the unnarrowed total while the column displayed fewer cards would
+// state something false, which is exactly what the count exists to prevent
+// (SPEC/WEB.md § Roadmap Tasks Page, Count per column; Effect on the board;
+// Acceptance Criteria 83 and 101).
 //
 // Field order puts the string before the slice so the pointer-scan prefix stops
 // at the slice header rather than spanning the whole struct (govet
@@ -211,11 +271,21 @@ type taskColumn struct {
 // of the task state machine's flow. The grouping is in memory over the values
 // already read: the board issues no query of its own, none per column and none
 // per card (SPEC/WEB.md § Roadmap Tasks Page, read cost).
+// Search is the term exactly as the request carried it, echoed back into the
+// search input and into the no-match message; html/template escapes it in both
+// places. SearchActive says a term is in force (the folded term is non-empty), and
+// NoMatches says a term is in force and nothing matched, which is the condition
+// for the board's "no task matches" message — a different condition from a roadmap
+// that holds no task at all (SPEC/WEB.md § Roadmap Tasks Page, Effect on the
+// board; Empty states).
 type tasksData struct {
-	Name    string
-	Chrome  chrome
-	Tasks   []taskView
-	Columns []taskColumn
+	Name         string
+	Search       string
+	Chrome       chrome
+	Tasks        []taskView
+	Columns      []taskColumn
+	SearchActive bool
+	NoMatches    bool
 }
 
 // auditPageSize is the fixed number of audit entries shown per page on the
@@ -525,14 +595,14 @@ func loadSprints(ctx context.Context, name string) (sprintsData, error) {
 // The caller is responsible for the {name} validation and existence check
 // (resolveRoadmap); this function trusts name is a validated, existing
 // roadmap.
-func loadTasks(ctx context.Context, name string) (tasksData, error) {
+func loadTasks(ctx context.Context, name, search string) (tasksData, error) {
 	database, err := db.OpenReadOnly(name)
 	if err != nil {
 		return tasksData{}, err
 	}
 	defer database.Close() //nolint:errcheck // read-only handle; close error is non-actionable
 
-	return readTasks(ctx, database, name)
+	return readTasks(ctx, database, name, search)
 }
 
 // readTasks is the tasks page's entire read, expressed against the page's read
@@ -557,7 +627,7 @@ func loadTasks(ctx context.Context, name string) (tasksData, error) {
 // Separating it from loadTasks is what makes the query count of a page render
 // measurable against a real database: the caller supplies the source, so a test
 // can hand in a counting one (Acceptance Criteria 70 and 92).
-func readTasks(ctx context.Context, src tasksSource, name string) (tasksData, error) {
+func readTasks(ctx context.Context, src tasksSource, name, search string) (tasksData, error) {
 	// EVERY task of the roadmap, any status, with no limit and no pagination.
 	// The board prints a count on each column header as a statement of fact about
 	// the roadmap, so a partial read would publish wrong counts as true ones with
@@ -584,7 +654,28 @@ func readTasks(ctx context.Context, src tasksSource, name string) (tasksData, er
 		return tasksData{}, err
 	}
 
-	return tasksData{Name: name, Tasks: views, Columns: groupIntoColumns(views)}, nil
+	// The term narrows what the board SHOWS; it narrows neither what the page
+	// reads nor what the document carries. Every card stays in the page, which is
+	// what lets the browser re-narrow with no round trip, and the verdict recorded
+	// here is the one the browser recomputes when the user types (SPEC/WEB.md
+	// § Roadmap Tasks Page, Read cost; Server and client produce the same board).
+	folded := foldSearchTerm(search)
+	shown := 0
+	for i := range views {
+		views[i].Match = views[i].matchesSearch(folded)
+		if views[i].Match {
+			shown++
+		}
+	}
+
+	return tasksData{
+		Name:         name,
+		Search:       search,
+		Tasks:        views,
+		Columns:      groupIntoColumns(views),
+		SearchActive: folded != "",
+		NoMatches:    folded != "" && shown == 0,
+	}, nil
 }
 
 // attachSprints resolves the sprint of EVERY view in one grouped query over the
@@ -651,7 +742,13 @@ func groupIntoColumns(views []taskView) []taskColumn {
 	}
 
 	for i := range columns {
-		columns[i].Count = len(columns[i].Tasks)
+		shown := 0
+		for _, task := range columns[i].Tasks {
+			if task.Match {
+				shown++
+			}
+		}
+		columns[i].Count = shown
 	}
 	return columns
 }

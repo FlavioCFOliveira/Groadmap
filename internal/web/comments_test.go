@@ -479,14 +479,14 @@ func TestTaskDetail_CommentBodyTravelsAsAJSONString(t *testing.T) {
 	if strings.Contains(page, rendered(bodyMarkup)) {
 		t.Errorf("a comment body reached the page at all; the modal is filled from the endpoint")
 	}
-	// The page's script elements are the two it loads, opened and closed once
+	// The page's script elements are the three it loads, opened and closed once
 	// each. A body that became markup would raise either count.
-	if got := strings.Count(page, "<script"); got != 2 {
-		t.Errorf("page has %d <script elements, want exactly 2 (the vendored bundle and the "+
-			"modal script)", got)
+	if got := strings.Count(page, "<script"); got != 3 {
+		t.Errorf("page has %d <script elements, want exactly 3 (the vendored bundle, the "+
+			"modal script and the board's search script)", got)
 	}
-	if got := strings.Count(page, "</script>"); got != 2 {
-		t.Errorf("page has %d </script> closers, want exactly 2", got)
+	if got := strings.Count(page, "</script>"); got != 3 {
+		t.Errorf("page has %d </script> closers, want exactly 3", got)
 	}
 
 	// The endpoint carries the body as a JSON string. Go's encoder escapes the
@@ -917,7 +917,7 @@ func TestTasksPage_OneGroupedCommentCountQueryIndependentOfTaskCount(t *testing.
 		ids := seedTasksWithComments(t, name, taskCount)
 		src := openCounting(t, name)
 
-		data, err := readTasks(context.Background(), src, name)
+		data, err := readTasks(context.Background(), src, name, "")
 		if err != nil {
 			t.Fatalf("%d tasks: readTasks: %v", taskCount, err)
 		}
@@ -983,7 +983,7 @@ func TestTasksPage_OneGroupedCommentCountQueryIndependentOfTaskCount(t *testing.
 	seedTasksWithComments(t, emptyName, 0)
 	emptySrc := openCounting(t, emptyName)
 
-	emptyData, err := readTasks(context.Background(), emptySrc, emptyName)
+	emptyData, err := readTasks(context.Background(), emptySrc, emptyName, "")
 	if err != nil {
 		t.Fatalf("empty roadmap: readTasks: %v", err)
 	}

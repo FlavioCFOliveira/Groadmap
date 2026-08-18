@@ -427,9 +427,10 @@ func TestTaskModal_HostileValuesNeverReachThePageAsMarkup(t *testing.T) {
 			t.Errorf("the page carries %q; the modal's values are fetched on demand", absent)
 		}
 	}
-	// The page's script elements are exactly the two it loads.
-	if got := strings.Count(page, "<script"); got != 2 {
-		t.Errorf("the page has %d <script elements, want 2", got)
+	// The page's script elements are exactly the three it loads: the vendored
+	// bundle, the modal script, and the board's search script.
+	if got := strings.Count(page, "<script"); got != 3 {
+		t.Errorf("the page has %d <script elements, want 3", got)
 	}
 
 	// The endpoint carries every hostile value as a JSON string, with the

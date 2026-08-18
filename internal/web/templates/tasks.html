@@ -15,8 +15,24 @@
               <div class="page-pretitle">Roadmap</div>
               <h2 class="page-title">{{.Name}} <span class="text-secondary">/ Tasks</span></h2>
             </div>
+            {{/*
+              The actions column carries the board's search box and nothing else.
+              The knowledge-graph link that stood here was a second route to a
+              destination the admin-shell sidebar already lists on every page, so
+              removing it removes a duplicate and no access.
+
+              The input carries a real <label>, associated by for/id: a
+              placeholder is not an accessible name and disappears the moment the
+              user types, so it may not stand in for one. The control submits
+              nothing — there is no form — because narrowing happens in the
+              browser and the term travels in the URL through history.replaceState
+              (SPEC/WEB.md § Roadmap Tasks Page, Header search control).
+            */}}
             <div class="col-auto ms-auto d-print-none">
-              <a class="btn btn-outline-secondary" href="/roadmaps/{{.Name}}/graph"><i class="ti ti-affiliate me-1"></i>Knowledge graph</a>
+              <div class="d-flex align-items-center gap-2">
+                <label class="form-label mb-0" for="task-search">Search tasks</label>
+                <input class="form-control w-auto" type="search" id="task-search" name="q" value="{{.Search}}" autocomplete="off" spellcheck="false" data-role="task-search">
+              </div>
             </div>
           </div>
         </div>
@@ -43,6 +59,20 @@
             column is Tabler's own markup — cards, the card-header idiom, badges,
             and the empty state.
           */}}
+          {{/*
+            The board's own answer to a search that matched nothing: a roadmap
+            that holds no task and a search that matched no task are different
+            conditions and read differently, so the five in-column empty states
+            alone are not enough to explain this one (SPEC/WEB.md § Roadmap Tasks
+            Page, Effect on the board; Empty states). The element is always in the
+            document and hidden unless it applies, so the server and the script
+            express the same state the same way.
+          */}}
+          <div class="empty py-3" data-role="task-search-empty"{{if not .NoMatches}} hidden{{end}}>
+            <p class="empty-title">No task matches this search</p>
+            <p class="empty-subtitle text-secondary">Nothing in this roadmap matches <span data-role="task-search-term">{{.Search}}</span>. Clear the search to see every task.</p>
+          </div>
+
           <div class="task-board" data-role="task-board">
             {{range .Columns}}
             <div class="card task-board__column" data-role="task-board-column">
@@ -69,7 +99,7 @@
                   classes are unchanged, and w-100/p-0/text-start are the
                   utilities that keep a button looking like the card it is.
                 */}}
-                <button type="button" class="card card-sm task-card w-100 p-0 text-start" data-bs-toggle="modal" data-bs-target="#task-modal" data-task-id="{{.ID}}" aria-label="Open details for task #{{.ID}}: {{.Title}}">
+                <button type="button" class="card card-sm task-card w-100 p-0 text-start" data-bs-toggle="modal" data-bs-target="#task-modal" data-task-id="{{.ID}}" data-search="{{.SearchText}}" aria-label="Open details for task #{{.ID}}: {{.Title}}"{{if not .Match}} hidden{{end}}>
                   <span class="card-body d-block">
                     <span class="d-block small text-secondary" data-role="task-card-ref">#{{.ID}} &middot; {{.Type}}</span>
                     <span class="d-block fw-bold text-break mb-1" data-role="task-card-title">{{.Title}}</span>
@@ -97,12 +127,19 @@
                     {{end}}
                   </span>
                 </button>
-                {{else}}
-                <div class="empty" data-role="task-board-column-empty">
+                {{end}}
+                {{/*
+                  The column's own empty state. It is rendered whether or not the
+                  column holds cards and hidden while it shows any, so a search
+                  that empties a column reveals the same empty state the roadmap's
+                  own emptiness does, and the browser toggles exactly what the
+                  server would have sent (SPEC/WEB.md § Roadmap Tasks Page, Empty
+                  states; Effect on the board).
+                */}}
+                <div class="empty" data-role="task-board-column-empty"{{if .Count}} hidden{{end}}>
                   <p class="empty-title">No tasks</p>
                   <p class="empty-subtitle text-secondary">No task is in {{.Status}} right now.</p>
                 </div>
-                {{end}}
               </div>
             </div>
             {{end}}
@@ -132,5 +169,6 @@
 
   <script src="/static/vendor/tabler/tabler.min.js"></script>
   <script src="/static/task-modal.js"></script>
+  <script src="/static/task-search.js"></script>
 </body>
 </html>{{end}}

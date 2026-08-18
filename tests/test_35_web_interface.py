@@ -620,6 +620,19 @@ class TestWebInterface:
         return region, region.split('data-role="task-board-column"')[1:]
 
     @staticmethod
+    def _shows_empty_state(column):
+        """Whether a column is SHOWING its in-column empty state.
+
+        The element is always in the document — the server and the browser both
+        express the state by toggling `hidden`, so a column emptied by a search
+        reads exactly like a column the roadmap left empty — so presence alone
+        says nothing.
+        """
+        m = re.search(r'<div class="empty" data-role="task-board-column-empty"([^>]*)>', column)
+        assert m, "a board column carries no in-column empty state"
+        return "hidden" not in m.group(1)
+
+    @staticmethod
     def _column_header(column):
         """Return the (status, count) a column header shows."""
         m = re.search(
@@ -696,10 +709,16 @@ class TestWebInterface:
         assert "<th>Specialists</th>" not in body, "the tasks page must render no task table"
         assert 'id="tab-current"' not in body, "tasks page must not render the sprint tabs"
 
-        # Read-only: no edit affordance and no drag-and-drop.
+        # Read-only: no form, no submit, no drag-and-drop. The page carries exactly
+        # one input — the header search box, which submits nothing and only changes
+        # which of the already-read tasks are shown (SPEC/WEB.md § Roadmap Tasks
+        # Page, Read-only).
         assert "<form" not in low, "tasks page must contain no form"
-        assert "<input" not in low, "tasks page must contain no input"
         assert 'type="submit"' not in low, "tasks page must contain no submit"
+        assert low.count("<input") == 1, (
+            f"tasks page carries {low.count('<input')} inputs, want exactly the search box"
+        )
+        assert "<input" not in region.lower(), "the board itself must carry no input"
         assert "draggable" not in region.lower(), "the board must offer no drag-and-drop"
 
     def test_tasks_page_board_places_each_status_in_its_own_column(self):
@@ -785,7 +804,7 @@ class TestWebInterface:
             got, count = self._column_header(column)
             assert got == want, f"column titled {got!r}, want {want!r}"
             assert count == 0, f"the empty column {got} shows the count {count}, want 0"
-            assert 'data-role="task-board-column-empty"' in column, (
+            assert self._shows_empty_state(column), (
                 f"the empty column {got} renders no empty state"
             )
         assert 'class="card card-sm task-card' not in region, (
@@ -798,7 +817,7 @@ class TestWebInterface:
         _, columns = self._board_columns(populated)
         for column in columns:
             status, count = self._column_header(column)
-            empty = 'data-role="task-board-column-empty"' in column
+            empty = self._shows_empty_state(column)
             assert empty == (count == 0), (
                 f"column {status} shows the count {count} and "
                 f"{'an' if empty else 'no'} empty state"
@@ -835,8 +854,10 @@ class TestWebInterface:
         # — and then its VISIBLE label. Reading the visible label rather than the
         # aria-label is what keeps an assertion about the accessible name
         # non-circular.
+        # Attributes may sit between the task id and the accessible name (the board
+        # card also carries its search corpus), so the pattern spans them.
         m = re.search(
-            rf'data-task-id="{task_id}" aria-label="[^"]*">(.*?)</button>', body, re.S
+            rf'data-task-id="{task_id}"[^>]*aria-label="[^"]*">(.*?)</button>', body, re.S
         )
         assert m, f"task #{task_id} has no trigger to read its title from"
         inner = re.search(r'data-role="task-card-title">(.*?)</span>', m.group(1), re.S)
@@ -923,12 +944,17 @@ class TestWebInterface:
             # The fix added no script: the page still loads the one vendored
             # bundle, and the policy still forbids inline script.
             scripts = re.findall(r"<script\b([^>]*)>", body)
-            assert len(scripts) == 2, f"{path}: loads {len(scripts)} scripts, want 2"
             srcs = {re.search(r'src="([^"]*)"', s).group(1) for s in scripts}
-            assert srcs == {
+            want_srcs = {
                 "/static/vendor/tabler/tabler.min.js",
                 "/static/task-modal.js",
-            }, f"{path}: unexpected scripts {srcs!r}"
+            }
+            if path.endswith("/tasks"):
+                want_srcs.add("/static/task-search.js")
+            assert len(scripts) == len(want_srcs), (
+                f"{path}: loads {len(scripts)} scripts, want {len(want_srcs)}"
+            )
+            assert srcs == want_srcs, f"{path}: unexpected scripts {srcs!r}"
             _, headers, _ = self._req(port, path)
             assert "script-src 'self'" in headers.get("content-security-policy", ""), (
                 f"{path}: the Content-Security-Policy no longer restricts script to 'self'"
@@ -993,6 +1019,260 @@ class TestWebInterface:
         ) in body, "the member-task title is not the row's keyboard trigger"
         assert body.count(marker) == 2, (
             "the row and its title trigger must both carry the task id"
+        )
+
+    # ====================================================================
+    # Header search: narrowing the board, the URL, and the two paths agreeing
+    # (SPEC/WEB.md § Roadmap Tasks Page, Header search control)
+    # ====================================================================
+
+    @staticmethod
+    def _board_cards(region):
+        """Return every card of a board region as (id, corpus, shown)."""
+        cards = []
+        for tag in re.findall(
+            r'<button type="button" class="card card-sm task-card[^>]*>', region
+        ):
+            task_id = re.search(r'data-task-id="(\d+)"', tag)
+            corpus = re.search(r'data-search="([^"]*)"', tag)
+            assert task_id and corpus, f"a board card carries no id or corpus: {tag}"
+            cards.append(
+                (int(task_id.group(1)), html_lib.unescape(corpus.group(1)), " hidden" not in tag)
+            )
+        return cards
+
+    def _board_snapshot(self, port, roadmap, query=""):
+        """Return what a served board shows: per column, the ids shown and the
+        count, plus the no-match message state."""
+        _, _, body = self._req(port, f"/roadmaps/{roadmap}/tasks{query}")
+        region, columns = self._board_columns(body)
+        snapshot = {"columns": [], "message": False, "body": body, "region": region}
+        for column in columns:
+            status, count = self._column_header(column)
+            cards = self._board_cards(column)
+            snapshot["columns"].append({
+                "status": status,
+                "count": count,
+                "shown": [c[0] for c in cards if c[2]],
+                "cards": cards,
+                "empty": self._shows_empty_state(column),
+            })
+        m = re.search(r'<div class="empty py-3" data-role="task-search-empty"([^>]*)>', region)
+        assert m, "the board carries no no-match message element"
+        snapshot["message"] = "hidden" not in m.group(1)
+        return snapshot
+
+    def test_tasks_page_header_has_search_and_no_graph_button(self):
+        """The page header carries a labelled search input and no knowledge-graph
+        button; the sidebar still reaches the graph (Acceptance Criterion 100)."""
+        proc, port = self._start(["--port", "0"])
+        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/tasks")
+
+        header = body[body.index('<div class="page-header d-print-none">'):body.index('<main class="page-body">')]
+        assert 'data-role="task-search"' in header, "the page header carries no search input"
+        assert 'type="search"' in header and 'id="task-search"' in header, header
+        assert '<label class="form-label mb-0" for="task-search">Search tasks</label>' in header, (
+            "the search input has no associated label"
+        )
+        assert "placeholder" not in header, "a placeholder must not stand in for the label"
+        assert "/graph" not in header, "the page header still links to the knowledge graph"
+        assert "<form" not in header, "the search control must submit nothing"
+
+        # The graph stays reachable from this page, through the sidebar.
+        assert f'href="/roadmaps/{ROADMAP}/graph"' in body, (
+            "the sidebar must still reach the graph from the tasks page"
+        )
+
+    def test_tasks_page_search_narrows_the_board_and_its_counts(self):
+        """A q term narrows the shown cards and the counts follow, matching the
+        title and the #id reference only (Acceptance Criteria 101, 102)."""
+        proc, port = self._start(["--port", "0"])
+
+        full = self._board_snapshot(port, ROADMAP)
+        total = sum(c["count"] for c in full["columns"])
+        assert total > 0, "the fixture roadmap shows no card"
+
+        # A word from one title narrows to the tasks carrying it.
+        narrowed = self._board_snapshot(port, ROADMAP, "?q=passkey")
+        shown = [i for c in narrowed["columns"] for i in c["shown"]]
+        assert shown == [self.pending_task_id], (
+            f"the term 'passkey' shows {shown}, want just the passkey task"
+        )
+        for column in narrowed["columns"]:
+            assert column["count"] == len(column["shown"]), (
+                f"column {column['status']} counts {column['count']} and shows {len(column['shown'])}"
+            )
+            assert column["empty"] == (column["count"] == 0), (
+                f"column {column['status']} empty-state disagrees with its count"
+            )
+        # Every card stays in the document, so the browser can widen with no round trip.
+        assert sum(len(c["cards"]) for c in narrowed["columns"]) == total
+
+        # Case-insensitive, and the same tasks for the upper-case term.
+        upper = self._board_snapshot(port, ROADMAP, "?q=PASSKEY")
+        assert [i for c in upper["columns"] for i in c["shown"]] == shown
+
+        # The id and the #id reference both find the task.
+        t1 = self.open_task_ids[0]
+        for query in (f"?q={t1}", f"?q=%23{t1}"):
+            by_ref = self._board_snapshot(port, ROADMAP, query)
+            found = [i for c in by_ref["columns"] for i in c["shown"]]
+            assert t1 in found, f"{query} does not find task #{t1}: {found}"
+
+        # A term matching nothing empties the board AND says so.
+        none = self._board_snapshot(port, ROADMAP, "?q=zzz-nothing-matches")
+        assert all(c["count"] == 0 and c["empty"] for c in none["columns"])
+        assert none["message"], "a search that matched nothing renders no message"
+        assert len(none["columns"]) == 5, "searching dropped a column"
+
+        # An empty term is no term: every card shows, and no message.
+        blank = self._board_snapshot(port, ROADMAP, "?q=%20%20")
+        assert sum(c["count"] for c in blank["columns"]) == total
+        assert not blank["message"]
+
+    def test_tasks_page_search_server_and_client_agree(self):
+        """The board the server renders for a term and the board the browser
+        produces by narrowing the unnarrowed page are the same (Acceptance
+        Criterion 104).
+
+        The browser's rule is re-expressed here from the served script's own
+        contract: fold the term with trim()+toLowerCase(), then match it against
+        the corpus the server folded into data-search, or against '#<id>'. The
+        script is asserted to be that rule in
+        test_tasks_page_search_script_is_text_only_and_locale_independent."""
+        proc, port = self._start(["--port", "0"])
+        full = self._board_snapshot(port, ROADMAP)
+
+        for term, query in (
+            ("", ""),
+            ("passkey", "?q=passkey"),
+            ("PASSKEY", "?q=PASSKEY"),
+            ("  passkey  ", "?q=%20%20passkey%20%20"),
+            ("token endpoint", "?q=token%20endpoint"),
+            ("#" + str(self.open_task_ids[0]), f"?q=%23{self.open_task_ids[0]}"),
+            ("e", "?q=e"),
+            ("zzz", "?q=zzz"),
+            ("<b>x</b>", "?q=%3Cb%3Ex%3C%2Fb%3E"),
+        ):
+            server = self._board_snapshot(port, ROADMAP, query)
+            folded = term.strip().lower()
+
+            for column in full["columns"]:
+                want = [
+                    task_id for task_id, corpus, _ in column["cards"]
+                    if folded == "" or folded in corpus or folded in f"#{task_id}"
+                ]
+                got = next(c for c in server["columns"] if c["status"] == column["status"])
+                assert got["shown"] == want, (
+                    f"term {term!r}: column {column['status']} shows {got['shown']} on the "
+                    f"server and {want} in the browser"
+                )
+                assert got["count"] == len(want), (
+                    f"term {term!r}: column {column['status']} counts {got['count']}, want {len(want)}"
+                )
+                assert got["empty"] == (len(want) == 0), (
+                    f"term {term!r}: column {column['status']} empty-state disagrees"
+                )
+
+            shown_total = sum(len(c["shown"]) for c in server["columns"])
+            assert server["message"] == (folded != "" and shown_total == 0), (
+                f"term {term!r}: the no-match message disagrees with the shown set"
+            )
+
+    def test_tasks_page_search_term_is_escaped(self):
+        """A term carrying markup is echoed as text into the input and the
+        message, and introduces no element or script (Acceptance Criterion 106)."""
+        hostile = '"><script>alert(1)</script>'
+        proc, port = self._start(["--port", "0"])
+        _, _, body = self._req(
+            port, f"/roadmaps/{ROADMAP}/tasks?q=%22%3E%3Cscript%3Ealert(1)%3C%2Fscript%3E"
+        )
+
+        assert hostile not in body, "the raw term reached the page"
+        assert "<script>alert(1)</script>" not in body, "the term became a script element"
+        assert body.count("<script") == 3, (
+            f"the page has {body.count('<script')} script elements, want 3"
+        )
+        assert body.count("</script>") == 3
+
+        # The input echoes it as an attribute value that decodes back exactly.
+        m = re.search(r'<input[^>]*data-role="task-search"[^>]*>', body)
+        assert m, "the page renders no search input"
+        value = re.search(r'value="([^"]*)"', m.group(0))
+        assert value, f"the search input carries no value: {m.group(0)}"
+        assert html_lib.unescape(value.group(1)) == hostile, (
+            f"the input value decodes to {html_lib.unescape(value.group(1))!r}"
+        )
+
+        # And the no-match message names it as text.
+        term = re.search(r'data-role="task-search-term">([^<]*)<', body)
+        assert term and html_lib.unescape(term.group(1)) == hostile, (
+            "the no-match message does not echo the term as text"
+        )
+
+    def test_tasks_page_search_script_is_text_only_and_locale_independent(self):
+        """The narrowing script loads from /static/, writes the term only as
+        text, folds it without a locale, and updates the URL in place
+        (Acceptance Criteria 103, 106, 107)."""
+        proc, port = self._start(["--port", "0"])
+        status, headers, script = self._req(port, "/static/task-search.js")
+        assert status == 200, f"the narrowing script is not served: {status}"
+
+        code = re.sub(r"/\*.*?\*/", "", script, flags=re.S)
+        code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
+
+        for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval("):
+            assert sink not in code, f"the search script uses the markup sink {sink!r}"
+        assert "textContent" in code, "the search script must write the term as text"
+
+        # Locale-independent folding on the client, matching the server's.
+        assert "toLowerCase()" in code, "the script does not fold the term"
+        assert "toLocaleLowerCase" not in code, (
+            "the script folds with a locale-sensitive conversion; the same term would "
+            "then select different tasks for different viewers"
+        )
+        # It matches the corpus the server folded, and the #id reference.
+        assert 'getAttribute("data-search")' in code
+        assert 'data-task-id' in code
+
+        # The URL is updated in place, never stacked, and q is removed when empty.
+        assert "replaceState" in code, "the script does not update the URL in place"
+        assert "pushState" not in code, "the script stacks a history entry per keystroke"
+        assert 'searchParams.delete("q")' in code, "the script leaves an empty q behind"
+
+        # Narrowing reaches neither the network nor a navigation.
+        for forbidden in ("fetch(", "XMLHttpRequest", "location.assign", "location.replace"):
+            assert forbidden not in code, f"the search script does {forbidden!r}"
+
+        # The policy that keeps every script out of the document is unchanged.
+        _, page_headers, page = self._req(port, f"/roadmaps/{ROADMAP}/tasks")
+        csp = page_headers.get("content-security-policy", "")
+        assert "script-src 'self'" in csp, csp
+        srcs = {re.search(r'src="([^"]*)"', s).group(1)
+                for s in re.findall(r"<script\b([^>]*)>", page)}
+        assert srcs == {
+            "/static/vendor/tabler/tabler.min.js",
+            "/static/task-modal.js",
+            "/static/task-search.js",
+        }, srcs
+
+    def test_tasks_page_search_never_errors(self):
+        """No q value produces an error page, and an undecodable one is treated as
+        absent (Acceptance Criterion 105)."""
+        proc, port = self._start(["--port", "0"])
+        full = self._board_snapshot(port, ROADMAP)
+        total = sum(c["count"] for c in full["columns"])
+
+        for query in ("?q=", "?q=%20", "?q=zzz", "?q=%zz", "?q=%", "?q=" + "x" * 3000,
+                      "?q=%00", "?q=one&q=two"):
+            status, _, body = self._req(port, f"/roadmaps/{ROADMAP}/tasks{query}")
+            assert status == 200, f"{query} answered {status}, want 200"
+            assert 'data-role="task-board"' in body, f"{query} rendered no board"
+
+        # The undecodable one is treated as absent: the board is unnarrowed.
+        undecodable = self._board_snapshot(port, ROADMAP, "?q=%zz")
+        assert sum(c["count"] for c in undecodable["columns"]) == total, (
+            "an undecodable q narrowed the board; it must be treated as absent"
         )
 
     def test_serving_pages_writes_no_audit_entry(self):
@@ -1427,11 +1707,15 @@ class TestWebInterface:
                 assert absent.lower() not in body.lower(), (
                     f"{path}: carries the modal content {absent!r}; it must be fetched on demand"
                 )
-            # Read-only: no form/input/submit.
+            # Read-only: no form and no submit. The tasks page carries exactly one
+            # input, the header search box; the sprint page carries none.
             low = body.lower()
             assert "<form" not in low, f"{path}: modal page must contain no form"
-            assert "<input" not in low, f"{path}: modal page must contain no input"
             assert 'type="submit"' not in low, f"{path}: modal page must contain no submit"
+            want_inputs = 1 if path.endswith("/tasks") else 0
+            assert low.count("<input") == want_inputs, (
+                f"{path}: carries {low.count('<input')} inputs, want {want_inputs}"
+            )
 
         # And the shell is filled from the endpoint, which carries every field the
         # modal presents.
