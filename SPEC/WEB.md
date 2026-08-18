@@ -1378,11 +1378,19 @@ table below it is the same page of entries read in detail.
    Every entry on the page appears exactly once.
 
 4. **What a lane shows.** Each lane is labelled with its path — the sprint's
-   `Sprint #<id>`, `Backlog`, or the roadmap main line. A sprint lane branches
-   from the roadmap line at its `SPRINT_CREATE` (or `SPRINT_REOPEN`) point and
-   merges back at its `SPRINT_CLOSE` point, when those entries fall on the page;
-   a lane whose opening entry falls on another page simply begins at its first
-   entry (see [Audit History Paths](#audit-history-paths), rule 4).
+   `Sprint #<id>`, `Backlog`, or the roadmap main line. A lane **branches from
+   the roadmap line at its first point on the page** and, where its
+   `SPRINT_CLOSE` entry falls on the page, **merges back** into that line there.
+
+   A lane's start is deliberately not claimed to be the sprint's creation. It
+   usually is, but it need not be: a task's operations ride its **current**
+   sprint's lane (see [Audit History Paths](#audit-history-paths), rule 5), so an
+   operation recorded before that sprint existed lands on the lane too and starts
+   it earlier; and a lane whose opening entry falls on another page begins at
+   whatever its first entry here is (rule 4 there). The entries that **did** open
+   the sprint — `SPRINT_CREATE` and `SPRINT_REOPEN` — are therefore marked at
+   their own points rather than implied by where the lane begins, so what the
+   tree states about them is true in every case.
 
 5. **The table is not replaced.** The entry table remains, below the tree, with
    every column specified in **Columns** above including `Path`. The tree adds a

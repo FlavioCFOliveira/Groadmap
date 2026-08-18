@@ -1432,6 +1432,76 @@ class TestWebInterface:
             assert status == 200, f"{q!r} must clamp to 200, never 404; got {status}"
             assert want in b, f"{q!r} must clamp to {want!r}"
 
+    def test_audit_history_tree_is_drawn_from_the_server_model(self):
+        """AC: the audit page presents its history as a git-style tree.
+
+        What is asserted here is everything the tree depends on and that a
+        request can see: the container, the vendored library and the drawing
+        script served from /static/, and one table row per entry carrying the
+        path that entry belongs to plus the marks for the sprint operations
+        that open and merge a lane. The drawing itself is a browser concern;
+        what the server owes the browser is this model, complete and correct
+        (SPEC/WEB.md § Audit History Paths, § Audit History Tree).
+        """
+        proc, port = self._start(["--port", "0"])
+        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/audit")
+
+        assert '<div class="audit-graph" data-role="audit-graph"' in body, (
+            "the audit page renders no tree container"
+        )
+        for src in (
+            "/static/vendor/gitgraph/gitgraph.umd.min.js",
+            "/static/audit-graph.js",
+        ):
+            assert f'<script src="{src}"></script>' in body, f"the audit page does not load {src}"
+            status, headers, asset = self._req(port, src)
+            assert status == 200, f"{src} is not served (status {status})"
+            assert asset, f"{src} is served empty"
+            ctype = headers.get("content-type", "")
+            assert "javascript" in ctype, f"{src} served as {ctype!r}, not JavaScript"
+
+        rows = re.findall(r"<tr data-role=\"audit-entry\"[^>]*>", body)
+        assert rows, "the audit page renders no entry row carrying the tree model"
+        for row in rows:
+            for attribute in ("data-path=", "data-path-label=", "data-op=",
+                              "data-entity=", "data-entity-id=", "data-at="):
+                assert attribute in row, f"an entry row is missing {attribute}: {row}"
+
+        # Every path is one of the three kinds the model defines.
+        for path in re.findall(r'<tr data-role="audit-entry" data-path="([^"]*)"', body):
+            assert path == "backlog" or path.startswith("sprint/"), (
+                f"entry on unknown path {path!r}; the model defines roadmap, sprint/<id> and backlog"
+            )
+
+        # The reader is told the lanes reflect current membership, not history.
+        assert "A task's lane is the sprint it belongs to now" in body, (
+            "the page does not state that a task's lane is its current sprint"
+        )
+
+    def test_audit_page_survives_without_the_tree(self):
+        """The table is what a reader without JavaScript still gets.
+
+        The tree is client-drawn, so every entry and its path must already be in
+        the server-rendered table: a page whose script did not run loses the
+        drawing, not the data (SPEC/WEB.md § Audit History Tree, rule 5).
+        """
+        proc, port = self._start(["--port", "0"])
+        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/audit")
+
+        assert "<th>Path</th>" in body, "the audit table has no Path column"
+        # One rendered path badge per entry row: the table states, on its own,
+        # what every operation belongs to.
+        rows = len(re.findall(r'<tr data-role="audit-entry"', body))
+        badges = len(re.findall(r'data-role="audit-path"', body))
+        assert rows > 0, "the audit page rendered no entry"
+        assert rows == badges, (
+            f"{rows} entry rows but {badges} path badges: the table does not state every entry's path"
+        )
+        # The entries themselves are server-rendered, not fetched.
+        assert "<td>TASK_CREATE</td>" in body or "<td>SPRINT_CREATE</td>" in body, (
+            "the audit table does not render its entries server-side"
+        )
+
     def test_audit_page_empty_state(self):
         """A roadmap whose audit log is empty renders 200 with an empty-state
         message and 'Page 1 of 1', with no active pagination controls

@@ -19,6 +19,37 @@
         <div class="container-xl">
 
           {{/*
+            The history tree: one lane per path, one point per audit entry, with
+            the branch and merge points that open and close a sprint's lane
+            (SPEC/WEB.md § Audit History Tree). It is drawn by the vendored
+            gitgraph.js from the data-* attributes on the table rows below, so
+            the page carries no inline script — the Content-Security-Policy is
+            script-src 'self' — and no second copy of the entries.
+
+            The card is rendered only when the page has entries: an empty audit
+            log gets the table's empty state and no empty tree container
+            (SPEC/WEB.md § Audit History Tree, rule 8).
+
+            The note under the drawing is not decoration. A task's lane is the
+            sprint it belongs to NOW, because the audit never records which task
+            a SPRINT_ADD_TASK or SPRINT_MOVE_TASK concerned; presenting the
+            derived relationship as a historical one would be a false claim about
+            the record (SPEC/WEB.md § Audit History Paths, rule 5).
+          */}}
+          {{if .Entries}}
+          <div class="card mb-3" id="audit-history">
+            <div class="card-header">
+              <h3 class="card-title">History</h3>
+              <div class="card-actions text-secondary">Oldest first</div>
+            </div>
+            <div class="card-body">
+              <div class="audit-graph" data-role="audit-graph" data-main-path="roadmap"></div>
+              <p class="text-secondary mb-0 mt-2">A task's lane is the sprint it belongs to now. The audit log records which sprint an operation touched, never which task was added or moved, so a task's earlier operations appear on its current sprint's lane.</p>
+            </div>
+          </div>
+          {{end}}
+
+          {{/*
             Read-only audit log: one fixed-size page of audit entries ordered by
             performed_at DESC (most recent first). No clickable row, no modal, no
             edit affordance (SPEC/WEB.md § Roadmap Audit Log Page). The card's
@@ -51,8 +82,15 @@
                   </tr>
                 </thead>
                 <tbody>
+                  {{/*
+                    Each row carries its own model as data-* attributes: the tree
+                    script reads these rows rather than a second, inline copy of
+                    the same entries. data-opens and data-merges mark the three
+                    sprint operations that give the tree its shape, and are absent
+                    on every other row rather than being present and false.
+                  */}}
                   {{range .Entries}}
-                  <tr>
+                  <tr data-role="audit-entry" data-path="{{.Path}}" data-path-label="{{.PathLabel}}" data-op="{{.Operation}}" data-entity="{{.EntityType}}" data-entity-id="{{.EntityID}}" data-at="{{.PerformedAt}}"{{if .Opens}} data-opens="true"{{end}}{{if .Merges}} data-merges="true"{{end}}>
                     <td>{{.ID}}</td>
                     <td>{{.Operation}}</td>
                     <td>{{.EntityType}}</td>
@@ -123,5 +161,7 @@
   </div>
 
   <script src="/static/vendor/tabler/tabler.min.js"></script>
+  <script src="/static/vendor/gitgraph/gitgraph.umd.min.js"></script>
+  <script src="/static/audit-graph.js"></script>
 </body>
 </html>{{end}}

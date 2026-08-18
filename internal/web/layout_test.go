@@ -27,6 +27,7 @@ var vendoredAssets = []string{
 	"static/vendor/d3/d3-sankey.min.js",
 	"static/vendor/gitgraph/gitgraph.umd.min.js",
 	"static/graph.js",
+	"static/audit-graph.js",
 	"static/style.css",
 	"static/favicon.svg",
 }
@@ -688,6 +689,7 @@ func TestStatic_VendoredAssetsServed(t *testing.T) {
 		{"/static/vendor/d3/d3-sankey.min.js", "javascript"},
 		{"/static/vendor/gitgraph/gitgraph.umd.min.js", "javascript"},
 		{"/static/graph.js", "javascript"},
+		{"/static/audit-graph.js", "javascript"},
 		{"/static/vendor/inter/files/inter-latin-wght-normal.woff2", ""},
 		{"/static/vendor/tabler-icons/fonts/tabler-icons.woff2", ""},
 		{"/static/favicon.svg", "image/svg"},

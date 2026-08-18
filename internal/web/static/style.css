@@ -503,3 +503,30 @@
     max-height: none;
   }
 }
+
+/* Audit history tree.
+ *
+ * Tabler ships no graph component, so the drawing area's own layout lives here
+ * (SPEC/WEB.md § UI Framework, rule 10: what no Tabler class covers belongs in
+ * this stylesheet). The library draws an SVG into this container; everything
+ * around it is Tabler's card.
+ *
+ * The container scrolls INSIDE ITSELF rather than letting the page scroll: a
+ * roadmap with many sprints puts many lanes side by side, and a page that
+ * scrolled horizontally as a whole would break the mobile-first rule that the
+ * body never overflows (SPEC/WEB.md § Audit History Tree, rule 9; § Responsive
+ * and Mobile-First Design). */
+.audit-graph {
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* -webkit-overflow-scrolling keeps the momentum scrolling iOS gives a native
+     scroll area, which a plain overflow container otherwise loses. */
+  -webkit-overflow-scrolling: touch;
+}
+
+/* The library sizes its SVG to the graph it drew. Letting it shrink below that
+   width would overlap the lanes; the container above is what scrolls instead. */
+.audit-graph svg {
+  display: block;
+  max-width: none;
+}
