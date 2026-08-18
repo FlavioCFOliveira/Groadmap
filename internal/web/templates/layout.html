@@ -9,6 +9,14 @@
   roadmap, active nav section). The dark theme is set with
   data-bs-theme="dark" on <html>; no toggle is offered.
 
+  Element order inside .page is the Tabler order: the sidebar <aside>, then the
+  top <header>, then .page-wrapper — the header is a SIBLING of the wrapper, not
+  a child of it. The vendored stylesheet offsets both with the same sibling rule
+  (.navbar-expand-lg.navbar-vertical~.navbar and ~.page-wrapper both get
+  margin-left:15rem), which only applies to that shape. The #sidebar-menu
+  collapse has exactly one toggler, the one inside the <aside>; the top navbar
+  carries no second toggler and no second brand.
+
   Asset order in <head> is fixed: Inter font, Tabler core CSS, Tabler Icons
   CSS, then the reworked override stylesheet. All come from /static/...; no
   remote origin, no CDN, no Google Fonts.
@@ -35,57 +43,69 @@
           <span class="fw-bold">Groadmap</span>
         </a>
       </h1>
-      <div class="collapse navbar-collapse" id="sidebar-menu">
+      <nav class="collapse navbar-collapse" id="sidebar-menu" aria-label="Sidebar">
         <ul class="navbar-nav pt-lg-3">
           <li class="nav-item{{if eq .Chrome.Active "roadmaps"}} active{{end}}">
-            <a class="nav-link" href="/">
+            <a class="nav-link" href="/"{{if eq .Chrome.Active "roadmaps"}} aria-current="page"{{end}}>
               <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-list"></i></span>
               <span class="nav-link-title">Roadmaps</span>
             </a>
           </li>
           {{with .Chrome.Roadmap}}
+          {{/*
+            The per-roadmap section label. Tabler v1.4.0 ships no navbar-specific
+            heading or divider class, so the label is its own `subheader` (the
+            small uppercase letter-spaced muted label, core/scss/ui/_type.scss)
+            and the rule above it is Tabler's `dropdown-divider`. The px-3 gutter
+            is Tabler's own spacing utility and resolves to the exact inline
+            padding of a vertical-navbar nav-link (var(--tblr-page-padding) =
+            var(--tblr-spacer-3) = 1rem), so the label lines up with the links
+            without a single line of project CSS (SPEC/WEB.md § UI Framework,
+            rule 10).
+          */}}
           <li class="nav-item mt-3">
-            <hr class="navbar-divider">
-            <h2 class="navbar-heading subheader">{{.}}</h2>
+            <hr class="dropdown-divider">
+            <h2 class="subheader px-3 mb-2">{{.}}</h2>
           </li>
           <li class="nav-item{{if eq $.Chrome.Active "sprints"}} active{{end}}">
-            <a class="nav-link" href="/roadmaps/{{.}}">
+            <a class="nav-link" href="/roadmaps/{{.}}"{{if eq $.Chrome.Active "sprints"}} aria-current="page"{{end}}>
               <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-run"></i></span>
               <span class="nav-link-title">Sprints</span>
             </a>
           </li>
           <li class="nav-item{{if eq $.Chrome.Active "tasks"}} active{{end}}">
-            <a class="nav-link" href="/roadmaps/{{.}}/tasks">
+            <a class="nav-link" href="/roadmaps/{{.}}/tasks"{{if eq $.Chrome.Active "tasks"}} aria-current="page"{{end}}>
               <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-checklist"></i></span>
               <span class="nav-link-title">Tasks</span>
             </a>
           </li>
           <li class="nav-item{{if eq $.Chrome.Active "audit"}} active{{end}}">
-            <a class="nav-link" href="/roadmaps/{{.}}/audit">
+            <a class="nav-link" href="/roadmaps/{{.}}/audit"{{if eq $.Chrome.Active "audit"}} aria-current="page"{{end}}>
               <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-history"></i></span>
               <span class="nav-link-title">Audit</span>
             </a>
           </li>
           <li class="nav-item{{if eq $.Chrome.Active "graph"}} active{{end}}">
-            <a class="nav-link" href="/roadmaps/{{.}}/graph">
+            <a class="nav-link" href="/roadmaps/{{.}}/graph"{{if eq $.Chrome.Active "graph"}} aria-current="page"{{end}}>
               <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-affiliate"></i></span>
               <span class="nav-link-title">Graph</span>
             </a>
           </li>
           {{end}}
         </ul>
-      </div>
+      </nav>
     </div>
   </aside>{{end}}
 
+{{/*
+  The top navbar. It holds only the read-only indicator: the sidebar already
+  owns the brand and the single #sidebar-menu toggler, so repeating either here
+  would give a small viewport two hamburgers driving one collapse and the word
+  Groadmap twice. Tabler's own header toggler targets its own #navbar-menu,
+  which this interface does not have (SPEC/WEB.md § UI Framework).
+*/}}
 {{define "topnavbar"}}  <header class="navbar navbar-expand-md d-print-none">
-    <div class="container-fluid">
-      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#sidebar-menu" aria-controls="sidebar-menu" aria-expanded="false" aria-label="Toggle navigation">
-        <span class="navbar-toggler-icon"></span>
-      </button>
-      <div class="navbar-brand d-md-none">
-        <a href="/" class="text-decoration-none">Groadmap</a>
-      </div>
+    <div class="container-xl">
       <div class="navbar-nav flex-row order-md-last">
         <div class="nav-item d-flex align-items-center">
           <span class="badge bg-secondary-lt"><i class="ti ti-lock me-1"></i>Read-only</span>
@@ -163,7 +183,7 @@
   authoritative count of the rows actually rendered here (SPEC/WEB.md § Sprint
   Detail Sub-Template).
 */}}
-{{define "sprintDetail"}}          <div class="sprint-summary-line h3 mb-3" data-role="sprint-summary">{{.Summary.Line}}</div>
+{{define "sprintDetail"}}          <div class="h3 mb-3" data-role="sprint-summary">{{.Summary.Line}}</div>
 
           <div class="card mb-3">
             <div class="card-header">

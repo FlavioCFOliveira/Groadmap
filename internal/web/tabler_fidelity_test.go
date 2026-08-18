@@ -124,3 +124,432 @@ func TestTablerFidelity_FooterRowStructure(t *testing.T) {
 		}
 	}
 }
+
+// The tests below are the regression guards for the admin-shell fidelity rules
+// in SPEC/WEB.md § UI Framework. Each one was written against the Tabler v1.4.0
+// sources that match the vendored distribution — the version banner in
+// static/vendor/tabler/tabler.min.css and core/package.json on the Tabler
+// repository both read 1.4.0 — and each asserts both the shape Tabler uses and
+// the absence of the shape it replaced, so a divergence cannot come back
+// unnoticed.
+
+// allPagePaths is every route that renders the admin shell: the four of
+// pagePaths plus the sprint detail page and the audit log page. The shell rules
+// hold on all six, so the fidelity guards below sweep the complete set rather
+// than the subset pagePaths covers. The caller must have seeded the roadmap with
+// both seedRoadmap (which creates sprint 1) and seedRoadmapWithAudit.
+func allPagePaths(name string) []string {
+	return []string{
+		"/",
+		"/roadmaps/" + name,
+		"/roadmaps/" + name + "/tasks",
+		"/roadmaps/" + name + "/sprints/1",
+		"/roadmaps/" + name + "/audit",
+		"/roadmaps/" + name + "/graph",
+	}
+}
+
+// TestTablerFidelity_TopNavbarIsSiblingOfPageWrapper asserts the admin-shell
+// element order: inside div.page, the top header.navbar is a SIBLING of
+// div.page-wrapper and precedes it, rather than being nested inside it.
+//
+// This is the order Tabler ships in both its documented "Sample layout"
+// (docs/content/ui/layout/page-layouts.mdx) and its built shell
+// (shared/layouts/DefaultLayout.astro), and the vendored stylesheet is written
+// for it: `.navbar-expand-lg.navbar-vertical~.navbar` and the matching
+// `~.page-wrapper` rule give the header and the wrapper the same 15rem offset
+// through the sibling combinator, which never applies to a nested header.
+func TestTablerFidelity_TopNavbarIsSiblingOfPageWrapper(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name := seedRoadmap(t, "platform-core")
+	seedRoadmapWithAudit(t, name, 3)
+	mux := buildMux()
+
+	for _, path := range allPagePaths(name) {
+		body := servePage(t, mux, path)
+
+		header := strings.Index(body, `<header class="navbar navbar-expand-md d-print-none">`)
+		closing := strings.Index(body, "</header>")
+		wrapper := strings.Index(body, `<div class="page-wrapper">`)
+		if header < 0 || closing < 0 || wrapper < 0 {
+			t.Errorf("page %s: admin shell incomplete (header=%d, /header=%d, page-wrapper=%d)",
+				path, header, closing, wrapper)
+			continue
+		}
+		// The whole header element closes before the wrapper opens, which is
+		// only possible when the two are siblings and the header comes first.
+		if closing > wrapper {
+			t.Errorf("page %s: the top navbar is nested inside .page-wrapper; Tabler places it "+
+				"as a sibling of the wrapper, directly inside .page", path)
+		}
+	}
+}
+
+// TestTablerFidelity_SingleTogglerAndSingleBrand asserts each page renders
+// exactly one navbar-toggler and exactly one navbar-brand, and that the toggler
+// controls the sidebar collapse.
+//
+// The top navbar used to repeat both: a second toggler pointing at the same
+// #sidebar-menu and a second `d-md-none` brand. Below the md breakpoint that
+// painted two hamburger buttons driving one collapse and the word Groadmap
+// twice. In Tabler's vertical layout the sidebar owns the only #sidebar-menu
+// toggler (shared/components/navbar/Sidebar.astro) and the header's own toggler
+// targets its own #navbar-menu (Navbar.astro), a menu this interface does not
+// have.
+func TestTablerFidelity_SingleTogglerAndSingleBrand(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name := seedRoadmap(t, "platform-core")
+	seedRoadmapWithAudit(t, name, 3)
+	mux := buildMux()
+
+	for _, path := range allPagePaths(name) {
+		body := servePage(t, mux, path)
+
+		if got := strings.Count(body, `class="navbar-toggler"`); got != 1 {
+			t.Errorf("page %s: %d navbar-toggler elements, want exactly 1 "+
+				"(a second one would drive the same collapse)", path, got)
+		}
+		if got := strings.Count(body, `class="navbar-brand`); got != 1 {
+			t.Errorf("page %s: %d navbar-brand elements, want exactly 1", path, got)
+		}
+		if !strings.Contains(body, `data-bs-target="#sidebar-menu"`) {
+			t.Errorf("page %s: the single toggler does not control #sidebar-menu", path)
+		}
+		// The retired duplicate brand must not come back.
+		if strings.Contains(body, `class="navbar-brand d-md-none"`) {
+			t.Errorf("page %s: the duplicated top-navbar brand is back", path)
+		}
+	}
+}
+
+// TestTablerFidelity_SidebarCollapseIsNavLandmark asserts the sidebar collapse
+// is the labelled <nav> element Tabler v1.4.0 renders
+// (shared/components/navbar/Sidebar.astro: `<nav class="collapse
+// navbar-collapse" id="sidebar-menu" aria-label="Sidebar">`), not a bare div.
+func TestTablerFidelity_SidebarCollapseIsNavLandmark(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name := seedRoadmap(t, "platform-core")
+	seedRoadmapWithAudit(t, name, 3)
+	mux := buildMux()
+
+	for _, path := range allPagePaths(name) {
+		body := servePage(t, mux, path)
+		if !strings.Contains(body, `<nav class="collapse navbar-collapse" id="sidebar-menu" aria-label="Sidebar">`) {
+			t.Errorf("page %s: the sidebar collapse is not Tabler's labelled <nav> landmark", path)
+		}
+		if strings.Contains(body, `<div class="collapse navbar-collapse" id="sidebar-menu">`) {
+			t.Errorf("page %s: the sidebar collapse regressed to a bare <div>", path)
+		}
+	}
+}
+
+// TestTablerFidelity_ActiveSidebarLinkCarriesAriaCurrent asserts the active
+// sidebar link is marked with aria-current="page" and that exactly one link per
+// page carries it. Tabler sets the attribute alongside the `active` class on the
+// list item (shared/components/navbar/NavbarMenu.astro); the class alone is a
+// visual cue that assistive technology cannot read.
+func TestTablerFidelity_ActiveSidebarLinkCarriesAriaCurrent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name := seedRoadmap(t, "platform-core")
+	seedRoadmapWithAudit(t, name, 3)
+	mux := buildMux()
+
+	// Each page's active sidebar view and the href that view links to.
+	cases := map[string]string{
+		"/":                            `href="/" aria-current="page"`,
+		"/roadmaps/" + name:            `href="/roadmaps/` + name + `" aria-current="page"`,
+		"/roadmaps/" + name + "/tasks": `href="/roadmaps/` + name + `/tasks" aria-current="page"`,
+		"/roadmaps/" + name + "/audit": `href="/roadmaps/` + name + `/audit" aria-current="page"`,
+		"/roadmaps/" + name + "/graph": `href="/roadmaps/` + name + `/graph" aria-current="page"`,
+	}
+	for path, want := range cases {
+		body := servePage(t, mux, path)
+		if !strings.Contains(body, want) {
+			t.Errorf("page %s: active sidebar link is not marked with %q", path, want)
+		}
+		// Count inside the sidebar only. The audit page's pagination legitimately
+		// marks its own current page with aria-current="page" as well, which is
+		// Bootstrap's idiom for a pagination bar and a different set of links.
+		if got := strings.Count(sidebarRegion(t, path, body), `aria-current="page"`); got != 1 {
+			t.Errorf("page %s: %d sidebar links carry aria-current=\"page\", want exactly 1", path, got)
+		}
+	}
+}
+
+// sidebarRegion returns the markup between the sidebar collapse's opening and
+// closing tags, so an assertion about navigation links cannot be satisfied — or
+// broken — by a link elsewhere on the page.
+func sidebarRegion(t *testing.T, path, body string) string {
+	t.Helper()
+	const open = `<nav class="collapse navbar-collapse" id="sidebar-menu" aria-label="Sidebar">`
+	start := strings.Index(body, open)
+	if start < 0 {
+		t.Fatalf("page %s: sidebar collapse not found", path)
+	}
+	rest := body[start+len(open):]
+	end := strings.Index(rest, "</nav>")
+	if end < 0 {
+		t.Fatalf("page %s: sidebar collapse is not closed", path)
+	}
+	return rest[:end]
+}
+
+// TestTablerFidelity_PaginationIsANavLandmark asserts the audit log's pagination
+// list sits inside a labelled <nav>, as Tabler's own pagination component emits
+// it (shared/ui/Pagination.astro renders `<nav aria-label="Pagination"><ul
+// class="pagination">`). A bare list is not announced as a navigation landmark
+// and is indistinguishable from the sidebar's navigation.
+func TestTablerFidelity_PaginationIsANavLandmark(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name := seedRoadmap(t, "platform-core")
+	seedRoadmapWithAudit(t, name, 250)
+	mux := buildMux()
+
+	body := servePage(t, mux, "/roadmaps/"+name+"/audit")
+	nav := strings.Index(body, `<nav aria-label="Audit log pagination"`)
+	list := strings.Index(body, `<ul class="pagination`)
+	if nav < 0 {
+		t.Fatalf("audit page: pagination is not wrapped in a labelled <nav> landmark")
+	}
+	if list < 0 || list < nav {
+		t.Errorf("audit page: the pagination list is not inside the <nav> landmark "+
+			"(nav at %d, ul at %d)", nav, list)
+	}
+	// The control stays read-only: the landmark introduces no form and no
+	// non-GET affordance.
+	if strings.Contains(body[nav:], "<form") || strings.Contains(body[nav:], "<button") {
+		t.Errorf("audit page: the pagination landmark introduced a write affordance")
+	}
+}
+
+// TestTablerFidelity_PageHeaderActionsAreHiddenInPrint asserts the page-header
+// actions column carries d-print-none, as Tabler's PageHeader does
+// (shared/components/layout/PageHeader.astro: `<div class="col-auto ms-auto
+// d-print-none">`). Without it the actions print on a page header that is
+// otherwise excluded from print by its own d-print-none.
+func TestTablerFidelity_PageHeaderActionsAreHiddenInPrint(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name := seedRoadmap(t, "platform-core")
+	seedRoadmapWithAudit(t, name, 3)
+	mux := buildMux()
+
+	// The roadmap index has no page-header actions; every roadmap page does.
+	for _, path := range []string{
+		"/roadmaps/" + name,
+		"/roadmaps/" + name + "/tasks",
+		"/roadmaps/" + name + "/sprints/1",
+		"/roadmaps/" + name + "/audit",
+		"/roadmaps/" + name + "/graph",
+	} {
+		body := servePage(t, mux, path)
+		if !strings.Contains(body, `<div class="col-auto ms-auto d-print-none">`) {
+			t.Errorf("page %s: the page-header actions column is missing Tabler's d-print-none", path)
+		}
+		if strings.Contains(body, `<div class="col-auto ms-auto">`) {
+			t.Errorf("page %s: a page-header actions column regressed to the print-visible variant", path)
+		}
+	}
+}
+
+// TestTablerFidelity_FluidLayoutUsesContainerXl asserts the page containers use
+// Tabler's fluid idiom: `<body class="layout-fluid">` plus `container-xl`
+// containers. The vendored stylesheet carries `.layout-fluid .container,
+// .layout-fluid [class*=" container-"], .layout-fluid [class^=container-]
+// {max-width:100%}` for exactly that pairing; with `container-fluid` containers
+// the body class does nothing at all.
+//
+// The single container-fluid Tabler itself uses — the one inside the vertical
+// navbar aside — is the framework's own markup and stays, so the assertion
+// counts rather than forbids.
+func TestTablerFidelity_FluidLayoutUsesContainerXl(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name := seedRoadmap(t, "platform-core")
+	seedRoadmapWithAudit(t, name, 3)
+	mux := buildMux()
+
+	for _, path := range allPagePaths(name) {
+		body := servePage(t, mux, path)
+		if !strings.Contains(body, `<body class="layout-fluid">`) {
+			t.Errorf("page %s: the body does not carry Tabler's layout-fluid class", path)
+		}
+		if !strings.Contains(body, `<div class="container-xl">`) {
+			t.Errorf("page %s: no page container uses Tabler's container-xl", path)
+		}
+		// Exactly one container-fluid survives: the sidebar aside's own, which
+		// is Tabler's markup.
+		if got := strings.Count(body, `class="container-fluid"`); got != 1 {
+			t.Errorf("page %s: %d container-fluid elements, want exactly 1 "+
+				"(the sidebar aside's own); page containers must be container-xl", path, got)
+		}
+	}
+}
+
+// The class-attribute pattern this file scans with is classAttrRe, declared once
+// for the package in comments_test.go; it captures the whitespace-separated
+// token list inside a class attribute.
+
+// styleSheetPaths are the embedded stylesheets that may define a class, in the
+// order the pages load them: the vendored Tabler distribution, the vendored
+// Tabler Icons webfont stylesheet, and the project's own override sheet. A class
+// that resolves in none of them is styled by nothing the binary ships.
+var styleSheetPaths = []string{
+	"static/vendor/tabler/tabler.min.css",
+	"static/vendor/tabler-icons/tabler-icons.min.css",
+	"static/style.css",
+}
+
+// structuralHookClasses are the classes that legitimately carry no CSS rule.
+// Each is a documented structural hook rather than a styling class, and the
+// entry records which component owns it. Anything not on this list and not in a
+// stylesheet is an invented class — the failure mode SPEC/WEB.md § UI Framework
+// rule 10 exists to prevent, and the one that let `navbar-heading` and
+// `navbar-divider` ship propped up by project CSS.
+var structuralHookClasses = map[string]string{
+	// Tabler's own component skeletons: shared/ui/DatagridItem.astro emits the
+	// item and content wrappers, only the title of which is styled.
+	"datagrid-item":    "Tabler DatagridItem structure",
+	"datagrid-content": "Tabler DatagridItem structure",
+	// shared/components/navbar/NavbarMenu.astro wraps every nav-link label in
+	// this span; the vertical navbar styles the link, not the span.
+	"nav-link-title": "Tabler NavbarMenu structure",
+	// Project BEM block and element names whose styled members are the
+	// children: static/style.css styles .graph-query-bar__row and
+	// .labels-sidebar__heading, and these two are their unstyled hooks.
+	"graph-query-bar":              "project BEM block for .graph-query-bar__*",
+	"labels-sidebar__heading-text": "project BEM element inside .labels-sidebar__heading",
+}
+
+// TestTablerFidelity_NoClassOutsideTheVendoredStylesheets asserts every class
+// token a served page emits resolves to a rule in one of the embedded
+// stylesheets, or is one of the explicitly recorded structural hooks.
+//
+// This is the general guard behind SPEC/WEB.md § UI Framework rules 8 and 10.
+// A class Tabler does not define is either dead markup or, worse, a bespoke
+// component wearing a framework-looking name and kept alive by a rule in
+// static/style.css — which is a divergence from Tabler dressed as an override.
+// Both `navbar-heading` and `navbar-divider` shipped that way until this guard
+// existed.
+//
+// Both sides are read through the go:embed filesystems, so the test gates
+// exactly what the binary ships.
+func TestTablerFidelity_NoClassOutsideTheVendoredStylesheets(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name := seedRoadmap(t, "platform-core")
+	seedRoadmapWithAudit(t, name, 3)
+	mux := buildMux()
+
+	sheets := make([]string, 0, len(styleSheetPaths))
+	for _, p := range styleSheetPaths {
+		b, err := staticFS.ReadFile(p)
+		if err != nil {
+			t.Fatalf("reading embedded stylesheet %s: %v", p, err)
+		}
+		sheets = append(sheets, string(b))
+	}
+
+	// used maps each class token to the first page that emitted it.
+	used := map[string]string{}
+	for _, path := range allPagePaths(name) {
+		for _, m := range classAttrRe.FindAllStringSubmatch(servePage(t, mux, path), -1) {
+			for _, class := range strings.Fields(m[1]) {
+				if _, seen := used[class]; !seen {
+					used[class] = path
+				}
+			}
+		}
+	}
+
+	// Falsifiability control: an extraction that found nothing would make the
+	// assertion below pass vacuously. The shell alone emits far more than this.
+	if len(used) < 50 {
+		t.Fatalf("extracted only %d class tokens from the rendered pages; the "+
+			"extraction is broken and the assertion below would be vacuous", len(used))
+	}
+
+	for class, path := range used {
+		if _, ok := structuralHookClasses[class]; ok {
+			continue
+		}
+		if !classDefined(sheets, class) {
+			t.Errorf("page %s uses class %q, which no embedded stylesheet defines and "+
+				"which is not a recorded structural hook: either use the Tabler class "+
+				"that does the job, or record the hook in structuralHookClasses", path, class)
+		}
+	}
+
+	// The recorded hooks must stay hooks: one that gains a rule should be
+	// dropped from the list rather than left claiming it has none.
+	for class, owner := range structuralHookClasses {
+		if classDefined(sheets, class) {
+			t.Errorf("class %q is recorded as a structural hook (%s) but a stylesheet "+
+				"now defines it; remove it from structuralHookClasses", class, owner)
+		}
+	}
+}
+
+// classDefined reports whether any stylesheet carries a selector for class. The
+// trailing check rejects a prefix match, so `.card` does not satisfy `.card-sm`.
+func classDefined(sheets []string, class string) bool {
+	needle := "." + class
+	for _, sheet := range sheets {
+		for i := 0; ; {
+			j := strings.Index(sheet[i:], needle)
+			if j < 0 {
+				break
+			}
+			end := i + j + len(needle)
+			if end == len(sheet) || !isClassNameByte(sheet[end]) {
+				return true
+			}
+			i = i + j + 1
+		}
+	}
+	return false
+}
+
+// isClassNameByte reports whether b can continue a CSS class name, so a match
+// followed by one of these bytes is a longer class rather than the one sought.
+func isClassNameByte(b byte) bool {
+	switch {
+	case b >= 'a' && b <= 'z', b >= 'A' && b <= 'Z', b >= '0' && b <= '9':
+		return true
+	case b == '-' || b == '_':
+		return true
+	}
+	return false
+}
+
+// TestTablerFidelity_PageBodyIsTheMainLandmark asserts the page body is the
+// <main class="page-body"> landmark Tabler v1.4.0's built shell renders
+// (shared/layouts/DefaultLayout.astro: `<main id="content" class="page-body">`),
+// and that exactly one exists per page.
+//
+// The project takes the element and the class but not the id, which exists only
+// to anchor a skip link whose `skip-link` class lives in Tabler's demo
+// stylesheet rather than in the distributed tabler.min.css — the vendored sheet
+// defines no rule for it. `.page-body` is styled by class, so the element change
+// carries no visual effect; it only gives the document its main landmark.
+//
+// Tabler's older documented "Sample layout" snippet still shows a div here.
+// Where the two disagree, the built shell of the vendored version governs, so
+// this test also fails if the div comes back.
+func TestTablerFidelity_PageBodyIsTheMainLandmark(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name := seedRoadmap(t, "platform-core")
+	seedRoadmapWithAudit(t, name, 3)
+	mux := buildMux()
+
+	for _, path := range allPagePaths(name) {
+		body := servePage(t, mux, path)
+		if got := strings.Count(body, `<main class="page-body">`); got != 1 {
+			t.Errorf("page %s: %d <main class=\"page-body\"> elements, want exactly 1", path, got)
+		}
+		if got := strings.Count(body, "</main>"); got != 1 {
+			t.Errorf("page %s: %d </main> closings, want exactly 1", path, got)
+		}
+		if strings.Contains(body, `<div class="page-body">`) {
+			t.Errorf("page %s: the page body regressed to a <div>; Tabler's shell "+
+				"makes it the <main> landmark", path)
+		}
+	}
+}

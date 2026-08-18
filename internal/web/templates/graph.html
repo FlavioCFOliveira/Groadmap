@@ -6,16 +6,16 @@
 <body class="layout-fluid">
   <div class="page">
 {{template "sidebar" .}}
-    <div class="page-wrapper">
 {{template "topnavbar" .}}
+    <div class="page-wrapper">
       <div class="page-header d-print-none">
-        <div class="container-fluid">
+        <div class="container-xl">
           <div class="row g-2 align-items-center">
             <div class="col">
               <div class="page-pretitle">Knowledge graph</div>
               <h2 class="page-title">{{.Name}}</h2>
             </div>
-            <div class="col-auto ms-auto">
+            <div class="col-auto ms-auto d-print-none">
               <div class="d-flex align-items-center gap-2 flex-wrap">
                 <label for="layout-select" class="form-label mb-0 text-secondary d-none d-sm-inline">Layout</label>
                 <select id="layout-select" class="form-select form-select-sm graph-layout-select" aria-label="Graph layout">
@@ -35,8 +35,8 @@
           </div>
         </div>
       </div>
-      <div class="page-body">
-        <div class="container-fluid h-100">
+      <main class="page-body">
+        <div class="container-xl h-100">
           <form id="query-bar" class="graph-query-bar card mb-3" novalidate>
             <div class="card-body">
               <div class="graph-query-bar__row">
@@ -125,7 +125,7 @@
             </div>
           </div>
         </div>
-      </div>
+      </main>
     </div>
   </div>
   <script src="/static/vendor/tabler/tabler.min.js"></script>

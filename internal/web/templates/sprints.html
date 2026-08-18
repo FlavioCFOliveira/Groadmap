@@ -6,23 +6,23 @@
 <body class="layout-fluid">
   <div class="page">
 {{template "sidebar" .}}
-    <div class="page-wrapper">
 {{template "topnavbar" .}}
+    <div class="page-wrapper">
       <div class="page-header d-print-none">
-        <div class="container-fluid">
+        <div class="container-xl">
           <div class="row g-2 align-items-center">
             <div class="col">
               <div class="page-pretitle">Roadmap</div>
               <h2 class="page-title">{{.Name}}</h2>
             </div>
-            <div class="col-auto ms-auto">
+            <div class="col-auto ms-auto d-print-none">
               <a class="btn btn-outline-secondary" href="/roadmaps/{{.Name}}/graph"><i class="ti ti-affiliate me-1"></i>Knowledge graph</a>
             </div>
           </div>
         </div>
       </div>
-      <div class="page-body">
-        <div class="container-fluid">
+      <main class="page-body">
+        <div class="container-xl">
 
           <div class="card" id="sprints">
             <div class="card-header">
@@ -100,9 +100,9 @@
           </div>
 
         </div>
-      </div>
+      </main>
       <footer class="footer footer-transparent d-print-none">
-        <div class="container-fluid">
+        <div class="container-xl">
           <div class="row text-center align-items-center flex-row-reverse">
             <div class="col-12 text-secondary">
               Read-only. The rmp CLI remains the sole write path.

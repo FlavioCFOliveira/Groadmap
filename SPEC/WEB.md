@@ -835,8 +835,11 @@ how the `rmp web` process itself terminates.
   link rendered as `a.page-link`. The current page item carries the `active` state,
   and a disabled **Previous** or **Next** chevron and the ellipsis item carry the
   `disabled` state. `aria` attributes mark the disabled chevrons and the
-  active/current page so the bar is fully accessible. The markup contains only
-  `GET` links and inert items: no form, no button, and no write path.
+  active/current page so the bar is fully accessible, and the whole bar sits inside
+  a `<nav>` element carrying a descriptive `aria-label`, the wrapper Tabler emits
+  around its pagination component (see [UI Framework](#ui-framework),
+  rule 15). The markup contains only `GET` links and inert items: no form, no
+  button, and no write path.
 - **Defense in depth: within the audit hard cap.** The data layer clamps an
   unbounded or oversized audit limit to `MaxAuditLimit` (value **500**; see
   `DATABASE.md § Audit Result Limit`). A fixed 100-entries-per-page request is
@@ -1852,8 +1855,13 @@ read from the host filesystem at runtime.
    asset set. The specific fidelity requirements that follow from this principle —
    card tabs (rule 9), semantic status badges (see
    [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours)),
-   no presentational inline styles (rule 10), and the minor markup-fidelity
-   adjustments (rule 11) — are concrete applications of it.
+   no presentational inline styles and no class the vendored distribution does not
+   ship (rule 10), the minor markup-fidelity adjustments (rule 11), the admin-shell
+   element order (rule 12), the single sidebar collapse, toggler, and brand
+   (rule 13), `aria-current` on the active navigation link (rule 14), the labelled
+   pagination wrapper (rule 15), the page-header actions column (rule 16), the
+   fluid-layout container idiom (rule 17), and the `main` page-body landmark
+   (rule 18) — are concrete applications of it.
 9. **Card tabs follow Tabler's "card with tabs" example.** The Roadmap Sprints
    Page tab control (the three tabs Próximos, Actual, Concluídos; see
    [Roadmap Sprints Page](#roadmap-sprints-page)) follows Tabler's "card with
@@ -1868,18 +1876,35 @@ read from the host filesystem at runtime.
    the **Actual** tab is the one carrying the `active` state on page load. The three
    tabs and their counts or badges, and the default-active Actual tab, are preserved
    exactly as specified in [Roadmap Sprints Page](#roadmap-sprints-page).
-10. **No presentational inline styles.** Templates MUST NOT carry presentational
-    inline `style="..."` attributes. All styling lives in the vendored Tabler
-    classes and utilities, or in the project override stylesheet (`static/style.css`),
-    served from `/static/...` (see
+10. **No presentational inline styles, and no class the vendored Tabler
+    distribution does not ship.** Templates MUST NOT carry presentational inline
+    `style="..."` attributes. All styling lives in the vendored Tabler classes and
+    utilities, or in the project override stylesheet (`static/style.css`), served
+    from `/static/...` (see
     [Embedded Asset Categories](#embedded-asset-categories)). In particular, the
     navigation sidebar's section label and the empty-state icon sizing carry no
-    inline `style`: the sidebar section separator follows Tabler's vertical-navbar
-    subheader and `hr` idiom (a Tabler navbar subheader and divider, not an
-    inline-styled label), and any presentational sizing such as the empty-state
-    icon's dimensions lives in a Tabler utility class or in `static/style.css`. This
-    keeps the markup faithful to the Tabler examples and keeps presentation out of
-    the templates, consistent with the Content-Security-Policy in
+    inline `style`. The sidebar's per-roadmap section label is a Tabler
+    `subheader` — the small uppercase letter-spaced muted label the vendored
+    distribution defines — and the rule above it is a Tabler `dropdown-divider`.
+    The label is aligned with the sidebar links by a Tabler spacing utility
+    (`px-3`, the same 1rem horizontal padding Tabler gives a vertical-navbar
+    `nav-link` at the viewport widths where the sidebar is expanded), never by a
+    project stylesheet rule. Any presentational sizing, such as the empty-state
+    icon's dimensions, lives in a Tabler utility class or in `static/style.css`.
+
+    A template MUST use only class names the vendored Tabler distribution actually
+    provides. `navbar-heading` and `navbar-divider` are not Tabler class names —
+    the vendored distribution defines neither — and MUST NOT appear in any
+    template. The project stylesheet MUST NOT carry a rule whose selector targets a
+    framework class the vendored distribution does not define: such a rule does not
+    override Tabler, it re-creates a component Tabler never shipped, which is the
+    divergence rule 8 forbids. When a template appears to need such a rule, the
+    template is wrong and is brought back to the Tabler class that already provides
+    the behaviour. `static/style.css` remains the place for project-specific
+    styling that no Tabler class covers.
+
+    Keeping presentation out of the templates this way keeps the markup faithful to
+    the Tabler examples and is consistent with the Content-Security-Policy in
     [Security Headers](#security-headers) (which already permits the framework's own
     `style-src 'unsafe-inline'` for Tabler, while the project's own styling stays in
     the stylesheet).
@@ -1894,6 +1919,95 @@ read from the host filesystem at runtime.
       example does.
     These adjustments only align the markup with the Tabler examples; they introduce
     no new page, no new content, and no write path, and the pages remain read-only.
+12. **Admin-shell element order.** Tabler places the top navbar as a direct child
+    of the page container: in the official page-layout examples, and in Tabler's own
+    built admin shell, `<header class="navbar navbar-expand-... d-print-none">` is a
+    **sibling** of `<div class="page-wrapper">` inside `<div class="page">`, never a
+    descendant of it. The vendored stylesheet depends on that shape: its
+    `.navbar-expand-lg.navbar-vertical~.navbar` and
+    `.navbar-expand-lg.navbar-vertical~.page-wrapper` rules give the top navbar and
+    the page wrapper the 15rem offset that clears the vertical sidebar, and a
+    general sibling selector matches only elements that follow the `<aside>` at the
+    same level. The templates MUST therefore place, inside `<div class="page">` and
+    in this order: the sidebar `<aside>`, the top `<header>`, and then
+    `<div class="page-wrapper">`, which holds the page header, the page body, and
+    the footer. A template MUST NOT nest the top `<header>` inside
+    `<div class="page-wrapper">`, and the top navbar carries `d-print-none` as the
+    Tabler shell does.
+13. **One sidebar collapse, one toggler, one brand.** Tabler's vertical navbar
+    holds its collapsible menu region inside the sidebar `<aside>`, identified by
+    `class="collapse navbar-collapse"` and `id="sidebar-menu"`, and gives that
+    region exactly one `navbar-toggler`, also inside the `<aside>`. Where Tabler's
+    top navbar carries a toggler of its own, that toggler targets the top navbar's
+    own `#navbar-menu` collapse, never the sidebar's; and in Tabler's own layout
+    that combines a sidebar with a top navbar, the top navbar hides its brand, so
+    the shell shows one brand only. The templates MUST follow this: the sidebar
+    collapse carries `class="collapse navbar-collapse"` and `id="sidebar-menu"` and
+    lives inside the `<aside>`; exactly one `navbar-toggler` in the whole shell
+    targets `#sidebar-menu`, and it lives inside that same `<aside>`; and the top
+    navbar carries neither a second toggler for `#sidebar-menu` nor a second brand,
+    so each page renders exactly one brand, the sidebar brand of rule 11. Two
+    togglers driving one collapse would give a small viewport two hamburger
+    controls for the same menu, and a second brand would show the product name
+    twice. Tabler renders that collapse region as a `<nav>` element carrying
+    `aria-label="Sidebar"`, so the menu is a navigation landmark with an accessible
+    name that tells it apart from the page's other navigation; the templates MUST
+    use that element and that label. The off-canvas
+    (hamburger) behaviour specified in
+    [Responsive and Mobile-First Design](#responsive-and-mobile-first-design) is
+    unchanged, with a single control driving it.
+14. **`aria-current` on the active navigation link.** Tabler marks the active entry
+    of its vertical navbar with the `active` class on the `<li class="nav-item">`,
+    and marks the active link of its navigation examples with `aria-current="page"`
+    on the `<a class="nav-link">`. The templates MUST do both wherever they
+    highlight the active view: the `<li>` carries `active` and the `<a>` inside it
+    carries `aria-current="page"`. This applies to the sidebar's roadmap-index entry
+    and to the active view among a roadmap's Sprints, Tasks, Audit, and Graph links
+    (see rule 1), so the active view reaches assistive technology and is not
+    conveyed by colour alone.
+15. **Pagination is wrapped in a labelled `nav`.** Tabler emits its pagination
+    component inside a `<nav>` element carrying a descriptive `aria-label`, which is
+    also how Bootstrap, the framework Tabler is built on (see rule 1), specifies
+    that component. The wrapper is what makes assistive technology announce the
+    control as a navigation section and tell it apart from the page's other
+    navigation. The audit log
+    page's numbered pagination bar MUST therefore sit inside a
+    `<nav aria-label="...">` whose label names what the bar navigates. The
+    `ul.pagination` list, its `li.page-item` items, and its `a.page-link` links stay
+    exactly as specified in [Roadmap Audit Log Page](#roadmap-audit-log-page); the
+    wrapper adds the landmark and the accessible name and changes no pagination
+    behaviour.
+16. **Page-header actions column.** Tabler's page-header component emits its
+    actions column as `<div class="col-auto ms-auto d-print-none">`, its
+    `d-print-none` matching the `d-print-none` the `page-header` element itself
+    carries. Where a page header carries actions, the templates MUST use that
+    column idiom unchanged, `d-print-none` included.
+17. **The fluid layout idiom is `layout-fluid` plus `container-xl`.** Tabler's
+    full-width layout pairs `class="layout-fluid"` on `<body>` with ordinary
+    `container-xl` page containers. The vendored stylesheet's
+    `.layout-fluid .container,.layout-fluid [class*=" container-"],.layout-fluid [class^=container-]{max-width:100%}`
+    rule exists for exactly that pairing and is what releases those containers to
+    the full viewport width. A `container-fluid` page container is already full
+    width on its own, which leaves the `layout-fluid` body class with nothing to act
+    on and silently drops the idiom. The templates MUST therefore carry
+    `layout-fluid` on `<body>` and use `container-xl` for the shell containers: the
+    top navbar, the page header, the page body, and the footer. The
+    `container-fluid` inside the sidebar `<aside>` is Tabler's own vertical-navbar
+    markup and stays exactly as Tabler ships it.
+18. **The page body is a `main` landmark.** Tabler's built admin shell renders the
+    page body as `<main class="page-body">`, so the region that holds each page's
+    own content is the document's `main` landmark and assistive technology can jump
+    straight to it past the sidebar, the top navbar, and the page header. The
+    templates MUST use that element for the page body, keeping the `page-body`
+    class, which is what the vendored stylesheet styles; the element carries no
+    identifier, because the one Tabler puts there exists only to anchor a skip link
+    whose styling lives in Tabler's demonstration stylesheet rather than in the
+    distributed one this project vendors, and this interface offers no skip link.
+    The change is behaviour-neutral: `.page-body` is a class selector, so the
+    element it sits on affects no layout rule. Tabler's older hand-written
+    page-layout snippet still shows a `<div>` here; where a documented snippet and
+    the framework's own built shell disagree, the built shell of the vendored
+    distribution governs, and the templates MUST NOT be reverted to the `<div>`.
 
 ### Status, Priority, and Severity Badge Colours
 
@@ -2704,11 +2818,16 @@ Rules:
     beyond those defined in `MODELS.md` and `STATE_MACHINE.md`.
 62. No template carries a presentational inline `style="..."` attribute: all styling
     is provided by vendored Tabler classes and utilities or by the project override
-    stylesheet (`static/style.css`). In particular, the navigation sidebar's section
-    label uses Tabler's vertical-navbar subheader and `hr` divider idiom rather than
-    an inline-styled label, and the empty-state icon's sizing lives in a Tabler
-    utility class or in `static/style.css` rather than in an inline `style`
-    attribute (see [UI Framework](#ui-framework), rule 10).
+    stylesheet (`static/style.css`). In particular, the navigation sidebar's
+    per-roadmap section label is a Tabler `subheader` element preceded by a Tabler
+    `dropdown-divider` rule and aligned with the sidebar links by the `px-3` spacing
+    utility, rather than an inline-styled label, and the empty-state icon's sizing
+    lives in a Tabler utility class or in `static/style.css` rather than in an
+    inline `style` attribute. Every framework class name a template uses is present
+    in the vendored `tabler.min.css`: a search of the templates for `navbar-heading`
+    or for `navbar-divider` returns no match, and `static/style.css` carries no rule
+    whose selector targets a framework class the vendored distribution does not
+    define (see [UI Framework](#ui-framework), rule 10).
 63. The templates follow Tabler's markup idioms in the minor markup-fidelity places:
     page-header rows use Tabler's `row g-2 align-items-center` gutter and alignment
     classes, the sidebar brand uses the Tabler
@@ -2761,6 +2880,42 @@ Rules:
     body containing HTML control characters is rendered as text and cannot alter the
     page structure, in the modal and in the Comments card alike (see
     [Security and Constraints](#security-and-constraints)).
+74. Every page's admin shell places, inside `<div class="page">` and in this order,
+    the sidebar `<aside>`, the top `<header class="navbar ... d-print-none">`, and
+    `<div class="page-wrapper">`, which holds the page header, the page body, and
+    the footer. The top `<header>` is a sibling of `<div class="page-wrapper">` and
+    is never nested inside it, which is the shape the vendored stylesheet's
+    `.navbar-vertical~.navbar` and `.navbar-vertical~.page-wrapper` offset rules
+    require (see [UI Framework](#ui-framework), rule 12).
+75. The sidebar's collapsible region carries `class="collapse navbar-collapse"` and
+    `id="sidebar-menu"`, is rendered as a `<nav>` element with `aria-label="Sidebar"`,
+    and lives inside the sidebar `<aside>`. Exactly one `navbar-toggler` in the
+    rendered page targets `#sidebar-menu`, and it lives inside that same `<aside>`;
+    the top navbar carries neither a second toggler for `#sidebar-menu` nor a second
+    brand, so each page renders exactly one `navbar-brand` element (see
+    [UI Framework](#ui-framework), rules 11 and 13).
+76. The active navigation entry is marked twice: its `<li class="nav-item">` carries
+    the `active` class and the `<a class="nav-link">` inside it carries
+    `aria-current="page"`. This holds for the sidebar's roadmap-index entry and for
+    the active view among a roadmap's Sprints, Tasks, Audit, and Graph links (see
+    [UI Framework](#ui-framework), rule 14).
+77. The audit log page's `<ul class="pagination">` list sits inside a `<nav>` element
+    carrying a descriptive `aria-label`. The pagination structure and behaviour
+    specified in Acceptance Criteria 58 and 59 are unchanged (see
+    [UI Framework](#ui-framework), rule 15, and
+    [Roadmap Audit Log Page](#roadmap-audit-log-page)).
+78. Every page header that carries actions emits its actions column as
+    `<div class="col-auto ms-auto d-print-none">` (see
+    [UI Framework](#ui-framework), rule 16).
+79. Every page carries `class="layout-fluid"` on `<body>` and uses `container-xl` for
+    its shell containers: the top navbar, the page header, the page body, and the
+    footer. No page container uses `container-fluid`; the only `container-fluid` in
+    the shell is the one inside the sidebar `<aside>`, which is Tabler's own
+    vertical-navbar markup (see [UI Framework](#ui-framework), rule 17).
+80. Every page renders its page body as `<main class="page-body">`, the element
+    Tabler's built admin shell uses, so each page exposes exactly one `main`
+    landmark holding that page's own content. No page renders the page body as a
+    `<div>` (see [UI Framework](#ui-framework), rule 18).
 
 ## See Also
 

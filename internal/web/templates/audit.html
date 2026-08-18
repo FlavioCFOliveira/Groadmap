@@ -6,23 +6,23 @@
 <body class="layout-fluid">
   <div class="page">
 {{template "sidebar" .}}
-    <div class="page-wrapper">
 {{template "topnavbar" .}}
+    <div class="page-wrapper">
       <div class="page-header d-print-none">
-        <div class="container-fluid">
+        <div class="container-xl">
           <div class="row g-2 align-items-center">
             <div class="col">
               <div class="page-pretitle">Roadmap</div>
               <h2 class="page-title">{{.Name}} <span class="text-secondary">/ Audit</span></h2>
             </div>
-            <div class="col-auto ms-auto">
+            <div class="col-auto ms-auto d-print-none">
               <a class="btn btn-outline-secondary" href="/roadmaps/{{.Name}}/graph"><i class="ti ti-affiliate me-1"></i>Knowledge graph</a>
             </div>
           </div>
         </div>
       </div>
-      <div class="page-body">
-        <div class="container-fluid">
+      <main class="page-body">
+        <div class="container-xl">
 
           {{/*
             Read-only audit log: one fixed-size page of audit entries ordered by
@@ -78,8 +78,14 @@
                 link except the active current page, and each collapsed gap is a
                 disabled, non-interactive ellipsis. The whole bar is read-only:
                 only GET links and inert items, no form and no write path.
+
+                The list sits inside a labelled <nav>, as Tabler's own pagination
+                component emits it (shared/ui/Pagination.astro), so the control is
+                announced as a navigation landmark and distinguishable from the
+                sidebar's (SPEC/WEB.md § UI Framework).
               */}}
-              <ul class="pagination m-0 ms-auto">
+              <nav aria-label="Audit log pagination" class="ms-auto">
+              <ul class="pagination m-0">
                 <li class="page-item{{if not .HasPrev}} disabled{{end}}">
                   {{if .HasPrev}}
                   <a class="page-link" href="?page={{.PrevPage}}" aria-label="Previous"><i class="ti ti-chevron-left"></i></a>
@@ -104,13 +110,14 @@
                   {{end}}
                 </li>
               </ul>
+              </nav>
             </div>
           </div>
 
         </div>
-      </div>
+      </main>
       <footer class="footer footer-transparent d-print-none">
-        <div class="container-fluid">
+        <div class="container-xl">
           <div class="row text-center align-items-center flex-row-reverse">
             <div class="col-12 text-secondary">
               Read-only. The rmp CLI remains the sole write path.

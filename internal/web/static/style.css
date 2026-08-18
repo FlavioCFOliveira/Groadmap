@@ -20,21 +20,12 @@
    leaving a `hidden` overlay painted on top of the rendered graph. */
 [hidden] { display: none !important; }
 
-/* ---- Sidebar section label and divider (SPEC/WEB.md § UI Framework, rule 10) ----
-   The vertical-navbar section label follows Tabler's subheader + divider idiom
-   instead of an inline-styled label. Tabler's `.subheader` already supplies the
-   small (0.75rem), uppercase, letter-spaced, muted look, so no inline style is
-   needed. These two residual rules only restore the compact navbar spacing for
-   the `navbar-heading`/`navbar-divider` idiom classes, which the vendored Tabler
-   v1.4.0 build does not style on their own. */
-.navbar-heading {
-  margin: 0;
-  padding: 0.25rem 1rem;
-}
-
-.navbar-divider {
-  margin: 0.25rem 1rem;
-}
+/* The sidebar section label and its divider carry NO rule here: they are
+   Tabler's own `subheader` and `dropdown-divider` classes plus the `px-3`/`mb-2`
+   spacing utilities, all of which the vendored distribution already styles
+   (SPEC/WEB.md § UI Framework, rule 10). A class that needs a rule in this file
+   to look right is a class Tabler does not ship, which is a divergence from the
+   framework rather than an override of it. */
 
 /* ---- Empty-state icon sizing (SPEC/WEB.md § UI Framework, rule 10) ----
    Tabler's `.empty-icon` sizes an SVG child, but the empty states use a Tabler
