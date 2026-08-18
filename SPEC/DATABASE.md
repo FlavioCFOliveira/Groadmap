@@ -758,7 +758,7 @@ ORDER BY st.task_id ASC;
 
 **No row for a task without a sprint.** A task that belongs to no sprint has no `sprint_tasks` row, so the result simply carries no entry for that task id. The absence of an entry is the answer: the query returns neither a `NULL` row nor a placeholder for it. The inner join excludes nothing else, because `sprint_id` is `NOT NULL` and carries a foreign key to `sprints(id)`, so every `sprint_tasks` row matches exactly one sprint.
 
-**Empty id set.** When the id set is empty, the application skips the query entirely instead of issuing a statement with an empty `IN` list, exactly as it does for the grouped comment listing.
+**Empty id set.** When the id set is empty, the application skips the query entirely instead of issuing a statement with an empty `IN` list. Every grouped read in this file that takes a set of ids follows this rule.
 
 **Ordering.** `task_id` ascending. The order makes the result walkable in one pass against a caller-side set of task ids; it carries no other meaning, and no tie-breaker is needed because at most one row exists per task id.
 
@@ -925,7 +925,7 @@ DELETE FROM audit WHERE performed_at < ?;
 
 ### Comments
 
-Every statement below exists in a `task_comments` form and a `sprint_comments` form, with the single exception noted under `List Comments for Many Parents (Grouped)`. The two forms are identical apart from the table name and the parent-key column (`task_id` / `sprint_id`); only the task form is written out where the sprint form adds nothing.
+Every statement below exists in a `task_comments` form and a `sprint_comments` form, with the single exception noted under `Count Comments for Many Parents (Grouped)`. The two forms are identical apart from the table name and the parent-key column (`task_id` / `sprint_id`); only the task form is written out where the sprint form adds nothing.
 
 #### Insert Comment
 
@@ -993,23 +993,6 @@ DELETE FROM task_comments WHERE id = ?;
 
 The row is removed outright; there is no soft delete and no tombstone. The delete and its audit entry (`TASK_COMMENT_DELETE` / `SPRINT_COMMENT_DELETE`) MUST run in the same transaction.
 
-#### List Comments for Many Parents (Grouped)
-
-Returns the comments of a set of parents in one round trip, ordered so that a caller can walk the result once and group by parent without re-sorting.
-
-```sql
--- Comments of several tasks at once. The IN list is built from the same number
--- of placeholders as ids, never by string concatenation.
-SELECT id, task_id, type, body, created_at, updated_at
-FROM task_comments
-WHERE task_id IN (?, ?, ...)
-ORDER BY task_id ASC, created_at ASC, id ASC;
-```
-
-**Use case:** the read-only web interface renders one task detail modal per rendered task, so it MUST load the comments of every rendered task with this single grouped query rather than one query per task (see `WEB.md § Task Detail Modal`). When the id set is empty, the application skips the query entirely instead of issuing a statement with an empty `IN` list.
-
-This is the one statement in this group that has no `sprint_comments` form, because nothing reads the comments of several sprints at once: the only surface that presents sprint comments presents a single sprint (see `WEB.md § Roadmap Sprint Page`), which the single-parent listing above already serves.
-
 #### Count Comments for Many Parents (Grouped)
 
 Returns how many comments each task of a given set has, in one round trip, without reading any comment body.
@@ -1026,13 +1009,13 @@ ORDER BY task_id ASC;
 
 **No row for a task without comments.** A task with no comment produces no group, so the result carries no entry for that task id and the caller reads its count as zero. The query never returns a row whose `comment_count` is `0`.
 
-**Empty id set.** When the id set is empty, the application skips the query entirely instead of issuing a statement with an empty `IN` list, exactly as the grouped listing above does.
+**Empty id set.** When the id set is empty, the application skips the query entirely instead of issuing a statement with an empty `IN` list, as every grouped read that takes a set of ids does.
 
 **Index.** Served by `idx_task_comments_task_created`, whose leading column is `task_id`; the aggregate needs no further index and reads no `body` value. See Performance Optimization below.
 
-**Use case:** the read-only web interface's Kanban task board shows a comment count on each card but no comment text, because the card's modal loads a task's comments on demand from its own endpoint (see `WEB.md § Task Detail Endpoint`). The board therefore uses this counting query instead of the grouped listing above, and never reads a comment body in order to display a number. The grouped listing remains the query for a surface that renders comment text.
+**Use case:** the read-only web interface's Kanban task board shows a comment count on each card but no comment text, because the card's modal loads a task's comments on demand from its own endpoint (see `WEB.md § Task Detail Endpoint`). The board therefore never reads a comment body in order to display a number, and no read anywhere loads the comment text of several tasks at once: a task's comments are read one task at a time, through the single-parent listing above.
 
-This statement, like the grouped listing, has no `sprint_comments` form: the Roadmap Sprint Page presents one sprint's comment log in full through the single-parent listing, and no surface counts the comments of several sprints at once.
+This statement has no `sprint_comments` form: the Roadmap Sprint Page presents one sprint's comment log in full through the single-parent listing, and no surface counts the comments of several sprints at once.
 
 ---
 
@@ -1221,7 +1204,7 @@ The following composite indexes are designed to optimize frequently executed que
 | `idx_tasks_priority_created` | tasks | (priority DESC, created_at) | Optimizes priority filtering with date-based ordering |
 | `idx_sprint_tasks_lookup` | sprint_tasks | (sprint_id, task_id) | Optimizes sprint task relationship lookups |
 | `idx_audit_date` | audit | (performed_at DESC) | Optimizes audit log date range queries |
-| `idx_task_comments_task_created` | task_comments | (task_id, created_at ASC) | Optimizes the comment listing of one task, and the grouped listing of many tasks |
+| `idx_task_comments_task_created` | task_comments | (task_id, created_at ASC) | Optimizes the comment listing of one task, and the grouped comment count of many tasks |
 | `idx_sprint_comments_sprint_created` | sprint_comments | (sprint_id, created_at ASC) | Optimizes the comment listing of one sprint |
 
 ### Index Design Rationale
@@ -1250,7 +1233,7 @@ The following composite indexes are designed to optimize frequently executed que
 **idx_task_comments_task_created and idx_sprint_comments_sprint_created:**
 - Query pattern: `WHERE task_id = ? ORDER BY created_at ASC` (and the `sprint_id` equivalent)
 - The leading column serves the parent lookup and the trailing column serves the listing order, so one index covers both and no sort step is needed
-- The same index serves both grouped `WHERE task_id IN (...)` forms the web interface uses: the listing that loads the comments of every rendered task in one round trip, and the `GROUP BY task_id` count that the task board uses to show a comment count without reading any body
+- The same index serves the grouped `WHERE task_id IN (...) GROUP BY task_id` count the web interface's task board uses to show a comment count per card without reading any body
 - A single index per table is sufficient: every comment listing filters on the parent key, so no query ever scans a comment table without it, and no listing is ordered by any other column
 
 **Grouped sprint resolution needs no new index.** The grouped query that resolves the sprint of many tasks at once (see `Resolve the Sprint of Many Tasks (Grouped)` above) filters with `WHERE sprint_tasks.task_id IN (...)` and joins `sprints` by primary key. The `task_id` lookup is already served by `idx_sprint_tasks_task_id`, the single-column index the `sprint_tasks` DDL declares, and by the implicit unique index SQLite creates for the `UNIQUE` constraint on that column. No index is added for this query, and `idx_sprint_tasks_lookup` (leading column `sprint_id`) is not the index that serves it.

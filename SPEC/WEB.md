@@ -938,10 +938,9 @@ how the `rmp web` process itself terminates.
   The page reads comment **counts**, not comment bodies. The card displays a
   number, so reading the text of every comment of every task in order to display it
   would be work the page throws away; a task's comment text is read only when a
-  user opens that task's modal, by the task detail endpoint (see
-  [Task Detail Endpoint](#task-detail-endpoint)). The grouped comment *listing*
-  remains the query for a surface that renders comment text, which this page is not
-  (see `DATABASE.md § List Comments for Many Parents (Grouped)`).
+  user opens that task's modal, one task at a time, by the task detail endpoint
+  (see [Task Detail Endpoint](#task-detail-endpoint)). No page reads the comment
+  text of many tasks at once.
 
   When the roadmap has no task, the page issues the task-list read only: neither
   the count query nor the sprint query is issued, because both take a set of
@@ -3601,8 +3600,9 @@ Rules:
 - Task and Sprint fields presented in the sprints page, the tasks page, the sprint
   page, and the task detail modal → `MODELS.md` and `DATABASE.md`
 - `TaskComment` and `SprintComment` fields, the comment type values, the comment
-  read queries and their chronological ordering, and the grouped query that keeps
-  the task modals free of an N+1 read → `MODELS.md § Task Comment`,
+  read queries and their chronological ordering, and the grouped count that gives
+  each board card its comment number without reading a body →
+  `MODELS.md § Task Comment`,
   `MODELS.md § Sprint Comment`, `MODELS.md § Comment Type`, and
   `DATABASE.md § Comments`
 - CLI contract for writing and reading comments → `COMMANDS.md § Task Comments`
