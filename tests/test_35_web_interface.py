@@ -38,6 +38,7 @@ terminates it. Roadmap data and a populated knowledge graph are built
 through the real CLI so the pages render production-shaped content.
 """
 
+import html as html_lib
 import http.client
 import json
 import os
@@ -681,6 +682,9 @@ class TestWebInterface:
         t1 = self.open_task_ids[0]
         assert f'data-bs-target="#task-modal-{t1}"' in region, "board card missing the modal trigger"
         assert f'id="task-modal-{t1}"' in body, "tasks page missing the task detail modal"
+        assert '<button type="button" class="card card-sm task-card' in region, (
+            "a board card must be a real button, so the keyboard can activate it"
+        )
 
         # The card of a task in a sprint names that sprint, by title and id.
         assert f"Authentication hardening sprint (Sprint #{self.open_sid})" in region, (
@@ -799,6 +803,135 @@ class TestWebInterface:
                 f"column {status} shows the count {count} and "
                 f"{'an' if empty else 'no'} empty state"
             )
+
+    # Elements the HTML activation behaviour lets the keyboard press: only these
+    # turn Enter or Space into the click Bootstrap's modal data-api listens for.
+    NATIVELY_ACTIVATABLE = ("button", "a", "input")
+
+    @staticmethod
+    def _rendered_task_title(body, task_id):
+        """Return a task's title as the page rendered it, from the trigger's
+        VISIBLE label.
+
+        Reading the visible label rather than the aria-label is what keeps an
+        assertion about the accessible name non-circular.
+        """
+        m = re.search(
+            rf'data-bs-target="#task-modal-{task_id}" aria-label="[^"]*">(.*?)</button>', body, re.S
+        )
+        assert m, f"task #{task_id} has no trigger to read its title from"
+        inner = re.search(r'data-role="task-card-title">(.*?)</span>', m.group(1), re.S)
+        return inner.group(1) if inner else m.group(1)
+
+    @staticmethod
+    def _opening_tags(body):
+        """Yield (tag, attributes) for every opening tag in a document."""
+        return re.findall(r"<([a-zA-Z][a-zA-Z0-9]*)\b([^>]*)>", body)
+
+    def test_every_task_has_a_keyboard_activatable_modal_trigger(self):
+        """On both surfaces that show a clickable task, each task can be opened by
+        a natively activatable control, and nothing that cannot be activated
+        pretends to be one.
+
+        The vendored Bootstrap binds the modal data-api on click alone
+        (tabler.min.js: ge.on(document, On, '[data-bs-toggle="modal"]', ...) with
+        On = 'click...'), so a div or tr carrying role="button" and tabindex="0"
+        took focus, announced a button, and could never be pressed. The fix is
+        markup, not script (SPEC/WEB.md § Roadmap Tasks Page, clickable card;
+        § Sprint Detail Sub-Template)."""
+        proc, port = self._start(["--port", "0"])
+
+        for path in (
+            f"/roadmaps/{ROADMAP}/tasks",
+            f"/roadmaps/{ROADMAP}/sprints/{self.open_sid}",
+        ):
+            _, _, body = self._req(port, path)
+            tags = self._opening_tags(body)
+            assert tags, f"{path}: no markup parsed; the extraction is broken"
+
+            # Each task the page can open has at least one activatable trigger,
+            # whose accessible name identifies the task and carries its title.
+            activatable_by_task = {}
+            for tag, attrs in tags:
+                if 'data-bs-toggle="modal"' not in attrs:
+                    continue
+                target = re.search(r'data-bs-target="#task-modal-(\d+)"', attrs)
+                if not target:
+                    continue
+                task_id = target.group(1)
+                activatable_by_task.setdefault(task_id, False)
+                if tag.lower() not in self.NATIVELY_ACTIVATABLE:
+                    continue
+                if tag.lower() == "button":
+                    assert 'type="button"' in attrs, (
+                        f"{path}: a modal trigger button carries no type=\"button\": {attrs}"
+                    )
+                # A control whose accessible name omits its visible label fails
+                # WCAG 2.5.3 (Label in Name), and on the sprint page the visible
+                # label of the trigger IS the title.
+                title = self._rendered_task_title(body, task_id)
+                want = f'aria-label="Open details for task #{task_id}: {title}"'
+                assert want in attrs, (
+                    f"{path}: the trigger of task #{task_id} does not carry {want}: {attrs}"
+                )
+                activatable_by_task[task_id] = True
+
+            assert activatable_by_task, f"{path}: no task modal trigger found"
+            for task_id, activatable in activatable_by_task.items():
+                assert activatable, (
+                    f"{path}: task #{task_id} can be opened by pointer only — no trigger of it "
+                    f"is a button, an anchor with href, or a form control, so Enter and Space "
+                    f"do nothing"
+                )
+
+            # And no element fakes a button it cannot be.
+            for tag, attrs in tags:
+                if 'role="button"' in attrs and 'tabindex="0"' in attrs:
+                    assert tag.lower() in self.NATIVELY_ACTIVATABLE, (
+                        f"{path}: a <{tag}> carries role=\"button\" with tabindex=\"0\"; it takes "
+                        f"focus and announces a button that cannot be pressed: {attrs}"
+                    )
+                if 'data-bs-toggle="modal"' in attrs:
+                    for prop in ('role="button"', 'tabindex="0"'):
+                        assert prop not in attrs, (
+                            f"{path}: a modal trigger carries {prop}; a real button has it "
+                            f"natively and anything else that needs it cannot be activated: {attrs}"
+                        )
+
+            # The fix added no script: the page still loads the one vendored
+            # bundle, and the policy still forbids inline script.
+            scripts = re.findall(r"<script\b([^>]*)>", body)
+            assert len(scripts) == 1, f"{path}: loads {len(scripts)} scripts, want 1"
+            assert 'src="/static/vendor/tabler/tabler.min.js"' in scripts[0], (
+                f"{path}: unexpected script {scripts[0]!r}"
+            )
+            _, headers, _ = self._req(port, path)
+            assert "script-src 'self'" in headers.get("content-security-policy", ""), (
+                f"{path}: the Content-Security-Policy no longer restricts script to 'self'"
+            )
+
+    def test_sprint_page_row_stays_clickable_by_pointer(self):
+        """Moving the keyboard trigger onto the task title left the row clickable
+        by pointer: the row keeps the modal data attributes, and both it and the
+        title button point at the same modal (SPEC/WEB.md § Sprint Detail
+        Sub-Template)."""
+        proc, port = self._start(["--port", "0"])
+        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/sprints/{self.open_sid}")
+
+        t1 = self.open_task_ids[0]
+        target = f'data-bs-target="#task-modal-{t1}"'
+        assert f'<tr class="task-row" data-bs-toggle="modal" {target}>' in body, (
+            "the member-task row is no longer clickable by pointer"
+        )
+        title = self._rendered_task_title(body, t1)
+        assert (
+            f'<button type="button" class="task-row__trigger p-0 border-0 bg-transparent '
+            f'text-reset text-start" data-bs-toggle="modal" {target} '
+            f'aria-label="Open details for task #{t1}: {title}">{title}</button>'
+        ) in body, "the member-task title is not the row's keyboard trigger"
+        assert body.count(target) >= 2, (
+            "the row and its title trigger must both open the task's modal"
+        )
 
     def test_serving_pages_writes_no_audit_entry(self):
         before = self._run(["audit", "stats", "-r", ROADMAP])[1]
@@ -2189,6 +2322,50 @@ class TestWebInterface:
         _, _, body = self._req(port, "/roadmaps/escaping_demo/tasks")
         assert "<script>alert(1)</script>" not in body, "task title must be escaped"
         assert "&lt;script&gt;" in body, "title must appear HTML-escaped"
+
+        # The title also travels inside an ATTRIBUTE — the trigger's accessible
+        # name — where an unescaped double quote would close the attribute and
+        # turn the rest of the title into markup. A title is free text written
+        # through the CLI, so every character with meaning in an attribute is
+        # exercised here: the delimiter, the angle brackets, the ampersand, an
+        # apostrophe, and an already-escaped entity that must not be decoded.
+        hostile = "Reject \"quoted\" <b>bold</b> & O'Brien &amp; 100% > 50%"
+        task_id = self.test.create_task(
+            "escaping_demo", hostile, "why", "how", "verify",
+        )
+        sprint_id = self.test.create_sprint("escaping_demo", "Escaping regression sprint")
+        self._run(["sprint", "add-tasks", "-r", "escaping_demo", str(sprint_id), str(task_id)])
+
+        for path in (
+            "/roadmaps/escaping_demo/tasks",
+            f"/roadmaps/escaping_demo/sprints/{sprint_id}",
+        ):
+            _, _, body = self._req(port, path)
+
+            # Nothing of the raw title reaches the page.
+            assert hostile not in body, f"{path}: the raw title reached the page unescaped"
+            for raw in ('<b>bold</b>', '"quoted"'):
+                assert raw not in body, f"{path}: {raw!r} reached the page unescaped"
+
+            # The accessible name is a well-formed attribute value that decodes
+            # back to exactly what the user wrote. The extraction is bounded by
+            # the quote characters, so a label that had swallowed a stray quote
+            # would come back truncated and fail to decode.
+            labels = [
+                m for m in re.findall(r'aria-label="([^"]*)"', body)
+                if m.startswith(f"Open details for task #{task_id}:")
+            ]
+            assert labels, f"{path}: no accessible name for task #{task_id} survived extraction"
+            for label in labels:
+                assert html_lib.unescape(label) == f"Open details for task #{task_id}: {hostile}", (
+                    f"{path}: the accessible name decodes to {html_lib.unescape(label)!r}"
+                )
+
+            # And the markup kept its shape: one modal for the task, not several
+            # fragments produced by a broken attribute.
+            assert body.count(f'id="task-modal-{task_id}"') == 1, (
+                f"{path}: the hostile title broke the markup around task #{task_id}"
+            )
 
     # ====================================================================
     # AC17: graceful shutdown on SIGINT / SIGTERM

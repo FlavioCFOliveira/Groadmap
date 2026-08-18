@@ -51,14 +51,32 @@
               </div>
               <div class="card-body task-board__cards">
                 {{range .Tasks}}
-                <div class="card card-sm task-card" data-bs-toggle="modal" data-bs-target="#task-modal-{{.ID}}" tabindex="0" role="button" aria-label="Open details for task #{{.ID}}">
-                  <div class="card-body">
-                    <div class="small text-secondary" data-role="task-card-ref">#{{.ID}} &middot; {{.Type}}</div>
-                    <div class="fw-bold text-break mb-1" data-role="task-card-title">{{.Title}}</div>
-                    <div class="d-flex flex-wrap gap-1">
+                {{/*
+                  The card IS the modal trigger, and it is a real <button>: the
+                  vendored Bootstrap binds the modal data-api on click only, and
+                  per the HTML activation behaviour only a button, an anchor with
+                  href, or a form control turns Enter and Space into a click. A
+                  div carrying role="button" and tabindex="0" takes focus and
+                  announces itself as a button while being impossible to press,
+                  so the element itself carries the affordance instead. role and
+                  tabindex are therefore absent: a button has both natively. The
+                  accessible name names the task and carries its title, the same
+                  form the sprint page's row trigger uses (SPEC/WEB.md § Roadmap
+                  Tasks Page, clickable card).
+
+                  The button's content is phrasing content — spans, not divs —
+                  because that is a button's content model; the Tabler card
+                  classes are unchanged, and w-100/p-0/text-start are the
+                  utilities that keep a button looking like the card it is.
+                */}}
+                <button type="button" class="card card-sm task-card w-100 p-0 text-start" data-bs-toggle="modal" data-bs-target="#task-modal-{{.ID}}" aria-label="Open details for task #{{.ID}}: {{.Title}}">
+                  <span class="card-body d-block">
+                    <span class="d-block small text-secondary" data-role="task-card-ref">#{{.ID}} &middot; {{.Type}}</span>
+                    <span class="d-block fw-bold text-break mb-1" data-role="task-card-title">{{.Title}}</span>
+                    <span class="d-flex flex-wrap gap-1">
                       <span class="badge {{priorityBadge .Priority}}">{{.Priority}}</span>
                       <span class="badge {{severityBadge .Severity}}">{{.Severity}}</span>
-                    </div>
+                    </span>
                     {{/*
                       The metadata footer shows ONLY the indicators the task has:
                       an absent, empty, or zero value renders nothing at all — no
@@ -68,17 +86,17 @@
                       the column it sits in already states the status.
                     */}}
                     {{if .HasMeta}}
-                    <div class="d-flex flex-wrap gap-2 mt-2 small text-secondary" data-role="task-card-meta">
+                    <span class="d-flex flex-wrap gap-2 mt-2 small text-secondary" data-role="task-card-meta">
                       {{with .Sprint}}<span data-role="task-card-sprint"><i class="ti ti-flag me-1"></i>{{.Title}} (Sprint #{{.ID}})</span>{{end}}
                       {{with .SpecialistsText}}<span data-role="task-card-specialists"><i class="ti ti-users me-1"></i>{{.}}</span>{{end}}
                       {{if .SubtaskCount}}<span data-role="task-card-subtasks"><i class="ti ti-subtask me-1"></i>Subtasks: {{.SubtaskCount}}</span>{{end}}
                       {{if .DependsOn}}<span data-role="task-card-depends-on"><i class="ti ti-link me-1"></i>Depends on: {{len .DependsOn}}</span>{{end}}
                       {{if .Blocks}}<span data-role="task-card-blocks"><i class="ti ti-lock me-1"></i>Blocks: {{len .Blocks}}</span>{{end}}
                       {{if .Comments}}<span data-role="task-card-comments"><i class="ti ti-message me-1"></i>Comments: {{len .Comments}}</span>{{end}}
-                    </div>
+                    </span>
                     {{end}}
-                  </div>
-                </div>
+                  </span>
+                </button>
                 {{else}}
                 <div class="empty" data-role="task-board-column-empty">
                   <p class="empty-title">No tasks</p>

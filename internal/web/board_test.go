@@ -275,8 +275,10 @@ func cardMarker(taskID int) string {
 }
 
 // cardOpen is the opening markup of a board card, used both to count cards and to
-// find a card's boundaries.
-const cardOpen = `<div class="card card-sm task-card"`
+// find a card's boundaries. The card is a real <button>: only a natively
+// activatable element turns Enter and Space into the click the modal data-api
+// listens for (see keyboard_activation_test.go).
+const cardOpen = `<button type="button" class="card card-sm task-card`
 
 // cardSlice returns the markup of one task's card within a column.
 func cardSlice(t *testing.T, column string, taskID int) string {
@@ -518,15 +520,15 @@ func TestTaskBoard_CardContent(t *testing.T) {
 
 	// 1. The reference line: #id and the task type, as muted text, with no colour
 	//    applied to the type (no badge, no bg-*-lt class on it).
-	ref := `<div class="small text-secondary" data-role="task-card-ref">#` +
-		itoa(f.passkey) + ` &middot; ` + string(models.TypeUserStory) + `</div>`
+	ref := `<span class="d-block small text-secondary" data-role="task-card-ref">#` +
+		itoa(f.passkey) + ` &middot; ` + string(models.TypeUserStory) + `</span>`
 	if !strings.Contains(card, ref) {
 		t.Errorf("the card's reference line is not %q\ncard: %s", ref, card)
 	}
 
 	// 2. The title, as the card's prominent main content.
 	if !strings.Contains(card,
-		`data-role="task-card-title">Add WebAuthn passkey support to checkout</div>`) {
+		`data-role="task-card-title">Add WebAuthn passkey support to checkout</span>`) {
 		t.Errorf("the card does not show the task title as its main content\ncard: %s", card)
 	}
 
@@ -589,6 +591,11 @@ func TestTaskBoard_CardContent(t *testing.T) {
 
 // metaFooter returns the metadata footer of one card, or "" when the card renders
 // none.
+//
+// The footer and its indicators are all <span> elements — a button's content model
+// is phrasing content — so the slice is taken by matching the footer's own closing
+// tag rather than the first one, which would cut the footer after its first
+// indicator and make every "the footer shows X" assertion pass or fail by accident.
 func metaFooter(t *testing.T, card string) string {
 	t.Helper()
 
@@ -596,11 +603,30 @@ func metaFooter(t *testing.T, card string) string {
 	if at < 0 {
 		return ""
 	}
-	end := strings.Index(card[at:], "</div>")
-	if end < 0 {
-		t.Fatalf("the card's metadata footer is not closed\ncard: %s", card)
+	start := strings.LastIndex(card[:at], "<span")
+	if start < 0 {
+		t.Fatalf("the card's metadata footer is not a span\ncard: %s", card)
 	}
-	return card[at : at+end]
+
+	rest := card[start:]
+	depth := 0
+	for i := 0; i < len(rest); {
+		switch {
+		case strings.HasPrefix(rest[i:], "<span"):
+			depth++
+			i += len("<span")
+		case strings.HasPrefix(rest[i:], "</span>"):
+			depth--
+			i += len("</span>")
+			if depth == 0 {
+				return rest[:i]
+			}
+		default:
+			i++
+		}
+	}
+	t.Fatalf("the card's metadata footer is not closed\ncard: %s", card)
+	return ""
 }
 
 // TestTaskBoard_AbsentMetadataRendersNothing is the gate for the second half of
@@ -722,17 +748,30 @@ func TestTaskBoard_CardOpensTheReadOnlyModal(t *testing.T) {
 			column := columns[statusIndex(t, status)]
 			card := cardSlice(t, column, id)
 
-			// The card is the modal's trigger, and is operable from the keyboard
-			// with the same role and label the sprint page's task rows carry.
+			// The card is the modal's trigger, and it is a real button, so the
+			// keyboard activates it — the treatment the sprint page's task rows
+			// now carry too (keyboard_activation_test.go gates that across both
+			// surfaces).
 			for _, attr := range []string{
+				`<button type="button"`,
 				`data-bs-toggle="modal"`,
 				`data-bs-target="#task-modal-` + itoa(id) + `"`,
-				`tabindex="0"`,
-				`role="button"`,
-				`aria-label="Open details for task #` + itoa(id) + `"`,
+				// The accessible name names the task AND carries its title, the
+				// same form the sprint page's trigger uses; the expectation is
+				// composed from the roadmap's own stored title, escaped as
+				// html/template escapes it (keyboard_activation_test.go).
+				wantAccessibleName(itoa(id), renderedTitleOf(t, f.name, id)),
 			} {
 				if !strings.Contains(card, attr) {
 					t.Errorf("task #%d's card is missing %s\ncard: %s", id, attr, card)
+				}
+			}
+			// role and tabindex are redundant on a button and must not come back:
+			// they are what made the old div look activatable without being so.
+			for _, redundant := range []string{`role="button"`, `tabindex="0"`} {
+				if strings.Contains(card, redundant) {
+					t.Errorf("task #%d's card carries %s, which a <button> has natively\ncard: %s",
+						id, redundant, card)
 				}
 			}
 
@@ -744,15 +783,27 @@ func TestTaskBoard_CardOpensTheReadOnlyModal(t *testing.T) {
 		}
 	}
 
-	// The board region is read-only: no form, no input, no button, no link, and no
+	// The board region is read-only: no form, no input, no link, and no
 	// write-method submission anywhere in it. (The modals live outside this region
 	// and carry only Bootstrap's own dismiss control.)
 	lower := strings.ToLower(region)
-	for _, forbidden := range []string{"<form", "<input", "<button", "<select", "<textarea", "<a ",
+	for _, forbidden := range []string{"<form", "<input", "<select", "<textarea", "<a ",
 		`method="post"`, "draggable=", "ondrag"} {
 		if strings.Contains(lower, forbidden) {
 			t.Errorf("the board is read-only but contains %q", forbidden)
 		}
+	}
+	// The only buttons on the board are the cards themselves: every one is a
+	// type="button" modal trigger, so none can submit anything. type="button" is
+	// also what keeps a button inert outside a form.
+	buttons := strings.Count(region, "<button")
+	triggers := strings.Count(region, `<button type="button" class="card card-sm task-card`)
+	if buttons != triggers {
+		t.Errorf("the board renders %d buttons but only %d are card modal triggers; "+
+			"the board carries no other control", buttons, triggers)
+	}
+	if strings.Contains(lower, `type="submit"`) {
+		t.Errorf("the board carries a submit control")
 	}
 }
 

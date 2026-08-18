@@ -38,15 +38,25 @@
 }
 
 /* ---- Roadmap detail / sprint pages ----
-   A clickable task row (on the sprint page's member-tasks table) and a clickable
-   task card (on the tasks page's Kanban board), both of which open the read-only
-   task detail modal. Tabler/Bootstrap own the modal itself; this only signals the
-   element is interactive and gives it a visible keyboard-focus affordance, so it
-   is usable by touch and keyboard (SPEC/WEB.md § Task Detail Modal, § Responsive
-   and Mobile-First Design). */
+   The controls that open the read-only task detail modal: the board card on the
+   tasks page, the task-title button inside a member-task row on the sprint page,
+   and the row itself, which stays clickable by pointer. Tabler/Bootstrap own the
+   modal; this only signals the element is interactive (SPEC/WEB.md § Task Detail
+   Modal, § Responsive and Mobile-First Design).
+
+   `cursor` is inherited, but a browser user-agent stylesheet may set its own
+   cursor on a button, so the title trigger names itself here rather than relying
+   on inheriting the row's. */
 .task-row,
+.task-row__trigger,
 .task-card { cursor: pointer; }
-.task-row:focus-visible,
+
+/* The keyboard-focus affordance belongs to the elements that can actually take
+   focus and be activated — both are real buttons. The row carries no focus rule:
+   it is not focusable, because a <tr> cannot be activated from the keyboard and
+   pretending otherwise (tabindex + role="button") announced a button that could
+   not be pressed. The keyboard reaches the title button inside it instead. */
+.task-row__trigger:focus-visible,
 .task-card:focus-visible { outline: 2px solid var(--tblr-primary, #4299e1); outline-offset: -2px; }
 
 /* ---- Kanban task board (SPEC/WEB.md § Roadmap Tasks Page, layout and
@@ -65,7 +75,16 @@
   display: flex;
   align-items: stretch;
   gap: 0.75rem;
+  /* Two height declarations, not one. `vh` is the LARGE viewport height: on a
+     mobile browser with a dynamic address bar it measures the viewport as if the
+     bar were retracted, so the bottom of the board — the end of each column's
+     card list — sits below the fold exactly when the bar is showing. `dvh` is the
+     height actually visible at that moment. A browser that does not understand
+     `dvh` drops the second declaration and keeps the first, which is the standard
+     way to ship the unit without an @supports block (SPEC/WEB.md § Responsive and
+     Mobile-First Design, rule 9). */
   height: calc(100vh - 14rem);
+  height: calc(100dvh - 14rem);
   min-height: 22rem;
   overflow-x: auto;
   overflow-y: hidden;

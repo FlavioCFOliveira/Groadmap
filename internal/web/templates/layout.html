@@ -251,10 +251,27 @@
                   </tr>
                 </thead>
                 <tbody>
+                  {{/*
+                    The row stays clickable by POINTER — it keeps the modal
+                    data attributes, so a click anywhere on it opens the task's
+                    modal — but it is no longer focusable and no longer claims
+                    role="button": a <tr> cannot be a button and cannot contain
+                    one wrapping the whole row, so announcing the role while
+                    being impossible to press is worse than not being focusable.
+                    The KEYBOARD reaches a real <button> on the task title, which
+                    the HTML activation behaviour turns into a click on Enter and
+                    Space. Its accessible name names the task it opens AND
+                    contains the button's visible label, the title, which is what
+                    WCAG 2.5.3 (Label in Name) requires of a control whose visible
+                    text is part of its name. Both surfaces that show a clickable
+                    task are treated the same way; the board's card is the same
+                    kind of button (SPEC/WEB.md § Sprint Detail Sub-Template;
+                    § Roadmap Tasks Page, clickable card).
+                  */}}
                   {{range .Tasks}}
-                  <tr class="task-row" data-bs-toggle="modal" data-bs-target="#task-modal-{{.ID}}" tabindex="0" role="button" aria-label="Open details for task #{{.ID}}">
+                  <tr class="task-row" data-bs-toggle="modal" data-bs-target="#task-modal-{{.ID}}">
                     <td>#{{.ID}}</td>
-                    <td>{{.Title}}</td>
+                    <td><button type="button" class="task-row__trigger p-0 border-0 bg-transparent text-reset text-start" data-bs-toggle="modal" data-bs-target="#task-modal-{{.ID}}" aria-label="Open details for task #{{.ID}}: {{.Title}}">{{.Title}}</button></td>
                     <td><span class="badge {{taskStatusBadge .Status}}">{{.Status}}</span></td>
                     <td>{{.Type}}</td>
                     <td><span class="badge {{priorityBadge .Priority}}">{{.Priority}}</span></td>
