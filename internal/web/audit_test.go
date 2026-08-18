@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -374,95 +373,4 @@ func TestHandleAudit_CacheControlNoStore(t *testing.T) {
 	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
 		t.Errorf("Cache-Control = %q, want %q", cc, "no-store")
 	}
-}
-
-// TestHandleAudit_PathColumnIsRenderedServerSide asserts the served page states
-// the path of every entry — the sprint whose work it is, or the backlog — in a
-// column the server rendered (SPEC/WEB.md § Audit History Paths; § Roadmap
-// Audit Log Page, Columns).
-//
-// This is the property that keeps the page whole without JavaScript: the tree
-// above the table is client-drawn, this column is not, so a reader whose script
-// did not run still sees what each operation belongs to.
-func TestHandleAudit_PathColumnIsRenderedServerSide(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	// seedRoadmap creates sprint 1 and puts its first task (id 1) in it.
-	name := seedRoadmap(t, "platform-core")
-
-	database, err := db.Open(name)
-	if err != nil {
-		t.Fatalf("opening roadmap %q: %v", name, err)
-	}
-	defer database.Close() //nolint:errcheck // test cleanup
-
-	// Three entries, one per case: the sprint's own creation, an operation on
-	// the task that belongs to it, and an operation on a task that belongs to
-	// no sprint.
-	entries := []struct {
-		op         models.AuditOperation
-		entityType models.EntityType
-		entityID   int
-		at         string
-	}{
-		{models.OpSprintCreate, models.EntitySprint, 1, "2026-01-01T00:00:00Z"},
-		{models.OpTaskStatusChange, models.EntityTask, 1, "2026-01-01T00:00:01Z"},
-		{models.OpTaskCreate, models.EntityTask, 4242, "2026-01-01T00:00:02Z"},
-	}
-	for _, e := range entries {
-		if err := database.WithTransaction(func(tx *sql.Tx) error {
-			return db.LogAuditTx(tx, e.op, e.entityType, e.entityID, e.at)
-		}); err != nil {
-			t.Fatalf("seeding audit entry %s: %v", e.op, err)
-		}
-	}
-
-	mux := buildMux()
-	req := httptest.NewRequest(http.MethodGet, "/roadmaps/"+name+"/audit", nil)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("audit status = %d, want 200", rec.Code)
-	}
-	body := rec.Body.String()
-
-	// The column exists, and each kind of path reaches the page with both the
-	// machine-readable key a client draws from and the label a reader sees.
-	if !contains(body, "<th>Path</th>") {
-		t.Errorf("the audit table has no Path column")
-	}
-	for _, want := range []string{
-		`data-path="sprint/1"`, // the sprint's own entry
-		`data-path="backlog"`,  // the task that belongs to no sprint
-		">Sprint #1<",          // the lane label a reader sees
-		">Backlog<",
-	} {
-		if !contains(body, want) {
-			t.Errorf("the audit page does not render %s", want)
-		}
-	}
-
-	// Which row got which path. Counting occurrences would be wrong: seeding a
-	// roadmap writes audit entries of its own (creating the task and the sprint,
-	// adding the task to it), so the page holds more rows than this test wrote.
-	// The assertion is therefore per row, on the row that names each entity.
-	assertRowPath := func(entityID int, operation models.AuditOperation, wantPath string) {
-		t.Helper()
-		for _, row := range strings.Split(body, "<tr>") {
-			if !contains(row, ">"+string(operation)+"<") || !contains(row, ">"+strconv.Itoa(entityID)+"<") {
-				continue
-			}
-			if !contains(row, `data-path="`+wantPath+`"`) {
-				t.Errorf("the %s row for entity %d is not on path %q; row=%q", operation, entityID, wantPath, row)
-			}
-			return
-		}
-		t.Errorf("no row found for %s on entity %d", operation, entityID)
-	}
-
-	// A task that belongs to a sprint rides that sprint's path...
-	assertRowPath(1, models.OpTaskStatusChange, "sprint/1")
-	// ...a sprint's own entry is on its own path...
-	assertRowPath(1, models.OpSprintCreate, "sprint/1")
-	// ...and a task that belongs to no sprint falls to the backlog.
-	assertRowPath(4242, models.OpTaskCreate, "backlog")
 }

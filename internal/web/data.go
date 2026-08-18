@@ -314,7 +314,7 @@ const auditPageSize = 100
 type auditData struct {
 	Name       string
 	Chrome     chrome
-	Entries    []auditEntryView
+	Entries    []models.AuditEntry
 	PageItems  []pageItem
 	Page       int
 	TotalPages int
@@ -943,19 +943,9 @@ func loadAudit(ctx context.Context, name string, requestedPage int) (auditData, 
 		return auditData{}, err
 	}
 
-	// Which sprint each task named by this page belongs to, so every entry can
-	// be assigned to its path (SPEC/WEB.md § Audit History Paths). One grouped
-	// read for the whole page, over exactly the tasks the page is about to show,
-	// through the same lookup the tasks board uses for its sprint indicator —
-	// the page adds no query of its own.
-	sprintOf, err := database.GetSprintsByTasks(ctx, auditTaskIDs(entries))
-	if err != nil {
-		return auditData{}, err
-	}
-
 	return auditData{
 		Name:       name,
-		Entries:    buildAuditHistory(entries, sprintOf),
+		Entries:    entries,
 		PageItems:  paginationItems(page, totalPages),
 		Page:       page,
 		TotalPages: totalPages,

@@ -169,9 +169,9 @@ Rules:
    - HTML templates;
    - the stylesheet (all CSS, including the vendored Tabler CSS framework — the UI
      framework — and any further vendored CSS);
-   - all client JavaScript, including the Tabler JavaScript, the D3.js
-     knowledge-graph visualisation library (and the d3-sankey plugin), the
-     gitgraph.js audit-history library, and any of their dependencies;
+   - all client JavaScript, including the Tabler JavaScript and the D3.js
+     knowledge-graph visualisation library (and the d3-sankey plugin) and any of
+     their dependencies;
    - web fonts, including the Inter font and the Tabler Icons webfont;
    - icons and images, including the Tabler Icons set;
    - the favicon;
@@ -206,28 +206,14 @@ Rules:
    network or any remote origin (see `WEB.md § Knowledge-Graph Visualisation
    Library`). Upgrading or replacing the vendored library or its plugin is a change
    to the committed asset and to this section, recorded in git.
-5. **Vendored history library: gitgraph.js.** The audit log page draws its
-   git-style history tree with gitgraph.js (`@gitgraph/js`, pinned at version
-   `1.4.0`, MIT). The committed file is the upstream UMD build
-   (`gitgraph.umd.min.js`), a standalone bundle that inlines its own
-   `@gitgraph/core` dependency and requires nothing at runtime; it is committed
-   under `internal/web/static/vendor/gitgraph/`, embedded with `go:embed`, served
-   locally from `/static/...`, and never fetched from a content delivery network or
-   any remote origin (see `WEB.md § Roadmap Audit Log Page`). The UMD build is the
-   one that can be used at all here: there is no JavaScript build toolchain
-   (rule 2), so a module build would need a bundler the project does not have.
-   The library draws SVG and contains no `eval` and no `new Function`, which the
-   Content-Security-Policy requires — it permits `script-src 'self'` and no
-   `'unsafe-eval'` (see `WEB.md § Security Headers`). Upgrading or replacing it is
-   a change to the committed asset and to this section, recorded in git.
-6. **No CDN and no outbound network at build or run time.** The build does not
+5. **No CDN and no outbound network at build or run time.** The build does not
    download web assets, and the running server makes no outbound request to load
    them; every asset is in the binary. No page references a content delivery
    network, a remote font host such as Google Fonts, or any other remote origin
    for a script, stylesheet, font, icon, image, or API. This covers the vendored
    Tabler CSS framework, the Tabler JavaScript, the Tabler Icons webfont, the
-   Inter font, the D3.js library with the d3-sankey plugin, and gitgraph.js: all
-   are embedded, locally-served assets with no remote origin. The interface renders and functions
+   Inter font, and the D3.js library with the d3-sankey plugin: all are embedded,
+   locally-served assets with no remote origin. The interface renders and functions
    fully offline (see `WEB.md § Self-Contained Deliverable`).
 6. **Embedding does not change the build targets.** Embedded assets are part of
    the Go package, so every target in Supported Build Targets builds the web

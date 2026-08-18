@@ -9,13 +9,12 @@ import (
 	"time"
 )
 
-// vendoredAssets enumerates the vendored Tabler / Inter / D3 / gitgraph asset
-// paths that MUST be present in the embedded static FS for the self-contained
-// binary to render and operate the admin-shell, the knowledge-graph
-// visualisation and the audit history tree offline (SPEC/WEB.md § Embedded
-// Asset Categories, § UI Framework, § Knowledge-Graph Visualisation Library,
-// § Roadmap Audit Log Page; SPEC/BUILD.md § Vendored Web Assets). Paths are
-// relative to the embedded "static" directory.
+// vendoredAssets enumerates the vendored Tabler / Inter / D3 asset paths that
+// MUST be present in the embedded static FS for the self-contained binary to
+// render and operate the admin-shell and the knowledge-graph visualisation
+// offline (SPEC/WEB.md § Embedded Asset Categories, § UI Framework,
+// § Knowledge-Graph Visualisation Library; SPEC/BUILD.md § Vendored Web
+// Assets). Paths are relative to the embedded "static" directory.
 var vendoredAssets = []string{
 	"static/vendor/tabler/tabler.min.css",
 	"static/vendor/tabler/tabler.min.js",
@@ -25,9 +24,7 @@ var vendoredAssets = []string{
 	"static/vendor/inter/files/inter-latin-wght-normal.woff2",
 	"static/vendor/d3/d3.min.js",
 	"static/vendor/d3/d3-sankey.min.js",
-	"static/vendor/gitgraph/gitgraph.umd.min.js",
 	"static/graph.js",
-	"static/audit-graph.js",
 	"static/style.css",
 	"static/favicon.svg",
 }
@@ -687,9 +684,7 @@ func TestStatic_VendoredAssetsServed(t *testing.T) {
 		{"/static/style.css", "text/css"},
 		{"/static/vendor/d3/d3.min.js", "javascript"},
 		{"/static/vendor/d3/d3-sankey.min.js", "javascript"},
-		{"/static/vendor/gitgraph/gitgraph.umd.min.js", "javascript"},
 		{"/static/graph.js", "javascript"},
-		{"/static/audit-graph.js", "javascript"},
 		{"/static/vendor/inter/files/inter-latin-wght-normal.woff2", ""},
 		{"/static/vendor/tabler-icons/fonts/tabler-icons.woff2", ""},
 		{"/static/favicon.svg", "image/svg"},
@@ -837,46 +832,5 @@ func TestSprintsPage_PreservesSprintCards(t *testing.T) {
 	// full table is not rendered here.
 	if strings.Contains(body, "<th>Type</th>") {
 		t.Errorf("sprints page must NOT render the full tasks table (found a Type column header)")
-	}
-}
-
-// TestVendoredGitgraph_IsUsableUnderTheContentSecurityPolicy asserts the two
-// properties of the vendored gitgraph.js build that the interface depends on,
-// against the shipped bytes rather than against its documentation.
-//
-// The Content-Security-Policy this server sends is `script-src 'self'` with no
-// `'unsafe-eval'` (SPEC/WEB.md § Security Headers), so a library that compiled
-// code at runtime through eval or the Function constructor would be blocked by
-// the browser and the tree would silently fail to draw. The UMD build must also
-// be standalone: there is no JavaScript build toolchain (SPEC/BUILD.md
-// § Vendored Web Assets, rule 2), so an asset that expected a bundler to
-// resolve a require() could not run.
-func TestVendoredGitgraph_IsUsableUnderTheContentSecurityPolicy(t *testing.T) {
-	const asset = "static/vendor/gitgraph/gitgraph.umd.min.js"
-
-	data, err := staticFS.ReadFile(asset)
-	if err != nil {
-		t.Fatalf("reading the embedded %s: %v", asset, err)
-	}
-	source := string(data)
-
-	// Falsifiability control: an empty or truncated read would satisfy every
-	// absence below without proving anything.
-	if len(source) < 10_000 {
-		t.Fatalf("%s is %d bytes, far smaller than the upstream UMD build; the assertions below would be vacuous", asset, len(source))
-	}
-	// The UMD wrapper exposes the global the drawing script calls.
-	if !strings.Contains(source, "GitgraphJS") {
-		t.Errorf("%s does not expose the GitgraphJS global the audit tree script uses", asset)
-	}
-	// No runtime code compilation: the CSP admits neither.
-	for _, forbidden := range []string{"eval(", "new Function("} {
-		if strings.Contains(source, forbidden) {
-			t.Errorf("%s contains %q, which the Content-Security-Policy (script-src 'self', no 'unsafe-eval') blocks", asset, forbidden)
-		}
-	}
-	// Standalone: nothing left for a bundler to resolve.
-	if strings.Contains(source, "require(\"") {
-		t.Errorf("%s calls require(), so it is not the standalone UMD build and cannot run without a bundler", asset)
 	}
 }
