@@ -2663,9 +2663,9 @@ class TestWebInterface:
         """AC108: the top navbar names the roadmap the page belongs to.
 
         Every roadmap-scoped page shows that roadmap's name in the navbar,
-        prominently (the Tabler `h3` type utility) and preceded by a Tabler
-        Icons glyph; the roadmap index page belongs to no roadmap and renders
-        the region empty. No page's navbar carries the badge that used to
+        prominently (the Tabler `h3` type utility) and standing alone, with no
+        glyph beside it; the roadmap index page belongs to no roadmap and
+        renders the region empty. No page's navbar carries the badge that used to
         declare the interface read-only: that the server never writes is
         covered by the 405 and no-write-affordance scenarios, not by a label.
         """
@@ -2681,13 +2681,14 @@ class TestWebInterface:
             _, _, body = self._req(port, path)
             navbar = self._top_navbar(path, body)
             assert named in navbar, f"page {path}: top navbar does not name its roadmap; navbar={navbar!r}"
-            assert '<i class="ti ti-map me-2"></i>' in navbar, (
-                f"page {path}: top navbar carries no roadmap glyph before the name; navbar={navbar!r}"
+            assert "<i " not in navbar and "ti-" not in navbar, (
+                f"page {path}: top navbar carries an icon beside the roadmap name; "
+                f"the name stands alone; navbar={navbar!r}"
             )
 
         _, _, index_body = self._req(port, "/")
         index_navbar = self._top_navbar("/", index_body)
-        for unwanted in ('data-role="active-roadmap"', "ti-map", ROADMAP, "<span", "<i "):
+        for unwanted in ('data-role="active-roadmap"', ROADMAP, "<span", "<i "):
             assert unwanted not in index_navbar, (
                 f"the roadmap index page belongs to no roadmap, so its top navbar must render "
                 f"empty, but it carries {unwanted!r}; navbar={index_navbar!r}"

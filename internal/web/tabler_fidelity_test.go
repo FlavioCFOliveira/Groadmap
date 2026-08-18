@@ -250,13 +250,16 @@ func TestShell_TopNavbarNamesTheSelectedRoadmap(t *testing.T) {
 			if !strings.Contains(nav, named) {
 				t.Errorf("page %s: top navbar does not name its roadmap as %s; navbar=%q", path, named, nav)
 			}
-			// The glyph that precedes the name, and the overflow-hidden that is
-			// what lets text-truncate clip a long name instead of widening the
-			// navbar: a flex item's automatic minimum size is its content.
-			if !strings.Contains(nav, `<i class="ti ti-map me-2"></i>`) {
-				t.Errorf("page %s: top navbar carries no roadmap glyph before the name; navbar=%q", path, nav)
+			// The name stands alone: no glyph, and no other element beside it.
+			// An icon here would be identical on every page of every roadmap,
+			// so it would distinguish nothing.
+			if strings.Contains(nav, "<i ") || strings.Contains(nav, "ti-") {
+				t.Errorf("page %s: top navbar carries an icon beside the roadmap name; the name stands alone; navbar=%q", path, nav)
 			}
-			if !strings.Contains(nav, `<div class="nav-item d-flex align-items-center overflow-hidden">`) {
+			// overflow-hidden is what lets text-truncate clip a long name
+			// instead of widening the navbar: a flex item's automatic minimum
+			// size is otherwise its content.
+			if !strings.Contains(nav, `<div class="nav-item overflow-hidden">`) {
 				t.Errorf("page %s: the navbar's flex item lost overflow-hidden, so text-truncate cannot clip a long roadmap name; navbar=%q", path, nav)
 			}
 			if strings.Contains(nav, rdm.other) {
@@ -268,7 +271,7 @@ func TestShell_TopNavbarNamesTheSelectedRoadmap(t *testing.T) {
 	// The roadmap index belongs to no roadmap, so the region is empty: no name,
 	// no glyph, no placeholder standing in for the roadmap that is not selected.
 	indexNav := topNavbarRegion(t, "/", servePage(t, mux, "/"))
-	for _, unwanted := range []string{`data-role="active-roadmap"`, "ti-map", platform, billing, "<span", "<i "} {
+	for _, unwanted := range []string{`data-role="active-roadmap"`, platform, billing, "<span", "<i "} {
 		if strings.Contains(indexNav, unwanted) {
 			t.Errorf("the roadmap index page's top navbar carries %q; it belongs to no roadmap and the region must render empty; navbar=%q", unwanted, indexNav)
 		}
@@ -294,7 +297,7 @@ func TestShell_TopNavbarNamesTheSelectedRoadmap(t *testing.T) {
 	// template comment that records why the badge went away, which sits outside
 	// the definition and, being a Go template comment, is never served.
 	def := topNavbarDefinition(t)
-	for _, gone := range []string{"ti-lock", "badge", "Read-only"} {
+	for _, gone := range []string{"ti-lock", "ti-map", "<i ", "badge", "Read-only"} {
 		if strings.Contains(def, gone) {
 			t.Errorf("the topnavbar partial carries %q; the read-only indicator was replaced by the selected roadmap's name; definition=%q", gone, def)
 		}

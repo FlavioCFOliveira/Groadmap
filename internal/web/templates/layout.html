@@ -118,17 +118,21 @@
   placeholder. The value is the validated roadmap segment of the request path and
   goes through html/template as text, so it is escaped like every other value.
 
+  The name stands alone: no glyph precedes it. An icon here would be the same on
+  every page of every roadmap and so would distinguish nothing, while the sidebar
+  already gives each of the roadmap's views its own.
+
   overflow-hidden on the flex items is what lets text-truncate act: a flex item's
   automatic minimum size is its content, so without it a long name would push the
-  navbar wider instead of being clipped (SPEC/WEB.md § UI Framework, rule 19;
-  Acceptance Criterion 108).
+  navbar wider instead of being clipped. The nav-item needs no d-flex now that it
+  holds a single child (SPEC/WEB.md § UI Framework, rule 19; Acceptance
+  Criterion 108).
 */}}
 {{define "topnavbar"}}  <header class="navbar navbar-expand-md d-print-none">
     <div class="container-xl">
       {{with .Chrome.Roadmap}}
       <div class="navbar-nav flex-row overflow-hidden">
-        <div class="nav-item d-flex align-items-center overflow-hidden">
-          <i class="ti ti-map me-2"></i>
+        <div class="nav-item overflow-hidden">
           <span class="h3 mb-0 text-truncate" data-role="active-roadmap">{{.}}</span>
         </div>
       </div>

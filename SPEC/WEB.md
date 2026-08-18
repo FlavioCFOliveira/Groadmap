@@ -2610,10 +2610,14 @@ read from the host filesystem at runtime.
     a small viewport (rule 5), so the top navbar is the one region that names the
     selected roadmap at every viewport width.
 
-    The name is rendered prominently and with vendored Tabler classes only: a
-    Tabler Icons glyph followed by the name carrying Tabler's `h3` type utility,
-    inside the `navbar-nav flex-row` / `nav-item` idiom Tabler uses for the top
-    navbar's own content. A long name is truncated with Tabler's `text-truncate`
+    The name is rendered prominently and with vendored Tabler classes only: the
+    name alone, carrying Tabler's `h3` type utility, inside the
+    `navbar-nav flex-row` / `nav-item` idiom Tabler uses for the top navbar's own
+    content. **No glyph precedes it.** An icon here would be the same on every
+    page of every roadmap, so it would distinguish nothing, while the sidebar
+    already gives each of the roadmap's views its own distinguishing glyph; a
+    roadmap is identified by its name, which is what the URL, the sidebar label,
+    and the page title all use. A long name is truncated with Tabler's `text-truncate`
     rather than wrapped or allowed to overflow, so the navbar keeps its height and
     the page never scrolls horizontally because of it (see
     [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)). The
@@ -2623,8 +2627,8 @@ read from the host filesystem at runtime.
     other value the interface shows.
 
     **The roadmap index page names no roadmap.** `/` lists the roadmaps and belongs
-    to none of them, so its top navbar renders no name, no glyph, and no
-    placeholder text: the region is simply empty, exactly as the sidebar's
+    to none of them, so its top navbar renders nothing at all: no name and no
+    placeholder text. The region is simply empty, exactly as the sidebar's
     per-roadmap section is absent on that page.
 
     **The navbar carries no read-only indicator.** It MUST NOT carry a badge,
@@ -3859,10 +3863,10 @@ Rules:
 108. The top navbar of every roadmap-scoped page — the roadmap's sprints page, a
     sprint's own page, the tasks board, the audit log page, and the knowledge-graph
     page — shows the name of the roadmap in the request path, rendered prominently
-    with the vendored Tabler `h3` type utility and preceded by a Tabler Icons
-    glyph, and a long name is truncated rather than wrapped or overflowing. The
-    roadmap index page, which belongs to no roadmap, renders that region empty: no
-    name, no glyph, and no placeholder text. No page's top navbar carries a badge,
+    with the vendored Tabler `h3` type utility and with no glyph or other element
+    beside it, and a long name is truncated rather than wrapped or overflowing.
+    The roadmap index page, which belongs to no roadmap, renders that region
+    empty: no name and no placeholder text. No page's top navbar carries a badge,
     label, or icon declaring the interface read-only. The name is HTML-escaped
     through `html/template` like every other value, the markup uses only classes
     the vendored Tabler distribution ships, and no template carries a `style`
