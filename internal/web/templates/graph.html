@@ -11,10 +11,16 @@
       <div class="page-header d-print-none">
         <div class="container-xl">
           <div class="row g-2 align-items-center">
-            <div class="col">
-              <div class="page-pretitle">Knowledge graph</div>
-              <h2 class="page-title">{{.Name}}</h2>
-            </div>
+{{template "pageTitle" .Chrome.Heading}}
+            {{/*
+              The actions column carries the layout dropdown and nothing else: a
+              control that acts on this page. The link that stood beside it was
+              labelled "Tasks & sprints" but pointed at /roadmaps/{name}, the
+              sprints page alone — a leftover from before those two endpoints were
+              split, and the same retired label the roadmap index already forbids.
+              It was also a second route to a page the sidebar lists on every page
+              (SPEC/WEB.md § Shared Page-Header Partial, rule 5).
+            */}}
             <div class="col-auto ms-auto d-print-none">
               <div class="d-flex align-items-center gap-2 flex-wrap">
                 <label for="layout-select" class="form-label mb-0 text-secondary d-none d-sm-inline">Layout</label>
@@ -29,7 +35,6 @@
                   <option value="chord-directed">Directed chord diagram</option>
                   <option value="chord-dependency">Chord dependency diagram</option>
                 </select>
-                <a class="btn btn-outline-secondary btn-sm" href="/roadmaps/{{.Name}}"><i class="ti ti-arrow-left me-1"></i>Tasks &amp; sprints</a>
               </div>
             </div>
           </div>

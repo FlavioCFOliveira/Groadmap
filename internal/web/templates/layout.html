@@ -141,6 +141,35 @@
   </header>{{end}}
 
 {{/*
+  pageTitle is the ONE partial that renders a page header's title column, so the
+  six pages cannot drift into six conventions for saying the same kind of thing
+  (SPEC/WEB.md § Shared Page-Header Partial; Acceptance Criterion 109). No page
+  writes a page-pretitle or a page-title element of its own.
+
+  Dot is a web.pageHeading. The title names the VIEW — Roadmaps, Sprints, Tasks,
+  Audit, Knowledge graph — and never the roadmap: the shell states the roadmap
+  twice already, in the sidebar's section label and in the top navbar, so a third
+  statement here would repeat a fact the user can see while leaving the view they
+  are actually looking at unnamed.
+
+  Three fields are optional and belong to one page each. Pretitle is the sprint
+  page's, the only page presenting an individual record rather than a view, where
+  it carries Sprint #<id> and the title becomes the sprint's own title plus its
+  status Badge. Lead and LeadCode are the roadmap index's lead line, whose
+  trailing path renders inside <code>. $ is the pageHeading itself, which the
+  {{with}} blocks shadow.
+
+  The actions column is NOT here: a search input, a <select> and a link are
+  genuinely different markup, and folding them in would force this partial to
+  know every page that uses it (SPEC/WEB.md § Shared Page-Header Partial, rule 4).
+*/}}
+{{define "pageTitle"}}            <div class="col">
+              {{with .Pretitle}}<div class="page-pretitle">{{.}}</div>{{end}}
+              <h2 class="page-title">{{.Title}}{{with .Badge}}<span class="badge {{$.BadgeClass}} ms-2">{{.}}</span>{{end}}</h2>
+              {{with .Lead}}<div class="text-secondary mt-1">{{.}}{{with $.LeadCode}} <code>{{.}}</code>{{end}}</div>{{end}}
+            </div>{{end}}
+
+{{/*
   sprintCard renders the single shared sprint card used by EVERY tab of the
   Roadmap Sprints Page — Próximos, Actual, and Concluídos — so all sprints share
   identical card markup across the three tabs. The OPEN sprint under Actual is

@@ -11,10 +11,7 @@
       <div class="page-header d-print-none">
         <div class="container-xl">
           <div class="row g-2 align-items-center">
-            <div class="col">
-              <div class="page-pretitle">Roadmap</div>
-              <h2 class="page-title">{{.Name}} <span class="text-secondary">/ Tasks</span></h2>
-            </div>
+{{template "pageTitle" .Chrome.Heading}}
             {{/*
               The actions column carries the board's search box and nothing else.
               The knowledge-graph link that stood here was a second route to a

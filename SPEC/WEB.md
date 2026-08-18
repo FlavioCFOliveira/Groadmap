@@ -17,6 +17,7 @@
   - [Roadmap Tasks Page](#roadmap-tasks-page)
   - [Roadmap Sprint Page](#roadmap-sprint-page)
   - [Roadmap Audit Log Page](#roadmap-audit-log-page)
+  - [Shared Page-Header Partial](#shared-page-header-partial)
   - [Shared Sprint-Card Partial](#shared-sprint-card-partial)
   - [Sprint Detail Sub-Template](#sprint-detail-sub-template)
   - [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page)
@@ -1149,8 +1150,12 @@ how the `rmp web` process itself terminates.
 - **Page header.** The page header presents the sprint `title` (the required
   title defined for the `Sprint` model in `MODELS.md § Sprint`) alongside the text
   `Sprint #<ID>` (the sprint's `id`), so the sprint is identifiable by both its
-  title and its id. The page does not redefine these fields; `MODELS.md` remains
-  canonical.
+  title and its id. It is rendered by the shared partial, which places
+  `Sprint #<ID>` in the pretitle and the `title` with its status badge in the
+  title (see [Shared Page-Header Partial](#shared-page-header-partial)); the
+  roadmap name is not repeated there. The actions column carries a link back to
+  the roadmap's sprints page. The page does not redefine these fields;
+  `MODELS.md` remains canonical.
 - **Sprint status summary line.** At the top of the sprint presentation the page
   shows the sprint status summary line defined in
   [Sprint Detail Sub-Template](#sprint-detail-sub-template).
@@ -1282,6 +1287,72 @@ how the `rmp web` process itself terminates.
   log writes no row and produces no new audit entry, because a read is not a change
   (see [Tasks and Sprints from SQLite](#tasks-and-sprints-from-sqlite) and
   `DATABASE.md § audit Table`).
+
+### Shared Page-Header Partial
+
+Every page's header title column is rendered by **one** partial, so the six pages
+cannot drift into six conventions for saying the same kind of thing. The partial
+renders the `<div class="col">` of the Tabler page-header row: an optional
+pretitle, the title, an optional status badge inside the title, and an optional
+lead line. A page MUST NOT hand-write a `page-pretitle` or a `page-title` element.
+
+1. **The title names the view, not the roadmap.** The roadmap is named twice in
+   the shell already — in the sidebar's per-roadmap section label and in the top
+   navbar (see [UI Framework](#ui-framework), rule 19) — so repeating it in the
+   page title would state the same fact a third time on one screen while leaving
+   the view the user is actually looking at unnamed on the sprints page. The
+   titles are exactly:
+
+   | Page | Pretitle | Title |
+   |---|---|---|
+   | Roadmap Index | — | `Roadmaps` |
+   | Roadmap Sprints | — | `Sprints` |
+   | Roadmap Tasks | — | `Tasks` |
+   | Roadmap Audit Log | — | `Audit` |
+   | Roadmap Knowledge-Graph | — | `Knowledge graph` |
+   | Roadmap Sprint | `Sprint #<ID>` | the sprint's `title`, with its status badge |
+
+2. **The sprint page is the one hierarchical header.** It is the only page that
+   presents an individual record rather than a view of the roadmap, so it alone
+   carries a pretitle, and that pretitle is `Sprint #<ID>` — the roadmap name is
+   not repeated in it. The sprint's `title` stays the page title and keeps the
+   status badge specified in
+   [Roadmap Sprint Page](#roadmap-sprint-page), so the sprint remains identifiable
+   by both its title and its id.
+
+3. **The lead line belongs to the roadmap index alone.** The index page's title is
+   followed by a lead line naming the directory the roadmaps are discovered under.
+   No other page carries one.
+
+4. **The actions column stays with the page.** The partial covers the title column
+   only. What a page puts in its actions column is genuinely page-specific markup —
+   a search input, a `<select>`, a link — and folding those into the shared partial
+   would require it to know every page that uses it. Each page therefore renders
+   its own actions column, in the Tabler idiom fixed in
+   [UI Framework](#ui-framework), rule 16, and the `page-header`, `container-xl`
+   and `row g-2 align-items-center` wrapper likewise stays in the page.
+
+5. **The actions column carries controls, not duplicated navigation.** A control
+   that acts on the page belongs there; a link to a destination the admin-shell
+   sidebar already lists on every page does not, because it is a second route to
+   somewhere the page already offers and removing it costs no access. Concretely:
+
+   | Page | Actions column |
+   |---|---|
+   | Roadmap Index | none |
+   | Roadmap Sprints | none |
+   | Roadmap Tasks | the search input (see [Roadmap Tasks Page](#roadmap-tasks-page), **Header search control**) |
+   | Roadmap Audit Log | none |
+   | Roadmap Knowledge-Graph | the layout dropdown (see [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page)) |
+   | Roadmap Sprint | a link back to the roadmap's sprints page |
+
+   The sprint page's back link is **not** duplicated navigation: it returns to the
+   parent record of the one being shown, which is a relationship the sidebar's flat
+   view list does not express.
+
+6. **Values are escaped.** The sprint `title` and any other data-derived value
+   reaching the partial is rendered through `html/template` as text, exactly as it
+   was before the partial existed.
 
 ### Shared Sprint-Card Partial
 
@@ -3872,6 +3943,19 @@ Rules:
     the vendored Tabler distribution ships, and no template carries a `style`
     attribute (Acceptance Criteria 62 and 63 continue to hold; see
     [UI Framework](#ui-framework), rule 19).
+109. Every page's header title column is rendered by the shared page-header
+    partial: no page hand-writes a `page-pretitle` or a `page-title` element, and
+    the titles read exactly `Roadmaps`, `Sprints`, `Tasks`, `Audit`,
+    `Knowledge graph`, and — on a sprint's own page — that sprint's `title` with
+    its status badge, under the pretitle `Sprint #<ID>`. No page title contains the
+    roadmap name, which the shell already states in the sidebar and in the top
+    navbar. Each page's actions column carries only what
+    [Shared Page-Header Partial](#shared-page-header-partial) fixes: the tasks
+    page's search input, the knowledge-graph page's layout dropdown, and the sprint
+    page's link back to the roadmap's sprints page. The sprints, audit, and index
+    page headers carry no actions column, and no page header links to the
+    knowledge-graph page — Acceptance Criterion 100 held that for the tasks page
+    and now holds for every page.
 
 ## See Also
 

@@ -2659,6 +2659,76 @@ class TestWebInterface:
         assert end >= 0, f"page {path}: the top navbar is never closed"
         return rest[:end]
 
+    @staticmethod
+    def _page_header(path, body):
+        """Return the page-header block, from its opening div to the <main>."""
+        opening = '<div class="page-header d-print-none">'
+        start = body.find(opening)
+        assert start >= 0, f"page {path} renders no page header, so any assertion on it would be vacuous"
+        rest = body[start:]
+        end = rest.find('<main class="page-body">')
+        assert end >= 0, f"page {path}: no page body follows the page header"
+        return rest[:end]
+
+    def test_page_header_is_uniform_across_pages(self):
+        """AC109: one shared partial renders every page header's title column.
+
+        The title names the VIEW, never the roadmap: the sidebar and the top
+        navbar already state the roadmap, so a third statement would repeat
+        what the user can see while leaving the view unnamed. Only a sprint's
+        own page is hierarchical, with the pretitle Sprint #<id>. The actions
+        column holds controls that act on the page, plus the sprint page's
+        back link - never navigation the sidebar already carries.
+        """
+        proc, port = self._start(["--port", "0"])
+
+        titles = {
+            "/": "Roadmaps",
+            f"/roadmaps/{ROADMAP}": "Sprints",
+            f"/roadmaps/{ROADMAP}/tasks": "Tasks",
+            f"/roadmaps/{ROADMAP}/audit": "Audit",
+            f"/roadmaps/{ROADMAP}/graph": "Knowledge graph",
+        }
+        for path, title in titles.items():
+            _, _, body = self._req(port, path)
+            header = self._page_header(path, body)
+            assert f'<h2 class="page-title">{title}</h2>' in header, (
+                f"page {path}: header title is not {title!r}; header={header!r}"
+            )
+            assert "page-pretitle" not in header, (
+                f"page {path}: renders a pretitle; only a sprint's own page carries one"
+            )
+            assert ROADMAP not in header, (
+                f"page {path}: the header names the roadmap, which the sidebar and the "
+                f"top navbar already state; header={header!r}"
+            )
+
+        # No header offers a second route to the knowledge graph, and the
+        # retired "Tasks & sprints" label is gone from the graph page too.
+        for path in list(titles):
+            _, _, body = self._req(port, path)
+            header = self._page_header(path, body)
+            assert '/graph"' not in header, (
+                f"page {path}: header links to the knowledge-graph page, duplicating the sidebar"
+            )
+            assert "Tasks &amp; sprints" not in header and "Tasks & sprints" not in header, (
+                f"page {path}: header still shows the retired \"Tasks & sprints\" label"
+            )
+
+        # Only three headers carry an actions column, and each holds what it
+        # should: a control, or the sprint page's hierarchical back link.
+        _, _, tasks_body = self._req(port, f"/roadmaps/{ROADMAP}/tasks")
+        assert 'data-role="task-search"' in self._page_header(f"/roadmaps/{ROADMAP}/tasks", tasks_body)
+        _, _, graph_body = self._req(port, f"/roadmaps/{ROADMAP}/graph")
+        assert 'id="layout-select"' in self._page_header(f"/roadmaps/{ROADMAP}/graph", graph_body)
+
+        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/audit"):
+            _, _, body = self._req(port, path)
+            header = self._page_header(path, body)
+            assert "col-auto ms-auto" not in header, (
+                f"page {path}: header carries an actions column; it should have none; header={header!r}"
+            )
+
     def test_top_navbar_names_the_selected_roadmap(self):
         """AC108: the top navbar names the roadmap the page belongs to.
 

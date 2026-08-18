@@ -19,16 +19,40 @@ const (
 )
 
 // chrome carries the data the shared Tabler admin-shell partials need
-// (head, sidebar, top navbar): the page <title>, the active roadmap (empty
-// on the index, set on a roadmap's pages so the sidebar lists that roadmap's
-// Tasks/Sprints/Graph links), and the active nav section so the sidebar can
-// highlight the current view. It is embedded on every page view model under
-// the field name Chrome, which the layout.html partials reference
-// (SPEC/WEB.md § UI Framework).
+// (head, sidebar, top navbar, page header): the page <title>, the active
+// roadmap (empty on the index, set on a roadmap's pages so the sidebar lists
+// that roadmap's Tasks/Sprints/Graph links), the active nav section so the
+// sidebar can highlight the current view, and the page header's title column.
+// It is embedded on every page view model under the field name Chrome, which
+// the layout.html partials reference (SPEC/WEB.md § UI Framework).
 type chrome struct {
 	Title   string
 	Roadmap string
 	Active  string
+	Heading pageHeading
+}
+
+// pageHeading is the content of the page header's title column, rendered by
+// the single shared pageTitle partial so the pages cannot drift into one
+// convention each (SPEC/WEB.md § Shared Page-Header Partial).
+//
+// Title names the VIEW, never the roadmap: the shell already states the
+// roadmap in the sidebar's section label and in the top navbar, so a third
+// statement in the page title would say the same thing again while leaving the
+// view unnamed. Pretitle is set only by the sprint page, the one page that
+// presents an individual record rather than a view of the roadmap; Badge is
+// that sprint's status, and BadgeClass the colour variant the badge mapping
+// gives it. Lead and LeadCode are the roadmap index's lead line, whose trailing
+// path renders inside a <code> element; every other page leaves them empty.
+//
+// Every field is rendered as text through html/template.
+type pageHeading struct {
+	Pretitle   string
+	Title      string
+	Badge      string
+	BadgeClass string
+	Lead       string
+	LeadCode   string
 }
 
 // indexView is the view model for the roadmap index page. Roadmaps is the
@@ -57,7 +81,15 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	renderHTML(w, "index.html", indexView{
-		Chrome:   chrome{Title: "Groadmap — Roadmaps", Active: "roadmaps"},
+		Chrome: chrome{
+			Title:  "Groadmap — Roadmaps",
+			Active: "roadmaps",
+			Heading: pageHeading{
+				Title:    "Roadmaps",
+				Lead:     "Read-only view of the roadmaps under",
+				LeadCode: "~/.roadmaps/",
+			},
+		},
 		Roadmaps: names,
 	})
 }
@@ -80,7 +112,12 @@ func handleSprints(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
-	data.Chrome = chrome{Title: "Groadmap — " + name, Roadmap: name, Active: "sprints"}
+	data.Chrome = chrome{
+		Title:   "Groadmap — " + name,
+		Roadmap: name,
+		Active:  "sprints",
+		Heading: pageHeading{Title: "Sprints"},
+	}
 	renderHTML(w, "sprints.html", data)
 }
 
@@ -113,7 +150,12 @@ func handleTasks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
-	data.Chrome = chrome{Title: "Groadmap — " + name + " / Tasks", Roadmap: name, Active: "tasks"}
+	data.Chrome = chrome{
+		Title:   "Groadmap — " + name + " / Tasks",
+		Roadmap: name,
+		Active:  "tasks",
+		Heading: pageHeading{Title: "Tasks"},
+	}
 	renderHTML(w, "tasks.html", data)
 }
 
@@ -196,6 +238,7 @@ func handleAudit(w http.ResponseWriter, r *http.Request) {
 		Title:   "Groadmap — " + name + " / Audit",
 		Roadmap: name,
 		Active:  "audit",
+		Heading: pageHeading{Title: "Audit"},
 	}
 	renderHTML(w, "audit.html", data)
 }
@@ -236,10 +279,20 @@ func handleSprint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The one hierarchical page header: it presents an individual record, not a
+	// view of the roadmap, so it alone carries a pretitle, and that pretitle is
+	// the sprint's id — the roadmap name is not repeated there, the shell states
+	// it twice already (SPEC/WEB.md § Shared Page-Header Partial, rule 2).
 	data.Chrome = chrome{
 		Title:   "Groadmap — " + name + " / Sprint #" + strconv.Itoa(id),
 		Roadmap: name,
 		Active:  "sprints",
+		Heading: pageHeading{
+			Pretitle:   "Sprint #" + strconv.Itoa(id),
+			Title:      data.Sprint.Title,
+			Badge:      string(data.Sprint.Status),
+			BadgeClass: sprintStatusBadge(data.Sprint.Status),
+		},
 	}
 	renderHTML(w, "sprint.html", data)
 }
@@ -255,8 +308,13 @@ func handleGraphPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	renderHTML(w, "graph.html", graphPageView{
-		Chrome: chrome{Title: "Groadmap — " + name + " graph", Roadmap: name, Active: "graph"},
-		Name:   name,
+		Chrome: chrome{
+			Title:   "Groadmap — " + name + " graph",
+			Roadmap: name,
+			Active:  "graph",
+			Heading: pageHeading{Title: "Knowledge graph"},
+		},
+		Name: name,
 	})
 }
 

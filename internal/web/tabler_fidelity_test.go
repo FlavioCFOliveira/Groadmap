@@ -525,12 +525,14 @@ func TestTablerFidelity_PageHeaderActionsAreHiddenInPrint(t *testing.T) {
 	seedRoadmapWithAudit(t, name, 3)
 	mux := buildMux()
 
-	// The roadmap index has no page-header actions; every roadmap page does.
+	// Only the three pages whose header carries a control or a hierarchical link
+	// have an actions column at all: the tasks board's search input, the sprint
+	// page's back link, and the graph page's layout dropdown. The index, sprints
+	// and audit headers carry none, which TestPageHeader_SharedPartialAndActions
+	// asserts (SPEC/WEB.md § Shared Page-Header Partial, rule 5).
 	for _, path := range []string{
-		"/roadmaps/" + name,
 		"/roadmaps/" + name + "/tasks",
 		"/roadmaps/" + name + "/sprints/1",
-		"/roadmaps/" + name + "/audit",
 		"/roadmaps/" + name + "/graph",
 	} {
 		body := servePage(t, mux, path)
@@ -744,4 +746,180 @@ func TestTablerFidelity_PageBodyIsTheMainLandmark(t *testing.T) {
 				"makes it the <main> landmark", path)
 		}
 	}
+}
+
+// TestPageHeader_SharedPartialAndActions is the regression guard for
+// SPEC/WEB.md § Shared Page-Header Partial and Acceptance Criterion 109.
+//
+// Before the partial, the six page headers said the same kinds of things in
+// different shapes: the pretitle axis inverted between the graph page and the
+// other roadmap views, the active view was stated as a title suffix on two
+// pages, as the pretitle on one, and not at all on the sprints landing page,
+// and the roadmap name was printed three times on one screen once the top
+// navbar took it. This test fixes what each header now says and what its
+// actions column may hold.
+func TestPageHeader_SharedPartialAndActions(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name := seedRoadmap(t, "platform-core")
+	seedRoadmapWithAudit(t, name, 3)
+	mux := buildMux()
+
+	// The title names the VIEW. The roadmap is named by the sidebar and the top
+	// navbar; a third statement here would repeat what the user can already see.
+	titles := map[string]string{
+		"/":                            `<h2 class="page-title">Roadmaps</h2>`,
+		"/roadmaps/" + name:            `<h2 class="page-title">Sprints</h2>`,
+		"/roadmaps/" + name + "/tasks": `<h2 class="page-title">Tasks</h2>`,
+		"/roadmaps/" + name + "/audit": `<h2 class="page-title">Audit</h2>`,
+		"/roadmaps/" + name + "/graph": `<h2 class="page-title">Knowledge graph</h2>`,
+	}
+	for path, want := range titles {
+		body := servePage(t, mux, path)
+		if !strings.Contains(body, want) {
+			t.Errorf("page %s: header title is not %s", path, want)
+		}
+		// None of these five carries a pretitle: the sprint page is the only
+		// hierarchical header.
+		if strings.Contains(body, "page-pretitle") {
+			t.Errorf("page %s: renders a pretitle; only a sprint's own page carries one", path)
+		}
+	}
+
+	// The sprint page: pretitle Sprint #<id>, title the sprint's own title with
+	// its status badge, and no roadmap name in either.
+	sprintBody := servePage(t, mux, "/roadmaps/"+name+"/sprints/1")
+	if !strings.Contains(sprintBody, `<div class="page-pretitle">Sprint #1</div>`) {
+		t.Errorf("sprint page: pretitle is not the sprint id alone")
+	}
+	// seedRoadmap's sprint 1, verbatim: the title column shows the sprint's own
+	// title, not a composed one, and carries the status badge.
+	const seededSprintTitle = "Ship the read-only web UI for roadmap inspection"
+	wantTitle := `<h2 class="page-title">` + seededSprintTitle +
+		`<span class="badge bg-secondary-lt ms-2">PENDING</span></h2>`
+	if !strings.Contains(sprintBody, wantTitle) {
+		t.Errorf("sprint page: header title is not the sprint's title with its status badge; header=%q",
+			headerRegion(t, "/roadmaps/"+name+"/sprints/1", sprintBody))
+	}
+
+	// The roadmap name belongs to the shell, not to any page title. The check is
+	// on the TITLE COLUMN, not the whole header: the sprint page's back link
+	// legitimately carries the roadmap name inside its URL.
+	for _, path := range allPagePaths(name) {
+		column := titleColumn(t, path, servePage(t, mux, path))
+		if strings.Contains(column, name) {
+			t.Errorf("page %s: the header's title column names the roadmap %q, which the sidebar and the top navbar already state; column=%q", path, name, column)
+		}
+	}
+
+	// The actions column: a control that acts on the page, or the sprint page's
+	// hierarchical back link. Never navigation the sidebar already carries.
+	withActions := map[string]string{
+		"/roadmaps/" + name + "/tasks":     `data-role="task-search"`,
+		"/roadmaps/" + name + "/graph":     `id="layout-select"`,
+		"/roadmaps/" + name + "/sprints/1": `href="/roadmaps/` + name + `"`,
+	}
+	for path, want := range withActions {
+		header := headerRegion(t, path, servePage(t, mux, path))
+		if !strings.Contains(header, `<div class="col-auto ms-auto d-print-none">`) {
+			t.Errorf("page %s: header lost its actions column", path)
+		}
+		if !strings.Contains(header, want) {
+			t.Errorf("page %s: header actions column no longer carries %s", path, want)
+		}
+	}
+	for _, path := range []string{"/", "/roadmaps/" + name, "/roadmaps/" + name + "/audit"} {
+		header := headerRegion(t, path, servePage(t, mux, path))
+		if strings.Contains(header, "col-auto ms-auto") {
+			t.Errorf("page %s: header carries an actions column; it should have none; header=%q", path, header)
+		}
+	}
+
+	// No header links to the knowledge graph: the sidebar lists it on every page.
+	// The retired "Tasks & sprints" label, already forbidden on the index card,
+	// must be gone from the graph page's header too.
+	for _, path := range allPagePaths(name) {
+		header := headerRegion(t, path, servePage(t, mux, path))
+		if strings.Contains(header, "/graph\"") {
+			t.Errorf("page %s: header links to the knowledge-graph page, duplicating the sidebar; header=%q", path, header)
+		}
+		for _, retired := range []string{"Tasks &amp; sprints", "Tasks & sprints", "Knowledge graph<"} {
+			if strings.Contains(header, retired) && path != "/roadmaps/"+name+"/graph" {
+				t.Errorf("page %s: header still shows the retired label %q", path, retired)
+			}
+		}
+	}
+
+	// At the source: no page hand-writes a title element; all six go through the
+	// partial.
+	templates, err := fs.Glob(templatesFS, "templates/*.html")
+	if err != nil {
+		t.Fatalf("listing the embedded templates: %v", err)
+	}
+	pages := 0
+	for _, tmpl := range templates {
+		content, err := templatesFS.ReadFile(tmpl)
+		if err != nil {
+			t.Fatalf("reading the embedded template %s: %v", tmpl, err)
+		}
+		source := string(content)
+		if !strings.Contains(source, `<div class="page-header d-print-none">`) {
+			continue // layout.html: the partials, not a page
+		}
+		pages++
+		if !strings.Contains(source, `{{template "pageTitle" .Chrome.Heading}}`) {
+			t.Errorf("template %s writes a page header without invoking the shared pageTitle partial", tmpl)
+		}
+		for _, handWritten := range []string{`class="page-title"`, `class="page-pretitle"`} {
+			if strings.Contains(source, handWritten) {
+				t.Errorf("template %s hand-writes %s instead of using the shared partial", tmpl, handWritten)
+			}
+		}
+	}
+	if pages != 6 {
+		t.Fatalf("found %d page templates carrying a page header, want 6; the sweep is not covering what it claims", pages)
+	}
+}
+
+// titleColumn returns the header's title column — the <div class="col"> the
+// shared partial renders — so an assertion about what the header SAYS is not
+// satisfied or falsified by the actions column beside it.
+func titleColumn(t *testing.T, path, body string) string {
+	t.Helper()
+
+	header := headerRegion(t, path, body)
+	const open = `<div class="col">`
+	start := strings.Index(header, open)
+	if start < 0 {
+		t.Fatalf("page %s: the page header has no title column, so any assertion on it would be vacuous", path)
+	}
+	rest := header[start:]
+	end := strings.Index(rest, "</div>\n            </div>")
+	if end < 0 {
+		// Fall back to the start of the actions column, or the end of the row.
+		if i := strings.Index(rest, `<div class="col-auto`); i >= 0 {
+			return rest[:i]
+		}
+		return rest
+	}
+	return rest[:end]
+}
+
+// headerRegion returns the markup of a page's page-header block, from the
+// opening <div class="page-header d-print-none"> to the <main> that follows it.
+// Assertions about the header are made on this region so they cannot be
+// satisfied, or falsified, by markup elsewhere on the page.
+func headerRegion(t *testing.T, path, body string) string {
+	t.Helper()
+
+	const open = `<div class="page-header d-print-none">`
+	start := strings.Index(body, open)
+	if start < 0 {
+		t.Fatalf("page %s: no page header in the response, so any assertion on it would be vacuous", path)
+	}
+	rest := body[start:]
+	end := strings.Index(rest, `<main class="page-body">`)
+	if end < 0 {
+		t.Fatalf("page %s: no page body follows the page header", path)
+	}
+	return rest[:end]
 }
