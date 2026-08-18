@@ -7,7 +7,7 @@
 **JSON output is reserved for query operations and record creation.**
 
 - **Query operations (JSON)**: `list`, `ls`, `get`, `next`, `tasks`, `stats`, `show`, `history`, `hist`, `comment-list`, `c-ls`.
-- **Server startup (JSON)**: `web` prints a single JSON object naming the served URL on successful startup (e.g. `{"url": "http://127.0.0.1:8787"}`), then keeps running; see `COMMANDS.md § Web Interface`. While running, the server returns HTTP responses (HTML pages and the JSON graph data endpoint), which are not command stdout output.
+- **Server startup (JSON)**: `web` prints a single JSON object naming the served URL on successful startup (e.g. `{"url": "http://127.0.0.1:8787"}`), then keeps running; see `COMMANDS.md § Web Interface`. While running, the server returns HTTP responses (HTML pages and its JSON endpoints, the graph data endpoint and the task detail endpoint), which are not command stdout output.
 - **Creation operations (JSON)**: `create`, `new`, `comment-add`, `c-add`. These commands return a JSON object containing the ID of the newly created record (e.g., `{"id": 42}`).
 - **Other database modifications (No output)**: Commands that update, delete, or change the state of entities (status, priority, etc.) respond with **no content** on success, signaling completion via exit code `0`.
 - **Help commands (Plain text)**: When no command is provided, or when using `-h` and `--help` flags, the application displays information in **plain text**, following traditional CLI application formats (not JSON).
@@ -484,6 +484,99 @@ Rules:
    counts from the nodes' `labels` arrays and the edge-type inventory and counts
    from the edges' `type` field, client-side, from this same response. That feature
    consumes this shape and does not change it; no field is added here for it.
+
+---
+
+## Task Detail Data
+
+The web interface's task detail endpoint (`GET /roadmaps/{name}/tasks/{id}/data`,
+see `WEB.md § Task Detail Endpoint`) returns one task's full field set together
+with that task's comments, as a single JSON object. The read-only task detail
+modal fetches it when a user opens a task, and fills the page's single modal
+element with the result (see `WEB.md § Task Detail Modal`). The endpoint reads the
+roadmap's `project.db` **read-only**: it writes nothing, alters no schema, and
+produces no audit entry.
+
+This is the canonical specification of the task detail response shape. It
+**composes** the two object shapes this file already defines and introduces no new
+field definitions of its own: the task object is the [Task](#task) shape and each
+comment is the [Task Comment](#task-comment) shape. A value therefore carries the
+same field name, the same type, and the same null convention here as it does in
+the corresponding CLI output.
+
+### Shape
+
+```json
+{
+  "task": {
+    "id": 42,
+    "title": "Implement JWT authentication system",
+    "status": "DOING",
+    "type": "USER_STORY",
+    "functional_requirements": "Users must be able to authenticate securely",
+    "technical_requirements": "Create authentication module with JWT token support",
+    "acceptance_criteria": "Functional login with 24h valid tokens; proper error handling",
+    "created_at": "2026-03-12T10:00:00.000Z",
+    "specialists": "go-elite-developer,security-expert",
+    "started_at": "2026-03-12T10:30:00.000Z",
+    "tested_at": null,
+    "closed_at": null,
+    "completion_summary": null,
+    "parent_task_id": null,
+    "priority": 9,
+    "severity": 0,
+    "subtask_count": 0,
+    "depends_on": [],
+    "blocks": []
+  },
+  "comments": [
+    {
+      "id": 12,
+      "task_id": 42,
+      "type": "FINDING",
+      "body": "The JWT middleware rejects tokens whose exp claim is exactly the current second.",
+      "created_at": "2026-03-12T11:15:00.000Z",
+      "updated_at": null
+    },
+    {
+      "id": 13,
+      "task_id": 42,
+      "type": "DECISION",
+      "body": "Token expiry is compared with !time.Now().Before(exp), so the boundary second expires.",
+      "created_at": "2026-03-12T11:40:00.000Z",
+      "updated_at": "2026-03-12T14:05:00.000Z"
+    }
+  ]
+}
+```
+
+**Notes:**
+
+1. The object carries exactly two members, `task` and `comments`. No other
+   top-level member is added.
+2. `task` is one [Task](#task) object, whose fields are defined for the `Task`
+   model in `MODELS.md § Task`. Every field the task detail modal displays is
+   present, including the long free-text fields (`functional_requirements`,
+   `technical_requirements`, `acceptance_criteria`, and `completion_summary`) and
+   the lifecycle timestamps.
+3. `comments` is an array of [Task Comment](#task-comment) objects, whose fields
+   are defined for the `TaskComment` model in `MODELS.md § Task Comment`.
+4. **Order.** The `comments` array is ordered **oldest first**: `created_at`
+   ascending, with the comment `id` ascending as the tie-breaker. This is exactly
+   the order `rmp task comment-list` returns for the same task (see
+   `DATABASE.md § Comments`), and exactly the order the modal's timeline presents,
+   so one ordering rule serves the CLI and the web interface alike.
+5. **Completeness.** Every comment of the task is present. The endpoint applies no
+   type filter, no count limit, and no pagination.
+6. **A task with no comment yields `[]`, never `null`**, consistent with the
+   empty-array rule in [Implementation Notes](#implementation-notes).
+7. Free-text values preserve the author's interior line breaks as `\n` escapes in
+   JSON, exactly as they do in CLI output.
+8. The response is JSON-encoded and is never interpolated into HTML by the server.
+   Because these values reach the browser as data rather than as server-rendered
+   markup, the client that renders them MUST write every value into the DOM as
+   text and never as markup; that requirement is specified in
+   `WEB.md § Task Detail Modal`.
 
 ---
 

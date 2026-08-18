@@ -412,6 +412,22 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);  -- created_at set by application (ISO 86
 SELECT * FROM tasks ORDER BY priority DESC, created_at ASC;
 ```
 
+**Result-set size:** The statement carries no `LIMIT` and no `OFFSET`. Any bound on
+the number of rows a caller receives is imposed by that caller, not by this query.
+
+**The web tasks page reads this listing unbounded.** The read-only web interface's
+Kanban task board reads every task of the roadmap through this statement, with no
+`LIMIT` applied and no pagination (see `WEB.md § Roadmap Tasks Page`). The display
+default that sizes `rmp task list` output — `-l, --limit <n>`, default `100` (see
+`COMMANDS.md § List Tasks`) — MUST NOT be applied to this read. That default exists
+to size the output of one command invocation, where a caller who wants more asks for
+more and can see that the listing was cut. The board has no such affordance: it
+groups the tasks it reads into five columns and presents a count on each column
+header as a statement of fact about the roadmap. A partial read would therefore not
+merely show fewer cards, it would publish wrong counts as true ones, with nothing on
+the page to reveal that anything was omitted. Reading every row is what makes those
+counts correct by construction.
+
 #### List by Status
 
 ```sql
@@ -994,6 +1010,30 @@ ORDER BY task_id ASC, created_at ASC, id ASC;
 
 This is the one statement in this group that has no `sprint_comments` form, because nothing reads the comments of several sprints at once: the only surface that presents sprint comments presents a single sprint (see `WEB.md § Roadmap Sprint Page`), which the single-parent listing above already serves.
 
+#### Count Comments for Many Parents (Grouped)
+
+Returns how many comments each task of a given set has, in one round trip, without reading any comment body.
+
+```sql
+-- Comment counts for several tasks at once. The IN list is built from the same
+-- number of placeholders as ids, never by string concatenation.
+SELECT task_id, COUNT(*) AS comment_count
+FROM task_comments
+WHERE task_id IN (?, ?, ...)
+GROUP BY task_id
+ORDER BY task_id ASC;
+```
+
+**No row for a task without comments.** A task with no comment produces no group, so the result carries no entry for that task id and the caller reads its count as zero. The query never returns a row whose `comment_count` is `0`.
+
+**Empty id set.** When the id set is empty, the application skips the query entirely instead of issuing a statement with an empty `IN` list, exactly as the grouped listing above does.
+
+**Index.** Served by `idx_task_comments_task_created`, whose leading column is `task_id`; the aggregate needs no further index and reads no `body` value. See Performance Optimization below.
+
+**Use case:** the read-only web interface's Kanban task board shows a comment count on each card but no comment text, because the card's modal loads a task's comments on demand from its own endpoint (see `WEB.md § Task Detail Endpoint`). The board therefore uses this counting query instead of the grouped listing above, and never reads a comment body in order to display a number. The grouped listing remains the query for a surface that renders comment text.
+
+This statement, like the grouped listing, has no `sprint_comments` form: the Roadmap Sprint Page presents one sprint's comment log in full through the single-parent listing, and no surface counts the comments of several sprints at once.
+
 ---
 
 ## Relationships
@@ -1210,7 +1250,7 @@ The following composite indexes are designed to optimize frequently executed que
 **idx_task_comments_task_created and idx_sprint_comments_sprint_created:**
 - Query pattern: `WHERE task_id = ? ORDER BY created_at ASC` (and the `sprint_id` equivalent)
 - The leading column serves the parent lookup and the trailing column serves the listing order, so one index covers both and no sort step is needed
-- The same index serves the grouped `WHERE task_id IN (...)` query the web interface uses to load the comments of every rendered task in one round trip
+- The same index serves both grouped `WHERE task_id IN (...)` forms the web interface uses: the listing that loads the comments of every rendered task in one round trip, and the `GROUP BY task_id` count that the task board uses to show a comment count without reading any body
 - A single index per table is sufficient: every comment listing filters on the parent key, so no query ever scans a comment table without it, and no listing is ordered by any other column
 
 **Grouped sprint resolution needs no new index.** The grouped query that resolves the sprint of many tasks at once (see `Resolve the Sprint of Many Tasks (Grouped)` above) filters with `WHERE sprint_tasks.task_id IN (...)` and joins `sprints` by primary key. The `task_id` lookup is already served by `idx_sprint_tasks_task_id`, the single-column index the `sprint_tasks` DDL declares, and by the implicit unique index SQLite creates for the `UNIQUE` constraint on that column. No index is added for this query, and `idx_sprint_tasks_lookup` (leading column `sprint_id`) is not the index that serves it.

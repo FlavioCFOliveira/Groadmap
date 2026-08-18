@@ -26,6 +26,7 @@
   - [Graph Data Endpoint](#graph-data-endpoint)
   - [Static Assets](#static-assets)
   - [Task Detail Modal](#task-detail-modal)
+  - [Task Detail Endpoint](#task-detail-endpoint)
 - [Read-Only Data Flow](#read-only-data-flow)
   - [Tasks and Sprints from SQLite](#tasks-and-sprints-from-sqlite)
   - [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)
@@ -218,10 +219,12 @@ task detail modal that displays all of the task's fields (see
    `<button>` on every such surface, so the pointer, touch, Enter, and Space all
    open it without any added JavaScript. The modal
    only displays data: it contains no form, no edit control, and no submit action,
-   and it requires no new server endpoint and no new write path. The comments of
-   every task rendered on a page are loaded in one grouped query, never one query
-   per task (see
-   [Task Detail Modal](#task-detail-modal)).
+   and it opens no write path. A page renders **one** modal element, not one per
+   task, and fills it on demand: opening a task fetches that task's fields and
+   comments from the read-only endpoint `GET /roadmaps/{name}/tasks/{id}/data`.
+   Every value that endpoint returns is written into the page as text and never as
+   markup (see [Task Detail Modal](#task-detail-modal) and
+   [Task Detail Endpoint](#task-detail-endpoint)).
 12. The roadmap knowledge-graph page shows the selected roadmap's knowledge graph
    as an interactive node-link visualisation rendered with **D3.js**, read from
    that roadmap's GoGraph store, opened read-only exactly as the `graph query` and
@@ -529,6 +532,7 @@ showing a state that no longer matches the data.
    - the roadmap index page (`/`);
    - the roadmap sprints page (`/roadmaps/{name}`);
    - the roadmap tasks page (`/roadmaps/{name}/tasks`);
+   - the task detail endpoint (`/roadmaps/{name}/tasks/{id}/data`);
    - the roadmap sprint page (`/roadmaps/{name}/sprints/{id}`);
    - the roadmap audit log page (`/roadmaps/{name}/audit`);
    - the knowledge-graph page shell (`/roadmaps/{name}/graph`);
@@ -571,6 +575,7 @@ produced from embedded `html/template` templates. Page routes return HTML
 | `/` | GET, HEAD | Roadmap index | HTML list of roadmaps |
 | `/roadmaps/{name}` | GET, HEAD | Roadmap sprints page (landing; sprint tabs) | HTML |
 | `/roadmaps/{name}/tasks` | GET, HEAD | Roadmap tasks page (Kanban task board) | HTML |
+| `/roadmaps/{name}/tasks/{id}/data` | GET, HEAD | One task's fields and comments, for the task detail modal (see [Task Detail Endpoint](#task-detail-endpoint)) | JSON |
 | `/roadmaps/{name}/sprints/{id}` | GET, HEAD | Roadmap sprint page (all sprint details and the sprint's task list) | HTML |
 | `/roadmaps/{name}/audit` | GET, HEAD | Roadmap audit log page (full audit log, paginated; optional `page` parameter; see [Roadmap Audit Log Page](#roadmap-audit-log-page)) | HTML |
 | `/roadmaps/{name}/graph` | GET, HEAD | Roadmap knowledge-graph page (interactive visualisation) | HTML |
@@ -593,6 +598,15 @@ Path-parameter rules:
    `{id}` that is not the `id` of a sprint belonging to the named roadmap, is
    answered with HTTP `404 Not Found`. The `{name}` part of the sprint route is
    validated by rules 1 and 2 above, exactly as on the other roadmap routes.
+4. `{id}`, on the task detail endpoint `/roadmaps/{name}/tasks/{id}/data`, is a
+   task identifier and follows the same discipline. It MUST be a valid integer; a
+   non-integer `{id}`, or an integer `{id}` that is not the `id` of a task
+   belonging to the named roadmap, is answered with HTTP `404 Not Found`. The
+   `{name}` part is validated by rules 1 and 2 above before any filesystem path is
+   built, exactly as on every other roadmap route, so the endpoint carries the same
+   path-traversal guard as the pages (see
+   [Task Detail Endpoint](#task-detail-endpoint) and
+   [Security and Constraints](#security-and-constraints)).
 
 HTTP status mapping for page and data routes:
 
@@ -601,6 +615,7 @@ HTTP status mapping for page and data routes:
 | Page or data served successfully | 200 |
 | Roadmap name invalid, or roadmap not found | 404 |
 | Sprint `{id}` not a valid integer, or not a sprint of the roadmap | 404 |
+| Task `{id}` not a valid integer, or not a task of the roadmap | 404 |
 | Audit `page` parameter out of range, non-integer, or garbage | 200 (clamped to nearest valid page; see [Roadmap Audit Log Page](#roadmap-audit-log-page)) |
 | Non-read HTTP method on any route | 405 |
 | Unhandled internal error reading data (I/O, corrupt store) | 500 |
@@ -728,6 +743,22 @@ how the `rmp web` process itself terminates.
   Neither the set of columns nor their order depends on the data. Each column
   title is the status identifier exactly as the enum spells it, in upper case
   (`BACKLOG`, `SPRINT`, `DOING`, `TESTING`, `COMPLETED`), and is not translated.
+- **Unbounded read: every task, never a page of them.** The page reads **every**
+  task of the roadmap. The read carries no limit, no page size, and no truncation,
+  and the board has no pagination: whatever the roadmap holds, the board shows.
+
+  The display default that sizes `rmp task list` output — `-l, --limit <n>`,
+  default `100` (see `COMMANDS.md § List Tasks`) — MUST NOT be applied to this
+  read. That default exists to size the output of one command invocation, where the
+  caller who wants more asks for more and can see that the listing was cut. This
+  page offers no such affordance, and it does not merely list: it groups the tasks
+  into five columns and prints a count on each column header as a statement of fact
+  about the roadmap. Under a partial read those counts would be wrong and would
+  still be presented as true, with nothing on the page to reveal that tasks were
+  omitted. Reading every task is therefore what makes the counts in **Count per
+  column** correct by construction, and it is a correctness requirement of this
+  page rather than a performance choice (see `DATABASE.md § Main SQL Queries`,
+  "List All").
 - **Placement.** Each task of the roadmap appears in exactly one column: the
   column of that task's own `status`. The board omits no task and duplicates
   none, so the five column counts sum to the roadmap's total number of tasks. The
@@ -815,8 +846,12 @@ how the `rmp web` process itself terminates.
   canonical.
 - **Clickable card.** Selecting a card opens the read-only task detail modal for
   that task (see [Task Detail Modal](#task-detail-modal)). Opening the modal
-  requires no new route, no new server endpoint, no additional query, and no write
-  path: the modal is populated from the task data already delivered to the page.
+  fetches that task's fields and comments from the read-only endpoint
+  `GET /roadmaps/{name}/tasks/{id}/data` and fills the page's single modal shell
+  with them (see [Task Detail Endpoint](#task-detail-endpoint)). That request is
+  made when the user opens the task, not while the page is rendered, so it adds no
+  query to the page's own read and no per-task cost to the board. It opens no write
+  path.
 
   The card **is** the trigger, and the trigger is a `<button type="button">`, a
   natively activatable element. A pointer click, a touch tap, and the keyboard
@@ -892,25 +927,32 @@ how the `rmp web` process itself terminates.
 
   The presentation MUST reflect the same relationships defined in
   `DATABASE.md § Relationships`; it introduces no new relationship.
-- **Read cost.** The page performs **three** reads and no more:
-  1. the roadmap's full task list;
-  2. **one** grouped query for the comments of every task the page renders (see
-     [Task Detail Modal](#task-detail-modal) and
-     `DATABASE.md § List Comments for Many Parents (Grouped)`);
+- **Read cost.** Rendering the page performs **three** reads and no more:
+  1. the roadmap's full task list, unbounded (see **Unbounded read** above);
+  2. **one** grouped query returning the comment **count** of every task the page
+     renders (see `DATABASE.md § Count Comments for Many Parents (Grouped)`);
   3. **one** grouped query that resolves the sprint of every task the page
      renders, over the whole set of rendered task ids at once (see
      `DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)`).
 
+  The page reads comment **counts**, not comment bodies. The card displays a
+  number, so reading the text of every comment of every task in order to display it
+  would be work the page throws away; a task's comment text is read only when a
+  user opens that task's modal, by the task detail endpoint (see
+  [Task Detail Endpoint](#task-detail-endpoint)). The grouped comment *listing*
+  remains the query for a surface that renders comment text, which this page is not
+  (see `DATABASE.md § List Comments for Many Parents (Grouped)`).
+
   When the roadmap has no task, the page issues the task-list read only: neither
-  the comment query nor the sprint query is issued, because both take a set of
+  the count query nor the sprint query is issued, because both take a set of
   rendered task ids and that set is empty.
 
-  Grouping the tasks into the five columns, counting each column, counting each
-  card's comments, and matching each card to its sprint are done in memory over
-  the results already read. The board adds no further query — none per column and
-  none per card — and never issues one query per task. The number of queries the
-  page issues does not grow with the number of tasks, the number of sprints, or
-  the number of columns.
+  Grouping the tasks into the five columns, counting each column, and matching each
+  card to its sprint are done in memory over the results already read. The board
+  adds no further query — none per column and none per card — and never issues one
+  query per task. The number of queries the page issues does not grow with the
+  number of tasks, the number of sprints, or the number of columns. Opening a modal
+  adds one request for that one task, made only on demand.
 - **Path parameters.** `{name}` is validated against the roadmap-name rules
   exactly as on the other roadmap routes (the path-traversal guard in
   [Routes and Pages](#routes-and-pages) and
@@ -1870,31 +1912,116 @@ tasks.
   edit control, and no submit action of any kind. This includes the comments
   timeline: comments are displayed, never created, edited, or deleted from the
   web interface.
-- **No new server endpoint and no new write path.** The modal is populated from
-  read-only task data already delivered to the page that opens it: the task data
-  and its comments are server-rendered into the page (as auto-escaped HTML) or
-  carried in a JSON data island (JSON-encoded, not interpolated into HTML). The
-  modal introduces no new server endpoint and no new write path; the CLI remains
-  the sole write path (see
+- **One modal element, filled on demand.** A page that shows clickable tasks
+  renders **one** modal element, not one per task. That element is an empty shell:
+  it carries no task's data until a user opens a task. When the user opens one, the
+  page's script fetches that task's data from
+  `GET /roadmaps/{name}/tasks/{id}/data` (see
+  [Task Detail Endpoint](#task-detail-endpoint)) and fills the shell with it. The
+  document the server sends therefore carries the modal's markup once, and its size
+  does not grow with the number of tasks the page shows. A user opens one task at a
+  time, and a task the user never opens is never fetched.
+- **Client-side rendering is text-only (security-critical).** Because the task's
+  values now reach the browser as JSON rather than as server-rendered HTML, the
+  server's `html/template` contextual auto-escaping no longer stands between a
+  stored value and the page structure: the responsibility moves to the script that
+  fills the modal. Therefore **every** value the script writes into the DOM MUST be
+  written through the DOM `textContent` property, or an equivalent that cannot
+  interpret markup. The script MUST NOT use `innerHTML`, MUST NOT use
+  `insertAdjacentHTML`, and MUST NOT build DOM by assigning a string that embeds a
+  value to any markup-parsing sink.
+
+  This governs every caller-authored value on this path, all of which are free text
+  a user wrote through the CLI: the task `title`, `functional_requirements`,
+  `technical_requirements`, `acceptance_criteria`, `completion_summary`,
+  `specialists`, and every comment `body`. A value containing HTML control
+  characters MUST render as the characters themselves and MUST NOT be able to
+  introduce an element, an attribute, or a script into the page. The
+  control-character constraint in `MODELS.md § Task` rejects terminal and
+  bidirectional control characters at write time; it does not reject HTML markup,
+  so it is not a substitute for this rule.
+- **Failure is visible in the modal.** The modal already depends on JavaScript,
+  because the vendored framework is what opens it. When the fetch for a task's data
+  fails — a network error, a non-200 response, or a body that does not parse — the
+  modal MUST open and show a clear error message in place of the task's content,
+  naming that the task's detail could not be loaded. It MUST NOT stay blank, MUST
+  NOT close silently, and MUST NOT leave the previously opened task's data on
+  display. The failure is a read failure and offers no retry that writes anything.
+- **No new write path.** The endpoint the modal fetches is read-only and serves
+  `GET` and `HEAD` only; the modal introduces no write path, and the CLI remains
+  the sole write path (see [Task Detail Endpoint](#task-detail-endpoint) and
   [Security and Constraints](#security-and-constraints)).
-- **One grouped comment query, never N+1.** A page that shows clickable tasks
-  renders one modal per task, so the server MUST load the comments of every
-  rendered task with a single grouped query over the whole set of rendered task
-  ids (`WHERE task_id IN (...)`, ordered by task id then `created_at`; see
-  `DATABASE.md § List Comments for Many Parents (Grouped)`), and MUST NOT issue
-  one query per task. When the page renders no task, the query is not issued at
-  all.
-- **Output escaping.** Roadmap-derived text shown in the modal is escaped
-  consistently with [Security and Constraints](#security-and-constraints):
-  `html/template` contextual auto-escaping for HTML, or JSON encoding for a data
-  island. Task field values that contain HTML control characters cannot alter page
-  structure.
 - **Popup and touch usability.** The modal is a popup overlay (for example a
   Tabler or Bootstrap modal) rendered inside the Tabler admin shell. It MUST be
   usable on touch input and on small viewports: it fits the viewport without
   horizontal overflow, scrolls its content when the task's text is long, and
   offers touch-friendly controls to open and dismiss it (see
   [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
+
+### Task Detail Endpoint
+
+- **Route:** `GET /roadmaps/{name}/tasks/{id}/data`
+- **Purpose:** Feeds the task detail modal. The page holds one empty modal shell,
+  and the page's JavaScript fetches this endpoint when the user opens a task,
+  filling that shell with the returned task's fields and comments (see
+  [Task Detail Modal](#task-detail-modal)).
+- **Path shape.** The endpoint follows the one JSON-endpoint convention this
+  interface already has: the graph page is served at `/roadmaps/{name}/graph` and
+  its JSON at `/roadmaps/{name}/graph/data` (see
+  [Graph Data Endpoint](#graph-data-endpoint)). The `/data` suffix is what marks a
+  path as a JSON payload rather than an HTML page, which keeps the bare
+  `{collection}/{id}` shape reserved for the HTML-page idiom that
+  `/roadmaps/{name}/sprints/{id}` uses. `/roadmaps/{name}/tasks/{id}` is therefore
+  not a route and is answered `404 Not Found`. The endpoint is scoped to a task of
+  a roadmap rather than to a page, so both surfaces that show a clickable task —
+  the tasks page's board and the Roadmap Sprint Page's member-tasks table — use
+  this same endpoint.
+- **Response:** JSON carrying the task's fields and its comments, in the shape
+  specified in `DATA_FORMATS.md § Task Detail Data`. That shape **composes** the
+  object shapes already defined in `DATA_FORMATS.md § Task` and
+  `DATA_FORMATS.md § Task Comment` (whose fields are defined for the `Task` and
+  `TaskComment` models in `MODELS.md § Task` and `MODELS.md § Task Comment`) rather
+  than introducing a new object encoding, so a value carries the same field names,
+  the same types, and the same null conventions here as it does in CLI output.
+  `DATA_FORMATS.md` is canonical for the response shape, including the ordering of
+  the `comments` array (oldest first, the order the modal's timeline presents) and
+  the `[]`-not-`null` convention for a task with no comment; this file does not
+  restate them.
+- **Path parameters.** `{name}` and `{id}` follow the discipline in
+  [Routes and Pages](#routes-and-pages), rules 1, 2, and 4: `{name}` is validated
+  against the roadmap-name rules before any filesystem path is built, and an
+  invalid or nonexistent `{name}`, a non-integer `{id}`, or an `{id}` that is not a
+  task of the named roadmap each return HTTP `404 Not Found`. The 404 for a task of
+  another roadmap is what keeps a roadmap's data reachable only through its own
+  path space.
+- **Methods.** `GET` and `HEAD` only. Any other method is answered HTTP
+  `405 Method Not Allowed`, exactly as on every other route (see
+  [Functional Requirements](#functional-requirements), requirement 4).
+- **Read-only.** The endpoint reads the roadmap's `project.db` through the same
+  read-only open path the pages use, writes nothing, and exposes no write path. It
+  produces no audit entry, because a read is not a change (see
+  [Tasks and Sprints from SQLite](#tasks-and-sprints-from-sqlite)). The `rmp` CLI
+  remains the sole write path.
+- **Reads.** One read for the task and one for that task's comments, for the single
+  task requested. The endpoint is requested only when a user opens a modal, so it
+  is not on the page-rendering path and does not reintroduce a per-task query into
+  page rendering (see [Roadmap Tasks Page](#roadmap-tasks-page), **Read cost**).
+- **Cache policy.** The response is data-derived and therefore carries
+  `Cache-Control: no-store` from the existing header treatment, like every other
+  data-derived response (see [Cache Policy](#cache-policy)).
+- **Security headers and Content-Security-Policy.** The endpoint requires **no**
+  change to the Content-Security-Policy. The policy specified in
+  [Security Headers](#security-headers) already admits `connect-src 'self'` and
+  `script-src 'self'`, which is what permits a same-origin fetch driven by a script
+  served from `/static/`. The graph page already fetches its data this way, so
+  runtime fetch is an established pattern of this interface and not an exception
+  made for this endpoint. No inline script is introduced (see
+  [Frontend Rules](#frontend-rules)).
+- **Output encoding.** The response body is JSON-encoded, never HTML. Task and
+  comment text is carried as JSON string values and is never interpolated into
+  markup by the server. How the client renders those values is
+  security-critical and is specified in [Task Detail Modal](#task-detail-modal),
+  **Client-side rendering is text-only**.
 
 ## Read-Only Data Flow
 
@@ -1922,16 +2049,22 @@ re-presents an earlier, now-stale response in its place.
    audit log page reads the
    roadmap's audit entries ordered by `performed_at` descending, one fixed-size page
    at a time (see [Roadmap Audit Log Page](#roadmap-audit-log-page) and
-   `DATABASE.md § Audit`). The task data the task detail modal
-   displays comes from the same read queries; the modal adds no separate request.
+   `DATABASE.md § Audit`).
    The web interface adds no new schema, no new table, and no new write query.
-   A page that renders task detail modals additionally reads the comments of every
-   task it renders, in one grouped query over the whole set of rendered task ids,
-   and the sprint page reads that sprint's own comments in one further query (see
-   `DATABASE.md § Comments`). Both are existing read queries of the comment
-   feature, issued server-side while the page is rendered; neither adds a request
-   from the browser, and the number of comment queries per page does not grow with
-   the number of tasks shown. The tasks page issues one further grouped query,
+   The data the task detail modal displays is **not** read while the page is
+   rendered: the page carries one empty modal shell, and the task's fields and
+   comments are read only when a user opens that task, by the read-only task detail
+   endpoint (see [Task Detail Endpoint](#task-detail-endpoint)). A page that shows
+   clickable tasks therefore reads, at render time, only what it displays itself:
+   the tasks page reads a comment **count** per rendered task, in one grouped
+   counting query over the whole set of rendered task ids, because its cards show a
+   count and no comment text (see
+   `DATABASE.md § Count Comments for Many Parents (Grouped)`). The Roadmap Sprint
+   Page is unchanged: it presents the sprint's own comment log, so it still reads
+   that sprint's comments in full in one further query (see `DATABASE.md §
+   Comments`). Every one of these is a read query issued server-side while the page
+   is rendered, and the number of them per page does not grow with the number of
+   tasks shown. The tasks page issues one further grouped query,
    which resolves the sprint of every task it renders over the whole set of
    rendered task ids at once, so each board card can name the sprint its task
    belongs to (see `DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)`).
@@ -2611,14 +2744,23 @@ Rules:
    fully offline, and the server makes no outbound network request (see
    [Self-Contained Deliverable](#self-contained-deliverable) and
    [Frontend and Embedded Assets](#frontend-and-embedded-assets)).
-7. **Output escaping.** Roadmap-derived text (task and sprint fields, including
-   the task fields shown in the task detail modal, task and sprint comment bodies,
-   and graph node and edge labels
-   and property values) is rendered through `html/template`'s contextual
+7. **Output escaping.** Roadmap-derived text (task and sprint fields, task and
+   sprint comment bodies, and graph node and edge labels
+   and property values) that the server renders into a page is rendered through
+   `html/template`'s contextual
    auto-escaping, so data that contains HTML control characters cannot alter page
-   structure. Task data and comment data carried to the page as a JSON data island
-   for the task detail modal, and graph data delivered as JSON to the
-   visualisation, are encoded as JSON, not interpolated into HTML.
+   structure. Data delivered as JSON instead — the task detail endpoint's task and
+   comment data, and the graph data delivered to the visualisation — is encoded as
+   JSON and never interpolated into HTML.
+
+   Where a value reaches the browser as JSON, the server's auto-escaping no longer
+   protects the page, so the client script MUST write every such value into the DOM
+   through `textContent` or an equivalent that cannot interpret markup, and MUST
+   NOT use `innerHTML` or `insertAdjacentHTML`. This applies to every value the
+   task detail modal renders and to every value the graph detail panel renders (see
+   [Task Detail Modal](#task-detail-modal), **Client-side rendering is text-only**,
+   and [Frontend Rules](#frontend-rules), rule 6). A stored value can therefore
+   alter neither page structure on the server-rendered path nor on the JSON path.
 8. **Security headers on every HTML response.** Every HTML response carries the
    Content-Security-Policy, X-Content-Type-Options (`nosniff`), X-Frame-Options
    (`DENY`), and Referrer-Policy (`same-origin`) headers specified in
@@ -2697,9 +2839,10 @@ Rules:
    or link that submits a change. `GET /roadmaps/{name}/tasks`
    for a non-existent roadmap, or a request whose `{name}` violates the
    roadmap-name rules, returns HTTP 404 without touching the filesystem outside
-   `~/.roadmaps/`. Acceptance Criteria 81 to 92 define the board itself, and
+   `~/.roadmaps/`. Acceptance Criteria 81 to 92 define the board itself,
    Acceptance Criterion 93 fixes the modal trigger on every surface that shows a
-   clickable task.
+   clickable task, and Acceptance Criteria 94 to 99 fix the task detail endpoint
+   that fills the modal.
 10. `GET /roadmaps/{name}` for a non-existent roadmap returns HTTP 404, and a
     request whose `{name}` violates the roadmap-name rules (for example
     `../etc`) returns HTTP 404 without touching the filesystem outside
@@ -2742,8 +2885,11 @@ Rules:
     `priority`, `severity`, `functional_requirements`, `technical_requirements`,
     `acceptance_criteria`, `specialists`, `completion_summary`, `parent_task_id`,
     `subtask_count`, `depends_on`, `blocks`, `created_at`, `started_at`,
-    `tested_at`, `closed_at`). The modal is read-only: it contains no form, no edit
-    control, and no submit action, and it triggers no new server request and no new
+    `tested_at`, `closed_at`). The page carries one modal element, not one per
+    task, and opening a task fetches that task's fields and comments from
+    `GET /roadmaps/{name}/tasks/{id}/data` to fill it. The modal is read-only: it
+    contains no form, no edit
+    control, and no submit action, and it opens no
     write path. The modal opens from the pointer, from touch, and from the keyboard
     on every surface that shows a clickable task, and the modal and the sprint tabs
     are usable on touch input and on a small phone-sized viewport.
@@ -3170,12 +3316,17 @@ Rules:
 69. The sprint Comments card shows only the sprint's own comments. A comment written
     against a member task appears in that task's detail modal and nowhere in the
     Comments card, and no aggregate of task comments is presented at sprint level.
-70. Rendering a page with N clickable tasks issues exactly one query for the comments
-    of all N tasks, not N queries: an instrumented count of comment queries for a
-    tasks page or a sprint page is 1 for the task comments (plus 1 for the sprint's
-    own comments on the sprint page), independent of N. A page that renders no task
-    issues no task-comment query at all (see
-    `DATABASE.md § List Comments for Many Parents (Grouped)`).
+70. Rendering a page that shows N clickable tasks never issues one comment query per
+    task: an instrumented count of comment queries is independent of N on every such
+    page. On the tasks page the count is 1 — a single grouped **counting** query for
+    all N cards, and no comment-listing query at all, because the board shows counts
+    and no comment text (see
+    `DATABASE.md § Count Comments for Many Parents (Grouped)`). On the sprint page it
+    is 1 for that sprint's own comments, which the page renders in full as a log (see
+    `DATABASE.md § Comments`). A page that renders no task issues no task-comment
+    query of either kind. A task's comment bodies are read only when a user opens
+    that task's modal, one task at a time (see
+    [Task Detail Endpoint](#task-detail-endpoint)).
 71. The comments timeline uses only the Tabler Timeline classes already present in
     the vendored `tabler.min.css` (`timeline`, `timeline-event`,
     `timeline-event-icon`, `timeline-event-card`). The feature adds no CSS file, no
@@ -3240,7 +3391,13 @@ Rules:
     column matching that task's `status`. No task is omitted and no task is
     duplicated: for a roadmap with N tasks, the five column counts sum to exactly N,
     and a task whose status changes appears only in the column of its new status on
-    the next request.
+    the next request. This holds for every N, with no upper bound: the page's task
+    read carries no limit and no pagination, and the `rmp task list` display default
+    of `100` is not applied to it. For a roadmap holding more than 100 tasks the
+    board renders all of them and the column counts still sum to N, so no count the
+    page prints is ever a count of a truncated result (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Unbounded read**, and
+    `DATABASE.md § Main SQL Queries`, "List All").
 83. Each column header shows the status name together with a Tabler badge carrying
     the number of tasks in that column. A column holding no task shows the count
     `0`, and the count of each column equals the number of cards rendered in it.
@@ -3266,8 +3423,9 @@ Rules:
     none of the six indicators renders no metadata footer.
 86. Selecting a board card opens the read-only task detail modal for that task,
     which displays that task's full field set as specified in Acceptance Criterion
-    15. Opening the modal issues no new server request, uses no new endpoint, runs
-    no additional query, and reaches no write path. The card is a
+    15. Opening the modal fetches that task's data from
+    `GET /roadmaps/{name}/tasks/{id}/data` and reaches no write path; that request
+    is made on demand, not while the page renders. The card is a
     `<button type="button">`, so it is focusable and activatable natively: a
     pointer click, a touch tap, Enter, and Space each open the modal, and no
     JavaScript is added to make that work. The card carries no `tabindex` and no
@@ -3299,16 +3457,18 @@ Rules:
     [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
     rule 9).
 89. Rendering the tasks page for a roadmap with at least one task issues exactly
-    three reads: the roadmap's full task list, one grouped query for the comments
-    of every task rendered, and one grouped query that resolves the sprint of every
-    task rendered. For a roadmap with no task the page issues the task-list read
+    three reads: the roadmap's full task list, one grouped query returning the
+    comment **count** of every task rendered, and one grouped query that resolves
+    the sprint of every task rendered. The page reads no comment **body**: an
+    instrumented count of comment-listing queries for the tasks page is 0, and of
+    comment-counting queries is 1, independent of the number of tasks. For a
+    roadmap with no task the page issues the task-list read
     only, and neither grouped query. Grouping the tasks into the five columns,
-    counting each column, counting each card's comments, and matching each card to
+    counting each column, and matching each card to
     its sprint are performed in memory over the results already
     read, so the board adds no further query — none per column and none per card —
     and the query count is independent of the number of tasks, sprints, and columns
-    (Acceptance Criterion 70 continues to hold; see
-    `DATABASE.md § List Comments for Many Parents (Grouped)` and
+    (see `DATABASE.md § Count Comments for Many Parents (Grouped)` and
     `DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)`).
 90. The board's markup obeys the rules already in force and introduces no exception:
     no template carries a presentational inline `style` attribute, and every class
@@ -3363,10 +3523,63 @@ Rules:
     [Task Detail Modal](#task-detail-modal),
     [Roadmap Tasks Page](#roadmap-tasks-page), and
     [Sprint Detail Sub-Template](#sprint-detail-sub-template)).
+94. `GET /roadmaps/{name}/tasks/{id}/data` for a task of an existing roadmap returns
+    HTTP 200 and JSON in the shape defined in `DATA_FORMATS.md § Task Detail Data`:
+    an object with exactly two members, `task` carrying that task's full field set
+    and `comments` carrying that task's comments, ordered oldest first — the same
+    order `rmp task comment-list` returns and the same order the modal's timeline
+    shows — with every comment present, no type filter and no count limit, and `[]`
+    for a task with no comment. The shape composes the `Task` and `Task Comment`
+    objects `DATA_FORMATS.md` already defines and introduces no new object shape
+    (see [Task Detail Endpoint](#task-detail-endpoint)).
+95. The task detail endpoint enforces the same path-parameter discipline as every
+    other roadmap route: a request whose `{name}` violates the roadmap-name rules,
+    or names a roadmap that does not exist, returns HTTP 404 without touching the
+    filesystem outside `~/.roadmaps/`; a non-integer `{id}` returns HTTP 404; and an
+    integer `{id}` that is a task of some other roadmap, or of no roadmap, returns
+    HTTP 404 rather than that task's data. The endpoint serves `GET` and `HEAD` only
+    and answers any other method with HTTP 405. Its response carries
+    `Cache-Control: no-store`, like every other data-derived response (Acceptance
+    Criterion 37 continues to hold).
+96. The served tasks page contains exactly **one** modal element, not one per task.
+    The document therefore no longer carries any task's modal content, and its size
+    does not grow with the per-task modal content: measured against the recorded
+    baseline of 930,188 bytes for 100 tasks — of which 774,484 bytes, 83 percent,
+    were the rendered modals — the document for the same 100 tasks is smaller by
+    substantially the whole of that modal share, and the remaining size grows only
+    with the cards. Opening a card fetches that task's data and fills the single
+    modal with every field the modal presented before, plus that task's comments in
+    the specified order: nothing the modal displayed is lost (see
+    [Task Detail Modal](#task-detail-modal)).
+97. Every value the modal script writes into the DOM is written as text, never as
+    markup: the script uses `textContent` or an equivalent that cannot interpret
+    markup, and uses neither `innerHTML` nor `insertAdjacentHTML`. A task whose
+    `title`, `completion_summary`, requirement free-text, or comment `body` contains
+    HTML markup renders that markup as visible characters and introduces no element,
+    no attribute, and no script into the page. This is proven by a test that fails if
+    the script writes such a value as markup, covering at least a hostile task title
+    and a hostile comment body (see [Task Detail Modal](#task-detail-modal),
+    **Client-side rendering is text-only**, and
+    [Security and Constraints](#security-and-constraints), rule 7).
+98. The Content-Security-Policy is unchanged by the task detail endpoint: it remains
+    exactly the value fixed in Acceptance Criterion 33, whose `connect-src 'self'`
+    and `script-src 'self'` already admit a same-origin fetch driven by a script
+    served from `/static/`. No inline script is introduced, every script the page
+    loads still comes from `/static/`, and the page makes no request to any origin
+    but its own (Acceptance Criteria 23 and 33 continue to hold).
+99. When the fetch for a task's data fails — a network error, a non-200 response, or
+    a body that does not parse — the modal opens and shows a clear error message in
+    place of the task's content, stating that the task's detail could not be loaded.
+    It does not stay blank, does not close silently, and does not leave the
+    previously opened task's data on display. The failure path writes nothing (see
+    [Task Detail Modal](#task-detail-modal), **Failure is visible in the modal**).
 
 ## See Also
 
 - CLI command contract for `web` → `COMMANDS.md § Web Interface`
+- Task detail endpoint JSON shape (the task object and its comments) →
+  `DATA_FORMATS.md § Task Detail Data`, composed from `DATA_FORMATS.md § Task` and
+  `DATA_FORMATS.md § Task Comment`
 - Graph view data JSON shape → `DATA_FORMATS.md § Graph View Data`
 - Graph element and property-type JSON mapping reused by the graph data endpoint
   → `DATA_FORMATS.md § Graph Query Result`
