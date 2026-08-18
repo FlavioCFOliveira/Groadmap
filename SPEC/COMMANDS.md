@@ -67,7 +67,7 @@ The comment subcommands of the `task` and `sprint` families (`comment-add`, `com
 | Field | Required | Max Length | Description |
 |-------|----------|------------|-------------|
 | `type` | Yes | - | Comment classification. Mandatory, no default. Task comments accept `FINDING`, `HYPOTHESIS`, `TEST`, `DECISION`, `PROGRESS`, `UPDATE`, `NOTE`; sprint comments accept `FINDING`, `DECISION`, `PROGRESS`, `UPDATE`. See `MODELS.md § Comment Type` for the canonical list |
-| `body` | Yes | 4096 chars | Comment text. Supplied through `--body` or, when that flag is absent, read in full from standard input |
+| `body` | Yes | 4096 chars | Comment text. Supplied through `--body` or, when that flag is absent, read from standard input under the bounded read |
 
 A `type` value outside the set the entity accepts is rejected with exit code 6 and a message naming the valid set for that entity. The `body` is subject to the Control-Character Constraint below.
 
@@ -76,10 +76,20 @@ A `type` value outside the set the entity accepts is rejected with exit code 6 a
 The comment `body` is supplied either through the `--body` flag or on standard input. This is the same input mechanism the `graph` subcommands use for `--query` (see `GRAPH.md § Cypher Input Source and Precedence`); there is no `--body-file` flag and no path argument, so the commands open no file. The rules are:
 
 1. When `--body` is present and its value is neither empty nor whitespace only, that value is the body and standard input is **not** read.
-2. When `--body` is absent **and no other change was requested**, the entire standard input is read to EOF and used as the body. On `comment-add` no other change is ever possible, so an absent `--body` always means "read standard input". On `comment-edit` the body is read from standard input only when `--type` is also absent; when `--type` is present and `--body` is absent, only the type changes and standard input is not read, so a type-only edit never blocks waiting for input.
+2. When `--body` is absent **and no other change was requested**, the body is read from standard input. The read is bounded and is not a read to EOF: see **Bounded standard-input read** below. On `comment-add` no other change is ever possible, so an absent `--body` always means "read standard input". On `comment-edit` the body is read from standard input only when `--type` is also absent; when `--type` is present and `--body` is absent, only the type changes and standard input is not read, so a type-only edit never blocks waiting for input.
 3. When the body must come from standard input and standard input is empty, whitespace only, or not connected, the command fails with exit code 2. The message differs by subcommand, because the two subcommands are missing different things: on `comment-add` a body is mandatory and the message is "Error: required parameter missing: no comment body supplied"; on `comment-edit` the absent body means no change was requested at all, and the message is "Error: required parameter missing: at least one of --type or --body is required".
 4. When `--body` is present but its value is empty, whitespace only, or missing (no following token, or the following token is itself a flag), the command fails with exit code 2 and the message "Error: required parameter missing: no comment body supplied", in both subcommands. The command does not silently fall back to standard input in this case.
 5. Leading and trailing whitespace is trimmed before validation and before storage. Interior line breaks are preserved: a comment body is expected to be multi-line.
+
+**Bounded standard-input read.** When the body comes from standard input, the command does NOT read the stream to EOF. It reads only until the outcome is already decided, and it never retains more than the 4096-character cap while doing so:
+
+- While the body read so far still fits within the cap, reading continues.
+- The moment the body cannot fit within the cap, the verdict is fixed, because no later byte can change it. The command stops reading and fails with exit code 6 and the message "Error: field exceeds maximum size: body exceeds maximum length of 4096 characters".
+- Peak memory is therefore bounded by the cap and does not grow with the amount the writer sends.
+
+This is a security property and not an implementation detail: an oversized body is refused without ever being buffered, so a producer that writes without limit cannot drive the command's memory. A producer still writing when the command exits observes the usual broken-pipe result. The verdict the user sees is exactly the verdict a read-to-EOF implementation would reach; only the reading and the memory profile differ.
+
+The rule is identical on all four subcommands that accept a body on standard input: `task comment-add`, `task comment-edit`, `sprint comment-add`, and `sprint comment-edit`.
 
 **Validation order.** `--type` is validated — for presence on `comment-add`, and for value in both subcommands — before the body is resolved, so a missing or invalid type fails immediately instead of leaving the command waiting on standard input for a body it would reject anyway.
 
@@ -410,7 +420,7 @@ rmp task new -r <name> -t <title> -fr <fr> -tr <tr> -ac <ac>
 | `functional-requirements` | Required, max 4096 chars | "Functional requirements are required and must not exceed 4096 characters" |
 | `technical-requirements` | Required, max 4096 chars | "Technical requirements are required and must not exceed 4096 characters" |
 | `acceptance-criteria` | Required, max 4096 chars | "Acceptance criteria are required and must not exceed 4096 characters" |
-| `type` | One of 10 valid values | "Error: invalid task type: <value>" | 6 |
+| `type` | One of 10 valid values | "Error: invalid task type: <value>" |
 
 **Output (success):** `{"id": 42}`, exit code 0.
 
@@ -744,7 +754,7 @@ rmp task subtasks -r <name> <id>
 | Scenario | Exit Code | stderr |
 |----------|-----------|--------|
 | Task not found | 4 | `Error: not found: task N` |
-| Invalid ID format | 2 | `Error: invalid task ID: X` |
+| Invalid ID format | 2 | `Error: invalid input: invalid task ID: "X" (must be a positive integer)` |
 
 ---
 
@@ -816,7 +826,7 @@ rmp task blockers -r <name> <id>
 | Scenario | Exit Code | stderr |
 |----------|-----------|--------|
 | Task not found | 4 | `Error: not found: task N` |
-| Invalid ID format | 2 | `Error: invalid task ID: X` |
+| Invalid ID format | 2 | `Error: invalid input: invalid task ID: "X" (must be a positive integer)` |
 
 ---
 
@@ -837,7 +847,7 @@ rmp task blocking -r <name> <id>
 | Scenario | Exit Code | stderr |
 |----------|-----------|--------|
 | Task not found | 4 | `Error: not found: task N` |
-| Invalid ID format | 2 | `Error: invalid task ID: X` |
+| Invalid ID format | 2 | `Error: invalid input: invalid task ID: "X" (must be a positive integer)` |
 
 ---
 
@@ -847,7 +857,7 @@ rmp task blocking -r <name> <id>
 rmp task reopen -r <name> <ids>
 ```
 
-**Description:** Returns one or more tasks to `BACKLOG` status, clearing all lifecycle timestamps (`started_at`, `tested_at`, `closed_at`). Also removes the task from its sprint association (`sprint_tasks`). Accepts comma-separated IDs for bulk operations.
+**Description:** Returns one or more tasks to `BACKLOG` status, clearing all lifecycle timestamps (`started_at`, `tested_at`, `closed_at`) and the `completion_summary`. Also removes the task from its sprint association (`sprint_tasks`). Accepts comma-separated IDs for bulk operations.
 
 **Valid source states:** `SPRINT`, `DOING`, `TESTING`, `COMPLETED` — any non-BACKLOG state.
 
@@ -857,7 +867,7 @@ All IDs are validated before any transitions are applied. If any ID is invalid, 
 
 | Scenario | Exit Code | Behavior | Output |
 |----------|-----------|----------|--------|
-| Task transitions to BACKLOG | 0 | Timestamps cleared; sprint_tasks row removed if applicable | No stdout |
+| Task transitions to BACKLOG | 0 | Timestamps and `completion_summary` cleared; sprint_tasks row removed if applicable | No stdout |
 | Task already in BACKLOG | 0 | No change | Informational message to stderr |
 | Invalid task ID | 4 | **No tasks modified** | Error to stderr |
 
@@ -952,13 +962,13 @@ rmp task comment-add -r <name> <task-id> --type FINDING < finding.txt
 **Options:**
 - `-r, --roadmap <name>` - REQUIRED. Target roadmap.
 - `-y, --type <TYPE>` - REQUIRED. Comment type. One of `FINDING`, `HYPOTHESIS`, `TEST`, `DECISION`, `PROGRESS`, `UPDATE`, `NOTE`. See `MODELS.md § Comment Type` for the canonical list and the meaning of each value.
-- `-b, --body <text>` - Comment text, maximum 4096 characters. When absent, the body is read in full from standard input (see `Comment Body Input Source and Precedence` above).
+- `-b, --body <text>` - Comment text, maximum 4096 characters. When absent, the body is read from standard input under the bounded read (see `Comment Body Input Source and Precedence` above).
 
 **Validation Rules:**
 
 | Field | Constraint | Error Message (stderr) | Exit Code |
 |-------|------------|------------------------|-----------|
-| `task-id` | Positive integer | "Error: invalid input: invalid task ID: X" | 2 |
+| `task-id` | Positive integer | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" | 2 |
 | `type` | Present | "Error: required parameter missing: --type" | 2 |
 | `type` | One of the seven task values | "Error: validation error: invalid comment type \"X\" for a task comment; valid types: FINDING, HYPOTHESIS, TEST, DECISION, PROGRESS, UPDATE, NOTE" | 6 |
 | `body` | Supplied via `--body` or stdin | "Error: required parameter missing: no comment body supplied" | 2 |
@@ -986,7 +996,7 @@ Steps 3 and 4 both precede step 5 deliberately: a missing or invalid `--type` is
 | Task not found | 4 | `Error: resource not found: task 42 not found` |
 | Roadmap not specified | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
 | Roadmap not found | 4 | `Error: resource not found: roadmap "X" not found` |
-| Invalid task ID format | 2 | `Error: invalid input: invalid task ID: X` |
+| Invalid task ID format | 2 | `Error: invalid input: invalid task ID: "X" (must be a positive integer)` |
 | Missing task ID | 2 | `Error: required parameter missing: task ID required` |
 | Unknown flag | 2 | `Error: invalid input: unknown flag: --foo` |
 | Database failure | 1 | `Error: database error: <detail>` |
@@ -1023,7 +1033,7 @@ rmp task c-ls -r <name> <task-id> [-y <TYPE>]
 |----------|-----------|--------|
 | Task not found | 4 | `Error: resource not found: task 42 not found` |
 | Invalid `--type` value | 6 | `Error: validation error: invalid comment type "X" for a task comment; valid types: FINDING, HYPOTHESIS, TEST, DECISION, PROGRESS, UPDATE, NOTE` |
-| Invalid task ID format | 2 | `Error: invalid input: invalid task ID: X` |
+| Invalid task ID format | 2 | `Error: invalid input: invalid task ID: "X" (must be a positive integer)` |
 | Missing task ID | 2 | `Error: required parameter missing: task ID required` |
 | Roadmap not specified | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
 
@@ -1049,7 +1059,7 @@ rmp task comment-edit -r <name> <comment-id> < revised.txt
 **Options:**
 - `-r, --roadmap <name>` - REQUIRED. Target roadmap.
 - `-y, --type <TYPE>` - New comment type. One of the seven task values.
-- `-b, --body <text>` - New comment text, maximum 4096 characters. When `--body` is absent and `--type` is also absent, the new body is read in full from standard input; when `--type` is present and `--body` is absent, the body is left unchanged and standard input is not read (see `Comment Body Input Source and Precedence` above).
+- `-b, --body <text>` - New comment text, maximum 4096 characters. When `--body` is absent and `--type` is also absent, the new body is read from standard input under the bounded read; when `--type` is present and `--body` is absent, the body is left unchanged and standard input is not read (see `Comment Body Input Source and Precedence` above).
 
 **Replacement semantics:** The edit replaces the stored body in place and stamps `updated_at` with the edit's timestamp, so the JSON output of a later listing shows that the comment was altered. The previous text is not retained anywhere and cannot be recovered. This is a deliberate trade-off: the audit log records that an edit happened, not what it replaced.
 
@@ -1057,7 +1067,7 @@ rmp task comment-edit -r <name> <comment-id> < revised.txt
 
 | Field | Constraint | Error Message (stderr) | Exit Code |
 |-------|------------|------------------------|-----------|
-| `comment-id` | Positive integer | "Error: invalid input: invalid comment ID: X" | 2 |
+| `comment-id` | Positive integer | "Error: invalid input: invalid comment ID: \"X\" (must be a positive integer)" | 2 |
 | change | At least one change requested: a `--type` value, a `--body` value, or a body on standard input | "Error: required parameter missing: at least one of --type or --body is required" | 2 |
 | `type` | One of the seven task values | "Error: validation error: invalid comment type \"X\" for a task comment; valid types: FINDING, HYPOTHESIS, TEST, DECISION, PROGRESS, UPDATE, NOTE" | 6 |
 | `body` | `--body` present but empty or whitespace only | "Error: required parameter missing: no comment body supplied" | 2 |
@@ -1083,7 +1093,7 @@ rmp task comment-edit -r <name> <comment-id> < revised.txt
 |----------|-----------|--------|
 | Comment not found | 4 | `Error: resource not found: task comment 13 not found` |
 | Roadmap not specified | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
-| Invalid comment ID format | 2 | `Error: invalid input: invalid comment ID: X` |
+| Invalid comment ID format | 2 | `Error: invalid input: invalid comment ID: "X" (must be a positive integer)` |
 | Missing comment ID | 2 | `Error: required parameter missing: comment ID required` |
 | Database failure | 1 | `Error: database error: <detail>` |
 
@@ -1118,7 +1128,7 @@ rmp task c-rm -r <name> <comment-id>
 |----------|-----------|--------|
 | Comment not found | 4 | `Error: resource not found: task comment 13 not found` |
 | Roadmap not specified | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
-| Invalid comment ID format | 2 | `Error: invalid input: invalid comment ID: X` |
+| Invalid comment ID format | 2 | `Error: invalid input: invalid comment ID: "X" (must be a positive integer)` |
 | Missing comment ID | 2 | `Error: required parameter missing: comment ID required` |
 | Database failure | 1 | `Error: database error: <detail>` |
 
@@ -1729,13 +1739,13 @@ rmp sprint comment-add -r <name> <sprint-id> --type DECISION < decision.txt
 **Options:**
 - `-r, --roadmap <name>` - REQUIRED. Target roadmap.
 - `-y, --type <TYPE>` - REQUIRED. Comment type. One of `FINDING`, `DECISION`, `PROGRESS`, `UPDATE`. See `MODELS.md § Comment Type` for the canonical list and the meaning of each value.
-- `-b, --body <text>` - Comment text, maximum 4096 characters. When absent, the body is read in full from standard input (see `Comment Body Input Source and Precedence` above).
+- `-b, --body <text>` - Comment text, maximum 4096 characters. When absent, the body is read from standard input under the bounded read (see `Comment Body Input Source and Precedence` above).
 
 **Validation Rules:**
 
 | Field | Constraint | Error Message (stderr) | Exit Code |
 |-------|------------|------------------------|-----------|
-| `sprint-id` | Positive integer | "Error: invalid input: invalid sprint ID: X" | 2 |
+| `sprint-id` | Positive integer | "Error: invalid input: invalid sprint ID: \"X\" (must be a positive integer)" | 2 |
 | `type` | Present | "Error: required parameter missing: --type" | 2 |
 | `type` | One of the four sprint values | "Error: validation error: invalid comment type \"X\" for a sprint comment; valid types: FINDING, DECISION, PROGRESS, UPDATE" | 6 |
 | `body` | Supplied via `--body` or stdin | "Error: required parameter missing: no comment body supplied" | 2 |
@@ -1753,7 +1763,7 @@ rmp sprint comment-add -r <name> <sprint-id> --type DECISION < decision.txt
 | Sprint not found | 4 | `Error: resource not found: sprint 7 not found` |
 | Roadmap not specified | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
 | Roadmap not found | 4 | `Error: resource not found: roadmap "X" not found` |
-| Invalid sprint ID format | 2 | `Error: invalid input: invalid sprint ID: X` |
+| Invalid sprint ID format | 2 | `Error: invalid input: invalid sprint ID: "X" (must be a positive integer)` |
 | Missing sprint ID | 2 | `Error: required parameter missing: sprint ID required` |
 | Unknown flag | 2 | `Error: invalid input: unknown flag: --foo` |
 | Database failure | 1 | `Error: database error: <detail>` |
@@ -1790,7 +1800,7 @@ rmp sprint c-ls -r <name> <sprint-id> [-y <TYPE>]
 |----------|-----------|--------|
 | Sprint not found | 4 | `Error: resource not found: sprint 7 not found` |
 | Invalid `--type` value | 6 | `Error: validation error: invalid comment type "X" for a sprint comment; valid types: FINDING, DECISION, PROGRESS, UPDATE` |
-| Invalid sprint ID format | 2 | `Error: invalid input: invalid sprint ID: X` |
+| Invalid sprint ID format | 2 | `Error: invalid input: invalid sprint ID: "X" (must be a positive integer)` |
 | Missing sprint ID | 2 | `Error: required parameter missing: sprint ID required` |
 | Roadmap not specified | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
 
@@ -1824,7 +1834,7 @@ rmp sprint comment-edit -r <name> <comment-id> < revised.txt
 
 | Field | Constraint | Error Message (stderr) | Exit Code |
 |-------|------------|------------------------|-----------|
-| `comment-id` | Positive integer | "Error: invalid input: invalid comment ID: X" | 2 |
+| `comment-id` | Positive integer | "Error: invalid input: invalid comment ID: \"X\" (must be a positive integer)" | 2 |
 | change | At least one change requested: a `--type` value, a `--body` value, or a body on standard input | "Error: required parameter missing: at least one of --type or --body is required" | 2 |
 | `type` | One of the four sprint values | "Error: validation error: invalid comment type \"X\" for a sprint comment; valid types: FINDING, DECISION, PROGRESS, UPDATE" | 6 |
 | `body` | `--body` present but empty or whitespace only | "Error: required parameter missing: no comment body supplied" | 2 |
@@ -1841,7 +1851,7 @@ rmp sprint comment-edit -r <name> <comment-id> < revised.txt
 |----------|-----------|--------|
 | Comment not found | 4 | `Error: resource not found: sprint comment 4 not found` |
 | Roadmap not specified | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
-| Invalid comment ID format | 2 | `Error: invalid input: invalid comment ID: X` |
+| Invalid comment ID format | 2 | `Error: invalid input: invalid comment ID: "X" (must be a positive integer)` |
 | Missing comment ID | 2 | `Error: required parameter missing: comment ID required` |
 | Database failure | 1 | `Error: database error: <detail>` |
 
@@ -1874,7 +1884,7 @@ rmp sprint c-rm -r <name> <comment-id>
 |----------|-----------|--------|
 | Comment not found | 4 | `Error: resource not found: sprint comment 4 not found` |
 | Roadmap not specified | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
-| Invalid comment ID format | 2 | `Error: invalid input: invalid comment ID: X` |
+| Invalid comment ID format | 2 | `Error: invalid input: invalid comment ID: "X" (must be a positive integer)` |
 | Missing comment ID | 2 | `Error: required parameter missing: comment ID required` |
 | Database failure | 1 | `Error: database error: <detail>` |
 
@@ -2133,7 +2143,7 @@ rmp stats -r <name>
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
-| Roadmap not specified | 3 | "Error: no roadmap selected: no roadmap selected" |
+| Roadmap not specified | 3 | "Error: no roadmap selected: use -r <name> or --roadmap <name>" |
 | Roadmap not found | 4 | "Error: resource not found: roadmap 'name'" |
 
 **Behavior Notes:**
@@ -2462,7 +2472,7 @@ interface introduces no new codes.
 | `--port` out of range | 6 | "Error: --port must be an integer between 0 and 65535 (got 70000)" |
 | `--port` not an integer | 6 | "Error: --port must be an integer between 0 and 65535 (got \"notanumber\")" |
 | Unknown flag | 2 | "Error: unknown flag: --foo" |
-| Data directory unreadable | 1 | "Error: cannot read data directory ~/.roadmaps: <detail>" |
+| Data directory unreadable | 1 | "Error: reading data directory <absolute path of ~/.roadmaps>: database error" |
 
 ---
 

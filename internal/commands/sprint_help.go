@@ -719,10 +719,10 @@ Valid comment types (for -y, --type on the comment-* subcommands):
 
 Optional:
   -b, --body <text>               Comment text, max 4096 characters. When this
-                                  flag is absent the body is read in full from
-                                  standard input (a heredoc, a pipe or a file
-                                  redirect); supplying neither the flag nor a
-                                  non-empty standard input fails with exit 2.
+                                  flag is absent the body is read from standard
+                                  input under a bounded read (a heredoc, a pipe
+                                  or a file redirect); supplying neither the flag
+                                  nor a non-empty standard input fails with exit 2.
                                   Leading and trailing whitespace is trimmed;
                                   interior line breaks are preserved.
 
@@ -840,7 +840,7 @@ Optional:
   -y, --type <TYPE>               New comment type; one of the values above
   -b, --body <text>               New comment text, max 4096 characters. When
                                   --body is absent AND --type is absent, the
-                                  new body is read in full from standard input,
+                                  new body is read from standard input,
                                   so 'comment-edit <comment-id> < revised.txt'
                                   is a valid edit. When --type is present and
                                   --body is absent, the body is left unchanged

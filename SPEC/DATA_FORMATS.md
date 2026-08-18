@@ -631,6 +631,16 @@ a sprint rejects (see `HELP.md § Comment subcommand help specifics`).
 }
 ```
 
+**Every published value carries a description.** Each element of `values` MUST
+carry a `description` that is not empty after trimming whitespace. The rule
+applies to every enum the contract publishes, not only to the one shown above,
+and it holds however many values the enum has. A value published without a
+description is a value an agent can see but cannot interpret, and the agent gets
+no signal that anything is missing: it cannot tell what the value means, or how
+it differs from the value beside it. The contract is the only description of the
+CLI such an agent has, so the description travels with the value rather than
+being left to the value's name.
+
 #### `global_flags` array entry
 
 Same shape as `commands[].flags[]` (see below). Global flags include at

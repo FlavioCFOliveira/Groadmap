@@ -209,8 +209,8 @@ var auditOperationDescriptions = map[models.AuditOperation]string{
 		"transitions are logged as `SPRINT_ADD_TASK` / `SPRINT_REMOVE_TASK`).",
 	models.OpTaskPriorityChange: "Priority change (0-9) via `task priority`.",
 	models.OpTaskSeverityChange: "Severity change (0-9) via `task severity`.",
-	models.OpTaskReopen: "Task returned to BACKLOG via `task reopen`; lifecycle timestamps cleared and " +
-		"sprint_tasks row removed.",
+	models.OpTaskReopen: "Task returned to BACKLOG via `task reopen`; lifecycle timestamps and " +
+		"completion_summary cleared, and sprint_tasks row removed.",
 
 	// Sprint lifecycle.
 	models.OpSprintCreate:     "New sprint created.",

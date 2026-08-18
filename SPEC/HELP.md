@@ -205,8 +205,8 @@ help text must match the command contract in `COMMANDS.md`.
 | Sprint | `rmp sprint [comment-add \| comment-list \| comment-edit \| comment-remove]` | `COMMANDS.md § Sprint Comments` |
 | Sprint | `rmp sprint [start \| close \| reopen]` | `COMMANDS.md § Sprint Lifecycle` |
 | Sprint | `rmp sprint [tasks \| open-tasks \| stats]` | `COMMANDS.md § Sprint Management` |
-| Sprint | `rmp sprint [add-tasks \| remove-tasks \| move-tasks]` | `COMMANDS.md § Sprint Task Assignment` |
-| Sprint | `rmp sprint [reorder \| move-to \| swap \| top \| bottom]` | `COMMANDS.md § Sprint Task Ordering` |
+| Sprint | `rmp sprint [add-tasks \| remove-tasks \| move-tasks]` | `COMMANDS.md § Task Assignment` |
+| Sprint | `rmp sprint [reorder \| move-to \| swap \| top \| bottom]` | `COMMANDS.md § Task Ordering` |
 | Audit | `rmp audit [list \| history \| stats]` | `COMMANDS.md § Audit Log Management` |
 | Backlog | `rmp backlog [list \| show-next]` | `COMMANDS.md § Backlog Management` |
 | Stats | `rmp stats` | `COMMANDS.md § Statistics Command` |
@@ -327,8 +327,8 @@ explicit, because a reader cannot infer them from the generic template:
    `TaskType`. See `MODELS.md § Comment Type` and
    `DATA_FORMATS.md § enums map entry`.
 2. **Body input.** State, on `comment-add` and `comment-edit`, that the comment
-   body comes from `-b, --body` or, when that flag is absent, from standard input
-   read to EOF, and that supplying neither is an error (exit code 2). On
+   body comes from `-b, --body` or, when that flag is absent, from standard
+   input, and that supplying neither is an error (exit code 2). On
    `comment-edit`, state additionally that standard input is read only when
    `--type` is absent as well, so a type-only edit does not wait for input. See
    `COMMANDS.md § Comment Body Input Source and Precedence`.

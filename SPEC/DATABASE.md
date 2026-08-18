@@ -262,7 +262,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 - `TASK_PRIORITY_CHANGE` - Priority change (0-9) via `task priority`
 - `TASK_SEVERITY_CHANGE` - Severity change (0-9) via `task severity`
 - `TASK_UPDATE` - Generic update via `task edit` (title, type, functional_requirements, technical_requirements, acceptance_criteria, specialists). A type change made through `task edit` is recorded here, not under a dedicated operation.
-- `TASK_REOPEN` - Task returned to BACKLOG via `task reopen`; lifecycle timestamps cleared and sprint_tasks row removed
+- `TASK_REOPEN` - Task returned to BACKLOG via `task reopen`; lifecycle timestamps and completion_summary cleared, and sprint_tasks row removed
 - `TASK_ASSIGN` - Specialist added to the task's specialists list via `task assign`; written only when the list actually changes, because assigning an already-assigned specialist is an idempotent no-op. A whole-list replacement made through `task edit` is recorded as `TASK_UPDATE` instead.
 - `TASK_UNASSIGN` - Specialist removed from the task's specialists list via `task unassign`; written only when the list actually changes, because removing a specialist that is not assigned is a no-op
 - `TASK_ADD_DEP` - Dependency added (logged against both task_id and depends_on_task_id)
@@ -497,9 +497,10 @@ UPDATE tasks
 SET status = 'COMPLETED', closed_at = ?
 WHERE id = ?;
 
--- When reopening (COMPLETED → BACKLOG): clear tracking dates
+-- When reopening (any non-BACKLOG state → BACKLOG, via task stat or
+-- task reopen): clear the tracking dates and the completion summary
 UPDATE tasks
-SET status = 'BACKLOG', started_at = NULL, tested_at = NULL, closed_at = NULL
+SET status = 'BACKLOG', started_at = NULL, tested_at = NULL, closed_at = NULL, completion_summary = NULL
 WHERE id = ?;
 
 -- Generic status update without date tracking changes
@@ -1208,6 +1209,7 @@ The following length constraints are enforced at the database level using CHECK 
 | `tasks.functional_requirements` | 4096 characters | `CHECK(length(functional_requirements) <= 4096)` |
 | `tasks.technical_requirements` | 4096 characters | `CHECK(length(technical_requirements) <= 4096)` |
 | `tasks.acceptance_criteria` | 4096 characters | `CHECK(length(acceptance_criteria) <= 4096)` |
+| `tasks.completion_summary` | 4096 characters | `CHECK(completion_summary IS NULL OR length(completion_summary) <= 4096)` |
 | `sprints.title` | 255 characters | `CHECK(length(title) <= 255)` |
 | `task_comments.body` | 4096 characters | `CHECK(length(body) <= 4096)` |
 | `sprint_comments.body` | 4096 characters | `CHECK(length(body) <= 4096)` |

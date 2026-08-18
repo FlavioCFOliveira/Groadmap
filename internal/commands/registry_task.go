@@ -438,7 +438,7 @@ func taskCommentAddSubcommand() Subcommand {
 		Flags: []Flag{
 			sharedRoadmapFlag(),
 			commentTypeFlag("TaskCommentType", "REQUIRED. Comment type. "+taskCommentTypeDescription, true),
-			commentBodyFlag("Comment text, max 4096 characters. When the flag is absent the body is read in full from standard input; supplying neither is an error (exit code 2)."),
+			commentBodyFlag("Comment text, max 4096 characters. When the flag is absent the body is read from standard input under a bounded read; supplying neither is an error (exit code 2)."),
 			helpFlag(),
 		},
 		Output:      SuccessOutput{Kind: "object", Schema: `{"id": <int>} — the id of the created comment.`, Example: `{"id":12}`},
@@ -517,7 +517,7 @@ func taskCommentEditSubcommand() Subcommand {
 		Flags: []Flag{
 			sharedRoadmapFlag(),
 			commentTypeFlag("TaskCommentType", "New comment type. "+taskCommentTypeDescription, false),
-			commentBodyFlag("New comment text, max 4096 characters. When --body is absent AND --type is absent, the new body is read in full from standard input; when --type is present and --body is absent, the body is left unchanged and standard input is not read, so a type-only edit never waits for input."),
+			commentBodyFlag("New comment text, max 4096 characters. When --body is absent AND --type is absent, the new body is read from standard input under a bounded read; when --type is present and --body is absent, the body is left unchanged and standard input is not read, so a type-only edit never waits for input."),
 			helpFlag(),
 		},
 		Output:      SuccessOutput{Kind: "empty"},

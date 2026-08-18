@@ -120,7 +120,7 @@ Options (comment-add / comment-list / comment-edit):
                                     comment-list, optional new value on comment-edit.
   -b, --body <text>                 Comment text (max 4096 chars). On comment-add and
                                     comment-edit the body may instead arrive on standard
-                                    input, read to EOF, when this flag is absent —
+                                    input, under a bounded read, when absent —
                                     on comment-edit only if --type is absent too, so a
                                     type-only edit never waits for input. Supplying
                                     neither source is an error (exit 2).

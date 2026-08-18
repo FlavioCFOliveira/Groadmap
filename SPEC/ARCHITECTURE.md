@@ -136,11 +136,14 @@ Two ordering constraints are part of the rule, and neither is incidental:
   into the roadmap home directory to act on the file.
 - The file's mode is settled **before** the database connection is established.
   SQLite derives the mode of the write-ahead log and shared-memory sidecars from
-  the mode of the database file it is opening (the database file's permission
-  bits, further narrowed by the process umask), so a session that begins with
-  `project.db` at `0600` produces sidecars at `0600`. Connecting first and
-  restricting afterwards would let the engine stamp a wider mode onto files it
-  creates in between.
+  the mode of the database file it is opening. The process umask does not narrow
+  that mode: the driver this binary links re-applies the requested mode to a
+  sidecar it has just created while that file is still empty, which undoes the
+  umask. A session that begins with `project.db` at `0600` therefore produces
+  sidecars at `0600`, and the mode is never widened, so the guarantee this
+  ordering constraint rests on is unaffected. Connecting first and restricting
+  afterwards would let the engine stamp a wider mode onto files it creates in
+  between.
 
 **C. Failure mode.** A database that cannot be brought to `0600` is a database
 whose contents are readable by other users of the machine. `rmp` refuses to
