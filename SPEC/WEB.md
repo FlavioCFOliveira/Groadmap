@@ -187,7 +187,11 @@ task detail modal that displays all of the task's fields (see
    once and no task is omitted. Each card is clickable: selecting a card opens the
    read-only task detail modal for that task, which is where the task's full field
    set is shown. The board is read-only: it offers no drag-and-drop and no other
-   control that moves a task between columns. The page renders no task table (see
+   control that moves a task between columns. The page renders no task table. The
+   page header carries a **search input** that narrows the board to the tasks whose
+   title or `#<id>` reference contains the term, with the column counts following
+   the narrowed set; the term travels in the `q` URL parameter, and requesting the
+   page with that parameter renders the identical narrowed board (see
    [Roadmap Tasks Page](#roadmap-tasks-page) and
    [Task Detail Modal](#task-detail-modal)).
 8. When a user selects a roadmap on the index page, the user lands on that
@@ -574,7 +578,7 @@ produced from embedded `html/template` templates. Page routes return HTML
 |-------|--------|---------|----------|
 | `/` | GET, HEAD | Roadmap index | HTML list of roadmaps |
 | `/roadmaps/{name}` | GET, HEAD | Roadmap sprints page (landing; sprint tabs) | HTML |
-| `/roadmaps/{name}/tasks` | GET, HEAD | Roadmap tasks page (Kanban task board) | HTML |
+| `/roadmaps/{name}/tasks` | GET, HEAD | Roadmap tasks page (Kanban task board; optional `q` search parameter, see [Roadmap Tasks Page](#roadmap-tasks-page)) | HTML |
 | `/roadmaps/{name}/tasks/{id}/data` | GET, HEAD | One task's fields and comments, for the task detail modal (see [Task Detail Endpoint](#task-detail-endpoint)) | JSON |
 | `/roadmaps/{name}/sprints/{id}` | GET, HEAD | Roadmap sprint page (all sprint details and the sprint's task list) | HTML |
 | `/roadmaps/{name}/audit` | GET, HEAD | Roadmap audit log page (full audit log, paginated; optional `page` parameter; see [Roadmap Audit Log Page](#roadmap-audit-log-page)) | HTML |
@@ -617,6 +621,7 @@ HTTP status mapping for page and data routes:
 | Sprint `{id}` not a valid integer, or not a sprint of the roadmap | 404 |
 | Task `{id}` not a valid integer, or not a task of the roadmap | 404 |
 | Audit `page` parameter out of range, non-integer, or garbage | 200 (clamped to nearest valid page; see [Roadmap Audit Log Page](#roadmap-audit-log-page)) |
+| Tasks `q` search parameter absent, empty, unmatched, or undecodable | 200 (never an error; see [Roadmap Tasks Page](#roadmap-tasks-page)) |
 | Non-read HTTP method on any route | 405 |
 | Unhandled internal error reading data (I/O, corrupt store) | 500 |
 
@@ -759,6 +764,12 @@ how the `rmp web` process itself terminates.
   column** correct by construction, and it is a correctness requirement of this
   page rather than a performance choice (see `DATABASE.md § Main SQL Queries`,
   "List All").
+
+  A search narrows what the board **shows**; it does not narrow what the page
+  **reads**. The read stays the full task list either way, so a term applied by the
+  server and the same term applied in the browser select from the identical set —
+  which is what makes the two paths equivalent (see **Server and client produce the
+  same board**).
 - **Placement.** Each task of the roadmap appears in exactly one column: the
   column of that task's own `status`. The board omits no task and duplicates
   none, so the five column counts sum to the roadmap's total number of tasks. The
@@ -768,7 +779,9 @@ how the `rmp web` process itself terminates.
 - **Count per column.** Each column header shows the status name together with a
   Tabler badge carrying the number of tasks in that column, the way a GitLab
   issue board shows the issue count of each list. A column holding no task shows
-  the count `0`.
+  the count `0`. The count always equals the number of cards that column is
+  actually showing: when a search narrows the board, the counts narrow with it (see
+  **Effect on the board** below).
 - **Order within a column.** The cards of a column appear in a deterministic
   order: descending `priority` and, for tasks of equal priority, ascending
   `created_at`. This is the order in which the page's own read already returns the
@@ -866,6 +879,124 @@ how the `rmp web` process itself terminates.
   task by `id` and `title`, and containing the card's own visible title text. The
   card keeps the Tabler card presentation specified under
   **Markup** above; making it a button changes the element, not the appearance.
+- **Header search control.** The page header's actions column carries a **search
+  input** that narrows the board. It is the only control in that column: the page
+  header presents no link to the knowledge-graph page, because the admin-shell
+  sidebar already lists **Graph** among the roadmap's own links on every page (see
+  [UI Framework](#ui-framework), rule 1), so a header link would be a second route
+  to a destination the page already offers, and removing it costs no access. The
+  actions column keeps the Tabler idiom fixed in [UI Framework](#ui-framework),
+  rule 16.
+
+  The input carries a real, programmatically associated **label** naming what it
+  searches. A `placeholder` MUST NOT stand in for that label: a placeholder is not
+  an accessible name and disappears as soon as the user types. Where the label is
+  visible, the input's accessible name contains the visible label text, by the rule
+  in [Task Detail Modal](#task-detail-modal), *The trigger is a natively activatable
+  element*. The control is reachable and operable from the keyboard.
+- **What the search matches.** A task matches a term when the term occurs in that
+  task's **searchable text**, which is the concatenation of exactly two things the
+  card itself displays:
+  1. the task `title`;
+  2. the task reference `#<id>`, written with its leading `#`.
+
+  Including the reference is deliberate: the card shows `#<id>` in its reference
+  line, so a user reading a card can see it, and typing `42` to reach task 42 is
+  the obvious gesture. Because the reference is matched as the literal string
+  `#42`, both `42` and `#42` find it under the one substring rule below, with no
+  special case for either form.
+
+  `specialists` is deliberately **excluded**, and so is every other task field. The
+  search answers "which task is this?" from what identifies a task on its card;
+  matching an attribute answers a different question, "which tasks share this
+  property?", which is the job of the attribute filters and would make one control
+  serve two purposes with no way for the user to tell which one produced a hit.
+  Keeping the two apart is what lets them compose (see **Composing further
+  criteria** below).
+- **Matching rule.** Matching is **case-insensitive** and by **substring**: a task
+  matches when its searchable text contains the term. Leading and trailing
+  whitespace is stripped from the term before matching, and a term that is empty
+  or entirely whitespace is **no term at all** — the board shows every task.
+  Whitespace inside the term is significant and is matched literally.
+
+  The case-insensitive comparison MUST be **locale-independent**, so that the same
+  term and the same task produce the same verdict wherever the page is rendered and
+  whatever locale the browser reports. A locale-sensitive case conversion MUST NOT
+  be used, because it makes the match depend on the viewer's locale and would break
+  the equivalence below for terms containing letters whose case mapping is
+  locale-specific.
+- **Effect on the board.** A task that does not match is not shown. Everything the
+  board states about itself then refers to the **shown set**, not to the roadmap:
+  - Each column shows only its matching cards, in the order fixed by **Order within
+    a column**, which the narrowing preserves.
+  - **Each column's count is the number of cards that column is showing.** The
+    counts follow the narrowing. A count that kept reporting the unfiltered total
+    while the column displayed fewer cards would state something false about what
+    the user is looking at, which is exactly what **Count per column** exists to
+    prevent.
+  - The five columns remain present and in order. Searching never drops, hides, or
+    reorders a column.
+  - A column left with no matching card shows its ordinary in-column empty state.
+  - When **no** task matches, the board says so: it shows a clear message naming
+    that no task matches the current search, alongside the five empty columns,
+    rather than leaving five silently empty columns for the user to interpret. This
+    is distinct from a roadmap that holds no task at all, which is not a search
+    result and is covered by **Empty states**.
+- **The URL carries the term.** The term travels in the URL query parameter **`q`**
+  on `/roadmaps/{name}/tasks`. The name matches the role `q` already has on the
+  graph data endpoint — the text the user typed into a search control (see
+  [Graph Data Endpoint](#graph-data-endpoint)) — and the two are distinct routes,
+  so the shared name carries one meaning per route and no ambiguity.
+  - **Live typing updates the URL in place.** As the user types, the page replaces
+    the current history entry so the address bar always reflects the board on
+    screen. It MUST NOT push a new history entry per keystroke, which would turn
+    the browser Back button into an undo key for typing.
+  - **An empty term leaves no parameter.** When the term is empty or entirely
+    whitespace, `q` is **removed** from the URL rather than left present and empty:
+    the unfiltered board's URL is the bare page URL.
+  - **Cold load applies the same term.** When the page is requested with a `q`
+    value, the **server** applies it and renders the already-narrowed board. The
+    page does not render every task and then narrow it after load.
+- **Server and client produce the same board (the property that matters).** For any
+  roadmap and any term, the board reached by typing that term into the search
+  control and the board reached by requesting the page URL carrying that term in
+  `q` are the **same**: the same cards, in the same columns, in the same order,
+  with the same column counts, and the same empty states. The two paths implement
+  one matching rule and MUST NOT diverge — that equivalence is what makes a
+  narrowed board shareable and reloadable, and it is the property to test.
+- **No malformed term is an error.** Every string is a valid term. A term that
+  matches nothing renders the empty board described above, with HTTP 200. A term
+  longer than any searchable text simply matches nothing. A `q` the server cannot
+  decode is treated as absent, and the unfiltered board is served. The search never
+  produces an error page and never changes the route's status codes.
+- **Composing further criteria.** The search term is **one** criterion. The shown
+  set is the set of tasks satisfying **every** active criterion, and a board with no
+  active criterion shows every task. Further criteria — for example filters over a
+  task's attributes — compose with the term by the same conjunction, each carried in
+  its own URL query parameter under the same rules as `q` (absent when inactive,
+  applied by the server on a cold load, equivalent between the two paths). Adding
+  such a criterion requires no change to this contract.
+- **Escaping the term.** The term is caller-supplied text echoed back into the page,
+  and it is treated exactly as every other caller-supplied value:
+  - Where the **server** renders it — into the search input's value, and into the
+    no-match message — it is escaped by `html/template`'s contextual auto-escaping
+    (see [Frontend Rules](#frontend-rules), rule 1).
+  - Where the **script** renders it, it is written through `textContent` or an
+    equivalent that cannot interpret markup, never `innerHTML` and never
+    `insertAdjacentHTML`, by the same rule the task detail modal follows (see
+    [Task Detail Modal](#task-detail-modal), *Client-side rendering is text-only*,
+    and [Security and Constraints](#security-and-constraints), rule 7).
+
+  A term containing HTML markup therefore renders as visible characters on both
+  paths and can introduce no element, attribute, or script into the page.
+- **Implementation constraints already in force.** The narrowing script is embedded
+  and served from `/static/...` like every other client script (see
+  [Embedded Asset Categories](#embedded-asset-categories) and
+  [Frontend Rules](#frontend-rules), rules 2 and 5). No inline script is
+  introduced and the Content-Security-Policy in [Security Headers](#security-headers)
+  is unchanged. Every class the control emits resolves in the embedded stylesheets
+  and no template carries a `style` attribute (see [UI Framework](#ui-framework),
+  rules 8 and 10).
 - **Read-only.** The page renders data only. The board offers **no
   drag-and-drop** and no control of any other kind that moves a task between
   columns, reorders cards, changes a task's status, or creates or edits a task or
@@ -875,6 +1006,13 @@ how the `rmp web` process itself terminates.
   form, button, or link that submits a change, and the `rmp` CLI remains the sole
   write path for every task (see
   [Security and Constraints](#security-and-constraints)).
+
+  Read-only constrains what the page may **change**, not what it may **show**. A
+  control that only alters which of the already-read tasks the user is looking at —
+  the header search of **Header search control** above — changes no task, writes
+  nothing, and is therefore not an exception to this rule. The distinction is
+  between altering the data and altering the view of it: the first is forbidden
+  here, the second is not.
 - **Empty states.** A column that holds no task renders its own clear, unobtrusive
   empty state inside the column, below the column header, in place of the card
   list; the column, its title, and its `0` count badge stay visible. A roadmap
@@ -883,6 +1021,12 @@ how the `rmp web` process itself terminates.
   with a page-level empty state, and it never drops or hides a column: the five
   columns are fixed (see **Columns** above), and an empty roadmap is shown as an
   empty board, not as an absent one.
+
+  A roadmap that holds no task and a search that matches no task are different
+  conditions and read differently. The first is the state of the roadmap and shows
+  the five in-column empty states alone. The second is the result of what the user
+  typed, so the board additionally says that no task matches the search (see
+  **Effect on the board** above). In both cases the five columns stay.
 - **Layout and scrolling.** The five columns are presented side by side. When
   they do not fit the viewport, the **board** scrolls horizontally inside its own
   container; the page itself never scrolls horizontally, so `<body>` produces no
@@ -952,6 +1096,11 @@ how the `rmp web` process itself terminates.
   query per task. The number of queries the page issues does not grow with the
   number of tasks, the number of sprints, or the number of columns. Opening a modal
   adds one request for that one task, made only on demand.
+
+  A search term changes none of this. Applying a term on a cold load selects from
+  the task list the page already reads and issues no additional query; narrowing in
+  the browser issues no request at all, because every card is already in the
+  document.
 - **Path parameters.** `{name}` is validated against the roadmap-name rules
   exactly as on the other roadmap routes (the path-traversal guard in
   [Routes and Pages](#routes-and-pages) and
@@ -2641,7 +2790,9 @@ experience is the baseline that larger viewports enhance.
    at which its cards stay legible, the horizontal board scroll is reachable by a
    touch gesture, and the cards and their badges present touch-friendly hit targets
    that open the read-only task detail modal (see
-   [Task Detail Modal](#task-detail-modal)).
+   [Task Detail Modal](#task-detail-modal)). The page header's search input is
+   likewise usable on a narrow viewport: it fits the header's actions column without
+   page-level horizontal overflow and presents a touch-friendly target.
 
 ## Error Handling and Exit Codes
 
@@ -2840,8 +2991,8 @@ Rules:
    roadmap-name rules, returns HTTP 404 without touching the filesystem outside
    `~/.roadmaps/`. Acceptance Criteria 81 to 92 define the board itself,
    Acceptance Criterion 93 fixes the modal trigger on every surface that shows a
-   clickable task, and Acceptance Criteria 94 to 99 fix the task detail endpoint
-   that fills the modal.
+   clickable task, Acceptance Criteria 94 to 99 fix the task detail endpoint that
+   fills the modal, and Acceptance Criteria 100 to 107 fix the header search.
 10. `GET /roadmaps/{name}` for a non-existent roadmap returns HTTP 404, and a
     request whose `{name}` violates the roadmap-name rules (for example
     `../etc`) returns HTTP 404 without touching the filesystem outside
@@ -3572,6 +3723,60 @@ Rules:
     It does not stay blank, does not close silently, and does not leave the
     previously opened task's data on display. The failure path writes nothing (see
     [Task Detail Modal](#task-detail-modal), **Failure is visible in the modal**).
+100. The roadmap tasks page header carries a search input in its actions column and
+    **no** knowledge-graph link. The graph stays reachable from this page through
+    the admin-shell sidebar's Graph entry, which every page carries (Acceptance
+    Criterion 16 continues to hold), so removing the header link removes a duplicate
+    route to the graph and no access. The input has a programmatically associated
+    accessible label naming what it searches — a `placeholder` does not stand in for
+    that label — and is reachable and operable from the keyboard (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Header search control**).
+101. Typing a term narrows the board without a page reload, and every column count
+    equals the number of cards that column is then showing. A task matches when the
+    term occurs, case-insensitively and as a substring, in that task's `title` or in
+    its `#<id>` reference written with the leading `#`; both `42` and `#42` therefore
+    find task 42. No other task field is matched: a term equal to a task's
+    `specialists` value, and matching nothing in that task's title or reference, does
+    not match it. Leading and trailing whitespace is stripped from the term, and a
+    term that is empty or entirely whitespace shows every task. The case-insensitive
+    comparison is locale-independent, so the same term and task yield the same
+    verdict regardless of the browser's reported locale.
+102. A column left with no matching card renders its ordinary in-column empty state,
+    and the five columns stay present and in order — searching drops, hides, and
+    reorders no column (Acceptance Criterion 81 continues to hold). When no task
+    matches, the board states that no task matches the search rather than presenting
+    five silently empty columns; that message is distinct from the state of a roadmap
+    that holds no task at all, which shows the in-column empty states alone
+    (Acceptance Criterion 88 continues to hold).
+103. The term travels in the `q` URL query parameter on `/roadmaps/{name}/tasks`. As
+    the user types, the page updates the URL in place, replacing the current history
+    entry rather than pushing one entry per keystroke. Clearing the search restores
+    every card and every unnarrowed count and **removes** `q` from the URL, leaving
+    no empty parameter behind.
+104. For any roadmap and any term, the board produced by typing that term into the
+    search control and the board produced by requesting the page URL carrying that
+    term in `q` are identical — the same cards, in the same columns, in the same
+    order, with the same column counts and the same empty states — asserted by
+    comparing the two. A cold load with `q` is narrowed by the **server**; the page
+    does not render every task and narrow it afterwards.
+105. No `q` value produces an error page: a term matching nothing, a term longer than
+    any searchable text, and a `q` the server cannot decode each return HTTP 200,
+    the last treated as though `q` were absent. Applying a term adds no database
+    query: the page's read remains the full task list specified in Acceptance
+    Criterion 89, and narrowing in the browser issues no request at all.
+106. A term containing HTML markup renders as visible characters and introduces no
+    element, attribute, or script into the page: the server escapes it through
+    `html/template` where it echoes it into the search input and into the no-match
+    message, and the script writes it only as text, never through `innerHTML` or
+    `insertAdjacentHTML`. This is proven by a test that fails if the term is written
+    as markup (Acceptance Criterion 97 continues to hold for the modal, and rule 7 of
+    [Security and Constraints](#security-and-constraints) governs both).
+107. The search introduces no inline script and no Content-Security-Policy change:
+    the narrowing script loads from `/static/` like every other client script, and
+    the policy remains exactly the value fixed in Acceptance Criterion 33
+    (Acceptance Criteria 23 and 98 continue to hold). Every class the control emits
+    resolves in the embedded stylesheets and no template carries a `style` attribute
+    (Acceptance Criterion 62 continues to hold).
 
 ## See Also
 
