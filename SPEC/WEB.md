@@ -826,8 +826,10 @@ how the `rmp web` process itself terminates.
   button role on its own, the card carries no `tabindex` and no `role="button"`:
   both would be redundant, and neither would grant activation to an element that
   lacked it (see [Task Detail Modal](#task-detail-modal), *The trigger is a
-  natively activatable element*). The card's accessible name identifies the task
-  it opens. The card keeps the Tabler card presentation specified under
+  natively activatable element*). The card's accessible name is
+  `Open details for task #<id>: <title>`, naming the action and identifying the
+  task by `id` and `title`, and containing the card's own visible title text. The
+  card keeps the Tabler card presentation specified under
   **Markup** above; making it a button changes the element, not the appearance.
 - **Read-only.** The page renders data only. The board offers **no
   drag-and-drop** and no control of any other kind that moves a task between
@@ -1142,8 +1144,14 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      with Enter or Space, on the same contract the board card offers. The row as a
      whole remains clickable by pointer, so
      pointer and touch behaviour is unchanged and the whole row stays the target it
-     is today. The control's accessible name identifies the task the modal will
-     show. The row itself MUST NOT be the trigger and MUST NOT carry `role="button"`
+     is today. The control's accessible name is
+     `Open details for task #<id>: <title>`, the same form the board card uses. The
+     `title` is required in it, not optional: the button's visible label here **is**
+     the task title, and an accessible name that omitted it would leave the control
+     impossible to activate by speech input, which is what WCAG 2.5.3 Label in Name
+     (Level A) forbids (see [Task Detail Modal](#task-detail-modal), *The trigger is
+     a natively activatable element*).
+     The row itself MUST NOT be the trigger and MUST NOT carry `role="button"`
      with `tabindex="0"`, which would announce a button that cannot be pressed (see
      [Task Detail Modal](#task-detail-modal), *The trigger is a natively activatable
      element*). When the sprint has no tasks, the
@@ -1790,9 +1798,22 @@ tasks.
   no inline script. The trigger therefore has to be an element that is activatable
   to begin with.
 
-  Each trigger carries an **accessible name that identifies the task it opens**,
-  so a user reaching it without sight of the surrounding layout knows which task
+  Each trigger carries an **accessible name that names the action and identifies
+  the task by both its `id` and its `title`**. The name is
+  `Open details for task #<id>: <title>`, so a user reaching the trigger without
+  sight of the surrounding layout knows both what the control does and which task
   the modal will show.
+
+  Where the trigger has a **visible text label**, the accessible name MUST contain
+  that visible label text. This is the case on the Roadmap Sprint Page, where the
+  trigger is the task title in the member-tasks row and the title is therefore the
+  control's visible label; including the `title` in the name is what satisfies the
+  rule there. A name that omits the visible label breaks activation by speech
+  input: a speech-input user says the words they can see, and a control whose
+  accessible name does not contain them cannot be activated that way, even though
+  it reads correctly to a screen reader. This requirement is the one stated by
+  WCAG 2.5.3 Label in Name (Level A), cited here as the grounding for this rule;
+  it is the reason the name carries the `title` and not the `id` alone.
 - **Fields shown.** The modal displays all of the task's fields as defined for the
   `Task` model in `MODELS.md § Task`: `id`, `title`, `status`, `type`, `priority`,
   `severity`, `functional_requirements`, `technical_requirements`,
@@ -3250,9 +3271,10 @@ Rules:
     `<button type="button">`, so it is focusable and activatable natively: a
     pointer click, a touch tap, Enter, and Space each open the modal, and no
     JavaScript is added to make that work. The card carries no `tabindex` and no
-    `role="button"`, both redundant on a button, and its accessible name identifies
-    the task it opens, so a card can be opened without a pointing device (see
-    [Roadmap Tasks Page](#roadmap-tasks-page) and
+    `role="button"`, both redundant on a button, and its accessible name is
+    `Open details for task #<id>: <title>`, so a card can be opened without a
+    pointing device and can be named aloud by a speech-input user from the title it
+    displays (see [Roadmap Tasks Page](#roadmap-tasks-page) and
     [Task Detail Modal](#task-detail-modal)).
 87. The board is read-only. It offers no drag-and-drop, and no control of any other
     kind that moves a task between columns, reorders cards, changes a task's status,
@@ -3327,7 +3349,14 @@ Rules:
     Roadmap Sprint Page it is a natively activatable element inside the member-tasks
     row, a `<button>` carried by the task `Title` cell, while the row stays
     clickable by pointer.
-    Each trigger carries an accessible name identifying the task it opens. The
+    Each trigger's accessible name is `Open details for task #<id>: <title>`,
+    carrying the task's `id` and its `title`, on both surfaces. In particular the
+    name contains the task title, so on the Roadmap Sprint Page — where the title is
+    the trigger's visible label — the accessible name contains the visible label
+    text, as WCAG 2.5.3 Label in Name (Level A) requires, and the control can be
+    activated by speech input by speaking the title that is displayed. An
+    accessible name carrying the `id` alone, such as `Open details for task #<id>`,
+    does not satisfy this criterion. The
     property holds without any JavaScript being added: the page loads no script
     beyond those it already loads from `/static/`, and the Content-Security-Policy
     of Acceptance Criterion 33 is unchanged (see
