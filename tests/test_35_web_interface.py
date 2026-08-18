@@ -26,9 +26,9 @@ running HTTP server:
   loads no remote CSS; the stylesheet uses min-width media queries (AC20-AC22).
 - Tabler admin-shell: every page renders in the dark theme
   (data-bs-theme="dark"), with a vertical sidebar, page wrapper/header, a
-  read-only indicator, and the off-canvas hamburger markup; the vendored
-  Tabler CSS/JS and the Inter / Tabler Icons web fonts are served locally
-  from /static/ (AC23/AC24, AC16/AC22).
+  top navbar naming the selected roadmap (AC108), and the off-canvas
+  hamburger markup; the vendored Tabler CSS/JS and the Inter / Tabler Icons
+  web fonts are served locally from /static/ (AC23/AC24, AC16/AC22).
 
 The server is long-lived, so each scenario launches a fresh `rmp web`
 process on an ephemeral port (--port 0), parses the startup URL from
@@ -2618,10 +2618,15 @@ class TestWebInterface:
 
         The shell is a vertical navigation sidebar (listing Roadmaps and,
         within a roadmap, that roadmap's views), a page wrapper, a page
-        header, and a top-navbar read-only indicator. The navbar-toggler +
-        collapse markup is what Tabler's JS turns into an off-canvas hamburger
-        menu on small viewports (AC24), so its presence is the structural
-        proof of the responsive sidebar.
+        header, and the top navbar. The navbar-toggler + collapse markup is
+        what Tabler's JS turns into an off-canvas hamburger menu on small
+        viewports (AC24), so its presence is the structural proof of the
+        responsive sidebar.
+
+        What the top navbar CARRIES is roadmap-dependent — the selected
+        roadmap's name, and nothing at all on the roadmap index page — so it
+        is covered by test_top_navbar_names_the_selected_roadmap rather than
+        by this sweep, which asserts only what every page shares.
         """
         proc, port = self._start(["--port", "0"])
         for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/tasks", f"/roadmaps/{ROADMAP}/audit", f"/roadmaps/{ROADMAP}/graph"):
@@ -2632,9 +2637,70 @@ class TestWebInterface:
                 "page-header",       # per-page header
                 "navbar-toggler",    # hamburger / off-canvas toggle
                 "Roadmaps",          # always-present sidebar link
-                "Read-only",         # top-navbar indicator
+                '<header class="navbar navbar-expand-md d-print-none">',  # top navbar
             ):
                 assert marker in body, f"page {path} missing admin-shell marker {marker!r}"
+
+    @staticmethod
+    def _top_navbar(path, body):
+        """Return the markup between the top navbar's <header> and </header>.
+
+        Assertions about the navbar are made on this region, never on the whole
+        document: the roadmap index page legitimately writes "Read-only view of
+        the roadmaps under ~/.roadmaps/" in its page header, and the roadmap
+        name appears in the sidebar and the page header of every roadmap-scoped
+        page, so a document-wide check would prove nothing either way.
+        """
+        opening = '<header class="navbar navbar-expand-md d-print-none">'
+        start = body.find(opening)
+        assert start >= 0, f"page {path} renders no top navbar, so any assertion on it would be vacuous"
+        rest = body[start + len(opening):]
+        end = rest.find("</header>")
+        assert end >= 0, f"page {path}: the top navbar is never closed"
+        return rest[:end]
+
+    def test_top_navbar_names_the_selected_roadmap(self):
+        """AC108: the top navbar names the roadmap the page belongs to.
+
+        Every roadmap-scoped page shows that roadmap's name in the navbar,
+        prominently (the Tabler `h3` type utility) and preceded by a Tabler
+        Icons glyph; the roadmap index page belongs to no roadmap and renders
+        the region empty. No page's navbar carries the badge that used to
+        declare the interface read-only: that the server never writes is
+        covered by the 405 and no-write-affordance scenarios, not by a label.
+        """
+        proc, port = self._start(["--port", "0"])
+
+        named = f'<span class="h3 mb-0 text-truncate" data-role="active-roadmap">{ROADMAP}</span>'
+        for path in (
+            f"/roadmaps/{ROADMAP}",
+            f"/roadmaps/{ROADMAP}/tasks",
+            f"/roadmaps/{ROADMAP}/audit",
+            f"/roadmaps/{ROADMAP}/graph",
+        ):
+            _, _, body = self._req(port, path)
+            navbar = self._top_navbar(path, body)
+            assert named in navbar, f"page {path}: top navbar does not name its roadmap; navbar={navbar!r}"
+            assert '<i class="ti ti-map me-2"></i>' in navbar, (
+                f"page {path}: top navbar carries no roadmap glyph before the name; navbar={navbar!r}"
+            )
+
+        _, _, index_body = self._req(port, "/")
+        index_navbar = self._top_navbar("/", index_body)
+        for unwanted in ('data-role="active-roadmap"', "ti-map", ROADMAP, "<span", "<i "):
+            assert unwanted not in index_navbar, (
+                f"the roadmap index page belongs to no roadmap, so its top navbar must render "
+                f"empty, but it carries {unwanted!r}; navbar={index_navbar!r}"
+            )
+
+        for path in ("/", f"/roadmaps/{ROADMAP}", f"/roadmaps/{ROADMAP}/tasks", f"/roadmaps/{ROADMAP}/audit", f"/roadmaps/{ROADMAP}/graph"):
+            _, _, body = self._req(port, path)
+            navbar = self._top_navbar(path, body)
+            for gone in ("Read-only", "read-only", "ti-lock", "badge"):
+                assert gone not in navbar, (
+                    f"page {path}: top navbar carries {gone!r}; the read-only indicator was "
+                    f"replaced by the selected roadmap's name; navbar={navbar!r}"
+                )
 
     def test_roadmap_pages_link_sprints_tasks_graph_in_sidebar(self):
         """A roadmap's pages surface its Sprints/Tasks/Graph in the sidebar, each

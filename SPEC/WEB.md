@@ -297,8 +297,8 @@ task detail modal that displays all of the task's fields (see
     roadmap's Sprints, Tasks, Audit, and Graph views, resolving to
     `/roadmaps/{name}`, `/roadmaps/{name}/tasks`, `/roadmaps/{name}/audit`, and
     `/roadmaps/{name}/graph` respectively and
-    highlighting the active view), a top navbar, page headers, and Tabler cards,
-    tables, and badges. The interface is built on the vendored Tabler framework;
+    highlighting the active view), a top navbar naming the selected roadmap, page
+    headers, and Tabler cards, tables, and badges. The interface is built on the vendored Tabler framework;
     on small viewports the navigation sidebar collapses to an off-canvas
     (hamburger) menu (see [UI Framework](#ui-framework) and
     [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
@@ -2451,8 +2451,9 @@ read from the host filesystem at runtime.
    element order (rule 12), the single sidebar collapse, toggler, and brand
    (rule 13), `aria-current` on the active navigation link (rule 14), the labelled
    pagination wrapper (rule 15), the page-header actions column (rule 16), the
-   fluid-layout container idiom (rule 17), and the `main` page-body landmark
-   (rule 18) — are concrete applications of it.
+   fluid-layout container idiom (rule 17), the `main` page-body landmark
+   (rule 18), and the top navbar's content (rule 19) — are concrete applications
+   of it.
 9. **Card tabs follow Tabler's "card with tabs" example.** The Roadmap Sprints
    Page tab control (the three tabs Próximos, Actual, Concluídos; see
    [Roadmap Sprints Page](#roadmap-sprints-page)) follows Tabler's "card with
@@ -2600,6 +2601,41 @@ read from the host filesystem at runtime.
     page-layout snippet still shows a `<div>` here; where a documented snippet and
     the framework's own built shell disagree, the built shell of the vendored
     distribution governs, and the templates MUST NOT be reverted to the `<div>`.
+19. **The top navbar names the selected roadmap.** The shell's top navbar carries
+    one thing: the name of the roadmap whose data the current page shows. Every
+    page but the roadmap index is scoped to a single roadmap — its sprints, one of
+    those sprints, its tasks, its audit log, or its knowledge graph — and the name
+    is what tells one roadmap's pages from another's at a glance. The sidebar's own
+    per-roadmap section label collapses out of sight behind the off-canvas menu on
+    a small viewport (rule 5), so the top navbar is the one region that names the
+    selected roadmap at every viewport width.
+
+    The name is rendered prominently and with vendored Tabler classes only: a
+    Tabler Icons glyph followed by the name carrying Tabler's `h3` type utility,
+    inside the `navbar-nav flex-row` / `nav-item` idiom Tabler uses for the top
+    navbar's own content. A long name is truncated with Tabler's `text-truncate`
+    rather than wrapped or allowed to overflow, so the navbar keeps its height and
+    the page never scrolls horizontally because of it (see
+    [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)). The
+    name shown is the validated roadmap segment of the request path — the same
+    value that selected the database (see [Routes and Pages](#routes-and-pages)) —
+    rendered through `html/template` as text, so it is escaped exactly like every
+    other value the interface shows.
+
+    **The roadmap index page names no roadmap.** `/` lists the roadmaps and belongs
+    to none of them, so its top navbar renders no name, no glyph, and no
+    placeholder text: the region is simply empty, exactly as the sidebar's
+    per-roadmap section is absent on that page.
+
+    **The navbar carries no read-only indicator.** It MUST NOT carry a badge,
+    label, or icon declaring the interface read-only. That the interface never
+    writes is a guarantee of the server, specified in
+    [Security and Read-Only Guarantees](#security-and-read-only-guarantees) and in
+    each page's own **Read-only** rule, and it is already evident on every page:
+    no form, no submit control, no edit affordance anywhere. Restating it in the
+    one shell region that can instead identify the page's subject spends that
+    region on what the user cannot act on. This mirrors the removal of the
+    read-only footer band, whose whole content was the same restatement (rule 12).
 
 ### Status, Priority, and Severity Badge Colours
 
@@ -3153,8 +3189,9 @@ Rules:
     Tabler CSS framework in use is vendored and served from `/static/...`.
 30. Every page renders in the Tabler admin-shell layout — a navigation sidebar
     (listing the roadmaps and, within a roadmap, that roadmap's Sprints, Tasks,
-    Audit, and Graph views), a top navbar, and a page header — using Tabler cards,
-    tables, and badges, and the interface renders in Tabler's dark theme.
+    Audit, and Graph views), a top navbar naming the selected roadmap, and a page
+    header — using Tabler cards, tables, and badges, and the interface renders in
+    Tabler's dark theme.
 31. On a small phone-sized viewport, the admin-shell navigation sidebar is not
     shown expanded inline; it collapses to an off-canvas (hamburger) menu that the
     user can open, so each page stays usable without horizontal overflow.
@@ -3819,6 +3856,18 @@ Rules:
     (Acceptance Criteria 23 and 98 continue to hold). Every class the control emits
     resolves in the embedded stylesheets and no template carries a `style` attribute
     (Acceptance Criterion 62 continues to hold).
+108. The top navbar of every roadmap-scoped page — the roadmap's sprints page, a
+    sprint's own page, the tasks board, the audit log page, and the knowledge-graph
+    page — shows the name of the roadmap in the request path, rendered prominently
+    with the vendored Tabler `h3` type utility and preceded by a Tabler Icons
+    glyph, and a long name is truncated rather than wrapped or overflowing. The
+    roadmap index page, which belongs to no roadmap, renders that region empty: no
+    name, no glyph, and no placeholder text. No page's top navbar carries a badge,
+    label, or icon declaring the interface read-only. The name is HTML-escaped
+    through `html/template` like every other value, the markup uses only classes
+    the vendored Tabler distribution ships, and no template carries a `style`
+    attribute (Acceptance Criteria 62 and 63 continue to hold; see
+    [UI Framework](#ui-framework), rule 19).
 
 ## See Also
 

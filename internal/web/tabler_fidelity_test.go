@@ -186,6 +186,158 @@ func allPagePaths(name string) []string {
 	}
 }
 
+// topNavbarRegion returns the markup between the top navbar's opening <header>
+// and its closing </header>, failing the test when the region is absent.
+//
+// Every assertion about what the navbar carries is made on this region rather
+// than on the whole document. A document-wide check would be wrong in both
+// directions: the roadmap index page legitimately writes "Read-only view of the
+// roadmaps under ~/.roadmaps/" in its page header, and the roadmap name appears
+// in the sidebar and the page header of every roadmap-scoped page, so neither
+// its presence nor the absence of the word would prove anything about the
+// navbar.
+func topNavbarRegion(t *testing.T, path, body string) string {
+	t.Helper()
+
+	const open = `<header class="navbar navbar-expand-md d-print-none">`
+	start := strings.Index(body, open)
+	if start < 0 {
+		t.Fatalf("page %s: no top navbar in the response, so any assertion on it would be vacuous", path)
+	}
+	rest := body[start+len(open):]
+	end := strings.Index(rest, "</header>")
+	if end < 0 {
+		t.Fatalf("page %s: the top navbar is never closed", path)
+	}
+	return rest[:end]
+}
+
+// TestShell_TopNavbarNamesTheSelectedRoadmap is the regression guard for
+// SPEC/WEB.md § UI Framework rule 19 and Acceptance Criterion 108: the top
+// navbar names the roadmap the current page belongs to, and carries no badge,
+// label, or icon declaring the interface read-only.
+//
+// It replaces the guard that asserted the ">Read-only<" badge. That badge was
+// the whole content of the navbar and restated a server guarantee — no route
+// writes — that every page already shows by having no control that writes,
+// while the region it occupied is the only one that identifies the page's
+// subject at every viewport width: the sidebar's own per-roadmap label collapses
+// behind the off-canvas menu on a small viewport.
+//
+// Two roadmaps are seeded, so the assertion proves the navbar names the roadmap
+// the page BELONGS TO rather than any fixed string that happens to match the
+// only roadmap in the fixture.
+func TestShell_TopNavbarNamesTheSelectedRoadmap(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	// seedRoadmap creates sprint 1 (for the /sprints/1 detail page);
+	// seedRoadmapWithAudit adds audit entries to the same roadmap (for /audit).
+	platform := seedRoadmap(t, "platform-core")
+	seedRoadmapWithAudit(t, platform, 3)
+	billing := seedRoadmap(t, "billing-migration")
+	seedRoadmapWithAudit(t, billing, 2)
+	mux := buildMux()
+
+	for _, rdm := range []struct{ name, other string }{
+		{platform, billing},
+		{billing, platform},
+	} {
+		// allPagePaths[0] is "/", the roadmap index; it belongs to no roadmap
+		// and is asserted separately below.
+		for _, path := range allPagePaths(rdm.name)[1:] {
+			nav := topNavbarRegion(t, path, servePage(t, mux, path))
+
+			named := `<span class="h3 mb-0 text-truncate" data-role="active-roadmap">` + rdm.name + `</span>`
+			if !strings.Contains(nav, named) {
+				t.Errorf("page %s: top navbar does not name its roadmap as %s; navbar=%q", path, named, nav)
+			}
+			// The glyph that precedes the name, and the overflow-hidden that is
+			// what lets text-truncate clip a long name instead of widening the
+			// navbar: a flex item's automatic minimum size is its content.
+			if !strings.Contains(nav, `<i class="ti ti-map me-2"></i>`) {
+				t.Errorf("page %s: top navbar carries no roadmap glyph before the name; navbar=%q", path, nav)
+			}
+			if !strings.Contains(nav, `<div class="nav-item d-flex align-items-center overflow-hidden">`) {
+				t.Errorf("page %s: the navbar's flex item lost overflow-hidden, so text-truncate cannot clip a long roadmap name; navbar=%q", path, nav)
+			}
+			if strings.Contains(nav, rdm.other) {
+				t.Errorf("page %s: top navbar names the other roadmap %q; navbar=%q", path, rdm.other, nav)
+			}
+		}
+	}
+
+	// The roadmap index belongs to no roadmap, so the region is empty: no name,
+	// no glyph, no placeholder standing in for the roadmap that is not selected.
+	indexNav := topNavbarRegion(t, "/", servePage(t, mux, "/"))
+	for _, unwanted := range []string{`data-role="active-roadmap"`, "ti-map", platform, billing, "<span", "<i "} {
+		if strings.Contains(indexNav, unwanted) {
+			t.Errorf("the roadmap index page's top navbar carries %q; it belongs to no roadmap and the region must render empty; navbar=%q", unwanted, indexNav)
+		}
+	}
+
+	// No page's navbar restates the read-only guarantee, under the badge that
+	// carried it or under any other element.
+	for _, rdm := range []string{platform, billing} {
+		for _, path := range allPagePaths(rdm) {
+			nav := topNavbarRegion(t, path, servePage(t, mux, path))
+			for _, gone := range []string{"Read-only", "read-only", "ti-lock", "badge"} {
+				if strings.Contains(nav, gone) {
+					t.Errorf("page %s: top navbar carries %q; the read-only indicator was replaced by the selected roadmap's name", path, gone)
+				}
+			}
+		}
+	}
+
+	// The same at the source, on the one partial that defines the navbar. The
+	// check is scoped to the `{{define "topnavbar"}}` body for two reasons: the
+	// badge's lock glyph is not exclusive to it — ti-lock is also the board
+	// card's "Blocks" indicator — and the words survive legitimately in the
+	// template comment that records why the badge went away, which sits outside
+	// the definition and, being a Go template comment, is never served.
+	def := topNavbarDefinition(t)
+	for _, gone := range []string{"ti-lock", "badge", "Read-only"} {
+		if strings.Contains(def, gone) {
+			t.Errorf("the topnavbar partial carries %q; the read-only indicator was replaced by the selected roadmap's name; definition=%q", gone, def)
+		}
+	}
+	// Falsifiability control: an extraction that came back empty would satisfy
+	// every absence above without proving anything.
+	if !strings.Contains(def, "Chrome.Roadmap") {
+		t.Fatalf("the extracted topnavbar partial does not read .Chrome.Roadmap, so the assertions above were made on the wrong text; definition=%q", def)
+	}
+}
+
+// topNavbarDefinition returns the body of the `{{define "topnavbar"}}` partial
+// in the embedded layout template: the one place the top navbar's markup is
+// written, which every page renders through `{{template "topnavbar" .}}`.
+//
+// The body ends at the LAST `{{end}}` before the next `{{define ...}}`, because
+// the partial contains a nested `{{with .Chrome.Roadmap}}` whose own `{{end}}`
+// comes first.
+func topNavbarDefinition(t *testing.T) string {
+	t.Helper()
+
+	content, err := templatesFS.ReadFile("templates/layout.html")
+	if err != nil {
+		t.Fatalf("reading the embedded layout template: %v", err)
+	}
+	source := string(content)
+
+	const define = `{{define "topnavbar"}}`
+	start := strings.Index(source, define)
+	if start < 0 {
+		t.Fatalf("the embedded layout template defines no %q partial", "topnavbar")
+	}
+	rest := source[start+len(define):]
+	if next := strings.Index(rest, "{{define "); next >= 0 {
+		rest = rest[:next]
+	}
+	end := strings.LastIndex(rest, "{{end}}")
+	if end < 0 {
+		t.Fatalf("the topnavbar partial is never closed")
+	}
+	return rest[:end]
+}
+
 // TestTablerFidelity_TopNavbarIsSiblingOfPageWrapper asserts the admin-shell
 // element order: inside div.page, the top header.navbar is a SIBLING of
 // div.page-wrapper and precedes it, rather than being nested inside it.

@@ -112,10 +112,15 @@ func TestPages_DarkThemeAttribute(t *testing.T) {
 
 // TestPages_AdminShellMarkup asserts every page renders the Tabler admin-shell
 // chrome: a vertical navigation sidebar that lists Roadmaps, the page-wrapper
-// shell, a page header, and the read-only indicator. The off-canvas collapse
+// shell, a page header, and the top navbar. The off-canvas collapse
 // is driven by Tabler's JS via the navbar-toggler + collapse markup, so its
 // presence is the structural proof of the hamburger menu on small viewports
 // (SPEC/WEB.md Acceptance Criteria 23/24).
+//
+// What the top navbar CARRIES is roadmap-dependent — the selected roadmap's
+// name, and nothing at all on the roadmap index page — so it is asserted by
+// TestShell_TopNavbarNamesTheSelectedRoadmap rather than by this sweep, which
+// covers only what every page shares.
 func TestPages_AdminShellMarkup(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	name := seedRoadmap(t, "platform-core")
@@ -130,7 +135,7 @@ func TestPages_AdminShellMarkup(t *testing.T) {
 			"navbar-toggler",    // hamburger control (off-canvas collapse on small viewports)
 			`id="sidebar-menu"`, // collapsible sidebar target the toggler controls
 			">Roadmaps<",        // the always-present Roadmaps sidebar link
-			">Read-only<",       // the read-only indicator in the top navbar
+			`<header class="navbar navbar-expand-md d-print-none">`, // the top navbar
 		} {
 			if !strings.Contains(body, marker) {
 				t.Errorf("page %s missing admin-shell marker %q", path, marker)

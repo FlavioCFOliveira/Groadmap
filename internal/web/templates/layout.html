@@ -98,19 +98,41 @@
   </aside>{{end}}
 
 {{/*
-  The top navbar. It holds only the read-only indicator: the sidebar already
-  owns the brand and the single #sidebar-menu toggler, so repeating either here
-  would give a small viewport two hamburgers driving one collapse and the word
-  Groadmap twice. Tabler's own header toggler targets its own #navbar-menu,
-  which this interface does not have (SPEC/WEB.md § UI Framework).
+  The top navbar. It names the roadmap the current page belongs to, and holds
+  nothing else: the sidebar already owns the brand and the single #sidebar-menu
+  toggler, so repeating either here would give a small viewport two hamburgers
+  driving one collapse and the word Groadmap twice. Tabler's own header toggler
+  targets its own #navbar-menu, which this interface does not have (SPEC/WEB.md
+  § UI Framework, rules 13 and 19).
+
+  The name is what tells one roadmap's pages from another's at a glance, and the
+  sidebar's own per-roadmap label collapses out of sight behind the off-canvas
+  menu on a small viewport, so this is the one region that names the selected
+  roadmap at every viewport width. It replaces a badge reading "Read-only": that
+  the interface never writes is a guarantee of the server, evident on every page
+  from the absence of any control that writes, so restating it here spent the one
+  region that can identify the page's subject on what the user cannot act on.
+
+  .Chrome.Roadmap is empty on the roadmap index page, which belongs to no
+  roadmap, and the {{with}} leaves the region empty there — no name, no glyph, no
+  placeholder. The value is the validated roadmap segment of the request path and
+  goes through html/template as text, so it is escaped like every other value.
+
+  overflow-hidden on the flex items is what lets text-truncate act: a flex item's
+  automatic minimum size is its content, so without it a long name would push the
+  navbar wider instead of being clipped (SPEC/WEB.md § UI Framework, rule 19;
+  Acceptance Criterion 108).
 */}}
 {{define "topnavbar"}}  <header class="navbar navbar-expand-md d-print-none">
     <div class="container-xl">
-      <div class="navbar-nav flex-row order-md-last">
-        <div class="nav-item d-flex align-items-center">
-          <span class="badge bg-secondary-lt"><i class="ti ti-lock me-1"></i>Read-only</span>
+      {{with .Chrome.Roadmap}}
+      <div class="navbar-nav flex-row overflow-hidden">
+        <div class="nav-item d-flex align-items-center overflow-hidden">
+          <i class="ti ti-map me-2"></i>
+          <span class="h3 mb-0 text-truncate" data-role="active-roadmap">{{.}}</span>
         </div>
       </div>
+      {{end}}
     </div>
   </header>{{end}}
 
