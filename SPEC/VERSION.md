@@ -101,7 +101,7 @@ pre-existing sprints satisfy the `NOT NULL` constraint after the column is added
 
 ```sql
 -- Add the title column only when it does not already exist (see
--- DATABASE.md § Migration Idempotency). When absent, run:
+-- DATABASE.md § Migration Idempotency (ALTER TABLE ADD COLUMN)). When absent, run:
 ALTER TABLE sprints ADD COLUMN title TEXT NOT NULL DEFAULT '' CHECK(length(title) <= 255);
 
 -- Backfill each existing sprint with the literal title 'Sprint ' || id
@@ -113,7 +113,7 @@ UPDATE _metadata SET value = '1.7.0' WHERE key = 'schema_version';
 ```
 
 This migration is idempotent: the `ADD COLUMN` step is guarded by the
-column-existence check specified in `DATABASE.md § Migration Idempotency`, so
+column-existence check specified in `DATABASE.md § Migration Idempotency (ALTER TABLE ADD COLUMN)`, so
 re-running the migration set against an already-migrated database is a no-op
 rather than an error. Fresh databases created at schema version 1.7.0 receive the
 `title TEXT NOT NULL` column directly from the `sprints` CREATE TABLE statement
@@ -151,7 +151,7 @@ unique index, and application-level model validation on every write.
 
 ```sql
 -- Add the order_index column only when it does not already exist (see
--- DATABASE.md § Migration Idempotency). When absent, run:
+-- DATABASE.md § Migration Idempotency (ALTER TABLE ADD COLUMN)). When absent, run:
 -- No column-level CHECK is added here: SQLite evaluates a retrofitted CHECK
 -- against the column DEFAULT for every existing row, so CHECK(order_index > 0)
 -- would fail against the DEFAULT 0 used to satisfy NOT NULL on existing rows.
@@ -175,7 +175,7 @@ UPDATE _metadata SET value = '1.8.0' WHERE key = 'schema_version';
 ```
 
 This migration is idempotent: the `ADD COLUMN` step is guarded by the
-column-existence check specified in `DATABASE.md § Migration Idempotency`, the
+column-existence check specified in `DATABASE.md § Migration Idempotency (ALTER TABLE ADD COLUMN)`, the
 backfill is a deterministic full-table assignment that yields the same result on
 every run, and the index creation uses `IF NOT EXISTS`. Re-running the migration
 set against an already-migrated database is therefore a no-op. Fresh databases
@@ -188,7 +188,7 @@ and require no backfill.
 Adds the two comment tables, `task_comments` and `sprint_comments`, and the one
 index each of them needs. The migration adds no column to any existing table, so
 the `ALTER TABLE ADD COLUMN` guard specified in
-`DATABASE.md § Migration Idempotency` does not apply here. The migration is
+`DATABASE.md § Migration Idempotency (ALTER TABLE ADD COLUMN)` does not apply here. The migration is
 inherently idempotent: every `CREATE` statement carries `IF NOT EXISTS`, and the
 closing `UPDATE _metadata` writes the same literal on every run.
 

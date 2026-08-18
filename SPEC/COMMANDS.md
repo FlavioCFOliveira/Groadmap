@@ -114,15 +114,15 @@ contains any of the following is rejected with exit code 6 before it is stored:
   `U+202A`-`U+202E`, `U+2066`-`U+2069`, and `U+FEFF`.
 
 This guards against terminal escape-sequence injection (CWE-150) and Trojan Source
-attacks (CVE-2021-42574). The canonical definition is in
-`MODELS.md § Free-Text Control-Character Constraint`.
+attacks (CVE-2021-42574). The canonical definition is the Free-Text
+Control-Character Constraint in `MODELS.md § Task`.
 
 ### Specialists List-Separator Constraint
 
 The `specialists` field is a comma-separated list. The comma is reserved as the
 list separator, so an individual specialist name MUST NOT contain a comma. An input
 in which a single name contains a comma is rejected with exit code 6. The canonical
-definition is in `MODELS.md § Specialists List-Separator Constraint`.
+definition is the Specialists List-Separator Constraint in `MODELS.md § Task`.
 
 ### Validation Error Messages
 

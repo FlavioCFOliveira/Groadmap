@@ -16,7 +16,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Knowledge graph feature (design, persistence, guard rails) | `GRAPH.md` |
 | Read-only web interface (`rmp web`, server, pages, graph viz) | `WEB.md` |
 | Web roadmap sprints page / landing (`/roadmaps/{name}`, sprint tabs Próximos / Actual / Concluídos) | `WEB.md § Roadmap Sprints Page` |
-| Web roadmap tasks page (`/roadmaps/{name}/tasks`, full task table) | `WEB.md § Roadmap Tasks Page` |
+| Web roadmap tasks page (`/roadmaps/{name}/tasks`, Kanban task board) | `WEB.md § Roadmap Tasks Page` |
 | Web sprint page (`/roadmaps/{name}/sprints/{id}`) | `WEB.md § Roadmap Sprint Page` |
 | Web shared sprint-card partial (header, description, task-count footer; used by all three sprints-page tabs) | `WEB.md § Shared Sprint-Card Partial` |
 | Web sprint detail sub-template (status summary line, metadata datagrid, member-tasks table; single sprint page only) | `WEB.md § Sprint Detail Sub-Template` |
@@ -35,7 +35,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Web HTTP security headers (CSP, X-Frame-Options, etc.) | `WEB.md § Security Headers` |
 | Web HTTP server timeouts (read-header, write, idle) | `WEB.md § HTTP Server Timeouts` |
 | Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
-| Free-text control-character constraint (CWE-150 / Trojan Source) | `MODELS.md § Free-Text Control-Character Constraint` |
+| Free-text control-character constraint (CWE-150 / Trojan Source) | `MODELS.md § Task` (Free-Text Control-Character Constraint) |
 | Comment types (the one enum, and the per-entity valid subsets) | `MODELS.md § Comment Type` |
 | Task comment / sprint comment models and field constraints | `MODELS.md § Task Comment` and `MODELS.md § Sprint Comment` |
 | Comment subcommand syntax / flags (`comment-add`, `comment-list`, `comment-edit`, `comment-remove`) | `COMMANDS.md § Task Comments` and `COMMANDS.md § Sprint Comments` |

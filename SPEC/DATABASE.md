@@ -342,7 +342,7 @@ CREATE INDEX IF NOT EXISTS idx_task_comments_task_created ON task_comments(task_
 **Fields:**
 - `task_id`: The owning task. Deleting the task deletes its comments (`ON DELETE CASCADE`).
 - `type`: The comment classification. The `CHECK` enumerates exactly the seven values a task comment accepts; the Go-level enum is defined in `MODELS.md § Comment Type`.
-- `body`: The comment text, maximum 4096 characters, subject to the control-character constraint in `MODELS.md § Free-Text Control-Character Constraint`.
+- `body`: The comment text, maximum 4096 characters, subject to the Free-Text Control-Character Constraint defined in `MODELS.md § Task`.
 - `created_at`: Creation timestamp, never modified afterwards.
 - `updated_at`: Last edit timestamp. `NULL` while the comment has never been edited; set on every edit, so a reader can tell that the stored text is no longer the text originally written.
 
@@ -724,6 +724,32 @@ DELETE FROM sprint_tasks WHERE sprint_id = ?;
 DELETE FROM sprints WHERE id = ?;
 ```
 
+#### Resolve the Sprint of Many Tasks (Grouped)
+
+Returns the sprint each task of a given set belongs to, in one round trip, so that a caller can walk the result once and index it by task without re-sorting.
+
+```sql
+-- Sprint membership of several tasks at once. The IN list is built from the same
+-- number of placeholders as ids, never by string concatenation.
+SELECT st.task_id, s.id, s.title
+FROM sprint_tasks st
+INNER JOIN sprints s ON s.id = st.sprint_id
+WHERE st.task_id IN (?, ?, ...)
+ORDER BY st.task_id ASC;
+```
+
+**At most one row per task.** `sprint_tasks.task_id` carries a `UNIQUE` constraint, so a task belongs to at most one sprint at any time (see the `sprint_tasks` Table section above and Relationships below). The query therefore returns at most one row per task id, and the caller needs no de-duplication step.
+
+**No row for a task without a sprint.** A task that belongs to no sprint has no `sprint_tasks` row, so the result simply carries no entry for that task id. The absence of an entry is the answer: the query returns neither a `NULL` row nor a placeholder for it. The inner join excludes nothing else, because `sprint_id` is `NOT NULL` and carries a foreign key to `sprints(id)`, so every `sprint_tasks` row matches exactly one sprint.
+
+**Empty id set.** When the id set is empty, the application skips the query entirely instead of issuing a statement with an empty `IN` list, exactly as it does for the grouped comment listing.
+
+**Ordering.** `task_id` ascending. The order makes the result walkable in one pass against a caller-side set of task ids; it carries no other meaning, and no tie-breaker is needed because at most one row exists per task id.
+
+**Index.** The query needs no new index. `WHERE st.task_id IN (...)` is served by `idx_sprint_tasks_task_id`, the single-column index the `sprint_tasks` DDL already declares on `task_id`, and by the implicit unique index SQLite creates for that column's `UNIQUE` constraint. The join resolves `sprints` by its primary key. See Performance Optimization below.
+
+**Use case:** the read-only web interface renders the roadmap's tasks as a Kanban board and shows on each card the sprint that task belongs to, so it MUST resolve the sprint of every rendered task with this single grouped query rather than one query per task or one query per board column (see `WEB.md § Roadmap Tasks Page`).
+
 ### Audit
 
 #### Log Operation
@@ -991,7 +1017,7 @@ This is the one statement in this group that has no `sprint_comments` form, beca
 
 **Integrity rules:**
 - A task may not be in any sprint (no record in `sprint_tasks`)
-- A task can only be in one sprint at a time (composite PK constraint)
+- A task can only be in one sprint at a time (`UNIQUE` constraint on `sprint_tasks.task_id`)
 - When deleting sprint, relationships in `sprint_tasks` are removed (`ON DELETE CASCADE`)
 - Tasks are never automatically deleted, only disassociated
 - A task may have no comments (no record in `task_comments`); a sprint may have no comments (no record in `sprint_comments`)
@@ -1186,6 +1212,8 @@ The following composite indexes are designed to optimize frequently executed que
 - The leading column serves the parent lookup and the trailing column serves the listing order, so one index covers both and no sort step is needed
 - The same index serves the grouped `WHERE task_id IN (...)` query the web interface uses to load the comments of every rendered task in one round trip
 - A single index per table is sufficient: every comment listing filters on the parent key, so no query ever scans a comment table without it, and no listing is ordered by any other column
+
+**Grouped sprint resolution needs no new index.** The grouped query that resolves the sprint of many tasks at once (see `Resolve the Sprint of Many Tasks (Grouped)` above) filters with `WHERE sprint_tasks.task_id IN (...)` and joins `sprints` by primary key. The `task_id` lookup is already served by `idx_sprint_tasks_task_id`, the single-column index the `sprint_tasks` DDL declares, and by the implicit unique index SQLite creates for the `UNIQUE` constraint on that column. No index is added for this query, and `idx_sprint_tasks_lookup` (leading column `sprint_id`) is not the index that serves it.
 
 ### Verification
 
