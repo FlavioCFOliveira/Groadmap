@@ -214,7 +214,9 @@ task detail modal that displays all of the task's fields (see
 11. Anywhere a task is shown clickable — the tasks page's board cards and the
    sprint page's task list — selecting the task opens a read-only task detail
    modal that displays all of the task's fields and, after them, that task's
-   comments as a chronological timeline. The modal
+   comments as a chronological timeline. The element that opens the modal is a
+   `<button>` on every such surface, so the pointer, touch, Enter, and Space all
+   open it without any added JavaScript. The modal
    only displays data: it contains no form, no edit control, and no submit action,
    and it requires no new server endpoint and no new write path. The comments of
    every task rendered on a page are loaded in one grouped query, never one query
@@ -785,11 +787,13 @@ how the `rmp web` process itself terminates.
      `DATABASE.md § Relationships`).
 
      The sprint indicator is **plain text, not a link**. The whole card is a single
-     clickable control that opens the task detail modal (see **Clickable card**
-     below), and a link nested inside it would put two competing activation targets
-     in one control, leaving pointer, touch, and keyboard activation ambiguous
-     about which target the user meant. The sprint's own page stays one step away
-     through the sidebar and the sprints page, so nothing becomes unreachable.
+     `<button>` that opens the task detail modal (see **Clickable card** below), and
+     a link cannot be nested inside it: a button's content model admits no
+     interactive descendant, so a nested link would be invalid markup and would put
+     two competing activation targets in one control, leaving pointer, touch, and
+     keyboard activation ambiguous about which target the user meant. The sprint's
+     own page stays one step away through the sidebar and the sprints page, so
+     nothing becomes unreachable.
 
   The card shows **no status badge**, because the column the card sits in already
   states the task's status.
@@ -813,11 +817,18 @@ how the `rmp web` process itself terminates.
   that task (see [Task Detail Modal](#task-detail-modal)). Opening the modal
   requires no new route, no new server endpoint, no additional query, and no write
   path: the modal is populated from the task data already delivered to the page.
-  The card is reachable and operable from the keyboard, carrying the same focus
-  handling, `role`, and `aria-label` treatment as the clickable task rows of the
-  Roadmap Sprint Page's member-tasks table (see
-  [Sprint Detail Sub-Template](#sprint-detail-sub-template)), so the board is
-  usable without a pointing device.
+
+  The card **is** the trigger, and the trigger is a `<button type="button">`, a
+  natively activatable element. A pointer click, a touch tap, and the keyboard
+  (Enter and Space) therefore all open the modal through the browser's own
+  activation behaviour, with no added JavaScript, so the board is fully usable
+  without a pointing device. Because a `<button>` is focusable and exposes the
+  button role on its own, the card carries no `tabindex` and no `role="button"`:
+  both would be redundant, and neither would grant activation to an element that
+  lacked it (see [Task Detail Modal](#task-detail-modal), *The trigger is a
+  natively activatable element*). The card's accessible name identifies the task
+  it opens. The card keeps the Tabler card presentation specified under
+  **Markup** above; making it a button changes the element, not the appearance.
 - **Read-only.** The page renders data only. The board offers **no
   drag-and-drop** and no control of any other kind that moves a task between
   columns, reorders cards, changes a task's status, or creates or edits a task or
@@ -939,7 +950,10 @@ how the `rmp web` process itself terminates.
   execution order, which is the `sprint_tasks` order (the ordered set of task IDs
   the `Sprint` model exposes as `tasks`; see `MODELS.md § Sprint` and
   `DATABASE.md § Relationships`). Each task in the list is clickable: selecting a
-  task opens the read-only task detail modal for that task (see
+  task opens the read-only task detail modal for that task. The element that opens
+  the modal is a `<button>` inside the task's row, so the modal opens
+  from the pointer, from touch, and from the keyboard alike (see
+  [Sprint Detail Sub-Template](#sprint-detail-sub-template) and
   [Task Detail Modal](#task-detail-modal)).
 - **Sprint comments.** After the task list, the page shows the sprint's own
   comments in a Comments card, oldest first (see
@@ -1119,7 +1133,20 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours).
      Each task row is clickable and opens the
      read-only task detail modal for that task (see
-     [Task Detail Modal](#task-detail-modal)). When the sprint has no tasks, the
+     [Task Detail Modal](#task-detail-modal)).
+
+     The element that opens the modal is a `<button>` **inside**
+     the row, not the row itself: a table row is not an activatable element, and it
+     can hold no single control that wraps the whole row. The task `Title` cell
+     carries that button, so the title is what the keyboard reaches and activates
+     with Enter or Space, on the same contract the board card offers. The row as a
+     whole remains clickable by pointer, so
+     pointer and touch behaviour is unchanged and the whole row stays the target it
+     is today. The control's accessible name identifies the task the modal will
+     show. The row itself MUST NOT be the trigger and MUST NOT carry `role="button"`
+     with `tabindex="0"`, which would announce a button that cannot be pressed (see
+     [Task Detail Modal](#task-detail-modal), *The trigger is a natively activatable
+     element*). When the sprint has no tasks, the
      sub-template shows a clear empty-state message in place of the table.
    - the **Comments card**, a separate card placed after the member-tasks card and
      rendered last in the sub-template (defined below).
@@ -1737,6 +1764,35 @@ tasks.
   The roadmap sprints page shows no clickable tasks, because every sprint there is
   rendered as a card with no member-tasks table. Selecting a task opens the modal
   for that task.
+- **The trigger is a natively activatable element.** Every element that opens the
+  modal MUST be a `<button>`, so that a pointer click, a touch tap, Enter, and
+  Space all open the modal through the browser's own activation behaviour, with no
+  added JavaScript. This is the property every surface that shows a clickable task
+  shares, and it holds for each surface on its own terms: the surfaces are not
+  defined by reference to one another, and no surface satisfies it by copying
+  another's markup.
+
+  A `<button>` is the applicable element, not a link. A link is activatable only
+  when it carries an `href`, and the modal is not a route: it has no URL to point
+  at (see [Routes and Pages](#routes-and-pages)). A link also answers Enter alone,
+  where a button answers Enter and Space, so choosing a button is what makes the
+  same keyboard contract hold identically on every surface.
+
+  A non-interactive element made to look interactive — a `<div>` or a `<tr>`
+  carrying `role="button"` and `tabindex="0"` — MUST NOT be the trigger.
+  `tabindex` grants focus and `role` announces the element as a button, but
+  neither grants activation, so such an element takes focus and announces itself
+  as a button that cannot be pressed. The vendored framework does not close that
+  gap: it binds its modal trigger behaviour to the click event only and registers
+  no key handler for a trigger, and adding one is not available to this interface,
+  because the Content-Security-Policy in [Security Headers](#security-headers)
+  admits script only from `/static/` and [Frontend Rules](#frontend-rules) allow
+  no inline script. The trigger therefore has to be an element that is activatable
+  to begin with.
+
+  Each trigger carries an **accessible name that identifies the task it opens**,
+  so a user reaching it without sight of the surrounding layout knows which task
+  the modal will show.
 - **Fields shown.** The modal displays all of the task's fields as defined for the
   `Task` model in `MODELS.md § Task`: `id`, `title`, `status`, `type`, `priority`,
   `severity`, `functional_requirements`, `technical_requirements`,
@@ -2620,7 +2676,9 @@ Rules:
    or link that submits a change. `GET /roadmaps/{name}/tasks`
    for a non-existent roadmap, or a request whose `{name}` violates the
    roadmap-name rules, returns HTTP 404 without touching the filesystem outside
-   `~/.roadmaps/`. Acceptance Criteria 81 to 92 define the board itself.
+   `~/.roadmaps/`. Acceptance Criteria 81 to 92 define the board itself, and
+   Acceptance Criterion 93 fixes the modal trigger on every surface that shows a
+   clickable task.
 10. `GET /roadmaps/{name}` for a non-existent roadmap returns HTTP 404, and a
     request whose `{name}` violates the roadmap-name rules (for example
     `../etc`) returns HTTP 404 without touching the filesystem outside
@@ -2665,8 +2723,9 @@ Rules:
     `subtask_count`, `depends_on`, `blocks`, `created_at`, `started_at`,
     `tested_at`, `closed_at`). The modal is read-only: it contains no form, no edit
     control, and no submit action, and it triggers no new server request and no new
-    write path. The modal and the sprint tabs are usable on touch input and on a
-    small phone-sized viewport.
+    write path. The modal opens from the pointer, from touch, and from the keyboard
+    on every surface that shows a clickable task, and the modal and the sprint tabs
+    are usable on touch input and on a small phone-sized viewport.
 16. The admin-shell sidebar's per-roadmap links target the four distinct endpoints:
     the Sprints link points to `/roadmaps/{name}` (the landing page), the Tasks
     link points to `/roadmaps/{name}/tasks`, the Audit link points to
@@ -3187,12 +3246,14 @@ Rules:
 86. Selecting a board card opens the read-only task detail modal for that task,
     which displays that task's full field set as specified in Acceptance Criterion
     15. Opening the modal issues no new server request, uses no new endpoint, runs
-    no additional query, and reaches no write path. Each card is reachable and
-    operable from the keyboard, carrying the same focus handling, `role`, and
-    `aria-label` treatment as the clickable task rows of the Roadmap Sprint Page's
-    member-tasks table, so a card can be opened without a pointing device (see
-    [Task Detail Modal](#task-detail-modal) and
-    [Sprint Detail Sub-Template](#sprint-detail-sub-template)).
+    no additional query, and reaches no write path. The card is a
+    `<button type="button">`, so it is focusable and activatable natively: a
+    pointer click, a touch tap, Enter, and Space each open the modal, and no
+    JavaScript is added to make that work. The card carries no `tabindex` and no
+    `role="button"`, both redundant on a button, and its accessible name identifies
+    the task it opens, so a card can be opened without a pointing device (see
+    [Roadmap Tasks Page](#roadmap-tasks-page) and
+    [Task Detail Modal](#task-detail-modal)).
 87. The board is read-only. It offers no drag-and-drop, and no control of any other
     kind that moves a task between columns, reorders cards, changes a task's status,
     or creates or edits a task or a column. The page contains no form, button, or
@@ -3257,6 +3318,22 @@ Rules:
     at all. This is measured the same way Acceptance Criterion 70 measures the
     comment-query count (see
     `DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)`).
+93. On every surface that renders a clickable task, the element that opens the task
+    detail modal is a `<button>` in the served HTML, activatable by pointer, touch,
+    Enter, and Space. No modal trigger anywhere in the served HTML is a
+    `<div>` or a `<tr>` carrying `role="button"`, and none relies on `tabindex` to
+    be reachable in place of being activatable. On the roadmap tasks page the
+    trigger is the board card itself, rendered as `<button type="button">`; on the
+    Roadmap Sprint Page it is a natively activatable element inside the member-tasks
+    row, a `<button>` carried by the task `Title` cell, while the row stays
+    clickable by pointer.
+    Each trigger carries an accessible name identifying the task it opens. The
+    property holds without any JavaScript being added: the page loads no script
+    beyond those it already loads from `/static/`, and the Content-Security-Policy
+    of Acceptance Criterion 33 is unchanged (see
+    [Task Detail Modal](#task-detail-modal),
+    [Roadmap Tasks Page](#roadmap-tasks-page), and
+    [Sprint Detail Sub-Template](#sprint-detail-sub-template)).
 
 ## See Also
 
@@ -3300,6 +3377,10 @@ Rules:
   `DATABASE.md § tasks Table`
 - Default task ordering that fixes the order of the cards inside each board column
   → `DATABASE.md § Main SQL Queries` ("List All")
+- Keyboard operability of a clickable task: why the modal trigger must be a
+  natively activatable element on every surface, and why no script may be added to
+  compensate → [Task Detail Modal](#task-detail-modal),
+  [Security Headers](#security-headers), and [Frontend Rules](#frontend-rules)
 - Sprint membership shown on each board card, the `UNIQUE` constraint that limits a
   task to one sprint, and the grouped query that resolves the sprint of every
   rendered task in one round trip → `MODELS.md § Sprint`,
