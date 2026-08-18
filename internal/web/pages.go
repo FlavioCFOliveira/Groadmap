@@ -84,11 +84,13 @@ func handleSprints(w http.ResponseWriter, r *http.Request) {
 	renderHTML(w, "sprints.html", data)
 }
 
-// handleTasks renders a roadmap's tasks page: the full task table (every task,
-// any status), each row clickable to open the read-only task detail modal
-// (SPEC/WEB.md § Roadmap Tasks Page). The {name} is validated and confirmed to
-// exist before any data read; an invalid or unknown name yields 404 (handled
-// by resolveRoadmap), an internal read error yields 500.
+// handleTasks renders a roadmap's tasks page: every task, any status, as a
+// Kanban board of five fixed columns — one per task status — with each card
+// clickable to open the read-only task detail modal (SPEC/WEB.md § Roadmap Tasks
+// Page). The page renders no task table; the board is its only task presentation.
+// The {name} is validated and confirmed to exist before any data read; an invalid
+// or unknown name yields 404 (handled by resolveRoadmap), an internal read error
+// yields 500.
 func handleTasks(w http.ResponseWriter, r *http.Request) {
 	name, ok := resolveRoadmap(w, r)
 	if !ok {

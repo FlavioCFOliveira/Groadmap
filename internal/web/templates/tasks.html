@@ -24,60 +24,67 @@
       <main class="page-body">
         <div class="container-xl">
 
-          <div class="card" id="tasks">
-            <div class="card-header">
-              <h3 class="card-title">Tasks <span class="badge bg-secondary-lt ms-2">{{len .Tasks}}</span></h3>
-            </div>
-            {{if .Tasks}}
-            <div class="table-responsive">
-              <table class="table table-vcenter card-table">
-                <thead>
-                  <tr>
-                    <th>ID</th>
-                    <th>Title</th>
-                    <th>Status</th>
-                    <th>Type</th>
-                    <th>Priority</th>
-                    <th>Severity</th>
-                    <th>Specialists</th>
-                    <th>Parent</th>
-                    <th>Subtasks</th>
-                    <th>Depends on</th>
-                    <th>Blocks</th>
-                    <th>Created</th>
-                    <th>Started</th>
-                    <th>Tested</th>
-                    <th>Closed</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {{range .Tasks}}
-                  <tr class="task-row" data-bs-toggle="modal" data-bs-target="#task-modal-{{.ID}}" tabindex="0" role="button" aria-label="Open details for task #{{.ID}}">
-                    <td>{{.ID}}</td>
-                    <td>{{.Title}}</td>
-                    <td><span class="badge {{taskStatusBadge .Status}}">{{.Status}}</span></td>
-                    <td>{{.Type}}</td>
-                    <td><span class="badge {{priorityBadge .Priority}}">{{.Priority}}</span></td>
-                    <td><span class="badge {{severityBadge .Severity}}">{{.Severity}}</span></td>
-                    <td>{{with .Specialists}}{{.}}{{else}}&mdash;{{end}}</td>
-                    <td>{{with .ParentTaskID}}#{{.}}{{else}}&mdash;{{end}}</td>
-                    <td>{{.SubtaskCount}}</td>
-                    <td>{{if .DependsOn}}{{range $i, $d := .DependsOn}}{{if $i}}, {{end}}#{{$d}}{{end}}{{else}}&mdash;{{end}}</td>
-                    <td>{{if .Blocks}}{{range $i, $b := .Blocks}}{{if $i}}, {{end}}#{{$b}}{{end}}{{else}}&mdash;{{end}}</td>
-                    <td class="text-nowrap text-secondary">{{.CreatedAt}}</td>
-                    <td class="text-nowrap text-secondary">{{with .StartedAt}}{{.}}{{else}}&mdash;{{end}}</td>
-                    <td class="text-nowrap text-secondary">{{with .TestedAt}}{{.}}{{else}}&mdash;{{end}}</td>
-                    <td class="text-nowrap text-secondary">{{with .ClosedAt}}{{.}}{{else}}&mdash;{{end}}</td>
-                  </tr>
-                  {{end}}
-                </tbody>
-              </table>
-            </div>
-            {{else}}
-            <div class="card-body">
-              <div class="empty">
-                <p class="empty-title">No tasks yet</p>
-                <p class="empty-subtitle text-secondary">This roadmap has no tasks yet.</p>
+          {{/*
+            The Kanban task board: five fixed columns, one per TaskStatus, in the
+            order of the task state machine's flow. The columns come from the
+            model (web.groupIntoColumns over models.ValidTaskStatuses), never from
+            a literal here, so the set and the order cannot drift from the enum
+            and every column is rendered even when it holds no task.
+
+            The board is READ-ONLY: it has no drag-and-drop and no control that
+            moves a task between columns or edits anything. Selecting a card opens
+            that task's read-only detail modal, which is rendered once per task at
+            the end of this page from data already delivered to it — no new route,
+            no new endpoint, no further query (SPEC/WEB.md § Roadmap Tasks Page;
+            Acceptance Criteria 81 to 92).
+
+            Tabler ships no board component, so only the column strip's layout and
+            scrolling live in static/style.css (.task-board*); everything inside a
+            column is Tabler's own markup — cards, the card-header idiom, badges,
+            and the empty state.
+          */}}
+          <div class="task-board" data-role="task-board">
+            {{range .Columns}}
+            <div class="card task-board__column" data-role="task-board-column">
+              <div class="card-header">
+                <h3 class="card-title">{{.Status}} <span class="badge bg-secondary-lt ms-2">{{.Count}}</span></h3>
+              </div>
+              <div class="card-body task-board__cards">
+                {{range .Tasks}}
+                <div class="card card-sm task-card" data-bs-toggle="modal" data-bs-target="#task-modal-{{.ID}}" tabindex="0" role="button" aria-label="Open details for task #{{.ID}}">
+                  <div class="card-body">
+                    <div class="small text-secondary" data-role="task-card-ref">#{{.ID}} &middot; {{.Type}}</div>
+                    <div class="fw-bold text-break mb-1" data-role="task-card-title">{{.Title}}</div>
+                    <div class="d-flex flex-wrap gap-1">
+                      <span class="badge {{priorityBadge .Priority}}">{{.Priority}}</span>
+                      <span class="badge {{severityBadge .Severity}}">{{.Severity}}</span>
+                    </div>
+                    {{/*
+                      The metadata footer shows ONLY the indicators the task has:
+                      an absent, empty, or zero value renders nothing at all — no
+                      dash and no placeholder — and a task with none of the six
+                      renders no footer (SPEC/WEB.md § Roadmap Tasks Page, absent
+                      metadata renders nothing). The card carries no status badge:
+                      the column it sits in already states the status.
+                    */}}
+                    {{if .HasMeta}}
+                    <div class="d-flex flex-wrap gap-2 mt-2 small text-secondary" data-role="task-card-meta">
+                      {{with .Sprint}}<span data-role="task-card-sprint"><i class="ti ti-flag me-1"></i>{{.Title}} (Sprint #{{.ID}})</span>{{end}}
+                      {{with .SpecialistsText}}<span data-role="task-card-specialists"><i class="ti ti-users me-1"></i>{{.}}</span>{{end}}
+                      {{if .SubtaskCount}}<span data-role="task-card-subtasks"><i class="ti ti-subtask me-1"></i>Subtasks: {{.SubtaskCount}}</span>{{end}}
+                      {{if .DependsOn}}<span data-role="task-card-depends-on"><i class="ti ti-link me-1"></i>Depends on: {{len .DependsOn}}</span>{{end}}
+                      {{if .Blocks}}<span data-role="task-card-blocks"><i class="ti ti-lock me-1"></i>Blocks: {{len .Blocks}}</span>{{end}}
+                      {{if .Comments}}<span data-role="task-card-comments"><i class="ti ti-message me-1"></i>Comments: {{len .Comments}}</span>{{end}}
+                    </div>
+                    {{end}}
+                  </div>
+                </div>
+                {{else}}
+                <div class="empty" data-role="task-board-column-empty">
+                  <p class="empty-title">No tasks</p>
+                  <p class="empty-subtitle text-secondary">No task is in {{.Status}} right now.</p>
+                </div>
+                {{end}}
               </div>
             </div>
             {{end}}
@@ -97,7 +104,7 @@
     </div>
   </div>
 
-  {{/* One read-only task detail modal per task in the full task table. */}}
+  {{/* One read-only task detail modal per task on the board. */}}
   {{range .Tasks}}{{template "taskModal" .}}{{end}}
 
   <script src="/static/vendor/tabler/tabler.min.js"></script>

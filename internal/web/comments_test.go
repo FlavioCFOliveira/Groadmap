@@ -760,18 +760,40 @@ func TestCommentTypeBadge_NeutralForEveryType(t *testing.T) {
 // task. It is unreachable through the narrow interfaces the loaders are handed —
 // taskCommentReader does not carry it — so the counter is a falsifiable guard that
 // the seam still holds if that interface is ever widened.
+// groupedTaskSprints counts the tasks page's third read, the grouped sprint
+// resolution, and lastSprintIDs records the id set it was given, so Acceptance
+// Criterion 92 is measured on the same instrument as Criterion 70: one query for
+// the whole set of rendered task ids, and none for a page that renders no task.
+//
+// boundedTaskList counts the CLI's capped listing, which the board must never
+// take: its limit is capped at models.MaxTaskLimit, so a roadmap with more tasks
+// than that would lose cards while the column headers still presented their
+// counts as facts about the roadmap.
 type countingSource struct {
 	*db.DB
 	lastGroupedIDs      []int
+	lastSprintIDs       []int
 	groupedTaskComments int
+	groupedTaskSprints  int
 	perTaskComments     int
 	sprintComments      int
 	taskList            int
+	boundedTaskList     int
 	sprintTasks         int
 }
 
-func (c *countingSource) ListTasks(ctx context.Context, filter *db.TaskListFilter) ([]models.Task, error) {
+// ListAllTasks is the read the board performs: unbounded, every task of the
+// roadmap.
+func (c *countingSource) ListAllTasks(ctx context.Context) ([]models.Task, error) {
 	c.taskList++
+	return c.DB.ListAllTasks(ctx)
+}
+
+// ListTasks is the CLI's bounded listing. It is unreachable through the
+// tasksSource interface; counting it here keeps that seam falsifiable if the
+// interface is ever widened.
+func (c *countingSource) ListTasks(ctx context.Context, filter *db.TaskListFilter) ([]models.Task, error) {
+	c.boundedTaskList++
 	return c.DB.ListTasks(ctx, filter)
 }
 
@@ -792,6 +814,13 @@ func (c *countingSource) ListTaskComments(ctx context.Context, taskID int,
 	commentType *models.CommentType) ([]models.TaskComment, error) {
 	c.perTaskComments++
 	return c.DB.ListTaskComments(ctx, taskID, commentType)
+}
+
+func (c *countingSource) GetSprintsByTasks(ctx context.Context,
+	taskIDs []int) (map[int]db.SprintRef, error) {
+	c.groupedTaskSprints++
+	c.lastSprintIDs = append([]int(nil), taskIDs...)
+	return c.DB.GetSprintsByTasks(ctx, taskIDs)
 }
 
 func (c *countingSource) ListSprintComments(ctx context.Context, sprintID int,
@@ -964,6 +993,13 @@ func TestSprintPage_CommentQueryCount(t *testing.T) {
 	}
 	if src.sprintTasks != 1 {
 		t.Errorf("the sprint page issued %d member-task queries, want 1", src.sprintTasks)
+	}
+	// The tasks page's grouped sprint read must not leak into this page: the
+	// sprint page renders one known sprint, so resolving the sprint of its member
+	// tasks would be a query for a value its markup never shows (SPEC/WEB.md
+	// § Roadmap Tasks Page, the sprint indicator).
+	if src.groupedTaskSprints != 0 {
+		t.Errorf("the sprint page issued %d sprint-resolution queries, want 0", src.groupedTaskSprints)
 	}
 	if len(src.lastGroupedIDs) != 3 {
 		t.Errorf("the grouped read was given %d ids, want the sprint's 3 member tasks",

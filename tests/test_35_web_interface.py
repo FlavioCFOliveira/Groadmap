@@ -582,11 +582,13 @@ class TestWebInterface:
         assert "data-bs-target=\"#task-modal-" not in body, (
             "the sprints page must render no per-task modal trigger"
         )
-        # The full task table (its 15-column header) belongs to the tasks page,
-        # not the sprints page. The <th>Specialists</th> header is unique to the
-        # full table (the modal's "Specialists" datagrid title is not a <th>).
+        # The sprints page renders no task presentation of its own: neither a
+        # task table nor the tasks page's Kanban board.
         assert "<th>Specialists</th>" not in body, (
-            "the sprints page must NOT render the full task table"
+            "the sprints page must render no task table"
+        )
+        assert 'data-role="task-board"' not in body, (
+            "the Kanban board belongs to the tasks page, not the sprints page"
         )
         # The PENDING-sprint task is not surfaced on the sprints page either.
         assert "add webauthn passkey support" not in body.lower(), (
@@ -598,16 +600,72 @@ class TestWebInterface:
             "sprints page must not submit any change"
         )
 
-    def test_tasks_page_shows_full_table_read_only(self):
-        """The tasks page renders the roadmap's full task table — every task of
-        any status — with the read-only task detail modal on each row, and does
-        NOT render the sprint tabs (SPEC/WEB.md § Roadmap Tasks Page)."""
+    # The five fixed board columns, in the order of the task state machine's
+    # flow (SPEC/WEB.md § Roadmap Tasks Page, Acceptance Criterion 81).
+    BOARD_COLUMNS = ("BACKLOG", "SPRINT", "DOING", "TESTING", "COMPLETED")
+
+    @staticmethod
+    def _board_columns(body):
+        """Return the markup of each board column, in the order rendered.
+
+        The board lives inside <main class="page-body">; the task detail modals
+        are rendered after it, outside the page wrapper, so slicing main keeps a
+        modal's copy of a task's title from being mistaken for a card.
+        """
+        main = re.search(r'<main class="page-body">(.*?)</main>', body, re.S)
+        assert main, 'the tasks page has no <main class="page-body"> region'
+        region = main.group(1)
+        assert 'data-role="task-board"' in region, "the tasks page renders no Kanban board"
+        return region, region.split('data-role="task-board-column"')[1:]
+
+    @staticmethod
+    def _column_header(column):
+        """Return the (status, count) a column header shows."""
+        m = re.search(
+            r'<h3 class="card-title">([A-Z]+) '
+            r'<span class="badge bg-secondary-lt ms-2">(\d+)</span></h3>',
+            column,
+        )
+        assert m, "a board column has no Tabler card-title header with a count badge"
+        return m.group(1), int(m.group(2))
+
+    def test_tasks_page_renders_the_kanban_board_read_only(self):
+        """The tasks page renders every task of the roadmap as a Kanban board of
+        five fixed columns, each card opening the read-only task detail modal.
+
+        It renders no task table, no sprint tabs, and no control that writes
+        (SPEC/WEB.md § Roadmap Tasks Page, Acceptance Criteria 81 to 92)."""
         proc, port = self._start(["--port", "0"])
         status, headers, body = self._req(port, f"/roadmaps/{ROADMAP}/tasks")
         assert status == 200
         assert headers.get("content-type", "").startswith("text/html")
-        # The full 15-column task table is present.
-        assert "<th>Specialists</th>" in body, "tasks page must render the full task table"
+
+        region, columns = self._board_columns(body)
+
+        # Five columns, in the state machine's order, whatever the data holds.
+        assert len(columns) == 5, f"the board renders {len(columns)} columns, want 5"
+        for column, want in zip(columns, self.BOARD_COLUMNS):
+            got, _ = self._column_header(column)
+            assert got == want, f"column titled {got!r}, want {want!r}"
+
+        # Every task the CLI reports is on the board exactly once, in the column
+        # of its own status: the web view and the CLI agree on where the work
+        # stands. The counts sum to the roadmap's task count.
+        tasks = json.loads(self._run(["task", "list", "-r", ROADMAP])[1])
+        assert tasks, "the fixture roadmap has no task to place on the board"
+        by_column = dict(zip(self.BOARD_COLUMNS, columns))
+        for task in tasks:
+            marker = f'data-bs-target="#task-modal-{task["id"]}"'
+            assert region.count(marker) == 1, (
+                f"task #{task['id']} has {region.count(marker)} cards on the board, want 1"
+            )
+            assert marker in by_column[task["status"]], (
+                f"task #{task['id']} is not in the {task['status']} column, which is its status"
+            )
+        assert sum(self._column_header(c)[1] for c in columns) == len(tasks), (
+            "the column counts do not sum to the roadmap's task count"
+        )
+
         # Every task, any status — including the PENDING-sprint task that the
         # sprints page does not show.
         low = body.lower()
@@ -617,17 +675,130 @@ class TestWebInterface:
             "add webauthn passkey support",
             "audit the session-cookie flags",
         ):
-            assert title in low, f"tasks page must list task {title!r}"
-        # A clickable row opens the read-only modal for the task.
+            assert title in low, f"tasks page must show task {title!r} on the board"
+
+        # A card opens the read-only modal of its own task.
         t1 = self.open_task_ids[0]
-        assert f'data-bs-target="#task-modal-{t1}"' in body, "tasks page missing modal trigger"
-        assert f'id="task-modal-{t1}"' in body, "tasks page missing modal element"
-        # The tasks page does NOT render the sprint tabs/panes.
+        assert f'data-bs-target="#task-modal-{t1}"' in region, "board card missing the modal trigger"
+        assert f'id="task-modal-{t1}"' in body, "tasks page missing the task detail modal"
+
+        # The card of a task in a sprint names that sprint, by title and id.
+        assert f"Authentication hardening sprint (Sprint #{self.open_sid})" in region, (
+            "the card of a sprinted task must name its sprint"
+        )
+
+        # The board replaced the table: no table, and no sprint tabs.
+        assert "<table" not in region, "the board is the page's only task presentation"
+        assert "<th>Specialists</th>" not in body, "the tasks page must render no task table"
         assert 'id="tab-current"' not in body, "tasks page must not render the sprint tabs"
-        # Read-only: no edit affordance.
+
+        # Read-only: no edit affordance and no drag-and-drop.
         assert "<form" not in low, "tasks page must contain no form"
         assert "<input" not in low, "tasks page must contain no input"
         assert 'type="submit"' not in low, "tasks page must contain no submit"
+        assert "draggable" not in region.lower(), "the board must offer no drag-and-drop"
+
+    def test_tasks_page_board_places_each_status_in_its_own_column(self):
+        """Tasks written through the CLI land in the board column of the status
+        the CLI reports, one column per status.
+
+        The shared fixture keeps every task in one status, so this test builds a
+        roadmap of its own whose tasks sit in three DIFFERENT columns: a board
+        that grouped by anything other than the task's status, or that dropped
+        the grouping altogether, could not place all three correctly
+        (SPEC/WEB.md § Roadmap Tasks Page, Acceptance Criterion 82)."""
+        roadmap = "board_placement_demo"
+        self._run(["roadmap", "create", roadmap])
+        backlog = self.test.create_task(
+            roadmap,
+            "Publish the settlement reconciliation runbook",
+            "Operators need a written procedure for a failed settlement window",
+            "Write the runbook and link it from the on-call handbook",
+            "An operator can follow the runbook without asking the team",
+            priority=3,
+        )
+        sprinted = self.test.create_task(
+            roadmap,
+            "Alert on an unbalanced settlement window",
+            "An unbalanced window must page the on-call engineer",
+            "Emit a metric per window and alert on a non-zero residual",
+            "A seeded imbalance pages within five minutes",
+            priority=7,
+        )
+        doing = self.test.create_task(
+            roadmap,
+            "Reconcile the ledger against the acquirer report",
+            "The ledger and the acquirer report must agree to the cent",
+            "Match both sides by window and report the residual",
+            "A day's windows reconcile with a zero residual",
+            priority=9,
+        )
+        sprint_id = self.test.create_sprint(roadmap, "Settlement reconciliation sprint")
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id), str(sprinted), str(doing)])
+        self._run(["sprint", "start", "-r", roadmap, str(sprint_id)])
+        self._run(["task", "stat", "-r", roadmap, str(doing), "DOING"])
+
+        proc, port = self._start(["--port", "0"])
+        _, _, body = self._req(port, f"/roadmaps/{roadmap}/tasks")
+        region, columns = self._board_columns(body)
+        by_column = dict(zip(self.BOARD_COLUMNS, columns))
+
+        for task_id, want in ((backlog, "BACKLOG"), (sprinted, "SPRINT"), (doing, "DOING")):
+            marker = f'data-bs-target="#task-modal-{task_id}"'
+            assert region.count(marker) == 1, (
+                f"task #{task_id} has {region.count(marker)} cards on the board, want 1"
+            )
+            assert marker in by_column[want], f"task #{task_id} is not in the {want} column"
+
+        # The counts follow the placement, and the two untouched columns are empty.
+        for status, want in (("BACKLOG", 1), ("SPRINT", 1), ("DOING", 1),
+                             ("TESTING", 0), ("COMPLETED", 0)):
+            _, count = self._column_header(by_column[status])
+            assert count == want, f"column {status} shows the count {count}, want {want}"
+
+        # The sprinted tasks name their sprint; the BACKLOG task names none.
+        assert f"Settlement reconciliation sprint (Sprint #{sprint_id})" in region, (
+            "a card of a sprinted task must name its sprint"
+        )
+        backlog_card = by_column["BACKLOG"]
+        assert "Sprint #" not in backlog_card, (
+            "the card of a task in no sprint must name no sprint"
+        )
+
+    def test_tasks_page_board_empty_states(self):
+        """An empty column, and a roadmap with no task at all, each render the
+        in-column empty state while keeping all five columns and their 0 counts
+        (SPEC/WEB.md § Roadmap Tasks Page, Acceptance Criterion 88)."""
+        self._run(["roadmap", "create", "board_empty_demo"])
+        proc, port = self._start(["--port", "0"])
+
+        # A roadmap with no task: five columns, five empty states, no card, and
+        # the board itself still rendered.
+        _, _, body = self._req(port, "/roadmaps/board_empty_demo/tasks")
+        region, columns = self._board_columns(body)
+        assert len(columns) == 5, "an empty roadmap must still render all five columns"
+        for column, want in zip(columns, self.BOARD_COLUMNS):
+            got, count = self._column_header(column)
+            assert got == want, f"column titled {got!r}, want {want!r}"
+            assert count == 0, f"the empty column {got} shows the count {count}, want 0"
+            assert 'data-role="task-board-column-empty"' in column, (
+                f"the empty column {got} renders no empty state"
+            )
+        assert 'class="card card-sm task-card' not in region, (
+            "an empty roadmap must render no card"
+        )
+
+        # A populated board keeps the empty state in the columns that hold no
+        # task: the fixture roadmap has no task in DOING.
+        _, _, populated = self._req(port, f"/roadmaps/{ROADMAP}/tasks")
+        _, columns = self._board_columns(populated)
+        for column in columns:
+            status, count = self._column_header(column)
+            empty = 'data-role="task-board-column-empty"' in column
+            assert empty == (count == 0), (
+                f"column {status} shows the count {count} and "
+                f"{'an' if empty else 'no'} empty state"
+            )
 
     def test_serving_pages_writes_no_audit_entry(self):
         before = self._run(["audit", "stats", "-r", ROADMAP])[1]
@@ -2007,7 +2178,7 @@ class TestWebInterface:
     def test_tasks_text_is_html_escaped(self):
         # Output escaping (SPEC Security): roadmap-derived text cannot inject markup.
         # The task is in BACKLOG (no sprint), so it surfaces on the tasks page,
-        # which renders the full task table (SPEC/WEB.md § Roadmap Tasks Page).
+        # as a card in the board's BACKLOG column (SPEC/WEB.md § Roadmap Tasks Page).
         self._run(["roadmap", "create", "escaping_demo"])
         self.test.create_task(
             "escaping_demo",

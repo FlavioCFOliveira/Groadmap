@@ -217,9 +217,11 @@ func TestTasksPage_RendersSemanticBadgeColours(t *testing.T) {
 	}
 	body := rec.Body.String()
 
-	// Status badge: SPRINT -> bg-cyan-lt.
-	if !strings.Contains(body, `<span class="badge bg-cyan-lt">SPRINT</span>`) {
-		t.Errorf("tasks page missing SPRINT status badge with bg-cyan-lt")
+	// Status badge: SPRINT -> bg-cyan-lt, in the task detail modal. The board card
+	// deliberately shows no status badge: the column it sits in already states the
+	// status (SPEC/WEB.md § Roadmap Tasks Page, Acceptance Criterion 85).
+	if !strings.Contains(body, `<span class="badge bg-cyan-lt ms-auto me-2">SPRINT</span>`) {
+		t.Errorf("tasks page missing the SPRINT status badge with bg-cyan-lt in the task detail modal")
 	}
 	// Priority 8 -> bg-red-lt badge (was previously a plain cell).
 	if !strings.Contains(body, `<span class="badge bg-red-lt">8</span>`) {

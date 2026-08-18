@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -1861,5 +1862,89 @@ func TestEmptyListsAreNonNil(t *testing.T) {
 	}
 	if entries == nil {
 		t.Error("GetAuditEntries must return a non-nil empty slice, got nil (marshals to JSON null)")
+	}
+}
+
+// ==================== UNBOUNDED LISTING FOR THE WEB TASK BOARD ====================
+
+// TestListAllTasksIsUnbounded is the gate for SPEC/DATABASE.md § Main SQL
+// Queries, "List All": the listing the web interface's Kanban board reads carries
+// no LIMIT, so it returns every task of the roadmap however many there are.
+//
+// The seed is deliberately larger than models.MaxTaskLimit, which is the ceiling
+// the CLI listing clamps to. That is the bug this test exists to prevent: the
+// board used to read through ListTasks, whose limit is capped at MaxTaskLimit
+// (100), so a roadmap with more tasks than that had cards silently dropped while
+// the column headers still presented their counts as facts about the roadmap.
+//
+// The CLI's clamp is asserted alongside it, on the same data: the two reads must
+// differ, or the unbounded one is not doing anything.
+func TestListAllTasksIsUnbounded(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// One more than the cap, plus enough to make a truncation obvious.
+	const total = models.MaxTaskLimit + 37
+	for i := range total {
+		if _, err := db.CreateTask(testContext(), &models.Task{
+			// Priorities cycle so the ordering assertion below has something to
+			// order, and creation order differs from priority order.
+			Priority:               i % 10,
+			Severity:               i % 10,
+			Status:                 models.StatusBacklog,
+			Title:                  fmt.Sprintf("Reconcile settlement window %d", i+1),
+			FunctionalRequirements: "Every window must balance against the acquirer report.",
+			TechnicalRequirements:  "Match both sides by window and report the residual.",
+			AcceptanceCriteria:     "A day's windows reconcile with a zero residual.",
+			CreatedAt:              fmt.Sprintf("2026-01-%02dT%02d:00:00.000Z", (i%28)+1, i%24),
+		}); err != nil {
+			t.Fatalf("creating task %d: %v", i+1, err)
+		}
+	}
+
+	all, err := db.ListAllTasks(testContext())
+	if err != nil {
+		t.Fatalf("ListAllTasks: %v", err)
+	}
+	if len(all) != total {
+		t.Errorf("ListAllTasks returned %d tasks, want every one of the %d in the roadmap",
+			len(all), total)
+	}
+
+	// The order is the listing's own: priority DESC, then created_at ASC.
+	for i := 1; i < len(all); i++ {
+		prev, cur := all[i-1], all[i]
+		switch {
+		case prev.Priority < cur.Priority:
+			t.Fatalf("tasks out of order at %d: priority %d precedes %d",
+				i, prev.Priority, cur.Priority)
+		case prev.Priority == cur.Priority && prev.CreatedAt > cur.CreatedAt:
+			t.Fatalf("tasks out of order at %d: created_at %q precedes %q",
+				i, prev.CreatedAt, cur.CreatedAt)
+		}
+	}
+
+	// The CLI listing keeps its per-invocation cap on the very same data, which is
+	// what makes the assertion above meaningful rather than vacuous.
+	capped, err := db.ListTasks(testContext(), &TaskListFilter{Limit: models.MaxTaskLimit})
+	if err != nil {
+		t.Fatalf("ListTasks: %v", err)
+	}
+	if len(capped) != models.MaxTaskLimit {
+		t.Errorf("ListTasks returned %d tasks, want the capped %d", len(capped), models.MaxTaskLimit)
+	}
+	if len(all) <= len(capped) {
+		t.Errorf("the unbounded read returned %d tasks and the capped read %d; the seed does not "+
+			"exceed the cap, so this test would pass for a bounded board read", len(all), len(capped))
+	}
+
+	// A nil filter still answers the CLI default page, unchanged by this addition.
+	defaulted, err := db.ListTasks(testContext(), nil)
+	if err != nil {
+		t.Fatalf("ListTasks(nil): %v", err)
+	}
+	if len(defaulted) != models.DefaultTaskLimit {
+		t.Errorf("ListTasks(nil) returned %d tasks, want the default page of %d",
+			len(defaulted), models.DefaultTaskLimit)
 	}
 }

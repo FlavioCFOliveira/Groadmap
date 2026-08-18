@@ -3,9 +3,10 @@
  * The admin-shell layout, typography, colours, dark theme, tables, cards,
  * badges, buttons, and the responsive off-canvas sidebar all come from the
  * vendored Tabler framework (SPEC/WEB.md § UI Framework). This file holds
- * only what Tabler does not give us: the D3 #graph container sizing, the
- * graph detail-panel positioning, the empty-graph overlay, the in-place
- * degradation message, the layout dropdown glue, and a couple of minor
+ * only what Tabler does not give us: the Kanban task board's column strip and
+ * its scrolling (Tabler ships no board component), the D3 #graph container
+ * sizing, the graph detail-panel positioning, the empty-graph overlay, the
+ * in-place degradation message, the layout dropdown glue, and a couple of minor
  * dark-theme tweaks. It does not re-implement any layout Tabler already
  * provides.
  *
@@ -37,12 +38,78 @@
 }
 
 /* ---- Roadmap detail / sprint pages ----
-   A clickable task row (opens the read-only task detail modal). Tabler/Bootstrap
-   own the modal itself; this only signals the row is interactive and gives it a
-   visible keyboard-focus affordance, so it is usable by touch and keyboard
-   (SPEC/WEB.md § Task Detail Modal, § Responsive and Mobile-First Design). */
-.task-row { cursor: pointer; }
-.task-row:focus-visible { outline: 2px solid var(--tblr-primary, #4299e1); outline-offset: -2px; }
+   A clickable task row (on the sprint page's member-tasks table) and a clickable
+   task card (on the tasks page's Kanban board), both of which open the read-only
+   task detail modal. Tabler/Bootstrap own the modal itself; this only signals the
+   element is interactive and gives it a visible keyboard-focus affordance, so it
+   is usable by touch and keyboard (SPEC/WEB.md § Task Detail Modal, § Responsive
+   and Mobile-First Design). */
+.task-row,
+.task-card { cursor: pointer; }
+.task-row:focus-visible,
+.task-card:focus-visible { outline: 2px solid var(--tblr-primary, #4299e1); outline-offset: -2px; }
+
+/* ---- Kanban task board (SPEC/WEB.md § Roadmap Tasks Page, layout and
+   scrolling; § Responsive and Mobile-First Design, rule 9) ----
+   The vendored Tabler distribution ships no board or Kanban component, so the
+   column strip's own layout and scrolling rules live here; everything inside a
+   column is Tabler's own markup (cards, card headers, badges, empty states) and
+   carries no rule of its own in this file.
+
+   The five columns sit side by side and the BOARD scrolls horizontally inside
+   this container when they do not fit, so the page itself never scrolls
+   horizontally at any viewport width. The height is viewport-derived, leaving
+   room for the Tabler navbar, page header, and footer, which is what gives each
+   column an "available height" to scroll its cards within. */
+.task-board {
+  display: flex;
+  align-items: stretch;
+  gap: 0.75rem;
+  height: calc(100vh - 14rem);
+  min-height: 22rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* Room for the horizontal scrollbar so it never overlaps the last card. */
+  padding-bottom: 0.5rem;
+}
+
+/* One column. It never shrinks below a width at which its cards stay legible on
+   a narrow viewport; the remaining columns are reached by scrolling the board
+   horizontally, which is a touch-friendly gesture on a touch device. */
+.task-board__column {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  width: 17rem;
+  min-width: 15rem;
+  max-height: 100%;
+  overflow: hidden;
+}
+
+/* The card list of one column scrolls VERTICALLY and independently of the other
+   columns when it exceeds the available height. min-height: 0 is what lets a
+   flex item shrink below its content height and therefore scroll at all. */
+.task-board__cards {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* An empty column keeps its title and its 0 count badge and shows Tabler's
+   empty-state markup in place of the card list. Tabler sizes that panel for a
+   full-width card; inside a 15rem column it is tightened so the empty state
+   stays unobtrusive, which is the only presentation rule the board adds to a
+   Tabler component. */
+.task-board__cards .empty {
+  padding: 1rem 0.5rem;
+}
+
+.task-board__cards .empty-title {
+  font-size: 1rem;
+}
 
 /* The sprint tabs wrap on narrow viewports rather than overflowing the card
    horizontally, keeping the three tabs reachable on phones. */

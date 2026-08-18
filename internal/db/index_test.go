@@ -289,3 +289,91 @@ func seedIndexFixture(t *testing.T, db *DB) indexFixtureIDs {
 
 	return indexFixtureIDs{commentedTaskIDs: commented, sprintID: sprintID}
 }
+
+// TestGroupedSprintResolutionNeedsNoNewIndex asserts the claim SPEC/DATABASE.md
+// § Resolve the Sprint of Many Tasks (Grouped) makes about the grouped sprint
+// read: it needs no index of its own, because the `WHERE st.task_id IN (...)`
+// lookup is already served by an index on sprint_tasks.task_id and the join
+// resolves sprints by primary key.
+//
+// The assertion is deliberately not tied to one index NAME: sprint_tasks.task_id
+// carries a UNIQUE constraint, for which SQLite creates an implicit index, and
+// the DDL also declares idx_sprint_tasks_task_id on the same column. The planner
+// is free to take either, and the SPEC names both. What must hold is that it
+// takes ONE of them rather than scanning the table.
+func TestGroupedSprintResolutionNeedsNoNewIndex(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+	fixture := seedIndexFixture(t, db)
+
+	// The sprint's first three member tasks: real ids, so the planner sees the
+	// IN list production sends.
+	memberIDs, err := db.GetSprintTasks(testContext(), fixture.sprintID)
+	if err != nil {
+		t.Fatalf("reading the sprint's member tasks: %v", err)
+	}
+	if len(memberIDs) < 3 {
+		t.Fatalf("the fixture sprint has %d member tasks, want at least 3", len(memberIDs))
+	}
+	args := []any{memberIDs[0], memberIDs[1], memberIDs[2]}
+
+	plan := queryPlan(t, db, groupedTaskSprintsQuery(db.Placeholders(3)), args...)
+
+	// The membership lookup is served by an index on task_id, whichever of the two
+	// the planner picks.
+	usesTaskIDIndex := strings.Contains(plan, "idx_sprint_tasks_task_id") ||
+		strings.Contains(plan, "sqlite_autoindex_sprint_tasks_1")
+	if !usesTaskIDIndex {
+		t.Errorf("the grouped sprint read is not served by an index on sprint_tasks.task_id.\nplan: %s", plan)
+	}
+	if strings.Contains(plan, "SCAN sprint_tasks") || strings.Contains(plan, "SCAN st") {
+		t.Errorf("the grouped sprint read falls back to a full scan of sprint_tasks.\nplan: %s", plan)
+	}
+	// The join reaches the sprint by its primary key, so widening the id set costs
+	// one key lookup per task and never a scan of sprints.
+	if !strings.Contains(plan, "INTEGER PRIMARY KEY") {
+		t.Errorf("the grouped sprint read does not resolve sprints by primary key.\nplan: %s", plan)
+	}
+	if strings.Contains(plan, "SCAN sprints") || strings.Contains(plan, "SCAN s") {
+		t.Errorf("the grouped sprint read falls back to a full scan of sprints.\nplan: %s", plan)
+	}
+	// At most one row per task means no sort is needed for the task_id ordering:
+	// a temporary B-tree here would mean the index earns nothing.
+	if strings.Contains(plan, "TEMP B-TREE") {
+		t.Errorf("the grouped sprint read sorts in a temporary B-tree; the index must supply "+
+			"the task_id order.\nplan: %s", plan)
+	}
+
+	// "No new index" is the other half of the claim: the sprint_tasks index set is
+	// exactly the one the DDL declared before this read existed.
+	rows, err := db.Query(`SELECT name FROM pragma_index_list('sprint_tasks') ORDER BY name`)
+	if err != nil {
+		t.Fatalf("listing the indexes of sprint_tasks: %v", err)
+	}
+	defer rows.Close()
+
+	var indexes []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scanning index name: %v", err)
+		}
+		indexes = append(indexes, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterating index names: %v", err)
+	}
+
+	want := []string{
+		"idx_sprint_tasks_lookup",
+		"idx_sprint_tasks_order",
+		"idx_sprint_tasks_task_id",
+		"sqlite_autoindex_sprint_tasks_1", // the UNIQUE constraint on task_id
+		"sqlite_autoindex_sprint_tasks_2", // the (sprint_id, task_id) primary key
+	}
+	if strings.Join(indexes, ",") != strings.Join(want, ",") {
+		t.Errorf("sprint_tasks carries the indexes %v, want exactly %v; the grouped sprint read "+
+			"adds none (SPEC/DATABASE.md § Resolve the Sprint of Many Tasks (Grouped), Index)",
+			indexes, want)
+	}
+}
