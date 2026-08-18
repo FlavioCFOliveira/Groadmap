@@ -134,11 +134,13 @@ A published version of the binary.
 
 ### Doc
 
-A user-facing documentation file: the per-command pages under `DOCS/commands/`, the
-repository `README.md`, and `CHANGELOG.md`. Distinct from `Spec`, which is the project's
-technical specification: the two have different audiences and different owners
-(`doc-manager` versus `specification-manager`). The key is the repository-relative path,
-which also avoids colliding with the `Spec` node whose key is the bare name `README.md`.
+A prose document that explains the project to a reader, as opposed to specifying it. The
+criterion is the document's purpose, not its location: the per-command pages under
+`DOCS/commands/`, the repository `README.md`, `CHANGELOG.md`, and `tests/README.md` are all
+`Doc`s today. Distinct from `Spec`, which is the project's technical specification: the two
+have different audiences and different owners (`doc-manager` versus
+`specification-manager`). The key is the repository-relative path, which also avoids
+colliding with the `Spec` node whose key is the bare name `README.md`.
 
 `CHANGELOG.md` is a `Doc` and not a `Release`. A `Release` is one published version of the
 binary; the changelog is the prose a reader consults to learn what changed, it carries the
