@@ -264,3 +264,62 @@ func TestAuditPage_AddsNoInlineScriptAndKeepsThePolicy(t *testing.T) {
 		t.Errorf("Content-Security-Policy = %q, want the unchanged policy %q", got, contentSecurityPolicy)
 	}
 }
+
+// TestAuditPage_StatesTheOrderItActuallyShows is the regression guard for the
+// second half of the defect measured in task #217: the history card's subtitle
+// read "Oldest first" while the drawing showed the most recent entry at the
+// top, because the library places the LAST point added at the top and the
+// points are added oldest first.
+//
+// The tree and the table are two readings of the same page, so they must state
+// the same direction, and it must be the one the page shows (SPEC/WEB.md
+// § Audit History Tree, rule 2).
+func TestAuditPage_StatesTheOrderItActuallyShows(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name := seedRoadmap(t, "platform-core")
+	seedRoadmapWithAudit(t, name, 3)
+
+	body := servePage(t, buildMux(), "/roadmaps/"+name+"/audit")
+
+	// Both cards state the same order...
+	if got := strings.Count(body, "Most recent first"); got != 2 {
+		t.Errorf(`"Most recent first" appears %d times, want 2 (the history card and the entry table)`, got)
+	}
+	// ...and neither claims the opposite.
+	if strings.Contains(body, "Oldest first") {
+		t.Errorf(`the audit page still claims "Oldest first"; the tree draws the most recent entry at the top`)
+	}
+}
+
+// TestAuditGraphScript_DrawsAtItsNaturalSize is the regression guard for the
+// first half of task #217. The library's `responsive` option replaces the SVG's
+// width and height with a viewBox AND forces `width:100%; padding-bottom:100%`
+// onto the container as an inline style — a square as tall as the column is
+// wide, with the drawing laid out at the viewBox's aspect ratio. Measured in
+// chromium at a 1440px viewport, that rendered the tree 16811px tall.
+//
+// Without the option the drawing carries a real width and height, the container
+// keeps the height cap the stylesheet gives it, and nothing writes an inline
+// style — which the project forbids anyway.
+func TestAuditGraphScript_DrawsAtItsNaturalSize(t *testing.T) {
+	source := auditGraphScript(t)
+
+	if strings.Contains(source, "responsive") {
+		t.Error("audit-graph.js passes the responsive option: it forces padding-bottom:100% onto the container and scales the drawing to a square, which measured 16811px tall at a 1440px viewport")
+	}
+
+	// The density that makes a page of history readable: roughly one table row
+	// per point rather than the 61.6px the first version drew.
+	for _, want := range []string{"spacing: 30", "spacing: 24", "size: 4"} {
+		if !strings.Contains(source, want) {
+			t.Errorf("audit-graph.js no longer sets %q; the drawing's density is what keeps it readable", want)
+		}
+	}
+
+	// The stylesheet caps the card so the drawing scrolls inside it instead of
+	// pushing the table and the pagination down the page.
+	css := readEmbeddedAsset(t, "static/style.css")
+	if !strings.Contains(css, "max-height: 60vh") {
+		t.Errorf("style.css no longer caps .audit-graph's height; a page of history would push the table thousands of pixels down")
+	}
+}

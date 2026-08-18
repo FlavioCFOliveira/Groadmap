@@ -16,11 +16,14 @@
  * carry anyway, the Content-Security-Policy being script-src 'self' with no
  * inline script allowed.
  *
- * ORDER IS REVERSED HERE. The table renders performed_at DESC, most recent
- * first, as specified. A tree must be built oldest first: a lane has to exist
- * before a point can land on it. The reversal is a display concern and lives
- * here, not in the server model, where it would have silently changed the
- * table's own order (SPEC/WEB.md § Audit History Tree, rule 2).
+ * ORDER. The table renders performed_at DESC, most recent first. A tree must be
+ * BUILT oldest first — a lane has to exist before a point can land on it — so
+ * the rows are reversed here rather than in the server model, where reversing
+ * would have silently changed the table's own order. The drawing then places
+ * the last point added at the top, so the tree is READ most recent first, the
+ * same direction as the table: the two readings of the page agree, and the
+ * reversal is invisible to the reader (SPEC/WEB.md § Audit History Tree,
+ * rule 2).
  *
  * SECURITY. Every value written into the drawing is text taken from the
  * server-rendered attributes and passed to the library as a plain string. This
@@ -73,13 +76,13 @@
   var template = GitgraphJS.templateExtend(GitgraphJS.TemplateName.Metro, {
     colors: laneColors,
     branch: {
-      lineWidth: 3,
-      spacing: 46,
-      label: { font: "500 12px Inter, sans-serif" },
+      lineWidth: 2,
+      spacing: 24,
+      label: { font: "500 11px Inter, sans-serif" },
     },
     commit: {
-      spacing: 42,
-      dot: { size: 7 },
+      spacing: 30,
+      dot: { size: 4 },
       message: {
         /* The author and the hash are git's fields, not this log's: an audit
          * entry has no author, and its id is shown in the table beside it. What
@@ -88,14 +91,13 @@
         displayAuthor: false,
         displayHash: false,
         color: textColor,
-        font: "400 13px Inter, sans-serif",
+        font: "400 12px Inter, sans-serif",
       },
     },
   });
 
   var graph = GitgraphJS.createGitgraph(container, {
     template: template,
-    responsive: true,
   });
 
   var mainPath = container.getAttribute("data-main-path") || "roadmap";
@@ -113,6 +115,18 @@
       lanes[path] = main.branch({ name: label || path });
     }
     return lanes[path];
+  }
+
+  /* The stored timestamp is ISO 8601 UTC with milliseconds, which is what the
+   * table shows and what the record holds. On one line of a drawing the T and
+   * the milliseconds are noise, so the point shows "2026-08-18 17:52:05". This
+   * is formatting, not derivation: no field is dropped that the table does not
+   * still show in full beside it. */
+  function readableTime(value) {
+    if (!value) {
+      return "";
+    }
+    return value.replace("T", " ").replace(/\.\d+Z?$/, "").replace(/Z$/, "");
   }
 
   /* Oldest first. Array.prototype.slice turns the static NodeList into an array
@@ -136,8 +150,10 @@
      * therefore carries a mark of its own rather than being implied by the
      * lane's start (SPEC/WEB.md § Audit History Tree, rule 4). */
     var commit = {
-      subject: row.getAttribute("data-op") || "",
-      body: entity + " #" + entityID + "  ·  " + (row.getAttribute("data-at") || ""),
+      subject:
+        (row.getAttribute("data-op") || "") +
+        "  ·  " + entity + " #" + entityID +
+        "  ·  " + readableTime(row.getAttribute("data-at")),
     };
     if (row.getAttribute("data-opens")) {
       commit.tag = "opened";

@@ -1367,11 +1367,14 @@ table below it is the same page of entries read in detail.
    gitgraph.js (see `BUILD.md § Vendored Web Assets`), served from `/static/...`
    like every other asset. It renders SVG into a container the page provides.
 
-2. **Chronological order.** The tree is built **oldest first**, because a path
-   must exist before a point can be placed on it. This is the reverse of the
-   table's order, which stays `performed_at` descending as specified above: the
-   two orders are deliberate and each is stated where it applies. The tree reads
-   from the top down, from the oldest entry on the page to the most recent.
+2. **Chronological order.** The tree is **built oldest first**, because a path
+   must exist before a point can be placed on it, and it is **read most recent
+   first**: the drawing places the last point added at the top, so reading the
+   tree from the top down goes from the most recent entry on the page to the
+   oldest. That is the same direction the entry table runs (`performed_at`
+   descending, specified above), so the two readings of the page agree and the
+   card states the same order over both. Construction order is an implementation
+   requirement, not something the reader sees.
 
 3. **What a point shows.** Each point carries its entry's `operation`, the entity
    it names (`entity_type` and `entity_id`), and its `performed_at` timestamp.
