@@ -11,6 +11,7 @@ from `/static/...` and never from a remote origin (see `SPEC/BUILD.md
 | Inter (variable webfont) | `inter/inter.css`, `inter/files/inter-latin-wght-normal.woff2` | Inter (Rasmus Andersson) | SIL Open Font License 1.1 |
 | D3.js (graph library) | `d3/d3.min.js` | D3 (Mike Bostock) | ISC |
 | d3-sankey (Sankey layout plugin) | `d3/d3-sankey.min.js` | d3-sankey (Mike Bostock) | ISC |
+| gitgraph.js (audit history tree) | `gitgraph/gitgraph.umd.min.js` | `@gitgraph/js` 1.4.0 (Nicolas Carlo, Fabien Bernard) | MIT |
 
 These attributions are recorded as good practice for vendored assets; the full
 upstream licence texts ship with each project's distribution.

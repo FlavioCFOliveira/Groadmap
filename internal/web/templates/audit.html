@@ -24,6 +24,13 @@
             edit affordance (SPEC/WEB.md § Roadmap Audit Log Page). The card's
             own footer holds plain GET pagination links that change only the page
             query parameter; there is no form and no write path.
+
+            Each row carries the PATH its operation belongs to — the sprint whose
+            work it is, or the backlog — derived on the server (SPEC/WEB.md
+            § Audit History Paths). The path is what ties an operation to the work
+            it belongs to, and it is rendered here, server-side, so it survives
+            without JavaScript: the tree above is drawn by a script, this table is
+            not.
           */}}
           <div class="card" id="audit">
             <div class="card-header">
@@ -39,6 +46,7 @@
                     <th>Operation</th>
                     <th>Entity Type</th>
                     <th>Entity ID</th>
+                    <th>Path</th>
                     <th>Performed At</th>
                   </tr>
                 </thead>
@@ -49,6 +57,7 @@
                     <td>{{.Operation}}</td>
                     <td>{{.EntityType}}</td>
                     <td>{{.EntityID}}</td>
+                    <td class="text-nowrap"><span class="badge bg-secondary-lt" data-role="audit-path" data-path="{{.Path}}">{{.PathLabel}}</span></td>
                     <td class="text-nowrap text-secondary">{{.PerformedAt}}</td>
                   </tr>
                   {{end}}
