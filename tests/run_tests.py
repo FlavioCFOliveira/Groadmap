@@ -12,6 +12,7 @@ Usage:
 
 import sys
 import os
+import re
 import subprocess
 import argparse
 from pathlib import Path
@@ -89,6 +90,48 @@ def assert_no_dormant_modules() -> list[str]:
         for p in Path(__file__).parent.glob("test_*.py")
     }
     return sorted(on_disk - registered)
+
+
+# A module row in the tests/README.md table:
+#   | `test_01_basic_crud.py` | Roadmap and task CRUD: ... |
+_README_MODULE_ROW = re.compile(r"^\|\s*`(test_[0-9A-Za-z_]+)\.py`\s*\|")
+
+README_PATH = Path(__file__).parent / "README.md"
+
+
+def assert_readme_documents_every_module() -> tuple[list[str], list[str], list[str]]:
+    """Guard against a stale index: tests/README.md carries one table row per
+    registered module saying what that module covers, and it is the only place
+    the suite says so -- this file holds names, not meaning. A registered
+    module with no row hides its coverage from every reader who consults the
+    table; a row naming a module registered nowhere promises coverage that
+    does not run; a module listed twice makes the table's own count wrong.
+
+    Returns (missing, unknown, duplicated):
+        missing    -- registered here, absent from the README table
+        unknown    -- present in the README table, registered nowhere
+        duplicated -- listed by the README table more than once
+
+    A README that cannot be read reports every registered module as missing,
+    so the check fails loudly instead of passing on an absent file.
+    """
+    registered = set(TEST_MODULES) | set(STRESS_TEST_MODULES)
+
+    try:
+        readme = README_PATH.read_text(encoding="utf-8")
+    except OSError:
+        readme = ""
+
+    documented = [
+        match.group(1)
+        for match in (_README_MODULE_ROW.match(line) for line in readme.splitlines())
+        if match
+    ]
+
+    missing = sorted(registered - set(documented))
+    unknown = sorted(set(documented) - registered)
+    duplicated = sorted({name for name in documented if documented.count(name) > 1})
+    return missing, unknown, duplicated
 
 
 def run_test_module(module_name: str) -> tuple[bool, str]:
@@ -201,6 +244,24 @@ def main():
         for name in dormant:
             print(f"  - {name}")
         print("Add them to TEST_MODULES or STRESS_TEST_MODULES in run_tests.py.")
+        print("=" * 60)
+        return False
+
+    # Fail fast on a stale index: the README table is the suite's only record
+    # of what each module covers, so a table that stopped tracking the registry
+    # misinforms everyone who trusts it.
+    missing, unknown, duplicated = assert_readme_documents_every_module()
+    if missing or unknown or duplicated:
+        print("=" * 60)
+        print("ERROR: tests/README.md module table disagrees with the registry:")
+        for name in missing:
+            print(f"  - {name}.py: registered here, no row in the table")
+        for name in unknown:
+            print(f"  - {name}.py: row in the table, registered nowhere")
+        for name in duplicated:
+            print(f"  - {name}.py: listed by the table more than once")
+        print("Give every registered module exactly one row in the '## Test Modules'")
+        print("table of tests/README.md, stating what that module covers.")
         print("=" * 60)
         return False
 
