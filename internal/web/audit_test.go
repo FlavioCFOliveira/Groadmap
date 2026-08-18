@@ -252,8 +252,8 @@ func TestHandleAudit_PrevNextEdges(t *testing.T) {
 	}
 }
 
-// TestHandleAudit_NumberedBarRendering verifies the rendered audit.html footer
-// contains the numbered Tabler pagination bar: GET links to the visible page
+// TestHandleAudit_NumberedBarRendering verifies the rendered audit card's own
+// footer contains the numbered Tabler pagination bar: GET links to the visible page
 // numbers, a single active (non-link) item for the current page, and a
 // collapsed ellipsis for the wide gap (SPEC/WEB.md § Roadmap Audit Log Page,
 // pagination controls and sliding window with ellipsis). It drives a genuine

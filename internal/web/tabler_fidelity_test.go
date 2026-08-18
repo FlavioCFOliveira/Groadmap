@@ -1,6 +1,7 @@
 package web
 
 import (
+	"io/fs"
 	"strings"
 	"testing"
 )
@@ -77,18 +78,23 @@ func TestTablerFidelity_SidebarBrandHeading(t *testing.T) {
 	}
 }
 
-// TestTablerFidelity_FooterRowStructure is the regression guard for
-// SPEC/WEB.md § UI Framework rule 11 and Acceptance Criterion 63: the footer
-// follows Tabler's footer row structure, as the Tabler footer example does.
-// The pre-rule markup placed the notice directly in the container; this test
-// asserts the Tabler footer row wraps the read-only notice in a column, and
-// that the exact notice text is preserved verbatim and the pages stay
-// read-only (no write affordance is introduced by the structure change).
+// TestShell_CarriesNoFooterAnywhere is the regression guard that replaces the
+// one which asserted the footer's presence and structure. That footer — a full
+// band whose entire content was the sentence "Read-only. The rmp CLI remains the
+// sole write path." — was removed from every template, so its old guard has no
+// subject left. Weakening it into something that still passes would have left
+// apparent coverage over nothing; the guard is therefore inverted, and now fails
+// if a footer or the notice comes back.
 //
-// The graph page intentionally has no footer (SPEC/WEB.md does not require one
-// there), so it is excluded; the index, sprints, tasks, sprint detail, and
-// audit pages all carry the footer.
-func TestTablerFidelity_FooterRowStructure(t *testing.T) {
+// The sweep is over EVERY page route, the knowledge-graph page included: that
+// page never carried a footer, and the inverse guard is what keeps the shell
+// uniform in both directions.
+//
+// Both sides are checked. The served pages are checked because that is what a
+// user receives, and the embedded template sources are checked because a footer
+// added to a template that some future route stops rendering would otherwise slip
+// past a behavioural sweep alone.
+func TestShell_CarriesNoFooterAnywhere(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	// seedRoadmap creates sprint 1 (for the /sprints/1 detail page);
 	// seedRoadmapWithAudit adds audit entries to the same roadmap (for /audit).
@@ -98,29 +104,60 @@ func TestTablerFidelity_FooterRowStructure(t *testing.T) {
 
 	const notice = "Read-only. The rmp CLI remains the sole write path."
 
-	paths := []string{
-		"/",
-		"/roadmaps/" + name,
-		"/roadmaps/" + name + "/tasks",
-		"/roadmaps/" + name + "/sprints/1",
-		"/roadmaps/" + name + "/audit",
-	}
-	for _, path := range paths {
+	for _, path := range allPagePaths(name) {
 		body := servePage(t, mux, path)
-		if !strings.Contains(body, `<footer class="footer footer-transparent d-print-none">`) {
-			t.Errorf("page %s: missing the read-only footer element", path)
-			continue
+
+		// Falsifiability control: a body that came back empty would satisfy every
+		// absence below without proving anything. Every page renders the shell.
+		if !strings.Contains(body, `<div class="page">`) {
+			t.Fatalf("page %s: no admin shell in the response, so the assertions below "+
+				"would be vacuous", path)
 		}
-		if !strings.Contains(body, `<div class="row text-center align-items-center flex-row-reverse">`) {
-			t.Errorf("page %s: footer does not use Tabler's footer row structure "+
-				`<div class="row text-center align-items-center flex-row-reverse">`, path)
+
+		// The element, not merely its text: removing the sentence and leaving the
+		// band would leave an empty strip at the foot of the page.
+		if strings.Contains(body, "<footer") {
+			t.Errorf("page %s: renders a <footer> element; the read-only footer was removed "+
+				"from every page", path)
 		}
-		if !strings.Contains(body, `<div class="col-12 text-secondary">`) {
-			t.Errorf("page %s: footer notice is not wrapped in a Tabler column "+
-				`<div class="col-12 text-secondary">`, path)
+		if strings.Contains(body, "</footer>") {
+			t.Errorf("page %s: renders a closing </footer> tag", path)
 		}
-		if !strings.Contains(body, notice) {
-			t.Errorf("page %s: footer lost the verbatim read-only notice %q", path, notice)
+		if strings.Contains(body, notice) {
+			t.Errorf("page %s: renders the read-only notice %q, which was removed with the "+
+				"footer that carried it", path, notice)
+		}
+		// The Tabler footer classes go with it: a footer rebuilt under a different
+		// element would still be the band that was removed.
+		for _, class := range []string{"footer-transparent", `class="footer`} {
+			if strings.Contains(body, class) {
+				t.Errorf("page %s: renders %q, so the page footer is back under another element",
+					path, class)
+			}
+		}
+	}
+
+	// The same, at the source: no template carries a footer element or the notice.
+	// card-footer and modal-footer are different components — a Tabler card's own
+	// footer and the modal's button row — so the check is for the ELEMENT.
+	templates, err := fs.Glob(templatesFS, "templates/*.html")
+	if err != nil {
+		t.Fatalf("listing the embedded templates: %v", err)
+	}
+	if len(templates) == 0 {
+		t.Fatal("no embedded template found; the source sweep would be vacuous")
+	}
+	for _, name := range templates {
+		content, err := templatesFS.ReadFile(name)
+		if err != nil {
+			t.Fatalf("reading the embedded template %s: %v", name, err)
+		}
+		source := string(content)
+		if strings.Contains(source, "<footer") || strings.Contains(source, "</footer>") {
+			t.Errorf("template %s carries a footer element", name)
+		}
+		if strings.Contains(source, notice) {
+			t.Errorf("template %s carries the read-only notice %q", name, notice)
 		}
 	}
 }

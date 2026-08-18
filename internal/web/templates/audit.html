@@ -27,9 +27,9 @@
           {{/*
             Read-only audit log: one fixed-size page of audit entries ordered by
             performed_at DESC (most recent first). No clickable row, no modal, no
-            edit affordance (SPEC/WEB.md § Roadmap Audit Log Page). The footer
-            holds plain GET pagination links that change only the page query
-            parameter; there is no form and no write path.
+            edit affordance (SPEC/WEB.md § Roadmap Audit Log Page). The card's
+            own footer holds plain GET pagination links that change only the page
+            query parameter; there is no form and no write path.
           */}}
           <div class="card" id="audit">
             <div class="card-header">
@@ -116,15 +116,6 @@
 
         </div>
       </main>
-      <footer class="footer footer-transparent d-print-none">
-        <div class="container-xl">
-          <div class="row text-center align-items-center flex-row-reverse">
-            <div class="col-12 text-secondary">
-              Read-only. The rmp CLI remains the sole write path.
-            </div>
-          </div>
-        </div>
-      </footer>
     </div>
   </div>
 

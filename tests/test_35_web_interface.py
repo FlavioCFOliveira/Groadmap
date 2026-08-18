@@ -1275,6 +1275,44 @@ class TestWebInterface:
             "an undecodable q narrowed the board; it must be treated as absent"
         )
 
+    def test_no_page_carries_a_footer_or_the_read_only_notice(self):
+        """No page ends with a footer band.
+
+        Every page except the knowledge-graph one used to close with a footer
+        whose entire content was the sentence below, restating a property the
+        interface already demonstrates by having no control that writes. The
+        element was removed - the element, not merely its text, so no empty band
+        is left - and this is the guard that keeps it removed. It sweeps every
+        page route, the graph page included, which never had one."""
+        notice = "Read-only. The rmp CLI remains the sole write path."
+        proc, port = self._start(["--port", "0"])
+
+        for path in (
+            "/",
+            f"/roadmaps/{ROADMAP}",
+            f"/roadmaps/{ROADMAP}/tasks",
+            f"/roadmaps/{ROADMAP}/sprints/{self.open_sid}",
+            f"/roadmaps/{ROADMAP}/audit",
+            f"/roadmaps/{ROADMAP}/graph",
+        ):
+            status, _, body = self._req(port, path)
+            assert status == 200, f"{path}: status {status}"
+            # A body that came back empty would satisfy every absence below
+            # without proving anything.
+            assert '<div class="page">' in body, f"{path}: no admin shell in the response"
+
+            assert "<footer" not in body, f"{path}: renders a <footer> element"
+            assert "</footer>" not in body, f"{path}: renders a closing </footer> tag"
+            assert notice not in body, f"{path}: renders the read-only notice"
+            assert "footer-transparent" not in body, (
+                f"{path}: the page footer is back under another element"
+            )
+
+            # The shell itself is untouched: the sidebar, the top navbar, the page
+            # header and the main landmark keep their places.
+            assert '<aside class="navbar navbar-vertical' in body, f"{path}: lost its sidebar"
+            assert '<main class="page-body">' in body, f"{path}: lost its main landmark"
+
     def test_serving_pages_writes_no_audit_entry(self):
         before = self._run(["audit", "stats", "-r", ROADMAP])[1]
         before_total = json.loads(before).get("total_entries")
