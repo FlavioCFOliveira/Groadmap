@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -435,8 +436,8 @@ func TestSprintPage_HappyPath(t *testing.T) {
 	if !strings.Contains(body, "Build the read-only sprint page route and template") {
 		t.Errorf("sprint page does not list its member task")
 	}
-	if !strings.Contains(body, `data-bs-target="#task-modal-`+itoa(f.openTaskID)+`"`) {
-		t.Errorf("sprint page task row is not wired to its task modal")
+	if !strings.Contains(body, `data-task-id="`+itoa(f.openTaskID)+`"`) {
+		t.Errorf("sprint page task row is not wired to the task detail modal")
 	}
 	// Read-only: no form, no submit, no edit control.
 	low := strings.ToLower(body)
@@ -504,52 +505,85 @@ func TestSprintPage_NotFoundCases(t *testing.T) {
 
 // TestTaskModal_WiringAndContent asserts the read-only task detail modal
 // mechanism on every page that shows clickable tasks: the tasks page and the
-// sprint page. Each clickable task is wired with data-bs-toggle="modal" to a
-// matching modal element, the modal shows the long free-text fields, and it
-// contains no form/input/submit. The asserted task (f.openTaskID) is a member of
-// the OPEN sprint, so its modal is rendered on the sprint page, and it also
-// appears in the full task table on the tasks page. The sprints landing page is
-// deliberately excluded: it renders every sprint as a compact card and opens no
-// task detail modal (SPEC/WEB.md § Task Detail Modal, § Shared Sprint-Card
-// Partial; Acceptance Criteria 8/15/38).
+// sprint page. Each page carries ONE modal shell, each clickable task is wired to
+// it by data-bs-toggle="modal" plus the task id the script fetches, and the
+// endpoint that fills the shell returns the long free-text fields the modal
+// presents. The sprints landing page is deliberately excluded: it renders every
+// sprint as a compact card and opens no task detail modal (SPEC/WEB.md § Task
+// Detail Modal, § Task Detail Endpoint, § Shared Sprint-Card Partial; Acceptance
+// Criteria 8/15/38/96).
+var rePerTaskModal = regexp.MustCompile(`id="task-modal-\d+"`)
+
 func TestTaskModal_WiringAndContent(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	f := seedSprintFixture(t, "web-task-modal")
 	mux := buildMux()
 
 	for _, path := range []string{
-		"/roadmaps/" + f.name + "/tasks",                     // tasks page (full task table)
+		"/roadmaps/" + f.name + "/tasks",                     // tasks page (the board)
 		"/roadmaps/" + f.name + "/sprints/" + itoa(f.openID), // sprint page
 	} {
 		body := servePage(t, mux, path)
 
-		// A clickable control is wired to a modal via Bootstrap data attributes.
+		// A clickable control is wired to the modal via Bootstrap data attributes,
+		// and carries the id of the task the script fetches.
 		if !strings.Contains(body, `data-bs-toggle="modal"`) {
 			t.Errorf("page %s has no modal-toggling control", path)
 		}
-		target := `data-bs-target="#task-modal-` + itoa(f.openTaskID) + `"`
-		if !strings.Contains(body, target) {
-			t.Errorf("page %s missing modal trigger %q", path, target)
+		if !strings.Contains(body, `data-bs-target="#task-modal"`) {
+			t.Errorf("page %s has no trigger pointing at the modal shell", path)
 		}
-		// The matching modal element exists.
-		modal := `id="task-modal-` + itoa(f.openTaskID) + `"`
-		if !strings.Contains(body, modal) {
-			t.Errorf("page %s missing modal element %q", path, modal)
+		if !strings.Contains(body, `data-task-id="`+itoa(f.openTaskID)+`"`) {
+			t.Errorf("page %s missing the trigger for task #%d", path, f.openTaskID)
 		}
-		// The modal shows the long free-text fields.
-		for _, section := range []string{
-			"Functional requirements", "Technical requirements", "Acceptance criteria", "Completion summary",
-			"Operators can inspect a sprint and its task list from the browser", // functional text
+
+		// Exactly ONE modal element, and it is the empty shell: no task's data
+		// travels in the document.
+		if got := strings.Count(body, `id="task-modal"`); got != 1 {
+			t.Errorf("page %s carries %d modal shells, want exactly 1", path, got)
+		}
+		// A per-task modal carried a numeric id; the shell's own elements are named
+		// (task-modal-title, task-modal-ref, ...), so the digits are what
+		// distinguish the two.
+		if rePerTaskModal.MatchString(body) {
+			t.Errorf("page %s still renders a per-task modal", path)
+		}
+		for _, absent := range []string{
+			"Functional requirements", "Technical requirements", "Acceptance criteria",
+			"Operators can inspect a sprint and its task list from the browser",
 		} {
-			if !strings.Contains(body, section) {
-				t.Errorf("page %s task modal missing %q", path, section)
+			if strings.Contains(body, absent) {
+				t.Errorf("page %s carries the modal content %q; it must be fetched on demand",
+					path, absent)
 			}
 		}
-		// Read-only: the modal (and the page) carry no form/input/submit.
+
+		// Read-only: the page carries no form, input, or submit control.
 		low := strings.ToLower(body)
 		if strings.Contains(low, "<form") || strings.Contains(low, "<input") || strings.Contains(low, "type=\"submit\"") {
-			t.Errorf("page %s task modal must be read-only: no form/input/submit", path)
+			t.Errorf("page %s must be read-only: no form/input/submit", path)
 		}
+	}
+
+	// What the shell is filled with: the endpoint returns every field the modal
+	// presents, for the same task the triggers point at.
+	view := decodeTaskDetail(t, mux, f.name, f.openTaskID)
+	if view.Task.ID != f.openTaskID {
+		t.Fatalf("the endpoint returned task #%d, want #%d", view.Task.ID, f.openTaskID)
+	}
+	for label, value := range map[string]string{
+		"functional requirements": view.Task.FunctionalRequirements,
+		"technical requirements":  view.Task.TechnicalRequirements,
+		"acceptance criteria":     view.Task.AcceptanceCriteria,
+		"title":                   view.Task.Title,
+		"created_at":              view.Task.CreatedAt,
+	} {
+		if value == "" {
+			t.Errorf("the task detail carries no %s", label)
+		}
+	}
+	if view.Task.FunctionalRequirements != "Operators can inspect a sprint and its task list from the browser" {
+		t.Errorf("the task detail's functional requirements = %q", view.Task.FunctionalRequirements)
 	}
 }
 

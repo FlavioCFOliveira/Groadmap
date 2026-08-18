@@ -40,9 +40,15 @@
     </div>
   </div>
 
-  {{/* One read-only task detail modal per task in this sprint. */}}
-  {{range .Tasks}}{{template "taskModal" .}}{{end}}
+  {{/*
+    ONE read-only task detail modal for the whole page: an empty shell filled on
+    demand from the task detail endpoint when the user opens a task, so the
+    document carries no task's modal content at all (SPEC/WEB.md § Task Detail
+    Modal, One modal element, filled on demand).
+  */}}
+{{template "taskModalShell" .}}
 
   <script src="/static/vendor/tabler/tabler.min.js"></script>
+  <script src="/static/task-modal.js"></script>
 </body>
 </html>{{end}}

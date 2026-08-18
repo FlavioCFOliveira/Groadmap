@@ -69,7 +69,7 @@
                   classes are unchanged, and w-100/p-0/text-start are the
                   utilities that keep a button looking like the card it is.
                 */}}
-                <button type="button" class="card card-sm task-card w-100 p-0 text-start" data-bs-toggle="modal" data-bs-target="#task-modal-{{.ID}}" aria-label="Open details for task #{{.ID}}: {{.Title}}">
+                <button type="button" class="card card-sm task-card w-100 p-0 text-start" data-bs-toggle="modal" data-bs-target="#task-modal" data-task-id="{{.ID}}" aria-label="Open details for task #{{.ID}}: {{.Title}}">
                   <span class="card-body d-block">
                     <span class="d-block small text-secondary" data-role="task-card-ref">#{{.ID}} &middot; {{.Type}}</span>
                     <span class="d-block fw-bold text-break mb-1" data-role="task-card-title">{{.Title}}</span>
@@ -92,7 +92,7 @@
                       {{if .SubtaskCount}}<span data-role="task-card-subtasks"><i class="ti ti-subtask me-1"></i>Subtasks: {{.SubtaskCount}}</span>{{end}}
                       {{if .DependsOn}}<span data-role="task-card-depends-on"><i class="ti ti-link me-1"></i>Depends on: {{len .DependsOn}}</span>{{end}}
                       {{if .Blocks}}<span data-role="task-card-blocks"><i class="ti ti-lock me-1"></i>Blocks: {{len .Blocks}}</span>{{end}}
-                      {{if .Comments}}<span data-role="task-card-comments"><i class="ti ti-message me-1"></i>Comments: {{len .Comments}}</span>{{end}}
+                      {{if .CommentCount}}<span data-role="task-card-comments"><i class="ti ti-message me-1"></i>Comments: {{.CommentCount}}</span>{{end}}
                     </span>
                     {{end}}
                   </span>
@@ -122,9 +122,15 @@
     </div>
   </div>
 
-  {{/* One read-only task detail modal per task on the board. */}}
-  {{range .Tasks}}{{template "taskModal" .}}{{end}}
+  {{/*
+    ONE read-only task detail modal for the whole page: an empty shell filled on
+    demand from the task detail endpoint when the user opens a task, so the
+    document carries no task's modal content at all (SPEC/WEB.md § Task Detail
+    Modal, One modal element, filled on demand).
+  */}}
+{{template "taskModalShell" .}}
 
   <script src="/static/vendor/tabler/tabler.min.js"></script>
+  <script src="/static/task-modal.js"></script>
 </body>
 </html>{{end}}

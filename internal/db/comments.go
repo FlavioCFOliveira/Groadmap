@@ -183,20 +183,26 @@ var sprintCommentStmts = commentStatements{
 	parseType:    models.ParseSprintCommentType,
 }
 
-// groupedTaskCommentsQuery returns the grouped listing of SPEC/DATABASE.md §
-// List Comments for Many Parents (Grouped) for an IN list of the given
-// placeholders. The ORDER BY is parent then chronology, so a caller walks the
-// single result set once and groups by parent without re-sorting.
+// groupedTaskCommentCountsQuery returns the grouped counting read of
+// SPEC/DATABASE.md § Count Comments for Many Parents (Grouped) for an IN list of
+// the given placeholders. It reads no body: a surface that shows a NUMBER has no
+// use for the text, and reading every comment of every task in order to display a
+// count is work thrown away.
 //
-// It is a function rather than a constant because the IN list has one
-// placeholder per id. Assembly is separated from execution so the index tests
-// can plan the exact SQL production runs, rather than a lookalike.
-func groupedTaskCommentsQuery(placeholders string) string {
+// The GROUP BY drops a task with no comment rather than returning a zero row, so
+// the caller reads a missing key as zero. The ORDER BY is task_id ascending, so
+// the result is walkable in one pass against a caller-side set of task ids.
+//
+// It is a function rather than a constant because the IN list has one placeholder
+// per id. Assembly is separated from execution so the index tests can plan the
+// exact SQL production runs, rather than a lookalike.
+func groupedTaskCommentCountsQuery(placeholders string) string {
 	return fmt.Sprintf( // #nosec G201 -- only ? placeholders are interpolated; every id is bound
-		`SELECT id, task_id, type, body, created_at, updated_at
+		`SELECT task_id, COUNT(*) AS comment_count
 	 FROM task_comments
 	 WHERE task_id IN (%s)
-	 ORDER BY task_id ASC, created_at ASC, id ASC`,
+	 GROUP BY task_id
+	 ORDER BY task_id ASC`,
 		placeholders,
 	)
 }
@@ -450,31 +456,28 @@ func (db *DB) ListSprintComments(ctx context.Context, sprintID int, commentType 
 	return listComments(ctx, db, &sprintCommentStmts, sprintID, commentType, (*commentRow).toSprintComment)
 }
 
-// ListTaskCommentsByTasks returns the comments of several tasks in ONE statement,
-// keyed by task id, each task's slice oldest first.
+// CountTaskCommentsByTasks returns how many comments each of the given tasks has,
+// keyed by task id, in ONE statement whatever the number of tasks — and without
+// reading a single comment body.
 //
-// This is the read the web interface MUST use to render its task detail modals:
-// one modal per rendered task means the comments of every rendered task are
-// needed, and fetching them one task at a time would reintroduce the N+1 pattern
-// the project has removed elsewhere (SPEC/WEB.md § Task Detail Modal, "One
-// grouped comment query, never N+1").
+// This is the read a surface that displays a comment COUNT must use. The web
+// interface's Kanban board shows a count on each card and no comment text: a
+// task's comment text is read only when a user opens that task's detail modal, by
+// the task detail endpoint, which reads that one task through the single-parent
+// listing above (SPEC/WEB.md § Roadmap Tasks Page, read cost; § Task Detail
+// Endpoint). No surface reads the comment text of several tasks at once, so no
+// grouped listing exists.
 //
-// An empty id set issues no statement at all and returns an empty map. A task
-// with no comments is absent from the map, exactly as in CountSubTasksByParents
-// and GetIncompleteSubTasksByParents: the zero value of the missing key is a nil
-// slice, which has length 0 and ranges as empty, so a caller needs no presence
-// check. Duplicate ids in the input are harmless; each row is returned once.
+// A task with no comment is ABSENT from the map: the GROUP BY produces no group
+// for it, so the query never returns a zero row and the caller reads the missing
+// key's zero value, which is already the right answer.
 //
-// The id set is bound as one placeholder per id in a single statement, so it is
-// subject to the driver's bind-variable limit, measured at 32766 parameters (a set
-// of 32766 ids succeeds, 32767 fails with "too many SQL variables"). The set is
-// the tasks one page renders, and the sibling grouped reads named above carry the
-// same ceiling, so no chunking is applied here: chunking would trade the
-// single-statement guarantee the SPEC requires for headroom nothing needs.
-func (db *DB) ListTaskCommentsByTasks(ctx context.Context, taskIDs []int) (map[int][]models.TaskComment, error) {
-	grouped := make(map[int][]models.TaskComment, len(taskIDs))
+// An empty id set issues no statement at all and returns an empty map. Duplicate
+// ids in the input are harmless; each task is counted once.
+func (db *DB) CountTaskCommentsByTasks(ctx context.Context, taskIDs []int) (map[int]int, error) {
+	counts := make(map[int]int, len(taskIDs))
 	if len(taskIDs) == 0 {
-		return grouped, nil
+		return counts, nil
 	}
 
 	args := make([]any, len(taskIDs))
@@ -482,18 +485,23 @@ func (db *DB) ListTaskCommentsByTasks(ctx context.Context, taskIDs []int) (map[i
 		args[i] = id
 	}
 
-	rows, err := db.QueryContext(ctx, groupedTaskCommentsQuery(db.Placeholders(len(taskIDs))), args...)
+	rows, err := db.QueryContext(ctx, groupedTaskCommentCountsQuery(db.Placeholders(len(taskIDs))), args...)
 	if err != nil {
-		return nil, fmt.Errorf("querying task comments by task: %w", err)
+		return nil, fmt.Errorf("counting task comments by task: %w", err)
 	}
 	defer rows.Close()
 
-	if err := forEachCommentRow(rows, func(row *commentRow) {
-		grouped[row.ParentID] = append(grouped[row.ParentID], row.toTaskComment())
-	}); err != nil {
-		return nil, err
+	for rows.Next() {
+		var taskID, count int
+		if err := rows.Scan(&taskID, &count); err != nil {
+			return nil, fmt.Errorf("scanning task comment count: %w", err)
+		}
+		counts[taskID] = count
 	}
-	return grouped, nil
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating task comment count rows: %w", err)
+	}
+	return counts, nil
 }
 
 // getComment is the by-id read both entities share.

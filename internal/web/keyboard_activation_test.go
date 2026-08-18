@@ -77,8 +77,10 @@ func clickableTaskPaths(name string, sprintID int) []string {
 	}
 }
 
-// reModalTarget captures the task id a trigger's data-bs-target points at.
-var reModalTarget = regexp.MustCompile(`data-bs-target="#task-modal-(\d+)"`)
+// reModalTarget captures the task id a trigger carries. The page holds ONE modal
+// shell, so every trigger points at the same data-bs-target and the task id is
+// what identifies which task will be fetched into it.
+var reModalTarget = regexp.MustCompile(`data-task-id="(\d+)"`)
 
 // renderedTitleOf returns a task's title as the page must render it in an
 // attribute: the stored title, escaped the way html/template escapes a value in
@@ -289,11 +291,13 @@ func TestModalTriggers_AddNoScriptAndKeepTheContentSecurityPolicy(t *testing.T) 
 		body := rec.Body.String()
 		scripts := reScript.FindAllStringSubmatch(body, -1)
 
-		// The one script a page loads: the vendored framework that opens the modal.
-		// It is served from /static/, which is what the policy admits, and it is
-		// not inline, which the policy forbids outright.
+		// The two scripts a page that shows clickable tasks loads: the vendored
+		// framework that opens the modal, and the project script that fills it from
+		// the task detail endpoint. Both are served from /static/, which is what the
+		// policy admits; neither is inline, which the policy forbids outright.
 		wantScripts := map[string]bool{
 			"/static/vendor/tabler/tabler.min.js": true,
+			"/static/task-modal.js":               true,
 		}
 		if len(scripts) != len(wantScripts) {
 			t.Errorf("%s: the page loads %d scripts, want %d", path, len(scripts), len(wantScripts))
@@ -326,25 +330,27 @@ func TestSprintPage_RowStaysClickableByPointer(t *testing.T) {
 	mux := buildMux()
 
 	body := servePage(t, mux, "/roadmaps/"+f.name+"/sprints/"+itoa(f.openID))
-	target := `data-bs-target="#task-modal-` + itoa(f.openTaskID) + `"`
+	taskID := `data-task-id="` + itoa(f.openTaskID) + `"`
 
 	// The row itself: still a trigger, still styled as clickable, no longer
 	// pretending to be a button.
-	row := `<tr class="task-row" data-bs-toggle="modal" ` + target + `>`
+	row := `<tr class="task-row" data-bs-toggle="modal" data-bs-target="#task-modal" ` + taskID + `>`
 	if !strings.Contains(body, row) {
 		t.Errorf("the member-task row is no longer clickable by pointer; want the row %q", row)
 	}
 	// The title inside it: a real button, carrying the accessible name the row
 	// used to carry, and the task's own title as its visible text.
 	trigger := `<button type="button" class="task-row__trigger p-0 border-0 bg-transparent text-reset text-start" ` +
-		`data-bs-toggle="modal" ` + target + ` ` +
+		`data-bs-toggle="modal" data-bs-target="#task-modal" ` + taskID + ` ` +
 		wantAccessibleName(itoa(f.openTaskID), renderedTitleOf(t, f.name, f.openTaskID)) + `>`
 	if !strings.Contains(body, trigger) {
 		t.Errorf("the member-task title is not the row's keyboard trigger; want %q", trigger)
 	}
-	// Both point at the same modal, so pointer and keyboard open the same thing.
-	if got := strings.Count(body, target); got < 2 {
-		t.Errorf("the row and its title trigger reference the task's modal %d times, want both", got)
+	// Both carry the task id, so pointer and keyboard open the same task in the
+	// page's single modal shell.
+	if got := strings.Count(body, taskID); got != 2 {
+		t.Errorf("the task id appears %d times in the row, want twice: on the row and on its "+
+			"title trigger", got)
 	}
 }
 
@@ -418,11 +424,11 @@ func TestModalTriggers_AccessibleNameEscapesAHostileTitle(t *testing.T) {
 				"attribute is not well formed", path, taskID)
 		}
 
-		// The markup kept its shape: one modal for the task, not several fragments
-		// produced by a broken attribute.
-		if got := strings.Count(body, `id="task-modal-`+taskID+`"`); got != 1 {
-			t.Errorf("%s: task #%s has %d modals, want 1; the hostile title broke the markup",
-				path, taskID, got)
+		// The markup kept its shape: the page carries exactly one modal shell,
+		// whatever the titles it renders.
+		if got := strings.Count(body, `id="task-modal"`); got != 1 {
+			t.Errorf("%s: the page carries %d modal shells, want 1; the hostile title broke the markup",
+				path, got)
 		}
 	}
 }

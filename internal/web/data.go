@@ -121,11 +121,11 @@ type sprintsData struct {
 // own fields ({{.ID}}, {{.Title}}, {{.CompletionSummary}}, ...) is unchanged by
 // the addition of the comment log, and the timeline block reads {{.Comments}}.
 //
-// Comments is oldest first — created_at ascending, comment id ascending as the
-// tie-breaker — exactly the order `rmp task comment-list` returns, because that
-// order is what makes the log readable as one. A task with no comments carries a
-// nil slice, which ranges as empty, so the template's empty-state branch needs no
-// presence check (SPEC/DATABASE.md § List Comments for Many Parents (Grouped)).
+// CommentCount is how many comments the task has, which is all a card shows. The
+// comment TEXT is deliberately absent: it is read only when a user opens that
+// task's modal, by the task detail endpoint, one task at a time, so a page never
+// reads a comment body in order to display a number (SPEC/WEB.md § Roadmap Tasks
+// Page, read cost; SPEC/DATABASE.md § Count Comments for Many Parents (Grouped)).
 //
 // Sprint is the sprint the task belongs to, or nil when it belongs to none — a
 // task belongs to at most one, which sprint_tasks.task_id's UNIQUE constraint
@@ -137,9 +137,9 @@ type sprintsData struct {
 // Field order places the pointer-bearing fields before the embedded struct to
 // keep the pointer-scan prefix minimal (govet fieldalignment), as in sprintView.
 type taskView struct {
-	Comments []models.TaskComment
-	Sprint   *db.SprintRef
+	Sprint *db.SprintRef
 	models.Task
+	CommentCount int
 }
 
 // SpecialistsText returns the task's specialists as text, or the empty string
@@ -174,7 +174,7 @@ func (v *taskView) HasMeta() bool {
 		v.SubtaskCount > 0 ||
 		len(v.DependsOn) > 0 ||
 		len(v.Blocks) > 0 ||
-		len(v.Comments) > 0
+		v.CommentCount > 0
 }
 
 // taskColumn is one column of the roadmap tasks page's Kanban board: a task
@@ -394,18 +394,19 @@ type graphView struct {
 	Edges []map[string]any `json:"edges"`
 }
 
-// taskCommentReader is the ONLY comment read a page that renders task detail
-// modals is given: the grouped read over the whole set of rendered task ids, one
-// statement for every task (SPEC/DATABASE.md § List Comments for Many Parents
-// (Grouped)).
+// taskCommentCounter is the ONLY comment read the tasks page is given: the
+// grouped COUNT over the whole set of rendered task ids, one statement for every
+// task (SPEC/DATABASE.md § Count Comments for Many Parents (Grouped)).
 //
 // The per-task listing (db.ListTaskComments) is deliberately absent from this
-// interface. The page read path therefore cannot express the N+1 pattern
-// SPEC/WEB.md § Task Detail Modal forbids — one query per rendered task — because
-// the method that would do it is not reachable through the dependency it is
-// handed. *db.DB satisfies the interface.
-type taskCommentReader interface {
-	ListTaskCommentsByTasks(ctx context.Context, taskIDs []int) (map[int][]models.TaskComment, error)
+// interface, and it is the only read that could bring a comment BODY onto this
+// path. Its absence therefore carries two guarantees at once: the page cannot
+// express the N+1 pattern SPEC/WEB.md forbids — one query per rendered task — and
+// it cannot read comment text at all. The board shows a number, and a task's
+// comment text is read only when a user opens that task's modal, by the task
+// detail endpoint. *db.DB satisfies the interface.
+type taskCommentCounter interface {
+	CountTaskCommentsByTasks(ctx context.Context, taskIDs []int) (map[int]int, error)
 }
 
 // taskSprintReader is the ONLY sprint read the tasks page is given: the grouped
@@ -428,7 +429,7 @@ type taskSprintReader interface {
 // counted against a real database (Acceptance Criteria 70 and 92).
 type tasksSource interface {
 	ListAllTasks(ctx context.Context) ([]models.Task, error)
-	taskCommentReader
+	taskCommentCounter
 	taskSprintReader
 }
 
@@ -440,8 +441,12 @@ type sprintTaskSource interface {
 }
 
 // sprintSource is the complete read surface of the single Roadmap Sprint Page:
-// the sprint, its ordered member tasks, the grouped comment read for the task
-// modals, and the sprint's own comments.
+// the sprint, its ordered member tasks, and the sprint's own comments.
+//
+// No task-comment read of any kind is here. The page's member-tasks table shows
+// no comment value, and the modal a row opens is filled on demand by the task
+// detail endpoint, so the page reads only what it displays itself (SPEC/WEB.md
+// § Tasks and Sprints from SQLite; Acceptance Criterion 70).
 //
 // The sprint comment read is the SINGLE-parent listing: there is deliberately no
 // grouped multi-sprint read, because this page renders exactly one sprint
@@ -450,7 +455,6 @@ type sprintSource interface {
 	GetSprint(ctx context.Context, id int) (*models.Sprint, error)
 	ListSprintComments(ctx context.Context, sprintID int, commentType *models.CommentType) ([]models.SprintComment, error)
 	sprintTaskSource
-	taskCommentReader
 }
 
 // loadRoadmapNames returns the names of all roadmaps under ~/.roadmaps/,
@@ -533,11 +537,13 @@ func loadTasks(ctx context.Context, name string) (tasksData, error) {
 
 // readTasks is the tasks page's entire read, expressed against the page's read
 // surface rather than a concrete connection. It is THREE reads and no more: the
-// full task list UNBOUNDED, then the comments of every task the page renders in
-// ONE grouped query, then the sprint of every task the page renders in ONE grouped
-// query
-// (SPEC/WEB.md § Roadmap Tasks Page, read cost; § Task Detail Modal, one grouped
-// comment query, never N+1).
+// full task list, then the comment COUNT of every task the page renders in ONE
+// grouped query, then the sprint of every task the page renders in ONE grouped
+// query (SPEC/WEB.md § Roadmap Tasks Page, read cost).
+//
+// The page reads comment counts, never comment bodies: the card shows a number,
+// and a task's comment text is read only when a user opens that task's modal, by
+// the task detail endpoint (SPEC/WEB.md § Task Detail Endpoint).
 //
 // A roadmap with no task costs ONE read: both grouped queries take the set of
 // rendered task ids, and that set is empty, so both are skipped outright rather
@@ -568,8 +574,9 @@ func readTasks(ctx context.Context, src tasksSource, name string) (tasksData, er
 		return tasksData{}, err
 	}
 
-	views, err := newTaskViews(ctx, src, tasks)
-	if err != nil {
+	views := newTaskViews(tasks)
+
+	if err := attachCommentCounts(ctx, src, views); err != nil {
 		return tasksData{}, err
 	}
 
@@ -597,12 +604,7 @@ func attachSprints(ctx context.Context, r taskSprintReader, views []taskView) er
 		return nil
 	}
 
-	ids := make([]int, len(views))
-	for i := range views {
-		ids[i] = views[i].ID
-	}
-
-	sprints, err := r.GetSprintsByTasks(ctx, ids)
+	sprints, err := r.GetSprintsByTasks(ctx, taskViewIDs(views))
 	if err != nil {
 		return err
 	}
@@ -654,42 +656,136 @@ func groupIntoColumns(views []taskView) []taskColumn {
 	return columns
 }
 
-// newTaskViews pairs every task with its comment log, reading the comments of ALL
-// the tasks in a SINGLE grouped query over the whole set of rendered task ids —
-// never one query per task (SPEC/WEB.md § Task Detail Modal, one grouped comment
-// query, never N+1; Acceptance Criterion 70).
+// newTaskViews wraps every task in the view the templates consume. It performs
+// no read: a view carries the task itself, and the two values a surface may add
+// to it — the comment count and the sprint — are attached by the loaders that
+// need them.
 //
-// It is the one place a page resolves task comments, so both surfaces that render
-// task detail modals — the tasks page and the sprint page — share the same single
-// read and the same pairing rule.
-//
-// A page that renders no task issues no comment query at all: the read is skipped
-// outright rather than called with an empty id set (which db.ListTaskCommentsByTasks
-// would also answer without a statement).
-//
-// A task with no comment is ABSENT from the grouped map. Its zero value is a nil
-// slice, which has length 0 and ranges as empty, so the pairing needs no presence
-// check and the template's empty-state branch is reached naturally.
-func newTaskViews(ctx context.Context, r taskCommentReader, tasks []models.Task) ([]taskView, error) {
-	if len(tasks) == 0 {
-		return nil, nil
-	}
-
-	ids := make([]int, len(tasks))
-	for i := range tasks {
-		ids[i] = tasks[i].ID
-	}
-
-	grouped, err := r.ListTaskCommentsByTasks(ctx, ids)
-	if err != nil {
-		return nil, err
-	}
-
+// It is the one place a page turns tasks into task views, so both surfaces that
+// show a clickable task build the same value from the same rule.
+func newTaskViews(tasks []models.Task) []taskView {
 	views := make([]taskView, len(tasks))
 	for i := range tasks {
-		views[i] = taskView{Comments: grouped[tasks[i].ID], Task: tasks[i]}
+		views[i] = taskView{Task: tasks[i]}
 	}
-	return views, nil
+	return views
+}
+
+// attachCommentCounts reads the comment COUNT of EVERY view in one grouped query
+// over the whole set of rendered task ids — never one per card, and never the
+// comment bodies (SPEC/DATABASE.md § Count Comments for Many Parents (Grouped);
+// Acceptance Criterion 70).
+//
+// A page that renders no task issues no comment query at all: the read is skipped
+// outright rather than called with an empty id set (which
+// db.CountTaskCommentsByTasks would also answer without a statement).
+//
+// A task with no comment is ABSENT from the grouped map, and the zero value a
+// missing key yields is already the right count, so the pairing needs no presence
+// check.
+func attachCommentCounts(ctx context.Context, r taskCommentCounter, views []taskView) error {
+	if len(views) == 0 {
+		return nil
+	}
+
+	counts, err := r.CountTaskCommentsByTasks(ctx, taskViewIDs(views))
+	if err != nil {
+		return err
+	}
+
+	for i := range views {
+		views[i].CommentCount = counts[views[i].ID]
+	}
+	return nil
+}
+
+// taskViewIDs is the set of rendered task ids, in render order, which is what
+// every grouped read of this page is given.
+func taskViewIDs(views []taskView) []int {
+	ids := make([]int, len(views))
+	for i := range views {
+		ids[i] = views[i].ID
+	}
+	return ids
+}
+
+// taskDetailSource is the complete read surface of the task detail endpoint: one
+// task, and that task's comments in full.
+//
+// The comment read here is the SINGLE-parent listing, deliberately: the endpoint
+// serves exactly one task, requested when a user opens its modal, so there is no
+// set of ids to group over. It is also the only path on which the web interface
+// reads comment TEXT for a task, which is what keeps the page-rendering paths
+// free of it (SPEC/WEB.md § Task Detail Endpoint, Reads).
+type taskDetailSource interface {
+	GetTask(ctx context.Context, id int) (*models.Task, error)
+	ListTaskComments(ctx context.Context, taskID int, commentType *models.CommentType) ([]models.TaskComment, error)
+}
+
+// taskDetailView is the JSON body of the task detail endpoint: exactly two
+// members, `task` and `comments` (SPEC/WEB.md § Task Detail Endpoint, Response).
+//
+// It introduces NO new object shape. Task and TaskComment are marshalled through
+// their own JSON tags, which are the shapes SPEC/DATA_FORMATS.md § Task and
+// § Task Comment already fix for CLI output, so a value carries the same field
+// names, types, and null conventions here as it does there.
+//
+// Comments is never nil: a task with no comment yields `[]`, not `null`.
+type taskDetailView struct {
+	Comments []models.TaskComment `json:"comments"`
+	Task     models.Task          `json:"task"`
+}
+
+// loadTaskDetail reads one task and its comments read-only for the task detail
+// endpoint. It opens the roadmap database, reads, and releases the handle; no row
+// is written and no audit entry is produced (SPEC/WEB.md § Task Detail Endpoint,
+// Read-only).
+//
+// The caller is responsible for the {name} validation and existence check
+// (resolveRoadmap); this function trusts name is a validated, existing roadmap.
+// A task id that is not a task of THIS roadmap yields utils.ErrNotFound, which
+// the handler maps to 404: a task of another roadmap is not reachable through
+// this roadmap's path space, because the read is scoped to this roadmap's own
+// database file.
+func loadTaskDetail(ctx context.Context, name string, id int) (taskDetailView, error) {
+	database, err := db.OpenReadOnly(name)
+	if err != nil {
+		return taskDetailView{}, err
+	}
+	defer database.Close() //nolint:errcheck // read-only handle; close error is non-actionable
+
+	return readTaskDetail(ctx, database, id)
+}
+
+// readTaskDetail is the endpoint's entire read, expressed against its read
+// surface rather than a concrete connection: the task, then that task's comments.
+// Two reads for the one task requested, issued only when a user opens a modal, so
+// they are not on the page-rendering path.
+//
+// Separating it from loadTaskDetail is what makes the endpoint's query count
+// measurable against a real database, as it is for every page loader.
+//
+// The comments are oldest first — created_at ascending, comment id ascending as
+// the tie-breaker — exactly the order `rmp task comment-list` returns and the
+// order the modal's timeline presents. No type filter (nil) and no count limit
+// apply: every comment of the task is returned.
+func readTaskDetail(ctx context.Context, src taskDetailSource, id int) (taskDetailView, error) {
+	task, err := src.GetTask(ctx, id)
+	if err != nil {
+		return taskDetailView{}, err
+	}
+
+	comments, err := src.ListTaskComments(ctx, id, nil)
+	if err != nil {
+		return taskDetailView{}, err
+	}
+	// A task with no comment must serialise as [], never null: the client walks
+	// the array unconditionally.
+	if comments == nil {
+		comments = []models.TaskComment{}
+	}
+
+	return taskDetailView{Task: *task, Comments: comments}, nil
 }
 
 // loadAudit reads one page of a roadmap's full audit log read-only for the
@@ -785,12 +881,13 @@ func loadSprint(ctx context.Context, name string, id int) (sprintPageData, error
 
 // readSprint is the sprint page's entire read, expressed against the page's read
 // surface rather than a concrete connection: the sprint, its member tasks in
-// planned in-sprint execution order, the comments of every member task in ONE
-// grouped query, and the sprint's OWN comments in one further query (SPEC/WEB.md
+// planned in-sprint execution order, and the sprint's OWN comments (SPEC/WEB.md
 // § Roadmap Sprint Page; § Tasks and Sprints from SQLite, rule 1).
 //
-// The number of comment queries is therefore two, whatever the number of member
-// tasks: it does not grow with the tasks shown (Acceptance Criterion 70).
+// The page reads NO task comments. Its member-tasks table shows no comment value,
+// and the modal a row opens is filled on demand by the task detail endpoint, so
+// the count of comment queries is ONE — the sprint's own log, which this page
+// renders in full — whatever the number of member tasks (Acceptance Criterion 70).
 func readSprint(ctx context.Context, src sprintSource, name string, id int) (sprintPageData, error) {
 	sprint, err := src.GetSprint(ctx, id)
 	if err != nil {
@@ -802,10 +899,7 @@ func readSprint(ctx context.Context, src sprintSource, name string, id int) (spr
 		return sprintPageData{}, err
 	}
 
-	views, err := newTaskViews(ctx, src, orderedTasks)
-	if err != nil {
-		return sprintPageData{}, err
-	}
+	views := newTaskViews(orderedTasks)
 
 	// The sprint's own comments: every one of them, oldest first, with no type
 	// filter (nil) and no count limit, exactly as `rmp sprint comment-list`

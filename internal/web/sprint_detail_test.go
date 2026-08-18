@@ -124,8 +124,8 @@ func TestSprintDetail_FullBlockOnlyOnSprintPage(t *testing.T) {
 	if !strings.Contains(sprintPage, "Build the read-only sprint page route and template") {
 		t.Errorf("single sprint page: detail block missing the OPEN sprint's member task")
 	}
-	if !strings.Contains(sprintPage, `data-bs-target="#task-modal-`+itoa(f.openTaskID)+`"`) {
-		t.Errorf("single sprint page: member task row not wired to its task modal")
+	if !strings.Contains(sprintPage, `data-task-id="`+itoa(f.openTaskID)+`"`) {
+		t.Errorf("single sprint page: member task row not wired to the task detail modal")
 	}
 
 	// The Actual tab MUST NOT carry any part of the full detail block.

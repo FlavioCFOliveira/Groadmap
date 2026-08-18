@@ -106,6 +106,47 @@ func handleTasks(w http.ResponseWriter, r *http.Request) {
 	renderHTML(w, "tasks.html", data)
 }
 
+// handleTaskData serves one task's detail as JSON: the task's full field set and
+// its comments, which the page's script fetches when the user opens that task's
+// modal (SPEC/WEB.md § Task Detail Endpoint). The page itself carries one empty
+// modal shell and no task data, so this endpoint is what a modal is filled from.
+//
+// The {name} is validated and confirmed to exist before any data read
+// (resolveRoadmap), and {id} is parsed before any read: an invalid or unknown
+// name, a non-integer id, and an id that is not a task of THIS roadmap all yield
+// 404 — the last one because the read is scoped to this roadmap's own database,
+// so another roadmap's task is not reachable here. Any other read failure yields
+// 500.
+//
+// The response is data-derived, so the security-header middleware already gives
+// it Cache-Control: no-store; nothing is set here (SPEC/WEB.md § Cache Policy).
+func handleTaskData(w http.ResponseWriter, r *http.Request) {
+	name, ok := resolveRoadmap(w, r)
+	if !ok {
+		return
+	}
+
+	// A non-integer {id} is a 404, exactly like an unknown roadmap: it is not a
+	// task of the roadmap. No database read happens for an invalid id.
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	data, err := loadTaskDetail(r.Context(), name, id)
+	if err != nil {
+		if errors.Is(err, utils.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	renderJSON(w, data)
+}
+
 // handleAudit renders a roadmap's audit log page: one page of the full audit
 // log (every operation and entity type) as a read-only table ordered by
 // performed_at DESC, with a Previous/Next pagination footer (SPEC/WEB.md

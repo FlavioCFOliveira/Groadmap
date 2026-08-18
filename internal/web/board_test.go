@@ -268,10 +268,15 @@ func columnHeader(t *testing.T, column string) (status string, count int) {
 	return m[1], n
 }
 
-// cardMarker is the attribute that identifies the card of one task: the modal it
-// opens. It appears once per card and nowhere else in the board region.
+// cardMarker is the attribute that identifies the card of one task: the task id
+// the trigger carries, which the modal script fetches that task's data with. It
+// appears once per card and nowhere else in the board region.
+//
+// The board no longer points each card at a modal of its own — the page holds one
+// shell — so the target attribute is the same on every card and identifies
+// nothing; the task id is what does.
 func cardMarker(taskID int) string {
-	return `data-bs-target="#task-modal-` + itoa(taskID) + `"`
+	return `data-task-id="` + itoa(taskID) + `"`
 }
 
 // cardOpen is the opening markup of a board card, used both to count cards and to
@@ -755,7 +760,8 @@ func TestTaskBoard_CardOpensTheReadOnlyModal(t *testing.T) {
 			for _, attr := range []string{
 				`<button type="button"`,
 				`data-bs-toggle="modal"`,
-				`data-bs-target="#task-modal-` + itoa(id) + `"`,
+				`data-bs-target="#task-modal"`,
+				`data-task-id="` + itoa(id) + `"`,
 				// The accessible name names the task AND carries its title, the
 				// same form the sprint page's trigger uses; the expectation is
 				// composed from the roadmap's own stored title, escaped as
@@ -775,10 +781,13 @@ func TestTaskBoard_CardOpensTheReadOnlyModal(t *testing.T) {
 				}
 			}
 
-			// Exactly one modal per task, rendered into the page itself, so opening
-			// it costs no request and no query.
-			if got := strings.Count(body, `id="task-modal-`+itoa(id)+`"`); got != 1 {
-				t.Errorf("task #%d has %d detail modals on the page, want exactly 1", id, got)
+			// The card points at the ONE modal shell the page carries: the page
+			// renders no modal per task, and the shell is filled on demand from the
+			// task detail endpoint when the card is opened (Acceptance Criterion 96;
+			// task_modal_test.go pins the shell and the fetch).
+			if got := strings.Count(body, `id="task-modal-`+itoa(id)+`"`); got != 0 {
+				t.Errorf("task #%d has %d detail modals of its own, want 0: the page carries one "+
+					"shell for every task", id, got)
 			}
 		}
 	}
@@ -990,8 +999,12 @@ func TestTasksPage_IssuesThreeReadsAndNoneMore(t *testing.T) {
 	if src.taskList != 1 {
 		t.Errorf("the board issued %d task-list queries, want 1", src.taskList)
 	}
-	if src.groupedTaskComments != 1 {
-		t.Errorf("the board issued %d comment queries, want exactly 1", src.groupedTaskComments)
+	if src.groupedCommentCounts != 1 {
+		t.Errorf("the board issued %d comment-count queries, want exactly 1", src.groupedCommentCounts)
+	}
+	if src.perTaskComments != 0 {
+		t.Errorf("the board issued %d comment-listing queries, want 0: a card shows a count and "+
+			"the modal's text comes from the task detail endpoint", src.perTaskComments)
 	}
 	if src.boundedTaskList != 0 {
 		t.Errorf("the board issued %d bounded task-list queries, want 0: it reads every task",
@@ -1037,10 +1050,10 @@ func TestTasksPage_IssuesThreeReadsAndNoneMore(t *testing.T) {
 		if _, err := readTasks(context.Background(), counted, name); err != nil {
 			t.Fatalf("%d tasks: readTasks: %v", taskCount, err)
 		}
-		if counted.taskList != 1 || counted.groupedTaskComments != 1 || counted.groupedTaskSprints != 1 {
-			t.Errorf("%d tasks: the board issued %d task-list, %d comment, and %d sprint queries; "+
-				"want 1, 1 and 1", taskCount, counted.taskList,
-				counted.groupedTaskComments, counted.groupedTaskSprints)
+		if counted.taskList != 1 || counted.groupedCommentCounts != 1 || counted.groupedTaskSprints != 1 {
+			t.Errorf("%d tasks: the board issued %d task-list, %d comment-count, and %d sprint "+
+				"queries; want 1, 1 and 1", taskCount, counted.taskList,
+				counted.groupedCommentCounts, counted.groupedTaskSprints)
 		}
 
 		// The control that makes those counts falsifiable: the per-task alternative
@@ -1073,8 +1086,8 @@ func TestTasksPage_IssuesThreeReadsAndNoneMore(t *testing.T) {
 	if emptySrc.taskList != 1 {
 		t.Errorf("the empty roadmap issued %d task-list queries, want 1", emptySrc.taskList)
 	}
-	if emptySrc.groupedTaskComments != 0 {
-		t.Errorf("the empty roadmap issued %d comment queries, want 0", emptySrc.groupedTaskComments)
+	if emptySrc.groupedCommentCounts != 0 {
+		t.Errorf("the empty roadmap issued %d comment-count queries, want 0", emptySrc.groupedCommentCounts)
 	}
 	if emptySrc.groupedTaskSprints != 0 {
 		t.Errorf("the empty roadmap issued %d sprint queries, want 0", emptySrc.groupedTaskSprints)

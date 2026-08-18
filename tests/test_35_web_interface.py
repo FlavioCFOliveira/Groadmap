@@ -656,7 +656,7 @@ class TestWebInterface:
         assert tasks, "the fixture roadmap has no task to place on the board"
         by_column = dict(zip(self.BOARD_COLUMNS, columns))
         for task in tasks:
-            marker = f'data-bs-target="#task-modal-{task["id"]}"'
+            marker = f'data-task-id="{task["id"]}"'
             assert region.count(marker) == 1, (
                 f"task #{task['id']} has {region.count(marker)} cards on the board, want 1"
             )
@@ -680,8 +680,8 @@ class TestWebInterface:
 
         # A card opens the read-only modal of its own task.
         t1 = self.open_task_ids[0]
-        assert f'data-bs-target="#task-modal-{t1}"' in region, "board card missing the modal trigger"
-        assert f'id="task-modal-{t1}"' in body, "tasks page missing the task detail modal"
+        assert f'data-task-id="{t1}"' in region, "board card missing the modal trigger"
+        assert body.count('id="task-modal"') == 1, "the page must carry exactly one modal shell"
         assert '<button type="button" class="card card-sm task-card' in region, (
             "a board card must be a real button, so the keyboard can activate it"
         )
@@ -748,7 +748,7 @@ class TestWebInterface:
         by_column = dict(zip(self.BOARD_COLUMNS, columns))
 
         for task_id, want in ((backlog, "BACKLOG"), (sprinted, "SPRINT"), (doing, "DOING")):
-            marker = f'data-bs-target="#task-modal-{task_id}"'
+            marker = f'data-task-id="{task_id}"'
             assert region.count(marker) == 1, (
                 f"task #{task_id} has {region.count(marker)} cards on the board, want 1"
             )
@@ -808,16 +808,35 @@ class TestWebInterface:
     # turn Enter or Space into the click Bootstrap's modal data-api listens for.
     NATIVELY_ACTIVATABLE = ("button", "a", "input")
 
+    def _task_detail(self, port, roadmap, task_id):
+        """Return (status, parsed-JSON) of one task's detail endpoint.
+
+        This is the read the modal performs when the user opens a task: the page
+        carries one empty shell and the script fills it from here (SPEC/WEB.md
+        § Task Detail Endpoint).
+        """
+        status, _, body = self._req(port, f"/roadmaps/{roadmap}/tasks/{task_id}/data")
+        if status != 200:
+            return status, None
+        return status, json.loads(body)
+
     @staticmethod
     def _rendered_task_title(body, task_id):
-        """Return a task's title as the page rendered it, from the trigger's
-        VISIBLE label.
+        """Return a task's title exactly as the page rendered it.
 
-        Reading the visible label rather than the aria-label is what keeps an
-        assertion about the accessible name non-circular.
+        Read from the task's own modal heading, so an expected accessible name is
+        composed from the page's own value rather than from a literal repeated in
+        the test: Go's html/template escapes element text and attribute values
+        with the same replacement table, which
+        test_task_title_is_escaped_in_markup_and_in_the_accessible_name pins.
         """
+        # The trigger of that task — the board card or the sprint row's title
+        # button, both of which carry the task id followed by the accessible name
+        # — and then its VISIBLE label. Reading the visible label rather than the
+        # aria-label is what keeps an assertion about the accessible name
+        # non-circular.
         m = re.search(
-            rf'data-bs-target="#task-modal-{task_id}" aria-label="[^"]*">(.*?)</button>', body, re.S
+            rf'data-task-id="{task_id}" aria-label="[^"]*">(.*?)</button>', body, re.S
         )
         assert m, f"task #{task_id} has no trigger to read its title from"
         inner = re.search(r'data-role="task-card-title">(.*?)</span>', m.group(1), re.S)
@@ -850,12 +869,12 @@ class TestWebInterface:
             assert tags, f"{path}: no markup parsed; the extraction is broken"
 
             # Each task the page can open has at least one activatable trigger,
-            # whose accessible name identifies the task and carries its title.
+            # whose accessible name identifies the task.
             activatable_by_task = {}
             for tag, attrs in tags:
                 if 'data-bs-toggle="modal"' not in attrs:
                     continue
-                target = re.search(r'data-bs-target="#task-modal-(\d+)"', attrs)
+                target = re.search(r'data-task-id="(\d+)"', attrs)
                 if not target:
                     continue
                 task_id = target.group(1)
@@ -866,9 +885,12 @@ class TestWebInterface:
                     assert 'type="button"' in attrs, (
                         f"{path}: a modal trigger button carries no type=\"button\": {attrs}"
                     )
-                # A control whose accessible name omits its visible label fails
+                # The accessible name names the task AND carries its title: a
+                # control whose accessible name omits its visible label fails
                 # WCAG 2.5.3 (Label in Name), and on the sprint page the visible
-                # label of the trigger IS the title.
+                # label of the trigger IS the title. The expectation is composed
+                # from the page's own rendering of that title, so it stays exact
+                # for a title carrying characters the template escapes.
                 title = self._rendered_task_title(body, task_id)
                 want = f'aria-label="Open details for task #{task_id}: {title}"'
                 assert want in attrs, (
@@ -901,14 +923,54 @@ class TestWebInterface:
             # The fix added no script: the page still loads the one vendored
             # bundle, and the policy still forbids inline script.
             scripts = re.findall(r"<script\b([^>]*)>", body)
-            assert len(scripts) == 1, f"{path}: loads {len(scripts)} scripts, want 1"
-            assert 'src="/static/vendor/tabler/tabler.min.js"' in scripts[0], (
-                f"{path}: unexpected script {scripts[0]!r}"
-            )
+            assert len(scripts) == 2, f"{path}: loads {len(scripts)} scripts, want 2"
+            srcs = {re.search(r'src="([^"]*)"', s).group(1) for s in scripts}
+            assert srcs == {
+                "/static/vendor/tabler/tabler.min.js",
+                "/static/task-modal.js",
+            }, f"{path}: unexpected scripts {srcs!r}"
             _, headers, _ = self._req(port, path)
             assert "script-src 'self'" in headers.get("content-security-policy", ""), (
                 f"{path}: the Content-Security-Policy no longer restricts script to 'self'"
             )
+
+    def test_task_modal_script_writes_values_as_text_only(self):
+        """The script the binary serves writes every value as text.
+
+        Moving the modal's values from html/template to JSON moved the escaping
+        responsibility to the client, so this is the property that replaces the
+        server's auto-escaping on that path: no markup-parsing sink appears in the
+        script the browser actually receives (SPEC/WEB.md § Task Detail Modal,
+        Client-side rendering is text-only; Acceptance Criterion 97)."""
+        proc, port = self._start(["--port", "0"])
+        status, headers, script = self._req(port, "/static/task-modal.js")
+        assert status == 200, f"the modal script is not served: {status}"
+        assert headers.get("content-type", "").startswith("text/javascript") or (
+            "javascript" in headers.get("content-type", "")
+        ), headers.get("content-type")
+
+        # Comments are stripped first: the file's header names the sinks it must
+        # never use, and naming them in prose is not using them.
+        code = re.sub(r"/\*.*?\*/", "", script, flags=re.S)
+        code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
+
+        for sink in (
+            "innerHTML", "outerHTML", "insertAdjacentHTML", "document.write",
+            "eval(", "new Function", "createContextualFragment",
+        ):
+            assert sink not in code, f"the modal script uses the markup sink {sink!r}"
+        assert code.count("textContent") >= 10, (
+            "the modal script must write its values through textContent"
+        )
+        assert "replaceChildren(" in code, (
+            "the modal script must clear containers structurally, not by assigning markup"
+        )
+
+        # And the policy that makes "no inline script" enforceable is unchanged.
+        _, page_headers, _ = self._req(port, f"/roadmaps/{ROADMAP}/tasks")
+        csp = page_headers.get("content-security-policy", "")
+        assert "script-src 'self'" in csp, csp
+        assert "connect-src 'self'" in csp, csp
 
     def test_sprint_page_row_stays_clickable_by_pointer(self):
         """Moving the keyboard trigger onto the task title left the row clickable
@@ -919,18 +981,18 @@ class TestWebInterface:
         _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/sprints/{self.open_sid}")
 
         t1 = self.open_task_ids[0]
-        target = f'data-bs-target="#task-modal-{t1}"'
-        assert f'<tr class="task-row" data-bs-toggle="modal" {target}>' in body, (
+        marker = f'data-task-id="{t1}"'
+        assert f'<tr class="task-row" data-bs-toggle="modal" data-bs-target="#task-modal" {marker}>' in body, (
             "the member-task row is no longer clickable by pointer"
         )
         title = self._rendered_task_title(body, t1)
         assert (
             f'<button type="button" class="task-row__trigger p-0 border-0 bg-transparent '
-            f'text-reset text-start" data-bs-toggle="modal" {target} '
+            f'text-reset text-start" data-bs-toggle="modal" data-bs-target="#task-modal" {marker} '
             f'aria-label="Open details for task #{t1}: {title}">{title}</button>'
         ) in body, "the member-task title is not the row's keyboard trigger"
-        assert body.count(target) >= 2, (
-            "the row and its title trigger must both open the task's modal"
+        assert body.count(marker) == 2, (
+            "the row and its title trigger must both carry the task id"
         )
 
     def test_serving_pages_writes_no_audit_entry(self):
@@ -1276,9 +1338,29 @@ class TestWebInterface:
             "how", "verify",
         )
         proc, port = self._start(["--port", "0"])
+
+        # The value travels to the browser as JSON, with its newlines intact.
+        tasks = json.loads(self._run(["task", "list", "-r", "linebreaks_demo"])[1])
+        task_id = tasks[0]["id"]
+        _, detail = self._task_detail(port, "linebreaks_demo", task_id)
+        assert detail["task"]["functional_requirements"] == multiline_fr, (
+            "the endpoint must carry the author's line breaks unchanged"
+        )
+
+        # The script writes it into a .task-modal__text block, which the
+        # stylesheet renders with white-space: pre-wrap, so the line breaks
+        # survive to the screen. The page itself carries no task text any more.
+        _, _, script = self._req(port, "/static/task-modal.js")
+        assert '"task-modal__text"' in script, (
+            "the modal script must use the line-break-preserving class"
+        )
+        assert "textContent" in script, "the modal script must write values as text"
+        _, _, css = self._req(port, "/static/style.css")
+        assert ".task-modal__text" in css and "white-space: pre-wrap" in css
         _, _, body = self._req(port, "/roadmaps/linebreaks_demo/tasks")
-        assert "task-modal__text" in body, "task long-text must use the preserving class"
-        assert multiline_fr in body, "task free-text must preserve the author's line breaks"
+        assert multiline_fr not in body, (
+            "the task free-text must not travel in the page; the modal fetches it"
+        )
 
     def test_graph_detail_panel_preserves_line_breaks(self):
         """The knowledge-graph detail panel preserves authored line breaks in the
@@ -1311,39 +1393,60 @@ class TestWebInterface:
     def test_task_modal_wiring_and_content(self):
         proc, port = self._start(["--port", "0"])
         t1 = self.open_task_ids[0]
-        # The task detail modal appears on the tasks page and the single sprint
-        # page. The sprints landing page renders compact sprint cards only and
-        # opens no task detail modal (SPEC/WEB.md § Task Detail Modal, § Shared
-        # Sprint-Card Partial; Acceptance Criteria 8/15/38).
+        # Both pages that show clickable tasks carry ONE modal shell and wire every
+        # trigger to it by task id; the content comes from the task detail
+        # endpoint when the user opens a task. The sprints landing page renders
+        # compact sprint cards only and opens no task detail modal (SPEC/WEB.md
+        # § Task Detail Modal, § Task Detail Endpoint; Acceptance Criteria
+        # 8/15/38/96).
         for path in (
             f"/roadmaps/{ROADMAP}/tasks",
             f"/roadmaps/{ROADMAP}/sprints/{self.open_sid}",
         ):
             _, _, body = self._req(port, path)
-            # A clickable control toggles a Bootstrap modal targeting the task's modal.
             assert 'data-bs-toggle="modal"' in body, f"{path}: no modal-toggling control"
-            assert f'data-bs-target="#task-modal-{t1}"' in body, (
-                f"{path}: missing modal trigger for task #{t1}"
+            assert 'data-bs-target="#task-modal"' in body, (
+                f"{path}: no trigger pointing at the modal shell"
             )
-            # The matching modal element exists.
-            assert f'id="task-modal-{t1}"' in body, f"{path}: missing modal element for task #{t1}"
-            # The modal shows the long free-text sections.
-            for section in (
+            assert f'data-task-id="{t1}"' in body, f"{path}: missing the trigger for task #{t1}"
+
+            # Exactly one modal element, and no per-task modal.
+            assert body.count('id="task-modal"') == 1, (
+                f"{path}: carries {body.count('id=\"task-modal\"')} modal shells, want 1"
+            )
+            assert not re.search(r'id="task-modal-\d+"', body), (
+                f"{path}: still renders a per-task modal"
+            )
+            # No task's modal content travels in the document.
+            for absent in (
                 "Functional requirements",
                 "Technical requirements",
                 "Acceptance criteria",
-                "Completion summary",
+                "end users must authenticate without a stored password",
             ):
-                assert section in body, f"{path}: task modal missing section {section!r}"
-            # The functional-requirement text of the OPEN-sprint task is present.
-            assert "end users must authenticate without a stored password" in body.lower(), (
-                f"{path}: task modal missing the task's functional-requirements text"
-            )
+                assert absent.lower() not in body.lower(), (
+                    f"{path}: carries the modal content {absent!r}; it must be fetched on demand"
+                )
             # Read-only: no form/input/submit.
             low = body.lower()
             assert "<form" not in low, f"{path}: modal page must contain no form"
             assert "<input" not in low, f"{path}: modal page must contain no input"
             assert 'type="submit"' not in low, f"{path}: modal page must contain no submit"
+
+        # And the shell is filled from the endpoint, which carries every field the
+        # modal presents.
+        status, detail = self._task_detail(port, ROADMAP, t1)
+        assert status == 200, f"the task detail endpoint answered {status}"
+        for field in (
+            "id", "title", "status", "type", "priority", "severity",
+            "functional_requirements", "technical_requirements", "acceptance_criteria",
+            "specialists", "completion_summary", "parent_task_id", "subtask_count",
+            "depends_on", "blocks", "created_at", "started_at", "tested_at", "closed_at",
+        ):
+            assert field in detail["task"], f"the task detail carries no {field!r}"
+        assert "end users must authenticate without a stored password" in (
+            detail["task"]["functional_requirements"].lower()
+        )
 
     # ====================================================================
     # Comment log: the task detail modal timeline and the sprint Comments card
@@ -1404,21 +1507,6 @@ class TestWebInterface:
         return ids
 
     @staticmethod
-    def _slice_task_modal(html, task_id):
-        """Return the markup of exactly one task modal.
-
-        Bounded on the opening tag rather than on id="task-modal-N" alone: the
-        modal's own title carries id="task-modal-N-title", so a naive search
-        would cut the slice short before the comment block.
-        """
-        opening = f'<div class="modal modal-blur fade" id="task-modal-{task_id}"'
-        start = html.find(opening)
-        assert start != -1, f"no modal element for task #{task_id}"
-        nxt = html.find('<div class="modal modal-blur fade" id="task-modal-',
-                        start + len(opening))
-        return html[start:nxt if nxt != -1 else len(html)]
-
-    @staticmethod
     def _slice_sprint_comments_card(html):
         """Return the sprint's own Comments card, up to the end of its timeline.
 
@@ -1441,100 +1529,101 @@ class TestWebInterface:
     def _timeline_types(timeline):
         return re.findall(r'<span class="badge bg-secondary-lt">(\w+)</span>', timeline)
 
-    def test_task_modal_renders_the_comment_timeline(self):
-        """The modal renders the log as Tabler's Timeline, one event per comment."""
+    def test_task_detail_endpoint_serves_the_comment_log(self):
+        """The log the modal shows travels through the task detail endpoint, in
+        the order the CLI reports and complete (SPEC/WEB.md § Task Detail
+        Endpoint; Acceptance Criterion 94)."""
         self._seed_comments()
         proc, port = self._start(["--port", "0"])
-        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/tasks")
 
-        modal = self._slice_task_modal(body, self.commented_task)
-        timeline = self._timeline(modal)
-        assert timeline, "the commented task's modal renders no timeline"
+        status, detail = self._task_detail(port, ROADMAP, self.commented_task)
+        assert status == 200, f"the task detail endpoint answered {status}"
+        assert set(detail) == {"task", "comments"}, f"unexpected members {set(detail)!r}"
+        assert detail["task"]["id"] == self.commented_task
 
-        # The four Tabler classes and the message icon, once per comment.
-        assert modal.count('<li class="timeline-event">') == 3, modal.count(
-            '<li class="timeline-event">'
-        )
-        assert timeline.count(
-            '<div class="timeline-event-icon"><i class="ti ti-message"></i></div>'
-        ) == 3
-        assert timeline.count('<div class="card timeline-event-card">') == 3
-
-        # Every type badge is the neutral one: no per-type colour is introduced.
-        assert self._timeline_types(timeline) == ["FINDING", "HYPOTHESIS", "DECISION"]
-        assert not re.search(
-            r'<span class="badge bg-(?!secondary-lt)[a-z-]+">(?:FINDING|HYPOTHESIS|DECISION)',
-            timeline,
-        ), "a comment type badge is not the neutral bg-secondary-lt"
-
-        # Each entry shows its creation timestamp; only the edited one is stamped.
-        created = re.findall(
-            r'<span class="text-secondary">(\d{4}-\d{2}-\d{2}T[^<]+Z)</span>', timeline
-        )
-        assert len(created) == 3, created
-        assert created == sorted(created), f"timestamps out of order: {created}"
-        assert timeline.count('<span class="text-secondary">edited ') == 1, (
-            "exactly one comment was edited, so exactly one entry carries the stamp"
-        )
-
-        # The bodies are on the page, HTML-escaped rather than raw.
-        assert "measurable amount of time longer to reject" in body
-        assert "Today&#39;s fix doesn&#39;t change" in body, (
-            "an apostrophe in a comment body must arrive escaped"
-        )
-        assert "Today's fix doesn't change" not in body
-
-        # Read-only: the timeline offers no control and no link.
-        low = timeline.lower()
-        for forbidden in ("<form", "<input", "<button", "<a ", "<textarea"):
-            assert forbidden not in low, (
-                f"the comment timeline must be read-only, found {forbidden!r}"
-            )
-
-    def test_task_modal_comment_order_is_oldest_first(self):
-        """The modal's entries follow the log's order, oldest first."""
-        self._seed_comments()
-        proc, port = self._start(["--port", "0"])
-        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/tasks")
-
-        modal = self._slice_task_modal(body, self.commented_task)
-        timeline = self._timeline(modal)
-
-        # The rendered order must equal the order the CLI reports.
+        # Complete, and in the order `rmp task comment-list` returns.
         cli_log = json.loads(
             self._run(["task", "comment-list", "-r", ROADMAP,
                        str(self.commented_task)])[1]
         )
-        assert self._timeline_types(timeline) == [c["type"] for c in cli_log]
+        assert [c["type"] for c in detail["comments"]] == [c["type"] for c in cli_log]
+        assert [c["body"] for c in detail["comments"]] == [c["body"] for c in cli_log]
+        created = [c["created_at"] for c in detail["comments"]]
+        assert created == sorted(created), f"the log is not oldest first: {created}"
 
-        # And on the body text, so a reordered render cannot pass on types alone.
-        positions = [timeline.find(c["body"].split(",")[0][:40]) for c in cli_log]
-        assert all(p != -1 for p in positions), positions
-        assert positions == sorted(positions), (
-            f"comment bodies rendered out of order: {positions}"
+        # Exactly one entry was edited, and only that one carries updated_at.
+        edited = [c for c in detail["comments"] if c.get("updated_at")]
+        assert len(edited) == 1, f"{len(edited)} entries carry updated_at, want 1"
+
+        # The page carries none of it: the modal is filled on demand.
+        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/tasks")
+        for comment in detail["comments"]:
+            assert comment["body"] not in body, (
+                "a comment body reached the served page; the modal is filled from the endpoint"
+            )
+        assert '<ul class="timeline">' not in body, (
+            "the tasks page renders no timeline: the modal builds it from the endpoint"
         )
 
-    def test_task_modal_without_comments_shows_the_empty_state(self):
-        """A task with no comments shows the message, not an empty timeline.
-
-        Asserted on the uncommented task's OWN modal slice, on a page whose
-        other modal does render a timeline: a page-wide check could not tell
-        the two apart.
-        """
+    def test_task_detail_endpoint_without_comments_returns_an_empty_array(self):
+        """A task with no comment yields [], never null, so the script renders
+        its empty-state message (Acceptance Criterion 94)."""
         self._seed_comments()
         proc, port = self._start(["--port", "0"])
-        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/tasks")
 
-        empty = self._slice_task_modal(body, self.uncommented_task)
-        assert "No comments have been recorded on this task yet." in empty
-        assert '<ul class="timeline">' not in empty, (
-            "a task with no comments must render no timeline"
+        status, detail = self._task_detail(port, ROADMAP, self.uncommented_task)
+        assert status == 200
+        assert detail["comments"] == [], f"want an empty array, got {detail['comments']!r}"
+
+        # The message itself lives in the script, which renders the empty state.
+        _, _, script = self._req(port, "/static/task-modal.js")
+        assert "No comments have been recorded on this task yet." in script
+
+        # The commented task, on the same server, does carry its log: the empty
+        # array above is a fact about that task, not about the endpoint.
+        _, populated = self._task_detail(port, ROADMAP, self.commented_task)
+        assert len(populated["comments"]) == 3
+
+    def test_task_detail_endpoint_rejects_unknown_names_ids_and_methods(self):
+        """The endpoint enforces the roadmap-route discipline: 404 for an invalid
+        or unknown roadmap, a non-integer id and a task of another roadmap; 405
+        for any non-read method; and no-store on its response (Acceptance
+        Criterion 95)."""
+        self._seed_comments()
+        self._run(["roadmap", "create", "endpoint_other"])
+        other_task = self.test.create_task(
+            "endpoint_other",
+            "Rotate the acquirer API credentials",
+            "Credentials must rotate quarterly",
+            "Rotate through the secret manager",
+            "The old credential stops authenticating",
         )
-        assert "Comments" in empty, "the Comments section itself must still be present"
+        proc, port = self._start(["--port", "0"])
 
-        populated = self._slice_task_modal(body, self.commented_task)
-        assert "No comments have been recorded on this task yet." not in populated
-        assert '<ul class="timeline">' in populated
+        ok, headers, _ = self._req(port, f"/roadmaps/{ROADMAP}/tasks/{self.commented_task}/data")
+        assert ok == 200
+        assert headers.get("cache-control") == "no-store", headers.get("cache-control")
+
+        for path in (
+            "/roadmaps/INVALID/tasks/1/data",
+            "/roadmaps/..%2fetc/tasks/1/data",
+            "/roadmaps/no_such_roadmap/tasks/1/data",
+            f"/roadmaps/{ROADMAP}/tasks/not-a-number/data",
+            f"/roadmaps/{ROADMAP}/tasks/999999/data",
+            # A task of ANOTHER roadmap is not reachable through this one.
+            f"/roadmaps/{ROADMAP}/tasks/{other_task}/data"
+            if other_task not in self.open_task_ids else
+            f"/roadmaps/{ROADMAP}/tasks/999998/data",
+            # The bare page path is not a route.
+            f"/roadmaps/{ROADMAP}/tasks/{self.commented_task}",
+        ):
+            status, _, _ = self._req(port, path)
+            assert status == 404, f"GET {path} answered {status}, want 404"
+
+        path = f"/roadmaps/{ROADMAP}/tasks/{self.commented_task}/data"
+        for method in ("POST", "PUT", "PATCH", "DELETE"):
+            status, _, _ = self._req(port, path, method=method)
+            assert status == 405, f"{method} {path} answered {status}, want 405"
 
     def test_sprint_page_comments_card_shows_only_the_sprints_own_comments(self):
         """The Comments card is the SPRINT's log, counted in its own badge.
@@ -1566,10 +1655,14 @@ class TestWebInterface:
                 "a member task's comment leaked into the sprint's Comments card"
             )
 
-        # The member task's own log is still rendered, in its own modal.
-        modal = self._slice_task_modal(body, self.commented_task)
-        assert '<ul class="timeline">' in modal
-        assert self.comment_bodies["FINDING"][:50] in modal
+        # The member task's own log is still reachable — from its own detail
+        # endpoint, which is where the modal now gets it — and it is the task's
+        # log, not the sprint's.
+        _, detail = self._task_detail(port, ROADMAP, self.commented_task)
+        assert self.comment_bodies["FINDING"] in [c["body"] for c in detail["comments"]]
+        assert self.sprint_comment_body not in [c["body"] for c in detail["comments"]], (
+            "a sprint comment leaked into a task's detail"
+        )
 
     def test_sprint_page_comments_card_empty_state(self):
         """A sprint with no comments shows the Tabler empty panel and a zero badge."""
@@ -2361,10 +2454,10 @@ class TestWebInterface:
                     f"{path}: the accessible name decodes to {html_lib.unescape(label)!r}"
                 )
 
-            # And the markup kept its shape: one modal for the task, not several
-            # fragments produced by a broken attribute.
-            assert body.count(f'id="task-modal-{task_id}"') == 1, (
-                f"{path}: the hostile title broke the markup around task #{task_id}"
+            # And the markup kept its shape: the page carries exactly one modal
+            # shell, not fragments produced by a broken attribute.
+            assert body.count('id="task-modal"') == 1, (
+                f"{path}: the hostile title broke the markup"
             )
 
     # ====================================================================

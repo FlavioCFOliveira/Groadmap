@@ -112,6 +112,17 @@ func buildMux() *http.ServeMux {
 	mux.HandleFunc("GET /roadmaps/{name}/tasks", handleTasks)
 	mux.HandleFunc("HEAD /roadmaps/{name}/tasks", handleTasks)
 
+	// Task detail endpoint: the JSON one task's detail modal is filled from,
+	// fetched when the user opens that task. The /data suffix is what marks a
+	// path as a JSON payload rather than an HTML page, exactly as the graph's
+	// own data endpoint does, which keeps the bare {collection}/{id} shape
+	// reserved for the HTML-page idiom /roadmaps/{name}/sprints/{id} uses:
+	// /roadmaps/{name}/tasks/{id} is deliberately NOT a route and falls through
+	// to the 404 handler. {id} is parsed and validated inside the handler
+	// (SPEC/WEB.md § Task Detail Endpoint).
+	mux.HandleFunc("GET /roadmaps/{name}/tasks/{id}/data", handleTaskData)
+	mux.HandleFunc("HEAD /roadmaps/{name}/tasks/{id}/data", handleTaskData)
+
 	// Roadmap audit log page: the full audit log, paginated. A distinct, more
 	// specific pattern than /roadmaps/{name}; Go 1.22+ ServeMux routes the
 	// literal "audit" segment here and {name} alone to handleSprints without

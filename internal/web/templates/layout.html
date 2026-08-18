@@ -115,23 +115,6 @@
   </header>{{end}}
 
 {{/*
-  taskModal renders ONE Bootstrap modal for a single task (dot = a web.taskView:
-  the task, whose own fields are reached through embedding, plus .Comments, its
-  work log). Each clickable task on a page is a control with
-  data-bs-toggle="modal" data-bs-target="#task-modal-{ID}", and the page renders
-  one taskModal per task it shows; tabler.min.js (Bootstrap 5.3) drives open and
-  close natively, so no custom JavaScript and no new server endpoint are needed
-  (SPEC/WEB.md § Task Detail Modal). The modal is read-only: it has no form, no
-  input, and no submit control — only a close control.
-
-  Every roadmap-derived field (title, the long free-text requirements, the
-  completion summary, specialists, and every comment body) is emitted through
-  html/template's contextual auto-escaping, so task data that contains HTML
-  control characters cannot alter page structure (SPEC/WEB.md § Security and
-  Constraints, rule 6). The long free-text fields and the comment bodies render
-  inside .task-modal__text blocks that wrap and preserve their line breaks.
-*/}}
-{{/*
   sprintCard renders the single shared sprint card used by EVERY tab of the
   Roadmap Sprints Page — Próximos, Actual, and Concluídos — so all sprints share
   identical card markup across the three tabs. The OPEN sprint under Actual is
@@ -170,13 +153,14 @@
   Page (SPEC/WEB.md § Sprint Detail Sub-Template; Acceptance Criteria 38/39).
 
   Dot is a web.sprintDetail: .Name (roadmap), .Sprint (models.Sprint), .Tasks
-  (member tasks in planned in-sprint execution order, each with its own comment
-  log), .Comments (the sprint's own comments, oldest first), and .Summary
-  (the precomputed completion summary). It renders, in order: the sprint status
-  summary line, the sprint metadata datagrid, the full member-tasks table
-  with each row clickable to open the read-only task detail modal, and the
-  sprint's Comments card. The caller is responsible for rendering one taskModal
-  per shown task.
+  (member tasks in planned in-sprint execution order), .Comments (the sprint's
+  own comments, oldest first), and .Summary (the precomputed completion summary).
+  It renders, in order: the sprint status summary line, the sprint metadata
+  datagrid, the full member-tasks table with each row clickable to open the
+  read-only task detail modal, and the sprint's Comments card. The caller renders
+  the single taskModalShell the page carries; the member tasks hold no comment
+  data, because the modal a row opens is filled on demand from the task detail
+  endpoint.
 
   The "Tasks" datagrid value uses len .Tasks (the loaded member tasks) rather
   than .Sprint.TaskCount: GetSprint populates TaskCount, but len .Tasks is the
@@ -264,14 +248,14 @@
                     contains the button's visible label, the title, which is what
                     WCAG 2.5.3 (Label in Name) requires of a control whose visible
                     text is part of its name. Both surfaces that show a clickable
-                    task are treated the same way; the board's card is the same
-                    kind of button (SPEC/WEB.md § Sprint Detail Sub-Template;
-                    § Roadmap Tasks Page, clickable card).
+                    task are treated the same way; the board's card is the same kind of button
+                    (SPEC/WEB.md § Sprint Detail Sub-Template; § Roadmap Tasks
+                    Page, clickable card).
                   */}}
                   {{range .Tasks}}
-                  <tr class="task-row" data-bs-toggle="modal" data-bs-target="#task-modal-{{.ID}}">
+                  <tr class="task-row" data-bs-toggle="modal" data-bs-target="#task-modal" data-task-id="{{.ID}}">
                     <td>#{{.ID}}</td>
-                    <td><button type="button" class="task-row__trigger p-0 border-0 bg-transparent text-reset text-start" data-bs-toggle="modal" data-bs-target="#task-modal-{{.ID}}" aria-label="Open details for task #{{.ID}}: {{.Title}}">{{.Title}}</button></td>
+                    <td><button type="button" class="task-row__trigger p-0 border-0 bg-transparent text-reset text-start" data-bs-toggle="modal" data-bs-target="#task-modal" data-task-id="{{.ID}}" aria-label="Open details for task #{{.ID}}: {{.Title}}">{{.Title}}</button></td>
                     <td><span class="badge {{taskStatusBadge .Status}}">{{.Status}}</span></td>
                     <td>{{.Type}}</td>
                     <td><span class="badge {{priorityBadge .Priority}}">{{.Priority}}</span></td>
@@ -320,117 +304,49 @@
             </div>
           </div>{{end}}
 
-{{define "taskModal"}}  <div class="modal modal-blur fade" id="task-modal-{{.ID}}" tabindex="-1" aria-labelledby="task-modal-{{.ID}}-title" aria-hidden="true">
+{{/*
+  taskModalShell is the ONE task detail modal a page renders. It is an empty
+  shell: it carries no task's data, and every page that shows a clickable task
+  renders it exactly once, whatever the number of tasks (SPEC/WEB.md § Task Detail
+  Modal, One modal element, filled on demand).
+
+  Before this, a page rendered one fully populated modal per task, whether or not
+  the user ever opened one: on a 100-task board that was 774,484 of the document's
+  930,188 bytes — 83 percent — for content a user opens one of at a time.
+
+  When the user opens a task, /static/task-modal.js fetches that task's fields and
+  comments from GET /roadmaps/{name}/tasks/{id}/data (the base path is the
+  data-task-base attribute below, and the trigger carries the task id in
+  data-task-id) and fills this shell. Every value it writes goes in as TEXT, never
+  as markup: the server's html/template escaping no longer stands between a stored
+  value and the page structure once the values travel as JSON, so the script is
+  what must not interpret them (SPEC/WEB.md § Task Detail Modal, Client-side
+  rendering is text-only).
+
+  Dot is the page's own view model; only .Name is read.
+*/}}
+{{define "taskModalShell"}}  <div class="modal modal-blur fade" id="task-modal" tabindex="-1" aria-labelledby="task-modal-title" aria-hidden="true" data-task-base="/roadmaps/{{.Name}}/tasks">
     <div class="modal-dialog modal-lg modal-dialog-scrollable modal-dialog-centered" role="document">
       <div class="modal-content">
         <div class="modal-header">
           <div>
-            <div class="text-secondary">Task #{{.ID}}</div>
-            <h5 class="modal-title" id="task-modal-{{.ID}}-title">{{.Title}}</h5>
+            <div class="text-secondary" id="task-modal-ref"></div>
+            <h5 class="modal-title" id="task-modal-title"></h5>
           </div>
-          <span class="badge {{taskStatusBadge .Status}} ms-auto me-2">{{.Status}}</span>
+          <span class="badge ms-auto me-2" id="task-modal-status" hidden></span>
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
         <div class="modal-body">
-          <div class="datagrid mb-3">
-            <div class="datagrid-item">
-              <div class="datagrid-title">Type</div>
-              <div class="datagrid-content">{{.Type}}</div>
-            </div>
-            <div class="datagrid-item">
-              <div class="datagrid-title">Priority</div>
-              <div class="datagrid-content"><span class="badge {{priorityBadge .Priority}}">{{.Priority}}</span></div>
-            </div>
-            <div class="datagrid-item">
-              <div class="datagrid-title">Severity</div>
-              <div class="datagrid-content"><span class="badge {{severityBadge .Severity}}">{{.Severity}}</span></div>
-            </div>
-            <div class="datagrid-item">
-              <div class="datagrid-title">Specialists</div>
-              <div class="datagrid-content">{{with .Specialists}}{{.}}{{else}}&mdash;{{end}}</div>
-            </div>
-            <div class="datagrid-item">
-              <div class="datagrid-title">Parent task</div>
-              <div class="datagrid-content">{{with .ParentTaskID}}#{{.}}{{else}}&mdash;{{end}}</div>
-            </div>
-            <div class="datagrid-item">
-              <div class="datagrid-title">Subtasks</div>
-              <div class="datagrid-content">{{.SubtaskCount}}</div>
-            </div>
-            <div class="datagrid-item">
-              <div class="datagrid-title">Depends on</div>
-              <div class="datagrid-content">
-                {{if .DependsOn}}<span class="d-flex flex-wrap gap-1">{{range .DependsOn}}<span class="badge bg-secondary-lt">#{{.}}</span>{{end}}</span>{{else}}&mdash;{{end}}
-              </div>
-            </div>
-            <div class="datagrid-item">
-              <div class="datagrid-title">Blocks</div>
-              <div class="datagrid-content">
-                {{if .Blocks}}<span class="d-flex flex-wrap gap-1">{{range .Blocks}}<span class="badge bg-secondary-lt">#{{.}}</span>{{end}}</span>{{else}}&mdash;{{end}}
-              </div>
-            </div>
-            <div class="datagrid-item">
-              <div class="datagrid-title">Created</div>
-              <div class="datagrid-content text-secondary">{{.CreatedAt}}</div>
-            </div>
-            <div class="datagrid-item">
-              <div class="datagrid-title">Started</div>
-              <div class="datagrid-content text-secondary">{{with .StartedAt}}{{.}}{{else}}&mdash;{{end}}</div>
-            </div>
-            <div class="datagrid-item">
-              <div class="datagrid-title">Tested</div>
-              <div class="datagrid-content text-secondary">{{with .TestedAt}}{{.}}{{else}}&mdash;{{end}}</div>
-            </div>
-            <div class="datagrid-item">
-              <div class="datagrid-title">Closed</div>
-              <div class="datagrid-content text-secondary">{{with .ClosedAt}}{{.}}{{else}}&mdash;{{end}}</div>
-            </div>
-          </div>
-
-          <div class="mb-3">
-            <div class="datagrid-title mb-1">Functional requirements</div>
-            <div class="task-modal__text">{{.FunctionalRequirements}}</div>
-          </div>
-          <div class="mb-3">
-            <div class="datagrid-title mb-1">Technical requirements</div>
-            <div class="task-modal__text">{{.TechnicalRequirements}}</div>
-          </div>
-          <div class="mb-3">
-            <div class="datagrid-title mb-1">Acceptance criteria</div>
-            <div class="task-modal__text">{{.AcceptanceCriteria}}</div>
-          </div>
-          <div class="mb-3">
-            <div class="datagrid-title mb-1">Completion summary</div>
-            <div class="task-modal__text">{{with .CompletionSummary}}{{.}}{{else}}&mdash;{{end}}</div>
-          </div>
-
           {{/*
-            The task's work log, directly after the completion-summary block and
-            last in the modal body: what was tried, what was found, and why the
-            work went the way it did (SPEC/WEB.md § Task Detail Modal, comments
-            timeline; Acceptance Criteria 64/65/67).
-
-            The comments arrive on the taskView already paired with the task by
-            the page loader's single grouped query, so opening a modal issues no
-            request of its own: no new server endpoint and no write path. A task
-            with no comments reaches the else branch and shows an explicit
-            empty state, not an empty list and not a missing section.
-
-            The empty state is a plain message rather than the Tabler .empty panel
-            the sprint Comments card uses: this block sits among the modal's other
-            text blocks (the requirements, the completion summary), and a centred
-            3rem-padded panel among them would read as a different kind of content.
-            The sprint card, by contrast, is a card and follows the member-tasks
-            card's panel idiom, as SPEC/WEB.md § Sprint Detail Sub-Template asks.
+            Three mutually exclusive states, all present in the shell and toggled
+            by the script: the load in progress, the failure message, and the
+            task's content. The failure is shown IN the modal, never silently and
+            never leaving the previously opened task on display (SPEC/WEB.md
+            § Task Detail Modal, Failure is visible in the modal).
           */}}
-          <div>
-            <div class="datagrid-title mb-1">Comments</div>
-            {{if .Comments}}
-            {{template "commentTimeline" .Comments}}
-            {{else}}
-            <div class="text-secondary">No comments have been recorded on this task yet.</div>
-            {{end}}
-          </div>
+          <div class="text-secondary" id="task-modal-loading">Loading the task detail&hellip;</div>
+          <div class="text-danger" id="task-modal-error" role="alert" hidden></div>
+          <div id="task-modal-content"></div>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>

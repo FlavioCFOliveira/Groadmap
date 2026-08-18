@@ -197,12 +197,17 @@ func seedBadgeRoadmap(t *testing.T, name string) (roadmap string, sprintID int) 
 	return name, sprintID
 }
 
-// TestTasksPage_RendersSemanticBadgeColours proves the helpers are actually
-// wired into the tasks template and emit the SPEC colour variant in the rendered
-// HTML: a SPRINT / priority 8 / severity 9 task must render bg-cyan-lt,
-// bg-red-lt, and bg-red-lt badges respectively, and priority/severity must now
-// be Tabler badges rather than the old plain cells (SPEC/WEB.md § Status,
-// Priority, and Severity Badge Colours, rule 2).
+// TestTasksPage_RendersSemanticBadgeColours proves the helpers are actually wired
+// into the tasks template and emit the SPEC colour variant in the rendered HTML:
+// a priority 8 / severity 9 task renders bg-red-lt badges on its board card
+// (SPEC/WEB.md § Status, Priority, and Severity Badge Colours, rule 2).
+//
+// The STATUS badge is deliberately not asserted here. The card shows none — the
+// column it sits in already states the status — and the modal that does show one
+// is now filled by /static/task-modal.js from the task detail endpoint, so no
+// status badge is server-rendered on this page at all. The script's own mapping
+// is pinned against these same Go helpers, value by value, in
+// TestTaskModalScript_BadgeMappingMatchesTheServerHelpers.
 func TestTasksPage_RendersSemanticBadgeColours(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	name, _ := seedBadgeRoadmap(t, "badge-colours")
@@ -217,19 +222,19 @@ func TestTasksPage_RendersSemanticBadgeColours(t *testing.T) {
 	}
 	body := rec.Body.String()
 
-	// Status badge: SPRINT -> bg-cyan-lt, in the task detail modal. The board card
-	// deliberately shows no status badge: the column it sits in already states the
-	// status (SPEC/WEB.md § Roadmap Tasks Page, Acceptance Criterion 85).
-	if !strings.Contains(body, `<span class="badge bg-cyan-lt ms-auto me-2">SPRINT</span>`) {
-		t.Errorf("tasks page missing the SPRINT status badge with bg-cyan-lt in the task detail modal")
-	}
-	// Priority 8 -> bg-red-lt badge (was previously a plain cell).
+	// Priority 8 -> bg-red-lt badge, on the board card.
 	if !strings.Contains(body, `<span class="badge bg-red-lt">8</span>`) {
 		t.Errorf("tasks page missing priority badge with bg-red-lt for priority 8")
 	}
-	// Severity 9 -> bg-red-lt badge (was previously a plain cell).
+	// Severity 9 -> bg-red-lt badge, on the board card.
 	if !strings.Contains(body, `<span class="badge bg-red-lt">9</span>`) {
 		t.Errorf("tasks page missing severity badge with bg-red-lt for severity 9")
+	}
+	// No status badge is server-rendered on this page: not on the card, and not
+	// in the shell, which carries an empty badge element the script fills.
+	if strings.Contains(body, `>SPRINT</span>`) {
+		t.Errorf("tasks page renders a status badge; the column states the status and the modal " +
+			"is filled by the script")
 	}
 }
 

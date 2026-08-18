@@ -1484,7 +1484,7 @@ func groupedTaskSprintsQuery(placeholders string) string {
 // Sprint of Many Tasks (Grouped)).
 //
 // A task that belongs to no sprint is ABSENT from the map, exactly as in
-// ListTaskCommentsByTasks and CountSubTasksByParents: it has no sprint_tasks row,
+// CountTaskCommentsByTasks and CountSubTasksByParents: it has no sprint_tasks row,
 // so the absence of an entry is the answer, and the zero value a caller reads for
 // a missing key is the zero SprintRef. At most one entry exists per task, which
 // the schema guarantees rather than the query: sprint_tasks.task_id carries a
