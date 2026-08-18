@@ -9,6 +9,7 @@
 - [Startup Schema Migration](#startup-schema-migration)
 - [Bind Address and Port Selection](#bind-address-and-port-selection)
 - [HTTP Server Timeouts](#http-server-timeouts)
+  - [Graph Query Time Budget](#graph-query-time-budget)
 - [Security Headers](#security-headers)
 - [Cache Policy](#cache-policy)
 - [Routes and Pages](#routes-and-pages)
@@ -307,6 +308,17 @@ task detail modal that displays all of the task's fields (see
     directory is unreadable, or a flag value is invalid) are reported as plain
     text to stderr and map to the existing exit codes; no new exit code is
     introduced (see [Error Handling and Exit Codes](#error-handling-and-exit-codes)).
+19. **The graph data endpoint bounds its own work.** The endpoint executes the
+    caller-supplied Cypher query under a per-request time budget of 5 seconds,
+    derived from the request context, so no single request can hold the server for
+    as long as that query takes to run. The budget bounds the work the query
+    causes, whereas the injected node `LIMIT` bounds only the result it returns; a
+    query cancelled for exceeding the budget is surfaced as a query execution
+    failure, with the message the page already shows for one, and introduces no new
+    HTTP status and no new exit code (see
+    [Graph Query Time Budget](#graph-query-time-budget),
+    [Graph Data Endpoint](#graph-data-endpoint), and
+    [Query-Bar Error Handling](#query-bar-error-handling)).
 
 ## Command Surface
 
@@ -485,7 +497,78 @@ or stalled client connection cannot hold server resources indefinitely. The
 
 These three timeouts are mandatory. They protect the read-only server from
 resource exhaustion by slow or idle connections and apply uniformly to every
-route.
+route. They bound the connection only. The work a handler performs once the
+request has been read is bounded separately, on the one route whose work a caller
+drives, by the budget specified next.
+
+### Graph Query Time Budget
+
+The three timeouts above bound the connection, not the work the server does for a
+request. A client that sends its headers promptly, stays connected, and reads the
+response as soon as it arrives satisfies all three however long the server takes
+to produce that response. One route's work is driven by caller-supplied input:
+the graph data endpoint (`GET /roadmaps/{name}/graph/data`) executes a Cypher
+query the caller writes (see [Graph Data Endpoint](#graph-data-endpoint) and
+[Graph Query Bar](#graph-query-bar)). That route MUST therefore bound its own
+work with an explicit time budget.
+
+1. **Budget: 5 seconds.** The graph data endpoint MUST execute the caller's query
+   under a deadline of 5 seconds. The deadline starts when the endpoint begins
+   executing the query and covers the endpoint's execution of it: the run against
+   the engine's read path and the walk over the result that run produces (see
+   [Graph Data Endpoint](#graph-data-endpoint)). The value sits well above the
+   slowest execution measured on a small store — a three-way Cartesian product
+   over a 252-node store spent 1.32 seconds of server time to return a single
+   aggregate row — and well below the 30-second `WriteTimeout`, so a query that
+   exhausts the budget is cancelled, and its failure is rendered, while the
+   response can still be written.
+2. **Derived from the request context.** The deadline MUST be derived from the
+   request's own context, so the two sources of cancellation compose rather than
+   replace one another: a client that disconnects still cancels the query
+   immediately, exactly as it did before the budget existed, and a client that
+   stays connected can no longer hold the query running beyond the budget.
+3. **The budget bounds the work; the node limit bounds the result.** These are two
+   different bounds, and neither substitutes for the other. The `LIMIT` clause the
+   endpoint injects (see [Graph Data Endpoint](#graph-data-endpoint)) bounds the
+   **result**: how many rows the query returns, and therefore how large the
+   response is. It does not bound the **work** the engine performs to produce
+   those rows. A query that aggregates over a Cartesian product, for example,
+   scans the whole product before any limit applies: its cost grows with the size
+   of the store while its response stays a few bytes long. The time budget is the
+   only bound on that work.
+4. **Exceeding the budget is a query execution failure.** When the budget is
+   exhausted, the endpoint cancels the query and reports the request as a **query
+   execution failure** — case 3 of
+   [Query-Bar Error Handling](#query-bar-error-handling), the same classification
+   a query that fails in the engine receives, and distinct from the read-only
+   guard-rail rejection of case 1 and from the invalid limit of case 2. The page
+   surfaces the existing "query failed to execute" message in place: the page does
+   not crash, the failure triggers no write and no navigation, the graph already
+   shown is left as it is, and the user can edit the query, lower the node limit,
+   and search again.
+5. **No new status and no new error class.** The budget introduces no new HTTP
+   status, no new sentinel error, and no new process exit code. A request whose
+   query exceeded the budget is answered exactly as any other query execution
+   failure is answered, so the HTTP status mapping in
+   [Routes and Pages](#routes-and-pages) and the exit-code mapping in
+   [Error Handling and Exit Codes](#error-handling-and-exit-codes) are both
+   unchanged. Exhausting the budget never terminates the process: the server keeps
+   serving.
+6. **Ordinary queries are unaffected.** A query that completes within the budget
+   is served exactly as it was served before the budget existed: the same nodes
+   and edges, in the same response shape, with nothing truncated, no ordering
+   changed, and no latency added. The budget is observable only to a query that
+   would otherwise have run for longer than it.
+7. **Per request, and cancellation writes nothing.** Each graph data request gets
+   its own budget; requests do not share one, and one request's budget is
+   unaffected by any other request in flight. Cancelling a query changes nothing
+   on disk: the store is opened read-only, so an abandoned query writes no data,
+   runs no checkpoint, and truncates no write-ahead log, exactly as a completed
+   one does (see
+   [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
+8. **The budget is the whole of the bound.** This version bounds the work of a
+   graph data request and nothing else. It introduces no request rate limit and no
+   new endpoint.
 
 ## Security Headers
 
@@ -1712,9 +1795,11 @@ already consumes; it adds no new endpoint and no write path.
    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
 
 8. **Error surfacing.** When a search fails — because the query is rejected as not
-   read-only, because the limit is invalid, or because the query fails to execute —
-   the page shows a clear, read-only message in place and does not crash, exactly
-   as the layout degradation does; the distinct cases are specified in
+   read-only, because the limit is invalid, or because the query fails to execute,
+   which includes exhausting the endpoint's query time budget (see
+   [Graph Query Time Budget](#graph-query-time-budget)) — the page shows a clear,
+   read-only message in place and does not crash, exactly as the layout
+   degradation does; the distinct cases are specified in
    [Query-Bar Error Handling](#query-bar-error-handling).
 
 9. **Coexistence with the other graph controls.** The query bar coexists with the
@@ -1760,7 +1845,11 @@ rule 5). The failure modes are kept distinct so the user understands what to fix
    the read-only rejection in case 1. A syntactically invalid read-only query is an
    execution failure, not a guard-rail rejection, mirroring the CLI behaviour where
    a query that passes the clause check is still rejected by the engine at execution
-   time (see `GRAPH.md § Per-Subcommand Validation Rules`, note 3).
+   time (see `GRAPH.md § Per-Subcommand Validation Rules`, note 3). A query that
+   the endpoint cancels because it exhausted the endpoint's 5-second query time
+   budget is an execution failure of this same case and is surfaced with this same
+   message; the budget is specified in
+   [Graph Query Time Budget](#graph-query-time-budget).
 
 4. **In-place, read-only, non-fatal.** In every case the message is shown in place
    on the page, the page does not crash, and the failure triggers no write and no
@@ -2000,6 +2089,16 @@ write.
   does not count as an existing top-level `LIMIT` and does not suppress injection.
   The default query has no `LIMIT`, so a request that uses the default query
   always has the resolved limit applied to it.
+- **Per-request query time budget.** The endpoint MUST execute the query under a
+  5-second deadline derived from the request context, so a query that would run
+  for longer is cancelled instead of holding the server for as long as it takes to
+  finish. The budget bounds the **work** the query causes; the injected `LIMIT`
+  bounds only the **result** it returns, and neither substitutes for the other. A
+  query cancelled for exceeding the budget is a query execution failure and is
+  surfaced as one (see
+  [Query-Bar Error Handling](#query-bar-error-handling), case 3). The rule,
+  including the reason for the value, is specified in
+  [Graph Query Time Budget](#graph-query-time-budget).
 - **Result-to-graph extraction.** The endpoint builds the
   `{"nodes": [...], "edges": [...]}` response (see
   `DATA_FORMATS.md § Graph View Data`) by walking the **entire** query result and
@@ -2705,7 +2804,7 @@ read from the host filesystem at runtime.
     **The navbar carries no read-only indicator.** It MUST NOT carry a badge,
     label, or icon declaring the interface read-only. That the interface never
     writes is a guarantee of the server, specified in
-    [Security and Read-Only Guarantees](#security-and-read-only-guarantees) and in
+    [Security and Constraints](#security-and-constraints) and in
     each page's own **Read-only** rule, and it is already evident on every page:
     no form, no submit control, no edit affordance anywhere. Restating it in the
     one shell region that can instead identify the page's subject spends that
@@ -3062,12 +3161,20 @@ Rules:
    HTML-safe JSON (`<`, `>`, and `&` serialized as Unicode escape sequences), so
    roadmap-derived graph text cannot break an HTML or script context (see
    [Graph Data Endpoint](#graph-data-endpoint)).
-10. **No directory listings; bounded connection timeouts.** The static handler
-   never serves a directory listing: a request for a directory under `/static/`
-   returns HTTP `404` (see [Static Assets](#static-assets)). The HTTP server is
-   configured with explicit ReadHeaderTimeout, WriteTimeout, and IdleTimeout values
-   so a slow or idle client cannot exhaust server resources (see
-   [HTTP Server Timeouts](#http-server-timeouts)).
+10. **No directory listings; bounded connection timeouts and a bounded graph
+   query.** The static handler never serves a directory listing: a request for a
+   directory under `/static/` returns HTTP `404` (see
+   [Static Assets](#static-assets)). The HTTP server is configured with explicit
+   ReadHeaderTimeout, WriteTimeout, and IdleTimeout values so a slow or idle client
+   cannot exhaust server resources (see
+   [HTTP Server Timeouts](#http-server-timeouts)). Those three timeouts bound the
+   connection and not the work a request causes, so the one route that executes
+   caller-supplied input — the graph data endpoint — additionally bounds that work
+   with a per-request query time budget of 5 seconds, after which the query is
+   cancelled and the page shows the existing query-execution-failure message (see
+   [Graph Query Time Budget](#graph-query-time-budget)). Without that budget a
+   single `GET` could hold the server for as long as the caller's query took to
+   run, because the injected node limit bounds the result and not the work.
 11. **No stale data; `no-store` on data-derived responses.** Every data-derived
    response (the roadmap index page, the roadmap sprints page, the roadmap tasks
    page, the roadmap sprint page, the roadmap audit log page, the knowledge-graph
@@ -3956,6 +4063,23 @@ Rules:
     page headers carry no actions column, and no page header links to the
     knowledge-graph page — Acceptance Criterion 100 held that for the tasks page
     and now holds for every page.
+110. `GET /roadmaps/{name}/graph/data` executes the caller's query under a
+    5-second deadline derived from the request context. A query that would run for
+    longer is cancelled when the budget is exhausted instead of running to
+    completion: the request is answered as a query execution failure, and the page
+    shows the same "query failed to execute" message it shows for a query that
+    fails in the engine — distinct from the "query rejected: not read-only" message
+    of Acceptance Criterion 47 and from the invalid-limit message of Acceptance
+    Criterion 48 — with no new HTTP status and no new exit code introduced. This is
+    proven with a query whose work the node limit does not bound, such as an
+    aggregate over a Cartesian product (`MATCH (a),(b),(c) RETURN count(*)`), which
+    returns a single row and is therefore unaffected by the injected `LIMIT`. A
+    query that completes within the budget returns exactly the response it returned
+    before the budget existed, with nothing truncated and no ordering changed, and
+    a client that disconnects still cancels the query immediately. A cancelled
+    request writes nothing: the store is unchanged, no checkpoint runs, no
+    write-ahead log is truncated, and the server keeps serving later requests (see
+    [Graph Query Time Budget](#graph-query-time-budget)).
 
 ## See Also
 

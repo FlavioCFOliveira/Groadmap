@@ -37,6 +37,36 @@ const defaultGraphQuery = "MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r, m"
 // § Graph Data Endpoint, query parameters).
 const defaultGraphLimit = 100
 
+// defaultGraphQueryBudget is the per-request time budget the graph data
+// endpoint executes the caller's Cypher query under: the run against the
+// engine's read path plus the walk over the result that run produces
+// (SPEC/WEB.md § Graph Query Time Budget, rule 1).
+//
+// Five seconds sits well above the slowest execution measured on a small store
+// — a three-way Cartesian product over a 252-node store spent 1.32 seconds of
+// server time to return a single aggregate row — and well below the 30-second
+// WriteTimeout (SPEC/WEB.md § HTTP Server Timeouts), so a query that exhausts
+// the budget is cancelled and its failure is still written to the client.
+//
+// The budget bounds the WORK; the injected LIMIT bounds only the RESULT
+// (SPEC/WEB.md § Graph Query Time Budget, rule 3). An aggregate over a
+// Cartesian product returns one row whatever the limit is, yet scans the whole
+// product to produce it, so the limit cannot bound it and the budget is the
+// only bound on that work.
+const defaultGraphQueryBudget = 5 * time.Second
+
+// graphQueryBudget is the budget runGraphViewQuery actually applies. It is a
+// var rather than a const for exactly one reason: the regression test for this
+// bound drives it down to a few milliseconds so it can prove the cancellation
+// without spending five real seconds per run.
+//
+// Production never reassigns it. It is initialised from
+// defaultGraphQueryBudget and there is no flag, environment variable, request
+// parameter, or any other user-facing knob that can change it, so every graph
+// data request the server serves runs under the 5-second budget (SPEC/WEB.md
+// § Graph Query Time Budget, rules 1 and 8).
+var graphQueryBudget = defaultGraphQueryBudget
+
 // allowedGraphLimits is the closed set of node-limit values the limit dropdown
 // offers and the endpoint accepts. A limit outside this set is rejected as an
 // invalid limit; the endpoint never clamps to the nearest value (SPEC/WEB.md
@@ -1217,10 +1247,35 @@ func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphV
 // Data). An engine failure (for example invalid Cypher syntax) is returned as a
 // classified execution-failure graphQueryError, distinct from a guard-rail
 // rejection.
+//
+// The whole of that execution runs under the per-request query time budget
+// (SPEC/WEB.md § Graph Query Time Budget). The deadline is derived HERE, and
+// not in loadGraphView, because rule 1 defines the budget as covering exactly
+// what this function does — the run against the engine's read path and the walk
+// over the result that run produces — and nothing else: resolving the limit,
+// the read-only guard rail, and opening the store are not query execution. The
+// walk MUST be inside the deadline and not merely the Run: the engine streams a
+// disconnected pattern's tuples as the result is iterated, so a Cartesian
+// product's cost is paid during result.Next(), and Run returns a nil error long
+// before it. A deadline covering only Run would therefore bound nothing.
+//
+// Deriving it from ctx (context.WithTimeout, not context.WithDeadline on a
+// fresh context) keeps the two cancellation sources composed, per rule 2: a
+// client that disconnects still cancels the query immediately, and a client
+// that stays connected can no longer hold it beyond the budget.
 func runGraphViewQuery(ctx context.Context, engine *cypher.Engine, query string) (graphView, error) {
-	result, err := engine.Run(ctx, query, nil)
+	// Read the budget once so the deadline that fires and the message that
+	// reports it can never disagree.
+	budget := graphQueryBudget
+	budgeted, cancel := context.WithTimeout(ctx, budget)
+	// Deferred FIRST, so it unwinds LAST: result.Close() below still runs on a
+	// live context. Releasing the timer here also means the budget is strictly
+	// per request and nothing outlives the call (rule 7).
+	defer cancel()
+
+	result, err := engine.Run(budgeted, query, nil)
 	if err != nil {
-		return graphView{}, newGraphQueryError(graphErrExecution, "query failed to execute: "+err.Error())
+		return graphView{}, graphExecutionError(ctx, budget, err)
 	}
 	defer result.Close() //nolint:errcheck // read path; close commits nothing
 
@@ -1238,10 +1293,50 @@ func runGraphViewQuery(ctx context.Context, engine *cypher.Engine, query string)
 		}
 	}
 	if err := result.Err(); err != nil {
-		return graphView{}, newGraphQueryError(graphErrExecution, "query failed to execute: "+err.Error())
+		return graphView{}, graphExecutionError(ctx, budget, err)
 	}
 
 	return c.view(), nil
+}
+
+// graphExecutionError classifies a failure raised by the engine's read path —
+// whether it surfaced from Run or from the walk over the result — as the single
+// execution-failure kind, and words the user-facing reason truthfully.
+//
+// Every case is graphErrExecution: exhausting the query time budget is a query
+// execution failure, case 3 of SPEC/WEB.md § Query-Bar Error Handling, exactly
+// as a query that fails in the engine is. No new kind, no new sentinel error,
+// no new HTTP status (SPEC/WEB.md § Graph Query Time Budget, rules 4 and 5).
+// Only the reason differs, and it must not lie about which of the two composed
+// cancellation sources fired:
+//
+//   - The engine wraps ctx.Err() (cypher.checkContext), so a budget exhaustion
+//     arrives as context.DeadlineExceeded and a client disconnect as
+//     context.Canceled, both matchable with errors.Is.
+//   - DeadlineExceeded alone is not proof of the budget: it is also what a
+//     parent context with its own earlier deadline reports through the derived
+//     one. parent is therefore consulted — it is the REQUEST's context, without
+//     the budget layered on — and only a live parent attributes the failure to
+//     the budget.
+//
+// An ordinary engine failure (invalid Cypher, for example) keeps the exact
+// message it had before the budget existed. The page renders whichever reason
+// it is given verbatim in place, so all three read as the same "query failed to
+// execute" message the user already knows (graph.js showQueryError).
+func graphExecutionError(parent context.Context, budget time.Duration, err error) *graphQueryError {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded) && parent.Err() == nil:
+		// The request is still live, so the deadline that fired is ours.
+		return newGraphQueryError(graphErrExecution,
+			"query failed to execute: exceeded the "+budget.String()+" query time budget")
+	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
+		// The request's own context died first: the client disconnected, or the
+		// caller gave up. Not the budget.
+		return newGraphQueryError(graphErrExecution,
+			"query failed to execute: the request was cancelled before the query finished")
+	default:
+		return newGraphQueryError(graphErrExecution, "query failed to execute: "+err.Error())
+	}
 }
 
 // graphCollector accumulates the deduplicated nodes and relationships found by
