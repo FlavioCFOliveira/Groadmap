@@ -440,39 +440,6 @@ class TestAC6CapacityPctZero:
 
 
 # ---------------------------------------------------------------------------
-# AC6: capacity_pct=0.0 when max_tasks set and no active tasks
-# ---------------------------------------------------------------------------
-
-
-class TestAC6CapacityPctZero:
-    def setup_method(self):
-        self.test = GroadmapTestBase()
-        self.test.setup()
-
-    def teardown_method(self):
-        self.test.teardown()
-
-    def test_capacity_pct_zero_on_empty_sprint_with_max_tasks(self):
-        roadmap = self.test.create_roadmap()
-        sprint_id = self.test.run_cmd_json([
-            "sprint", "create", "-r", roadmap,
-            "-t", "Sprint Iota - freshly created with capacity limit set",
-            "-d", "Sprint Iota - freshly created with capacity limit set",
-            "--max-tasks", "4",
-        ])["id"]
-        self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint_id)])
-
-        show = self.test.run_cmd_json(["sprint", "show", "-r", roadmap, str(sprint_id)])
-        load = show.get("current_load")
-        pct = show.get("capacity_pct")
-        mt = show.get("max_tasks")
-        assert load == 0, f"AC6 FAIL: expected current_load=0 on empty sprint, got {load}"
-        assert pct == 0.0, f"AC6 FAIL: expected capacity_pct=0.0, got {pct}"
-        assert mt == 4, f"AC6 FAIL: expected max_tasks=4, got {mt}"
-        print(f"AC6 PASS: empty sprint with max_tasks=4 shows capacity_pct=0.0")
-
-
-# ---------------------------------------------------------------------------
 # AC7: Schema migration
 # ---------------------------------------------------------------------------
 
