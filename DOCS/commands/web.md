@@ -48,15 +48,41 @@ All routes serve `GET` and `HEAD` only. Any other HTTP method on any route retur
 | Route | Purpose | Response |
 |-------|---------|----------|
 | `/` | Roadmap index: every roadmap under `~/.roadmaps/`, with links to each roadmap's sprints landing page and graph page (empty-state message when none) | HTML |
-| `/roadmaps/{name}` | Roadmap sprints page and landing page: that roadmap's sprints in three tabs (Próximos / Actual / Concluídos, Actual default), the OPEN sprint expanded with its tasks; each sprint links to its own page. Selecting a roadmap on the index lands here | HTML |
-| `/roadmaps/{name}/tasks` | Roadmap tasks page: that roadmap's full task table (every task, any status); clicking a task opens a read-only modal with all task fields | HTML |
-| `/roadmaps/{name}/sprints/{id}` | Dedicated sprint page: all sprint details and the task list in planned execution order; each task opens the task detail modal | HTML |
+| `/roadmaps/{name}` | Roadmap sprints page and landing page: that roadmap's sprints in three tabs (Próximos / Actual / Concluídos, Actual default), every sprint rendered through the same sprint card and linking to its own page. Selecting a roadmap on the index lands here | HTML |
+| `/roadmaps/{name}/tasks` | Roadmap tasks page: that roadmap's full task table (every task, any status); clicking a task opens a read-only modal with all task fields and that task's comments timeline | HTML |
+| `/roadmaps/{name}/sprints/{id}` | Dedicated sprint page: all sprint details, the task list in planned execution order, and the sprint's own Comments card; each task opens the task detail modal | HTML |
 | `/roadmaps/{name}/audit` | Roadmap audit log page: that roadmap's full audit log (columns ID, Operation, Entity Type, Entity ID, Performed At), ordered by Performed At descending (most recent first), paginated at 100 entries per page via the `page` query parameter (1-based, default 1; out-of-range or non-numeric values are clamped to the nearest valid page) with Previous/Next controls and a "Page X of Y" indicator | HTML |
 | `/roadmaps/{name}/graph` | Interactive knowledge-graph visualisation (D3.js; selectable Networks-section layouts via a dropdown, default Mobile patent suits; pan/zoom, touch, tap-to-inspect) | HTML |
 | `/roadmaps/{name}/graph/data` | The graph's nodes and edges for the visualisation | JSON |
 | `/static/...` | Embedded static assets (CSS, JS, vendored Tabler framework and D3.js + d3-sankey, fonts) | static file |
 
 `{name}` is validated against the roadmap-name rules (regex `^[a-z0-9_-]+$`, max 50 characters) before it is used to build any filesystem path; a name that fails validation, or a roadmap that does not exist, returns HTTP `404`. A request for a `/static/...` asset that is not embedded returns HTTP `404`. These HTTP statuses are distinct from the process exit codes below.
+
+## Comment Surfaces
+
+Comments recorded through `rmp task comment-add` and `rmp sprint comment-add` are surfaced on two read-only places in the interface. Both only display data: neither creates, edits, nor deletes a comment, and the CLI remains the sole write path.
+
+### Task comments: the detail modal timeline
+
+Anywhere a task is clickable — the roadmap tasks page's task table and the sprint page's task list — the read-only task detail modal renders that task's comments as a chronological timeline, placed after the task's fields and last in the modal body.
+
+- **Order and completeness.** Oldest first, exactly the order `rmp task comment-list` returns (`created_at` ascending, comment `id` ascending as the tie-breaker). Every comment of the task is rendered: no type filter and no count limit.
+- **What each entry shows.** The comment's `type` as a badge, its `created_at` timestamp, an edited marker carrying the `updated_at` timestamp when that value is not null, and the `body`.
+- **Type badge colour.** Neutral for every one of the seven task comment types. The semantic colour mapping used for status, priority, and severity is not extended to comment types.
+- **Line breaks.** A comment body is multi-line as authored through the CLI, and the timeline preserves the author's line breaks; the text wraps inside the card, so no horizontal scrolling is introduced.
+- **Empty state.** A task with no comments shows a plain message in place of the timeline, not an empty list and not a missing section.
+
+### Sprint comments: the Comments card
+
+The dedicated sprint page (`/roadmaps/{name}/sprints/{id}`) shows the sprint's own comments in a Comments card, placed after the member-tasks card and rendered last on the page.
+
+- **Scope.** The card shows the comments of the sprint itself. It does not show, aggregate, or merge in the comments of the sprint's member tasks; those are reachable through each task's own detail modal.
+- **Order and completeness.** Oldest first, exactly the order `rmp sprint comment-list` returns. Every comment of the sprint is rendered: no type filter and no count limit.
+- **Card header.** The card title `Comments` with a badge showing the number of comments.
+- **What each entry shows.** The same four elements as the task timeline: the `type` badge, `created_at`, the edited marker when `updated_at` is not null, and the `body`. The badge is neutral for every one of the four sprint comment types.
+- **Empty state.** A sprint with no comments shows an empty-state message in place of the timeline. The card itself is always present.
+
+The comments of every task rendered on a page are loaded in a single grouped query over the whole set of rendered task ids, never one query per task, so the number of comment queries per page does not grow with the number of tasks. The surfaces add no server endpoint: no route returns comments on their own, and comments are not embedded in any JSON the CLI emits for a task or a sprint.
 
 ## Exit Codes
 
@@ -87,7 +113,7 @@ rmp web --host 0.0.0.0 --port 9000
 
 ## Read-Only and Security
 
-- **Read-only.** The interface exposes no route that creates, edits, or deletes any roadmap, task, sprint, audit entry, or graph element. Serving a page writes no rows and no audit-log entry. The graph store is opened read-only and a web read never triggers a checkpoint or write-ahead-log truncation.
+- **Read-only.** The interface exposes no route that creates, edits, or deletes any roadmap, task, sprint, comment, audit entry, or graph element. Comments are displayed, never created, edited, or deleted from the web interface. Serving a page writes no rows and no audit-log entry. The graph store is opened read-only and a web read never triggers a checkpoint or write-ahead-log truncation.
 - **Loopback by default.** The server binds the loopback interface (`127.0.0.1`) by default, so the read-only interface is reachable only from the local machine. Exposing it on the network via `--host 0.0.0.0` (all interfaces, or any other non-loopback address) is the explicit opt-in; doing so prints a network-exposure warning to stderr at startup.
 - **Path-traversal guard.** Roadmap names from the URL are validated before any filesystem path is built, so a crafted name cannot traverse outside `~/.roadmaps/`.
 - **Tabler dark-theme UI.** The interface is built on the vendored Tabler admin-dashboard framework in its dark theme (navigation sidebar that collapses to a hamburger menu on small viewports, top navbar, page headers, Tabler cards/tables/badges). Task and sprint status, priority, and severity render as colour-coded Tabler badges (for example completed work in green, in-progress in blue, high priority or critical severity in red), so state is scannable at a glance.
@@ -98,3 +124,4 @@ rmp web --host 0.0.0.0 --port 9000
 - `SPEC/WEB.md` - full behaviour of the running server (routes, read-only data flow, self-contained delivery, mobile-first design, security)
 - `SPEC/COMMANDS.md` (Web Interface) - the command-line contract
 - `DOCS/commands/graph.md` - the knowledge graph the graph page visualises
+- `DOCS/commands/task.md` and `DOCS/commands/sprint.md` - the comment subcommands that write the logs these pages display

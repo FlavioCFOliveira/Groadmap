@@ -5,6 +5,7 @@
 - [High-Level Overview](#high-level-overview)
 - [Directory Structure](#directory-structure)
 - [Security Guarantees](#security-guarantees)
+  - [Open-Time Permission Enforcement](#open-time-permission-enforcement)
 - [Source Code Structure](#source-code-structure)
 - [Modules and Responsibilities](#modules-and-responsibilities)
 - [Command Lifecycle](#command-lifecycle)
@@ -74,7 +75,7 @@ transactions, or locks. The graph layer is specified in `GRAPH.md`.
 3. Permissions: the data directory is restricted to the owner (`0700` or `drwx------` on POSIX) to ensure data privacy.
 4. Each roadmap has its own **home directory** at `~/.roadmaps/<name>/`. The directory name is the roadmap name. This directory is the container for every file the `rmp` application uses for that roadmap.
 5. Each roadmap home directory is created if absent, is owned by the user only, and uses the same `0700` permissions as the data directory; its permissions are verified on access.
-6. The roadmap's SQLite database lives inside the roadmap home directory at `~/.roadmaps/<name>/project.db` with `0600` permissions. Its SQLite sidecars (`project.db-wal`, `project.db-shm`) live alongside it.
+6. The roadmap's SQLite database lives inside the roadmap home directory at `~/.roadmaps/<name>/project.db` with `0600` permissions, applied and verified every time `rmp` opens the database and not only when it creates it (see `ARCHITECTURE.md § Open-Time Permission Enforcement`). Its SQLite sidecars (`project.db-wal`, `project.db-shm`) live alongside it.
 7. A roadmap home directory holds the SQLite database and its sidecars, and, once the knowledge graph is used, the `graph/` subdirectory. The directory is the designated location for per-roadmap artefacts; additional file types may be added without changing this layout.
 8. The knowledge graph for a roadmap is stored in the subdirectory `~/.roadmaps/<name>/graph/` (mode `0700`), created on first use of any `rmp graph` subcommand. It is a directory because the GoGraph backing store persists through an on-disk snapshot plus a write-ahead log; after the first successful write subcommand the directory also contains a `snapshot/` subdirectory, produced by the synchronous checkpoint that runs after each write (see `GRAPH.md § Synchronous Checkpoint on Write`). Its internal layout is owned by GoGraph and is opaque to Groadmap. The graph store is the canonical subject of `GRAPH.md`; see `GRAPH.md § Persistence Layout`.
 9. Roadmap enumeration considers the immediate **subdirectories** of `~/.roadmaps/` (one directory per roadmap), not files at the top level. A roadmap is identified by the presence of `project.db`; the optional `graph/` subdirectory does not by itself constitute a roadmap.
@@ -85,10 +86,202 @@ transactions, or locks. The graph layer is specified in `GRAPH.md`.
 Groadmap implements several security layers to protect user data and ensure system stability:
 
 ### 1. Data Isolation and Privacy
-- **Restricted Permissions**: The data directory `~/.roadmaps` and every per-roadmap home directory `~/.roadmaps/<name>/` are created with `0700` permissions, and individual `project.db` files are created with `0600` permissions **from the outset** (the file is created with mode `0600`, not created under the process umask and chmod-ed afterwards, so there is no window in which the database is more permissive than `0600`). The SQLite sidecars `project.db-wal` and `project.db-shm` are held to the same `0600` permissions as `project.db`, because they can hold the same data pages. Permissions are (re)verified to `0700` for directories and `0600` for the database after every layout migration.
+- **Restricted Permissions**: The data directory `~/.roadmaps` and every per-roadmap home directory `~/.roadmaps/<name>/` are created with `0700` permissions, and individual `project.db` files are created with `0600` permissions **from the outset** (the file is created with mode `0600`, not created under the process umask and chmod-ed afterwards, so there is no window in which the database is more permissive than `0600`). The SQLite sidecars `project.db-wal` and `project.db-shm` are held to the same `0600` permissions as `project.db`, because they can hold the same data pages. These permissions are not a creation-time convention that later runs inherit: `0700` on the two directories and `0600` on `project.db` are re-applied and re-verified **every time `rmp` opens a roadmap database**, and after every layout migration. A `project.db` that cannot be brought to `0600` fails the command. The complete rule — the order of operations, the failure mode, the treatment of the sidecars, and the read-only open path — is `ARCHITECTURE.md § Open-Time Permission Enforcement`, which is the canonical statement of the permission model for the roadmap database.
 - **Filesystem Safety — No Symlink Following (CWE-59)**: Neither `~/.roadmaps/` nor any roadmap home directory `~/.roadmaps/<name>/` may be a symbolic link. When creating, opening, or migrating a roadmap directory, `rmp` MUST refuse to follow a symbolic link and fail with an error rather than following it. This prevents redirection of `project.db` writes to a path outside the data directory and prevents `rmp`'s `0700`/`0600` permission changes from being applied to an external directory or file reached through a link. The rule is stated in `ARCHITECTURE.md § Directory Structure`, location rule 10, and the layout-migration sweep enforces the same rule for `.db`-named top-level symlinks (see `ARCHITECTURE.md § Filesystem Layout Migration`, Edge Cases).
 - **Input Validation**: Roadmap names are strictly validated using the regex `^[a-z0-9_-]+$` with a maximum length of **50 characters** to prevent path traversal attacks and ensure filesystem compatibility. This validation MUST be applied as a central gate for all commands that accept a roadmap name (via `-r` or `--roadmap`).
 - **Length Validation Error**: When a roadmap name exceeds 50 characters, the error message is: "Error: Roadmap name must not exceed 50 characters (got N)"
+
+#### Open-Time Permission Enforcement
+
+The `0600` restriction on `~/.roadmaps/<name>/project.db` is an **open-time**
+guarantee, not a creation-time one. A database can arrive with a wider mode
+through entirely ordinary means: restored from an archive that carried no
+permission bits, copied from a filesystem that does not record them,
+synchronized without preserving them, written by an older binary under a
+permissive umask, or moved in from the legacy layout. Every command that opens a
+roadmap database therefore re-establishes the restriction before it uses the
+database, in the same way the `0700` on the directories is already re-applied and
+re-verified on every open. This section is the canonical statement of that rule;
+`DATABASE.md § Physical Location and Naming` refers to it.
+
+**A. Directories: unchanged.** Before any database file is touched, `rmp`
+re-applies `0700` to the data directory `~/.roadmaps/` and to the roadmap home
+directory `~/.roadmaps/<name>/`, and verifies both. A directory that cannot be
+brought to `0700` fails the command. This behaviour is unchanged, and it MUST NOT
+be relaxed in order to align the directories with the file rule: the directory is
+the boundary that stops another user from reaching any file inside the roadmap
+home at all, so it stays re-applied and verified on every open.
+
+**B. The database file: read the mode, repair it, read it again.** After the
+directory permissions are applied and verified, and before any database
+connection is established, `rmp` reads the permission bits of
+`~/.roadmaps/<name>/project.db` when that file already exists, and then:
+
+1. If the mode is exactly `0600`, `rmp` proceeds and changes nothing. No mode
+   change is attempted, so a database that the invoking user can read but does not
+   own opens normally as long as it is already restricted.
+2. If the mode differs, `rmp` changes it to `0600` and reads the mode again.
+3. If the mode is `0600` after the change, `rmp` proceeds.
+4. If the change fails, or the mode still differs after the change, `rmp` fails
+   the command with the failure mode in **C. Failure mode** below.
+
+A database being created is unaffected by this sequence: it is created with mode
+`0600` from the outset, as stated in **Restricted Permissions** above, so there is
+no window in which it is more permissive.
+
+Two ordering constraints are part of the rule, and neither is incidental:
+
+- The enclosing directories are brought to `0700` **before** the file's mode is
+  read, so between reading that mode and repairing it no other user can traverse
+  into the roadmap home directory to act on the file.
+- The file's mode is settled **before** the database connection is established.
+  SQLite derives the mode of the write-ahead log and shared-memory sidecars from
+  the mode of the database file it is opening. The process umask does not narrow
+  that mode: the driver this binary links re-applies the requested mode to a
+  sidecar it has just created while that file is still empty, which undoes the
+  umask. A session that begins with `project.db` at `0600` therefore produces
+  sidecars at `0600`, and the mode is never widened, so the guarantee this
+  ordering constraint rests on is unaffected. Connecting first and restricting
+  afterwards would let the engine stamp a wider mode onto files it creates in
+  between.
+
+**C. Failure mode.** A database that cannot be brought to `0600` is a database
+whose contents are readable by other users of the machine. `rmp` refuses to
+operate on it rather than warning and continuing.
+
+- **Error message.** The failure produces the standard error shape specified in
+  `HELP.md § Error message format`, and the error wraps the `utils.ErrDatabase`
+  sentinel, as every I/O failure does (see
+  `ARCHITECTURE.md § Error Reuse Policy (Mandatory)`). The line written to stderr
+  is:
+
+  ```
+  Error: database error: cannot secure <path> to 0600: <detail>
+  ```
+
+  `<path>` is the absolute path of the database file. `<detail>` is the
+  underlying failure, in one of two forms: the operating system's error text when
+  the mode change itself failed, or `expected 0600, got <mode>` when the mode
+  change reported success but the file is still not `0600`, which happens on a
+  filesystem that does not record POSIX permission bits. A complete example:
+
+  ```
+  Error: database error: cannot secure /home/user/.roadmaps/project1/project.db to 0600: chmod /home/user/.roadmaps/project1/project.db: operation not permitted
+  ```
+
+  The `database error: ` prefix is the rendering of the wrapped sentinel and is
+  part of the message the user sees. The AI-agent hint follows on its own line,
+  exactly as on every other error path.
+
+- **Exit code.** `1` (`EXIT_FAILURE`), which is the code `utils.ErrDatabase` maps
+  to in `ARCHITECTURE.md § Exit Codes`. No new sentinel and no new exit code are
+  introduced for this failure.
+
+- **What the command MUST NOT have done.** When a command fails this way, it has
+  performed no work on the database:
+  1. No database connection has been established and no SQL statement has run:
+     no schema creation, no migration, no query, no row change, and no audit
+     entry. In particular, an invocation that appends a comment to a task or a
+     sprint has not appended it, and an invocation that lists comments has read
+     none.
+  2. Nothing has been written to stdout. The invocation produces no JSON success
+     object; its only output is the error on stderr.
+  3. The database file's contents, name, and location are unchanged. The file is
+     never deleted, renamed, replaced, or truncated in order to satisfy the
+     guarantee.
+  4. The file's mode is never left wider than it was found. The only mode change
+     `rmp` attempts on it is the restriction to `0600`.
+
+  The directory permissions described in **A. Directories** may already have been
+  re-applied, because that step precedes the file check. That is the intended
+  order: it restricts the enclosing directories and never touches the user's data.
+
+**D. Sidecars: restricted on every open, never fatal.** When `project.db-wal` or
+`project.db-shm` is present, `rmp` restricts it to `0600` on every open. A
+sidecar that cannot be restricted does **not** fail the command, and no warning
+is emitted. The asymmetry with `project.db` is deliberate, and it is not an
+oversight to be "unified" later:
+
+- SQLite owns the sidecars' lifetime. The engine creates, removes, and recreates
+  them at moments `rmp` does not control: a checkpoint, or the closing of the
+  last connection, can remove the write-ahead log between the moment `rmp`
+  observes the file and the moment it changes the mode. Treating that as fatal
+  would turn a benign race that has already resolved itself into an intermittent
+  command failure.
+- The case the restriction covers is narrow, because the guarantee on
+  `project.db` already carries the sidecars. SQLite creates a sidecar with the
+  permission bits of the database file it belongs to, narrowed by the process
+  umask, so once step **B** has settled `project.db` at `0600` before the
+  connection is established, every sidecar created in that session is `0600`
+  without any further action. What the explicit restriction catches is a sidecar
+  left behind by an earlier session or by another tool, created when the database
+  file was still more permissive.
+- The sidecars are transient state that never leaves the roadmap home directory.
+  `project.db` is the durable artefact that gets backed up, copied to another
+  machine, or handed to someone else, and its mode travels with it — which is
+  precisely how a database arrives more permissive than `0600` in the first
+  place. A sidecar exists only while a connection is open or after a crash,
+  inside a directory that step **A** has just verified is `0700`, and a directory
+  without its execute bit cannot be traversed by another user.
+
+The sidecar restriction is therefore defence in depth for the case where the
+`0700` directory guarantee is itself defeated: applied whenever it can be, and
+skipped silently when it cannot.
+
+**E. The read-only open path.** The web interface opens each roadmap database
+strictly read-only, with SQLite `query_only` set (see
+`WEB.md § Read-Only Data Flow`). A read-only opener may be able to read a file it
+does not own, and therefore may be unable to change its mode. That path applies
+the same rule, with the sequence in step **B** followed exactly as written:
+
+- It reads the mode first and attempts no change when the file is already `0600`.
+  This is what keeps a legitimate read working for a correctly restricted
+  database the caller does not own: an unconditional mode change would fail there
+  and refusing would protect nothing, because the file is already private.
+- When the mode does deviate, the read-only path repairs it if it can and refuses
+  the open if it cannot. A reader that lacks the ownership needed to restrict a
+  database it can read is, by construction, reading a database that other users
+  of the machine can also read, and the web interface is the one surface on which
+  those contents leave the invoking user's terminal.
+- Restricting the mode is the only filesystem effect the read-only path may have.
+  It creates no file and no directory, it never widens a mode, and it changes
+  neither the contents nor the schema of the database.
+  `WEB.md § Security and Constraints` states that the web interface creates no new
+  on-disk artefact for a read and relaxes no permission; restricting a file that
+  is more permissive than `0600` is consistent with both statements.
+- The read-only path does not create, modify, or verify directories. The
+  directory rule in step **A** is enforced by the writable open path and by the
+  web server's startup sequence, which verifies `0700` on `~/.roadmaps/` before
+  serving anything and re-applies `0700` to each roadmap home directory it opens
+  during the startup schema migration (see `WEB.md § Server Lifecycle` and
+  `WEB.md § Startup Schema Migration`).
+- A refusal on the read-only path does not stop the server. It is a read failure
+  on the affected route and surfaces as HTTP `500`, exactly as any other read
+  failure does (see `WEB.md § Routes and Pages`). This matters for a roadmap whose
+  startup schema migration was skipped, which is non-fatal and per-roadmap (see
+  `WEB.md § Startup Schema Migration`): the per-request check is what prevents a
+  database the startup step refused from being served through a path that never
+  checked it. If a command-line invocation ever opens a database through the
+  read-only path, the refusal is the failure mode in **C. Failure mode**,
+  unchanged.
+
+**F. Verifiable behaviour.** The rule is observable from outside the process, and
+the following statements MUST hold:
+
+1. Given `~/.roadmaps/<name>/project.db` at mode `0666`, owned by the invoking
+   user, any command that opens that roadmap succeeds and leaves the file at
+   `0600`. This is the case the rule exists for: without it, the command succeeds
+   and leaves the file at `0666`.
+2. Given a database whose mode the invoking user cannot change to `0600`, the
+   command fails with exit code `1`, writes the message in **C. Failure mode** to
+   stderr, writes nothing to stdout, and leaves both the database's contents and
+   its mode as they were.
+3. Given a database already at `0600`, the command opens it with no mode change
+   attempted, whether the invoking user owns the file or not.
+4. After any successful open, `~/.roadmaps/` and `~/.roadmaps/<name>/` are `0700`,
+   whatever mode they had before it.
+5. A `project.db-wal` or `project.db-shm` that cannot be restricted changes
+   neither the exit code nor the output of the command.
 
 ### 2. Binary Hardening
 - **ASLR Support**: The binary is compiled as a Position Independent Executable (PIE) to leverage Address Space Layout Randomization (standard in modern Go).
@@ -102,7 +295,7 @@ Groadmap implements several security layers to protect user data and ensure syst
 - **Inert Database Paths**: The DSN is a `file:` URI with the database path percent-encoded, so no character in the path can redirect the open to another file or introduce a connection parameter. The roadmap name is validated, but the home directory the path is rooted in is not; see `IMPLEMENTATION.md § DSN Construction`.
 - **Bulk Operation Limits**: Commands handling bulk task IDs (e.g., `rmp task get`) must batch operations into sets of 500 or fewer to stay safely within SQLite's `SQLITE_LIMIT_VARIABLE_NUMBER`.
 - **Transactional Integrity**: All database modifications (CREATE, UPDATE, DELETE, STATUS_CHANGE) MUST be wrapped in an explicit SQL transaction. The audit log entry for the operation MUST be written within the same transaction to ensure atomicity and consistency.
-- **XSS Prevention**: User inputs that might be rendered in other contexts are sanitized to remove HTML tags and dangerous attributes.
+- **XSS Prevention — Escaping at Render Time, Not Sanitizing at Input Time**: Roadmap text is stored exactly as the user entered it. `rmp` strips no HTML tag, removes no attribute, and rewrites no character on the way in. The defence is contextual escaping at the point of rendering: every page the web interface serves is produced by Go's `html/template`, which escapes each value according to the context it lands in (HTML text, attribute, script, URL), and data delivered to the browser as JSON is encoded as JSON rather than interpolated into markup. This is the correct defence, and the specified one. Escaping at render time protects each output context with the rules of that context and leaves the stored record faithful to what the user wrote, whereas sanitizing at input time would corrupt the record — a task description or a comment body that legitimately contains `<`, `>`, or an HTML fragment is data, not markup — while still not making any single output context safe. The rendering rules are specified in `WEB.md § Security and Constraints` (output escaping) and `WEB.md § Frontend Rules`.
 
 ## Source Code Structure
 
@@ -118,6 +311,7 @@ Groadmap/
 │   │   ├── roadmap.go     # Roadmap subcommands
 │   │   ├── task.go        # Task subcommands
 │   │   ├── sprint.go      # Sprint subcommands
+│   │   ├── comment.go     # Comment subcommands of the task and sprint families
 │   │   ├── graph.go       # Graph subcommands (GoGraph integration)
 │   │   └── web.go         # web command (starts the embedded HTTP server)
 │   ├── web/               # Embedded read-only HTTP server (net/http)
@@ -134,6 +328,7 @@ Groadmap/
 │   ├── models/
 │   │   ├── task.go        # Task structs, enums
 │   │   ├── sprint.go      # Sprint structs, enums
+│   │   ├── comment.go     # TaskComment and SprintComment structs, CommentType enum
 │   │   ├── roadmap.go     # Roadmap structures
 │   │   ├── audit.go       # Audit log structures
 │   │   └── consts.go      # Constants (limits, defaults)

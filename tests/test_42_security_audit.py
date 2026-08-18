@@ -299,6 +299,146 @@ class TestSecurityAudit:
         db = rdir / "project.db"
         assert _mode(db) == 0o600, f"project.db is {oct(_mode(db))}"
 
+    def test_defense_roadmap_creation_survives_a_narrowing_umask(self):
+        """A umask that clears the owner-write bit must not leave a roadmap
+        half-created. The O_EXCL pre-create asks for 0600 and the umask narrows
+        it (0600 &~ 0277 = 0400), so the mode has to be repaired BEFORE the
+        connection is established: a file the owner cannot write cannot be
+        switched to WAL.
+
+        Ordering regression. With the repair sitting after the connection was
+        configured, `rmp roadmap create` under umask 0277 failed with
+        "configuring database: enabling WAL mode: attempt to write a readonly
+        database (8)" (exit 1) and left a 0400 stub project.db behind. The
+        SPEC's order -- settle the file's mode, then open the connection --
+        is what makes this work.
+        """
+        home = self._fresh_home()
+        rm = "narrowumask"
+        code, _, err = self._run(["roadmap", "create", rm], home=home, umask=0o277)
+        assert code == 0, (
+            f"roadmap creation failed under umask 0277: exit={code} stderr={err!r}")
+        db = self._roadmaps_dir(home) / rm / "project.db"
+        assert _mode(db) == 0o600, (
+            f"project.db is {oct(_mode(db))} under umask 0277; the umask-narrowed "
+            "pre-create must be repaired to 0600")
+
+        # The roadmap is genuinely usable, not a stub that merely exists.
+        code, _, err = self._run(["task", "create", "-r", rm,
+                                  "-t", "created under a narrowing umask",
+                                  "-fr", "why", "-tr", "how", "-ac", "verify"],
+                                 home=home, umask=0o277)
+        assert code == 0, f"the created roadmap is not usable: exit={code} stderr={err!r}"
+        assert _mode(db) == 0o600, f"project.db is {oct(_mode(db))} after a write"
+
+    def test_defense_project_db_rehardened_on_every_open(self):
+        """#178 CWE-276: the 0600 restriction on project.db is an OPEN-time
+        guarantee, not a creation-time one. A database that arrives at 0666 --
+        restored from an archive that carried no modes, copied off a filesystem
+        that does not record them, rsync'd without -p, or written by an older
+        binary under a permissive umask -- must be brought back to 0600 by ANY
+        command that opens it, a read exactly as much as a write, mirroring what
+        ~/.roadmaps and ~/.roadmaps/<name> already do on every open. Comment
+        bodies, the durable record of findings and decisions, live in that file.
+
+        Pins SPEC/ARCHITECTURE.md section Open-Time Permission Enforcement,
+        F.1 (a 0666 database is left at 0600 by any command that opens it) and
+        F.4 (both directories are 0700 after any successful open).
+        """
+        home = self._fresh_home()
+        rm = "commentledger"
+        self._run(["roadmap", "create", rm], home=home, check=True)
+        _, out, _ = self._run(["task", "create", "-r", rm,
+                               "-t", "Re-verify project.db permissions on open",
+                               "-fr", "The 0600 guarantee must survive a restore",
+                               "-tr", "Harden and verify before the connection",
+                               "-ac", "The mode is 0600 after any open"],
+                              home=home, check=True)
+        tid = json.loads(out)["id"]
+        base = self._roadmaps_dir(home)
+        rdir = base / rm
+        db = rdir / "project.db"
+        assert _mode(db) == 0o600, "precondition: a freshly created project.db is 0600"
+
+        # --- a READ command must re-harden the file -----------------------
+        os.chmod(db, 0o666)
+        os.chmod(rdir, 0o777)
+        os.chmod(base, 0o777)
+        code, out, err = self._run(["task", "comment-list", "-r", rm, str(tid)],
+                                   home=home)
+        assert code == 0, f"read command failed: exit={code} stderr={err!r}"
+        assert json.loads(out) == [], "the read must still return the (empty) comment list"
+        assert _mode(db) == 0o600, (
+            f"OPEN #178: project.db left at {oct(_mode(db))} after `task comment-list`; "
+            "0600 must be re-applied and re-verified on every open, not only at creation")
+        assert _mode(base) == 0o700, f"~/.roadmaps is {oct(_mode(base))} after a read"
+        assert _mode(rdir) == 0o700, f"roadmap home is {oct(_mode(rdir))} after a read"
+
+        # --- a WRITE command must re-harden the file ----------------------
+        os.chmod(db, 0o666)
+        os.chmod(rdir, 0o777)
+        os.chmod(base, 0o777)
+        body = "Measured: chmod 666 project.db then comment-add/comment-list both exit 0."
+        code, _, err = self._run(["task", "comment-add", "-r", rm, str(tid),
+                                  "-y", "FINDING", "-b", body], home=home)
+        assert code == 0, f"write command failed: exit={code} stderr={err!r}"
+        assert _mode(db) == 0o600, (
+            f"OPEN #178: project.db left at {oct(_mode(db))} after `task comment-add`; "
+            "0600 must be re-applied and re-verified on every open, not only at creation")
+        assert _mode(base) == 0o700, f"~/.roadmaps is {oct(_mode(base))} after a write"
+        assert _mode(rdir) == 0o700, f"roadmap home is {oct(_mode(rdir))} after a write"
+
+        # The hardening did not cost the command its work: the comment landed.
+        comments = self._json(["task", "comment-list", "-r", rm, str(tid)], home=home)
+        assert [c["body"] for c in comments] == [body], (
+            f"the appended comment was not persisted: {comments!r}")
+        # ... and no sidecar was left group/other-accessible either.
+        wide = [(p.name, oct(_mode(p))) for p in rdir.glob("project.db-*")
+                if _mode(p) & 0o077]
+        assert not wide, f"sidecars left accessible to other users: {wide}"
+
+    def test_defense_web_read_path_rehardens_project_db(self):
+        """#178 CWE-276: the strictly read-only open path the web server uses
+        applies the same rule. A database that turns 0666 while the server is
+        already running is restricted to 0600 by the request that reads it, and
+        the request still succeeds. Tightening the mode is the only filesystem
+        effect that path may have -- it creates nothing and never widens -- and
+        it must not touch the directories, which the writable path owns.
+
+        Pins SPEC/ARCHITECTURE.md section Open-Time Permission Enforcement,
+        E. The read-only open path, and SPEC/WEB.md section Read-Only Data Flow.
+        """
+        home = self._fresh_home()
+        rm = "webledger"
+        self._run(["roadmap", "create", rm], home=home, check=True)
+        self._run(["task", "create", "-r", rm, "-t", "Served read-only",
+                   "-fr", "why", "-tr", "how", "-ac", "verify"],
+                  home=home, check=True)
+        proc, host, port = self._start_web(home=home)
+
+        base = self._roadmaps_dir(home)
+        rdir = base / rm
+        db = rdir / "project.db"
+        # Widen AFTER startup, so the startup schema migration (a writable
+        # open) cannot be what repairs it: only the per-request read-only open
+        # is left to do it.
+        os.chmod(db, 0o666)
+        # Widen the roadmap home too. The read-only path must leave it exactly
+        # as it found it: enforcing 0700 is the writable path's job, and a
+        # read-only open that silently re-created or re-hardened directories
+        # would be doing more than reading.
+        os.chmod(rdir, 0o777)
+
+        status, _, _ = self._http_get(port, f"/roadmaps/{rm}/tasks", host=host)
+        assert status == 200, f"tasks page status {status}; the read must still succeed"
+        assert _mode(db) == 0o600, (
+            f"OPEN #178: project.db left at {oct(_mode(db))} after a read-only web "
+            "request; the read-only path must restrict it too")
+        assert _mode(rdir) == 0o777, (
+            "the read-only path must not create, modify or verify directories "
+            f"(roadmap home became {oct(_mode(rdir))})")
+        assert proc.poll() is None, "the server must keep serving"
+
     def test_defense_graph_guardrail_blocks_dml_writes(self):
         """The read-only `graph query` path rejects every DML write clause,
         including literal/comment/escape desync bypass attempts."""
@@ -354,35 +494,77 @@ class TestSecurityAudit:
                 f"OPEN #64: audit list --limit {bad} accepted (exit {code}); "
                 "expected exit 6 once the 1..100 cap is enforced")
 
+    def _assert_symlink_refusal(self, code, err, finding):
+        """The refusal contract for a symlinked roadmap directory.
+
+        SPEC/ARCHITECTURE.md states it twice -- § Directory Structure
+        (location rule 10) and § Security Guarantees -- and both say the
+        operation fails with `utils.ErrDatabase` and exit code 1.
+
+        The exit code is the machine-readable half of the contract: an AI
+        agent driving this binary branches on it. Exit 2 is documented as
+        MISUSE (a syntax or flag error), which a symbolic link on disk is
+        not, so exit 2 would misreport the condition. Task #186 moved the
+        refusal from exit 2 to exit 1; this assertion is its regression pin.
+        """
+        assert code == 1, (
+            f"OPEN {finding}: symlink refusal exited {code}, expected 1 "
+            "(utils.ErrDatabase). SPEC/ARCHITECTURE.md location rule 10 and "
+            "§ Security Guarantees both mandate exit 1; exit 2 is MISUSE and "
+            f"misclassifies a filesystem condition. stderr={err!r}")
+        assert "database error" in err, (
+            f"OPEN {finding}: refusal must render the ErrDatabase sentinel "
+            f"prefix; stderr={err!r}")
+        assert "is a symbolic link" in err, (
+            f"OPEN {finding}: refusal must say why it refused; stderr={err!r}")
+
     def test_finding_72_symlinked_roadmap_dir_not_followed(self):
         """#72 CWE-59: a pre-placed symlink at ~/.roadmaps/<name> must not
-        redirect the project.db write outside ~/.roadmaps."""
+        redirect the project.db write outside ~/.roadmaps, and must be
+        refused with exit 1 (utils.ErrDatabase) per SPEC/ARCHITECTURE.md."""
         home = self._fresh_home()
         # Materialise ~/.roadmaps (0700) via a first, legitimate roadmap.
         self._run(["roadmap", "create", "seed"], home=home, check=True)
         target = tempfile.mkdtemp(prefix="sec_target_")
         self._extra.append(target)
+        os.chmod(target, 0o755)
         link = self._roadmaps_dir(home) / "evil"
         os.symlink(target, link)
         # Attempt to create a roadmap whose dir is the attacker symlink.
-        self._run(["roadmap", "create", "evil"], home=home)
+        code, _, err = self._run(["roadmap", "create", "evil"], home=home)
+        self._assert_symlink_refusal(code, err, "#72")
         leaked = Path(target) / "project.db"
         assert not leaked.exists(), (
             f"OPEN #72: project.db was written through the symlink to {leaked}; "
             "creation must refuse or stay inside ~/.roadmaps")
+        # The refusal must precede every write AND every chmod through the link.
+        assert _mode(Path(target)) == 0o755, (
+            f"OPEN #72: external dir was re-chmod'd to {oct(_mode(Path(target)))}; "
+            "the refusal must happen before the 0700 hardening")
+        # The link itself is left in place; rmp refuses, it does not repair.
+        assert link.is_symlink(), "the symlink must be left untouched, not deleted"
+        assert os.readlink(link) == target, "the symlink target must be unchanged"
 
     def test_finding_75_roadmaps_symlink_chmod_not_followed(self):
         """#75 CWE-59: if ~/.roadmaps itself is a symlink, the tool must not
-        chmod the external target to 0700."""
+        chmod the external target to 0700, and must be refused with exit 1
+        (utils.ErrDatabase) per SPEC/ARCHITECTURE.md."""
         home = self._fresh_home()
         target = tempfile.mkdtemp(prefix="sec_rmtarget_")
         self._extra.append(target)
         os.chmod(target, 0o755)
-        os.symlink(target, self._roadmaps_dir(home))
-        self._run(["roadmap", "create", "viactl"], home=home)
+        link = self._roadmaps_dir(home)
+        os.symlink(target, link)
+        code, _, err = self._run(["roadmap", "create", "viactl"], home=home)
+        self._assert_symlink_refusal(code, err, "#75")
         assert _mode(Path(target)) == 0o755, (
             f"OPEN #75: external dir was re-chmod'd to {oct(_mode(Path(target)))}; "
             "a ~/.roadmaps symlink must be detected and refused, not followed")
+        # Nothing may be created inside the target through the link.
+        assert not list(Path(target).iterdir()), (
+            f"OPEN #75: files were created through the symlink into {target}: "
+            f"{[p.name for p in Path(target).iterdir()]}")
+        assert link.is_symlink(), "the symlink must be left untouched, not deleted"
 
     def test_finding_78_wal_sidecar_permissions(self):
         """#78 CWE-276: SQLite WAL/SHM sidecar files must be 0600, not the

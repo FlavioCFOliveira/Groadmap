@@ -1,7 +1,7 @@
 package web
 
 import (
-	"context"
+	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -34,15 +34,16 @@ func seedRoadmapWithAudit(t *testing.T, name string, n int) string {
 	// Distinct, strictly increasing timestamps so performed_at DESC is a total
 	// order: entity id i+1 is performed one second after entity id i, so the
 	// last-inserted (highest id) entry is the most recent and sorts first.
+	//
+	// The rows go in through db.LogAuditTx inside a transaction, which is how
+	// every writer in the CLI puts a row in this table, so the page under test
+	// reads rows shaped exactly like the ones a real roadmap holds.
 	base := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
 	for i := 0; i < n; i++ {
-		entry := &models.AuditEntry{
-			Operation:   "TASK_CREATE",
-			EntityType:  "TASK",
-			EntityID:    i + 1,
-			PerformedAt: base.Add(time.Duration(i) * time.Second).Format(time.RFC3339),
-		}
-		if _, err := database.LogAuditEntry(context.Background(), entry); err != nil {
+		performedAt := base.Add(time.Duration(i) * time.Second).Format(time.RFC3339)
+		if err := database.WithTransaction(func(tx *sql.Tx) error {
+			return db.LogAuditTx(tx, models.OpTaskCreate, models.EntityTask, i+1, performedAt)
+		}); err != nil {
 			t.Fatalf("seeding audit entry %d: %v", i, err)
 		}
 	}
@@ -192,8 +193,8 @@ func TestHandleAudit_PageClamping(t *testing.T) {
 // state).
 func TestHandleAudit_EmptyState(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	// seedRoadmap creates a roadmap whose audit log is empty (its task/sprint
-	// helpers do not write audit rows via the LogAuditEntry path used here).
+	// A roadmap whose audit log is empty: seeding zero entries writes no rows,
+	// and creating the roadmap itself writes none either.
 	name := seedRoadmapWithAudit(t, "web-audit-empty", 0)
 
 	rec := getAudit(t, name, "")

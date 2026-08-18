@@ -11,11 +11,14 @@
   - [`sprint_tasks` Table (1:N Relationship)](#sprint_tasks-table-1n-relationship)
   - [`audit` Table](#audit-table)
   - [`task_dependencies` Table](#task_dependencies-table)
+  - [`task_comments` Table](#task_comments-table)
+  - [`sprint_comments` Table](#sprint_comments-table)
   - [`_metadata` Table](#_metadata-table)
 - [Main SQL Queries](#main-sql-queries)
   - [Tasks](#tasks)
   - [Sprints](#sprints)
   - [Audit](#audit)
+  - [Comments](#comments)
 - [Relationships](#relationships)
   - [Transactional Atomicity Guarantees](#transactional-atomicity-guarantees)
 - [Data Constraints](#data-constraints)
@@ -33,9 +36,10 @@ Each roadmap is stored in an individual SQLite database. The schema is designed 
 ### Physical Location and Naming
 
 - Each roadmap has its own home directory at `~/.roadmaps/<name>/`, where `<name>` is the roadmap name. The home directory uses `0700` permissions, owner-only.
-- The SQLite database is named `project.db` and lives inside that directory at `~/.roadmaps/<name>/project.db` with `0600` permissions. The `project.db` file MUST be created with `0600` permissions from the outset, not created with the process umask and chmod-ed afterwards: there must be no window in which the file is more permissive than `0600`.
-- SQLite sidecars (`project.db-wal`, `project.db-shm`) live alongside the database in the same directory and MUST also use `0600` permissions, identical to `project.db`. Because the sidecars can contain the same data pages as the main database, they are held to the same owner-only permission as `project.db`.
-- The data directory layout, its permission model, and the automatic migration from the legacy `~/.roadmaps/<name>.db` layout are specified in `ARCHITECTURE.md § Directory Structure` and `ARCHITECTURE.md § Filesystem Layout Migration`.
+- The SQLite database is named `project.db` and lives inside that directory at `~/.roadmaps/<name>/project.db` with `0600` permissions.
+- SQLite sidecars (`project.db-wal`, `project.db-shm`) live alongside the database in the same directory. Because they can contain the same data pages as the main database, they are held to the same owner-only `0600` permission as `project.db`.
+- The permission model for these files and directories — when `0600` and `0700` are applied, when they are verified, what happens when `project.db` cannot be restricted to `0600`, how the sidecars are treated, and what the read-only open path does — is specified in one place only: `ARCHITECTURE.md § Open-Time Permission Enforcement`. That section is canonical; the values repeated above are a summary and must not be restated here in more detail or amended independently of it.
+- The data directory layout and the automatic migration from the legacy `~/.roadmaps/<name>.db` layout are specified in `ARCHITECTURE.md § Directory Structure` and `ARCHITECTURE.md § Filesystem Layout Migration`.
 
 ## Naming Conventions
 
@@ -95,6 +99,22 @@ Each roadmap is stored in an individual SQLite database. The schema is designed 
 |  - task_id (FK → tasks.id)            |
 |  - depends_on_task_id (FK → tasks.id) |
 |  - Composite PK (task_id, dep_id)     |
++----------------------------------------+
+|           task_comments                |
+|  - id (PK, AUTOINCREMENT)              |
+|  - task_id (FK → tasks.id)             |
+|  - type (TEXT)                         |
+|  - body (TEXT)                         |
+|  - created_at (TEXT ISO8601)           |
+|  - updated_at (TEXT ISO8601, NULL)     |
++----------------------------------------+
+|           sprint_comments              |
+|  - id (PK, AUTOINCREMENT)              |
+|  - sprint_id (FK → sprints.id)         |
+|  - type (TEXT)                         |
+|  - body (TEXT)                         |
+|  - created_at (TEXT ISO8601)           |
+|  - updated_at (TEXT ISO8601, NULL)     |
 +----------------------------------------+
 |           _metadata                     |
 |  - key (TEXT PK)                       |
@@ -212,7 +232,7 @@ Logs all operations that change task or sprint state, enabling complete audit hi
 CREATE TABLE IF NOT EXISTS audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     operation TEXT NOT NULL,
-    entity_type TEXT NOT NULL,
+    entity_type TEXT NOT NULL CHECK(entity_type IN ('TASK', 'SPRINT')),
     entity_id INTEGER NOT NULL,
     performed_at TEXT NOT NULL  -- ISO 8601 UTC
 );
@@ -229,7 +249,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 
 **Fields:**
 - `operation`: Operation type (e.g., `TASK_STATUS_CHANGE`, `SPRINT_START`). Values validated by application.
-- `entity_type`: `'TASK'` or `'SPRINT'`. Values validated by application.
+- `entity_type`: `'TASK'` or `'SPRINT'`. Values validated by application and enforced by the column `CHECK`.
 - `entity_id`: Affected entity ID
 - `performed_at`: Operation timestamp
 
@@ -242,9 +262,14 @@ CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 - `TASK_PRIORITY_CHANGE` - Priority change (0-9) via `task priority`
 - `TASK_SEVERITY_CHANGE` - Severity change (0-9) via `task severity`
 - `TASK_UPDATE` - Generic update via `task edit` (title, type, functional_requirements, technical_requirements, acceptance_criteria, specialists). A type change made through `task edit` is recorded here, not under a dedicated operation.
-- `TASK_REOPEN` - Task returned to BACKLOG via `task reopen`; lifecycle timestamps cleared and sprint_tasks row removed
+- `TASK_REOPEN` - Task returned to BACKLOG via `task reopen`; lifecycle timestamps and completion_summary cleared, and sprint_tasks row removed
+- `TASK_ASSIGN` - Specialist added to the task's specialists list via `task assign`; written only when the list actually changes, because assigning an already-assigned specialist is an idempotent no-op. A whole-list replacement made through `task edit` is recorded as `TASK_UPDATE` instead.
+- `TASK_UNASSIGN` - Specialist removed from the task's specialists list via `task unassign`; written only when the list actually changes, because removing a specialist that is not assigned is a no-op
 - `TASK_ADD_DEP` - Dependency added (logged against both task_id and depends_on_task_id)
 - `TASK_REMOVE_DEP` - Dependency removed (logged against both task_id and depends_on_task_id)
+- `TASK_COMMENT_CREATE` - Comment added to a task via `task comment-add` (logged against the parent task)
+- `TASK_COMMENT_UPDATE` - Comment edited via `task comment-edit` (logged against the parent task)
+- `TASK_COMMENT_DELETE` - Comment deleted via `task comment-remove` (logged against the parent task)
 
 **Sprints:**
 - `SPRINT_CREATE` - New sprint created
@@ -259,8 +284,16 @@ CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 - `SPRINT_REORDER_TASKS` - Sprint tasks reordered (set exact order)
 - `SPRINT_TASK_MOVE_POSITION` - Single task moved to specific position
 - `SPRINT_TASK_SWAP` - Two tasks swapped positions
+- `SPRINT_COMMENT_CREATE` - Comment added to a sprint via `sprint comment-add` (logged against the parent sprint)
+- `SPRINT_COMMENT_UPDATE` - Comment edited via `sprint comment-edit` (logged against the parent sprint)
+- `SPRINT_COMMENT_DELETE` - Comment deleted via `sprint comment-remove` (logged against the parent sprint)
 
 **Note:** Read operations (GET, STATS, LIST_TASKS) are NOT logged to audit as they do not modify state.
+
+**Comment operations are recorded against the parent entity.** The six comment operations write `entity_type = 'TASK'` with `entity_id` set to the owning task's id, or `entity_type = 'SPRINT'` with `entity_id` set to the owning sprint's id. They never write the comment's own id and never introduce a new `entity_type` value. Two consequences follow, both intended:
+
+1. The `entity_type` value set stays exactly `TASK` and `SPRINT`. No `COMMENT` entity type is introduced. The set is closed by the table definition itself: `entity_type` carries `CHECK(entity_type IN ('TASK', 'SPRINT'))`, so SQLite rejects a row naming any other entity type whatever the calling code intends. Those two values are validated by the application on every write, and they are also the only two the audit read surface accepts, because `audit history` requires its first positional argument to be `TASK` or `SPRINT` and rejects anything else with exit code 6 (see `COMMANDS.md § Audit Log Management`). Introducing a third value would therefore mean changing the table definition as well as widening a command contract and the catalogue above, all for no gain: a comment operation is always an operation on the task or the sprint that owns the comment, so the parent entity is the correct subject of the entry.
+2. The audit trail of a comment survives the comment. `task comment-remove` deletes the row from `task_comments`, but the `TASK_COMMENT_DELETE` entry remains in the audit log against the parent task, so the history of the task still records that a comment was written, edited, and removed. The comment's text is not recoverable from the audit log; the audit log records that the operations happened, not what they contained.
 
 **Entities:**
 - `entity_type`: TASK, SPRINT
@@ -286,6 +319,63 @@ CREATE INDEX IF NOT EXISTS idx_task_deps_depends_on ON task_dependencies(depends
 
 ---
 
+### `task_comments` Table
+
+Stores the comments attached to a task. A comment is a durable, typed log entry that records the work carried out within the scope of that task: findings, hypotheses raised and tested, tests run, decisions taken, progress, the reason behind a change to the task's definition, and free-form notes. The relationship is one-task-to-many-comments: a task has many comments, and each comment belongs to exactly one task.
+
+```sql
+CREATE TABLE IF NOT EXISTS task_comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL,               -- Owning task
+    type TEXT NOT NULL CHECK(type IN ('FINDING', 'HYPOTHESIS', 'TEST', 'DECISION', 'PROGRESS', 'UPDATE', 'NOTE')),
+    body TEXT NOT NULL CHECK(length(body) <= 4096),  -- Comment text, max 4096 chars
+    created_at TEXT NOT NULL,               -- ISO 8601 UTC, set when the comment is created
+    updated_at TEXT,                        -- ISO 8601 UTC, NULL until the comment is edited
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);
+
+-- Composite index for comment listing
+-- Covers: the parent lookup and the chronological listing order in one index
+CREATE INDEX IF NOT EXISTS idx_task_comments_task_created ON task_comments(task_id, created_at ASC);
+```
+
+**Fields:**
+- `task_id`: The owning task. Deleting the task deletes its comments (`ON DELETE CASCADE`).
+- `type`: The comment classification. The `CHECK` enumerates exactly the seven values a task comment accepts; the Go-level enum is defined in `MODELS.md § Comment Type`.
+- `body`: The comment text, maximum 4096 characters, subject to the control-character constraint in `MODELS.md § Free-Text Control-Character Constraint`.
+- `created_at`: Creation timestamp, never modified afterwards.
+- `updated_at`: Last edit timestamp. `NULL` while the comment has never been edited; set on every edit, so a reader can tell that the stored text is no longer the text originally written.
+
+**Comment ids are per-table.** `task_comments.id` and `sprint_comments.id` are independent `AUTOINCREMENT` sequences, so the value `7` may exist in both tables and address two unrelated comments. A comment id is only ever meaningful together with the family that owns it (`rmp task comment-edit 7` and `rmp sprint comment-edit 7` address different rows; see `COMMANDS.md § Edit Task Comment` and `COMMANDS.md § Edit Sprint Comment`).
+
+**No authorship.** A comment records no author. The table has no author column, consistent with the `audit` table, which records no actor either.
+
+### `sprint_comments` Table
+
+Stores the comments attached to a sprint. A sprint comment records only the progression of the work during the sprint's development: findings, decisions taken, progress, and the reason behind a change to the sprint's definition. The relationship is one-sprint-to-many-comments: a sprint has many comments, and each comment belongs to exactly one sprint.
+
+```sql
+CREATE TABLE IF NOT EXISTS sprint_comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sprint_id INTEGER NOT NULL,             -- Owning sprint
+    type TEXT NOT NULL CHECK(type IN ('FINDING', 'DECISION', 'PROGRESS', 'UPDATE')),
+    body TEXT NOT NULL CHECK(length(body) <= 4096),  -- Comment text, max 4096 chars
+    created_at TEXT NOT NULL,               -- ISO 8601 UTC, set when the comment is created
+    updated_at TEXT,                        -- ISO 8601 UTC, NULL until the comment is edited
+    FOREIGN KEY (sprint_id) REFERENCES sprints(id) ON DELETE CASCADE
+);
+
+-- Composite index for comment listing
+-- Covers: the parent lookup and the chronological listing order in one index
+CREATE INDEX IF NOT EXISTS idx_sprint_comments_sprint_created ON sprint_comments(sprint_id, created_at ASC);
+```
+
+**Fields:** identical in meaning to the `task_comments` fields above, with `sprint_id` in place of `task_id`. The `type` `CHECK` enumerates exactly the four values a sprint comment accepts: a sprint comment records the progression of the sprint, so the task-only values `HYPOTHESIS`, `TEST`, and `NOTE` are not accepted at either the database or the application level.
+
+**Two tables, deliberately.** Comments are stored in two separate tables rather than one polymorphic table. Each table has a single `NOT NULL` foreign key, a single `ON DELETE CASCADE` rule, and its own `CHECK` enumerating that entity's valid types. There is no nullable parent column and no exclusivity `CHECK`, so each table is readable and verifiable on its own. The accepted cost is duplication: two sets of queries, two models, and two sets of tests.
+
+---
+
 ### `_metadata` Table
 
 Stores roadmap metadata and schema version.
@@ -298,7 +388,7 @@ CREATE TABLE IF NOT EXISTS _metadata (
 
 -- Insert schema version on creation
 INSERT INTO _metadata (key, value) VALUES
-    ('schema_version', '1.8.0'),
+    ('schema_version', '1.9.0'),
     ('created_at', '2026-03-20T00:00:00.000Z'),
     ('application', 'Groadmap');
 ```
@@ -407,9 +497,10 @@ UPDATE tasks
 SET status = 'COMPLETED', closed_at = ?
 WHERE id = ?;
 
--- When reopening (COMPLETED → BACKLOG): clear tracking dates
+-- When reopening (any non-BACKLOG state → BACKLOG, via task stat or
+-- task reopen): clear the tracking dates and the completion summary
 UPDATE tasks
-SET status = 'BACKLOG', started_at = NULL, tested_at = NULL, closed_at = NULL
+SET status = 'BACKLOG', started_at = NULL, tested_at = NULL, closed_at = NULL, completion_summary = NULL
 WHERE id = ?;
 
 -- Generic status update without date tracking changes
@@ -790,6 +881,93 @@ ORDER BY count DESC;
 DELETE FROM audit WHERE performed_at < ?;
 ```
 
+### Comments
+
+Every statement below exists in a `task_comments` form and a `sprint_comments` form, with the single exception noted under `List Comments for Many Parents (Grouped)`. The two forms are identical apart from the table name and the parent-key column (`task_id` / `sprint_id`); only the task form is written out where the sprint form adds nothing.
+
+#### Insert Comment
+
+```sql
+-- Task comment. created_at set by the application (ISO 8601 UTC); updated_at
+-- starts NULL and is written only by a later edit.
+INSERT INTO task_comments (task_id, type, body, created_at)
+VALUES (?, ?, ?, ?);
+
+-- Sprint comment
+INSERT INTO sprint_comments (sprint_id, type, body, created_at)
+VALUES (?, ?, ?, ?);
+```
+
+The insert and its audit entry (`TASK_COMMENT_CREATE` / `SPRINT_COMMENT_CREATE`, written against the parent entity) MUST run in the same transaction.
+
+#### List Comments for One Parent
+
+```sql
+-- All comments of one task, oldest first
+SELECT id, task_id, type, body, created_at, updated_at
+FROM task_comments
+WHERE task_id = ?
+ORDER BY created_at ASC, id ASC;
+
+-- Optional type filter
+SELECT id, task_id, type, body, created_at, updated_at
+FROM task_comments
+WHERE task_id = ? AND type = ?
+ORDER BY created_at ASC, id ASC;
+```
+
+**Ordering:** `created_at` ascending, with `id` ascending as the tie-breaker. The listing is a log, so the oldest entry comes first. The tie-breaker is required because two comments created within the same millisecond share a `created_at` value, and without it their relative order would be undefined. The result set is unbounded: the query carries no `LIMIT` and no `OFFSET` (see `COMMANDS.md § List Task Comments`).
+
+#### Get One Comment by Id
+
+```sql
+SELECT id, task_id, type, body, created_at, updated_at
+FROM task_comments
+WHERE id = ?;
+```
+
+**Use case:** the application resolves the comment before editing or removing it, so that a missing id is reported as a not-found condition (exit code 4) before any write.
+
+#### Update Comment
+
+```sql
+-- Edit body and type
+UPDATE task_comments SET type = ?, body = ?, updated_at = ? WHERE id = ?;
+
+-- Edit body only
+UPDATE task_comments SET body = ?, updated_at = ? WHERE id = ?;
+
+-- Edit type only
+UPDATE task_comments SET type = ?, updated_at = ? WHERE id = ?;
+```
+
+`updated_at` is written on every edit, whichever columns the edit touches. The edit replaces the stored `body` in place: the previous text is not retained anywhere and is not recoverable. The update and its audit entry (`TASK_COMMENT_UPDATE` / `SPRINT_COMMENT_UPDATE`) MUST run in the same transaction.
+
+#### Delete Comment
+
+```sql
+DELETE FROM task_comments WHERE id = ?;
+```
+
+The row is removed outright; there is no soft delete and no tombstone. The delete and its audit entry (`TASK_COMMENT_DELETE` / `SPRINT_COMMENT_DELETE`) MUST run in the same transaction.
+
+#### List Comments for Many Parents (Grouped)
+
+Returns the comments of a set of parents in one round trip, ordered so that a caller can walk the result once and group by parent without re-sorting.
+
+```sql
+-- Comments of several tasks at once. The IN list is built from the same number
+-- of placeholders as ids, never by string concatenation.
+SELECT id, task_id, type, body, created_at, updated_at
+FROM task_comments
+WHERE task_id IN (?, ?, ...)
+ORDER BY task_id ASC, created_at ASC, id ASC;
+```
+
+**Use case:** the read-only web interface renders one task detail modal per rendered task, so it MUST load the comments of every rendered task with this single grouped query rather than one query per task (see `WEB.md § Task Detail Modal`). When the id set is empty, the application skips the query entirely instead of issuing a statement with an empty `IN` list.
+
+This is the one statement in this group that has no `sprint_comments` form, because nothing reads the comments of several sprints at once: the only surface that presents sprint comments presents a single sprint (see `WEB.md § Roadmap Sprint Page`), which the single-parent listing above already serves.
+
 ---
 
 ## Relationships
@@ -800,7 +978,15 @@ DELETE FROM audit WHERE performed_at < ?;
 |     id      | 1      N  |  sprint_id (FK) | N      1  |     id      |
 |   (PK)      |-----------|  task_id (FK)   |-----------|   (PK)      |
 |             |           |  (Composite PK) |           |             |
-+-------------+           +-----------------+           +-------------+
++------+------+           +-----------------+           +------+------+
+       | 1                                                     | 1
+       |                                                       |
+       | N                                                     | N
++------+-------------+                              +----------+---------+
+|  sprint_comments   |                              |   task_comments    |
+|  sprint_id (FK)    |                              |   task_id (FK)     |
+|  id (PK)           |                              |   id (PK)          |
++--------------------+                              +--------------------+
 ```
 
 **Integrity rules:**
@@ -808,6 +994,10 @@ DELETE FROM audit WHERE performed_at < ?;
 - A task can only be in one sprint at a time (composite PK constraint)
 - When deleting sprint, relationships in `sprint_tasks` are removed (`ON DELETE CASCADE`)
 - Tasks are never automatically deleted, only disassociated
+- A task may have no comments (no record in `task_comments`); a sprint may have no comments (no record in `sprint_comments`)
+- Every comment belongs to exactly one parent: `task_comments.task_id` and `sprint_comments.sprint_id` are `NOT NULL`, so a comment can never exist without its parent
+- Deleting a task deletes that task's comments, and deleting a sprint deletes that sprint's comments (`ON DELETE CASCADE`). Removing a task from a sprint deletes only the `sprint_tasks` row; it deletes no comment, because a task's comments belong to the task and not to the sprint
+- Comments are never moved between parents. Moving a task between sprints (`sprint move-tasks`) re-parents the `sprint_tasks` row only; the task keeps its own comments and neither sprint's comments change
 
 ### Transactional Atomicity Guarantees
 
@@ -848,6 +1038,12 @@ so that the database never reaches a state where `tasks.status` and the
    same `MAX` and then both insert it. The `idx_sprints_order` unique index is the
    final backstop: if a race still produces a collision, the second insert fails
    the constraint and the whole transaction rolls back, surfaced as exit code 5.
+7. **Writing a comment (`AddTaskComment`, `AddSprintComment`, `UpdateTaskComment`,
+   `UpdateSprintComment`, `DeleteTaskComment`, `DeleteSprintComment`).** The
+   `INSERT`, `UPDATE`, or `DELETE` on the comment table and the matching audit
+   entry against the parent entity MUST occur in the same transaction. A committed
+   comment change can never exist without its audit record, and an audit record can
+   never exist for a change that was rolled back.
 
 These guarantees extend the general transactional-integrity requirement in
 `ARCHITECTURE.md § Security Guarantees` (every modification, including its audit
@@ -911,13 +1107,39 @@ Fields are organized to match the optimized Go struct layout (Content, Tracking,
 |--------|------|-------------|
 | id | INTEGER | PK, AUTOINCREMENT |
 | operation | TEXT | NOT NULL |
-| entity_type | TEXT | NOT NULL |
+| entity_type | TEXT | NOT NULL, CHECK enum values: TASK, SPRINT |
 | entity_id | INTEGER | NOT NULL |
 | performed_at | TEXT | NOT NULL, ISO 8601 format |
 
 **Valid values (validated by application):**
 - `operation`: See the canonical catalogue in the `audit` Table section above (Tasks + Sprints).
 - `entity_type`: TASK, SPRINT
+
+### Task_Comments
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| id | INTEGER | PK, AUTOINCREMENT; unique within `task_comments` only |
+| task_id | INTEGER | NOT NULL, FK → tasks.id, ON DELETE CASCADE |
+| type | TEXT | NOT NULL, CHECK enum values: FINDING, HYPOTHESIS, TEST, DECISION, PROGRESS, UPDATE, NOTE |
+| body | TEXT | NOT NULL, CHECK length <= 4096 chars, non-empty (application) |
+| created_at | TEXT | NOT NULL, ISO 8601 format |
+| updated_at | TEXT | NULLABLE, ISO 8601 format; NULL until the comment is first edited |
+
+**Note:** The `type` value is mandatory: there is no default and no fallback value. An `INSERT` or `UPDATE` carrying a value outside the seven listed above fails the `CHECK`; the application rejects it first, with exit code 6 (see `COMMANDS.md § Add Task Comment`).
+
+### Sprint_Comments
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| id | INTEGER | PK, AUTOINCREMENT; unique within `sprint_comments` only |
+| sprint_id | INTEGER | NOT NULL, FK → sprints.id, ON DELETE CASCADE |
+| type | TEXT | NOT NULL, CHECK enum values: FINDING, DECISION, PROGRESS, UPDATE |
+| body | TEXT | NOT NULL, CHECK length <= 4096 chars, non-empty (application) |
+| created_at | TEXT | NOT NULL, ISO 8601 format |
+| updated_at | TEXT | NULLABLE, ISO 8601 format; NULL until the comment is first edited |
+
+**Note:** The four accepted values are a subset of the seven a task comment accepts. `HYPOTHESIS`, `TEST`, and `NOTE` are rejected on a sprint comment with exit code 6 (see `COMMANDS.md § Add Sprint Comment`).
 
 ---
 
@@ -933,6 +1155,8 @@ The following composite indexes are designed to optimize frequently executed que
 | `idx_tasks_priority_created` | tasks | (priority DESC, created_at) | Optimizes priority filtering with date-based ordering |
 | `idx_sprint_tasks_lookup` | sprint_tasks | (sprint_id, task_id) | Optimizes sprint task relationship lookups |
 | `idx_audit_date` | audit | (performed_at DESC) | Optimizes audit log date range queries |
+| `idx_task_comments_task_created` | task_comments | (task_id, created_at ASC) | Optimizes the comment listing of one task, and the grouped listing of many tasks |
+| `idx_sprint_comments_sprint_created` | sprint_comments | (sprint_id, created_at ASC) | Optimizes the comment listing of one sprint |
 
 ### Index Design Rationale
 
@@ -957,6 +1181,12 @@ The following composite indexes are designed to optimize frequently executed que
 - Essential for audit log pagination and date range filtering
 - Expected improvement: 85% query time reduction for date range queries
 
+**idx_task_comments_task_created and idx_sprint_comments_sprint_created:**
+- Query pattern: `WHERE task_id = ? ORDER BY created_at ASC` (and the `sprint_id` equivalent)
+- The leading column serves the parent lookup and the trailing column serves the listing order, so one index covers both and no sort step is needed
+- The same index serves the grouped `WHERE task_id IN (...)` query the web interface uses to load the comments of every rendered task in one round trip
+- A single index per table is sufficient: every comment listing filters on the parent key, so no query ever scans a comment table without it, and no listing is ordered by any other column
+
 ### Verification
 
 To verify index usage:
@@ -979,7 +1209,10 @@ The following length constraints are enforced at the database level using CHECK 
 | `tasks.functional_requirements` | 4096 characters | `CHECK(length(functional_requirements) <= 4096)` |
 | `tasks.technical_requirements` | 4096 characters | `CHECK(length(technical_requirements) <= 4096)` |
 | `tasks.acceptance_criteria` | 4096 characters | `CHECK(length(acceptance_criteria) <= 4096)` |
+| `tasks.completion_summary` | 4096 characters | `CHECK(completion_summary IS NULL OR length(completion_summary) <= 4096)` |
 | `sprints.title` | 255 characters | `CHECK(length(title) <= 255)` |
+| `task_comments.body` | 4096 characters | `CHECK(length(body) <= 4096)` |
+| `sprint_comments.body` | 4096 characters | `CHECK(length(body) <= 4096)` |
 
 **Application-Level Validation Only:**
 
@@ -1055,6 +1288,7 @@ hard cap, `MaxAuditLimit`, defined in `internal/models/consts.go` with the value
 
 ## See Also
 
+- Database file permissions (`0600`, when enforced, failure mode) → `ARCHITECTURE.md § Open-Time Permission Enforcement`
 - Query caching strategy → `IMPLEMENTATION.md § Query Caching`
 - Schema migrations and version history → `VERSION.md § Migrations`
 - Concurrency model (WAL, pool, retry) → `IMPLEMENTATION.md § Concurrency Model`

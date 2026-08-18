@@ -5,7 +5,11 @@
 // from HandleSprint via sprintSubHelp() when --help is in argv.
 package commands
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/FlavioCFOliveira/Groadmap/internal/models"
+)
 
 // printSprintListHelp — `rmp sprint list`.
 func printSprintListHelp() {
@@ -671,5 +675,232 @@ Exit codes:
 Examples:
   rmp sprint bottom -r myproject 5 7
   rmp sprint btm -r myproject 5 12
+`)
+}
+
+// sprintCommentTypes renders the four values a sprint comment accepts, exactly as
+// the rejection message and the AI Agent Contract publish them. The list is never
+// re-typed in a help body: models.FormatCommentTypes is the single source, so a
+// change to the accepted set cannot leave a stale list behind in the help, and the
+// seven task values can never appear on a sprint subcommand
+// (SPEC/HELP.md § Comment subcommand help specifics item 1).
+func sprintCommentTypes() string {
+	return models.FormatCommentTypes(models.ValidSprintCommentTypes)
+}
+
+// printSprintCommentAddHelp — `rmp sprint comment-add`.
+func printSprintCommentAddHelp() {
+	fmt.Printf(`Usage: rmp sprint comment-add -r <roadmap> <sprint-id> --type <TYPE> [--body <text>]
+
+Adds one typed entry to a sprint's log: what was found, what was decided,
+how the work progressed, and why the sprint's own definition changed. Work
+carried out inside one task belongs in that task's comments, not here.
+
+Comments are accepted in every sprint status, including CLOSED, and no
+comment ever changes or gates a sprint's status.
+
+The positional argument is the SPRINT's id — the comment's own id is
+assigned by this command and printed on success.
+
+Aliases: c-add.
+
+Required:
+  -r, --roadmap <name>            Target roadmap
+  <sprint-id>                     Integer id of the sprint being commented on
+  -y, --type <TYPE>               Comment type; one of the values below
+
+Valid comment types (for -y, --type on the comment-* subcommands):
+  %s
+
+  Note: the sprint set is deliberately smaller than the task set. The
+  task-only values HYPOTHESIS, TEST and NOTE are rejected here with exit 6:
+  a sprint records how the sprint went, not the execution diary of its
+  individual tasks. In this family -y, --type has no other meaning.
+
+Optional:
+  -b, --body <text>               Comment text, max 4096 characters. When this
+                                  flag is absent the body is read from standard
+                                  input under a bounded read (a heredoc, a pipe
+                                  or a file redirect); supplying neither the flag
+                                  nor a non-empty standard input fails with exit 2.
+                                  Leading and trailing whitespace is trimmed;
+                                  interior line breaks are preserved.
+
+Validation order (a bad --type never leaves the command waiting on input):
+  roadmap, then <sprint-id>, then --type presence, then the --type value,
+  then the body, then the sprint's existence, then the body's length and
+  control characters, then the insert and its audit entry in one transaction.
+
+Output (stdout JSON):
+  {"id": <new-comment-id>}
+
+Exit codes:
+  0  Success
+  1  Database failure
+  2  Invalid <sprint-id>, missing --type, or no comment body supplied
+  3  Missing -r
+  4  Sprint not found (or roadmap not found)
+  6  Invalid --type value, body over 4096 characters, or control characters
+     in the body
+
+Examples:
+  rmp sprint comment-add -r myproject 3 --type DECISION \
+      --body "Dropped the second migration: its schema change is not settled."
+  rmp sprint comment-add -r myproject 3 --type PROGRESS < progress.txt
+  cat finding.txt | rmp sprint comment-add -r myproject 3 -y FINDING
+  rmp sprint comment-add -r myproject 3 --type UPDATE <<'BODY'
+Extended the sprint goal to cover the boundary-second regression test.
+The fix alone would have shipped without a guard against reintroduction.
+BODY
+`, sprintCommentTypes())
+}
+
+// printSprintCommentListHelp — `rmp sprint comment-list`.
+func printSprintCommentListHelp() {
+	fmt.Printf(`Usage: rmp sprint comment-list -r <roadmap> <sprint-id> [--type <TYPE>]
+
+Returns every comment of the given sprint, oldest first: created_at
+ascending with the comment id as the tie-breaker. Read top to bottom, the
+log is the account of how the sprint went — what was tried, what was found
+and why it went the way it did.
+
+The positional argument is the SPRINT's id, not a comment id.
+
+Aliases: c-ls.
+
+Required:
+  -r, --roadmap <name>            Target roadmap
+  <sprint-id>                     Integer id of the sprint whose log is read
+
+Optional:
+  -y, --type <TYPE>               Return only the comments of this type. The
+                                  value MUST be one of the values below; any
+                                  other value fails with exit 6, including a
+                                  value that is valid only on a task comment.
+
+Valid comment types (for -y, --type on the comment-* subcommands):
+  %s
+
+  Note: the task-only values HYPOTHESIS, TEST and NOTE are not accepted as a
+  filter here. In this family -y, --type has no other meaning.
+
+Result-set size:
+  Unbounded. Every matching comment is returned; there is no --limit, no
+  --desc and no pagination.
+
+Output (stdout JSON):
+  Array of comment objects, oldest first. Keys: id, sprint_id, type, body,
+  created_at, updated_at (null until the comment is first edited).
+  Empty array (exit 0) when the sprint has no comments, or none of the
+  requested type.
+
+Exit codes:
+  0  Success
+  2  Invalid <sprint-id>, or an unknown flag
+  3  Missing -r
+  4  Sprint not found (or roadmap not found)
+  6  Invalid --type value
+
+Examples:
+  rmp sprint comment-list -r myproject 3
+  rmp sprint comment-list -r myproject 3 --type DECISION
+  rmp sprint c-ls -r myproject 3 -y FINDING
+`, sprintCommentTypes())
+}
+
+// printSprintCommentEditHelp — `rmp sprint comment-edit`.
+func printSprintCommentEditHelp() {
+	fmt.Printf(`Usage: rmp sprint comment-edit -r <roadmap> <comment-id> [--type <TYPE>] [--body <text>]
+
+Changes the type and/or the body of one existing sprint comment and stamps
+updated_at, so a later listing shows that the comment was altered. The
+previous text is not retained anywhere and cannot be recovered: the audit
+log records that an edit happened, not what it replaced.
+
+The positional argument is the COMMENT's own id, NOT the id of the sprint it
+belongs to. Sprint comment ids and task comment ids are separate sequences,
+so an id that exists under 'task comment-edit' is not found here.
+
+Aliases: c-edit.
+
+Required:
+  -r, --roadmap <name>            Target roadmap
+  <comment-id>                    Integer id of the comment itself
+  At least one change: a --type value, a --body value, or a body on standard
+  input. Unlike 'sprint update', a request with no change is rejected
+  (exit 2), not accepted as a no-op.
+
+Valid comment types (for -y, --type on the comment-* subcommands):
+  %s
+
+  Note: the task-only values HYPOTHESIS, TEST and NOTE are rejected here
+  with exit 6. In this family -y, --type has no other meaning.
+
+Optional:
+  -y, --type <TYPE>               New comment type; one of the values above
+  -b, --body <text>               New comment text, max 4096 characters. When
+                                  --body is absent AND --type is absent, the
+                                  new body is read from standard input,
+                                  so 'comment-edit <comment-id> < revised.txt'
+                                  is a valid edit. When --type is present and
+                                  --body is absent, the body is left unchanged
+                                  and standard input is NOT read, so a
+                                  type-only edit never waits for input.
+
+Output (stdout JSON):
+  Empty (exit 0 on success), as for 'sprint update'.
+
+Exit codes:
+  0  Success
+  1  Database failure
+  2  Invalid <comment-id>, an empty --body value, or no change requested
+  3  Missing -r
+  4  Comment not found (or roadmap not found)
+  6  Invalid --type value, body over 4096 characters, or control characters
+     in the body
+
+Examples:
+  rmp sprint comment-edit -r myproject 4 --type UPDATE
+  rmp sprint comment-edit -r myproject 4 \
+      --body "Superseded: the migration landed inside this sprint after all."
+  rmp sprint comment-edit -r myproject 4 < revised.txt
+  rmp sprint c-edit -r myproject 4 -y PROGRESS -b "Two of five tasks closed."
+`, sprintCommentTypes())
+}
+
+// printSprintCommentRemoveHelp — `rmp sprint comment-remove`.
+func printSprintCommentRemoveHelp() {
+	fmt.Print(`Usage: rmp sprint comment-remove -r <roadmap> <comment-id>
+
+Deletes one sprint comment. The row is removed outright: there is no soft
+delete and no recovery. The audit entry outlives the row, so the sprint's
+history still records that a comment existed and was removed.
+
+The positional argument is the COMMENT's own id, NOT the id of the sprint it
+belongs to. Sprint comment ids and task comment ids are separate sequences,
+so an id that exists under 'task comment-remove' is not found here.
+
+Exactly one id is accepted: this command takes no comma-separated list, so
+the batch fail-fast rules of 'task remove' do not apply.
+
+Aliases: c-rm.
+
+Required:
+  -r, --roadmap <name>            Target roadmap
+  <comment-id>                    Integer id of the comment itself
+
+Output (stdout JSON):
+  Empty (exit 0 on success).
+
+Exit codes:
+  0  Success
+  1  Database failure
+  2  Invalid or missing <comment-id>, or an unknown flag
+  3  Missing -r
+  4  Comment not found (or roadmap not found)
+
+Examples:
+  rmp sprint comment-remove -r myproject 4
+  rmp sprint c-rm -r myproject 4
 `)
 }

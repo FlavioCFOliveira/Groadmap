@@ -1,7 +1,11 @@
 // Package commands implements CLI command handlers for Groadmap.
 package commands
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/FlavioCFOliveira/Groadmap/internal/models"
+)
 
 // HandleTask handles task commands by delegating to the central
 // command registry. The dispatch (subcommand resolution, alias
@@ -14,14 +18,31 @@ func HandleTask(args []string) error {
 }
 
 // printTaskHelp prints task command help.
+//
+// Two distinct "Valid values" blocks cover -y, --type, and they are deliberately
+// NOT merged: inside this one family the same flag spelling carries a TaskType on
+// list / create / edit and a comment type on the four comment-* subcommands. The
+// two enums are unrelated and never interchangeable, so a single list of
+// seventeen values would be wrong (SPEC/HELP.md § Comment subcommand help
+// specifics item 1). The comment-type list is rendered from
+// models.ValidTaskCommentTypes rather than typed out, so it cannot go stale.
 func printTaskHelp() {
-	fmt.Print(`Usage: rmp task [command] [arguments] [options]
+	fmt.Printf(`Usage: rmp task [command] [arguments] [options]
 
 Valid status values (for --status filter and 'stat' setter):
   BACKLOG, SPRINT, DOING, TESTING, COMPLETED
 
-Valid task types (for --type filter and 'create'/'edit' setter):
+Valid task types (for -y, --type on 'list', 'create' and 'edit'):
   USER_STORY, TASK, BUG, SUB_TASK, EPIC, REFACTOR, CHORE, SPIKE, DESIGN_UX, IMPROVEMENT
+
+Valid comment types (for -y, --type on 'comment-add', 'comment-list' and
+'comment-edit'):
+  %s
+  The same -y, --type spelling carries two unrelated enums in this family: a
+  task type on 'list'/'create'/'edit', a comment type on 'comment-add',
+  'comment-list' and 'comment-edit'. A value from one set is rejected (exit 6)
+  by the other. 'comment-remove' takes no -y, --type at all and rejects it
+  (exit 2).
 
 Numeric ranges:
   --priority, --severity      0-9 (0 = lowest, 9 = highest)
@@ -55,6 +76,10 @@ Commands:
   remove-dep <task-id> <blocker-id>           Remove the dependency edge created by add-dep
   blockers <task-id>                          List tasks blocking <task-id> (incomplete dependencies)
   blocking <task-id>                          List tasks that depend on <task-id> (reverse of blockers)
+  comment-add, c-add <task-id>                Add one typed comment to a task's work log
+  comment-list, c-ls <task-id>                List a task's comments, oldest first
+  comment-edit, c-edit <comment-id>           Change the type and/or body of one comment
+  comment-remove, c-rm <comment-id>           Delete one comment (irreversible)
 
 Options (shared by most subcommands):
   -r, --roadmap <name>              REQUIRED. Target roadmap.
@@ -89,22 +114,48 @@ Options (stat to COMPLETED):
   -s, --summary <text>              Completion summary (max 4096 chars; only valid when
                                     target status is COMPLETED)
 
+Options (comment-add / comment-list / comment-edit):
+  -y, --type <TYPE>                 Comment type (see the comment-type list above).
+                                    REQUIRED on comment-add, optional filter on
+                                    comment-list, optional new value on comment-edit.
+  -b, --body <text>                 Comment text (max 4096 chars). On comment-add and
+                                    comment-edit the body may instead arrive on standard
+                                    input, under a bounded read, when absent —
+                                    on comment-edit only if --type is absent too, so a
+                                    type-only edit never waits for input. Supplying
+                                    neither source is an error (exit 2).
+
+Comment rules (per SPEC/COMMANDS.md § Task Comments):
+  - Comments are accepted in every status, including COMPLETED, and no comment
+    changes or gates a task's status.
+  - comment-add and comment-list take the TASK's id; comment-edit and
+    comment-remove take the COMMENT's own id. Task and sprint comment ids are
+    separate sequences.
+  - comment-edit requires at least one change (--type, --body, or a body on
+    standard input) and is rejected with exit 2 when none is requested.
+
 Output (stdout JSON):
   list, get, next, subtasks, blockers, blocking   Array of task objects.
   create                                          {"id": <int>}
   edit, stat, prio, sev, reopen, remove           Empty (exit 0 on success).
   assign, unassign                                Empty (exit 0 on success).
   add-dep, remove-dep                             Empty (exit 0 on success).
+  comment-add                                     {"id": <int>}
+  comment-list                                    Array of comment objects.
+  comment-edit, comment-remove                    Empty (exit 0 on success).
   Task object keys: id, title, status, type, functional_requirements,
   technical_requirements, acceptance_criteria, created_at, specialists,
   started_at, tested_at, closed_at, completion_summary, parent_task_id,
   priority, severity, subtask_count, depends_on, blocks.
+  Comment object keys: id, task_id, type, body, created_at, updated_at
+  (updated_at is null until the comment is first edited).
 
 Exit codes:
   0   Success
-  2   Misuse (missing required flag, bad syntax)
+  1   Database failure
+  2   Misuse (missing required flag, bad syntax, no comment body supplied)
   3   No roadmap specified (-r missing)
-  4   Task not found
+  4   Task or comment not found
   6   Validation error (bad enum, out-of-range number, oversized field,
        invalid state transition, subtask/dependency guard, etc.)
 
@@ -122,5 +173,10 @@ Examples:
   rmp task add-dep -r myproject 10 7
   rmp task blockers -r myproject 10
   rmp task next -r myproject 5
-`)
+  rmp task comment-add -r myproject 42 --type FINDING --body "Boundary second is accepted by the parser."
+  rmp task comment-add -r myproject 42 --type DECISION < decision.txt
+  rmp task comment-list -r myproject 42 --type DECISION
+  rmp task comment-edit -r myproject 12 --type NOTE
+  rmp task comment-remove -r myproject 12
+`, models.FormatCommentTypes(models.ValidTaskCommentTypes))
 }

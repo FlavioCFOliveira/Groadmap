@@ -21,6 +21,8 @@ var specComposite = []struct {
 	{"idx_tasks_priority_created", "tasks"},
 	{"idx_sprint_tasks_lookup", "sprint_tasks"},
 	{"idx_audit_date", "audit"},
+	{"idx_task_comments_task_created", "task_comments"},
+	{"idx_sprint_comments_sprint_created", "sprint_comments"},
 }
 
 // TestCompositeIndexesExistInProductionSchema asserts that every composite
@@ -55,7 +57,7 @@ func TestCompositeIndexesExistInProductionSchema(t *testing.T) {
 func TestCompositeIndexesServeTheProductionQueries(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
-	seedIndexFixture(t, db)
+	fixture := seedIndexFixture(t, db)
 
 	status := models.StatusBacklog
 	minPriority := 5
@@ -71,6 +73,10 @@ func TestCompositeIndexesServeTheProductionQueries(t *testing.T) {
 	priorityQuery, priorityArgs := buildListTasksQuery(listByPriority)
 	auditQuery, auditArgs := buildAuditEntriesQuery(auditByDate)
 
+	// The comment listings and the grouped comment read come from the production
+	// statement sets in comments.go, and the grouped form is planned with the same
+	// placeholder count production builds for three parents.
+	commentedTasks := fixture.commentedTaskIDs
 	tests := []struct {
 		name      string
 		query     string
@@ -106,6 +112,44 @@ func TestCompositeIndexesServeTheProductionQueries(t *testing.T) {
 			wantIndex: "idx_audit_date",
 			noScanOf:  "audit",
 		},
+		{
+			name:      "task comment listing of one task, oldest first",
+			query:     taskCommentStmts.selectByParent,
+			args:      []any{commentedTasks[0]},
+			wantIndex: "idx_task_comments_task_created",
+			noScanOf:  "task_comments",
+		},
+		{
+			name:      "task comment listing of one task, filtered by type",
+			query:     taskCommentStmts.selectByParentAndType,
+			args:      []any{commentedTasks[0], string(models.CommentProgress)},
+			wantIndex: "idx_task_comments_task_created",
+			noScanOf:  "task_comments",
+		},
+		{
+			name:      "sprint comment listing of one sprint, oldest first",
+			query:     sprintCommentStmts.selectByParent,
+			args:      []any{fixture.sprintID},
+			wantIndex: "idx_sprint_comments_sprint_created",
+			noScanOf:  "sprint_comments",
+		},
+		{
+			name:      "sprint comment listing of one sprint, filtered by type",
+			query:     sprintCommentStmts.selectByParentAndType,
+			args:      []any{fixture.sprintID, string(models.CommentProgress)},
+			wantIndex: "idx_sprint_comments_sprint_created",
+			noScanOf:  "sprint_comments",
+		},
+		{
+			// SPEC/DATABASE.md § Index Design Rationale states that the same
+			// index serves the grouped WHERE task_id IN (...) read the web
+			// interface uses. That claim is asserted here, not assumed.
+			name:      "grouped task comment read over three tasks",
+			query:     groupedTaskCommentsQuery(db.Placeholders(3)),
+			args:      []any{commentedTasks[0], commentedTasks[1], commentedTasks[2]},
+			wantIndex: "idx_task_comments_task_created",
+			noScanOf:  "task_comments",
+		},
 	}
 
 	for _, tt := range tests {
@@ -121,6 +165,15 @@ func TestCompositeIndexesServeTheProductionQueries(t *testing.T) {
 			// a subquery).
 			if strings.Contains(plan, "SCAN "+tt.noScanOf) {
 				t.Errorf("the query falls back to a full scan of %s.\nplan: %s", tt.noScanOf, plan)
+			}
+			// A comment listing is ordered by the index's own trailing column
+			// (created_at, then the implicit rowid, which IS the comment id), so
+			// the engine must supply the order rather than sort the result. A
+			// TEMP B-TREE here would mean the composite index shape earns nothing
+			// over a plain index on the parent key.
+			if strings.HasSuffix(tt.noScanOf, "_comments") && strings.Contains(plan, "TEMP B-TREE") {
+				t.Errorf("the comment listing sorts in a temporary B-tree; the index must supply the "+
+					"created_at order.\nplan: %s\nquery: %s", plan, tt.query)
 			}
 		})
 	}
@@ -154,9 +207,17 @@ func queryPlan(t *testing.T, db *DB, query string, args ...any) string {
 	return plan.String()
 }
 
-// seedIndexFixture populates the three indexed tables through the production
-// write paths, so the planner sees the same shape of data the tool produces.
-func seedIndexFixture(t *testing.T, db *DB) {
+// indexFixtureIDs names the rows seedIndexFixture created, so the plan
+// assertions bind the ids that actually exist rather than assuming an
+// autoincrement sequence.
+type indexFixtureIDs struct {
+	commentedTaskIDs []int
+	sprintID         int
+}
+
+// seedIndexFixture populates the indexed tables through the production write
+// paths, so the planner sees the same shape of data the tool produces.
+func seedIndexFixture(t *testing.T, db *DB) indexFixtureIDs {
 	t.Helper()
 	ctx := testContext()
 
@@ -205,8 +266,26 @@ func seedIndexFixture(t *testing.T, db *DB) {
 			EntityID:    backlogIDs[i%len(backlogIDs)],
 			PerformedAt: utils.FormatISO8601(now.AddDate(0, 0, -i)),
 		}
-		if _, err := db.LogAuditEntry(ctx, entry); err != nil {
-			t.Fatalf("logging audit entry %d: %v", i, err)
+		seedAuditEntry(t, db, entry)
+	}
+
+	// Comments on several tasks and on the sprint, written through the production
+	// transactional path, so the comment listings and the grouped read are planned
+	// against populated tables. Three tasks carry comments: the grouped read is
+	// planned over an IN list of three real parents.
+	commented := backlogIDs[:3]
+	for _, taskID := range commented {
+		for entry := range 8 {
+			addTaskComment(t, db, taskID, models.CommentProgress,
+				"Audit retention now holds a full year of history for this window.",
+				utils.FormatISO8601(now.AddDate(0, 0, -entry)))
 		}
 	}
+	for entry := range 8 {
+		addSprintComment(t, db, sprintID, models.CommentProgress,
+			"Retention is verified for the windows closed so far.",
+			utils.FormatISO8601(now.AddDate(0, 0, -entry)))
+	}
+
+	return indexFixtureIDs{commentedTaskIDs: commented, sprintID: sprintID}
 }

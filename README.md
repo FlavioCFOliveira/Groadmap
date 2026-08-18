@@ -16,6 +16,7 @@ This will detect your OS and architecture, download the latest release from GitH
 - **Task Management**: Create, edit, list, and get tasks with status, priority, and severity tracking
 - **Task Prioritization**: Get next tasks from the open sprint, ordered by sprint task order
 - **Sub-tasks and Dependencies**: Decompose tasks into sub-tasks and declare blocking dependencies between tasks
+- **Comments**: Durable, typed, timestamped comment logs on tasks and sprints recording findings, hypotheses, tests, decisions, and progress
 - **Sprint Management**: Organize tasks into sprints with a complete lifecycle (PENDING, OPEN, CLOSED) and a unique execution order
 - **Sprint Reporting**: Comprehensive sprint reports with progress and distribution metrics
 - **Task Ordering**: Reorder, move-to-position, swap, top, and bottom commands for sprint task management
@@ -41,8 +42,8 @@ The only commands that do **not** take `-r` are:
 | Command | Description | Documentation |
 |---------|-------------|---------------|
 | `roadmap` | Roadmap management (create, list, remove) | [DOCS/commands/roadmap.md](DOCS/commands/roadmap.md) |
-| `task` | Task management (create, edit, list, get, next, status, priority, severity, dependencies) | [DOCS/commands/task.md](DOCS/commands/task.md) |
-| `sprint` | Sprint management with lifecycle control, reporting, and task ordering | [DOCS/commands/sprint.md](DOCS/commands/sprint.md) |
+| `task` | Task management (create, edit, list, get, next, status, priority, severity, dependencies, comments) | [DOCS/commands/task.md](DOCS/commands/task.md) |
+| `sprint` | Sprint management with lifecycle control, reporting, task ordering, and comments | [DOCS/commands/sprint.md](DOCS/commands/sprint.md) |
 | `backlog` | Backlog planning views (list and show-next) | [DOCS/commands/backlog.md](DOCS/commands/backlog.md) |
 | `stats` | Roadmap-wide statistics and velocity | [DOCS/commands/stats.md](DOCS/commands/stats.md) |
 | `audit` | Audit log and entity history | [DOCS/commands/audit.md](DOCS/commands/audit.md) |
@@ -154,7 +155,7 @@ rmp graph query -r myproject \
 | 1 | General error | Database failure, unexpected error |
 | 2 | Invalid usage | Wrong arguments, syntax error |
 | 3 | No roadmap | No roadmap provided via `-r` for a command that requires it |
-| 4 | Not found | Roadmap/task/sprint doesn't exist |
+| 4 | Not found | Roadmap/task/sprint/comment doesn't exist |
 | 5 | Already exists | Duplicate name or duplicate sprint order |
 | 6 | Invalid data | Validation failed (dates, ranges) |
 | 127 | Unknown command | Unknown command or subcommand |
@@ -441,6 +442,23 @@ rmp task assign -r <name> <id> "go-developer"
 rmp task unassign -r <name> <id> "go-developer"
 ```
 
+**How do I record what I found while doing the work?**
+
+Comments are the work log. They are typed and timestamped, and a task or a sprint holds as many as the work needs.
+```bash
+rmp task comment-add -r <name> <id> --type FINDING --body "The parser accepts the boundary second exactly; no rounding occurs."
+rmp task comment-add -r <name> <id> --type DECISION < decision.txt   # body from standard input
+rmp task comment-list -r <name> <id>                                 # the whole log, oldest first
+rmp task comment-list -r <name> <id> --type DECISION                 # filter by type
+rmp task comment-edit -r <name> <comment-id> --type NOTE             # takes the COMMENT's id
+rmp task comment-remove -r <name> <comment-id>
+```
+- A task comment accepts `FINDING`, `HYPOTHESIS`, `TEST`, `DECISION`, `PROGRESS`, `UPDATE`, `NOTE`.
+- A sprint comment (`rmp sprint comment-add ...`, same four subcommands) accepts only `FINDING`, `DECISION`, `PROGRESS`, `UPDATE`; the task-only values are rejected with exit code 6, because a sprint records how the sprint went and not the diary of its individual tasks.
+- `comment-add` and `comment-list` take the task's or sprint's id; `comment-edit` and `comment-remove` take the comment's own id. Task and sprint comment ids are separate sequences.
+- Comments are accepted in every status, including `COMPLETED` and `CLOSED`, and no comment gates a transition.
+- The body may be given with `--body` or piped in on standard input, which is how a multi-line entry is written without shell quoting.
+
 ---
 
 ### Visibility and Reporting
@@ -569,6 +587,7 @@ On startup the served URL is printed as JSON (`{"url": "http://127.0.0.1:8787"}`
 - **Self-contained and offline.** Every asset (HTML, CSS, JavaScript, the vendored Tabler framework and D3.js graph library with the d3-sankey plugin, the Tabler Icons webfont, and the Inter font) is embedded in the binary via `go:embed` and served only from `/static/`; no page references a CDN, a remote font host, or any other remote origin, and the server makes no outbound request.
 - **Loopback by default.** It binds the loopback interface (`127.0.0.1`), so the read-only interface is reachable only from the local machine. Exposing it on the network is the explicit opt-in via `--host 0.0.0.0` (or any other non-loopback address), which also prints a network-exposure warning to stderr. Roadmap names from the URL are validated before any filesystem path is built (path-traversal guard).
 - **Responsive, mobile-first.** Every page, including the graph visualisation, adapts to small touch viewports.
+- **Comments are visible.** Opening a task shows its comments as a chronological timeline in the read-only task detail modal, and a sprint's own page carries a Comments card with the sprint's log. Both are oldest first and read-only: comments are displayed, never written, from the browser.
 
 See [DOCS/commands/web.md](DOCS/commands/web.md) for the full route list and exit codes.
 

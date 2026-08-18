@@ -65,7 +65,8 @@ func migrateLegacyLayout(warn *os.File) error {
 	// symlinked ~/.roadmaps is touched; it must refuse rather than follow the
 	// link, consistent with EnsureDataDir (SPEC/ARCHITECTURE.md Security
 	// Guarantees / Directory Structure). This is a refuse-condition, surfaced
-	// as ErrInvalidInput (exit 6), not a per-roadmap skip.
+	// as ErrDatabase (exit 1), not a per-roadmap skip; it is the second fatal
+	// condition of the sweep, alongside the unreadable data directory below.
 	if err := assertNotSymlink(dataDir); err != nil {
 		return err
 	}
@@ -189,8 +190,13 @@ func migrateOneRoadmap(dataDir, name string, warn *os.File) error {
 	// consistent with the per-roadmap error handling, returning here causes
 	// this one roadmap to be SKIPPED with a non-fatal warning while the sweep
 	// continues with the remaining candidates.
+	//
+	// The error is returned unwrapped: assertNotSymlink already carries
+	// ErrDatabase, so this function's "every returned error carries ErrDatabase"
+	// invariant holds without re-wrapping, and the warning text stays free of a
+	// duplicated sentinel.
 	if err := assertNotSymlink(roadmapDir); err != nil {
-		return fmt.Errorf("%w: %w", err, ErrDatabase)
+		return err
 	}
 
 	if err := os.MkdirAll(roadmapDir, DataDirPerm); err != nil {

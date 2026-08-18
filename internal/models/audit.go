@@ -51,6 +51,19 @@ const (
 	// Task dependency operations
 	OpTaskAddDep    AuditOperation = "TASK_ADD_DEP"
 	OpTaskRemoveDep AuditOperation = "TASK_REMOVE_DEP"
+
+	// Comment operations. All six are recorded against the PARENT entity: a task
+	// comment writes entity_type = TASK with the owning task's id, a sprint
+	// comment writes entity_type = SPRINT with the owning sprint's id. The
+	// comment's own id is never written and no COMMENT entity type exists, so the
+	// entity_type value set stays exactly TASK and SPRINT (SPEC/DATABASE.md §
+	// audit Table, "Comment operations are recorded against the parent entity").
+	OpTaskCommentCreate   AuditOperation = "TASK_COMMENT_CREATE"
+	OpTaskCommentUpdate   AuditOperation = "TASK_COMMENT_UPDATE"
+	OpTaskCommentDelete   AuditOperation = "TASK_COMMENT_DELETE"
+	OpSprintCommentCreate AuditOperation = "SPRINT_COMMENT_CREATE"
+	OpSprintCommentUpdate AuditOperation = "SPRINT_COMMENT_UPDATE"
+	OpSprintCommentDelete AuditOperation = "SPRINT_COMMENT_DELETE"
 )
 
 // ValidAuditOperations contains all valid audit operations.
@@ -78,6 +91,12 @@ var ValidAuditOperations = []AuditOperation{
 	OpTaskUnassign,
 	OpTaskAddDep,
 	OpTaskRemoveDep,
+	OpTaskCommentCreate,
+	OpTaskCommentUpdate,
+	OpTaskCommentDelete,
+	OpSprintCommentCreate,
+	OpSprintCommentUpdate,
+	OpSprintCommentDelete,
 }
 
 // IsValidAuditOperation checks if a string is a valid audit operation.

@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/FlavioCFOliveira/GoGraph/cypher"
+	"github.com/FlavioCFOliveira/GoGraph/cypher/ir"
 	"github.com/FlavioCFOliveira/Groadmap/internal/cypherguard"
 )
 
@@ -557,6 +559,153 @@ func TestIsReadOnly(t *testing.T) {
 			t.Parallel()
 			if got := cypherguard.IsReadOnly(tc.query); got != tc.want {
 				t.Errorf("IsReadOnly(%q) = %v, want %v", tc.query, got, tc.want)
+			}
+		})
+	}
+}
+
+// spoofedDDLQueries are DDL statements whose CREATE/DROP INDEX/CONSTRAINT
+// keyword pair carries a NON-ASCII letter that Unicode uppercasing maps onto the
+// ASCII letter the keyword needs — U+0131 LATIN SMALL LETTER DOTLESS I
+// uppercases to 'I', and U+017F LATIN SMALL LETTER LONG S uppercases to 'S'.
+//
+// The engine acts on exactly that transformation: cypher/ir.IsDDL falls back to
+// strings.HasPrefix(strings.ToUpper(stmt), "CREATE INDEX") as soon as a
+// non-ASCII byte appears in the prefix window, and cypher/ir.ParseDDL dispatches
+// on strings.ToUpper(stmt) too. Go's (?i) regexp flag applies Unicode simple
+// case FOLDING instead, whose 'I'/'i' orbit does not contain U+0131, so a regexp
+// alone does not see these as DDL.
+//
+// Before the fix this divergence was a fail-OPEN guard-rail bypass: the guard
+// rail reported "ordinary read", `rmp graph query` and the read-only web graph
+// data endpoint admitted the statement, and the engine executed it through its
+// DDL executor (proven end to end: `rmp graph query -q "CREATE <U+0131>NDEX …"`
+// exited 0, and the DROP form reached exec.DropIndex).
+var spoofedDDLQueries = []struct {
+	name  string
+	query string
+}{
+	{name: "create index with U+0131 in INDEX", query: "CREATE ıNDEX evil FOR (n:Spec) ON (n.key)"},
+	{name: "create index if not exists with U+0131", query: "CREATE ıNDEX IF NOT EXISTS evil FOR (n:Spec) ON (n.key)"},
+	{name: "drop index with U+0131 in INDEX", query: "DROP ıNDEX evil"},
+	{name: "lowercase drop index with U+0131", query: "drop ındex evil"},
+	{name: "create constraint with U+0131 in CONSTRAINT", query: "CREATE CONSTRAıNT c1 FOR (n:Spec) REQUIRE n.key IS UNIQUE"},
+	{name: "drop constraint with U+0131 in CONSTRAINT", query: "DROP CONSTRAıNT c1"},
+	{name: "create constraint with U+017F in CONSTRAINT", query: "CREATE CONſTRAINT c1 FOR (n:Spec) REQUIRE n.key IS UNIQUE"},
+	{name: "spoofed keyword with extra whitespace", query: "CREATE   ıNDEX evil FOR (n:Spec) ON (n.key)"},
+	{name: "spoofed keyword after a leading comment", query: "// plan\nCREATE ıNDEX evil FOR (n:Spec) ON (n.key)"},
+}
+
+// TestClassifySpoofedDDLKeywords pins that a DDL keyword spelled with a
+// non-ASCII letter that uppercases onto ASCII is classified as DDL, and
+// therefore refused as not read-only. Regression test for the guard-rail bypass
+// described on spoofedDDLQueries.
+func TestClassifySpoofedDDLKeywords(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range spoofedDDLQueries {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := cypherguard.Classify(tc.query); !got.DDL {
+				t.Errorf("Classify(%q).DDL = false, want true (the engine routes this to its DDL executor)", tc.query)
+			}
+			if cypherguard.IsReadOnly(tc.query) {
+				t.Errorf("IsReadOnly(%q) = true, want false: a schema-mutating DDL statement is never read-only", tc.query)
+			}
+		})
+	}
+}
+
+// TestClassifyKeepsUnicodeIdentifiersReadOnly is the other half of the fix: the
+// uppercased second pass must not turn ordinary reads that merely CONTAIN such
+// letters into rejections. Only a spoofed KEYWORD may be caught, never a label,
+// property, or literal that happens to carry the same code point.
+func TestClassifyKeepsUnicodeIdentifiersReadOnly(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		query string
+	}{
+		{name: "dotless i inside a property name", query: "MATCH (n:Task) WHERE n.basık = 'x' RETURN n"},
+		{name: "dotless i inside a label", query: "MATCH (n:Yazılım) RETURN n"},
+		{name: "spoofed keyword inside a string literal", query: "MATCH (n:Doc) WHERE n.body = 'CREATE ıNDEX evil' RETURN n"},
+		{name: "spoofed keyword inside a line comment", query: "MATCH (n) RETURN n // CREATE ıNDEX evil"},
+		{name: "spoofed keyword inside a backtick identifier", query: "MATCH (n:`CREATE ıNDEX`) RETURN n"},
+		{name: "long s inside a label", query: "MATCH (n:Meſsage) RETURN n"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := cypherguard.Classify(tc.query); got.DDL {
+				t.Errorf("Classify(%q).DDL = true, want false: no DDL keyword is present", tc.query)
+			}
+			if !cypherguard.IsReadOnly(tc.query) {
+				t.Errorf("IsReadOnly(%q) = false, want true: an ordinary read must stay admissible", tc.query)
+			}
+		})
+	}
+}
+
+// TestGuardRailCoversEngineDDLSurface binds the guard rail to the engine's REAL
+// dispatch predicate rather than to its documentation: for every statement the
+// engine would route to its DDL executor (cypher/ir.IsDDL), the guard rail MUST
+// classify DDL.
+//
+// The property is stated as an implication, so it can only fail in the
+// dangerous direction. A future engine release that stops treating one of these
+// forms as DDL leaves the test green (the guard rail is allowed to be stricter
+// than the engine); an engine that starts treating a NEW spelling as DDL while
+// the guard rail still calls it an ordinary read fails the test — which is
+// exactly the fail-open divergence this package exists to prevent.
+//
+// The second assertion pins WHY the guard rail cannot delegate to the engine's
+// own writing-clause classifier: cypher.QueryHasWritingClause returns false for
+// everything IsDDL accepts, so a DDL statement carries no write signal at all
+// and the DDL discriminator is the only thing standing between it and execution.
+func TestGuardRailCoversEngineDDLSurface(t *testing.T) {
+	t.Parallel()
+
+	ascii := []string{
+		// ASCII forms, as the engine's prefix scan sees them.
+		"CREATE INDEX i FOR (n:Spec) ON (n.key)",
+		"create index i FOR (n:Spec) ON (n.key)",
+		"DROP INDEX i",
+		"drop index i",
+		"CREATE CONSTRAINT c FOR (n:Spec) REQUIRE n.key IS UNIQUE",
+		"DROP CONSTRAINT c",
+		"/* lead */ CREATE INDEX i FOR (n:Spec) ON (n.key)",
+		"// lead\nDROP INDEX i",
+	}
+	corpus := make([]string, 0, len(ascii)+len(spoofedDDLQueries))
+	corpus = append(corpus, ascii...)
+	for _, tc := range spoofedDDLQueries {
+		corpus = append(corpus, tc.query)
+	}
+
+	for _, query := range corpus {
+		t.Run(query, func(t *testing.T) {
+			t.Parallel()
+			// The implication, asserted without branching out of the test: a
+			// statement the engine dispatches as DDL must be classified DDL. A
+			// statement it does NOT dispatch may still be classified DDL — the
+			// guard rail is deliberately stricter (it tolerates any whitespace
+			// between the two keywords, where the engine's prefix scan wants
+			// exactly one space).
+			if ir.IsDDL(query) && !cypherguard.Classify(query).DDL {
+				t.Errorf("engine dispatches %q to its DDL executor but Classify(...).DDL = false", query)
+			}
+			// Every entry of the corpus is DDL-shaped, so none of them may be
+			// admitted as read-only whether the engine dispatches it or not.
+			if cypherguard.IsReadOnly(query) {
+				t.Errorf("IsReadOnly(%q) = true, want false: the statement is schema-mutating DDL", query)
+			}
+			// The engine's writing-clause classifier exempts everything IsDDL
+			// accepts, so it carries no write signal for these statements: the
+			// DDL discriminator is the only thing between them and execution.
+			if ir.IsDDL(query) && cypher.QueryHasWritingClause(query) {
+				t.Errorf("cypher.QueryHasWritingClause(%q) = true; the DDL exemption this guard rail compensates for has changed — re-audit Classify", query)
 			}
 		})
 	}

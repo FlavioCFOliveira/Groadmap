@@ -23,6 +23,11 @@
 //     high-level (macro) goal of the development effort the sprint delivers
 //     (SPEC/HELP.md § Sprint family help specifics item 5;
 //     SPEC/MODELS.md § Sprint Field Constraints).
+//  9. The comment subcommands of both families satisfy
+//     SPEC/HELP.md § Comment subcommand help specifics: the "Valid comment
+//     types" block lists the family's OWN set and never the other's, the body's
+//     two input sources are stated on comment-add and comment-edit, and each
+//     subcommand names the id it actually takes.
 package commands
 
 import (
@@ -30,6 +35,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
@@ -503,6 +509,153 @@ func TestHelpContent_SprintDescriptionExamplesAreMacroGoals(t *testing.T) {
 						pair.label, v, strings.TrimSpace(line),
 					)
 				}
+			}
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 9. Comment help: the "Valid comment types" block names the family's OWN set.
+// ---------------------------------------------------------------------------
+
+// commentTypeBlock returns the type list printed under the "Valid comment types"
+// heading of one help output: the first indented line after the heading, with the
+// heading's own continuation lines (which end in "):") skipped.
+//
+// It returns "" when the output has no such heading, which is itself an assertable
+// condition: comment-remove takes no --type and therefore prints no block.
+func commentTypeBlock(out string) string {
+	lines := strings.Split(out, "\n")
+	for i, line := range lines {
+		if !strings.Contains(line, "Valid comment types") {
+			continue
+		}
+		for _, candidate := range lines[i+1:] {
+			trimmed := strings.TrimSpace(candidate)
+			if trimmed == "" || strings.HasSuffix(trimmed, "):") {
+				continue // a wrapped heading line, or the blank line after it
+			}
+			return trimmed
+		}
+	}
+	return ""
+}
+
+// TestHelpContent_CommentTypeBlockIsPerFamily pins SPEC/HELP.md § Comment
+// subcommand help specifics item 1: each family's comment help lists the values
+// ITS OWN family accepts — the seven task values under `task`, the four sprint
+// values under `sprint` — and MUST NOT show the other family's set.
+//
+// The expected lists are rendered from models.FormatCommentTypes, so the test
+// measures the help against the enum rather than against a second hand-typed copy
+// that could drift with it. The block is extracted rather than searched for as a
+// substring, because the surrounding prose legitimately NAMES the excluded values
+// while explaining that they are excluded.
+func TestHelpContent_CommentTypeBlockIsPerFamily(t *testing.T) {
+	taskTypes := models.FormatCommentTypes(models.ValidTaskCommentTypes)
+	sprintTypes := models.FormatCommentTypes(models.ValidSprintCommentTypes)
+
+	// The premise of the whole test: the two sets are genuinely different.
+	if taskTypes == sprintTypes {
+		t.Fatalf("the two comment type sets are identical (%q); the per-family rule is vacuous", taskTypes)
+	}
+
+	want := map[string]struct{ own, other string }{
+		"task":   {own: taskTypes, other: sprintTypes},
+		"sprint": {own: sprintTypes, other: taskTypes},
+	}
+	// comment-remove has no --type flag, so it prints no block and is excluded.
+	withTypeFlag := []string{"comment-add", "comment-list", "comment-edit"}
+
+	reg := AppRegistry()
+	for family, sets := range want {
+		cmd := reg.FindCommand(family)
+		if cmd == nil {
+			t.Fatalf("family %q missing from the registry", family)
+		}
+
+		// The family help carries a comment-type block too.
+		labels := map[string]string{"rmp " + family + " --help": ""}
+		for _, sub := range withTypeFlag {
+			labels["rmp "+family+" "+sub+" --help"] = sub
+		}
+
+		for label, sub := range labels {
+			args := []string{"--help"}
+			if sub != "" {
+				args = []string{sub, "--help"}
+			}
+			out := captureStdout(t, func() { _ = cmd.DispatchFamily(args) })
+
+			block := commentTypeBlock(out)
+			if block == "" {
+				t.Errorf("%s: no 'Valid comment types' block", label)
+				continue
+			}
+			if block != sets.own {
+				t.Errorf("%s: comment-type block\n got: %q\nwant: %q", label, block, sets.own)
+			}
+			if strings.Contains(out, sets.other) {
+				t.Errorf("%s: help prints the other family's full comment-type list %q", label, sets.other)
+			}
+		}
+
+		// comment-remove prints no type list at all: it accepts no --type.
+		removeOut := captureStdout(t, func() { _ = cmd.DispatchFamily([]string{"comment-remove", "--help"}) })
+		if block := commentTypeBlock(removeOut); block != "" {
+			t.Errorf("rmp %s comment-remove --help lists comment types (%q) for a flag it does not accept",
+				family, block)
+		}
+	}
+}
+
+// TestHelpContent_CommentHelpDocumentsBodyAndIDRules pins items 2 and 3 of
+// SPEC/HELP.md § Comment subcommand help specifics for both families at once: the
+// body's two input sources on comment-add and comment-edit, the extra condition
+// that governs standard input on comment-edit, and which id each subcommand takes.
+func TestHelpContent_CommentHelpDocumentsBodyAndIDRules(t *testing.T) {
+	reg := AppRegistry()
+	for _, family := range []string{"task", "sprint"} {
+		cmd := reg.FindCommand(family)
+		if cmd == nil {
+			t.Fatalf("family %q missing from the registry", family)
+		}
+		help := func(sub string) string {
+			return captureStdout(t, func() { _ = cmd.DispatchFamily([]string{sub, "--help"}) })
+		}
+
+		// Item 2: the body comes from --body or from standard input, and supplying
+		// neither is an error.
+		for _, sub := range []string{"comment-add", "comment-edit"} {
+			out := help(sub)
+			for _, want := range []string{"--body", "standard input"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("rmp %s %s --help does not mention %q", family, sub, want)
+				}
+			}
+		}
+		if out := help("comment-add"); !strings.Contains(out, "exit 2") && !strings.Contains(out, "2  Invalid") {
+			t.Errorf("rmp %s comment-add --help does not state that supplying no body is an error", family)
+		}
+		if out := help("comment-edit"); !strings.Contains(out, "--type is absent") &&
+			!strings.Contains(out, "--type is present") {
+			t.Errorf("rmp %s comment-edit --help does not state that stdin is read only when --type is absent", family)
+		}
+
+		// Item 3: which id the subcommand takes.
+		parent := "<" + family + "-id>"
+		for _, sub := range []string{"comment-add", "comment-list"} {
+			if out := help(sub); !strings.Contains(out, parent) {
+				t.Errorf("rmp %s %s --help does not name the parent argument %s", family, sub, parent)
+			}
+		}
+		for _, sub := range []string{"comment-edit", "comment-remove"} {
+			out := help(sub)
+			if !strings.Contains(out, "<comment-id>") {
+				t.Errorf("rmp %s %s --help does not name the <comment-id> argument", family, sub)
+			}
+			if !strings.Contains(out, "separate sequences") {
+				t.Errorf("rmp %s %s --help does not state that the two comment id spaces are separate", family, sub)
 			}
 		}
 	}

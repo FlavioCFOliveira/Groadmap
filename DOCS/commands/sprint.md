@@ -2,7 +2,7 @@
 
 ## Description
 
-Sprint management within a roadmap. Sprints group tasks into time-boxed iterations with lifecycle management (PENDING → OPEN → CLOSED).
+Sprint management within a roadmap. Sprints group tasks into time-boxed iterations with lifecycle management (PENDING → OPEN → CLOSED), and each sprint carries an append-oriented comment log recording how the sprint went.
 
 ## Synopsis
 
@@ -704,6 +704,171 @@ rmp sprint bottom -r project1 1 5    # Move task 5 to last position
 rmp sprint btm -r project1 1 10    # Move task 10 to last position
 ```
 
+---
+
+## Comment Commands
+
+Commands for a sprint's progression log: a durable, append-oriented record of how the sprint went. A sprint comment records only the progression of the work during the sprint's development — findings, decisions taken, progress, and the reason behind a change to the sprint's definition. Work carried out inside one task belongs in that task's own comments, not here (see [DOCS/commands/task.md](task.md)).
+
+The four subcommands mirror the four task comment subcommands exactly. Two differences apply throughout:
+
+- **The accepted type set is smaller.** A sprint comment accepts `FINDING`, `DECISION`, `PROGRESS`, and `UPDATE`. The task-only values `HYPOTHESIS`, `TEST`, and `NOTE` are rejected with exit code 6. See [Comment Type Values](#comment-type-values).
+- **The id space is separate.** A comment id here identifies a sprint comment. The same number in the `task` family identifies an unrelated task comment.
+
+Comments are accepted in every sprint status, including `CLOSED`. No comment subcommand checks or changes a sprint's status. `-y`/`--type` has no other meaning in the `sprint` family: `comment-add`, `comment-list`, and `comment-edit` are the only subcommands that accept it, and it always carries a comment type. `comment-remove` takes no `-y`/`--type` at all and rejects the flag as unknown (exit 2).
+
+### comment-add
+
+Adds one comment to a sprint's progression log. The comment is stored with its type, its body, and a creation timestamp; `updated_at` starts null.
+
+**Usage:** `rmp sprint comment-add [OPTIONS] <sprint-id>` or `rmp sprint c-add [OPTIONS] <sprint-id>`
+
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `sprint-id` | Yes | Sprint ID the comment is attached to |
+
+**Flags:**
+| Short Flag | Long Flag | Type | Description |
+|------------|------------|------|-----------|
+| `-r` | `--roadmap` | string | Roadmap name (required) |
+| `-y` | `--type` | enum | Comment type (required, no default); one of the four sprint comment types |
+| `-b` | `--body` | string | Comment text, max 4096 chars. When the flag is absent, the body is read from standard input (see below) |
+
+**Body from standard input:** when `--body` is absent, the whole of standard input is read to EOF and used as the body. On `comment-add` no other change is ever possible, so an absent `--body` always means "read standard input". Leading and trailing whitespace is trimmed before validation and before storage; interior line breaks are preserved, so a multi-line body survives intact. Two cases fail with exit code 2: standard input that is empty, whitespace only, or not connected when the body must come from it; and a `--body` whose value is empty, whitespace only, or missing (no following token, or the following token is itself a flag) — the command does not fall back to standard input in that case.
+
+`--type` is validated, for presence and then for value, before the body is resolved, so a missing or invalid type fails immediately instead of leaving the command waiting on standard input for a body it would reject anyway.
+
+**Output:** JSON object with the created comment ID
+
+**Examples:**
+```bash
+rmp sprint comment-add -r project1 3 --type DECISION --body "Dropped the second migration from this sprint."
+rmp sprint c-add -r project1 3 -y FINDING -b "The migration runs in 40 ms on a 20k-row database."
+rmp sprint comment-add -r project1 3 --type PROGRESS < progress.txt
+```
+
+**Example output:**
+```json
+{"id": 4}
+```
+
+An absent `--type` is rejected (exit 2); a value outside the four sprint comment types is rejected (exit 6), and that includes the task-only values `HYPOTHESIS`, `TEST`, and `NOTE`. A body longer than 4096 characters, or one containing control characters, is rejected (exit 6). An unknown sprint id is rejected (exit 4).
+
+---
+
+### comment-list
+
+Returns every comment of the given sprint, oldest first.
+
+**Usage:** `rmp sprint comment-list [OPTIONS] <sprint-id>` or `rmp sprint c-ls [OPTIONS] <sprint-id>`
+
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `sprint-id` | Yes | Sprint ID whose comments are listed |
+
+**Flags:**
+| Short Flag | Long Flag | Type | Description |
+|------------|------------|------|-----------|
+| `-r` | `--roadmap` | string | Roadmap name (required) |
+| `-y` | `--type` | enum | Optional filter: return only comments of this type. The value must be one of the four sprint comment types |
+
+**Ordering:** `created_at` ascending, with the comment `id` ascending as the tie-breaker for comments created within the same millisecond.
+
+**Result-set size:** unbounded. Every matching comment is returned; there is no `--limit` flag, no `--desc` flag, and no pagination.
+
+**Output:** JSON array of Comment objects; `[]` when the sprint has no comments, or none of the requested type
+
+**Examples:**
+```bash
+rmp sprint comment-list -r project1 3
+rmp sprint comment-list -r project1 3 --type DECISION
+rmp sprint c-ls -r project1 3 -y PROGRESS
+```
+
+**Example output:**
+```json
+[
+  {
+    "updated_at": null,
+    "type": "DECISION",
+    "body": "Dropped the second migration from this sprint.",
+    "created_at": "2026-03-12T11:15:00.000Z",
+    "id": 4,
+    "sprint_id": 3
+  }
+]
+```
+
+Listing is a read: it writes no audit entry. An invalid `--type` value is rejected (exit 6), including a valid task-only value such as `NOTE`.
+
+---
+
+### comment-edit
+
+Changes the type and/or the body of one existing sprint comment, identified by the comment's own id. At least one change is required.
+
+**Usage:** `rmp sprint comment-edit [OPTIONS] <comment-id>` or `rmp sprint c-edit [OPTIONS] <comment-id>`
+
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `comment-id` | Yes | Comment ID, **not** the id of the sprint it belongs to |
+
+**Flags:**
+| Short Flag | Long Flag | Type | Description |
+|------------|------------|------|-----------|
+| `-r` | `--roadmap` | string | Roadmap name (required) |
+| `-y` | `--type` | enum | New comment type; one of the four sprint comment types |
+| `-b` | `--body` | string | New comment text, max 4096 chars. Read from standard input when this flag is absent **and** `--type` is absent too (see below) |
+
+**Body from standard input:** standard input is read only when neither `--type` nor `--body` is given. When `--type` is present and `--body` is absent, only the type changes, standard input is not read, and a type-only edit therefore never blocks waiting for input. The trimming, empty-value, and missing-value rules are those of `comment-add`.
+
+**Replacement semantics:** the edit replaces the stored body in place and stamps `updated_at` with the edit's timestamp, so a later listing shows that the comment was altered. The previous text is not retained anywhere and cannot be recovered; the audit log records that an edit happened, not what it replaced.
+
+**No-op is not accepted.** Unlike `sprint update`, `comment-edit` requires at least one change and fails with exit code 2 when none is requested. A change is requested by a `--type` value, by a `--body` value, or by a body arriving on standard input, so the flagless form `comment-edit <comment-id> < revised.txt` is a valid edit and not a no-op.
+
+**Output:** Empty on success (exit 0)
+
+**Examples:**
+```bash
+rmp sprint comment-edit -r project1 4 --type UPDATE
+rmp sprint comment-edit -r project1 4 --body "Dropped both migrations; they move to the next sprint."
+rmp sprint comment-edit -r project1 4 < revised.txt
+rmp sprint c-edit -r project1 4 -y PROGRESS -b "Six of the nine tasks are closed."
+```
+
+A comment id that does not exist among the sprint comments is rejected (exit 4), including an id that exists only among the task comments: the two id spaces are independent.
+
+---
+
+### comment-remove
+
+Deletes one sprint comment, identified by the comment's own id. The row is removed outright; there is no soft delete and no recovery. The audit entry survives the row, so the sprint's history still records that a comment existed and was removed.
+
+**Usage:** `rmp sprint comment-remove [OPTIONS] <comment-id>` or `rmp sprint c-rm [OPTIONS] <comment-id>`
+
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `comment-id` | Yes | Comment ID, **not** the id of the sprint it belongs to |
+
+**Flags:**
+| Short Flag | Long Flag | Type | Description |
+|------------|------------|------|-----------|
+| `-r` | `--roadmap` | string | Roadmap name (required) |
+
+**Single-id command:** `comment-remove` takes exactly one comment id and accepts no comma-separated list. It takes no `-y`/`--type` and rejects the flag as unknown (exit 2).
+
+**Output:** Empty on success (exit 0)
+
+**Examples:**
+```bash
+rmp sprint comment-remove -r project1 4
+rmp sprint c-rm -r project1 4
+```
+
 ## Aliases
 
 | Command | Alias |
@@ -719,6 +884,10 @@ rmp sprint btm -r project1 1 10    # Move task 10 to last position
 | `reorder` | `order` |
 | `move-to` | `mvto` |
 | `bottom` | `btm` |
+| `comment-add` | `c-add` |
+| `comment-list` | `c-ls` |
+| `comment-edit` | `c-edit` |
+| `comment-remove` | `c-rm` |
 
 ## Sprint Lifecycle
 
@@ -736,6 +905,10 @@ PENDING → OPEN → CLOSED
 - When adding tasks to a sprint, the task status changes to `SPRINT`
 - Task ordering commands maintain position consistency (0, 1, 2...n) automatically
 - The `stats` command shows the current `task_order` array for reference
+- Comments are strictly additive. They are accepted in every status, including `CLOSED`; no comment subcommand checks or changes a sprint's status, and no comment gates a transition
+- `comment-add` and `comment-list` take the SPRINT's id; `comment-edit` and `comment-remove` take the COMMENT's own id
+- Sprint and task comment ids are separate sequences, so `rmp sprint comment-edit 7` and `rmp task comment-edit 7` address two unrelated comments
+- Comment operations are audited against the parent sprint, as `SPRINT_COMMENT_CREATE`, `SPRINT_COMMENT_UPDATE`, and `SPRINT_COMMENT_DELETE`; `comment-list` is a read and writes no audit entry
 
 ## Field Limits and Constraints
 
@@ -745,6 +918,8 @@ PENDING → OPEN → CLOSED
 | `description` | Yes (on create) | 2048 chars | Sprint description: the high-level (macro) goal of the development effort the sprint delivers (macro goal only; detail belongs in the sprint's tasks) |
 | `max-tasks` | No | 1-10000 | Capacity cap on active tasks; cannot be removed once set |
 | `order` | No | positive integer (`> 0`), unique | Execution order across the roadmap; auto-assigned when omitted; immutable once the sprint is CLOSED |
+| `type` (comment) | Yes (on `comment-add`) | one of 4 comment types | Comment classification; no default |
+| `body` | Yes (on `comment-add`) | 4096 chars | Comment text; supplied through `--body` or on standard input |
 
 ### Sprint Status Values
 
@@ -752,10 +927,28 @@ PENDING → OPEN → CLOSED
 - `OPEN` - Sprint in progress
 - `CLOSED` - Sprint finished
 
+### Comment Type Values
+
+Carried by `-y`/`--type` on `comment-add`, `comment-list`, and `comment-edit`. A sprint comment accepts four values:
+
+- `FINDING` - Something discovered during the work: an observed behaviour, a measurement, a cause identified, a constraint that turned out to apply
+- `DECISION` - A decision taken during the work, and the reasoning behind it
+- `PROGRESS` - A statement of how the work advanced: what was done, what remains
+- `UPDATE` - The reason behind a modification to the definition of the sprint: something added, updated, removed, complemented, or clarified
+
+**Per-entity applicability.** The comment type enum is per-entity, and the two sets are not symmetric. A task comment accepts three further values — `HYPOTHESIS`, `TEST`, and `NOTE` — which are rejected on a sprint with exit code 6, because a sprint records how the sprint went and not the execution diary of its individual tasks. The reverse does not happen: every value valid on a sprint is also valid on a task. The full seven-value set is documented in [DOCS/commands/task.md](task.md).
+
+### Comment Object Keys
+
+Comment objects returned by `comment-list` contain:
+`id`, `sprint_id`, `type`, `body`, `created_at`, `updated_at`.
+
+`updated_at` is always present and is `null` until the comment is first edited, after which it carries the edit's timestamp. `body` preserves the author's interior line breaks as `\n` escapes in JSON. Sprint objects carry no `comments` array and no comment count: comments are read only through `comment-list` and the read-only web interface.
+
 ## Output Format
 
 All commands follow these conventions:
-- **Success**: JSON output to stdout, exit code 0
+- **Success**: JSON output to stdout, exit code 0. `create` and `comment-add` emit `{"id": <int>}`; read commands, `comment-list` included, emit a JSON array; mutating commands, `comment-edit` and `comment-remove` included, emit empty stdout
 - **Errors**: Plain text to stderr, non-zero exit code
 
 ## Exit Codes
@@ -764,8 +957,10 @@ All commands follow these conventions:
 |------|---------|
 | 0 | Success |
 | 1 | General error (database failure) |
-| 2 | Misuse (missing required argument, bad syntax) |
+| 2 | Misuse (missing required argument, bad syntax). On the comment subcommands it also covers a missing `--type` on `comment-add`, a body supplied by neither `--body` nor standard input, and a `comment-edit` that requests no change at all |
 | 3 | No roadmap selected (`-r` missing) |
-| 4 | Sprint not found |
+| 4 | Sprint or comment not found |
 | 5 | `--order` value already used by another sprint (`create` / `update`) |
-| 6 | Validation error: bad enum; `--max-tasks` outside 1-10000; closing while SPRINT/DOING/TESTING tasks remain without `--force`; opening while another sprint is OPEN; changing `--order` on a CLOSED sprint |
+| 6 | Validation error: bad enum; `--max-tasks` outside 1-10000; closing while SPRINT/DOING/TESTING tasks remain without `--force`; opening while another sprint is OPEN; changing `--order` on a CLOSED sprint; a comment type outside the four sprint values; a comment body over 4096 characters or containing control characters |
+
+The comment subcommands split the two failure kinds along a consistent line. A missing or unusable **body** is a misuse error (exit 2), because the command was invoked without the input it needs; an **oversized or control-character** body is a validation error (exit 6), because the input arrived and was rejected on its content.

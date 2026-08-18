@@ -332,6 +332,64 @@ class TestGraphClauseSurface:
             f"SHOW INDEXES lists {result['rows']!r}")
 
 
+    # ---- Guard-rail bypass: DDL keywords spelled with non-ASCII letters ----
+
+    def test_spoofed_ddl_keywords_are_rejected_by_every_subcommand(self):
+        """A DDL keyword whose letters include a non-ASCII code point that
+        Unicode UPPERCASING maps onto ASCII must still be classified as DDL.
+
+        The engine decides DDL on strings.ToUpper, which maps U+0131 (dotless i)
+        onto 'I' and U+017F (long s) onto 'S'; a case-insensitive regexp folds
+        instead, and did not see those spellings. A security audit proved the
+        divergence end to end against this binary: `graph query` accepted
+        "CREATE \u0131NDEX ..." with exit 0 and the engine executed it through
+        its DDL executor, and the DROP form reached the DropIndex executor.
+        """
+        spoofed = [
+            "CREATE \u0131NDEX spec_key_idx FOR (n:Spec) ON (n.key)",
+            "CREATE \u0131NDEX IF NOT EXISTS spec_key_idx FOR (n:Spec) ON (n.key)",
+            "DROP \u0131NDEX spec_key_idx",
+            "drop \u0131ndex spec_key_idx",
+            "CREATE CONSTRA\u0131NT unique_spec_key FOR (n:Spec) REQUIRE n.key IS UNIQUE",
+            "DROP CONSTRA\u0131NT unique_spec_key",
+            "CREATE CON\u017fTRAINT unique_spec_key FOR (n:Spec) REQUIRE n.key IS UNIQUE",
+        ]
+        for subcmd in ("query", "search", "create", "update", "delete"):
+            for query in spoofed:
+                code, _stdout, stderr = self.run(subcmd, query)
+                assert code == EXIT_GUARD_RAIL, (
+                    f"`graph {subcmd}` must reject the spoofed DDL {query!r} with "
+                    f"exit 6: the engine executes it as schema DDL; "
+                    f"exit={code} stderr={stderr!r}")
+                assert "validation error" in stderr, (
+                    f"expected a guard-rail validation error; got {stderr!r}")
+
+    def test_spoofed_ddl_never_reaches_the_engine(self):
+        """The rejection happens before execution: no index is created."""
+        code, stdout, _stderr = self.run(
+            "query", "CREATE \u0131NDEX spec_key_idx FOR (n:Spec) ON (n.key)")
+        assert code == EXIT_GUARD_RAIL, (
+            f"spoofed CREATE INDEX on the read path must be refused; "
+            f"exit={code} stdout={stdout!r}")
+        result = self.json("query", "SHOW INDEXES")
+        assert result["rows"] == [], (
+            f"a refused spoofed CREATE INDEX must not have reached the engine; "
+            f"SHOW INDEXES lists {result['rows']!r}")
+
+    def test_unicode_identifiers_are_still_ordinary_reads(self):
+        """The stricter classification must not reject legitimate non-ASCII text."""
+        reads = [
+            "MATCH (n:Yaz\u0131l\u0131m) RETURN n",
+            "MATCH (s:Spec) WHERE s.key = 'CREATE \u0131NDEX x' RETURN s.key",
+            "MATCH (s:Spec) RETURN s.key // CREATE \u0131NDEX x",
+        ]
+        for query in reads:
+            code, _stdout, stderr = self.run("query", query)
+            assert code == EXIT_OK, (
+                f"an ordinary read must stay admissible: {query!r}; "
+                f"exit={code} stderr={stderr!r}")
+
+
 def _run_all():
     instance_cls = TestGraphClauseSurface
     method_names = [m for m in dir(instance_cls) if m.startswith("test_")]

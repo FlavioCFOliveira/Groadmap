@@ -70,10 +70,19 @@ func GetDataDir() (string, error) {
 // its target. A non-existent path is fine (it will be created as a real
 // directory); only an existing symlink is refused. Any other stat error is
 // surfaced unchanged so genuine I/O failures are not masked.
+//
+// The refusal carries ErrDatabase, which handleError maps to exit code 1. This
+// is the classification SPEC/ARCHITECTURE.md mandates in both § Directory
+// Structure (location rule 10) and § Security Guarantees. A symbolic link at
+// one of these paths is a condition of the filesystem's state, not a syntax or
+// flag error, so exit 2 (documented as MISUSE) would misreport it to the AI
+// agents that read the exit code as the contract. Exit 1 also groups this
+// refusal with the other file-level refusals it belongs with, including the
+// 0600 refusal in db.secureDBFile.
 func assertNotSymlink(path string) error {
 	fi, err := os.Lstat(path)
 	if err == nil && fi.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("%w: %s is a symbolic link; refusing to use it as a roadmap directory", ErrInvalidInput, path)
+		return fmt.Errorf("%w: %s is a symbolic link; refusing to use it as a roadmap directory", ErrDatabase, path)
 	}
 	if err != nil && !os.IsNotExist(err) {
 		return err

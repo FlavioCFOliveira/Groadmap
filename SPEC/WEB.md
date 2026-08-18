@@ -186,8 +186,9 @@ task detail modal that displays all of the task's fields (see
    current OPEN sprint or sprints — active by default (see
    [Roadmap Index Page](#roadmap-index-page) and
    [Roadmap Sprints Page](#roadmap-sprints-page)).
-9. The roadmap sprint page shows all details of a single sprint and the sprint's
-   task list in the planned in-sprint execution order, read from that roadmap's
+9. The roadmap sprint page shows all details of a single sprint, the sprint's
+   task list in the planned in-sprint execution order, and the sprint's own
+   comments in a Comments card, read from that roadmap's
    `project.db`. It is served at `/roadmaps/{name}/sprints/{id}`, is read-only, and
    returns HTTP `404 Not Found` when `{id}` is not a valid integer or is not a
    sprint of the named roadmap (see [Roadmap Sprint Page](#roadmap-sprint-page)).
@@ -204,9 +205,12 @@ task detail modal that displays all of the task's fields (see
    [Roadmap Audit Log Page](#roadmap-audit-log-page)).
 11. Anywhere a task is shown clickable — the tasks page's task table and the sprint
    page's task list — selecting the task opens a read-only task detail modal that
-   displays all of the task's fields. The modal
+   displays all of the task's fields and, after them, that task's comments as a
+   chronological timeline. The modal
    only displays data: it contains no form, no edit control, and no submit action,
-   and it requires no new server endpoint and no new write path (see
+   and it requires no new server endpoint and no new write path. The comments of
+   every task rendered on a page are loaded in one grouped query, never one query
+   per task (see
    [Task Detail Modal](#task-detail-modal)).
 12. The roadmap knowledge-graph page shows the selected roadmap's knowledge graph
    as an interactive node-link visualisation rendered with **D3.js**, read from
@@ -744,6 +748,11 @@ how the `rmp web` process itself terminates.
   `DATABASE.md § Relationships`). Each task in the list is clickable: selecting a
   task opens the read-only task detail modal for that task (see
   [Task Detail Modal](#task-detail-modal)).
+- **Sprint comments.** After the task list, the page shows the sprint's own
+  comments in a Comments card, oldest first (see
+  [Sprint Detail Sub-Template](#sprint-detail-sub-template)). The card shows the
+  comments of the sprint itself, not those of its member tasks; a task's comments
+  are shown in that task's detail modal.
 - **Path parameters.** `{name}` is validated against the roadmap-name rules
   exactly as on the other roadmap routes (the path-traversal guard in
   [Routes and Pages](#routes-and-pages) and
@@ -916,6 +925,8 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      read-only task detail modal for that task (see
      [Task Detail Modal](#task-detail-modal)). When the sprint has no tasks, the
      sub-template shows a clear empty-state message in place of the table.
+   - the **Comments card**, a separate card placed after the member-tasks card and
+     rendered last in the sub-template (defined below).
 
 3. **Sprint status summary line.** At the top of the sub-template the sub-template
    renders one indicative, complementary line that summarises the sprint's task
@@ -945,11 +956,46 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
    its `Summary.TotalTasks`); the summary line reuses that categorisation rather
    than defining a new one.
 
-4. **Read-only.** The sub-template renders data only. It contains no form, button,
+4. **Comments card.** The last card of the sub-template presents the sprint's own
+   comments — the sprint's progression log. The fields of a comment are defined for
+   the `SprintComment` model in `MODELS.md § Sprint Comment`; the sub-template does
+   not redefine them.
+   - **Scope.** The card shows the comments of the sprint itself. It does not show,
+     aggregate, or merge in the comments of the sprint's member tasks; those are
+     reachable through each task's own detail modal (see
+     [Task Detail Modal](#task-detail-modal)).
+   - **Order and completeness.** Oldest first, exactly the order
+     `sprint comment-list` returns (`created_at` ascending, comment `id` ascending
+     as the tie-breaker). Every comment of the sprint is rendered: no type filter,
+     no count limit.
+   - **Card header.** A `card-header` with the card title `Comments` and a Tabler
+     badge showing the number of comments, following the member-tasks card's header
+     idiom.
+   - **What each entry shows.** For one comment, in order: its `type` as a badge,
+     its `created_at` timestamp, its `updated_at` timestamp when that value is not
+     null (marking the entry as edited), and its `body`.
+   - **Markup.** The card body holds Tabler's Timeline component with the same
+     structure the task detail modal uses: `<ul class="timeline">` with
+     `<li class="timeline-event">` items, each an icon
+     (`<i class="ti ti-message"></i>`) in `timeline-event-icon` and a
+     `card timeline-event-card` holding the entry. The type badge uses the neutral
+     `bg-secondary-lt` variant for every type value, exactly as in the modal, and
+     introduces no per-type colour.
+   - **Authored line breaks.** A comment body is multi-line as authored through the
+     CLI, and the card renders it preserving the author's line breaks (see
+     [Frontend Rules](#frontend-rules), rule 6).
+   - **Empty state.** When the sprint has no comments, the card shows a clear
+     empty-state message in place of the timeline, in the same idiom the
+     member-tasks card uses when the sprint has no tasks. The card itself is always
+     present.
+   - **Read-only.** The card renders data only: no form, no input, no edit control,
+     and no submit action.
+
+5. **Read-only.** The sub-template renders data only. It contains no form, button,
    or link that submits a change; the only interaction is opening the read-only
    task detail modal from a task row.
 
-5. **Authored line breaks.** Wherever the sub-template renders the sprint's
+6. **Authored line breaks.** Wherever the sub-template renders the sprint's
    `description`, it preserves the author's line breaks as specified in
    [Frontend Rules](#frontend-rules), rule 6.
 
@@ -1508,14 +1554,60 @@ tasks.
   still wraps within the modal, so no forced horizontal scrolling is introduced
   (see [Frontend Rules](#frontend-rules), rule 6). The page does not redefine
   these fields; `MODELS.md` and `DATABASE.md` remain canonical.
+- **Comments timeline.** Directly after the completion-summary block, and as the
+  last block of the modal body, the modal renders the task's comments as a
+  chronological timeline. The fields of a comment are defined for the
+  `TaskComment` model in `MODELS.md § Task Comment`; the modal does not redefine
+  them.
+  - **Order.** Oldest first, exactly the order `task comment-list` returns
+    (`created_at` ascending, comment `id` ascending as the tie-breaker; see
+    `DATABASE.md § Comments`). The timeline is a log, and the order is what makes
+    it readable as one.
+  - **Completeness.** Every comment of the task is rendered. The modal applies no
+    type filter and no count limit.
+  - **What each entry shows.** For one comment, in order: its `type` as a badge,
+    its `created_at` timestamp, its `updated_at` timestamp when that value is not
+    null (marking the entry as edited), and its `body`.
+  - **Markup.** The timeline uses Tabler's Timeline component, which the vendored
+    `tabler.min.css` already provides (see
+    [Embedded Asset Categories](#embedded-asset-categories)); the feature adds no
+    asset. The structure is an unordered list `<ul class="timeline">` whose items
+    are `<li class="timeline-event">`, each containing a
+    `<div class="timeline-event-icon">` holding a Tabler icon
+    (`<i class="ti ti-message"></i>`) and a
+    `<div class="card timeline-event-card">` whose `card-body` carries the
+    timestamps, the type badge, and the body text.
+  - **Type badge colour.** The comment type renders as a neutral Tabler badge,
+    `bg-secondary-lt`, for every one of the seven type values. The semantic colour
+    mapping in
+    [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours)
+    covers task and sprint status, priority, and severity only; it is not extended
+    to comment types, and no per-type colour is introduced.
+  - **Authored line breaks.** A comment body is multi-line as authored through the
+    CLI. The timeline renders it preserving the author's line breaks, and the text
+    wraps within the card, exactly as the long free-text fields above do (see
+    [Frontend Rules](#frontend-rules), rule 6).
+  - **Empty state.** When the task has no comments, the modal shows a clear
+    empty-state message in place of the timeline rather than an empty list or an
+    absent section.
 - **Read-only.** The modal only displays data. It contains no form, no input, no
-  edit control, and no submit action of any kind.
+  edit control, and no submit action of any kind. This includes the comments
+  timeline: comments are displayed, never created, edited, or deleted from the
+  web interface.
 - **No new server endpoint and no new write path.** The modal is populated from
   read-only task data already delivered to the page that opens it: the task data
-  is server-rendered into the page (as auto-escaped HTML) or carried in a JSON data
-  island (JSON-encoded, not interpolated into HTML). The modal introduces no new
-  server endpoint and no new write path; the CLI remains the sole write path (see
+  and its comments are server-rendered into the page (as auto-escaped HTML) or
+  carried in a JSON data island (JSON-encoded, not interpolated into HTML). The
+  modal introduces no new server endpoint and no new write path; the CLI remains
+  the sole write path (see
   [Security and Constraints](#security-and-constraints)).
+- **One grouped comment query, never N+1.** A page that shows clickable tasks
+  renders one modal per task, so the server MUST load the comments of every
+  rendered task with a single grouped query over the whole set of rendered task
+  ids (`WHERE task_id IN (...)`, ordered by task id then `created_at`; see
+  `DATABASE.md § List Comments for Many Parents (Grouped)`), and MUST NOT issue
+  one query per task. When the page renders no task, the query is not issued at
+  all.
 - **Output escaping.** Roadmap-derived text shown in the modal is escaped
   consistently with [Security and Constraints](#security-and-constraints):
   `html/template` contextual auto-escaping for HTML, or JSON encoding for a data
@@ -1554,6 +1646,13 @@ re-presents an earlier, now-stale response in its place.
    `DATABASE.md § Audit`). The task data the task detail modal
    displays comes from the same read queries; the modal adds no separate request.
    The web interface adds no new schema, no new table, and no new write query.
+   A page that renders task detail modals additionally reads the comments of every
+   task it renders, in one grouped query over the whole set of rendered task ids,
+   and the sprint page reads that sprint's own comments in one further query (see
+   `DATABASE.md § Comments`). Both are existing read queries of the comment
+   feature, issued server-side while the page is rendered; neither adds a request
+   from the browser, and the number of comment queries per page does not grow with
+   the number of tasks shown.
 2. The server opens the database for reading only. It MUST NOT modify rows, MUST
    NOT write an audit entry, and MUST NOT alter the schema. A web read produces no
    audit-log entry, because the audit log records changes and a read is not a
@@ -1564,7 +1663,12 @@ re-presents an earlier, now-stale response in its place.
    read-only connection is opened (see
    [Startup Schema Migration](#startup-schema-migration)); the startup migration
    is the only path on which the web interface writes to a roadmap database, and
-   it is the only place the schema is altered.
+   it is the only place the schema is altered. Restricting the database file's
+   permissions to `0600` is not a write in this sense and is the one filesystem
+   change the read-only open path may make: it alters no row, no audit entry, and
+   no schema, and it only ever tightens the mode. A database whose permissions
+   cannot be brought to `0600` is not served; the rule, including that refusal, is
+   `ARCHITECTURE.md § Open-Time Permission Enforcement`.
 3. Each request opens the database, reads what it needs, renders the page, and
    releases the handle. Concurrency against SQLite follows the existing model in
    `IMPLEMENTATION.md § Concurrency Model`; a web read is an ordinary reader and
@@ -1862,8 +1966,12 @@ Rules:
    and [Sprint Detail Sub-Template](#sprint-detail-sub-template)), and the sprint
    tabs on the Roadmap Sprints Page (see [Roadmap Sprints Page](#roadmap-sprints-page)).
    A status, priority, or severity badge anywhere in the interface uses the variant
-   the relevant table above assigns to its value; no badge uses a single fixed
-   colour across differing values.
+   the relevant table above assigns to its value; no status, priority, or severity
+   badge uses a single fixed colour across differing values. The mapping governs
+   those three badge kinds only. The comment-type badge shown in the task detail
+   modal and the sprint Comments card is deliberately outside it and uses the
+   neutral `bg-secondary-lt` variant for every type value (see
+   [Task Detail Modal](#task-detail-modal)).
 3. **No new enum value.** The mapping introduces no status, priority, or severity
    value that is not already defined in `MODELS.md` and `STATE_MACHINE.md`. Should a
    new enum value or a revised band be introduced there, this table is updated in the
@@ -2092,12 +2200,13 @@ Rules:
    [Self-Contained Deliverable](#self-contained-deliverable) and
    [Frontend and Embedded Assets](#frontend-and-embedded-assets)).
 7. **Output escaping.** Roadmap-derived text (task and sprint fields, including
-   the task fields shown in the task detail modal, and graph node and edge labels
+   the task fields shown in the task detail modal, task and sprint comment bodies,
+   and graph node and edge labels
    and property values) is rendered through `html/template`'s contextual
    auto-escaping, so data that contains HTML control characters cannot alter page
-   structure. Task data carried to the page as a JSON data island for the task
-   detail modal, and graph data delivered as JSON to the visualisation, are encoded
-   as JSON, not interpolated into HTML.
+   structure. Task data and comment data carried to the page as a JSON data island
+   for the task detail modal, and graph data delivered as JSON to the
+   visualisation, are encoded as JSON, not interpolated into HTML.
 8. **Security headers on every HTML response.** Every HTML response carries the
    Content-Security-Policy, X-Content-Type-Options (`nosniff`), X-Frame-Options
    (`DENY`), and Referrer-Policy (`same-origin`) headers specified in
@@ -2304,9 +2413,10 @@ Rules:
 32. Multi-line free-text authored through the CLI renders preserving its source
     line breaks: the task detail modal's long free-text fields
     (`functional_requirements`, `technical_requirements`, `acceptance_criteria`,
-    and `completion_summary`) and a sprint's `description` — shown in the sprint
-    cards on the roadmap sprints page (across all three tabs) and on the roadmap
-    sprint page — each display the author's
+    and `completion_summary`), every comment `body` shown in the modal's comments
+    timeline and in the sprint Comments card, and a sprint's `description` — shown
+    in the sprint cards on the roadmap sprints page (across all three tabs) and on
+    the roadmap sprint page — each display the author's
     newlines rather than collapsing them, while the text still wraps without forced
     horizontal scrolling and remains HTML-escaped through `html/template` (never
     rendered as raw HTML).
@@ -2344,8 +2454,8 @@ Rules:
     with a status badge), the sprint description, and the footer task count, and it
     is not expanded into an inline sprint metadata datagrid, member-tasks table, or
     per-task modals on the sprints page. The full sprint detail block (sprint status
-    summary line, metadata datagrid, and member-tasks table) is shown only on the
-    single Roadmap Sprint Page (see
+    summary line, metadata datagrid, member-tasks table, and Comments card) is shown
+    only on the single Roadmap Sprint Page (see
     [Shared Sprint-Card Partial](#shared-sprint-card-partial) and
     [Sprint Detail Sub-Template](#sprint-detail-sub-template)).
 39. At the top of the full sprint presentation on the single Roadmap Sprint Page, a
@@ -2606,6 +2716,51 @@ Rules:
     Tabler's footer row structure. These are markup-fidelity adjustments only: the
     read-only nature of the interface and the content shown are unchanged (see
     [UI Framework](#ui-framework), rule 11).
+64. The task detail modal renders the task's comments as a timeline placed after the
+    completion-summary block and last in the modal body. For a task with comments,
+    the modal contains a `<ul class="timeline">` whose `<li class="timeline-event">`
+    items appear oldest first, in the same order `rmp task comment-list` returns for
+    that task, and every comment of the task is present — no type filter and no count
+    limit (see [Task Detail Modal](#task-detail-modal)).
+65. Each timeline entry shows the comment's type as a badge, its `created_at`
+    timestamp, its `body` with the author's line breaks preserved, and — only when
+    `updated_at` is not null — the `updated_at` timestamp marking the entry as
+    edited. A comment whose `updated_at` is null shows no edited marker.
+66. The comment type badge uses the neutral `bg-secondary-lt` variant for all seven
+    type values, in both the task detail modal and the sprint Comments card. No
+    per-type colour is introduced, and the semantic mapping in
+    [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours)
+    is unchanged (Acceptance Criterion 61 continues to hold).
+67. A task with no comments opens a modal that shows a clear empty-state message in
+    place of the timeline, not an empty list and not a missing section.
+68. The Roadmap Sprint Page renders a Comments card after the member-tasks card, as
+    the last card of the sprint detail sub-template. It shows the sprint's own
+    comments oldest first, in the same order `rmp sprint comment-list` returns, with
+    a card header titled `Comments` carrying a badge with the comment count. A sprint
+    with no comments still renders the card, showing an empty-state message in place
+    of the timeline (see [Sprint Detail Sub-Template](#sprint-detail-sub-template)).
+69. The sprint Comments card shows only the sprint's own comments. A comment written
+    against a member task appears in that task's detail modal and nowhere in the
+    Comments card, and no aggregate of task comments is presented at sprint level.
+70. Rendering a page with N clickable tasks issues exactly one query for the comments
+    of all N tasks, not N queries: an instrumented count of comment queries for a
+    tasks page or a sprint page is 1 for the task comments (plus 1 for the sprint's
+    own comments on the sprint page), independent of N. A page that renders no task
+    issues no task-comment query at all (see
+    `DATABASE.md § List Comments for Many Parents (Grouped)`).
+71. The comments timeline uses only the Tabler Timeline classes already present in
+    the vendored `tabler.min.css` (`timeline`, `timeline-event`,
+    `timeline-event-icon`, `timeline-event-card`). The feature adds no CSS file, no
+    JavaScript file, and no vendored asset, and no template carries a presentational
+    inline `style` attribute for it (Acceptance Criterion 62 continues to hold).
+72. Neither the modal timeline nor the sprint Comments card contains a form, an
+    input, a button, or a link that submits a change. There is no route, no
+    endpoint, and no client-side path through which the web interface can create,
+    edit, or delete a comment; the CLI remains the sole write path.
+73. Comment text is escaped exactly as every other roadmap-derived value: a comment
+    body containing HTML control characters is rendered as text and cannot alter the
+    page structure, in the modal and in the Comments card alike (see
+    [Security and Constraints](#security-and-constraints)).
 
 ## See Also
 
@@ -2630,6 +2785,13 @@ Rules:
   `ARCHITECTURE.md § Command Lifecycle`
 - Task and Sprint fields presented in the sprints page, the tasks page, the sprint
   page, and the task detail modal → `MODELS.md` and `DATABASE.md`
+- `TaskComment` and `SprintComment` fields, the comment type values, the comment
+  read queries and their chronological ordering, and the grouped query that keeps
+  the task modals free of an N+1 read → `MODELS.md § Task Comment`,
+  `MODELS.md § Sprint Comment`, `MODELS.md § Comment Type`, and
+  `DATABASE.md § Comments`
+- CLI contract for writing and reading comments → `COMMANDS.md § Task Comments`
+  and `COMMANDS.md § Sprint Comments`
 - `AuditEntry` fields, the audit read query and its `performed_at DESC` ordering,
   and the audit result-set hard cap presented on the audit log page →
   `MODELS.md § Audit Entry`, `DATABASE.md § audit Table`, `DATABASE.md § Audit`,

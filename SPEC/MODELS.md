@@ -8,9 +8,12 @@ This document defines the Go structures and enums for Groadmap, ensuring consist
   - [Task Status](#task-status)
   - [Task Type](#task-type)
   - [Sprint Status](#sprint-status)
+  - [Comment Type](#comment-type)
 - [Structures](#structures)
   - [Task](#task)
   - [Sprint](#sprint)
+  - [Task Comment](#task-comment)
+  - [Sprint Comment](#sprint-comment)
   - [Audit Entry](#audit-entry)
   - [Roadmap (Metadata)](#roadmap-metadata)
   - [BurndownEntry](#burndownentry)
@@ -92,6 +95,62 @@ const (
 )
 ```
 
+### Comment Type
+
+Classifies a comment. There is one `CommentType` enum, with seven values. Each entity accepts a subset of it, and the application enforces the subset that applies to the entity being commented on.
+
+```go
+type CommentType string
+
+const (
+    CommentFinding    CommentType = "FINDING"
+    CommentHypothesis CommentType = "HYPOTHESIS"
+    CommentTest       CommentType = "TEST"
+    CommentDecision   CommentType = "DECISION"
+    CommentProgress   CommentType = "PROGRESS"
+    CommentUpdate     CommentType = "UPDATE"
+    CommentNote       CommentType = "NOTE"
+)
+
+// ValidTaskCommentTypes lists, in canonical order, the seven values a task
+// comment accepts.
+var ValidTaskCommentTypes = []CommentType{
+    CommentFinding, CommentHypothesis, CommentTest, CommentDecision,
+    CommentProgress, CommentUpdate, CommentNote,
+}
+
+// ValidSprintCommentTypes lists, in canonical order, the four values a sprint
+// comment accepts.
+var ValidSprintCommentTypes = []CommentType{
+    CommentFinding, CommentDecision, CommentProgress, CommentUpdate,
+}
+```
+
+**Descriptions:**
+
+| Type | Description |
+|------|-------------|
+| `FINDING` | Something discovered during the work: an observed behaviour, a measurement, a cause identified, a constraint that turned out to apply. |
+| `HYPOTHESIS` | A proposition raised to explain a problem or to guide the next step, stated before it is confirmed or refuted. |
+| `TEST` | A test that was run and what it showed. Covers both automated tests and manual verification. |
+| `DECISION` | A decision taken during the work, and the reasoning behind it. |
+| `PROGRESS` | A statement of how the work advanced: what was done, what remains. |
+| `UPDATE` | The reason behind a modification to the definition of the task or the sprint: something added, updated, removed, complemented, or clarified. |
+| `NOTE` | A remark that belongs in the log but fits none of the categories above. |
+
+**Per-entity valid subsets:**
+
+| Entity | Accepted values | Rejected values |
+|--------|-----------------|-----------------|
+| Task | `FINDING`, `HYPOTHESIS`, `TEST`, `DECISION`, `PROGRESS`, `UPDATE`, `NOTE` | none |
+| Sprint | `FINDING`, `DECISION`, `PROGRESS`, `UPDATE` | `HYPOTHESIS`, `TEST`, `NOTE` |
+
+The subsets follow from what each entity's log is for. A task comment records exclusively the work carried out within the scope of that task, which is where hypotheses, tests, and incidental notes belong. A sprint comment records only the progression of the work during the sprint's development — findings, decisions, progress, and the reason behind a change to the sprint's definition — so the three task-only values are not accepted on a sprint.
+
+The type is mandatory on every comment: there is no default value and no untyped comment. An invalid value, or a value valid for the other entity but not for this one, is rejected with exit code 6 and a message naming the valid set for the entity (see `COMMANDS.md § Add Task Comment` and `COMMANDS.md § Add Sprint Comment`). The database enforces the same subsets independently, through a `CHECK` constraint on each comment table (see `DATABASE.md § task_comments Table` and `DATABASE.md § sprint_comments Table`).
+
+The two subsets are also kept apart on the two surfaces that publish enums to a caller: each family's help lists only its own set, and the machine-readable AI Agent Contract exposes them as two enum keys, `TaskCommentType` and `SprintCommentType`, because a contract flag names exactly one enum (see `HELP.md § Comment subcommand help specifics` and `DATA_FORMATS.md § enums map entry`).
+
 ---
 
 ## Structures
@@ -111,7 +170,8 @@ Maps to the `tasks` table and `Task` JSON object.
 
 All free-text fields — `Title`, `FunctionalRequirements`, `TechnicalRequirements`,
 `AcceptanceCriteria`, `CompletionSummary`, and `Specialists` (and the `Sprint`
-`Title` and `Description` fields) — MUST reject control characters. The application rejects an
+`Title` and `Description` fields, and the `Body` field of `TaskComment` and
+`SprintComment`) — MUST reject control characters. The application rejects an
 input that contains any of the following code points, with exit code 6, before the
 value is stored:
 
@@ -204,6 +264,72 @@ type Sprint struct {
 
   See `COMMANDS.md § Create Sprint` and `COMMANDS.md § Update Sprint` for the flag that writes this field, and `HELP.md § Sprint family help specifics` for the help text that states these semantics to the caller.
 - `Order`: Required (NOT NULL), positive integer strictly greater than zero (`> 0`), and unique across every sprint in the roadmap. It records the natural, sequential execution order of sprints: the sprint with the lowest `Order` value executes first. Two sprints can never share the same `Order` value. The value is auto-assigned on creation when the caller does not supply one (see `COMMANDS.md § Create Sprint`) and can be changed while the sprint is `PENDING` or `OPEN`. Once the sprint is `CLOSED`, the `Order` value becomes immutable and can never change again, because it then represents the historical execution record (see `STATE_MACHINE.md § Sprint Order Immutability`). The JSON field name is `order`; the underlying database column is named `order_index`, because `ORDER` is a reserved SQL keyword (see `DATABASE.md § sprints Table`).
+
+### Task Comment
+Maps to the `task_comments` table and the `TaskComment` JSON object.
+
+A `TaskComment` is one entry in the durable log attached to a task. The log records exclusively the work carried out within the scope of that task: findings, hypotheses raised and tested, tests run, decisions taken, progress, the reason behind a change to the task's definition, and notes. Read oldest-first, the log shows how the work on that task progressed.
+
+**Field Length Constraints:**
+- `Body`: Required, minimum 1 character after trimming, maximum 4096 characters (`models.MaxCommentBody`)
+
+```go
+// TaskComment represents one comment attached to a task.
+// Field order optimized for memory layout (72 bytes, zero padding on 64-bit systems).
+type TaskComment struct {
+    UpdatedAt *string     `json:"updated_at"`  // ISO 8601 UTC; null until the comment is first edited
+    Type      CommentType `json:"type"`        // Mandatory classification; one of the seven task values
+    Body      string      `json:"body"`        // Comment text, 1-4096 chars
+    CreatedAt string      `json:"created_at"`  // ISO 8601 UTC, auto-set on creation, never changed
+    ID        int         `json:"id"`          // Primary key, unique within task_comments only
+    TaskID    int         `json:"task_id"`     // Owning task
+}
+```
+
+#### Task Comment Field Constraints
+
+- `Type`: Required. One of `ValidTaskCommentTypes`. There is no default: a comment without a type is rejected before it reaches the database. See [Comment Type](#comment-type).
+- `Body`: Required, maximum 4096 characters. Leading and trailing whitespace is trimmed before validation; a value that is empty after trimming counts as absent. Subject to the Free-Text Control-Character Constraint above, so the body may contain TAB, LF, and CR but no other control character.
+- `CreatedAt`: Set by the application when the comment is created and never modified afterwards.
+- `UpdatedAt`: `null` while the comment has never been edited. Every edit sets it to the edit's timestamp, so a reader can see that the stored text is no longer the text originally written. The previous text is not retained and is not recoverable; the audit log records that the edit happened, not what was replaced (see `DATABASE.md § audit Table`).
+- `ID`: Unique within `task_comments` only. Task comment ids and sprint comment ids are independent sequences.
+- `TaskID`: The owning task. A comment never changes parent, and a comment cannot exist without its parent: deleting the task deletes its comments.
+
+**No authorship.** A comment records no author. There is no author field, no `--author` flag, and no derivation of an author from the environment. This keeps the model consistent with `AuditEntry`, which records no actor either, and keeps command output deterministic.
+
+**Lifecycle independence.** Comments are accepted on a task in every status, including `COMPLETED`: a finding made after the work closed is exactly the kind of entry the log exists for. `task reopen` clears the task's lifecycle timestamps and its completion summary and does not touch its comments (see `STATE_MACHINE.md § Task State Machine`).
+
+**Not embedded in the task.** The `Task` struct carries no comment field and no comment count, and no task JSON output includes comments. Comments are read only through the comment listing commands and the read-only web interface.
+
+### Sprint Comment
+Maps to the `sprint_comments` table and the `SprintComment` JSON object.
+
+A `SprintComment` is one entry in the durable log attached to a sprint. The log records only the progression of the work during the sprint's development: findings, decisions, progress, and the reason behind a change to the sprint's definition. Detailed per-task work belongs in that task's own comments.
+
+**Field Length Constraints:**
+- `Body`: Required, minimum 1 character after trimming, maximum 4096 characters (`models.MaxCommentBody`)
+
+```go
+// SprintComment represents one comment attached to a sprint.
+// Field order optimized for memory layout (72 bytes, zero padding on 64-bit systems).
+type SprintComment struct {
+    UpdatedAt *string     `json:"updated_at"`  // ISO 8601 UTC; null until the comment is first edited
+    Type      CommentType `json:"type"`        // Mandatory classification; one of the four sprint values
+    Body      string      `json:"body"`        // Comment text, 1-4096 chars
+    CreatedAt string      `json:"created_at"`  // ISO 8601 UTC, auto-set on creation, never changed
+    ID        int         `json:"id"`          // Primary key, unique within sprint_comments only
+    SprintID  int         `json:"sprint_id"`   // Owning sprint
+}
+```
+
+#### Sprint Comment Field Constraints
+
+Every constraint stated for `TaskComment` above applies to `SprintComment`, with two differences:
+
+- `Type`: Required. One of `ValidSprintCommentTypes` — the four sprint values. `HYPOTHESIS`, `TEST`, and `NOTE` are rejected with exit code 6.
+- `SprintID`: The owning sprint, in place of `TaskID`. Deleting the sprint deletes its comments. Removing or moving a task does not affect any sprint comment.
+
+Comments are accepted on a sprint in every status, including `CLOSED`. The `Sprint` struct carries no comment field and no comment count.
 
 ### Audit Entry
 Maps to the `audit` table.
@@ -450,6 +576,28 @@ Group 3: Slice fields (2 × 24 = 48 bytes)
 Group 4: Int fields (4 × 8 = 32 bytes)
   ID, Priority, Severity, SubtaskCount
 ```
+
+**TaskComment and SprintComment structs (72 bytes each, zero padding on 64-bit):**
+```
+Group 1: Pointer field (1 × 8 = 8 bytes)
+  UpdatedAt
+
+Group 2: String fields (3 × 16 = 48 bytes)
+  Type, Body, CreatedAt
+  (Type is a string-typed enum.)
+
+Group 3: Int fields (2 × 8 = 16 bytes)
+  ID and the parent id (TaskID or SprintID)
+```
+
+The two structs have identical layouts and differ only in the name of the
+parent-id field. Every field is 8-byte aligned, so no ordering introduces
+padding, and the byte count is 72 whatever the order. What the order decides is
+the pointer-scan prefix, and that is what `fieldalignment` enforces here: with
+the `*string` first and the three string headers after it, the last word that can
+hold a pointer ends at byte 48, and the two `int` fields, which hold no pointer,
+trail. Moving `UpdatedAt` after the strings pushes that boundary to byte 56 and
+the linter rejects the struct with "struct with 56 pointer bytes could be 48".
 
 **SprintStats struct (112 bytes, zero padding on 64-bit):**
 ```

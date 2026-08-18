@@ -12,7 +12,9 @@
 //   - Conventions: SPEC/DATA_FORMATS.md § AI Agent Contract § conventions object
 //   - Exit codes:  SPEC/ARCHITECTURE.md § Exit Codes
 //   - Enums:       SPEC/MODELS.md § Enums (values + descriptions),
-//     internal/models package (canonical value lists)
+//     SPEC/DATABASE.md § `audit` Table (the canonical catalogue of
+//     audit operations, and the source of the AuditOperation
+//     descriptions), internal/models package (canonical value lists)
 package aihelp
 
 import (
@@ -110,11 +112,187 @@ var enumDescriptions = map[string]map[string]string{
 		"status":   "Sort by status (state-machine order).",
 		"severity": "Sort by severity descending.",
 	},
-	// AuditOperation values: descriptions are derived directly from
-	// the operation name (e.g. TASK_CREATE → "task creation"), so
-	// rather than duplicate every operation we leave the descriptions
-	// empty here and let the generator emit empty-string descriptions
-	// for them. The operation names themselves are self-explanatory.
+	// The comment types are published as TWO keys, not one: a
+	// flags[].enum value is a single key into this map, so the two
+	// per-entity subsets of the CommentType enum cannot share one entry
+	// without offering a sprint the three types a sprint rejects
+	// (SPEC/DATA_FORMATS.md § enums map entry). Both entries are built
+	// from one description table so the shared values are described
+	// once; see commentEnumDescriptions.
+	"TaskCommentType":   commentEnumDescriptions(models.ValidTaskCommentTypes),
+	"SprintCommentType": commentEnumDescriptions(models.ValidSprintCommentTypes),
+	// AuditOperation is transcribed from the canonical catalogue in
+	// SPEC/DATABASE.md § `audit` Table rather than left to the reader to
+	// infer from the operation name. The names carry less than they look
+	// like they do: SPRINT_TASK_MOVE_POSITION and SPRINT_REORDER_TASKS
+	// are indistinguishable by name alone, TASK_ASSIGN does not say that
+	// it is written only when the specialists list actually changes, and
+	// the six comment operations do not say that they are recorded
+	// against the parent entity. See auditOperationDescriptions.
+	"AuditOperation": auditOperationEnumDescriptions(),
+}
+
+// commentTypeDescriptions is the one description per CommentType value,
+// transcribed from the table in SPEC/MODELS.md § Comment Type. It is keyed
+// by the model constant rather than by a bare string so a renamed or
+// removed constant fails to compile here instead of silently dropping a
+// description at runtime.
+//
+// The per-entity subsets are NOT encoded here: they are derived from
+// internal/models (the same slices the rejection messages and the family
+// helps render) by commentEnumDescriptions.
+var commentTypeDescriptions = map[models.CommentType]string{
+	models.CommentFinding: "Something discovered during the work: an observed behaviour, a measurement, " +
+		"a cause identified, a constraint that turned out to apply.",
+	models.CommentHypothesis: "A proposition raised to explain a problem or to guide the next step, " +
+		"stated before it is confirmed or refuted.",
+	models.CommentTest: "A test that was run and what it showed. Covers both automated tests and " +
+		"manual verification.",
+	models.CommentDecision: "A decision taken during the work, and the reasoning behind it.",
+	models.CommentProgress: "A statement of how the work advanced: what was done, what remains.",
+	models.CommentUpdate: "The reason behind a modification to the definition of the task or the sprint: " +
+		"something added, updated, removed, complemented, or clarified.",
+	models.CommentNote: "A remark that belongs in the log but fits none of the categories above.",
+}
+
+// Suffixes stating the per-entity subset a comment type belongs to. The
+// enums map is the only place in the contract that can carry this fact —
+// EnumDefinition has no per-entity field — so it travels in the value
+// description (SPEC/MODELS.md § Comment Type, Per-entity valid subsets).
+const (
+	commentTypeBothEntities = " Accepted on both a task comment and a sprint comment."
+	commentTypeTaskOnly     = " Accepted on a task comment only; on a sprint comment it is rejected with exit code 6."
+)
+
+// commentEnumDescriptions renders the description map for one per-entity
+// comment-type subset. Membership of the sprint subset is asked of
+// internal/models rather than restated here, so the "task only" marker
+// cannot drift from the validation that enforces it.
+func commentEnumDescriptions(types []models.CommentType) map[string]string {
+	out := make(map[string]string, len(types))
+	for _, t := range types {
+		suffix := commentTypeTaskOnly
+		if models.IsValidSprintCommentType(string(t)) {
+			suffix = commentTypeBothEntities
+		}
+		out[string(t)] = commentTypeDescriptions[t] + suffix
+	}
+	return out
+}
+
+// auditOperationDescriptions is the one description per AuditOperation
+// value, transcribed from the canonical catalogue in SPEC/DATABASE.md §
+// `audit` Table — the section that declares itself canonical for the whole
+// SPEC. Each entry is that catalogue's text verbatim, with a full stop added
+// where the catalogue entry has none; the six comment operations additionally
+// receive auditCommentParentSuffix (see auditOperationEnumDescriptions).
+//
+// Transcription is deliberate but not unguarded. Copying is unavoidable —
+// the SPEC is markdown on disk and the contract must stay a self-contained
+// binary that describes itself with no repository present — so the copy is
+// pinned instead: TestGenerate_AuditOperationDescriptionsMatchSpecCatalogue
+// re-derives every one of these strings from SPEC/DATABASE.md and fails on
+// the first byte of drift, in either direction.
+//
+// Like commentTypeDescriptions above, it is keyed by the model constant
+// rather than by a bare string, so a renamed or removed AuditOperation
+// constant fails to compile here instead of silently dropping a description
+// at runtime.
+var auditOperationDescriptions = map[models.AuditOperation]string{
+	// Task lifecycle.
+	models.OpTaskCreate: "New task created.",
+	models.OpTaskUpdate: "Generic update via `task edit` (title, type, functional_requirements, " +
+		"technical_requirements, acceptance_criteria, specialists). A type change made through " +
+		"`task edit` is recorded here, not under a dedicated operation.",
+	models.OpTaskDelete: "Task deleted (only allowed while in BACKLOG; see Delete Task precondition).",
+	models.OpTaskStatusChange: "Status change (BACKLOG ↔ DOING ↔ TESTING → COMPLETED, plus COMPLETED → BACKLOG; SPRINT " +
+		"transitions are logged as `SPRINT_ADD_TASK` / `SPRINT_REMOVE_TASK`).",
+	models.OpTaskPriorityChange: "Priority change (0-9) via `task priority`.",
+	models.OpTaskSeverityChange: "Severity change (0-9) via `task severity`.",
+	models.OpTaskReopen: "Task returned to BACKLOG via `task reopen`; lifecycle timestamps and " +
+		"completion_summary cleared, and sprint_tasks row removed.",
+
+	// Sprint lifecycle.
+	models.OpSprintCreate:     "New sprint created.",
+	models.OpSprintUpdate:     "Sprint title, description, capacity, or execution order updated via `sprint update`.",
+	models.OpSprintDelete:     "Sprint deleted.",
+	models.OpSprintStart:      "Sprint started (PENDING → OPEN).",
+	models.OpSprintClose:      "Sprint closed (OPEN → CLOSED).",
+	models.OpSprintReopen:     "Sprint reopened (CLOSED → OPEN).",
+	models.OpSprintAddTask:    "Task added to sprint.",
+	models.OpSprintRemoveTask: "Task removed from sprint.",
+	models.OpSprintMoveTask:   "Task moved between sprints.",
+
+	// Sprint task ordering. These three are the clearest case against
+	// inferring a description from the name.
+	models.OpSprintReorderTasks:     "Sprint tasks reordered (set exact order).",
+	models.OpSprintTaskMovePosition: "Single task moved to specific position.",
+	models.OpSprintTaskSwap:         "Two tasks swapped positions.",
+
+	// Task specialists.
+	models.OpTaskAssign: "Specialist added to the task's specialists list via `task assign`; written only when " +
+		"the list actually changes, because assigning an already-assigned specialist is an " +
+		"idempotent no-op. A whole-list replacement made through `task edit` is recorded as " +
+		"`TASK_UPDATE` instead.",
+	models.OpTaskUnassign: "Specialist removed from the task's specialists list via `task unassign`; written only " +
+		"when the list actually changes, because removing a specialist that is not assigned is " +
+		"a no-op.",
+
+	// Task dependencies.
+	models.OpTaskAddDep:    "Dependency added (logged against both task_id and depends_on_task_id).",
+	models.OpTaskRemoveDep: "Dependency removed (logged against both task_id and depends_on_task_id).",
+
+	// Comments. The half of the rule the catalogue entries do not state —
+	// that the comment's own id never appears — is appended once by
+	// auditOperationEnumDescriptions rather than written out six times.
+	models.OpTaskCommentCreate:   "Comment added to a task via `task comment-add` (logged against the parent task).",
+	models.OpTaskCommentUpdate:   "Comment edited via `task comment-edit` (logged against the parent task).",
+	models.OpTaskCommentDelete:   "Comment deleted via `task comment-remove` (logged against the parent task).",
+	models.OpSprintCommentCreate: "Comment added to a sprint via `sprint comment-add` (logged against the parent sprint).",
+	models.OpSprintCommentUpdate: "Comment edited via `sprint comment-edit` (logged against the parent sprint).",
+	models.OpSprintCommentDelete: "Comment deleted via `sprint comment-remove` (logged against the parent sprint).",
+}
+
+// auditCommentParentSuffix completes, for the six comment operations, the rule
+// SPEC/DATABASE.md states in prose immediately below the catalogue: "They never
+// write the comment's own id and never introduce a new entity_type value." The
+// catalogue entries themselves say only that the operation is logged against the
+// parent, so an agent reading the contract alone would not learn that
+// `audit history TASK <task-id>` — never `audit history` on a comment id — is
+// how a comment's trail is retrieved.
+const auditCommentParentSuffix = " The audit entry names the parent entity; the comment's own id is never recorded."
+
+// auditCommentOperations is the set the suffix above applies to. It is a set of
+// constants rather than a name test (say, a check for "_COMMENT_" in the value)
+// so that adding a seventh comment operation is a deliberate edit here, and so
+// that renaming one of the six is a compile error rather than a silent loss of
+// the sentence.
+var auditCommentOperations = map[models.AuditOperation]bool{
+	models.OpTaskCommentCreate:   true,
+	models.OpTaskCommentUpdate:   true,
+	models.OpTaskCommentDelete:   true,
+	models.OpSprintCommentCreate: true,
+	models.OpSprintCommentUpdate: true,
+	models.OpSprintCommentDelete: true,
+}
+
+// auditOperationEnumDescriptions renders the description map for the
+// AuditOperation enum, appending the parent-entity sentence to the six comment
+// operations. It walks models.ValidAuditOperations rather than ranging over
+// auditOperationDescriptions, so an operation the code can write but nobody
+// described renders as the empty string the schema allows instead of being
+// dropped — and the contract gate that requires every value to carry a
+// description reports it.
+func auditOperationEnumDescriptions() map[string]string {
+	out := make(map[string]string, len(models.ValidAuditOperations))
+	for _, op := range models.ValidAuditOperations {
+		description := auditOperationDescriptions[op]
+		if description != "" && auditCommentOperations[op] {
+			description += auditCommentParentSuffix
+		}
+		out[string(op)] = description
+	}
+	return out
 }
 
 // stateMachineRefs maps an enum name to the SPEC reference for its
@@ -132,41 +310,41 @@ var stateMachineRefs = map[string]string{
 func enumValues(name string) []string {
 	switch name {
 	case "TaskStatus":
-		out := make([]string, 0, len(models.ValidTaskStatuses))
-		for _, v := range models.ValidTaskStatuses {
-			out = append(out, string(v))
-		}
-		return out
+		return enumStrings(models.ValidTaskStatuses)
 	case "TaskType":
-		out := make([]string, 0, len(models.ValidTaskTypes))
-		for _, v := range models.ValidTaskTypes {
-			out = append(out, string(v))
-		}
-		return out
+		return enumStrings(models.ValidTaskTypes)
 	case "SprintStatus":
-		out := make([]string, 0, len(models.ValidSprintStatuses))
-		for _, v := range models.ValidSprintStatuses {
-			out = append(out, string(v))
-		}
-		return out
+		return enumStrings(models.ValidSprintStatuses)
 	case "AuditOperation":
-		out := make([]string, 0, len(models.ValidAuditOperations))
-		for _, v := range models.ValidAuditOperations {
-			out = append(out, string(v))
-		}
-		return out
+		return enumStrings(models.ValidAuditOperations)
 	case "AuditEntityType":
 		// EntityType has no Valid* slice in internal/models. The
 		// authoritative pair is declared as constants; mirror them
 		// here in the order they appear in models/audit.go.
 		return []string{string(models.EntityTask), string(models.EntitySprint)}
 	case "TaskSort":
-		out := make([]string, 0, len(models.ValidTaskSorts))
-		for _, v := range models.ValidTaskSorts {
-			out = append(out, string(v))
-		}
-		return out
+		return enumStrings(models.ValidTaskSorts)
+	case "TaskCommentType":
+		// The two comment-type keys are the same enum narrowed to the
+		// subset its entity accepts. Each reads its own canonical slice
+		// from internal/models, which is also what the rejection message
+		// and the family help render, so the three surfaces cannot drift.
+		return enumStrings(models.ValidTaskCommentTypes)
+	case "SprintCommentType":
+		return enumStrings(models.ValidSprintCommentTypes)
 	default:
 		return nil
 	}
+}
+
+// enumStrings converts a canonical enum slice from internal/models into
+// the []string the contract emits, preserving declaration order. The type
+// parameter is constrained to string-kinded types, which is what every
+// enum in internal/models is.
+func enumStrings[T ~string](values []T) []string {
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		out = append(out, string(v))
+	}
+	return out
 }

@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
@@ -295,9 +296,106 @@ func auditStats(args []string) error {
 	return utils.PrintJSON(stats)
 }
 
+// auditOperationGroups partitions the operation enum for presentation. The
+// prefix is the entity the operation is recorded against, which is also how
+// the audit log stores it: a comment operation such as TASK_COMMENT_CREATE
+// is written against the parent task, so it belongs in the task group
+// (SPEC/DATABASE.md § audit Table).
+//
+// The last group is the catch-all. Its empty prefix matches every remaining
+// name, so an operation the earlier prefixes do not recognise still reaches
+// the help instead of being dropped silently.
+var auditOperationGroups = []struct{ label, prefix string }{
+	{"Task ops:", "TASK_"},
+	{"Sprint ops:", "SPRINT_"},
+	{"Other ops:", ""},
+}
+
+// auditOperationBlock renders the "Valid operations" body of the audit
+// family help from models.ValidAuditOperations, so a newly declared
+// operation appears in the help without a second edit here. The returned
+// string is a sequence of complete lines, each terminated by a newline; a
+// group with no members contributes no line.
+func auditOperationBlock() string {
+	// Column at which every operation list starts: the two-space block
+	// indent, the widest label, and one separating space. Derived from the
+	// labels rather than hard-coded, so renaming a label cannot misalign the
+	// continuation lines.
+	widest := 0
+	for _, g := range auditOperationGroups {
+		if len(g.label) > widest {
+			widest = len(g.label)
+		}
+	}
+	const blockIndent, labelGap = 2, 1
+	width := blockIndent + widest + labelGap
+	indent := strings.Repeat(" ", width)
+
+	grouped := make([][]string, len(auditOperationGroups))
+	for _, op := range models.ValidAuditOperations {
+		name := string(op)
+		for i, g := range auditOperationGroups {
+			if strings.HasPrefix(name, g.prefix) {
+				grouped[i] = append(grouped[i], name)
+				break
+			}
+		}
+	}
+
+	var b strings.Builder
+	for i, g := range auditOperationGroups {
+		b.WriteString(wrapEnumList(labelCell(g.label, width), indent, grouped[i]))
+	}
+	return b.String()
+}
+
+// labelCell renders one left-aligned label padded to the shared column
+// width, prefixed by the two-space block indent.
+func labelCell(label string, width int) string {
+	return "  " + label + strings.Repeat(" ", width-2-len(label))
+}
+
+// wrapEnumList renders names as a comma-separated list that starts after
+// label and wraps at maxWidth columns, continuation lines being aligned with
+// indent. An empty name list renders nothing at all, so an empty group
+// contributes no line to the help.
+func wrapEnumList(label, indent string, names []string) string {
+	const maxWidth = 79 // keeps every help line inside an 80-column terminal
+
+	var b strings.Builder
+	line := label
+	filled := false
+	for i, name := range names {
+		item := name
+		if i < len(names)-1 {
+			item += ","
+		}
+		sep := ""
+		if filled {
+			sep = " "
+		}
+		if filled && len(line)+len(sep)+len(item) > maxWidth {
+			b.WriteString(line)
+			b.WriteByte('\n')
+			line, sep = indent, ""
+		}
+		line += sep + item
+		filled = true
+	}
+	if filled {
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
 // printAuditHelp prints audit command help.
+//
+// The operation list is rendered from models.ValidAuditOperations rather
+// than typed out, so it cannot go stale: the six comment operations were
+// missing from the hand-written list this replaces.
 func printAuditHelp() {
-	fmt.Print(`Usage: rmp audit [command] [arguments] [options]
+	fmt.Printf(`Usage: rmp audit [command] [arguments] [options]
 
 Aliases: aud.
 
@@ -305,14 +403,11 @@ Valid entity types (for --entity-type filter and 'history' arg):
   TASK, SPRINT
 
 Valid operations (for --operation filter):
-  Task ops:   TASK_CREATE, TASK_UPDATE, TASK_DELETE, TASK_STATUS_CHANGE,
-              TASK_PRIORITY_CHANGE, TASK_SEVERITY_CHANGE,
-              TASK_REOPEN, TASK_ASSIGN, TASK_UNASSIGN,
-              TASK_ADD_DEP, TASK_REMOVE_DEP
-  Sprint ops: SPRINT_CREATE, SPRINT_UPDATE, SPRINT_DELETE,
-              SPRINT_START, SPRINT_CLOSE, SPRINT_REOPEN,
-              SPRINT_ADD_TASK, SPRINT_REMOVE_TASK, SPRINT_MOVE_TASK,
-              SPRINT_REORDER_TASKS, SPRINT_TASK_MOVE_POSITION, SPRINT_TASK_SWAP
+%s
+Comment operations are recorded against the PARENT entity: a task comment
+writes entity_type TASK with the owning task's id, a sprint comment writes
+entity_type SPRINT with the owning sprint's id. There is no COMMENT entity
+type and the comment's own id never appears in the audit log.
 
 Date format (--since / --until):
   ISO 8601 with millisecond precision and UTC suffix:
@@ -361,5 +456,6 @@ Examples:
   rmp audit history -r myproject TASK 1
   rmp audit history -r myproject SPRINT 3
   rmp audit stats -r myproject --since 2026-01-01T00:00:00.000Z
-`)
+  rmp audit list -r myproject -o SPRINT_COMMENT_CREATE
+`, auditOperationBlock())
 }

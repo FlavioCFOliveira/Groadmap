@@ -23,11 +23,12 @@
 // shell-executable as-is.
 package aihelp
 
-// staticWorkflows returns the six canonical workflows required by
-// SPEC/DATA_FORMATS.md § AI Agent Contract. The slice is returned
-// fresh on every call so the caller may mutate it without affecting
-// later invocations (defensive copy semantics consistent with
-// staticConventions / staticExitCodes).
+// staticWorkflows returns the canonical workflows: the six mandated by
+// SPEC/DATA_FORMATS.md § AI Agent Contract plus the curated additions for
+// surfaces the mandatory table predates (the knowledge graph, the comment
+// working log). The slice is returned fresh on every call so the caller may
+// mutate it without affecting later invocations (defensive copy semantics
+// consistent with staticConventions / staticExitCodes).
 func staticWorkflows() []Workflow {
 	return []Workflow{
 		{
@@ -196,6 +197,51 @@ func staticWorkflows() []Workflow {
 				},
 			},
 			ExpectedOutcome: "The task is in COMPLETED status, carries the supplied completion_summary, and has all three of started_at, tested_at, and closed_at set.",
+		},
+		{
+			Name: "record_task_working_log",
+			Description: "Record, as the work happens, what was tried on a task and what came of it: the hypothesis " +
+				"raised, the test that was run, the finding it produced, and the decision taken. The remaining task " +
+				"comment types are added the same way — PROGRESS for how the work advanced, UPDATE for why the task's " +
+				"definition changed, NOTE for anything else worth keeping. Use whenever an agent works a task and the " +
+				"reasoning must survive the session, so that months later the task itself answers what was tried, " +
+				"what was found and why the work went the way it did.",
+			Prerequisites: []string{
+				"Roadmap `<name>` exists.",
+				"The target task exists. Comments are accepted in every task status, including COMPLETED, and no comment changes or gates a task's status.",
+				"Each `--type` value is one of the seven task comment types (see enums.TaskCommentType); a TaskType value such as BUG is rejected with exit code 6.",
+			},
+			Steps: []WorkflowStep{
+				{
+					Command: "rmp task comment-add -r <name> <task-id> --type HYPOTHESIS --body \"<the proposition about to be tested>\"",
+					Purpose: "Record the proposition BEFORE it is confirmed or refuted, so the log shows what was expected and not only what happened. Returns the new comment's own id on stdout as {\"id\": <int>}.",
+				},
+				{
+					Command: "rmp task comment-add -r <name> <task-id> --type TEST --body \"<the test or verification that was run, and what it showed>\"",
+					Purpose: "Record the evidence gathered against the hypothesis, automated or manual.",
+				},
+				{
+					Command: "rmp task comment-add -r <name> <task-id> --type FINDING --body \"<the behaviour observed, the measurement taken, or the cause identified>\"",
+					Purpose: "Record what the work discovered. Omit --body to have the body read from standard input instead, which is how a multi-paragraph finding is supplied without shell quoting.",
+				},
+				{
+					Command: "rmp task comment-add -r <name> <task-id> --type DECISION --body \"<the decision taken and the reasoning behind it>\"",
+					Purpose: "Record the decision the finding led to, with its reasoning; this is the entry a later reader needs most.",
+				},
+				{
+					Command: "rmp task comment-edit -r <name> <comment-id> --type FINDING",
+					Purpose: "Reclassify an entry that was filed under the wrong type. The positional argument is the COMMENT's own id, as returned by comment-add, not the task's id. A type-only edit does not read standard input.",
+				},
+				{
+					Command: "rmp task comment-list -r <name> <task-id>",
+					Purpose: "Read the whole log back, oldest first, to verify the record before closing the task. Add --type <TYPE> to read one class of entry only (for example just the decisions).",
+				},
+				{
+					Command: "rmp task stat -r <name> <task-id> COMPLETED --summary \"<one-paragraph completion summary>\"",
+					Purpose: "Close the task. The completion summary states the outcome; the comment log preserves the route taken to it, and stays readable and appendable after the task is COMPLETED.",
+				},
+			},
+			ExpectedOutcome: "The task carries a chronological, typed working log — hypothesis, test, finding, decision — readable oldest-first with `task comment-list`, and that log remains attached and appendable after the task reaches COMPLETED.",
 		},
 		{
 			Name: "build_knowledge_graph",

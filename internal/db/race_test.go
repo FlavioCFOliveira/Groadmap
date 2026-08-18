@@ -329,7 +329,7 @@ func TestConcurrentAuditLogging(t *testing.T) {
 					PerformedAt: time.Now().Format(time.RFC3339),
 				}
 
-				_, err := db.LogAuditEntry(context.Background(), entry)
+				err := writeAuditEntry(db, entry)
 				if err != nil {
 					atomic.AddInt32(&errorCount, 1)
 					t.Logf("Audit logging error: %v", err)
@@ -391,7 +391,7 @@ func TestConcurrentAuditReads(t *testing.T) {
 					EntityID:    id*100 + j,
 					PerformedAt: time.Now().Format(time.RFC3339),
 				}
-				db.LogAuditEntry(context.Background(), entry)
+				_ = writeAuditEntry(db, entry)
 				time.Sleep(time.Millisecond)
 			}
 		}(i)

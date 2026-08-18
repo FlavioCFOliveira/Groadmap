@@ -61,7 +61,7 @@ The `_metadata` table records the active schema version. Migration steps and the
 
 ### Current Schema Version
 
-`SchemaVersion = "1.8.0"` (defined in `internal/db/schema.go`).
+`SchemaVersion = "1.9.0"` (defined in `internal/db/schema.go`).
 
 ### Migration Commands
 
@@ -138,11 +138,13 @@ The `ADD COLUMN` statement deliberately carries **no** column-level
 `CHECK(order_index > 0)`. SQLite evaluates a column-level `CHECK` against the
 column `DEFAULT` for every existing row at `ADD COLUMN` time, so pairing
 `DEFAULT 0` with `CHECK(order_index > 0)` would fail with "CHECK constraint
-failed" on any populated table. More generally, SQLite cannot retrofit a
-column-level `CHECK` onto an existing table through `ALTER TABLE ADD COLUMN` at
-all. The `CHECK(order_index > 0)` therefore exists **only** on freshly created
-databases, where it is part of the `sprints` `CREATE TABLE` definition (see
-`DATABASE.md § sprints Table`). On migrated databases the column carries no
+failed" on any populated table. A retrofitted column-level `CHECK` is accepted
+only when the column `DEFAULT` satisfies it — as it does for the `title` column
+added by the `1.6.0` → `1.7.0` migration above, whose `DEFAULT ''` satisfies
+`CHECK(length(title) <= 255)` — and the sentinel `DEFAULT 0` required here does
+not satisfy `> 0`. The `CHECK(order_index > 0)` therefore exists **only** on
+freshly created databases, where it is part of the `sprints` `CREATE TABLE`
+definition (see `DATABASE.md § sprints Table`). On migrated databases the column carries no
 column-level `CHECK`; the positive (`> 0`) invariant on those databases is
 upheld by the positive deterministic backfill below, the `idx_sprints_order`
 unique index, and application-level model validation on every write.
@@ -150,9 +152,9 @@ unique index, and application-level model validation on every write.
 ```sql
 -- Add the order_index column only when it does not already exist (see
 -- DATABASE.md § Migration Idempotency). When absent, run:
--- No column-level CHECK is added here: SQLite cannot add a CHECK via
--- ALTER TABLE ADD COLUMN, and a CHECK(order_index > 0) would fail against the
--- DEFAULT 0 used to satisfy NOT NULL on existing rows.
+-- No column-level CHECK is added here: SQLite evaluates a retrofitted CHECK
+-- against the column DEFAULT for every existing row, so CHECK(order_index > 0)
+-- would fail against the DEFAULT 0 used to satisfy NOT NULL on existing rows.
 ALTER TABLE sprints ADD COLUMN order_index INTEGER NOT NULL DEFAULT 0;
 
 -- Backfill a deterministic, unique, positive execution order across all sprints,
@@ -180,6 +182,68 @@ set against an already-migrated database is therefore a no-op. Fresh databases
 created at schema version 1.8.0 receive the `order_index` column and the
 `idx_sprints_order` unique index directly from the `sprints` schema definition
 and require no backfill.
+
+### Migration 1.8.0 → 1.9.0
+
+Adds the two comment tables, `task_comments` and `sprint_comments`, and the one
+index each of them needs. The migration adds no column to any existing table, so
+the `ALTER TABLE ADD COLUMN` guard specified in
+`DATABASE.md § Migration Idempotency` does not apply here. The migration is
+inherently idempotent: every `CREATE` statement carries `IF NOT EXISTS`, and the
+closing `UPDATE _metadata` writes the same literal on every run.
+
+There is no backfill. Comments are new data with no pre-existing source, so an
+already-populated database migrates to two empty tables, and every existing task
+and sprint simply has no comments until one is written.
+
+```sql
+-- Task comments. The CHECK enumerates exactly the seven types a task comment
+-- accepts (see DATABASE.md § task_comments Table).
+CREATE TABLE IF NOT EXISTS task_comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL,
+    type TEXT NOT NULL CHECK(type IN ('FINDING', 'HYPOTHESIS', 'TEST', 'DECISION', 'PROGRESS', 'UPDATE', 'NOTE')),
+    body TEXT NOT NULL CHECK(length(body) <= 4096),
+    created_at TEXT NOT NULL,
+    updated_at TEXT,
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_comments_task_created ON task_comments(task_id, created_at ASC);
+
+-- Sprint comments. The CHECK enumerates exactly the four types a sprint comment
+-- accepts (see DATABASE.md § sprint_comments Table).
+CREATE TABLE IF NOT EXISTS sprint_comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sprint_id INTEGER NOT NULL,
+    type TEXT NOT NULL CHECK(type IN ('FINDING', 'DECISION', 'PROGRESS', 'UPDATE')),
+    body TEXT NOT NULL CHECK(length(body) <= 4096),
+    created_at TEXT NOT NULL,
+    updated_at TEXT,
+    FOREIGN KEY (sprint_id) REFERENCES sprints(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_sprint_comments_sprint_created ON sprint_comments(sprint_id, created_at ASC);
+
+-- Update schema version
+UPDATE _metadata SET value = '1.9.0' WHERE key = 'schema_version';
+```
+
+Unlike the `1.8.0` migration, this one creates whole tables rather than
+retrofitting a column onto a populated one, so the `CHECK` constraints stated
+above are present on migrated databases exactly as they are on fresh ones: the
+`CREATE TABLE` statement is the same statement in both cases, and there are no
+existing rows for a new constraint to be evaluated against. Migrated and freshly
+created databases therefore end up with identical comment tables, and the
+application-level validation described in
+`COMMANDS.md § Comment Field Constraints` is a first line of defence rather than
+the only one.
+
+The two tables reference `tasks(id)` and `sprints(id)` with `ON DELETE CASCADE`,
+which SQLite enforces only when `foreign_keys` is on. That PRAGMA is connection
+scoped and is carried in the DSN of every connection the application opens (see
+`IMPLEMENTATION.md § Where Each PRAGMA Is Applied`), so deleting a task or a
+sprint deletes its comments.
 
 ## Release Process
 

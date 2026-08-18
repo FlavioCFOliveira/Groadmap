@@ -305,3 +305,91 @@ func TestHandleGraphData_CacheControlOnError(t *testing.T) {
 		t.Errorf("Content-Type = %q, want %q", ct, contentTypeJSON)
 	}
 }
+
+// TestHandleGraphData_RejectsSpoofedDDLKeywords is the HTTP-level regression for
+// the guard-rail bypass a security audit proved end to end: a DDL keyword
+// spelled with a non-ASCII letter that Unicode UPPERCASING maps onto ASCII
+// (U+0131 dotless i uppercases to 'I') was not seen as DDL by the guard rail's
+// case-insensitive regexp, while the engine's own dispatcher — which decides on
+// strings.ToUpper — routed it straight to its DDL executor.
+//
+// The proven consequence was that an unauthenticated GET on this read-only
+// endpoint executed schema DDL: "CREATE <U+0131>NDEX evil FOR (n:Bulk) ON (n.i)"
+// answered 200, and the DROP form reached exec.DropIndex. Every such form must
+// now be refused before execution, with the same classification as any other
+// write, and the store must be untouched.
+func TestHandleGraphData_RejectsSpoofedDDLKeywords(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name := seedRoadmap(t, "web-ui-rollout")
+	seedGraph(t, name, graphSeedQueries()...)
+
+	spoofed := []string{
+		"CREATE ıNDEX evil FOR (n:Spec) ON (n.key)",
+		"CREATE ıNDEX IF NOT EXISTS evil FOR (n:Spec) ON (n.key)",
+		"DROP ıNDEX evil",
+		"drop ındex evil",
+		"CREATE CONSTRAıNT c1 FOR (n:Spec) REQUIRE n.key IS UNIQUE",
+		"DROP CONSTRAıNT c1",
+		"CREATE CONſTRAINT c1 FOR (n:Spec) REQUIRE n.key IS UNIQUE",
+		// Combined with the trailing-comment trick that used to swallow the
+		// injected LIMIT, which is how the DDL reached the engine intact.
+		"CREATE ıNDEX evil FOR (n:Spec) ON (n.key) //",
+	}
+
+	for _, q := range spoofed {
+		t.Run(q, func(t *testing.T) {
+			rec := doGraphData(t, name, url.Values{"q": {q}})
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400: schema DDL must never execute on the read-only endpoint; body=%q", rec.Code, rec.Body.String())
+			}
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decoding error body: %v", err)
+			}
+			if body["kind"] != graphErrNotReadOnly {
+				t.Errorf("kind = %v, want %q (rejected by the guard rail, not by the engine); body=%q", body["kind"], graphErrNotReadOnly, rec.Body.String())
+			}
+		})
+	}
+
+	// The store is unchanged: the default read still returns the seeded graph.
+	rec := doGraphData(t, name, nil)
+	var view graphView
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatalf("decoding post-rejection read: %v", err)
+	}
+	if len(view.Nodes) != 3 {
+		t.Errorf("after rejected DDL, nodes = %d, want 3 (store must be unchanged)", len(view.Nodes))
+	}
+}
+
+// TestHandleGraphData_LimitAppliesDespiteTrailingComment is the HTTP-level
+// regression for the node-limit bypass: the endpoint appended its LIMIT clause
+// on the same line as the user's query, so a query ending in a line comment
+// swallowed it and the endpoint returned the WHOLE graph instead of the resolved
+// limit (proven against a 252-node store, which returned all 252 nodes).
+func TestHandleGraphData_LimitAppliesDespiteTrailingComment(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name := seedRoadmap(t, "web-ui-rollout")
+	seedGraph(t, name, `UNWIND range(1,120) AS i CREATE (:Bulk {i:i})`)
+
+	for _, q := range []string{
+		"MATCH (n) RETURN n //",
+		"MATCH (n) RETURN n // show everything",
+		"MATCH (n) RETURN n\n// trailing comment line",
+	} {
+		t.Run(q, func(t *testing.T) {
+			rec := doGraphData(t, name, url.Values{"q": {q}, "limit": {"50"}})
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%q", rec.Code, rec.Body.String())
+			}
+			var view graphView
+			if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+				t.Fatalf("decoding: %v", err)
+			}
+			if len(view.Nodes) != 50 {
+				t.Errorf("nodes = %d, want 50: the resolved limit must apply even when the query ends in a comment", len(view.Nodes))
+			}
+		})
+	}
+}

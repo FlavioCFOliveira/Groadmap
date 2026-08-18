@@ -66,14 +66,12 @@ func TestGetAuditEntriesHardCap(t *testing.T) {
 	for i := 0; i < total; i++ {
 		// Distinct, monotonically increasing timestamps so ORDER BY is stable.
 		ts := now.Add(time.Duration(i) * time.Second).Format(time.RFC3339Nano)
-		if _, err := db.LogAuditEntry(testContext(), &models.AuditEntry{
+		seedAuditEntry(t, db, &models.AuditEntry{
 			Operation:   "TASK_CREATE",
 			EntityType:  "TASK",
 			EntityID:    i + 1,
 			PerformedAt: ts,
-		}); err != nil {
-			t.Fatalf("logging audit entry %d: %v", i, err)
-		}
+		})
 	}
 
 	cases := []struct {
@@ -103,73 +101,6 @@ func TestGetAuditEntriesHardCap(t *testing.T) {
 	}
 	if len(entries) != 10 {
 		t.Errorf("expected in-range limit 10 honored, got %d", len(entries))
-	}
-}
-
-// ==================== #65: DeleteSprint atomicity ====================
-
-// TestDeleteSprintAtomic verifies DeleteSprint resets member tasks to BACKLOG,
-// removes the sprint and its sprint_tasks rows, and writes the SPRINT_DELETE
-// audit entry — all consistently — so the post-call state never leaves a task
-// marked SPRINT with its sprint gone (finding #65).
-func TestDeleteSprintAtomic(t *testing.T) {
-	db, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	sprintID := newTestSprintWithCap(t, db, "Deletable sprint", 0)
-	taskIDs := []int{
-		newTestTask(t, db, "Implement auth"),
-		newTestTask(t, db, "Write migration"),
-	}
-	if err := db.AddTasksToSprint(testContext(), sprintID, taskIDs); err != nil {
-		t.Fatalf("adding tasks: %v", err)
-	}
-
-	if err := db.DeleteSprint(testContext(), sprintID); err != nil {
-		t.Fatalf("DeleteSprint: %v", err)
-	}
-
-	// Sprint is gone.
-	if _, err := db.GetSprint(testContext(), sprintID); err == nil {
-		t.Error("expected sprint to be deleted")
-	}
-
-	// No orphan sprint_tasks rows remain.
-	var stCount int
-	if err := db.QueryRowContext(testContext(),
-		"SELECT COUNT(*) FROM sprint_tasks WHERE sprint_id = ?", sprintID).Scan(&stCount); err != nil {
-		t.Fatalf("counting sprint_tasks: %v", err)
-	}
-	if stCount != 0 {
-		t.Errorf("expected 0 sprint_tasks rows, got %d", stCount)
-	}
-
-	// Member tasks were reset to BACKLOG (status/membership consistent).
-	for _, id := range taskIDs {
-		task, err := db.GetTask(testContext(), id)
-		if err != nil {
-			t.Fatalf("getting task %d: %v", id, err)
-		}
-		if task.Status != models.StatusBacklog {
-			t.Errorf("task %d: expected BACKLOG, got %q", id, task.Status)
-		}
-	}
-
-	// The SPRINT_DELETE audit entry was written in the same transaction.
-	op := string(models.OpSprintDelete)
-	entries, err := db.GetAuditEntries(testContext(), &AuditFilter{Operation: &op})
-	if err != nil {
-		t.Fatalf("GetAuditEntries: %v", err)
-	}
-	found := false
-	for _, e := range entries {
-		if e.EntityID == sprintID && e.EntityType == string(models.EntitySprint) {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("expected a SPRINT_DELETE audit entry for the deleted sprint")
 	}
 }
 

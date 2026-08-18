@@ -458,10 +458,7 @@ func TestGetEntityHistory(t *testing.T) {
 		EntityID:    taskID,
 		PerformedAt: time.Now().Format(time.RFC3339),
 	}
-	_, err = db.LogAuditEntry(context.Background(), entry)
-	if err != nil {
-		t.Fatalf("failed to log audit entry: %v", err)
-	}
+	seedAuditEntry(t, db, entry)
 
 	// Get entity history
 	history, err := db.GetEntityHistory(context.Background(), "TASK", taskID)

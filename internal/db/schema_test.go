@@ -25,7 +25,10 @@ func TestCreateSchema(t *testing.T) {
 	}
 
 	// Verify tables exist
-	tables := []string{"tasks", "sprints", "sprint_tasks", "audit", "_metadata", "task_dependencies"}
+	tables := []string{
+		"tasks", "sprints", "sprint_tasks", "audit", "_metadata", "task_dependencies",
+		"task_comments", "sprint_comments",
+	}
 	for _, table := range tables {
 		var name string
 		err := sqlDB.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&name)
@@ -35,6 +38,26 @@ func TestCreateSchema(t *testing.T) {
 		if name != table {
 			t.Errorf("expected table %s, got %s", table, name)
 		}
+	}
+}
+
+// TestSchemaVersionConstant pins the SchemaVersion constant to the version
+// SPEC/VERSION.md § Current Schema Version declares. Bumping the constant
+// without the corresponding migration (or the reverse) fails here.
+func TestSchemaVersionConstant(t *testing.T) {
+	const want = "1.9.0"
+	if SchemaVersion != want {
+		t.Errorf("SchemaVersion = %q, want %q (SPEC/VERSION.md § Current Schema Version)", SchemaVersion, want)
+	}
+
+	// The newest registered migration must target the current version: a fresh
+	// database and a fully migrated one must land on the same schema.
+	if len(migrations) == 0 {
+		t.Fatal("no migrations registered")
+	}
+	if last := migrations[len(migrations)-1].Version; last != want {
+		t.Errorf("newest migration targets %q, want %q: a database migrated to the newest "+
+			"migration must reach SchemaVersion", last, want)
 	}
 }
 
@@ -63,8 +86,8 @@ func TestSchemaVersion(t *testing.T) {
 		t.Fatalf("failed to get schema version: %v", err)
 	}
 
-	if version != "1.8.0" {
-		t.Errorf("expected schema version 1.8.0, got %s", version)
+	if version != SchemaVersion {
+		t.Errorf("expected schema version %s, got %s", SchemaVersion, version)
 	}
 }
 

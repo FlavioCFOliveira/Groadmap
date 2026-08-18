@@ -3,10 +3,11 @@ package commands
 
 func buildSprintCommand() Command {
 	return Command{
-		Name:          "sprint",
-		Aliases:       []string{"s"},
-		Summary:       "Manage sprints and their task membership/ordering.",
-		Description:   "Create, list, query, mutate, and order sprints and their task assignments.",
+		Name:    "sprint",
+		Aliases: []string{"s"},
+		Summary: "Manage sprints and their task membership/ordering.",
+		Description: "Create, list, query, mutate, and order sprints and their task assignments, and keep each " +
+			"sprint's append-oriented comment log (the comment-* subcommands).",
 		HelpPrinter:   printSprintHelp,
 		HasSubcommand: true,
 		Prerequisites: []string{"An existing roadmap selected via -r/--roadmap."},
@@ -449,6 +450,163 @@ func buildSprintCommand() Command {
 					{Title: "Sprint not found", Cmd: "rmp sprint bottom -r myproject 99999 7", Stderr: "Error: resource not found: sprint 99999", Exit: 4},
 				},
 			},
+			sprintCommentAddSubcommand(),
+			sprintCommentListSubcommand(),
+			sprintCommentEditSubcommand(),
+			sprintCommentRemoveSubcommand(),
+		},
+	}
+}
+
+// The four comment subcommands of the sprint family (SPEC/COMMANDS.md § Sprint
+// Comments). They are declared in their own constructors for the same reason the
+// task ones are: each carries a long, self-contained contract that would bury the
+// surrounding entries if inlined.
+//
+// The type descriptions name SprintCommentType, the enum that carries the FOUR
+// sprint values. The sibling task subcommands name TaskCommentType and carry seven:
+// the two sets are never conflated into one enum shared by both families
+// (SPEC/HELP.md § Comment subcommand help specifics item 1).
+
+// sprintCommentTypeDescription is the `--type` contract text shared by the four
+// subcommands, with the per-subcommand role prefixed by the caller.
+//
+// Unlike the task family, `-y, --type` carries nothing else anywhere in the sprint
+// family, so what has to be said is the opposite of the task family's warning: the
+// flag has one meaning here, and the values it does NOT accept are the three
+// task-only ones (SPEC/COMMANDS.md § Sprint Comments).
+const sprintCommentTypeDescription = "It always means a comment type in the sprint family, which uses -y, --type for " +
+	"nothing else; the task-only values HYPOTHESIS, TEST and NOTE are rejected with exit code 6."
+
+func sprintCommentAddSubcommand() Subcommand {
+	return Subcommand{
+		Name: "comment-add", Aliases: []string{"c-add"},
+		Summary:     "Add one typed comment to a sprint's log.",
+		Description: "Adds one comment to the given sprint, stored with its type, its body and a creation timestamp; updated_at starts null. The log records how the sprint itself went — findings, decisions, progress and the reason behind a change to its definition — not the work done inside one task, which belongs in that task's comments. Comments are accepted in every sprint status, including CLOSED, and no comment changes or gates a sprint's status.",
+		Usage:       "rmp sprint comment-add -r <roadmap> <sprint-id> --type <TYPE> [--body <text>]",
+		HelpPrinter: printSprintCommentAddHelp,
+		Handler:     sprintCommentAdd,
+		ReadsStdin:  true,
+		Positional: []Argument{
+			{Name: "sprint-id", Type: "integer", Required: true, Description: "Integer id of the sprint the comment is attached to."},
+		},
+		Flags: []Flag{
+			sharedRoadmapFlag(),
+			commentTypeFlag("SprintCommentType", "REQUIRED. Comment type. "+sprintCommentTypeDescription, true),
+			commentBodyFlag("Comment text, max 4096 characters. When the flag is absent the body is read from standard input under a bounded read; supplying neither is an error (exit code 2)."),
+			helpFlag(),
+		},
+		Output:      SuccessOutput{Kind: "object", Schema: `{"id": <int>} — the id of the created comment.`, Example: `{"id":4}`},
+		SideEffects: SideEffects{Database: "INSERT into sprint_comments plus a SPRINT_COMMENT_CREATE audit entry against the parent sprint; one transaction.", Filesystem: "None.", Network: "None."},
+		Idempotent:  false,
+		ExitCodes:   []int{0, 1, 2, 3, 4, 6},
+		Examples: []Example{
+			{
+				Title:  "Record a sprint-level decision",
+				Cmd:    `rmp sprint comment-add -r myproject 3 --type DECISION --body "Dropped the second migration from the sprint: the schema change it needed is only settled once the expiry work lands."`,
+				Stdout: `{"id":4}`,
+				Exit:   0,
+			},
+			{
+				Title:  "Body from a pipe (no --body)",
+				Cmd:    `cat sprint-retro.txt | rmp sprint comment-add -r myproject 3 --type PROGRESS`,
+				Stdout: `{"id":5}`,
+				Exit:   0,
+			},
+			{
+				Title:  "Task-only type refused on a sprint",
+				Cmd:    `rmp sprint comment-add -r myproject 3 --type HYPOTHESIS --body "..."`,
+				Stderr: `Error: validation error: invalid comment type "HYPOTHESIS" for a sprint comment; valid types: FINDING, DECISION, PROGRESS, UPDATE`,
+				Exit:   6,
+			},
+			{
+				Title:  "No body from either source",
+				Cmd:    `rmp sprint comment-add -r myproject 3 --type UPDATE < /dev/null`,
+				Stderr: "Error: required parameter missing: no comment body supplied",
+				Exit:   2,
+			},
+		},
+	}
+}
+
+func sprintCommentListSubcommand() Subcommand {
+	return Subcommand{
+		Name: "comment-list", Aliases: []string{"c-ls"},
+		Summary:     "List a sprint's comments, oldest first.",
+		Description: "Returns every comment of the given sprint in the order the work happened: created_at ascending, with the comment id as the tie-breaker. Read top to bottom, it is the account of how the sprint went. The result set is unbounded — there is no --limit, no --desc and no pagination.",
+		Usage:       "rmp sprint comment-list -r <roadmap> <sprint-id> [--type <TYPE>]",
+		HelpPrinter: printSprintCommentListHelp,
+		Handler:     sprintCommentList,
+		Positional: []Argument{
+			{Name: "sprint-id", Type: "integer", Required: true, Description: "Integer id of the sprint whose comments are listed."},
+		},
+		Flags: []Flag{
+			sharedRoadmapFlag(),
+			commentTypeFlag("SprintCommentType", "Optional filter: return only the comments of this type. "+sprintCommentTypeDescription, false),
+			helpFlag(),
+		},
+		Output:      SuccessOutput{Kind: "array", Schema: "Array of sprint-comment objects (id, sprint_id, type, body, created_at, updated_at); [] when the sprint has no comments or none of the requested type.", Example: `[{"id":4,"sprint_id":3,"type":"DECISION","body":"...","created_at":"2026-03-12T11:15:00.000Z","updated_at":null}]`},
+		SideEffects: SideEffects{Database: "Read-only.", Filesystem: "None.", Network: "None."},
+		Idempotent:  true,
+		ExitCodes:   []int{0, 2, 3, 4, 6},
+		Examples: []Example{
+			{Title: "Whole sprint log", Cmd: "rmp sprint comment-list -r myproject 3", Exit: 0},
+			{Title: "Decisions only", Cmd: "rmp sprint comment-list -r myproject 3 --type DECISION", Exit: 0},
+			{Title: "Unknown sprint", Cmd: "rmp sprint comment-list -r myproject 99999", Stderr: "Error: resource not found: sprint 99999 not found", Exit: 4},
+		},
+	}
+}
+
+func sprintCommentEditSubcommand() Subcommand {
+	return Subcommand{
+		Name: "comment-edit", Aliases: []string{"c-edit"},
+		Summary:     "Change the type and/or body of one sprint comment.",
+		Description: "Edits one existing sprint comment, identified by the comment's own id, and stamps updated_at. At least one of --type and --body is required: unlike sprint update, this command does not succeed as a no-op. The previous body is not retained anywhere — the audit log records that an edit happened, not what it replaced.",
+		Usage:       "rmp sprint comment-edit -r <roadmap> <comment-id> [--type <TYPE>] [--body <text>]",
+		HelpPrinter: printSprintCommentEditHelp,
+		Handler:     sprintCommentEdit,
+		ReadsStdin:  true,
+		Positional: []Argument{
+			{Name: "comment-id", Type: "integer", Required: true, Description: "Integer id of the COMMENT itself, not of the sprint it belongs to; sprint and task comment ids are separate sequences."},
+		},
+		Flags: []Flag{
+			sharedRoadmapFlag(),
+			commentTypeFlag("SprintCommentType", "New comment type. "+sprintCommentTypeDescription, false),
+			commentBodyFlag("New comment text, max 4096 characters. When --body is absent AND --type is absent, the new body is read from standard input under a bounded read; when --type is present and --body is absent, the body is left unchanged and standard input is not read, so a type-only edit never waits for input."),
+			helpFlag(),
+		},
+		Output:      SuccessOutput{Kind: "empty"},
+		SideEffects: SideEffects{Database: "UPDATE sprint_comments plus a SPRINT_COMMENT_UPDATE audit entry against the parent sprint; one transaction.", Filesystem: "None.", Network: "None."},
+		Idempotent:  true,
+		ExitCodes:   []int{0, 1, 2, 3, 4, 6},
+		Examples: []Example{
+			{Title: "Reclassify", Cmd: "rmp sprint comment-edit -r myproject 4 --type UPDATE", Exit: 0},
+			{Title: "Replace the body from a file", Cmd: "rmp sprint comment-edit -r myproject 4 < revised.txt", Exit: 0},
+			{Title: "Nothing requested", Cmd: "rmp sprint comment-edit -r myproject 4 < /dev/null", Stderr: "Error: required parameter missing: at least one of --type or --body is required", Exit: 2},
+			{Title: "Unknown comment", Cmd: `rmp sprint comment-edit -r myproject 99999 --type UPDATE`, Stderr: "Error: resource not found: sprint comment 99999 not found", Exit: 4},
+		},
+	}
+}
+
+func sprintCommentRemoveSubcommand() Subcommand {
+	return Subcommand{
+		Name: "comment-remove", Aliases: []string{"c-rm"},
+		Summary:     "Delete one sprint comment (irreversible).",
+		Description: "Deletes one sprint comment, identified by the comment's own id. The row is removed outright: there is no soft delete and no recovery. The audit entry outlives the row, so the sprint's history still records that a comment existed and was removed. Exactly one id is accepted — no comma-separated list.",
+		Usage:       "rmp sprint comment-remove -r <roadmap> <comment-id>",
+		HelpPrinter: printSprintCommentRemoveHelp,
+		Handler:     sprintCommentRemove,
+		Positional: []Argument{
+			{Name: "comment-id", Type: "integer", Required: true, Description: "Integer id of the COMMENT itself, not of the sprint it belongs to; sprint and task comment ids are separate sequences."},
+		},
+		Flags:       []Flag{sharedRoadmapFlag(), helpFlag()},
+		Output:      SuccessOutput{Kind: "empty"},
+		SideEffects: SideEffects{Database: "DELETE from sprint_comments plus a SPRINT_COMMENT_DELETE audit entry against the parent sprint; one transaction.", Filesystem: "None.", Network: "None."},
+		Idempotent:  false,
+		ExitCodes:   []int{0, 1, 2, 3, 4},
+		Examples: []Example{
+			{Title: "Remove a comment", Cmd: "rmp sprint comment-remove -r myproject 4", Exit: 0},
+			{Title: "Unknown comment", Cmd: "rmp sprint comment-remove -r myproject 99999", Stderr: "Error: resource not found: sprint comment 99999 not found", Exit: 4},
 		},
 	}
 }

@@ -14,6 +14,7 @@ package commands
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
@@ -175,6 +176,72 @@ func TestValidateGuardRailRejectsDDL(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("expected acceptance (nil error), got %v", err)
+			}
+		})
+	}
+}
+
+// TestValidateGuardRailRejectsSpoofedDDLKeywords is the CLI-side regression for
+// the guard-rail bypass a security audit proved end to end: a DDL keyword whose
+// letters include a non-ASCII code point that Unicode UPPERCASING maps onto the
+// ASCII letter (U+0131 dotless i uppercases to 'I', U+017F long s uppercases to
+// 'S') was invisible to a case-insensitive regexp, which folds rather than
+// uppercases — while the engine's dispatcher decides on strings.ToUpper and
+// routed the statement to its DDL executor.
+//
+// Proven before the fix: `rmp graph query -q "CREATE <U+0131>NDEX idx FOR
+// (n:Seed) ON (n.k)"` exited 0 with the empty DDL result, and the DROP form
+// reached exec.DropIndex. Both read subcommands must refuse every such form with
+// the pinned read-path message, and no write subcommand may accept it either.
+func TestValidateGuardRailRejectsSpoofedDDLKeywords(t *testing.T) {
+	spoofed := []string{
+		"CREATE ıNDEX idx FOR (n:Spec) ON (n.key)",
+		"CREATE ıNDEX IF NOT EXISTS idx FOR (n:Spec) ON (n.key)",
+		"DROP ıNDEX idx",
+		"drop ındex idx",
+		"CREATE CONSTRAıNT c1 FOR (n:Spec) REQUIRE n.key IS UNIQUE",
+		"DROP CONSTRAıNT c1",
+		"CREATE CONſTRAINT c1 FOR (n:Spec) REQUIRE n.key IS UNIQUE",
+	}
+
+	for _, query := range spoofed {
+		for _, sub := range []struct{ name, allowed, wantMsg string }{
+			{name: "query", allowed: "read-only", wantMsg: "graph query accepts only read-only queries"},
+			{name: "search", allowed: "read-only", wantMsg: "graph search accepts only read-only queries"},
+			{name: "create", allowed: "CREATE/MERGE", wantMsg: "graph create accepts only CREATE/MERGE queries"},
+			{name: "update", allowed: "SET/REMOVE", wantMsg: "graph update accepts only SET/REMOVE queries"},
+			{name: "delete", allowed: "DELETE/DETACH DELETE", wantMsg: "graph delete accepts only DELETE/DETACH DELETE queries"},
+		} {
+			t.Run(sub.name+": "+query, func(t *testing.T) {
+				err := validateGuardRail(sub.name, sub.allowed, query)
+				if err == nil {
+					t.Fatalf("validateGuardRail(%q, %q) = nil, want a rejection: the engine executes this as schema DDL", sub.name, query)
+				}
+				if !errors.Is(err, utils.ErrValidation) {
+					t.Errorf("error = %v, want utils.ErrValidation (exit code 6)", err)
+				}
+				if got := err.Error(); !strings.Contains(got, sub.wantMsg) {
+					t.Errorf("message = %q, want it to contain %q", got, sub.wantMsg)
+				}
+			})
+		}
+	}
+}
+
+// TestValidateGuardRailKeepsUnicodeReadsAccepted is the other half: a read whose
+// identifiers merely CONTAIN those code points must still be accepted, so the
+// stricter classification cannot be mistaken for a blanket ban on non-ASCII.
+func TestValidateGuardRailKeepsUnicodeReadsAccepted(t *testing.T) {
+	reads := []string{
+		"MATCH (n:Yazılım) RETURN n",
+		"MATCH (n:Spec) WHERE n.başlık = 'auth' RETURN n.key",
+		"MATCH (n:Spec) WHERE n.note = 'CREATE ıNDEX idx' RETURN n",
+		"MATCH (n) RETURN n // CREATE ıNDEX idx",
+	}
+	for _, query := range reads {
+		t.Run(query, func(t *testing.T) {
+			if err := validateGuardRail("query", "read-only", query); err != nil {
+				t.Errorf("validateGuardRail(query, %q) = %v, want nil: an ordinary read must stay admissible", query, err)
 			}
 		})
 	}
