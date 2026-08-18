@@ -1082,9 +1082,9 @@ how the `rmp web` process itself terminates.
   distribution ships no board or Kanban component, so the column strip's own
   layout and scrolling rules live in `static/style.css`, which is the specified
   home for project styling no Tabler class covers (see
-  [UI Framework](#ui-framework), rule 10). The page keeps the admin shell, the
-  page header, and the footer that every other page uses, unchanged and still
-  governed by [UI Framework](#ui-framework), rules 11 to 18.
+  [UI Framework](#ui-framework), rule 10). The page keeps the admin shell and the
+  page header that every other page uses, unchanged and still governed by
+  [UI Framework](#ui-framework), rules 11 to 18.
 - **Relationships shown.** The page surfaces, in a read-only view, the
   relationships already modelled in the data, and each one is surfaced in a
   specific place:
@@ -1225,7 +1225,7 @@ how the `rmp web` process itself terminates.
 - **Empty state.** When the roadmap's audit log is empty, the page renders
   successfully (HTTP 200) with a clear empty-state message and shows **page 1 of 1**.
   An empty audit log is not an error.
-- **Pagination controls.** The page footer shows a read-only **numbered
+- **Pagination controls.** The audit card's footer shows a read-only **numbered
   pagination bar** in the Tabler style (the first option at
   `https://preview.tabler.io/pagination.html`), rendered in the shape
   `‹ 1 … 4 5 6 … 20 ›`. Each visible page number is a `GET` link to that page
@@ -1253,7 +1253,8 @@ how the `rmp web` process itself terminates.
      hidden page.
   5. When the total page count is small enough that the anchors and the window
      already cover every page, every page number is shown and no ellipsis appears.
-- **"Page X of Y" indicator.** The page footer keeps the textual "Page X of Y"
+- **"Page X of Y" indicator.** The audit card's footer keeps the textual
+  "Page X of Y"
   indicator alongside the numbered pagination bar. It is a read-only, accessible
   affordance that states the current page and the total page count in words; it
   reflects the same `page` value and `TotalPages` total as the numbered bar.
@@ -2505,8 +2506,6 @@ read from the host filesystem at runtime.
       alignment classes, as the Tabler page-header example does.
     - **The sidebar brand** uses the Tabler `<h1 class="navbar-brand
       navbar-brand-autodark">` element, as the Tabler vertical-navbar example does.
-    - **The footer** follows Tabler's footer row structure, as the Tabler footer
-      example does.
     These adjustments only align the markup with the Tabler examples; they introduce
     no new page, no new content, and no write path, and the pages remain read-only.
 12. **Admin-shell element order.** Tabler places the top navbar as a direct child
@@ -2520,10 +2519,13 @@ read from the host filesystem at runtime.
     general sibling selector matches only elements that follow the `<aside>` at the
     same level. The templates MUST therefore place, inside `<div class="page">` and
     in this order: the sidebar `<aside>`, the top `<header>`, and then
-    `<div class="page-wrapper">`, which holds the page header, the page body, and
-    the footer. A template MUST NOT nest the top `<header>` inside
+    `<div class="page-wrapper">`, which holds the page header and the page body. A
+    template MUST NOT nest the top `<header>` inside
     `<div class="page-wrapper">`, and the top navbar carries `d-print-none` as the
     Tabler shell does.
+
+    The shell carries **no footer**. No page renders a `<footer>` element, so the
+    page body is the last region inside `<div class="page-wrapper">` on every page.
 13. **One sidebar collapse, one toggler, one brand.** Tabler's vertical navbar
     holds its collapsible menu region inside the sidebar `<aside>`, identified by
     `class="collapse navbar-collapse"` and `id="sidebar-menu"`, and gives that
@@ -2581,7 +2583,7 @@ read from the host filesystem at runtime.
     width on its own, which leaves the `layout-fluid` body class with nothing to act
     on and silently drops the idiom. The templates MUST therefore carry
     `layout-fluid` on `<body>` and use `container-xl` for the shell containers: the
-    top navbar, the page header, the page body, and the footer. The
+    top navbar, the page header, and the page body. The
     `container-fluid` inside the sidebar `<aside>` is Tabler's own vertical-navbar
     markup and stays exactly as Tabler ships it.
 18. **The page body is a `main` landmark.** Tabler's built admin shell renders the
@@ -3415,7 +3417,7 @@ Rules:
     out-of-range or unparseable `page` value. When the audit log is empty, the page
     returns HTTP 200 with a clear empty-state message and shows page 1 of 1 (see
     [Roadmap Audit Log Page](#roadmap-audit-log-page)).
-59. The audit log page footer shows read-only Previous and Next navigation controls
+59. The audit card's footer shows read-only Previous and Next navigation controls
     and a "Page X of Y" indicator, using accessible Tabler pagination markup. The
     Previous control is disabled or absent on the first page and the Next control is
     disabled or absent on the last page. The controls are `GET` links that change
@@ -3463,9 +3465,9 @@ Rules:
     define (see [UI Framework](#ui-framework), rule 10).
 63. The templates follow Tabler's markup idioms in the minor markup-fidelity places:
     page-header rows use Tabler's `row g-2 align-items-center` gutter and alignment
-    classes, the sidebar brand uses the Tabler
-    `<h1 class="navbar-brand navbar-brand-autodark">` element, and the footer follows
-    Tabler's footer row structure. These are markup-fidelity adjustments only: the
+    classes, and the sidebar brand uses the Tabler
+    `<h1 class="navbar-brand navbar-brand-autodark">` element. These are
+    markup-fidelity adjustments only: the
     read-only nature of the interface and the content shown are unchanged (see
     [UI Framework](#ui-framework), rule 11).
 64. The task detail modal renders the task's comments as a timeline placed after the
@@ -3520,11 +3522,13 @@ Rules:
     [Security and Constraints](#security-and-constraints)).
 74. Every page's admin shell places, inside `<div class="page">` and in this order,
     the sidebar `<aside>`, the top `<header class="navbar ... d-print-none">`, and
-    `<div class="page-wrapper">`, which holds the page header, the page body, and
-    the footer. The top `<header>` is a sibling of `<div class="page-wrapper">` and
+    `<div class="page-wrapper">`, which holds the page header and the page body. The
+    top `<header>` is a sibling of `<div class="page-wrapper">` and
     is never nested inside it, which is the shape the vendored stylesheet's
     `.navbar-vertical~.navbar` and `.navbar-vertical~.page-wrapper` offset rules
-    require (see [UI Framework](#ui-framework), rule 12).
+    require. No page renders a `<footer>` element: the page body is the last region
+    inside `<div class="page-wrapper">` on every page, including the knowledge-graph
+    page (see [UI Framework](#ui-framework), rule 12).
 75. The sidebar's collapsible region carries `class="collapse navbar-collapse"` and
     `id="sidebar-menu"`, is rendered as a `<nav>` element with `aria-label="Sidebar"`,
     and lives inside the sidebar `<aside>`. Exactly one `navbar-toggler` in the
@@ -3546,8 +3550,8 @@ Rules:
     `<div class="col-auto ms-auto d-print-none">` (see
     [UI Framework](#ui-framework), rule 16).
 79. Every page carries `class="layout-fluid"` on `<body>` and uses `container-xl` for
-    its shell containers: the top navbar, the page header, the page body, and the
-    footer. No page container uses `container-fluid`; the only `container-fluid` in
+    its shell containers: the top navbar, the page header, and the page body. No
+    page container uses `container-fluid`; the only `container-fluid` in
     the shell is the one inside the sidebar `<aside>`, which is Tabler's own
     vertical-navbar markup (see [UI Framework](#ui-framework), rule 17).
 80. Every page renders its page body as `<main class="page-body">`, the element
@@ -3657,8 +3661,8 @@ Rules:
     Tabler badges for the counts and for the priority and severity values, and
     Tabler's empty-state markup for an empty column — and the column strip's layout
     and scrolling rules live in `static/style.css`, because the vendored distribution
-    ships no board or Kanban component. The page's admin shell, page header, and
-    footer are unchanged (Acceptance Criteria 74 to 76 and 78 to 80 continue to
+    ships no board or Kanban component. The page's admin shell and page header are
+    unchanged (Acceptance Criteria 74 to 76 and 78 to 80 continue to
     hold; see [UI Framework](#ui-framework), rules 8 and 10).
 91. The card of a task that belongs to a sprint shows that sprint in its metadata
     footer, identified by the sprint `title` together with `Sprint #<id>`, as plain
