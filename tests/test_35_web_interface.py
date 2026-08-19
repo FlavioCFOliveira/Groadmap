@@ -1228,11 +1228,20 @@ class TestWebInterface:
             assert sink not in code, f"the search script uses the markup sink {sink!r}"
         assert "textContent" in code, "the search script must write the term as text"
 
-        # Locale-independent folding on the client, matching the server's.
-        assert "toLowerCase()" in code, "the script does not fold the term"
-        assert "toLocaleLowerCase" not in code, (
-            "the script folds with a locale-sensitive conversion; the same term would "
-            "then select different tasks for different viewers"
+        # The client folds the term with the mapping the SERVER ships it, and
+        # calls no case conversion of the JavaScript platform at all: the
+        # platform's is Unicode's Default Case Conversion rather than the folding
+        # rule, and its tables are of whatever Unicode version the browser ships
+        # (Acceptance Criteria 118 and 119).
+        for conversion in ("toLowerCase", "toLocaleLowerCase"):
+            assert conversion not in script, (
+                f"the served script names {conversion}; the same term would then select "
+                "different tasks on the two paths, and different tasks in two browsers "
+                "of different Unicode versions"
+            )
+        assert "var FOLD_TABLE = [" in code, "the script ships no folding table"
+        assert "codePointAt" in code and "fromCodePoint" in code, (
+            "the script must fold the term by code point, not by UTF-16 code unit"
         )
         # It matches the corpus the server folded, and the #id reference.
         assert 'getAttribute("data-search")' in code
@@ -1258,6 +1267,179 @@ class TestWebInterface:
             "/static/task-modal.js",
             "/static/task-search.js",
         }, srcs
+
+    # A second roadmap, whose titles carry the code points on which the
+    # JavaScript platform's own case conversion differs from the folding rule
+    # SPEC/WEB.md Acceptance Criterion 118 fixes, plus an ASCII control so a term
+    # that narrows nothing at all cannot pass unnoticed. It is separate from the
+    # fixture roadmap so no other scenario's totals move.
+    FOLD_ROADMAP = "multilingual-settlement"
+    FOLD_TITLES = (
+        # A WORD-FINAL capital sigma: the rule folds it to U+03C3 in every
+        # position, the full conversion would give U+03C2 here.
+        ("greek_upper", "\u039f\u0394\u039f\u03a3 \u03a0\u039b\u0397\u03a1\u03a9\u039c\u03a9\u039d: "
+                        "\u03b5\u03c0\u03b1\u03bd\u03b1\u03c3\u03c7\u03b5\u03b4\u03b9\u03b1\u03c3\u03bc"
+                        "\u03cc\u03c2 \u03b4\u03c1\u03bf\u03bc\u03bf\u03bb\u03cc\u03b3\u03b7\u03c3\u03b7\u03c2"),
+        # A LITERAL U+03C2 the author typed: already lower case, folds to itself,
+        # and a post-fold rewrite of it would lose this card.
+        ("greek_final", "\u03a7\u03b1\u03c1\u03c4\u03bf\u03b3\u03c1\u03ac\u03c6\u03b7\u03c3\u03b7 "
+                        "\u03bf\u03b4\u03cc\u03c2 \u03c0\u03bb\u03b7\u03c1\u03c9\u03bc\u03ce\u03bd "
+                        "\u03b1\u03bd\u03ac \u03c0\u03ac\u03c1\u03bf\u03c7\u03bf"),
+        # U+0130, which the rule folds to U+0069 ALONE.
+        ("dotted", "\u0130STANBUL nightly settlement reconciliation"),
+        ("plain", "Istanbul acquirer report parser"),
+        # Astral code points, which only a code-point walk folds.
+        ("deseret", "\U00010400\U00010401 Deseret glossary pilot"),
+        ("control", "Rotate the payment gateway signing keys"),
+    )
+
+    def _seed_fold_roadmap(self):
+        """Create the divergence roadmap through the real CLI and return its
+        task ids by key."""
+        self._run(["roadmap", "create", self.FOLD_ROADMAP])
+        ids = {}
+        for key, title in self.FOLD_TITLES:
+            ids[key] = self.test.create_task(
+                self.FOLD_ROADMAP,
+                title,
+                "Operators must find this task by typing its title into the board search.",
+                "The title is folded once by the server into the card's search corpus.",
+                "The term selects the same cards typed as it does carried in the URL.",
+            )
+        return ids
+
+    @staticmethod
+    def _shipped_fold(script):
+        """Return (runs, fold) built from the FOLD_TABLE the server ships in the
+        narrowing script.
+
+        The client's rule is NOT re-expressed here: the table is the one the
+        browser would run, and the binary search over it is the one the script
+        performs. Python iterates a string by code point, which is the walk the
+        script does with codePointAt."""
+        m = re.search(r"var FOLD_TABLE = \[(.*?)\];", script, re.S)
+        assert m, "the narrowing script ships no FOLD_TABLE"
+        numbers = [int(n) for n in re.findall(r"-?\d+", m.group(1))]
+        assert numbers, "the shipped FOLD_TABLE is empty"
+        assert len(numbers) % 3 == 0, (
+            f"the shipped FOLD_TABLE holds {len(numbers)} numbers, which is not whole "
+            "triples of start, length, delta"
+        )
+        runs = [tuple(numbers[i:i + 3]) for i in range(0, len(numbers), 3)]
+        for i in range(1, len(runs)):
+            assert runs[i - 1][0] + runs[i - 1][1] <= runs[i][0], (
+                f"the shipped runs {runs[i - 1]} and {runs[i]} overlap or are out of order"
+            )
+
+        def fold(raw):
+            out = []
+            for char in raw.strip():
+                cp = ord(char)
+                lo, hi = 0, len(runs) - 1
+                while lo <= hi:
+                    mid = (lo + hi) // 2
+                    start, length, delta = runs[mid]
+                    if cp < start:
+                        hi = mid - 1
+                    elif cp >= start + length:
+                        lo = mid + 1
+                    else:
+                        cp += delta
+                        break
+                out.append(chr(cp))
+            return "".join(out)
+
+        return runs, fold
+
+    def test_tasks_page_search_folds_the_term_with_the_shipped_mapping(self):
+        """Typing a term and opening the URL that carries it select the same cards
+        for every term, the two code points included on which the JavaScript
+        platform's own case conversion differs from the folding rule (Acceptance
+        Criteria 104, 118 and 119).
+
+        This is the defect the criterion exists to forbid: with the client folding
+        through the platform's conversion, a term of U+039F U+0394 U+039F U+03A3
+        found nothing while the same term carried in q found the card, because the
+        platform gives the word-final sigma U+03C2 and the server gives U+03C3.
+
+        The browser's rule is not re-expressed here. The term is folded through the
+        FOLD_TABLE the server ships inside the narrowing script — the very table
+        the script binary searches — so what is compared are the two real
+        paths."""
+        ids = self._seed_fold_roadmap()
+        proc, port = self._start(["--port", "0"])
+
+        status, _, script = self._req(port, "/static/task-search.js")
+        assert status == 200, f"the narrowing script is not served: {status}"
+        for conversion in ("toLowerCase", "toLocaleLowerCase"):
+            assert conversion not in script, (
+                f"the served script names {conversion}; it must fold the term with the "
+                "server's shipped mapping and consult no case table of the browser's"
+            )
+        assert "codePointAt" in script and "fromCodePoint" in script, (
+            "the script must fold the term by code point, so a surrogate pair is folded "
+            "as the one character it is"
+        )
+
+        _, fold = self._shipped_fold(script)
+
+        # The shipped mapping IS the rule Acceptance Criterion 118 fixes.
+        assert fold("\u0130") == "\u0069", (
+            "U+0130 must fold to U+0069 alone, never to U+0069 U+0307"
+        )
+        assert fold("\u03a3") == "\u03c3", (
+            "U+03A3 must fold to U+03C3 in every position, word-final included"
+        )
+        assert fold("\u03c2") == "\u03c2", (
+            "a literal U+03C2 is already lower case and must not be rewritten"
+        )
+        assert fold("A") == "a" and fold("\u00c1") == "\u00e1", (
+            "ASCII and accented Latin must fold letter for letter"
+        )
+
+        full = self._board_snapshot(port, self.FOLD_ROADMAP)
+        assert sum(c["count"] for c in full["columns"]) == len(self.FOLD_TITLES), (
+            "the divergence roadmap did not render every seeded task"
+        )
+
+        for term, want in (
+            # The defect, both ways round.
+            ("\u039f\u0394\u039f\u03a3", [ids["greek_upper"]]),
+            ("\u03bf\u03b4\u03bf\u03c3", [ids["greek_upper"]]),
+            # And the regression a post-fold rewrite of U+03C2 would cause.
+            ("\u03bf\u03b4\u03cc\u03c2", [ids["greek_final"]]),
+            ("\u039f\u0394\u039f\u03a3 \u03a0\u039b\u0397\u03a1\u03a9\u039c\u03a9\u039d",
+             [ids["greek_upper"]]),
+            ("\u0130STANBUL", [ids["dotted"], ids["plain"]]),
+            ("istanbul", [ids["dotted"], ids["plain"]]),
+            ("\U00010400\U00010401", [ids["deseret"]]),
+            ("SIGNING", [ids["control"]]),
+        ):
+            query = "?q=" + urllib.parse.quote(term, safe="")
+            server = self._board_snapshot(port, self.FOLD_ROADMAP, query)
+            shown = sorted(i for c in server["columns"] for i in c["shown"])
+
+            folded = fold(term)
+            client = sorted(
+                task_id
+                for column in full["columns"]
+                for task_id, corpus, _ in column["cards"]
+                if folded in corpus or folded in f"#{task_id}"
+            )
+
+            assert shown == sorted(want), (
+                f"the SERVER shows {shown} for {term!r}, want {sorted(want)}"
+            )
+            assert client == sorted(want), (
+                f"the BROWSER shows {client} for {term!r}, want {sorted(want)}"
+            )
+            assert shown == client, (
+                f"the two paths disagree on {term!r}: the server shows {shown}, "
+                f"the browser {client}"
+            )
+            assert server["message"] == (len(shown) == 0), (
+                f"term {term!r}: the no-match message disagrees with the shown set"
+            )
 
     def test_tasks_page_search_never_errors(self):
         """No q value produces an error page, and an undecodable one is treated as

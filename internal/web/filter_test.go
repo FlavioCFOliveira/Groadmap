@@ -562,13 +562,21 @@ var filterCombinations = []clientControls{
 	{Term: "zzz-nothing-matches", Type: string(models.TypeBug), Priority: "3", Severity: "3"},
 }
 
-// filterKeeps is the conjunction, computed over a seeded task's own fields. It is
-// deliberately written from the SPECIFICATION — substring over title or "#<id>",
+// filterKeeps is the conjunction, computed over a seeded task's own fields. Its
+// SHAPE is written from the SPECIFICATION — substring over title or "#<id>",
 // equality on type, ">=" on the two thresholds — and not from the implementation.
+//
+// The FOLD inside it is the one thing not re-expressed: it calls the server's own
+// foldSearch and foldSearchTerm. A harness that spelled the folding rule out a
+// third time would agree with itself for every term this suite happens to use
+// while the two real paths disagreed about some other one, which is precisely how
+// a divergence between Go's case conversion and the browser's survived here
+// unseen (SPEC/WEB.md § Roadmap Tasks Page, One rule, and only one
+// implementation of it).
 func filterKeeps(c clientControls, task *filterTask) bool {
-	term := strings.ToLower(strings.TrimSpace(c.Term))
+	term := foldSearchTerm(c.Term)
 	if term != "" &&
-		!strings.Contains(strings.ToLower(task.title), term) &&
+		!strings.Contains(foldSearch(task.title), term) &&
 		!strings.Contains("#"+strconv.Itoa(task.id), term) {
 		return false
 	}

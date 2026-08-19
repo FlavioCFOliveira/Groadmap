@@ -251,19 +251,21 @@ func (v *taskView) SpecialistsText() string {
 	return strings.TrimSpace(*v.Specialists)
 }
 
-// SearchText is the task's title folded to lower case, which the card carries so
-// the browser matches against the SAME text the server matched against.
+// SearchText is the task's title folded by the board search's folding rule, which
+// the card carries so the browser matches against the SAME text the server
+// matched against.
 //
 // Folding the corpus once, here, is what keeps the two paths equivalent: the
-// script folds only the term the user typed, never the task text, so a difference
-// between Go's case conversion and the browser's cannot make the same term select
-// different tasks on the two paths (SPEC/WEB.md § Roadmap Tasks Page, Matching
-// rule; Server and client produce the same board).
+// script folds only the term the user typed, never the task text, so nothing
+// about a task's text is ever transformed twice (SPEC/WEB.md § Roadmap Tasks
+// Page, One rule, and only one implementation of it; Server and client produce
+// the same board).
 //
-// strings.ToLower is locale-independent — it applies Unicode's case mapping and
-// consults no locale — which is what the matching rule requires of both sides.
+// The fold is foldSearch, the same function foldSearchTerm folds a term with, so
+// the corpus and the term are folded by one implementation of one rule rather
+// than by two implementations of one description (see fold.go).
 func (v *taskView) SearchText() string {
-	return strings.ToLower(v.Title)
+	return foldSearch(v.Title)
 }
 
 // HasMeta reports whether the card has at least one metadata indicator to show:
@@ -282,16 +284,6 @@ func (v *taskView) HasMeta() bool {
 		len(v.DependsOn) > 0 ||
 		len(v.Blocks) > 0 ||
 		v.CommentCount > 0
-}
-
-// foldSearchTerm normalises a raw search term into the form the matching rule
-// compares with: surrounding whitespace stripped, folded to lower case.
-//
-// A term that is empty or entirely whitespace folds to the empty string, which is
-// no term at all and matches every task. Whitespace INSIDE the term survives and
-// is matched literally (SPEC/WEB.md § Roadmap Tasks Page, Matching rule).
-func foldSearchTerm(raw string) string {
-	return strings.ToLower(strings.TrimSpace(raw))
 }
 
 // matchesSearch reports whether the task matches an already-folded term.

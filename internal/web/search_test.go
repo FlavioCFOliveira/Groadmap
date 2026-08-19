@@ -205,9 +205,14 @@ func (s boardState) shownIDs() map[string][]int {
 // It is the script's algorithm re-expressed, ONE conjunction over four criteria
 // exactly as static/task-search.js computes one:
 //
-//   - the term is trimmed and folded with a locale-independent lower-casing, and
-//     matches when it is a substring of the corpus the server folded into the
-//     card or of the card's "#<id>" reference;
+//   - the term is folded by CALLING the server's own foldSearchTerm rather than
+//     by re-expressing the folding rule here, and matches when it is a substring
+//     of the corpus the server folded into the card or of the card's "#<id>"
+//     reference. A harness that re-expressed the rule could agree with itself
+//     while the two real paths disagreed, which is exactly how the folding
+//     divergence this test guards against went unnoticed; the script folds with
+//     the mapping the server ships it, which
+//     TestTaskSearchScript_FoldTableIsTheServerFold pins to that same function;
 //   - the type criterion is an EQUALITY against the card's own data-type;
 //   - the priority and severity criteria are THRESHOLDS, ">=", over the card's
 //     own data-priority and data-severity;
@@ -218,7 +223,7 @@ func (s boardState) shownIDs() map[string][]int {
 // this rule, so the comparison is between the two real paths rather than between
 // the server and a convenient fiction.
 func (s boardState) narrow(c clientControls) boardState {
-	term := strings.ToLower(strings.TrimSpace(c.Term))
+	term := foldSearchTerm(c.Term)
 
 	narrowed := boardState{messageTerm: c.Term, messageTermShown: term != ""}
 	total := 0
@@ -808,14 +813,35 @@ func TestTaskSearch_TermIsEscapedWhereverItIsEchoed(t *testing.T) {
 func TestTaskSearchScript_ImplementsTheSameMatchingRule(t *testing.T) {
 	script := stripJSComments(readEmbeddedAsset(t, "static/task-search.js"))
 
-	// The term is folded exactly as the server folds it: trimmed, lower-cased,
-	// with the LOCALE-SENSITIVE variant absent.
-	if !strings.Contains(script, "raw.trim().toLowerCase()") {
-		t.Errorf("the script does not fold the term with trim().toLowerCase()")
+	// The term is folded exactly as the server folds it, and by the server's own
+	// mapping: whitespace stripped, then every CODE POINT walked through the
+	// shipped FOLD_TABLE. No case conversion of the JavaScript platform is
+	// consulted, locale-sensitive or not — the platform's is Unicode's Default
+	// Case Conversion rather than the folding rule, and its tables are of
+	// whatever Unicode version the browser ships (SPEC/WEB.md Acceptance
+	// Criteria 118 and 119; the table itself is checked against the server's
+	// foldSearch over the whole of Unicode by
+	// TestTaskSearchScript_FoldTableIsTheServerFold).
+	for _, fragment := range []string{
+		"var FOLD_TABLE = [",
+		"function foldCodePoint(",
+		"var trimmed = raw.trim();",
+		"trimmed.codePointAt(i)",
+		"String.fromCodePoint(foldCodePoint(cp))",
+	} {
+		if !strings.Contains(script, fragment) {
+			t.Errorf("the script does not fold the term through the server's shipped mapping: "+
+				"no %q", fragment)
+		}
 	}
-	if strings.Contains(script, "toLocaleLowerCase") || strings.Contains(script, "toLocaleUpperCase") {
-		t.Errorf("the script folds with a locale-sensitive conversion; the same term would then " +
-			"select different tasks for different viewers")
+	for _, conversion := range []string{
+		"toLowerCase", "toLocaleLowerCase", "toUpperCase", "toLocaleUpperCase",
+	} {
+		if strings.Contains(script, conversion) {
+			t.Errorf("the script folds with the platform's %s; the same term would then select "+
+				"different tasks on the two paths, and in two browsers of different Unicode "+
+				"versions", conversion)
+		}
 	}
 	if strings.Contains(script, "localeCompare") {
 		t.Errorf("the script compares with localeCompare, which is locale-sensitive")

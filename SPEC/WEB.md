@@ -1009,19 +1009,107 @@ how the `rmp web` process itself terminates.
   or entirely whitespace is **no term at all** — the board shows every task.
   Whitespace inside the term is significant and is matched literally.
 
-  The case-insensitive comparison MUST be **locale-independent**, so that the same
-  term and the same task produce the same verdict wherever the page is rendered and
-  whatever locale the browser reports. A locale-sensitive case conversion MUST NOT
-  be used, because it makes the match depend on the viewer's locale and would break
-  the equivalence below for terms containing letters whose case mapping is
-  locale-specific.
+  Case-insensitivity here means one specific transformation, applied to the task's
+  searchable text and to the term before the two are compared. **The folding rule**
+  below states which transformation it is; stating it exactly, rather than only
+  requiring that it ignore the viewer's locale, is what keeps the two paths of
+  **Server and client produce the same board** below from disagreeing about a term.
+- **The folding rule.** The task's searchable text and the term are folded by
+  Unicode's **simple lowercase mapping**: the single replacement code point that
+  the Unicode Character Database gives a code point, applied to each code point on
+  its own, with a code point that has no such mapping folding to itself. Three
+  properties follow from that definition, and every implementation of the rule MUST
+  have all three:
+  1. **Unconditional.** What a code point folds to never depends on the code points
+     around it. No context — the start or the end of a word, the letters before or
+     after it, the presence of another cased letter — changes the result.
+  2. **One code point in, one code point out.** The fold replaces each code point
+     with exactly one code point. It adds none, removes none, and reorders none, so
+     folding never lengthens or shortens the text.
+  3. **Locale-independent.** The fold consults no locale, so the same term and the
+     same task produce the same verdict wherever the page is rendered and whatever
+     locale the browser reports. A locale-sensitive case conversion MUST NOT be
+     used.
 
-  A task's searchable text is folded **once, by the server**. The client folds only
-  the term, and compares it against text the server already folded; no client-side
-  code folds a task's `title` or its reference. This makes the equivalence below
-  structural rather than coincidental: the two paths cannot disagree about a task's
-  text, because only one of them ever transforms it, and the single value both fold
-  is the term the user typed.
+  The rule is deliberately **not** Unicode's Default Case Conversion — the full
+  case conversion, with its conditional rules and its multi-code-point special-case
+  mappings, which is the conversion a programming language's ordinary lower-case
+  function may implement. The difference is observable rather than academic, and
+  this specification fixes both code points on which the two conversions disagree:
+  - `U+0130` (LATIN CAPITAL LETTER I WITH DOT ABOVE) folds to `U+0069` alone, and
+    never to the two code points `U+0069 U+0307` the full conversion produces for
+    it.
+  - `U+03A3` (GREEK CAPITAL LETTER SIGMA) folds to `U+03C3` in **every** position,
+    word-final included, and never to the final form `U+03C2` the full conversion
+    produces where its Final_Sigma condition holds.
+
+  Those two are the whole of the difference at any one Unicode version: swept over
+  every code point of Unicode in a range of neighbouring contexts, no third code
+  point folds differently under the two conversions. Ordinary ASCII and accented
+  Latin text is therefore untouched by the distinction — `A` folds to `a`, `Á` to
+  `á`, letter for letter.
+
+  **Nothing is rewritten after the mapping.** A `U+03C2` the user typed is already a
+  lower-case letter, folds to itself, and MUST NOT be rewritten to `U+03C3`
+  afterwards: a task titled `οδός` carries that `U+03C2` in its folded searchable
+  text, so a term rewritten that way would stop finding it. The same holds for
+  every other post-fold fixup, such as removing a `U+0307` the user typed. The cost
+  of the simple mapping is stated plainly rather than patched over: a task whose
+  title ends in a literal `ς` is not found by typing that word in capitals, because
+  the capital folds to `σ`. Both paths return that same verdict, which is the
+  property the rule exists to protect; whether two differently spelled forms of one
+  word should match each other is a different question from case, and this rule does
+  not answer it.
+
+  A term whose bytes are not valid UTF-8 is not a sequence of code points at all:
+  the server replaces each invalid byte with `U+FFFD` before folding, and the term
+  is then folded and matched like any other — it matches nothing on an ordinary
+  roadmap, and it is neither an error nor an absent term (see **No malformed term
+  is an error** below).
+- **One rule, and only one implementation of it.** A task's searchable text is
+  folded **once, by the server**. The client folds only the term, and compares it
+  against text the server already folded; no client-side code folds a task's
+  `title` or its reference. The two paths therefore cannot disagree about a task's
+  text, because only one of them ever transforms it.
+
+  The term is the one value both sides fold, and it is where the two could still
+  drift, because each platform's own lower-case function implements whichever
+  conversion that platform chose. The client therefore **MUST NOT** fold the term
+  with the JavaScript platform's case conversion, locale-sensitive or not. It folds
+  the term with the **server's own mapping**, which the server ships to it together
+  with the script that narrows the board. The client consults no case-conversion
+  table of the browser's, and the fold of a term is the server's answer on both
+  paths by construction, rather than by two implementations happening to agree.
+
+  Shipping the mapping settles a second question with the same move. A browser's
+  case tables are of whatever Unicode version that browser ships, which Groadmap
+  neither chooses nor can detect, so a fold that consulted them would be a fold two
+  browsers could answer differently for the same term. The shipped mapping removes
+  the browser from the answer entirely.
+
+  On the server, the corpus fold and the term fold are likewise **one** rule: the
+  server folds a task's searchable text and folds a term through the same folding
+  function, not through two implementations of one description, so the two cannot
+  drift apart on that side either.
+- **What keeps the shipped mapping equal to the server's.** The mapping the binary
+  ships to the client is checked against the server's own folding function over
+  **the whole of Unicode**: every code point, not a sample, and against that
+  function itself, never against a stored copy of its expected results — such a
+  copy can be updated to match a changed fold, and would then prove nothing. The
+  check fails when a single code point folds differently on the two sides, and it
+  fails the same way when a toolchain upgrade changes a mapping, so a change of
+  Unicode version cannot move one side of the fold and leave the other behind
+  unnoticed. The check also asserts, as an absence in the script the binary serves,
+  that the narrowing script calls no case conversion of the platform.
+
+  The check is an ordinary Go test. It runs no JavaScript and requires no
+  JavaScript engine, no Node.js, no network access, and no module dependency, so it
+  holds within the constraints already fixed in `BUILD.md § External Dependencies`
+  and `BUILD.md § Vendored Web Assets`, rule 2. It is the discipline the badge
+  colour mapping already follows wherever a client script carries that mapping too
+  (see
+  [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
+  rule 2).
 - **Header filter controls.** Beside the search input, the page header's actions
   column carries **three filter dropdowns** (select controls) that narrow the board
   by what a task **is**, where the search narrows it by what a task is **called**:
@@ -1244,7 +1332,11 @@ how the `rmp web` process itself terminates.
   column counts, and the same empty states. The two paths implement one matching
   rule per criterion and one conjunction over them, and MUST NOT diverge — that
   equivalence is what makes a narrowed board shareable and reloadable, and it is the
-  property to test.
+  property to test. For the term, one rule per criterion means the folding rule
+  above with a single implementation of it, shipped from the server to the client
+  (see **The folding rule** and **One rule, and only one implementation of it**);
+  for a filter it means one comparison per dimension (see **What each filter
+  matches**).
 - **No malformed term is an error.** Every string is a valid term. A term that
   matches nothing renders the empty board described above, with HTTP 200. A term
   longer than any searchable text simply matches nothing. A `q` the server cannot
@@ -4243,8 +4335,10 @@ Rules:
     `specialists` value, and matching nothing in that task's title or reference, does
     not match it. Leading and trailing whitespace is stripped from the term, and a
     term that is empty or entirely whitespace shows every task. The case-insensitive
-    comparison is locale-independent, so the same term and task yield the same
-    verdict regardless of the browser's reported locale.
+    comparison folds the term and the task's searchable text by the rule Acceptance
+    Criterion 118 fixes, so the same term and task yield the same verdict regardless
+    of the browser's reported locale, of the browser, and of the Unicode version
+    that browser's case tables implement.
 102. A column left with no matching card renders its ordinary in-column empty state,
     and the five columns stay present and in order — narrowing the board drops,
     hides, and reorders no column (Acceptance Criterion 81 continues to hold). When
@@ -4270,14 +4364,19 @@ Rules:
     towards nothing the board states; their presence is what lets clearing the
     search restore them without a request to the server, as Acceptance Criterion 103
     requires. What is forbidden is a document that arrives unnarrowed and is
-    narrowed by a script after load.
+    narrowed by a script after load. The identity holds for **every** term, the two
+    code points included on which a platform's own case conversion differs from the
+    folding rule: a term carrying `U+0130`, and a term carrying `U+03A3` where the
+    full conversion's Final_Sigma condition would hold, select the same cards on
+    both paths and in every browser (Acceptance Criteria 118 and 119).
 105. No `q` value produces an error page: a term matching nothing, a term longer than
     any searchable text, and a `q` the server cannot decode each return HTTP 200,
     the last treated as though `q` were absent. Applying a term adds no database
     query: the page's read remains the full task list specified in Acceptance
     Criterion 89, and narrowing in the browser issues no request at all. A task's
     searchable text is folded once by the server and never by the client, so the two
-    paths cannot disagree about a task's text; the term is the only value both fold.
+    paths cannot disagree about a task's text; the term is the only value both fold,
+    and both fold it with the server's own mapping (Acceptance Criterion 119).
 106. A term containing HTML markup renders as visible characters and introduces no
     element, attribute, or script into the page: the server escapes it through
     `html/template` where it echoes it into the search input and into the no-match
@@ -4432,6 +4531,41 @@ Rules:
     Every class the dropdowns emit resolves in the embedded stylesheets, the select
     control is one the vendored Tabler distribution already ships, and no template
     carries a `style` attribute (Acceptance Criterion 62 continues to hold).
+118. The task's searchable text and the term are folded by Unicode's **simple
+    lowercase mapping**, applied to each code point on its own: unconditional, one
+    code point in and one code point out, and consulting no locale. It is **not**
+    Unicode's Default Case Conversion, and the two code points where the
+    conversions disagree resolve as this criterion states: `U+0130` folds to
+    `U+0069` and never to `U+0069 U+0307`, and `U+03A3` folds to `U+03C3` in every
+    position, word-final included, and never to `U+03C2`. Nothing is rewritten
+    after the mapping: a `U+03C2` in a term stays `U+03C2`, so a term of `οδός`
+    finds a task titled `οδός`, which a post-fold rewrite of `ς` to `σ` would stop
+    finding. ASCII and accented Latin fold letter for letter — `A` to `a`, `Á` to
+    `á` — and a term of `ΟΔΟΣ` finds a task titled `ΟΔΟΣ` on both paths. A term
+    whose bytes are not valid UTF-8 is folded with each invalid byte replaced by
+    `U+FFFD` and is then matched like any other term, being neither an error nor an
+    absent term (Acceptance Criterion 105 continues to hold; see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **The folding rule**).
+119. The client folds the term with the mapping the server ships to it and calls no
+    case conversion of the JavaScript platform: neither `toLowerCase` nor
+    `toLocaleLowerCase` appears in the narrowing script, asserted as an absence in
+    the script the binary serves, the way Acceptance Criterion 97 asserts the modal
+    script's markup sinks. The shipped mapping is compared against the server's own
+    folding function over the whole of Unicode — every code point, not a sample —
+    and against that function itself, never against a stored copy of its expected
+    results; the comparison fails when one code point folds differently on the two
+    sides, including when a toolchain upgrade changes a mapping. The server folds a
+    task's searchable text and folds a term through that one function, not through
+    two implementations of one description. The check is an ordinary Go test: it
+    runs no JavaScript and requires no JavaScript engine, no Node.js, no network
+    access, and no module dependency, so `BUILD.md § External Dependencies` and
+    `BUILD.md § Vendored Web Assets`, rule 2, continue to hold. Because the client
+    consults no case table of the browser's, the board a term produces does not
+    depend on which Unicode version the browser implements, and two browsers of
+    different Unicode versions produce the same board (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **One rule, and only one
+    implementation of it**, and **What keeps the shipped mapping equal to the
+    server's**).
 
 ## See Also
 
