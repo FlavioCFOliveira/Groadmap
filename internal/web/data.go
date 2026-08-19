@@ -778,15 +778,48 @@ type sprintBoardColumn struct {
 // colour out of the template: the template reads this value through
 // taskStatusBadge and writes no colour class of its own, so there is ONE mapping
 // from a status to a badge variant in the project and this board reads it.
+//
+// The fourth field is the column's own ORDERING KEY: the timestamp the column's
+// cards are ordered by, descending, read off the task the card presents
+// (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Order within a column;
+// Acceptance Criteria 14 and 132). The three columns do not share one order, so
+// naming each column's key beside the column itself keeps the whole ordering rule
+// in one table instead of spread over a switch elsewhere.
+//
+// WAITING names NO key, and that is the rule rather than an omission: WAITING is
+// the queue of work not yet started, its order is the plan, and the plan is the
+// sprint_tasks position order the page's read already returns — so the column is
+// rendered exactly as it was read and is never sorted (see
+// groupIntoSprintBoardColumns).
+//
+// DOING names started_at, and it names it for the WHOLE column, including the
+// column's TESTING cards. tested_at orders nothing: the column groups DOING and
+// TESTING, a task reaches TESTING only from DOING, and started_at records entry
+// into DOING for both, so a TESTING card takes its place from when its task
+// entered DOING and never from when it entered TESTING (SPEC/STATE_MACHINE.md
+// § Date Tracking Fields).
 var sprintBoardColumns = [...]struct {
-	heading   string
-	canonical models.TaskStatus
-	category  models.TaskStatusCategory
+	orderingTimestamp func(*models.Task) *string
+	heading           string
+	canonical         models.TaskStatus
+	category          models.TaskStatusCategory
 }{
-	{"WAITING", models.StatusSprint, models.CategoryPending},
-	{"DOING", models.StatusDoing, models.CategoryInProgress},
-	{"CLOSED", models.StatusCompleted, models.CategoryCompleted},
+	{nil, "WAITING", models.StatusSprint, models.CategoryPending},
+	{startedAt, "DOING", models.StatusDoing, models.CategoryInProgress},
+	{closedAt, "CLOSED", models.StatusCompleted, models.CategoryCompleted},
 }
+
+// startedAt and closedAt are the two ordering keys sprintBoardColumns names. Each
+// is a plain accessor, written out so the table above reads as a table and so the
+// key a column is ordered by is a named thing rather than an inline literal.
+//
+// Both return the task's field as it is stored, nil included: a nil result IS the
+// "absent timestamp" case the ordering rule is written against, and it is the
+// caller's business, not theirs, to decide where an absent value sorts
+// (MODELS.md § Task makes both fields nullable).
+func startedAt(t *models.Task) *string { return t.StartedAt }
+
+func closedAt(t *models.Task) *string { return t.ClosedAt }
 
 // sprintDetail is the single context shape the "sprintDetail" sub-template
 // renders. Only the single Roadmap Sprint Page builds one and hands it to the
@@ -795,9 +828,11 @@ var sprintBoardColumns = [...]struct {
 //
 // Tasks is the sprint's member tasks in planned in-sprint execution order
 // (sprint_tasks position ascending), each carrying its own comment count; Columns
-// is that same list grouped into the member-tasks board's three fixed columns,
-// which is what the sub-template renders. Both describe the same tasks: Columns
-// points into Tasks.
+// is that same list grouped into the member-tasks board's three fixed columns and
+// ordered per column — WAITING keeping the position order, DOING and CLOSED
+// reordered by started_at and closed_at descending — which is what the
+// sub-template renders. Both describe the same tasks: Columns points into Tasks,
+// and only the order in which it walks them differs.
 //
 // Comments is the sprint's OWN comment log — the sprint's progression account —
 // oldest first, rendered in the Comments card the sub-template places last. It
@@ -816,10 +851,10 @@ type sprintDetail struct {
 }
 
 // sprintPageData is the view model handed to the roadmap sprint template. It
-// presents a single sprint with all of its fields, its member tasks in planned
-// in-sprint execution order as a Kanban board of three fixed columns — each card
-// clickable to open the read-only task detail modal — and the sprint's own
-// comments (SPEC/WEB.md § Roadmap Sprint Page). It is read-only.
+// presents a single sprint with all of its fields, its member tasks as a Kanban
+// board of three fixed columns each ordered by its own key — each card clickable
+// to open the read-only task detail modal — and the sprint's own comments
+// (SPEC/WEB.md § Roadmap Sprint Page). It is read-only.
 type sprintPageData struct {
 	Name     string
 	Chrome   chrome
@@ -1406,10 +1441,12 @@ func loadSprint(ctx context.Context, name string, id int) (sprintPageData, error
 // rather than issued against an empty IN list. The Comments card is always
 // present, so the sprint's own listing is issued regardless.
 //
-// Grouping the member tasks into the board's three columns is done here, in
-// memory, over the rows already read: no query is issued per column and none per
-// card, so the page's query count is independent of the number of member tasks
-// and of columns.
+// Grouping the member tasks into the board's three columns AND ordering each
+// column by its own key is done here, in memory, over the rows already read: the
+// read returns the rows in sprint_tasks position order and the board reorders two
+// of the three columns afterwards, issuing no query per column and none per card,
+// so the page's query count is independent of the number of member tasks and of
+// columns (SPEC/WEB.md § Tasks and Sprints from SQLite).
 func readSprint(ctx context.Context, src sprintSource, name string, id int) (sprintPageData, error) {
 	sprint, err := src.GetSprint(ctx, id)
 	if err != nil {
@@ -1469,10 +1506,42 @@ func readSprint(ctx context.Context, src sprintSource, name string, id int) (spr
 // empty column is a built column with no card and a sprint with no member task
 // renders an empty board rather than an absent one (Acceptance Criterion 130).
 //
-// The grouping is a SINGLE ordered pass over the views as the read returned them,
-// so the cards of one column keep the relative order of that read — the
-// sprint_tasks position order, ascending — and the board applies no sort of its
-// own and introduces no second notion of order (Acceptance Criterion 132).
+// EACH COLUMN THEN TAKES ITS OWN ORDER, because the three columns answer three
+// different questions (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Order
+// within a column; Acceptance Criteria 14 and 132):
+//
+//   - WAITING keeps the sprint_tasks position order, ascending — the plan, which
+//     answers "which task do I develop next?". That is the order the page's read
+//     already returns, so the column is left exactly as the grouping pass built it
+//     and is not sorted at all.
+//   - DOING is reordered by started_at descending — the most recently started task
+//     first — which answers "what has just been picked up?".
+//   - CLOSED is reordered by closed_at descending — the most recently closed task
+//     first — which answers "what has just been finished?".
+//
+// started_at orders the WHOLE of the DOING column. That column groups DOING and
+// TESTING, and a TESTING card takes its place from when its task entered DOING,
+// never from when it entered TESTING: tested_at orders nothing on this board (see
+// sprintBoardColumns).
+//
+// THE TIEBREAKER IS THE PLAN, AND IT COSTS NOTHING. Equal ordering timestamps are
+// an ordinary case here — `rmp task stat` moves a batch of tasks in one operation
+// and stamps them alike — and MODELS.md § Task makes both timestamps nullable, so
+// a card may carry none at all. Both cases fall back to the sprint_tasks position
+// order, ascending, and a card carrying no timestamp sorts LAST in its column. No
+// position is compared to obtain that: the rows arrive from the read in position
+// order, the grouping pass below preserves it, and sort.SliceStable keeps the
+// relative order of every pair its comparison calls equal — which is exactly the
+// pair the tiebreaker speaks about. Reading the position into the comparison would
+// not merely be redundant, it would be unsound: sprint_tasks.position carries no
+// uniqueness constraint (SPEC/DATABASE.md § `sprint_tasks` Table (1:N
+// Relationship), whose DDL constrains sprint_id and task_id and leaves position
+// free), so two member tasks may share one, and stability is what keeps such a
+// pair in the order the read gave it.
+//
+// THE ORDERING COSTS NO READ. It is an in-memory reorder of the rows the page has
+// already read: no query per column, no query per card, and no second read of any
+// kind (SPEC/WEB.md § Tasks and Sprints from SQLite).
 //
 // Every member task lands in exactly one column: tasks.status is restricted by a
 // CHECK constraint to the five values of the closed status enum
@@ -1490,12 +1559,67 @@ func groupIntoSprintBoardColumns(views []taskView) []sprintBoardColumn {
 		}
 	}
 
+	// One ordered pass over the views as the read returned them, so every column
+	// starts out in the sprint_tasks position order — which is WAITING's final
+	// order and the other two columns' tiebreaker.
 	for i := range views {
 		if column, ok := sprintBoardColumnOf(models.CategorizeTaskStatus(views[i].Status)); ok {
 			columns[column].Tasks = append(columns[column].Tasks, &views[i])
 		}
 	}
+
+	for i := range sprintBoardColumns {
+		if key := sprintBoardColumns[i].orderingTimestamp; key != nil {
+			sortByTimestampDescending(columns[i].Tasks, key)
+		}
+	}
 	return columns
+}
+
+// sortByTimestampDescending orders a board column's cards by the timestamp key
+// reads off each card's task: most recent first, and a card whose timestamp is
+// absent last (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, The tiebreaker is
+// the plan; Acceptance Criterion 132).
+//
+// The sort is STABLE and the comparison reads the timestamp and nothing else, so
+// the cards the timestamp does not separate — two carrying the same instant, and
+// the ones carrying none — keep the order they arrived in, which is the
+// sprint_tasks position order the page read them in. That is the tiebreaker the
+// rule calls for, obtained without carrying the position into the comparison.
+//
+// The timestamps are compared as strings, which is correct rather than merely
+// convenient: every write of started_at and closed_at goes through
+// utils.NowISO8601, whose format (utils.ISO8601Format, YYYY-MM-DDTHH:mm:ss.sssZ)
+// is fixed-width, zero-padded, and always UTC, so the byte order of two such
+// values is their chronological order. Comparing them directly therefore parses
+// nothing, allocates nothing, and cannot fail on a value a parse would have to
+// reject.
+func sortByTimestampDescending(cards []*taskView, key func(*models.Task) *string) {
+	// A column of fewer than two cards is already in order, and the guard is not
+	// cosmetic: sort.SliceStable builds a reflect.Swapper before it looks at the
+	// length, so sorting an empty or single-card column costs an allocation and
+	// about 32ns to reach a conclusion that is free here. Both are ordinary
+	// columns — a sprint whose work has not started renders an empty DOING and an
+	// empty CLOSED (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Every column
+	// is always rendered).
+	if len(cards) < 2 {
+		return
+	}
+
+	sort.SliceStable(cards, func(i, j int) bool {
+		left, right := key(&cards[i].Task), key(&cards[j].Task)
+		switch {
+		case left == nil:
+			// An absent timestamp is never above anything: it sorts after every
+			// card that carries one, and stability leaves two absent cards in
+			// position order.
+			return false
+		case right == nil:
+			return true
+		default:
+			return *left > *right
+		}
+	})
 }
 
 // sprintBoardColumnOf returns the index of the column that holds a category, and

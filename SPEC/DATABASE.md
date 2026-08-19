@@ -537,7 +537,7 @@ ORDER BY st.position ASC;
 **Ordering priority:**
 1. `position` ASC (lowest first: 0, 1, 2...)
 
-**Use case:** Sprint task sequence view - tasks appear in the order defined by the user for sprint execution. The read-only web interface's sprint page reads this statement to fill its member-tasks board: the board groups the rows into its three columns in memory, keeping the order the read returned, and shows each task's subtask count on its card without any further query (see `WEB.md § Sprint Detail Sub-Template`).
+**Use case:** Sprint task sequence view - tasks appear in the order defined by the user for sprint execution. The read-only web interface's sprint page reads this statement to fill its member-tasks board: the board groups the rows into its three columns in memory and then orders the `DOING` column by `started_at` descending and the `CLOSED` column by `closed_at` descending, so the position order this statement returns is what the `WAITING` column keeps and what breaks ties in the other two. The board shows each task's subtask count on its card without any further query. The per-column ordering is presentation and belongs to `WEB.md § Sprint Detail Sub-Template`, which states it in full; this section owns the statement, not the board.
 
 #### Add Task to Sprint with Position
 

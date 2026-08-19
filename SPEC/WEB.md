@@ -210,8 +210,10 @@ task detail modal that displays all of the task's fields (see
 9. The roadmap sprint page shows all details of a single sprint, the sprint's
    member tasks as a Kanban board of three fixed columns — `WAITING` holding the
    sprint's `BACKLOG` and `SPRINT` tasks, `DOING` its `DOING` and `TESTING` tasks,
-   and `CLOSED` its `COMPLETED` tasks — whose cards follow the planned in-sprint
-   execution order and whose column counts are the `P`, `A`, and `C` values of the
+   and `CLOSED` its `COMPLETED` tasks — whose cards are ordered by what each column
+   is about, the `WAITING` column by the planned in-sprint execution order and the
+   `DOING` and `CLOSED` columns by recency (`started_at` and `closed_at`
+   descending), and whose column counts are the `P`, `A`, and `C` values of the
    sprint status summary line on the same page, and the sprint's own
    comments in a Comments card, read from that roadmap's
    `project.db`. It is served at `/roadmaps/{name}/sprints/{id}`, is read-only, and
@@ -1766,10 +1768,15 @@ how the `rmp web` process itself terminates.
   task, placed between the sprint details above it and the sprint's comments below
   it. The columns group the tasks by the same
   categorisation the sprint status summary line uses, so each column's count is one
-  of that line's own numbers, and the cards of a column keep the planned in-sprint
-  execution order, which is the `sprint_tasks` order (the ordered set of task IDs
-  the `Sprint` model exposes as `tasks`; see `MODELS.md § Sprint` and
-  `DATABASE.md § Relationships`). Each card is clickable: selecting a card opens
+  of that line's own numbers, and each column orders its own cards: the `WAITING`
+  column keeps the planned in-sprint execution order, which is the `sprint_tasks`
+  order (the ordered set of task IDs the `Sprint` model exposes as `tasks`; see
+  `MODELS.md § Sprint` and `DATABASE.md § Relationships`), while the `DOING` and
+  `CLOSED` columns lead with the most recent — `started_at` descending and
+  `closed_at` descending — because those two columns record what has happened
+  rather than what is planned, with the planned order breaking their ties (see
+  [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Order within a
+  column**). Each card is clickable: selecting a card opens
   the read-only task detail modal for that task. The card **is** the element that
   opens the modal and it is a `<button>`, so the modal opens from the pointer, from
   touch, and from the keyboard alike. The board carries no control that moves a
@@ -2120,15 +2127,71 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      other choice would leave the board's own heading disagreeing with its colour.
      `CLOSED` calls for no such choice, because it holds one status and that status
      is its canonical one.
-   - **Order within a column.** The cards of a column appear in the sprint's planned
-     in-sprint execution order — the `sprint_tasks` position order the page already
-     reads, `position` ascending (see `MODELS.md § Sprint`,
+   - **Order within a column.** Each column orders its cards by the question that
+     column answers, so the three columns do not share one order:
+
+     | Column | Order | What the reader gets from it |
+     |---|---|---|
+     | `WAITING` | `sprint_tasks` `position` ascending | The next task to develop at the top, the last one at the bottom |
+     | `DOING` | `started_at` descending | The task that entered `DOING` most recently at the top, the one that has been there longest at the bottom |
+     | `CLOSED` | `closed_at` descending | The task closed most recently at the top, the one closed longest ago at the bottom |
+
+     **Why the three columns differ.** `WAITING` holds work that has not started. It
+     is a queue, and what a reader wants from a queue is the plan: `position`
+     ascending is the order the user planned, and it answers "which task do I
+     develop next?". `DOING` and `CLOSED` are not queues. They are records of what
+     has happened, and what a reader wants from a record is recency: "what has just
+     been picked up?" and "what has just been finished?". A task's place in the plan
+     says nothing about when work on it began or ended, so ordering those two
+     columns by the plan puts the card the reader came for somewhere in the middle
+     of the column. The board therefore does hold more than one notion of order, and
+     it holds it deliberately rather than arbitrarily: each column is ordered by the
+     one thing that column is about.
+
+     **`started_at` orders the whole `DOING` column, and `tested_at` orders
+     nothing.** That column groups two statuses, `DOING` and `TESTING` (see the
+     table of columns above), and `started_at` records entry into `DOING` for both
+     of them: a task reaches `TESTING` only from `DOING`, and the task state machine
+     sets `started_at` on the `SPRINT → DOING` transition (see
+     `STATE_MACHINE.md § Date Tracking Fields`). One key therefore serves the whole
+     column, and a `TESTING` card takes its place from when its task entered
+     `DOING`, not from when it entered `TESTING`. `MODELS.md § Task` stays canonical
+     for `started_at`, `tested_at`, and `closed_at`; this rule does not redefine
+     them.
+
+     **The tiebreaker is the plan.** Two cards of one column can carry the same
+     ordering timestamp: `task stat` changes the status of several tasks in a single
+     bulk operation (see `COMMANDS.md § Change Status (stat)`), and tasks moved
+     together can carry one and the same timestamp, so equal timestamps are an
+     ordinary case and not a theoretical one. When the ordering timestamp of two cards is equal, and when a
+     card's ordering timestamp is absent, the cards are ordered by `sprint_tasks`
+     `position` ascending. The fallback is the plan because the plan is the only
+     other order the sprint defines: falling back to the task `id`, or to the order
+     the rows happened to arrive in, would order the column by something the sprint
+     does not mean. A card whose ordering timestamp is absent sorts **last** in its
+     column, after every card that carries one, because a column ordered by recency
+     has nowhere else to put a card that states no time. `MODELS.md § Task` makes
+     both timestamps nullable, so this rule says what happens when one is absent
+     rather than assuming one is always there.
+
+     Together the two keys make every column's order **total and deterministic**:
+     for any two cards of a column the rule states which of them is above the other,
+     and two renderings of the same data produce the same board, which is what lets a
+     test assert it. `position` is also the key the
+     page's own read orders by, so where two member tasks of one sprint carry the
+     same `position` the board keeps the relative order that read gave them; beyond
+     its column key the board introduces no order of its own.
+
+     **The ordering costs no read.** The page reads its member tasks once, in
+     `sprint_tasks` position order (see `MODELS.md § Sprint`,
      `DATABASE.md § Relationships`, and
-     `DATABASE.md § List Sprint Tasks Ordered by Position`). Grouping the tasks into
-     the three columns is a single ordered pass over what that read returned, so the
-     cards of one column keep the relative order the read gave them. The board
-     applies no sort of its own and introduces **no second notion of order**: the
-     order on the board is the order the user planned, and there is only one.
+     `DATABASE.md § List Sprint Tasks Ordered by Position`), and that is still what
+     the read returns. The board groups those rows into the three columns and
+     reorders two of the three afterwards, in memory, over the rows already in hand:
+     no second read, no query per column, and no query per card. The tiebreaker
+     needs no extra data either, because the position order is the order in which
+     the rows arrived, so a stable sort by the column's timestamp leaves the cards
+     that timestamp does not separate in exactly the order the tiebreaker calls for.
    - **The card.** Each card presents one member task, in this order:
      1. the task **`title`**, leading the card — the one place this board
         deliberately differs from the tasks board's card, which leads with its
@@ -2329,8 +2392,9 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      already returns each task's `subtask_count` (`MODELS.md § Task` defines it as a
      count computed with the task rather than a stored column), so the card's
      subtask number is already in hand. Grouping the member tasks into the three
-     columns and counting each column are done in memory over the rows already read,
-     so the board adds no query per column and none per card.
+     columns, ordering each column, and counting each column are done in memory over
+     the rows already read, so the board adds no query per column and none per
+     card.
    - **Read-only.** The board offers **no drag-and-drop** and no control of any
      other kind that moves a task between columns, reorders cards, changes a task's
      status, or creates or edits anything. It contains no form and no write path;
@@ -3369,8 +3433,10 @@ re-presents an earlier, now-stale response in its place.
    groups into the five status columns in memory, with no further query — none per
    column and none per card (see [Roadmap Tasks Page](#roadmap-tasks-page)); the
    sprint page reads that sprint and its member tasks in `sprint_tasks` position
-   order, which its own board then groups into the three columns in memory, again
-   with no further query per column and none per card (see
+   order, which its own board then groups into the three columns and orders in
+   memory — the `WAITING` column keeping the position order the read returned, the
+   `DOING` and `CLOSED` columns reordered by `started_at` and `closed_at`
+   descending — again with no further query per column and none per card (see
    [Sprint Detail Sub-Template](#sprint-detail-sub-template)); the
    audit log page reads the
    roadmap's audit entries ordered by `performed_at` descending, one fixed-size page
@@ -4472,9 +4538,11 @@ Rules:
     HTTP 200 and an HTML page showing all details of that sprint (id, status,
     `title`, description, execution `order`, capacity `max_tasks`, `created_at`,
     `started_at`, `closed_at`, and
-    `task_count`) and the sprint's member tasks as a three-column board whose cards
-    follow the `sprint_tasks` order (the planned
-    in-sprint execution order); the page header presents the sprint `title`
+    `task_count`) and the sprint's member tasks as a three-column board whose
+    `WAITING` column follows the `sprint_tasks` order (the planned
+    in-sprint execution order) while its `DOING` and `CLOSED` columns lead with the
+    most recently started and the most recently closed task respectively; the page
+    header presents the sprint `title`
     alongside `Sprint #<ID>`, and the sprint metadata datagrid shows the sprint
     `Title` and the execution `Order` in addition to the ID, Status, Capacity,
     Tasks, Created, Started, and Closed fields; the page contains no form, button,
@@ -5662,15 +5730,29 @@ Rules:
     three counts that each looked plausible on its own. For the sprint whose summary
     line reads `33% - P:8 A:29 C:18 - T:55`, the three column badges read `8`, `29`,
     and `18`, and the board shows 55 cards in total.
-132. Within every column the cards appear in the sprint's planned in-sprint
+132. Each column of the sprint's member-tasks board orders its cards by its own
+    key. In the `WAITING` column the cards appear in the sprint's planned in-sprint
     execution order, which is the `sprint_tasks` position order the page reads
     (`position` ascending; see
-    `DATABASE.md § List Sprint Tasks Ordered by Position`). Grouping the tasks into
-    the three columns preserves that relative order, so for any two tasks of one
-    column the card of the task with the lower `position` appears above the other.
-    The board applies no sort of its own: reordering the sprint's tasks through the
-    CLI and reloading the page reorders the cards accordingly, and no ordering by
-    priority, severity, id, or title is observable anywhere on the board.
+    `DATABASE.md § List Sprint Tasks Ordered by Position`), so for any two tasks of
+    that column the card of the task with the lower `position` appears above the
+    other. In the `DOING` column the cards appear by `started_at` descending, the
+    most recently started task first, and that holds for the column's `TESTING`
+    cards as well: a `TESTING` card takes its place from `started_at`, never from
+    `tested_at`. In the `CLOSED` column the cards appear by `closed_at` descending,
+    the most recently closed task first. Where two cards of one column carry the
+    same ordering timestamp, and where a card carries none, those cards are ordered
+    by `sprint_tasks` `position` ascending, and a card carrying no ordering
+    timestamp appears after every card of that column that carries one. Reordering
+    the sprint's tasks through the CLI and reloading the page therefore reorders the
+    cards of the `WAITING` column and leaves the order of the `DOING` and `CLOSED`
+    columns unchanged; the check MUST assert both halves of that split, because a
+    board that ordered all three columns by `position` and a board that ordered all
+    three by recency each satisfy one half on its own. The check's data MUST make
+    the three candidate orders differ from one another — the `position` order, the
+    ordering-timestamp order, and the task `id` order — so that no assertion can
+    pass on an order that merely coincides with the specified one. No ordering by
+    priority, severity, title, or id is observable anywhere on the board.
 133. Each card of the sprint's member-tasks board shows exactly six data points, in
     this order: the task `title` leading the card, the reference `#<id>` on its own
     line as secondary text, a `priority` badge reading `P` immediately followed by
@@ -5856,8 +5938,12 @@ Rules:
   columns, their left-to-right order, and the CHECK constraint that admits no sixth
   status → `MODELS.md § Enums`, `STATE_MACHINE.md § Task State Machine`, and
   `DATABASE.md § tasks Table`
-- Default task ordering that fixes the order of the cards inside each board column
-  → `DATABASE.md § Main SQL Queries` ("List All")
+- Default task ordering that fixes the order of the cards inside each column of the
+  tasks board → `DATABASE.md § Main SQL Queries` ("List All")
+- Lifecycle timestamps that order the `DOING` and `CLOSED` columns of the sprint
+  page's member-tasks board, and the planned order that breaks their ties →
+  `MODELS.md § Task`, `STATE_MACHINE.md § Date Tracking Fields`, and
+  `DATABASE.md § List Sprint Tasks Ordered by Position`
 - Task type enum and the `priority` and `severity` integer ranges that fix the
   accepted values of the tasks board's header filters → `MODELS.md § Enums` and
   `MODELS.md § Task`

@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -568,75 +569,702 @@ func TestSprintBoard_ColumnCountsAreTheSummaryLinesOwnNumbers(t *testing.T) {
 
 // ==================== ORDER WITHIN A COLUMN ====================
 
-// TestSprintBoard_CardOrderIsTheSprintTaskPosition is the gate for Acceptance
-// Criterion 132: within every column the cards appear in the sprint_tasks
-// position order the page reads, and the board applies no sort of its own.
+// sprintOrderFixture names the twelve member tasks seedSprintOrderFixture
+// created — four in each of the board's three columns — so the ordering
+// assertions bind the ids that actually exist rather than assuming an
+// autoincrement sequence.
 //
-// The fixture's position order is neither the id order nor the priority order, so
-// a board that re-sorted its cards — or that lost the read's order and fell back
-// to the id order SQLite would return unordered rows in — renders a different
-// sequence. Both alternatives are asserted against explicitly, because "the cards
-// are in position order" is satisfied vacuously by any order when the three
-// coincide.
+// Four per column is the smallest set that can carry every case the ordering
+// rule states at once: two cards separated by their timestamp, two carrying the
+// SAME timestamp (the tie), and one carrying none at all (SPEC/WEB.md § Sprint
+// Detail Sub-Template, rule 4, The tiebreaker is the plan; Acceptance Criterion
+// 132).
 //
-// The second half reorders the sprint through the production write path and
-// re-renders: the cards follow, which is what proves the order is READ rather
-// than computed.
-func TestSprintBoard_CardOrderIsTheSprintTaskPosition(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	f := seedSprintBoardFixture(t, "settlement-platform")
-	mux := buildMux()
+// The fields are grouped by column and declared in ID order within each group,
+// which is one of the three orders the test plays off against the other two.
+type sprintOrderFixture struct {
+	name     string
+	sprintID int
 
-	columns := memberBoardColumns(t, servePage(t, mux, f.path()))
-	for i, column := range columns {
-		heading, _ := columnHeader(t, column)
-		got := memberCardIDs(t, column)
-		want := f.wantColumns()[i]
-		if !equalIDs(got, want) {
-			t.Errorf("the %s column renders the cards %v, want the position order %v",
-				heading, got, want)
+	// WAITING (positions 4, 10, 1 and 7). backfillLedger is the one member
+	// returned to BACKLOG inside the sprint; the other three are SPRINT, and
+	// the column holds both statuses.
+	publishRules      int // SPRINT,  position 4
+	backfillLedger    int // BACKLOG, position 10
+	chartOfAccounts   int // SPRINT,  position 1
+	reconcileBalances int // SPRINT,  position 7
+
+	// DOING (positions 8, 5, 11 and 2), ordered by started_at descending.
+	freezeLegacy       int // DOING,   position 8,  started_at ABSENT
+	postingEngine      int // DOING,   position 5,  started_at 2026-03-18T14:05
+	validateMarchClose int // TESTING, position 11, started_at 2026-03-17T09:30 (tie)
+	portPayoutLedger   int // TESTING, position 2,  started_at 2026-03-17T09:30 (tie)
+
+	// CLOSED (positions 3, 9, 12 and 6), ordered by closed_at descending.
+	agreeCutover        int // position 3,  closed_at ABSENT
+	shipSchemaMigration int // position 9,  closed_at 2026-03-25T17:45
+	balanceAssertions   int // position 12, closed_at 2026-03-24T10:00 (tie)
+	documentInvariants  int // position 6,  closed_at 2026-03-24T10:00 (tie)
+}
+
+// path is the route the board is rendered on.
+func (f *sprintOrderFixture) path() string {
+	return "/roadmaps/" + f.name + "/sprints/" + itoa(f.sprintID)
+}
+
+// wantColumns is the order the three columns must render in, per column, before
+// the sprint is reordered.
+//
+//   - WAITING follows the sprint_tasks position order: 1, 4, 7, 10.
+//   - DOING follows started_at descending: the 18th, then the two cards tied on
+//     the 17th in position order (2 before 11), then the card carrying no
+//     started_at at all, which sorts last however early its position is.
+//   - CLOSED follows closed_at descending, on the same three rules: the 25th,
+//     then the two tied on the 24th in position order (6 before 12), then the
+//     card carrying no closed_at.
+func (f *sprintOrderFixture) wantColumns() [][]int {
+	return [][]int{
+		{f.chartOfAccounts, f.publishRules, f.reconcileBalances, f.backfillLedger},
+		{f.postingEngine, f.portPayoutLedger, f.validateMarchClose, f.freezeLegacy},
+		{f.shipSchemaMigration, f.documentInvariants, f.balanceAssertions, f.agreeCutover},
+	}
+}
+
+// positionOrder is the order the three columns would render in if the board
+// ordered ALL of them by sprint_tasks position — the board this one replaced.
+//
+// It is the control the ordering assertions are read against: for WAITING it is
+// the specified order, and for DOING and CLOSED it must differ from it, or an
+// assertion could pass on a board that never learnt the difference.
+func (f *sprintOrderFixture) positionOrder() [][]int {
+	return [][]int{
+		{f.chartOfAccounts, f.publishRules, f.reconcileBalances, f.backfillLedger},
+		{f.portPayoutLedger, f.postingEngine, f.freezeLegacy, f.validateMarchClose},
+		{f.agreeCutover, f.documentInvariants, f.shipSchemaMigration, f.balanceAssertions},
+	}
+}
+
+// idOrder is the order the three columns would render in if the board fell back
+// to the task id — the order SQLite hands back rows in when an ORDER BY is lost.
+func (f *sprintOrderFixture) idOrder() [][]int {
+	return [][]int{
+		{f.publishRules, f.backfillLedger, f.chartOfAccounts, f.reconcileBalances},
+		{f.freezeLegacy, f.postingEngine, f.validateMarchClose, f.portPayoutLedger},
+		{f.agreeCutover, f.shipSchemaMigration, f.balanceAssertions, f.documentInvariants},
+	}
+}
+
+// reordered is the sprint's task order after the reorder half of the test, in
+// the order `rmp sprint reorder` would be given the ids.
+//
+// It reverses the WAITING column and moves every DOING and CLOSED card to a new
+// position, so a board ordering all three columns by position would render all
+// three differently afterwards. What it does NOT change is the relative position
+// of the two tied cards in each of those columns: the tie IS broken by position,
+// so reversing a tied pair would legitimately reorder its column and the "DOING
+// and CLOSED are unchanged" half of the assertion would be asserting the wrong
+// thing.
+func (f *sprintOrderFixture) reordered() []int {
+	return []int{
+		f.backfillLedger, f.freezeLegacy, f.documentInvariants,
+		f.reconcileBalances, f.portPayoutLedger, f.balanceAssertions,
+		f.publishRules, f.postingEngine, f.agreeCutover,
+		f.chartOfAccounts, f.validateMarchClose, f.shipSchemaMigration,
+	}
+}
+
+// wantColumnsAfterReorder is the board the reordered sprint must render: a
+// WAITING column following the NEW position order, and a DOING and a CLOSED
+// column identical to what they were, because neither is ordered by position.
+func (f *sprintOrderFixture) wantColumnsAfterReorder() [][]int {
+	return [][]int{
+		{f.backfillLedger, f.reconcileBalances, f.publishRules, f.chartOfAccounts},
+		{f.postingEngine, f.portPayoutLedger, f.validateMarchClose, f.freezeLegacy},
+		{f.shipSchemaMigration, f.documentInvariants, f.balanceAssertions, f.agreeCutover},
+	}
+}
+
+// positionOrderAfterReorder is what the three columns would render in after the
+// reorder if the board ordered all of them by position. Every one of the three
+// differs from the corresponding entry of positionOrder, which is what makes
+// "DOING and CLOSED did not move" a claim about the board's ordering rule rather
+// than a claim about the reorder having done nothing.
+func (f *sprintOrderFixture) positionOrderAfterReorder() [][]int {
+	return [][]int{
+		{f.backfillLedger, f.reconcileBalances, f.publishRules, f.chartOfAccounts},
+		{f.freezeLegacy, f.portPayoutLedger, f.postingEngine, f.validateMarchClose},
+		{f.documentInvariants, f.balanceAssertions, f.agreeCutover, f.shipSchemaMigration},
+	}
+}
+
+// The ordering timestamps the fixture installs. They are written out here, once,
+// so the expected orders above can be read against them.
+//
+// The format is utils.ISO8601Format (YYYY-MM-DDTHH:mm:ss.sssZ), which is what
+// every production write of these columns produces: the board compares the
+// stored strings, and a fixture writing some other spelling would be testing a
+// value the application cannot store.
+const (
+	orderStartedPostingEngine = "2026-03-18T14:05:00.000Z"
+	orderStartedTiedPair      = "2026-03-17T09:30:00.000Z" // shared by two cards
+	orderTestedValidate       = "2026-03-21T08:00:00.000Z" // the LATEST tested_at
+	orderTestedPortPayout     = "2026-03-20T11:00:00.000Z"
+	orderClosedShipMigration  = "2026-03-25T17:45:00.000Z"
+	orderClosedTiedPair       = "2026-03-24T10:00:00.000Z" // shared by two cards
+)
+
+// The three UPDATE statements the fixture uses to install a controlled lifecycle
+// timestamp. They are constants with no interpolation of any kind: the column is
+// part of the literal and the value and the id are bound, so the helper below
+// can set exactly these three columns and nothing else.
+const (
+	sqlSetTaskStartedAt = "UPDATE tasks SET started_at = ? WHERE id = ?"
+	sqlSetTaskTestedAt  = "UPDATE tasks SET tested_at = ? WHERE id = ?"
+	sqlSetTaskClosedAt  = "UPDATE tasks SET closed_at = ? WHERE id = ?"
+)
+
+// setTaskLifecycleTimestamp writes one task lifecycle timestamp directly into
+// the fixture database, through the *sql.DB the roadmap database embeds. A nil
+// value writes SQL NULL.
+//
+// THIS IS A FIXTURE-ONLY WRITE, and it is deliberate. started_at, tested_at and
+// closed_at are set by the task state machine and never by a caller: every
+// production write of them stamps utils.NowISO8601 (SPEC/STATE_MACHINE.md § Date
+// Tracking Fields), so driving the tasks through `task stat` alone would give the
+// test whatever instants the clock happened to produce — it could not choose
+// which card is the most recent, could not make the timestamp order differ from
+// the position order and the id order on purpose, and could not produce the two
+// cases the ordering rule is explicitly written for: two cards carrying the SAME
+// instant and a card carrying NONE.
+//
+// So the fixture drives every task through the production status path first,
+// which is what puts the tasks in their statuses and stamps them, and only then
+// rewrites the stamped values to the ones the assertions are written against.
+// Nothing in the production code writes a timestamp this way; the same technique
+// already seeds the sprint closed_at values in sprint_test.go (setClosed).
+//
+// The NULL cases are the deliberate part of the same argument. MODELS.md § Task
+// makes all three fields nullable and SPEC/WEB.md states where a card carrying no
+// ordering timestamp sorts, so the rule has a case that the state machine's own
+// transitions cannot reach and that must still be covered.
+func setTaskLifecycleTimestamp(t *testing.T, database *db.DB, statement string, id int, value *string) {
+	t.Helper()
+
+	if _, err := database.ExecContext(context.Background(), statement, value, id); err != nil {
+		t.Fatalf("setting the lifecycle timestamp of task %d: %v", id, err)
+	}
+}
+
+// seedSprintOrderFixture builds a roadmap holding one OPEN sprint with twelve
+// member tasks, four in each board column, seeded so that the three candidate
+// orders of every column differ from one another:
+//
+//	created in one order       -> fixes the id order
+//	added to the sprint in a second order -> fixes the sprint_tasks position order
+//	stamped in a third order   -> fixes the started_at / closed_at order
+//
+// No assertion of the ordering test can therefore pass on an order that merely
+// coincides with the specified one (Acceptance Criterion 132), and each column's
+// specified order is checked against both alternatives explicitly.
+//
+// The DOING column additionally carries two TESTING cards whose tested_at values
+// are the LATEST timestamps in the whole fixture and rank the two differently
+// from started_at, so a board that ordered a TESTING card by tested_at renders a
+// different column and fails.
+func seedSprintOrderFixture(t *testing.T, name string) sprintOrderFixture {
+	t.Helper()
+
+	database, err := db.Open(name)
+	if err != nil {
+		t.Fatalf("opening roadmap %q: %v", name, err)
+	}
+	defer database.Close() //nolint:errcheck // test cleanup
+
+	ctx := context.Background()
+	f := sprintOrderFixture{name: name}
+
+	newTask := func(title, created string, priority, severity int, taskType models.TaskType) int {
+		t.Helper()
+		id, cerr := database.CreateTask(ctx, &models.Task{
+			Title:                  title,
+			Type:                   taskType,
+			Status:                 models.StatusBacklog,
+			Priority:               priority,
+			Severity:               severity,
+			FunctionalRequirements: "Every ledger movement must be expressed as a balanced double-entry posting.",
+			TechnicalRequirements:  "Implemented against the posting engine; the legacy writer stays read-only.",
+			AcceptanceCriteria:     "The March close reconciles to zero against the double-entry postings.",
+			CreatedAt:              created,
+		})
+		if cerr != nil {
+			t.Fatalf("creating task %q: %v", title, cerr)
+		}
+		return id
+	}
+
+	// Creation order fixes the id order, and it interleaves the three columns so
+	// that no column's id order can coincide with its position order by accident.
+	f.publishRules = newTask("Publish the double-entry posting rules to the finance team",
+		"2026-02-02T09:00:00Z", 9, 3, models.TypeTask)
+	f.freezeLegacy = newTask("Freeze the legacy single-entry write path",
+		"2026-02-03T09:00:00Z", 8, 7, models.TypeChore)
+	f.agreeCutover = newTask("Agree the double-entry migration cutover window",
+		"2026-02-04T09:00:00Z", 6, 2, models.TypeTask)
+	f.backfillLedger = newTask("Backfill the historical ledger into double-entry postings",
+		"2026-02-05T09:00:00Z", 6, 8, models.TypeUserStory)
+	f.postingEngine = newTask("Write the double-entry posting engine",
+		"2026-02-06T09:00:00Z", 3, 9, models.TypeUserStory)
+	f.shipSchemaMigration = newTask("Ship the posting-engine schema migration",
+		"2026-02-07T09:00:00Z", 2, 4, models.TypeTask)
+	f.chartOfAccounts = newTask("Model the chart of accounts for the double-entry ledger",
+		"2026-02-08T09:00:00Z", 4, 5, models.TypeUserStory)
+	f.validateMarchClose = newTask("Validate the posting engine against the March close",
+		"2026-02-09T09:00:00Z", 5, 6, models.TypeBug)
+	f.balanceAssertions = newTask("Instrument the posting engine with balance assertions",
+		"2026-02-10T09:00:00Z", 9, 1, models.TypeChore)
+	f.reconcileBalances = newTask("Reconcile the legacy balance sheet against the new postings",
+		"2026-02-11T09:00:00Z", 1, 8, models.TypeTask)
+	f.portPayoutLedger = newTask("Port the payout ledger to the posting engine",
+		"2026-02-12T09:00:00Z", 7, 3, models.TypeUserStory)
+	f.documentInvariants = newTask("Document the double-entry posting invariants",
+		"2026-02-13T09:00:00Z", 4, 2, models.TypeChore)
+
+	f.sprintID = newSprint(t, database, "Migrate the ledger to double-entry postings",
+		"Replace the single-entry ledger with balanced postings, cutover included.")
+
+	// Membership in POSITION order, which AddTasksToSprint assigns sequentially.
+	// It matches no column's id order and, in DOING and CLOSED, no column's
+	// timestamp order either.
+	members := []int{
+		f.chartOfAccounts, f.portPayoutLedger, f.agreeCutover, f.publishRules,
+		f.postingEngine, f.documentInvariants, f.reconcileBalances, f.freezeLegacy,
+		f.shipSchemaMigration, f.backfillLedger, f.validateMarchClose, f.balanceAssertions,
+	}
+	if aerr := database.AddTasksToSprint(ctx, f.sprintID, members); aerr != nil {
+		t.Fatalf("adding the member tasks to the sprint: %v", aerr)
+	}
+	if serr := database.UpdateSprintStatus(ctx, f.sprintID, models.SprintOpen); serr != nil {
+		t.Fatalf("opening the sprint: %v", serr)
+	}
+
+	// The statuses, set through the production write path and in the order the
+	// state machine allows: SPRINT -> DOING -> TESTING -> COMPLETED. Membership
+	// already put every member in SPRINT, so the WAITING column needs no move
+	// beyond the single task returned to BACKLOG inside the sprint.
+	statusMoves := []struct {
+		status models.TaskStatus
+		ids    []int
+	}{
+		{models.StatusBacklog, []int{f.backfillLedger}},
+		{models.StatusDoing, []int{
+			f.freezeLegacy, f.postingEngine, f.validateMarchClose, f.portPayoutLedger,
+			f.agreeCutover, f.shipSchemaMigration, f.balanceAssertions, f.documentInvariants,
+		}},
+		{models.StatusTesting, []int{
+			f.validateMarchClose, f.portPayoutLedger,
+			f.agreeCutover, f.shipSchemaMigration, f.balanceAssertions, f.documentInvariants,
+		}},
+		{models.StatusCompleted, []int{
+			f.agreeCutover, f.shipSchemaMigration, f.balanceAssertions, f.documentInvariants,
+		}},
+	}
+	for _, move := range statusMoves {
+		if uerr := database.UpdateTaskStatus(ctx, move.ids, move.status); uerr != nil {
+			t.Fatalf("moving %v to %s: %v", move.ids, move.status, uerr)
 		}
 	}
 
-	// The controls that make the assertion above discriminating: the WAITING
-	// column's position order differs from both alternatives a defective board
-	// would produce.
-	waiting := f.wantColumns()[0]
-	byID := []int{f.reconcile, f.alerting, f.runbook}
-	byPriority := []int{f.reconcile, f.runbook, f.alerting}
-	if equalIDs(waiting, byID) {
-		t.Fatalf("the fixture's WAITING position order %v is also its id order; the ordering "+
-			"assertion would pass on a board that ignored the read's order", waiting)
-	}
-	if equalIDs(waiting, byPriority) {
-		t.Fatalf("the fixture's WAITING position order %v is also its priority order; the "+
-			"ordering assertion would pass on a board that sorted by priority", waiting)
+	// The controlled ordering timestamps, replacing the "now" the transitions
+	// above stamped. See setTaskLifecycleTimestamp for why the fixture writes
+	// these directly instead of letting the clock choose them.
+	startedPostingEngine := orderStartedPostingEngine
+	startedTied := orderStartedTiedPair
+	testedValidate := orderTestedValidate
+	testedPortPayout := orderTestedPortPayout
+	closedShipMigration := orderClosedShipMigration
+	closedTied := orderClosedTiedPair
+
+	for _, stamp := range []struct {
+		statement string
+		value     *string
+		id        int
+	}{
+		// DOING column, by started_at descending.
+		{sqlSetTaskStartedAt, &startedPostingEngine, f.postingEngine},
+		{sqlSetTaskStartedAt, &startedTied, f.validateMarchClose},
+		{sqlSetTaskStartedAt, &startedTied, f.portPayoutLedger},
+		{sqlSetTaskStartedAt, nil, f.freezeLegacy},
+		// tested_at, which must order nothing: the two TESTING cards carry the
+		// latest timestamps in the fixture, and they rank the pair the other way
+		// round from started_at plus the position tiebreak.
+		{sqlSetTaskTestedAt, &testedValidate, f.validateMarchClose},
+		{sqlSetTaskTestedAt, &testedPortPayout, f.portPayoutLedger},
+		// CLOSED column, by closed_at descending.
+		{sqlSetTaskClosedAt, &closedShipMigration, f.shipSchemaMigration},
+		{sqlSetTaskClosedAt, &closedTied, f.balanceAssertions},
+		{sqlSetTaskClosedAt, &closedTied, f.documentInvariants},
+		{sqlSetTaskClosedAt, nil, f.agreeCutover},
+	} {
+		setTaskLifecycleTimestamp(t, database, stamp.statement, stamp.id, stamp.value)
 	}
 
-	// Reordering through the production path reorders the cards. The reversal
-	// moves a task within its column (runbook from first to last of WAITING) and
-	// swaps the two DOING cards, so both columns change.
-	reordered := []int{f.schema, f.alerting, f.retries, f.dashboard, f.reconcile, f.runbook}
-	reorderSprintTasks(t, f.name, f.sprintID, reordered)
+	return f
+}
 
-	columns = memberBoardColumns(t, servePage(t, mux, f.path()))
-	wantAfter := [][]int{
-		{f.alerting, f.reconcile, f.runbook}, // WAITING: positions 2, 5 and 6
-		{f.retries, f.dashboard},             // DOING:   positions 3 and 4
-		{f.schema},                           // CLOSED:  position 1
-	}
+// assertBoardOrder checks the three columns of the rendered board against the
+// order each must be in, naming the column in every failure.
+func assertBoardOrder(t *testing.T, body string, want [][]int, when string) {
+	t.Helper()
+
+	columns := memberBoardColumns(t, body)
 	for i, column := range columns {
 		heading, _ := columnHeader(t, column)
 		got := memberCardIDs(t, column)
-		if !equalIDs(got, wantAfter[i]) {
-			t.Errorf("after reordering the sprint, the %s column renders the cards %v, want %v",
-				heading, got, wantAfter[i])
+		if !equalIDs(got, want[i]) {
+			t.Errorf("%s, the %s column renders the cards %v, want %v",
+				when, heading, got, want[i])
 		}
 	}
 }
 
+// assertOrdersDiffer fails the test when a column's specified order coincides
+// with one of the orders a defective board would produce, which would make the
+// corresponding assertion vacuous.
+func assertOrdersDiffer(t *testing.T, want, alternative [][]int, columns []string, what string) {
+	t.Helper()
+
+	for i := range want {
+		if equalIDs(want[i], alternative[i]) {
+			t.Fatalf("the fixture's %s column order %v is also its %s; the ordering "+
+				"assertion would pass on a board that used the latter",
+				columns[i], want[i], what)
+		}
+	}
+}
+
+// sprintOrderColumnHeadings names the three columns for the failure messages of
+// the helpers above, left to right.
+var sprintOrderColumnHeadings = []string{"WAITING", "DOING", "CLOSED"}
+
+// TestSprintBoard_EachColumnOrdersByItsOwnKey is the gate for Acceptance
+// Criterion 132: the three columns of the sprint's member-tasks board do NOT
+// share one order. WAITING follows the sprint_tasks position order the page
+// reads, DOING follows started_at descending, and CLOSED follows closed_at
+// descending; where two cards of a column carry the same ordering timestamp, and
+// where a card carries none, the cards fall back to position ascending, and a
+// card carrying no timestamp sorts last in its column.
+//
+// The test asserts ALL THREE orders, not just the one that changed, and it
+// asserts BOTH HALVES of the split the criterion names: reordering the sprint
+// through the production write path reorders the WAITING column AND leaves the
+// DOING and CLOSED columns exactly as they were. Each half on its own is
+// satisfied by a board that got the rule wrong — a board ordering all three
+// columns by position satisfies the first, a board ordering all three by recency
+// satisfies the second — so neither half is evidence without the other.
+//
+// Every assertion is guarded against coincidence. The fixture's position order,
+// timestamp order and id order differ from one another in every column, and the
+// guards below state that explicitly, so an assertion cannot pass on an order
+// that merely happens to look like the specified one.
+func TestSprintBoard_EachColumnOrdersByItsOwnKey(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	f := seedSprintOrderFixture(t, "ledger-migration")
+	mux := buildMux()
+
+	// The controls first: if the fixture ever loses the property that its three
+	// candidate orders differ, the assertions below stop discriminating and the
+	// test must say so rather than pass.
+	assertOrdersDiffer(t, f.wantColumns()[1:], f.positionOrder()[1:],
+		sprintOrderColumnHeadings[1:], "sprint_tasks position order")
+	assertOrdersDiffer(t, f.wantColumns(), f.idOrder(),
+		sprintOrderColumnHeadings, "task id order")
+
+	body := servePage(t, mux, f.path())
+	assertBoardOrder(t, body, f.wantColumns(), "as the sprint was planned")
+
+	columns := memberBoardColumns(t, body)
+	doing, closed := memberCardIDs(t, columns[1]), memberCardIDs(t, columns[2])
+
+	// THE TIE. Two cards of the DOING column entered DOING at the same instant
+	// and two cards of the CLOSED column were closed at the same instant, which
+	// is the ordinary case rather than a contrived one: a bulk `rmp task stat`
+	// stamps a whole batch alike. Each tied pair falls back to the sprint_tasks
+	// position, ascending — and in both pairs the id order is the REVERSE of the
+	// position order, so a board tiebreaking on the id fails here.
+	assertCardBefore(t, doing, f.portPayoutLedger, f.validateMarchClose,
+		"the DOING column's two cards tied on started_at fall back to position ascending")
+	assertCardBefore(t, closed, f.documentInvariants, f.balanceAssertions,
+		"the CLOSED column's two cards tied on closed_at fall back to position ascending")
+
+	// THE ABSENT TIMESTAMP. A card that states no time sorts last in its column,
+	// after every card that states one — and it does so despite holding a
+	// position that is not last, so "last" is the rule at work and not the
+	// position order showing through.
+	assertCardLast(t, doing, f.freezeLegacy, "a DOING card carrying no started_at")
+	assertCardLast(t, closed, f.agreeCutover, "a CLOSED card carrying no closed_at")
+	if f.positionOrder()[1][len(f.positionOrder()[1])-1] == f.freezeLegacy {
+		t.Fatalf("the fixture's card with no started_at is also last by position; the " +
+			"assertion would pass on a board that never applied the rule")
+	}
+	if f.positionOrder()[2][len(f.positionOrder()[2])-1] == f.agreeCutover {
+		t.Fatalf("the fixture's card with no closed_at is also last by position; the " +
+			"assertion would pass on a board that never applied the rule")
+	}
+
+	// tested_at ORDERS NOTHING. The DOING column groups DOING and TESTING and
+	// started_at orders both: a TESTING card takes its place from when its task
+	// entered DOING. The two TESTING cards carry the fixture's LATEST timestamps
+	// in tested_at, so a board that ordered a TESTING card by tested_at would put
+	// one of them at the head of the column instead of the DOING card that is
+	// there.
+	if doing[0] != f.postingEngine {
+		t.Errorf("the DOING column is headed by task #%d, want the most recently STARTED "+
+			"task #%d; a TESTING card takes its place from started_at and never from "+
+			"tested_at", doing[0], f.postingEngine)
+	}
+
+	// THE SPLIT. Reordering the sprint through the production write path moves
+	// every card to a new position, in all three columns.
+	reorderSprintTasks(t, f.name, f.sprintID, f.reordered())
+
+	// The reorder must actually change what a position-ordered board would show
+	// in DOING and CLOSED, or "those two columns did not move" is a claim about
+	// the reorder rather than about the board.
+	assertOrdersDiffer(t, f.positionOrderAfterReorder()[1:], f.positionOrder()[1:],
+		sprintOrderColumnHeadings[1:], "position order before the reorder")
+	assertOrdersDiffer(t, f.wantColumnsAfterReorder()[:1], f.wantColumns()[:1],
+		sprintOrderColumnHeadings[:1], "order before the reorder")
+
+	assertBoardOrder(t, servePage(t, mux, f.path()), f.wantColumnsAfterReorder(),
+		"after reordering the sprint")
+}
+
+// assertCardBefore fails the test unless the card of task `first` appears above
+// the card of task `second` in the column's rendered order.
+func assertCardBefore(t *testing.T, column []int, first, second int, why string) {
+	t.Helper()
+
+	at, other := indexOfID(column, first), indexOfID(column, second)
+	if at < 0 || other < 0 {
+		t.Fatalf("%s: the column %v does not hold both task #%d and task #%d",
+			why, column, first, second)
+	}
+	if at > other {
+		t.Errorf("%s: task #%d is rendered at %d, below task #%d at %d",
+			why, first, at, second, other)
+	}
+}
+
+// assertCardLast fails the test unless the card of task `id` is the last of the
+// column.
+func assertCardLast(t *testing.T, column []int, id int, what string) {
+	t.Helper()
+
+	at := indexOfID(column, id)
+	if at < 0 {
+		t.Fatalf("%s (task #%d) is not in the column %v at all", what, id, column)
+	}
+	if at != len(column)-1 {
+		t.Errorf("%s (task #%d) is rendered at %d of %d, want last: a card whose ordering "+
+			"timestamp is absent sorts after every card that carries one",
+			what, id, at, len(column))
+	}
+}
+
+// indexOfID returns the position of a task id in a column's rendered order, or
+// -1 when the column does not hold it.
+func indexOfID(column []int, id int) int {
+	for i := range column {
+		if column[i] == id {
+			return i
+		}
+	}
+	return -1
+}
+
+// sprintTieCutoverServices names the fifteen services the tie fixture's member
+// tasks cut over, one task each. Fifteen in-progress tasks in one sprint is an
+// ordinary size rather than a stress case: SPEC/WEB.md's own worked example of a
+// sprint reads `33% - P:8 A:29 C:18 - T:55`.
+var sprintTieCutoverServices = [...]string{
+	"card authorisation", "refunds", "chargebacks", "payouts", "settlement import",
+	"fee calculation", "invoicing", "dunning", "tax engine", "currency conversion",
+	"wallet top-up", "direct debit", "payment links", "subscription billing",
+	"fraud scoring",
+}
+
+// sprintTieMemberOrder is the order the fifteen tasks are added to the sprint,
+// as indices into sprintTieCutoverServices — so it is the sprint_tasks position
+// order, and it is a permutation of the creation order rather than a shuffle
+// computed at run time, because a fixture whose data changes per run cannot be
+// read against a failure message.
+var sprintTieMemberOrder = [...]int{9, 2, 14, 5, 0, 11, 7, 3, 13, 1, 8, 12, 4, 10, 6}
+
+// sprintTieBatches groups the same fifteen tasks into the three bulk status
+// changes that move them into DOING, most recent batch first. Every task of a
+// batch carries the batch's started_at, so the column holds three groups of five
+// cards tied on their ordering timestamp.
+var sprintTieBatches = [...][5]int{
+	{0, 4, 7, 11, 13},
+	{1, 3, 8, 10, 14},
+	{2, 5, 6, 9, 12},
+}
+
+// sprintTieStartedAt is the started_at each batch carries, in the same order,
+// descending. The values are fixed rather than left to the clock so the expected
+// column order is the same on every run.
+var sprintTieStartedAt = [...]string{
+	"2026-04-10T09:15:00.000Z",
+	"2026-04-09T16:40:00.000Z",
+	"2026-04-08T11:05:00.000Z",
+}
+
+// TestSprintBoard_TiedCardsKeepThePlannedOrderAtColumnScale pins the ONE
+// property the tiebreaker rests on: the sort that orders a column by its
+// timestamp is STABLE, so the cards the timestamp does not separate come out in
+// the sprint_tasks position order the read delivered them in (SPEC/WEB.md
+// § Sprint Detail Sub-Template, rule 4, The tiebreaker is the plan; Acceptance
+// Criterion 132).
+//
+// It exists because that property is INVISIBLE in a small column. Go's
+// sort.Slice sorts a short slice by insertion, which happens to be stable, so a
+// column of four cards renders identically whether the board sorts stably or not
+// and a test built on one cannot tell the two apart. Above the insertion-sort
+// threshold the unstable sort reorders equal elements, and the difference becomes
+// observable — which is exactly when a real sprint would notice it, because the
+// case is ordinary: a bulk `rmp task stat` moves a batch of tasks in one
+// operation and stamps every one of them alike (SPEC/COMMANDS.md § Change Status
+// (stat)).
+//
+// The fixture therefore builds a DOING column of fifteen cards in three bulk
+// batches of five, each batch tied on its own started_at. The expected order is
+// derived from the fixture's own data by the rule the specification states —
+// batch by batch, most recent first, and inside a batch by position ascending —
+// and is checked against both the plain position order and the plain id order, so
+// it cannot pass on either.
+func TestSprintBoard_TiedCardsKeepThePlannedOrderAtColumnScale(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name, sprintID, ids := seedSprintTieFixture(t, "payments-cutover")
+	mux := buildMux()
+
+	// Position of each task in the sprint plan, keyed by the index the fixture
+	// names it by.
+	position := make(map[int]int, len(sprintTieMemberOrder))
+	for pos, created := range sprintTieMemberOrder {
+		position[created] = pos
+	}
+
+	// The expected column: the batches in started_at order, each batch's cards in
+	// position order. This walks the fixture's declared data by the rule the
+	// specification states; it does not consult the board.
+	want := make([]int, 0, len(sprintTieCutoverServices))
+	for _, batch := range sprintTieBatches {
+		ordered := append([]int(nil), batch[:]...)
+		sort.Slice(ordered, func(i, j int) bool { return position[ordered[i]] < position[ordered[j]] })
+		for _, created := range ordered {
+			want = append(want, ids[created])
+		}
+	}
+
+	// The controls. Neither the plain position order nor the plain id order may
+	// coincide with it, or the assertion below would hold on a board that ordered
+	// the column by one of them and never sorted at all.
+	byPosition := make([]int, 0, len(sprintTieMemberOrder))
+	for _, created := range sprintTieMemberOrder {
+		byPosition = append(byPosition, ids[created])
+	}
+	byID := append([]int(nil), ids...)
+	sort.Ints(byID)
+	if equalIDs(want, byPosition) {
+		t.Fatalf("the fixture's expected order %v is also its position order", want)
+	}
+	if equalIDs(want, byID) {
+		t.Fatalf("the fixture's expected order %v is also its id order", want)
+	}
+
+	columns := memberBoardColumns(t, servePage(t, mux,
+		"/roadmaps/"+name+"/sprints/"+itoa(sprintID)))
+	got := memberCardIDs(t, columns[1])
+	if !equalIDs(got, want) {
+		t.Errorf("the DOING column renders the cards\n got %v\nwant %v\n"+
+			"cards tied on started_at must come out in sprint_tasks position order, which "+
+			"they only do if the column's sort is stable", got, want)
+	}
+}
+
+// seedSprintTieFixture builds a roadmap holding one OPEN sprint whose DOING
+// column carries fifteen cards in three bulk-stamped batches of five, and returns
+// the roadmap name, the sprint id, and the task ids in creation order.
+//
+// The batches are moved through the PRODUCTION status path, one bulk
+// UpdateTaskStatus per batch, which is the shape `rmp task stat <id,id,...>
+// DOING` produces and the reason equal timestamps are ordinary. Their stamped
+// values are then replaced with the fixed ones in sprintTieStartedAt, so the
+// expected order does not depend on how far apart the clock happened to place two
+// consecutive batches; see setTaskLifecycleTimestamp for why a fixture writes
+// these directly.
+func seedSprintTieFixture(t *testing.T, name string) (string, int, []int) {
+	t.Helper()
+
+	database, err := db.Open(name)
+	if err != nil {
+		t.Fatalf("opening roadmap %q: %v", name, err)
+	}
+	defer database.Close() //nolint:errcheck // test cleanup
+
+	ctx := context.Background()
+	ids := make([]int, 0, len(sprintTieCutoverServices))
+	for i, service := range sprintTieCutoverServices {
+		id, cerr := database.CreateTask(ctx, &models.Task{
+			Title:                  "Cut the " + service + " service over to the shared payment ledger",
+			Type:                   models.TypeTask,
+			Status:                 models.StatusBacklog,
+			Priority:               (i % 9) + 1,
+			Severity:               (i % 7) + 1,
+			FunctionalRequirements: "The service must post to the shared ledger without a dual-write window.",
+			TechnicalRequirements:  "Move the service's writes behind the ledger client and retire its own store.",
+			AcceptanceCriteria:     "The service's postings reconcile against the shared ledger for a full day.",
+			CreatedAt:              "2026-04-0" + itoa((i%9)+1) + "T09:00:00Z",
+		})
+		if cerr != nil {
+			t.Fatalf("creating the %s cutover task: %v", service, cerr)
+		}
+		ids = append(ids, id)
+	}
+
+	sprintID := newSprint(t, database, "Cut the payment services over to the shared ledger",
+		"Retire every service-local ledger in favour of the shared double-entry ledger.")
+
+	members := make([]int, 0, len(sprintTieMemberOrder))
+	for _, created := range sprintTieMemberOrder {
+		members = append(members, ids[created])
+	}
+	if aerr := database.AddTasksToSprint(ctx, sprintID, members); aerr != nil {
+		t.Fatalf("adding the member tasks to the sprint: %v", aerr)
+	}
+	if serr := database.UpdateSprintStatus(ctx, sprintID, models.SprintOpen); serr != nil {
+		t.Fatalf("opening the sprint: %v", serr)
+	}
+
+	for b := range sprintTieBatches {
+		batch := make([]int, 0, len(sprintTieBatches[b]))
+		for _, created := range sprintTieBatches[b] {
+			batch = append(batch, ids[created])
+		}
+		if uerr := database.UpdateTaskStatus(ctx, batch, models.StatusDoing); uerr != nil {
+			t.Fatalf("moving the batch %v to DOING: %v", batch, uerr)
+		}
+		started := sprintTieStartedAt[b]
+		for _, id := range batch {
+			setTaskLifecycleTimestamp(t, database, sqlSetTaskStartedAt, id, &started)
+		}
+	}
+
+	return name, sprintID, ids
+}
+
 // reorderSprintTasks sets the sprint's task order through the production write
-// path, so the value under test travels the same route `rmp sprint reorder-tasks`
+// path, so the value under test travels the same route `rmp sprint reorder`
 // travels.
 func reorderSprintTasks(t *testing.T, roadmap string, sprintID int, taskIDs []int) {
 	t.Helper()

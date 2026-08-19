@@ -178,7 +178,19 @@ All three columns are always present, in that order, whatever the sprint holds. 
 
 ### Order within a column
 
-The cards of a column appear in the sprint's planned in-sprint execution order — the order `rmp sprint tasks` returns and `rmp sprint reorder` sets. Grouping the tasks into the three columns preserves that relative order, and the board applies no sort of its own: reordering the sprint through the CLI and reloading the page reorders the cards. There is one notion of order on this board, and it is the one you planned.
+Each column is ordered by the question that column answers:
+
+| Column | Order | What you read at the top |
+|--------|-------|--------------------------|
+| `WAITING` | Planned in-sprint execution order (`position` ascending) | The next task to develop |
+| `DOING` | `started_at` descending | The task that entered `DOING` most recently |
+| `CLOSED` | `closed_at` descending | The task closed most recently |
+
+`WAITING` is a queue of work not yet started, so the plan is what you want from it: it is the order `rmp sprint tasks` returns and `rmp sprint reorder` sets, and reordering the sprint through the CLI reorders that column. `DOING` and `CLOSED` are not queues but records of what has happened, so they lead with the most recent and a CLI reorder does not touch them. The board therefore holds more than one notion of order, deliberately: each column is ordered by the one thing that column is about.
+
+A task in `TESTING` sits in the `DOING` column and is ordered by `started_at` as well — when it entered `DOING`, not when it entered `TESTING` — so one key orders the whole column.
+
+Where two cards carry the same ordering timestamp, which is ordinary because a bulk `rmp task stat` stamps a batch alike, they fall back to the planned order; a card with no ordering timestamp sorts last in its column. The fallback is the plan because that is the only other order the sprint defines.
 
 ### Cards
 

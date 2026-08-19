@@ -453,26 +453,61 @@ func TestSprintPage_HappyPath(t *testing.T) {
 	}
 }
 
-// TestSprintPage_TaskOrder asserts the sprint page presents its tasks in
-// sprint_tasks position order (the planned in-sprint execution order), not by id
-// or status (SPEC/WEB.md § Roadmap Sprint Page; Acceptance Criteria 13 and 132).
-// The OPEN sprint was seeded with openTaskID added before openTaskID2, and both
-// are in the same board column, so the document order of their two cards is the
-// order within that column.
+// TestSprintPage_TaskOrder asserts that the sprint page presents the tasks of
+// its WAITING column in sprint_tasks position order — the planned in-sprint
+// execution order — and not by id (SPEC/WEB.md § Roadmap Sprint Page; Acceptance
+// Criteria 13, 14 and 132).
+//
+// WAITING is the one column of the three that is ordered by position: it holds
+// the work that has not started, so its order is the plan and answers "which task
+// do I develop next?". The DOING and CLOSED columns are records rather than
+// queues and are ordered by started_at and closed_at descending; they are not
+// this test's subject, and the whole three-column rule is pinned by
+// TestSprintBoard_EachColumnOrdersByItsOwnKey in sprint_board_test.go. The
+// fixture's two OPEN-sprint member tasks are both in SPRINT status, so both cards
+// sit in WAITING and their document order is the order within that column.
+//
+// The assertion is made discriminating by reordering the sprint through the
+// production write path: the fixture adds the two tasks in id order, so the
+// as-seeded page cannot tell a position-ordered column from an id-ordered one,
+// and the reordered page can — the two orders are then opposites.
 func TestSprintPage_TaskOrder(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	f := seedSprintFixture(t, "web-sprint-order")
 	mux := buildMux()
 
-	body := servePage(t, mux, "/roadmaps/"+f.name+"/sprints/"+itoa(f.openID))
+	const (
+		firstTitle  = "Build the read-only sprint page route and template"
+		secondTitle = "Render one task detail modal per shown task"
+	)
+	path := "/roadmaps/" + f.name + "/sprints/" + itoa(f.openID)
 
-	first := strings.Index(body, "Build the read-only sprint page route and template")
-	second := strings.Index(body, "Render one task detail modal per shown task")
-	if first < 0 || second < 0 {
-		t.Fatalf("sprint page is missing one of its member tasks (first=%d second=%d)", first, second)
+	cardOrder := func(body string) (int, int) {
+		t.Helper()
+		first := strings.Index(body, firstTitle)
+		second := strings.Index(body, secondTitle)
+		if first < 0 || second < 0 {
+			t.Fatalf("sprint page is missing one of its member tasks (first=%d second=%d)",
+				first, second)
+		}
+		return first, second
 	}
+
+	// As planned: openTaskID was added to the sprint first, so its card is first.
+	first, second := cardOrder(servePage(t, mux, path))
 	if first > second {
-		t.Errorf("sprint page tasks out of execution order: task #%d must precede task #%d", f.openTaskID, f.openTaskID2)
+		t.Errorf("sprint page tasks out of execution order: task #%d must precede task #%d",
+			f.openTaskID, f.openTaskID2)
+	}
+
+	// Re-planned through the production write path: the WAITING column follows.
+	reorderSprintTasks(t, f.name, f.openID, []int{f.openTaskID2, f.openTaskID})
+
+	first, second = cardOrder(servePage(t, mux, path))
+	if second > first {
+		t.Errorf("after reordering the sprint, task #%d must precede task #%d: the WAITING "+
+			"column follows the sprint_tasks position order, which no longer matches the id "+
+			"order", f.openTaskID2, f.openTaskID)
 	}
 }
 

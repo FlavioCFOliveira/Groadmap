@@ -48,6 +48,7 @@ import os
 import re
 import shutil
 import signal
+import sqlite3
 import socket
 import subprocess
 import sys
@@ -2874,63 +2875,236 @@ class TestWebInterface:
         assert "<table" not in body, "the sprint page must render no task table"
         assert "task-row" not in body, "the sprint page must render no table-row markup"
 
-    def test_sprint_board_column_order_follows_position_and_reorder(self):
-        """AC132: within a column the cards follow the sprint_tasks position
-        order, and reordering through the CLI and reloading the page reorders
-        the cards accordingly — proof the board applies no sort of its own (not
-        by id, not by priority, not by title).
+    def test_sprint_board_each_column_orders_by_its_own_key(self):
+        """AC132: the three columns of the sprint's member-tasks board do not
+        share one order. WAITING follows the `sprint_tasks` position order (the
+        plan), DOING follows `started_at` descending, and CLOSED follows
+        `closed_at` descending. Cards of one column carrying the same ordering
+        timestamp fall back to position ascending, and a card carrying none
+        sorts last in its column.
 
-        All four member tasks stay in SPRINT status (WAITING column) so the
-        whole column is one ordering problem: a board that quietly sorted by
-        id, priority, or title instead of position would still show a stable
-        response across the `sprint reorder` call below, which is exactly what
-        this test would catch.
+        All three orders are asserted, and both halves of the split the
+        criterion names are asserted too: reordering the sprint through the CLI
+        reorders the WAITING column AND leaves DOING and CLOSED exactly as they
+        were. Each half on its own is satisfied by a board that got the rule
+        wrong — a board ordering all three columns by position satisfies the
+        first, a board ordering all three by recency satisfies the second — so
+        neither is evidence without the other.
+
+        Nothing here can pass by coincidence. In every column the position
+        order, the ordering-timestamp order and the task id order differ from
+        one another, and the test states those alternatives explicitly and
+        checks the expected order against them.
+
+        Two of the cases are produced by the CLI itself. The TIE is a bulk
+        `rmp task stat <id>,<id> DOING`, which stamps a whole batch alike — the
+        reason the specification calls equal timestamps ordinary — and in both
+        tied pairs the id order is the reverse of the position order, so a board
+        tiebreaking on the id fails. The TESTING card carries the newest
+        `tested_at` in the fixture, so a board that ordered it by `tested_at`
+        would put it at the head of the DOING column instead of third.
+
+        The ABSENT timestamp cannot come from the CLI: the task state machine
+        stamps `started_at` on SPRINT -> DOING and `closed_at` on
+        TESTING -> COMPLETED and offers no route to a DOING task without the
+        first or a COMPLETED task without the second (SPEC/STATE_MACHINE.md
+        § Date Tracking Fields). The two fields are nullable all the same
+        (SPEC/MODELS.md § Task) and the specification states where a card
+        carrying neither sorts, so the fixture writes those two NULLs, and the
+        two older timestamps it needs, straight into the roadmap database with
+        sqlite3 before the server is started. That is a fixture write and
+        nothing else: every status change below travels the CLI.
         """
-        roadmap = "incident_postmortem_demo"
+        roadmap = "checkout_latency_demo"
         self._run(["roadmap", "create", roadmap])
 
-        def task(title, priority):
+        def task(title, priority, severity):
             return self.test.create_task(
                 roadmap, title,
-                "Postmortems must be published within five business days "
-                "of a SEV1 incident closing",
-                "Template the postmortem doc and track the SLA in the tracker",
-                "Every SEV1 incident has a published postmortem within the SLA",
-                priority=priority,
+                "Checkout must complete within the latency budget the "
+                "merchants were promised",
+                "Measured at the checkout endpoint and enforced in the "
+                "storefront release gate",
+                "The checkout endpoint stays inside its latency budget for a "
+                "full trading day",
+                priority=priority, severity=severity,
             )
 
-        t_a = task("Draft the postmortem template", 2)
-        t_b = task("Backfill missing postmortems from last quarter", 4)
-        t_c = task("Add a reminder for postmortems nearing the SLA", 6)
-        t_d = task("Link each postmortem from the incident tracker", 3)
+        # Creation order fixes the ID order, and it interleaves the three
+        # columns so no column's id order can coincide with its position order.
+        w_alpha = task("Publish the checkout latency budget to the storefront team", 9, 2)
+        d_alpha = task("Cache the merchant tax rules at the edge", 8, 6)
+        c_alpha = task("Add a latency histogram to the checkout endpoint", 6, 1)
+        w_beta = task("Backfill the latency history into the reliability warehouse", 5, 7)
+        d_beta = task("Move the fraud check off the checkout critical path", 3, 9)
+        c_beta = task("Retire the synchronous currency-rate lookup", 2, 4)
+        w_gamma = task("Agree the checkout latency service level with the merchants", 4, 5)
+        d_gamma = task("Batch the inventory reservation calls", 7, 3)
+        c_gamma = task("Split the checkout database read replica", 1, 8)
+        d_delta = task("Trim the checkout page's blocking script payload", 6, 6)
+        c_delta = task("Compress the checkout API response payloads", 3, 2)
 
-        sprint_id = self.test.create_sprint(roadmap, "Postmortem SLA sprint")
-        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id),
-                   str(t_a), str(t_b), str(t_c), str(t_d)])
+        sprint_id = self.test.create_sprint(
+            roadmap, "Bring checkout back inside its latency budget")
+
+        # Membership order fixes the POSITION order, which matches no column's
+        # id order and, in DOING and CLOSED, no column's timestamp order.
+        members = [w_gamma, d_delta, c_beta, w_alpha, d_beta, c_delta,
+                   w_beta, d_alpha, c_alpha, d_gamma, c_gamma]
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id)]
+                  + [str(i) for i in members])
+        self._run(["sprint", "start", "-r", roadmap, str(sprint_id)])
+
+        def stat(ids, status):
+            self._run(["task", "stat", "-r", roadmap,
+                       ",".join(str(i) for i in ids), status])
+
+        # DOING column. The first call is the bulk one: d_alpha and d_beta enter
+        # DOING in a single `task stat` and therefore carry one and the same
+        # started_at, which is the latest in the column. d_gamma goes on to
+        # TESTING last of all, so its tested_at is the newest timestamp in the
+        # fixture while its started_at is rewritten to an older instant below.
+        stat([d_alpha, d_beta], "DOING")
+        stat([d_delta], "DOING")
+        stat([d_gamma], "DOING")
+        stat([d_gamma], "TESTING")
+
+        # CLOSED column, through the full lifecycle. c_alpha and c_delta are
+        # completed in one bulk call and share a closed_at.
+        stat([c_alpha, c_beta, c_gamma, c_delta], "DOING")
+        stat([c_alpha, c_beta, c_gamma, c_delta], "TESTING")
+        stat([c_gamma], "COMPLETED")
+        stat([c_beta], "COMPLETED")
+        stat([c_alpha, c_delta], "COMPLETED")
+
+        # The two older timestamps and the two absent ones, written directly
+        # into the fixture database — see the docstring for why the CLI cannot
+        # produce them.
+        db_path = Path(self.home) / ".roadmaps" / roadmap / "project.db"
+        connection = sqlite3.connect(str(db_path))
+        try:
+            cursor = connection.cursor()
+            cursor.execute("UPDATE tasks SET started_at = ? WHERE id = ?",
+                           ("2026-02-11T08:15:00.000Z", d_gamma))
+            cursor.execute("UPDATE tasks SET started_at = NULL WHERE id = ?", (d_delta,))
+            cursor.execute("UPDATE tasks SET closed_at = ? WHERE id = ?",
+                           ("2026-01-20T17:40:00.000Z", c_gamma))
+            cursor.execute("UPDATE tasks SET closed_at = NULL WHERE id = ?", (c_beta,))
+            connection.commit()
+        finally:
+            connection.close()
+
+        # What each column must render, and the two orders it must NOT render.
+        want = [
+            [w_gamma, w_alpha, w_beta],
+            [d_beta, d_alpha, d_gamma, d_delta],
+            [c_delta, c_alpha, c_gamma, c_beta],
+        ]
+        by_position = [
+            [w_gamma, w_alpha, w_beta],
+            [d_delta, d_beta, d_alpha, d_gamma],
+            [c_beta, c_delta, c_alpha, c_gamma],
+        ]
+        by_id = [
+            [w_alpha, w_beta, w_gamma],
+            [d_alpha, d_beta, d_gamma, d_delta],
+            [c_alpha, c_beta, c_gamma, c_delta],
+        ]
+        headings = ["WAITING", "DOING", "CLOSED"]
+
+        # The controls. WAITING is specified to follow the position order, so it
+        # is exempt from the first check and not from the second.
+        for i in (1, 2):
+            assert want[i] != by_position[i], (
+                f"the fixture's {headings[i]} order {want[i]} is also its position "
+                f"order; the assertion would pass on a board that ordered every "
+                f"column by position"
+            )
+        for i in range(3):
+            assert want[i] != by_id[i], (
+                f"the fixture's {headings[i]} order {want[i]} is also its id order; "
+                f"the assertion would pass on a board that lost the read's order"
+            )
 
         proc, port = self._start(["--port", "0"])
         _, _, body = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
         _, columns = self._sprint_board_columns(body)
-        waiting = columns[0]
-        assert self._column_header(waiting)[1] == 4
-        assert self._sprint_board_card_ids(waiting) == [t_a, t_b, t_c, t_d], (
-            "before reordering, the WAITING column must follow the sprint_tasks "
-            "insertion (position ascending) order"
+        got = [self._sprint_board_card_ids(c) for c in columns]
+        for i in range(3):
+            assert got[i] == want[i], (
+                f"as the sprint was planned, the {headings[i]} column renders "
+                f"{got[i]}, want {want[i]}"
+            )
+
+        # The tie falls back to the plan, and the id order would invert it.
+        assert got[1].index(d_beta) < got[1].index(d_alpha), (
+            "the two DOING cards tied on started_at must fall back to position "
+            "ascending, which puts the later-created d_beta above d_alpha"
+        )
+        assert got[2].index(c_delta) < got[2].index(c_alpha), (
+            "the two CLOSED cards tied on closed_at must fall back to position "
+            "ascending, which puts the later-created c_delta above c_alpha"
         )
 
-        # Reorder through the CLI: the sprint's own planned execution order
-        # changes to something unrelated to id, priority, or title order.
-        new_order = [t_c, t_a, t_d, t_b]
+        # A card whose ordering timestamp is absent sorts last, and neither of
+        # the two is last by position, so "last" is the rule and not the plan
+        # showing through.
+        assert got[1][-1] == d_delta, (
+            f"the DOING card carrying no started_at must sort last, got {got[1]}"
+        )
+        assert got[2][-1] == c_beta, (
+            f"the CLOSED card carrying no closed_at must sort last, got {got[2]}"
+        )
+        assert by_position[1][-1] != d_delta and by_position[2][-1] != c_beta, (
+            "the cards carrying no ordering timestamp must not be last by "
+            "position either, or the assertion above proves nothing"
+        )
+
+        # tested_at orders nothing: the TESTING card carries the newest
+        # timestamp in the fixture and still sits where started_at puts it.
+        assert got[1][0] == d_beta, (
+            f"the DOING column must be headed by the most recently STARTED task, "
+            f"got #{got[1][0]}; a TESTING card takes its place from started_at "
+            f"and never from tested_at"
+        )
+
+        # The split. The new plan moves every card in all three columns.
+        reordered = [w_beta, d_beta, c_delta, w_alpha, d_delta, c_beta,
+                     w_gamma, d_alpha, c_alpha, d_gamma, c_gamma]
+        want_after = [
+            [w_beta, w_alpha, w_gamma],
+            [d_beta, d_alpha, d_gamma, d_delta],
+            [c_delta, c_alpha, c_gamma, c_beta],
+        ]
+        by_position_after = [
+            [w_beta, w_alpha, w_gamma],
+            [d_beta, d_delta, d_alpha, d_gamma],
+            [c_delta, c_beta, c_alpha, c_gamma],
+        ]
+        # The reorder must change what a position-ordered board would show in
+        # DOING and CLOSED too, or "those two did not move" is a statement about
+        # the reorder rather than about the board.
+        for i in (1, 2):
+            assert by_position_after[i] != by_position[i], (
+                f"the reorder leaves the {headings[i]} column's position order "
+                f"unchanged, so the assertion below would prove nothing"
+            )
+        assert want_after[0] != want[0], (
+            "the reorder leaves the WAITING column unchanged, so the first half "
+            "of the split would prove nothing"
+        )
+
         self._run(["sprint", "reorder", "-r", roadmap, str(sprint_id),
-                   ",".join(str(i) for i in new_order)])
+                   ",".join(str(i) for i in reordered)])
 
         _, _, body2 = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
         _, columns2 = self._sprint_board_columns(body2)
-        got = self._sprint_board_card_ids(columns2[0])
-        assert got == new_order, (
-            f"after `sprint reorder`, the WAITING column must reflect the new "
-            f"position order {new_order}, got {got}"
-        )
+        got_after = [self._sprint_board_card_ids(c) for c in columns2]
+        for i in range(3):
+            assert got_after[i] == want_after[i], (
+                f"after `sprint reorder`, the {headings[i]} column renders "
+                f"{got_after[i]}, want {want_after[i]}"
+            )
 
     def test_sprint_board_card_shows_six_data_points_in_order(self):
         """AC133: each card shows exactly six data points, in this order: the
