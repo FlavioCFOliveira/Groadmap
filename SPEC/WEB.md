@@ -1552,6 +1552,34 @@ how the `rmp web` process itself terminates.
   9, and [Task Detail Modal](#task-detail-modal)). On a viewport too short to
   present a usable board, the board takes the minimum height of
   [Full-Height Page Regions](#full-height-page-regions), rule 5.
+- **Column width and card density.** How much of a task's own text the board can
+  place on one line is decided by two lengths — how wide a column is, and how much
+  padding the card inside it spends on its own margins — so both are fixed here
+  rather than left to whatever a framework default happens to be.
+
+  Each of the five columns is **19rem** wide and never narrower than **17rem**. All
+  five carry the same width: a column stands for a state, not for a volume of work,
+  so a column holding many tasks is no wider than one holding none and the board's
+  shape does not change with the data. A column does not stretch to fill a viewport
+  wider than the board needs either; the space beyond the five columns is left empty,
+  which keeps the measure of a card's title the same at every viewport width.
+
+  Inside a column, the card the user reads and activates carries **0.75rem** of
+  padding on all four sides of its body, in place of the `1rem` the vendored Tabler
+  distribution gives a small card's body. The card's body holds running text — the
+  reference line, the title, the two badges, and the metadata footer — inside a
+  measure the column has already narrowed, so padding taken off the body is width
+  returned to that text and height returned to the card. The hit target is
+  unaffected, because what the user presses is the whole card and not the text
+  inside it (see **Card content** and **Clickable card** above). The rule is an
+  override of a vendored component's own spacing, declared in the project override
+  stylesheet, which is where such an override belongs (see
+  [UI Framework](#ui-framework), rule 10); it changes no class the board emits and
+  no markup.
+
+  Both lengths are expressed in `rem`, so they scale with the reader's own text
+  size: enlarging the browser's font enlarges the column and the card's padding with
+  it, and the relation between the text and the space around it is preserved.
 - **Markup.** The board obeys the markup rules already in force and introduces no
   exception to them. Templates carry no inline `style` attribute (see
   [Frontend Rules](#frontend-rules) and [UI Framework](#ui-framework), rule 10).
@@ -5089,6 +5117,18 @@ Rules:
     board can still be scrolled sideways. The check fails on a board whose columns
     extend to its bottom edge, where the scrollbar overlaps the last card (see
     [Roadmap Tasks Page](#roadmap-tasks-page), **Layout and scrolling**).
+129. Each of the five columns of the Kanban board is `19rem` wide and never narrower
+    than `17rem`, all five carry the same width whatever number of tasks each holds,
+    and none stretches to fill a viewport wider than the board needs. The body of a
+    task card on that board carries `0.75rem` of padding on all four sides, which is
+    strictly less than the padding the vendored Tabler distribution declares for a
+    small card's body, and the project override stylesheet declares it in a rule of
+    at least the specificity of Tabler's own, in the stylesheet the layout links
+    last, so the override wins on the cascade with no `!important`. Both lengths are
+    expressed in `rem`. This is a stylesheet change only: the board emits the same
+    markup and the same classes, carries no inline `style` attribute, and
+    Acceptance Criteria 27, 88, and 124 to 128 continue to hold (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Column width and card density**).
 
 ## See Also
 

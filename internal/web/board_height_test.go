@@ -224,6 +224,40 @@ func TestTasksPage_BoardSitsInTheFullHeightShellChain(t *testing.T) {
 	}
 }
 
+// TestNormaliseSelector_AbsorbsWhitespaceOnBothSidesOfACombinator is the
+// regression guard for a defect in the helper below: it dropped the whitespace
+// BEFORE a combinator but kept the whitespace AFTER it, so `.card-sm>.card-body`
+// normalised to itself while `.card-sm > .card-body` normalised to
+// `.card-sm> .card-body`. The two are one selector, and the helper's own contract
+// says so, but every guard looking up a rule the vendored distribution writes
+// minified while spelling the lookup with spaces found no rule at all.
+//
+// The descendant combinator is the other half of the contract: it is written as
+// whitespace and MUST survive, or `.a .b` and `.a.b` — two different selectors —
+// would normalise to the same string and a lookup would match the wrong rule.
+func TestNormaliseSelector_AbsorbsWhitespaceOnBothSidesOfACombinator(t *testing.T) {
+	for _, tc := range []struct {
+		in, want string
+	}{
+		{".card-sm>.card-body", ".card-sm>.card-body"},
+		{".card-sm > .card-body", ".card-sm>.card-body"},
+		{".card-sm >.card-body", ".card-sm>.card-body"},
+		{".card-sm> .card-body", ".card-sm>.card-body"},
+		{"  .card-sm\t>\n.card-body  ", ".card-sm>.card-body"},
+		{".a + .b ~ .c", ".a+.b~.c"},
+		// The descendant combinator is whitespace and stays one space.
+		{".full-height-page  .page", ".full-height-page .page"},
+		{".full-height-page .page-body > .container-xl", ".full-height-page .page-body>.container-xl"},
+		// Falsifiability control: a compound selector carries no combinator at
+		// all and must not gain one.
+		{".card.card-sm", ".card.card-sm"},
+	} {
+		if got := normaliseSelector(tc.in); got != tc.want {
+			t.Errorf("normaliseSelector(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 // --- stylesheet reading -----------------------------------------------------
 
 // projectStyleSheet returns the override stylesheet the binary serves.
@@ -287,26 +321,30 @@ func cssRuleBlocks(sheet, selector string) []string {
 
 // normaliseSelector collapses the whitespace a selector may be written with, so
 // `.page-body>.container-xl` and `.page-body > .container-xl` are one selector.
+//
+// A combinator absorbs the whitespace on BOTH sides of it: the space before it is
+// dropped because it is never written, and the space after it is dropped because
+// the run that follows a combinator opens no descendant relation of its own. The
+// space that IS significant — the descendant combinator, written as whitespace
+// alone — is preserved as a single space.
 func normaliseSelector(s string) string {
-	var b strings.Builder
-	lastSpace := false
+	var (
+		b       strings.Builder
+		spaced  bool // whitespace has been seen since the last rune written
+		afterOp bool // the last rune written was a combinator
+	)
 	for _, r := range strings.TrimSpace(s) {
 		switch {
 		case r == ' ' || r == '\t' || r == '\n' || r == '\r':
-			lastSpace = true
+			spaced = true
 		case r == '>' || r == '+' || r == '~':
-			// A combinator absorbs the whitespace around it.
-			for strings.HasSuffix(b.String(), " ") {
-				return normaliseSelector(strings.TrimSuffix(b.String(), " ") + string(r) +
-					strings.TrimSpace(s[strings.Index(s, string(r))+1:]))
-			}
+			spaced, afterOp = false, true
 			b.WriteRune(r)
-			lastSpace = false
 		default:
-			if lastSpace && b.Len() > 0 {
+			if spaced && b.Len() > 0 && !afterOp {
 				b.WriteByte(' ')
 			}
-			lastSpace = false
+			spaced, afterOp = false, false
 			b.WriteRune(r)
 		}
 	}

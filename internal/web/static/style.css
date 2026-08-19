@@ -201,15 +201,21 @@
   padding-bottom: 0.5rem;
 }
 
-/* One column. It never shrinks below a width at which its cards stay legible on
-   a narrow viewport; the remaining columns are reached by scrolling the board
-   horizontally, which is a touch-friendly gesture on a touch device. */
+/* One column. Its width is what decides the measure a card's title is set on, so
+   it is stated here rather than left to the content: all five columns carry the
+   same width, because a column stands for a state and not for a volume of work,
+   and `flex: 0 0 auto` is what keeps it — the column neither grows into a wide
+   viewport nor shrinks on a narrow one. It never shrinks below a width at which
+   its cards stay legible; the remaining columns are reached by scrolling the board
+   horizontally, which is a touch-friendly gesture on a touch device. Both lengths
+   are in `rem`, so the column follows the reader's own text size
+   (SPEC/WEB.md § Roadmap Tasks Page, Column width and card density). */
 .task-board__column {
   display: flex;
   flex: 0 0 auto;
   flex-direction: column;
-  width: 17rem;
-  min-width: 15rem;
+  width: 19rem;
+  min-width: 17rem;
   max-height: 100%;
   overflow: hidden;
 }
@@ -226,11 +232,24 @@
   overflow-y: auto;
 }
 
+/* The card the user reads and presses. Tabler gives a small card's body 1rem on
+   every side (`.card-sm > .card-body`); inside a column already narrowed to 19rem
+   that padding is measure taken from the card's own running text — the reference
+   line, the title, the badges, and the metadata footer — so it is reduced here and
+   the width and height it frees go back to that text. The selector matches
+   Tabler's specificity and this sheet is the last one the layout links, so source
+   order settles the cascade and no !important is needed. The hit target does not
+   shrink: what the user presses is the whole card, not the text inside it
+   (SPEC/WEB.md § Roadmap Tasks Page, Column width and card density). */
+.task-card > .card-body {
+  padding: 0.75rem;
+}
+
 /* An empty column keeps its title and its 0 count badge and shows Tabler's
    empty-state markup in place of the card list. Tabler sizes that panel for a
-   full-width card; inside a 15rem column it is tightened so the empty state
-   stays unobtrusive, which is the only presentation rule the board adds to a
-   Tabler component. */
+   full-width card; inside a 19rem column it is tightened so the empty state stays
+   unobtrusive. Together with the card-body padding above, these are the only two
+   presentation rules the board adds to a Tabler component. */
 .task-board__cards .empty {
   padding: 1rem 0.5rem;
 }
