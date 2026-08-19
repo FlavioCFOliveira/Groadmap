@@ -35,6 +35,16 @@ commit it was cut from, and a `Memory` owns the commit at which its content was 
 those are stored under their own property names (`commit`/`date` and
 `source_commit`/`source_date`) and never under `last_commit`.
 
+A stamp is a claim, not a formality: it asserts that somebody confirmed the element against
+the repository at that commit. It follows that an element whose truth could not be
+established MUST be left unstamped rather than given a plausible commit. **An absent
+`last_commit` therefore means UNVERIFIED, and never "overlooked"**: it is the one honest
+way the graph can say it does not know. Every node carries provenance; an edge may lack it,
+and where one does, the reason is recorded in a `Memory` so the gap is a decision a reader
+can find rather than a silence. Never bulk-stamp elements to make a completeness query come
+out clean: that converts an admission of ignorance into a false assertion, which is worse
+than the gap it hides.
+
 ## Node labels
 
 ### Component
@@ -130,6 +140,7 @@ A published version of the binary.
 | `summary` | yes | What the release delivered. |
 | `url` | no | Published release URL. |
 | `published`, `published_at`, `assets` | no | Publication state. |
+| `verified` | no | What was checked against the *published* artefacts after the release went out: checksums, archive contents, the version the shipped binary reports, and the release workflow run. The release's own fact, not provenance, and distinct from the validation gates that ran before the tag. |
 | `last_commit`, `last_commit_date` | yes | Provenance. |
 
 ### Doc
@@ -171,7 +182,9 @@ rediscovered. Per CLAUDE.md section 5 this layer is the only memory the project 
 
 ## Edge types
 
-Every edge carries `last_commit` and `last_commit_date`.
+Every edge carries `last_commit` and `last_commit_date`, except where the relationship could
+not be verified; see Provenance above, where an absent stamp means unverified and its
+reason is recorded in a `Memory`.
 
 | Edge | From | To | Meaning |
 |---|---|---|---|
@@ -186,6 +199,7 @@ Every edge carries `last_commit` and `last_commit_date`.
 | `INCLUDES` | `Release` | `Memory` | The release is the subject of the recorded memory. |
 | `NEXT_RELEASE` | `Release` | `Release` | Chronological succession of releases. |
 | `SEE_ALSO` | `Memory` | `Memory`, `Spec`, `Component` | Cross-reference from a memory to related knowledge. A `Component` target records that the memory carries knowledge about that component which the component's own properties cannot hold, such as a pinning constraint no validation gate can check. |
+| `SEE_ALSO` | `Requirement` | `Requirement` | Cross-reference between two capabilities that meet on the same surface, so that reading about one should lead to the other. It asserts no necessity: that is `DEPENDS_ON`, which states that a capability cannot work without the other, and the two must not be conflated. It is also not derivable from a shared `IMPLEMENTED_BY` target, because the shared artefacts are the large ones, and a join on them relates every capability that happens to touch the same file. |
 
 ## Core traceability chain
 
