@@ -1778,9 +1778,12 @@ already consumes; it adds no new endpoint and no write path.
 
 6. **Node limit applied by the endpoint.** The dropdown value is the `limit`
    parameter sent on the request. The endpoint applies it as a `LIMIT` clause only
-   when the user's query does not already contain a top-level `LIMIT`, so a user
-   who writes their own `LIMIT` keeps it and the dropdown value is not applied; the
-   injection and precedence rule is specified in
+   when the user's query both lacks a top-level `LIMIT` of its own and is a
+   statement form that admits a `LIMIT` clause. A user who writes their own `LIMIT`
+   keeps it and the dropdown value is not applied; a schema-introspection command
+   or a standalone procedure call admits no `LIMIT` at all, so the dropdown value
+   does not apply to it either and the query runs as written rather than failing in
+   the parser. The injection, precedence, and suppression rules are specified in
    [Graph Data Endpoint](#graph-data-endpoint).
 
 7. **Read-only.** The query bar submits only read-only Cypher. A query containing
@@ -2079,16 +2082,70 @@ write.
   read-only.
 - **Node-limit injection.** The endpoint applies the resolved `limit` (the
   parameter value, or the default `100` when absent) by appending a top-level
-  `LIMIT <n>` clause to the query, **only when the user's query does not already
-  contain a top-level `LIMIT` clause**. The user's own `LIMIT` takes precedence
-  and is respected as-is: when the query already has a top-level `LIMIT`, the
-  endpoint injects nothing and the dropdown value is not applied. The
-  presence-of-`LIMIT` check is performed on the **masked normalization** of the
-  query (see `GRAPH.md § Literal-Aware Normalization`), so a `LIMIT` keyword that
-  appears only inside a string literal, a comment, or a backtick-quoted identifier
-  does not count as an existing top-level `LIMIT` and does not suppress injection.
-  The default query has no `LIMIT`, so a request that uses the default query
+  `LIMIT <n>` clause to the query. Injection is **suppressed** in exactly the two
+  cases below, and applies in every other case. The default query has no `LIMIT`
+  and is an ordinary reading query, so a request that uses the default query
   always has the resolved limit applied to it.
+  - **Suppression 1: the query already carries a top-level `LIMIT`.** The user's
+    own `LIMIT` takes precedence and is respected as-is: the endpoint injects
+    nothing and the dropdown value is not applied. The presence-of-`LIMIT` check is
+    performed on the **masked normalization** of the query (see
+    `GRAPH.md § Literal-Aware Normalization`), so a `LIMIT` keyword that appears
+    only inside a string literal, a comment, or a backtick-quoted identifier does
+    not count as an existing top-level `LIMIT` and does not suppress injection.
+  - **Suppression 2: the query is a statement form that admits no `LIMIT`
+    clause.** Not every read the guard rail admits can carry a `LIMIT` clause.
+    Appending one to a statement that cannot carry it bounds nothing: it makes the
+    statement fail in the **parser**, so a read form the guard rail accepts, and
+    that `rmp graph query` runs, would be unusable through this endpoint and the
+    endpoint would be stricter than the contract it publishes. The endpoint MUST
+    therefore inject nothing into either form below, and MUST execute each of them
+    as the caller wrote it.
+    - **A schema-introspection command.** The `SHOW INDEXES`, `SHOW INDEX`,
+      `SHOW CONSTRAINTS`, and `SHOW CONSTRAINT` forms that
+      `GRAPH.md § Schema Introspection` defines as a read-only class of their own.
+      Suppression covers the **whole** class, including a command that carries a
+      `YIELD`, `WHERE`, or `RETURN` tail: no form of the command admits a `LIMIT`
+      clause, so a tail does not make one injectable.
+    - **A standalone procedure call.** A statement whose first clause is `CALL`
+      and that has **no top-level `RETURN`**. The call's result is not projected,
+      and the unprojected form admits no `LIMIT` clause. A `CALL` that **is**
+      projected through a top-level `RETURN` — the `CALL ... YIELD ... RETURN ...`
+      form — is an ordinary reading query for this rule: it admits a `LIMIT`, and
+      the endpoint injects the resolved limit into it exactly as it does into a
+      `MATCH ... RETURN` query. The presence of a top-level `RETURN` is the whole
+      of the boundary: a `LIMIT` clause attaches only to a `RETURN` or a `WITH`
+      projection, so a call carrying a `YIELD` but no top-level `RETURN` admits no
+      `LIMIT` either, and is a standalone call for this rule.
+  - **Recognising the two non-limitable forms.** Both are recognised on the
+    **masked normalization** of the query, exactly as Suppression 1 and the
+    read-only guard-rail are (see `GRAPH.md § Literal-Aware Normalization`), so a
+    `SHOW`, `CALL`, or `RETURN` keyword that appears only inside a string literal,
+    a comment, or a backtick-quoted identifier does not affect the decision.
+    Recognition is **anchored to the start of the statement**, the same anchoring
+    `GRAPH.md § Schema Introspection` requires of the introspection class: a `CALL`
+    that appears inside a larger query, and an identifier, label, or property named
+    `show` or `call`, do not make the statement one of these forms. Suppression 2
+    changes no operation class: both forms are read-only before this rule and
+    after it, and the guard rail of the preceding bullet still runs on them first
+    and still decides, alone, whether they execute at all.
+  - **Separator: the injected clause begins on a new line.** When the endpoint does
+    inject, it MUST separate the injected `LIMIT <n>` from the query with a
+    **newline**, never with a space. A query whose last line ends in a line comment
+    (`MATCH (n) RETURN n //`) swallows anything appended on that same line, so a
+    space-separated injection lands **inside** the comment and the limit silently
+    does not apply — the endpoint then returns the whole graph and the cap it
+    exists to enforce is defeated. A newline terminates the comment, so the
+    injected clause is always top-level and always applies. Cypher treats the
+    newline as ordinary whitespace, so every query that worked before is
+    unaffected.
+  - **A suppressed query is not bounded by the node limit.** Suppression means no
+    `LIMIT` is applied, so the resolved limit does not cap these queries and the
+    dropdown value has no effect on them. What still bounds them is the
+    per-request time budget, which applies to every query the endpoint executes,
+    injected or not (see [Graph Query Time Budget](#graph-query-time-budget)): the
+    budget bounds the **work**, the node limit bounds the **result**, and only the
+    second is suppressed here.
 - **Per-request query time budget.** The endpoint MUST execute the query under a
   5-second deadline derived from the request context, so a query that would run
   for longer is cancelled instead of holding the server for as long as it takes to
@@ -3518,17 +3575,22 @@ Rules:
     [Query-Bar Error Handling](#query-bar-error-handling), and
     `GRAPH.md § Literal-Aware Normalization`).
 48. The endpoint applies the node limit by appending `LIMIT <n>` only when the
-    user's query does not already contain a top-level `LIMIT`: a request whose `q`
-    has no top-level `LIMIT` returns at most the resolved limit's worth of results
-    (the dropdown value, or `100` when `limit` is absent), while a request whose `q`
-    already contains its own top-level `LIMIT` keeps that `LIMIT` and the dropdown
-    value is not applied. The existing-`LIMIT` detection runs on the masked
-    normalization, so a `LIMIT` keyword appearing only inside a string literal, a
-    comment, or a backtick-quoted identifier does not count as an existing top-level
-    `LIMIT` and does not suppress injection. A `limit` parameter that is not one of
-    the six allowed values is rejected as an invalid limit and the query is not
-    executed; the page surfaces a clear invalid-limit message (see
-    [Graph Data Endpoint](#graph-data-endpoint) and
+    user's query both lacks a top-level `LIMIT` of its own and is a statement form
+    that admits a `LIMIT` clause (Acceptance Criterion 111 covers the forms that do
+    not): a request whose `q` has no top-level `LIMIT` returns at most the resolved
+    limit's worth of results (the dropdown value, or `100` when `limit` is absent),
+    while a request whose `q` already contains its own top-level `LIMIT` keeps that
+    `LIMIT` and the dropdown value is not applied. The existing-`LIMIT` detection
+    runs on the masked normalization, so a `LIMIT` keyword appearing only inside a
+    string literal, a comment, or a backtick-quoted identifier does not count as an
+    existing top-level `LIMIT` and does not suppress injection. The injected clause
+    is separated from the query by a newline, never by a space, so a query whose
+    last line ends in a line comment (`MATCH (n) RETURN n //`) still has the limit
+    applied: the comment does not swallow the injected clause, and the endpoint
+    does not return the whole graph. A `limit` parameter that is not one of the six
+    allowed values is rejected
+    as an invalid limit and the query is not executed; the page surfaces a clear
+    invalid-limit message (see [Graph Data Endpoint](#graph-data-endpoint) and
     [Query-Bar Error Handling](#query-bar-error-handling)).
 49. The endpoint builds the `{"nodes": [...], "edges": [...]}` response by walking
     the entire query result and collecting every node and every relationship that
@@ -4080,6 +4142,31 @@ Rules:
     request writes nothing: the store is unchanged, no checkpoint runs, no
     write-ahead log is truncated, and the server keeps serving later requests (see
     [Graph Query Time Budget](#graph-query-time-budget)).
+111. `GET /roadmaps/{name}/graph/data` injects no node `LIMIT` into a statement form
+    that admits no `LIMIT` clause, and runs that form instead of failing it in the
+    parser. Two forms admit none: a schema-introspection command (`SHOW INDEXES`,
+    `SHOW INDEX`, `SHOW CONSTRAINTS`, or `SHOW CONSTRAINT`, with or without a
+    `YIELD`, `WHERE`, or `RETURN` tail) and a standalone procedure call (a statement
+    whose first clause is `CALL` and that has no top-level `RETURN`). A request
+    whose `q` is either form executes and succeeds; neither is answered with the
+    parse failure that appending a `LIMIT` to it produces. Both are classified
+    read-only by the guard rail and both run from `rmp graph query`, so the endpoint
+    is no stricter than the contract it publishes (see
+    [Graph Data Endpoint](#graph-data-endpoint) and
+    `GRAPH.md § Schema Introspection`). A `CALL` projected through a top-level
+    `RETURN` (`CALL ... YIELD ... RETURN ...`) is **not** a standalone call: it
+    admits a `LIMIT`, receives the injection, and returns at most the resolved
+    limit's worth of rows. The two forms are recognised on the masked
+    normalization and anchored to the start of the statement, so a `SHOW`, `CALL`,
+    or `RETURN` keyword inside a string literal, a comment, or a backtick-quoted
+    identifier, and a `CALL` nested inside a larger query, do not trigger
+    suppression. Every ordinary reading query is unaffected and keeps the behaviour
+    of Acceptance Criterion 48: a query with no top-level `LIMIT` still receives the
+    injection, a query with its own top-level `LIMIT` still keeps it, and a query
+    whose last line ends in a line comment still has the injected clause applied on
+    a new line. A suppressed query is not bounded by the node limit; it remains
+    bounded by the 5-second query time budget (see Acceptance Criterion 110 and
+    [Graph Query Time Budget](#graph-query-time-budget)).
 
 ## See Also
 
@@ -4097,6 +4184,8 @@ Rules:
   the query bar's user-supplied Cypher →
   `GRAPH.md § Subcommands and Guard-Rail Validation` and
   `GRAPH.md § Literal-Aware Normalization`
+- Schema-introspection commands, the read-only class the graph data endpoint
+  admits and injects no node limit into → `GRAPH.md § Schema Introspection`
 - Roadmap discovery, data directory layout, and permissions →
   `ARCHITECTURE.md § Directory Structure`
 - SQLite schema migrations the startup step runs, and their idempotency →

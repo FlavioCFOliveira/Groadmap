@@ -84,6 +84,56 @@ var allowedGraphLimits = map[int]struct{}{
 // LIMIT and does not suppress injection.
 var reTopLevelLimit = regexp.MustCompile(`(?i)\bLIMIT\b`)
 
+// reLeadingCall and reTopLevelReturn together recognise a STANDALONE PROCEDURE
+// CALL: a statement whose first clause is CALL and that carries no top-level
+// RETURN. That form admits no LIMIT clause, so the endpoint must inject nothing
+// into it (SPEC/WEB.md § Graph Data Endpoint, node-limit injection,
+// Suppression 2; Acceptance Criterion 111).
+//
+// The boundary is exactly the presence of a top-level RETURN, and it comes
+// straight from the engine's grammar (GoGraph cypher/parser/grammar):
+//
+//	query           : regularQuery | standaloneCall
+//	standaloneCall  : CALL invocationName parenExpressionChain? (YIELD ...)?
+//	singlePartQ     : readingStatement* (returnSt | updatingStatement+ returnSt?)
+//	projectionBody  : DISTINCT? projectionItems orderSt? skipSt? limitSt?
+//
+// A LIMIT attaches only to a projectionBody, which only a RETURN or a WITH
+// carries; standaloneCall has no projectionBody at all. So a leading CALL with
+// no RETURN parses as standaloneCall and rejects an appended LIMIT outright,
+// while a leading CALL that IS projected through a RETURN parses as an ordinary
+// regularQuery whose queryCallSt is just a reading statement, and takes the
+// LIMIT exactly like a MATCH ... RETURN does. Measured against the engine:
+// "CALL db.labels()\nLIMIT 100" fails with `cypher: parse: unexpected "LIMIT"`,
+// whereas "CALL db.labels() YIELD label RETURN label\nLIMIT 1" runs and returns
+// one row instead of two.
+//
+// Both run on the masked normalization (cypherguard.MaskLiterals), like every
+// other discriminator in the guard rail, so a CALL or RETURN keyword that
+// appears only inside a string literal, a comment, or a backtick identifier
+// does not affect the decision.
+var (
+	// reLeadingCall is ANCHORED at the start of the statement (\A), the same
+	// anchoring cypherguard's introspection matcher uses and for the same
+	// reason: CALL introduces the standalone form only as the FIRST clause. A
+	// CALL nested inside a larger query — "MATCH (n) CALL db.labels() YIELD
+	// label RETURN n, label" — is a reading statement in a limitable query, so
+	// it must still receive the injection. Leading whitespace is allowed, which
+	// also covers a leading comment: MaskLiterals neutralises a comment to
+	// spaces before this runs.
+	reLeadingCall = regexp.MustCompile(`(?i)\A\s*CALL\b`)
+	// reTopLevelReturn detects the RETURN that makes a leading CALL a projected,
+	// and therefore limitable, query. Like reTopLevelLimit above it is a
+	// presence check on the masked text rather than a full parse, and it errs the
+	// same way: a RETURN the check sees means the query is treated as limitable
+	// and receives the injection. That is the safe direction — a query wrongly
+	// judged limitable keeps the node cap it would otherwise escape, and the only
+	// place a RETURN can hide inside a standalone call is the "CALL ... YIELD ...
+	// WHERE ..." tail, which this engine fails to plan at all ("plan root must be
+	// ProduceResults, got *ir.Selection") with or without an injected LIMIT.
+	reTopLevelReturn = regexp.MustCompile(`(?i)\bRETURN\b`)
+)
+
 // graphQueryError classifies a query-bar failure so the handler can map it to a
 // distinct, in-page, read-only message (SPEC/WEB.md § Query-Bar Error Handling).
 // The three kinds are kept separate so the user understands what to fix: a
@@ -1136,13 +1186,29 @@ func resolveGraphQuery(raw string) string {
 	return defaultGraphQuery
 }
 
-// applyGraphLimit appends a top-level LIMIT clause to query, but ONLY when the
-// query does not already contain a top-level LIMIT (SPEC/WEB.md § Graph Data
-// Endpoint, node-limit injection). The presence check runs on the literal-masked
-// normalization (cypherguard.MaskLiterals), so a LIMIT keyword that appears only
-// inside a string literal, a comment, or a backtick identifier does not count as
-// an existing LIMIT and does not suppress injection. A user-authored top-level
-// LIMIT is respected as-is and the resolved dropdown value is not applied.
+// applyGraphLimit appends a top-level LIMIT clause to query, and is the single
+// place the node-limit injection rule lives (SPEC/WEB.md § Graph Data Endpoint,
+// node-limit injection). Injection is suppressed in exactly two cases and
+// applies in every other one:
+//
+//   - Suppression 1: the query already carries a top-level LIMIT. The
+//     user-authored LIMIT is respected as-is and the resolved dropdown value is
+//     not applied.
+//   - Suppression 2: the query is a statement form that admits NO LIMIT clause
+//     at all — a schema-introspection command, or a standalone procedure call.
+//     Appending a LIMIT to one of those bounds nothing; it makes the statement
+//     fail in the PARSER, so a read the guard rail admits, and that
+//     `rmp graph query` runs, would be unusable through this endpoint and the
+//     endpoint would be stricter than the contract it publishes.
+//
+// Both suppression checks run on the literal-masked normalization
+// (cypherguard.MaskLiterals), so a LIMIT, SHOW, CALL, or RETURN keyword that
+// appears only inside a string literal, a comment, or a backtick identifier does
+// not affect the decision, and both forms of Suppression 2 are anchored to the
+// start of the statement. A suppressed query is not bounded by the node limit;
+// it remains bounded by the per-request query time budget, which applies to
+// every query the endpoint executes (SPEC/WEB.md § Graph Query Time Budget).
+//
 // The injected clause is separated from the query by a NEWLINE, never by a
 // space. A query whose last line ends in a line comment ("MATCH (n) RETURN n //")
 // swallows anything appended on the same line, so a space-separated injection
@@ -1154,10 +1220,56 @@ func resolveGraphQuery(raw string) string {
 // whitespace, so every query that worked before is unaffected.
 func applyGraphLimit(query string, limit int) string {
 	masked := cypherguard.MaskLiterals(query)
+
+	// Suppression 1: the caller wrote their own top-level LIMIT.
 	if reTopLevelLimit.MatchString(masked) {
 		return query
 	}
+	// Suppression 2: a statement form that cannot carry a LIMIT clause.
+	if !admitsLimitClause(query, masked) {
+		return query
+	}
 	return query + "\nLIMIT " + strconv.Itoa(limit)
+}
+
+// admitsLimitClause reports whether query is a statement form that can carry a
+// top-level LIMIT clause. masked MUST be cypherguard.MaskLiterals(query); it is
+// passed in rather than recomputed because the caller already holds it.
+//
+// This is a SYNTAX question — "can this statement carry a LIMIT?" — and not a
+// read-only or safety question, which is why the standalone-call predicate lives
+// here beside the injection rule it serves and not in the shared cypherguard
+// guard rail: the endpoint's admission decision is, and stays, exactly the guard
+// rail's, and this function changes no operation class. Both forms below are
+// read-only before this check and after it, and cypherguard.IsReadOnly has
+// already decided, alone, whether they execute at all. The one piece that IS
+// shared is reused rather than reimplemented: the literal masking, and the
+// recognition of the introspection class itself, both come from cypherguard, so
+// the two can never drift apart on what a SHOW command is (SPEC/WEB.md § Graph
+// Data Endpoint, Suppression 2; SPEC/GRAPH.md § Schema Introspection).
+//
+// Two forms admit no LIMIT:
+//
+//  1. A schema-introspection command — the SHOW INDEXES / SHOW INDEX /
+//     SHOW CONSTRAINTS / SHOW CONSTRAINT class, INCLUDING one carrying a YIELD,
+//     WHERE, or RETURN tail: the engine's SHOW parser rejects ORDER BY, SKIP, and
+//     LIMIT on every one of those forms, so a tail does not make a LIMIT
+//     injectable. The predicate is cypherguard's own Introspect classification,
+//     which is exactly this class and nothing wider: every other SHOW the guard
+//     rail sees (SHOW DATABASES, SHOW FUNCTIONS, SHOW PROCEDURES, ...) is not
+//     part of it, and the engine rejects those at the parser whether or not a
+//     LIMIT is appended, so leaving them out changes nothing for them.
+//  2. A standalone procedure call — first clause CALL, no top-level RETURN.
+//     See reLeadingCall and reTopLevelReturn for why the top-level RETURN is the
+//     whole of the boundary.
+func admitsLimitClause(query, masked string) bool {
+	if cypherguard.Classify(query).Introspect {
+		return false
+	}
+	if reLeadingCall.MatchString(masked) && !reTopLevelReturn.MatchString(masked) {
+		return false
+	}
+	return true
 }
 
 // loadGraphView reads a roadmap's knowledge graph read-only and returns its
@@ -1170,7 +1282,8 @@ func applyGraphLimit(query string, limit int) string {
 // rawQuery and rawLimit are the request's q and limit URL parameters (empty
 // when absent). The query is resolved (default when absent), validated as
 // read-only via the shared cypherguard guard-rail BEFORE execution, and has a
-// LIMIT injected only when it has no top-level LIMIT. A query that contains any
+// LIMIT injected only when it has no top-level LIMIT of its own AND is a
+// statement form that admits a LIMIT clause. A query that contains any
 // writing or DDL clause, or an invalid limit, is returned as a classified
 // graphQueryError and is never executed; the store is not opened for it when
 // the failure is detectable before opening.
@@ -1234,8 +1347,9 @@ func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphV
 	engine := cypher.NewEngine(res.Graph)
 
 	// Inject the node limit only when the (validated, read-only) query has no
-	// top-level LIMIT of its own. The original query — not the masked copy — is
-	// what executes; masking only governs the presence check and the guard-rail.
+	// top-level LIMIT of its own AND is a statement form that admits a LIMIT
+	// clause at all. The original query — not the masked copy — is what executes;
+	// masking only governs the suppression checks and the guard-rail.
 	executed := applyGraphLimit(query, limit)
 	return runGraphViewQuery(ctx, engine, executed)
 }

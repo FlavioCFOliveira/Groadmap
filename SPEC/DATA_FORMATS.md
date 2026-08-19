@@ -419,8 +419,9 @@ bar sends. When `q` is absent or empty, the endpoint runs the default query
 full-graph view a request with no parameters always produced (backward
 compatible). User-supplied `q` is validated as **read-only** before execution
 (reusing the graph guard-rail) and the resolved `limit` is applied as a `LIMIT`
-clause only when the query does not already contain a top-level `LIMIT`. The full
-parameter contract, the read-only guard-rail, the limit-injection rule, and the
+clause only when the query both lacks a top-level `LIMIT` of its own and is a
+statement form that admits a `LIMIT` clause. The full parameter contract, the
+read-only guard-rail, the limit-injection and suppression rules, and the
 failure modes are specified in `WEB.md § Graph Data Endpoint` and
 `WEB.md § Query-Bar Error Handling`; this section specifies only the response
 shape, which is identical regardless of which query produced it.
