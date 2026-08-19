@@ -205,12 +205,15 @@ var auditOperationDescriptions = map[models.AuditOperation]string{
 		"technical_requirements, acceptance_criteria, specialists). A type change made through " +
 		"`task edit` is recorded here, not under a dedicated operation.",
 	models.OpTaskDelete: "Task deleted (only allowed while in BACKLOG; see Delete Task precondition).",
-	models.OpTaskStatusChange: "Status change (BACKLOG ↔ DOING ↔ TESTING → COMPLETED, plus COMPLETED → BACKLOG; SPRINT " +
-		"transitions are logged as `SPRINT_ADD_TASK` / `SPRINT_REMOVE_TASK`).",
+	models.OpTaskStatusChange: "Every status change made by `task stat`, whatever the source and target " +
+		"state, including `SPRINT` → `BACKLOG` and `COMPLETED` → `BACKLOG`. Status changes made as a " +
+		"side effect of a sprint operation are logged against the sprint instead, as `SPRINT_ADD_TASK` / " +
+		"`SPRINT_REMOVE_TASK` / `SPRINT_DELETE`.",
 	models.OpTaskPriorityChange: "Priority change (0-9) via `task priority`.",
 	models.OpTaskSeverityChange: "Severity change (0-9) via `task severity`.",
 	models.OpTaskReopen: "Task returned to BACKLOG via `task reopen`; lifecycle timestamps and " +
-		"completion_summary cleared, and sprint_tasks row removed.",
+		"completion_summary cleared. The sprint_tasks row is removed only when the source state is " +
+		"SPRINT, DOING, or TESTING; from COMPLETED the row is kept.",
 
 	// Sprint lifecycle.
 	models.OpSprintCreate:     "New sprint created.",

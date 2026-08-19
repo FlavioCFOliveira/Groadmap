@@ -258,11 +258,11 @@ CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 **Tasks:**
 - `TASK_CREATE` - New task created
 - `TASK_DELETE` - Task deleted (only allowed while in BACKLOG; see Delete Task precondition)
-- `TASK_STATUS_CHANGE` - Status change (BACKLOG ↔ DOING ↔ TESTING → COMPLETED, plus COMPLETED → BACKLOG; SPRINT transitions are logged as `SPRINT_ADD_TASK` / `SPRINT_REMOVE_TASK`)
+- `TASK_STATUS_CHANGE` - Every status change made by `task stat`, whatever the source and target state, including `SPRINT` → `BACKLOG` and `COMPLETED` → `BACKLOG`. Status changes made as a side effect of a sprint operation are logged against the sprint instead, as `SPRINT_ADD_TASK` / `SPRINT_REMOVE_TASK` / `SPRINT_DELETE`
 - `TASK_PRIORITY_CHANGE` - Priority change (0-9) via `task priority`
 - `TASK_SEVERITY_CHANGE` - Severity change (0-9) via `task severity`
 - `TASK_UPDATE` - Generic update via `task edit` (title, type, functional_requirements, technical_requirements, acceptance_criteria, specialists). A type change made through `task edit` is recorded here, not under a dedicated operation.
-- `TASK_REOPEN` - Task returned to BACKLOG via `task reopen`; lifecycle timestamps and completion_summary cleared, and sprint_tasks row removed
+- `TASK_REOPEN` - Task returned to BACKLOG via `task reopen`; lifecycle timestamps and completion_summary cleared. The sprint_tasks row is removed only when the source state is SPRINT, DOING, or TESTING; from COMPLETED the row is kept
 - `TASK_ASSIGN` - Specialist added to the task's specialists list via `task assign`; written only when the list actually changes, because assigning an already-assigned specialist is an idempotent no-op. A whole-list replacement made through `task edit` is recorded as `TASK_UPDATE` instead.
 - `TASK_UNASSIGN` - Specialist removed from the task's specialists list via `task unassign`; written only when the list actually changes, because removing a specialist that is not assigned is a no-op
 - `TASK_ADD_DEP` - Dependency added (logged against both task_id and depends_on_task_id)
@@ -408,12 +408,34 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);  -- created_at set by application (ISO 86
 
 #### List All
 
+Returns every task, each row carrying the complete `Task` object: the task's stored columns, its computed subtask count, and its two dependency sets.
+
 ```sql
-SELECT * FROM tasks ORDER BY priority DESC, created_at ASC;
+SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
+       t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
+       t.closed_at, t.completion_summary, t.parent_task_id,
+       t.priority, t.severity,
+       (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count,
+       (SELECT COALESCE(group_concat(d), '') FROM (
+           SELECT depends_on_task_id AS d FROM task_dependencies
+           WHERE task_id = t.id ORDER BY depends_on_task_id
+       )) AS depends_on_csv,
+       (SELECT COALESCE(group_concat(b), '') FROM (
+           SELECT task_id AS b FROM task_dependencies
+           WHERE depends_on_task_id = t.id ORDER BY task_id
+       )) AS blocks_csv
+FROM tasks t WHERE 1=1
+ORDER BY t.priority DESC, t.created_at ASC;
 ```
 
-**Result-set size:** The statement carries no `LIMIT` and no `OFFSET`. Any bound on
-the number of rows a caller receives is imposed by that caller, not by this query.
+**What the statement returns:**
+- The task's **stored columns**, named one by one rather than through `*`, so the column order the application scans is fixed by the statement itself and not by the table's current shape.
+- **`subtask_count`**, the number of direct subtasks, produced by the correlated subquery above. It is not a stored column — `MODELS.md § Task` defines it as computed — and this statement is where its value comes from, so the caller needs no second query and no per-task query to obtain it.
+- **`depends_on_csv`** and **`blocks_csv`**, the task's two dependency sets, each a comma-separated list of task ids in ascending id order (fixed by the inner `ORDER BY`) and the empty string when the set is empty (`COALESCE`). The application parses them into the task's `depends_on` and `blocks` values, which keeps the listing free of one dependency query per task.
+
+**One statement, several shapes.** The listing is assembled rather than fixed. It opens `WHERE 1=1` so that each optional predicate can be appended as a further `AND` — the status filter of `List by Status` below, and the priority, severity, type, specialists, and creation-date filters of the same listing — and it carries one of four orderings: `t.priority DESC, t.created_at ASC` (the default, shown above), `t.created_at ASC`, `t.status ASC, t.priority DESC, t.created_at ASC`, or `t.severity DESC, t.priority DESC, t.created_at ASC`. `COMMANDS.md § List Tasks` is canonical for which caller selects which. Every filter value is a bound parameter; none is concatenated into the SQL, and a value used in a `LIKE` predicate has its wildcards escaped first.
+
+**Result-set size:** The listing itself imposes no bound: it carries no `OFFSET`, and it carries a `LIMIT ?` only when the caller asks for one. Any bound on the number of rows a caller receives is therefore the caller's, not this query's.
 
 **The web tasks page reads this listing unbounded.** The read-only web interface's
 Kanban task board reads every task of the roadmap through this statement, with no
@@ -430,50 +452,92 @@ counts correct by construction.
 
 #### List by Status
 
+The status filter is one predicate on the listing above, not a statement of its own:
+
 ```sql
-SELECT * FROM tasks WHERE status = ? ORDER BY priority DESC;
+SELECT ...  -- the select list of List All above, unchanged
+FROM tasks t WHERE 1=1
+  AND t.status = ?
+ORDER BY t.priority DESC, t.created_at ASC;
 ```
+
+**Ordering.** `priority DESC` is not the whole ordering. `created_at ASC` breaks its ties, exactly as in the unfiltered listing, so two tasks of equal priority are returned oldest first rather than in whichever order SQLite is free to produce. A caller that asks for a different sort gets one of the other three orderings named in `List All` above; the status predicate does not change which orderings are available.
+
+**The status value is bound, never concatenated,** like every other filter value of this listing.
 
 #### List by Sprint
 
+A sprint's membership is read in two shapes, and the choice is the caller's.
+
+**The ids alone**, for a caller that needs the membership and not the tasks:
+
 ```sql
-SELECT t.* FROM tasks t
-INNER JOIN sprint_tasks st ON t.id = st.task_id
-WHERE st.sprint_id = ? ORDER BY t.priority DESC;
+SELECT task_id FROM sprint_tasks WHERE sprint_id = ? ORDER BY task_id;
 ```
 
-#### List Sprint Tasks Ordered (Priority → Severity)
+This statement reads `sprint_tasks` only and joins nothing: the answer is a set of ids, so no task row is fetched to produce it. It orders by `task_id` ascending, which is not the sprint's planned order — the planned order is `sprint_tasks.position`, and a caller that needs it reads one of the two listings below.
 
-Returns all tasks in a sprint ordered by priority (descending) and severity (descending).
+**The tasks themselves**, through the sprint listing documented in the two sections that follow — `List Sprint Tasks Ordered (Priority → Position)` and `List Sprint Tasks Ordered by Position`. Those two are **one** statement under two `ORDER BY` forms, with the same select list, the same join, and the same optional `AND t.status = ?` predicate; they are not two different reads of the schema.
+
+#### List Sprint Tasks Ordered (Priority → Position)
+
+Returns all tasks in a sprint ordered by priority (descending), with the sprint position breaking ties. It is the statement of `List Sprint Tasks Ordered by Position` below under its other `ORDER BY`: the select list, the join, the `WHERE` clause, and the optional status predicate are identical, and only the ordering differs.
 
 ```sql
-SELECT t.* FROM tasks t
+SELECT ...  -- the select list of List Sprint Tasks Ordered by Position below, unchanged
+FROM tasks t
 INNER JOIN sprint_tasks st ON t.id = st.task_id
 WHERE st.sprint_id = ?
-ORDER BY t.priority DESC, t.severity DESC;
+ORDER BY t.priority DESC, st.position ASC;
 ```
 
 **Ordering priority:**
 1. `priority` DESC (highest first: 9 → 0)
-2. `severity` DESC (highest first: 9 → 0)
+2. `position` ASC (the sprint's planned order) as the tie-breaker
 
-**Use case:** Sprint planning and execution view - tasks with highest urgency AND technical impact appear first.
+**Severity does not order this listing.** Two tasks of equal priority are returned in the sprint's planned order, not by severity: `severity` appears in the `ORDER BY` of no sprint listing. The one ordering that leads with severity is a whole-roadmap task listing (`t.severity DESC, t.priority DESC, t.created_at ASC`; see `List All` above), which reads no `sprint_tasks` row and is not this statement.
+
+**Use case:** Sprint execution view for a caller that wants the most urgent work first — and, within one priority, the order the user planned.
 
 #### List Sprint Tasks Ordered by Position
 
-Returns all tasks in a sprint ordered by their position in the sprint task list.
+Returns all tasks in a sprint ordered by their position in the sprint task list, each row carrying the complete `Task` object — the same three groups of values `List All` above returns, from the same select list: the task's stored columns, its computed subtask count, and its two dependency sets.
 
 ```sql
-SELECT t.*, st.position FROM tasks t
+SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
+       t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
+       t.closed_at, t.completion_summary, t.parent_task_id,
+       t.priority, t.severity,
+       (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count,
+       (SELECT COALESCE(group_concat(d), '') FROM (
+           SELECT depends_on_task_id AS d FROM task_dependencies
+           WHERE task_id = t.id ORDER BY depends_on_task_id
+       )) AS depends_on_csv,
+       (SELECT COALESCE(group_concat(b), '') FROM (
+           SELECT task_id AS b FROM task_dependencies
+           WHERE depends_on_task_id = t.id ORDER BY task_id
+       )) AS blocks_csv
+FROM tasks t
 INNER JOIN sprint_tasks st ON t.id = st.task_id
 WHERE st.sprint_id = ?
 ORDER BY st.position ASC;
 ```
 
+**What the statement returns:**
+- The task's **stored columns**, named one by one rather than through `t.*`, so the column order the application scans is fixed by the statement itself and not by the table's current shape.
+- **`subtask_count`**, the number of direct subtasks, produced by the correlated subquery above. It is not a stored column — `MODELS.md § Task` defines it as computed — and this statement is where its value comes from on this path, so the caller needs no second query and no per-task query to obtain it.
+- **`depends_on_csv`** and **`blocks_csv`**, the task's two dependency sets, each a comma-separated list of task ids in ascending id order (fixed by the inner `ORDER BY`) and the empty string when the set is empty (`COALESCE`). The application parses them into the task's `depends_on` and `blocks` values, which is what keeps the listing free of one dependency query per task.
+
+**`st.position` orders the rows and is not selected.** The caller receives the tasks already in the planned order; the position value itself is not part of the `Task` object (`MODELS.md § Task`).
+
+**Optional status filter:** a caller that wants a single status adds `AND t.status = ?` to the `WHERE` clause. The select list and the ordering are unchanged by it.
+
+**The other ordering of this statement** — `t.priority DESC, st.position ASC` — is documented as `List Sprint Tasks Ordered (Priority → Position)` above. Only the `ORDER BY` differs between the two.
+
 **Ordering priority:**
 1. `position` ASC (lowest first: 0, 1, 2...)
 
-**Use case:** Sprint task sequence view - tasks appear in the order defined by the user for sprint execution.
+**Use case:** Sprint task sequence view - tasks appear in the order defined by the user for sprint execution. The read-only web interface's sprint page reads this statement to fill its member-tasks board: the board groups the rows into its three columns in memory, keeping the order the read returned, and shows each task's subtask count on its card without any further query (see `WEB.md § Sprint Detail Sub-Template`).
 
 #### Add Task to Sprint with Position
 
@@ -513,8 +577,11 @@ UPDATE tasks
 SET status = 'COMPLETED', closed_at = ?
 WHERE id = ?;
 
--- When reopening (any non-BACKLOG state → BACKLOG, via task stat or
--- task reopen): clear the tracking dates and the completion summary
+-- Returning a task to BACKLOG: clear the tracking dates and the completion
+-- summary. The same statement serves `task stat <ids> BACKLOG` (accepted from
+-- SPRINT and COMPLETED only) and `task reopen` (accepted from any non-BACKLOG
+-- state). Neither command writes to sprint_tasks; see
+-- STATE_MACHINE.md § Sprint Membership and the BACKLOG Status.
 UPDATE tasks
 SET status = 'BACKLOG', started_at = NULL, tested_at = NULL, closed_at = NULL, completion_summary = NULL
 WHERE id = ?;
@@ -544,23 +611,30 @@ UPDATE tasks SET status = 'SPRINT' WHERE id IN (?, ?, ...);
 #### Remove from Sprint
 
 ```sql
--- Remove from junction table
-DELETE FROM sprint_tasks WHERE task_id IN (?, ?, ...);
+-- Remove from junction table, scoped to the named sprint
+DELETE FROM sprint_tasks WHERE sprint_id = ? AND task_id = ?;
 
--- Update task status
-UPDATE tasks SET status = 'BACKLOG' WHERE id IN (?, ?, ...);
+-- Reset the task, whatever its status was inside the sprint
+UPDATE tasks
+SET status = 'BACKLOG', started_at = NULL, tested_at = NULL, closed_at = NULL, completion_summary = NULL
+WHERE id = ?;
 ```
 
 #### Clear All Tasks from Sprint
 
-```sql
--- Remove all sprint relationships
-DELETE FROM sprint_tasks WHERE sprint_id = ?;
+The status reset MUST run before the membership rows are deleted; once the
+`sprint_tasks` rows are gone the subquery selects nothing.
 
--- Update task status
-UPDATE tasks SET status = 'BACKLOG' WHERE id IN (
+```sql
+-- Reset every member task, whatever its status was inside the sprint
+UPDATE tasks
+SET status = 'BACKLOG', started_at = NULL, tested_at = NULL, closed_at = NULL, completion_summary = NULL
+WHERE id IN (
     SELECT task_id FROM sprint_tasks WHERE sprint_id = ?
 );
+
+-- Then remove all sprint relationships
+DELETE FROM sprint_tasks WHERE sprint_id = ?;
 ```
 
 #### Get Max Position in Sprint
@@ -727,9 +801,11 @@ UPDATE sprints SET status = 'CLOSED', closed_at = ? WHERE id = ?;
 -- Remove sprint (and relationships in sprint_tasks)
 DELETE FROM sprints WHERE id = ?;
 
--- Optional: reset task status to BACKLOG
+-- Reset every member task, whatever its status was inside the sprint
 -- Note: in implementation, do this before deleting sprint
-UPDATE tasks SET status = 'BACKLOG' WHERE id IN (
+UPDATE tasks
+SET status = 'BACKLOG', started_at = NULL, tested_at = NULL, closed_at = NULL, completion_summary = NULL
+WHERE id IN (
     SELECT task_id FROM sprint_tasks WHERE sprint_id = ?
 );
 
@@ -815,71 +891,45 @@ INSERT INTO audit (operation, entity_type, entity_id, performed_at)
 VALUES ('SPRINT_TASK_SWAP', 'SPRINT', 1, '2026-03-12T17:30:00.000Z');
 ```
 
-#### Query Entity History
+#### Query Audit Entries
+
+Every audit read is **one** assembled statement, not a family of statements. It names the five columns of an audit entry, appends only the predicates the caller supplied, and always orders and bounds the result:
 
 ```sql
--- Complete history of a task
-SELECT * FROM audit
-WHERE entity_type = 'TASK' AND entity_id = ?
-ORDER BY performed_at DESC;
-
--- Complete history of a sprint
-SELECT * FROM audit
-WHERE entity_type = 'SPRINT' AND entity_id = ?
-ORDER BY performed_at DESC;
-
--- All status change operations
-SELECT * FROM audit
-WHERE operation LIKE '%STATUS_CHANGE%'
-ORDER BY performed_at DESC;
-
--- Last N operations
-SELECT * FROM audit
+SELECT id, operation, entity_type, entity_id, performed_at
+FROM audit WHERE 1=1
+  AND operation = ?          -- optional
+  AND entity_type = ?        -- optional
+  AND entity_id = ?          -- optional
+  AND performed_at >= ?      -- optional (ISO 8601 UTC)
+  AND performed_at <= ?      -- optional (ISO 8601 UTC)
 ORDER BY performed_at DESC
-LIMIT ?;
+LIMIT ?                      -- always present, always clamped
+OFFSET ?;                    -- only when the caller asks to skip rows
 ```
+
+**The five columns are named, never `*`.** They are the whole of `AuditEntry` (`MODELS.md § Audit Entry`), and naming them fixes the result-set order the application scans rather than leaving it to the table's current shape.
+
+**The predicates are optional and compose.** The statement opens `WHERE 1=1` so that each predicate the caller supplied can be appended as a further `AND`; a caller that supplies none reads the whole log. Every value is a bound parameter and none is concatenated into the SQL.
+
+**`operation` is matched by equality only.** This table carries no `LIKE` predicate on any column, so there is no pattern search over operation names: a caller that wants a family of operations either issues one read per operation value or filters the entries it received.
+
+**The ordering is not a caller choice.** It is always `performed_at DESC` — the most recently performed operation first — because the audit log is read as a history.
+
+**The `LIMIT` is always present and always clamped** to `MaxAuditLimit`, whatever the caller asked for, including a caller that asked for none (see `Audit Result Limit` below). An entity history is bounded by the same clamp: the history of one task or sprint is the newest `MaxAuditLimit` entries of that entity, not every row ever written for it.
 
 #### Query Audit Log with Filters
 
-```sql
--- List all audit entries (most recent first)
-SELECT * FROM audit
-ORDER BY performed_at DESC
-LIMIT ? OFFSET ?;
+Each documented "filter" is a caller's choice of predicates on the statement above, not a statement of its own. The four shapes the application uses:
 
--- Filter by operation type
-SELECT * FROM audit
-WHERE operation = ?
-ORDER BY performed_at DESC
-LIMIT ?;
+| Caller | Predicates supplied | Notes |
+|---|---|---|
+| Full audit log, newest first | none | the read-only web audit log page, which pages through it with `OFFSET` (see `WEB.md § Roadmap Audit Log Page`) |
+| Entity history | `entity_type = ?` and `entity_id = ?` | the history of one task or one sprint, newest first, bounded by the clamp above |
+| Operation filter | `operation = ?` | one operation value, by equality |
+| Date range | `performed_at >= ?` and `performed_at <= ?` | ISO 8601 UTC bounds, either or both |
 
--- Filter by entity type
-SELECT * FROM audit
-WHERE entity_type = ?
-ORDER BY performed_at DESC
-LIMIT ?;
-
--- Filter by entity ID
-SELECT * FROM audit
-WHERE entity_type = ? AND entity_id = ?
-ORDER BY performed_at DESC
-LIMIT ?;
-
--- Filter by date range (ISO 8601 UTC)
-SELECT * FROM audit
-WHERE performed_at >= ? AND performed_at <= ?
-ORDER BY performed_at DESC
-LIMIT ?;
-
--- Combined filters
-SELECT * FROM audit
-WHERE entity_type = ?
-  AND operation = ?
-  AND performed_at >= ?
-  AND performed_at <= ?
-ORDER BY performed_at DESC
-LIMIT ? OFFSET ?;
-```
+The shapes combine: supplying an entity, an operation, and a date range at once appends all four predicates to the one statement, in the order shown above, and changes neither the select list, the ordering, nor the clamp.
 
 #### Audit Statistics
 
@@ -1013,7 +1063,7 @@ ORDER BY task_id ASC;
 
 **Index.** Served by `idx_task_comments_task_created`, whose leading column is `task_id`; the aggregate needs no further index and reads no `body` value. See Performance Optimization below.
 
-**Use case:** the read-only web interface's Kanban task board shows a comment count on each card but no comment text, because the card's modal loads a task's comments on demand from its own endpoint (see `WEB.md § Task Detail Endpoint`). The board therefore never reads a comment body in order to display a number, and no read anywhere loads the comment text of several tasks at once: a task's comments are read one task at a time, through the single-parent listing above.
+**Use case:** the two boards of the read-only web interface — the roadmap tasks page's Kanban task board and the sprint page's member-tasks board (see `WEB.md § Roadmap Tasks Page` and `WEB.md § Sprint Detail Sub-Template`) — each show a comment count on a card but no comment text, because the card's modal loads a task's comments on demand from its own endpoint (see `WEB.md § Task Detail Endpoint`). Neither board therefore ever reads a comment body in order to display a number, and no read anywhere loads the comment text of several tasks at once: a task's comments are read one task at a time, through the single-parent listing above.
 
 This statement has no `sprint_comments` form: the Roadmap Sprint Page presents one sprint's comment log in full through the single-parent listing, and no surface counts the comments of several sprints at once.
 
@@ -1061,8 +1111,12 @@ so that the database never reaches a state where `tasks.status` and the
    `SPRINT` while their sprint or their `sprint_tasks` rows were gone is forbidden.
 2. **Removing tasks from a sprint (`RemoveTasksFromSprint`).** Deleting the
    affected `sprint_tasks` rows, resetting those tasks' status to `BACKLOG`, and
-   writing the audit entry MUST occur in the same transaction. `tasks.status` and
-   `sprint_tasks` membership are always consistent at every committed state.
+   writing the audit entry MUST occur in the same transaction. No committed state
+   shows a task still marked `SPRINT`, `DOING`, or `TESTING` after its
+   `sprint_tasks` row is gone. The converse combination is legitimate and is not a
+   partial commit: a task in `BACKLOG` status can hold a live `sprint_tasks` row,
+   because `task stat <ids> BACKLOG` changes the status without touching
+   membership (see `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`).
 3. **Sprint capacity enforcement (`max_tasks`).** When `max_tasks` is set, the
    capacity check (current member count against `max_tasks`) and the insertion of
    the new `sprint_tasks` rows MUST occur **inside the same transaction** as a
@@ -1240,13 +1294,28 @@ The following composite indexes are designed to optimize frequently executed que
 
 ### Verification
 
-To verify index usage:
+Index usage is verified by planning **the statement the application issues**, taken from the production query builder itself, with the bind arguments production passes:
 
 ```sql
--- Check if query uses index
-EXPLAIN QUERY PLAN SELECT * FROM tasks WHERE status = 'BACKLOG' ORDER BY priority DESC;
--- Expected: USING INDEX idx_tasks_status_priority
+-- The SQL comes from the builder (for example the task listing of
+-- `List All` above, assembled with a status filter); it is never retyped here.
+EXPLAIN QUERY PLAN <the production statement>;
+-- Expected of the plan:
+--   * it names the index the section above creates for that statement
+--     (for the status-filtered task listing: idx_tasks_status_priority);
+--   * it contains no `SCAN <target table>`, which would mean the index is
+--     not doing its job even if the plan mentions it elsewhere, such as in
+--     a subquery;
+--   * for a comment listing, it contains no `TEMP B-TREE`, because the
+--     index must supply the `created_at` order rather than the engine
+--     sorting the result afterwards.
 ```
+
+The bind arguments are required even to plan the statement, so a check passes the same values production passes.
+
+**A hand-written lookalike proves nothing, and this is why the statement is taken from the builder rather than retyped.** SQLite plans a statement from its select list, its predicates, its ordering and its limit; a lookalike differs from the real statement in each of those, so it can be served by a different index — or by none — than the statement it stands in for. A check written that way certifies a query the application never issues, and it keeps passing while the real statement drifts away from its index. Taking the SQL from the builder is what makes that drift fail the check instead of hiding behind it.
+
+This verification is automated, not left to hand-running: `internal/db/index_test.go` plans the production statements of the task listing, the audit listing, the sprint membership lookup, and the comment listings, and asserts the three expectations above for each. The production builders are separated from execution precisely so a check can obtain that SQL.
 
 ---
 
