@@ -20,15 +20,39 @@
 
           <div class="card" id="sprints">
             <div class="card-header">
+              {{/*
+                Each tab's count badge is a hybrid: its TEXT is the number of
+                sprints in the tab, and its COLOUR is the variant the ONE sprint
+                status mapping (sprintStatusBadge, badge.go) assigns to the status
+                that tab GROUPS — Próximos the PENDING sprints, Actual the OPEN
+                sprints, Concluídos the CLOSED sprints. No colour is written here:
+                the tab names the status it groups, beside its own label, pane and
+                group, and the mapping in badge.go decides the class, exactly as on
+                every other badge in the interface. The status name goes through
+                the canonical enum parser, so a name outside the enum fails the
+                render instead of silently yielding the neutral variant.
+
+                The colour follows the TAB's status, never the sprints in it, so a
+                tab that holds no sprint shows the count 0 in its own colour.
+
+                Read the three colours as a set. PENDING maps to bg-secondary-lt,
+                which is also the neutral colour a count badge carries when nothing
+                colours it, so Próximos renders identically whether the mapping
+                colours it or not; what separates a conforming rendering from a
+                fixed-colour one is bg-blue-lt on Actual and bg-green-lt on
+                Concluídos beside it (SPEC/WEB.md § Roadmap Sprints Page; § Status,
+                Priority, and Severity Badge Colours, rule 2; § UI Framework,
+                rule 9; Acceptance Criteria 60 and 120).
+              */}}
               <ul class="nav nav-tabs card-header-tabs sprint-tabs" data-bs-toggle="tabs" role="tablist">
                 <li class="nav-item" role="presentation">
-                  <a href="#tab-upcoming" class="nav-link" data-bs-toggle="tab" role="tab" aria-selected="false">Próximos <span class="badge bg-secondary-lt ms-1">{{len .SprintsUpcoming}}</span></a>
+                  <a href="#tab-upcoming" class="nav-link" data-bs-toggle="tab" role="tab" aria-selected="false">Próximos <span class="badge {{sprintStatusBadge (sprintStatus "PENDING")}} ms-1">{{len .SprintsUpcoming}}</span></a>
                 </li>
                 <li class="nav-item" role="presentation">
-                  <a href="#tab-current" class="nav-link active" data-bs-toggle="tab" role="tab" aria-selected="true">Actual <span class="badge bg-secondary-lt ms-1">{{len .SprintsCurrent}}</span></a>
+                  <a href="#tab-current" class="nav-link active" data-bs-toggle="tab" role="tab" aria-selected="true">Actual <span class="badge {{sprintStatusBadge (sprintStatus "OPEN")}} ms-1">{{len .SprintsCurrent}}</span></a>
                 </li>
                 <li class="nav-item" role="presentation">
-                  <a href="#tab-closed" class="nav-link" data-bs-toggle="tab" role="tab" aria-selected="false">Concluídos <span class="badge bg-secondary-lt ms-1">{{len .SprintsClosed}}</span></a>
+                  <a href="#tab-closed" class="nav-link" data-bs-toggle="tab" role="tab" aria-selected="false">Concluídos <span class="badge {{sprintStatusBadge (sprintStatus "CLOSED")}} ms-1">{{len .SprintsClosed}}</span></a>
                 </li>
               </ul>
             </div>

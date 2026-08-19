@@ -145,10 +145,24 @@ func commentTypeBadge(models.CommentType) string {
 // severity, or comment-type badge with the deterministic Tabler colour variant
 // the SPEC assigns to each value (SPEC/WEB.md § Status, Priority, and Severity
 // Badge Colours; § Task Detail Modal, type badge colour).
+//
+// sprintStatus is the odd one out and colours nothing: it is the canonical enum
+// parser from models, exposed so a template can NAME a sprint status the colour
+// mapping is keyed on where no record supplies one. The sprints page's three tab
+// badges are the single site that needs it — a tab groups exactly one sprint
+// status but writes none, so the status it groups is named beside the tab it
+// belongs to and handed to sprintStatusBadge like any other status value
+// (SPEC/WEB.md § Status, Priority, and Severity Badge Colours, rule 2, "the badge
+// counts the members of a group that has one value"; Acceptance Criterion 120).
+// Routing it through models.ParseSprintStatus rather than accepting the raw
+// string keeps the enum the single authority: a name outside PENDING/OPEN/CLOSED
+// fails the render loudly instead of falling through to the neutral variant and
+// looking, on the Próximos tab, exactly like a correct one.
 var badgeFuncMap = map[string]any{
 	"taskStatusBadge":   taskStatusBadge,
 	"sprintStatusBadge": sprintStatusBadge,
 	"priorityBadge":     priorityBadge,
 	"severityBadge":     severityBadge,
 	"commentTypeBadge":  commentTypeBadge,
+	"sprintStatus":      models.ParseSprintStatus,
 }

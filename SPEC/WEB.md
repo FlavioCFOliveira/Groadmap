@@ -763,6 +763,20 @@ how the `rmp web` process itself terminates.
   (see [UI Framework](#ui-framework), rule 9). The status badge each card shows uses
   the semantic colour mapping in
   [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours).
+
+  **Each tab carries its own count badge.** Beside its label, each of the three tabs
+  shows a Tabler badge whose **text** is the number of sprints in that tab and whose
+  **colour** is the variant the sprint status mapping assigns to the status that tab
+  groups: Próximos carries `bg-secondary-lt` (the `PENDING` variant), Actual carries
+  `bg-blue-lt` (`OPEN`), and Concluídos carries `bg-green-lt` (`CLOSED`) (see
+  [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
+  rule 2). The colour states which status the tab groups, and the text states how many
+  sprints the tab holds; the two are independent, so the badge of a tab that holds no
+  sprint shows the count `0` and keeps the colour of its status. The Próximos colour
+  is the same `bg-secondary-lt` a badge carries when nothing colours it, so that tab
+  on its own cannot show whether the mapping was applied; the three tabs are read
+  together, with `bg-blue-lt` on Actual and `bg-green-lt` on Concluídos beside it.
+
   - **Actual** (the default active tab) presents the OPEN sprint or sprints —
     those in progress — ordered by ascending sprint `Order` (the unique sprint
     execution order; see `MODELS.md § Sprint`). Each OPEN sprint is shown with the
@@ -2971,8 +2985,9 @@ read from the host filesystem at runtime.
    built on Bootstrap; see rule 1), not a hand-rolled show/hide script. Each tab's
    trigger is a Tabler `nav-link` (`<a class="nav-link" data-bs-toggle="tab">`), and
    the **Actual** tab is the one carrying the `active` state on page load. The three
-   tabs and their counts or badges, and the default-active Actual tab, are preserved
-   exactly as specified in [Roadmap Sprints Page](#roadmap-sprints-page).
+   tabs and their count badges, and the default-active Actual tab, are preserved
+   exactly as specified in [Roadmap Sprints Page](#roadmap-sprints-page), including
+   the semantic colour each count badge carries there.
 10. **No presentational inline styles, and no class the vendored Tabler
     distribution does not ship.** Templates MUST NOT carry presentational inline
     `style="..."` attributes. All styling lives in the vendored Tabler classes and
@@ -3207,23 +3222,62 @@ Rules:
    colour variant in the tables above. The priority and severity bands together
    cover the whole `0`-`9` range with no gap and no overlap, so every valid integer
    value resolves to exactly one band.
-2. **Applied consistently everywhere a badge is shown.** The same mapping is applied
-   wherever a status, priority, or severity badge appears: the priority and severity
-   badges on the tasks page's board cards (see
-   [Roadmap Tasks Page](#roadmap-tasks-page)), the sprint detail member-tasks table
-   (see [Sprint Detail Sub-Template](#sprint-detail-sub-template)), the task detail
-   modal (see [Task Detail Modal](#task-detail-modal)), the sprint cards (see
+2. **Applied consistently everywhere a badge is shown.** The mapping governs a
+   badge's **colour**, and it is keyed on a value: a task status, a sprint status, a
+   `priority`, or a `severity`. The same mapping is applied wherever a badge carries
+   one of those values: the priority and severity badges on the tasks page's board
+   cards (see [Roadmap Tasks Page](#roadmap-tasks-page)), the sprint detail
+   member-tasks table (see
+   [Sprint Detail Sub-Template](#sprint-detail-sub-template)), the task detail modal
+   (see [Task Detail Modal](#task-detail-modal)), the sprint cards (see
    [Shared Sprint-Card Partial](#shared-sprint-card-partial)), the Roadmap Sprint
    Page header and metadata datagrid (see [Roadmap Sprint Page](#roadmap-sprint-page)
    and [Sprint Detail Sub-Template](#sprint-detail-sub-template)), and the sprint
    tabs on the Roadmap Sprints Page (see [Roadmap Sprints Page](#roadmap-sprints-page)).
-   A status, priority, or severity badge anywhere in the interface uses the variant
-   the relevant table above assigns to its value; no status, priority, or severity
-   badge uses a single fixed colour across differing values. The mapping governs
-   those three badge kinds only. The comment-type badge shown in the task detail
-   modal and the sprint Comments card is deliberately outside it and uses the
-   neutral `bg-secondary-lt` variant for every type value (see
-   [Task Detail Modal](#task-detail-modal)).
+   A badge that carries one of those values uses the variant the relevant table above
+   assigns to it, and no such badge uses a single fixed colour across differing
+   values.
+
+   **A badge carries a value in one of two ways.** The mapping applies to both. The
+   second is a single named case, not a general licence:
+   - **The badge's own text is the value.** Every site listed above except the sprint
+     tabs is this case: the badge reads `COMPLETED`, `OPEN`, `7`, or `2`, and it takes
+     the colour the relevant table assigns to what it reads.
+   - **The badge counts the members of a group that has one value.** The three sprint
+     tabs on the Roadmap Sprints Page are this case, and the only one in the
+     interface. Each tab groups the sprints of exactly one sprint status — Próximos
+     the `PENDING` sprints, Actual the `OPEN` sprints, Concluídos the `CLOSED` sprints
+     (see [Roadmap Sprints Page](#roadmap-sprints-page)) — so a tab has a sprint
+     status even though no sprint status is written on it. Its badge is a hybrid: the
+     **colour** is the variant the sprint status table above assigns to the status
+     that tab groups, while the **text** is the number of sprints in the tab.
+     Próximos therefore carries `bg-secondary-lt`, Actual carries `bg-blue-lt`, and
+     Concluídos carries `bg-green-lt`, each showing its own count. The count itself
+     selects no colour: it is not a value this mapping knows, and it adds no fourth
+     badge kind.
+
+   **Read the three tab colours as a set, never one at a time.** `PENDING` maps to
+   `bg-secondary-lt`, which is also the neutral variant a count badge carries when
+   nothing colours it, so the Próximos tab looks the same whether the mapping colours
+   it or not. Looking the same is not being correct: the Próximos badge conforms only
+   when its colour comes from the sprint status table, exactly as the other two do,
+   and on its own it demonstrates nothing about this rule. What separates a
+   conforming rendering from a non-conforming one is that Actual carries `bg-blue-lt`
+   and Concluídos carries `bg-green-lt`; a rendering that gives all three tabs
+   `bg-secondary-lt` conforms on none of them.
+
+   The mapping governs the colour of those three kinds of value only — task and
+   sprint status, `priority`, and `severity` — whether the badge writes the value that
+   colours it or counts a group that has that value. It governs no other badge. The
+   comment-type badge shown in the task detail modal and the sprint Comments card is
+   deliberately outside it and uses the neutral `bg-secondary-lt` variant for every
+   type value (see [Task Detail Modal](#task-detail-modal)). Every other count badge
+   in the interface is outside it as well — among them the per-column task-count badge
+   on the Roadmap Tasks Page (see [Roadmap Tasks Page](#roadmap-tasks-page)) and the
+   comment-count badge on the sprint Comments card (see
+   [Sprint Detail Sub-Template](#sprint-detail-sub-template)) — and each stays
+   governed by the section that defines it. The sprint tabs are the one count badge
+   this mapping colours.
 3. **No new enum value.** The mapping introduces no status, priority, or severity
    value that is not already defined in `MODELS.md` and `STATE_MACHINE.md`. Should a
    new enum value or a revised band be introduced there, this table is updated in the
@@ -3995,8 +4049,9 @@ Rules:
     placed inside the card header (not a card title in the header with a separate
     `nav-tabs` list in the card body), tab activation uses Bootstrap's native tabs
     behaviour via `data-bs-toggle="tabs"`, and the three tabs (Próximos, Actual,
-    Concluídos) with their counts or badges and the default-active **Actual** tab are
-    preserved exactly as specified (see [UI Framework](#ui-framework), rule 9, and
+    Concluídos) with their count badges and the default-active **Actual** tab are
+    preserved exactly as specified, including the semantic colour of each tab's count
+    badge (Acceptance Criterion 120; see [UI Framework](#ui-framework), rule 9, and
     [Roadmap Sprints Page](#roadmap-sprints-page)).
 61. Every status, priority, and severity badge uses the semantically meaningful
     Tabler colour variant assigned to its value in
@@ -4012,8 +4067,10 @@ Rules:
     it is shown — the priority and severity badges on the tasks page's board cards,
     the sprint detail member-tasks table, the task
     detail modal, the sprint cards, the Roadmap Sprint Page header and metadata
-    datagrid, and the sprints-page tabs — and the mapping introduces no enum value
-    beyond those defined in `MODELS.md` and `STATE_MACHINE.md`.
+    datagrid, and the sprints-page tabs, where the colour is the variant of the status
+    the tab groups while the badge text is that tab's sprint count (Acceptance
+    Criterion 120) — and the mapping introduces no enum value beyond those defined in
+    `MODELS.md` and `STATE_MACHINE.md`.
 62. No template carries a presentational inline `style="..."` attribute: all styling
     is provided by vendored Tabler classes and utilities or by the project override
     stylesheet (`static/style.css`). In particular, the navigation sidebar's
@@ -4566,6 +4623,22 @@ Rules:
     [Roadmap Tasks Page](#roadmap-tasks-page), **One rule, and only one
     implementation of it**, and **What keeps the shipped mapping equal to the
     server's**).
+120. Each of the three tabs on the Roadmap Sprints Page carries a Tabler badge whose
+    text is the number of sprints in that tab and whose colour is the variant the
+    sprint status mapping assigns to the status that tab groups: Próximos carries
+    `bg-secondary-lt` (the `PENDING` variant), Actual carries `bg-blue-lt` (`OPEN`),
+    and Concluídos carries `bg-green-lt` (`CLOSED`). The three tabs therefore do not
+    share one fixed colour. A tab that holds no sprint shows the count `0` and keeps
+    the colour of its status, because the colour follows the tab's status and not the
+    sprints in it. The check asserts all three tabs together, because only Actual and
+    Concluídos can make it fail: `PENDING` maps to `bg-secondary-lt`, which is also
+    the neutral colour a badge carries when nothing colours it, so the Próximos badge
+    renders identically whether the mapping colours it or not, and a check that
+    asserts Próximos alone passes without exercising the rule. The check fails on a
+    rendering that gives all three tabs `bg-secondary-lt` (see
+    [Roadmap Sprints Page](#roadmap-sprints-page) and
+    [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
+    rule 2).
 
 ## See Also
 

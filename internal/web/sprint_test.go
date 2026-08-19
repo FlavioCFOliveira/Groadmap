@@ -231,10 +231,17 @@ func TestSprints_CardHeaderTabs(t *testing.T) {
 			t.Errorf("card header missing tab label %q", label)
 		}
 	}
-	// Each tab badge renders its count: 2 PENDING, 1 OPEN, 2 CLOSED.
+	// Each tab badge renders its count — 2 PENDING, 1 OPEN, 2 CLOSED — in the
+	// colour the sprint status mapping gives the status that tab groups: the
+	// count is the text, the tab's status is the colour (Acceptance Criteria 60
+	// and 120). The three are asserted TOGETHER: PENDING maps to the neutral
+	// bg-secondary-lt, so the Próximos badge alone is satisfied by a fixed-colour
+	// rendering too. TestSprintsPage_TabCountBadgesCarryTheirTabStatusColour in
+	// badge_test.go is the dedicated regression test for the colours.
 	for _, badge := range []string{
-		`<span class="badge bg-secondary-lt ms-1">2</span>`, // Próximos count
-		`<span class="badge bg-secondary-lt ms-1">1</span>`, // Actual count
+		`>Próximos <span class="badge bg-secondary-lt ms-1">2</span>`,
+		`>Actual <span class="badge bg-blue-lt ms-1">1</span>`,
+		`>Concluídos <span class="badge bg-green-lt ms-1">2</span>`,
 	} {
 		if !strings.Contains(header, badge) {
 			t.Errorf("card header missing count badge %q", badge)
