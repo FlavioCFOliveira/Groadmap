@@ -1,19 +1,33 @@
-/* Groadmap task board search.
+/* Groadmap task board narrowing: the search term and the three header filters.
  *
  * The board carries every card of the roadmap, so narrowing it is a DOM
  * operation: the script shows and hides cards, recomputes each column's count,
  * toggles the empty states, and keeps the URL in step. No request is made, and
  * nothing is written anywhere (SPEC/WEB.md § Roadmap Tasks Page, Header search
- * control; Effect on the board).
+ * control; Header filter controls; Effect on the board).
  *
- * SERVER AND CLIENT MUST AGREE. The same term produces the same board whether it
- * was typed here or carried in the URL of a cold load, and that equivalence is
- * kept by construction rather than by two implementations happening to match:
+ * ONE FILTERING MODEL, NOT TWO. The term and the three filters are not separate
+ * mechanisms: each is one criterion, a card is shown when it satisfies EVERY
+ * active criterion, and that single conjunction is computed in one place
+ * (`matches` below) exactly as the server computes it in one place
+ * (web.taskView.matches). Narrowing a criterion can only shrink the shown set,
+ * and no criterion ever re-admits a card another excluded (SPEC/WEB.md § Roadmap
+ * Tasks Page, How the criteria compose).
  *
- *   - the corpus is folded ONCE, by the server, into each card's data-search
- *     attribute, so this script never case-folds task text;
+ * SERVER AND CLIENT MUST AGREE. The same controls produce the same board whether
+ * they were set here or carried in the URL of a cold load, and that equivalence
+ * is kept by construction rather than by two implementations happening to match:
+ *
+ *   - a task's own values are transformed by ONE side only. The server folds the
+ *     title once into data-search and writes the type, priority and severity once
+ *     into data-type, data-priority and data-severity; this script only reads
+ *     them, so it can never fold or spell a task's value differently;
  *   - the reference is rebuilt from data-task-id as "#<id>", exactly as the
  *     server builds it;
+ *   - a filter value is never parsed here either: the only values these controls
+ *     can hold are the options the server emitted from the TaskType enum and from
+ *     the threshold range, so the "is this value accepted?" question the server
+ *     answers for a URL parameter cannot arise on this side;
  *   - the term is folded with toLowerCase(), NOT toLocaleLowerCase(): the
  *     locale-sensitive variant would make the same term select different tasks
  *     for different viewers, which the matching rule forbids.
@@ -35,7 +49,51 @@
 
   var boardEmpty = document.querySelector('[data-role="task-search-empty"]');
   var boardEmptyTerm = document.querySelector('[data-role="task-search-term"]');
+  var boardEmptyTermPhrase = document.querySelector('[data-role="task-search-term-phrase"]');
   var columns = board.querySelectorAll('[data-role="task-board-column"]');
+
+  /* equals is the type filter's comparison: a task matches when its type IS the
+   * selected TaskType value. Both sides are the enum's own spelling — the card's
+   * from the server, the control's from the option set the server emitted — so
+   * the comparison is exact and needs no case folding, exactly as `rmp task list
+   * -y` compares. */
+  function equals(cardValue, filterValue) {
+    return cardValue === filterValue;
+  }
+
+  /* atLeast is the priority and severity filters' comparison: a task matches when
+   * its value is greater than or equal to the selected threshold, which is the
+   * meaning `rmp task list -p` and `--severity` already carry. Both operands are
+   * the server's own digit strings. */
+  function atLeast(cardValue, filterValue) {
+    return Number(cardValue) >= Number(filterValue);
+  }
+
+  /* The three filters in ONE table: the URL parameter each travels in, the
+   * control that sets it, the card attribute it reads, and how it compares.
+   * Nothing else in this file knows how many dimensions there are, so a further
+   * one is a row here and no change anywhere else — which is the same property
+   * the server's single conjunction has. */
+  var filters = [
+    {
+      param: "type",
+      control: document.querySelector('[data-role="task-filter-type"]'),
+      attribute: "data-type",
+      compare: equals
+    },
+    {
+      param: "priority",
+      control: document.querySelector('[data-role="task-filter-priority"]'),
+      attribute: "data-priority",
+      compare: atLeast
+    },
+    {
+      param: "severity",
+      control: document.querySelector('[data-role="task-filter-severity"]'),
+      attribute: "data-severity",
+      compare: atLeast
+    }
+  ];
 
   /* foldTerm normalises what the user typed into the form the matching rule
    * compares with, mirroring the server's foldSearchTerm: surrounding whitespace
@@ -46,11 +104,39 @@
     return raw.trim().toLowerCase();
   }
 
-  /* matches applies the one matching rule: the term occurs, as a substring, in
+  /* controls reads the four header controls into the one shape the rest of this
+   * file works with: the raw term (echoed back as text), the folded term, and one
+   * value per filter, "" meaning that dimension carries no filter — the same
+   * meaning the parameter's absence has in the URL and the zero value has on the
+   * server. */
+  function controls() {
+    var values = [];
+    for (var i = 0; i < filters.length; i++) {
+      values.push(filters[i].control ? filters[i].control.value : "");
+    }
+    return { raw: input.value, term: foldTerm(input.value), filters: values };
+  }
+
+  /* active reports whether any control is narrowing the board, which is what
+   * separates a board narrowed to nothing — which says so — from a roadmap that
+   * holds no task at all, which does not. */
+  function active(state) {
+    if (state.term !== "") {
+      return true;
+    }
+    for (var i = 0; i < state.filters.length; i++) {
+      if (state.filters[i] !== "") {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /* matchesTerm applies the search criterion: the term occurs, as a substring, in
    * the task's title or in its "#<id>" reference. The title arrives already
    * folded from the server; the reference is digits and "#", which no case
    * folding changes. No other field is searched. */
-  function matches(card, term) {
+  function matchesTerm(card, term) {
     if (term === "") {
       return true;
     }
@@ -62,11 +148,30 @@
     return reference.indexOf(term) !== -1;
   }
 
-  /* apply narrows the board to a term and brings everything the board says about
-   * itself back into agreement with what it is showing: the cards, the per-column
-   * counts, the per-column empty states, and the board's own no-match message. */
-  function apply(raw) {
-    var term = foldTerm(raw);
+  /* matches is the board's ONE verdict on one card: shown when it satisfies EVERY
+   * active criterion. An inactive filter is skipped rather than compared, which
+   * is what makes a board with no active control show every task. */
+  function matches(card, state) {
+    if (!matchesTerm(card, state.term)) {
+      return false;
+    }
+    for (var i = 0; i < filters.length; i++) {
+      var value = state.filters[i];
+      if (value === "") {
+        continue;
+      }
+      if (!filters[i].compare(card.getAttribute(filters[i].attribute) || "", value)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /* apply narrows the board to the current controls and brings everything the
+   * board says about itself back into agreement with what it is showing: the
+   * cards, the per-column counts, the per-column empty states, and the board's own
+   * no-match message. */
+  function apply(state) {
     var shown = 0;
 
     for (var c = 0; c < columns.length; c++) {
@@ -75,7 +180,7 @@
       var visible = 0;
 
       for (var i = 0; i < cards.length; i++) {
-        var show = matches(cards[i], term);
+        var show = matches(cards[i], state);
         cards[i].hidden = !show;
         if (show) {
           visible++;
@@ -87,7 +192,7 @@
       if (badge) {
         badge.textContent = String(visible);
       }
-      // A column emptied by the search reads exactly like a column the roadmap
+      // A column emptied by the controls reads exactly like a column the roadmap
       // left empty.
       var columnEmpty = column.querySelector('[data-role="task-board-column-empty"]');
       if (columnEmpty) {
@@ -96,47 +201,70 @@
       shown += visible;
     }
 
-    // The board's own message, shown only when a term is in force and nothing
-    // matched it. The term is written as TEXT, never as markup.
+    // The board's own message, shown only when a control is in force and nothing
+    // matched the conjunction of all of them. ONE message covers the term and the
+    // filters together; the phrase naming the term is shown only when there is a
+    // term, and the term itself is written as TEXT, never as markup.
     if (boardEmpty) {
       if (boardEmptyTerm) {
-        boardEmptyTerm.textContent = raw;
+        boardEmptyTerm.textContent = state.raw;
       }
-      boardEmpty.hidden = !(term !== "" && shown === 0);
+      if (boardEmptyTermPhrase) {
+        boardEmptyTermPhrase.hidden = state.term === "";
+      }
+      boardEmpty.hidden = !(active(state) && shown === 0);
     }
   }
 
   /* syncURL keeps the address bar showing the board on screen, so a narrowed view
    * is shareable and reloadable. The current history entry is REPLACED rather
-   * than a new one pushed: one entry per keystroke would turn the Back button
-   * into an undo key for typing. An empty term removes q rather than leaving an
-   * empty parameter behind. */
-  function syncURL(raw) {
+   * than a new one pushed: one entry per keystroke, or one per dropdown change,
+   * would turn the Back button into an undo key for narrowing. A control on its
+   * no-filter option — an empty term, a dropdown on "Any ..." — REMOVES its
+   * parameter rather than leaving an empty one behind, so clearing every control
+   * leaves the bare page URL. */
+  function syncURL(state) {
     if (!window.history || !window.history.replaceState) {
       return;
     }
     var url = new URL(window.location.href);
-    if (foldTerm(raw) === "") {
+    if (state.term === "") {
       url.searchParams.delete("q");
     } else {
-      url.searchParams.set("q", raw);
+      url.searchParams.set("q", state.raw);
+    }
+    for (var i = 0; i < filters.length; i++) {
+      if (state.filters[i] === "") {
+        url.searchParams.delete(filters[i].param);
+      } else {
+        url.searchParams.set(filters[i].param, state.filters[i]);
+      }
     }
     window.history.replaceState(window.history.state, "", url.toString());
   }
 
-  input.addEventListener("input", function () {
-    apply(input.value);
-    syncURL(input.value);
-  });
+  /* narrow is the single entry point every control ends in, so the four controls
+   * cannot drift into four behaviours. */
+  function narrow() {
+    var state = controls();
+    apply(state);
+    syncURL(state);
+  }
+
+  input.addEventListener("input", narrow);
 
   /* A search input offers a native clear control, which fires "search" rather
    * than "input" in some browsers; both paths end in the same call. */
-  input.addEventListener("search", function () {
-    apply(input.value);
-    syncURL(input.value);
-  });
+  input.addEventListener("search", narrow);
 
-  /* The board arrives already narrowed by the server when the URL carried a term,
-   * so nothing is applied on load: re-applying would repeat work the server did
-   * and would be the post-load narrowing the specification rules out. */
+  for (var f = 0; f < filters.length; f++) {
+    if (filters[f].control) {
+      filters[f].control.addEventListener("change", narrow);
+    }
+  }
+
+  /* The board arrives already narrowed by the server when the URL carried any of
+   * the four values, so nothing is applied on load: re-applying would repeat work
+   * the server did and would be the post-load narrowing the specification rules
+   * out. */
 })();

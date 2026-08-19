@@ -13,22 +13,54 @@
           <div class="row g-2 align-items-center">
 {{template "pageTitle" .Chrome.Heading}}
             {{/*
-              The actions column carries the board's search box and nothing else.
-              The knowledge-graph link that stood here was a second route to a
-              destination the admin-shell sidebar already lists on every page, so
-              removing it removes a duplicate and no access.
+              The actions column carries the board's four narrowing controls and
+              nothing else: the search box, which narrows by what a task is
+              CALLED, and the type, minimum-priority and minimum-severity
+              dropdowns, which narrow by what a task IS. The knowledge-graph link
+              that stood here was a second route to a destination the admin-shell
+              sidebar already lists on every page, so removing it removed a
+              duplicate and no access.
 
-              The input carries a real <label>, associated by for/id: a
+              Every control carries a real <label>, associated by for/id. A
               placeholder is not an accessible name and disappears the moment the
-              user types, so it may not stand in for one. The control submits
-              nothing — there is no form — because narrowing happens in the
-              browser and the term travels in the URL through history.replaceState
-              (SPEC/WEB.md § Roadmap Tasks Page, Header search control).
+              user types; a dropdown's first option ("Any type") is a VALUE, not
+              the control's name, and neither may stand in for a label
+              (SPEC/WEB.md § Roadmap Tasks Page, Header search control; Header
+              filter controls). All four are native form controls, so the keyboard
+              reaches and operates them with no script of our own.
+
+              Nothing here submits: there is no form. Narrowing happens in the
+              browser and the four values travel in the URL through
+              history.replaceState, so a narrowed board is a shareable URL.
+
+              The option sets are the SERVER's own enumeration of the TaskType
+              enum and of the threshold range; a request's value only decides
+              which option carries `selected`, so no caller-supplied string
+              reaches the page through type, priority or severity (SPEC/WEB.md
+              § Roadmap Tasks Page, A filter value is never echoed into the page).
+
+              There is deliberately NO status filter: the five columns already are
+              the status, and SPEC/WEB.md § Roadmap Tasks Page, Why the board
+              offers no status filter, records the four reasons.
             */}}
             <div class="col-auto ms-auto d-print-none">
-              <div class="d-flex align-items-center gap-2">
-                <label class="form-label mb-0" for="task-search">Search tasks</label>
-                <input class="form-control w-auto" type="search" id="task-search" name="q" value="{{.Search}}" autocomplete="off" spellcheck="false" data-role="task-search">
+              <div class="task-controls">
+                <span class="task-controls__field">
+                  <label class="form-label mb-0" for="task-search">Search tasks</label>
+                  <input class="form-control w-auto" type="search" id="task-search" name="q" value="{{.Search}}" autocomplete="off" spellcheck="false" data-role="task-search">
+                </span>
+                <span class="task-controls__field">
+                  <label class="form-label mb-0" for="task-filter-type">Type</label>
+                  <select class="form-select w-auto" id="task-filter-type" name="type" data-role="task-filter-type">{{range .Filters.Types}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+                </span>
+                <span class="task-controls__field">
+                  <label class="form-label mb-0" for="task-filter-priority">Min priority</label>
+                  <select class="form-select w-auto" id="task-filter-priority" name="priority" data-role="task-filter-priority">{{range .Filters.Priorities}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+                </span>
+                <span class="task-controls__field">
+                  <label class="form-label mb-0" for="task-filter-severity">Min severity</label>
+                  <select class="form-select w-auto" id="task-filter-severity" name="severity" data-role="task-filter-severity">{{range .Filters.Severities}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+                </span>
               </div>
             </div>
           </div>
@@ -57,17 +89,23 @@
             and the empty state.
           */}}
           {{/*
-            The board's own answer to a search that matched nothing: a roadmap
-            that holds no task and a search that matched no task are different
+            The board's own answer to controls that matched nothing: a roadmap
+            that holds no task and a board narrowed to no task are different
             conditions and read differently, so the five in-column empty states
             alone are not enough to explain this one (SPEC/WEB.md § Roadmap Tasks
             Page, Effect on the board; Empty states). The element is always in the
             document and hidden unless it applies, so the server and the script
             express the same state the same way.
+
+            ONE message covers the term and the three filters together: the shown
+            set is their conjunction, so singling out one control would attribute
+            the empty result to a cause the board cannot know. The term is named
+            only where there IS one — the phrase carrying it is hidden while the
+            search box is empty — and it is written as TEXT on both paths.
           */}}
           <div class="empty py-3" data-role="task-search-empty"{{if not .NoMatches}} hidden{{end}}>
-            <p class="empty-title">No task matches this search</p>
-            <p class="empty-subtitle text-secondary">Nothing in this roadmap matches <span data-role="task-search-term">{{.Search}}</span>. Clear the search to see every task.</p>
+            <p class="empty-title">No task matches these controls</p>
+            <p class="empty-subtitle text-secondary">Nothing in this roadmap matches the search and filters in force<span data-role="task-search-term-phrase"{{if not .SearchActive}} hidden{{end}}> (search: <span data-role="task-search-term">{{.Search}}</span>)</span>. Clear every control to see every task.</p>
           </div>
 
           <div class="task-board" data-role="task-board">
@@ -91,12 +129,20 @@
                   form the sprint page's row trigger uses (SPEC/WEB.md § Roadmap
                   Tasks Page, clickable card).
 
+                  The card carries the three dimensions the header filters act on
+                  — its type, its priority and its severity — in the server's own
+                  spelling, exactly as it carries its already-folded search corpus
+                  in data-search. Neither side ever transforms a task's value: the
+                  server writes it once and the browser compares what it reads,
+                  which is what keeps the two verdicts identical (SPEC/WEB.md
+                  § Roadmap Tasks Page, Server and client produce the same board).
+
                   The button's content is phrasing content — spans, not divs —
                   because that is a button's content model; the Tabler card
                   classes are unchanged, and w-100/p-0/text-start are the
                   utilities that keep a button looking like the card it is.
                 */}}
-                <button type="button" class="card card-sm task-card w-100 p-0 text-start" data-bs-toggle="modal" data-bs-target="#task-modal" data-task-id="{{.ID}}" data-search="{{.SearchText}}" aria-label="Open details for task #{{.ID}}: {{.Title}}"{{if not .Match}} hidden{{end}}>
+                <button type="button" class="card card-sm task-card w-100 p-0 text-start" data-bs-toggle="modal" data-bs-target="#task-modal" data-task-id="{{.ID}}" data-search="{{.SearchText}}" data-type="{{.Type}}" data-priority="{{.Priority}}" data-severity="{{.Severity}}" aria-label="Open details for task #{{.ID}}: {{.Title}}"{{if not .Match}} hidden{{end}}>
                   <span class="card-body d-block">
                     <span class="d-block small text-secondary" data-role="task-card-ref">#{{.ID}} &middot; {{.Type}}</span>
                     <span class="d-block fw-bold text-break mb-1" data-role="task-card-title">{{.Title}}</span>

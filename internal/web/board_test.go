@@ -1010,7 +1010,7 @@ func TestTasksPage_IssuesThreeReadsAndNoneMore(t *testing.T) {
 	f := seedBoardFixture(t, "payment-platform")
 	src := openCounting(t, f.name)
 
-	data, err := readTasks(context.Background(), src, f.name, "")
+	data, err := readTasks(context.Background(), src, f.name, boardControls{})
 	if err != nil {
 		t.Fatalf("readTasks: %v", err)
 	}
@@ -1066,7 +1066,7 @@ func TestTasksPage_IssuesThreeReadsAndNoneMore(t *testing.T) {
 		seedTasksWithComments(t, name, taskCount)
 		counted := openCounting(t, name)
 
-		if _, err := readTasks(context.Background(), counted, name, ""); err != nil {
+		if _, err := readTasks(context.Background(), counted, name, boardControls{}); err != nil {
 			t.Fatalf("%d tasks: readTasks: %v", taskCount, err)
 		}
 		if counted.taskList != 1 || counted.groupedCommentCounts != 1 || counted.groupedTaskSprints != 1 {
@@ -1095,7 +1095,7 @@ func TestTasksPage_IssuesThreeReadsAndNoneMore(t *testing.T) {
 	seedTasksWithComments(t, emptyName, 0)
 	emptySrc := openCounting(t, emptyName)
 
-	emptyData, err := readTasks(context.Background(), emptySrc, emptyName, "")
+	emptyData, err := readTasks(context.Background(), emptySrc, emptyName, boardControls{})
 	if err != nil {
 		t.Fatalf("empty roadmap: readTasks: %v", err)
 	}

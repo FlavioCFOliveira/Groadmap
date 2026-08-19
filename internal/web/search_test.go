@@ -30,11 +30,21 @@ import (
 
 // ==================== READING A RENDERED BOARD ====================
 
-// searchCard is one card as the board rendered it.
+// searchCard is one card as the board rendered it: everything the client needs
+// to recompute the board's verdict on that card, and the verdict the server
+// reached.
+//
+// search, taskType, priority and severity are the four values the card carries
+// for the four header controls. Each is written ONCE, by the server, in the
+// server's own spelling; the client only reads them, which is what keeps the two
+// verdicts from being able to disagree about a task's own data.
 type searchCard struct {
-	id     int
-	search string // the folded corpus the client matches against
-	shown  bool
+	id       int
+	search   string // the folded corpus the client matches against
+	taskType string // data-type: the TaskType, in the enum's own spelling
+	priority string // data-priority
+	severity string // data-severity
+	shown    bool
 }
 
 // searchColumn is one column as the board rendered it.
@@ -48,19 +58,73 @@ type searchColumn struct {
 // boardState is everything the board says about itself: what each column shows,
 // what it counts, which empty states are visible, and the board's own no-match
 // message. Two boards are the same when their states are.
+//
+// messageTermShown is whether the message NAMES the term. One message covers the
+// term and the three filters together, and the phrase carrying the term is shown
+// only when there is a term, so a board narrowed to nothing by a filter alone
+// does not quote an empty search.
 type boardState struct {
-	columns      []searchColumn
-	messageTerm  string
-	messageShown bool
+	columns          []searchColumn
+	messageTerm      string
+	messageShown     bool
+	messageTermShown bool
+}
+
+// clientControls is the state of the board's four header controls as the browser
+// holds them: the raw term and one value per filter, "" meaning that dimension
+// carries no filter — the same meaning the parameter's absence has in the URL.
+//
+// The three filter fields are strings rather than typed values on purpose: the
+// browser holds exactly what the <option> carried, and the point of the
+// comparison below is that neither side ever reinterprets it.
+type clientControls struct {
+	Term     string
+	Type     string
+	Priority string
+	Severity string
+}
+
+// query renders the controls as a URL query string, carrying a parameter only
+// for a control that holds a value.
+//
+// It follows the same rule the script's syncURL follows — a control on its
+// no-filter option leaves no parameter behind — with one deliberate exception: a
+// term that is whitespace is carried, because the SERVER must be exercised with
+// one and the script would never produce that URL (it removes q for a term that
+// folds to empty, which TestTaskSearchScript_KeepsTheURLInStepWithoutStackingHistory
+// pins separately).
+func (c clientControls) query() string {
+	values := url.Values{}
+	for _, pair := range []struct{ name, value string }{
+		{"q", c.Term},
+		{"type", c.Type},
+		{"priority", c.Priority},
+		{"severity", c.Severity},
+	} {
+		if pair.value != "" {
+			values.Set(pair.name, pair.value)
+		}
+	}
+	return values.Encode()
+}
+
+// active reports whether any control is narrowing the board, which is the
+// condition for the board's no-match message.
+func (c clientControls) active() bool {
+	return strings.TrimSpace(c.Term) != "" || c.Type != "" || c.Priority != "" || c.Severity != ""
 }
 
 var (
-	reSearchCardTag = regexp.MustCompile(`<button type="button" class="card card-sm task-card[^>]*>`)
-	reSearchCardID  = regexp.MustCompile(`data-task-id="(\d+)"`)
-	reSearchCorpus  = regexp.MustCompile(`data-search="([^"]*)"`)
-	reSearchTerm    = regexp.MustCompile(`data-role="task-search-term">([^<]*)<`)
-	reSearchInput   = regexp.MustCompile(`<input[^>]*data-role="task-search"[^>]*>`)
-	reInputValue    = regexp.MustCompile(`value="([^"]*)"`)
+	reSearchCardTag   = regexp.MustCompile(`<button type="button" class="card card-sm task-card[^>]*>`)
+	reSearchCardID    = regexp.MustCompile(`data-task-id="(\d+)"`)
+	reSearchCorpus    = regexp.MustCompile(`data-search="([^"]*)"`)
+	reSearchCardType  = regexp.MustCompile(`data-type="([^"]*)"`)
+	reSearchCardPrio  = regexp.MustCompile(`data-priority="([^"]*)"`)
+	reSearchCardSev   = regexp.MustCompile(`data-severity="([^"]*)"`)
+	reSearchTerm      = regexp.MustCompile(`data-role="task-search-term">([^<]*)<`)
+	reSearchTermPhase = regexp.MustCompile(`data-role="task-search-term-phrase"([^>]*)>`)
+	reSearchInput     = regexp.MustCompile(`<input[^>]*data-role="task-search"[^>]*>`)
+	reInputValue      = regexp.MustCompile(`value="([^"]*)"`)
 )
 
 // readBoardState parses a served tasks page into the state its board presents.
@@ -75,17 +139,27 @@ func readBoardState(t *testing.T, body string) boardState {
 		for _, tag := range reSearchCardTag.FindAllString(column, -1) {
 			id := reSearchCardID.FindStringSubmatch(tag)
 			corpus := reSearchCorpus.FindStringSubmatch(tag)
+			taskType := reSearchCardType.FindStringSubmatch(tag)
+			priority := reSearchCardPrio.FindStringSubmatch(tag)
+			severity := reSearchCardSev.FindStringSubmatch(tag)
 			if id == nil || corpus == nil {
 				t.Fatalf("a board card carries no task id or no search corpus: %s", tag)
+			}
+			if taskType == nil || priority == nil || severity == nil {
+				t.Fatalf("a board card carries no type, priority or severity for the header "+
+					"filters to compare: %s", tag)
 			}
 			taskID, err := strconv.Atoi(id[1])
 			if err != nil {
 				t.Fatalf("a board card carries a non-integer task id: %s", tag)
 			}
 			parsed.cards = append(parsed.cards, searchCard{
-				id:     taskID,
-				search: html.UnescapeString(corpus[1]),
-				shown:  !strings.Contains(tag, " hidden"),
+				id:       taskID,
+				search:   html.UnescapeString(corpus[1]),
+				taskType: html.UnescapeString(taskType[1]),
+				priority: priority[1],
+				severity: severity[1],
+				shown:    !strings.Contains(tag, " hidden"),
 			})
 		}
 		state.columns = append(state.columns, parsed)
@@ -102,6 +176,11 @@ func readBoardState(t *testing.T, body string) boardState {
 	if term := reSearchTerm.FindStringSubmatch(region); term != nil {
 		state.messageTerm = html.UnescapeString(term[1])
 	}
+	phrase := reSearchTermPhase.FindStringSubmatch(region)
+	if phrase == nil {
+		t.Fatalf("the no-match message carries no term phrase element")
+	}
+	state.messageTermShown = !strings.Contains(phrase[1], "hidden")
 	return state
 }
 
@@ -121,25 +200,35 @@ func (s boardState) shownIDs() map[string][]int {
 }
 
 // narrow applies the CLIENT's rule to an unnarrowed board, producing the state
-// the script would leave the page in for that term.
+// the script would leave the page in for those controls.
 //
-// It is the script's algorithm re-expressed: the term is trimmed and folded with
-// a locale-independent lower-casing, and a card matches when the folded term is a
-// substring of the corpus the server folded into it, or of its "#<id>" reference.
-// TestTaskSearchScript_ImplementsTheSameMatchingRule pins that the served script
-// is this rule, so the comparison is between the two real paths rather than
-// between the server and a convenient fiction.
-func (s boardState) narrow(raw string) boardState {
-	term := strings.ToLower(strings.TrimSpace(raw))
+// It is the script's algorithm re-expressed, ONE conjunction over four criteria
+// exactly as static/task-search.js computes one:
+//
+//   - the term is trimmed and folded with a locale-independent lower-casing, and
+//     matches when it is a substring of the corpus the server folded into the
+//     card or of the card's "#<id>" reference;
+//   - the type criterion is an EQUALITY against the card's own data-type;
+//   - the priority and severity criteria are THRESHOLDS, ">=", over the card's
+//     own data-priority and data-severity;
+//   - a control holding "" contributes no criterion at all.
+//
+// TestTaskSearchScript_ImplementsTheSameMatchingRule and
+// TestTaskFilters_ScriptAppliesTheSameConjunction pin that the served script is
+// this rule, so the comparison is between the two real paths rather than between
+// the server and a convenient fiction.
+func (s boardState) narrow(c clientControls) boardState {
+	term := strings.ToLower(strings.TrimSpace(c.Term))
 
-	narrowed := boardState{messageTerm: raw}
+	narrowed := boardState{messageTerm: c.Term, messageTermShown: term != ""}
 	total := 0
 	for _, column := range s.columns {
 		result := searchColumn{status: column.status}
 		for _, card := range column.cards {
-			show := term == "" ||
-				strings.Contains(card.search, term) ||
-				strings.Contains("#"+strconv.Itoa(card.id), term)
+			show := matchesClientTerm(&card, term) &&
+				(c.Type == "" || card.taskType == c.Type) &&
+				(c.Priority == "" || clientNumber(card.priority) >= clientNumber(c.Priority)) &&
+				(c.Severity == "" || clientNumber(card.severity) >= clientNumber(c.Severity))
 			card.shown = show
 			if show {
 				result.count++
@@ -150,17 +239,50 @@ func (s boardState) narrow(raw string) boardState {
 		total += result.count
 		narrowed.columns = append(narrowed.columns, result)
 	}
-	narrowed.messageShown = term != "" && total == 0
+	narrowed.messageShown = c.active() && total == 0
 	return narrowed
 }
 
-// servedBoard requests the tasks page, optionally with a term, and reads it.
-func servedBoard(t *testing.T, mux *http.ServeMux, roadmap, term string, withTerm bool) (boardState, string) {
+// matchesClientTerm is the term criterion of narrow, kept separate so the
+// conjunction above reads as four criteria rather than as one long expression.
+func matchesClientTerm(card *searchCard, term string) bool {
+	return term == "" ||
+		strings.Contains(card.search, term) ||
+		strings.Contains("#"+strconv.Itoa(card.id), term)
+}
+
+// clientNumber mirrors the script's Number(): the card attributes and the option
+// values are the server's own digit strings, so this never sees anything else.
+func clientNumber(raw string) int {
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
+// servedBoard requests the tasks page with the URL those controls produce, and
+// reads the board it served.
+func servedBoard(t *testing.T, mux *http.ServeMux, roadmap string, c clientControls) (boardState, string) {
 	t.Helper()
 
 	path := "/roadmaps/" + roadmap + "/tasks"
-	if withTerm {
-		path += "?q=" + url.QueryEscape(term)
+	if query := c.query(); query != "" {
+		path += "?" + query
+	}
+	body := servePage(t, mux, path)
+	return readBoardState(t, body), body
+}
+
+// servedBoardQuery requests the tasks page with a RAW query string, for the cases
+// no control can produce: a parameter present with an empty value, a decorated or
+// undecodable value, a repeated parameter, or a deliberately odd parameter order.
+func servedBoardQuery(t *testing.T, mux *http.ServeMux, roadmap, query string) (boardState, string) {
+	t.Helper()
+
+	path := "/roadmaps/" + roadmap + "/tasks"
+	if query != "" {
+		path += "?" + query
 	}
 	body := servePage(t, mux, path)
 	return readBoardState(t, body), body
@@ -237,7 +359,7 @@ func TestTaskSearch_NarrowsTheBoardAndItsCounts(t *testing.T) {
 	f := seedBoardFixture(t, "payment-platform")
 	mux := buildMux()
 
-	unnarrowed, _ := servedBoard(t, mux, f.name, "", false)
+	unnarrowed, _ := servedBoard(t, mux, f.name, clientControls{})
 	total := 0
 	for _, column := range unnarrowed.columns {
 		total += column.count
@@ -261,7 +383,7 @@ func TestTaskSearch_NarrowsTheBoardAndItsCounts(t *testing.T) {
 		{"the bare id finds the same task", itoa(f.passkey), []int{f.passkey}},
 		{"a term matching nothing", "zzz-nothing-matches-this", []int{}},
 	} {
-		state, _ := servedBoard(t, mux, f.name, c.term, true)
+		state, _ := servedBoard(t, mux, f.name, clientControls{Term: c.term})
 
 		got := []int{}
 		for _, ids := range state.shownIDs() {
@@ -297,7 +419,7 @@ func TestTaskSearch_NarrowsTheBoardAndItsCounts(t *testing.T) {
 
 	// An empty or whitespace-only term is no term at all: every card is shown.
 	for _, blank := range []string{"", " ", "   \t  "} {
-		state, _ := servedBoard(t, mux, f.name, blank, true)
+		state, _ := servedBoardQuery(t, mux, f.name, "q="+url.QueryEscape(blank))
 		shown := 0
 		for _, column := range state.columns {
 			shown += column.count
@@ -312,7 +434,7 @@ func TestTaskSearch_NarrowsTheBoardAndItsCounts(t *testing.T) {
 
 	// specialists is deliberately outside the search: the passkey task carries
 	// "go-developer, security-review" and no title contains it.
-	state, _ := servedBoard(t, mux, f.name, "security-review", true)
+	state, _ := servedBoard(t, mux, f.name, clientControls{Term: "security-review"})
 	for _, ids := range state.shownIDs() {
 		if len(ids) != 0 {
 			t.Errorf("a specialists value matched task(s) %v; the search covers the title and "+
@@ -352,8 +474,8 @@ func TestTaskSearch_PreservesTheOrderWithinAColumn(t *testing.T) {
 	// The BACKLOG column's four cards are seeded so that priority order, creation
 	// order and id order all differ; "en" occurs in three of the four titles and
 	// not in the fourth, so the narrowed column is a proper subset.
-	unnarrowed, _ := servedBoard(t, mux, f.name, "", false)
-	narrowed, _ := servedBoard(t, mux, f.name, "en", true)
+	unnarrowed, _ := servedBoard(t, mux, f.name, clientControls{})
+	narrowed, _ := servedBoard(t, mux, f.name, clientControls{Term: "en"})
 
 	full := unnarrowed.shownIDs()[string(models.StatusBacklog)]
 	kept := narrowed.shownIDs()[string(models.StatusBacklog)]
@@ -390,7 +512,7 @@ func TestTaskSearch_EmptyStates(t *testing.T) {
 
 	// A term that matches two tasks, in two columns: the other three columns are
 	// emptied by the search and show their empty state.
-	state, _ := servedBoard(t, mux, f.name, "settlement", true)
+	state, _ := servedBoard(t, mux, f.name, clientControls{Term: "settlement"})
 	if len(state.columns) != 5 {
 		t.Fatalf("the narrowed board has %d columns, want 5", len(state.columns))
 	}
@@ -407,7 +529,7 @@ func TestTaskSearch_EmptyStates(t *testing.T) {
 
 	// A term that matches nothing: five empty columns AND the board's own message,
 	// naming the term, so the user is not left to interpret five silent columns.
-	none, body := servedBoard(t, mux, f.name, "zzz-nothing", true)
+	none, body := servedBoard(t, mux, f.name, clientControls{Term: "zzz-nothing"})
 	if !none.messageShown {
 		t.Errorf("a search that matched nothing renders no no-match message")
 	}
@@ -426,7 +548,7 @@ func TestTaskSearch_EmptyStates(t *testing.T) {
 
 	// A roadmap that holds no task is a different condition and reads differently:
 	// the in-column empty states alone, with no search message.
-	empty, _ := servedBoard(t, mux, "payment-platform-empty", "", false)
+	empty, _ := servedBoard(t, mux, "payment-platform-empty", clientControls{})
 	if empty.messageShown {
 		t.Errorf("a roadmap with no task reports a search that matched nothing")
 	}
@@ -451,7 +573,7 @@ func TestTaskSearch_ServerAndClientProduceTheSameBoard(t *testing.T) {
 	f := seedBoardFixture(t, "payment-platform")
 	mux := buildMux()
 
-	unnarrowed, _ := servedBoard(t, mux, f.name, "", false)
+	unnarrowed, _ := servedBoard(t, mux, f.name, clientControls{})
 
 	terms := []string{
 		"", " ", "settlement", "SETTLEMENT", "  settlement  ", "settlement ledger",
@@ -462,8 +584,8 @@ func TestTaskSearch_ServerAndClientProduceTheSameBoard(t *testing.T) {
 	}
 
 	for _, term := range terms {
-		server, _ := servedBoard(t, mux, f.name, term, true)
-		client := unnarrowed.narrow(term)
+		server, _ := servedBoard(t, mux, f.name, clientControls{Term: term})
+		client := unnarrowed.narrow(clientControls{Term: term})
 
 		if len(server.columns) != len(client.columns) {
 			t.Fatalf("term %q: the server board has %d columns and the browser board %d",
@@ -520,7 +642,7 @@ func TestTaskSearch_CorpusIsFoldedByTheServer(t *testing.T) {
 	f := seedBoardFixture(t, "payment-platform")
 	mux := buildMux()
 
-	state, _ := servedBoard(t, mux, f.name, "", false)
+	state, _ := servedBoard(t, mux, f.name, clientControls{})
 	titles := roadmapTaskTitles(t, f.name)
 
 	checked := 0
@@ -599,7 +721,7 @@ func TestTaskSearch_NoTermIsAnErrorAndNoneAddsAQuery(t *testing.T) {
 
 	// The term costs no query: the page's three reads are unchanged.
 	src := openCounting(t, f.name)
-	if _, err := readTasks(context.Background(), src, f.name, "settlement"); err != nil {
+	if _, err := readTasks(context.Background(), src, f.name, newBoardControls("settlement", "", 0, 0)); err != nil {
 		t.Fatalf("readTasks with a term: %v", err)
 	}
 	if src.taskList != 1 || src.groupedCommentCounts != 1 || src.groupedTaskSprints != 1 {
@@ -720,7 +842,7 @@ func TestTaskSearchScript_ImplementsTheSameMatchingRule(t *testing.T) {
 	for _, fragment := range []string{
 		"badge.textContent = String(visible)",
 		"columnEmpty.hidden = visible > 0",
-		"boardEmpty.hidden = !(term !== \"\" && shown === 0)",
+		"boardEmpty.hidden = !(active(state) && shown === 0)",
 	} {
 		if !strings.Contains(script, fragment) {
 			t.Errorf("the script does not keep %q in step with the shown set", fragment)
@@ -744,7 +866,7 @@ func TestTaskSearchScript_KeepsTheURLInStepWithoutStackingHistory(t *testing.T) 
 	if !strings.Contains(script, `url.searchParams.delete("q")`) {
 		t.Errorf("the script does not remove q for an empty term")
 	}
-	if !strings.Contains(script, `url.searchParams.set("q", raw)`) {
+	if !strings.Contains(script, `url.searchParams.set("q", state.raw)`) {
 		t.Errorf("the script does not carry the term in q")
 	}
 	// Nothing is fetched, submitted or navigated: narrowing is a DOM operation.
@@ -769,7 +891,7 @@ func TestTaskSearchScript_WritesTheTermAsText(t *testing.T) {
 			t.Errorf("the search script uses %q; the term must be written as text", sink)
 		}
 	}
-	if !strings.Contains(script, "boardEmptyTerm.textContent = raw") {
+	if !strings.Contains(script, "boardEmptyTerm.textContent = state.raw") {
 		t.Errorf("the search script does not write the term through textContent")
 	}
 }

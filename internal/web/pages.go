@@ -126,8 +126,9 @@ func handleSprints(w http.ResponseWriter, r *http.Request) {
 // clickable to open the read-only task detail modal (SPEC/WEB.md § Roadmap Tasks
 // Page). The page renders no task table; the board is its only task presentation.
 // An optional q parameter narrows the board to the tasks whose title or #id
-// reference contains it; the same term typed into the header search control
-// narrows the same board in the browser, and the two must agree.
+// reference contains it, and the optional type, priority and severity parameters
+// narrow it by what a task is; the same values set on the header controls narrow
+// the same board in the browser, and the two must agree.
 // The {name} is validated and confirmed to exist before any data read; an invalid
 // or unknown name yields 404 (handled by resolveRoadmap), an internal read error
 // yields 500.
@@ -137,15 +138,15 @@ func handleTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The optional search term. Every string is a valid term, so nothing here can
-	// fail: a term that matches nothing renders an empty board with HTTP 200, and
-	// a q the server cannot decode is treated as absent, because url.Values.Get
-	// answers "" for a pair ParseQuery could not decode. The search never changes
-	// this route's status codes (SPEC/WEB.md § Roadmap Tasks Page, No malformed
-	// term is an error).
-	search := r.URL.Query().Get("q")
+	// The optional header controls: the search term and the three filters. Parsing
+	// cannot fail. Every string is a valid term, and a filter value the dimension
+	// does not accept applies no filter on that dimension and leaves the other
+	// dimensions untouched, so a board that matches nothing is still HTTP 200 and
+	// no query value can change this route's status codes (SPEC/WEB.md § Roadmap
+	// Tasks Page, No malformed term is an error; No filter value is an error).
+	controls := parseBoardControls(r.URL.Query())
 
-	data, err := loadTasks(r.Context(), name, search)
+	data, err := loadTasks(r.Context(), name, controls)
 	if err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return

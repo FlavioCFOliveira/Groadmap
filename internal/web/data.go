@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -207,8 +208,12 @@ type sprintsData struct {
 // reads a comment body in order to display a number (SPEC/WEB.md § Roadmap Tasks
 // Page, read cost; SPEC/DATABASE.md § Count Comments for Many Parents (Grouped)).
 //
-// Match is whether the task satisfies the board's active search term. It is true
-// for every task when no term is active. A task that does not match stays in the
+// Match is whether the task satisfies EVERY active board control: the search term
+// and the type, minimum-priority and minimum-severity filters, conjoined. It is
+// true for every task when no control is active. The four controls reach the card
+// through this ONE verdict rather than through a criterion of their own, which is
+// what keeps the board to a single filtering model (SPEC/WEB.md § Roadmap Tasks
+// Page, How the criteria compose). A task that does not match stays in the
 // document — every card is in the page so the browser can narrow without a round
 // trip — but is not SHOWN, and does not count towards its column's badge
 // (SPEC/WEB.md § Roadmap Tasks Page, Effect on the board).
@@ -310,6 +315,227 @@ func (v *taskView) matchesSearch(folded string) bool {
 	return strings.Contains("#"+strconv.Itoa(v.ID), folded)
 }
 
+// The board's minimum-priority and minimum-severity filters offer the thresholds
+// minFilterThreshold to maxFilterThreshold. That is the priority and severity
+// range of SPEC/MODELS.md § Task WITHOUT its 0 floor: a threshold of 0 admits
+// every task and IS the unfiltered board, which already has its own option and
+// its own URL form — the parameter absent — so offering it would give one board
+// two URLs and two control settings (SPEC/WEB.md § Roadmap Tasks Page, What each
+// filter matches).
+//
+// 0 is therefore free to mean "no filter on this dimension", which is exactly
+// what `task.Priority >= 0` computes for every task: the inactive filter needs no
+// branch of its own.
+const (
+	minFilterThreshold = 1
+	maxFilterThreshold = 9
+)
+
+// boardControls is what one request asked the roadmap tasks board to show: the
+// search term and the three header filters, reduced to the values the matching
+// rule compares with.
+//
+// The three filters carry ACCEPTED values only. A value a dimension does not
+// accept never reaches this struct: the parser turns it into the zero value,
+// which is the same state the parameter's absence produces, so "no filter value
+// is an error" is settled once, at the boundary, and every consumer downstream
+// sees one representation of "this dimension is not filtered" (SPEC/WEB.md
+// § Roadmap Tasks Page, No filter value is an error).
+//
+// Search keeps the term exactly as the request carried it, because that string is
+// echoed back into the input and the no-match message; folded is the same term in
+// the form the matching rule uses, computed ONCE per request rather than once per
+// task.
+//
+// Field order places the three string-shaped fields before the two ints, so the
+// pointer-scan prefix stops at the ints (govet fieldalignment).
+type boardControls struct {
+	Search   string
+	folded   string
+	Type     models.TaskType
+	Priority int
+	Severity int
+}
+
+// newBoardControls builds the controls from values already reduced to their
+// accepted forms, folding the term once.
+func newBoardControls(search string, taskType models.TaskType, priority, severity int) boardControls {
+	return boardControls{
+		Search:   search,
+		folded:   foldSearchTerm(search),
+		Type:     taskType,
+		Priority: priority,
+		Severity: severity,
+	}
+}
+
+// parseBoardControls reads the board's four header controls out of a request's
+// query string. It cannot fail: every value a caller can send maps to a control
+// state, so this route's status codes do not depend on what the query carries
+// (SPEC/WEB.md § Roadmap Tasks Page, No malformed term is an error; No filter
+// value is an error).
+//
+// url.Values.Get answers the FIRST value of a repeated parameter, which is the
+// reading the specification fixes for ?type=BUG&type=EPIC, and answers "" for a
+// parameter url.URL.Query could not decode, which is the reading it fixes for an
+// undecodable one. Both rules therefore come from the standard library's own
+// semantics rather than from a special case here.
+func parseBoardControls(query url.Values) boardControls {
+	return newBoardControls(
+		query.Get("q"),
+		parseTypeFilter(query.Get("type")),
+		parseThresholdFilter(query.Get("priority")),
+		parseThresholdFilter(query.Get("severity")),
+	)
+}
+
+// parseTypeFilter reduces a raw type parameter to the TaskType it names, or to
+// the empty TaskType when it names none.
+//
+// The comparison is EXACT against the enum's own spelling, in upper case, and no
+// case folding is applied: `rmp task list -y bug` is rejected by the CLI for the
+// same reason, so one parameter name means one thing across the two surfaces
+// (SPEC/WEB.md § Roadmap Tasks Page, What each filter matches; SPEC/COMMANDS.md
+// § List Tasks). A comma-packed value such as "BUG,EPIC" is one string, is not
+// one of the ten, and is ignored whole — no filter is ever partly applied.
+func parseTypeFilter(raw string) models.TaskType {
+	if models.IsValidTaskType(raw) {
+		return models.TaskType(raw)
+	}
+	return ""
+}
+
+// parseThresholdFilter reduces a raw minimum-priority or minimum-severity
+// parameter to the threshold it names, or to 0 — no filter — when it names none.
+//
+// Accepted is the canonical spelling of an integer in [minFilterThreshold,
+// maxFilterThreshold] and nothing else. strconv.Atoi already rejects a value with
+// surrounding spaces or a non-numeric body; the round-trip through strconv.Itoa
+// rejects the decorated spellings it would otherwise accept — "+5" and "05" parse
+// as 5 but are not how 5 is written — so a decorated value applies no filter
+// rather than silently applying one the URL does not say (SPEC/WEB.md § Roadmap
+// Tasks Page, No filter value is an error).
+//
+// strconv.Itoa allocates nothing for a value below 100: it slices a package-level
+// string of the small integers.
+func parseThresholdFilter(raw string) int {
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < minFilterThreshold || n > maxFilterThreshold {
+		return 0
+	}
+	if raw != strconv.Itoa(n) {
+		return 0
+	}
+	return n
+}
+
+// active reports whether any control is narrowing the board. It is the condition
+// that separates a board narrowed to nothing — which says so — from a roadmap
+// that holds no task at all, which does not (SPEC/WEB.md § Roadmap Tasks Page,
+// Empty states).
+func (c boardControls) active() bool {
+	return c.folded != "" || c.Type != "" || c.Priority > 0 || c.Severity > 0
+}
+
+// matches is the board's ONE verdict on one task: the task is shown when it
+// satisfies EVERY active control, and a board with no active control shows every
+// task (SPEC/WEB.md § Roadmap Tasks Page, How the criteria compose).
+//
+// The conjunction is total and each clause decides only its own dimension, so
+// narrowing a control can only shrink the shown set and no control ever re-admits
+// a task another control excluded.
+//
+// The two ordinal clauses need no "is this filter active" test: an inactive
+// threshold is 0, and every priority and severity is >= 0 by the range
+// SPEC/MODELS.md § Task fixes, so the inactive filter admits everything by
+// arithmetic rather than by a branch.
+//
+// The clauses are ordered cheapest first, which a conjunction of pure predicates
+// leaves free to choose: the two integer comparisons and the string equality cost
+// nothing, while the term clause folds the task's title (taskView.SearchText).
+// Rejecting a task on a threshold therefore skips that fold entirely. Measured
+// over 200 tasks with all four controls in force
+// (BenchmarkTaskMatches_OrdinalFirst vs BenchmarkTaskMatches_TermFirst):
+// 513 ns/op and 0 allocs against 20158 ns/op and 200 allocs — one allocation per
+// task saved per render (three runs, 20000 iterations each, all within 0.4%). Evaluation order cannot change the verdict, so the
+// property that server and client agree is untouched.
+func (v *taskView) matches(c boardControls) bool {
+	return v.Priority >= c.Priority &&
+		v.Severity >= c.Severity &&
+		(c.Type == "" || v.Type == c.Type) &&
+		v.matchesSearch(c.folded)
+}
+
+// filterOption is one option of a header filter dropdown: the value the URL
+// parameter carries, the text the option shows, and whether this request's value
+// selected it.
+//
+// Value and Label are the SERVER's own strings — a TaskType from the enum, a
+// threshold from the range, or the empty value of the dimension's no-filter
+// option — never a string the caller supplied. A caller's parameter only decides
+// which of them carries Selected, so no caller-supplied string reaches the page
+// through type, priority, or severity (SPEC/WEB.md § Roadmap Tasks Page, A filter
+// value is never echoed into the page).
+type filterOption struct {
+	Value    string
+	Label    string
+	Selected bool
+}
+
+// boardFilters is the three header dropdowns as the template renders them: one
+// fixed option set per dimension, with exactly one option marked selected.
+type boardFilters struct {
+	Types      []filterOption
+	Priorities []filterOption
+	Severities []filterOption
+}
+
+// newBoardFilters builds the three option sets for one request's controls.
+func newBoardFilters(c boardControls) boardFilters {
+	return boardFilters{
+		Types:      typeFilterOptions(c.Type),
+		Priorities: thresholdFilterOptions("Any priority", c.Priority),
+		Severities: thresholdFilterOptions("Any severity", c.Severity),
+	}
+}
+
+// typeFilterOptions enumerates the type dropdown: the no-filter option, then the
+// ten TaskType values.
+//
+// The values come from models.ValidTaskTypes rather than from a literal here or
+// in the template, so the dropdown cannot drift from the enum: a type added to
+// SPEC/MODELS.md § Enums appears here with no change to this file.
+func typeFilterOptions(selected models.TaskType) []filterOption {
+	options := make([]filterOption, 0, len(models.ValidTaskTypes)+1)
+	options = append(options, filterOption{Label: "Any type", Selected: selected == ""})
+	for _, taskType := range models.ValidTaskTypes {
+		options = append(options, filterOption{
+			Value:    string(taskType),
+			Label:    string(taskType),
+			Selected: taskType == selected,
+		})
+	}
+	return options
+}
+
+// thresholdFilterOptions enumerates one threshold dropdown: the no-filter option,
+// then the thresholds minFilterThreshold to maxFilterThreshold. The range is the
+// one the constants fix, so the offered set and the accepted set are the same set
+// and neither can drift from the other.
+func thresholdFilterOptions(anyLabel string, selected int) []filterOption {
+	options := make([]filterOption, 0, maxFilterThreshold-minFilterThreshold+2)
+	options = append(options, filterOption{Label: anyLabel, Selected: selected == 0})
+	for threshold := minFilterThreshold; threshold <= maxFilterThreshold; threshold++ {
+		value := strconv.Itoa(threshold)
+		options = append(options, filterOption{
+			Value:    value,
+			Label:    value,
+			Selected: threshold == selected,
+		})
+	}
+	return options
+}
+
 // taskColumn is one column of the roadmap tasks page's Kanban board: a task
 // status, the cards of the tasks in that status, and the count its header shows.
 //
@@ -353,15 +579,22 @@ type taskColumn struct {
 // per card (SPEC/WEB.md § Roadmap Tasks Page, read cost).
 // Search is the term exactly as the request carried it, echoed back into the
 // search input and into the no-match message; html/template escapes it in both
-// places. SearchActive says a term is in force (the folded term is non-empty), and
-// NoMatches says a term is in force and nothing matched, which is the condition
-// for the board's "no task matches" message — a different condition from a roadmap
-// that holds no task at all (SPEC/WEB.md § Roadmap Tasks Page, Effect on the
-// board; Empty states).
+// places. Filters is the three header dropdowns with their fixed option sets and
+// the one option this request selected — the server's own strings throughout, so
+// no filter value is ever echoed into the page.
+//
+// SearchActive says a term is in force (the folded term is non-empty), which is
+// what decides whether the no-match message names the term at all. NoMatches says
+// at least one control is in force and nothing matched it, which is the condition
+// for the board's "no task matches" message — a different condition from a
+// roadmap that holds no task at all. One message covers the term and the three
+// filters together, because the shown set is their conjunction (SPEC/WEB.md
+// § Roadmap Tasks Page, Effect on the board; Empty states).
 type tasksData struct {
 	Name         string
 	Search       string
 	Chrome       chrome
+	Filters      boardFilters
 	Tasks        []taskView
 	Columns      []taskColumn
 	SearchActive bool
@@ -675,14 +908,14 @@ func loadSprints(ctx context.Context, name string) (sprintsData, error) {
 // The caller is responsible for the {name} validation and existence check
 // (resolveRoadmap); this function trusts name is a validated, existing
 // roadmap.
-func loadTasks(ctx context.Context, name, search string) (tasksData, error) {
+func loadTasks(ctx context.Context, name string, controls boardControls) (tasksData, error) {
 	database, err := db.OpenReadOnly(name)
 	if err != nil {
 		return tasksData{}, err
 	}
 	defer database.Close() //nolint:errcheck // read-only handle; close error is non-actionable
 
-	return readTasks(ctx, database, name, search)
+	return readTasks(ctx, database, name, controls)
 }
 
 // readTasks is the tasks page's entire read, expressed against the page's read
@@ -707,7 +940,7 @@ func loadTasks(ctx context.Context, name, search string) (tasksData, error) {
 // Separating it from loadTasks is what makes the query count of a page render
 // measurable against a real database: the caller supplies the source, so a test
 // can hand in a counting one (Acceptance Criteria 70 and 92).
-func readTasks(ctx context.Context, src tasksSource, name, search string) (tasksData, error) {
+func readTasks(ctx context.Context, src tasksSource, name string, controls boardControls) (tasksData, error) {
 	// EVERY task of the roadmap, any status, with no limit and no pagination.
 	// The board prints a count on each column header as a statement of fact about
 	// the roadmap, so a partial read would publish wrong counts as true ones with
@@ -734,15 +967,20 @@ func readTasks(ctx context.Context, src tasksSource, name, search string) (tasks
 		return tasksData{}, err
 	}
 
-	// The term narrows what the board SHOWS; it narrows neither what the page
-	// reads nor what the document carries. Every card stays in the page, which is
-	// what lets the browser re-narrow with no round trip, and the verdict recorded
-	// here is the one the browser recomputes when the user types (SPEC/WEB.md
-	// § Roadmap Tasks Page, Read cost; Server and client produce the same board).
-	folded := foldSearchTerm(search)
+	// The header controls narrow what the board SHOWS; they narrow neither what
+	// the page reads nor what the document carries. Every card stays in the page,
+	// which is what lets the browser re-narrow with no round trip, and the ONE
+	// verdict recorded here — the conjunction of the term and the three filters —
+	// is the one the browser recomputes when the user types or picks a value.
+	//
+	// A filter adds no clause to the read above, no second read, and no
+	// per-dimension query: it is applied in memory over the rows already in hand,
+	// exactly as the term is, so the page's query count is the same narrowed as
+	// unnarrowed (SPEC/WEB.md § Roadmap Tasks Page, Read cost; Server and client
+	// produce the same board).
 	shown := 0
 	for i := range views {
-		views[i].Match = views[i].matchesSearch(folded)
+		views[i].Match = views[i].matches(controls)
 		if views[i].Match {
 			shown++
 		}
@@ -750,11 +988,12 @@ func readTasks(ctx context.Context, src tasksSource, name, search string) (tasks
 
 	return tasksData{
 		Name:         name,
-		Search:       search,
+		Search:       controls.Search,
+		Filters:      newBoardFilters(controls),
 		Tasks:        views,
 		Columns:      groupIntoColumns(views),
-		SearchActive: folded != "",
-		NoMatches:    folded != "" && shown == 0,
+		SearchActive: controls.folded != "",
+		NoMatches:    controls.active() && shown == 0,
 	}, nil
 }
 

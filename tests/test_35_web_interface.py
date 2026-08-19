@@ -12,7 +12,10 @@ running HTTP server:
 - Routes and pages: index with discovery + empty state, the read-only
   sprints landing page (GET /roadmaps/{name}: three sprint tabs, Actual
   active by default) and the separate tasks page (GET /roadmaps/{name}/tasks:
-  the full task table) — both with no edit affordance and no audit-log
+  the Kanban board of five fixed columns, narrowed by the header search input
+  and the type, minimum-priority and minimum-severity filter dropdowns, which
+  compose conjunctively and travel in the q, type, priority and severity query
+  parameters) — both with no edit affordance and no audit-log
   growth, name validation / path-traversal guard, the knowledge-graph page
   and its JSON data endpoint, and the read-only proof that graph reads create
   no snapshot/ directory. Choosing a roadmap on the index lands the user on
@@ -1274,6 +1277,497 @@ class TestWebInterface:
         assert sum(c["count"] for c in undecodable["columns"]) == total, (
             "an undecodable q narrowed the board; it must be treated as absent"
         )
+
+    # ---- tasks board header filters (AC112-AC117) -----------------------
+
+    # The filter fixture, seeded on demand by _seed_filter_tasks. Every task
+    # carries a distinct (type, priority, severity) triple, the ten TaskType
+    # values are all present, and both ends of the threshold range are populated,
+    # so no filter assertion below can pass by accident. The "cache" family is
+    # built so that the specification's worked example
+    # ?q=cache&type=BUG&priority=7 has a task excluded by EACH of its three
+    # criteria and by no other, which makes dropping any one of them observable.
+    FILTER_SEED = [
+        ("Cache the acquirer settlement report", "BUG", 8, 7),
+        ("Cache invalidation drops the refund receipt", "BUG", 7, 3),
+        ("Cache warmup exceeds the deployment window", "BUG", 6, 9),
+        ("Cache the merchant catalogue in the edge tier", "EPIC", 9, 2),
+        ("Cache the currency conversion table", "TASK", 7, 7),
+        ("Retire the legacy settlement cache", "BUG", 2, 9),
+        ("Duplicate payout on a retried webhook", "BUG", 9, 5),
+        ("Rotate the acquirer signing keys", "CHORE", 9, 8),
+        ("Publish the acquirer onboarding runbook", "CHORE", 0, 0),
+        ("Draft the payout reconciliation story", "USER_STORY", 5, 1),
+        ("Split the ledger writer into its own package", "REFACTOR", 4, 0),
+        ("Investigate the settlement latency spike", "SPIKE", 3, 6),
+        ("Redesign the refund confirmation screen", "DESIGN_UX", 2, 2),
+        ("Backfill the dispute evidence index", "SUB_TASK", 1, 5),
+        ("Improve the payout scheduling heuristics", "IMPROVEMENT", 7, 4),
+    ]
+
+    def _seed_filter_tasks(self):
+        """Create the filter fixture and return {id: (title, type, priority,
+        severity)} for the tasks it created."""
+        seeded = {}
+        for title, task_type, priority, severity in self.FILTER_SEED:
+            _, out, _ = self._run([
+                "task", "create", "-r", ROADMAP,
+                "-t", title,
+                "-y", task_type,
+                "-p", str(priority),
+                "--severity", str(severity),
+                "-fr", "Operators must be able to narrow the board to this work.",
+                "-tr", "Read-only on the web side, over the roadmap database.",
+                "-ac", "The board shows the task under every control that admits it.",
+            ])
+            seeded[json.loads(out)["id"]] = (title, task_type, priority, severity)
+        return seeded
+
+    @staticmethod
+    def _card_dimensions(region):
+        """Return {id: (type, priority, severity)} for every card in a region."""
+        dimensions = {}
+        for tag in re.findall(
+            r'<button type="button" class="card card-sm task-card[^>]*>', region
+        ):
+            task_id = re.search(r'data-task-id="(\d+)"', tag)
+            task_type = re.search(r'data-type="([^"]*)"', tag)
+            priority = re.search(r'data-priority="([^"]*)"', tag)
+            severity = re.search(r'data-severity="([^"]*)"', tag)
+            assert task_id and task_type and priority and severity, (
+                f"a board card carries no type, priority or severity: {tag}"
+            )
+            dimensions[int(task_id.group(1))] = (
+                task_type.group(1), int(priority.group(1)), int(severity.group(1))
+            )
+        return dimensions
+
+    @staticmethod
+    def _read_select(body, control_id):
+        """Return [(value, label, selected)] for the <select> carrying an id."""
+        block = re.search(
+            r'<select[^>]*\bid="' + re.escape(control_id) + r'"[^>]*>(.*?)</select>',
+            body, re.S,
+        )
+        assert block, f"the page renders no <select id={control_id!r}>"
+        return [
+            (m.group(1), m.group(3), "selected" in m.group(2))
+            for m in re.finditer(
+                r'<option value="([^"]*)"([^>]*)>([^<]*)</option>', block.group(1)
+            )
+        ]
+
+    @staticmethod
+    def _selected(options, control_id):
+        chosen = [value for value, _, is_selected in options if is_selected]
+        assert len(chosen) == 1, (
+            f"{control_id} has {len(chosen)} selected options ({chosen}), want exactly 1"
+        )
+        return chosen[0]
+
+    def _shown_ids(self, snapshot):
+        return {task_id for column in snapshot["columns"] for task_id in column["shown"]}
+
+    @staticmethod
+    def _keeps(term, task_type, priority, severity, task_id, seeded):
+        """The conjunction, written from the specification and computed over the
+        seeded values: substring over title or '#<id>', equality on type, '>=' on
+        the two thresholds, and a control left empty contributing no criterion."""
+        title, seed_type, seed_priority, seed_severity = seeded[task_id]
+        folded = term.strip().lower()
+        if folded and folded not in title.lower() and folded not in f"#{task_id}":
+            return False
+        if task_type and seed_type != task_type:
+            return False
+        if priority and seed_priority < int(priority):
+            return False
+        if severity and seed_severity < int(severity):
+            return False
+        return True
+
+    FILTER_CONTROL_IDS = (
+        ("task-filter-type", "type"),
+        ("task-filter-priority", "priority"),
+        ("task-filter-severity", "severity"),
+    )
+
+    def test_tasks_page_header_carries_the_three_filter_dropdowns(self):
+        """The actions column carries exactly three labelled filter dropdowns
+        beside the search input, offering the ten TaskType values and the
+        thresholds 1-9, with a no-filter first option and no status filter
+        (Acceptance Criterion 112)."""
+        proc, port = self._start(["--port", "0"])
+        _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/tasks")
+
+        assert len(re.findall(r"<select\b", body)) == 3, (
+            "the tasks page must carry exactly three <select> controls"
+        )
+        assert 'data-role="task-search"' in body, "the search input the filters sit beside is gone"
+
+        # Every control names its dimension through a real, associated label.
+        for control_id in ("task-search", "task-filter-type",
+                           "task-filter-priority", "task-filter-severity"):
+            label = re.search(
+                r'<label[^>]*\bfor="' + re.escape(control_id) + r'"[^>]*>([^<]+)</label>', body
+            )
+            assert label and label.group(1).strip(), (
+                f"{control_id} carries no non-empty <label for=...>; a placeholder or a "
+                f"first option may not stand in for one"
+            )
+
+        types = self._read_select(body, "task-filter-type")
+        assert [value for value, _, _ in types] == [
+            "", "USER_STORY", "TASK", "BUG", "SUB_TASK", "EPIC",
+            "REFACTOR", "CHORE", "SPIKE", "DESIGN_UX", "IMPROVEMENT",
+        ], f"the type filter offers {[v for v, _, _ in types]}"
+        assert types[0][2], "the no-filter option is not selected on an unfiltered board"
+
+        for control_id in ("task-filter-priority", "task-filter-severity"):
+            options = self._read_select(body, control_id)
+            assert [value for value, _, _ in options] == [""] + [str(n) for n in range(1, 10)], (
+                f"{control_id} offers {[v for v, _, _ in options]}, want the no-filter option and 1-9"
+            )
+            assert options[0][2], f"{control_id} does not start on its no-filter option"
+
+        # No status filter: the columns already are the status.
+        for status in ("BACKLOG", "SPRINT", "DOING", "TESTING", "COMPLETED"):
+            assert f'<option value="{status}"' not in body, (
+                f"the header offers {status} as a filter value; the board offers no status filter"
+            )
+        assert 'id="task-filter-status"' not in body
+        assert 'name="status"' not in body
+
+    def test_tasks_page_filters_narrow_the_board_and_its_counts(self):
+        """Each filter narrows by its own dimension, the type filter is an
+        equality and the two thresholds are '>=', and every column count follows
+        the narrowed set (Acceptance Criterion 113)."""
+        seeded = self._seed_filter_tasks()
+        proc, port = self._start(["--port", "0"])
+
+        full = self._board_snapshot(port, ROADMAP)
+        dimensions = self._card_dimensions(full["region"])
+        assert set(seeded) <= set(dimensions), "the board dropped a seeded task"
+
+        for task_id, (_, task_type, priority, severity) in seeded.items():
+            assert dimensions[task_id] == (task_type, priority, severity), (
+                f"task #{task_id} carries {dimensions[task_id]} on its card, "
+                f"want {(task_type, priority, severity)}"
+            )
+
+        for task_type in ("USER_STORY", "TASK", "BUG", "SUB_TASK", "EPIC",
+                          "REFACTOR", "CHORE", "SPIKE", "DESIGN_UX", "IMPROVEMENT"):
+            snapshot = self._board_snapshot(port, ROADMAP, f"?type={task_type}")
+            want = {tid for tid, dim in dimensions.items() if dim[0] == task_type}
+            assert self._shown_ids(snapshot) == want, (
+                f"?type={task_type} shows {self._shown_ids(snapshot)}, want {want}"
+            )
+            for column in snapshot["columns"]:
+                assert column["count"] == len(column["shown"]), (
+                    f"?type={task_type}: column {column['status']} counts "
+                    f"{column['count']} while showing {len(column['shown'])} cards"
+                )
+                assert column["empty"] == (not column["shown"])
+            assert len(snapshot["columns"]) == 5, "a filter dropped a column"
+
+        for threshold in range(1, 10):
+            for name, index in (("priority", 1), ("severity", 2)):
+                snapshot = self._board_snapshot(port, ROADMAP, f"?{name}={threshold}")
+                want = {tid for tid, dim in dimensions.items() if dim[index] >= threshold}
+                assert self._shown_ids(snapshot) == want, (
+                    f"?{name}={threshold} shows {self._shown_ids(snapshot)}, want {want}"
+                )
+                for column in snapshot["columns"]:
+                    assert column["count"] == len(column["shown"])
+
+        # The threshold is "at least", not "exactly": tasks ABOVE it are shown.
+        above = {tid for tid, dim in dimensions.items() if dim[1] > 8}
+        assert above, "the fixture holds no task above priority 8; the assertion would be vacuous"
+        assert above <= self._shown_ids(self._board_snapshot(port, ROADMAP, "?priority=8"))
+
+    def test_tasks_page_filters_compose_conjunctively_with_the_search(self):
+        """The shown set is the conjunction of every active control, including
+        the specification's worked example (Acceptance Criterion 114)."""
+        seeded = self._seed_filter_tasks()
+        proc, port = self._start(["--port", "0"])
+        full = self._board_snapshot(port, ROADMAP)
+        every = set(self._card_dimensions(full["region"]))
+
+        worked = self._board_snapshot(port, ROADMAP, "?q=cache&type=BUG&priority=7")
+        want = {tid for tid in every
+                if tid in seeded and self._keeps("cache", "BUG", "7", "", tid, seeded)}
+        assert len(want) == 2, f"the fixture makes the worked example select {len(want)} tasks, want 2"
+        assert self._shown_ids(worked) == want, (
+            f"?q=cache&type=BUG&priority=7 shows {self._shown_ids(worked)}, want {want}"
+        )
+
+        # Each of the three criteria is doing work: dropping any one widens the
+        # board, so the assertion above cannot be satisfied by ignoring one.
+        for query in ("?type=BUG&priority=7", "?q=cache&priority=7", "?q=cache&type=BUG"):
+            wider = self._shown_ids(self._board_snapshot(port, ROADMAP, query))
+            assert len(wider) > len(want), (
+                f"{query} shows {len(wider)} cards, not more than the {len(want)} of the full "
+                f"conjunction: that criterion selects nothing of its own"
+            )
+
+        for term, task_type, priority, severity in (
+            ("", "", "", ""),
+            ("cache", "", "", ""),
+            ("", "BUG", "", ""),
+            ("", "", "7", ""),
+            ("", "", "", "6"),
+            ("cache", "BUG", "", ""),
+            ("cache", "", "7", ""),
+            ("", "BUG", "7", ""),
+            ("", "CHORE", "", "8"),
+            ("", "", "5", "5"),
+            ("cache", "BUG", "7", ""),
+            ("cache", "BUG", "", "9"),
+            ("the", "TASK", "6", "3"),
+            ("settlement", "SPIKE", "1", "1"),
+            ("", "DESIGN_UX", "9", ""),
+            ("zzz-nothing-matches", "BUG", "3", "3"),
+        ):
+            query = "&".join(
+                f"{name}={urllib.parse.quote(value)}"
+                for name, value in (("q", term), ("type", task_type),
+                                    ("priority", priority), ("severity", severity))
+                if value
+            )
+            snapshot = self._board_snapshot(port, ROADMAP, f"?{query}" if query else "")
+            # The expectation is computed over EVERY card the unnarrowed board
+            # carries - the four tasks _populate created as well as the seeded
+            # ones - from the card's own dimensions and the conjunction as the
+            # specification states it, never from the narrowed page under test.
+            want = set()
+            dimensions = self._card_dimensions(full["region"])
+            titles = self._board_titles(full["region"])
+            assert set(dimensions) == every, "the card sweep lost a card"
+            for tid, (card_type, card_priority, card_severity) in dimensions.items():
+                folded = term.strip().lower()
+                if folded and folded not in titles[tid].lower() and folded not in f"#{tid}":
+                    continue
+                if task_type and card_type != task_type:
+                    continue
+                if priority and card_priority < int(priority):
+                    continue
+                if severity and card_severity < int(severity):
+                    continue
+                want.add(tid)
+            assert self._shown_ids(snapshot) == want, (
+                f"?{query} shows {self._shown_ids(snapshot)}, want {want}"
+            )
+            for column in snapshot["columns"]:
+                assert column["count"] == len(column["shown"]), (
+                    f"?{query}: column {column['status']} miscounts"
+                )
+            assert snapshot["message"] == (
+                bool(query) and not self._shown_ids(snapshot)
+            ), f"?{query}: the no-match message disagrees with the shown set"
+
+    @staticmethod
+    def _board_titles(region):
+        """Return {id: title} for every card in a board region, from the folded
+        corpus the server wrote into the card."""
+        titles = {}
+        for tag in re.findall(
+            r'<button type="button" class="card card-sm task-card[^>]*>', region
+        ):
+            task_id = int(re.search(r'data-task-id="(\d+)"', tag).group(1))
+            titles[task_id] = html_lib.unescape(
+                re.search(r'data-search="([^"]*)"', tag).group(1)
+            )
+        return titles
+
+    def test_tasks_page_filters_never_error_and_are_independent(self):
+        """A value a dimension does not accept applies no filter on that
+        dimension, answers 200, and leaves the other dimensions applied
+        (Acceptance Criterion 115)."""
+        seeded = self._seed_filter_tasks()
+        proc, port = self._start(["--port", "0"])
+        full = self._board_snapshot(port, ROADMAP)
+        total = sum(c["count"] for c in full["columns"])
+
+        for query in (
+            "type=NOT_A_TYPE", "type=bug", "type=Bug", "type=BUG,EPIC",
+            "type=BUG%20EPIC", "type=%20BUG%20", "type=", "type=%zz",
+            "priority=0", "priority=10", "priority=-1", "priority=%2B7",
+            "priority=07", "priority=%207", "priority=high", "priority=7.0",
+            "priority=", "priority=%zz",
+            "severity=0", "severity=10", "severity=critical", "severity=", "severity=%zz",
+            "status=DOING",
+        ):
+            status, _, body = self._req(port, f"/roadmaps/{ROADMAP}/tasks?{query}")
+            assert status == 200, f"?{query} answered {status}, want 200"
+            assert 'data-role="task-board"' in body, f"?{query} rendered no board"
+
+            snapshot = self._board_snapshot(port, ROADMAP, f"?{query}")
+            assert sum(c["count"] for c in snapshot["columns"]) == total, (
+                f"?{query} narrowed the board; an unaccepted value applies no filter"
+            )
+            assert not snapshot["message"], (
+                f"?{query}: the board says nothing matches while no control is in force"
+            )
+            for control_id, _ in self.FILTER_CONTROL_IDS:
+                chosen = self._selected(self._read_select(body, control_id), control_id)
+                assert chosen == "", (
+                    f"?{query}: {control_id} is on {chosen!r}, want the no-filter option"
+                )
+
+        # The dimensions are independent: an unusable type leaves the accepted
+        # priority and the term applying.
+        mixed = self._board_snapshot(port, ROADMAP, "?q=cache&type=nope&priority=7")
+        priced = self._board_snapshot(port, ROADMAP, "?q=cache&priority=7")
+        assert self._shown_ids(mixed) == self._shown_ids(priced), (
+            "an unusable type changed what the accepted priority and the term select"
+        )
+        assert self._shown_ids(mixed), "the independence assertion is vacuous: nothing is shown"
+
+        # A repeated parameter is read as its FIRST occurrence.
+        repeated = self._board_snapshot(port, ROADMAP, "?type=BUG&type=EPIC")
+        bug = self._board_snapshot(port, ROADMAP, "?type=BUG")
+        epic = self._board_snapshot(port, ROADMAP, "?type=EPIC")
+        assert self._shown_ids(repeated) == self._shown_ids(bug), (
+            "?type=BUG&type=EPIC is not the BUG board"
+        )
+        assert self._shown_ids(bug) != self._shown_ids(epic), (
+            "the fixture makes BUG and EPIC select the same tasks; the assertion is vacuous"
+        )
+
+        # A comma-packed value is one string, names no TaskType, and is ignored.
+        packed = self._board_snapshot(port, ROADMAP, "?type=BUG,EPIC")
+        assert sum(c["count"] for c in packed["columns"]) == total, (
+            "?type=BUG,EPIC narrowed the board; it must be ignored whole"
+        )
+
+        # The parameters do not depend on their order in the query string.
+        forward = self._board_snapshot(port, ROADMAP, "?q=cache&type=BUG&priority=7")
+        reverse = self._board_snapshot(port, ROADMAP, "?priority=7&type=BUG&q=cache")
+        assert self._shown_ids(forward) == self._shown_ids(reverse), (
+            "the board depends on the order of the query parameters"
+        )
+        assert seeded, "the fixture seeded nothing"
+
+    def test_tasks_page_filters_round_trip_through_the_url(self):
+        """A cold load of a URL carrying any combination renders that board with
+        every control already showing the value that produced it, and clearing
+        every control restores the full board and the bare URL (Acceptance
+        Criterion 116)."""
+        self._seed_filter_tasks()
+        proc, port = self._start(["--port", "0"])
+        full = self._board_snapshot(port, ROADMAP)
+        total = sum(c["count"] for c in full["columns"])
+
+        for term, task_type, priority, severity in (
+            ("cache", "BUG", "7", ""),
+            ("", "CHORE", "", "8"),
+            ("the", "", "5", "5"),
+            ("cache", "", "", ""),
+            ("", "EPIC", "9", "1"),
+        ):
+            query = "&".join(
+                f"{name}={urllib.parse.quote(value)}"
+                for name, value in (("q", term), ("type", task_type),
+                                    ("priority", priority), ("severity", severity))
+                if value
+            )
+            _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/tasks?{query}")
+            value = re.search(r'value="([^"]*)"', re.search(
+                r'<input[^>]*data-role="task-search"[^>]*>', body).group(0))
+            assert html_lib.unescape(value.group(1)) == term, (
+                f"?{query}: the search input shows {value.group(1)!r}, want {term!r}"
+            )
+            for (control_id, _), want in zip(self.FILTER_CONTROL_IDS,
+                                             (task_type, priority, severity)):
+                chosen = self._selected(self._read_select(body, control_id), control_id)
+                assert chosen == want, (
+                    f"?{query}: {control_id} shows {chosen!r}, want {want!r}"
+                )
+
+        # Clearing every control restores the full board with its TRUE counts.
+        bare = self._board_snapshot(port, ROADMAP)
+        assert sum(c["count"] for c in bare["columns"]) == total
+        assert not bare["message"]
+        for control_id, _ in self.FILTER_CONTROL_IDS:
+            assert self._selected(self._read_select(bare["body"], control_id), control_id) == ""
+
+    def test_tasks_page_filter_script_applies_the_same_conjunction(self):
+        """The dropdowns are applied by the SAME /static/ script that applies the
+        term, as one conjunction, with the URL kept in place and no inline script
+        or policy change (Acceptance Criteria 116 and 117)."""
+        proc, port = self._start(["--port", "0"])
+        status, _, script = self._req(port, "/static/task-search.js")
+        assert status == 200, f"the narrowing script is not served: {status}"
+
+        code = re.sub(r"/\*.*?\*/", "", script, flags=re.S)
+        code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
+
+        for fragment in (
+            'data-role="task-filter-type"',
+            'data-role="task-filter-priority"',
+            'data-role="task-filter-severity"',
+            'attribute: "data-type"',
+            'attribute: "data-priority"',
+            'attribute: "data-severity"',
+            'param: "type"', 'param: "priority"', 'param: "severity"',
+        ):
+            assert fragment in code, f"the narrowing script does not carry {fragment!r}"
+
+        assert "return cardValue === filterValue" in code, "the type filter is not an equality"
+        assert "return Number(cardValue) >= Number(filterValue)" in code, (
+            "the threshold filters are not '>='"
+        )
+        assert "Number(cardValue) > Number(filterValue)" not in code
+
+        # One conjunction, and one entry point for all four controls.
+        assert 'addEventListener("change", narrow)' in code, (
+            "the dropdowns are not wired to the same narrowing entry point as the search input"
+        )
+        assert 'input.addEventListener("input", narrow)' in code
+
+        # The URL is kept in step in place, and a control on its no-filter option
+        # removes its parameter.
+        assert "replaceState" in code and "pushState" not in code
+        assert "url.searchParams.delete(filters[i].param)" in code
+        assert "url.searchParams.set(filters[i].param, state.filters[i])" in code
+
+        for forbidden in ("fetch(", "XMLHttpRequest", "location.assign", "location.replace",
+                          "innerHTML", "insertAdjacentHTML", "document.write", "eval("):
+            assert forbidden not in code, f"the narrowing script does {forbidden!r}"
+
+        # No new script and no policy change came in with the dropdowns.
+        _, headers, page = self._req(port, f"/roadmaps/{ROADMAP}/tasks?type=BUG&priority=7")
+        assert "script-src 'self'" in headers.get("content-security-policy", "")
+        srcs = {re.search(r'src="([^"]*)"', s).group(1)
+                for s in re.findall(r"<script\b([^>]*)>", page)}
+        assert srcs == {
+            "/static/vendor/tabler/tabler.min.js",
+            "/static/task-modal.js",
+            "/static/task-search.js",
+        }, srcs
+        assert "style=" not in page, "the filters introduced an inline style attribute"
+
+    def test_tasks_page_filter_values_are_never_echoed_into_the_page(self):
+        """A filter value never reaches the document: the options are the
+        server's own enumeration and an unaccepted value selects the no-filter
+        option (Acceptance Criterion 117)."""
+        proc, port = self._start(["--port", "0"])
+        hostile = '"><script>alert(1)</script>'
+        encoded = urllib.parse.quote(hostile, safe="")
+        status, _, body = self._req(
+            port,
+            f"/roadmaps/{ROADMAP}/tasks?type={encoded}&priority={encoded}&severity={encoded}",
+        )
+
+        assert status == 200, f"a hostile filter value answered {status}, want 200"
+        assert hostile not in body, "a raw filter value reached the page"
+        assert "alert(1)" not in body, "a filter value became script content"
+        assert body.count("<script") == 3, (
+            f"the page has {body.count('<script')} script elements, want 3"
+        )
+        for control_id, _ in self.FILTER_CONTROL_IDS:
+            assert self._selected(self._read_select(body, control_id), control_id) == "", (
+                f"{control_id} did not fall back to its no-filter option"
+            )
 
     def test_no_page_carries_a_footer_or_the_read_only_notice(self):
         """No page ends with a footer band.

@@ -134,6 +134,50 @@
    horizontally, keeping the three tabs reachable on phones. */
 .sprint-tabs { flex-wrap: wrap; }
 
+/* ---- Tasks board header controls (SPEC/WEB.md § Roadmap Tasks Page, Header
+   search control and Header filter controls; § Responsive and Mobile-First
+   Design, rule 9) ----
+   Mobile-first: the four controls - the search box and the type, minimum-priority
+   and minimum-severity dropdowns - wrap inside the page header's actions column
+   instead of forcing the page to scroll horizontally. Each control stays paired
+   with its own label, so a wrap never separates the two. */
+
+.task-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.task-controls__field {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Touch-friendly minimum height on small viewports, matching the query bar's
+   controls. */
+.task-controls .form-control,
+.task-controls .form-select {
+  min-height: 2.5rem;
+}
+
+/* Tabler's page-header actions column is `.col-auto`, which is `flex: 0 0 auto`:
+   it sizes to its content and never shrinks, so on a narrow viewport the four
+   controls above would sit on one unbreakable line far wider than the viewport
+   and the PAGE would scroll horizontally, which rule 2 forbids. Letting that
+   column shrink is what gives the wrap above somewhere to happen.
+
+   The hook is the child rather than the column: the column's own classes are
+   Tabler's PageHeader markup verbatim and are pinned by the page-header fidelity
+   guards, so nothing may be added to them. Where :has() is unsupported the rule
+   is simply skipped and the header behaves as it did before the dropdowns
+   existed. */
+.page-header .col-auto:has(> .task-controls) {
+  flex-shrink: 1;
+  min-width: 0;
+}
+
 /* Authored multi-line free-text wraps and preserves the source line breaks
    without forcing horizontal scrolling, so it stays readable on small
    viewports (SPEC/WEB.md § Frontend Rules, rule 6). This covers the task

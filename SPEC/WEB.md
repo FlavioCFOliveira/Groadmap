@@ -191,9 +191,13 @@ task detail modal that displays all of the task's fields (see
    set is shown. The board is read-only: it offers no drag-and-drop and no other
    control that moves a task between columns. The page renders no task table. The
    page header carries a **search input** that narrows the board to the tasks whose
-   title or `#<id>` reference contains the term, with the column counts following
-   the narrowed set; the term travels in the `q` URL parameter, and requesting the
-   page with that parameter renders the identical narrowed board (see
+   title or `#<id>` reference contains the term, and **three filter dropdowns** —
+   task type, minimum priority, and minimum severity — that narrow the board by what
+   a task is. The search term and the three filters combine conjunctively, the
+   column counts follow the narrowed set, and each control travels in its own URL
+   query parameter (`q`, `type`, `priority`, and `severity`), so requesting the page
+   with those parameters renders the identical narrowed board. The board offers
+   **no** status filter, because the columns already are the status (see
    [Roadmap Tasks Page](#roadmap-tasks-page) and
    [Task Detail Modal](#task-detail-modal)).
 8. When a user selects a roadmap on the index page, the user lands on that
@@ -662,7 +666,7 @@ produced from embedded `html/template` templates. Page routes return HTML
 |-------|--------|---------|----------|
 | `/` | GET, HEAD | Roadmap index | HTML list of roadmaps |
 | `/roadmaps/{name}` | GET, HEAD | Roadmap sprints page (landing; sprint tabs) | HTML |
-| `/roadmaps/{name}/tasks` | GET, HEAD | Roadmap tasks page (Kanban task board; optional `q` search parameter, see [Roadmap Tasks Page](#roadmap-tasks-page)) | HTML |
+| `/roadmaps/{name}/tasks` | GET, HEAD | Roadmap tasks page (Kanban task board; optional `q` search parameter and optional `type`, `priority`, and `severity` filter parameters, see [Roadmap Tasks Page](#roadmap-tasks-page)) | HTML |
 | `/roadmaps/{name}/tasks/{id}/data` | GET, HEAD | One task's fields and comments, for the task detail modal (see [Task Detail Endpoint](#task-detail-endpoint)) | JSON |
 | `/roadmaps/{name}/sprints/{id}` | GET, HEAD | Roadmap sprint page (all sprint details and the sprint's task list) | HTML |
 | `/roadmaps/{name}/audit` | GET, HEAD | Roadmap audit log page (full audit log, paginated; optional `page` parameter; see [Roadmap Audit Log Page](#roadmap-audit-log-page)) | HTML |
@@ -706,6 +710,7 @@ HTTP status mapping for page and data routes:
 | Task `{id}` not a valid integer, or not a task of the roadmap | 404 |
 | Audit `page` parameter out of range, non-integer, or garbage | 200 (clamped to nearest valid page; see [Roadmap Audit Log Page](#roadmap-audit-log-page)) |
 | Tasks `q` search parameter absent, empty, unmatched, or undecodable | 200 (never an error; see [Roadmap Tasks Page](#roadmap-tasks-page)) |
+| Tasks `type`, `priority`, or `severity` filter parameter absent, unknown, malformed, or undecodable | 200 (never an error; the dimension applies no filter; see [Roadmap Tasks Page](#roadmap-tasks-page)) |
 | Non-read HTTP method on any route | 405 |
 | Unhandled internal error reading data (I/O, corrupt store) | 500 |
 
@@ -849,11 +854,11 @@ how the `rmp web` process itself terminates.
   page rather than a performance choice (see `DATABASE.md § Main SQL Queries`,
   "List All").
 
-  A search narrows what the board **shows**; it does not narrow what the page
-  **reads**. The read stays the full task list either way, so a term applied by the
-  server and the same term applied in the browser select from the identical set —
-  which is what makes the two paths equivalent (see **Server and client produce the
-  same board**).
+  A search term and the header filters narrow what the board **shows**; neither
+  narrows what the page **reads**. The read stays the full task list either way, so
+  criteria applied by the server and the same criteria applied in the browser select
+  from the identical set — which is what makes the two paths equivalent (see
+  **Server and client produce the same board**).
 - **Placement.** Each task of the roadmap appears in exactly one column: the
   column of that task's own `status`. The board omits no task and duplicates
   none, so the five column counts sum to the roadmap's total number of tasks. The
@@ -864,8 +869,8 @@ how the `rmp web` process itself terminates.
   Tabler badge carrying the number of tasks in that column, the way a GitLab
   issue board shows the issue count of each list. A column holding no task shows
   the count `0`. The count always equals the number of cards that column is
-  actually showing: when a search narrows the board, the counts narrow with it (see
-  **Effect on the board** below).
+  actually showing: when the header controls narrow the board, the counts narrow
+  with it (see **Effect on the board** below).
 - **Order within a column.** The cards of a column appear in a deterministic
   order: descending `priority` and, for tasks of equal priority, ascending
   `created_at`. This is the order in which the page's own read already returns the
@@ -964,7 +969,8 @@ how the `rmp web` process itself terminates.
   card keeps the Tabler card presentation specified under
   **Markup** above; making it a button changes the element, not the appearance.
 - **Header search control.** The page header's actions column carries a **search
-  input** that narrows the board. It is the only control in that column: the page
+  input** that narrows the board. That input and the three filter dropdowns of
+  **Header filter controls** below are the only controls in that column: the page
   header presents no link to the knowledge-graph page, because the admin-shell
   sidebar already lists **Graph** among the roadmap's own links on every page (see
   [UI Framework](#ui-framework), rule 1), so a header link would be a second route
@@ -993,10 +999,10 @@ how the `rmp web` process itself terminates.
   `specialists` is deliberately **excluded**, and so is every other task field. The
   search answers "which task is this?" from what identifies a task on its card;
   matching an attribute answers a different question, "which tasks share this
-  property?", which is the job of the attribute filters and would make one control
-  serve two purposes with no way for the user to tell which one produced a hit.
-  Keeping the two apart is what lets them compose (see **Composing further
-  criteria** below).
+  property?", which is the job of the type, priority, and severity filters below and
+  would make one control serve two purposes with no way for the user to tell which
+  one produced a hit. Keeping the two apart is what lets them compose (see **Header
+  filter controls** and **How the criteria compose** below).
 - **Matching rule.** Matching is **case-insensitive** and by **substring**: a task
   matches when its searchable text contains the term. Leading and trailing
   whitespace is stripped from the term before matching, and a term that is empty
@@ -1016,11 +1022,138 @@ how the `rmp web` process itself terminates.
   structural rather than coincidental: the two paths cannot disagree about a task's
   text, because only one of them ever transforms it, and the single value both fold
   is the term the user typed.
-- **Effect on the board.** A task that does not match is not shown. Everything the
-  board states about itself then refers to the **shown set**, not to the roadmap.
-  This holds continuously: as the user types, the counts, the empty states, and the
-  no-match message are updated together with the cards, so the board is never left
-  stating something true of a previous term or of the unnarrowed roadmap:
+- **Header filter controls.** Beside the search input, the page header's actions
+  column carries **three filter dropdowns** (select controls) that narrow the board
+  by what a task **is**, where the search narrows it by what a task is **called**:
+
+  1. a **type filter**, offering the ten `TaskType` values (`MODELS.md § Enums`);
+  2. a **minimum-priority filter**, offering the thresholds `1` to `9` over the
+     task's `priority` (`MODELS.md § Task`);
+  3. a **minimum-severity filter**, offering the thresholds `1` to `9` over the
+     task's `severity` (`MODELS.md § Task`).
+
+  The ten type values are enumerated in `MODELS.md § Enums` and are not restated
+  here, so the type filter cannot drift from the enum. The thresholds are the
+  `priority` and `severity` range of `MODELS.md § Task` without its `0` floor, for
+  the reason **What each filter matches** below gives.
+
+  These are exactly the three dimensions the CLI already filters `rmp task list` by
+  — `-y, --type`, `-p, --priority`, and `--severity` (see
+  `COMMANDS.md § List Tasks`) — so the page presents no less capability over the
+  board than the command that lists the same data. Each dimension is also
+  visible on the card the filter acts on: the card's reference line shows the task's
+  `type`, and the two badges show its `priority` and its `severity` (see **Card
+  content** above), so the user filters by values the board already displays, as the
+  search matches text the card already displays.
+
+  Each dropdown offers, as its **first** option, a value meaning *no filter on this
+  dimension* — for example `Any type` — and that option is the selected one whenever
+  the dimension carries no filter. That option is a **value**, not the control's
+  name: each dropdown carries a real, programmatically associated **label** naming
+  the dimension it filters, and neither a first option nor a `placeholder` stands in
+  for that label, by the same rule **Header search control** above applies to the
+  search input. Each control is reachable and operable from the keyboard.
+
+  **Each dimension takes exactly one value.** A dimension carries one filter or it
+  carries none; it never carries a set. `rmp task list` is single-valued on all
+  three flags, a threshold is a single number by construction, and one value per
+  dimension keeps a single filtering model across the three controls instead of a
+  set-valued model for the categorical dimension and a scalar one for the two
+  ordinal dimensions.
+
+  **A filter value is never echoed into the page.** Unlike the term, a filter value
+  is not caller-supplied text rendered back to the user: the options are the fixed
+  sets enumerated above, emitted by the server from the enum and from the range, and
+  all a parameter does is decide which of those options is marked as selected. A
+  value that is not one of them selects the no-filter option (see **No filter value
+  is an error** below), so no caller-supplied string reaches the page through
+  `type`, `priority`, or `severity`, and the question that **Escaping the term**
+  below answers for `q` does not arise for the filters.
+- **What each filter matches.** The three dimensions do not compare the same way,
+  and each keeps the meaning the CLI flag of the same name already carries (see
+  `COMMANDS.md § List Tasks`), so one parameter name means one thing across the two
+  surfaces:
+  - **Type is an equality.** A task matches when its `type` is **equal to** the
+    selected `TaskType` value. The comparison is exact against the value as
+    `MODELS.md § Enums` spells it, in upper case; a differently spelled or
+    differently cased value is not one of the ten and is handled by **No filter
+    value is an error** below.
+  - **Priority and severity are thresholds.** A task matches the priority filter
+    when its `priority` is **greater than or equal to** the selected value, and the
+    severity filter when its `severity` is greater than or equal to the selected
+    value. This is the meaning `rmp task list` already gives `-p, --priority <n>`
+    ("Filter priority >= n") and `--severity <n>` ("Filter severity >= n"), and
+    `priority` and `severity` are ordinal `0`-`9` ranges rather than categories
+    (`MODELS.md § Task`), so "at least" is the comparison that fits them.
+
+    The offered thresholds start at `1` and not at `0` because a threshold of `0`
+    admits every task and is therefore the unfiltered board, which already has its
+    own option and its own URL form — the parameter absent (see **The URL carries
+    the filters** below). Offering `0` would give one board two URLs and two
+    control settings, which is what **An empty term leaves no parameter** exists to
+    prevent for the term.
+- **Why the board offers no status filter.** The board deliberately offers **no**
+  filter over a task's `status`, and the omission follows from the layout rather
+  than from an oversight:
+  1. **The columns already are the status.** The board has exactly five fixed
+     columns, one per `TaskStatus` value, and each task sits in the column of its
+     own status (see **Columns** and **Placement** above). The narrowing a status
+     filter would perform is the narrowing the layout has performed already: a user
+     who wants the `DOING` tasks reads the `DOING` column, which is already
+     separate, already ordered, and already counted.
+  2. **Keeping the columns would make the board state something false.** A status
+     filter that left the five columns in place would leave the excluded columns
+     present, in order, and showing the count `0`, while the roadmap holds tasks in
+     those statuses. A column count is a statement of fact about what that column
+     shows (see **Count per column** above), so the board would state that the
+     roadmap holds no task in a status that in fact holds many.
+  3. **Dropping the columns would contradict the layout.** A status filter that
+     instead dropped or hid the excluded columns would break the rule that all five
+     columns are always present, in order, whatever the data contains (see
+     **Columns** above), and would leave the filter and the layout disagreeing
+     about how many columns a board has.
+  4. **Two controls would state one fact.** With a status filter active, a card's
+     status would be stated twice on one screen — by the column the card sits in
+     and by the control that admitted it — and nothing would keep a reader from
+     taking the two statements for two different facts.
+
+  Status is therefore the one task attribute this page presents **structurally**,
+  and the header controls filter only attributes the layout does not already
+  express.
+- **No filter value is an error.** A filter parameter whose value is not one the
+  dimension accepts applies **no filter on that dimension**, and the board is
+  rendered exactly as though that parameter were absent. This covers every way a
+  value can fail to be accepted: a `type` that is not one of the ten `TaskType`
+  values, including one that differs from a value only in case; a `priority` or
+  `severity` that is not an integer, or is an integer outside `1` to `9` — `0`
+  included, because a threshold of `0` is no filter (see **What each filter
+  matches** above); a value carrying a sign, surrounding spaces, or any other
+  decoration; a parameter present with an empty value; and a parameter the server
+  cannot decode.
+
+  The dimensions are independent under this rule: an unusable `type` leaves an
+  accepted `priority` applied and the search term applying, and narrows nothing of
+  its own. No filter value produces an error page and none changes the route's
+  status codes — **No malformed term is an error** below holds for the filters
+  exactly as it holds for the term, and the page answers HTTP 200 whatever the
+  three parameters carry.
+
+  **One value is read per dimension.** Because each dimension takes exactly one
+  value (see **Header filter controls** above), a URL that repeats a parameter —
+  `?type=BUG&type=EPIC` — is read as its **first** occurrence and the remaining
+  occurrences are ignored, so a hand-written URL has one defined reading rather
+  than an implementation-defined one. A single value that packs several —
+  `?type=BUG,EPIC` — is not a list: it is one string, that string is not one of the
+  ten `TaskType` values, and the rule above therefore ignores it. Neither form is a
+  partly valid filter, so this contract needs no rule for "some values accepted,
+  some not": a dimension is filtered by one accepted value, or it is not filtered.
+- **Effect on the board.** A task that does not satisfy every active criterion is
+  not shown. Everything the board states about itself then refers to the **shown
+  set**, not to the roadmap.
+  This holds continuously: as the user types a term or changes a filter, the counts,
+  the empty states, and the no-match message are updated together with the cards, so
+  the board is never left stating something true of a previous set of controls or of
+  the unnarrowed roadmap:
   - Each column shows only its matching cards, in the order fixed by **Order within
     a column**, which the narrowing preserves.
   - **Each column's count is the number of cards that column is showing.** The
@@ -1032,14 +1165,19 @@ how the `rmp web` process itself terminates.
     is present but marked as not visible is not shown: it counts towards nothing the
     board states, and a column whose every card is in that state displays its empty
     state exactly as a column with no such card would.
-  - The five columns remain present and in order. Searching never drops, hides, or
-    reorders a column.
+  - The five columns remain present and in order. Neither searching nor filtering
+    ever drops, hides, or reorders a column. The board offers no status filter, so
+    no control narrows the columns themselves (see **Why the board offers no status
+    filter** above).
   - A column left with no matching card shows its ordinary in-column empty state.
   - When **no** task matches, the board says so: it shows a clear message naming
-    that no task matches the current search, alongside the five empty columns,
-    rather than leaving five silently empty columns for the user to interpret. This
-    is distinct from a roadmap that holds no task at all, which is not a search
-    result and is covered by **Empty states**.
+    that no task matches the controls the board is currently narrowed by, alongside
+    the five empty columns, rather than leaving five silently empty columns for the
+    user to interpret. One message covers the term and the filters together, because
+    the shown set is their conjunction and singling out one control would attribute
+    the empty result to a cause the board cannot know. This is distinct from a
+    roadmap that holds no task at all, which is not the result of any control and is
+    covered by **Empty states**.
 - **The URL carries the term.** The term travels in the URL query parameter **`q`**
   on `/roadmaps/{name}/tasks`. The name matches the role `q` already has on the
   graph data endpoint — the text the user typed into a search control (see
@@ -1069,27 +1207,67 @@ how the `rmp web` process itself terminates.
     server, which would make the narrowing instantaneous in one direction only. The
     rule forbids narrowing applied *after* load; it does not forbid cards *present*
     in the document.
+- **The URL carries the filters.** Each filter travels in its own URL query
+  parameter on `/roadmaps/{name}/tasks` — **`type`**, **`priority`**, and
+  **`severity`** — named after the `rmp task list` flags that carry the same three
+  dimensions (see `COMMANDS.md § List Tasks`). Each obeys the rules that **The URL
+  carries the term** states for `q`, for the same reasons:
+  - **Changing a filter updates the URL in place.** Selecting a value replaces the
+    current history entry rather than pushing a new one, so the browser Back button
+    leaves the board rather than stepping backwards through the control row.
+    Narrowing the board is one kind of act and does not become a different kind of
+    act because the user performed it with a dropdown instead of a keyboard.
+  - **A dimension with no filter leaves no parameter.** While a dropdown sits on its
+    no-filter option, that dimension's parameter is **removed** from the URL rather
+    than left present and empty. Clearing every control — the search input and all
+    three dropdowns — therefore restores the full board with its true counts, and
+    leaves the bare page URL, with no parameter of any kind behind it.
+  - **Cold load arrives already narrowed.** When the page is requested with any
+    combination of `q`, `type`, `priority`, and `severity`, the **server** applies
+    every one of them, and the document it sends already carries the narrowing in
+    its final state: the narrowed column counts, the in-column empty states, the
+    no-match message where nothing matches, and each control already showing the
+    value that produced the board. Nothing on the client applies a filter after
+    load. Non-matching cards **may** be present in that document under exactly the
+    condition that **The URL carries the term** sets — they arrive already marked
+    as not visible and count towards nothing the board states — which is what lets
+    widening or clearing a filter restore them without a request to the server.
+
+  The four parameters are independent of each other and of their position in the
+  query string: the board depends on which values are present, never on the order
+  in which the query string carries them.
 - **Server and client produce the same board (the property that matters).** For any
-  roadmap and any term, the board reached by typing that term into the search
-  control and the board reached by requesting the page URL carrying that term in
-  `q` are the **same**: the same cards, in the same columns, in the same order,
-  with the same column counts, and the same empty states. The two paths implement
-  one matching rule and MUST NOT diverge — that equivalence is what makes a
-  narrowed board shareable and reloadable, and it is the property to test.
+  roadmap and any combination of a term and the three filters, the board reached by
+  setting those controls on the page and the board reached by requesting the page
+  URL carrying the same values in `q`, `type`, `priority`, and `severity` are the
+  **same**: the same cards, in the same columns, in the same order, with the same
+  column counts, and the same empty states. The two paths implement one matching
+  rule per criterion and one conjunction over them, and MUST NOT diverge — that
+  equivalence is what makes a narrowed board shareable and reloadable, and it is the
+  property to test.
 - **No malformed term is an error.** Every string is a valid term. A term that
   matches nothing renders the empty board described above, with HTTP 200. A term
   longer than any searchable text simply matches nothing. A `q` the server cannot
   decode is treated as absent, and the unfiltered board is served. The search never
-  produces an error page and never changes the route's status codes.
-- **Composing further criteria.** The search term is **one** criterion. The shown
-  set is the set of tasks satisfying **every** active criterion, and a board with no
-  active criterion shows every task. Further criteria — for example filters over a
-  task's attributes — compose with the term by the same conjunction, each carried in
-  its own URL query parameter under the same rules as `q` (absent when inactive,
-  applied by the server on a cold load, equivalent between the two paths). Adding
-  such a criterion requires no change to this contract.
-- **Escaping the term.** The term is caller-supplied text echoed back into the page,
-  and it is treated exactly as every other caller-supplied value:
+  produces an error page and never changes the route's status codes, and neither
+  does any filter value (see **No filter value is an error** above).
+- **How the criteria compose.** The search term is **one** criterion, and each
+  active filter is one more. The shown set is the set of tasks satisfying **every**
+  active criterion, and a board with no active criterion shows every task. The
+  conjunction is total and holds in every direction: `?q=cache&type=BUG&priority=7`
+  shows the `BUG` tasks of priority `7` or above whose title or `#<id>` reference
+  contains `cache`, and no other task. Narrowing a criterion can only shrink the
+  shown set, never grow it, and no criterion ever re-admits a task another criterion
+  excluded.
+
+  The criteria are independent: each dimension decides only its own question, none
+  of them changes how another is compared, and each carries its own URL query
+  parameter under the same rules as `q` — absent when inactive, applied by the
+  server on a cold load, equivalent between the two paths. A further criterion added
+  later composes the same way and requires no change to this contract.
+- **Escaping the term.** The term is the one caller-supplied string this page
+  echoes back — a filter value never is (see **Header filter controls** above) — and
+  it is treated exactly as every other caller-supplied value:
   - Where the **server** renders it — into the search input's value, and into the
     no-match message — it is escaped by `html/template`'s contextual auto-escaping
     (see [Frontend Rules](#frontend-rules), rule 1).
@@ -1101,14 +1279,18 @@ how the `rmp web` process itself terminates.
 
   A term containing HTML markup therefore renders as visible characters on both
   paths and can introduce no element, attribute, or script into the page.
-- **Implementation constraints already in force.** The narrowing script is embedded
-  and served from `/static/...` like every other client script (see
+- **Implementation constraints already in force.** The narrowing script — the one
+  script that applies the term and the three filters alike — is embedded and served
+  from `/static/...` like every other client script (see
   [Embedded Asset Categories](#embedded-asset-categories) and
   [Frontend Rules](#frontend-rules), rules 2 and 5). No inline script is
   introduced and the Content-Security-Policy in [Security Headers](#security-headers)
-  is unchanged. Every class the control emits resolves in the embedded stylesheets
+  is unchanged. Every class the controls emit resolves in the embedded stylesheets
   and no template carries a `style` attribute (see [UI Framework](#ui-framework),
-  rules 8 and 10).
+  rules 8 and 10). The filter dropdowns introduce no component the vendored Tabler
+  distribution does not already ship: the select control is the one the
+  knowledge-graph page's layout dropdown already uses (see
+  [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page)).
 - **Read-only.** The page renders data only. The board offers **no
   drag-and-drop** and no control of any other kind that moves a task between
   columns, reorders cards, changes a task's status, or creates or edits a task or
@@ -1121,8 +1303,9 @@ how the `rmp web` process itself terminates.
 
   Read-only constrains what the page may **change**, not what it may **show**. A
   control that only alters which of the already-read tasks the user is looking at —
-  the header search of **Header search control** above — changes no task, writes
-  nothing, and is therefore not an exception to this rule. The distinction is
+  the header search of **Header search control** and the three dropdowns of
+  **Header filter controls** above — changes no task, writes nothing, and is
+  therefore not an exception to this rule. The distinction is
   between altering the data and altering the view of it: the first is forbidden
   here, the second is not.
 - **Empty states.** A column that holds no task renders its own clear, unobtrusive
@@ -1134,11 +1317,12 @@ how the `rmp web` process itself terminates.
   columns are fixed (see **Columns** above), and an empty roadmap is shown as an
   empty board, not as an absent one.
 
-  A roadmap that holds no task and a search that matches no task are different
+  A roadmap that holds no task and a narrowing that matches no task are different
   conditions and read differently. The first is the state of the roadmap and shows
-  the five in-column empty states alone. The second is the result of what the user
-  typed, so the board additionally says that no task matches the search (see
-  **Effect on the board** above). In both cases the five columns stay.
+  the five in-column empty states alone. The second is the result of the controls
+  the user set — a term, a filter, or any combination of them — so the board
+  additionally says that no task matches those controls (see **Effect on the board**
+  above). In both cases the five columns stay.
 - **Layout and scrolling.** The five columns are presented side by side. When
   they do not fit the viewport, the **board** scrolls horizontally inside its own
   container; the page itself never scrolls horizontally, so `<body>` produces no
@@ -1209,10 +1393,12 @@ how the `rmp web` process itself terminates.
   number of tasks, the number of sprints, or the number of columns. Opening a modal
   adds one request for that one task, made only on demand.
 
-  A search term changes none of this. Applying a term on a cold load selects from
-  the task list the page already reads and issues no additional query; narrowing in
-  the browser issues no request at all, because every card is already in the
-  document.
+  A search term and the three filters change none of this. Applying them on a cold
+  load selects from the task list the page already reads and issues no additional
+  query: a filter adds no clause to that read, no second read, and no per-dimension
+  query, because it is applied in memory over the rows already in hand exactly as
+  the term is. Narrowing in the browser issues no request at all, because every card
+  is already in the document.
 - **Path parameters.** `{name}` is validated against the roadmap-name rules
   exactly as on the other roadmap routes (the path-traversal guard in
   [Routes and Pages](#routes-and-pages) and
@@ -1424,7 +1610,7 @@ lead line. A page MUST NOT hand-write a `page-pretitle` or a `page-title` elemen
    |---|---|
    | Roadmap Index | none |
    | Roadmap Sprints | none |
-   | Roadmap Tasks | the search input (see [Roadmap Tasks Page](#roadmap-tasks-page), **Header search control**) |
+   | Roadmap Tasks | the search input and the type, priority, and severity filter dropdowns (see [Roadmap Tasks Page](#roadmap-tasks-page), **Header search control** and **Header filter controls**) |
    | Roadmap Audit Log | none |
    | Roadmap Knowledge-Graph | the layout dropdown (see [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page)) |
    | Roadmap Sprint | a link back to the roadmap's sprints page |
@@ -3087,9 +3273,11 @@ experience is the baseline that larger viewports enhance.
    at which its cards stay legible, the horizontal board scroll is reachable by a
    touch gesture, and the cards and their badges present touch-friendly hit targets
    that open the read-only task detail modal (see
-   [Task Detail Modal](#task-detail-modal)). The page header's search input is
-   likewise usable on a narrow viewport: it fits the header's actions column without
-   page-level horizontal overflow and presents a touch-friendly target.
+   [Task Detail Modal](#task-detail-modal)). The page header's search input and its
+   three filter dropdowns are likewise usable on a narrow viewport: they fit the
+   header's actions column without page-level horizontal overflow, wrapping within
+   that column rather than forcing the page to scroll horizontally, and each
+   presents a touch-friendly target.
 
 ## Error Handling and Exit Codes
 
@@ -3297,7 +3485,9 @@ Rules:
    `~/.roadmaps/`. Acceptance Criteria 81 to 92 define the board itself,
    Acceptance Criterion 93 fixes the modal trigger on every surface that shows a
    clickable task, Acceptance Criteria 94 to 99 fix the task detail endpoint that
-   fills the modal, and Acceptance Criteria 100 to 107 fix the header search.
+   fills the modal, Acceptance Criteria 100 to 107 fix the header search, and
+   Acceptance Criteria 112 to 117 fix the header's type, priority, and severity
+   filters.
 10. `GET /roadmaps/{name}` for a non-existent roadmap returns HTTP 404, and a
     request whose `{name}` violates the roadmap-name rules (for example
     `../etc`) returns HTTP 404 without touching the filesystem outside
@@ -4056,12 +4246,13 @@ Rules:
     comparison is locale-independent, so the same term and task yield the same
     verdict regardless of the browser's reported locale.
 102. A column left with no matching card renders its ordinary in-column empty state,
-    and the five columns stay present and in order — searching drops, hides, and
-    reorders no column (Acceptance Criterion 81 continues to hold). When no task
-    matches, the board states that no task matches the search rather than presenting
-    five silently empty columns; that message is distinct from the state of a roadmap
-    that holds no task at all, which shows the in-column empty states alone
-    (Acceptance Criterion 88 continues to hold).
+    and the five columns stay present and in order — narrowing the board drops,
+    hides, and reorders no column (Acceptance Criterion 81 continues to hold). When
+    no task matches, the board states that no task matches the controls the board is
+    narrowed by — one message covering the term and the filters together — rather
+    than presenting five silently empty columns; that message is distinct from the
+    state of a roadmap that holds no task at all, which shows the in-column empty
+    states alone (Acceptance Criterion 88 continues to hold).
 103. The term travels in the `q` URL query parameter on `/roadmaps/{name}/tasks`. As
     the user types, the page updates the URL in place, replacing the current history
     entry rather than pushing one entry per keystroke. Clearing the search restores
@@ -4120,11 +4311,11 @@ Rules:
     roadmap name, which the shell already states in the sidebar and in the top
     navbar. Each page's actions column carries only what
     [Shared Page-Header Partial](#shared-page-header-partial) fixes: the tasks
-    page's search input, the knowledge-graph page's layout dropdown, and the sprint
-    page's link back to the roadmap's sprints page. The sprints, audit, and index
-    page headers carry no actions column, and no page header links to the
-    knowledge-graph page — Acceptance Criterion 100 held that for the tasks page
-    and now holds for every page.
+    page's search input and its three filter dropdowns, the knowledge-graph page's
+    layout dropdown, and the sprint page's link back to the roadmap's sprints page.
+    The sprints, audit, and index page headers carry no actions column, and no page
+    header links to the knowledge-graph page — Acceptance Criterion 100 held that
+    for the tasks page and now holds for every page.
 110. `GET /roadmaps/{name}/graph/data` executes the caller's query under a
     5-second deadline derived from the request context. A query that would run for
     longer is cancelled when the budget is exhausted instead of running to
@@ -4167,6 +4358,80 @@ Rules:
     a new line. A suppressed query is not bounded by the node limit; it remains
     bounded by the 5-second query time budget (see Acceptance Criterion 110 and
     [Graph Query Time Budget](#graph-query-time-budget)).
+
+112. The roadmap tasks page header carries, beside the search input, exactly three
+    filter dropdowns in its actions column: a type filter offering the ten
+    `TaskType` values of `MODELS.md § Enums`, a minimum-priority filter offering the
+    thresholds `1` to `9`, and a minimum-severity filter offering the thresholds `1`
+    to `9`. Each dropdown offers a first option meaning no filter on that dimension,
+    and that option is selected whenever the dimension carries no filter. Each
+    dropdown carries a programmatically associated accessible label naming the
+    dimension it filters — neither that first option nor a `placeholder` stands in
+    for the label — and each is reachable and operable from the keyboard
+    (Acceptance Criterion 100 continues to hold for the search input). The header
+    offers **no** status filter, and no control of any kind narrows, drops, or
+    reorders the five columns; [Roadmap Tasks Page](#roadmap-tasks-page), **Why the
+    board offers no status filter**, records the four reasons for that omission, so
+    the absence is specified rather than merely unimplemented.
+113. Each filter narrows the board by its own dimension and every column count
+    equals the number of cards that column is then showing, as Acceptance Criterion
+    101 requires of the term. A task matches the type filter when its `type` is
+    **equal** to the selected value, compared exactly against the spelling in
+    `MODELS.md § Enums`; it matches the priority filter when its `priority` is
+    **greater than or equal to** the selected threshold, and the severity filter
+    when its `severity` is greater than or equal to the selected threshold. These
+    are the meanings `rmp task list` gives `-y, --type`, `-p, --priority`, and
+    `--severity` (see `COMMANDS.md § List Tasks`), so the same value selects the
+    same tasks on the board and on the command line. Each dimension carries at most
+    one value.
+114. The three filters combine **conjunctively**, with each other and with the
+    search term: the board shows exactly the tasks satisfying every active control,
+    and a board with no active control shows every task. A request
+    for `?q=cache&type=BUG&priority=7` shows the `BUG` tasks of priority `7` or
+    above whose `title` or `#<id>` reference contains `cache`, and no other task.
+    Activating a further control can only shrink the shown set; no control re-admits
+    a task another control excluded.
+115. A `type`, `priority`, or `severity` value the dimension does not accept applies
+    **no filter on that dimension** and returns HTTP 200 with the board rendered as
+    though that parameter were absent — never an error page and never a changed
+    status code. This holds for a `type` outside the ten `TaskType` values or
+    differing from one only in case, a `priority` or `severity` that is not an
+    integer or is an integer outside `1` to `9` (`0` included, a threshold of `0`
+    being no filter), a value carrying a sign or surrounding spaces, a parameter
+    present with an empty value, and a parameter the server cannot decode. The other
+    dimensions are unaffected: with an unusable `type` and an accepted `priority`,
+    the board is narrowed by the priority and by the term alone. A repeated
+    parameter (`?type=BUG&type=EPIC`) is read as its first occurrence; a
+    comma-packed value (`?type=BUG,EPIC`) is one string, matches no `TaskType`
+    value, and is therefore ignored whole — no filter is ever partly applied.
+116. Each active filter travels in its own URL query parameter on
+    `/roadmaps/{name}/tasks` — `type`, `priority`, `severity` — and a dimension on
+    its no-filter option leaves **no** parameter behind. Changing a dropdown updates
+    the URL in place, replacing the current history entry rather than pushing a new
+    one, exactly as Acceptance Criterion 103 requires of typing. For any roadmap and
+    any combination of a term and the three filters, the board produced by setting
+    those controls on the page and the board produced by requesting the URL carrying
+    the same values are identical — the same cards, in the same columns, in the same
+    order, with the same column counts and the same empty states — asserted by
+    comparing the two, and the document served for such a cold load already carries
+    the narrowing in its final state with each control showing the value that
+    produced it (Acceptance Criterion 104 continues to hold, including its treatment
+    of non-matching cards present but marked as not visible). Clearing every control
+    restores the full board with its true unnarrowed counts and leaves the bare page
+    URL, carrying none of the four parameters.
+117. The filters add no database query: the page's read remains the full task list
+    of Acceptance Criterion 89, a filter contributes no clause to it and no read of
+    its own, and narrowing in the browser issues no request at all. No filter value
+    is echoed into the page — the dropdown options are the server's own enumeration
+    of the enum and the range, and an unaccepted value selects the no-filter option
+    — so no caller-supplied string reaches the page through `type`, `priority`, or
+    `severity`. The filters introduce no inline script and no
+    Content-Security-Policy change: they are applied by the same `/static/` script
+    that applies the term, and the policy remains exactly the value fixed in
+    Acceptance Criterion 33 (Acceptance Criteria 23, 98, and 107 continue to hold).
+    Every class the dropdowns emit resolves in the embedded stylesheets, the select
+    control is one the vendored Tabler distribution already ships, and no template
+    carries a `style` attribute (Acceptance Criterion 62 continues to hold).
 
 ## See Also
 
@@ -4216,6 +4481,12 @@ Rules:
   `DATABASE.md § tasks Table`
 - Default task ordering that fixes the order of the cards inside each board column
   → `DATABASE.md § Main SQL Queries` ("List All")
+- Task type enum and the `priority` and `severity` integer ranges that fix the
+  accepted values of the tasks board's header filters → `MODELS.md § Enums` and
+  `MODELS.md § Task`
+- CLI filters over the same three dimensions, whose meanings the board's header
+  filters reuse — `-y, --type` as an equality, `-p, --priority` and `--severity` as
+  thresholds → `COMMANDS.md § List Tasks`
 - Keyboard operability of a clickable task: why the modal trigger must be a
   natively activatable element on every surface, and why no script may be added to
   compensate → [Task Detail Modal](#task-detail-modal),

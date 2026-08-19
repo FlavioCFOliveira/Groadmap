@@ -917,7 +917,7 @@ func TestTasksPage_OneGroupedCommentCountQueryIndependentOfTaskCount(t *testing.
 		ids := seedTasksWithComments(t, name, taskCount)
 		src := openCounting(t, name)
 
-		data, err := readTasks(context.Background(), src, name, "")
+		data, err := readTasks(context.Background(), src, name, boardControls{})
 		if err != nil {
 			t.Fatalf("%d tasks: readTasks: %v", taskCount, err)
 		}
@@ -983,7 +983,7 @@ func TestTasksPage_OneGroupedCommentCountQueryIndependentOfTaskCount(t *testing.
 	seedTasksWithComments(t, emptyName, 0)
 	emptySrc := openCounting(t, emptyName)
 
-	emptyData, err := readTasks(context.Background(), emptySrc, emptyName, "")
+	emptyData, err := readTasks(context.Background(), emptySrc, emptyName, boardControls{})
 	if err != nil {
 		t.Fatalf("empty roadmap: readTasks: %v", err)
 	}
