@@ -277,6 +277,12 @@ func (v *taskView) SearchText() string {
 // The six conditions are exactly the six the footer's own items are rendered
 // under, so the footer can never be emitted empty and can never swallow an
 // indicator the card should show.
+//
+// It governs the TASKS board's card alone. The sprint page's member-tasks board
+// needs no such predicate: its card carries exactly two indicators, both of them
+// counts, and renders both on every card including when either is 0, so its footer
+// row is unconditional (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Both
+// counters are always rendered; Acceptance Criterion 134).
 func (v *taskView) HasMeta() bool {
 	return v.Sprint != nil ||
 		v.SpecialistsText() != "" ||
@@ -284,23 +290,6 @@ func (v *taskView) HasMeta() bool {
 		len(v.DependsOn) > 0 ||
 		len(v.Blocks) > 0 ||
 		v.CommentCount > 0
-}
-
-// HasCounters reports whether the sprint page's member-tasks board has at least
-// one indicator to put in a card's trailing-edge footer: the task's subtasks or
-// its comments. A task with neither renders no footer at all — not an empty one
-// (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Absent metadata renders
-// nothing; Acceptance Criterion 134).
-//
-// It is a second predicate rather than a reuse of HasMeta because the two cards
-// show different things. The sprint board's card shows exactly two counters, and
-// HasMeta is true for four further reasons — a sprint, specialists, dependencies,
-// blocked tasks — none of which that card renders, so a member task carrying only
-// specialists would open a footer with nothing inside it. The two conditions are
-// each exactly the disjunction of the indicators their own footer emits, which is
-// what keeps either footer from being emitted empty.
-func (v *taskView) HasCounters() bool {
-	return v.SubtaskCount > 0 || v.CommentCount > 0
 }
 
 // matchesSearch reports whether the task matches an already-folded term.
@@ -730,7 +719,8 @@ type sprintCard struct {
 }
 
 // sprintBoardColumn is one column of the Roadmap Sprint Page's member-tasks
-// board: the heading it shows and the cards of the sprint's tasks it holds.
+// board: the heading it shows, the canonical status its count badge is coloured
+// by, and the cards of the sprint's tasks it holds.
 //
 // Tasks holds POINTERS into the page's flat member-task list rather than copies,
 // so the board and the single modal shell its cards open are rendered from one
@@ -739,12 +729,23 @@ type sprintCard struct {
 // no second notion of "how many are shown" to keep in step with a stored number
 // (contrast taskColumn, whose count is what the tasks page's search left visible).
 //
-// Field order puts the string before the slice so the pointer-scan prefix stops
-// at the slice header rather than spanning the whole struct (govet
+// CanonicalStatus is the status the column's count badge takes its colour from: a
+// column of this board groups a SET of statuses and writes none of them, so the
+// status its colour is keyed on has to be named somewhere, and it is named in the
+// model rather than in the template. The template hands it to taskStatusBadge, the
+// same helper every task status badge takes its colour from, so the board reads
+// the ONE semantic mapping instead of carrying colour literals that could drift
+// from it (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Column header;
+// § Status, Priority, and Severity Badge Colours, rule 2; Acceptance Criterion
+// 140).
+//
+// Field order puts the two strings before the slice so the pointer-scan prefix
+// stops at the slice header rather than spanning the whole struct (govet
 // fieldalignment).
 type sprintBoardColumn struct {
-	Heading string
-	Tasks   []*taskView
+	Heading         string
+	CanonicalStatus models.TaskStatus
+	Tasks           []*taskView
 }
 
 // sprintBoardColumns is the board's three fixed columns, left to right, each
@@ -761,13 +762,30 @@ type sprintBoardColumn struct {
 //
 // The headings are written exactly as the specification spells them, in upper
 // case, and are not translated.
+//
+// The third field is the CANONICAL status of the group — the status a task is
+// normally in at that stage of the sprint — and it is what the column's count
+// badge is coloured by (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Column
+// header; Acceptance Criterion 140). A task waiting in a sprint is normally a
+// SPRINT task: a BACKLOG task inside a sprint is the exceptional case, the case of
+// a task returned to the backlog without leaving the sprint, so SPRINT is the
+// status WAITING stands for. The column named DOING takes the colour of the status
+// named DOING, which is the reading a user expects and the only one that leaves
+// the heading agreeing with the colour. CLOSED calls for no choice at all: it
+// holds COMPLETED alone, and that status is its canonical one.
+//
+// Naming the status here, beside the category it belongs to, is what keeps the
+// colour out of the template: the template reads this value through
+// taskStatusBadge and writes no colour class of its own, so there is ONE mapping
+// from a status to a badge variant in the project and this board reads it.
 var sprintBoardColumns = [...]struct {
-	heading  string
-	category models.TaskStatusCategory
+	heading   string
+	canonical models.TaskStatus
+	category  models.TaskStatusCategory
 }{
-	{"WAITING", models.CategoryPending},
-	{"DOING", models.CategoryInProgress},
-	{"CLOSED", models.CategoryCompleted},
+	{"WAITING", models.StatusSprint, models.CategoryPending},
+	{"DOING", models.StatusDoing, models.CategoryInProgress},
+	{"CLOSED", models.StatusCompleted, models.CategoryCompleted},
 }
 
 // sprintDetail is the single context shape the "sprintDetail" sub-template
@@ -1466,7 +1484,10 @@ func readSprint(ctx context.Context, src sprintSource, name string, id int) (spr
 func groupIntoSprintBoardColumns(views []taskView) []sprintBoardColumn {
 	columns := make([]sprintBoardColumn, len(sprintBoardColumns))
 	for i := range sprintBoardColumns {
-		columns[i] = sprintBoardColumn{Heading: sprintBoardColumns[i].heading}
+		columns[i] = sprintBoardColumn{
+			Heading:         sprintBoardColumns[i].heading,
+			CanonicalStatus: sprintBoardColumns[i].canonical,
+		}
 	}
 
 	for i := range views {

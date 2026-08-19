@@ -104,10 +104,17 @@ func TestSprintDetail_FullBlockOnlyOnSprintPage(t *testing.T) {
 	datagridTitles := []string{
 		">ID<", ">Status<", ">Capacity<", ">Tasks<", ">Created<", ">Started<", ">Closed<",
 	}
+	// The WAITING column's header carries the colour of the status that column
+	// groups — SPRINT's, the canonical status of the group — so the marker is
+	// built from the semantic helper rather than from a colour literal, and this
+	// test keeps stating WHERE the block may appear while the colour itself is
+	// pinned by TestBoardColumnBadges_CarryTheColourOfTheStatusTheyGroup
+	// (Acceptance Criterion 140).
 	boardMarkers := []string{
 		`class="task-board task-board--bounded mb-3" data-role="task-board"`,
 		`<div class="card task-board__column" data-role="task-board-column">`,
-		`<h3 class="card-title">WAITING <span class="badge bg-secondary-lt ms-2">2</span></h3>`,
+		`<h3 class="card-title">WAITING <span class="badge ` +
+			taskStatusBadge(models.StatusSprint) + ` ms-2">2</span></h3>`,
 	}
 
 	// The single sprint page MUST carry the full detail block.

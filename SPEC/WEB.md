@@ -906,6 +906,21 @@ how the `rmp web` process itself terminates.
   the count `0`. The count always equals the number of cards that column is
   actually showing: when the header controls narrow the board, the counts narrow
   with it (see **Effect on the board** below).
+
+  **The badge carries the colour of its column's status.** A column of this board
+  is exactly one `TaskStatus` value (see **Columns** above), so the badge is a
+  hybrid: its **text** is the count of tasks in the column, and its **colour** is
+  the variant the task status table assigns to that column's status (see
+  [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
+  rule 2). The colours are the ones that table already holds; this board introduces
+  no new colour and no new band, and it keys on that mapping rather than restating
+  the variants here. The count itself selects no colour, so a column that holds no
+  task shows `0` in the colour of its status, exactly as a tab that holds no sprint
+  does (see [Roadmap Sprints Page](#roadmap-sprints-page)). The colour earns its
+  place because the header is where the reader identifies the column: the mapping
+  already gives each status a colour the reader meets wherever that status is
+  written out, and carrying it here lets the five columns tell themselves apart by
+  the same key rather than by their heading text alone.
 - **Order within a column.** The cards of a column appear in a deterministic
   order: descending `priority` and, for tasks of equal priority, ascending
   `created_at`. This is the order in which the page's own read already returns the
@@ -1019,6 +1034,11 @@ how the `rmp web` process itself terminates.
   detail modal the card opens (see [Task Detail Modal](#task-detail-modal)). The
   card does not redefine any field; `MODELS.md` and `DATABASE.md` remain
   canonical.
+
+  The absent-metadata rule above governs **this** board's card. The card of the
+  sprint page's member-tasks board departs from it deliberately and always renders
+  both of its counters, for the reason stated where that card is defined (see
+  [Sprint Detail Sub-Template](#sprint-detail-sub-template), **The card**).
 - **Clickable card.** Selecting a card opens the read-only task detail modal for
   that task (see [Task Detail Modal](#task-detail-modal)). Opening the modal
   fetches that task's fields and comments from the read-only endpoint
@@ -1613,6 +1633,14 @@ how the `rmp web` process itself terminates.
   wider than the board needs either; the space beyond the five columns is left empty,
   which keeps the measure of a card's title the same at every viewport width.
 
+  These widths are this board's own. The sprint page's member-tasks board departs
+  from them deliberately: its three columns divide the width of that board equally
+  and grow with the viewport, for the reason stated where that board is defined (see
+  [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Height and
+  scrolling**). The `17rem` minimum, the `0.75rem` gap between columns, and the
+  `0.75rem` card body padding below are carried by both boards; the `19rem` column
+  width is carried by this one alone.
+
   Inside a column, the card the user reads and activates carries **0.75rem** of
   padding on all four sides of its body, in place of the `1rem` the vendored Tabler
   distribution gives a small card's body. The card's body holds running text — the
@@ -2072,11 +2100,26 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
    - **Column header.** Each column header shows the column heading together with a
      Tabler badge carrying that column's task count, exactly as the tasks board's
      column header does (see [Roadmap Tasks Page](#roadmap-tasks-page), **Count per
-     column**). The count badge states a number of member tasks and carries no
-     status, priority, or severity value, so the semantic colour mapping does not
-     govern it (see
+     column**). The badge is the same hybrid it is there: its **text** is the number
+     of member tasks in the column, and its **colour** is the semantic colour of the
+     status the column groups, taken from the task status table (see
      [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
-     rule 2).
+     rule 2). No new colour and no new band is introduced here.
+
+     A column of this board groups a **set** of statuses rather than a single one:
+     `WAITING` groups `BACKLOG` and `SPRINT`, `DOING` groups `DOING` and `TESTING`,
+     and `CLOSED` holds `COMPLETED` alone (see the table above). The colour is
+     therefore the one the mapping assigns to the **canonical status of the group** —
+     the status a task is normally in at that stage of the sprint. `WAITING` takes
+     the colour of `SPRINT`, `DOING` takes the colour of `DOING`, and `CLOSED` takes
+     the colour of `COMPLETED`. A task waiting in a sprint is normally a `SPRINT`
+     task: a `BACKLOG` task inside a sprint is the exceptional case, the case of a
+     task returned to the backlog without leaving the sprint, so `SPRINT` is the
+     status the `WAITING` column stands for. The column named `DOING` taking the
+     colour of the status named `DOING` is the reading a user will expect, and any
+     other choice would leave the board's own heading disagreeing with its colour.
+     `CLOSED` calls for no such choice, because it holds one status and that status
+     is its canonical one.
    - **Order within a column.** The cards of a column appear in the sprint's planned
      in-sprint execution order — the `sprint_tasks` position order the page already
      reads, `position` ascending (see `MODELS.md § Sprint`,
@@ -2111,7 +2154,9 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
         subtasks (`subtask_count`) and its number of comments, each rendered as an
         icon followed by its number — `ti ti-subtask` for the subtask count and
         `ti ti-message` for the comment count, the same icons the tasks board's card
-        metadata uses (see [Roadmap Tasks Page](#roadmap-tasks-page)).
+        metadata uses (see [Roadmap Tasks Page](#roadmap-tasks-page)). Both counters
+        are always rendered, including when the number they carry is `0` (see **Both
+        counters are always rendered** below).
 
      The card carries **no status badge**: the column the card sits in already
      states the task's status, which is the reason the tasks board's card omits one
@@ -2124,13 +2169,24 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      modal the card opens (see [Task Detail Modal](#task-detail-modal)). The card
      does not redefine any field; `MODELS.md` and `DATABASE.md` remain canonical.
 
-     **Absent metadata renders nothing.** A `subtask_count` of `0` renders nothing
-     at all — no icon, no dash, no placeholder, no empty slot — and a comment count
-     of `0` renders nothing either; a task with neither renders no footer row. This
-     is the rule the tasks board's card already states (see
+     **Both counters are always rendered.** The subtask count and the comment count
+     are present on every card of this board, including when either or both are `0`:
+     a task with no subtask shows the subtask icon followed by `0`, a task with no
+     comment shows the comment icon followed by `0`, and the footer row is therefore
+     present on every card the board renders.
+
+     This is a deliberate departure from the tasks board's card, which renders an
+     indicator only when it has something to count (see
      [Roadmap Tasks Page](#roadmap-tasks-page), **Absent metadata renders
-     nothing**), and it holds here for the same reason: an indicator earns its space
-     only when it counts something.
+     nothing**). The two cards differ because what they carry differs. This card
+     carries exactly two indicators and both of them are counts, so rendering both
+     always makes every card of the board the same shape and makes each number
+     meaningful: a `0` states that the task has no comment, where an absent counter
+     leaves the reader unable to tell "no comments" from "this card does not show
+     comments". The tasks board's card carries six heterogeneous indicators, two of
+     which — the sprint the task belongs to and its `specialists` — are text rather
+     than counts and have no zero to show, so always rendering all six is not even
+     well defined there.
    - **The card is the trigger, and the trigger is a `<button>`.** Selecting a card
      opens the read-only task detail modal for that task, and the card itself is a
      `<button type="button">`, a natively activatable element, exactly as the tasks
@@ -2202,19 +2258,48 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
        the full-height shell alone, because the sprint page is not a full-height
        page and would otherwise find nothing to read.
 
-     **Column width and card density are the tasks board's own lengths, reused.**
-     Each column is **19rem** wide and never narrower than **17rem**, the columns
-     are separated by a **0.75rem** gap, and the body of a card carries **0.75rem**
-     of padding on all four sides — the lengths the tasks board's columns and cards
+     **The three columns divide the width of the board.** The three columns share
+     the board's width equally: all three carry the same width, and that width is an
+     equal share of what the board leaves once the gaps between the columns are
+     taken out, so the columns grow into whatever the viewport gives them instead of
+     leaving the space beside them empty. A column stands for a state and not for a
+     volume of work, so the three widths stay equal whatever number of tasks each
+     column holds: the width follows the viewport, never the data.
+
+     A column is never narrower than **17rem**, the width at which its cards stay
+     legible. When three columns at that minimum, plus the gaps between them, do not
+     fit the viewport, the columns keep the minimum and the column strip scrolls
+     horizontally inside its own container exactly as it does when the board is
+     wider than the viewport for any other reason, while `<body>` still produces no
+     horizontal overflow (see **Height and scrolling** above and
+     [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
+     rules 2 and 10).
+
+     The columns are separated by a **0.75rem** gap, and the body of a card carries
+     **0.75rem** of padding on all four sides. Those two lengths, together with the
+     `17rem` minimum above, are the lengths the tasks board's columns and cards
      already carry (see [Roadmap Tasks Page](#roadmap-tasks-page), **Column width
-     and card density**). The reuse is deliberate, not incidental. A column stands
-     for a state and not for a volume of work, so all three columns carry the same
-     width whatever number of tasks each holds, and none stretches to fill a
-     viewport wider than the board needs. And the columns of the two boards are the
-     same kind of object: a reader moving between the tasks page and a sprint page
-     should meet one column measure and one card measure, not two that differ for no
-     reason a reader could name. Every one of these lengths is expressed in `rem`,
-     so the column and the card scale with the reader's own text size.
+     and card density**). What the two boards no longer share is the column width
+     itself.
+
+     **Why the two boards differ here.** The five columns of the tasks board are
+     unchanged by this rule: each is **19rem** wide, never narrower than **17rem**,
+     and does not grow into a viewport wider than that board needs. Dividing a
+     viewport among five columns would leave each one narrow enough to hurt the
+     measure a card's title is read on, which is the length that board's fixed width
+     exists to protect; three columns dividing the same viewport are wide, not
+     narrow. The two boards are also read differently. The tasks board is a view of
+     a whole roadmap, and its column count is fixed by the task status enum rather
+     than by what is on screen, so the board has a natural width of its own and the
+     space beyond it is left empty. This board has three columns and is read as one
+     sprint at a glance, which is what makes filling the width the right shape for
+     it. The lengths that remain shared — the `17rem` minimum, the `0.75rem` gap,
+     and the `0.75rem` card body padding — stay shared, so a reader moving between
+     the tasks page and a sprint page still meets one card measure and one minimum
+     column.
+
+     Every one of these lengths is expressed in `rem`, so the minimum column and the
+     card scale with the reader's own text size.
 
      On a narrow viewport the board stays usable on the tasks board's terms: each
      column keeps the minimum width above, at which its cards remain legible, the
@@ -2281,7 +2366,13 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      no count limit.
    - **Card header.** A `card-header` with the card title `Comments` and a Tabler
      badge showing the number of comments, following the same header idiom the
-     member-tasks board's column headers use.
+     member-tasks board's column headers use. The idiom is shared; the colour is
+     not. This badge counts comments, and a comment carries no status of any kind,
+     so there is nothing for the semantic mapping to key on and the badge keeps the
+     neutral `bg-secondary-lt` variant while a column badge of the board above takes
+     the colour of the status its column groups (see
+     [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
+     rule 2, **The discriminating test**).
    - **What each entry shows.** For one comment, in order: its `type` as a badge,
      its `created_at` timestamp, its `updated_at` timestamp when that value is not
      null (marking the entry as edited), and its `body`.
@@ -3875,17 +3966,22 @@ Rules:
    (see [Task Detail Modal](#task-detail-modal)), the sprint cards (see
    [Shared Sprint-Card Partial](#shared-sprint-card-partial)), the Roadmap Sprint
    Page header and metadata datagrid (see [Roadmap Sprint Page](#roadmap-sprint-page)
-   and [Sprint Detail Sub-Template](#sprint-detail-sub-template)), and the sprint
-   tabs on the Roadmap Sprints Page (see [Roadmap Sprints Page](#roadmap-sprints-page)).
+   and [Sprint Detail Sub-Template](#sprint-detail-sub-template)), the sprint
+   tabs on the Roadmap Sprints Page (see [Roadmap Sprints Page](#roadmap-sprints-page)),
+   and the per-column count badge of each of the two Kanban boards (see
+   [Roadmap Tasks Page](#roadmap-tasks-page) and
+   [Sprint Detail Sub-Template](#sprint-detail-sub-template)).
    A badge that carries one of those values uses the variant the relevant table above
    assigns to it, and no such badge uses a single fixed colour across differing
    values.
 
    **A badge carries a value in one of two ways.** The mapping applies to both. The
-   second is a single named case, not a general licence:
+   second is a closed list of named cases, not a general licence; the test that
+   decides membership of that list is stated below it:
    - **The badge's own text is the value.** Every site listed above except the sprint
-     tabs is this case: the badge reads `COMPLETED`, `OPEN`, `7`, or `2`, and it takes
-     the colour the relevant table assigns to the value it carries. On the card of
+     tabs and the two boards' per-column count badges is this case: the badge reads
+     `COMPLETED`, `OPEN`, `7`, or `2`, and it takes the colour the relevant table
+     assigns to the value it carries. On the card of
      either board the priority and severity badges write that value behind a
      one-letter prefix — `P7`, `S2` — which names the field the value belongs to,
      because a card carries no label that would (see
@@ -3893,18 +3989,50 @@ Rules:
      the value alone and never on the prefix, so `P7` takes the colour of the
      priority `7`, and no band, no colour variant, and no enum value changes because
      of it.
-   - **The badge counts the members of a group that has one value.** The three sprint
-     tabs on the Roadmap Sprints Page are this case, and the only one in the
-     interface. Each tab groups the sprints of exactly one sprint status — Próximos
-     the `PENDING` sprints, Actual the `OPEN` sprints, Concluídos the `CLOSED` sprints
-     (see [Roadmap Sprints Page](#roadmap-sprints-page)) — so a tab has a sprint
-     status even though no sprint status is written on it. Its badge is a hybrid: the
-     **colour** is the variant the sprint status table above assigns to the status
-     that tab groups, while the **text** is the number of sprints in the tab.
-     Próximos therefore carries `bg-secondary-lt`, Actual carries `bg-blue-lt`, and
-     Concluídos carries `bg-green-lt`, each showing its own count. The count itself
+   - **The badge counts the members of a group with one status to key on.** Three
+     sites are this case: the three sprint tabs on the Roadmap Sprints Page, the
+     per-column count badge of the Roadmap Tasks Page's Kanban board, and the
+     per-column count badge of the sprint detail member-tasks board. Each such badge
+     is a hybrid: the **colour** is the variant the relevant table above assigns to
+     the status the counted group has, directly or through its canonical status,
+     while the **text** is the number of members in the group. The count itself
      selects no colour: it is not a value this mapping knows, and it adds no fourth
      badge kind.
+     - Each **sprint tab** groups the sprints of exactly one sprint status — Próximos
+       the `PENDING` sprints, Actual the `OPEN` sprints, Concluídos the `CLOSED`
+       sprints (see [Roadmap Sprints Page](#roadmap-sprints-page)) — so a tab has a
+       sprint status even though no sprint status is written on it. Próximos therefore
+       carries `bg-secondary-lt`, Actual carries `bg-blue-lt`, and Concluídos carries
+       `bg-green-lt`, each showing its own count.
+     - Each column of the **tasks board** is exactly one task status, because that
+       board has one column per `TaskStatus` value (see
+       [Roadmap Tasks Page](#roadmap-tasks-page)), so its count badge takes the
+       variant the task status table above assigns to that column's status.
+     - Each column of the **sprint board** groups a set of task statuses rather than a
+       single one — `WAITING` groups `BACKLOG` and `SPRINT`, `DOING` groups `DOING`
+       and `TESTING`, and `CLOSED` holds `COMPLETED` alone — so its count badge takes
+       the variant assigned to the **canonical status of the group**, the status a
+       task is normally in at that stage of the sprint: `SPRINT` for `WAITING`,
+       `DOING` for `DOING`, and `COMPLETED` for `CLOSED`. Why each group's canonical
+       status is the one named here is stated where that board is defined (see
+       [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Column header**).
+
+   **The discriminating test: has the counted group one status to key on?** The
+   mapping colours a count badge where the group it counts has one status value to key
+   on — whether the group has that status directly, as a sprint tab and a tasks board
+   column do, or through its canonical status, as a sprint board column does. Where
+   the counted group has no status at all, the badge stays neutral and this mapping
+   does not govern it.
+
+   Two count badges stay neutral under that test, and the rule above does not reach
+   either. The **Comments card header count** on the Roadmap Sprint Page counts
+   comments, and a comment carries no status of any kind (see
+   [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Comments card**), so
+   the tables above have nothing to key on and the badge carries the neutral
+   `bg-secondary-lt`. A count over a **group of mixed status for which no canonical
+   status is defined** stays neutral for the same reason: such a group has no one
+   status value, and colouring it would mean choosing a colour this mapping assigns to
+   nothing.
 
    **Read the three tab colours as a set, never one at a time.** `PENDING` maps to
    `bg-secondary-lt`, which is also the neutral variant a count badge carries when
@@ -3916,24 +4044,18 @@ Rules:
    and Concluídos carries `bg-green-lt`; a rendering that gives all three tabs
    `bg-secondary-lt` conforms on none of them.
 
+   The same trap sits on the tasks board, where `BACKLOG` maps to `bg-secondary-lt`:
+   that column's count badge renders identically whether the mapping colours it or
+   not, so the board's five column badges are read together and never one at a time.
+
    The mapping governs the colour of those three kinds of value only — task and
    sprint status, `priority`, and `severity` — whether the badge writes the value that
    colours it or counts a group that has that value. It governs no other badge. The
    comment-type badge shown in the task detail modal and the sprint Comments card is
    deliberately outside it and uses the neutral `bg-secondary-lt` variant for every
-   type value (see [Task Detail Modal](#task-detail-modal)). Every other count badge
-   in the interface is outside it as well — among them the per-column task-count badge
-   on the Roadmap Tasks Page (see [Roadmap Tasks Page](#roadmap-tasks-page)), the
-   per-column task-count badge on the sprint detail member-tasks board, and the
-   comment-count badge on the sprint Comments card (see
-   [Sprint Detail Sub-Template](#sprint-detail-sub-template)) — and each stays
-   governed by the section that defines it. The sprint board's column badge is
-   outside the mapping even though its column groups tasks by status, because a
-   column of that board groups **two** statuses rather than one — `WAITING` groups
-   `BACKLOG` and `SPRINT`, `DOING` groups `DOING` and `TESTING` — so the column has
-   no single status value for the table above to colour, and `CLOSED` is not made an
-   exception to the rule its two neighbours cannot follow. The sprint tabs remain the
-   one count badge this mapping colours.
+   type value (see [Task Detail Modal](#task-detail-modal)), and every count badge the
+   discriminating test leaves out is outside it as well and stays governed by the
+   section that defines it.
 3. **No new enum value.** The mapping introduces no status, priority, or severity
    value that is not already defined in `MODELS.md` and `STATE_MACHINE.md`. Should a
    new enum value or a revised band be introduced there, this table is updated in the
@@ -4105,12 +4227,13 @@ experience is the baseline that larger viewports enhance.
    scroll is reachable by a touch gesture, and the cards and their badges present
    touch-friendly hit targets that open the read-only task detail modal (see
    [Task Detail Modal](#task-detail-modal)). The board's height is `60vh` with a
-   floor read from the `--full-height-region-floor` custom property, and its
-   columns carry the tasks board's own `19rem` width, `17rem` minimum, and `0.75rem`
-   gap, so every length is viewport-relative or in `rem` and scales with the screen
-   and with the reader's own text size rather than fixing the layout to one device
-   (see [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Height and
-   scrolling**).
+   floor read from the `--full-height-region-floor` custom property. Its three
+   columns divide the board's width equally and grow with the viewport, never
+   falling below the tasks board's own `17rem` minimum and separated by that board's
+   `0.75rem` gap, so every length is viewport-relative or in `rem` and scales with
+   the screen and with the reader's own text size rather than fixing the layout to
+   one device (see [Sprint Detail Sub-Template](#sprint-detail-sub-template),
+   **Height and scrolling**).
 
 ## Error Handling and Exit Codes
 
@@ -4768,10 +4891,13 @@ Rules:
     it is shown — the priority and severity badges on the tasks page's board cards
     and on the cards of the sprint detail member-tasks board, the task
     detail modal, the sprint cards, the Roadmap Sprint Page header and metadata
-    datagrid, and the sprints-page tabs, where the colour is the variant of the status
+    datagrid, the sprints-page tabs, where the colour is the variant of the status
     the tab groups while the badge text is that tab's sprint count (Acceptance
-    Criterion 120) — and the mapping introduces no enum value beyond those defined in
-    `MODELS.md` and `STATE_MACHINE.md`.
+    Criterion 120), and the per-column count badge of each of the two Kanban boards,
+    where the colour is the variant of the status the column groups while the badge
+    text is that column's task count (Acceptance Criterion 140) — and the mapping
+    introduces no enum value beyond those defined in `MODELS.md` and
+    `STATE_MACHINE.md`.
 62. No template carries a presentational inline `style="..."` attribute: all styling
     is provided by vendored Tabler classes and utilities or by the project override
     stylesheet (`static/style.css`). In particular, the navigation sidebar's
@@ -4917,8 +5043,9 @@ Rules:
     preserves that relative order, so the cards of one column follow the same
     relative order the page's read returned, and the board applies no second sort of
     its own.
-85. Each board card shows, in order: a reference line carrying `#<id>` and the
-    task's `type` as muted text with no colour applied to the type; the task
+85. Each card of the roadmap tasks page's Kanban board shows, in order: a reference
+    line carrying `#<id>` and the task's `type` as muted text with no colour applied
+    to the type; the task
     `title` as the card's prominent main content; a `priority` badge reading `P`
     immediately followed by the task's priority and a `severity` badge reading `S`
     immediately followed by the task's severity, with no space and no separator
@@ -4935,8 +5062,11 @@ Rules:
     entries, and its number of comments. The card shows **no status badge**, because
     the column already states the status. An indicator whose value is absent, empty,
     or zero renders nothing at all — no dash and no placeholder — and a task with
-    none of the six indicators renders no metadata footer. The prefix belongs to the
-    board card and to nothing else: the same task's `priority` and `severity` in the
+    none of the six indicators renders no metadata footer. That absent-metadata rule
+    is this board's own: the card of the sprint's member-tasks board is not governed
+    by it and always renders both of its counters (Acceptance Criterion 134). The
+    prefix belongs to the board card and to nothing else: the same task's `priority`
+    and `severity` in the
     task detail modal render as the bare integer beside the field name that already
     names it (Acceptance Criterion 15 continues to hold), and the card's accessible
     name carries neither value and therefore carries no prefix (Acceptance Criterion
@@ -5559,12 +5689,16 @@ Rules:
     dependency counts. The task's full field set is reached through the task detail
     modal the card opens (see [Sprint Detail Sub-Template](#sprint-detail-sub-template)
     and [Task Detail Modal](#task-detail-modal)).
-134. On a card of the sprint's member-tasks board, a subtask count of `0` and a
-    comment count of `0` each render nothing at all — no icon, no number, no dash, no
-    placeholder, and no empty slot — and a task with neither renders no footer row.
-    The check asserts the absence of the indicator's markup, not merely the absence
-    of the digit `0`, because a rendering that prints an icon with nothing beside it
-    still occupies the space this criterion removes.
+134. Every card of the sprint's member-tasks board renders both of its counters: the
+    subtask count and the comment count are present on every card, including when
+    either or both are `0`, so a task with no subtask and no comment still shows the
+    subtask icon followed by `0` and the comment icon followed by `0`, and the footer
+    row is present on every card of the board. The check asserts a card whose two
+    counts are both zero, because a card that has something to count renders the same
+    markup whether this criterion holds or not. The card of the roadmap tasks page's
+    board is not governed by this criterion and keeps its own rule, under which an
+    indicator whose value is absent, empty, or zero renders nothing at all
+    (Acceptance Criterion 85 continues to hold).
 135. Selecting a card of the sprint's member-tasks board opens the read-only task
     detail modal for that task, and the card **is** the trigger: in the served HTML
     the card is a `<button type="button">`, activatable by pointer, touch, Enter, and
@@ -5617,24 +5751,64 @@ Rules:
     a change: the only button in the board is the card itself, and activating it
     opens the read-only modal. There is no route and no client-side path through
     which the board can write; the `rmp` CLI remains the sole write path.
-139. Each of the three columns of the sprint's member-tasks board is `19rem` wide
-    and never narrower than `17rem`, the columns are separated by a `0.75rem` gap,
-    all three carry the same width whatever number of tasks each holds, and none
-    stretches to fill a viewport wider than the board needs. The body of a task card
-    on that board carries `0.75rem` of padding on all four sides, which is strictly
-    less than the padding the vendored Tabler distribution declares for a small
+139. The three columns of the sprint's member-tasks board divide the width of the
+    board equally: all three carry the same width whatever number of tasks each
+    holds, and that width grows with the viewport, so widening the viewport widens
+    the three columns together and leaves no unused space beside them. No column is
+    ever narrower than `17rem`; when three columns at that minimum, plus the
+    `0.75rem` gaps between them, do not fit the viewport, the columns keep the
+    minimum and the column strip scrolls horizontally inside its own container while
+    `<body>` produces no horizontal overflow (Acceptance Criterion 27 continues to
+    hold). The check measures the columns at a viewport wide enough for the equal
+    division and again at one too narrow for it, because a board measured at one
+    width alone passes as readily on columns that never grow as on columns that
+    never stop growing. The body of a task card on that board carries `0.75rem` of
+    padding on all four sides, which is strictly less than the padding the vendored
+    Tabler distribution declares for a small
     card's body, and the project override stylesheet declares it in a rule of at
     least the specificity of Tabler's own, in the stylesheet the layout links last,
     so the override wins on the cascade with no `!important`. Every one of these
-    lengths is expressed in `rem`, and every one is the length the tasks board's
-    columns and cards already carry, so the check compares the two boards' values
-    and fails when they diverge: they are one measure used twice, not two measures
-    that happen to agree today (Acceptance Criterion 129 continues to hold). This is
-    a stylesheet change only: the board emits the same markup and the same classes,
-    carries no inline `style` attribute, and Acceptance Criteria 27, 130, and 136
+    lengths is expressed in `rem`. The five columns of the roadmap tasks page's board
+    are unchanged: each stays `19rem` wide with a `17rem` minimum and still does not
+    grow into a wider viewport (Acceptance Criterion 129 continues to hold). The two
+    boards' column widths are therefore deliberately not one value, and this
+    criterion no longer requires them to agree; what the two boards still share is
+    the `17rem` minimum, the `0.75rem` gap, and the `0.75rem` card body padding, and
+    the check compares those three across the two boards and fails when they diverge.
+    This is a stylesheet change only: the board emits the same markup and the same
+    classes, carries no inline `style` attribute, and Acceptance Criteria 27, 130,
+    and 136
     continue to hold (see
     [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Height and
     scrolling**).
+140. Each per-column count badge of the two Kanban boards carries the semantic colour
+    of the status its column groups, while its text stays that column's task count
+    (Acceptance Criteria 83 and 131 continue to hold). On the roadmap tasks page's
+    board a column is exactly one task status, so the badge takes that status's
+    variant: `BACKLOG` `bg-secondary-lt`, `SPRINT` `bg-cyan-lt`, `DOING`
+    `bg-blue-lt`, `TESTING` `bg-yellow-lt`, and `COMPLETED` `bg-green-lt`. On the
+    sprint's member-tasks board a column groups a set of statuses — two for `WAITING`
+    and for `DOING`, and `COMPLETED` alone for `CLOSED` — so the badge takes the
+    variant of the group's canonical status: `WAITING` carries `SPRINT`'s
+    `bg-cyan-lt`, `DOING` carries `DOING`'s `bg-blue-lt`, and `CLOSED` carries
+    `COMPLETED`'s `bg-green-lt`. A column holding no task shows the count `0` and
+    keeps the colour of its status, because the colour follows the column and not the
+    cards in it, and a narrowed board keeps each column's colour while its count
+    follows the narrowing (Acceptance Criteria 101 and 113 continue to hold). The
+    check asserts all the columns of a board together, exactly as Acceptance
+    Criterion 120 asserts the three tabs together: `BACKLOG` maps to
+    `bg-secondary-lt`, which is also the neutral colour a badge carries when nothing
+    colours it, so that column alone renders identically whether the mapping was
+    applied or not, and the check fails on a rendering that gives every column of
+    either board `bg-secondary-lt`. The check also asserts the two count badges that
+    stay neutral, because the boundary is what keeps this rule a rule rather than a
+    licence to colour any count: the Comments card header count on the Roadmap Sprint
+    Page carries `bg-secondary-lt`, because it counts comments and a comment has no
+    status to key on, and so does any count over a group of mixed status for which no
+    canonical status is defined. The mapping introduces no new colour and no new
+    band (Acceptance Criterion 61 continues to hold; see
+    [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
+    rule 2).
 
 ## See Also
 

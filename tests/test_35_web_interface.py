@@ -760,16 +760,54 @@ class TestWebInterface:
         assert m, "a board column carries no in-column empty state"
         return "hidden" not in m.group(1)
 
+    # The authoritative task-status colour mapping, written out from
+    # SPEC/WEB.md § Status, Priority, and Severity Badge Colours. Every
+    # per-column count badge of the two boards is coloured through it
+    # (Acceptance Criteria 61 and 140).
+    TASK_STATUS_BADGE = {
+        "BACKLOG": "bg-secondary-lt",
+        "SPRINT": "bg-cyan-lt",
+        "DOING": "bg-blue-lt",
+        "TESTING": "bg-yellow-lt",
+        "COMPLETED": "bg-green-lt",
+    }
+
+    # The canonical status of each column of the sprint's member-tasks board,
+    # in board order. A column there groups a SET of statuses and writes none of
+    # them, so its count badge takes the colour of the status a task is normally
+    # in at that stage of the sprint: SPRINT for WAITING (a BACKLOG task inside a
+    # sprint is the exceptional case), DOING for DOING, and COMPLETED for CLOSED,
+    # which holds that status alone (SPEC/WEB.md § Sprint Detail Sub-Template,
+    # rule 4, Column header; Acceptance Criterion 140).
+    SPRINT_BOARD_CANONICAL = {
+        "WAITING": "SPRINT",
+        "DOING": "DOING",
+        "CLOSED": "COMPLETED",
+    }
+
     @staticmethod
-    def _column_header(column):
-        """Return the (status, count) a column header shows."""
+    def _column_badge(column):
+        """Return the (heading, badge colour variant, count) a column header shows.
+
+        The variant is CAPTURED and not pinned here, because it is no longer one
+        value across the columns of a board: each column's badge carries the
+        semantic colour of the status it groups (Acceptance Criterion 140). A
+        pattern that still demanded bg-secondary-lt would match the BACKLOG
+        column alone and fail on every other one.
+        """
         m = re.search(
             r'<h3 class="card-title">([A-Z]+) '
-            r'<span class="badge bg-secondary-lt ms-2">(\d+)</span></h3>',
+            r'<span class="badge (bg-[a-z]+-lt) ms-2">(\d+)</span></h3>',
             column,
         )
         assert m, "a board column has no Tabler card-title header with a count badge"
-        return m.group(1), int(m.group(2))
+        return m.group(1), m.group(2), int(m.group(3))
+
+    @classmethod
+    def _column_header(cls, column):
+        """Return the (status, count) a column header shows."""
+        heading, _, count = cls._column_badge(column)
+        return heading, count
 
     def test_tasks_page_renders_the_kanban_board_read_only(self):
         """The tasks page renders every task of the roadmap as a Kanban board of
@@ -2984,13 +3022,22 @@ class TestWebInterface:
                 f"the sprint board's card must not render {absent!r}: {card}"
             )
 
-    def test_sprint_board_card_zero_counters_render_no_indicator_markup(self):
-        """AC134: a card whose task has zero subtasks and zero comments renders
-        no footer row at all — no icon, no number, no dash, no placeholder, and
-        no empty slot. The check asserts the ABSENCE of the indicator markup
-        itself, not merely the absence of the digit "0", because an icon
-        rendered with nothing beside it would still occupy the space this rule
-        removes.
+    def test_sprint_board_card_always_renders_both_counters(self):
+        """AC134: both counters are present on EVERY card of the member-tasks
+        board, including when the number they carry is 0, so the footer row is
+        present on every card and every card is the same shape.
+
+        The subject is a task with neither a subtask nor a comment, because that
+        is the only card the criterion discriminates on: a card that has
+        something to count renders the same markup whether the rule holds or
+        not. A second task, with two subtasks and one comment, is seeded beside
+        it so the two zeros cannot come from a footer that prints 0 whatever the
+        task holds.
+
+        Each counter is asserted as its whole indicator markup — the element that
+        names it, its icon, and its number — rather than as the digit alone: a
+        bare 0 with no icon, or an icon with nothing beside it, would satisfy a
+        check for the digit and state nothing to the reader.
         """
         roadmap = "device_enrolment_demo"
         self._run(["roadmap", "create", roadmap])
@@ -3004,19 +3051,333 @@ class TestWebInterface:
             "rotated key",
             priority=3, severity=2,
         )
+        counted = self.test.create_task(
+            roadmap,
+            "Publish the device-enrolment trust bundle to the CDN",
+            "Enrolled devices must fetch the trust bundle from the edge "
+            "rather than from the enrolment service",
+            "Sign the bundle and upload it to the CDN origin on each rotation",
+            "A freshly enrolled device validates its bundle from the CDN",
+            priority=6, severity=4,
+        )
+        for subtask in (
+            "Sign the trust bundle with the rotated enrolment key",
+            "Invalidate the CDN cache for the previous trust bundle",
+        ):
+            self._run(["task", "create", "-r", roadmap, "-t", subtask,
+                       "-fr", "The bundle publication must be verifiable step by step",
+                       "-tr", "Implement as part of the enrolment trust pipeline",
+                       "-ac", "The parent task's acceptance criteria are met",
+                       "--parent", str(counted)])
+        self._run(["task", "comment-add", "-r", roadmap, str(counted),
+                   "--type", "DECISION",
+                   "--body", "The bundle is served from the CDN origin, not "
+                             "from the enrolment service."])
+
         sprint_id = self.test.create_sprint(roadmap, "Device trust maintenance sprint")
-        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id), str(bare)])
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id),
+                   str(bare), str(counted)])
 
         proc, port = self._start(["--port", "0"])
         _, _, body = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
-        _, columns = self._sprint_board_columns(body)
-        card = self._sprint_board_card_html(columns[0], bare)
+        region, columns = self._sprint_board_columns(body)
 
-        for needle in ("ti-subtask", "ti-message", "task-card-meta"):
-            assert needle not in card, (
-                f"a task with no subtasks and no comments must render no "
-                f"{needle!r} at all — not even an empty container: {card}"
+        def counter(role, icon, n):
+            return (f'<span data-role="{role}"><i class="ti {icon} me-1">'
+                    f'</i>{n}</span>')
+
+        # The card with nothing to count still carries both counters, each
+        # showing 0, inside a footer row that is present.
+        card = self._sprint_board_card_html(columns[0], bare)
+        assert 'data-role="task-card-meta"' in card, (
+            f"a task with no subtasks and no comments must still render its "
+            f"counter footer: {card}"
+        )
+        for role, icon in (("task-card-subtasks", "ti-subtask"),
+                           ("task-card-comments", "ti-message")):
+            assert counter(role, icon, 0) in card, (
+                f"the card of a task with nothing to count must render "
+                f"{counter(role, icon, 0)!r}; a 0 states that the task has "
+                f"none, where an absent counter leaves the reader unable to "
+                f"tell 'no comments' from 'this card does not show "
+                f"comments': {card}"
             )
+        # And nothing stands in for the zero: no dash, no placeholder, no word.
+        for absent in ("&mdash;", "Subtasks:", "Comments:"):
+            assert absent not in card, (
+                f"the counter-free card renders {absent!r} instead of the "
+                f"number 0: {card}"
+            )
+
+        # The control: the second card's counters carry its own numbers, so the
+        # zeros above are the data and not a constant.
+        other = self._sprint_board_card_html(columns[0], counted)
+        assert counter("task-card-subtasks", "ti-subtask", 2) in other, (
+            f"the card of a task with two subtasks must render its own count: {other}"
+        )
+        assert counter("task-card-comments", "ti-message", 1) in other, (
+            f"the card of a commented task must render its own count: {other}"
+        )
+
+        # Every card of the board carries the row, which is the property the
+        # criterion is written for and which no single card can establish.
+        cards = region.count('<button type="button" class="card card-sm task-card')
+        assert cards == 2, f"the board renders {cards} cards, want the 2 seeded"
+        for role in ("task-card-meta", "task-card-subtasks", "task-card-comments"):
+            assert region.count(f'data-role="{role}"') == cards, (
+                f"the board renders {cards} cards and "
+                f"{region.count(f'data-role=\"{role}\"')} {role!r} elements; "
+                f"both counters are present on every card"
+            )
+
+    def test_board_column_count_badges_carry_the_colour_of_their_status(self):
+        """AC140: every per-column count badge of the TWO Kanban boards carries
+        the semantic colour of the status its column groups, while its text
+        stays that column's task count.
+
+        On the roadmap tasks page a column is exactly one task status, so its
+        badge takes that status's own variant. On the sprint's member-tasks
+        board a column groups a SET of statuses, so its badge takes the variant
+        of the group's canonical status: SPRINT's for WAITING, DOING's for
+        DOING, COMPLETED's for CLOSED.
+
+        Both boards are asserted COLUMN BY COLUMN AND AS A WHOLE, exactly as
+        AC120 asserts the three sprint tabs together. BACKLOG maps to
+        bg-secondary-lt, which is also the neutral colour a badge carries when
+        nothing colours it, so that one column renders identically whether the
+        mapping was applied or not: what separates a conforming rendering from a
+        non-conforming one is the other columns, and a rendering that gave every
+        column of either board bg-secondary-lt must fail. The distinct-variant
+        assertions below are that control.
+        """
+        roadmap = "settlement_recon_demo"
+        self._run(["roadmap", "create", roadmap])
+
+        def task(title, priority, severity):
+            return self.test.create_task(
+                roadmap, title,
+                "Every acquirer settlement file must reconcile against the "
+                "ledger before the books close",
+                "Match settlement lines to ledger entries and raise a break "
+                "for any residual",
+                "A settlement file with no residual closes without manual work",
+                priority=priority, severity=severity,
+            )
+
+        t_backlog = task("Document the settlement break escalation path", 3, 2)
+        t_sprint = task("Match settlement lines against ledger entries", 8, 6)
+        t_doing = task("Publish the daily reconciliation dashboard", 5, 3)
+        t_testing = task("Replay a month of settlement files in staging", 6, 4)
+        t_completed = task("Version the settlement export schema", 4, 2)
+        all_ids = [t_backlog, t_sprint, t_doing, t_testing, t_completed]
+
+        sprint_id = self.test.create_sprint(roadmap, "Settlement reconciliation sprint")
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id)]
+                  + [str(i) for i in all_ids])
+        self._run(["sprint", "start", "-r", roadmap, str(sprint_id)])
+
+        self._run(["task", "stat", "-r", roadmap, str(t_backlog), "BACKLOG"])
+        self._run(["task", "stat", "-r", roadmap, str(t_doing), "DOING"])
+        self._run(["task", "stat", "-r", roadmap, str(t_testing), "DOING"])
+        self._run(["task", "stat", "-r", roadmap, str(t_testing), "TESTING"])
+        self._run(["task", "stat", "-r", roadmap, str(t_completed), "DOING"])
+        self._run(["task", "stat", "-r", roadmap, str(t_completed), "TESTING"])
+        self._run(["task", "stat", "-r", roadmap, str(t_completed), "COMPLETED"])
+
+        proc, port = self._start(["--port", "0"])
+
+        # ---- the tasks board: one status per column ----
+        status_code, _, tasks_body = self._req(port, f"/roadmaps/{roadmap}/tasks")
+        assert status_code == 200
+        _, tasks_columns = self._board_columns(tasks_body)
+        assert len(tasks_columns) == 5
+
+        tasks_variants = set()
+        for column, want_status in zip(tasks_columns, self.BOARD_COLUMNS):
+            heading, variant, count = self._column_badge(column)
+            tasks_variants.add(variant)
+            assert heading == want_status, (
+                f"the tasks board's column reads {heading!r}, want {want_status!r}"
+            )
+            want = self.TASK_STATUS_BADGE[want_status]
+            assert variant == want, (
+                f"the tasks board's {heading} column carries the count badge "
+                f"variant {variant!r}, want {want!r} — the variant the semantic "
+                f"mapping assigns to that column's own status (AC140)"
+            )
+            assert count == 1, (
+                f"the {heading} column shows the count {count}, want 1; the "
+                f"colour changes the badge's variant and nothing about its text"
+            )
+        assert len(tasks_variants) == 5, (
+            f"the tasks board's five column badges carry {len(tasks_variants)} "
+            f"distinct variant(s) ({sorted(tasks_variants)}); the five statuses "
+            f"map to five different colours, so fewer means the mapping was not "
+            f"applied — and a board that gave every column bg-secondary-lt "
+            f"conforms on none of them"
+        )
+
+        # ---- the sprint board: a set of statuses per column ----
+        status_code, _, sprint_body = self._req(
+            port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
+        assert status_code == 200
+        _, sprint_columns = self._sprint_board_columns(sprint_body)
+
+        sprint_variants = set()
+        for column, heading_want in zip(sprint_columns, self.SPRINT_BOARD_COLUMNS):
+            heading, variant, count = self._column_badge(column)
+            sprint_variants.add(variant)
+            assert heading == heading_want, (
+                f"the sprint board's column reads {heading!r}, want {heading_want!r}"
+            )
+            canonical = self.SPRINT_BOARD_CANONICAL[heading_want]
+            want = self.TASK_STATUS_BADGE[canonical]
+            assert variant == want, (
+                f"the sprint board's {heading} column carries the count badge "
+                f"variant {variant!r}, want {want!r} — the variant assigned to "
+                f"{canonical}, the canonical status of the group this column "
+                f"holds (AC140)"
+            )
+        assert len(sprint_variants) == 3, (
+            f"the sprint board's three column badges carry "
+            f"{len(sprint_variants)} distinct variant(s) "
+            f"({sorted(sprint_variants)}), want 3; the three canonical statuses "
+            f"are three different statuses"
+        )
+
+        # The two boards agree where they overlap: the DOING column names the
+        # same status on both, so it must carry the same colour on both.
+        _, doing_on_tasks, _ = self._column_badge(tasks_columns[2])
+        _, doing_on_sprint, _ = self._column_badge(sprint_columns[1])
+        assert doing_on_tasks == doing_on_sprint, (
+            f"the DOING column carries {doing_on_tasks!r} on the tasks board "
+            f"and {doing_on_sprint!r} on the sprint board; both name one status "
+            f"and both read one mapping"
+        )
+
+        # A narrowed board keeps every column's colour while its counts follow
+        # the narrowing (AC101 and AC113 continue to hold).
+        _, _, narrowed_body = self._req(
+            port, f"/roadmaps/{roadmap}/tasks?q=settlement")
+        _, narrowed_columns = self._board_columns(narrowed_body)
+        narrowed_total = 0
+        for column, want_status in zip(narrowed_columns, self.BOARD_COLUMNS):
+            heading, variant, count = self._column_badge(column)
+            narrowed_total += count
+            assert variant == self.TASK_STATUS_BADGE[want_status], (
+                f"the narrowed board's {heading} column carries {variant!r}, "
+                f"want {self.TASK_STATUS_BADGE[want_status]!r}; narrowing "
+                f"changes what a column counts, never what it stands for"
+            )
+        assert 0 < narrowed_total < 5, (
+            f"the search left {narrowed_total} of 5 tasks showing; it must "
+            f"narrow the board without emptying it for the assertion above to "
+            f"be about a narrowed board at all"
+        )
+
+    def test_board_column_count_badge_keeps_its_colour_when_the_column_is_empty(self):
+        """AC140: a column holding no task shows the count 0 and keeps the
+        colour of its status, because the colour follows the COLUMN and not the
+        cards in it.
+
+        Both boards are checked with nothing in them at all — a roadmap with no
+        task and a sprint with no member task — so every column of both is empty
+        and there is no card anywhere for a colour to be read from.
+        """
+        roadmap = "clearing_house_empty_demo"
+        self._run(["roadmap", "create", roadmap])
+        sprint_id = self.test.create_sprint(roadmap, "Clearing window readiness sprint")
+
+        proc, port = self._start(["--port", "0"])
+
+        _, _, tasks_body = self._req(port, f"/roadmaps/{roadmap}/tasks")
+        _, tasks_columns = self._board_columns(tasks_body)
+        for column, want_status in zip(tasks_columns, self.BOARD_COLUMNS):
+            heading, variant, count = self._column_badge(column)
+            assert count == 0, (
+                f"the {heading} column of an empty roadmap shows {count}, want 0"
+            )
+            assert variant == self.TASK_STATUS_BADGE[want_status], (
+                f"the empty {heading} column carries {variant!r}, want "
+                f"{self.TASK_STATUS_BADGE[want_status]!r}; the colour follows "
+                f"the column and not the cards in it"
+            )
+
+        _, _, sprint_body = self._req(
+            port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
+        _, sprint_columns = self._sprint_board_columns(sprint_body)
+        for column, heading_want in zip(sprint_columns, self.SPRINT_BOARD_COLUMNS):
+            heading, variant, count = self._column_badge(column)
+            canonical = self.SPRINT_BOARD_CANONICAL[heading_want]
+            assert count == 0, (
+                f"the {heading} column of an empty sprint shows {count}, want 0"
+            )
+            assert variant == self.TASK_STATUS_BADGE[canonical], (
+                f"the empty {heading} column carries {variant!r}, want "
+                f"{self.TASK_STATUS_BADGE[canonical]!r}; a column holding no "
+                f"task keeps the colour of the status it groups"
+            )
+
+    def test_sprint_page_comments_badge_stays_neutral_beside_a_coloured_board(self):
+        """AC140: the boundary of the rule. The Comments card header count on
+        the Roadmap Sprint Page counts comments, and a comment carries no status
+        of any kind, so the semantic mapping has nothing to key on and the badge
+        keeps the neutral bg-secondary-lt.
+
+        It is asserted on the SAME page that carries the coloured board, because
+        that is where the distinction lives: the column badges above the card are
+        coloured by the status they group, and the card's own count badge below
+        them is not. Without the control that at least one column badge on that
+        page is NOT neutral, a page on which nothing was coloured at all would
+        pass this test.
+        """
+        roadmap = "cross_border_payouts_demo"
+        self._run(["roadmap", "create", roadmap])
+        member = self.test.create_task(
+            roadmap,
+            "Route payouts through the local clearing scheme where available",
+            "Cross-border payouts must use a local scheme when the corridor "
+            "supports one, and fall back to correspondent banking otherwise",
+            "Select the rail per corridor from the scheme availability table",
+            "A payout to a supported corridor never leaves through "
+            "correspondent banking",
+            priority=7, severity=5,
+        )
+        sprint_id = self.test.create_sprint(roadmap, "Payout corridor coverage sprint")
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id), str(member)])
+        self._run(["sprint", "comment-add", "-r", roadmap, str(sprint_id),
+                   "--type", "DECISION",
+                   "--body", "Corridors without a local scheme keep the "
+                             "correspondent rail until Q3."])
+
+        proc, port = self._start(["--port", "0"])
+        _, _, body = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
+
+        m = re.search(
+            r'<h3 class="card-title">Comments '
+            r'<span class="badge (bg-[a-z]+-lt) ms-2">(\d+)</span></h3>',
+            body,
+        )
+        assert m, "the Comments card carries no count badge in the shared header idiom"
+        assert m.group(1) == "bg-secondary-lt", (
+            f"the Comments card's count badge carries {m.group(1)!r}, want the "
+            f"neutral 'bg-secondary-lt'; it counts comments, and a comment has "
+            f"no status for the semantic mapping to key on (SPEC/WEB.md "
+            f"§ Status, Priority, and Severity Badge Colours, rule 2, The "
+            f"discriminating test)"
+        )
+        assert m.group(2) == "1", (
+            f"the Comments badge counts {m.group(2)}, want the sprint's 1 comment"
+        )
+
+        # The control: the board above it on the same page IS coloured.
+        _, columns = self._sprint_board_columns(body)
+        variants = {self._column_badge(c)[1] for c in columns}
+        assert variants - {"bg-secondary-lt"}, (
+            f"no column badge on this page carries a variant other than "
+            f"bg-secondary-lt ({sorted(variants)}), so the Comments card "
+            f"looking neutral says nothing about the boundary under test"
+        )
 
     def test_sprint_board_empty_sprint_renders_all_three_columns_empty(self):
         """AC130: a sprint with no member task renders the member-tasks board

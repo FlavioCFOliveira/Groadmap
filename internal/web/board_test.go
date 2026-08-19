@@ -249,23 +249,38 @@ func boardColumns(t *testing.T, body string) []string {
 	return parts[1:]
 }
 
-// reColumnHeader captures a column's status name and the count its badge shows.
+// reColumnHeader captures a column's heading, the Tabler colour variant its count
+// badge carries, and the count itself.
+//
+// The variant is captured rather than pinned, because it is no longer one value
+// across the columns of a board: each column's badge carries the semantic colour
+// of the status it groups (Acceptance Criterion 140). A regexp that still demanded
+// bg-secondary-lt would match the BACKLOG column alone and fail on the other four.
 var reColumnHeader = regexp.MustCompile(
-	`<h3 class="card-title">([A-Z]+) <span class="badge bg-secondary-lt ms-2">(\d+)</span></h3>`)
+	`<h3 class="card-title">([A-Z]+) <span class="badge (bg-[a-z]+-lt) ms-2">(\d+)</span></h3>`)
 
-// columnHeader returns the status name and the count badge of one column.
+// columnHeader returns the heading and the count badge of one column.
 func columnHeader(t *testing.T, column string) (status string, count int) {
+	t.Helper()
+
+	status, _, count = columnBadge(t, column)
+	return status, count
+}
+
+// columnBadge returns the heading, the badge colour variant, and the count of one
+// column of either board, which is what the colour guards assert over.
+func columnBadge(t *testing.T, column string) (heading, variant string, count int) {
 	t.Helper()
 
 	m := reColumnHeader.FindStringSubmatch(column)
 	if m == nil {
 		t.Fatalf("a board column has no Tabler card-title header with a count badge")
 	}
-	n, err := strconv.Atoi(m[2])
+	n, err := strconv.Atoi(m[3])
 	if err != nil {
-		t.Fatalf("column %s: count badge %q is not a number: %v", m[1], m[2], err)
+		t.Fatalf("column %s: count badge %q is not a number: %v", m[1], m[3], err)
 	}
-	return m[1], n
+	return m[1], m[2], n
 }
 
 // cardMarker is the attribute that identifies the card of one task: the task id

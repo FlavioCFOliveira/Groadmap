@@ -16,7 +16,8 @@ import (
 // identity between the column counts and the sprint status summary line, the
 // card's content, the board's bounded height, and the page's comment read cost
 // (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4; Acceptance Criteria 130 to
-// 139).
+// 140). The COLOUR of each column's count badge is guarded separately, together
+// with the tasks board's, in board_column_badge_test.go.
 //
 // It replaces the assertions that pinned the six-column member-tasks table the
 // board supersedes: the page renders no table at all any more, so a test written
@@ -44,12 +45,16 @@ type sprintBoardFixture struct {
 
 	// The member tasks, in sprint_tasks POSITION order (1 to 6). Neither the id
 	// order nor the priority order matches it; see seedSprintBoardFixture.
-	runbook   int // BACKLOG   -> WAITING. No subtask, no comment: no card footer.
-	reconcile int // SPRINT    -> WAITING. 2 subtasks, 3 comments, both counters.
-	dashboard int // DOING     -> DOING.   No subtask, no comment: no card footer.
-	retries   int // TESTING   -> DOING.   1 subtask, no comment: one counter.
-	alerting  int // SPRINT    -> WAITING. No subtask, 2 comments: one counter.
-	schema    int // COMPLETED -> CLOSED.  No subtask, no comment: no card footer.
+	// The counters noted here are the numbers the cards must SHOW. Every card of
+	// this board renders both, including the zeros, so the interesting cases are
+	// the card with two zeros and the two cards carrying one real number beside
+	// one zero (Acceptance Criterion 134).
+	runbook   int // BACKLOG   -> WAITING. 0 subtasks, 0 comments.
+	reconcile int // SPRINT    -> WAITING. 2 subtasks, 3 comments.
+	dashboard int // DOING     -> DOING.   0 subtasks, 0 comments.
+	retries   int // TESTING   -> DOING.   1 subtask,  0 comments.
+	alerting  int // SPRINT    -> WAITING. 0 subtasks, 2 comments.
+	schema    int // COMPLETED -> CLOSED.  0 subtasks, 0 comments.
 }
 
 // wantColumns is the placement the fixture must produce, per column heading, in
@@ -784,40 +789,57 @@ func TestSprintBoard_CardShowsSixDataPointsInOrder(t *testing.T) {
 	}
 }
 
-// TestSprintBoard_ZeroCountersRenderNothing is the gate for Acceptance Criterion
-// 134: a subtask count of 0 and a comment count of 0 each render nothing at all —
-// no icon, no number, no dash, no placeholder, no empty slot — and a task with
-// neither renders no footer row.
+// TestSprintBoard_BothCountersAlwaysRender is the gate for Acceptance Criterion
+// 134: the subtask count and the comment count are present on EVERY card of this
+// board, including when either or both are `0`, so the footer row is present on
+// every card the board renders.
 //
-// Every absence is asserted against the INDICATOR'S MARKUP, not against the digit
-// `0`: a rendering that printed an icon with nothing beside it would still occupy
-// the space this criterion removes, and a check for the digit alone would accept
-// it.
-func TestSprintBoard_ZeroCountersRenderNothing(t *testing.T) {
+// The subject is the card whose two counts are both zero, because that is the only
+// card the criterion discriminates on: a card that has something to count renders
+// the same markup whether the rule holds or not. The runbook task carries neither
+// a subtask nor a comment, and the two mixed cards below keep the zero from being
+// produced by a footer that simply prints two zeros whatever the task holds.
+//
+// The counters are asserted as their whole INDICATOR MARKUP — the icon followed by
+// the number, inside the element that names it — and not as the digit alone: a
+// rendering that printed an icon with nothing beside it, or a bare `0` with no
+// icon, would satisfy a check for the digit and state nothing to the reader.
+func TestSprintBoard_BothCountersAlwaysRender(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	f := seedSprintBoardFixture(t, "settlement-platform")
 	mux := buildMux()
 
 	columns := memberBoardColumns(t, servePage(t, mux, f.path()))
 
-	const (
-		subtaskIcon = "ti ti-subtask"
-		commentIcon = "ti ti-message"
-	)
-
-	// A task with neither counter renders no footer element at all: the runbook
+	// A task with NEITHER counter still renders both, each showing 0: the runbook
 	// task has no subtask and no comment.
 	bare := cardSlice(t, columns[0], f.runbook)
-	if strings.Contains(bare, `data-role="task-card-meta"`) {
-		t.Errorf("a member task with no subtask and no comment renders a counter footer\ncard: %s", bare)
+	if !strings.Contains(bare, `data-role="task-card-meta"`) {
+		t.Errorf("a member task with no subtask and no comment renders no counter footer; the "+
+			"footer row is present on every card of this board (Acceptance Criterion 134)"+
+			"\ncard: %s", bare)
 	}
-	for _, absent := range []string{subtaskIcon, commentIcon, "&mdash;", "None", "Subtasks:", "Comments:"} {
-		if strings.Contains(bare, absent) {
-			t.Errorf("a member task with no counter renders %q on its card\ncard: %s", absent, bare)
+	for what, want := range map[string]string{
+		"subtask counter": counterMarkup("task-card-subtasks", "ti ti-subtask", 0),
+		"comment counter": counterMarkup("task-card-comments", "ti ti-message", 0),
+	} {
+		if !strings.Contains(bare, want) {
+			t.Errorf("the card of a task with nothing to count does not render its %s as %q; a 0 "+
+				"STATES that the task has none, where an absent counter leaves the reader "+
+				"unable to tell \"no comments\" from \"this card does not show comments\""+
+				"\ncard: %s", what, want, bare)
 		}
 	}
-	// The card itself is still a full card: what is absent is the indicators, not
-	// the task.
+	// The zero is the counter's own text and nothing else stands in for it: no
+	// dash, no placeholder, no word.
+	for _, absent := range []string{"&mdash;", "None", "Subtasks:", "Comments:"} {
+		if strings.Contains(bare, absent) {
+			t.Errorf("a member task with no counter renders %q on its card; the counter shows the "+
+				"number 0 and nothing else\ncard: %s", absent, bare)
+		}
+	}
+	// The card itself is still a full card: what the criterion adds is the two
+	// zeros, not a card reduced to them.
 	if !strings.Contains(bare, sprintTaskRunbook) {
 		t.Errorf("the counter-free card lost its title\ncard: %s", bare)
 	}
@@ -826,28 +848,65 @@ func TestSprintBoard_ZeroCountersRenderNothing(t *testing.T) {
 			"card's counters\ncard: %s", bare)
 	}
 
-	// A task with ONE counter renders that one and no slot for the other: the
-	// retries task has one subtask and no comment.
-	subtaskOnly := metaFooter(t, cardSlice(t, columns[1], f.retries))
-	if !strings.Contains(subtaskOnly,
-		`<span data-role="task-card-subtasks"><i class="`+subtaskIcon+` me-1"></i>1</span>`) {
-		t.Errorf("the card of a task with one subtask does not show its subtask count\nfooter: %s",
-			subtaskOnly)
-	}
-	if strings.Contains(subtaskOnly, commentIcon) || strings.Contains(subtaskOnly, "task-card-comments") {
-		t.Errorf("the card of a task with no comment renders a comment indicator\nfooter: %s", subtaskOnly)
+	// The two mixed cards, which are what keep the assertion above from passing on
+	// a board that prints "0" for every counter of every card. The retries task has
+	// one subtask and no comment; the alerting task has two comments and no
+	// subtask. Each renders one real number beside one zero, and the two are
+	// mirror images, so a footer indifferent to the data fails on both.
+	for _, tc := range []struct {
+		what     string
+		taskID   int
+		column   int
+		subtasks int
+		comments int
+	}{
+		{"one subtask and no comment", f.retries, 1, 1, 0},
+		{"no subtask and two comments", f.alerting, 0, 0, 2},
+	} {
+		footer := metaFooter(t, cardSlice(t, columns[tc.column], tc.taskID))
+		for what, want := range map[string]string{
+			"subtask counter": counterMarkup("task-card-subtasks", "ti ti-subtask", tc.subtasks),
+			"comment counter": counterMarkup("task-card-comments", "ti ti-message", tc.comments),
+		} {
+			if !strings.Contains(footer, want) {
+				t.Errorf("the card of a task with %s does not render its %s as %q; both counters "+
+					"are rendered on every card and each carries its own number"+
+					"\nfooter: %s", tc.what, what, want, footer)
+			}
+		}
 	}
 
-	// And the mirror image, so neither absence can come from a footer that simply
-	// omits everything: the alerting task has two comments and no subtask.
-	commentOnly := metaFooter(t, cardSlice(t, columns[0], f.alerting))
-	if !strings.Contains(commentOnly,
-		`<span data-role="task-card-comments"><i class="`+commentIcon+` me-1"></i>2</span>`) {
-		t.Errorf("the card of a commented task does not show its comment count\nfooter: %s", commentOnly)
+	// And every card of the board carries the row, so the shape is the same one
+	// whatever the sprint holds — the property the criterion is written for, which
+	// no single card can establish on its own.
+	region := memberBoardRegion(t, servePage(t, mux, f.path()))
+	cards := strings.Count(region, cardOpen)
+	footers := strings.Count(region, `data-role="task-card-meta"`)
+	if cards != 6 {
+		t.Fatalf("the board renders %d cards, want the fixture's 6; the count below would be "+
+			"measured against the wrong number", cards)
 	}
-	if strings.Contains(commentOnly, subtaskIcon) || strings.Contains(commentOnly, "task-card-subtasks") {
-		t.Errorf("the card of a task with no subtask renders a subtask indicator\nfooter: %s", commentOnly)
+	if footers != cards {
+		t.Errorf("the board renders %d cards and %d counter footers; every card of this board "+
+			"carries one (Acceptance Criterion 134)", cards, footers)
 	}
+	for _, role := range []string{"task-card-subtasks", "task-card-comments"} {
+		if got := strings.Count(region, `data-role="`+role+`"`); got != cards {
+			t.Errorf("the board renders %d cards and %d %s indicators; both counters are present "+
+				"on every card", cards, got, role)
+		}
+	}
+}
+
+// counterMarkup is the whole indicator markup of one counter on a sprint board
+// card: the element that names it, the icon, and the number.
+//
+// It is built here rather than written out at each assertion so that a check for
+// "the counter reads 0" cannot degrade into a check for the digit 0 appearing
+// somewhere in the card, which the priority and severity badges alone would
+// satisfy on most fixtures.
+func counterMarkup(role, icon string, n int) string {
+	return `<span data-role="` + role + `"><i class="` + icon + ` me-1"></i>` + itoa(n) + `</span>`
 }
 
 // ==================== READ-ONLY ====================

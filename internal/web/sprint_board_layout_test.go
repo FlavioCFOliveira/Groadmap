@@ -8,20 +8,30 @@ import (
 
 // The guards in this file cover the LAYOUT half of the Roadmap Sprint Page's
 // member-tasks board: its bounded height and per-column scrolling (Acceptance
-// Criterion 136), and the fact that its column and card lengths are the tasks
-// board's own lengths reused rather than a second set that happens to agree today
-// (Acceptance Criterion 139).
+// Criterion 136), its three columns dividing the board's width equally instead of
+// carrying the tasks board's fixed column width, and the three lengths the two
+// boards do still share — the 17rem minimum column, the 0.75rem gap, and the
+// 0.75rem card body padding (Acceptance Criterion 139).
+//
+// The two boards' column widths are deliberately NOT one value. A board of three
+// columns read as one sprint at a glance fills the width it is given; a board of
+// five columns that is a view of a whole roadmap has a natural width of its own,
+// and dividing a viewport among five would cut the measure a card's title is read
+// on. So the guards below assert the SPLIT as carefully as they used to assert the
+// agreement: what each board carries alone, and what neither may restate.
 //
 // What these guards can and cannot establish. There is no browser in the Go suite
 // and SPEC/BUILD.md rules out a JavaScript toolchain, so nothing here measures a
-// rendered board: whether 60vh presents a useful number of cards is judged against
-// a running server. What IS checkable hermetically is the mechanism those
-// measurements depend on, in the exact bytes the binary serves — that the board
-// declares the specified height, that it reads its floor from the one place the
-// length is written, that the property resolves on a page carrying no full-height
-// shell, that each column scrolls its own cards, and that both boards resolve to
-// one rule for every shared length. A stylesheet satisfying all of that can still
-// measure badly; one failing any of it cannot measure well.
+// rendered board: whether 60vh presents a useful number of cards, and whether three
+// divided columns are comfortable at a given width, are judged against a running
+// server. What IS checkable hermetically is the mechanism those measurements depend
+// on, in the exact bytes the binary serves — that the board declares the specified
+// height, that it reads its floor from the one place the length is written, that
+// the property resolves on a page carrying no full-height shell, that each column
+// scrolls its own cards, that the three columns are sized to divide and floored so
+// they cannot divide away to nothing, and that both boards resolve to one rule for
+// every length they share. A stylesheet satisfying all of that can still measure
+// badly; one failing any of it cannot measure well.
 
 // TestSprintBoard_HeightIsBoundedAndFlooredByTheSharedProperty is the gate for the
 // height half of Acceptance Criterion 136: the board's height is 60vh in the
@@ -225,24 +235,130 @@ func TestSprintBoard_IsNotAFullHeightRegion(t *testing.T) {
 	}
 }
 
-// TestSprintBoard_ReusesTheTasksBoardColumnAndCardLengths is the gate for
-// Acceptance Criterion 139: each of the three columns is 19rem wide and never
-// narrower than 17rem, the columns are separated by a 0.75rem gap, the body of a
-// card carries 0.75rem of padding on all four sides — and every one of those is
-// the length the tasks board's columns and cards already carry.
+// TestSprintBoard_ColumnsDivideTheBoardWidthEqually is the gate for the first
+// half of Acceptance Criterion 139: the board's three columns divide its width
+// equally, all three carry the same width whatever number of tasks each holds,
+// that width grows with the viewport and leaves no unused space beside them, and
+// no column is ever narrower than 17rem.
 //
-// The criterion requires the check to compare the TWO BOARDS' values and to fail
-// when they diverge, so the comparison is made where divergence would actually
-// happen: the classes each board's markup emits. Both boards select the same
-// rules, so the lengths are literally one measure used twice; a board that grew a
-// column class of its own would resolve to a different rule and fail here, however
-// closely the two rules' values agreed on the day it was written.
+// The criterion asks for the columns to be measured at a viewport wide enough for
+// the equal division and again at one too narrow for it, "because a board measured
+// at one width alone passes as readily on columns that never grow as on columns
+// that never stop growing". There is no browser in the Go suite, so what is
+// asserted here is the MECHANISM those two measurements would read, in the exact
+// bytes the binary serves, and it is asserted at both ends deliberately:
 //
-// The values themselves are pinned as well, because the criterion fixes them, and
-// soleCSSRule refuses a second unconditional rule for any of these selectors — a
-// property asserted on one of two rules for one selector proves nothing about what
-// the browser applies.
-func TestSprintBoard_ReusesTheTasksBoardColumnAndCardLengths(t *testing.T) {
+//   - the wide end is `flex: 1 1 0` — a flex basis of zero and a positive grow
+//     factor, declared once for all three columns, which is what makes the three
+//     shares equal and makes them absorb everything the board leaves once the gaps
+//     are taken out. A basis of `auto` would size each column to its cards and a
+//     grow factor of `0` would leave the space beside them empty;
+//   - the narrow end is `min-width: 17rem` on the shared rule, a floor the flex
+//     layout may not shrink past, together with `overflow-x: auto` on the board,
+//     which is what turns the excess into the strip's own scroll rather than into
+//     narrower columns or a scrolling `<body>`.
+//
+// A stylesheet satisfying both can still measure badly in a browser; one failing
+// either cannot measure well at the end it fails.
+func TestSprintBoard_ColumnsDivideTheBoardWidthEqually(t *testing.T) {
+	sheet := projectStyleSheet(t)
+
+	const overrideSelector = ".task-board--bounded > .task-board__column"
+	override := soleCSSRule(t, sheet, overrideSelector)
+
+	// The wide end: one rule, so one flex sizing for all three columns — equal by
+	// construction rather than by three values that happen to agree.
+	grow, shrink, basis := cssFlexShorthand(t, override, overrideSelector)
+	if grow == "0" {
+		t.Errorf("%s declares flex-grow %q; a column that does not grow leaves the space beside "+
+			"the three empty instead of dividing the board's width (Acceptance Criterion 139)",
+			overrideSelector, grow)
+	}
+	if !isCSSZeroLength(basis) {
+		t.Errorf("%s declares flex-basis %q, want a zero basis; a basis of `auto` sizes each "+
+			"column to its own cards, so the three widths would follow the data instead of "+
+			"the viewport", overrideSelector, basis)
+	}
+	if shrink == "" {
+		t.Errorf("%s declares no flex-shrink; the shorthand states all three factors so the "+
+			"column's sizing is not half inherited from the rule it overrides", overrideSelector)
+	}
+
+	// And it does not carry the tasks board's fixed width, in either of the two
+	// ways it could: not in this rule, and not by leaving the 19rem of the rule it
+	// overrides standing in the cascade.
+	if got := cssDeclarations(override, "width"); len(got) != 1 || got[0] != "auto" {
+		t.Errorf("%s declares width: %v, want exactly %q; the tasks board's 19rem is what this "+
+			"rule exists to override, and a flex item that stopped being one would apply it",
+			overrideSelector, got, "auto")
+	}
+
+	// The narrow end: the floor, and the container that scrolls once the floor
+	// stops the columns from shrinking any further.
+	column := soleCSSRule(t, sheet, ".task-board__column")
+	if got := cssDeclarations(column, "min-width"); len(got) != 1 || got[0] != "17rem" {
+		t.Errorf(".task-board__column declares min-width: %v, want exactly %q; it is the width "+
+			"below which a card's text stops being legible, and it floors the division above",
+			got, "17rem")
+	}
+	board := soleCSSRule(t, sheet, ".task-board")
+	if got := cssDeclarations(board, "overflow-x"); len(got) != 1 || got[0] != "auto" {
+		t.Errorf(".task-board declares overflow-x: %v, want exactly %q; at the floor the excess "+
+			"has to become the STRIP's scroll, or it becomes the page's (Acceptance Criteria 27 "+
+			"and 139)", got, "auto")
+	}
+
+	// The override restates none of the lengths the two boards share. Restating one
+	// would be a second copy free to be changed on its own, and the boards would
+	// then meet at a different minimum column, gap, or card measure.
+	for _, shared := range []string{"min-width", "gap", "padding"} {
+		if got := cssDeclarations(override, shared); len(got) != 0 {
+			t.Errorf("%s declares %s: %v; that length is shared by both boards and is declared "+
+				"once, on the rule this one overrides — a second copy is a copy that can be "+
+				"changed on its own", overrideSelector, shared, got)
+		}
+	}
+
+	// It wins the cascade on its own terms: it is the more specific selector AND
+	// the later rule, so no !important is needed and none is used.
+	base := cssRulePositions(sheet, ".task-board__column")
+	after := cssRulePositions(sheet, overrideSelector)
+	if len(base) != 1 || len(after) != 1 {
+		t.Fatalf("the sheet carries %d rules for %q and %d for %q, want exactly one of each",
+			len(base), ".task-board__column", len(after), overrideSelector)
+	}
+	if after[0] <= base[0] {
+		t.Errorf("%s is declared before the rule it overrides; equal specificity would then "+
+			"leave the fixed width standing", overrideSelector)
+	}
+	if strings.Contains(strings.ToLower(override), "!important") {
+		t.Errorf("%s carries an !important; it is one class more specific than the rule it "+
+			"overrides and comes after it, so the cascade already settles this", overrideSelector)
+	}
+
+	// Every length in either rule is in rem or is the unitless zero of the flex
+	// basis, so the board follows the reader's own text size.
+	for _, value := range append(cssDeclarations(column, "min-width"), cssDeclarations(column, "width")...) {
+		if !strings.HasSuffix(value, "rem") {
+			t.Errorf(".task-board__column declares the length %q; the board's lengths are in "+
+				"rem so they scale with the reader's text size, and a length in px does not",
+				value)
+		}
+	}
+}
+
+// TestSprintBoard_OverrideReachesTheSprintBoardAndOnlyIt is the markup half of
+// Acceptance Criterion 139, and it is the half a stylesheet-only assertion cannot
+// make. The width rule above is keyed on the `--bounded` modifier through a CHILD
+// combinator, so it selects nothing at all if the sprint board stops emitting that
+// class or wraps its columns in one more element — and every assertion above still
+// passes while the three columns silently return to the tasks board's fixed width.
+//
+// The criterion also requires the tasks board to be unchanged, which is the other
+// direction of the same check: that board must NOT carry the modifier, or its five
+// columns would divide the viewport too and lose the 19rem the measure of a card's
+// title depends on (Acceptance Criterion 129 continues to hold).
+func TestSprintBoard_OverrideReachesTheSprintBoardAndOnlyIt(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	f := seedSprintBoardFixture(t, "settlement-platform")
 	mux := buildMux()
@@ -250,8 +366,66 @@ func TestSprintBoard_ReusesTheTasksBoardColumnAndCardLengths(t *testing.T) {
 	sprintPage := servePage(t, mux, f.path())
 	tasksPage := servePage(t, mux, "/roadmaps/"+f.name+"/tasks")
 
-	// The two boards' columns and cards are the same object: the same class
-	// tokens, so the same rules, so the same lengths.
+	// The modifier the rule is keyed on, on the board that must be reached.
+	if !boardClassTokens(t, sprintPage, "the sprint page")["task-board--bounded"] {
+		t.Fatalf("the sprint page's board does not carry task-board--bounded, so the column " +
+			"width rule keyed on it selects nothing and the three columns keep the tasks " +
+			"board's fixed 19rem")
+	}
+	// And not on the board that must not.
+	if boardClassTokens(t, tasksPage, "the tasks page")["task-board--bounded"] {
+		t.Errorf("the tasks page's board carries task-board--bounded; its five columns would " +
+			"then divide the viewport as well, and each would be narrow enough to hurt the " +
+			"measure a card's title is read on (Acceptance Criterion 129)")
+	}
+
+	// The child combinator: a column is a DIRECT child of the board container.
+	// Anything between the two leaves the rule matching nothing.
+	region := memberBoardRegion(t, sprintPage)
+	gap := region[len(`data-role="task-board">`):]
+	firstColumn := strings.Index(gap, `<div class="card task-board__column"`)
+	if firstColumn < 0 {
+		t.Fatalf("the sprint board renders no `.task-board__column` element at all")
+	}
+	if strings.Contains(gap[:firstColumn], "<") {
+		t.Errorf("the sprint board wraps its columns in %q; `.task-board--bounded > "+
+			".task-board__column` is a CHILD combinator and selects nothing once anything sits "+
+			"between the board and its columns", strings.TrimSpace(gap[:firstColumn]))
+	}
+
+	// The board emits no inline style on either page: this is a stylesheet change
+	// and Acceptance Criterion 62 continues to hold.
+	if strings.Contains(region, "style=") {
+		t.Errorf("the member-tasks board carries an inline style attribute")
+	}
+}
+
+// TestBoards_ShareTheMinimumGapAndCardPadding is the gate for the last half of
+// Acceptance Criterion 139: the two boards' column widths are deliberately NOT one
+// value any more, and what they still share is the `17rem` minimum, the `0.75rem`
+// gap, and the `0.75rem` card body padding. The criterion requires those three to
+// be compared across the two boards and the check to fail when they diverge.
+//
+// The comparison is made where divergence would actually happen: the classes each
+// board's markup emits. Both boards emit the same board class and the same column
+// and card classes, so the three shared lengths are literally one declaration read
+// twice; a board that grew a column class of its own would resolve to a different
+// rule and fail here, however closely the two rules' values agreed on the day it
+// was written.
+//
+// The tasks board's own two lengths are pinned here as well, because the criterion
+// requires them unchanged: `19rem` with `flex: 0 0 auto`, on the shared rule, which
+// is what the sprint board's rule overrides and what every other board keeps.
+func TestBoards_ShareTheMinimumGapAndCardPadding(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	f := seedSprintBoardFixture(t, "settlement-platform")
+	mux := buildMux()
+
+	sprintPage := servePage(t, mux, f.path())
+	tasksPage := servePage(t, mux, "/roadmaps/"+f.name+"/tasks")
+
+	// The column and the card are the same object on both boards: the same class
+	// tokens, so the same rules, so the same shared lengths.
 	for _, part := range []struct {
 		what   string
 		marker string
@@ -263,38 +437,61 @@ func TestSprintBoard_ReusesTheTasksBoardColumnAndCardLengths(t *testing.T) {
 		onTasks := elementClassTokens(t, tasksPage, part.marker, "the tasks page's board")
 		if !sameClassSet(onSprint, onTasks) {
 			t.Errorf("the sprint board's %s carries the classes %v and the tasks board's carries "+
-				"%v; the two boards must resolve to ONE column measure and ONE card measure, "+
-				"not to two rules that happen to agree", part.what,
-				sortedKeys(onSprint), sortedKeys(onTasks))
+				"%v; the two boards keep ONE minimum column, ONE gap and ONE card measure, and "+
+				"they keep them by selecting the same rules rather than by two rules that "+
+				"happen to agree", part.what, sortedKeys(onSprint), sortedKeys(onTasks))
 		}
 	}
 
-	// And the lengths those shared rules carry, each declared once and expressed
-	// in rem so it scales with the reader's own text size.
+	// The board containers differ by exactly one token — the modifier that carries
+	// the sprint board's bounded height and its fluid columns — so the two boards
+	// still resolve to the same `.task-board` rule for everything else, the gap
+	// included.
+	sprintBoard := boardClassTokens(t, sprintPage, "the sprint page")
+	tasksBoard := boardClassTokens(t, tasksPage, "the tasks page")
+	for class := range tasksBoard {
+		if !sprintBoard[class] {
+			t.Errorf("the tasks board carries %q and the sprint board does not; the rules the "+
+				"two share are the rules both boards select", class)
+		}
+	}
+	for class := range sprintBoard {
+		if !tasksBoard[class] && class != "task-board--bounded" && class != "mb-3" {
+			t.Errorf("the sprint board carries the extra class %q; its only declared departure "+
+				"from the tasks board is task-board--bounded, on which the stylesheet keys "+
+				"both its bounded height and its fluid columns", class)
+		}
+	}
+
+	// The three shared lengths, each declared once, and each on a rule both boards
+	// select.
 	sheet := projectStyleSheet(t)
 
 	column := soleCSSRule(t, sheet, ".task-board__column")
-	for prop, want := range map[string]string{"width": "19rem", "min-width": "17rem"} {
-		if got := cssDeclarations(column, prop); len(got) != 1 || got[0] != want {
-			t.Errorf(".task-board__column declares %s: %v, want exactly %q (Acceptance Criteria "+
-				"129 and 139)", prop, got, want)
-		}
+	if got := cssDeclarations(column, "min-width"); len(got) != 1 || got[0] != "17rem" {
+		t.Errorf(".task-board__column declares min-width: %v, want exactly %q; both boards read "+
+			"this one minimum (Acceptance Criterion 139)", got, "17rem")
 	}
-	// A column stands for a state and not for a volume of work, so it neither
-	// grows into a wide viewport nor shrinks on a narrow one — on either board.
-	if got := cssDeclarations(column, "flex"); len(got) != 1 || got[0] != "0 0 auto" {
-		t.Errorf(".task-board__column declares flex: %v, want exactly %q", got, "0 0 auto")
-	}
-
 	board := soleCSSRule(t, sheet, ".task-board")
 	if got := cssDeclarations(board, "gap"); len(got) != 1 || got[0] != "0.75rem" {
 		t.Errorf(".task-board declares gap: %v, want exactly %q; the columns of both boards are "+
 			"separated by one gap", got, "0.75rem")
 	}
-
 	cardBody := soleCSSRule(t, sheet, ".task-card > .card-body")
 	if got := cssUniformRemPadding(t, cardBody, ".task-card > .card-body"); got != 0.75 {
-		t.Errorf(".task-card > .card-body declares padding %grem, want 0.75rem", got)
+		t.Errorf(".task-card > .card-body declares padding %grem, want 0.75rem; the card measure "+
+			"is one measure on both boards", got)
+	}
+
+	// The tasks board's own width, unchanged, on the rule the sprint board
+	// overrides. A board that moved it elsewhere would leave the sprint board's
+	// override selecting a property nothing declares.
+	for prop, want := range map[string]string{"width": "19rem", "flex": "0 0 auto"} {
+		if got := cssDeclarations(column, prop); len(got) != 1 || got[0] != want {
+			t.Errorf(".task-board__column declares %s: %v, want exactly %q; the tasks board's "+
+				"five columns are unchanged by the sprint board's division of its own width "+
+				"(Acceptance Criteria 129 and 139)", prop, got, want)
+		}
 	}
 
 	// Every one of those lengths is in rem, which a px length would not be.
@@ -312,12 +509,6 @@ func TestSprintBoard_ReusesTheTasksBoardColumnAndCardLengths(t *testing.T) {
 				}
 			}
 		}
-	}
-
-	// The board emits no inline style on either page: this is a stylesheet change
-	// and Acceptance Criterion 62 continues to hold.
-	if region := memberBoardRegion(t, sprintPage); strings.Contains(region, "style=") {
-		t.Errorf("the member-tasks board carries an inline style attribute")
 	}
 }
 
@@ -404,4 +595,56 @@ func cssDeclarationsOfValue(sheet string, props []string, want string) []string 
 		}
 	}
 	return found
+}
+
+// cssFlexShorthand returns the three factors of a declaration block's single
+// `flex` shorthand: the grow factor, the shrink factor, and the basis.
+//
+// The shorthand is required to state all three, so a rule that overrides another
+// rule's `flex` replaces the whole sizing rather than half of it and leaves
+// nothing to be inherited from the declaration it is meant to supersede.
+func cssFlexShorthand(t *testing.T, block, selector string) (grow, shrink, basis string) {
+	t.Helper()
+
+	values := cssDeclarations(block, "flex")
+	if len(values) != 1 {
+		t.Fatalf("%s declares flex %v, want exactly one declaration", selector, values)
+	}
+	fields := strings.Fields(values[0])
+	if len(fields) != 3 {
+		t.Fatalf("%s declares flex %q; the shorthand must state the grow factor, the shrink "+
+			"factor and the basis, not %d of the three", selector, values[0], len(fields))
+	}
+	return fields[0], fields[1], fields[2]
+}
+
+// isCSSZeroLength reports whether a flex basis is a zero of any of the forms CSS
+// accepts in the shorthand, so the assertion states the SIZING rather than the
+// spelling the sheet happened to use for it.
+func isCSSZeroLength(basis string) bool {
+	switch basis {
+	case "0", "0px", "0%", "0rem":
+		return true
+	default:
+		return false
+	}
+}
+
+// cssRulePositions returns the document position of every unconditional rule
+// whose selector list carries selector exactly, in source order, which is what
+// "the override comes after the rule it overrides" is read from.
+func cssRulePositions(sheet, selector string) []int {
+	var at []int
+	for i, rule := range parseCSSRules(sheet) {
+		if rule.nested {
+			continue
+		}
+		for _, s := range strings.Split(rule.prelude, ",") {
+			if normaliseSelector(s) == normaliseSelector(selector) {
+				at = append(at, i)
+				break
+			}
+		}
+	}
+	return at
 }

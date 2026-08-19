@@ -229,10 +229,11 @@
   padding-bottom: 0.5rem;
 }
 
-/* The sprint page's member-tasks board, and the ONE thing it does differently:
-   its height is bounded by a definite length instead of by the space the page
-   body leaves (SPEC/WEB.md § Sprint Detail Sub-Template, Height and scrolling;
-   Acceptance Criterion 136).
+/* The sprint page's member-tasks board, and the first of the two things it does
+   differently: its height is bounded by a definite length instead of by the space
+   the page body leaves (SPEC/WEB.md § Sprint Detail Sub-Template, Height and
+   scrolling; Acceptance Criterion 136). The second is the width of its columns,
+   which is declared on the column rule below and keyed on this same modifier.
 
    The sprint page is not a single-region page. It carries the Sprint details card
    above the board and the Comments card below it, and all three belong to one
@@ -249,7 +250,8 @@
    enough that 60vh falls below `--full-height-region-floor`, the board takes the
    floor and keeps showing useful content instead of collapsing to a sliver of one
    card. Nothing is restated here — not the floor, not a column length — because
-   the modifier's whole job is the one property that differs.
+   this rule's whole job is the one property that differs; the column width that
+   also differs is declared where the column is, not here.
 
    This board is deliberately NOT a full-height page region, so the ordered
    vh/dvh pair those regions declare does not apply to it: 60vh is a fraction of
@@ -260,16 +262,33 @@
   height: 60vh;
 }
 
-/* One column. Its width is what decides the measure a card's title is set on, so
-   it is stated here rather than left to the content: every column of either board
-   carries the same width, because a column stands for a state and not for a volume
-   of work, and `flex: 0 0 auto` is what keeps it — the column neither grows into a
-   wide viewport nor shrinks on a narrow one. It never shrinks below a width at
-   which its cards stay legible; the remaining columns are reached by scrolling the
-   board horizontally, which is a touch-friendly gesture on a touch device. Both
-   lengths are in `rem`, so the column follows the reader's own text size
-   (SPEC/WEB.md § Roadmap Tasks Page, Column width and card density; § Sprint
-   Detail Sub-Template, Column width and card density). */
+/* One column, and the two boards' SHARED column rule. A column's width is what
+   decides the measure a card's title is set on, so it is stated here rather than
+   left to the content — but the two boards no longer state the same one, and this
+   rule is careful about which half is which.
+
+   Shared, and read by both boards: `min-width: 17rem`, the width below which a
+   card's text stops being legible, and the bounds that make a column scroll its
+   own cards instead of growing with them (`max-height: 100%`, `overflow: hidden`).
+   The other two lengths the boards share are declared once as well and not here:
+   the 0.75rem gap on `.task-board`, and the 0.75rem card body padding on
+   `.task-card > .card-body`. A reader moving between the tasks page and a sprint
+   page therefore meets one card measure and one minimum column.
+
+   The TASKS board's own: `width: 19rem` with `flex: 0 0 auto`. That board has one
+   column per task status, so its column count is fixed by the enum rather than by
+   what is on screen and it has a natural width of its own: dividing a viewport
+   among five columns would cut the measure this width exists to protect, so the
+   column neither grows into a wider viewport — the space beyond the five is left
+   empty — nor shrinks on a narrower one, and the remaining columns are reached by
+   scrolling the board horizontally, a touch-friendly gesture on a touch device.
+
+   The sprint page's board overrides exactly those two declarations in the rule
+   below, and restates none of the shared lengths. Every length here is in `rem`,
+   so the column follows the reader's own text size (SPEC/WEB.md § Roadmap Tasks
+   Page, Column width and card density; § Sprint Detail Sub-Template, Height and
+   scrolling, "The three columns divide the width of the board" and "Why the two
+   boards differ here"; Acceptance Criteria 129 and 139). */
 .task-board__column {
   display: flex;
   flex: 0 0 auto;
@@ -278,6 +297,38 @@
   min-width: 17rem;
   max-height: 100%;
   overflow: hidden;
+}
+
+/* The sprint page's three columns divide the width of the board equally instead
+   of carrying the fixed width above. `flex-basis: 0` makes the three shares equal
+   whatever each column holds — a column stands for a state and not for a volume
+   of work, so the width follows the viewport and never the data — and
+   `flex-grow: 1` hands out everything the board leaves once the gaps between the
+   columns are taken out, so the columns grow into the viewport rather than leaving
+   the space beside them empty. Three columns dividing a viewport are wide where
+   five would be narrow, and this board is read as one sprint at a glance rather
+   than as a view of a whole roadmap, which is what makes filling the width the
+   right shape for it and not for the tasks board.
+
+   `width: auto` is written out rather than left implicit: a flex item with a
+   definite basis ignores `width`, but the 19rem above would otherwise stand in the
+   cascade as a length this board does not carry, and would apply the moment the
+   element stopped being a flex item.
+
+   The floor still holds, and is still declared once: `min-width: 17rem` above is a
+   minimum the flex layout may not shrink past, so when three columns at that
+   minimum plus their gaps exceed the viewport the columns keep the minimum and
+   `.task-board`'s own `overflow-x: auto` scrolls the strip inside its container,
+   leaving <body> with no horizontal overflow.
+
+   The selector is keyed on the `--bounded` modifier because that is the class this
+   board already carries: the change is a stylesheet change alone, and the board
+   emits the same markup and the same classes it did before (SPEC/WEB.md § Sprint
+   Detail Sub-Template, Height and scrolling; § Responsive and Mobile-First Design,
+   rules 2 and 10; Acceptance Criterion 139). */
+.task-board--bounded > .task-board__column {
+  flex: 1 1 0;
+  width: auto;
 }
 
 /* The card list of one column scrolls VERTICALLY and independently of the other
@@ -293,8 +344,8 @@
 }
 
 /* The card the user reads and presses. Tabler gives a small card's body 1rem on
-   every side (`.card-sm > .card-body`); inside a column already narrowed to 19rem
-   that padding is measure taken from the card's own running text — the reference
+   every side (`.card-sm > .card-body`); inside a column already narrowed to its
+   own width that padding is measure taken from the card's own running text — the reference
    line, the title, the badges, and the metadata footer — so it is reduced here and
    the width and height it frees go back to that text. The selector matches
    Tabler's specificity and this sheet is the last one the layout links, so source
@@ -309,7 +360,7 @@
 
 /* An empty column of either board keeps its heading and its 0 count badge and
    shows Tabler's empty-state markup in place of the card list. Tabler sizes that
-   panel for a full-width card; inside a 19rem column it is tightened so the empty
+   panel for a full-width card; inside a board column it is tightened so the empty
    state stays unobtrusive. Together with the card-body padding above, these are
    the only two presentation rules the boards add to a Tabler component. */
 .task-board__cards .empty {

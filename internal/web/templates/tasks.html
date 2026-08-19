@@ -119,8 +119,23 @@
           <div class="task-board" data-role="task-board">
             {{range .Columns}}
             <div class="card task-board__column" data-role="task-board-column">
+              {{/*
+                The column header: the status name, and a hybrid badge whose TEXT
+                is the number of tasks the column SHOWS — .Count, which follows the
+                header controls — and whose COLOUR is the status's own.
+
+                A column of this board is exactly one TaskStatus, so the status is
+                handed straight to taskStatusBadge, the SAME helper every task
+                status badge takes its colour from. No colour class is written out
+                here: a literal would be a second mapping, free to drift from the
+                first, and it would be undetectable on the BACKLOG column, whose
+                variant is also the neutral one a badge carries when nothing
+                colours it (SPEC/WEB.md § Roadmap Tasks Page, Count per column;
+                § Status, Priority, and Severity Badge Colours, rule 2; Acceptance
+                Criteria 61 and 140).
+              */}}
               <div class="card-header">
-                <h3 class="card-title">{{.Status}} <span class="badge bg-secondary-lt ms-2">{{.Count}}</span></h3>
+                <h3 class="card-title">{{.Status}} <span class="badge {{taskStatusBadge .Status}} ms-2">{{.Count}}</span></h3>
               </div>
               <div class="card-body task-board__cards">
                 {{range .Tasks}}

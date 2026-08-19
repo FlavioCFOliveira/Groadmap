@@ -74,7 +74,7 @@ The board has exactly five columns, one for each task status, ordered left to ri
 
 The columns are fixed. All five are always present, in that order, whatever the roadmap's data contains, and a column holding no task is still rendered with its own in-column empty state. Neither the set of columns nor their order depends on the data, and each column title is the status identifier exactly as the enum spells it, in upper case.
 
-Each column header carries a Tabler badge with the number of tasks that column is showing; a column with no card shows the count `0`. Every task appears in exactly one column, the column of its own `status`, so on an unnarrowed board the five counts sum to the roadmap's total number of tasks.
+Each column header carries a Tabler badge with the number of tasks that column is showing, coloured by the status the column stands for, so the badge states a count in text and a status in colour; a column with no card shows the count `0`. Every task appears in exactly one column, the column of its own `status`, so on an unnarrowed board the five counts sum to the roadmap's total number of tasks.
 
 Within a column the cards appear in descending `priority` and, for tasks of equal priority, ascending `created_at` — the same order `rmp task list` returns by default. The board introduces no second sort.
 
@@ -172,6 +172,8 @@ This is the same grouping the sprint status summary line at the top of the page 
 
 A `BACKLOG` task can be a sprint member — `rmp task stat <id> BACKLOG` returns a task to the backlog without removing it from the sprint — which is why `WAITING` groups `BACKLOG` with `SPRINT` rather than showing `SPRINT` alone.
 
+Each column header carries a Tabler badge with that column's task count, coloured by the canonical status of the group it holds: `WAITING` takes the colour of `SPRINT`, `DOING` that of `DOING`, and `CLOSED` that of `COMPLETED`. The canonical status is the one a task is normally in at that stage — a task waiting in a sprint is normally `SPRINT`, and `BACKLOG` there is the exceptional case.
+
 All three columns are always present, in that order, whatever the sprint holds. A column with no task keeps its heading and its `0` count badge and shows its own in-column empty state, so a sprint with no member tasks renders an empty board rather than no board.
 
 ### Order within a column
@@ -187,7 +189,7 @@ Each card presents one member task, in this order:
 3. A **`priority` badge** and a **`severity` badge**, prefixed `P` and `S` and coloured by band, exactly as on the tasks board.
 4. A **footer of counters** at the trailing edge of the card: the task's number of subtasks and its number of comments, each an icon followed by its number.
 
-A counter whose value is zero is not rendered at all — no icon, no placeholder — and a task with neither counter shows no footer. The card shows no status badge, because the column it sits in already states the status, and it shows no type, specialists or dependency counts: those are in the task detail modal the card opens.
+Both counters are always rendered, including when either or both are `0`, so the footer is always present and a zero is a statement rather than a silence. This is where the sprint card departs from the tasks board card, which renders only the indicators a task has: the sprint card carries exactly two indicators and both are counts, while the tasks board card carries six of mixed kinds, two of which are text and have no zero to show. The card shows no status badge, because the column it sits in already states the status, and it shows no type, specialists or dependency counts: those are in the task detail modal the card opens.
 
 The whole card is a `<button>`, so a pointer click, a touch tap, and the keyboard (Enter and Space) all open that task's read-only detail modal.
 
@@ -195,7 +197,7 @@ The whole card is a `<button>`, so a pointer click, a touch tap, and the keyboar
 
 The board takes a bounded height of `60vh`, never falling below the floor the interface uses for its full-height regions, and each column scrolls vertically and independently within it. It is deliberately not sized to the space the page body leaves: the page carries the sprint's details above the board and its Comments card below, and a board that grew with the sprint's task count would push those comments further away with every task added. When the three columns do not fit the viewport, the column strip scrolls horizontally inside its own container and the page itself never scrolls horizontally.
 
-The columns carry the same widths as the tasks board's columns, and a card the same body padding, because a column stands for a state on both boards and a reader moving between the two pages should meet one column measure and one card measure.
+The three columns divide the width of the board equally and grow with the viewport, down to a floor of `17rem` below which the strip scrolls horizontally. This is where the two boards part: the tasks board's five columns keep a fixed `19rem`, because five columns divided across a viewport would each be narrow enough to hurt the card's measure, and that board is a view of a whole roadmap whose column count the status enum fixes. The minimum column width, the gap between columns and the card's body padding stay shared by both boards.
 
 The page performs two comment reads whatever the number of member tasks: the sprint's own comment log, which the Comments card renders in full, and one grouped query for the comment count of every rendered card. Neither grows with the number of member tasks, and the board issues no query per column and none per card. The subtask counter costs no read of its own, because the sprint's member-task read already carries it.
 

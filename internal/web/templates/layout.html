@@ -297,17 +297,26 @@
             The board is NOT wrapped in an outer card: the columns ARE the cards,
             exactly as on the tasks page. Everything inside a column is Tabler's
             own markup — cards, the card-header idiom, badges, the empty state —
-            and the board reuses the tasks board's own classes rather than
-            declaring lengths of its own, so the two boards carry one column
-            measure and one card measure (SPEC/WEB.md § Sprint Detail
-            Sub-Template, Column width and card density; Acceptance Criterion 139).
+            and the board emits the tasks board's own classes rather than classes
+            of its own, so the lengths the two boards share are literally one
+            measure used twice: the 17rem minimum column, the 0.75rem gap and the
+            0.75rem card body padding (SPEC/WEB.md § Sprint Detail Sub-Template,
+            Height and scrolling; Acceptance Criterion 139).
 
-            task-board--bounded is the ONE thing this board does differently: its
+            task-board--bounded is what the stylesheet keys BOTH of this board's
+            departures on, and no markup of this board says more than that. Its
             height is bounded (60vh, floored at --full-height-region-floor) rather
             than taken from the space the page body leaves, because the sprint page
             is not a single-region page and a full-height board would push the
             Comments card below the fold for every sprint (SPEC/WEB.md
-            § Full-Height Page Regions; Acceptance Criterion 136).
+            § Full-Height Page Regions; Acceptance Criterion 136); and its three
+            columns divide the board's width equally and grow with the viewport
+            instead of carrying the tasks board's fixed 19rem, because three
+            columns dividing a viewport are wide where five would be narrow
+            (SPEC/WEB.md § Sprint Detail Sub-Template, Height and scrolling, "The
+            three columns divide the width of the board"; Acceptance Criterion
+            139). Both are declared in static/style.css and neither adds a class
+            here.
 
             READ-ONLY: no drag-and-drop, no control that moves a task between
             columns, reorders cards, or edits anything. The only button in the
@@ -317,8 +326,25 @@
           <div class="task-board task-board--bounded mb-3" data-role="task-board">
             {{range .Columns}}
             <div class="card task-board__column" data-role="task-board-column">
+              {{/*
+                The column header: the heading, and a hybrid badge whose TEXT is
+                the number of member tasks in the column and whose COLOUR is the
+                semantic colour of the status the column groups.
+
+                A column of this board groups a SET of statuses, so the colour is
+                the one the mapping assigns to the group's canonical status — the
+                status a task is normally in at that stage of the sprint. The model
+                names it (sprintBoardColumns, in data.go), and it is handed to
+                taskStatusBadge, the SAME helper every task status badge takes its
+                colour from. Nothing here writes a colour class out: a literal
+                would be a second mapping, free to drift from the first, and the
+                canonical status of each group is a fact about the board's columns
+                rather than about its markup (SPEC/WEB.md § Sprint Detail
+                Sub-Template, Column header; § Status, Priority, and Severity Badge
+                Colours, rule 2; Acceptance Criteria 61 and 140).
+              */}}
               <div class="card-header">
-                <h3 class="card-title">{{.Heading}} <span class="badge bg-secondary-lt ms-2">{{len .Tasks}}</span></h3>
+                <h3 class="card-title">{{.Heading}} <span class="badge {{taskStatusBadge .CanonicalStatus}} ms-2">{{len .Tasks}}</span></h3>
               </div>
               <div class="card-body task-board__cards">
                 {{range .Tasks}}
@@ -373,20 +399,28 @@
                     </span>
                     {{/*
                       The counters, at the TRAILING edge of the card, which is
-                      where the GitLab card puts its own. Only the indicators the
-                      task HAS are rendered: a zero count renders nothing at all —
-                      no icon, no dash, no placeholder, no empty slot — and a task
-                      with neither counter renders no footer element, which is what
-                      .HasCounters decides (SPEC/WEB.md § Sprint Detail
-                      Sub-Template, Absent metadata renders nothing; Acceptance
-                      Criterion 134).
+                      where the GitLab card puts its own. BOTH are always rendered,
+                      including when the number they carry is 0, so the footer row
+                      is present on every card of this board and every card is the
+                      same shape.
+
+                      This is a deliberate departure from the tasks board's card,
+                      which renders an indicator only when it has something to
+                      count. The two cards differ because what they carry differs:
+                      this card carries exactly two indicators and both of them are
+                      counts, so a 0 STATES that the task has no comment, where an
+                      absent counter leaves the reader unable to tell "no comments"
+                      from "this card does not show comments". The tasks board's
+                      card carries six heterogeneous indicators, two of which are
+                      text rather than counts and have no zero to show, so always
+                      rendering all six is not even well defined there (SPEC/WEB.md
+                      § Sprint Detail Sub-Template, Both counters are always
+                      rendered; Acceptance Criterion 134).
                     */}}
-                    {{if .HasCounters}}
                     <span class="d-flex flex-wrap justify-content-end gap-2 mt-2 small text-secondary" data-role="task-card-meta">
-                      {{if .SubtaskCount}}<span data-role="task-card-subtasks"><i class="ti ti-subtask me-1"></i>{{.SubtaskCount}}</span>{{end}}
-                      {{if .CommentCount}}<span data-role="task-card-comments"><i class="ti ti-message me-1"></i>{{.CommentCount}}</span>{{end}}
+                      <span data-role="task-card-subtasks"><i class="ti ti-subtask me-1"></i>{{.SubtaskCount}}</span>
+                      <span data-role="task-card-comments"><i class="ti ti-message me-1"></i>{{.CommentCount}}</span>
                     </span>
-                    {{end}}
                   </span>
                 </button>
                 {{end}}
