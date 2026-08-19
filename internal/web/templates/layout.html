@@ -365,61 +365,98 @@
                   are unchanged, and w-100/p-0/text-start are the utilities that
                   keep a button looking like the card it is.
 
-                  The order of the card differs from the tasks board's in exactly
-                  one place, and deliberately: the TITLE leads and the reference
-                  follows it as muted text on its own line, because the GitLab
-                  issue board card this board is modelled on leads with the title
-                  (Acceptance Criterion 133). The card carries no status badge —
-                  the column it sits in already states the status — and no type, no
-                  specialists and no dependency counts: a card is read at a glance,
-                  and every field of the task is in the modal the card opens.
+                  This card differs from the tasks board's in exactly two places,
+                  both deliberate and both stated in the SPEC. First, the TITLE
+                  leads and the reference follows it as muted text on its own
+                  line, because the GitLab issue board card this board is modelled
+                  on leads with the title. Second, the badges and the counters
+                  share ONE line instead of the counters getting a footer row of
+                  their own, and on that line the comment count precedes the
+                  subtask count (SPEC/WEB.md § Sprint Detail Sub-Template, The
+                  card; Acceptance Criterion 133). The card carries no status
+                  badge — the column it sits in already states the status — and no
+                  type, no specialists and no dependency counts: a card is read at
+                  a glance, and every field of the task is in the modal the card
+                  opens.
                 */}}
                 <button type="button" class="card card-sm task-card w-100 p-0 text-start" data-bs-toggle="modal" data-bs-target="#task-modal" data-task-id="{{.ID}}" aria-label="Open details for task #{{.ID}}: {{.Title}}">
                   <span class="card-body d-block">
                     <span class="d-block fw-bold text-break" data-role="task-card-title">{{.Title}}</span>
                     <span class="d-block small text-secondary mb-1" data-role="task-card-ref">#{{.ID}}</span>
                     {{/*
-                      The pair is rendered exactly as the tasks board's card
-                      renders it: P then the priority, S then the severity, with
-                      no space and no separator, so a task of priority 5 and
-                      severity 3 reads P5 and S3. The rule is stated once for the
-                      card of BOTH boards, in SPEC/WEB.md § Roadmap Tasks Page,
-                      Card content, item 3 (Acceptance Criteria 85 and 133), and
-                      is not restated here: the two boards keep ONE form for this
-                      pair, and changing it on one card alone is the drift that
-                      statement exists to prevent.
+                      The card's third and last line, carrying BOTH of its
+                      remaining groups: the two badges at the leading edge and the
+                      two counters at the trailing edge. They share a line because
+                      between them they answer one question — what this task IS,
+                      and how much is ATTACHED to it — and because the column a
+                      card sits in is bounded and scrolls, so a row of height the
+                      card does not need is a card the reader has to scroll to
+                      reach (SPEC/WEB.md § Sprint Detail Sub-Template, Why the
+                      badges and the counters share a line; Acceptance Criterion
+                      133). This card therefore renders NO separate counter footer,
+                      which is where it parts company with the tasks board's card.
 
-                      The prefix is a label, not a value. The colour helpers are
-                      handed .Priority and .Severity themselves, so the band is
-                      the band of the value and the prefix reaches no mapping.
+                      The layout is Bootstrap's own leading/trailing idiom and
+                      nothing else: justify-content-between puts the first flex
+                      item at the start of the line and the last at its end, and
+                      flex-wrap turns "too narrow to hold both" into a WRAP rather
+                      than an overflow. A wrapped flex line holding one item
+                      resolves space-between to flex-start, so on a column at its
+                      17rem minimum the counters drop directly BELOW the badges,
+                      inside the same card, and neither the card, nor the column,
+                      nor the page scrolls sideways. Both inner groups carry
+                      flex-wrap for the same reason, one level down. No inline
+                      style, and every class here is Tabler's (Acceptance Criteria
+                      27 and 62).
                     */}}
-                    <span class="d-flex flex-wrap gap-1">
-                      <span class="badge {{priorityBadge .Priority}}">P{{.Priority}}</span>
-                      <span class="badge {{severityBadge .Severity}}">S{{.Severity}}</span>
-                    </span>
-                    {{/*
-                      The counters, at the TRAILING edge of the card, which is
-                      where the GitLab card puts its own. BOTH are always rendered,
-                      including when the number they carry is 0, so the footer row
-                      is present on every card of this board and every card is the
-                      same shape.
+                    <span class="d-flex flex-wrap align-items-center justify-content-between gap-1" data-role="task-card-summary">
+                      {{/*
+                        The pair is rendered exactly as the tasks board's card
+                        renders it: P then the priority, S then the severity, with
+                        no space and no separator, so a task of priority 5 and
+                        severity 3 reads P5 and S3. The rule is stated once for the
+                        card of BOTH boards, in SPEC/WEB.md § Roadmap Tasks Page,
+                        Card content, item 3 (Acceptance Criteria 85 and 133), and
+                        is not restated here: the two boards keep ONE form for this
+                        pair, and changing it on one card alone is the drift that
+                        statement exists to prevent.
 
-                      This is a deliberate departure from the tasks board's card,
-                      which renders an indicator only when it has something to
-                      count. The two cards differ because what they carry differs:
-                      this card carries exactly two indicators and both of them are
-                      counts, so a 0 STATES that the task has no comment, where an
-                      absent counter leaves the reader unable to tell "no comments"
-                      from "this card does not show comments". The tasks board's
-                      card carries six heterogeneous indicators, two of which are
-                      text rather than counts and have no zero to show, so always
-                      rendering all six is not even well defined there (SPEC/WEB.md
-                      § Sprint Detail Sub-Template, Both counters are always
-                      rendered; Acceptance Criterion 134).
-                    */}}
-                    <span class="d-flex flex-wrap justify-content-end gap-2 mt-2 small text-secondary" data-role="task-card-meta">
-                      <span data-role="task-card-subtasks"><i class="ti ti-subtask me-1"></i>{{.SubtaskCount}}</span>
-                      <span data-role="task-card-comments"><i class="ti ti-message me-1"></i>{{.CommentCount}}</span>
+                        The prefix is a label, not a value. The colour helpers are
+                        handed .Priority and .Severity themselves, so the band is
+                        the band of the value and the prefix reaches no mapping.
+                      */}}
+                      <span class="d-flex flex-wrap gap-1" data-role="task-card-badges">
+                        <span class="badge {{priorityBadge .Priority}}">P{{.Priority}}</span>
+                        <span class="badge {{severityBadge .Severity}}">S{{.Severity}}</span>
+                      </span>
+                      {{/*
+                        The counters, closing the line at its TRAILING edge, which
+                        is where the GitLab card puts its own. The COMMENT count
+                        comes first and the subtask count second — the reverse of
+                        the tasks board's footer order, and stated separately from
+                        it because the two groups are separate: a pair read at the
+                        trailing edge of a line here, a list of six heterogeneous
+                        indicators in a block of its own there.
+
+                        BOTH are always rendered, including when the number they
+                        carry is 0, so every card of this board is the same shape.
+                        This is a deliberate departure from the tasks board's card,
+                        which renders an indicator only when it has something to
+                        count. The two cards differ because what they carry differs:
+                        this card carries exactly two indicators and both of them are
+                        counts, so a 0 STATES that the task has no comment, where an
+                        absent counter leaves the reader unable to tell "no comments"
+                        from "this card does not show comments". The tasks board's
+                        card carries six heterogeneous indicators, two of which are
+                        text rather than counts and have no zero to show, so always
+                        rendering all six is not even well defined there (SPEC/WEB.md
+                        § Sprint Detail Sub-Template, Both counters are always
+                        rendered; Acceptance Criterion 134).
+                      */}}
+                      <span class="d-flex flex-wrap gap-2 small text-secondary" data-role="task-card-counters">
+                        <span data-role="task-card-comments"><i class="ti ti-message me-1"></i>{{.CommentCount}}</span>
+                        <span data-role="task-card-subtasks"><i class="ti ti-subtask me-1"></i>{{.SubtaskCount}}</span>
+                      </span>
                     </span>
                   </span>
                 </button>

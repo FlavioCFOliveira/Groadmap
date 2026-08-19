@@ -646,26 +646,38 @@ func TestTaskBoard_CardContent(t *testing.T) {
 	}
 }
 
-// metaFooter returns the metadata footer of one card, or "" when the card renders
-// none.
+// metaFooter returns the metadata footer of one card of the ROADMAP TASKS page's
+// board, or "" when the card renders none.
 //
-// The footer and its indicators are all <span> elements — a button's content model
-// is phrasing content — so the slice is taken by matching the footer's own closing
-// tag rather than the first one, which would cut the footer after its first
-// indicator and make every "the footer shows X" assertion pass or fail by accident.
+// The sprint board's card carries no such footer: its two counters share the badge
+// line instead (SPEC/WEB.md § Sprint Detail Sub-Template, The two cards differ
+// here). A sprint card is therefore sliced with spanWithRole directly, on the role
+// that names the group wanted.
 func metaFooter(t *testing.T, card string) string {
 	t.Helper()
+	return spanWithRole(t, card, "task-card-meta")
+}
 
-	at := strings.Index(card, `data-role="task-card-meta"`)
+// spanWithRole returns the whole <span> element carrying data-role="<role>",
+// including its own children, or "" when the html holds none.
+//
+// A card's parts are all <span> elements — a button's content model is phrasing
+// content — and they nest, so the slice is taken by BALANCING the tags rather than
+// by matching the first closing tag, which would cut a group after its first child
+// and make every "the group shows X" assertion pass or fail by accident.
+func spanWithRole(t *testing.T, html, role string) string {
+	t.Helper()
+
+	at := strings.Index(html, `data-role="`+role+`"`)
 	if at < 0 {
 		return ""
 	}
-	start := strings.LastIndex(card[:at], "<span")
+	start := strings.LastIndex(html[:at], "<span")
 	if start < 0 {
-		t.Fatalf("the card's metadata footer is not a span\ncard: %s", card)
+		t.Fatalf("the element carrying data-role=%q is not a span\nhtml: %s", role, html)
 	}
 
-	rest := card[start:]
+	rest := html[start:]
 	depth := 0
 	for i := 0; i < len(rest); {
 		switch {
@@ -682,7 +694,7 @@ func metaFooter(t *testing.T, card string) string {
 			i++
 		}
 	}
-	t.Fatalf("the card's metadata footer is not closed\ncard: %s", card)
+	t.Fatalf("the element carrying data-role=%q is not closed\nhtml: %s", role, html)
 	return ""
 }
 

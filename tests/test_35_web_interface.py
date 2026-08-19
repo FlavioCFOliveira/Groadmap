@@ -2743,15 +2743,51 @@ class TestWebInterface:
 
     @staticmethod
     def _sprint_board_card_html(region, task_id):
-        """Return one sprint-board card's full markup, from its opening
-        <button> to its closing </button>."""
+        """Return one board card's full markup, from its opening <button> to its
+        closing </button>.
+
+        Both Kanban boards emit the same card element, so this reads a card of
+        either: the sprint's member-tasks board, and the roadmap tasks page's
+        board when one is needed as a control.
+        """
         m = re.search(
             rf'<button type="button" class="card card-sm task-card[^>]*'
             rf'data-task-id="{task_id}"[^>]*>.*?</button>',
             region, re.S,
         )
-        assert m, f"no sprint-board card found for task #{task_id}"
+        assert m, f"no board card found for task #{task_id}"
         return m.group(0)
+
+    @staticmethod
+    def _span_with_role(html, role):
+        """Return the whole <span> carrying data-role="<role>", children
+        included, or None when the markup holds none.
+
+        A card's parts are all <span> elements — a button's content model is
+        phrasing content — and they NEST, so the slice is taken by balancing the
+        tags. Matching the first `</span>` instead would cut a group after its
+        first child and make every "the group holds X" assertion pass or fail by
+        accident.
+        """
+        at = html.find(f'data-role="{role}"')
+        if at < 0:
+            return None
+        start = html.rfind("<span", 0, at)
+        assert start >= 0, f'the element carrying data-role="{role}" is not a span'
+
+        rest, depth, i = html[start:], 0, 0
+        while i < len(rest):
+            if rest.startswith("<span", i):
+                depth += 1
+                i += len("<span")
+            elif rest.startswith("</span>", i):
+                depth -= 1
+                i += len("</span>")
+                if depth == 0:
+                    return rest[:i]
+            else:
+                i += 1
+        raise AssertionError(f'the element carrying data-role="{role}" is not closed')
 
     def test_sprint_board_groups_all_five_statuses_into_three_columns(self):
         """AC130/AC131: the member-tasks board renders exactly three columns —
@@ -3107,14 +3143,20 @@ class TestWebInterface:
             )
 
     def test_sprint_board_card_shows_six_data_points_in_order(self):
-        """AC133: each card shows exactly six data points, in this order: the
-        task title leading the card, the `#<id>` reference as secondary text, a
-        `P<n>` priority badge, an `S<n>` severity badge, and — in a
-        trailing-edge footer row — the subtask count and the comment count,
-        each as an icon followed by its number.
+        """AC133: each card shows exactly six data points, on THREE lines, in
+        this order: the task title leading the card, the `#<id>` reference as
+        secondary text, and one line carrying the `P<n>` priority badge and the
+        `S<n>` severity badge at its leading edge and the comment count followed
+        by the subtask count at its trailing edge, each counter as an icon
+        followed by its number.
 
-        The task carries real subtasks and real comments so both footer
-        indicators have something to render, and priority 7 / severity 6 fall
+        The COUNTER ORDER is asserted rather than left implicit, because the
+        criterion requires it: a card showing the subtask count before the
+        comment count satisfies every other clause. It is also the reverse of
+        the roadmap tasks page's footer order, which that card keeps.
+
+        The task carries real subtasks and real comments so both counters
+        have something to render, and priority 7 / severity 6 fall
         in different colour bands (red / orange per badge.go's
         priorityBadge/severityBadge), so the badges are shown to carry the
         semantic mapping's own colours and not just the bare prefixed digits
@@ -3166,21 +3208,36 @@ class TestWebInterface:
             rf'data-role="task-card-title">{re.escape(title)}</span>\s*'
             rf'<span class="d-block small text-secondary mb-1" '
             rf'data-role="task-card-ref">#{parent}</span>\s*'
-            r'<span class="d-flex flex-wrap gap-1">\s*'
+            r'<span class="d-flex flex-wrap align-items-center '
+            r'justify-content-between gap-1" data-role="task-card-summary">\s*'
+            r'<span class="d-flex flex-wrap gap-1" '
+            r'data-role="task-card-badges">\s*'
             r'<span class="badge bg-red-lt">P7</span>\s*'
             r'<span class="badge bg-orange-lt">S6</span>\s*'
             r'</span>\s*'
-            r'<span class="d-flex flex-wrap justify-content-end gap-2 mt-2 '
-            r'small text-secondary" data-role="task-card-meta">\s*'
-            r'<span data-role="task-card-subtasks">'
-            r'<i class="ti ti-subtask me-1"></i>2</span>\s*'
+            r'<span class="d-flex flex-wrap gap-2 small text-secondary" '
+            r'data-role="task-card-counters">\s*'
             r'<span data-role="task-card-comments">'
             r'<i class="ti ti-message me-1"></i>3</span>\s*'
+            r'<span data-role="task-card-subtasks">'
+            r'<i class="ti ti-subtask me-1"></i>2</span>\s*'
+            r'</span>\s*'
             r'</span>'
         )
         assert re.search(pattern, card, re.S), (
             f"the card's six data points are missing or out of the required "
             f"order: {card}"
+        )
+
+        # The order of the two counters, asserted on its own and not only
+        # through the pattern above: the criterion singles it out because a card
+        # showing the subtask count first satisfies every other clause, and a
+        # pattern that drifted would take this with it.
+        assert (card.index('data-role="task-card-comments"')
+                < card.index('data-role="task-card-subtasks"')), (
+            f"the sprint card's counters read subtask count first; the comment "
+            f"count leads the pair on this board, which is the reverse of the "
+            f"roadmap tasks page's footer order: {card}"
         )
 
         # Exactly six data points: no seventh. No status badge (the column
@@ -3196,17 +3253,178 @@ class TestWebInterface:
                 f"the sprint board's card must not render {absent!r}: {card}"
             )
 
+    def test_sprint_board_card_merges_badges_and_counters_onto_one_line(self):
+        """AC133: the badges and the counters share ONE line — the badges at its
+        leading edge, the counters at its trailing edge — the line wraps inside
+        the card instead of overflowing it on a narrow column, and the card
+        renders no separate footer row for the counters.
+
+        This is the card's SHAPE rather than its contents, which
+        test_sprint_board_card_shows_six_data_points_in_order asserts. The
+        layout is read from the utility classes the line carries, because those
+        are what the browser resolves the behaviour from: justify-content-between
+        puts the first flex item at the leading edge and the last at the
+        trailing one, and flex-wrap turns "too narrow to hold both" into a wrap
+        rather than an overflow — a wrapped flex line holding one item resolves
+        space-between to flex-start, so the counters drop directly below the
+        badges inside the same card.
+
+        The roadmap tasks page's card is asserted UNCHANGED in the same test,
+        because "this board renders no metadata footer" states nothing unless
+        the other board still renders one: a template that had dropped the
+        footer from both cards would satisfy every absence assertion here.
+        """
+        roadmap = "settlement_layout_demo"
+        self._run(["roadmap", "create", roadmap])
+        member = self.test.create_task(
+            roadmap,
+            "Reconcile the acquirer settlement file against the ledger",
+            "Every settled line must be matched to a ledger entry before the "
+            "nightly window closes",
+            "Replay the acquirer file against the ledger and report residuals",
+            "The nightly reconciliation reports no unexplained residual",
+            priority=9, severity=2,
+        )
+        self._run(["task", "create", "-r", roadmap,
+                   "-t", "Match settlement lines to ledger entries by reference",
+                   "-fr", "The match must be reproducible line by line",
+                   "-tr", "Implement inside the reconciliation pipeline",
+                   "-ac", "The parent task's acceptance criteria are met",
+                   "--parent", str(member)])
+        self._run(["task", "comment-add", "-r", roadmap, str(member),
+                   "--type", "DECISION",
+                   "--body", "The ledger is authoritative; the acquirer file "
+                             "is replayed against it, never the reverse."])
+
+        sprint_id = self.test.create_sprint(roadmap, "Settlement reconciliation sprint")
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id), str(member)])
+
+        proc, port = self._start(["--port", "0"])
+        _, _, body = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
+        region, columns = self._sprint_board_columns(body)
+        card = self._sprint_board_card_html(columns[0], member)
+
+        # The line's OWN class attribute, not its subtree: both inner groups are
+        # flex containers that wrap as well, so a check against the whole card
+        # would find d-flex and flex-wrap on a line that carried neither and
+        # would pass on markup that overflows the card.
+        m = re.search(r'<span class="([^"]*)" data-role="task-card-summary">', card)
+        assert m, (
+            f"the card renders no line carrying both the badges and the "
+            f"counters: {card}"
+        )
+        line_classes = m.group(1).split()
+        for cls, why in (
+            ("d-flex", "the two groups share a line only inside a flex container"),
+            ("flex-wrap", "without it the line overflows the card instead of wrapping"),
+            ("justify-content-between", "it is what puts the counters at the trailing edge"),
+            ("align-items-center", "the badges are taller than the counters"),
+        ):
+            assert cls in line_classes, (
+                f"the card's badge-and-counter line does not itself carry "
+                f"{cls!r}: {why}; it carries {line_classes}"
+            )
+
+        # Both groups are inside that one line, the badges leading it and the
+        # counters closing it.
+        line = self._span_with_role(card, "task-card-summary")
+        assert line, f"the card's badge-and-counter line is not closed: {card}"
+        for role in ("task-card-badges", "task-card-counters",
+                     "task-card-comments", "task-card-subtasks"):
+            assert f'data-role="{role}"' in line, (
+                f"{role!r} does not sit on the card's badge-and-counter line: {line}"
+            )
+        assert (line.index('data-role="task-card-badges"')
+                < line.index('data-role="task-card-counters"')), (
+            f"the counters precede the badges on the card's line; the badges "
+            f"lead it and the counters close it: {line}"
+        )
+        # Neither group leaks into the other: a single flat row of four spans
+        # would satisfy every assertion above and would place nothing at either
+        # edge, because justify-content-between spreads FOUR items across the
+        # line instead of pinning two groups to its two ends.
+        badges = self._span_with_role(line, "task-card-badges")
+        counters = self._span_with_role(line, "task-card-counters")
+        assert "task-card-comments" not in badges, (
+            f"a counter sits inside the badge group: {badges}"
+        )
+        assert 'class="badge' not in counters, (
+            f"a badge sits inside the counter group: {counters}"
+        )
+        assert (counters.index('data-role="task-card-comments"')
+                < counters.index('data-role="task-card-subtasks"')), (
+            f"the trailing group reads subtask count first; the comment count "
+            f"leads the pair on this board: {counters}"
+        )
+
+        # No card of this board renders a separate footer row: not under the
+        # tasks board's role, not with that row's trailing-edge alignment, and
+        # not with the top margin that separated it from the badges. The board is
+        # scanned CARD BY CARD so the guard cannot fail for something a column
+        # header emits, and cannot pass because the one card examined is clean.
+        for column in columns:
+            for card_id in self._sprint_board_card_ids(column):
+                each = self._sprint_board_card_html(column, card_id)
+                for gone in ('data-role="task-card-meta"',
+                             "justify-content-end", "mt-2"):
+                    assert gone not in each, (
+                        f"the card of task #{card_id} still renders {gone!r}; "
+                        f"the counters share the badge line and the card has no "
+                        f"separate footer row: {each}"
+                    )
+
+        # No inline style anywhere on the board (AC62 continues to hold), and no
+        # page-level horizontal overflow is introduced by the merged line: the
+        # card's own line is the only place the two groups can compete for
+        # width, and it wraps.
+        assert 'style="' not in region, (
+            f"the member-tasks board carries an inline style attribute: {region}"
+        )
+
+        # The control: the roadmap tasks page's card is untouched. It still
+        # renders its metadata footer, and that footer still lists the subtask
+        # count BEFORE the comment count — the order this board reverses.
+        _, _, tasks_body = self._req(port, f"/roadmaps/{roadmap}/tasks")
+        tasks_region, _ = self._board_columns(tasks_body)
+        assert 'data-role="task-card-meta"' in tasks_region, (
+            "the roadmap tasks page's board renders no metadata footer at all, "
+            "so asserting the sprint board has none proves nothing"
+        )
+        assert 'data-role="task-card-summary"' not in tasks_region, (
+            "the roadmap tasks page's card grew the sprint card's merged line; "
+            "that card keeps its separate metadata footer"
+        )
+        # The same member task, on the tasks board: one subtask and one comment,
+        # so its footer renders both indicators and the order comparison below
+        # has two positions to compare.
+        tasks_card = self._sprint_board_card_html(tasks_region, member)
+        footer = self._span_with_role(tasks_card, "task-card-meta")
+        assert footer, f"the tasks board's control card renders no footer: {tasks_card}"
+        for role in ("task-card-subtasks", "task-card-comments"):
+            assert f'data-role="{role}"' in footer, (
+                f"the tasks board's control card renders no {role!r}, so the "
+                f"order comparison below is vacuous: {footer}"
+            )
+        assert (footer.index('data-role="task-card-subtasks"')
+                < footer.index('data-role="task-card-comments"')), (
+            f"the tasks board's metadata footer now lists the comment count "
+            f"before the subtask count; that footer keeps its own order, and "
+            f"the sprint card's reversed order is stated separately from it: "
+            f"{footer}"
+        )
+
     def test_sprint_board_card_always_renders_both_counters(self):
         """AC134: both counters are present on EVERY card of the member-tasks
-        board, including when the number they carry is 0, so the footer row is
-        present on every card and every card is the same shape.
+        board, including when the number they carry is 0, so the trailing edge
+        of every card's third line carries both numbers and every card is the
+        same shape.
 
         The subject is a task with neither a subtask nor a comment, because that
         is the only card the criterion discriminates on: a card that has
         something to count renders the same markup whether the rule holds or
         not. A second task, with two subtasks and one comment, is seeded beside
-        it so the two zeros cannot come from a footer that prints 0 whatever the
-        task holds.
+        it so the two zeros cannot come from a counter group that prints 0
+        whatever the task holds.
 
         Each counter is asserted as its whole indicator markup — the element that
         names it, its icon, and its number — rather than as the digit alone: a
@@ -3261,14 +3479,14 @@ class TestWebInterface:
                     f'</i>{n}</span>')
 
         # The card with nothing to count still carries both counters, each
-        # showing 0, inside a footer row that is present.
+        # showing 0, inside the counter group that closes its third line.
         card = self._sprint_board_card_html(columns[0], bare)
-        assert 'data-role="task-card-meta"' in card, (
+        assert 'data-role="task-card-counters"' in card, (
             f"a task with no subtasks and no comments must still render its "
-            f"counter footer: {card}"
+            f"counter group: {card}"
         )
-        for role, icon in (("task-card-subtasks", "ti-subtask"),
-                           ("task-card-comments", "ti-message")):
+        for role, icon in (("task-card-comments", "ti-message"),
+                           ("task-card-subtasks", "ti-subtask")):
             assert counter(role, icon, 0) in card, (
                 f"the card of a task with nothing to count must render "
                 f"{counter(role, icon, 0)!r}; a 0 states that the task has "
@@ -3286,18 +3504,18 @@ class TestWebInterface:
         # The control: the second card's counters carry its own numbers, so the
         # zeros above are the data and not a constant.
         other = self._sprint_board_card_html(columns[0], counted)
-        assert counter("task-card-subtasks", "ti-subtask", 2) in other, (
-            f"the card of a task with two subtasks must render its own count: {other}"
-        )
         assert counter("task-card-comments", "ti-message", 1) in other, (
             f"the card of a commented task must render its own count: {other}"
         )
+        assert counter("task-card-subtasks", "ti-subtask", 2) in other, (
+            f"the card of a task with two subtasks must render its own count: {other}"
+        )
 
-        # Every card of the board carries the row, which is the property the
+        # Every card of the board carries the pair, which is the property the
         # criterion is written for and which no single card can establish.
         cards = region.count('<button type="button" class="card card-sm task-card')
         assert cards == 2, f"the board renders {cards} cards, want the 2 seeded"
-        for role in ("task-card-meta", "task-card-subtasks", "task-card-comments"):
+        for role in ("task-card-counters", "task-card-comments", "task-card-subtasks"):
             assert region.count(f'data-role="{role}"') == cards, (
                 f"the board renders {cards} cards and "
                 f"{region.count(f'data-role=\"{role}\"')} {role!r} elements; "

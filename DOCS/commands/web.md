@@ -194,14 +194,15 @@ Where two cards carry the same ordering timestamp, which is ordinary because a b
 
 ### Cards
 
-Each card presents one member task, in this order:
+Each card presents one member task on three lines:
 
 1. The task **`title`**, leading the card.
 2. The task **reference** `#<id>` on its own line, in muted text.
-3. A **`priority` badge** and a **`severity` badge**, prefixed `P` and `S` and coloured by band, exactly as on the tasks board.
-4. A **footer of counters** at the trailing edge of the card: the task's number of subtasks and its number of comments, each an icon followed by its number.
+3. One line carrying both remaining groups: the **`priority` badge** and the **`severity` badge** at the leading edge, prefixed `P` and `S` and coloured by band exactly as on the tasks board, and the two **counters** at the trailing edge — the number of comments first, then the number of subtasks, each an icon followed by its number.
 
-Both counters are always rendered, including when either or both are `0`, so the footer is always present and a zero is a statement rather than a silence. This is where the sprint card departs from the tasks board card, which renders only the indicators a task has: the sprint card carries exactly two indicators and both are counts, while the tasks board card carries six of mixed kinds, two of which are text and have no zero to show. The card shows no status badge, because the column it sits in already states the status, and it shows no type, specialists or dependency counts: those are in the task detail modal the card opens.
+The badges and the counters share a line because they hold one kind of information — what the task is, and how much is attached to it — and because height is the scarce dimension in a column that is bounded and scrolls. Where the card is too narrow to hold both groups, the line wraps inside the card rather than overflowing it, so the card, its column and the page never scroll horizontally.
+
+Both counters are always rendered, including when either or both are `0`, so a zero is a statement rather than a silence. This is where the sprint card departs from the tasks board card, which renders only the indicators a task has and keeps them in a footer of their own: the sprint card carries exactly two counters and can put them on the badge line, while the tasks board card carries six indicators of mixed kinds, two of them text with no zero to show, which cannot share that line. The counter order differs for the same reason — comments before subtasks here, subtasks before comments in the tasks board's footer. The card shows no status badge, because the column it sits in already states the status, and it shows no type, specialists or dependency counts: those are in the task detail modal the card opens.
 
 The whole card is a `<button>`, so a pointer click, a touch tap, and the keyboard (Enter and Space) all open that task's read-only detail modal.
 

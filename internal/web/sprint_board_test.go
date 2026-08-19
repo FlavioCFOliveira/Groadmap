@@ -25,10 +25,14 @@ import (
 // against that table would fail for the wrong reason — its subject is gone.
 //
 // The markup helpers of the tasks board (boardRegion, columnHeader, cardSlice,
-// metaFooter, cardOpen, cardMarker, shownEmptyState in board_test.go) are reused
+// spanWithRole, cardOpen, cardMarker, shownEmptyState in board_test.go) are reused
 // verbatim wherever they apply, because the two boards emit the same classes and
 // the same data-role hooks: they are one presentation rendered on two pages, and
 // a helper that worked on only one of them would be evidence they had diverged.
+// The one helper NOT reused here is metaFooter, and its absence is the point: this
+// board's card carries no metadata footer at all, because its two counters share
+// the badge line (SPEC/WEB.md § Sprint Detail Sub-Template, The two cards differ
+// here; Acceptance Criterion 133).
 
 // ==================== FIXTURE ====================
 
@@ -1283,11 +1287,18 @@ func reorderSprintTasks(t *testing.T, roadmap string, sprintID int, taskIDs []in
 // ==================== THE CARD ====================
 
 // TestSprintBoard_CardShowsSixDataPointsInOrder is the gate for Acceptance
-// Criterion 133: the card shows exactly six data points, in this order — the
-// title leading the card, the reference `#<id>` on its own line as secondary
-// text, a priority badge, a severity badge, and a trailing-edge footer holding the
-// number of subtasks and the number of comments, each as its icon followed by its
-// number.
+// Criterion 133: the card shows exactly six data points, on THREE lines, in this
+// order — the title leading the card, the reference `#<id>` on its own line as
+// secondary text, and one line carrying the priority badge and the severity badge
+// at its leading edge and the number of comments followed by the number of
+// subtasks at its trailing edge, each counter as its icon followed by its number.
+//
+// The COUNTER ORDER is asserted explicitly, and the criterion requires that: a
+// card showing the subtask count before the comment count satisfies every other
+// clause, so an order left implicit is an order the template is free to flip. It
+// is also the order the tasks board's footer does NOT use, which is why the two
+// are stated separately (SPEC/WEB.md § Sprint Detail Sub-Template, The counter
+// order differs from the tasks board's too).
 //
 // The badge classes are taken FROM the semantic mapping (priorityBadge and
 // severityBadge) rather than written out here, so this test states that the card
@@ -1317,13 +1328,14 @@ func TestSprintBoard_CardShowsSixDataPointsInOrder(t *testing.T) {
 	//    and nothing else.
 	ref := `<span class="d-block small text-secondary mb-1" data-role="task-card-ref">#` +
 		itoa(f.reconcile) + `</span>`
-	// 3 and 4. The two badges: the prefixed value, in the variant the semantic
-	//          mapping assigns to that value.
+	// 3 and 4. The two badges, at the LEADING edge of the card's third line: the
+	//          prefixed value, in the variant the semantic mapping assigns to it.
 	priority := `<span class="badge ` + priorityBadge(9) + `">P9</span>`
 	severity := `<span class="badge ` + severityBadge(2) + `">S2</span>`
-	// 5 and 6. The counters, each an icon followed by its number.
-	subtasks := `<span data-role="task-card-subtasks"><i class="ti ti-subtask me-1"></i>2</span>`
-	comments := `<span data-role="task-card-comments"><i class="ti ti-message me-1"></i>3</span>`
+	// 5 and 6. The counters, at the TRAILING edge of that same line, each an icon
+	//          followed by its number, and the COMMENT count first.
+	comments := counterMarkup("task-card-comments", "ti ti-message", 3)
+	subtasks := counterMarkup("task-card-subtasks", "ti ti-subtask", 2)
 
 	if priorityBadge(9) == severityBadge(2) {
 		t.Fatalf("the fixture's priority and severity fall in the same band (%s); a card that "+
@@ -1340,8 +1352,8 @@ func TestSprintBoard_CardShowsSixDataPointsInOrder(t *testing.T) {
 		{"reference", ref},
 		{"priority badge", priority},
 		{"severity badge", severity},
-		{"subtask counter", subtasks},
 		{"comment counter", comments},
+		{"subtask counter", subtasks},
 	}
 	previous := -1
 	for _, item := range ordered {
@@ -1370,13 +1382,20 @@ func TestSprintBoard_CardShowsSixDataPointsInOrder(t *testing.T) {
 		}
 	}
 
-	// The footer is aligned to the TRAILING edge of the card, which is where the
-	// two counters sit and what distinguishes this row from the tasks board's
-	// leading-edge metadata footer.
-	footer := metaFooter(t, card)
-	if !strings.Contains(footer, "justify-content-end") {
-		t.Errorf("the card's counter footer is not aligned to the trailing edge of the card\n"+
-			"footer: %s", footer)
+	// The four values above sit on ONE line, not on two: the badges and the
+	// counters are both inside the card's third line, which is what makes the
+	// order asserted above an order WITHIN a line rather than an order of lines.
+	// The line's own layout — trailing edge, wrapping, no separate footer — is the
+	// subject of TestSprintBoard_CardMergesBadgesAndCountersOntoOneLine.
+	line := spanWithRole(t, card, "task-card-summary")
+	if line == "" {
+		t.Fatalf("the card renders no third line carrying both groups\ncard: %s", card)
+	}
+	for _, want := range []string{priority, severity, comments, subtasks} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the card's third line does not carry %q; the badges and the counters "+
+				"share one line (Acceptance Criterion 133)\nline: %s", want, line)
+		}
 	}
 
 	// And nothing else. Each of these is a value the task HAS — so the assertion
@@ -1418,15 +1437,16 @@ func TestSprintBoard_CardShowsSixDataPointsInOrder(t *testing.T) {
 }
 
 // TestSprintBoard_BothCountersAlwaysRender is the gate for Acceptance Criterion
-// 134: the subtask count and the comment count are present on EVERY card of this
-// board, including when either or both are `0`, so the footer row is present on
-// every card the board renders.
+// 134: the comment count and the subtask count are present on EVERY card of this
+// board, including when either or both are `0`, so the trailing edge of the card's
+// third line carries both numbers on every card the board renders.
 //
 // The subject is the card whose two counts are both zero, because that is the only
 // card the criterion discriminates on: a card that has something to count renders
 // the same markup whether the rule holds or not. The runbook task carries neither
 // a subtask nor a comment, and the two mixed cards below keep the zero from being
-// produced by a footer that simply prints two zeros whatever the task holds.
+// produced by a counter group that simply prints two zeros whatever the task
+// holds.
 //
 // The counters are asserted as their whole INDICATOR MARKUP — the icon followed by
 // the number, inside the element that names it — and not as the digit alone: a
@@ -1442,14 +1462,14 @@ func TestSprintBoard_BothCountersAlwaysRender(t *testing.T) {
 	// A task with NEITHER counter still renders both, each showing 0: the runbook
 	// task has no subtask and no comment.
 	bare := cardSlice(t, columns[0], f.runbook)
-	if !strings.Contains(bare, `data-role="task-card-meta"`) {
-		t.Errorf("a member task with no subtask and no comment renders no counter footer; the "+
-			"footer row is present on every card of this board (Acceptance Criterion 134)"+
-			"\ncard: %s", bare)
+	if !strings.Contains(bare, `data-role="task-card-counters"`) {
+		t.Errorf("a member task with no subtask and no comment renders no counter group; both "+
+			"counters close the third line of every card of this board (Acceptance "+
+			"Criterion 134)\ncard: %s", bare)
 	}
 	for what, want := range map[string]string{
-		"subtask counter": counterMarkup("task-card-subtasks", "ti ti-subtask", 0),
 		"comment counter": counterMarkup("task-card-comments", "ti ti-message", 0),
+		"subtask counter": counterMarkup("task-card-subtasks", "ti ti-subtask", 0),
 	} {
 		if !strings.Contains(bare, want) {
 			t.Errorf("the card of a task with nothing to count does not render its %s as %q; a 0 "+
@@ -1480,7 +1500,7 @@ func TestSprintBoard_BothCountersAlwaysRender(t *testing.T) {
 	// a board that prints "0" for every counter of every card. The retries task has
 	// one subtask and no comment; the alerting task has two comments and no
 	// subtask. Each renders one real number beside one zero, and the two are
-	// mirror images, so a footer indifferent to the data fails on both.
+	// mirror images, so a counter group indifferent to the data fails on both.
 	for _, tc := range []struct {
 		what     string
 		taskID   int
@@ -1491,38 +1511,187 @@ func TestSprintBoard_BothCountersAlwaysRender(t *testing.T) {
 		{"one subtask and no comment", f.retries, 1, 1, 0},
 		{"no subtask and two comments", f.alerting, 0, 0, 2},
 	} {
-		footer := metaFooter(t, cardSlice(t, columns[tc.column], tc.taskID))
+		group := spanWithRole(t, cardSlice(t, columns[tc.column], tc.taskID), "task-card-counters")
 		for what, want := range map[string]string{
-			"subtask counter": counterMarkup("task-card-subtasks", "ti ti-subtask", tc.subtasks),
 			"comment counter": counterMarkup("task-card-comments", "ti ti-message", tc.comments),
+			"subtask counter": counterMarkup("task-card-subtasks", "ti ti-subtask", tc.subtasks),
 		} {
-			if !strings.Contains(footer, want) {
+			if !strings.Contains(group, want) {
 				t.Errorf("the card of a task with %s does not render its %s as %q; both counters "+
 					"are rendered on every card and each carries its own number"+
-					"\nfooter: %s", tc.what, what, want, footer)
+					"\ncounters: %s", tc.what, what, want, group)
 			}
 		}
 	}
 
-	// And every card of the board carries the row, so the shape is the same one
+	// And every card of the board carries the pair, so the shape is the same one
 	// whatever the sprint holds — the property the criterion is written for, which
 	// no single card can establish on its own.
 	region := memberBoardRegion(t, servePage(t, mux, f.path()))
 	cards := strings.Count(region, cardOpen)
-	footers := strings.Count(region, `data-role="task-card-meta"`)
+	groups := strings.Count(region, `data-role="task-card-counters"`)
 	if cards != 6 {
 		t.Fatalf("the board renders %d cards, want the fixture's 6; the count below would be "+
 			"measured against the wrong number", cards)
 	}
-	if footers != cards {
-		t.Errorf("the board renders %d cards and %d counter footers; every card of this board "+
-			"carries one (Acceptance Criterion 134)", cards, footers)
+	if groups != cards {
+		t.Errorf("the board renders %d cards and %d counter groups; every card of this board "+
+			"carries one (Acceptance Criterion 134)", cards, groups)
 	}
-	for _, role := range []string{"task-card-subtasks", "task-card-comments"} {
+	for _, role := range []string{"task-card-comments", "task-card-subtasks"} {
 		if got := strings.Count(region, `data-role="`+role+`"`); got != cards {
 			t.Errorf("the board renders %d cards and %d %s indicators; both counters are present "+
 				"on every card", cards, got, role)
 		}
+	}
+}
+
+// TestSprintBoard_CardMergesBadgesAndCountersOntoOneLine is the gate for the part
+// of Acceptance Criterion 133 that governs the card's SHAPE rather than its
+// contents: the badges and the counters share one line, the counters close it at
+// its trailing edge, that line wraps inside the card instead of overflowing it on
+// a narrow column, and the card renders no separate footer row for the counters.
+//
+// The contents and their order are asserted by
+// TestSprintBoard_CardShowsSixDataPointsInOrder; what is asserted here is that the
+// four values are laid out as ONE line rather than two, which is the whole of the
+// change and is invisible to any check that only looks for the values.
+//
+// The layout is asserted through the utility classes the line carries, because the
+// classes are what a Go test can observe and are exactly what the browser resolves
+// the behaviour from: `justify-content-between` is what puts the first flex item at
+// the leading edge and the last at the trailing one, and `flex-wrap` is what turns
+// "too narrow to hold both" into a wrap rather than an overflow — a wrapped flex
+// line holding a single item resolves `space-between` to `flex-start`, so the
+// counters drop directly below the badges inside the same card. Without
+// `flex-wrap` the two groups would be squeezed onto one line and the card would
+// overflow its column, which Acceptance Criteria 27 and 133 both forbid.
+//
+// The tasks board's card is asserted UNCHANGED in the same test, because "this
+// board has no metadata footer" states nothing unless the other board still has
+// one: a template that had dropped the footer from both cards would satisfy every
+// absence assertion here.
+func TestSprintBoard_CardMergesBadgesAndCountersOntoOneLine(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	f := seedSprintBoardFixture(t, "settlement-platform")
+	mux := buildMux()
+
+	sprintPage := servePage(t, mux, f.path())
+	columns := memberBoardColumns(t, sprintPage)
+	card := cardSlice(t, columns[0], f.reconcile)
+
+	line := spanWithRole(t, card, "task-card-summary")
+	if line == "" {
+		t.Fatalf("the card renders no line carrying both the badges and the counters\ncard: %s", card)
+	}
+
+	// The line is a flex row that wraps, with its two groups at its two edges.
+	//
+	// The classes are read from the line's OWN opening tag and not from its whole
+	// subtree: both inner groups are flex containers that wrap as well, so a check
+	// against the subtree would find `d-flex` and `flex-wrap` on a line that
+	// carried neither, and would pass on markup that overflows the card.
+	own := elementClassTokens(t, card, `data-role="task-card-summary"`,
+		"the sprint board's card")
+	for class, why := range map[string]string{
+		"d-flex":                  "the two groups share a line only inside a flex container",
+		"flex-wrap":               "without it the line overflows the card instead of wrapping",
+		"justify-content-between": "it is what puts the counters at the trailing edge",
+		"align-items-center":      "the badges are taller than the counters and the line centres them",
+	} {
+		if !own[class] {
+			t.Errorf("the card's badge-and-counter line does not itself carry %q: %s\nline: %s",
+				class, why, line)
+		}
+	}
+
+	// The two groups are the line's own children, the badges first and the
+	// counters last, which is what "leading edge" and "trailing edge" mean once
+	// the line is `justify-content-between`.
+	badges := spanWithRole(t, line, "task-card-badges")
+	counters := spanWithRole(t, line, "task-card-counters")
+	if badges == "" || counters == "" {
+		t.Fatalf("the card's line does not hold both groups (badges %q, counters %q)\nline: %s",
+			badges, counters, line)
+	}
+	if strings.Index(line, badges) > strings.Index(line, counters) {
+		t.Errorf("the counters precede the badges on the card's line; the badges lead it and "+
+			"the counters close it\nline: %s", line)
+	}
+	// Neither group leaks into the other: a single flat row of four spans would
+	// satisfy every "contains" assertion above and would place nothing at either
+	// edge, because `justify-content-between` spreads FOUR items across the line
+	// instead of pinning two groups to its two ends.
+	if strings.Contains(badges, "task-card-comments") || strings.Contains(badges, "task-card-subtasks") {
+		t.Errorf("a counter sits inside the badge group\nbadges: %s", badges)
+	}
+	if strings.Contains(counters, "badge ") {
+		t.Errorf("a badge sits inside the counter group\ncounters: %s", counters)
+	}
+	// The counter group carries both counters and nothing else, so the trailing
+	// edge of the line is the two numbers.
+	if !strings.Contains(counters, counterMarkup("task-card-comments", "ti ti-message", 3)) ||
+		!strings.Contains(counters, counterMarkup("task-card-subtasks", "ti ti-subtask", 2)) {
+		t.Errorf("the trailing group does not carry both of the card's counters\ncounters: %s", counters)
+	}
+
+	// No card of the board renders a separate footer row: not under the tasks
+	// board's role, not under the row's own trailing-edge alignment, and not with
+	// the top margin that separated it from the badges. A template that merely
+	// renamed the footer, or that kept a second row beside the merged line, keeps
+	// at least one of the three, so all three are asserted absent from EVERY card
+	// rather than from the one card sliced above.
+	//
+	// The board is scanned card by card so the guard cannot fail for something the
+	// column header or the empty state emits, and cannot pass because the one card
+	// examined happens to be clean.
+	for _, ids := range f.wantColumns() {
+		for _, id := range ids {
+			each := cardSlice(t, memberBoardRegion(t, sprintPage), id)
+			for _, gone := range []string{
+				`data-role="task-card-meta"`, // the tasks board's footer, which this card has not
+				"justify-content-end",        // that footer's own trailing-edge alignment
+				"mt-2",                       // the gap that separated the footer from the badges
+			} {
+				if strings.Contains(each, gone) {
+					t.Errorf("the card of task #%d still renders %q; the counters share the badge "+
+						"line and the card has no separate footer row (Acceptance Criterion "+
+						"133)\ncard: %s", id, gone, each)
+				}
+			}
+		}
+	}
+
+	// The control that keeps those absences from being vacuous: the ROADMAP TASKS
+	// page's card is untouched by this criterion. It still renders its metadata
+	// footer, and that footer still lists the subtask count BEFORE the comment
+	// count — the order this board deliberately reverses.
+	tasksPage := servePage(t, mux, "/roadmaps/"+f.name+"/tasks")
+	tasksBoard := boardRegion(t, tasksPage)
+	if !strings.Contains(tasksBoard, `data-role="task-card-meta"`) {
+		t.Fatalf("the roadmap tasks page's board renders no metadata footer at all, so asserting " +
+			"the sprint board has none proves nothing; that card is unchanged by Acceptance " +
+			"Criterion 133")
+	}
+	if strings.Contains(tasksBoard, `data-role="task-card-summary"`) {
+		t.Errorf("the roadmap tasks page's card grew the sprint card's merged line; that card " +
+			"keeps its separate metadata footer (Acceptance Criterion 133)")
+	}
+	// The reconciliation task carries two subtasks and three comments, so its card
+	// on the tasks board renders both indicators; it sits in that board's SPRINT
+	// column, which is its second.
+	tasksFooter := metaFooter(t, cardSlice(t, boardColumns(t, tasksPage)[1], f.reconcile))
+	sub := strings.Index(tasksFooter, `data-role="task-card-subtasks"`)
+	com := strings.Index(tasksFooter, `data-role="task-card-comments"`)
+	if sub < 0 || com < 0 {
+		t.Fatalf("the tasks board's control card does not render both counters (subtasks at %d, "+
+			"comments at %d), so the order comparison below is vacuous\nfooter: %s",
+			sub, com, tasksFooter)
+	}
+	if sub > com {
+		t.Errorf("the tasks board's metadata footer now lists the comment count before the "+
+			"subtask count; that footer keeps its own order, and the sprint card's reversed "+
+			"order is stated separately from it\nfooter: %s", tasksFooter)
 	}
 }
 

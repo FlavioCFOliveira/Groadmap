@@ -2192,7 +2192,8 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      needs no extra data either, because the position order is the order in which
      the rows arrived, so a stable sort by the column's timestamp leaves the cards
      that timestamp does not separate in exactly the order the tiebreaker calls for.
-   - **The card.** Each card presents one member task, in this order:
+   - **The card.** Each card presents one member task on three lines, in this
+     order:
      1. the task **`title`**, leading the card — the one place this board
         deliberately differs from the tasks board's card, which leads with its
         reference line instead, because the GitLab issue board card leads with the
@@ -2200,26 +2201,77 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      2. the task **reference** `#<id>` (the task's `id`) on its own line, rendered
         as secondary, muted text, so the card is identifiable by its id without the
         id competing with the title for the reader's attention;
-     3. the task **`priority`** and **`severity`**, each as a Tabler badge carrying
-        that task's integer value behind the one-letter prefix that names it — `P`
-        for the priority and `S` for the severity, so a task of priority `5` and
-        severity `3` shows `P5` and `S3` — and coloured by the band the value falls
-        in, using exactly the mapping in
+     3. **one line carrying both of the card's remaining groups**: the task's two
+        badges at the **leading edge** of that line, and the task's two counters at
+        its **trailing edge**.
+
+        The **`priority`** and **`severity`** lead the line, each as a Tabler badge
+        carrying that task's integer value behind the one-letter prefix that names
+        it — `P` for the priority and `S` for the severity, so a task of priority
+        `5` and severity `3` shows `P5` and `S3` — and coloured by the band the
+        value falls in, using exactly the mapping in
         [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours).
         They occupy the place the GitLab card gives its labels. No new badge colour
         and no new band is introduced here. The prefix rule itself is stated once,
         for the card of both boards, in [Roadmap Tasks Page](#roadmap-tasks-page),
         **Card content**, item 3, and is not restated here: this card renders the
         pair exactly as the tasks board's card does, and the two boards keep one
-        form for it;
-     4. a **footer row of indicators aligned to the trailing edge of the card**,
-        which is where the GitLab card puts its counters: the task's number of
-        subtasks (`subtask_count`) and its number of comments, each rendered as an
-        icon followed by its number — `ti ti-subtask` for the subtask count and
-        `ti ti-message` for the comment count, the same icons the tasks board's card
-        metadata uses (see [Roadmap Tasks Page](#roadmap-tasks-page)). Both counters
-        are always rendered, including when the number they carry is `0` (see **Both
+        form for it.
+
+        The **counters** close the same line at its trailing edge, which is where
+        the GitLab card puts its counters. They are the task's number of comments
+        and its number of subtasks (`subtask_count`), **in that order: the comment
+        count first, then the subtask count**. Each is rendered as an icon followed
+        by its number — `ti ti-message` for the comment count and `ti ti-subtask`
+        for the subtask count, the same two icons the tasks board's card metadata
+        uses (see [Roadmap Tasks Page](#roadmap-tasks-page)). Both counters are
+        always rendered, including when the number they carry is `0` (see **Both
         counters are always rendered** below).
+
+     **Why the badges and the counters share a line.** Between them the two groups
+     answer one question about the task — what this task **is**, and how much is
+     **attached** to it — and a card is read at a glance, so the reader takes them
+     in together rather than one after the other. Giving each group a line of its
+     own also made every card taller than its content needs, and height is the
+     scarce dimension here: the column a card sits in is bounded and scrolls (see
+     **Height and scrolling** below), so every row of height a card does not need is
+     a card the reader has to scroll to reach.
+
+     **The line wraps rather than overflowing.** The leading group and the trailing
+     group sit on one line for as long as the card is wide enough to hold both. When
+     it is not — a column held at its `17rem` minimum, or a reader whose text size
+     is large — the line **wraps**, placing the trailing group below the leading one
+     inside the same card. It never overflows the card's edge, and it never makes
+     the card, the column, or the page scroll horizontally (see
+     [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
+     rules 2 and 10). The rule is stated as behaviour because that is what a reader
+     and a test can observe; the card carries no inline `style` attribute and every
+     class it emits is defined either in the vendored Tabler distribution or in the
+     project override stylesheet `static/style.css` (see
+     [UI Framework](#ui-framework), rules 8 and 10, and **Markup** below).
+
+     **The two cards differ here, and the difference is deliberate.** The tasks
+     board's card keeps its **separate metadata footer** and does not fold it into
+     the badge line (see [Roadmap Tasks Page](#roadmap-tasks-page), **Card
+     content**, item 4). That footer lists six indicators of mixed kinds, two of
+     which — the sprint the task belongs to and its `specialists` — are text rather
+     than counts and carry no bounded width, so the list cannot share a line with
+     the badges: it would either push them off the line or wrap beneath them and
+     spend the height the merge exists to save. This card carries exactly two
+     indicators, both counts and both short, so it can. The two cards therefore
+     diverge in this one line and in nothing else: the badge form and its prefixes,
+     the two icons, the badge colours, the absent status badge, and the card as the
+     modal trigger all stay shared. This is a stated divergence, not drift.
+
+     **The counter order differs from the tasks board's too.** On this card the
+     comment count comes first and the subtask count second. The tasks board's
+     metadata footer keeps its own order, in which the subtask count precedes the
+     comment count among the six indicators it lists. The two orders are stated
+     separately because the two groups are separate — a pair read at the trailing
+     edge of a line here, a list of six heterogeneous indicators in a block of its
+     own there — and neither order is derived from the other. Each is fixed in this
+     specification rather than left to the template, so that what a card shows is
+     testable rather than incidental.
 
      The card carries **no status badge**: the column the card sits in already
      states the task's status, which is the reason the tasks board's card omits one
@@ -2232,11 +2284,11 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      modal the card opens (see [Task Detail Modal](#task-detail-modal)). The card
      does not redefine any field; `MODELS.md` and `DATABASE.md` remain canonical.
 
-     **Both counters are always rendered.** The subtask count and the comment count
+     **Both counters are always rendered.** The comment count and the subtask count
      are present on every card of this board, including when either or both are `0`:
-     a task with no subtask shows the subtask icon followed by `0`, a task with no
-     comment shows the comment icon followed by `0`, and the footer row is therefore
-     present on every card the board renders.
+     a task with no comment shows the comment icon followed by `0`, a task with no
+     subtask shows the subtask icon followed by `0`, and the trailing edge of the
+     third line therefore carries both numbers on every card the board renders.
 
      This is a deliberate departure from the tasks board's card, which renders an
      indicator only when it has something to count (see
@@ -5753,17 +5805,28 @@ Rules:
     ordering-timestamp order, and the task `id` order — so that no assertion can
     pass on an order that merely coincides with the specified one. No ordering by
     priority, severity, title, or id is observable anywhere on the board.
-133. Each card of the sprint's member-tasks board shows exactly six data points, in
-    this order: the task `title` leading the card, the reference `#<id>` on its own
-    line as secondary text, a `priority` badge reading `P` immediately followed by
-    the task's priority, a `severity` badge reading `S` immediately followed by the
-    task's severity, and — in a footer
-    row aligned to the trailing edge of the card — the number of subtasks and the
-    number of comments, each as an icon (`ti ti-subtask` and `ti ti-message`
-    respectively) followed by its number. A task of priority `5` and severity `3`
-    shows `P5` and `S3`; a badge carrying the bare integer does not satisfy this
-    criterion, and this card renders the pair exactly as the tasks board's card does
-    (Acceptance Criterion 85 continues to hold). The priority and severity badges
+133. Each card of the sprint's member-tasks board shows exactly six data points, on
+    three lines, in this order: the task `title` leading the card; the reference
+    `#<id>` on its own line as secondary text; and one line carrying, at its leading
+    edge, a `priority` badge reading `P` immediately followed by the task's priority
+    and a `severity` badge reading `S` immediately followed by the task's severity,
+    and, at its trailing edge, the number of comments followed by the number of
+    subtasks, each as an icon (`ti ti-message` and `ti ti-subtask` respectively)
+    followed by its number. The badges and the counters share that one line, and the
+    card renders no separate footer row for the counters. The check MUST assert the
+    counter order, because a card showing the subtask count before the comment count
+    satisfies every other clause of this criterion. On a column too narrow to hold
+    the two groups side by side that line wraps inside the card instead of
+    overflowing its edge, and `<body>` still produces no page-level horizontal
+    overflow (Acceptance Criterion 27 continues to hold). The card carries no inline
+    `style` attribute, and every class it emits is defined either in the vendored
+    Tabler distribution or in `static/style.css` (Acceptance Criterion 62 continues
+    to hold). A task of priority `5` and severity `3` shows `P5` and `S3`; a badge
+    carrying the bare integer does not satisfy this criterion, and this card renders
+    the pair exactly as the tasks board's card does (Acceptance Criterion 85
+    continues to hold). The card of the roadmap tasks page's board is unchanged by
+    this criterion: it keeps its separate metadata footer and that footer's own
+    indicator order. The priority and severity badges
     take the colours the semantic mapping assigns to their values, which the prefix
     does not affect (Acceptance Criterion 61
     continues to hold). The card carries **no** status badge, because the column
@@ -5772,10 +5835,11 @@ Rules:
     modal the card opens (see [Sprint Detail Sub-Template](#sprint-detail-sub-template)
     and [Task Detail Modal](#task-detail-modal)).
 134. Every card of the sprint's member-tasks board renders both of its counters: the
-    subtask count and the comment count are present on every card, including when
-    either or both are `0`, so a task with no subtask and no comment still shows the
-    subtask icon followed by `0` and the comment icon followed by `0`, and the footer
-    row is present on every card of the board. The check asserts a card whose two
+    comment count and the subtask count are present on every card, including when
+    either or both are `0`, so a task with no comment and no subtask still shows the
+    comment icon followed by `0` and the subtask icon followed by `0`, and both
+    numbers sit at the trailing edge of the card's third line, which every card of
+    the board renders. The check asserts a card whose two
     counts are both zero, because a card that has something to count renders the same
     markup whether this criterion holds or not. The card of the roadmap tasks page's
     board is not governed by this criterion and keeps its own rule, under which an
