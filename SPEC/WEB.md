@@ -553,11 +553,13 @@ work with an explicit time budget.
 5. **No new status and no new error class.** The budget introduces no new HTTP
    status, no new sentinel error, and no new process exit code. A request whose
    query exceeded the budget is answered exactly as any other query execution
-   failure is answered, so the HTTP status mapping in
-   [Routes and Pages](#routes-and-pages) and the exit-code mapping in
-   [Error Handling and Exit Codes](#error-handling-and-exit-codes) are both
-   unchanged. Exhausting the budget never terminates the process: the server keeps
-   serving.
+   failure is answered — HTTP `400 Bad Request` with `kind` `execution`, the
+   status and the kind the execution-failure class already carries (see
+   [Query-Bar Error Handling](#query-bar-error-handling), rules 3 and 5) — so the
+   budget adds no row to the HTTP status mapping in
+   [Routes and Pages](#routes-and-pages) and leaves the exit-code mapping in
+   [Error Handling and Exit Codes](#error-handling-and-exit-codes) unchanged.
+   Exhausting the budget never terminates the process: the server keeps serving.
 6. **Ordinary queries are unaffected.** A query that completes within the budget
    is served exactly as it was served before the budget existed: the same nodes
    and edges, in the same response shape, with nothing truncated, no ordering
@@ -633,7 +635,11 @@ showing a state that no longer matches the data.
    It also covers the data-state-dependent error responses — for example a
    `404 Not Found` for a roadmap or a sprint that does not exist, and a `500` from
    a read failure — because whether such a path is found depends on the current
-   database or store state, so those responses are themselves data-derived.
+   database or store state, so those responses are themselves data-derived. The
+   `400 Bad Request` responses of the graph data endpoint (see
+   [Query-Bar Error Handling](#query-bar-error-handling)) carry the header as well.
+   The rule is applied per route rather than per outcome, so every response of a
+   route in the list above carries `no-store` whatever its status.
 2. **`no-store`, not merely `no-cache`.** `Cache-Control: no-store` is the chosen
    directive. The response MUST NOT be stored by any cache, so a reload, a
    back/forward navigation, or a re-fetch always re-reads the current database or
@@ -711,8 +717,11 @@ HTTP status mapping for page and data routes:
 | Audit `page` parameter out of range, non-integer, or garbage | 200 (clamped to nearest valid page; see [Roadmap Audit Log Page](#roadmap-audit-log-page)) |
 | Tasks `q` search parameter absent, empty, unmatched, or undecodable | 200 (never an error; see [Roadmap Tasks Page](#roadmap-tasks-page)) |
 | Tasks `type`, `priority`, or `severity` filter parameter absent, unknown, malformed, or undecodable | 200 (never an error; the dimension applies no filter; see [Roadmap Tasks Page](#roadmap-tasks-page)) |
+| Graph data `q` rejected by the read-only guard-rail | 400 (`kind` `not_read_only`; the query is not executed; see [Query-Bar Error Handling](#query-bar-error-handling)) |
+| Graph data `limit` not one of the six allowed values | 400 (`kind` `invalid_limit`; the query is not executed; see [Query-Bar Error Handling](#query-bar-error-handling)) |
+| Graph data query fails once running, a query cancelled for exhausting the time budget included | 400 (`kind` `execution`; see [Query-Bar Error Handling](#query-bar-error-handling)) |
 | Non-read HTTP method on any route | 405 |
-| Unhandled internal error reading data (I/O, corrupt store) | 500 |
+| Unhandled internal error reading data (I/O, corrupt store), a graph store that fails to open included | 500 |
 
 The HTTP status codes above describe the running server's HTTP responses and are
 distinct from the process exit codes in
@@ -2206,19 +2215,27 @@ layout degradation already specified (see
 [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library),
 rule 5). The failure modes are kept distinct so the user understands what to fix.
 
+The endpoint answers each of the three with HTTP `400 Bad Request` and a JSON body
+that names the failure's class in a `kind` field, in the shape specified in
+`DATA_FORMATS.md § Graph View Data`, **Error Shape**. Rules 5 to 9 below fix the
+status, the precedence between the three, the boundary against the `500` of an
+internal read error, and what the body carries.
+
 1. **Query rejected: not read-only.** When the submitted query contains a writing
    clause or a DDL clause, the endpoint's read-only guard-rail rejects it before
    execution (see [Graph Data Endpoint](#graph-data-endpoint)) and the query is
    never run. The page surfaces a clear message stating that the query was rejected
    because it is not read-only, distinct from an execution failure. The graph
-   already shown is left in place; the rejection changes nothing in the store.
+   already shown is left in place; the rejection changes nothing in the store. The
+   endpoint answers HTTP `400 Bad Request` with `kind` `not_read_only`.
 
 2. **Invalid limit.** When the `limit` parameter is not one of the six allowed
    values (`50`, `100`, `250`, `500`, `1000`, `3000`), the endpoint rejects the
    request as an invalid limit and does not execute the query; the page surfaces a
    clear message naming the invalid limit. Because the limit values originate from
    the page's own dropdown, this state is normally only reachable by a crafted
-   request, but the endpoint rejects it rather than guessing a value.
+   request, but the endpoint rejects it rather than guessing a value. The endpoint
+   answers HTTP `400 Bad Request` with `kind` `invalid_limit`.
 
 3. **Query failed to execute.** When the submitted query is accepted as read-only
    but then fails in the engine — for example, invalid Cypher syntax — the page
@@ -2230,12 +2247,97 @@ rule 5). The failure modes are kept distinct so the user understands what to fix
    the endpoint cancels because it exhausted the endpoint's 5-second query time
    budget is an execution failure of this same case and is surfaced with this same
    message; the budget is specified in
-   [Graph Query Time Budget](#graph-query-time-budget).
+   [Graph Query Time Budget](#graph-query-time-budget). The endpoint answers HTTP
+   `400 Bad Request` with `kind` `execution` in every case of this rule.
 
 4. **In-place, read-only, non-fatal.** In every case the message is shown in place
    on the page, the page does not crash, and the failure triggers no write and no
    navigation, exactly as the layout-degradation message does. The user can edit
    the query or change the limit and search again.
+
+5. **One status, three kinds.** All three failures carry HTTP `400 Bad Request`,
+   and the body's `kind` field is what distinguishes them. One status fits all
+   three because in each of them the server is able to serve the route and refuses
+   the request the caller made: the query carries a clause the endpoint's contract
+   forbids, the `limit` falls outside the closed set the endpoint publishes, or the
+   query the caller wrote cannot be executed. RFC 9110, Section 15.5.1, defines
+   `400` as the status for a request the server "cannot or will not process ... due
+   to something that is perceived to be a client error", and RFC 9110, Section
+   15.5, puts the explanation of the error in the response representation, which is
+   exactly what the `kind` and `error` fields are. Splitting the three across
+   different statuses would assert a distinction HTTP does not carry, while the
+   body already carries it precisely.
+
+   A query cancelled for exhausting the time budget carries this same `400` and
+   this same `execution` kind. It is neither a `503` nor a `504`. RFC 9110, Section
+   15.6.4, defines `503` as a temporary overload or scheduled maintenance "which
+   will likely be alleviated after some delay": this server is neither overloaded
+   nor under maintenance, it keeps serving every other request, and delay
+   alleviates nothing, because the same query over the same store exhausts the same
+   budget again. RFC 9110, Section 15.6.5, defines `504` for a server "acting as a
+   gateway or proxy" that did not receive a timely response "from an upstream
+   server": this server is neither, and the engine it runs the query on is
+   in-process, not an upstream server. What is true of a budget exhaustion is that
+   the caller asked this endpoint for more work than it spends on one request, and
+   that the caller changes the outcome by writing a cheaper query. `400` states
+   that; the two 5xx codes state something else that is not the case here.
+
+6. **Precedence: the `limit` is resolved before the guard rail runs.** One request
+   can be wrong in more than one way at once. The endpoint resolves the `limit`
+   first and validates the query as read-only second, so a request carrying both an
+   invalid `limit` and a query that is not read-only is answered `invalid_limit`,
+   not `not_read_only`. The order in which cases 1 to 3 appear above is the order in
+   which they are easiest to explain and is **not** an order of precedence; this
+   rule is the order of precedence and is the one to implement. The two orders
+   differ in nothing else: under either, the request is rejected before the query
+   runs and before the graph store is opened, so neither reads nor writes anything.
+   The case is in practice reachable only by a crafted request, because the page's
+   dropdown offers only the six allowed values (see
+   [Graph Query Bar](#graph-query-bar), rule 3).
+
+7. **The boundary against the internal read error is drawn at when the failure
+   surfaces, not at what the failure is.** This endpoint answers an internal read
+   error with `500`, exactly as every other route does (see
+   [Routes and Pages](#routes-and-pages) and
+   [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store),
+   rule 5). What separates that `500` from the `400` of case 3 is the moment the
+   failure surfaces: a failure to open the roadmap's graph store is an internal read
+   error and is answered `500`, while a failure that surfaces once the query is
+   running — from the run itself, or from the walk over the result it produces — is
+   a query execution failure and is answered `400`.
+
+   The boundary is a rule about timing, and it is deliberately not a claim about
+   what the failure is. A store corruption that a scan discovers while the query is
+   already running surfaces as a query execution failure and is therefore reported
+   as one, with `400` and `kind` `execution`, even though its cause is the store and
+   not the query. The endpoint classifies the engine's failures no further than
+   this. Drawing the boundary at the moment of surfacing keeps it verifiable from
+   outside the server, where drawing it at the cause would make the contract depend
+   on which failures the engine happens to tell apart.
+
+8. **The response body.** Each of the three failures carries a JSON body of exactly
+   two string fields, `error` and `kind`, in the shape specified in
+   `DATA_FORMATS.md § Graph View Data`, **Error Shape**, which is canonical for it.
+   `kind` is the machine-readable class — `not_read_only`, `invalid_limit`, or
+   `execution` — and `error` is the human-readable reason the page shows in place.
+   The `error` of an execution failure carries the engine's own diagnostic text, so
+   the user reads for a given query the same diagnostic the CLI prints for it (see
+   `GRAPH.md § Error Handling and Exit Codes`, rule 2) and can act on it; the
+   `error` of an invalid limit names the rejected value, which is what case 2's
+   message requires. The `500` of an internal read error does not carry this shape:
+   it is answered as every other route's internal read error is.
+
+9. **A request the caller abandoned is answered, but nobody reads the answer.** A
+   client that disconnects mid-query cancels the query immediately (see
+   [Graph Query Time Budget](#graph-query-time-budget), rule 2). The endpoint
+   treats that cancellation as a query execution failure like any other and answers
+   it with the same `400` and the same `execution` kind, with an `error` naming the
+   cancellation rather than the budget, because the two have different causes and
+   the budget must not be blamed for a caller that gave up. That answer reaches no
+   one: the client that would have read it is gone. It is specified here because it
+   is a third reason the `execution` kind arises, and a contract naming only two
+   would be incomplete on the day it is written. It is not an outcome a connected
+   client can observe, so no client-side test can assert it.
 
 ### Graph Labels Sidebar
 
@@ -2413,7 +2515,17 @@ write.
   graph-element and property-type conventions already defined in
   `DATA_FORMATS.md § Graph Query Result` (the node and relationship object shapes
   and the property-type-to-JSON mapping) rather than inventing a new element
-  encoding.
+  encoding. A request that fails carries the error object instead, specified in
+  the same file (see the next bullet).
+- **Failure responses.** The three ways a request to this endpoint fails — the
+  read-only guard-rail rejection, an invalid `limit`, and a query execution
+  failure — are each answered with HTTP `400 Bad Request` and a JSON body naming
+  the failure's class in a `kind` field, in the shape specified in
+  `DATA_FORMATS.md § Graph View Data`, **Error Shape**. The status, the `kind`
+  values, the precedence between the three, and the boundary against the `500` of
+  an internal read error are specified in
+  [Query-Bar Error Handling](#query-bar-error-handling); this section does not
+  restate them.
 - **Query parameters.** The endpoint accepts two optional URL query parameters
   that the graph page's query bar (see
   [Graph Query Bar](#graph-query-bar)) sends, and that drive which Cypher query
@@ -3545,7 +3657,7 @@ Rules:
    bind failure; the process binds an ephemeral port instead and starts normally.
 4. Once the server is serving, per-request failures (roadmap not found, corrupt
    graph store, read error) are handled inside the running server as HTTP status
-   responses (404, 405, 500) and do **not** terminate the process. The process
+   responses (400, 404, 405, 500) and do **not** terminate the process. The process
    exit code is determined by how the server itself is started and stopped.
 5. Errors written to stderr by `rmp web` carry the standard AI-agent hint and
    follow the plain-text error format in `HELP.md § Error message format`.
@@ -3993,7 +4105,9 @@ Rules:
     backtick-quoted identifier does not trip the rejection: for example
     `MATCH (m) WHERE m.title = "mentions delete and set" RETURN m` is accepted as
     read-only and executes, while `MATCH (n) DELETE n` is rejected and does not
-    execute (see [Graph Data Endpoint](#graph-data-endpoint),
+    execute. The rejected request is answered HTTP `400 Bad Request` with a JSON
+    body whose `kind` is `not_read_only` (see
+    [Graph Data Endpoint](#graph-data-endpoint),
     [Query-Bar Error Handling](#query-bar-error-handling), and
     `GRAPH.md § Literal-Aware Normalization`).
 48. The endpoint applies the node limit by appending `LIMIT <n>` only when the
@@ -4011,8 +4125,10 @@ Rules:
     applied: the comment does not swallow the injected clause, and the endpoint
     does not return the whole graph. A `limit` parameter that is not one of the six
     allowed values is rejected
-    as an invalid limit and the query is not executed; the page surfaces a clear
-    invalid-limit message (see [Graph Data Endpoint](#graph-data-endpoint) and
+    as an invalid limit and the query is not executed; the request is answered
+    HTTP `400 Bad Request` with a JSON body whose `kind` is `invalid_limit`, and
+    the page surfaces a clear invalid-limit message naming the rejected value (see
+    [Graph Data Endpoint](#graph-data-endpoint) and
     [Query-Bar Error Handling](#query-bar-error-handling)).
 49. The endpoint builds the `{"nodes": [...], "edges": [...]}` response by walking
     the entire query result and collecting every node and every relationship that
@@ -4031,7 +4147,9 @@ Rules:
     rejection, invalid limit, or execution failure — the message is shown in place,
     the page does not crash, and the failure triggers no write and no navigation,
     consistent with the graceful layout degradation; the user can edit the query or
-    change the limit and search again (see
+    change the limit and search again. All three failures are answered HTTP
+    `400 Bad Request`, and the body's `kind` is what tells them apart
+    (Acceptance Criterion 123; see
     [Query-Bar Error Handling](#query-bar-error-handling)).
 51. The labels sidebar shows an absolute total in each section header, derived
     client-side from the same already-fetched graph data as the per-entry
@@ -4574,7 +4692,9 @@ Rules:
     shows the same "query failed to execute" message it shows for a query that
     fails in the engine — distinct from the "query rejected: not read-only" message
     of Acceptance Criterion 47 and from the invalid-limit message of Acceptance
-    Criterion 48 — with no new HTTP status and no new exit code introduced. This is
+    Criterion 48. The request is answered HTTP `400 Bad Request` with `kind`
+    `execution`, the same status and the same kind a query that fails in the engine
+    receives, so no new HTTP status and no new exit code is introduced. This is
     proven with a query whose work the node limit does not bound, such as an
     aggregate over a Cartesian product (`MATCH (a),(b),(c) RETURN count(*)`), which
     returns a single row and is therefore unaffected by the injected `LIMIT`. A
@@ -4776,6 +4896,26 @@ Rules:
     [Roadmap Tasks Page](#roadmap-tasks-page), **One rule, and only one
     implementation of it**, and **What keeps the shipped rule equal to the
     server's**).
+123. Every query-bar failure of `GET /roadmaps/{name}/graph/data` is answered with
+    HTTP `400 Bad Request` and a JSON body of exactly two string fields, `error`
+    and `kind`, and never with HTTP 200 and never with the
+    `{"nodes": ..., "edges": ...}` shape. `kind` takes exactly three values:
+    `not_read_only` for a query the read-only guard-rail rejected (Acceptance
+    Criterion 47), `invalid_limit` for a `limit` outside the six allowed values
+    (Acceptance Criterion 48), and `execution` for a query that failed once running,
+    which includes a query cancelled for exhausting the 5-second time budget
+    (Acceptance Criterion 110). One status serves all three and the `kind` is what
+    distinguishes them. The precedence is fixed and testable: a request carrying
+    both an invalid `limit` and a query that is not read-only is answered
+    `invalid_limit`, because the endpoint resolves the limit before it runs the
+    guard rail. The boundary against the internal read error is drawn at the moment
+    the failure surfaces: a graph store that fails to open is answered HTTP 500,
+    while a failure surfacing once the query is running is answered HTTP 400 with
+    `kind` `execution`, a store corruption a scan discovers mid-query included. The
+    `error` of an execution failure carries the engine's diagnostic and the page
+    renders it in place; the `error` of an invalid limit names the rejected value
+    (see [Query-Bar Error Handling](#query-bar-error-handling) and
+    `DATA_FORMATS.md § Graph View Data`, **Error Shape**).
 
 ## See Also
 

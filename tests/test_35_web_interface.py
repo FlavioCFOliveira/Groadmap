@@ -3341,6 +3341,86 @@ class TestWebInterface:
             "an execution failure must be distinct from a read-only rejection"
         )
 
+    def test_query_bar_invalid_limit_outranks_not_read_only(self):
+        """AC123: one request can be wrong in more than one way at once. The
+        endpoint resolves the limit BEFORE it runs the read-only guard rail, so a
+        request carrying both an invalid limit and a query that is not read-only
+        is answered kind=invalid_limit, never kind=not_read_only. The order in
+        which SPEC/WEB.md lists the three failure cases is an order of
+        explanation, not an order of precedence (§ Query-Bar Error Handling,
+        rule 6). The two single-fault controls keep the assertion honest: without
+        them an endpoint that never classified anything as not_read_only would
+        pass the combined case."""
+        proc, port = self._start(["--port", "0"])
+        before = json.loads(self._req(port, self._graph_data(port))[2])
+        write_query = "MATCH (n) DELETE n"
+        bad_limit = "7"
+
+        # Control A: the query alone is classified not_read_only.
+        status, _, body = self._req(
+            port, self._graph_data(port, q=write_query, limit="100")
+        )
+        assert status == 400, "a write query with a valid limit must be rejected"
+        assert json.loads(body).get("kind") == "not_read_only", (
+            "the write query must reach the guard rail when the limit is valid"
+        )
+
+        # Control B: the limit alone is classified invalid_limit.
+        status, _, body = self._req(port, self._graph_data(port, limit=bad_limit))
+        assert status == 400
+        assert json.loads(body).get("kind") == "invalid_limit"
+
+        # The claim: both wrong at once resolves to invalid_limit.
+        status, _, body = self._req(
+            port, self._graph_data(port, q=write_query, limit=bad_limit)
+        )
+        assert status == 400, "a doubly invalid request must still be a 400"
+        err = json.loads(body)
+        assert err.get("kind") == "invalid_limit", (
+            "the limit is resolved before the guard rail runs, so an invalid "
+            f"limit outranks a query that is not read-only: {err}"
+        )
+        assert bad_limit in err.get("error", ""), (
+            f"the invalid-limit message must name the rejected value: {err}"
+        )
+
+        # The query never ran: the DELETE would have emptied the store.
+        after = json.loads(self._req(port, self._graph_data(port))[2])
+        assert len(after["nodes"]) == len(before["nodes"]), (
+            "the request must be rejected before the query runs, so the store "
+            "is untouched"
+        )
+
+    def test_query_bar_error_body_carries_exactly_error_and_kind(self):
+        """AC123: every query-bar failure is answered with a JSON body of exactly
+        two string fields, error and kind, and never with the
+        {"nodes": ..., "edges": ...} success shape
+        (SPEC/DATA_FORMATS.md - Graph View Data, Error Shape, rule 1)."""
+        proc, port = self._start(["--port", "0"])
+        cases = (
+            ("not_read_only", {"q": "MATCH (n) DELETE n"}),
+            ("invalid_limit", {"limit": "7"}),
+            ("execution", {"q": "MATCH (n) RETURN"}),
+        )
+        for want_kind, params in cases:
+            status, _, body = self._req(port, self._graph_data(port, **params))
+            assert status == 400, f"{want_kind}: status {status}, want 400"
+            err = json.loads(body)
+            assert set(err.keys()) == {"error", "kind"}, (
+                f"{want_kind}: failure body fields {sorted(err)}, want exactly "
+                "['error', 'kind']"
+            )
+            assert isinstance(err["error"], str) and err["error"], (
+                f"{want_kind}: error must be a non-empty string: {err!r}"
+            )
+            assert isinstance(err["kind"], str) and err["kind"] == want_kind, (
+                f"{want_kind}: kind must be the class name: {err!r}"
+            )
+            assert "nodes" not in err and "edges" not in err, (
+                f"{want_kind}: a failure response carries neither nodes nor "
+                f"edges: {err!r}"
+            )
+
     def test_query_bar_extraction_dedup_and_orphan_drop(self):
         """AC49: every returned edge endpoint resolves to a node in the same
         response (orphan edges dropped, ids deduplicated)."""

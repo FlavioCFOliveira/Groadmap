@@ -16,6 +16,11 @@
 - Errors are written as explicit human-readable messages to stderr
 - Input-related errors (missing parameters, wrong types, unknown commands or subcommands) additionally show the **specific help of the command or subcommand** that was invoked
 - Uses standard Unix exit codes for script integration
+- This rule governs **command output**. It does not govern the HTTP responses of
+  the running `web` server, which are not command stdout or stderr (see the
+  server-startup bullet above). The graph data endpoint answers a rejected or
+  failed query with a JSON error object, specified in
+  [Graph View Data](#graph-view-data), **Error Shape**.
 
 ### Input
 
@@ -79,7 +84,10 @@ Help commands display human-readable text to stdout.
 
 ### Error Response
 
-Error responses follow typical CLI conventions (NOT JSON).
+Error responses follow typical CLI conventions (NOT JSON). This covers command
+output only; the `web` server's HTTP error responses are separate, and the graph
+data endpoint's JSON error object is specified in
+[Graph View Data](#graph-view-data), **Error Shape**.
 
 ---
 
@@ -423,8 +431,10 @@ clause only when the query both lacks a top-level `LIMIT` of its own and is a
 statement form that admits a `LIMIT` clause. The full parameter contract, the
 read-only guard-rail, the limit-injection and suppression rules, and the
 failure modes are specified in `WEB.md § Graph Data Endpoint` and
-`WEB.md § Query-Bar Error Handling`; this section specifies only the response
-shape, which is identical regardless of which query produced it.
+`WEB.md § Query-Bar Error Handling`; this section specifies the response shapes —
+the successful one below, which is identical regardless of which query produced
+it, and the error one in [Error Shape](#error-shape) — and not the behaviour that
+selects between them.
 
 This is the canonical specification of the graph view-data shape. It **reuses**
 the graph-element and property-type conventions already defined in
@@ -454,10 +464,13 @@ Field reference:
 
 Rules:
 
-1. `nodes` and `edges` are always present. An empty graph returns
-   `{"nodes": [], "edges": []}` (empty arrays, never `null`). A roadmap that has
-   never used the `graph` command is treated as an empty graph and returns this
-   empty object; it is not an error (see `GRAPH.md § Persistence Layout`, rule 2).
+1. `nodes` and `edges` are always present **in a successful response**. An empty
+   graph returns `{"nodes": [], "edges": []}` (empty arrays, never `null`). A
+   roadmap that has never used the `graph` command is treated as an empty graph and
+   returns this empty object; it is not an error (see
+   `GRAPH.md § Persistence Layout`, rule 2). A response that is not successful
+   carries neither field: it carries the object in [Error Shape](#error-shape)
+   below, or, for an internal read error, no JSON at all.
 2. Each node object follows the Node mapping and each edge object follows the
    Relationship mapping in [Graph element mapping](#graph-element-mapping),
    including the `properties` object, whose values follow the
@@ -485,6 +498,54 @@ Rules:
    counts from the nodes' `labels` arrays and the edge-type inventory and counts
    from the edges' `type` field, client-side, from this same response. That feature
    consumes this shape and does not change it; no field is added here for it.
+
+### Error Shape
+
+A request the graph data endpoint refuses, and a query that fails, are answered
+with this object in place of the node-and-edge object above. The endpoint returns
+it for each of the three query-bar failures, always with HTTP `400 Bad Request`.
+The status, the failure classes, and the rules that select between them are
+specified in `WEB.md § Query-Bar Error Handling`, which is canonical for them; this
+section is canonical for the shape.
+
+```json
+{
+  "error": "query rejected: not read-only",
+  "kind": "not_read_only"
+}
+```
+
+Field reference:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `error` | string | The human-readable reason. The graph page shows it in place as its failure message. |
+| `kind` | string | The machine-readable failure class: `not_read_only`, `invalid_limit`, or `execution`. |
+
+Rules:
+
+1. Both fields are always present and both are always strings. The object carries
+   these two fields and no others, and it carries neither `nodes` nor `edges`.
+2. `kind` takes exactly three values, one per failure class in
+   `WEB.md § Query-Bar Error Handling`: `not_read_only` for a query the read-only
+   guard-rail rejected before execution, `invalid_limit` for a `limit` that is not
+   one of the six allowed values, and `execution` for a query that was accepted as
+   read-only and then failed once running. A query cancelled for exhausting the
+   endpoint's query time budget is an execution failure and carries `execution`;
+   the budget adds no fourth value (see `WEB.md § Graph Query Time Budget`).
+3. `error` is written to be read by a person and is not parsed. For an execution
+   failure it carries the engine's own diagnostic text, so a given query produces
+   the same diagnostic here as it produces on the CLI (see
+   `GRAPH.md § Error Handling and Exit Codes`, rule 2). For an invalid limit it
+   names the rejected value.
+4. The object is serialized exactly as every other response of this endpoint is:
+   HTML-safe, so `<`, `>`, and `&` are escaped (see `WEB.md § Graph Data Endpoint`),
+   pretty-printed with two-space indentation, and terminated by a newline (see
+   [Implementation Notes](#implementation-notes)).
+5. This is the endpoint's error contract for the three query-bar failures only. An
+   internal read error — a graph store that cannot be opened, for example — is
+   answered HTTP `500` as on every other route of the web interface and does not
+   carry this shape (see `WEB.md § Query-Bar Error Handling`, rule 7).
 
 ---
 

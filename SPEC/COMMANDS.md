@@ -2450,7 +2450,7 @@ process exits 0 (see `WEB.md § Server Lifecycle`).
 ### Exit Codes
 
 These are the exit codes of the `rmp web` **process**. They are distinct from the
-per-request HTTP status codes the running server returns (200, 404, 405, 500),
+per-request HTTP status codes the running server returns (200, 400, 404, 405, 500),
 which are specified in `WEB.md § Routes and Pages`.
 
 | Exit Code | Cause |

@@ -3,11 +3,13 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -391,5 +393,286 @@ func TestHandleGraphData_LimitAppliesDespiteTrailingComment(t *testing.T) {
 				t.Errorf("nodes = %d, want 50: the resolved limit must apply even when the query ends in a comment", len(view.Nodes))
 			}
 		})
+	}
+}
+
+// corruptGraphWAL makes the roadmap's graph store fail to OPEN, by flipping a
+// byte in the middle of its write-ahead log. The seeded graph commits each CREATE
+// in its own transaction, so a byte in the middle of the log lands inside a frame
+// that has committed transactions on both sides of it: that is genuine mid-WAL
+// corruption, not a torn tail, and GoGraph's recovery.Open surfaces it as a hard
+// error rather than truncating to the last good frame.
+//
+// This is the fixture for the internal-read-error side of the boundary in
+// SPEC/WEB.md § Query-Bar Error Handling, rule 7. It is deliberately a data
+// fault, not a permission fault: it needs no chmod, behaves identically for an
+// unprivileged and a privileged test process, and is the same fault GoGraph's own
+// recovery suite uses to prove Open fails hard.
+func corruptGraphWAL(t *testing.T, name string) {
+	t.Helper()
+
+	roadmapDir, err := utils.GetRoadmapDir(name)
+	if err != nil {
+		t.Fatalf("resolving roadmap dir: %v", err)
+	}
+	walPath := filepath.Join(roadmapDir, "graph", "wal")
+
+	raw, err := os.ReadFile(walPath) //nolint:gosec // path derives from t.TempDir via HOME
+	if err != nil {
+		t.Fatalf("reading graph WAL: %v", err)
+	}
+	if len(raw) < 64 {
+		t.Fatalf("graph WAL is %d bytes: too small to corrupt a middle frame", len(raw))
+	}
+	raw[len(raw)/2] ^= 0xFF
+	if err := os.WriteFile(walPath, raw, 0o600); err != nil {
+		t.Fatalf("writing corrupted graph WAL: %v", err)
+	}
+}
+
+// TestHandleGraphData_InvalidLimitTakesPrecedenceOverNotReadOnly pins the
+// precedence between the failure classes: one request can be wrong in more than
+// one way at once, and the endpoint resolves the limit BEFORE it runs the
+// read-only guard rail, so a request carrying both an invalid limit and a query
+// that is not read-only is answered invalid_limit, never not_read_only. The order
+// in which SPEC/WEB.md § Query-Bar Error Handling lists cases 1 to 3 is an order
+// of explanation, not an order of precedence; rule 6 is the order of precedence
+// and this test is what holds the implementation to it (Acceptance Criterion 123).
+//
+// The two single-fault controls are what make the assertion non-vacuous: without
+// them, an endpoint that simply never classified anything as not_read_only would
+// pass the combined case.
+func TestHandleGraphData_InvalidLimitTakesPrecedenceOverNotReadOnly(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name := seedRoadmap(t, "web-ui-rollout")
+	seedGraph(t, name, graphSeedQueries()...)
+
+	const writeQuery = `MATCH (n) DELETE n`
+	const badLimit = "7"
+
+	// Control A: the query alone IS classified not_read_only, so the combined
+	// case below cannot pass merely because that class is unreachable.
+	rec := doGraphData(t, name, url.Values{"q": {writeQuery}, "limit": {"100"}})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("control A: status = %d, want 400; body=%q", rec.Code, rec.Body.String())
+	}
+	var control map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &control); err != nil {
+		t.Fatalf("control A: decoding: %v", err)
+	}
+	if control["kind"] != graphErrNotReadOnly {
+		t.Fatalf("control A: kind = %v, want %q: the write query must be rejected by the guard rail when the limit is valid", control["kind"], graphErrNotReadOnly)
+	}
+
+	// Control B: the limit alone IS classified invalid_limit.
+	rec = doGraphData(t, name, url.Values{"limit": {badLimit}})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("control B: status = %d, want 400; body=%q", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &control); err != nil {
+		t.Fatalf("control B: decoding: %v", err)
+	}
+	if control["kind"] != graphErrInvalidLimit {
+		t.Fatalf("control B: kind = %v, want %q", control["kind"], graphErrInvalidLimit)
+	}
+
+	// The claim: both wrong at once resolves to invalid_limit.
+	rec = doGraphData(t, name, url.Values{"q": {writeQuery}, "limit": {badLimit}})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%q", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decoding: %v; body=%q", err, rec.Body.String())
+	}
+	if body["kind"] != graphErrInvalidLimit {
+		t.Errorf("kind = %v, want %q: the limit is resolved before the guard rail runs, so an invalid limit outranks a query that is not read-only (SPEC/WEB.md § Query-Bar Error Handling, rule 6)", body["kind"], graphErrInvalidLimit)
+	}
+	// The reason names the rejected value, not the query (rule 8; the allowed
+	// values named in the same message contain no '7').
+	if reason, _ := body["error"].(string); !strings.Contains(reason, badLimit) {
+		t.Errorf("error = %q, want it to name the rejected limit %q", reason, badLimit)
+	}
+
+	// The query never ran: the DELETE would have emptied the store.
+	rec = doGraphData(t, name, nil)
+	var view graphView
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatalf("decoding post-rejection read: %v", err)
+	}
+	if len(view.Nodes) != 3 {
+		t.Errorf("after the combined rejection, nodes = %d, want 3: the request must be rejected before the query runs, so nothing is written", len(view.Nodes))
+	}
+}
+
+// TestHandleGraphData_QueryBarRejectionPrecedesStoreOpen pins the two halves of
+// the boundary in SPEC/WEB.md § Query-Bar Error Handling, rule 7, against a
+// roadmap whose graph store cannot be opened:
+//
+//   - The 500 half: a request the endpoint accepts reaches the open, the open
+//     fails, and that is an internal read error — HTTP 500, and NOT a 400 with
+//     kind execution. The boundary is drawn at the moment the failure surfaces,
+//     and a failure to open surfaces before the query runs.
+//   - The 400 half: every query-bar rejection still answers 400 with its own kind
+//     over the very same unopenable store, which can only be true if the limit
+//     resolution and the read-only guard rail both run BEFORE the store is opened
+//     (rule 6). The 500 above is what makes this non-vacuous: it proves the store
+//     really is unopenable, so a 400 here cannot have come from a successful read.
+func TestHandleGraphData_QueryBarRejectionPrecedesStoreOpen(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name := seedRoadmap(t, "web-ui-rollout")
+	seedGraph(t, name, graphSeedQueries()...)
+	corruptGraphWAL(t, name)
+
+	// The 500 half.
+	rec := doGraphData(t, name, nil)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("accepted request over an unopenable store: status = %d, want 500; body=%q", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"kind"`) {
+		t.Errorf("the 500 of an internal read error must not carry the query-bar error shape; body=%q", rec.Body.String())
+	}
+
+	// The 400 half.
+	cases := []struct {
+		name     string
+		params   url.Values
+		wantKind string
+	}{
+		{"invalid limit alone", url.Values{"limit": {"7"}}, graphErrInvalidLimit},
+		{"not read-only alone", url.Values{"q": {`MATCH (n) DELETE n`}}, graphErrNotReadOnly},
+		{"both wrong at once", url.Values{"limit": {"7"}, "q": {`MATCH (n) DELETE n`}}, graphErrInvalidLimit},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := doGraphData(t, name, tc.params)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400: the request must be rejected before the graph store is opened; body=%q", rec.Code, rec.Body.String())
+			}
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decoding error body: %v; body=%q", err, rec.Body.String())
+			}
+			if body["kind"] != tc.wantKind {
+				t.Errorf("kind = %v, want %q", body["kind"], tc.wantKind)
+			}
+		})
+	}
+}
+
+// TestHandleGraphData_ErrorBodyShape pins the failure body's exact field set for
+// each of the three failure classes: exactly two fields, `error` and `kind`, both
+// strings and both non-empty, and neither `nodes` nor `edges`
+// (SPEC/DATA_FORMATS.md § Graph View Data, Error Shape, rule 1; Acceptance
+// Criterion 123).
+//
+// Asserting the exact field set — rather than only that `kind` is present, which
+// every other test in this file does — is the point: a body that gained a third
+// field, or that leaked an empty `nodes`/`edges` pair from the success shape,
+// would satisfy every existing assertion and only this one would catch it.
+func TestHandleGraphData_ErrorBodyShape(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name := seedRoadmap(t, "web-ui-rollout")
+	seedGraph(t, name, graphSeedQueries()...)
+
+	cases := []struct {
+		name     string
+		params   url.Values
+		wantKind string
+	}{
+		{"not read-only", url.Values{"q": {`MATCH (n) DELETE n`}}, graphErrNotReadOnly},
+		{"invalid limit", url.Values{"limit": {"7"}}, graphErrInvalidLimit},
+		{"execution failure", url.Values{"q": {`MATCH (n) RETURN`}}, graphErrExecution},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := doGraphData(t, name, tc.params)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%q", rec.Code, rec.Body.String())
+			}
+
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decoding error body: %v; body=%q", err, rec.Body.String())
+			}
+
+			if got := slices.Sorted(maps.Keys(body)); !slices.Equal(got, []string{"error", "kind"}) {
+				t.Errorf("body fields = %v, want exactly [error kind]; body=%q", got, rec.Body.String())
+			}
+			for _, field := range []string{"error", "kind"} {
+				v, present := body[field]
+				if !present {
+					t.Errorf("body is missing the %q field", field)
+					continue
+				}
+				s, isString := v.(string)
+				if !isString {
+					t.Errorf("%q = %v (%T), want a string", field, v, v)
+					continue
+				}
+				if s == "" {
+					t.Errorf("%q is the empty string, want a non-empty value", field)
+				}
+			}
+			for _, absent := range []string{"nodes", "edges"} {
+				if _, present := body[absent]; present {
+					t.Errorf("failure body carries %q: a response that is not successful carries neither nodes nor edges", absent)
+				}
+			}
+			if body["kind"] != tc.wantKind {
+				t.Errorf("kind = %v, want %q", body["kind"], tc.wantKind)
+			}
+		})
+	}
+}
+
+// TestHandleGraphData_ErrorBodySerialization pins how the failure body is
+// serialized: exactly as every other response of this endpoint is — HTML-safe, so
+// <, > and & are escaped, pretty-printed with two-space indentation, and
+// terminated by a newline (SPEC/DATA_FORMATS.md § Graph View Data, Error Shape,
+// rule 4).
+//
+// The HTML-safety half has teeth because the `error` of an invalid limit quotes
+// the rejected value verbatim, so a crafted limit is the one place request-derived
+// text reaches the response body of this endpoint.
+func TestHandleGraphData_ErrorBodySerialization(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name := seedRoadmap(t, "web-ui-rollout")
+	seedGraph(t, name, graphSeedQueries()...)
+
+	rec := doGraphData(t, name, url.Values{"limit": {`<script>alert(1)</script>`}})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%q", rec.Code, rec.Body.String())
+	}
+	raw := rec.Body.String()
+
+	// HTML-safe: the angle brackets of the echoed value are escaped, and no raw
+	// '<' or '>' survives anywhere in the body.
+	if strings.ContainsAny(raw, "<>") {
+		t.Errorf("body contains a raw angle bracket, so request-derived text is not HTML-escaped; body=%q", raw)
+	}
+	if !strings.Contains(raw, `\u003cscript\u003e`) {
+		t.Errorf("body does not carry the escaped form of the echoed value; body=%q", raw)
+	}
+
+	// Pretty-printed with two-space indentation, and newline-terminated.
+	if !strings.HasSuffix(raw, "\n") {
+		t.Errorf("body is not newline-terminated; body=%q", raw)
+	}
+	for _, want := range []string{"{\n  \"error\": ", "\n  \"kind\": ", "\n}\n"} {
+		if !strings.Contains(raw, want) {
+			t.Errorf("body is not pretty-printed with two-space indentation: missing %q; body=%q", want, raw)
+		}
+	}
+
+	// The escaping is a wire-format concern only: the decoded value is the
+	// original text, so the page shows the user what it rejected.
+	var body map[string]any
+	if err := json.Unmarshal([]byte(raw), &body); err != nil {
+		t.Fatalf("decoding error body: %v", err)
+	}
+	if reason, _ := body["error"].(string); !strings.Contains(reason, "<script>alert(1)</script>") {
+		t.Errorf("decoded error = %q, want it to name the rejected value verbatim", reason)
 	}
 }
