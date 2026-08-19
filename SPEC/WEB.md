@@ -37,6 +37,7 @@
   - [Embedded Asset Categories](#embedded-asset-categories)
   - [Frontend Rules](#frontend-rules)
   - [UI Framework](#ui-framework)
+  - [Full-Height Page Regions](#full-height-page-regions)
   - [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours)
   - [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library)
 - [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)
@@ -1527,16 +1528,30 @@ how the `rmp web` process itself terminates.
 - **Layout and scrolling.** The five columns are presented side by side. When
   they do not fit the viewport, the **board** scrolls horizontally inside its own
   container; the page itself never scrolls horizontally, so `<body>` produces no
-  horizontal overflow at any viewport width. Each column scrolls vertically and
-  independently of the others when its card list exceeds the available height, as
-  a GitLab issue board's lists do. On narrow viewports the board stays usable:
-  each column keeps a minimum width at which its cards remain legible, the user
-  reaches the remaining columns by scrolling the board horizontally (a
-  touch-friendly gesture on a touch device), the cards present touch-friendly hit
-  targets, and the task detail modal a card opens stays usable on the same
-  viewport (see
+  horizontal overflow at any viewport width.
+
+  The board is a **full-height page region**: its height is the space the page body
+  leaves once the top navbar and the page header are placed above it, it ends where
+  the page body ends, and that edge lies within the viewport, exactly as
+  [Full-Height Page Regions](#full-height-page-regions) requires. The board gives up
+  no space for a page footer, because the shell renders none (see
+  [UI Framework](#ui-framework), rule 12). That height is the **available height**
+  each column is measured against: a column scrolls vertically and independently of
+  the others when its card list exceeds it, as a GitLab issue board's lists do.
+
+  The board's own horizontal scrollbar is drawn in space reserved for it **beneath**
+  the columns rather than over them, so the last card of a column stays fully
+  visible while the board can still be scrolled sideways.
+
+  On narrow viewports the board stays usable: each column keeps a minimum width at
+  which its cards remain legible, the user reaches the remaining columns by
+  scrolling the board horizontally (a touch-friendly gesture on a touch device),
+  the cards present touch-friendly hit targets, and the task detail modal a card
+  opens stays usable on the same viewport (see
   [Responsive and Mobile-First Design](#responsive-and-mobile-first-design), rule
-  9, and [Task Detail Modal](#task-detail-modal)).
+  9, and [Task Detail Modal](#task-detail-modal)). On a viewport too short to
+  present a usable board, the board takes the minimum height of
+  [Full-Height Page Regions](#full-height-page-regions), rule 5.
 - **Markup.** The board obeys the markup rules already in force and introduces no
   exception to them. Templates carry no inline `style` attribute (see
   [Frontend Rules](#frontend-rules) and [UI Framework](#ui-framework), rule 10).
@@ -2010,7 +2025,12 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
   edge types and lets the user highlight elements interactively; it is specified in
   [Graph Labels Sidebar](#graph-labels-sidebar). The labels sidebar and the
   visualisation read from the same already-fetched graph data; the sidebar adds no
-  new request and no new endpoint.
+  new request and no new endpoint. The card is a **full-height page region**: its
+  height is the space the page body leaves once the top navbar, the page header,
+  and the query bar are placed above it, it ends where the page body ends, and that
+  edge lies within the viewport, exactly as
+  [Full-Height Page Regions](#full-height-page-regions) requires — so the page does
+  not scroll vertically to reveal the bottom of the canvas.
 - **Layout selection.** The page provides a dropdown (select control) that lets
   the user choose which layout renders the graph, offering the complete set of
   layouts from the "Networks" section of the D3 gallery: Force-directed graph,
@@ -3359,6 +3379,86 @@ read from the host filesystem at runtime.
     region on what the user cannot act on. This mirrors the removal of the
     read-only footer band, whose whole content was the same restatement (rule 12).
 
+### Full-Height Page Regions
+
+Two pages present a region sized to the **viewport** rather than to its own
+content, so that the region's children scroll **inside** it and the page itself
+does not scroll to reach them: the Kanban board of the roadmap tasks page (see
+[Roadmap Tasks Page](#roadmap-tasks-page), **Layout and scrolling**) and the graph
+card of the knowledge-graph page (see
+[Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page), **Graph card
+layout**). Each sits inside the `main.page-body` landmark of the admin shell (see
+[UI Framework](#ui-framework), rule 18). These two are the whole set: this
+subsection introduces no region and no page, and states only how a region of this
+kind is sized.
+
+1. **Two edges fix the height, and both MUST hold at every viewport size.**
+   - **The region ends where the page body ends.** The bottom edge of the region
+     coincides with the bottom edge of the page body, leaving no band of unused
+     page body beneath it.
+   - **That edge lies within the viewport.** The page does not scroll vertically
+     to reveal the end of the region.
+
+   Neither edge is sufficient on its own, and a check that asserts one of them
+   alone passes on a defective layout. A region that stops short of the page
+   body's end sits well within the viewport and satisfies the second edge while
+   wasting exactly the space it failed to take. A region that overruns the bottom
+   of the viewport still ends where the page body ends and satisfies the first
+   edge, because the overrun is itself what stretched the page body to that
+   height. Only the two together state that the region takes the space the page
+   body has, and no more.
+2. **No space is reserved for anything the page does not render.** What the region
+   gives up at the top is what the shell and the page actually place above it: the
+   top navbar and the page header on both pages, and the query bar as well on the
+   knowledge-graph page (see [Graph Query Bar](#graph-query-bar)). Removing one of
+   those elements reduces what the region gives up by that element's height, and
+   adding one increases it — not as a follow-up correction to a value recorded
+   somewhere, but because rule 1 is stated over the page body's edges and the page
+   body has already moved. In particular the shell carries no footer and no page
+   renders a `<footer>` element (see [UI Framework](#ui-framework), rule 12), so no
+   full-height region gives up any space for one.
+3. **A fixed subtraction from the viewport height does not satisfy rule 1.** The
+   height of the material above a full-height region is not a constant. The page
+   header's actions column wraps as the viewport narrows — the tasks page header
+   carries a search input and three filter dropdowns (see
+   [Roadmap Tasks Page](#roadmap-tasks-page), **Header search control** and
+   **Header filter controls**) — so the page header occupies more rows on a narrow
+   viewport than on a wide one and the page body begins lower. A height obtained by
+   subtracting a fixed length from the viewport height therefore matches the space
+   available at one viewport width at best and misses it at every other: too tall
+   where the page header is tall, which pushes the region past the fold, and too
+   short where the page header is short, which leaves the unused band rule 1
+   forbids. Rule 1 is stated over edges rather than over a subtracted length for
+   that reason — an edge needs no value kept in step with the page.
+4. **The viewport is the one the browser is showing at that moment.** A mobile
+   browser with a retracting address bar has two viewport heights: the **large**
+   viewport height, which measures the viewport as if the bar were retracted, and
+   the **dynamic** viewport height, which measures what is visible while the bar is
+   on screen. A full-height region MUST be sized against the dynamic height, so
+   that rule 1's second edge holds while the bar is showing and not only once it
+   has gone; sized against the large height, the end of the region sits below the
+   fold for exactly as long as the bar is on screen. A browser that does not
+   support the dynamic height MUST still receive a viewport-derived height rather
+   than none: the two are declared together and in that order — the large height
+   first, the dynamic height second — so a browser that understands only the first
+   keeps it and a browser that understands both applies the second. In CSS these
+   are the `vh` and `dvh` units, and that ordered pair of declarations is how the
+   dynamic unit ships without a feature query. This is the vertical counterpart of
+   the fluid-layout requirement in
+   [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
+   rules 2 and 9.
+5. **A floor keeps the region usable on a very short viewport.** Below some
+   viewport height the space the page body leaves is too small to present the
+   region at all: a board column would show a fraction of a single card, and the
+   graph canvas would be a strip. Each full-height region therefore carries a
+   **minimum height**, and when the space the page body leaves falls below that
+   minimum the region takes the minimum instead. In that case, and only in that
+   case, the region's bottom edge may fall below the viewport and the page may
+   scroll vertically to reach it: rule 1's second edge yields to the floor, because
+   a region compressed past legibility is worse than one the reader scrolls to. The
+   floor is the single exception to rule 1, and not a licence to exceed the viewport
+   at ordinary viewport heights.
+
 ### Status, Priority, and Severity Badge Colours
 
 Status, priority, and severity are presented as Tabler badges. The badges MUST use
@@ -3532,7 +3632,9 @@ Rules:
    navigation.
 6. **Touch and small-viewport configuration.** D3.js supports touch gestures. The
    visualisation and its container MUST be configured to be touch- and
-   small-viewport-friendly: the container is fluid and fits the viewport, and the
+   small-viewport-friendly: the container is fluid and fits the viewport, ending
+   within it as a full-height page region (see
+   [Full-Height Page Regions](#full-height-page-regions)), and the
    visualisation supports touch pan, pinch-to-zoom, and tap to select and inspect,
    so node and edge detail can be reached without a mouse hover (see
    [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)). The
@@ -3589,7 +3691,9 @@ experience is the baseline that larger viewports enhance.
    [Task Detail Modal](#task-detail-modal)).
 6. **Touch- and mobile-usable graph visualisation.** The interactive
    knowledge-graph visualisation MUST remain usable on touch and mobile devices.
-   Its container is fluid and fits the viewport, and it supports touch gestures —
+   Its container is fluid and fits the viewport, ending within it as a full-height
+   page region (see [Full-Height Page Regions](#full-height-page-regions)), and it
+   supports touch gestures —
    pan, pinch-to-zoom, and tap to select and inspect — so node and edge detail can
    be reached without a mouse hover (see
    [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library)).
@@ -3612,7 +3716,10 @@ experience is the baseline that larger viewports enhance.
    [Roadmap Tasks Page](#roadmap-tasks-page)). When the five columns do not fit the
    viewport, the board scrolls horizontally inside its own container, and the page
    itself still does not scroll horizontally (rule 2). Each column scrolls
-   vertically and independently when its card list exceeds the available height. On
+   vertically and independently when its card list exceeds the available height,
+   which is the height the board takes as a full-height page region — the space the
+   page body leaves, measured against the viewport the browser is showing at that
+   moment (see [Full-Height Page Regions](#full-height-page-regions)). On
    narrow viewports the board MUST remain usable: each column keeps a minimum width
    at which its cards stay legible, the horizontal board scroll is reachable by a
    touch gesture, and the cards and their badges present touch-friendly hit targets
@@ -4456,7 +4563,8 @@ Rules:
     when they do not fit the viewport the board scrolls horizontally inside its own
     container while the page itself does not scroll horizontally (Acceptance
     Criterion 27 continues to hold). Each column scrolls vertically and independently
-    when its card list exceeds the available height. On a narrow viewport each column
+    when its card list exceeds the available height, which is the board's own height
+    and is fixed by Acceptance Criterion 124. On a narrow viewport each column
     keeps a minimum width at which its cards stay legible, the horizontal board
     scroll is reachable by a touch gesture, and the cards and badges present
     touch-friendly hit targets (see
@@ -4916,6 +5024,71 @@ Rules:
     renders it in place; the `error` of an invalid limit names the rejected value
     (see [Query-Bar Error Handling](#query-bar-error-handling) and
     `DATA_FORMATS.md § Graph View Data`, **Error Shape**).
+124. Each full-height page region — the Kanban board of the roadmap tasks page and
+    the graph card of the knowledge-graph page — satisfies **both** edges of
+    [Full-Height Page Regions](#full-height-page-regions), rule 1, when the page is
+    rendered in a browser: the region's bottom edge coincides with the bottom edge
+    of that page's `main.page-body` element, and that edge lies within the viewport,
+    with the document scrolling vertically no further than the viewport height. The
+    check measures both regions and asserts both edges, because either edge alone
+    passes on a defective layout, and each of the two regions demonstrates one of
+    those failures. A region that stops short of the page body's end leaves an
+    unused band beneath itself while remaining comfortably within the viewport, so a
+    check that asserts only the second edge accepts it. A region that overruns the
+    bottom of the viewport still ends exactly where the page body ends, because its
+    own overrun stretched the page body to that height, so a check that asserts only
+    the first edge accepts it too. A criterion phrased as the region "using the
+    available height", or as its height matching a particular length, establishes
+    neither edge: every height is the available height of some layout, and a length
+    is only ever correct for the page as it stood when the length was chosen.
+125. Acceptance Criterion 124 is checked at a set of viewport widths chosen so that
+    the roadmap tasks page header renders at more than one height — at a wide
+    viewport its search input and three filter dropdowns share a row with the page
+    title, and as the viewport narrows they wrap onto further rows (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Header search control** and
+    **Header filter controls**) — and both edges hold at every one of those widths.
+    This is what a height obtained by subtracting a fixed length from the viewport
+    height cannot pass: such a height is correct at whichever width its length was
+    chosen for and wrong at every other, over-reserving where the page header is
+    short and under-reserving where it is tall, so a check made at a single width
+    would accept it and leave the defect in place. No full-height region reserves
+    space for a page footer, and no page renders a `<footer>` element (Acceptance
+    Criterion 74 continues to hold; see [UI Framework](#ui-framework), rule 12, and
+    [Full-Height Page Regions](#full-height-page-regions), rules 2 and 3).
+126. Each full-height page region's height is declared **twice** in the stylesheet
+    the binary serves, in this order: first against the large viewport height
+    (`vh`), then against the dynamic viewport height (`dvh`). The check asserts both
+    declarations **and** their order, and fails when either is removed or the two
+    are swapped. With the dynamic declaration alone, a browser that does not
+    implement the unit receives no viewport-derived height at all and the region
+    collapses to its content. With the large declaration alone, or with the large
+    one placed second, a mobile browser sizes the region as though the address bar
+    were retracted, so the end of the region sits below the fold for as long as the
+    bar is on screen and the second edge of Acceptance Criterion 124 fails on
+    exactly the devices the mobile-first requirement is written for. The order is
+    the whole mechanism — the later declaration wins where it is understood and is
+    discarded where it is not — so asserting that both units appear, without
+    asserting which comes second, does not establish it (see
+    [Full-Height Page Regions](#full-height-page-regions), rule 4, and
+    [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
+    rule 9).
+127. On a viewport short enough that the space the page body leaves falls below a
+    full-height region's minimum height, the region takes that minimum rather than
+    shrinking to the space available, and the vertical page scrolling that follows
+    is permitted: this is the one case in which the second edge of Acceptance
+    Criterion 124 does not hold. The check exercises both a viewport at which the
+    floor binds and one at which it does not, because a check run only below the
+    floor passes on a region that never tracks the page body at all, while a check
+    run only above it leaves the floor free to be deleted as though it were the
+    defect that Acceptance Criterion 124 describes (see
+    [Full-Height Page Regions](#full-height-page-regions), rule 5).
+128. The Kanban board reserves space beneath its columns for its own horizontal
+    scrollbar: the bottom edge of a column sits above the bottom edge of the board
+    by at least the reserved amount, so the scrollbar is drawn in that space and
+    never over a card, and the last card of a column stays fully visible while the
+    board can still be scrolled sideways. The check fails on a board whose columns
+    extend to its bottom edge, where the scrollbar overlaps the last card (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Layout and scrolling**).
 
 ## See Also
 

@@ -563,7 +563,14 @@ func TestTablerFidelity_FluidLayoutUsesContainerXl(t *testing.T) {
 
 	for _, path := range allPagePaths(name) {
 		body := servePage(t, mux, path)
-		if !strings.Contains(body, `<body class="layout-fluid">`) {
+		// The token, not the whole attribute: a page presenting a full-height
+		// region carries `full-height-page` alongside layout-fluid (SPEC/WEB.md
+		// § Full-Height Page Regions), and the class list is checked as a set of
+		// tokens so a second one is not read as the framework class going missing.
+		// Nothing invented can hide in there: every token a page emits must
+		// resolve to a stylesheet rule, which
+		// TestTablerFidelity_NoClassOutsideTheVendoredStylesheets enforces.
+		if !bodyClasses(t, body, path)["layout-fluid"] {
 			t.Errorf("page %s: the body does not carry Tabler's layout-fluid class", path)
 		}
 		if !strings.Contains(body, `<div class="container-xl">`) {
@@ -576,6 +583,31 @@ func TestTablerFidelity_FluidLayoutUsesContainerXl(t *testing.T) {
 				"(the sidebar aside's own); page containers must be container-xl", path, got)
 		}
 	}
+}
+
+// bodyClasses returns the class tokens on a served page's <body> element as a
+// set. It fails the test when the page carries no <body> class attribute at all,
+// so a caller cannot read an absent element as an absent class.
+func bodyClasses(t *testing.T, page, path string) map[string]bool {
+	t.Helper()
+	const open = "<body"
+	i := strings.Index(page, open)
+	if i < 0 {
+		t.Fatalf("page %s: no <body> element in the response", path)
+	}
+	end := strings.Index(page[i:], ">")
+	if end < 0 {
+		t.Fatalf("page %s: unterminated <body> tag", path)
+	}
+	m := classAttrRe.FindStringSubmatch(page[i : i+end+1])
+	if m == nil {
+		t.Fatalf("page %s: the <body> element carries no class attribute", path)
+	}
+	set := map[string]bool{}
+	for _, class := range strings.Fields(m[1]) {
+		set[class] = true
+	}
+	return set
 }
 
 // The class-attribute pattern this file scans with is classAttrRe, declared once

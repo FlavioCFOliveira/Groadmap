@@ -3,7 +3,15 @@
 <head>
 {{template "head" .}}
 </head>
-<body class="layout-fluid">
+{{/*
+  full-height-page next to Tabler's layout-fluid: this page presents a full-height
+  region, the Kanban board below, whose height is the space the page body leaves
+  once the navbar and the page header are placed. The class is what static/style.css
+  hangs the one definite height on, at the top of the flex chain Tabler already
+  ships, so the browser computes the board's height instead of the stylesheet
+  subtracting a guess from the viewport (SPEC/WEB.md § Full-Height Page Regions).
+*/}}
+<body class="layout-fluid full-height-page">
   <div class="page">
 {{template "sidebar" .}}
 {{template "topnavbar" .}}
