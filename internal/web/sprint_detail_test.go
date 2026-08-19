@@ -71,14 +71,19 @@ func TestNewSprintCompletion_CountsAndLine(t *testing.T) {
 
 // TestSprintDetail_FullBlockOnlyOnSprintPage asserts that the full sprint detail
 // block — the exact summary line, the metadata datagrid (ID/Status/Capacity/
-// Tasks/Created/Started/Closed), and the full member-tasks table headers
-// (ID/Title/Status/Type/Priority/Severity) in execution order — is rendered ONLY
-// on the single Roadmap Sprint Page, and that the Actual tab of the roadmap
-// sprints page does NOT render it for the OPEN sprint: there the OPEN sprint is
-// shown through the shared sprint-card partial, with no summary line, no
-// datagrid, no member-tasks table, and no per-task modal (SPEC/WEB.md § Shared
-// Sprint-Card Partial, § Sprint Detail Sub-Template; Acceptance Criteria
-// 8/12/38/39).
+// Tasks/Created/Started/Closed), and the member-tasks board with its three fixed
+// columns — is rendered ONLY on the single Roadmap Sprint Page, and that the
+// Actual tab of the roadmap sprints page does NOT render it for the OPEN sprint:
+// there the OPEN sprint is shown through the shared sprint-card partial, with no
+// summary line, no datagrid, no member-tasks board, and no per-task modal
+// (SPEC/WEB.md § Shared Sprint-Card Partial, § Sprint Detail Sub-Template;
+// Acceptance Criteria 8/12/38/39).
+//
+// The board markers replaced the six <th> headers of the member-tasks table this
+// board supersedes. The test's subject is unchanged — where the full detail block
+// may appear, and where it may not — so the markers moved to the presentation that
+// now carries it: the board container, its column, and the WAITING heading with a
+// count badge, which no other page emits.
 func TestSprintDetail_FullBlockOnlyOnSprintPage(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	f := seedSprintFixture(t, "web-shared-detail")
@@ -99,9 +104,10 @@ func TestSprintDetail_FullBlockOnlyOnSprintPage(t *testing.T) {
 	datagridTitles := []string{
 		">ID<", ">Status<", ">Capacity<", ">Tasks<", ">Created<", ">Started<", ">Closed<",
 	}
-	tableHeaders := []string{
-		"<th>ID</th>", "<th>Title</th>", "<th>Status</th>",
-		"<th>Type</th>", "<th>Priority</th>", "<th>Severity</th>",
+	boardMarkers := []string{
+		`class="task-board task-board--bounded mb-3" data-role="task-board"`,
+		`<div class="card task-board__column" data-role="task-board-column">`,
+		`<h3 class="card-title">WAITING <span class="badge bg-secondary-lt ms-2">2</span></h3>`,
 	}
 
 	// The single sprint page MUST carry the full detail block.
@@ -116,16 +122,23 @@ func TestSprintDetail_FullBlockOnlyOnSprintPage(t *testing.T) {
 			t.Errorf("single sprint page: detail block missing datagrid title %q", m)
 		}
 	}
-	for _, h := range tableHeaders {
-		if !strings.Contains(sprintPage, h) {
-			t.Errorf("single sprint page: detail block missing task table header %q", h)
+	for _, m := range boardMarkers {
+		if !strings.Contains(sprintPage, m) {
+			t.Errorf("single sprint page: detail block missing member-tasks board markup %q", m)
+		}
+	}
+	// And no table of tasks at all on this page: the board replaced it outright
+	// (Acceptance Criterion 130).
+	for _, absent := range []string{"<table", "<th>", "<tbody"} {
+		if strings.Contains(sprintPage, absent) {
+			t.Errorf("single sprint page: the member tasks are still presented in a table (%q)", absent)
 		}
 	}
 	if !strings.Contains(sprintPage, "Build the read-only sprint page route and template") {
 		t.Errorf("single sprint page: detail block missing the OPEN sprint's member task")
 	}
 	if !strings.Contains(sprintPage, `data-task-id="`+itoa(f.openTaskID)+`"`) {
-		t.Errorf("single sprint page: member task row not wired to the task detail modal")
+		t.Errorf("single sprint page: member task card not wired to the task detail modal")
 	}
 
 	// The Actual tab MUST NOT carry any part of the full detail block.
@@ -137,9 +150,9 @@ func TestSprintDetail_FullBlockOnlyOnSprintPage(t *testing.T) {
 			t.Errorf("Actual tab must not render the metadata datagrid title %q", m)
 		}
 	}
-	for _, h := range tableHeaders {
-		if strings.Contains(current, h) {
-			t.Errorf("Actual tab must not render the member-tasks table header %q", h)
+	for _, m := range boardMarkers {
+		if strings.Contains(current, m) {
+			t.Errorf("Actual tab must not render the member-tasks board markup %q", m)
 		}
 	}
 	if strings.Contains(current, `data-bs-target="#task-modal-`) {

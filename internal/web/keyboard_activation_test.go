@@ -29,11 +29,16 @@ import (
 // buttons that could not be pressed.
 //
 // The fix is therefore structural, and it has two halves. Every task can be
-// opened by a real control — the board card is itself a <button>, and the sprint
-// page's task title is one inside its row — and nothing that cannot be activated
-// pretends to be a control: no element carries role="button" with tabindex="0"
-// any more. A <tr> that keeps the modal data attributes for the POINTER is
-// harmless, because it takes no focus and announces no role.
+// opened by a real control — on both boards the card is itself a <button> — and
+// nothing that cannot be activated pretends to be a control: no element carries
+// role="button" with tabindex="0" any more.
+//
+// The sprint page reached that shape in two steps. It first kept its member-tasks
+// TABLE and moved the keyboard trigger onto the task title, leaving the <tr>
+// clickable by pointer: harmless, because a row takes no focus and announces no
+// role, but still two targets for one task, which is all a table can offer. The
+// member-tasks board then replaced the table outright, and its card is the whole
+// trigger — one element, one target, every input method.
 //
 // These tests assert both halves across every surface that renders a clickable
 // task, so the defect cannot regress on one surface while the other holds —
@@ -67,7 +72,7 @@ func modalTriggers(body string) []modalTrigger {
 }
 
 // clickableTaskPaths are the two surfaces that render a clickable task: the tasks
-// page's Kanban board and the sprint page's member-tasks table. Both must satisfy
+// page's Kanban board and the sprint page's member-tasks board. Both must satisfy
 // every property below; fixing one at the expense of the other is the divergence
 // SPEC/WEB.md forbids.
 func clickableTaskPaths(name string, sprintID int) []string {
@@ -108,9 +113,9 @@ func renderedTitleOf(t *testing.T, roadmap string, taskID int) string {
 // task reference, so the name identifies the task, followed by the task's title,
 // so the name CONTAINS the visible label of a trigger whose visible text is that
 // title. A control whose accessible name omits its visible label fails WCAG 2.5.3
-// (Label in Name, Level A), and the sprint page's title button is exactly such a
-// control (SPEC/WEB.md § Sprint Detail Sub-Template; § Roadmap Tasks Page,
-// clickable card).
+// (Label in Name, Level A), and a board card — whose visible label IS the task
+// title — is exactly such a control on both boards (SPEC/WEB.md § Sprint Detail
+// Sub-Template; § Roadmap Tasks Page, clickable card).
 func wantAccessibleName(taskID, renderedTitle string) string {
 	return `aria-label="Open details for task #` + taskID + `: ` + renderedTitle + `"`
 }
@@ -121,13 +126,14 @@ func wantAccessibleName(taskID, renderedTitle string) string {
 // — so Enter and Space open its modal with no JavaScript added — and that
 // trigger's accessible name identifies the task it opens.
 //
-// The property is "at least one activatable trigger per task", not "every trigger
-// is activatable", because the sprint page deliberately keeps the whole row
-// clickable by POINTER: the <tr> carries the modal data attributes so a click
-// anywhere on it still works. That row is not focusable and claims no role, so it
-// offers nothing to the keyboard and misleads nobody — which is exactly what
-// TestModalTriggers_NeverFakeAButtonWithRoleAndTabindex pins. What the keyboard
-// needs is that some real control exists for each task, and this is that test.
+// The property is "at least one activatable trigger per task" rather than "every
+// trigger is activatable", which is the weaker of the two and is kept deliberately:
+// it holds across a surface that offers a task a pointer-only trigger alongside a
+// real one, as the sprint page's member-tasks table did before its board replaced
+// it. Both surfaces now give a task exactly one trigger and it is the card itself,
+// which TestSprintBoard_CardIsTheWholeTrigger pins for the sprint page; what this
+// test states is the property that must hold however either surface is built —
+// some real control exists for every task the page can open.
 func TestModalTriggers_EveryTaskHasANativelyActivatableTrigger(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	name := seedRoadmap(t, "platform-core")
@@ -323,12 +329,23 @@ func TestModalTriggers_AddNoScriptAndKeepTheContentSecurityPolicy(t *testing.T) 
 	}
 }
 
-// TestSprintPage_RowStaysClickableByPointer is the gate for Acceptance Criterion
-// 5 of task #204 on the sprint page: moving the keyboard trigger onto the task
-// title did not take the pointer affordance off the row. The row still carries
-// the modal data attributes, so a click anywhere on it still opens the task's
-// modal, and the rendered values of the row are unchanged.
-func TestSprintPage_RowStaysClickableByPointer(t *testing.T) {
+// TestSprintBoard_CardIsTheWholeTrigger is the gate for Acceptance Criterion 135:
+// on the sprint page's member-tasks board the CARD is the trigger, and the card
+// is a <button type="button"> carrying no tabindex and no role="button", with the
+// accessible name that names the task and contains its title.
+//
+// It replaces the assertion that pinned the <tr>/title-cell split this board
+// supersedes. That split existed because a table row cannot be a control: a <tr>
+// is not activatable and can hold no single control wrapping the whole row, so the
+// pointer got the row and the keyboard got a button in one cell — two targets for
+// one task, and a shape SPEC/WEB.md now forbids outright ("No <tr> on this page is
+// a modal trigger or carries one"). A card is a single element and can BE the
+// control, so this test asserts ONE target per task and no second one.
+//
+// The shape is the tasks board's card, deliberately: both boards render the same
+// kind of trigger, which is why the exact opening markup is asserted rather than
+// merely "some button exists".
+func TestSprintBoard_CardIsTheWholeTrigger(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	f := seedSprintFixture(t, "web-task-modal")
 	mux := buildMux()
@@ -336,25 +353,50 @@ func TestSprintPage_RowStaysClickableByPointer(t *testing.T) {
 	body := servePage(t, mux, "/roadmaps/"+f.name+"/sprints/"+itoa(f.openID))
 	taskID := `data-task-id="` + itoa(f.openTaskID) + `"`
 
-	// The row itself: still a trigger, still styled as clickable, no longer
-	// pretending to be a button.
-	row := `<tr class="task-row" data-bs-toggle="modal" data-bs-target="#task-modal" ` + taskID + `>`
-	if !strings.Contains(body, row) {
-		t.Errorf("the member-task row is no longer clickable by pointer; want the row %q", row)
-	}
-	// The title inside it: a real button, carrying the accessible name the row
-	// used to carry, and the task's own title as its visible text.
-	trigger := `<button type="button" class="task-row__trigger p-0 border-0 bg-transparent text-reset text-start" ` +
+	// The card itself is the button, and it is the tasks board's own card markup:
+	// a real <button type="button"> wearing the Tabler card classes.
+	card := `<button type="button" class="card card-sm task-card w-100 p-0 text-start" ` +
 		`data-bs-toggle="modal" data-bs-target="#task-modal" ` + taskID + ` ` +
 		wantAccessibleName(itoa(f.openTaskID), renderedTitleOf(t, f.name, f.openTaskID)) + `>`
-	if !strings.Contains(body, trigger) {
-		t.Errorf("the member-task title is not the row's keyboard trigger; want %q", trigger)
+	if !strings.Contains(body, card) {
+		t.Errorf("the member-task card is not the modal trigger; want the card %q", card)
 	}
-	// Both carry the task id, so pointer and keyboard open the same task in the
-	// page's single modal shell.
-	if got := strings.Count(body, taskID); got != 2 {
-		t.Errorf("the task id appears %d times in the row, want twice: on the row and on its "+
-			"title trigger", got)
+
+	// ONE trigger per task, not two: the card is the single target the pointer,
+	// touch, Enter and Space all reach.
+	if got := strings.Count(body, taskID); got != 1 {
+		t.Errorf("the task id appears %d times on the page, want exactly once: the card is the "+
+			"only trigger of its task", got)
+	}
+
+	// No <tr> on this page is a trigger or carries one, and neither does anything
+	// else that is not a button: the table and its split trigger are gone.
+	for _, gone := range []string{"<tr", "task-row", "task-row__trigger"} {
+		if strings.Contains(body, gone) {
+			t.Errorf("the sprint page still carries %q; the member-tasks table and its split "+
+				"pointer/keyboard trigger were replaced by the board", gone)
+		}
+	}
+
+	// Every modal trigger on the page is that card: a button, with neither of the
+	// two attributes a real control never needs.
+	triggers := modalTriggers(body)
+	if len(triggers) == 0 {
+		t.Fatal("no modal trigger found on the sprint page; the extraction is broken or the " +
+			"board renders no card")
+	}
+	for _, trigger := range triggers {
+		if trigger.tag != "button" {
+			t.Errorf("a modal trigger on the sprint page is a <%s>; only a natively activatable "+
+				"element turns Enter and Space into the click the modal data-api listens for\nattrs: %s",
+				trigger.tag, trigger.attrs)
+		}
+		for _, prop := range []string{"tabindex=", `role="button"`} {
+			if strings.Contains(trigger.attrs, prop) {
+				t.Errorf("a board card carries %s; a <button> has it natively and stating it "+
+					"again says nothing\nattrs: %s", prop, trigger.attrs)
+			}
+		}
 	}
 }
 
@@ -388,10 +430,10 @@ func TestModalTriggers_AccessibleNameEscapesAHostileTitle(t *testing.T) {
 	for _, path := range clickableTaskPaths(f.name, f.openID) {
 		body := servePage(t, mux, path)
 
-		// The board card and the sprint-page title button both carry the composed
-		// name, and it is EXACTLY the escaped form html/template produces — the same
-		// bytes the modal heading carries for the same title, which is what makes
-		// composing the expectation from the page legitimate everywhere else.
+		// The card of either board carries the composed name, and it is EXACTLY the
+		// escaped form html/template produces — the same bytes the modal heading
+		// carries for the same title, which is what makes composing the expectation
+		// from the page legitimate everywhere else.
 		want := wantAccessibleName(taskID, renderedTitleOf(t, f.name, f.openTaskID))
 		if !strings.Contains(body, want) {
 			t.Errorf("%s: the trigger of task #%s does not carry the escaped accessible name %s",

@@ -50,7 +50,7 @@ All routes serve `GET` and `HEAD` only. Any other HTTP method on any route retur
 | `/` | Roadmap index: every roadmap under `~/.roadmaps/`, with links to each roadmap's sprints landing page and graph page (empty-state message when none) | HTML |
 | `/roadmaps/{name}` | Roadmap sprints page and landing page: that roadmap's sprints in three tabs (Próximos / Actual / Concluídos, Actual default), each tab carrying a count badge in the colour of the sprint status it groups; every sprint rendered through the same sprint card and linking to its own page. Selecting a roadmap on the index lands here | HTML |
 | `/roadmaps/{name}/tasks` | Roadmap tasks board: every task of that roadmap, of any status, laid out as a Kanban board of five fixed status columns with a count badge on each; narrowed by the header search and the three header filters through the `q`, `type`, `priority` and `severity` query parameters; clicking a card opens a read-only modal with all task fields and that task's comments timeline. See [The Tasks Board](#the-tasks-board) | HTML |
-| `/roadmaps/{name}/sprints/{id}` | Dedicated sprint page: all sprint details, the task list in planned execution order, and the sprint's own Comments card; each task opens the task detail modal | HTML |
+| `/roadmaps/{name}/sprints/{id}` | Dedicated sprint page: all sprint details, the sprint's member tasks as a three-column board in planned execution order, and the sprint's own Comments card; each task card opens the task detail modal. See [The Sprint Board](#the-sprint-board) | HTML |
 | `/roadmaps/{name}/audit` | Roadmap audit log page: that roadmap's full audit log (columns ID, Operation, Entity Type, Entity ID, Performed At), ordered by Performed At descending (most recent first), paginated at 100 entries per page via the `page` query parameter (1-based, default 1; out-of-range or non-numeric values are clamped to the nearest valid page) with Previous/Next controls and a "Page X of Y" indicator | HTML |
 | `/roadmaps/{name}/graph` | Interactive knowledge-graph visualisation (D3.js; selectable Networks-section layouts via a dropdown, default Mobile patent suits; pan/zoom, touch, tap-to-inspect), driven by the editable Cypher query bar above the graph card. See [The Knowledge-Graph Query Bar and Data Endpoint](#the-knowledge-graph-query-bar-and-data-endpoint) | HTML |
 | `/roadmaps/{name}/graph/data` | The graph's nodes and edges for the visualisation, produced by the read-only Cypher query in the `q` parameter (the full-graph default query when absent) under the endpoint's 5-second query time budget; a rejected, invalid or failed request answers HTTP `400` with an `error`/`kind` JSON body | JSON |
@@ -92,7 +92,7 @@ Each card presents one task, in this order:
 
 1. A **reference line** with the task reference `#<id>` and the task's `type`, both in muted text. The type carries no colour.
 2. The task **`title`**, as the card's prominent main content.
-3. A **`priority` badge** and a **`severity` badge**, each showing the task's integer value, coloured by the band that value falls in.
+3. A **`priority` badge** and a **`severity` badge**, each naming the value it carries with a one-letter prefix — `P` for the priority and `S` for the severity, so a task of priority `5` and severity `3` shows `P5` and `S3` — and coloured by the band that value falls in. The prefix is a label, not part of the value: the colour still follows the number alone.
 4. A **metadata footer** showing only the indicators the task actually has: the sprint it belongs to (identified by the sprint's `title` together with `Sprint #<id>`, as plain text rather than a link), its `specialists`, its number of subtasks, its number of `depends_on` entries, its number of `blocks` entries, and its number of comments.
 
 An indicator whose value is absent, empty or zero is not rendered at all: no dash, no placeholder, no empty slot. A task with none of the six shows no metadata footer. The card shows **no status badge**, because the column it sits in already states the task's status.
@@ -154,6 +154,51 @@ Every column is `19rem` wide and never narrower than `17rem`, and no column grow
 
 Rendering the page performs three reads and no more: the unbounded read of every task of the roadmap, one grouped query for the comment count of every rendered task, and one grouped query resolving the sprint of every rendered task. The board issues no query per column and none per card, so the number of queries does not grow with the number of tasks. A search term and the three filters add nothing to this: on a cold load they are applied in memory over the rows already read, and narrowing in the browser issues no request at all, because every card is already in the document.
 
+## The Sprint Board
+
+`/roadmaps/{name}/sprints/{id}` presents the sprint's member tasks as a read-only **three-column board**, placed between the sprint's details card and its Comments card. It follows the same GitLab issue board model as the tasks board, and departs from it in the same way: the board moves nothing and edits nothing. The page renders no task table.
+
+### Three columns, grouped by what the work is doing
+
+The board has exactly three columns, presented left to right:
+
+| Column | Holds the sprint's tasks whose status is |
+|--------|------------------------------------------|
+| `WAITING` | `BACKLOG` or `SPRINT` |
+| `DOING` | `DOING` or `TESTING` |
+| `CLOSED` | `COMPLETED` |
+
+This is the same grouping the sprint status summary line at the top of the page already uses — pending, open, completed — rather than a second categorisation invented for the board. That is what makes the two agree by construction: the `WAITING` count is the summary line's `P`, the `DOING` count is its `A`, the `CLOSED` count is its `C`, and the three sum to its `T`. A task status enum with five closed values and three columns claiming all five means no member task can fall outside the board, so there is no fourth column and no "other" column.
+
+A `BACKLOG` task can be a sprint member — `rmp task stat <id> BACKLOG` returns a task to the backlog without removing it from the sprint — which is why `WAITING` groups `BACKLOG` with `SPRINT` rather than showing `SPRINT` alone.
+
+All three columns are always present, in that order, whatever the sprint holds. A column with no task keeps its heading and its `0` count badge and shows its own in-column empty state, so a sprint with no member tasks renders an empty board rather than no board.
+
+### Order within a column
+
+The cards of a column appear in the sprint's planned in-sprint execution order — the order `rmp sprint tasks` returns and `rmp sprint reorder` sets. Grouping the tasks into the three columns preserves that relative order, and the board applies no sort of its own: reordering the sprint through the CLI and reloading the page reorders the cards. There is one notion of order on this board, and it is the one you planned.
+
+### Cards
+
+Each card presents one member task, in this order:
+
+1. The task **`title`**, leading the card.
+2. The task **reference** `#<id>` on its own line, in muted text.
+3. A **`priority` badge** and a **`severity` badge**, prefixed `P` and `S` and coloured by band, exactly as on the tasks board.
+4. A **footer of counters** at the trailing edge of the card: the task's number of subtasks and its number of comments, each an icon followed by its number.
+
+A counter whose value is zero is not rendered at all — no icon, no placeholder — and a task with neither counter shows no footer. The card shows no status badge, because the column it sits in already states the status, and it shows no type, specialists or dependency counts: those are in the task detail modal the card opens.
+
+The whole card is a `<button>`, so a pointer click, a touch tap, and the keyboard (Enter and Space) all open that task's read-only detail modal.
+
+### Layout and read cost
+
+The board takes a bounded height of `60vh`, never falling below the floor the interface uses for its full-height regions, and each column scrolls vertically and independently within it. It is deliberately not sized to the space the page body leaves: the page carries the sprint's details above the board and its Comments card below, and a board that grew with the sprint's task count would push those comments further away with every task added. When the three columns do not fit the viewport, the column strip scrolls horizontally inside its own container and the page itself never scrolls horizontally.
+
+The columns carry the same widths as the tasks board's columns, and a card the same body padding, because a column stands for a state on both boards and a reader moving between the two pages should meet one column measure and one card measure.
+
+The page performs two comment reads whatever the number of member tasks: the sprint's own comment log, which the Comments card renders in full, and one grouped query for the comment count of every rendered card. Neither grows with the number of member tasks, and the board issues no query per column and none per card. The subtask counter costs no read of its own, because the sprint's member-task read already carries it.
+
 ## The Knowledge-Graph Query Bar and Data Endpoint
 
 The knowledge-graph page renders its visualisation from a single editable Cypher query. Above the graph card sit three controls, left to right: a multi-line **query box** pre-filled on load with the default query `MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r, m`, a **Search** button that re-runs the query in the box (Ctrl+Enter in the query box does the same), and a **node-limit dropdown** offering exactly `50`, `100`, `250`, `500`, `1000` and `3000`, with `100` selected by default.
@@ -214,7 +259,7 @@ Anywhere a task is clickable — the cards of the roadmap tasks board and the sp
 
 ### Sprint comments: the Comments card
 
-The dedicated sprint page (`/roadmaps/{name}/sprints/{id}`) shows the sprint's own comments in a Comments card, placed after the member-tasks card and rendered last on the page.
+The dedicated sprint page (`/roadmaps/{name}/sprints/{id}`) shows the sprint's own comments in a Comments card, placed after the member-tasks board and rendered last on the page.
 
 - **Scope.** The card shows the comments of the sprint itself. It does not show, aggregate, or merge in the comments of the sprint's member tasks; those are reachable through each task's own detail modal.
 - **Order and completeness.** Oldest first, exactly the order `rmp sprint comment-list` returns. Every comment of the sprint is rendered: no type filter and no count limit.

@@ -556,13 +556,31 @@ func TestTaskBoard_CardContent(t *testing.T) {
 		t.Errorf("the card does not show the task title as its main content\ncard: %s", card)
 	}
 
-	// 3. The priority and severity badges, in the variants the mapping assigns:
-	//    priority 7 -> bg-red-lt (high band), severity 4 -> bg-yellow-lt (medium).
-	if !strings.Contains(card, `<span class="badge bg-red-lt">7</span>`) {
-		t.Errorf("the card does not show priority 7 as a bg-red-lt badge\ncard: %s", card)
+	// 3. The priority and severity badges. Each writes its value behind the
+	//    one-letter prefix that names it — P7 and S4 — with no space and no
+	//    separator, because the card carries no label that would say which of the
+	//    two numbers is which. The colour is still the colour of the VALUE:
+	//    priority 7 -> bg-red-lt (high band), severity 4 -> bg-yellow-lt (medium
+	//    band), and the two bands differ here, so a card that read one field for
+	//    both fails on the class as well as on the letter.
+	if !strings.Contains(card, `<span class="badge bg-red-lt">P7</span>`) {
+		t.Errorf("the card does not show priority 7 as a bg-red-lt badge reading P7\ncard: %s", card)
 	}
-	if !strings.Contains(card, `<span class="badge bg-yellow-lt">4</span>`) {
-		t.Errorf("the card does not show severity 4 as a bg-yellow-lt badge\ncard: %s", card)
+	if !strings.Contains(card, `<span class="badge bg-yellow-lt">S4</span>`) {
+		t.Errorf("the card does not show severity 4 as a bg-yellow-lt badge reading S4\ncard: %s", card)
+	}
+	// A badge carrying the bare integer does not satisfy Acceptance Criterion 85,
+	// so the unprefixed form is asserted ABSENT and not merely left unasserted: a
+	// card rendering both forms would otherwise pass.
+	for _, unprefixed := range []string{
+		`<span class="badge bg-red-lt">7</span>`,
+		`<span class="badge bg-yellow-lt">4</span>`,
+	} {
+		if strings.Contains(card, unprefixed) {
+			t.Errorf("the card renders %s; the priority and severity badges name the value they "+
+				"carry with a one-letter prefix (Acceptance Criterion 85)\ncard: %s",
+				unprefixed, card)
+		}
 	}
 
 	// 4. No status badge: the column states the status. SPRINT maps to bg-cyan-lt,
@@ -682,8 +700,9 @@ func TestTaskBoard_AbsentMetadataRendersNothing(t *testing.T) {
 	if !strings.Contains(bare, "Audit the session-cookie flags") {
 		t.Errorf("the metadata-free card lost its title\ncard: %s", bare)
 	}
-	if !strings.Contains(bare, `<span class="badge bg-yellow-lt">5</span>`) {
-		t.Errorf("the metadata-free card lost its priority badge\ncard: %s", bare)
+	if !strings.Contains(bare, `<span class="badge bg-yellow-lt">P5</span>`) {
+		t.Errorf("the metadata-free card lost its priority badge, which reads P5 whatever the "+
+			"card's metadata\ncard: %s", bare)
 	}
 
 	// A partial footer holds only what the task has: the BACKLOG task with one

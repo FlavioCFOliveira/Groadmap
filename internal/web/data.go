@@ -286,6 +286,23 @@ func (v *taskView) HasMeta() bool {
 		v.CommentCount > 0
 }
 
+// HasCounters reports whether the sprint page's member-tasks board has at least
+// one indicator to put in a card's trailing-edge footer: the task's subtasks or
+// its comments. A task with neither renders no footer at all — not an empty one
+// (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Absent metadata renders
+// nothing; Acceptance Criterion 134).
+//
+// It is a second predicate rather than a reuse of HasMeta because the two cards
+// show different things. The sprint board's card shows exactly two counters, and
+// HasMeta is true for four further reasons — a sprint, specialists, dependencies,
+// blocked tasks — none of which that card renders, so a member task carrying only
+// specialists would open a footer with nothing inside it. The two conditions are
+// each exactly the disjunction of the indicators their own footer emits, which is
+// what keeps either footer from being emitted empty.
+func (v *taskView) HasCounters() bool {
+	return v.SubtaskCount > 0 || v.CommentCount > 0
+}
+
 // matchesSearch reports whether the task matches an already-folded term.
 //
 // The searchable text is exactly the two things the card itself displays: the
@@ -660,7 +677,9 @@ func newSprintCompletion(tasks []models.Task) sprintCompletion {
 }
 
 // Line renders the sprint status summary line in the exact documented format
-// `<pct>% - P:<p> A:<a> C:<c> - T:<t>` (for example `33% - P:8 A:3 C:18 - T:55`).
+// `<pct>% - P:<p> A:<a> C:<c> - T:<t>` (for example `33% - P:8 A:29 C:18 - T:55`).
+// P, A and C always sum to T: the three categories partition the closed task
+// status enum, so no member task is counted twice and none is left out.
 // It is the single place the format string lives, so both call sites of the
 // shared sub-template produce a byte-identical line (SPEC/WEB.md § Shared Sprint
 // Presentation Sub-Template, sprint status summary line).
@@ -710,33 +729,84 @@ type sprintCard struct {
 	TaskCount int
 }
 
+// sprintBoardColumn is one column of the Roadmap Sprint Page's member-tasks
+// board: the heading it shows and the cards of the sprint's tasks it holds.
+//
+// Tasks holds POINTERS into the page's flat member-task list rather than copies,
+// so the board and the single modal shell its cards open are rendered from one
+// set of values and cannot drift apart. There is no Count field: the column's
+// badge is len(Tasks), because this board carries no narrowing control and so has
+// no second notion of "how many are shown" to keep in step with a stored number
+// (contrast taskColumn, whose count is what the tasks page's search left visible).
+//
+// Field order puts the string before the slice so the pointer-scan prefix stops
+// at the slice header rather than spanning the whole struct (govet
+// fieldalignment).
+type sprintBoardColumn struct {
+	Heading string
+	Tasks   []*taskView
+}
+
+// sprintBoardColumns is the board's three fixed columns, left to right, each
+// pairing the heading it shows with the sprint-summary category it holds
+// (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Three fixed columns).
+//
+// The category is models.TaskStatusCategory — the SAME categorisation the sprint
+// status summary line is computed from (models.CalculateSprintSummary, which
+// counts through models.CategorizeTaskStatus). Naming the categories here rather
+// than the statuses is what makes each column's badge equal one of that line's own
+// numbers by construction instead of by coincidence: there is one mapping from
+// status to bucket in the project, and both presentations read it (Acceptance
+// Criterion 131).
+//
+// The headings are written exactly as the specification spells them, in upper
+// case, and are not translated.
+var sprintBoardColumns = [...]struct {
+	heading  string
+	category models.TaskStatusCategory
+}{
+	{"WAITING", models.CategoryPending},
+	{"DOING", models.CategoryInProgress},
+	{"CLOSED", models.CategoryCompleted},
+}
+
 // sprintDetail is the single context shape the "sprintDetail" sub-template
 // renders. Only the single Roadmap Sprint Page builds one and hands it to the
 // sub-template, so the full sprint detail block appears only there (SPEC/WEB.md
 // § Sprint Detail Sub-Template; Acceptance Criterion 38).
 //
+// Tasks is the sprint's member tasks in planned in-sprint execution order
+// (sprint_tasks position ascending), each carrying its own comment count; Columns
+// is that same list grouped into the member-tasks board's three fixed columns,
+// which is what the sub-template renders. Both describe the same tasks: Columns
+// points into Tasks.
+//
 // Comments is the sprint's OWN comment log — the sprint's progression account —
 // oldest first, rendered in the Comments card the sub-template places last. It
 // never carries a member task's comments: those belong to that task's own detail
 // modal, and the sprint level presents no aggregate of them (SPEC/WEB.md § Sprint
-// Detail Sub-Template, Comments card scope; Acceptance Criterion 69).
+// Detail Sub-Template, Comments card scope; Acceptance Criterion 69). A board
+// card shows the NUMBER of a member task's comments and never their text, which
+// is read only when a user opens that task's modal, one task at a time.
 type sprintDetail struct {
 	Name     string
 	Tasks    []taskView
+	Columns  []sprintBoardColumn
 	Comments []models.SprintComment
 	Sprint   models.Sprint
 	Summary  sprintCompletion
 }
 
 // sprintPageData is the view model handed to the roadmap sprint template. It
-// presents a single sprint with all of its fields, its tasks in planned in-sprint
-// execution order — each clickable to open the read-only task detail modal, and
-// each carrying its own comment log — and the sprint's own comments (SPEC/WEB.md
-// § Roadmap Sprint Page). It is read-only.
+// presents a single sprint with all of its fields, its member tasks in planned
+// in-sprint execution order as a Kanban board of three fixed columns — each card
+// clickable to open the read-only task detail modal — and the sprint's own
+// comments (SPEC/WEB.md § Roadmap Sprint Page). It is read-only.
 type sprintPageData struct {
 	Name     string
 	Chrome   chrome
 	Tasks    []taskView
+	Columns  []sprintBoardColumn
 	Comments []models.SprintComment
 	Sprint   models.Sprint
 	Summary  sprintCompletion
@@ -756,6 +826,7 @@ func (d sprintPageData) Detail() sprintDetail {
 		Name:     d.Name,
 		Sprint:   d.Sprint,
 		Tasks:    d.Tasks,
+		Columns:  d.Columns,
 		Comments: d.Comments,
 		Summary:  d.Summary,
 	}
@@ -816,12 +887,23 @@ type sprintTaskSource interface {
 }
 
 // sprintSource is the complete read surface of the single Roadmap Sprint Page:
-// the sprint, its ordered member tasks, and the sprint's own comments.
+// the sprint, its ordered member tasks, the grouped comment COUNT of those tasks,
+// and the sprint's own comments.
 //
-// No task-comment read of any kind is here. The page's member-tasks table shows
-// no comment value, and the modal a row opens is filled on demand by the task
-// detail endpoint, so the page reads only what it displays itself (SPEC/WEB.md
-// § Tasks and Sprints from SQLite; Acceptance Criterion 70).
+// The page makes exactly TWO comment reads, whatever the number of member tasks:
+// the sprint's own listing, which the Comments card renders in full as a log, and
+// ONE grouped count over the whole set of rendered member-task ids, which is what
+// gives each board card its comment number. Neither grows with the member-task
+// count (SPEC/WEB.md § Sprint Detail Sub-Template, Read cost; Acceptance Criteria
+// 70 and 137).
+//
+// The per-task listing (db.ListTaskComments) is deliberately absent from this
+// interface, exactly as it is from tasksSource: it is the only read that could
+// bring a comment BODY onto this path, so its absence carries two guarantees at
+// once — the page cannot express the N+1 pattern SPEC/WEB.md forbids, one query
+// per rendered card, and it cannot read comment text at all. A member task's
+// comment text is read only when a user opens that task's modal, one task at a
+// time, through the task detail endpoint.
 //
 // The sprint comment read is the SINGLE-parent listing: there is deliberately no
 // grouped multi-sprint read, because this page renders exactly one sprint
@@ -830,6 +912,7 @@ type sprintSource interface {
 	GetSprint(ctx context.Context, id int) (*models.Sprint, error)
 	ListSprintComments(ctx context.Context, sprintID int, commentType *models.CommentType) ([]models.SprintComment, error)
 	sprintTaskSource
+	taskCommentCounter
 }
 
 // loadRoadmapNames returns the names of all roadmaps under ~/.roadmaps/,
@@ -1289,13 +1372,26 @@ func loadSprint(ctx context.Context, name string, id int) (sprintPageData, error
 
 // readSprint is the sprint page's entire read, expressed against the page's read
 // surface rather than a concrete connection: the sprint, its member tasks in
-// planned in-sprint execution order, and the sprint's OWN comments (SPEC/WEB.md
+// planned in-sprint execution order, the comment COUNT of every one of those
+// tasks in ONE grouped query, and the sprint's OWN comments (SPEC/WEB.md
 // § Roadmap Sprint Page; § Tasks and Sprints from SQLite, rule 1).
 //
-// The page reads NO task comments. Its member-tasks table shows no comment value,
-// and the modal a row opens is filled on demand by the task detail endpoint, so
-// the count of comment queries is ONE — the sprint's own log, which this page
-// renders in full — whatever the number of member tasks (Acceptance Criterion 70).
+// TWO comment reads, and only two, whatever the number of member tasks: the
+// sprint's own log, which the Comments card renders in full, and the grouped
+// count that gives each board card its comment number. Neither grows with the
+// member-task count, and the page reads no comment BODY for a task it renders —
+// the text of a member task's comments is fetched only when a user opens that
+// task's modal, by the task detail endpoint (Acceptance Criteria 70 and 137).
+//
+// A sprint with no member task costs one of those two: the grouped count takes
+// the set of rendered task ids, and that set is empty, so it is skipped outright
+// rather than issued against an empty IN list. The Comments card is always
+// present, so the sprint's own listing is issued regardless.
+//
+// Grouping the member tasks into the board's three columns is done here, in
+// memory, over the rows already read: no query is issued per column and none per
+// card, so the page's query count is independent of the number of member tasks
+// and of columns.
 func readSprint(ctx context.Context, src sprintSource, name string, id int) (sprintPageData, error) {
 	sprint, err := src.GetSprint(ctx, id)
 	if err != nil {
@@ -1308,6 +1404,14 @@ func readSprint(ctx context.Context, src sprintSource, name string, id int) (spr
 	}
 
 	views := newTaskViews(orderedTasks)
+
+	// The comment count of every rendered member task, in one grouped query over
+	// the whole set of ids — the same helper and the same statement the tasks
+	// page's board uses, so the two boards read their card counts one way
+	// (SPEC/DATABASE.md § Count Comments for Many Parents (Grouped)).
+	if err := attachCommentCounts(ctx, src, views); err != nil {
+		return sprintPageData{}, err
+	}
 
 	// The sprint's own comments: every one of them, oldest first, with no type
 	// filter (nil) and no count limit, exactly as `rmp sprint comment-list`
@@ -1323,9 +1427,69 @@ func readSprint(ctx context.Context, src sprintSource, name string, id int) (spr
 		Name:     name,
 		Sprint:   *sprint,
 		Tasks:    views,
+		Columns:  groupIntoSprintBoardColumns(views),
 		Comments: comments,
 		Summary:  newSprintCompletion(orderedTasks),
 	}, nil
+}
+
+// groupIntoSprintBoardColumns groups a sprint's member-task views into the
+// member-tasks board's three fixed columns — WAITING, DOING, CLOSED — in that
+// order (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4; Acceptance Criteria
+// 130 to 132).
+//
+// The bucket a task falls in comes from models.CategorizeTaskStatus, which is the
+// project's ONE mapping from a task status to a sprint-summary category and is
+// what models.CalculateSprintSummary counts the summary line's P, A and C through.
+// Reusing it, rather than writing a second status-to-column mapping here, is what
+// makes each column's badge equal its counterpart in the summary line by
+// construction: there is a single categorisation, so the board and the line cannot
+// come to disagree about which tasks are waiting, which are being worked on, and
+// which are done (Acceptance Criterion 131).
+//
+// All three columns are built on every request, whatever the sprint holds, so an
+// empty column is a built column with no card and a sprint with no member task
+// renders an empty board rather than an absent one (Acceptance Criterion 130).
+//
+// The grouping is a SINGLE ordered pass over the views as the read returned them,
+// so the cards of one column keep the relative order of that read — the
+// sprint_tasks position order, ascending — and the board applies no sort of its
+// own and introduces no second notion of order (Acceptance Criterion 132).
+//
+// Every member task lands in exactly one column: tasks.status is restricted by a
+// CHECK constraint to the five values of the closed status enum
+// (SPEC/DATABASE.md § tasks Table), each of which one of the three categories
+// claims. models.CategoryOther is therefore unreachable from stored data; a view
+// carrying it is placed in no column rather than in an invented fourth one, which
+// is the same defensive treatment groupIntoColumns gives an unknown status on the
+// tasks board.
+func groupIntoSprintBoardColumns(views []taskView) []sprintBoardColumn {
+	columns := make([]sprintBoardColumn, len(sprintBoardColumns))
+	for i := range sprintBoardColumns {
+		columns[i] = sprintBoardColumn{Heading: sprintBoardColumns[i].heading}
+	}
+
+	for i := range views {
+		if column, ok := sprintBoardColumnOf(models.CategorizeTaskStatus(views[i].Status)); ok {
+			columns[column].Tasks = append(columns[column].Tasks, &views[i])
+		}
+	}
+	return columns
+}
+
+// sprintBoardColumnOf returns the index of the column that holds a category, and
+// false for a category no column claims (models.CategoryOther).
+//
+// The lookup is a scan of three entries rather than a map: at this size a linear
+// scan over a contiguous array is both faster and allocation-free, and the array
+// is the same value that fixes the columns' order.
+func sprintBoardColumnOf(category models.TaskStatusCategory) (int, bool) {
+	for i := range sprintBoardColumns {
+		if sprintBoardColumns[i].category == category {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 // sprintOrderedTasks resolves a sprint's member tasks in the planned in-sprint

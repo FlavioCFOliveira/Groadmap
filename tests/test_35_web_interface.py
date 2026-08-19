@@ -1126,27 +1126,66 @@ class TestWebInterface:
         assert "script-src 'self'" in csp, csp
         assert "connect-src 'self'" in csp, csp
 
-    def test_sprint_page_row_stays_clickable_by_pointer(self):
-        """Moving the keyboard trigger onto the task title left the row clickable
-        by pointer: the row keeps the modal data attributes, and both it and the
-        title button point at the same modal (SPEC/WEB.md § Sprint Detail
-        Sub-Template)."""
+    def test_sprint_board_card_is_the_single_pointer_and_keyboard_trigger(self):
+        """The member-tasks board replaced the six-column member-task table: the
+        card itself IS the modal trigger, a real `<button type="button">`, so a
+        pointer click, a touch tap, Enter and Space all reach the SAME target
+        (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, The card is the
+        trigger, and the trigger is a `<button>`; Acceptance Criterion 135).
+
+        This replaces test_sprint_page_row_stays_clickable_by_pointer, whose
+        markup — a clickable `<tr class="task-row">` plus a separate
+        `task-row__trigger` `<button>` nested in one of its cells — no longer
+        exists by design (the table became a board). What that test actually
+        verified survives here: a member task is reachable by pointer AND by
+        keyboard, and both still open that same task's modal. The property is
+        now witnessed through ONE element instead of two, which is exactly what
+        `data-task-id` appearing exactly ONCE per card proves: the old split
+        trigger carried the id twice — once on the row, once on the button
+        nested inside it — so "exactly once" is the signature that the
+        two-target arrangement is gone, not merely that a card renders at all.
+        """
         proc, port = self._start(["--port", "0"])
         _, _, body = self._req(port, f"/roadmaps/{ROADMAP}/sprints/{self.open_sid}")
 
         t1 = self.open_task_ids[0]
         marker = f'data-task-id="{t1}"'
-        assert f'<tr class="task-row" data-bs-toggle="modal" data-bs-target="#task-modal" {marker}>' in body, (
-            "the member-task row is no longer clickable by pointer"
-        )
         title = self._rendered_task_title(body, t1)
-        assert (
-            f'<button type="button" class="task-row__trigger p-0 border-0 bg-transparent '
-            f'text-reset text-start" data-bs-toggle="modal" data-bs-target="#task-modal" {marker} '
-            f'aria-label="Open details for task #{t1}: {title}">{title}</button>'
-        ) in body, "the member-task title is not the row's keyboard trigger"
-        assert body.count(marker) == 2, (
-            "the row and its title trigger must both carry the task id"
+
+        want = (
+            f'<button type="button" class="card card-sm task-card w-100 p-0 text-start" '
+            f'data-bs-toggle="modal" data-bs-target="#task-modal" {marker} '
+            f'aria-label="Open details for task #{t1}: {title}">'
+        )
+        assert want in body, (
+            f"the member task's card must itself be the trigger; opening tag "
+            f"{want!r} not found in the served sprint page"
+        )
+
+        card = self._sprint_board_card_html(self._sprint_board_region(body), t1)
+        assert "tabindex" not in card, (
+            "a <button> is natively focusable; tabindex on the card would be "
+            "redundant and is exactly what the SPEC forbids on it"
+        )
+        assert 'role="button"' not in card, (
+            'the card already IS a button; role="button" on it would announce '
+            "nothing new and is the pattern this rule forbids on a real button"
+        )
+
+        # Exactly one target for this task: the old row+nested-button split
+        # trigger carried data-task-id TWICE for one task (row and button); a
+        # single <button> card carries it once.
+        assert body.count(marker) == 1, (
+            f"task #{t1}'s id appears {body.count(marker)} times on the sprint "
+            f"page, want exactly 1 — more than one means more than one element "
+            f"is wired as that task's modal trigger"
+        )
+
+        # No <tr> is a modal trigger on this page, and no row-based markup of
+        # any kind remains.
+        assert "<table" not in body, "the sprint page must render no member-tasks table"
+        assert "task-row" not in body, (
+            "no row-based trigger markup (task-row / task-row__trigger) may remain"
         )
 
     # ====================================================================
@@ -2580,6 +2619,488 @@ class TestWebInterface:
                 port, f"/roadmaps/{ROADMAP}/sprints/{self.open_sid}", method=method
             )
             assert status == 405, f"{method} sprint route must be 405, got {status}"
+
+    # ====================================================================
+    # Sprint page member-tasks board: the three-column Kanban board
+    # (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4; Acceptance
+    # Criteria 130 to 139)
+    # ====================================================================
+
+    # The three fixed board columns, left to right, exactly as
+    # SPEC/WEB.md § Sprint Detail Sub-Template, rule 4 spells them — the SAME
+    # categorisation the sprint status summary line groups its P/A/C by
+    # (Acceptance Criterion 130).
+    SPRINT_BOARD_COLUMNS = ("WAITING", "DOING", "CLOSED")
+
+    @staticmethod
+    def _sprint_summary(body):
+        """Parse the sprint status summary line into its five components.
+
+        Read from data-role="sprint-summary" in the format
+        `<pct>% - P:<p> A:<a> C:<c> - T:<t>` (SPEC/WEB.md § Sprint Detail
+        Sub-Template, rule 3). Returns a dict of ints so a caller can compare
+        the board's own column badges against these SAME numbers rather than
+        against a count it derives independently (Acceptance Criterion 131).
+        """
+        m = re.search(
+            r'<div class="h3 mb-3" data-role="sprint-summary">'
+            r'(\d+)% - P:(\d+) A:(\d+) C:(\d+) - T:(\d+)</div>',
+            body,
+        )
+        assert m, "the sprint page carries no sprint status summary line"
+        pct, p, a, c, t = (int(x) for x in m.groups())
+        return {"pct": pct, "p": p, "a": a, "c": c, "t": t}
+
+    @staticmethod
+    def _sprint_board_region(body):
+        """Return the member-tasks board's own markup.
+
+        Bounded between the board's opening tag and the Comments card that
+        follows it directly (SPEC/WEB.md § Sprint Detail Sub-Template, rule 2:
+        the board sits between the Sprint details card and the Comments card),
+        the same start-marker-to-next-feature slicing idiom
+        _slice_sprint_comments_card already uses, in reverse.
+        """
+        start = body.index('data-role="task-board">')
+        end = body.index('<h3 class="card-title">Comments', start)
+        return body[start:end]
+
+    @classmethod
+    def _sprint_board_columns(cls, body):
+        """Return (region, columns): the board's own markup and its three
+        columns, left to right, in rendered order (Acceptance Criterion 130,
+        Every column is always rendered)."""
+        region = cls._sprint_board_region(body)
+        columns = region.split('data-role="task-board-column"')[1:]
+        assert len(columns) == 3, (
+            f"the sprint's member-tasks board renders {len(columns)} columns, want 3"
+        )
+        return region, columns
+
+    @staticmethod
+    def _sprint_column_shows_empty_state(column):
+        """Whether a sprint-board column renders its in-column empty state.
+
+        Unlike the tasks board's column-empty element, which is always present
+        and toggled via a `hidden` attribute (because a client-side search can
+        empty a column there), the sprint board carries no narrowing control of
+        any kind: the element is rendered at all only when the column holds no
+        card (SPEC/WEB.md § Sprint Detail Sub-Template, rule 4, Every column is
+        always rendered).
+        """
+        return 'data-role="task-board-column-empty"' in column
+
+    @staticmethod
+    def _sprint_board_card_ids(column):
+        """Return the task ids of a sprint-board column's cards, in card
+        (= document) order."""
+        return [
+            int(m) for m in re.findall(
+                r'<button type="button" class="card card-sm task-card[^>]*'
+                r'data-task-id="(\d+)"',
+                column,
+            )
+        ]
+
+    @staticmethod
+    def _sprint_board_card_html(region, task_id):
+        """Return one sprint-board card's full markup, from its opening
+        <button> to its closing </button>."""
+        m = re.search(
+            rf'<button type="button" class="card card-sm task-card[^>]*'
+            rf'data-task-id="{task_id}"[^>]*>.*?</button>',
+            region, re.S,
+        )
+        assert m, f"no sprint-board card found for task #{task_id}"
+        return m.group(0)
+
+    def test_sprint_board_groups_all_five_statuses_into_three_columns(self):
+        """AC130/AC131: the member-tasks board renders exactly three columns —
+        WAITING, DOING, CLOSED, left to right — each holding the sprint's own
+        tasks of the statuses assigned to it, and each column's badge equals
+        the summary line's own P/A/C.
+
+        The fixture seeds one member task per TaskStatus value (BACKLOG,
+        SPRINT, DOING, TESTING, COMPLETED) so the two-statuses-per-column
+        grouping is actually exercised rather than merely assumed: a board that
+        miscategorised even one status would print a count that disagrees with
+        the summary line it is required to match.
+
+        AC131 is explicit that the check compares the two renderings of ONE
+        sprint against EACH OTHER, rather than each against a number this test
+        computes on its own: the property under test is that the board and the
+        summary line partition the sprint's tasks by the SAME categorisation,
+        and a board that grouped the statuses differently could still print
+        three counts that each looked plausible in isolation. So P/A/C/T are
+        read from the summary line here, and the column badges are compared
+        against THOSE values — never against a count this test derives
+        independently from the tasks it created.
+        """
+        roadmap = "webhook_delivery_demo"
+        self._run(["roadmap", "create", roadmap])
+
+        def task(title, priority, severity):
+            return self.test.create_task(
+                roadmap, title,
+                "Webhook subscribers must receive each event exactly once",
+                "Retry failed deliveries with exponential backoff and a "
+                "dead-letter queue after the retry budget is exhausted",
+                "A subscriber outage of under ten minutes loses no event",
+                priority=priority, severity=severity,
+            )
+
+        t_backlog = task("Design the dead-letter queue schema", 3, 2)
+        t_sprint = task("Add exponential backoff to the retry worker", 5, 3)
+        t_doing = task("Instrument delivery latency per subscriber", 6, 4)
+        t_testing = task("Load-test the retry worker at ten times volume", 7, 5)
+        t_completed = task("Cap the retry count at eight attempts", 4, 2)
+        all_ids = [t_backlog, t_sprint, t_doing, t_testing, t_completed]
+
+        sprint_id = self.test.create_sprint(roadmap, "Webhook reliability sprint")
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id)]
+                  + [str(i) for i in all_ids])
+        self._run(["sprint", "start", "-r", roadmap, str(sprint_id)])
+
+        # BACKLOG: a completed pipeline run reopened straight back to BACKLOG,
+        # remaining a member of the sprint throughout (SPEC/STATE_MACHINE.md
+        # § Manual Transitions, task stat BACKLOG is accepted from SPRINT).
+        self._run(["task", "stat", "-r", roadmap, str(t_backlog), "BACKLOG"])
+        # t_sprint is left untouched: SPRINT is its status by construction.
+        self._run(["task", "stat", "-r", roadmap, str(t_doing), "DOING"])
+        self._run(["task", "stat", "-r", roadmap, str(t_testing), "DOING"])
+        self._run(["task", "stat", "-r", roadmap, str(t_testing), "TESTING"])
+        self._run(["task", "stat", "-r", roadmap, str(t_completed), "DOING"])
+        self._run(["task", "stat", "-r", roadmap, str(t_completed), "TESTING"])
+        self._run(["task", "stat", "-r", roadmap, str(t_completed), "COMPLETED"])
+
+        proc, port = self._start(["--port", "0"])
+        status, _, body = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
+        assert status == 200
+
+        summary = self._sprint_summary(body)
+        assert summary["t"] == 5, (
+            f"the sprint's own summary line must count all 5 member tasks, got {summary}"
+        )
+
+        region, columns = self._sprint_board_columns(body)
+        headings = [self._column_header(c)[0] for c in columns]
+        assert headings == list(self.SPRINT_BOARD_COLUMNS), (
+            f"the board's columns read {headings}, want "
+            f"{list(self.SPRINT_BOARD_COLUMNS)} left to right"
+        )
+
+        waiting, doing, closed = columns
+        waiting_count = self._column_header(waiting)[1]
+        doing_count = self._column_header(doing)[1]
+        closed_count = self._column_header(closed)[1]
+
+        # AC131: the board's own badges against the summary line's own P/A/C —
+        # the two renderings of one sprint compared against each other.
+        assert waiting_count == summary["p"], (
+            f"WAITING badge {waiting_count} must equal the summary line's P {summary['p']}"
+        )
+        assert doing_count == summary["a"], (
+            f"DOING badge {doing_count} must equal the summary line's A {summary['a']}"
+        )
+        assert closed_count == summary["c"], (
+            f"CLOSED badge {closed_count} must equal the summary line's C {summary['c']}"
+        )
+        assert waiting_count + doing_count + closed_count == summary["t"], (
+            "the three column badges must sum to the summary line's T"
+        )
+
+        # Every member task appears on the board exactly once, in the column of
+        # the bucket its OWN status maps to — never dropped, never duplicated.
+        placement = {
+            t_backlog: waiting, t_sprint: waiting,
+            t_doing: doing, t_testing: doing,
+            t_completed: closed,
+        }
+        for task_id, column in placement.items():
+            marker = f'data-task-id="{task_id}"'
+            assert region.count(marker) == 1, (
+                f"task #{task_id} appears {region.count(marker)} times on the "
+                f"board, want exactly 1"
+            )
+            assert marker in column, (
+                f"task #{task_id} is not in the column its status maps to"
+            )
+
+        # The concrete numbers this fixture was built to produce: two WAITING
+        # (BACKLOG + SPRINT), two DOING (DOING + TESTING), one CLOSED.
+        assert (waiting_count, doing_count, closed_count) == (2, 2, 1), (
+            f"got ({waiting_count}, {doing_count}, {closed_count}), want (2, 2, 1)"
+        )
+
+        # No table anywhere on this page, and no row-based markup of any kind.
+        assert "<table" not in body, "the sprint page must render no task table"
+        assert "task-row" not in body, "the sprint page must render no table-row markup"
+
+    def test_sprint_board_column_order_follows_position_and_reorder(self):
+        """AC132: within a column the cards follow the sprint_tasks position
+        order, and reordering through the CLI and reloading the page reorders
+        the cards accordingly — proof the board applies no sort of its own (not
+        by id, not by priority, not by title).
+
+        All four member tasks stay in SPRINT status (WAITING column) so the
+        whole column is one ordering problem: a board that quietly sorted by
+        id, priority, or title instead of position would still show a stable
+        response across the `sprint reorder` call below, which is exactly what
+        this test would catch.
+        """
+        roadmap = "incident_postmortem_demo"
+        self._run(["roadmap", "create", roadmap])
+
+        def task(title, priority):
+            return self.test.create_task(
+                roadmap, title,
+                "Postmortems must be published within five business days "
+                "of a SEV1 incident closing",
+                "Template the postmortem doc and track the SLA in the tracker",
+                "Every SEV1 incident has a published postmortem within the SLA",
+                priority=priority,
+            )
+
+        t_a = task("Draft the postmortem template", 2)
+        t_b = task("Backfill missing postmortems from last quarter", 4)
+        t_c = task("Add a reminder for postmortems nearing the SLA", 6)
+        t_d = task("Link each postmortem from the incident tracker", 3)
+
+        sprint_id = self.test.create_sprint(roadmap, "Postmortem SLA sprint")
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id),
+                   str(t_a), str(t_b), str(t_c), str(t_d)])
+
+        proc, port = self._start(["--port", "0"])
+        _, _, body = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
+        _, columns = self._sprint_board_columns(body)
+        waiting = columns[0]
+        assert self._column_header(waiting)[1] == 4
+        assert self._sprint_board_card_ids(waiting) == [t_a, t_b, t_c, t_d], (
+            "before reordering, the WAITING column must follow the sprint_tasks "
+            "insertion (position ascending) order"
+        )
+
+        # Reorder through the CLI: the sprint's own planned execution order
+        # changes to something unrelated to id, priority, or title order.
+        new_order = [t_c, t_a, t_d, t_b]
+        self._run(["sprint", "reorder", "-r", roadmap, str(sprint_id),
+                   ",".join(str(i) for i in new_order)])
+
+        _, _, body2 = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
+        _, columns2 = self._sprint_board_columns(body2)
+        got = self._sprint_board_card_ids(columns2[0])
+        assert got == new_order, (
+            f"after `sprint reorder`, the WAITING column must reflect the new "
+            f"position order {new_order}, got {got}"
+        )
+
+    def test_sprint_board_card_shows_six_data_points_in_order(self):
+        """AC133: each card shows exactly six data points, in this order: the
+        task title leading the card, the `#<id>` reference as secondary text, a
+        `P<n>` priority badge, an `S<n>` severity badge, and — in a
+        trailing-edge footer row — the subtask count and the comment count,
+        each as an icon followed by its number.
+
+        The task carries real subtasks and real comments so both footer
+        indicators have something to render, and priority 7 / severity 6 fall
+        in different colour bands (red / orange per badge.go's
+        priorityBadge/severityBadge), so the badges are shown to carry the
+        semantic mapping's own colours and not just the bare prefixed digits
+        (SPEC/WEB.md § Roadmap Tasks Page, Card content, item 3 — the
+        badge-prefix rule binds on both boards' cards; Acceptance Criterion
+        133).
+        """
+        roadmap = "fraud_review_demo"
+        self._run(["roadmap", "create", roadmap])
+        parent = self.test.create_task(
+            roadmap,
+            "Escalate high-velocity card testing to manual review",
+            "A burst of small authorizations from one card must page a "
+            "fraud reviewer before the card is used for a large purchase",
+            "Flag the card and route its next authorization to manual review",
+            "A reviewer sees the flagged card within two minutes of the burst",
+            priority=7, severity=6,
+        )
+        for sub_title in (
+            "Define the burst-detection threshold",
+            "Wire the flagged card into the manual-review queue",
+        ):
+            self._run(["task", "create", "-r", roadmap, "-t", sub_title,
+                       "-fr", "Needed to detect and route a testing burst",
+                       "-tr", "Implement as part of the fraud review pipeline",
+                       "-ac", "The parent task's acceptance criteria are met",
+                       "--parent", str(parent)])
+        for body_text in (
+            "Three authorizations under two dollars within ninety seconds "
+            "from the same card.",
+            "The reviewer queue currently has no SLA; adding one is out of "
+            "scope for this task.",
+            "Confirmed with the risk team: the threshold is three "
+            "authorizations in one hundred twenty seconds.",
+        ):
+            self._run(["task", "comment-add", "-r", roadmap, str(parent),
+                       "--type", "NOTE", "--body", body_text])
+
+        sprint_id = self.test.create_sprint(roadmap, "Card-testing detection sprint")
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id), str(parent)])
+
+        proc, port = self._start(["--port", "0"])
+        _, _, body = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
+        region, columns = self._sprint_board_columns(body)
+        card = self._sprint_board_card_html(columns[0], parent)
+
+        title = self._rendered_task_title(body, parent)
+        pattern = (
+            rf'data-role="task-card-title">{re.escape(title)}</span>\s*'
+            rf'<span class="d-block small text-secondary mb-1" '
+            rf'data-role="task-card-ref">#{parent}</span>\s*'
+            r'<span class="d-flex flex-wrap gap-1">\s*'
+            r'<span class="badge bg-red-lt">P7</span>\s*'
+            r'<span class="badge bg-orange-lt">S6</span>\s*'
+            r'</span>\s*'
+            r'<span class="d-flex flex-wrap justify-content-end gap-2 mt-2 '
+            r'small text-secondary" data-role="task-card-meta">\s*'
+            r'<span data-role="task-card-subtasks">'
+            r'<i class="ti ti-subtask me-1"></i>2</span>\s*'
+            r'<span data-role="task-card-comments">'
+            r'<i class="ti ti-message me-1"></i>3</span>\s*'
+            r'</span>'
+        )
+        assert re.search(pattern, card, re.S), (
+            f"the card's six data points are missing or out of the required "
+            f"order: {card}"
+        )
+
+        # Exactly six data points: no seventh. No status badge (the column
+        # already states it), no type, no specialists, no dependency counts,
+        # no sprint name.
+        assert card.count('class="badge') == 2, (
+            f"the card must carry exactly two badges (P and S); found "
+            f"{card.count('class=\"badge')} in {card}"
+        )
+        for absent in ("task-card-sprint", "task-card-specialists",
+                       "task-card-depends-on", "task-card-blocks"):
+            assert absent not in card, (
+                f"the sprint board's card must not render {absent!r}: {card}"
+            )
+
+    def test_sprint_board_card_zero_counters_render_no_indicator_markup(self):
+        """AC134: a card whose task has zero subtasks and zero comments renders
+        no footer row at all — no icon, no number, no dash, no placeholder, and
+        no empty slot. The check asserts the ABSENCE of the indicator markup
+        itself, not merely the absence of the digit "0", because an icon
+        rendered with nothing beside it would still occupy the space this rule
+        removes.
+        """
+        roadmap = "device_enrolment_demo"
+        self._run(["roadmap", "create", roadmap])
+        bare = self.test.create_task(
+            roadmap,
+            "Rotate the device-enrolment signing key",
+            "The enrolment signing key must be rotated before its "
+            "scheduled expiry so no device is locked out",
+            "Generate a new key pair and publish the new public key",
+            "Newly enrolled devices verify successfully against the "
+            "rotated key",
+            priority=3, severity=2,
+        )
+        sprint_id = self.test.create_sprint(roadmap, "Device trust maintenance sprint")
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id), str(bare)])
+
+        proc, port = self._start(["--port", "0"])
+        _, _, body = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
+        _, columns = self._sprint_board_columns(body)
+        card = self._sprint_board_card_html(columns[0], bare)
+
+        for needle in ("ti-subtask", "ti-message", "task-card-meta"):
+            assert needle not in card, (
+                f"a task with no subtasks and no comments must render no "
+                f"{needle!r} at all — not even an empty container: {card}"
+            )
+
+    def test_sprint_board_empty_sprint_renders_all_three_columns_empty(self):
+        """AC130: a sprint with no member task renders the member-tasks board
+        with all three columns present, each showing its own `0` badge and its
+        own in-column empty state — never a page-level empty state and never an
+        absent board."""
+        roadmap = "empty_sprint_demo"
+        self._run(["roadmap", "create", roadmap])
+        sprint_id = self.test.create_sprint(roadmap, "Not yet staffed sprint")
+
+        proc, port = self._start(["--port", "0"])
+        status, _, body = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
+        assert status == 200
+
+        summary = self._sprint_summary(body)
+        assert summary == {"pct": 0, "p": 0, "a": 0, "c": 0, "t": 0}, (
+            f"an empty sprint's summary line must read all zeros, got {summary}"
+        )
+
+        region, columns = self._sprint_board_columns(body)
+        for column, heading in zip(columns, self.SPRINT_BOARD_COLUMNS):
+            got, count = self._column_header(column)
+            assert got == heading, f"column titled {got!r}, want {heading!r}"
+            assert count == 0, f"the empty column {got} shows the count {count}, want 0"
+            assert self._sprint_column_shows_empty_state(column), (
+                f"the empty column {got} renders no in-column empty state"
+            )
+        assert 'class="card card-sm task-card' not in region, (
+            "an empty sprint's board must render no card"
+        )
+        # The board is framed by the Sprint details card above and the
+        # Comments card below, exactly as a populated sprint's is: this is not
+        # a page-level empty state substituting for the board.
+        assert "Sprint details" in body
+        assert '<h3 class="card-title">Comments' in body
+
+    def test_sprint_board_all_member_tasks_in_a_single_column(self):
+        """A sprint whose member tasks sit entirely in one column still renders
+        all three: the two untouched columns show their `0` badge and their own
+        empty state, and the occupied column carries every member task."""
+        roadmap = "latency_budget_demo"
+        self._run(["roadmap", "create", roadmap])
+
+        def task(title, priority):
+            return self.test.create_task(
+                roadmap, title,
+                "The checkout API's p99 latency budget is 300 milliseconds",
+                "Profile the request's hot path and cut its slowest span",
+                "p99 latency measured under load stays under 300 milliseconds",
+                priority=priority,
+            )
+
+        t1 = task("Profile the checkout API's p99 latency", 5)
+        t2 = task("Cache the tax-rate lookup", 4)
+        t3 = task("Move the fraud check off the request's hot path", 7)
+
+        sprint_id = self.test.create_sprint(roadmap, "Checkout latency sprint")
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id),
+                   str(t1), str(t2), str(t3)])
+        self._run(["sprint", "start", "-r", roadmap, str(sprint_id)])
+        for t in (t1, t2, t3):
+            self._run(["task", "stat", "-r", roadmap, str(t), "DOING"])
+
+        proc, port = self._start(["--port", "0"])
+        _, _, body = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
+        summary = self._sprint_summary(body)
+        assert (summary["p"], summary["a"], summary["c"], summary["t"]) == (0, 3, 0, 3), (
+            f"expected all 3 member tasks counted under A (DOING), got {summary}"
+        )
+
+        region, columns = self._sprint_board_columns(body)
+        waiting, doing, closed = columns
+
+        assert self._column_header(waiting)[1] == 0
+        assert self._sprint_column_shows_empty_state(waiting)
+        assert self._column_header(closed)[1] == 0
+        assert self._sprint_column_shows_empty_state(closed)
+
+        assert self._column_header(doing)[1] == 3
+        assert not self._sprint_column_shows_empty_state(doing)
+        assert set(self._sprint_board_card_ids(doing)) == {t1, t2, t3}, (
+            "the DOING column must carry every member task when all three sit "
+            "in that one status"
+        )
 
     def test_sprint_description_preserves_line_breaks(self):
         """Authored multi-line sprint descriptions render preserving the line

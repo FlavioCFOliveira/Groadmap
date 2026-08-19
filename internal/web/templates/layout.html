@@ -208,14 +208,15 @@
   Page (SPEC/WEB.md § Sprint Detail Sub-Template; Acceptance Criteria 38/39).
 
   Dot is a web.sprintDetail: .Name (roadmap), .Sprint (models.Sprint), .Tasks
-  (member tasks in planned in-sprint execution order), .Comments (the sprint's
-  own comments, oldest first), and .Summary (the precomputed completion summary).
-  It renders, in order: the sprint status summary line, the sprint metadata
-  datagrid, the full member-tasks table with each row clickable to open the
+  (member tasks in planned in-sprint execution order), .Columns (those same tasks
+  grouped into the member-tasks board's three fixed columns), .Comments (the
+  sprint's own comments, oldest first), and .Summary (the precomputed completion
+  summary). It renders, in order: the sprint status summary line, the sprint
+  metadata datagrid, the member-tasks board with each card clickable to open the
   read-only task detail modal, and the sprint's Comments card. The caller renders
-  the single taskModalShell the page carries; the member tasks hold no comment
-  data, because the modal a row opens is filled on demand from the task detail
-  endpoint.
+  the single taskModalShell the page carries; a member task carries the NUMBER of
+  its comments and never their text, because the modal a card opens is filled on
+  demand from the task detail endpoint.
 
   The "Tasks" datagrid value uses len .Tasks (the loaded member tasks) rather
   than .Sprint.TaskCount: GetSprint populates TaskCount, but len .Tasks is the
@@ -271,60 +272,139 @@
             </div>
           </div>
 
-          <div class="card mb-3">
-            <div class="card-header">
-              <h3 class="card-title">Tasks <span class="badge bg-secondary-lt ms-2">{{len .Tasks}}</span></h3>
-              <div class="card-actions text-secondary">In planned execution order</div>
-            </div>
-            {{if .Tasks}}
-            <div class="table-responsive">
-              <table class="table table-vcenter card-table">
-                <thead>
-                  <tr>
-                    <th>ID</th>
-                    <th>Title</th>
-                    <th>Status</th>
-                    <th>Type</th>
-                    <th>Priority</th>
-                    <th>Severity</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {{/*
-                    The row stays clickable by POINTER — it keeps the modal
-                    data attributes, so a click anywhere on it opens the task's
-                    modal — but it is no longer focusable and no longer claims
-                    role="button": a <tr> cannot be a button and cannot contain
-                    one wrapping the whole row, so announcing the role while
-                    being impossible to press is worse than not being focusable.
-                    The KEYBOARD reaches a real <button> on the task title, which
-                    the HTML activation behaviour turns into a click on Enter and
-                    Space. Its accessible name names the task it opens AND
-                    contains the button's visible label, the title, which is what
-                    WCAG 2.5.3 (Label in Name) requires of a control whose visible
-                    text is part of its name. Both surfaces that show a clickable
-                    task are treated the same way; the board's card is the same kind of button
-                    (SPEC/WEB.md § Sprint Detail Sub-Template; § Roadmap Tasks
-                    Page, clickable card).
-                  */}}
-                  {{range .Tasks}}
-                  <tr class="task-row" data-bs-toggle="modal" data-bs-target="#task-modal" data-task-id="{{.ID}}">
-                    <td>#{{.ID}}</td>
-                    <td><button type="button" class="task-row__trigger p-0 border-0 bg-transparent text-reset text-start" data-bs-toggle="modal" data-bs-target="#task-modal" data-task-id="{{.ID}}" aria-label="Open details for task #{{.ID}}: {{.Title}}">{{.Title}}</button></td>
-                    <td><span class="badge {{taskStatusBadge .Status}}">{{.Status}}</span></td>
-                    <td>{{.Type}}</td>
-                    <td><span class="badge {{priorityBadge .Priority}}">{{.Priority}}</span></td>
-                    <td><span class="badge {{severityBadge .Severity}}">{{.Severity}}</span></td>
-                  </tr>
-                  {{end}}
-                </tbody>
-              </table>
-            </div>
-            {{else}}
-            <div class="card-body">
-              <div class="empty">
-                <p class="empty-title">No tasks in this sprint</p>
-                <p class="empty-subtitle text-secondary">This sprint has no tasks assigned yet.</p>
+          {{/*
+            The member-tasks board: three FIXED columns — WAITING, DOING, CLOSED —
+            holding one card per member task, placed between the Sprint details
+            card above and the Comments card below (SPEC/WEB.md § Sprint Detail
+            Sub-Template, rule 4; Acceptance Criteria 130 to 139).
+
+            It replaces the six-column member-tasks table. The table could not
+            hold the trigger contract whole: a <tr> is not an activatable element
+            and can contain no single control wrapping the row, so the pointer got
+            the row and the keyboard got a button in one cell — two targets for
+            one task. A card IS a single element and can BE the control, so
+            pointer, touch, Enter and Space all reach the same target.
+
+            The columns come from the model (web.groupIntoSprintBoardColumns over
+            models.CategorizeTaskStatus), never from a literal here, so the board
+            and the sprint status summary line above group the sprint's tasks by
+            ONE categorisation: each column's badge is that line's own P, A or C,
+            by construction rather than by coincidence. All three columns are
+            rendered whatever the sprint holds, so a sprint with no member task is
+            an empty board rather than an absent one, and the sub-template puts no
+            page-level empty state in place of it.
+
+            The board is NOT wrapped in an outer card: the columns ARE the cards,
+            exactly as on the tasks page. Everything inside a column is Tabler's
+            own markup — cards, the card-header idiom, badges, the empty state —
+            and the board reuses the tasks board's own classes rather than
+            declaring lengths of its own, so the two boards carry one column
+            measure and one card measure (SPEC/WEB.md § Sprint Detail
+            Sub-Template, Column width and card density; Acceptance Criterion 139).
+
+            task-board--bounded is the ONE thing this board does differently: its
+            height is bounded (60vh, floored at --full-height-region-floor) rather
+            than taken from the space the page body leaves, because the sprint page
+            is not a single-region page and a full-height board would push the
+            Comments card below the fold for every sprint (SPEC/WEB.md
+            § Full-Height Page Regions; Acceptance Criterion 136).
+
+            READ-ONLY: no drag-and-drop, no control that moves a task between
+            columns, reorders cards, or edits anything. The only button in the
+            board is the card itself, and it opens the read-only detail modal
+            (Acceptance Criterion 138).
+          */}}
+          <div class="task-board task-board--bounded mb-3" data-role="task-board">
+            {{range .Columns}}
+            <div class="card task-board__column" data-role="task-board-column">
+              <div class="card-header">
+                <h3 class="card-title">{{.Heading}} <span class="badge bg-secondary-lt ms-2">{{len .Tasks}}</span></h3>
+              </div>
+              <div class="card-body task-board__cards">
+                {{range .Tasks}}
+                {{/*
+                  The card IS the modal trigger, and it is a real <button>: the
+                  vendored Bootstrap binds the modal data-api on click only, and
+                  per the HTML activation behaviour only a button, an anchor with
+                  href, or a form control turns Enter and Space into a click.
+                  role="button" and tabindex are therefore absent: a button has
+                  both natively, and an element that needs them is an element that
+                  cannot be pressed. The accessible name names the task AND carries
+                  its title, which is the card's visible label — a control whose
+                  accessible name omits its visible label fails WCAG 2.5.3 (Label
+                  in Name, Level A) (Acceptance Criterion 135).
+
+                  The card's content is phrasing content — spans, not divs —
+                  because that is a button's content model; the Tabler card classes
+                  are unchanged, and w-100/p-0/text-start are the utilities that
+                  keep a button looking like the card it is.
+
+                  The order of the card differs from the tasks board's in exactly
+                  one place, and deliberately: the TITLE leads and the reference
+                  follows it as muted text on its own line, because the GitLab
+                  issue board card this board is modelled on leads with the title
+                  (Acceptance Criterion 133). The card carries no status badge —
+                  the column it sits in already states the status — and no type, no
+                  specialists and no dependency counts: a card is read at a glance,
+                  and every field of the task is in the modal the card opens.
+                */}}
+                <button type="button" class="card card-sm task-card w-100 p-0 text-start" data-bs-toggle="modal" data-bs-target="#task-modal" data-task-id="{{.ID}}" aria-label="Open details for task #{{.ID}}: {{.Title}}">
+                  <span class="card-body d-block">
+                    <span class="d-block fw-bold text-break" data-role="task-card-title">{{.Title}}</span>
+                    <span class="d-block small text-secondary mb-1" data-role="task-card-ref">#{{.ID}}</span>
+                    {{/*
+                      The pair is rendered exactly as the tasks board's card
+                      renders it: P then the priority, S then the severity, with
+                      no space and no separator, so a task of priority 5 and
+                      severity 3 reads P5 and S3. The rule is stated once for the
+                      card of BOTH boards, in SPEC/WEB.md § Roadmap Tasks Page,
+                      Card content, item 3 (Acceptance Criteria 85 and 133), and
+                      is not restated here: the two boards keep ONE form for this
+                      pair, and changing it on one card alone is the drift that
+                      statement exists to prevent.
+
+                      The prefix is a label, not a value. The colour helpers are
+                      handed .Priority and .Severity themselves, so the band is
+                      the band of the value and the prefix reaches no mapping.
+                    */}}
+                    <span class="d-flex flex-wrap gap-1">
+                      <span class="badge {{priorityBadge .Priority}}">P{{.Priority}}</span>
+                      <span class="badge {{severityBadge .Severity}}">S{{.Severity}}</span>
+                    </span>
+                    {{/*
+                      The counters, at the TRAILING edge of the card, which is
+                      where the GitLab card puts its own. Only the indicators the
+                      task HAS are rendered: a zero count renders nothing at all —
+                      no icon, no dash, no placeholder, no empty slot — and a task
+                      with neither counter renders no footer element, which is what
+                      .HasCounters decides (SPEC/WEB.md § Sprint Detail
+                      Sub-Template, Absent metadata renders nothing; Acceptance
+                      Criterion 134).
+                    */}}
+                    {{if .HasCounters}}
+                    <span class="d-flex flex-wrap justify-content-end gap-2 mt-2 small text-secondary" data-role="task-card-meta">
+                      {{if .SubtaskCount}}<span data-role="task-card-subtasks"><i class="ti ti-subtask me-1"></i>{{.SubtaskCount}}</span>{{end}}
+                      {{if .CommentCount}}<span data-role="task-card-comments"><i class="ti ti-message me-1"></i>{{.CommentCount}}</span>{{end}}
+                    </span>
+                    {{end}}
+                  </span>
+                </button>
+                {{end}}
+                {{/*
+                  The column's own empty state, in the idiom the tasks board uses:
+                  Tabler's empty-state markup inside the column, below the header,
+                  in place of the card list, with the column, its heading and its 0
+                  badge still visible. It is rendered only when the column holds no
+                  card — unlike the tasks board's, which is always present and
+                  toggled, because this board carries no narrowing control that
+                  could empty a column in the browser.
+                */}}
+                {{if not .Tasks}}
+                <div class="empty" data-role="task-board-column-empty">
+                  <p class="empty-title">No tasks</p>
+                  <p class="empty-subtitle text-secondary">No task of this sprint is {{.Heading}} right now.</p>
+                </div>
+                {{end}}
               </div>
             </div>
             {{end}}
@@ -332,15 +412,15 @@
 
           {{/*
             The sprint's own progression log, rendered as the LAST card of the
-            sub-template, after the member-tasks card (SPEC/WEB.md § Sprint Detail
+            sub-template, after the member-tasks board (SPEC/WEB.md § Sprint Detail
             Sub-Template, Comments card; Acceptance Criteria 68/69).
 
             .Comments carries the comments of the SPRINT itself. A member task's
             comments are not shown, aggregated, or merged in here: they are
-            reachable through that task's own detail modal. The card is always
-            present; a sprint with no comments shows the empty state in place of
-            the timeline, in the same idiom the member-tasks card uses when the
-            sprint has no tasks.
+            reachable through that task's own detail modal, and a board card shows
+            only how MANY a task has. The card is always present; a sprint with no
+            comments shows the empty state in place of the timeline, in the same
+            idiom a column of the member-tasks board uses when it holds no task.
           */}}
           <div class="card">
             <div class="card-header">

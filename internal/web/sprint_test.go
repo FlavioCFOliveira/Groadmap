@@ -420,8 +420,8 @@ func TestClassifySprints_OrderingRules(t *testing.T) {
 }
 
 // TestSprintPage_HappyPath drives handleSprint against a sprint of an existing
-// roadmap: 200 HTML showing all sprint fields and the member-task list, with
-// every task row clickable to a modal and no edit affordance (SPEC/WEB.md
+// roadmap: 200 HTML showing all sprint fields and the sprint's member tasks, with
+// every task card clickable to a modal and no edit affordance (SPEC/WEB.md
 // § Roadmap Sprint Page; Acceptance Criterion 13).
 func TestSprintPage_HappyPath(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
@@ -439,12 +439,12 @@ func TestSprintPage_HappyPath(t *testing.T) {
 	if !strings.Contains(body, "Deliver the sprint detail page and task modal") {
 		t.Errorf("sprint page missing the sprint description")
 	}
-	// Member tasks listed, each row clickable to a modal.
+	// Member tasks presented, each card clickable to a modal.
 	if !strings.Contains(body, "Build the read-only sprint page route and template") {
-		t.Errorf("sprint page does not list its member task")
+		t.Errorf("sprint page does not present its member task")
 	}
 	if !strings.Contains(body, `data-task-id="`+itoa(f.openTaskID)+`"`) {
-		t.Errorf("sprint page task row is not wired to the task detail modal")
+		t.Errorf("sprint page task card is not wired to the task detail modal")
 	}
 	// Read-only: no form, no submit, no edit control.
 	low := strings.ToLower(body)
@@ -453,10 +453,12 @@ func TestSprintPage_HappyPath(t *testing.T) {
 	}
 }
 
-// TestSprintPage_TaskOrder asserts the sprint page lists tasks in sprint_tasks
-// position order (the planned in-sprint execution order), not by id or status
-// (SPEC/WEB.md § Roadmap Sprint Page; Acceptance Criterion 13). The OPEN sprint
-// was seeded with openTaskID added before openTaskID2.
+// TestSprintPage_TaskOrder asserts the sprint page presents its tasks in
+// sprint_tasks position order (the planned in-sprint execution order), not by id
+// or status (SPEC/WEB.md § Roadmap Sprint Page; Acceptance Criteria 13 and 132).
+// The OPEN sprint was seeded with openTaskID added before openTaskID2, and both
+// are in the same board column, so the document order of their two cards is the
+// order within that column.
 func TestSprintPage_TaskOrder(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	f := seedSprintFixture(t, "web-sprint-order")
@@ -566,9 +568,10 @@ func TestTaskModal_WiringAndContent(t *testing.T) {
 		}
 
 		// Read-only: no form and no submit control on either page. The tasks page
-		// carries exactly one input — the board's search box, which submits nothing
-		// and only changes which of the already-read tasks are shown (SPEC/WEB.md
-		// § Roadmap Tasks Page, Read-only).
+		// carries exactly one input — its board's search box, which submits nothing
+		// and only changes which of the already-read tasks are shown; the sprint
+		// page's board carries none at all (SPEC/WEB.md § Roadmap Tasks Page,
+		// Read-only; § Sprint Detail Sub-Template, rule 4, Read-only).
 		low := strings.ToLower(body)
 		if strings.Contains(low, "<form") || strings.Contains(low, `type="submit"`) {
 			t.Errorf("page %s must be read-only: no form and no submit control", path)

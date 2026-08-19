@@ -4,8 +4,9 @@
  * badges, buttons, and the responsive off-canvas sidebar all come from the
  * vendored Tabler framework (SPEC/WEB.md § UI Framework). This file holds
  * only what Tabler does not give us: the one definite height that turns
- * Tabler's own shell chain into a full-height page region, the Kanban task
- * board's column strip and its scrolling (Tabler ships no board component),
+ * Tabler's own shell chain into a full-height page region, the column strip and
+ * scrolling shared by the two Kanban boards — the roadmap tasks page's and the
+ * sprint page's member-tasks board (Tabler ships no board component),
  * the D3 #graph container sizing, the graph detail-panel positioning, the
  * empty-graph overlay, the in-place degradation message, the layout dropdown
  * glue, and a couple of minor dark-theme tweaks. It does not re-implement
@@ -38,27 +39,46 @@
   font-size: 2.5rem;
 }
 
-/* ---- Roadmap detail / sprint pages ----
-   The controls that open the read-only task detail modal: the board card on the
-   tasks page, the task-title button inside a member-task row on the sprint page,
-   and the row itself, which stays clickable by pointer. Tabler/Bootstrap own the
-   modal; this only signals the element is interactive (SPEC/WEB.md § Task Detail
-   Modal, § Responsive and Mobile-First Design).
+/* ---- The card that opens the read-only task detail modal ----
+   Both boards render it — the roadmap tasks page's Kanban board and the sprint
+   page's member-tasks board — and on both the card IS the trigger and is a real
+   <button>. Tabler/Bootstrap own the modal; this only signals the element is
+   interactive (SPEC/WEB.md § Task Detail Modal, § Responsive and Mobile-First
+   Design).
 
    `cursor` is inherited, but a browser user-agent stylesheet may set its own
-   cursor on a button, so the title trigger names itself here rather than relying
-   on inheriting the row's. */
-.task-row,
-.task-row__trigger,
+   cursor on a button, so the card names it here rather than relying on
+   inheritance.
+
+   The rules for `.task-row` and `.task-row__trigger` were removed with the
+   sprint page's member-tasks table: a <tr> is not activatable and could hold no
+   control wrapping the whole row, so that presentation needed two targets for one
+   task — the row for the pointer and a button in one cell for the keyboard. The
+   card needs one, and it is the card. */
 .task-card { cursor: pointer; }
 
-/* The keyboard-focus affordance belongs to the elements that can actually take
-   focus and be activated — both are real buttons. The row carries no focus rule:
-   it is not focusable, because a <tr> cannot be activated from the keyboard and
-   pretending otherwise (tabindex + role="button") announced a button that could
-   not be pressed. The keyboard reaches the title button inside it instead. */
-.task-row__trigger:focus-visible,
+/* The keyboard-focus affordance, on the element that actually takes focus and can
+   be activated: the card button itself. */
 .task-card:focus-visible { outline: 2px solid var(--tblr-primary, #4299e1); outline-offset: -2px; }
+
+/* ---- The floor every bounded region reads (SPEC/WEB.md § Full-Height Page
+   Regions, rule 5; § Sprint Detail Sub-Template, Height and scrolling) ----
+   The single length below which a scrolling region would present a fraction of a
+   card and stop being worth presenting at all. It is declared ONCE, on :root, and
+   every rule that needs it reads it from there.
+
+   It lives on :root and not on `.full-height-page` because the pages that need it
+   are not the same set as the pages that carry that class. The sprint page's
+   member-tasks board is bounded to 60vh with this same floor, and that page is NOT
+   a full-height page — it places the Sprint details card above the board and the
+   Comments card below it — so a property declared on the full-height shell alone
+   would not resolve there and the board would lose its floor silently. Restating
+   the length beside the board instead would be the other failure: two copies of
+   one number, free to be changed apart, stating different floors for the same
+   screen (Acceptance Criterion 136). */
+:root {
+  --full-height-region-floor: 22rem;
+}
 
 /* ---- Full-height page shell (SPEC/WEB.md § Full-Height Page Regions) ----
    A page presenting a full-height region — one sized to the viewport so that its
@@ -105,17 +125,14 @@
    page, and the height below now does that job exactly; left in place it would
    also be free to resolve against the LARGE viewport on the very browsers rule 4
    is written for, overriding the dynamic height and putting the foot of the
-   region back under the address bar. */
-.full-height-page {
-  /* The floor, stated once. Below this height the region would present a
-     fraction of a single card, so it stops following the page body and the page
-     scrolls to reach it instead (rule 5). Two rules below need this number and
-     they must agree: the region takes the floor, and the page body it ends
-     against does not shrink past it, so the two edges of rule 1 keep coinciding
-     on a viewport where the floor binds. */
-  --full-height-region-floor: 22rem;
-}
+   region back under the address bar.
 
+   The floor those rules read — `--full-height-region-floor` — is declared at the
+   top of this file, on :root, so every page resolves it and not only the ones
+   carrying `full-height-page`. Three rules need it and they must agree: the
+   region takes the floor, the page body it ends against does not shrink past it,
+   so the two edges of rule 1 keep coinciding on a viewport where the floor binds,
+   and the sprint page's bounded board takes the same floor. */
 .full-height-page .page {
   min-height: 0;
   height: 100vh;
@@ -170,46 +187,89 @@
   flex-direction: column;
 }
 
-/* ---- Kanban task board (SPEC/WEB.md § Roadmap Tasks Page, layout and
-   scrolling; § Full-Height Page Regions; § Responsive and Mobile-First Design,
-   rule 9) ----
+/* ---- Kanban board (SPEC/WEB.md § Roadmap Tasks Page, layout and scrolling;
+   § Sprint Detail Sub-Template, rule 4; § Full-Height Page Regions;
+   § Responsive and Mobile-First Design, rules 9 and 10) ----
    The vendored Tabler distribution ships no board or Kanban component, so the
    column strip's own layout and scrolling rules live here; everything inside a
    column is Tabler's own markup (cards, card headers, badges, empty states) and
    carries no rule of its own in this file.
 
-   The five columns sit side by side and the BOARD scrolls horizontally inside
-   this container when they do not fit, so the page itself never scrolls
-   horizontally at any viewport width.
+   TWO boards are rendered from these rules: the roadmap tasks page's five-column
+   task board and the roadmap sprint page's three-column member-tasks board. They
+   share one set of rules rather than each carrying its own, because their columns
+   and their cards are the same kind of object and a reader moving between the two
+   pages should meet one column measure and one card measure. That is also what
+   makes the shared lengths one measure used twice rather than two that happen to
+   agree today (Acceptance Criteria 129 and 139).
 
-   The board is a full-height page region: it computes no height of its own and
-   claims what the page body has left through the shell chain above, which is what
-   gives each column an "available height" to scroll its cards within. */
+   The columns sit side by side and the BOARD scrolls horizontally inside this
+   container when they do not fit, so the page itself never scrolls horizontally
+   at any viewport width.
+
+   The board computes no height of its own here. On the tasks page it is a
+   full-height page region and claims what the page body has left through the
+   shell chain above; on the sprint page the `--bounded` modifier below gives it a
+   definite height instead. Either way, that height is the "available height" each
+   column scrolls its cards within. */
 .task-board {
   display: flex;
   align-items: stretch;
   gap: 0.75rem;
   flex: 1;
-  /* The region carries its own floor (SPEC/WEB.md § Full-Height Page Regions,
-     rule 5), reading the one the shell also holds the page body to so the two
-     cannot drift apart. The fallback is that same length, for a board rendered
-     outside a full-height shell. */
-  min-height: var(--full-height-region-floor, 22rem);
+  /* The floor, read from the one place it is declared (:root, at the top of this
+     file) so the board and the page body it is measured against cannot come to
+     state different floors. No fallback length is written here: a second copy of
+     the number is a copy that can be changed on its own (SPEC/WEB.md
+     § Full-Height Page Regions, rule 5; Acceptance Criterion 136). */
+  min-height: var(--full-height-region-floor);
   overflow-x: auto;
   overflow-y: hidden;
   /* Room for the horizontal scrollbar so it never overlaps the last card. */
   padding-bottom: 0.5rem;
 }
 
+/* The sprint page's member-tasks board, and the ONE thing it does differently:
+   its height is bounded by a definite length instead of by the space the page
+   body leaves (SPEC/WEB.md § Sprint Detail Sub-Template, Height and scrolling;
+   Acceptance Criterion 136).
+
+   The sprint page is not a single-region page. It carries the Sprint details card
+   above the board and the Comments card below it, and all three belong to one
+   sprint presentation: a board sized to the space the page body leaves would fill
+   the rest of the viewport on its own and push the Comments card below the fold
+   for every sprint, while a board sized to its own content would push that card
+   further down with every member task the sprint gains. This bounded height
+   avoids both — the board shows a useful number of cards, scrolls the rest inside
+   its columns, and leaves the Comments card within reach.
+
+   The height is viewport-relative, so the board follows the screen at the same
+   proportion everywhere rather than fixing the layout to one device, and the
+   `min-height` the base rule above already declares floors it: on a viewport short
+   enough that 60vh falls below `--full-height-region-floor`, the board takes the
+   floor and keeps showing useful content instead of collapsing to a sliver of one
+   card. Nothing is restated here — not the floor, not a column length — because
+   the modifier's whole job is the one property that differs.
+
+   This board is deliberately NOT a full-height page region, so the ordered
+   vh/dvh pair those regions declare does not apply to it: 60vh is a fraction of
+   the viewport rather than an edge that must meet the bottom of the page body,
+   and the dynamic unit exists to keep such an edge above the fold while a mobile
+   address bar is showing (§ Full-Height Page Regions, rules 1 and 4). */
+.task-board--bounded {
+  height: 60vh;
+}
+
 /* One column. Its width is what decides the measure a card's title is set on, so
-   it is stated here rather than left to the content: all five columns carry the
-   same width, because a column stands for a state and not for a volume of work,
-   and `flex: 0 0 auto` is what keeps it — the column neither grows into a wide
-   viewport nor shrinks on a narrow one. It never shrinks below a width at which
-   its cards stay legible; the remaining columns are reached by scrolling the board
-   horizontally, which is a touch-friendly gesture on a touch device. Both lengths
-   are in `rem`, so the column follows the reader's own text size
-   (SPEC/WEB.md § Roadmap Tasks Page, Column width and card density). */
+   it is stated here rather than left to the content: every column of either board
+   carries the same width, because a column stands for a state and not for a volume
+   of work, and `flex: 0 0 auto` is what keeps it — the column neither grows into a
+   wide viewport nor shrinks on a narrow one. It never shrinks below a width at
+   which its cards stay legible; the remaining columns are reached by scrolling the
+   board horizontally, which is a touch-friendly gesture on a touch device. Both
+   lengths are in `rem`, so the column follows the reader's own text size
+   (SPEC/WEB.md § Roadmap Tasks Page, Column width and card density; § Sprint
+   Detail Sub-Template, Column width and card density). */
 .task-board__column {
   display: flex;
   flex: 0 0 auto;
@@ -240,16 +300,18 @@
    Tabler's specificity and this sheet is the last one the layout links, so source
    order settles the cascade and no !important is needed. The hit target does not
    shrink: what the user presses is the whole card, not the text inside it
-   (SPEC/WEB.md § Roadmap Tasks Page, Column width and card density). */
+   (SPEC/WEB.md § Roadmap Tasks Page, Column width and card density; § Sprint
+   Detail Sub-Template, Column width and card density). Both boards' cards carry
+   this one padding: the rule selects the class, and both emit it. */
 .task-card > .card-body {
   padding: 0.75rem;
 }
 
-/* An empty column keeps its title and its 0 count badge and shows Tabler's
-   empty-state markup in place of the card list. Tabler sizes that panel for a
-   full-width card; inside a 19rem column it is tightened so the empty state stays
-   unobtrusive. Together with the card-body padding above, these are the only two
-   presentation rules the board adds to a Tabler component. */
+/* An empty column of either board keeps its heading and its 0 count badge and
+   shows Tabler's empty-state markup in place of the card list. Tabler sizes that
+   panel for a full-width card; inside a 19rem column it is tightened so the empty
+   state stays unobtrusive. Together with the card-body padding above, these are
+   the only two presentation rules the boards add to a Tabler component. */
 .task-board__cards .empty {
   padding: 1rem 0.5rem;
 }

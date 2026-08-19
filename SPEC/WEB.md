@@ -101,9 +101,9 @@ The web interface exposes the following kinds of page for each roadmap:
    sprint-card partial, so all sprints share identical card markup across the
    three tabs. Each card shows a header ("Sprint #<ID>" with a status badge), the
    sprint description, and a footer with the sprint's task count, and links to that
-   sprint's own page. The Actual tab does not expand the OPEN sprint into an inline
-   task table or per-task modals; the full sprint detail block is shown only on the
-   single Roadmap Sprint Page (see
+   sprint's own page. The Actual tab does not expand the OPEN sprint into an
+   inline member-tasks board or per-task modals; the full sprint detail block is
+   shown only on the single Roadmap Sprint Page (see
    [Shared Sprint-Card Partial](#shared-sprint-card-partial)). It does not render
    the roadmap's task board.
 3. A roadmap tasks page, served at `/roadmaps/{name}/tasks` and read from that
@@ -112,8 +112,9 @@ The web interface exposes the following kinds of page for each roadmap:
    a card in the column of its status and each card clickable to open the read-only
    task detail modal. The page renders no task table.
 4. A roadmap sprint page that shows all details of a single sprint and the
-   sprint's task list in planned in-sprint execution order, read from that
-   roadmap's `project.db`.
+   sprint's member tasks as a Kanban board of three fixed columns — `WAITING`,
+   `DOING`, and `CLOSED` — whose cards follow the planned in-sprint execution
+   order, read from that roadmap's `project.db`.
 5. A roadmap audit log page, served at `/roadmaps/{name}/audit` and read from
    that roadmap's `project.db`. It presents the roadmap's full audit log — every
    audit entry of any operation and entity type — as a read-only table ordered by
@@ -169,13 +170,13 @@ task detail modal that displays all of the task's fields (see
    ("Sprint #<ID>" with a status badge), the sprint description, and a footer with
    that sprint's total task count, and links to the sprint's own page. The OPEN
    sprint or sprints under Actual are rendered with this same card; the Actual tab
-   does not expand the OPEN sprint into an inline task table or per-task modals.
-   Próximos lists PENDING sprints ordered by ascending sprint `Order` (the unique
-   execution order; the next sprint to execute, lowest `Order`, first); Actual lists
-   the OPEN sprint or sprints ordered by ascending sprint `Order`; Concluídos lists
-   CLOSED sprints ordered by descending sprint `Order` (the last/highest-`Order`
-   closed sprint first). Each sprint shown in any tab is a clickable link to that
-   sprint's own page. The sprints page does not render the roadmap's task board (see
+   does not expand the OPEN sprint into an inline member-tasks board or per-task
+   modals. Próximos lists PENDING sprints ordered by ascending sprint `Order`
+   (the unique execution order; the next sprint to execute, lowest `Order`,
+   first); Actual lists the OPEN sprint or sprints ordered by ascending sprint
+   `Order`; Concluídos lists CLOSED sprints ordered by descending sprint
+   `Order` (the last/highest-`Order` closed sprint first). Each sprint shown in
+   any tab is a clickable link to that sprint's own page. The sprints page does not render the roadmap's task board (see
    [Roadmap Sprints Page](#roadmap-sprints-page),
    [Roadmap Sprint Page](#roadmap-sprint-page), and
    [Shared Sprint-Card Partial](#shared-sprint-card-partial)).
@@ -207,7 +208,11 @@ task detail modal that displays all of the task's fields (see
    [Roadmap Index Page](#roadmap-index-page) and
    [Roadmap Sprints Page](#roadmap-sprints-page)).
 9. The roadmap sprint page shows all details of a single sprint, the sprint's
-   task list in the planned in-sprint execution order, and the sprint's own
+   member tasks as a Kanban board of three fixed columns — `WAITING` holding the
+   sprint's `BACKLOG` and `SPRINT` tasks, `DOING` its `DOING` and `TESTING` tasks,
+   and `CLOSED` its `COMPLETED` tasks — whose cards follow the planned in-sprint
+   execution order and whose column counts are the `P`, `A`, and `C` values of the
+   sprint status summary line on the same page, and the sprint's own
    comments in a Comments card, read from that roadmap's
    `project.db`. It is served at `/roadmaps/{name}/sprints/{id}`, is read-only, and
    returns HTTP `404 Not Found` when `{id}` is not a valid integer or is not a
@@ -223,11 +228,12 @@ task detail modal that displays all of the task's fields (see
    clamped to the nearest valid page; an empty audit log renders successfully with
    a clear empty-state message (see
    [Roadmap Audit Log Page](#roadmap-audit-log-page)).
-11. Anywhere a task is shown clickable — the tasks page's board cards and the
-   sprint page's task list — selecting the task opens a read-only task detail
-   modal that displays all of the task's fields and, after them, that task's
+11. Anywhere a task is shown clickable — the board cards of the tasks page and
+   the board cards of the sprint page — selecting the task opens a read-only task
+   detail modal that displays all of the task's fields and, after them, that task's
    comments as a chronological timeline. The element that opens the modal is a
-   `<button>` on every such surface, so the pointer, touch, Enter, and Space all
+   `<button>` on every such surface, and on both boards that `<button>` is the card
+   itself, so the pointer, touch, Enter, and Space all
    open it without any added JavaScript. The modal
    only displays data: it contains no form, no edit control, and no submit action,
    and it opens no write path. A page renders **one** modal element, not one per
@@ -294,8 +300,8 @@ task detail modal that displays all of the task's fields (see
     the roadmap sprints page, the roadmap tasks page, the roadmap sprint page, the
     roadmap audit log page, and the knowledge-graph page — and to the interactive
     components, including the
-    sprint tabs, the tasks page's Kanban board, the task detail modal, and the
-    interactive knowledge-graph
+    sprint tabs, the tasks page's Kanban board, the sprint page's member-tasks
+    board, the task detail modal, and the interactive knowledge-graph
     visualisation, which MUST all remain usable on touch and small-viewport devices
     (see [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
 17. **Tabler admin-shell layout in the dark theme.** The interface presents a
@@ -675,7 +681,7 @@ produced from embedded `html/template` templates. Page routes return HTML
 | `/roadmaps/{name}` | GET, HEAD | Roadmap sprints page (landing; sprint tabs) | HTML |
 | `/roadmaps/{name}/tasks` | GET, HEAD | Roadmap tasks page (Kanban task board; optional `q` search parameter and optional `type`, `priority`, and `severity` filter parameters, see [Roadmap Tasks Page](#roadmap-tasks-page)) | HTML |
 | `/roadmaps/{name}/tasks/{id}/data` | GET, HEAD | One task's fields and comments, for the task detail modal (see [Task Detail Endpoint](#task-detail-endpoint)) | JSON |
-| `/roadmaps/{name}/sprints/{id}` | GET, HEAD | Roadmap sprint page (all sprint details and the sprint's task list) | HTML |
+| `/roadmaps/{name}/sprints/{id}` | GET, HEAD | Roadmap sprint page (all sprint details and the sprint's member-tasks board) | HTML |
 | `/roadmaps/{name}/audit` | GET, HEAD | Roadmap audit log page (full audit log, paginated; optional `page` parameter; see [Roadmap Audit Log Page](#roadmap-audit-log-page)) | HTML |
 | `/roadmaps/{name}/graph` | GET, HEAD | Roadmap knowledge-graph page (interactive visualisation) | HTML |
 | `/roadmaps/{name}/graph/data` | GET, HEAD | Graph nodes and edges for the visualisation (optional `q` Cypher query and `limit` node-limit parameters; see [Graph Data Endpoint](#graph-data-endpoint)) | JSON |
@@ -791,10 +797,10 @@ how the `rmp web` process itself terminates.
     those in progress — ordered by ascending sprint `Order` (the unique sprint
     execution order; see `MODELS.md § Sprint`). Each OPEN sprint is shown with the
     shared sprint-card partial, the same card the other two tabs use. The Actual
-    tab does not expand the OPEN sprint into an inline task table or per-task
-    modals; the full sprint detail block is shown only on the single Roadmap
-    Sprint Page (see [Roadmap Sprint Page](#roadmap-sprint-page)). When no sprint
-    is OPEN, the Actual tab shows a clear empty-state message and no card.
+    tab does not expand the OPEN sprint into an inline member-tasks board or
+    per-task modals; the full sprint detail block is shown only on the single
+    Roadmap Sprint Page (see [Roadmap Sprint Page](#roadmap-sprint-page)). When no
+    sprint is OPEN, the Actual tab shows a clear empty-state message and no card.
   - **Próximos** lists the PENDING sprints — planned but not yet started — ordered
     by ascending sprint `Order` (the unique sprint execution order; see
     `MODELS.md § Sprint`). The sprint with the lowest `Order`, the next sprint to
@@ -836,10 +842,15 @@ how the `rmp web` process itself terminates.
   renders no task table and offers no alternative table view. Every field a task
   has remains reachable from this page through the read-only task detail modal,
   which opens when the user selects a card (see
-  [Task Detail Modal](#task-detail-modal)). This page is the only page whose
-  presentation the board replaces: the member-tasks table of the Roadmap Sprint
-  Page is unchanged (see
-  [Sprint Detail Sub-Template](#sprint-detail-sub-template)).
+  [Task Detail Modal](#task-detail-modal)). The Roadmap Sprint Page presents its
+  member tasks as a board too, so both surfaces that show a clickable task are
+  boards whose card is the modal trigger; the two boards differ in what their
+  columns stand for and in what their cards show. This page has **five** columns,
+  one per task status, and its card leads with the reference line; the sprint
+  page's board has **three**, grouping the sprint's tasks the way the sprint status
+  summary line groups them, and its card leads with the title (see
+  [Sprint Detail Sub-Template](#sprint-detail-sub-template)). The five-column
+  specification below governs this page alone.
 - **Structural inspiration only.** The board follows the structure of a GitLab
   issue board — columns that stand for states, cards that stand for work items,
   and a task count on each column header — and deliberately departs from it in
@@ -913,11 +924,49 @@ how the `rmp web` process itself terminates.
      covers task and sprint status, priority, and severity only, and is not
      extended to the task type.
   2. The task **`title`**, presented as the card's prominent main content.
-  3. A **`priority` badge** and a **`severity` badge**, each showing that task's
-     integer value and coloured by the band the value falls in, using exactly the
-     mapping in
+  3. A **`priority` badge** and a **`severity` badge**, in that order, each
+     carrying that task's integer value and coloured by the band the value falls
+     in, using exactly the mapping in
      [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours).
      No new badge colour and no new band is introduced here.
+
+     **Each badge names the value it carries with a one-letter prefix.** The
+     priority badge reads `P` immediately followed by the task's `priority`, and
+     the severity badge reads `S` immediately followed by the task's `severity`,
+     with no space and no separator between the letter and the digits: a task of
+     priority `5` and severity `3` shows `P5` and `S3`.
+
+     The prefix is the label the card has no room to write out. Wherever else this
+     interface shows these two values, a word names each of them — the task detail
+     modal writes the field's name beside the value (see
+     [Task Detail Modal](#task-detail-modal)) — but a card is read at a glance, and
+     without the prefix it would put two bare integers side by side and state
+     nowhere which one is the priority and which one is the severity. A reader
+     would have to know the order by heart to tell `5` from `3`. The prefix states
+     that word in the one character the card can spare for it.
+
+     **This rule governs the card of both boards.** The card of the sprint page's
+     member-tasks board renders the same pair in the same way (see
+     [Sprint Detail Sub-Template](#sprint-detail-sub-template)). The rule is stated
+     here once for both cards rather than twice, so that the two cannot drift apart
+     on it: the two boards differ in what their columns stand for and in what else
+     their cards show, and they keep **one** form for this pair.
+
+     **The prefix is a label, not a value.** It changes what the badge reads and
+     nothing else. The colour still follows the value alone, through exactly the
+     band mapping named above: `P5` takes the colour that mapping assigns to the
+     priority `5`, and the prefix selects no colour, introduces no band, and
+     changes no meaning. The card's accessible name is unaffected as well: it is
+     `Open details for task #<id>: <title>` (see **Clickable card** below), it
+     carries neither value, and so it carries no prefix.
+
+     **Only these two badges take a prefix.** A prefix earns its place only where
+     no label names the value, which is true of the priority and severity badges on
+     a board card and of no other badge in this interface. A status badge is never
+     ambiguous, because its own text is the status name — it reads `COMPLETED`, not
+     a bare integer — so it takes no prefix wherever it is shown; this card shows no
+     status badge at all (see below). The priority and severity badges of the task
+     detail modal take no prefix either, for the reason stated there.
   4. A **metadata footer** showing only the indicators the task actually has:
      the sprint the task belongs to, its `specialists`, its number of subtasks
      (`subtask_count`), its number of `depends_on` entries, its number of `blocks`
@@ -1684,17 +1733,23 @@ how the `rmp web` process itself terminates.
   so no forced horizontal scrolling is introduced (see
   [Frontend Rules](#frontend-rules), rule 6). The page does not redefine these
   fields; `MODELS.md` and `DATABASE.md` remain canonical.
-- **Task list.** The page lists the sprint's tasks in the planned in-sprint
+- **Member-tasks board.** The page presents the sprint's tasks as a Kanban board
+  of three fixed columns — `WAITING`, `DOING`, and `CLOSED` — holding one card per
+  task, placed between the sprint details above it and the sprint's comments below
+  it. The columns group the tasks by the same
+  categorisation the sprint status summary line uses, so each column's count is one
+  of that line's own numbers, and the cards of a column keep the planned in-sprint
   execution order, which is the `sprint_tasks` order (the ordered set of task IDs
   the `Sprint` model exposes as `tasks`; see `MODELS.md § Sprint` and
-  `DATABASE.md § Relationships`). Each task in the list is clickable: selecting a
-  task opens the read-only task detail modal for that task. The element that opens
-  the modal is a `<button>` inside the task's row, so the modal opens
-  from the pointer, from touch, and from the keyboard alike (see
+  `DATABASE.md § Relationships`). Each card is clickable: selecting a card opens
+  the read-only task detail modal for that task. The card **is** the element that
+  opens the modal and it is a `<button>`, so the modal opens from the pointer, from
+  touch, and from the keyboard alike. The board carries no control that moves a
+  task between columns (see
   [Sprint Detail Sub-Template](#sprint-detail-sub-template) and
   [Task Detail Modal](#task-detail-modal)).
-- **Sprint comments.** After the task list, the page shows the sprint's own
-  comments in a Comments card, oldest first (see
+- **Sprint comments.** After the member-tasks board, the page shows the sprint's
+  own comments in a Comments card, oldest first (see
   [Sprint Detail Sub-Template](#sprint-detail-sub-template)). The card shows the
   comments of the sprint itself, not those of its member tasks; a task's comments
   are shown in that task's detail modal.
@@ -1930,36 +1985,12 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      `task_count`), `Created` (`created_at`), `Started` (`started_at`), and
      `Closed` (`closed_at`); the fields are defined for the `Sprint` model in
      `MODELS.md § Sprint` and are not redefined here;
-   - the **full member-tasks table** listing the sprint's tasks in planned
-     in-sprint execution order (the `sprint_tasks` order; see `MODELS.md § Sprint`
-     and `DATABASE.md § Relationships`), with the columns `ID`, `Title`, `Status`,
-     `Type`, `Priority`, and `Severity`. The `Status`, `Priority`, and `Severity`
-     cells render their values as Tabler badges coloured by the semantic mapping in
-     [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours).
-     Each task row is clickable and opens the
-     read-only task detail modal for that task (see
-     [Task Detail Modal](#task-detail-modal)).
-
-     The element that opens the modal is a `<button>` **inside**
-     the row, not the row itself: a table row is not an activatable element, and it
-     can hold no single control that wraps the whole row. The task `Title` cell
-     carries that button, so the title is what the keyboard reaches and activates
-     with Enter or Space, on the same contract the board card offers. The row as a
-     whole remains clickable by pointer, so
-     pointer and touch behaviour is unchanged and the whole row stays the target it
-     is today. The control's accessible name is
-     `Open details for task #<id>: <title>`, the same form the board card uses. The
-     `title` is required in it, not optional: the button's visible label here **is**
-     the task title, and an accessible name that omitted it would leave the control
-     impossible to activate by speech input, which is what WCAG 2.5.3 Label in Name
-     (Level A) forbids (see [Task Detail Modal](#task-detail-modal), *The trigger is
-     a natively activatable element*).
-     The row itself MUST NOT be the trigger and MUST NOT carry `role="button"`
-     with `tabindex="0"`, which would announce a button that cannot be pressed (see
-     [Task Detail Modal](#task-detail-modal), *The trigger is a natively activatable
-     element*). When the sprint has no tasks, the
-     sub-template shows a clear empty-state message in place of the table.
-   - the **Comments card**, a separate card placed after the member-tasks card and
+   - the **member-tasks board**, a Kanban board of three fixed columns holding the
+     sprint's tasks, one card per task (defined below). The board is the sprint's
+     member-task presentation and sits between the two cards that surround it:
+     directly below the sprint metadata datagrid and directly above the Comments
+     card;
+   - the **Comments card**, a separate card placed after the member-tasks board and
      rendered last in the sub-template (defined below).
 
 3. **Sprint status summary line.** At the top of the sub-template the sub-template
@@ -1968,7 +1999,7 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
 
    `<pct>% - P:<p> A:<a> C:<c> - T:<t>`
 
-   for example `69% - P:8 A:3 C:18 - T:55`. The components are:
+   for example `33% - P:8 A:29 C:18 - T:55`. The components are:
    - `<pct>` is the sprint **completion percentage**: the number of `COMPLETED`
      tasks divided by the total number of tasks in the sprint, expressed as a
      percentage and **rounded to the nearest integer percent**. When the sprint
@@ -1990,7 +2021,253 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
    its `Summary.TotalTasks`); the summary line reuses that categorisation rather
    than defining a new one.
 
-4. **Comments card.** The last card of the sub-template presents the sprint's own
+4. **Member-tasks board.** The sprint's member tasks are presented as a Kanban
+   board of three fixed columns, one card per task. The **GitLab issue board** is
+   the acknowledged model for this presentation: columns that stand for states of
+   the work, cards that stand for work items, a count on each column header, and
+   counters at the trailing edge of a card. As on the tasks page, the model is
+   structural and never interactive (see **Read-only** below).
+
+   - **Three fixed columns, in this order.** From left to right the columns are
+     `WAITING`, `DOING`, and `CLOSED`, and each holds the sprint's tasks in the
+     statuses named here (the task status enum is defined in `MODELS.md § Enums`):
+
+     | Column | Holds the sprint's tasks whose status is |
+     |---|---|
+     | `WAITING` | `BACKLOG` or `SPRINT` |
+     | `DOING` | `DOING` or `TESTING` |
+     | `CLOSED` | `COMPLETED` |
+
+     The grouping is deliberately the **same categorisation the sprint status
+     summary line already uses** — pending = `BACKLOG` + `SPRINT`, open/in-progress
+     = `DOING` + `TESTING`, completed = `COMPLETED` — which is the categorisation
+     `models.CalculateSprintShowResult` produces in its `Summary.Pending`,
+     `Summary.InProgress`, and `Summary.Completed` counters (see rule 3 above). The
+     board defines no new categorisation; it reuses that one, so the two
+     presentations of one sprint cannot disagree about which tasks are waiting,
+     which are being worked on, and which are done.
+
+     Each column heading is written exactly as spelled above, in upper case, and is
+     not translated.
+   - **The column counts are the summary line's own numbers.** Because the grouping
+     is that one, each column's count **equals** the corresponding value of the
+     summary line rendered at the top of the same page: the `WAITING` column's count
+     is `P`, the `DOING` column's count is `A`, the `CLOSED` column's count is `C`,
+     and the three counts sum to `T`. That identity is what makes a fourth or
+     "other" column unnecessary rather than merely unwanted: the task status enum is
+     closed (`MODELS.md § Enums`) and `tasks.status` is restricted by a CHECK
+     constraint to exactly its five values (`DATABASE.md § tasks Table`), so every
+     member task carries one of those five, each of the five is claimed by exactly
+     one column, and no task of the sprint can fall outside the board.
+   - **Every column is always rendered.** All three columns are present, in that
+     order, whatever the sprint holds; a column is never dropped or hidden, and
+     neither the set of columns nor their order depends on the data. A column
+     holding no task renders the in-column empty state in the idiom the tasks board
+     already uses — a clear, unobtrusive empty state inside the column, below the
+     column header, in place of the card list, with the column, its heading, and its
+     `0` count badge still visible (see
+     [Roadmap Tasks Page](#roadmap-tasks-page), **Empty states**). A sprint with no
+     member task is therefore shown as an empty board rather than as an absent one,
+     and the sub-template puts no page-level empty state in place of the board.
+   - **Column header.** Each column header shows the column heading together with a
+     Tabler badge carrying that column's task count, exactly as the tasks board's
+     column header does (see [Roadmap Tasks Page](#roadmap-tasks-page), **Count per
+     column**). The count badge states a number of member tasks and carries no
+     status, priority, or severity value, so the semantic colour mapping does not
+     govern it (see
+     [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
+     rule 2).
+   - **Order within a column.** The cards of a column appear in the sprint's planned
+     in-sprint execution order — the `sprint_tasks` position order the page already
+     reads, `position` ascending (see `MODELS.md § Sprint`,
+     `DATABASE.md § Relationships`, and
+     `DATABASE.md § List Sprint Tasks Ordered by Position`). Grouping the tasks into
+     the three columns is a single ordered pass over what that read returned, so the
+     cards of one column keep the relative order the read gave them. The board
+     applies no sort of its own and introduces **no second notion of order**: the
+     order on the board is the order the user planned, and there is only one.
+   - **The card.** Each card presents one member task, in this order:
+     1. the task **`title`**, leading the card — the one place this board
+        deliberately differs from the tasks board's card, which leads with its
+        reference line instead, because the GitLab issue board card leads with the
+        title and this board follows the model it is drawn from;
+     2. the task **reference** `#<id>` (the task's `id`) on its own line, rendered
+        as secondary, muted text, so the card is identifiable by its id without the
+        id competing with the title for the reader's attention;
+     3. the task **`priority`** and **`severity`**, each as a Tabler badge carrying
+        that task's integer value behind the one-letter prefix that names it — `P`
+        for the priority and `S` for the severity, so a task of priority `5` and
+        severity `3` shows `P5` and `S3` — and coloured by the band the value falls
+        in, using exactly the mapping in
+        [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours).
+        They occupy the place the GitLab card gives its labels. No new badge colour
+        and no new band is introduced here. The prefix rule itself is stated once,
+        for the card of both boards, in [Roadmap Tasks Page](#roadmap-tasks-page),
+        **Card content**, item 3, and is not restated here: this card renders the
+        pair exactly as the tasks board's card does, and the two boards keep one
+        form for it;
+     4. a **footer row of indicators aligned to the trailing edge of the card**,
+        which is where the GitLab card puts its counters: the task's number of
+        subtasks (`subtask_count`) and its number of comments, each rendered as an
+        icon followed by its number — `ti ti-subtask` for the subtask count and
+        `ti ti-message` for the comment count, the same icons the tasks board's card
+        metadata uses (see [Roadmap Tasks Page](#roadmap-tasks-page)).
+
+     The card carries **no status badge**: the column the card sits in already
+     states the task's status, which is the reason the tasks board's card omits one
+     as well.
+
+     The card shows those six data points and no others: no task type, no
+     `specialists`, and no dependency counts. It presents a subset of the task's
+     fields by design, because a card is read at a glance and a column of cards is
+     read as a whole; every field of the `Task` model is shown in the task detail
+     modal the card opens (see [Task Detail Modal](#task-detail-modal)). The card
+     does not redefine any field; `MODELS.md` and `DATABASE.md` remain canonical.
+
+     **Absent metadata renders nothing.** A `subtask_count` of `0` renders nothing
+     at all — no icon, no dash, no placeholder, no empty slot — and a comment count
+     of `0` renders nothing either; a task with neither renders no footer row. This
+     is the rule the tasks board's card already states (see
+     [Roadmap Tasks Page](#roadmap-tasks-page), **Absent metadata renders
+     nothing**), and it holds here for the same reason: an indicator earns its space
+     only when it counts something.
+   - **The card is the trigger, and the trigger is a `<button>`.** Selecting a card
+     opens the read-only task detail modal for that task, and the card itself is a
+     `<button type="button">`, a natively activatable element, exactly as the tasks
+     board's card is. A pointer click, a touch tap, Enter, and Space therefore all
+     open the modal through the browser's own activation behaviour, with no added
+     JavaScript. The card carries no `tabindex` and no `role="button"`: both would
+     be redundant on a `<button>`, and a non-activatable element made to announce
+     itself as a button MUST NOT be the trigger (see
+     [Task Detail Modal](#task-detail-modal), *The trigger is a natively activatable
+     element*). The card's accessible name is
+     `Open details for task #<id>: <title>`, the same form both existing surfaces
+     use. The `title` is required in it, not optional: the card's visible label is
+     the task title, and an accessible name that omitted it would leave the control
+     impossible to activate by speech input, which is what WCAG 2.5.3 Label in Name
+     (Level A) forbids.
+
+     The card can hold that contract whole, which a table row cannot. A row is not
+     an activatable element and can hold no single control that wraps it, so a
+     tabular presentation has to push the trigger down into one cell and leave the
+     row itself clickable by pointer alone — two targets for one task. A card is a
+     single element and can **be** the control, so pointer, touch, and keyboard
+     reach the same target. No `<tr>` on this page is a modal trigger or carries
+     one.
+   - **Opening the modal costs the page nothing.** Opening a card fetches that
+     task's fields and comments from the read-only endpoint
+     `GET /roadmaps/{name}/tasks/{id}/data` and fills the page's single modal shell
+     — the one modal element the page renders, not one per task — with them (see
+     [Task Detail Modal](#task-detail-modal) and
+     [Task Detail Endpoint](#task-detail-endpoint)). That request is made when the
+     user opens a task, not while the page is rendered, so the board adds no query
+     to the page's own read and no per-card cost.
+   - **Height and scrolling.** The board is **height-limited**: it takes a definite,
+     bounded height rather than growing with the number of member tasks, and each
+     column scrolls **vertically and independently** inside that height when its
+     cards exceed it, as a GitLab issue board's lists do. When the three columns do
+     not fit the viewport's width, the **column strip** scrolls horizontally inside
+     its own container, exactly as the tasks board's strip does, and the page itself
+     never scrolls horizontally (see
+     [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
+     rules 2 and 10).
+
+     The board is deliberately **not** a full-height page region, and that is where
+     it departs from the tasks board. The sprint page is not a single-region page:
+     it carries the Sprint details card above the board and the Comments card below
+     it, and all three belong to one sprint presentation. A board sized to the space
+     the page body leaves would fill the rest of the viewport on its own and push
+     the Comments card below the fold for every sprint, while a board sized to its
+     own content would push that card further down with every member task the sprint
+     gains. The bounded height avoids both
+     (see [Full-Height Page Regions](#full-height-page-regions)).
+
+     **The height is `60vh`, with a floor read from `--full-height-region-floor`.**
+     Both are declared in the project override stylesheet, and both are fixed here
+     rather than left to taste, so that what the board does is testable rather than
+     a matter of judgement:
+     - The height is **viewport-relative** (`60vh`), so the board follows the
+       screen: it presents more of a column on a tall display and less on a short
+       one, at the same proportion of the screen everywhere, while leaving the rest
+       of the page body to the cards above and below it.
+     - The floor is the value of the **`--full-height-region-floor`** custom
+       property, which is the floor the shell already holds the page body to (see
+       [Full-Height Page Regions](#full-height-page-regions), rule 5). The board
+       reads that property rather than restating the length, because a second copy
+       of a number is a copy that can be changed on its own, and the two would then
+       state different floors for the same screen. On a viewport short enough that
+       `60vh` falls below it, the board takes the floor instead, so it keeps showing
+       useful content rather than collapsing to a sliver of one card. The property
+       MUST resolve on this page: it is declared where every page reads it, not on
+       the full-height shell alone, because the sprint page is not a full-height
+       page and would otherwise find nothing to read.
+
+     **Column width and card density are the tasks board's own lengths, reused.**
+     Each column is **19rem** wide and never narrower than **17rem**, the columns
+     are separated by a **0.75rem** gap, and the body of a card carries **0.75rem**
+     of padding on all four sides — the lengths the tasks board's columns and cards
+     already carry (see [Roadmap Tasks Page](#roadmap-tasks-page), **Column width
+     and card density**). The reuse is deliberate, not incidental. A column stands
+     for a state and not for a volume of work, so all three columns carry the same
+     width whatever number of tasks each holds, and none stretches to fill a
+     viewport wider than the board needs. And the columns of the two boards are the
+     same kind of object: a reader moving between the tasks page and a sprint page
+     should meet one column measure and one card measure, not two that differ for no
+     reason a reader could name. Every one of these lengths is expressed in `rem`,
+     so the column and the card scale with the reader's own text size.
+
+     On a narrow viewport the board stays usable on the tasks board's terms: each
+     column keeps the minimum width above, at which its cards remain legible, the
+     horizontal strip scroll is reachable by a touch gesture, the cards present
+     touch-friendly hit targets, and the task detail modal a card opens stays usable
+     at the same viewport (see [Task Detail Modal](#task-detail-modal)).
+   - **Read cost: one grouped comment count, and nothing per card.** The card shows
+     a comment count, so the page reads one. That count is read with **one grouped
+     query** over the whole set of rendered member-task ids (see
+     `DATABASE.md § Count Comments for Many Parents (Grouped)`) — never one query
+     per card, and never a comment **body**: the card displays a number, and reading
+     the text of every comment of every member task in order to display a number
+     would be work the page throws away. A member task's comment text is read only
+     when the user opens that task's modal, one task at a time, through the task
+     detail endpoint. When the sprint has no member task the page issues no such
+     query at all, because the query takes a set of rendered task ids and that set
+     is empty.
+
+     The page therefore issues exactly **two** comment reads whatever the number of
+     member tasks: the sprint's own comment listing, which the Comments card renders
+     in full as a log (see `DATABASE.md § Comments`), and this one grouped count.
+     Neither grows with the number of member tasks, which is the invariant that
+     matters here (see
+     [Tasks and Sprints from SQLite](#tasks-and-sprints-from-sqlite)).
+
+     The **subtask count needs no read of its own**: the sprint's member-task read
+     already returns each task's `subtask_count` (`MODELS.md § Task` defines it as a
+     count computed with the task rather than a stored column), so the card's
+     subtask number is already in hand. Grouping the member tasks into the three
+     columns and counting each column are done in memory over the rows already read,
+     so the board adds no query per column and none per card.
+   - **Read-only.** The board offers **no drag-and-drop** and no control of any
+     other kind that moves a task between columns, reorders cards, changes a task's
+     status, or creates or edits anything. It contains no form and no write path;
+     its only interaction is opening the read-only task detail modal. This is the
+     same deliberate divergence from the GitLab issue board the tasks page states:
+     the inspiration is structural — columns per state, cards, per-column counts —
+     and never interactive, and the `rmp` CLI remains the sole write path for every
+     task (see [Security and Constraints](#security-and-constraints)).
+   - **Markup.** The board introduces no exception to the markup rules already in
+     force: no template carries an inline `style` attribute, and every class the
+     board emits is defined either in the vendored Tabler distribution or in the
+     project override stylesheet `static/style.css` (see
+     [UI Framework](#ui-framework), rules 8 and 10). Where Tabler provides the
+     component, the board uses Tabler's markup — Tabler cards for the task cards,
+     the card-header idiom for the column headers, Tabler badges for the counts and
+     for the priority and severity values, and Tabler's empty-state markup for an
+     empty column. The vendored Tabler distribution ships no board or Kanban
+     component, so the column strip's own layout, height, and scrolling rules live
+     in `static/style.css`, which is the specified home for project styling no
+     Tabler class covers.
+
+5. **Comments card.** The last card of the sub-template presents the sprint's own
    comments — the sprint's progression log. The fields of a comment are defined for
    the `SprintComment` model in `MODELS.md § Sprint Comment`; the sub-template does
    not redefine them.
@@ -2003,8 +2280,8 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      as the tie-breaker). Every comment of the sprint is rendered: no type filter,
      no count limit.
    - **Card header.** A `card-header` with the card title `Comments` and a Tabler
-     badge showing the number of comments, following the member-tasks card's header
-     idiom.
+     badge showing the number of comments, following the same header idiom the
+     member-tasks board's column headers use.
    - **What each entry shows.** For one comment, in order: its `type` as a badge,
      its `created_at` timestamp, its `updated_at` timestamp when that value is not
      null (marking the entry as edited), and its `body`.
@@ -2019,17 +2296,17 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      CLI, and the card renders it preserving the author's line breaks (see
      [Frontend Rules](#frontend-rules), rule 6).
    - **Empty state.** When the sprint has no comments, the card shows a clear
-     empty-state message in place of the timeline, in the same idiom the
-     member-tasks card uses when the sprint has no tasks. The card itself is always
+     empty-state message in place of the timeline, in the same idiom a column of the
+     member-tasks board uses when it holds no task. The card itself is always
      present.
    - **Read-only.** The card renders data only: no form, no input, no edit control,
      and no submit action.
 
-5. **Read-only.** The sub-template renders data only. It contains no form, button,
+6. **Read-only.** The sub-template renders data only. It contains no form, button,
    or link that submits a change; the only interaction is opening the read-only
-   task detail modal from a task row.
+   task detail modal from a board card.
 
-6. **Authored line breaks.** Wherever the sub-template renders the sprint's
+7. **Authored line breaks.** Wherever the sub-template renders the sprint's
    `description`, it preserves the author's line breaks as specified in
    [Frontend Rules](#frontend-rules), rule 6.
 
@@ -2752,10 +3029,10 @@ one task. It is not a separate route; it is part of the pages that show clickabl
 tasks.
 
 - **Where it appears.** Anywhere a task is shown clickable: the task cards on the
-  roadmap tasks page's Kanban board and the task list on the roadmap sprint page.
-  The roadmap sprints page shows no clickable tasks, because every sprint there is
-  rendered as a card with no member-tasks table. Selecting a task opens the modal
-  for that task.
+  roadmap tasks page's Kanban board and the task cards on the roadmap sprint page's
+  member-tasks board. The roadmap sprints page shows no clickable tasks, because
+  every sprint there is rendered as a card with no member tasks on it. Selecting a
+  task opens the modal for that task.
 - **The trigger is a natively activatable element.** Every element that opens the
   modal MUST be a `<button>`, so that a pointer click, a touch tap, Enter, and
   Space all open the modal through the browser's own activation behaviour, with no
@@ -2789,10 +3066,11 @@ tasks.
   the modal will show.
 
   Where the trigger has a **visible text label**, the accessible name MUST contain
-  that visible label text. This is the case on the Roadmap Sprint Page, where the
-  trigger is the task title in the member-tasks row and the title is therefore the
-  control's visible label; including the `title` in the name is what satisfies the
-  rule there. A name that omits the visible label breaks activation by speech
+  that visible label text. This is the case on both boards, whose card carries the
+  task title as its own visible text: on the Roadmap Sprint Page the title leads
+  the card, and on the roadmap tasks page it is the card's prominent main content.
+  Including the `title` in the name is what satisfies the rule on each of them. A
+  name that omits the visible label breaks activation by speech
   input: a speech-input user says the words they can see, and a control whose
   accessible name does not contain them cannot be activated that way, even though
   it reads correctly to a screen reader. This requirement is the one stated by
@@ -2814,6 +3092,17 @@ tasks.
   tasks page the modal is the sole place a task's full field set is shown, because
   the board card presents only the subset defined in
   [Roadmap Tasks Page](#roadmap-tasks-page).
+- **No prefix on the modal's priority and severity badges.** The one-letter prefix
+  the board card's `priority` and `severity` badges carry (see
+  [Roadmap Tasks Page](#roadmap-tasks-page), **Card content**, item 3) belongs to
+  the card and is not rendered here. That prefix exists because a card shows the two
+  values with no word naming either of them; the modal names every field it
+  displays, so the field's own name already stands beside each of these two values,
+  and a prefix would state the same thing twice. A prefix earns its place only where
+  no label names the value, which is true of the board card and of no other surface
+  in this interface. The badge colours are the same either way and stay those of
+  [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
+  because the mapping keys on the value and never on the badge's prefix.
 - **Comments timeline.** Directly after the completion-summary block, and as the
   last block of the modal body, the modal renders the task's comments as a
   chronological timeline. The fields of a comment are defined for the
@@ -2916,7 +3205,7 @@ tasks.
   `/roadmaps/{name}/sprints/{id}` uses. `/roadmaps/{name}/tasks/{id}` is therefore
   not a route and is answered `404 Not Found`. The endpoint is scoped to a task of
   a roadmap rather than to a page, so both surfaces that show a clickable task —
-  the tasks page's board and the Roadmap Sprint Page's member-tasks table — use
+  the tasks page's board and the Roadmap Sprint Page's member-tasks board — use
   this same endpoint.
 - **Response:** JSON carrying the task's fields and its comments, in the shape
   specified in `DATA_FORMATS.md § Task Detail Data`. That shape **composes** the
@@ -2984,10 +3273,14 @@ re-presents an earlier, now-stale response in its place.
    defined in
    `DATABASE.md § Main SQL Queries`. The sprints page reads the roadmap's sprints
    and each sprint's total task count for its card footer, but no member tasks,
-   because the page renders every sprint as a card with no member-tasks table; the
+   because the page renders every sprint as a card with no member tasks on it; the
    tasks page reads the roadmap's full task list, which its Kanban board then
    groups into the five status columns in memory, with no further query — none per
    column and none per card (see [Roadmap Tasks Page](#roadmap-tasks-page)); the
+   sprint page reads that sprint and its member tasks in `sprint_tasks` position
+   order, which its own board then groups into the three columns in memory, again
+   with no further query per column and none per card (see
+   [Sprint Detail Sub-Template](#sprint-detail-sub-template)); the
    audit log page reads the
    roadmap's audit entries ordered by `performed_at` descending, one fixed-size page
    at a time (see [Roadmap Audit Log Page](#roadmap-audit-log-page) and
@@ -2998,20 +3291,29 @@ re-presents an earlier, now-stale response in its place.
    comments are read only when a user opens that task, by the read-only task detail
    endpoint (see [Task Detail Endpoint](#task-detail-endpoint)). A page that shows
    clickable tasks therefore reads, at render time, only what it displays itself:
-   the tasks page reads a comment **count** per rendered task, in one grouped
-   counting query over the whole set of rendered task ids, because its cards show a
-   count and no comment text (see
-   `DATABASE.md § Count Comments for Many Parents (Grouped)`). The Roadmap Sprint
-   Page is unchanged: it presents the sprint's own comment log, so it still reads
-   that sprint's comments in full in one further query (see `DATABASE.md §
-   Comments`). Every one of these is a read query issued server-side while the page
+   both boards read a comment **count** per rendered task, in one grouped counting
+   query over the whole set of rendered task ids, because a card shows a count and
+   no comment text (see
+   `DATABASE.md § Count Comments for Many Parents (Grouped)`). On the tasks page
+   that grouped count is the page's only comment read. The Roadmap Sprint Page
+   additionally presents the sprint's own comment log, so it reads that sprint's
+   comments in full in one further query (see `DATABASE.md § Comments`): the sprint
+   page therefore issues exactly **two** comment reads — the sprint's own listing
+   and the one grouped count over its member tasks — whatever the number of member
+   tasks, and it reads the comment **body** of no member task. The grouped count is
+   skipped entirely when the sprint has no member task, because it takes a set of
+   rendered task ids and that set is empty; the sprint's own comment listing is
+   still issued, because the Comments card is always present. Every one of these is
+   a read query issued server-side while the page
    is rendered, and the number of them per page does not grow with the number of
    tasks shown. The tasks page issues one further grouped query,
    which resolves the sprint of every task it renders over the whole set of
    rendered task ids at once, so each board card can name the sprint its task
    belongs to (see `DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)`).
    That query is issued once per page, never once per task and never once per
-   board column, and it is skipped entirely when the page renders no task.
+   board column, and it is skipped entirely when the page renders no task. The
+   sprint page issues no sprint-resolution query at all: every card on its board
+   belongs to the one sprint the page is showing, so there is nothing to resolve.
 2. The server opens the database for reading only. It MUST NOT modify rows, MUST
    NOT write an audit entry, and MUST NOT alter the schema. A web read produces no
    audit-log entry, because the audit log records changes and a read is not a
@@ -3420,6 +3722,21 @@ layout**). Each sits inside the `main.page-body` landmark of the admin shell (se
 subsection introduces no region and no page, and states only how a region of this
 kind is sized.
 
+**The Roadmap Sprint Page's member-tasks board is deliberately not one of them.**
+It is a board with per-column vertical scrolling, like the tasks page's board, but
+its height is bounded by a definite length rather than by the space the page body
+leaves (see [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Height and
+scrolling**). The reason is that the sprint page is not a single-region page: the
+Sprint details card sits above the board and the Comments card below it, and all
+three belong to one sprint presentation. A board taking the space the page body
+leaves would fill the rest of the viewport on its own and push the Comments card
+below the fold for every sprint, while a board sized to its own content would push
+that card further down with every member task the sprint gains. A definite,
+bounded height avoids both: the board shows a useful number of cards, scrolls the
+rest inside its columns, and leaves the Comments card within reach. Rules 1 to 5
+below therefore do not apply to that board, and a check written against them MUST
+NOT be run on it.
+
 1. **Two edges fix the height, and both MUST hold at every viewport size.**
    - **The region ends where the page body ends.** The bottom edge of the region
      coincides with the bottom edge of the page body, leaving no band of unused
@@ -3552,8 +3869,8 @@ Rules:
    badge's **colour**, and it is keyed on a value: a task status, a sprint status, a
    `priority`, or a `severity`. The same mapping is applied wherever a badge carries
    one of those values: the priority and severity badges on the tasks page's board
-   cards (see [Roadmap Tasks Page](#roadmap-tasks-page)), the sprint detail
-   member-tasks table (see
+   cards (see [Roadmap Tasks Page](#roadmap-tasks-page)), the priority and severity
+   badges on the cards of the sprint detail member-tasks board (see
    [Sprint Detail Sub-Template](#sprint-detail-sub-template)), the task detail modal
    (see [Task Detail Modal](#task-detail-modal)), the sprint cards (see
    [Shared Sprint-Card Partial](#shared-sprint-card-partial)), the Roadmap Sprint
@@ -3568,7 +3885,14 @@ Rules:
    second is a single named case, not a general licence:
    - **The badge's own text is the value.** Every site listed above except the sprint
      tabs is this case: the badge reads `COMPLETED`, `OPEN`, `7`, or `2`, and it takes
-     the colour the relevant table assigns to what it reads.
+     the colour the relevant table assigns to the value it carries. On the card of
+     either board the priority and severity badges write that value behind a
+     one-letter prefix — `P7`, `S2` — which names the field the value belongs to,
+     because a card carries no label that would (see
+     [Roadmap Tasks Page](#roadmap-tasks-page), **Card content**, item 3). The prefix is a label and not a value: this mapping keys on
+     the value alone and never on the prefix, so `P7` takes the colour of the
+     priority `7`, and no band, no colour variant, and no enum value changes because
+     of it.
    - **The badge counts the members of a group that has one value.** The three sprint
      tabs on the Roadmap Sprints Page are this case, and the only one in the
      interface. Each tab groups the sprints of exactly one sprint status — Próximos
@@ -3599,11 +3923,17 @@ Rules:
    deliberately outside it and uses the neutral `bg-secondary-lt` variant for every
    type value (see [Task Detail Modal](#task-detail-modal)). Every other count badge
    in the interface is outside it as well — among them the per-column task-count badge
-   on the Roadmap Tasks Page (see [Roadmap Tasks Page](#roadmap-tasks-page)) and the
+   on the Roadmap Tasks Page (see [Roadmap Tasks Page](#roadmap-tasks-page)), the
+   per-column task-count badge on the sprint detail member-tasks board, and the
    comment-count badge on the sprint Comments card (see
    [Sprint Detail Sub-Template](#sprint-detail-sub-template)) — and each stays
-   governed by the section that defines it. The sprint tabs are the one count badge
-   this mapping colours.
+   governed by the section that defines it. The sprint board's column badge is
+   outside the mapping even though its column groups tasks by status, because a
+   column of that board groups **two** statuses rather than one — `WAITING` groups
+   `BACKLOG` and `SPRINT`, `DOING` groups `DOING` and `TESTING` — so the column has
+   no single status value for the table above to colour, and `CLOSED` is not made an
+   exception to the rule its two neighbours cannot follow. The sprint tabs remain the
+   one count badge this mapping colours.
 3. **No new enum value.** The mapping introduces no status, priority, or severity
    value that is not already defined in `MODELS.md` and `STATE_MACHINE.md`. Should a
    new enum value or a revised band be introduced there, this table is updated in the
@@ -3690,24 +4020,27 @@ experience is the baseline that larger viewports enhance.
    horizontally at any viewport width — typography stays readable, and navigation
    and other interactive controls present touch-friendly, appropriately sized hit
    targets. A component that deliberately scrolls horizontally **inside its own
-   container**, such as the Kanban board on the roadmap tasks page (rule 9), is not
-   page-level horizontal overflow and is permitted; the prohibition is on the page
-   itself scrolling horizontally.
+   container**, such as the Kanban board on the roadmap tasks page (rule 9) or the
+   member-tasks board on the roadmap sprint page (rule 10), is not page-level
+   horizontal overflow and is permitted; the prohibition is on the page itself
+   scrolling horizontally.
 3. **Applies to every page.** The mobile-first, responsive requirement applies to
    every page: the roadmap index page, the roadmap sprints page (the sprint tabs),
    the roadmap tasks page (the Kanban task board), the roadmap sprint page, the
    roadmap audit log page (the audit table), and the knowledge-graph page.
 4. **Usable tabular data on narrow screens.** The roadmap sprints page, the
-   roadmap sprint page, and the roadmap audit log page present sprint, task, and
-   audit data
-   that is tabular by nature. This data MUST remain usable on narrow screens, for
+   roadmap sprint page, and the roadmap audit log page present sprint and audit data
+   that is tabular by nature — among it the sprint metadata datagrid and the audit
+   table. This data MUST remain usable on narrow screens, for
    example through responsive or stacked tables or an equivalent layout that
    avoids page-level horizontal overflow, while still presenting the fields and
    relationships
    defined for those pages (see [Roadmap Sprints Page](#roadmap-sprints-page),
    [Roadmap Sprint Page](#roadmap-sprint-page), and
-   [Roadmap Audit Log Page](#roadmap-audit-log-page)). The roadmap tasks page
-   presents its data as a Kanban board rather than a table, and rule 9 governs it.
+   [Roadmap Audit Log Page](#roadmap-audit-log-page)). Neither page presents its
+   tasks as a table: the roadmap tasks page presents them as a Kanban board, which
+   rule 9 governs, and the roadmap sprint page presents its member tasks as a board
+   as well, which rule 10 governs.
 5. **Touch- and small-viewport-usable sprint tabs and task modal.** The three
    sprint tabs on the roadmap sprints page (Próximos, Actual, Concluídos) and the
    task detail modal MUST remain usable on touch input and on small viewports. The
@@ -3757,6 +4090,27 @@ experience is the baseline that larger viewports enhance.
    header's actions column without page-level horizontal overflow, wrapping within
    that column rather than forcing the page to scroll horizontally, and each
    presents a touch-friendly target.
+10. **Usable member-tasks board on narrow screens.** The roadmap sprint page
+   presents the sprint's member tasks as a board of three fixed columns side by
+   side (see [Sprint Detail Sub-Template](#sprint-detail-sub-template)). When the
+   three columns do not fit the viewport, the column strip scrolls horizontally
+   inside its own container and the page itself still does not scroll horizontally
+   (rule 2). Each column scrolls vertically and independently when its cards exceed
+   the board's height, which is a bounded length and **not** the space the page body
+   leaves, because the sprint page places the Sprint details card above the board
+   and the Comments card below it (see
+   [Full-Height Page Regions](#full-height-page-regions)). On narrow viewports the
+   board MUST remain usable on the same terms as the tasks page's board: each column
+   keeps a minimum width at which its cards stay legible, the horizontal strip
+   scroll is reachable by a touch gesture, and the cards and their badges present
+   touch-friendly hit targets that open the read-only task detail modal (see
+   [Task Detail Modal](#task-detail-modal)). The board's height is `60vh` with a
+   floor read from the `--full-height-region-floor` custom property, and its
+   columns carry the tasks board's own `19rem` width, `17rem` minimum, and `0.75rem`
+   gap, so every length is viewport-relative or in `rem` and scales with the screen
+   and with the reader's own text size rather than fixing the layout to one device
+   (see [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Height and
+   scrolling**).
 
 ## Error Handling and Exit Codes
 
@@ -3947,7 +4301,7 @@ Rules:
    the sprint description, and a footer task count) and each card links to the
    sprint's own page. The OPEN sprint under
    Actual is shown with the same card as the other sprints and is not expanded into
-   an inline member-tasks table or per-task modals, using the fields and
+   an inline member-tasks board or per-task modals, using the fields and
    relationships defined in `MODELS.md` and `DATABASE.md`. The page does **not**
    render the roadmap's task board, and it contains no form, button, or link that
    submits a change.
@@ -3984,7 +4338,7 @@ Rules:
     sprint `Order`; every `CLOSED` sprint appears under Concluídos ordered by
     descending sprint `Order` (highest `Order`, the last in execution order,
     first). The OPEN sprint under Actual is shown with the same card as the other
-    tabs and is not expanded into an inline task table or per-task modals. A tab
+    tabs and is not expanded into an inline member-tasks board or per-task modals. A tab
     with no matching sprint shows a clear empty-state message.
 13. On the roadmap sprints page, every sprint card in any tab shows a header
     presenting the sprint `title` together with `Sprint #<ID>` and a status badge,
@@ -3995,7 +4349,8 @@ Rules:
     HTTP 200 and an HTML page showing all details of that sprint (id, status,
     `title`, description, execution `order`, capacity `max_tasks`, `created_at`,
     `started_at`, `closed_at`, and
-    `task_count`) and the sprint's task list in `sprint_tasks` order (the planned
+    `task_count`) and the sprint's member tasks as a three-column board whose cards
+    follow the `sprint_tasks` order (the planned
     in-sprint execution order); the page header presents the sprint `title`
     alongside `Sprint #<ID>`, and the sprint metadata datagrid shows the sprint
     `Title` and the execution `Order` in addition to the ID, Status, Capacity,
@@ -4003,8 +4358,8 @@ Rules:
     or link that submits a change. A request whose `{id}` is not a valid integer, or is an
     integer that is not a sprint of the named roadmap, returns HTTP 404, and a
     request whose `{name}` is invalid or nonexistent returns HTTP 404.
-15. Clicking a task anywhere it is shown clickable — the tasks page's board cards
-    and the sprint page's task list — opens a modal
+15. Clicking a task anywhere it is shown clickable — the board cards of the tasks
+    page and the board cards of the sprint page — opens a modal
     popup that displays all of that task's fields (`id`, `title`, `status`, `type`,
     `priority`, `severity`, `functional_requirements`, `technical_requirements`,
     `acceptance_criteria`, `specialists`, `completion_summary`, `parent_task_id`,
@@ -4084,14 +4439,18 @@ Rules:
     touch-friendly hit targets, demonstrating the mobile-first base styles. The
     horizontal scroll the tasks page's Kanban board performs inside its own
     container is not page-level overflow and does not violate this criterion (see
-    Acceptance Criterion 88).
+    Acceptance Criterion 88), and neither is the horizontal scroll the sprint page's
+    member-tasks board performs inside its own container (see Acceptance
+    Criterion 136).
 28. On the roadmap sprints page, the roadmap sprint page, and the roadmap audit
-    log page at a narrow viewport, the sprint, task,
-    and audit data remains usable without page-level
+    log page at a narrow viewport, the sprint and audit data remains usable without
+    page-level
     horizontal overflow (for example through responsive or stacked tables or an
     equivalent layout) while still showing the fields and relationships defined for
-    those pages. The roadmap tasks page presents its tasks as a board rather than a
-    table, and Acceptance Criterion 88 covers its narrow-viewport behaviour.
+    those pages. Neither page presents its tasks as a table: the roadmap tasks page
+    presents them as a board, whose narrow-viewport behaviour Acceptance
+    Criterion 88 covers, and the roadmap sprint page presents its member tasks as a
+    board, whose narrow-viewport behaviour Acceptance Criterion 136 covers.
 29. Every HTML page the interface serves includes the responsive viewport meta
     tag, and no page loads a CSS framework or reset from a remote origin; the
     Tabler CSS framework in use is vendored and served from `/static/...`.
@@ -4145,24 +4504,27 @@ Rules:
     sprints use identical card markup. The OPEN sprint under the Actual tab is shown
     with the same card as the other sprints: it shows the header (`Sprint #<ID>`
     with a status badge), the sprint description, and the footer task count, and it
-    is not expanded into an inline sprint metadata datagrid, member-tasks table, or
+    is not expanded into an inline sprint metadata datagrid, member-tasks board, or
     per-task modals on the sprints page. The full sprint detail block (sprint status
-    summary line, metadata datagrid, member-tasks table, and Comments card) is shown
+    summary line, metadata datagrid, member-tasks board, and Comments card) is shown
     only on the single Roadmap Sprint Page (see
     [Shared Sprint-Card Partial](#shared-sprint-card-partial) and
     [Sprint Detail Sub-Template](#sprint-detail-sub-template)).
 39. At the top of the full sprint presentation on the single Roadmap Sprint Page, a
     sprint status summary line is shown in the
     exact format `<pct>% - P:<p> A:<a> C:<c> - T:<t>` (for example
-    `69% - P:8 A:3 C:18 - T:55`), where `<pct>` is the completion percentage
+    `33% - P:8 A:29 C:18 - T:55`), where `<pct>` is the completion percentage
     (`COMPLETED` tasks divided by total tasks, rounded to the nearest integer
     percent, and `0%` when the sprint has no tasks), `P` is the count of the
     sprint's tasks in `BACKLOG` or `SPRINT`, `A` is the count in `DOING` or
     `TESTING`, `C` is the count in `COMPLETED`, and `T` is the sprint's total task
-    count; every value counts only the sprint's own member tasks. For a sprint
-    with, for example, 55 member tasks of which 8 are pending, 3 in progress, and
-    18 completed (with the remaining 26 in other statuses), the line reads
-    `33% - P:8 A:3 C:18 - T:55` (18 of 55 completed rounds to 33%).
+    count; every value counts only the sprint's own member tasks. `P`, `A`, and `C`
+    partition the sprint's tasks and therefore always sum to `T`: the three
+    categories cover all five values of the task status enum, and `tasks.status`
+    admits no sixth value (`MODELS.md § Enums` and `DATABASE.md § tasks Table`). For
+    a sprint with, for example, 55 member tasks of which 8 are pending, 29 are in
+    progress, and 18 are completed, the line reads
+    `33% - P:8 A:29 C:18 - T:55` (18 of 55 completed rounds to 33%).
 40. Every sprint card under any tab of the roadmap sprints page — Próximos, Actual,
     and Concluídos — displays that sprint's total number of tasks in its footer.
 41. When `rmp web` starts against a roadmap whose on-disk `project.db` is at an
@@ -4403,8 +4765,8 @@ Rules:
     `bg-secondary-lt`; a severity in `8`-`9` renders `bg-red-lt`, `6`-`7` renders
     `bg-orange-lt`, `3`-`5` renders `bg-yellow-lt`, and `0`-`2` renders
     `bg-secondary-lt`. The same value maps to the same colour everywhere a badge for
-    it is shown — the priority and severity badges on the tasks page's board cards,
-    the sprint detail member-tasks table, the task
+    it is shown — the priority and severity badges on the tasks page's board cards
+    and on the cards of the sprint detail member-tasks board, the task
     detail modal, the sprint cards, the Roadmap Sprint Page header and metadata
     datagrid, and the sprints-page tabs, where the colour is the variant of the status
     the tab groups while the badge text is that tab's sprint count (Acceptance
@@ -4446,8 +4808,8 @@ Rules:
     is unchanged (Acceptance Criterion 61 continues to hold).
 67. A task with no comments opens a modal that shows a clear empty-state message in
     place of the timeline, not an empty list and not a missing section.
-68. The Roadmap Sprint Page renders a Comments card after the member-tasks card, as
-    the last card of the sprint detail sub-template. It shows the sprint's own
+68. The Roadmap Sprint Page renders a Comments card after the member-tasks board,
+    as the last card of the sprint detail sub-template. It shows the sprint's own
     comments oldest first, in the same order `rmp sprint comment-list` returns, with
     a card header titled `Comments` carrying a badge with the comment count. A sprint
     with no comments still renders the card, showing an empty-state message in place
@@ -4461,9 +4823,15 @@ Rules:
     all N cards, and no comment-listing query at all, because the board shows counts
     and no comment text (see
     `DATABASE.md § Count Comments for Many Parents (Grouped)`). On the sprint page it
-    is 1 for that sprint's own comments, which the page renders in full as a log (see
-    `DATABASE.md § Comments`). A page that renders no task issues no task-comment
-    query of either kind. A task's comment bodies are read only when a user opens
+    is 2, whatever N is: one listing query for that sprint's **own** comments, which
+    the Comments card renders in full as a log (see `DATABASE.md § Comments`), plus
+    one grouped **counting** query over the whole set of rendered member-task ids,
+    which is what gives each board card its comment number. The sprint page issues no
+    comment-listing query for a member task, so it reads the comment **body** of no
+    task it renders. A page that renders no task issues no task-comment query of
+    either kind: a sprint with no member task skips the grouped count entirely, while
+    still issuing the sprint's own comment listing, because the Comments card is
+    always present. A task's comment bodies are read only when a user opens
     that task's modal, one task at a time (see
     [Task Detail Endpoint](#task-detail-endpoint)).
 71. The comments timeline uses only the Tabler Timeline classes already present in
@@ -4551,17 +4919,28 @@ Rules:
     its own.
 85. Each board card shows, in order: a reference line carrying `#<id>` and the
     task's `type` as muted text with no colour applied to the type; the task
-    `title` as the card's prominent main content; a `priority` badge and a
-    `severity` badge, each coloured by the mapping in
+    `title` as the card's prominent main content; a `priority` badge reading `P`
+    immediately followed by the task's priority and a `severity` badge reading `S`
+    immediately followed by the task's severity, with no space and no separator
+    between the letter and the digits — a task of priority `5` and severity `3`
+    shows `P5` and `S3`, and a badge carrying the bare integer does not satisfy this
+    criterion — each coloured by the mapping in
     [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours)
-    (Acceptance Criterion 61 continues to hold); and a metadata footer listing only
+    applied to the value alone and not to the prefixed text, so the prefix changes no
+    badge colour (Acceptance Criterion 61 continues to hold); and a metadata footer
+    listing only
     the indicators the task actually has, among the sprint the task belongs to, its
     `specialists`, its
     `subtask_count`, its number of `depends_on` entries, its number of `blocks`
     entries, and its number of comments. The card shows **no status badge**, because
     the column already states the status. An indicator whose value is absent, empty,
     or zero renders nothing at all — no dash and no placeholder — and a task with
-    none of the six indicators renders no metadata footer.
+    none of the six indicators renders no metadata footer. The prefix belongs to the
+    board card and to nothing else: the same task's `priority` and `severity` in the
+    task detail modal render as the bare integer beside the field name that already
+    names it (Acceptance Criterion 15 continues to hold), and the card's accessible
+    name carries neither value and therefore carries no prefix (Acceptance Criterion
+    86 continues to hold).
 86. Selecting a board card opens the read-only task detail modal for that task,
     which displays that task's full field set as specified in Acceptance Criterion
     15. Opening the modal fetches that task's data from
@@ -4646,15 +5025,14 @@ Rules:
     detail modal is a `<button>` in the served HTML, activatable by pointer, touch,
     Enter, and Space. No modal trigger anywhere in the served HTML is a
     `<div>` or a `<tr>` carrying `role="button"`, and none relies on `tabindex` to
-    be reachable in place of being activatable. On the roadmap tasks page the
-    trigger is the board card itself, rendered as `<button type="button">`; on the
-    Roadmap Sprint Page it is a natively activatable element inside the member-tasks
-    row, a `<button>` carried by the task `Title` cell, while the row stays
-    clickable by pointer.
+    be reachable in place of being activatable. On both boards the trigger is the
+    board card itself, rendered as `<button type="button">`: on the roadmap tasks
+    page and on the Roadmap Sprint Page alike. No `<tr>` in the served HTML is a
+    modal trigger or carries one, on any page.
     Each trigger's accessible name is `Open details for task #<id>: <title>`,
     carrying the task's `id` and its `title`, on both surfaces. In particular the
-    name contains the task title, so on the Roadmap Sprint Page — where the title is
-    the trigger's visible label — the accessible name contains the visible label
+    name contains the task title, which is the trigger's visible label on both
+    boards, so the accessible name contains the visible label
     text, as WCAG 2.5.3 Label in Name (Level A) requires, and the control can be
     activated by speech input by speaking the title that is displayed. An
     accessible name carrying the `id` alone, such as `Open details for task #<id>`,
@@ -5129,6 +5507,134 @@ Rules:
     markup and the same classes, carries no inline `style` attribute, and
     Acceptance Criteria 27, 88, and 124 to 128 continue to hold (see
     [Roadmap Tasks Page](#roadmap-tasks-page), **Column width and card density**).
+130. `GET /roadmaps/{name}/sprints/{id}` renders the sprint's member tasks as a
+    Kanban board of exactly three columns, presented left to right with the headings
+    `WAITING`, `DOING`, and `CLOSED`, and the served HTML carries no member-tasks
+    table and no task table of any kind on this page. Each column holds exactly the
+    sprint's tasks in the statuses assigned to it — `WAITING` the `BACKLOG` and
+    `SPRINT` tasks, `DOING` the `DOING` and `TESTING` tasks, and `CLOSED` the
+    `COMPLETED` tasks — so every member task appears on the board exactly once and
+    none is omitted or duplicated. All three columns are rendered whatever the sprint
+    holds: a column with no task keeps its heading and its `0` count badge and shows
+    the in-column empty state in place of its card list, and a sprint with no member
+    task renders the board with all three columns present, each showing that empty
+    state, rather than a page-level empty state or an absent board. The Sprint
+    details card above the board and the Comments card below it keep their positions
+    (see [Sprint Detail Sub-Template](#sprint-detail-sub-template)).
+131. Each column count equals its counterpart in the sprint status summary line
+    rendered at the top of the same page: the `WAITING` column's badge equals `P`,
+    the `DOING` column's badge equals `A`, the `CLOSED` column's badge equals `C`,
+    and the three sum to `T` (Acceptance Criterion 39 continues to hold). The check
+    compares the two renderings of one sprint against each other, rather than each
+    against a number the check computes on its own, because the property under test
+    is that the board and the summary line group the sprint's tasks by the **same**
+    categorisation: a board that grouped the statuses differently could still show
+    three counts that each looked plausible on its own. For the sprint whose summary
+    line reads `33% - P:8 A:29 C:18 - T:55`, the three column badges read `8`, `29`,
+    and `18`, and the board shows 55 cards in total.
+132. Within every column the cards appear in the sprint's planned in-sprint
+    execution order, which is the `sprint_tasks` position order the page reads
+    (`position` ascending; see
+    `DATABASE.md § List Sprint Tasks Ordered by Position`). Grouping the tasks into
+    the three columns preserves that relative order, so for any two tasks of one
+    column the card of the task with the lower `position` appears above the other.
+    The board applies no sort of its own: reordering the sprint's tasks through the
+    CLI and reloading the page reorders the cards accordingly, and no ordering by
+    priority, severity, id, or title is observable anywhere on the board.
+133. Each card of the sprint's member-tasks board shows exactly six data points, in
+    this order: the task `title` leading the card, the reference `#<id>` on its own
+    line as secondary text, a `priority` badge reading `P` immediately followed by
+    the task's priority, a `severity` badge reading `S` immediately followed by the
+    task's severity, and — in a footer
+    row aligned to the trailing edge of the card — the number of subtasks and the
+    number of comments, each as an icon (`ti ti-subtask` and `ti ti-message`
+    respectively) followed by its number. A task of priority `5` and severity `3`
+    shows `P5` and `S3`; a badge carrying the bare integer does not satisfy this
+    criterion, and this card renders the pair exactly as the tasks board's card does
+    (Acceptance Criterion 85 continues to hold). The priority and severity badges
+    take the colours the semantic mapping assigns to their values, which the prefix
+    does not affect (Acceptance Criterion 61
+    continues to hold). The card carries **no** status badge, because the column
+    already states the status, and it shows no task type, no `specialists`, and no
+    dependency counts. The task's full field set is reached through the task detail
+    modal the card opens (see [Sprint Detail Sub-Template](#sprint-detail-sub-template)
+    and [Task Detail Modal](#task-detail-modal)).
+134. On a card of the sprint's member-tasks board, a subtask count of `0` and a
+    comment count of `0` each render nothing at all — no icon, no number, no dash, no
+    placeholder, and no empty slot — and a task with neither renders no footer row.
+    The check asserts the absence of the indicator's markup, not merely the absence
+    of the digit `0`, because a rendering that prints an icon with nothing beside it
+    still occupies the space this criterion removes.
+135. Selecting a card of the sprint's member-tasks board opens the read-only task
+    detail modal for that task, and the card **is** the trigger: in the served HTML
+    the card is a `<button type="button">`, activatable by pointer, touch, Enter, and
+    Space, carrying no `tabindex` and no `role="button"`. Its accessible name is
+    `Open details for task #<id>: <title>`, containing the task title that is the
+    card's visible label; a name carrying the `id` alone does not satisfy this
+    criterion. Opening a card fetches that task's data from
+    `GET /roadmaps/{name}/tasks/{id}/data` and fills the page's single modal shell,
+    of which the page renders one and not one per task. The page loads no script
+    beyond those it already loads from `/static/`, and the Content-Security-Policy of
+    Acceptance Criterion 33 is unchanged (Acceptance Criteria 93 and 97 to 99
+    continue to hold).
+136. The sprint's member-tasks board is height-limited and scrolls per column: each
+    column scrolls vertically and independently when its cards exceed the board's
+    height. That height is **`60vh`** in the project override stylesheet, floored at
+    the value of the **`--full-height-region-floor`** custom property, and it is
+    **not** the space the page body leaves. The floor is read from that property and
+    the length is not restated beside it, so the board and the page body cannot come
+    to state different floors; the check fails on a stylesheet that writes the floor
+    out as a literal length of its own, and it fails on a sprint page where the
+    property does not resolve, because the sprint page carries no full-height shell
+    to declare it. On a viewport short enough that `60vh` falls below the floor, the
+    board takes the floor. The board is therefore not a full-height page region, and
+    Acceptance Criteria 124 to 127 are not asserted against it: adding member tasks
+    to the sprint leaves the board's height unchanged and does not push the Comments
+    card further down the page. When the three columns do not fit the viewport, the
+    column strip scrolls horizontally inside its own container while `<body>`
+    produces no horizontal overflow (Acceptance Criterion 27 continues to hold), and
+    on a narrow viewport each column keeps a minimum width at which its cards stay
+    legible, with touch-friendly hit targets on the cards (see
+    [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Height and
+    scrolling**, and
+    [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
+    rule 10).
+137. The comment number on each card of the sprint's member-tasks board comes from
+    **one** grouped counting query issued over the whole set of rendered member-task
+    ids, never one query per card: an instrumented count of comment-counting queries
+    for a sprint page rendering N member tasks is 1, independent of N, and of
+    comment-listing queries for member tasks is 0 (see
+    `DATABASE.md § Count Comments for Many Parents (Grouped)` and Acceptance
+    Criterion 70). A sprint with no member task issues no such query at all. The
+    subtask number on a card costs no query of its own, because the sprint's
+    member-task read already returns each task's `subtask_count`; grouping the tasks
+    into the three columns and counting each column are performed in memory over the
+    rows already read, so the board adds no query per column and none per card.
+138. The sprint's member-tasks board is read-only: it offers no drag-and-drop and no
+    control of any other kind that moves a task between columns, reorders cards,
+    changes a task's status, or creates or edits a task, a column, or a comment. The
+    served HTML contains no form, no input, and no control in the board that submits
+    a change: the only button in the board is the card itself, and activating it
+    opens the read-only modal. There is no route and no client-side path through
+    which the board can write; the `rmp` CLI remains the sole write path.
+139. Each of the three columns of the sprint's member-tasks board is `19rem` wide
+    and never narrower than `17rem`, the columns are separated by a `0.75rem` gap,
+    all three carry the same width whatever number of tasks each holds, and none
+    stretches to fill a viewport wider than the board needs. The body of a task card
+    on that board carries `0.75rem` of padding on all four sides, which is strictly
+    less than the padding the vendored Tabler distribution declares for a small
+    card's body, and the project override stylesheet declares it in a rule of at
+    least the specificity of Tabler's own, in the stylesheet the layout links last,
+    so the override wins on the cascade with no `!important`. Every one of these
+    lengths is expressed in `rem`, and every one is the length the tasks board's
+    columns and cards already carry, so the check compares the two boards' values
+    and fails when they diverge: they are one measure used twice, not two measures
+    that happen to agree today (Acceptance Criterion 129 continues to hold). This is
+    a stylesheet change only: the board emits the same markup and the same classes,
+    carries no inline `style` attribute, and Acceptance Criteria 27, 130, and 136
+    continue to hold (see
+    [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Height and
+    scrolling**).
 
 ## See Also
 

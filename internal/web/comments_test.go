@@ -514,9 +514,13 @@ func TestTaskDetail_CommentBodyTravelsAsAJSONString(t *testing.T) {
 }
 
 // TestSprintPage_CommentsCard is the gate for Acceptance Criterion 68: the sprint
-// page renders a Comments card AFTER the member-tasks card, as the last card of the
-// sprint detail sub-template, showing the sprint's own comments oldest first with a
-// card header carrying the comment count.
+// page renders a Comments card AFTER the member-tasks board, as the last card of
+// the sprint detail sub-template, showing the sprint's own comments oldest first
+// with a card header carrying the comment count.
+//
+// The placement anchor is the board, because that is what the Comments card now
+// follows: the member-tasks table it used to follow no longer exists (SPEC/WEB.md
+// § Sprint Detail Sub-Template, rule 2; Acceptance Criterion 130).
 func TestSprintPage_CommentsCard(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	f := seedCommentFixture(t, "settlement-reconciliation")
@@ -524,15 +528,26 @@ func TestSprintPage_CommentsCard(t *testing.T) {
 
 	body := servePage(t, mux, "/roadmaps/"+f.name+"/sprints/"+itoa(f.sprintID))
 
-	// Placement: after the member-tasks card, and last (only the task modals, which
-	// are not part of the sub-template, follow it).
-	tasksCardAt := strings.Index(body, `<h3 class="card-title">Tasks <span`)
+	// Placement: after the member-tasks board, and last (only the task modal shell,
+	// which is not part of the sub-template, follows it). The anchor is the LAST
+	// column of the board rather than the board's opening tag, so a Comments card
+	// rendered between two columns would fail this assertion too.
+	boardAt := strings.Index(body, `data-role="task-board"`)
+	lastColumnAt := strings.LastIndex(body, `data-role="task-board-column"`)
 	commentsCardAt := strings.Index(body, `<h3 class="card-title">Comments <span`)
-	if tasksCardAt < 0 || commentsCardAt < 0 {
-		t.Fatalf("sprint page is missing a card (tasks=%d comments=%d)", tasksCardAt, commentsCardAt)
+	if boardAt < 0 || lastColumnAt < 0 || commentsCardAt < 0 {
+		t.Fatalf("sprint page is missing a region (board=%d last column=%d comments=%d)",
+			boardAt, lastColumnAt, commentsCardAt)
 	}
-	if commentsCardAt < tasksCardAt {
-		t.Errorf("the Comments card precedes the member-tasks card")
+	if commentsCardAt < lastColumnAt {
+		t.Errorf("the Comments card is rendered before the end of the member-tasks board")
+	}
+	// And the Sprint details card still precedes the board, so the three keep the
+	// order the sub-template fixes.
+	detailsCardAt := strings.Index(body, `<h3 class="card-title">Sprint details</h3>`)
+	if detailsCardAt < 0 || detailsCardAt > boardAt {
+		t.Errorf("the Sprint details card does not precede the member-tasks board "+
+			"(details=%d board=%d)", detailsCardAt, boardAt)
 	}
 
 	// Header: the title and a badge with the number of comments.
@@ -999,13 +1014,16 @@ func TestTasksPage_OneGroupedCommentCountQueryIndependentOfTaskCount(t *testing.
 }
 
 // TestSprintPage_CommentQueryCount is the gate for Acceptance Criterion 70 on the
-// sprint page: ONE comment query, for the sprint's own log, whatever the number of
-// member tasks.
+// sprint page: TWO comment queries, whatever the number of member tasks — the
+// sprint's own listing, which the Comments card renders in full as a log, and ONE
+// grouped COUNT over the whole set of rendered member-task ids, which is what gives
+// each board card its comment number.
 //
-// The page reads no task comments of any kind any more. Its member-tasks table
-// shows no comment value, and the modal a row opens is filled on demand by the
-// task detail endpoint, so a task-comment read here would be a read of something
-// the page does not display (SPEC/WEB.md § Tasks and Sprints from SQLite).
+// The page reads no comment BODY for a task it renders: a card shows a number, and
+// the text of a member task's comments is fetched only when a user opens that
+// task's modal, one task at a time, by the task detail endpoint. That is what the
+// zero on the per-task listing states (SPEC/WEB.md § Tasks and Sprints from SQLite;
+// § Sprint Detail Sub-Template, Read cost; Acceptance Criterion 137).
 func TestSprintPage_CommentQueryCount(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	f := seedCommentFixture(t, "settlement-reconciliation")
@@ -1016,16 +1034,31 @@ func TestSprintPage_CommentQueryCount(t *testing.T) {
 		t.Fatalf("readSprint: %v", err)
 	}
 
-	// Three member tasks were seeded, and none of them cost a comment query.
+	// Three member tasks were seeded, and together they cost ONE comment count.
 	if len(data.Tasks) != 3 {
 		t.Fatalf("the sprint page carries %d member tasks, want 3", len(data.Tasks))
 	}
-	if src.groupedCommentCounts != 0 {
-		t.Errorf("the sprint page issued %d task-comment-count queries, want 0: its table shows "+
-			"no comment value", src.groupedCommentCounts)
+	if src.groupedCommentCounts != 1 {
+		t.Errorf("the sprint page issued %d task-comment-count queries, want exactly 1: one "+
+			"grouped count over the whole set of rendered member-task ids",
+			src.groupedCommentCounts)
+	}
+	// That one query covered EVERY rendered card, which is what makes one query
+	// sufficient rather than merely few.
+	if len(src.lastGroupedIDs) != len(data.Tasks) {
+		t.Errorf("the comment count was given %d ids, want the board's %d member tasks",
+			len(src.lastGroupedIDs), len(data.Tasks))
+	}
+	for i := range data.Tasks {
+		if i < len(src.lastGroupedIDs) && src.lastGroupedIDs[i] != data.Tasks[i].ID {
+			t.Errorf("the comment-count id at %d is #%d, want #%d",
+				i, src.lastGroupedIDs[i], data.Tasks[i].ID)
+		}
 	}
 	if src.perTaskComments != 0 {
-		t.Errorf("the sprint page issued %d per-task comment queries, want 0", src.perTaskComments)
+		t.Errorf("the sprint page issued %d per-task comment queries, want 0: a card shows a "+
+			"count and a member task's comment TEXT is read only through its own modal",
+			src.perTaskComments)
 	}
 	if src.sprintComments != 1 {
 		t.Errorf("the sprint page issued %d sprint-comment queries, want exactly 1", src.sprintComments)
@@ -1046,8 +1079,9 @@ func TestSprintPage_CommentQueryCount(t *testing.T) {
 		t.Errorf("the sprint carries %d comments of its own, want 2", len(data.Comments))
 	}
 
-	// The control that makes those zeros falsifiable: the reads the page must not
-	// take are reachable on this same instrument and are counted when taken.
+	// The control that makes the count and the zero falsifiable: both reads are
+	// reachable on this same instrument and both are counted when taken, so "1" is
+	// a measurement rather than an instrument that never moves.
 	if _, err := src.CountTaskCommentsByTasks(context.Background(),
 		[]int{f.loggedTaskID, f.markupTaskID}); err != nil {
 		t.Fatalf("control count read: %v", err)
@@ -1055,9 +1089,9 @@ func TestSprintPage_CommentQueryCount(t *testing.T) {
 	if _, err := src.ListTaskComments(context.Background(), f.loggedTaskID, nil); err != nil {
 		t.Fatalf("control listing read: %v", err)
 	}
-	if src.groupedCommentCounts != 1 || src.perTaskComments != 1 {
-		t.Errorf("the control reads registered %d counts and %d listings, want 1 and 1; the "+
-			"instrument does not track reads one-for-one",
+	if src.groupedCommentCounts != 2 || src.perTaskComments != 1 {
+		t.Errorf("after the control reads the instrument registers %d counts and %d listings, "+
+			"want 2 and 1; it does not track reads one-for-one",
 			src.groupedCommentCounts, src.perTaskComments)
 	}
 }
