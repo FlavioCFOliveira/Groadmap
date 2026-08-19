@@ -62,6 +62,14 @@ from tests.base_test import GroadmapTestBase
 
 ROADMAP = "platform"
 
+# The port `rmp web` binds when --port is not given (SPEC/WEB.md § Bind Address
+# and Port Selection, item 2). The ephemeral fallback under test is reachable
+# ONLY by omitting --port: any --port at all, including this very number passed
+# explicitly, marks the port explicit and turns a bind failure into a fatal
+# error instead (internal/web/server.go bindListener; that other half of the
+# contract is test_explicit_busy_port_exits_1).
+DEFAULT_WEB_PORT = 8787
+
 # Unicode's White_Space property: the set SPEC/WEB.md Acceptance Criterion 121
 # names as the board search's trim, and the set the server ships to the browser as
 # SPACE_TABLE.
@@ -346,8 +354,16 @@ class TestWebInterface:
     # ---- HTTP helper (raw path, no client normalisation) ---------------
 
     @staticmethod
-    def _req(port, path, method="GET", host="127.0.0.1"):
-        conn = http.client.HTTPConnection(host, port, timeout=5)
+    def _req(port, path, method="GET", host="127.0.0.1", timeout=5):
+        """GET (or METHOD) a raw path and return (status, headers, body).
+
+        timeout is the client-side socket timeout in seconds. Five seconds is
+        far more than any ordinary page or data response needs, so it stays the
+        default. The graph query time budget scenario raises it deliberately:
+        the response it waits for is the one the server's own 5-second budget
+        produces, and a 5-second client would race the very deadline under test.
+        """
+        conn = http.client.HTTPConnection(host, port, timeout=timeout)
         try:
             conn.request(method, path)
             resp = conn.getresponse()
@@ -525,16 +541,106 @@ class TestWebInterface:
         assert "bind" in err.lower(), f"bind error must name the failure; stderr={err}"
 
     def test_default_port_busy_falls_back_to_ephemeral(self):
-        try:
-            self._occupy(port=8787)
-        except OSError:
-            # 8787 already taken by something else in this environment.
-            print("  (skipped: port 8787 not bindable here)")
-            return
-        proc, port = self._start()  # no --port -> default 8787 busy -> ephemeral
-        assert port != 8787, "default-port fallback must choose a different port"
-        status, _, _ = self._req(port, "/")
-        assert status == 200
+        """AC4: when the DEFAULT port is busy and --port was not given, the server
+        falls back to an OS-chosen ephemeral port and still starts, instead of
+        failing the way an explicit busy --port does (SPEC/WEB.md § Bind Address
+        and Port Selection, item 4).
+
+        The fallback is reachable only by omitting --port, so the scenario needs
+        DEFAULT_WEB_PORT to be busy — and whether it already is, is not this
+        suite's to decide. The test therefore does not probe the port and hope
+        the answer still holds a moment later. It starts one server with no
+        --port and READS BACK the port that server actually took; that single
+        observation both establishes which precondition is in force and is
+        itself the first assertion.
+
+          - The first server took the default port. Nothing else on this machine
+            wanted it, so the contention is supplied by this fixture: a second
+            server, also with no --port, must fall back off the port the first
+            one is now provably holding.
+          - The first server did NOT take the default port. Something outside
+            this suite holds it, the contention already existed, and this very
+            server is the one that fell back off it.
+
+        Neither branch can pass for the other's reason, because each asserts
+        something the other cannot reach: the fixture-held branch proves the
+        held port is still served afterwards (the fallback took a different
+        port rather than stealing the busy one), and the foreign-held branch
+        proves a busy default is survivable rather than fatal — no bind error on
+        stderr and a live process — which is exactly what separates it from the
+        explicit-port contract. Every message names the branch that ran, so the
+        output records which precondition was in force.
+
+        This replaces a form that bound the default port itself and RETURNED
+        without asserting when that bind failed, so on precisely the machines
+        where the port was busy — the condition the test exists to exercise — it
+        passed having executed no assertion at all. Nothing here can return
+        without asserting.
+        """
+        first_proc, first_port = self._start()  # no --port: the default path
+
+        # The port that server took is the whole of the branch decision, and it
+        # is recorded before anything can fail, so the run's output names the
+        # precondition that was in force whatever the outcome.
+        fixture_held = first_port == DEFAULT_WEB_PORT
+        branch = (
+            f"fixture-held (nothing else on this machine wanted port "
+            f"{DEFAULT_WEB_PORT}, so this test's own first server holds it)"
+            if fixture_held else
+            f"foreign-held (a process outside this suite holds port "
+            f"{DEFAULT_WEB_PORT}, so the first server fell back off it)"
+        )
+        print(f"  (default-port contention {branch})")
+
+        if fixture_held:
+            # The first server is already accepting connections on the default
+            # port (_start waits for that), so the second server's bind to it
+            # cannot succeed. The contention is established, not assumed.
+            fell_back_proc, fell_back_port = self._start()
+
+            # Branch-specific: the fallback took a DIFFERENT port and left the
+            # busy one alone. A server that had stolen or disturbed the held
+            # port would still answer on its own port and pass every shared
+            # check below.
+            status, _, _ = self._req(first_port, "/")
+            assert status == 200, (
+                f"{branch}: the server holding port {DEFAULT_WEB_PORT} must "
+                f"still serve after the second one fell back off it; got "
+                f"{status}"
+            )
+        else:
+            fell_back_proc, fell_back_port = first_proc, first_port
+
+            # Branch-specific: a busy DEFAULT port is survivable, not fatal.
+            # The explicit-port contract is the opposite — exit 1 with a bind
+            # error named on stderr (test_explicit_busy_port_exits_1) — so the
+            # absence of both is the whole difference between the two rules.
+            assert fell_back_proc.poll() is None, (
+                f"{branch}: a busy default port must not be fatal; the process "
+                f"exited {fell_back_proc.poll()}"
+            )
+            stderr = self._drain(fell_back_proc.err_file)
+            assert "bind" not in stderr.lower(), (
+                f"{branch}: falling back is silent, not a reported bind "
+                f"failure; stderr={stderr!r}"
+            )
+
+        # Shared contract, asserted for whichever server did the falling back.
+        # "Fell back" means it bound a DIFFERENT port, never merely that it
+        # started.
+        assert fell_back_port != DEFAULT_WEB_PORT, (
+            f"{branch}: the fallback must bind a port other than the busy "
+            f"default; it bound {fell_back_port}"
+        )
+        assert fell_back_port > 0, (
+            f"{branch}: the fallback must report the real OS-assigned port; "
+            f"got {fell_back_port}"
+        )
+        status, _, _ = self._req(fell_back_port, "/")
+        assert status == 200, (
+            f"{branch}: the server must serve on its fallback port "
+            f"{fell_back_port}; got {status}"
+        )
 
     # ====================================================================
     # AC6/AC7: roadmap index + empty state
@@ -3194,14 +3300,19 @@ class TestWebInterface:
     # ====================================================================
 
     @staticmethod
-    def _graph_data(port, q=None, limit=None):
-        """Build /graph/data with URL-encoded q and limit, GET it, return JSON."""
+    def _graph_data(port, q=None, limit=None, roadmap=ROADMAP):
+        """Build /graph/data with URL-encoded q and limit, GET it, return JSON.
+
+        roadmap defaults to the module fixture; the query time budget scenario
+        overrides it, because the store that scenario needs is far larger than
+        every other scenario wants to pay for.
+        """
         params = {}
         if q is not None:
             params["q"] = q
         if limit is not None:
             params["limit"] = limit
-        path = f"/roadmaps/{ROADMAP}/graph/data"
+        path = f"/roadmaps/{roadmap}/graph/data"
         if params:
             path += "?" + urllib.parse.urlencode(params)
         return path
@@ -3331,6 +3442,106 @@ class TestWebInterface:
         assert status == 200
         assert len(json.loads(body)["nodes"]) == 1, "user LIMIT 1 must be respected"
 
+    def test_query_bar_statements_admitting_no_limit_are_exempt(self):
+        """AC111: the node-limit injection is suppressed for the statement forms
+        that admit NO top-level LIMIT clause at all — the SHOW schema-
+        introspection commands and standalone procedure calls — so a read the
+        guard rail admits, and that `rmp graph query` runs, stays usable through
+        the endpoint (SPEC/WEB.md § Graph Data Endpoint, Suppression 2).
+
+        Appending a LIMIT to one of those bounds nothing: it makes the statement
+        fail in the PARSER. The claim under test is therefore that each one
+        EXECUTES rather than coming back as a 400 execution failure. Every one of
+        them is a tabular result carrying no graph elements, so the specified
+        outcome is the empty graph shape, and the body is asserted to equal it
+        exactly rather than merely to be error-free: {"nodes": [], "edges": []}
+        is the success shape, and a failure body would carry error and kind
+        instead (SPEC/DATA_FORMATS.md § Graph View Data).
+
+        The boundary is exactly the presence of a top-level RETURN, so the same
+        test carries the control that sits on the other side of it. A PROJECTED
+        call — a leading CALL that IS projected through a RETURN — parses as an
+        ordinary query and DOES take the injected LIMIT. Asserting only that the
+        six exempt forms succeed would be satisfied just as well by a broken
+        endpoint that never injected a LIMIT into any CALL; asserting that the
+        projected form is still CAPPED is what separates the two. The store is
+        given more nodes than the cap so the difference is observable: capped at
+        50 against a store of 62, and complete at 62 when the cap is raised
+        beyond it.
+        """
+        # A store larger than the smallest allowed node limit, so a cap is
+        # visible as a cap. The module fixture's own graph is two nodes, which
+        # no limit in the allowed set could narrow. Each test method runs against
+        # its own temporary HOME, so this widening is local to this scenario.
+        self._run(["graph", "create", "-r", ROADMAP,
+                   "--query", "UNWIND range(1,60) AS i CREATE (:Bulk {i:i})"])
+        _, out, _ = self._run(["graph", "query", "-r", ROADMAP,
+                               "--query", "MATCH (n) RETURN count(n)"])
+        total = json.loads(out)["rows"][0][0]
+        assert total > 50, (
+            f"the control needs a store larger than the 50-node cap; got {total}"
+        )
+
+        proc, port = self._start(["--port", "0"])
+
+        # The exempt forms: two bare SHOW commands, a SHOW carrying a YIELD tail
+        # (a tail does not make a LIMIT injectable), a bare standalone call, a
+        # standalone call that is not a pure read of the store, and a standalone
+        # call carrying a YIELD.
+        exempt = (
+            "SHOW INDEXES",
+            "SHOW CONSTRAINTS",
+            "SHOW INDEXES YIELD name, state RETURN name",
+            "CALL db.labels()",
+            "CALL db.stats.refresh()",
+            "CALL db.propertyKeys() YIELD propertyKey",
+        )
+        for query in exempt:
+            status, _, body = self._req(
+                port, self._graph_data(port, q=query, limit="100")
+            )
+            assert status == 200, (
+                f"{query!r} must execute, not fail in the parser with an "
+                f"injected LIMIT; got {status} {body!r}"
+            )
+            assert json.loads(body) == {"nodes": [], "edges": []}, (
+                f"{query!r} is a tabular result carrying no graph elements, so "
+                f"the response is the empty graph shape; got {body!r}"
+            )
+
+        # The control on the other side of the boundary: projected through a
+        # RETURN, so the LIMIT is injected and the result IS capped.
+        projected = "CALL db.labels() YIELD label MATCH (n) RETURN n"
+        status, _, body = self._req(
+            port, self._graph_data(port, q=projected, limit="50")
+        )
+        assert status == 200, (
+            f"a projected call must execute with the injected LIMIT; got "
+            f"{status} {body!r}"
+        )
+        capped = json.loads(body)["nodes"]
+        assert 0 < len(capped) <= 50, (
+            f"a projected call takes the injected LIMIT 50, so it returns at "
+            f"most 50 of the {total} nodes; got {len(capped)}"
+        )
+        assert len(capped) < total, (
+            f"the cap must be observable: {len(capped)} of {total} nodes came "
+            "back, so nothing was capped and the injection was suppressed for a "
+            "statement that admits a LIMIT"
+        )
+
+        # Raising the limit past the store size returns the whole store through
+        # the same projected form, proving the shortfall above was the LIMIT and
+        # not the query itself.
+        status, _, body = self._req(
+            port, self._graph_data(port, q=projected, limit="3000")
+        )
+        assert status == 200
+        assert len(json.loads(body)["nodes"]) == total, (
+            "the same projected call under a limit above the store size must "
+            "return every node"
+        )
+
     def test_query_bar_execution_failure_distinct_from_rejection(self):
         """AC50: a read-only query that fails in the engine (invalid syntax)
         surfaces kind=execution, distinct from a read-only rejection."""
@@ -3339,6 +3550,151 @@ class TestWebInterface:
         assert status == 400
         assert json.loads(body).get("kind") == "execution", (
             "an execution failure must be distinct from a read-only rejection"
+        )
+
+    def test_graph_query_is_bounded_by_the_query_time_budget(self):
+        """AC110: the endpoint executes the caller's query under a per-request
+        time budget, so a read the guard rail admits but whose WORK is unbounded
+        cannot hold the endpoint open indefinitely (SPEC/WEB.md § Graph Query
+        Time Budget).
+
+        The node limit cannot stand in for the budget. The limit bounds the
+        RESULT; an aggregate over a Cartesian product returns one row whatever
+        the limit is, yet scans the whole product to produce it, so the budget is
+        the only bound on that work (rule 3). Exhausting it is a query execution
+        failure and nothing new: HTTP 400, kind=execution, the same class as
+        invalid Cypher, distinguished only by the reason it gives (rules 4, 5).
+
+        The five seconds this costs are inherent. The budget has no URL
+        parameter, no flag and no environment variable: graphQueryBudget is
+        assigned once, in the server process, and nothing outside it can move it
+        (rule 8). The cost is confined instead — the store below belongs to this
+        scenario alone, so the module's shared fixture stays two nodes and every
+        other scenario stays fast.
+
+        That store is sized from measurement. Unbounded — through
+        `rmp graph query`, which has no budget — the three-way Cartesian product
+        below costs 61.2s over these 799 nodes against a 5s budget: a twelvefold
+        margin, so the query still cannot finish inside the budget on hardware an
+        order of magnitude faster than the machine this was measured on. The
+        margin is free: the request is cut at the budget whatever the store size,
+        so a larger store buys robustness and costs no wall time. A 399-node
+        store, for comparison, costs 7.5s unbounded — a 1.5x margin, which any
+        machine 1.6x faster would turn into a silent false pass.
+
+        Both time bounds are asserted and the LOWER one carries the weight: a
+        regression that disabled the budget and failed the request for some other
+        reason, instantly, would satisfy an upper bound on its own.
+        """
+        # 797 bulk nodes on top of the two-node, one-edge seed the module builds
+        # for its fixture, giving a 799-node store. Seeding is one CLI call and
+        # costs 0.03s.
+        name = "telemetry"
+        bulk = 797
+        self._run(["roadmap", "create", name])
+        self._run(["graph", "create", "-r", name,
+                   "--query", "CREATE (s:Spec {key:'passwordless-auth'})"])
+        self._run(["graph", "create", "-r", name,
+                   "--query", "CREATE (c:Code {path:'internal/auth/magiclink.go'})"])
+        self._run(["graph", "create", "-r", name,
+                   "--query",
+                   "MATCH (s:Spec {key:'passwordless-auth'}), "
+                   "(c:Code {path:'internal/auth/magiclink.go'}) "
+                   "CREATE (s)-[:IMPLEMENTED_BY]->(c)"])
+        self._run(["graph", "create", "-r", name,
+                   "--query",
+                   "UNWIND range(1," + str(bulk) + ") AS i CREATE (:Bulk {i:i})"])
+
+        # Ground truth for the store, read from the engine rather than assumed,
+        # so the completeness assertion below cannot silently drift with the
+        # seed. The reader limit must sit above it, or a capped read would be
+        # mistaken for a complete one.
+        _, out, _ = self._run(["graph", "query", "-r", name,
+                               "--query", "MATCH (n) RETURN count(n)"])
+        seeded = json.loads(out)["rows"][0][0]
+        assert seeded == bulk + 2, (
+            f"the seed must produce {bulk + 2} nodes; got {seeded}"
+        )
+        reader_limit = "1000"
+        assert seeded < int(reader_limit), (
+            f"the completeness read needs a limit above the {seeded}-node store"
+        )
+
+        proc, port = self._start(["--port", "0"])
+
+        # The expensive read: 799**3 = 510 million tuples scanned to produce one
+        # aggregate row, which no node limit can narrow.
+        expensive = "MATCH (a),(b),(c) RETURN count(*)"
+        # Six times the budget, so a client-side timeout is never the budget
+        # firing late; it can only mean the budget did not fire at all. A server
+        # that never cuts the query stops answering long before this, because its
+        # own 30s WriteTimeout closes the connection unanswered — which arrives
+        # here as a socket error, not as a response. Naming that outcome as the
+        # failure it is keeps the diagnosis on the contract rather than on a
+        # traceback from inside http.client.
+        started = time.monotonic()
+        try:
+            status, _, body = self._req(
+                port,
+                self._graph_data(port, q=expensive, limit="100", roadmap=name),
+                timeout=30,
+            )
+        except (OSError, http.client.HTTPException) as exc:
+            waited = time.monotonic() - started
+            raise AssertionError(
+                f"the endpoint never answered the expensive query: it was still "
+                f"running {waited:.2f}s in, and the connection failed with "
+                f"{type(exc).__name__}: {exc}. The query time budget did not cut "
+                "the query."
+            ) from exc
+        elapsed = time.monotonic() - started
+
+        assert status == 400, (
+            f"an exhausted budget is a query execution failure, answered 400; "
+            f"got {status} after {elapsed:.2f}s: {body!r}"
+        )
+        err = json.loads(body)
+        assert err.get("kind") == "execution", (
+            f"exhausting the budget must reuse the execution-failure kind, not "
+            f"introduce a new one: {err}"
+        )
+        assert "query time budget" in err.get("error", ""), (
+            f"the reason must name the budget, so the user is not told the "
+            f"query was cancelled or that the Cypher was wrong: {err}"
+        )
+
+        # The upper bound: the budget cut the work well before the server's
+        # 30s WriteTimeout, so the failure was actually written to this client.
+        assert elapsed < 15.0, (
+            f"the budget must cut the query long before the 30s WriteTimeout; "
+            f"the request took {elapsed:.2f}s"
+        )
+        # The lower bound, and the load-bearing half: the request really did run
+        # until the budget stopped it. Without this, a regression that removed
+        # the budget and failed the query instantly for any other reason would
+        # pass the check above.
+        assert elapsed > 3.0, (
+            f"the request returned after only {elapsed:.2f}s, far short of the "
+            "budget: the failure did not come from the budget expiring"
+        )
+
+        # The budget is per request and nothing outlives it: the SAME server
+        # process still serves, and serves the whole store.
+        status, _, body = self._req(
+            port, self._graph_data(port, limit=reader_limit, roadmap=name)
+        )
+        assert status == 200, (
+            f"the server must keep serving after a budget exhaustion; got "
+            f"{status}: {body!r}"
+        )
+        view = json.loads(body)
+        assert len(view["nodes"]) == seeded, (
+            f"the ordinary read must return the whole {seeded}-node store; got "
+            f"{len(view['nodes'])} nodes"
+        )
+        assert len(view["edges"]) == 1, (
+            f"the ordinary read must return the seeded relationship; got "
+            f"{len(view['edges'])} edges"
         )
 
     def test_query_bar_invalid_limit_outranks_not_read_only(self):
