@@ -28,15 +28,25 @@
  *     can hold are the options the server emitted from the TaskType enum and from
  *     the threshold range, so the "is this value accepted?" question the server
  *     answers for a URL parameter cannot arise on this side;
- *   - the TERM is the one value both sides fold, and this script folds it with
- *     the SERVER'S OWN mapping, shipped to the page as FOLD_TABLE below. It
- *     calls no case conversion of the JavaScript platform at all: the platform's
- *     is Unicode's Default Case Conversion rather than the simple mapping the
- *     folding rule fixes, and its tables are of whatever Unicode version the
- *     browser happens to ship — so consulting it would let the same term select
- *     different tasks here than on the server, and different tasks in two
- *     browsers (SPEC/WEB.md § Roadmap Tasks Page, The folding rule; One rule,
- *     and only one implementation of it).
+ *   - the TERM is the one value both sides normalise, and normalising it is TWO
+ *     steps — strip the whitespace at its ends, then fold its case. This script
+ *     takes NEITHER step from the JavaScript platform: it strips by the SERVER'S
+ *     OWN whitespace set and folds by the SERVER'S OWN mapping, shipped to the
+ *     page as SPACE_TABLE and FOLD_TABLE below, in that order.
+ *
+ *     Both platform functions would break the equivalence, and each on its own.
+ *     The platform's case conversion is Unicode's Default Case Conversion rather
+ *     than the simple mapping the folding rule fixes. The platform's own trimming
+ *     removes a different set from the White_Space property the trim rule fixes:
+ *     it keeps U+0085 (NEXT LINE), which carries the property, and it removes
+ *     U+FEFF (ZERO WIDTH NO-BREAK SPACE), which does not. Both read tables of
+ *     whatever Unicode version the browser happens to ship — so consulting either
+ *     would let the same term select different tasks here than on the server, and
+ *     different tasks in two browsers. The whitespace half would break it
+ *     QUIETLY: the two sets agree on every code point but those two, so every
+ *     ordinary term would go on agreeing and hide the disagreement (SPEC/WEB.md
+ *     § Roadmap Tasks Page, The trim rule; The folding rule; One rule, and only
+ *     one implementation of it).
  *
  * SECURITY. The term is text the user typed, echoed back into the page. It is
  * written through textContent only — this file contains no innerHTML, no
@@ -101,21 +111,30 @@
     }
   ];
 
-  /* THE FOLDING RULE, SHIPPED FROM THE SERVER.
+  /* THE TERM'S NORMALISATION, SHIPPED FROM THE SERVER.
+   *
+   * The two tables below are the two halves of it, and both are run-encoded as a
+   * flat array of consecutive spans, ordered by start and pairwise disjoint, so
+   * that one binary search answers for either.
    *
    * FOLD_TABLE carries Unicode's SIMPLE lowercase mapping — the single
    * replacement code point the Unicode Character Database gives a code point,
-   * applied to each code point on its own — run-encoded as a flat array of
-   * `start, length, delta` triples, ordered by start and pairwise disjoint: a
+   * applied to each code point on its own — as `start, length, delta` triples: a
    * code point c in [start, start + length) folds to c + delta, and a code point
    * in no run folds to itself.
    *
-   * It is GENERATED from the server's own fold by internal/web/foldtable_gen.go
-   * (`go generate ./internal/web/`) and is checked against that function, over
-   * every code point of Unicode, by the Go test
-   * TestTaskSearchScript_FoldTableIsTheServerFold. The fold of a term is
-   * therefore the server's own answer on both paths by construction, rather than
-   * by two implementations happening to agree. DO NOT EDIT THE TABLE BY HAND. */
+   * SPACE_TABLE carries Unicode's White_Space property, the set the trim rule
+   * strips from a term's two ends, as `start, length` PAIRS: membership is the
+   * whole question a trim asks, so a span needs no third number. A code point in
+   * a span carries the property; one in none does not.
+   *
+   * Both are GENERATED from the server's own foldSearch and isSearchSpace by
+   * internal/web/searchtables_gen.go (`go generate ./internal/web/`) and both are
+   * checked against those two functions, over every code point of Unicode, by the
+   * one Go test TestTaskSearchScript_ShippedRuleIsTheServerRule. A term's
+   * normalisation is therefore the server's own answer on both paths by
+   * construction, rather than by two implementations happening to agree. DO NOT
+   * EDIT EITHER TABLE BY HAND. */
   /* BEGIN GENERATED FOLD TABLE */
   var FOLD_TABLE = [
     65,26,32, 192,23,32, 216,7,32, 256,1,1, 258,1,1, 260,1,1, 262,1,1, 264,1,1, 266,1,1,
@@ -205,6 +224,12 @@
   ];
   /* END GENERATED FOLD TABLE */
 
+  /* BEGIN GENERATED SPACE TABLE */
+  var SPACE_TABLE = [
+    9,5, 32,1, 133,1, 160,1, 5760,1, 8192,11, 8232,2, 8239,1, 8287,1, 12288,1
+  ];
+  /* END GENERATED SPACE TABLE */
+
   /* foldCodePoint folds ONE code point through the table, by binary search over
    * the runs. The search is what the table's ordering and disjointness are for:
    * at most one run can contain a code point, and the halving finds it in about
@@ -227,18 +252,86 @@
     return cp;
   }
 
-  /* foldTerm normalises what the user typed into the form the matching rule
-   * compares with, mirroring the server's foldSearchTerm: surrounding whitespace
-   * stripped, then every code point folded through FOLD_TABLE, with whitespace
-   * inside the term left alone and matched literally. A term that is empty or all
-   * whitespace folds to "", which is no term at all and shows every task.
+  /* isSpaceCodePoint answers whether ONE code point carries the White_Space
+   * property, by binary search over the spans, exactly as foldCodePoint searches
+   * the runs. A code point no span covers is not whitespace, which is the set's
+   * default and needs no entry. */
+  function isSpaceCodePoint(cp) {
+    var lo = 0;
+    var hi = SPACE_TABLE.length / 2 - 1;
+    while (lo <= hi) {
+      var mid = (lo + hi) >> 1;
+      var at = 2 * mid;
+      if (cp < SPACE_TABLE[at]) {
+        hi = mid - 1;
+      } else if (cp >= SPACE_TABLE[at] + SPACE_TABLE[at + 1]) {
+        lo = mid + 1;
+      } else {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /* trimTerm removes the whitespace at the term's two ends by the SERVER'S set,
+   * and calls no trimming function of the JavaScript platform: the platform's
+   * removes a different set, so the same term would lose different code points
+   * here than on the server (see the note at the top of this file).
    *
-   * The walk is by CODE POINT, never by UTF-16 code unit: codePointAt returns the
-   * whole astral code point and the index then advances by the two units it
-   * occupies, so a surrogate pair is folded as the one character it is instead of
-   * as two halves that no run covers. */
+   * Removal stops at the first code point that does not carry the property, so
+   * whitespace INSIDE the term survives and is matched literally. A term made
+   * only of such code points becomes "", which is no term at all.
+   *
+   * Both walks are by CODE POINT, never by UTF-16 code unit. Walking forwards is
+   * codePointAt and a step of one unit or two; walking backwards has to look at
+   * the unit before the low surrogate to find where the code point began, which
+   * is what the pairing test does. No whitespace code point is astral today, but
+   * a walk that split a surrogate pair would ask the table about a lone surrogate
+   * half rather than about the character the user typed. */
+  function trimTerm(raw) {
+    var start = 0;
+    var end = raw.length;
+    while (start < end) {
+      var head = raw.codePointAt(start);
+      if (!isSpaceCodePoint(head)) {
+        break;
+      }
+      start += head > 0xffff ? 2 : 1;
+    }
+    while (end > start) {
+      var at = end - 1;
+      var last = raw.charCodeAt(at);
+      if (last >= 0xdc00 && last <= 0xdfff && at - 1 >= start) {
+        var first = raw.charCodeAt(at - 1);
+        if (first >= 0xd800 && first <= 0xdbff) {
+          at -= 1;
+        }
+      }
+      if (!isSpaceCodePoint(raw.codePointAt(at))) {
+        break;
+      }
+      end = at;
+    }
+    return raw.slice(start, end);
+  }
+
+  /* foldTerm normalises what the user typed into the form the matching rule
+   * compares with, mirroring the server's foldSearchTerm: the term's ends
+   * stripped by trimTerm, THEN every code point folded through FOLD_TABLE. A term
+   * that is empty or all whitespace normalises to "", which is no term at all and
+   * shows every task.
+   *
+   * The order is the server's, and it is fixed rather than left to chance: no
+   * code point carrying White_Space folds to anything but itself and none outside
+   * the property folds into it, so the two steps commute today — but both paths
+   * take them in the same order anyway, so the contract does not rest on that.
+   *
+   * The fold's walk is by CODE POINT, never by UTF-16 code unit: codePointAt
+   * returns the whole astral code point and the index then advances by the two
+   * units it occupies, so a surrogate pair is folded as the one character it is
+   * instead of as two halves that no run covers. */
   function foldTerm(raw) {
-    var trimmed = raw.trim();
+    var trimmed = trimTerm(raw);
     var folded = "";
     for (var i = 0; i < trimmed.length; ) {
       var cp = trimmed.codePointAt(i);

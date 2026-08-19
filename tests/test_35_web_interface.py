@@ -62,6 +62,25 @@ from tests.base_test import GroadmapTestBase
 
 ROADMAP = "platform"
 
+# Unicode's White_Space property: the set SPEC/WEB.md Acceptance Criterion 121
+# names as the board search's trim, and the set the server ships to the browser as
+# SPACE_TABLE.
+#
+# It is written out here rather than taken from Python's str.strip(), whose set is
+# Python's own — it also holds U+001C to U+001F — and rather than from the served
+# asset, so that this module states the expectation INDEPENDENTLY. That it still
+# equals what the binary ships is asserted, not assumed:
+# test_tasks_page_search_trims_the_term_with_the_shipped_whitespace compares the
+# two, so a drift on either side is named rather than absorbed.
+#
+# The two code points the JavaScript platform's own trimming disagrees about are
+# the point of the whole rule: U+0085 is HERE and that platform keeps it, U+FEFF is
+# NOT here and that platform removes it.
+WHITE_SPACE = "".join(chr(cp) for cp in (
+    0x0009, 0x000A, 0x000B, 0x000C, 0x000D, 0x0020, 0x0085, 0x00A0, 0x1680,
+    *range(0x2000, 0x200B), 0x2028, 0x2029, 0x202F, 0x205F, 0x3000,
+))
+
 
 class TestWebInterface:
     """End-to-end coverage of `rmp web` (SPEC/WEB.md AC1-AC22)."""
@@ -1139,10 +1158,16 @@ class TestWebInterface:
         Criterion 104).
 
         The browser's rule is re-expressed here from the served script's own
-        contract: fold the term with trim()+toLowerCase(), then match it against
-        the corpus the server folded into data-search, or against '#<id>'. The
-        script is asserted to be that rule in
-        test_tasks_page_search_script_is_text_only_and_locale_independent."""
+        contract: strip the term's ends by the trim rule's whitespace, fold what
+        is left, then match it against the corpus the server folded into
+        data-search, or against '#<id>'. The strip is NOT Python's str.strip():
+        that removes Python's own set, which also holds U+001C-U+001F, so a
+        harness using it would be re-expressing Python's rule rather than the one
+        under test. The script is asserted to be this rule in
+        test_tasks_page_search_script_is_text_only_and_locale_independent, and
+        the whitespace set spelled out below is checked against the one the
+        server actually ships in
+        test_tasks_page_search_trims_the_term_with_the_shipped_whitespace."""
         proc, port = self._start(["--port", "0"])
         full = self._board_snapshot(port, ROADMAP)
 
@@ -1158,7 +1183,7 @@ class TestWebInterface:
             ("<b>x</b>", "?q=%3Cb%3Ex%3C%2Fb%3E"),
         ):
             server = self._board_snapshot(port, ROADMAP, query)
-            folded = term.strip().lower()
+            folded = term.strip(WHITE_SPACE).lower()
 
             for column in full["columns"]:
                 want = [
@@ -1243,6 +1268,22 @@ class TestWebInterface:
         assert "codePointAt" in code and "fromCodePoint" in code, (
             "the script must fold the term by code point, not by UTF-16 code unit"
         )
+
+        # And the same for the other half of the term's normalisation: the client
+        # strips the term's ends with the whitespace set the SERVER ships, and
+        # calls none of the platform's trimming functions — that platform's set
+        # keeps U+0085 and removes U+FEFF, which the trim rule does the other way
+        # round on both counts (Acceptance Criteria 121 and 122).
+        for trimming in (".trim(", ".trimStart(", ".trimEnd(", ".trimLeft(", ".trimRight(",
+                         '["trim"]', "['trim']"):
+            assert trimming not in script, (
+                f"the served script calls the platform's {trimming}; the same term would then "
+                "lose different code points on the two paths"
+            )
+        assert "var SPACE_TABLE = [" in code, "the script ships no whitespace set"
+        assert "function trimTerm(" in code and "function isSpaceCodePoint(" in code, (
+            "the script must strip the term's ends through the shipped whitespace set"
+        )
         # It matches the corpus the server folded, and the #id reference.
         assert 'getAttribute("data-search")' in code
         assert 'data-task-id' in code
@@ -1313,6 +1354,10 @@ class TestWebInterface:
         """Return (runs, fold) built from the FOLD_TABLE the server ships in the
         narrowing script.
 
+        fold is the MAPPING alone, with no trimming in it: normalising a term is
+        two steps, the server ships one table for each, and composing them is the
+        caller's job so that neither step can be taken from Python by accident.
+
         The client's rule is NOT re-expressed here: the table is the one the
         browser would run, and the binary search over it is the one the script
         performs. Python iterates a string by code point, which is the walk the
@@ -1333,7 +1378,7 @@ class TestWebInterface:
 
         def fold(raw):
             out = []
-            for char in raw.strip():
+            for char in raw:
                 cp = ord(char)
                 lo, hi = 0, len(runs) - 1
                 while lo <= hi:
@@ -1350,6 +1395,38 @@ class TestWebInterface:
             return "".join(out)
 
         return runs, fold
+
+    @staticmethod
+    def _shipped_trim(script):
+        """Return (spans, trim) built from the SPACE_TABLE the server ships in the
+        narrowing script.
+
+        The trim rule's whitespace is NOT re-expressed here either: the spans are
+        the ones the browser would binary search, expanded into the set they
+        stand for, and the stripping is the ends-only removal the script does.
+        Python's own str.strip() is deliberately not what does the work — its set
+        is Python's, not the server's."""
+        m = re.search(r"var SPACE_TABLE = \[(.*?)\];", script, re.S)
+        assert m, "the narrowing script ships no SPACE_TABLE"
+        numbers = [int(n) for n in re.findall(r"-?\d+", m.group(1))]
+        assert numbers, "the shipped SPACE_TABLE is empty; the client would trim nothing"
+        assert len(numbers) % 2 == 0, (
+            f"the shipped SPACE_TABLE holds {len(numbers)} numbers, which is not whole "
+            "pairs of start, length"
+        )
+        spans = [tuple(numbers[i:i + 2]) for i in range(0, len(numbers), 2)]
+        for i in range(1, len(spans)):
+            assert spans[i - 1][0] + spans[i - 1][1] <= spans[i][0], (
+                f"the shipped spans {spans[i - 1]} and {spans[i]} overlap or are out of order"
+            )
+        shipped = "".join(
+            chr(cp) for start, length in spans for cp in range(start, start + length)
+        )
+
+        def trim(raw):
+            return raw.strip(shipped)
+
+        return spans, trim
 
     def test_tasks_page_search_folds_the_term_with_the_shipped_mapping(self):
         """Typing a term and opening the URL that carries it select the same cards
@@ -1438,6 +1515,110 @@ class TestWebInterface:
                 f"the browser {client}"
             )
             assert server["message"] == (len(shown) == 0), (
+                f"term {term!r}: the no-match message disagrees with the shown set"
+            )
+
+    def test_tasks_page_search_trims_the_term_with_the_shipped_whitespace(self):
+        """Typing a term and opening the URL that carries it select the same cards
+        for every term, the two code points included on which the JavaScript
+        platform's own trimming differs from the trim rule (Acceptance Criteria
+        104, 121 and 122).
+
+        The two differ in OPPOSITE directions, which is why both are exercised:
+
+          - U+0085 (NEXT LINE) carries Unicode's White_Space property, so it IS
+            stripped from a term's ends. That platform's trimming keeps it, and
+            with the client using that trimming a term of U+0085 + a word found
+            nothing while the same term carried in q found the card.
+          - U+FEFF (ZERO WIDTH NO-BREAK SPACE) does not carry the property, so it
+            is NOT stripped and a term pasted with a byte-order mark matches
+            nothing. That platform's trimming removes it, and with the client
+            using that trimming the same term found the card while q found
+            nothing. The empty result is not the defect; the disagreement was.
+
+        The browser's rule is not re-expressed here. The term is stripped by the
+        SPACE_TABLE and folded by the FOLD_TABLE the server ships inside the
+        narrowing script — the very tables the script binary searches — so what
+        is compared are the two real paths."""
+        proc, port = self._start(["--port", "0"])
+
+        status, _, script = self._req(port, "/static/task-search.js")
+        assert status == 200, f"the narrowing script is not served: {status}"
+
+        # The absence Acceptance Criterion 122 requires: the client calls none of
+        # the platform's five trimming functions, the legacy aliases included.
+        for trimming in (".trim(", ".trimStart(", ".trimEnd(", ".trimLeft(", ".trimRight(",
+                         '["trim"]', "['trim']"):
+            assert trimming not in script, (
+                f"the served script calls the platform's {trimming}; it must strip the term's "
+                "ends with the server's shipped whitespace set, so U+0085 and U+FEFF resolve "
+                "the same way on both paths"
+            )
+
+        spans, trim = self._shipped_trim(script)
+        _, fold = self._shipped_fold(script)
+        shipped = {cp for start, length in spans for cp in range(start, start + length)}
+
+        # The shipped set IS the property this module states, so the model used by
+        # test_tasks_page_search_server_and_client_agree cannot rot unnoticed.
+        assert shipped == set(map(ord, WHITE_SPACE)), (
+            "the shipped SPACE_TABLE is not Unicode's White_Space property: "
+            f"extra {sorted(shipped - set(map(ord, WHITE_SPACE)))}, "
+            f"missing {sorted(set(map(ord, WHITE_SPACE)) - shipped)}"
+        )
+        assert 0x0085 in shipped, (
+            "U+0085 carries White_Space and MUST be in the shipped set, though the platform's "
+            "own trimming keeps it"
+        )
+        assert 0xFEFF not in shipped, (
+            "U+FEFF does not carry White_Space and MUST NOT be in the shipped set, though the "
+            "platform's own trimming removes it"
+        )
+
+        full = self._board_snapshot(port, ROADMAP)
+        every = sorted(task_id for c in full["columns"] for task_id, _, _ in c["cards"])
+        passkey = [self.pending_task_id]
+
+        for term, want in (
+            # The trim, first direction: U+0085 goes, and the word finds the card.
+            ("\u0085passkey", passkey),
+            ("passkey\u0085", passkey),
+            ("\u0085PASSKEY\u0085", passkey),
+            # The other direction: U+FEFF stays, and the term finds nothing.
+            ("\ufeffpasskey", []),
+            ("passkey\ufeff", []),
+            # The ends only: whitespace inside a term is matched literally.
+            ("pass\u0085key", []),
+            # A term of the property alone is no term at all; one of U+FEFF is.
+            ("\u0085", every),
+            ("\ufeff", []),
+            # And the code points both sides always agreed on still work, so the
+            # two above are a difference rather than the whole rule.
+            (" \t\r\n\u00a0\u2003PASSKEY\u3000\v\f ", passkey),
+        ):
+            query = "?q=" + urllib.parse.quote(term, safe="")
+            server = self._board_snapshot(port, ROADMAP, query)
+            shown = sorted(i for c in server["columns"] for i in c["shown"])
+
+            folded = fold(trim(term))
+            client = sorted(
+                task_id
+                for column in full["columns"]
+                for task_id, corpus, _ in column["cards"]
+                if folded == "" or folded in corpus or folded in f"#{task_id}"
+            )
+
+            assert shown == sorted(want), (
+                f"the SERVER shows {shown} for {term!r}, want {sorted(want)}"
+            )
+            assert client == sorted(want), (
+                f"the BROWSER shows {client} for {term!r}, want {sorted(want)}"
+            )
+            assert shown == client, (
+                f"the two paths disagree on {term!r}: the server shows {shown}, "
+                f"the browser {client}"
+            )
+            assert server["message"] == (folded != "" and len(shown) == 0), (
                 f"term {term!r}: the no-match message disagrees with the shown set"
             )
 

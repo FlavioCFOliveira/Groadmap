@@ -110,8 +110,15 @@ func (c clientControls) query() string {
 
 // active reports whether any control is narrowing the board, which is the
 // condition for the board's no-match message.
+//
+// The term's emptiness is decided by CALLING foldSearchTerm rather than by
+// trimming here, for the reason narrow gives below: a harness that re-expressed
+// the trim rule with Go's strings.TrimSpace would be stating a second rule, and
+// the two divergent code points are exactly where a second statement of it goes
+// wrong — a term of U+FEFF alone is a term, and a term of U+0085 alone is not
+// (SPEC/WEB.md Acceptance Criterion 121).
 func (c clientControls) active() bool {
-	return strings.TrimSpace(c.Term) != "" || c.Type != "" || c.Priority != "" || c.Severity != ""
+	return foldSearchTerm(c.Term) != "" || c.Type != "" || c.Priority != "" || c.Severity != ""
 }
 
 var (
@@ -212,7 +219,8 @@ func (s boardState) shownIDs() map[string][]int {
 //     while the two real paths disagreed, which is exactly how the folding
 //     divergence this test guards against went unnoticed; the script folds with
 //     the mapping the server ships it, which
-//     TestTaskSearchScript_FoldTableIsTheServerFold pins to that same function;
+//     TestTaskSearchScript_ShippedRuleIsTheServerRule pins to that same function,
+//     together with the whitespace set it strips the term's ends by;
 //   - the type criterion is an EQUALITY against the card's own data-type;
 //   - the priority and severity criteria are THRESHOLDS, ">=", over the card's
 //     own data-priority and data-severity;
@@ -813,25 +821,30 @@ func TestTaskSearch_TermIsEscapedWhereverItIsEchoed(t *testing.T) {
 func TestTaskSearchScript_ImplementsTheSameMatchingRule(t *testing.T) {
 	script := stripJSComments(readEmbeddedAsset(t, "static/task-search.js"))
 
-	// The term is folded exactly as the server folds it, and by the server's own
-	// mapping: whitespace stripped, then every CODE POINT walked through the
-	// shipped FOLD_TABLE. No case conversion of the JavaScript platform is
-	// consulted, locale-sensitive or not — the platform's is Unicode's Default
-	// Case Conversion rather than the folding rule, and its tables are of
-	// whatever Unicode version the browser ships (SPEC/WEB.md Acceptance
-	// Criteria 118 and 119; the table itself is checked against the server's
-	// foldSearch over the whole of Unicode by
-	// TestTaskSearchScript_FoldTableIsTheServerFold).
+	// The term is normalised exactly as the server normalises it, and by the
+	// server's own two tables: its ends stripped through the shipped SPACE_TABLE,
+	// THEN every CODE POINT walked through the shipped FOLD_TABLE. Neither step
+	// is the platform's — its case conversion is Unicode's Default Case
+	// Conversion rather than the folding rule, its trimming removes a different
+	// set from the White_Space property, and both read tables of whatever Unicode
+	// version the browser ships (SPEC/WEB.md Acceptance Criteria 118, 119, 121
+	// and 122; the tables themselves are checked against the server's foldSearch
+	// and isSearchSpace over the whole of Unicode by
+	// TestTaskSearchScript_ShippedRuleIsTheServerRule, which also asserts that no
+	// trimming function of the platform is named anywhere in the asset).
 	for _, fragment := range []string{
 		"var FOLD_TABLE = [",
+		"var SPACE_TABLE = [",
 		"function foldCodePoint(",
-		"var trimmed = raw.trim();",
+		"function isSpaceCodePoint(",
+		"function trimTerm(",
+		"var trimmed = trimTerm(raw);",
 		"trimmed.codePointAt(i)",
 		"String.fromCodePoint(foldCodePoint(cp))",
 	} {
 		if !strings.Contains(script, fragment) {
-			t.Errorf("the script does not fold the term through the server's shipped mapping: "+
-				"no %q", fragment)
+			t.Errorf("the script does not normalise the term through the server's shipped "+
+				"tables: no %q", fragment)
 		}
 	}
 	for _, conversion := range []string{

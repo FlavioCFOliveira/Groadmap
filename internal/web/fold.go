@@ -1,8 +1,11 @@
 package web
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
-//go:generate go run foldtable_gen.go
+//go:generate go run searchtables_gen.go
 
 // foldSearch applies the board search's folding rule to text: Unicode's SIMPLE
 // lowercase mapping, the single replacement code point the Unicode Character
@@ -32,19 +35,72 @@ import "strings"
 // folded like any other term, neither an error nor an absent one.
 //
 // The client folds a term through the SAME mapping, shipped to it as the
-// run-encoded FOLD_TABLE in static/task-search.js, which foldtable_gen.go
-// generates from this rule and which TestTaskSearchScript_FoldTableIsTheServerFold
+// run-encoded FOLD_TABLE in static/task-search.js, which searchtables_gen.go
+// generates from this rule and which TestTaskSearchScript_ShippedRuleIsTheServerRule
 // checks against this function over the whole of Unicode.
 func foldSearch(text string) string {
 	return strings.ToLower(text)
 }
 
-// foldSearchTerm normalises a raw search term into the form the matching rule
-// compares with: surrounding whitespace stripped, then folded by foldSearch.
+// isSearchSpace reports whether r is the whitespace the board search's trim rule
+// removes from the ends of a term: a code point carrying Unicode's White_Space
+// property, the property Unicode's own character database publishes under that
+// name (SPEC/WEB.md § Roadmap Tasks Page, The trim rule; Acceptance Criteria 121
+// and 122).
 //
-// A term that is empty or entirely whitespace folds to the empty string, which is
-// no term at all and matches every task. Whitespace INSIDE the term survives and
-// is matched literally (SPEC/WEB.md § Roadmap Tasks Page, Matching rule).
+// It is the ONE statement of that set on the server, and it exists as a named
+// function for the same reason foldSearch does: the set has to have a single
+// subject that the term's trim uses and that the shipped set is checked against.
+// A guard comparing the shipped set with unicode.IsSpace directly would pass
+// while the server trimmed by some other set entirely, which is the vacuity this
+// function removes — trimSearchTerm below trims by THIS function, so a change
+// here is a change to the server's rule and fails
+// TestTaskSearchScript_ShippedRuleIsTheServerRule.
+//
+// unicode.IsSpace is that property exactly: Go's unicode tables define IsSpace as
+// White_Space, of whatever Unicode version the toolchain ships. The set is
+// deliberately NOT the one the JavaScript platform's own trimming removes, which
+// is a different set: it keeps U+0085 (NEXT LINE), which carries the property, and
+// removes U+FEFF (ZERO WIDTH NO-BREAK SPACE), which does not. Those two are the
+// whole of the difference at any one Unicode version, and the client trims by the
+// set THIS function defines rather than by the platform's, so the two paths return
+// one term for either of them.
+func isSearchSpace(r rune) bool {
+	return unicode.IsSpace(r)
+}
+
+// trimSearchTerm removes every leading and trailing code point carrying the
+// White_Space property from a raw search term, stopping at the first code point
+// that does not carry it.
+//
+// Whitespace INSIDE the term therefore survives, is part of the term, and is
+// matched literally; a term made only of such code points becomes the empty
+// string, which is no term at all and matches every task (SPEC/WEB.md § Roadmap
+// Tasks Page, The trim rule; Matching rule).
+//
+// It is strings.TrimFunc over isSearchSpace rather than strings.TrimSpace so that
+// the set the server trims by is the one function the guard compares the shipped
+// set against. The two are the same trimming — strings.TrimSpace is documented as
+// the TrimFunc(s, unicode.IsSpace) special case, and TestSearchTrim_IsTheWhiteSpaceProperty
+// holds them equal over the whole of Unicode — so nothing about the server's
+// behaviour changes; what changes is that the rule now has a name to be checked
+// against.
+//
+// The task's searchable text is NOT trimmed: the trim is the term's alone, and a
+// task's own leading or trailing whitespace is part of its text.
+func trimSearchTerm(raw string) string {
+	return strings.TrimFunc(raw, isSearchSpace)
+}
+
+// foldSearchTerm normalises a raw search term into the form the matching rule
+// compares with: trimmed by trimSearchTerm, THEN folded by foldSearch.
+//
+// The order is fixed, and the client performs the same two steps in the same
+// order. It is not observable under the Unicode version in force — no code point
+// carrying White_Space folds to anything but itself, and none outside the property
+// folds into it, so the two steps commute — but fixing it is what keeps the
+// contract from resting on that coincidence (SPEC/WEB.md § Roadmap Tasks Page,
+// Trim first, then fold).
 func foldSearchTerm(raw string) string {
-	return foldSearch(strings.TrimSpace(raw))
+	return foldSearch(trimSearchTerm(raw))
 }

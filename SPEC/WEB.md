@@ -1023,11 +1023,73 @@ how the `rmp web` process itself terminates.
   or entirely whitespace is **no term at all** — the board shows every task.
   Whitespace inside the term is significant and is matched literally.
 
-  Case-insensitivity here means one specific transformation, applied to the task's
-  searchable text and to the term before the two are compared. **The folding rule**
-  below states which transformation it is; stating it exactly, rather than only
-  requiring that it ignore the viewer's locale, is what keeps the two paths of
-  **Server and client produce the same board** below from disagreeing about a term.
+  The paragraph above names two transformations of the term, and each of the two has
+  to be stated exactly rather than only described. **The trim rule** below fixes
+  which code points count as the whitespace that is stripped. Case-insensitivity
+  means one specific transformation, applied to the task's searchable text and to
+  the term before the two are compared, and **The folding rule** below states which
+  transformation it is. Stating each exactly — rather than requiring only that
+  whitespace be removed and that the viewer's locale be ignored — is what keeps the
+  two paths of **Server and client produce the same board** below from disagreeing
+  about a term: a description both paths satisfy while returning different terms
+  fixes nothing.
+- **The trim rule.** Before the term is folded, every code point carrying Unicode's
+  **White_Space** property — the property Unicode's own character database
+  publishes under that name — is removed from the **start** of the term and from its
+  **end**. Removal stops at the first code point that does not carry the property,
+  so a code point carrying it anywhere else in the term survives, is part of the
+  term, and is matched literally (see **Matching rule** above). A term made only of
+  such code points becomes the empty string, which is no term at all and shows every
+  task.
+
+  The set is named by that property, and deliberately **not** by either platform's
+  own trimming function, because the two functions do not implement the same set and
+  a rule stated as "surrounding whitespace is stripped" would therefore fix nothing:
+  both platforms satisfy that description while disagreeing about which term they
+  produce. The difference is observable rather than academic, and this specification
+  fixes both code points on which the two disagree — they disagree in **opposite**
+  directions:
+  - `U+0085` (NEXT LINE) **carries** the White_Space property, so it **IS** removed
+    from the ends of a term, although the JavaScript platform's own trimming keeps
+    it: that platform trims the code points it classes as white space together with
+    its line terminators, and `U+0085` is in neither group.
+  - `U+FEFF` (ZERO WIDTH NO-BREAK SPACE) does **not** carry the White_Space
+    property, so it is **NOT** removed, although the JavaScript platform's own
+    trimming removes it: that platform lists this one format character in its white
+    space explicitly.
+
+  Those two are the whole of the difference at any one Unicode version: swept over
+  every code point of Unicode, no third code point is removed by one trimming and
+  kept by the other. Ordinary terms are therefore untouched by the distinction — the
+  space, the tab, the carriage return, and the line feed a user can type are removed
+  under either.
+
+  **The cost of the choice is stated plainly rather than patched over.** A term
+  pasted with a leading byte-order mark keeps that `U+FEFF`, and so matches nothing
+  on an ordinary roadmap. It does so on **both** paths, which is the property this
+  rule exists to protect: a term whose two paths disagree — a card on one of them
+  and nothing on the other — would break **Server and client produce the same
+  board** below, and that disagreement, not the empty result, is the defect. Nothing
+  is stripped after the trim to compensate, for the reason **The folding rule** below
+  gives for its own post-fold fixups.
+
+  **Trim first, then fold.** The term is trimmed and then folded, in that order, and
+  **both** paths perform those two steps in that same order. The order is not
+  observable under the Unicode version in force: the fold replaces each code point
+  with exactly one code point and reorders none (see **The folding rule** below),
+  and swept over every code point of Unicode no code point carrying the White_Space
+  property folds to anything but itself, while no code point outside the property
+  folds into it — so trimming and folding commute and either order yields the same
+  term. Fixing the order is what keeps the contract from resting on that
+  coincidence: were some code point ever to fold into a whitespace one, the two
+  paths would still perform the same two steps in the same order and would still
+  return one term.
+
+  **The task's searchable text is folded but never trimmed.** The trim applies to
+  the term alone. A task's own leading or trailing whitespace is part of its text
+  and is matched literally, exactly as whitespace inside a term is; the term is
+  trimmed because a user reaches for the space bar around what they type, which is
+  not a statement about the task.
 - **The folding rule.** The task's searchable text and the term are folded by
   Unicode's **simple lowercase mapping**: the single replacement code point that
   the Unicode Character Database gives a code point, applied to each code point on
@@ -1083,8 +1145,9 @@ how the `rmp web` process itself terminates.
 - **One rule, and only one implementation of it.** A task's searchable text is
   folded **once, by the server**. The client folds only the term, and compares it
   against text the server already folded; no client-side code folds a task's
-  `title` or its reference. The two paths therefore cannot disagree about a task's
-  text, because only one of them ever transforms it.
+  `title` or its reference, and no client-side code trims either. The two paths
+  therefore cannot disagree about a task's text, because only one of them ever
+  transforms it.
 
   The term is the one value both sides fold, and it is where the two could still
   drift, because each platform's own lower-case function implements whichever
@@ -1101,20 +1164,40 @@ how the `rmp web` process itself terminates.
   browsers could answer differently for the same term. The shipped mapping removes
   the browser from the answer entirely.
 
+  **The term's trim is the server's by the same construction.** Normalising a term
+  is two steps, and the client MUST NOT take either of them from the platform: it
+  **MUST NOT** trim the term with the JavaScript platform's trimming function, any
+  more than it may fold it with that platform's case conversion. It removes the
+  term's leading and trailing whitespace by the **server's own whitespace set**,
+  which the server ships to it together with the mapping and the script that narrows
+  the board, so which code points a term loses at its ends is the server's answer on
+  both paths by construction. Leaving that one step to the platform would be enough
+  to break the equivalence on its own, and would break it quietly: the two trimmings
+  agree on every code point but the two **The trim rule** above names, so every
+  ordinary term would go on agreeing and hide the disagreement.
+
   On the server, the corpus fold and the term fold are likewise **one** rule: the
   server folds a task's searchable text and folds a term through the same folding
   function, not through two implementations of one description, so the two cannot
   drift apart on that side either.
-- **What keeps the shipped mapping equal to the server's.** The mapping the binary
-  ships to the client is checked against the server's own folding function over
-  **the whole of Unicode**: every code point, not a sample, and against that
-  function itself, never against a stored copy of its expected results — such a
-  copy can be updated to match a changed fold, and would then prove nothing. The
-  check fails when a single code point folds differently on the two sides, and it
-  fails the same way when a toolchain upgrade changes a mapping, so a change of
-  Unicode version cannot move one side of the fold and leave the other behind
-  unnoticed. The check also asserts, as an absence in the script the binary serves,
-  that the narrowing script calls no case conversion of the platform.
+- **What keeps the shipped rule equal to the server's.** The binary ships the client
+  the two things a term's normalisation is made of — the whitespace set and the case
+  mapping — and **one** check covers both of them. It is one check and not two
+  beside each other because the two are parts of one rule: a check that took only
+  the mapping as its subject would leave the whitespace set free to drift, and a set
+  that drifts separates the two paths exactly as a drifting mapping would.
+
+  Each part is checked against the server's own function over **the whole of
+  Unicode**: every code point, not a sample, and against that function itself, never
+  against a stored copy of its expected results — such a copy can be updated to
+  match a changed fold or a changed whitespace set, and would then prove nothing.
+  The check fails when a single code point folds differently on the two sides, and
+  it fails the same way when a single code point is whitespace to one side and not
+  to the other. It fails the same way again when a toolchain upgrade changes either
+  of them, so a change of Unicode version cannot move one side of the rule and leave
+  the other behind unnoticed. The check also asserts, as an absence in the script the
+  binary serves, that the narrowing script calls neither a case conversion of the
+  platform nor a trimming function of the platform.
 
   The check is an ordinary Go test. It runs no JavaScript and requires no
   JavaScript engine, no Node.js, no network access, and no module dependency, so it
@@ -1291,7 +1374,10 @@ how the `rmp web` process itself terminates.
     the browser Back button into an undo key for typing.
   - **An empty term leaves no parameter.** When the term is empty or entirely
     whitespace, `q` is **removed** from the URL rather than left present and empty:
-    the unfiltered board's URL is the bare page URL.
+    the unfiltered board's URL is the bare page URL. "Entirely whitespace" is the
+    trim rule's whitespace and no other (see **The trim rule** above), so the two
+    paths agree on which terms are no term at all: a term of `U+FEFF` alone is not
+    one of them, and `q` keeps it.
   - **Cold load arrives already narrowed.** When the page is requested with a `q`
     value, the **server** applies the term, and the document it sends already
     carries the narrowing in its final state: the narrowed column counts, the
@@ -1346,11 +1432,11 @@ how the `rmp web` process itself terminates.
   column counts, and the same empty states. The two paths implement one matching
   rule per criterion and one conjunction over them, and MUST NOT diverge — that
   equivalence is what makes a narrowed board shareable and reloadable, and it is the
-  property to test. For the term, one rule per criterion means the folding rule
-  above with a single implementation of it, shipped from the server to the client
-  (see **The folding rule** and **One rule, and only one implementation of it**);
-  for a filter it means one comparison per dimension (see **What each filter
-  matches**).
+  property to test. For the term, one rule per criterion means the trim rule and the
+  folding rule above, each with a single implementation of it, shipped from the
+  server to the client (see **The trim rule**, **The folding rule**, and **One rule,
+  and only one implementation of it**); for a filter it means one comparison per
+  dimension (see **What each filter matches**).
 - **No malformed term is an error.** Every string is a valid term. A term that
   matches nothing renders the empty board described above, with HTTP 200. A term
   longer than any searchable text simply matches nothing. A `q` the server cannot
@@ -4390,12 +4476,13 @@ Rules:
     its `#<id>` reference written with the leading `#`; both `42` and `#42` therefore
     find task 42. No other task field is matched: a term equal to a task's
     `specialists` value, and matching nothing in that task's title or reference, does
-    not match it. Leading and trailing whitespace is stripped from the term, and a
-    term that is empty or entirely whitespace shows every task. The case-insensitive
-    comparison folds the term and the task's searchable text by the rule Acceptance
+    not match it. Leading and trailing whitespace is stripped from the term by the
+    rule Acceptance Criterion 121 fixes, and a term that is empty or entirely
+    whitespace under that rule shows every task. The case-insensitive comparison
+    folds the term and the task's searchable text by the rule Acceptance
     Criterion 118 fixes, so the same term and task yield the same verdict regardless
     of the browser's reported locale, of the browser, and of the Unicode version
-    that browser's case tables implement.
+    that browser's case and whitespace tables implement.
 102. A column left with no matching card renders its ordinary in-column empty state,
     and the five columns stay present and in order — narrowing the board drops,
     hides, and reorders no column (Acceptance Criterion 81 continues to hold). When
@@ -4421,19 +4508,27 @@ Rules:
     towards nothing the board states; their presence is what lets clearing the
     search restore them without a request to the server, as Acceptance Criterion 103
     requires. What is forbidden is a document that arrives unnarrowed and is
-    narrowed by a script after load. The identity holds for **every** term, the two
-    code points included on which a platform's own case conversion differs from the
-    folding rule: a term carrying `U+0130`, and a term carrying `U+03A3` where the
-    full conversion's Final_Sigma condition would hold, select the same cards on
-    both paths and in every browser (Acceptance Criteria 118 and 119).
+    narrowed by a script after load. The identity holds for **every** term, the four
+    code points included on which a platform's own normalisation of a term differs
+    from the rules this specification fixes. Two of them are the case conversion's:
+    a term carrying `U+0130`, and a term carrying `U+03A3` where the full
+    conversion's Final_Sigma condition would hold, select the same cards on both
+    paths and in every browser (Acceptance Criteria 118 and 119). Two are the
+    trimming's, and they differ in opposite directions: a term whose first code
+    point is `U+0085` loses it on both paths and finds what the rest of the term
+    matches, and a term whose first code point is `U+FEFF` keeps it on both paths
+    and finds nothing on an ordinary roadmap. None of the four is a term one path
+    narrows by while the other ignores it (Acceptance Criteria 121 and 122).
 105. No `q` value produces an error page: a term matching nothing, a term longer than
     any searchable text, and a `q` the server cannot decode each return HTTP 200,
     the last treated as though `q` were absent. Applying a term adds no database
     query: the page's read remains the full task list specified in Acceptance
     Criterion 89, and narrowing in the browser issues no request at all. A task's
-    searchable text is folded once by the server and never by the client, so the two
-    paths cannot disagree about a task's text; the term is the only value both fold,
-    and both fold it with the server's own mapping (Acceptance Criterion 119).
+    searchable text is folded once by the server, never by the client, and never
+    trimmed at all, so the two paths cannot disagree about a task's text; the term
+    is the only value both of them transform, and both trim it with the server's own
+    whitespace set and fold it with the server's own mapping (Acceptance Criteria
+    119 and 122).
 106. A term containing HTML markup renders as visible characters and introduces no
     element, attribute, or script into the page: the server escapes it through
     `html/template` where it echoes it into the search input and into the no-match
@@ -4621,7 +4716,7 @@ Rules:
     depend on which Unicode version the browser implements, and two browsers of
     different Unicode versions produce the same board (see
     [Roadmap Tasks Page](#roadmap-tasks-page), **One rule, and only one
-    implementation of it**, and **What keeps the shipped mapping equal to the
+    implementation of it**, and **What keeps the shipped rule equal to the
     server's**).
 120. Each of the three tabs on the Roadmap Sprints Page carries a Tabler badge whose
     text is the number of sprints in that tab and whose colour is the variant the
@@ -4639,6 +4734,48 @@ Rules:
     [Roadmap Sprints Page](#roadmap-sprints-page) and
     [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
     rule 2).
+121. Before the term is folded, every code point carrying Unicode's **White_Space**
+    property is removed from the start of the term and from its end, and no other
+    code point is removed from anywhere: a code point carrying that property
+    elsewhere in the term survives and is matched literally, and a term made only of
+    such code points becomes the empty string and shows every task. Whitespace is
+    that property and **not** the set either platform's own trimming function
+    removes, and the two code points where those functions disagree resolve as this
+    criterion states, in opposite directions: `U+0085` (NEXT LINE) carries the
+    property and **IS** removed, although the JavaScript platform's own trimming
+    keeps it; `U+FEFF` (ZERO WIDTH NO-BREAK SPACE) does not carry the property and
+    is **NOT** removed, although that platform's own trimming removes it — so a term
+    pasted with a leading byte-order mark matches nothing on an ordinary roadmap,
+    and does so on **both** paths, which is the property this criterion protects
+    rather than a defect in it. Swept over every code point of Unicode, those two are the
+    whole of the difference: no third code point is removed by one trimming and kept
+    by the other. The term is trimmed **and then** folded, in that order, on both
+    paths. The task's searchable text is folded but never trimmed, so a task's own
+    leading or trailing whitespace is part of its text (Acceptance Criteria 101 and
+    104 continue to hold; see [Roadmap Tasks Page](#roadmap-tasks-page), **The trim
+    rule**).
+122. The client removes the term's leading and trailing whitespace by the whitespace
+    set the server ships to it and calls no trimming function of the JavaScript
+    platform: no call to `trim`, `trimStart`, `trimEnd`, or the legacy aliases
+    `trimLeft` and `trimRight` appears in the narrowing script, asserted as an
+    absence in the script the binary serves, the way Acceptance Criterion 119
+    asserts the platform's case conversions. The shipped set is covered by the
+    **same** check that criterion fixes and not by a second check beside it, and
+    with the same three properties: it is compared against the server's own
+    whitespace function over the whole of Unicode — every code point, not a sample —
+    and against that function itself, never against a stored copy of its expected
+    results; and the comparison fails when a single code point is whitespace to one
+    side and not to the other, including when a toolchain upgrade changes which code
+    points carry the property. The check remains an ordinary Go test: it runs no
+    JavaScript and requires no JavaScript engine, no Node.js, no network access, and
+    no module dependency, so `BUILD.md § External Dependencies` and
+    `BUILD.md § Vendored Web Assets`, rule 2, continue to hold. Because the client
+    consults no whitespace table of the browser's, the board a term produces does
+    not depend on which Unicode version the browser implements, exactly as
+    Acceptance Criterion 119 requires of the fold (Acceptance Criterion 121; see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **One rule, and only one
+    implementation of it**, and **What keeps the shipped rule equal to the
+    server's**).
 
 ## See Also
 
