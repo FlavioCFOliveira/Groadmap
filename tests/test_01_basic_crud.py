@@ -85,7 +85,6 @@ class TestBasicCRUD:
             acceptance_criteria="No more SQL injection vulnerabilities",
             priority=9,
             severity=9,
-            specialists="security-team,backend-dev"
         )
 
         result = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])
@@ -93,7 +92,11 @@ class TestBasicCRUD:
 
         assert task["priority"] == 9
         assert task["severity"] == 9
-        assert task["specialists"] == "security-team,backend-dev"
+        # The specialists field was removed from the task entity (rmp task
+        # #246 / SPEC/VERSION.md § Migration 1.9.0 -> 1.10.0); it must not
+        # reappear in the JSON shape.
+        assert "specialists" not in task, task
+        self.test.assert_task_shape(task)
 
         print("✓ Create task with all fields test passed")
 

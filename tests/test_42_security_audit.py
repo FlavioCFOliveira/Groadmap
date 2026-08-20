@@ -73,7 +73,7 @@ FINDINGS_INDEX = {
     "#83": ("CWE-176", "INPUT", "bidi override chars stored (Trojan Source)"),
     "#84": ("CWE-20", "INPUT", "audit history entity id lacks bounds check"),
     "#85": ("CWE-20", "INPUT", "sprint --max-tasks / audit --limit unbounded"),
-    "#86": ("CWE-20", "INPUT", "specialist comma delimiter injection"),
+    "#86": ("CWE-20", "INPUT", "specialist comma delimiter injection (field removed; vector eliminated)"),
     "#87": ("CWE-20", "INPUT", "sprint move-to accepts huge position"),
 }
 
@@ -673,20 +673,28 @@ class TestSecurityAudit:
 
     def test_finding_86_specialist_comma_injection(self):
         """#86 CWE-20: a specialist name containing the ',' field delimiter must
-        not silently inflate the specialist list (structure corruption)."""
+        not silently inflate the specialist list (structure corruption).
+
+        The specialists field and the `task assign` subcommand that wrote to it
+        were removed entirely (rmp task #246; SPEC/VERSION.md § Migration 1.9.0
+        -> 1.10.0), which eliminates the injection vector at its root rather
+        than escaping or rejecting the delimiter within it. The probe now
+        asserts that removal: `task assign` must be an unknown subcommand
+        (exit 2), so there is no longer any comma-delimited list for a crafted
+        name to corrupt."""
         rm = self.test.create_roadmap()
         tid = self.test.create_task(rm, "task", "fr", "tr", "ac")
-        code, _, _ = self._run(["task", "assign", "-r", rm, str(tid),
-                                "alice,bob,charlie"])
-        if code != 0:
-            return  # rejected -> secure
+        code, out, _ = self._run(["task", "assign", "-r", rm, str(tid),
+                                  "alice,bob,charlie"])
+        assert code == 2, (
+            f"OPEN #86: `task assign` is reachable (exit {code}); the "
+            "specialist comma-injection surface must be fully removed")
+        assert out == "", "a rejected unknown subcommand must write nothing to stdout"
         got = self._json(["task", "get", "-r", rm, str(tid)])
         got = got[0] if isinstance(got, list) else got
-        specialists = got.get("specialists") or ""
-        n = len([s for s in specialists.split(",") if s.strip()])
-        assert n == 1, (
-            f"OPEN #86: one specialist name with commas became {n} entries "
-            f"({specialists!r}); reject or escape the delimiter")
+        assert "specialists" not in got, (
+            f"OPEN #86: the specialists field still exists on the task JSON: {got!r}"
+        )
 
     def test_finding_87_move_to_position_bound(self):
         """#87 CWE-20: `sprint move-to` must reject a position far beyond the

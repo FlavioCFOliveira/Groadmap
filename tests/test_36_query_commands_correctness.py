@@ -200,7 +200,7 @@ class TestQueryCommandsCorrectness:
         timestamps. Invariant: the values from any multi-row listing must equal
         the values returned by `task get <id>` (single row, always correct)."""
         r, ids = self._build()
-        ts_fields = ("started_at", "tested_at", "closed_at", "specialists", "completion_summary")
+        ts_fields = ("started_at", "tested_at", "closed_at", "completion_summary")
 
         # Ground truth: per-id single-row values.
         truth = {}

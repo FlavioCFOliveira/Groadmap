@@ -471,7 +471,6 @@ class TestTaskNext:
             acceptance_criteria="Logs queryable in centralized system",
             priority=7,
             severity=6,
-            specialists="backend,devops"
         )
 
         self.test.run_cmd([
@@ -506,7 +505,10 @@ class TestTaskNext:
         assert task["title"] == "Implement comprehensive logging"
         assert task["priority"] == 7
         assert task["severity"] == 6
-        assert task["specialists"] == "backend,devops"
+        # The specialists field was removed from the task entity (rmp task
+        # #246); `task next` must not carry it either.
+        assert "specialists" not in task, task
+        self.test.assert_task_shape(task)
 
         print("✓ Next task JSON structure test passed")
 

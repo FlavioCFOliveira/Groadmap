@@ -141,7 +141,7 @@ class TestBoundaryUnicode:
             roadmap,
             title="Fix production outage caused by nil dereference in task handler",
             functional_requirements="Task handler must not panic on missing optional fields",
-            technical_requirements="Add nil guard before dereferencing specialists pointer",
+            technical_requirements="Add nil guard before dereferencing the parent task pointer",
             acceptance_criteria="No panics observed in production logs after deployment",
             severity=9,
         )

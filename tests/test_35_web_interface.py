@@ -714,7 +714,7 @@ class TestWebInterface:
         )
         # The sprints page renders no task presentation of its own: neither a
         # task table nor the tasks page's Kanban board.
-        assert "<th>Specialists</th>" not in body, (
+        assert "<table" not in body, (
             "the sprints page must render no task table"
         )
         assert 'data-role="task-board"' not in body, (
@@ -873,7 +873,7 @@ class TestWebInterface:
 
         # The board replaced the table: no table, and no sprint tabs.
         assert "<table" not in region, "the board is the page's only task presentation"
-        assert "<th>Specialists</th>" not in body, "the tasks page must render no task table"
+        assert "<table" not in body, "the tasks page must render no task table anywhere on the page"
         assert 'id="tab-current"' not in body, "tasks page must not render the sprint tabs"
 
         # Read-only: no form, no submit, no drag-and-drop. The page carries exactly
@@ -3999,10 +3999,13 @@ class TestWebInterface:
         for field in (
             "id", "title", "status", "type", "priority", "severity",
             "functional_requirements", "technical_requirements", "acceptance_criteria",
-            "specialists", "completion_summary", "parent_task_id", "subtask_count",
+            "completion_summary", "parent_task_id", "subtask_count",
             "depends_on", "blocks", "created_at", "started_at", "tested_at", "closed_at",
         ):
             assert field in detail["task"], f"the task detail carries no {field!r}"
+        # The specialists field was removed from the task entity (rmp task
+        # #246); the web task-detail endpoint must not carry it either.
+        assert "specialists" not in detail["task"], detail["task"]
         assert "end users must authenticate without a stored password" in (
             detail["task"]["functional_requirements"].lower()
         )

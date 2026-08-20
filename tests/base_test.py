@@ -130,7 +130,7 @@ class GroadmapTestBase:
             functional_requirements: Functional requirements (Why?)
             technical_requirements: Technical requirements (How?)
             acceptance_criteria: Acceptance criteria (How to verify?)
-            **kwargs: Optional fields (priority, severity, specialists)
+            **kwargs: Optional fields (priority, severity)
         """
         cmd = [
             "task", "create",
@@ -145,8 +145,6 @@ class GroadmapTestBase:
             cmd.extend(["-p", str(kwargs["priority"])])
         if "severity" in kwargs:
             cmd.extend(["--severity", str(kwargs["severity"])])
-        if "specialists" in kwargs:
-            cmd.extend(["-sp", kwargs["specialists"]])
 
         result = self.run_cmd_json(cmd)
         return result["id"]
@@ -212,7 +210,7 @@ class GroadmapTestBase:
     TASK_KEYS = frozenset([
         "id", "title", "status", "type",
         "functional_requirements", "technical_requirements", "acceptance_criteria",
-        "created_at", "specialists",
+        "created_at",
         "started_at", "tested_at", "closed_at", "completion_summary",
         "parent_task_id", "priority", "severity",
         "subtask_count", "depends_on", "blocks",
