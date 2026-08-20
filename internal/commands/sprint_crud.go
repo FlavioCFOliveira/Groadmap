@@ -459,13 +459,16 @@ func sprintRemove(args []string) error {
 	// Delete within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
 		// First reset task statuses to BACKLOG, clearing ALL lifecycle
-		// timestamps and the completion summary. Tasks may have progressed to
-		// DOING/TESTING/COMPLETED inside the sprint, so leaving those fields set
-		// on a BACKLOG task violates the state machine's reopening invariant
-		// (SPEC/STATE_MACHINE.md Reopening Behavior; finding #49).
+		// timestamps, the completion summary and commit_close. Tasks may have
+		// progressed to DOING/TESTING/COMPLETED inside the sprint, so leaving
+		// those fields set on a BACKLOG task violates the state machine's
+		// reopening invariant (SPEC/STATE_MACHINE.md Reopening Behavior;
+		// finding #49). commit_open is deliberately NOT cleared: a task whose
+		// sprint is deleted keeps the record of where its work started
+		// (SPEC/STATE_MACHINE.md § Commit Tracking Fields).
 		_, resetErr := tx.Exec(
 			`UPDATE tasks SET status = 'BACKLOG', started_at = NULL, tested_at = NULL,
-			        closed_at = NULL, completion_summary = NULL WHERE id IN (
+			        closed_at = NULL, completion_summary = NULL, commit_close = NULL WHERE id IN (
 				SELECT task_id FROM sprint_tasks WHERE sprint_id = ?
 			)`,
 			sprintID,

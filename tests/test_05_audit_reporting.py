@@ -87,9 +87,9 @@ class TestAuditReporting:
         ])
 
         # Change status
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "5d6a2cd"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "8256fd0"])
 
         # Check audit log
         result = self.test.run_cmd_json(["audit", "list", "-r", roadmap])

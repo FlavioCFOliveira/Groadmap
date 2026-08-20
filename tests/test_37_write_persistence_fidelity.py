@@ -24,7 +24,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.base_test import GroadmapTestBase
+from tests.base_test import GroadmapTestBase, commit_flags_for
 
 
 class TestWritePersistenceFidelity:
@@ -137,7 +137,7 @@ class TestWritePersistenceFidelity:
         t = self._get(r, tid)
         assert t["status"] == "SPRINT" and t["started_at"] is None, t
 
-        self.test.run_cmd(["task", "stat", "-r", r, str(tid), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", r, str(tid), "DOING", "--commit-open", "6c8064a"])
         t = self._get(r, tid)
         assert t["status"] == "DOING" and t["started_at"] and t["tested_at"] is None, t
 
@@ -145,7 +145,7 @@ class TestWritePersistenceFidelity:
         t = self._get(r, tid)
         assert t["status"] == "TESTING" and t["tested_at"] and t["closed_at"] is None, t
 
-        self.test.run_cmd(["task", "stat", "-r", r, str(tid), "COMPLETED",
+        self.test.run_cmd(["task", "stat", "-r", r, str(tid), "COMPLETED", "--commit-close", "b7591f7",
                            "-s", "Shipped in v2.1; all green"])
         t = self._get(r, tid)
         assert t["status"] == "COMPLETED" and t["closed_at"], t
@@ -161,7 +161,7 @@ class TestWritePersistenceFidelity:
         tid = self._mk(r, "Reopen me")
         self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(s), str(tid)])
         for st in ("DOING", "TESTING", "COMPLETED"):
-            self.test.run_cmd(["task", "stat", "-r", r, str(tid), st])
+            self.test.run_cmd(["task", "stat", "-r", r, str(tid), st] + commit_flags_for(st))
         self.test.run_cmd(["task", "reopen", "-r", r, str(tid)])
         t = self._get(r, tid)
         assert t["status"] == "BACKLOG", t["status"]
@@ -308,8 +308,8 @@ class TestWritePersistenceFidelity:
         self.test.run_cmd(["sprint", "start", "-r", r, str(s1)])
         a = self._mk(r, "A"); b = self._mk(r, "B"); c = self._mk(r, "C")
         self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(s1), str(a), str(b), str(c)])
-        self.test.run_cmd(["task", "stat", "-r", r, str(b), "DOING"])
-        self.test.run_cmd(["task", "stat", "-r", r, str(c), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", r, str(b), "DOING", "--commit-open", "021fa2f"])
+        self.test.run_cmd(["task", "stat", "-r", r, str(c), "DOING", "--commit-open", "abd481c"])
         self.test.run_cmd(["task", "stat", "-r", r, str(c), "TESTING"])
         # a=SPRINT, b=DOING, c=TESTING
         self.test.run_cmd(["sprint", "move-tasks", "-r", r, str(s1), str(s2),
@@ -361,7 +361,7 @@ class TestWritePersistenceFidelity:
         self.test.run_cmd(["sprint", "start", "-r", r, str(sid)])
         a = self._mk(r, "A")
         self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(sid), str(a)])
-        self.test.run_cmd(["task", "stat", "-r", r, str(a), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", r, str(a), "DOING", "--commit-open", "5d6a2cd"])
         self.test.run_cmd(["sprint", "remove", "-r", r, str(sid)])
         assert self._get(r, a)["status"] == "BACKLOG", "sprint remove must revert members to BACKLOG"
         sprints = self.test.run_cmd_json(["sprint", "list", "-r", r])

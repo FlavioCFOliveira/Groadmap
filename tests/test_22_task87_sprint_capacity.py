@@ -256,7 +256,7 @@ class TestAC3SprintShowFields:
         self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint_id), f"{t1},{t2}"])
 
         # Advance t1 further to DOING
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(t1), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(t1), "DOING", "--commit-open", "24262f0"])
 
         show = self.test.run_cmd_json(["sprint", "show", "-r", roadmap, str(sprint_id)])
         load = show["current_load"]

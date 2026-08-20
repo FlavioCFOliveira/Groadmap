@@ -1254,7 +1254,7 @@ class TestTaskAndSprintComments:
         seen["SPRINT"] = self.add_task_comment("UPDATE")
 
         self.run(["sprint", "start", "-r", ROADMAP, str(self.sprint)])
-        self.run(["task", "stat", "-r", ROADMAP, str(self.task), "DOING"])
+        self.run(["task", "stat", "-r", ROADMAP, str(self.task), "DOING", "--commit-open", "5f93b51"])
         self.test.assert_task_status(ROADMAP, self.task, "DOING")
         seen["DOING"] = self.add_task_comment("HYPOTHESIS")
 
@@ -1262,7 +1262,7 @@ class TestTaskAndSprintComments:
         self.test.assert_task_status(ROADMAP, self.task, "TESTING")
         seen["TESTING"] = self.add_task_comment("TEST")
 
-        self.run(["task", "stat", "-r", ROADMAP, str(self.task), "COMPLETED",
+        self.run(["task", "stat", "-r", ROADMAP, str(self.task), "COMPLETED", "--commit-close", "fcb1c8a",
                   "--summary", "Idempotency key deployed; August cycle reconciled."])
         self.test.assert_task_status(ROADMAP, self.task, "COMPLETED")
         seen["COMPLETED"] = self.add_task_comment("DECISION")
@@ -1300,9 +1300,9 @@ class TestTaskAndSprintComments:
         """
         self.run(["sprint", "add-tasks", "-r", ROADMAP, str(self.sprint), str(self.task)])
         self.run(["sprint", "start", "-r", ROADMAP, str(self.sprint)])
-        self.run(["task", "stat", "-r", ROADMAP, str(self.task), "DOING"])
+        self.run(["task", "stat", "-r", ROADMAP, str(self.task), "DOING", "--commit-open", "2578d18"])
         self.run(["task", "stat", "-r", ROADMAP, str(self.task), "TESTING"])
-        self.run(["task", "stat", "-r", ROADMAP, str(self.task), "COMPLETED",
+        self.run(["task", "stat", "-r", ROADMAP, str(self.task), "COMPLETED", "--commit-close", "8007175",
                   "--summary", "Idempotency key deployed; August cycle reconciled."])
 
         cid = self.add_task_comment("PROGRESS")

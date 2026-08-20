@@ -137,7 +137,7 @@ class TestParallelReadsDuringWrites:
             for tid in self.seeded_ids[:10]:
                 rc, _, stderr = _run_rmp(
                     self.test.cli_path, self.test.home_dir,
-                    ["task", "stat", "-r", self.roadmap, str(tid), "DOING"],
+                    ["task", "stat", "-r", self.roadmap, str(tid), "DOING", "--commit-open", "3b9289c"],
                 )
                 outcomes.append((rc, stderr))
             return outcomes

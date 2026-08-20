@@ -59,7 +59,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.base_test import GroadmapTestBase
+from tests.base_test import GroadmapTestBase, commit_flags_for
 
 ROADMAP = "platform"
 
@@ -926,7 +926,7 @@ class TestWebInterface:
         sprint_id = self.test.create_sprint(roadmap, "Settlement reconciliation sprint")
         self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id), str(sprinted), str(doing)])
         self._run(["sprint", "start", "-r", roadmap, str(sprint_id)])
-        self._run(["task", "stat", "-r", roadmap, str(doing), "DOING"])
+        self._run(["task", "stat", "-r", roadmap, str(doing), "DOING", "--commit-open", "24262f0"])
 
         proc, port = self._start(["--port", "0"])
         _, _, body = self._req(port, f"/roadmaps/{roadmap}/tasks")
@@ -2841,12 +2841,12 @@ class TestWebInterface:
         # § Manual Transitions, task stat BACKLOG is accepted from SPRINT).
         self._run(["task", "stat", "-r", roadmap, str(t_backlog), "BACKLOG"])
         # t_sprint is left untouched: SPRINT is its status by construction.
-        self._run(["task", "stat", "-r", roadmap, str(t_doing), "DOING"])
-        self._run(["task", "stat", "-r", roadmap, str(t_testing), "DOING"])
+        self._run(["task", "stat", "-r", roadmap, str(t_doing), "DOING", "--commit-open", "6c8064a"])
+        self._run(["task", "stat", "-r", roadmap, str(t_testing), "DOING", "--commit-open", "021fa2f"])
         self._run(["task", "stat", "-r", roadmap, str(t_testing), "TESTING"])
-        self._run(["task", "stat", "-r", roadmap, str(t_completed), "DOING"])
+        self._run(["task", "stat", "-r", roadmap, str(t_completed), "DOING", "--commit-open", "abd481c"])
         self._run(["task", "stat", "-r", roadmap, str(t_completed), "TESTING"])
-        self._run(["task", "stat", "-r", roadmap, str(t_completed), "COMPLETED"])
+        self._run(["task", "stat", "-r", roadmap, str(t_completed), "COMPLETED", "--commit-close", "d1e8dec"])
 
         proc, port = self._start(["--port", "0"])
         status, _, body = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
@@ -2993,7 +2993,8 @@ class TestWebInterface:
 
         def stat(ids, status):
             self._run(["task", "stat", "-r", roadmap,
-                       ",".join(str(i) for i in ids), status])
+                       ",".join(str(i) for i in ids), status]
+                      + commit_flags_for(status))
 
         # DOING column. The first call is the bulk one: d_alpha and d_beta enter
         # DOING in a single `task stat` and therefore carry one and the same
@@ -3569,12 +3570,12 @@ class TestWebInterface:
         self._run(["sprint", "start", "-r", roadmap, str(sprint_id)])
 
         self._run(["task", "stat", "-r", roadmap, str(t_backlog), "BACKLOG"])
-        self._run(["task", "stat", "-r", roadmap, str(t_doing), "DOING"])
-        self._run(["task", "stat", "-r", roadmap, str(t_testing), "DOING"])
+        self._run(["task", "stat", "-r", roadmap, str(t_doing), "DOING", "--commit-open", "5d6a2cd"])
+        self._run(["task", "stat", "-r", roadmap, str(t_testing), "DOING", "--commit-open", "5f93b51"])
         self._run(["task", "stat", "-r", roadmap, str(t_testing), "TESTING"])
-        self._run(["task", "stat", "-r", roadmap, str(t_completed), "DOING"])
+        self._run(["task", "stat", "-r", roadmap, str(t_completed), "DOING", "--commit-open", "2578d18"])
         self._run(["task", "stat", "-r", roadmap, str(t_completed), "TESTING"])
-        self._run(["task", "stat", "-r", roadmap, str(t_completed), "COMPLETED"])
+        self._run(["task", "stat", "-r", roadmap, str(t_completed), "COMPLETED", "--commit-close", "4999725"])
 
         proc, port = self._start(["--port", "0"])
 
@@ -3831,7 +3832,7 @@ class TestWebInterface:
                    str(t1), str(t2), str(t3)])
         self._run(["sprint", "start", "-r", roadmap, str(sprint_id)])
         for t in (t1, t2, t3):
-            self._run(["task", "stat", "-r", roadmap, str(t), "DOING"])
+            self._run(["task", "stat", "-r", roadmap, str(t), "DOING", "--commit-open", "391cff7"])
 
         proc, port = self._start(["--port", "0"])
         _, _, body = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")

@@ -867,12 +867,25 @@ func TestSprintRemoveTasks_ClearsLifecycleAndCompacts(t *testing.T) {
 	}
 
 	// Drive t2 all the way to COMPLETED so it has started_at/tested_at/closed_at set.
-	for _, st := range []string{"DOING", "TESTING"} {
-		if err := HandleTask([]string{"stat", "-r", testName, strconv.Itoa(t2), st}); err != nil {
-			t.Fatalf("transition t2 -> %s: %v", st, err)
+	// The entry into DOING carries the mandatory --commit-open, and the entry
+	// into COMPLETED the mandatory --commit-close (SPEC/COMMANDS.md § Change
+	// Status (stat)).
+	for _, st := range []struct {
+		status string
+		flags  []string
+	}{
+		{"DOING", []string{"--commit-open", "5f93b51"}},
+		{"TESTING", nil},
+	} {
+		args := append([]string{"stat", "-r", testName, strconv.Itoa(t2), st.status}, st.flags...)
+		if err := HandleTask(args); err != nil {
+			t.Fatalf("transition t2 -> %s: %v", st.status, err)
 		}
 	}
-	if err := HandleTask([]string{"stat", "-r", testName, strconv.Itoa(t2), "COMPLETED", "--summary", "all done"}); err != nil {
+	if err := HandleTask([]string{
+		"stat", "-r", testName, strconv.Itoa(t2), "COMPLETED",
+		"--commit-close", "2578d18", "--summary", "all done",
+	}); err != nil {
 		t.Fatalf("complete t2: %v", err)
 	}
 

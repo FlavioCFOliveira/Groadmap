@@ -14,6 +14,30 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any, Tuple, Union
 
 
+# Commit hashes for the two mandatory commit-tracking flags of `task stat`.
+# --commit-open is required on every transition into DOING and --commit-close on
+# the transition into COMPLETED (SPEC/COMMANDS.md § Change Status (stat)).
+# Groadmap validates the FORMAT of a hash only: it runs no git command and never
+# resolves the value against a repository, so any well-formed hash serves. These
+# two are real short hashes from this project's history.
+COMMIT_OPEN_HASH = "8007175"
+COMMIT_CLOSE_HASH = "8a82583"
+
+
+def commit_flags_for(status: str) -> List[str]:
+    """Return the commit flag `task stat` makes mandatory for a target status.
+
+    Call sites that build the target status dynamically use this so the flag
+    follows the status automatically; a call site with a literal status spells
+    the flag out instead.
+    """
+    if status == "DOING":
+        return ["--commit-open", COMMIT_OPEN_HASH]
+    if status == "COMPLETED":
+        return ["--commit-close", COMMIT_CLOSE_HASH]
+    return []
+
+
 class GroadmapTestBase:
     """Base class for all Groadmap CLI tests."""
 

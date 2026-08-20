@@ -375,12 +375,12 @@ class TestBoundaryUnicode:
         )
         sprint_id = self.test.create_sprint(roadmap, "Completion-summary boundary sprint")
         self.test.move_task_to_sprint(roadmap, task_id, sprint_id)
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "6c8064a"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
 
         exact_summary = "s" * 4096
         self.test.run_cmd([
-            "task", "stat", "-r", roadmap, str(task_id), "COMPLETED",
+            "task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "4c4ccea",
             "--summary", exact_summary,
         ])
         stored = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])[0]

@@ -353,16 +353,18 @@ func sprintRemoveTasks(args []string) error {
 				return err
 			}
 
-			// Reset the task to BACKLOG, clearing ALL lifecycle timestamps and
-			// the completion summary. A task may have progressed to
+			// Reset the task to BACKLOG, clearing ALL lifecycle timestamps, the
+			// completion summary and commit_close. A task may have progressed to
 			// DOING/TESTING/COMPLETED while in the sprint, so leaving those
 			// fields populated on a BACKLOG task violates the state machine's
 			// reopening invariant (SPEC/STATE_MACHINE.md Reopening Behavior;
 			// finding #49). For an unstarted SPRINT task these are already NULL,
-			// so the clear is a harmless no-op.
+			// so the clear is a harmless no-op. commit_open is deliberately NOT
+			// cleared: a task detached from its sprint keeps the record of where
+			// its work started (SPEC/STATE_MACHINE.md § Commit Tracking Fields).
 			if _, err := tx.Exec(
 				`UPDATE tasks SET status = 'BACKLOG', started_at = NULL, tested_at = NULL,
-				        closed_at = NULL, completion_summary = NULL WHERE id = ?`,
+				        closed_at = NULL, completion_summary = NULL, commit_close = NULL WHERE id = ?`,
 				taskID,
 			); err != nil {
 				return err

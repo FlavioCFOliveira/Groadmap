@@ -346,14 +346,14 @@ class TestTaskNext:
         ])
 
         # Move tasks to different statuses (following state machine: SPRINT -> DOING -> TESTING -> COMPLETED)
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(doing_task), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(doing_task), "DOING", "--commit-open", "5f93b51"])
         # For testing_task: need SPRINT -> DOING -> TESTING
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(testing_task), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(testing_task), "DOING", "--commit-open", "2578d18"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(testing_task), "TESTING"])
         # For completed_task: need SPRINT -> DOING -> TESTING -> COMPLETED
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(completed_task), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(completed_task), "DOING", "--commit-open", "391cff7"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(completed_task), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(completed_task), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(completed_task), "COMPLETED", "--commit-close", "4c4ccea"])
 
         # Get next tasks
         result = self.test.run_cmd_json(["task", "next", "-r", roadmap, "10"])
@@ -614,7 +614,7 @@ class TestTaskNext:
         assert len(result) == 2, f"Expected 2 tasks initially, got {len(result)}"
 
         # Move task1 to DOING
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "DOING", "--commit-open", "626346d"])
 
         # task1 should still appear
         result = self.test.run_cmd_json(["task", "next", "-r", roadmap, "10"])
@@ -632,7 +632,7 @@ class TestTaskNext:
         assert task2 in returned_ids, "SPRINT task should appear"
 
         # Complete task1
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "COMPLETED", "--commit-close", "cf507b0"])
 
         # task1 should NOT appear anymore
         result = self.test.run_cmd_json(["task", "next", "-r", roadmap, "10"])

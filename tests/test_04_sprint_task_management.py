@@ -152,14 +152,14 @@ class TestSprintTaskManagement:
 
         # Move tasks to different statuses (following state machine rules)
         # Task 1: SPRINT -> DOING
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "DOING", "--commit-open", "2578d18"])
         # Task 2: SPRINT -> DOING -> TESTING
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task2), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task2), "DOING", "--commit-open", "391cff7"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task2), "TESTING"])
         # Task 3: SPRINT -> DOING -> TESTING -> COMPLETED
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task3), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task3), "DOING", "--commit-open", "626346d"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task3), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task3), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task3), "COMPLETED", "--commit-close", "8007175"])
 
         # Filter by SPRINT status
         result = self.test.run_cmd_json([
@@ -215,11 +215,11 @@ class TestSprintTaskManagement:
         assert result["status_distribution"]["SPRINT"] == 4
 
         # Progress some tasks
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "DOING", "--commit-open", "3b9289c"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "COMPLETED", "--commit-close", "8a82583"])
 
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task2), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task2), "DOING", "--commit-open", "24262f0"])
 
         # Get updated stats
         result = self.test.run_cmd_json(["sprint", "stats", "-r", roadmap, str(sprint_id)])
@@ -232,13 +232,13 @@ class TestSprintTaskManagement:
 
         # Complete all tasks
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task2), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task2), "COMPLETED"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task3), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task2), "COMPLETED", "--commit-close", "b0ab692"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task3), "DOING", "--commit-open", "6c8064a"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task3), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task3), "COMPLETED"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task4), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task3), "COMPLETED", "--commit-close", "4c4ccea"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task4), "DOING", "--commit-open", "021fa2f"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task4), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task4), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task4), "COMPLETED", "--commit-close", "cf507b0"])
 
         result = self.test.run_cmd_json(["sprint", "stats", "-r", roadmap, str(sprint_id)])
         assert result["completed_tasks"] == 4
@@ -295,7 +295,7 @@ class TestSprintTaskManagement:
         ])
 
         # Move one task to DOING
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "DOING", "--commit-open", "abd481c"])
 
         # Remove sprint
         self.test.run_cmd(["sprint", "remove", "-r", roadmap, str(sprint_id)])

@@ -76,9 +76,9 @@ class TestTask89MoveTasksClosedGuard:
 
     def _complete_task(self, task_id: int):
         """Advance a task from SPRINT all the way to COMPLETED."""
-        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(task_id), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(task_id), "DOING", "--commit-open", "3b9289c"])
         self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(task_id), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(task_id), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(task_id), "COMPLETED", "--commit-close", "4c4ccea"])
 
     def _assert_task_in_sprint(self, sprint_id: int, task_id: int):
         """Assert a task is present in the given sprint."""

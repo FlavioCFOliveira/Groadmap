@@ -32,7 +32,7 @@ import os
 import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.base_test import GroadmapTestBase
+from tests.base_test import GroadmapTestBase, commit_flags_for
 
 
 class TestQueryCommandsCorrectness:
@@ -62,7 +62,8 @@ class TestQueryCommandsCorrectness:
         """Drive a task DOING -> TESTING -> COMPLETED with optional settle delay
         so successive completions get distinct millisecond timestamps."""
         for st in ("DOING", "TESTING", "COMPLETED"):
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), st])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), st]
+                              + commit_flags_for(st))
         if settle:
             time.sleep(settle)
 
@@ -105,7 +106,7 @@ class TestQueryCommandsCorrectness:
         self._complete(r, t["t3"], settle=0.05)
         self._complete(r, t["t4"], settle=0.05)
         self._complete(r, t["t11"], settle=0.05)
-        self.test.run_cmd(["task", "stat", "-r", r, str(t["t1"]), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", r, str(t["t1"]), "DOING", "--commit-open", "626346d"])
         self.test.run_cmd(["sprint", "close", "-r", r, str(s1), "--force"])
 
         # Sprint 2: 4 tasks; complete 2, t7 -> DOING, t8 -> TESTING, stay OPEN.
@@ -114,8 +115,8 @@ class TestQueryCommandsCorrectness:
         self.test.run_cmd(["sprint", "start", "-r", r, str(s2)])
         self._complete(r, t["t6"], settle=0.05)
         self._complete(r, t["t14"], settle=0.05)
-        self.test.run_cmd(["task", "stat", "-r", r, str(t["t7"]), "DOING"])
-        self.test.run_cmd(["task", "stat", "-r", r, str(t["t8"]), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", r, str(t["t7"]), "DOING", "--commit-open", "3b9289c"])
+        self.test.run_cmd(["task", "stat", "-r", r, str(t["t8"]), "DOING", "--commit-open", "24262f0"])
         self.test.run_cmd(["task", "stat", "-r", r, str(t["t8"]), "TESTING"])
 
         # Sprint 3: PENDING with 2 tasks (move BACKLOG -> SPRINT). Sprint 4: PENDING empty.

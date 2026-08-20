@@ -41,7 +41,7 @@ def _advance_to_testing(test, roadmap, task_id):
     """Drive a task from BACKLOG to TESTING via a real sprint."""
     sprint_id = test.create_sprint(roadmap, f"Guard test sprint for #{task_id}")
     test.move_task_to_sprint(roadmap, task_id, sprint_id)
-    test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+    test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "abd481c"])
     test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
 
 
@@ -80,16 +80,16 @@ class TestSubtaskGuard:
     def _complete(self, task_id):
         sprint_id = self.test.create_sprint(self.roadmap, f"Subtask sprint #{task_id}")
         self.test.move_task_to_sprint(self.roadmap, task_id, sprint_id)
-        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(task_id), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(task_id), "DOING", "--commit-open", "5d6a2cd"])
         self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(task_id), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(task_id), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(task_id), "COMPLETED", "--commit-close", "d1e8dec"])
 
     def test_complete_rejected_when_any_subtask_incomplete(self):
         """All three subtasks still BACKLOG → COMPLETED on parent fails with the subtask IDs."""
         _advance_to_testing(self.test, self.roadmap, self.parent)
 
         exit_code, _, stderr = self.test.run_cmd(
-            ["task", "stat", "-r", self.roadmap, str(self.parent), "COMPLETED"],
+            ["task", "stat", "-r", self.roadmap, str(self.parent), "COMPLETED", "--commit-close", "4999725"],
             check=False,
         )
         assert exit_code == 6, f"COMPLETED with incomplete subtasks must exit 6; got {exit_code}"
@@ -113,7 +113,7 @@ class TestSubtaskGuard:
         _advance_to_testing(self.test, self.roadmap, self.parent)
 
         exit_code, _, stderr = self.test.run_cmd(
-            ["task", "stat", "-r", self.roadmap, str(self.parent), "COMPLETED"],
+            ["task", "stat", "-r", self.roadmap, str(self.parent), "COMPLETED", "--commit-close", "b7591f7"],
             check=False,
         )
         assert exit_code == 6
@@ -133,7 +133,7 @@ class TestSubtaskGuard:
             self._complete(sub)
         _advance_to_testing(self.test, self.roadmap, self.parent)
 
-        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(self.parent), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(self.parent), "COMPLETED", "--commit-close", "fcb1c8a"])
         status = self.test.run_cmd_json(["task", "get", "-r", self.roadmap, str(self.parent)])[0]["status"]
         assert status == "COMPLETED"
 
@@ -162,7 +162,7 @@ class TestDependencyGuard:
         _advance_to_testing(self.test, self.roadmap, self.task_a)
 
         exit_code, _, stderr = self.test.run_cmd(
-            ["task", "stat", "-r", self.roadmap, str(self.task_a), "COMPLETED"],
+            ["task", "stat", "-r", self.roadmap, str(self.task_a), "COMPLETED", "--commit-close", "8007175"],
             check=False,
         )
         assert exit_code == 6
@@ -180,12 +180,12 @@ class TestDependencyGuard:
         # Drive B to COMPLETED via its own sprint
         sprint_b = self.test.create_sprint(self.roadmap, "B sprint")
         self.test.move_task_to_sprint(self.roadmap, self.task_b, sprint_b)
-        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(self.task_b), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(self.task_b), "DOING", "--commit-open", "5f93b51"])
         self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(self.task_b), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(self.task_b), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(self.task_b), "COMPLETED", "--commit-close", "8a82583"])
 
         _advance_to_testing(self.test, self.roadmap, self.task_a)
-        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(self.task_a), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(self.task_a), "COMPLETED", "--commit-close", "b0ab692"])
 
         status = self.test.run_cmd_json(["task", "get", "-r", self.roadmap, str(self.task_a)])[0]["status"]
         assert status == "COMPLETED"
@@ -233,7 +233,7 @@ class TestGuardEvaluationOrder:
         _advance_to_testing(self.test, self.roadmap, self.parent)
 
         exit_code, _, stderr = self.test.run_cmd(
-            ["task", "stat", "-r", self.roadmap, str(self.parent), "COMPLETED"],
+            ["task", "stat", "-r", self.roadmap, str(self.parent), "COMPLETED", "--commit-close", "4c4ccea"],
             check=False,
         )
         assert exit_code == 6
