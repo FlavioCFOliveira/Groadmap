@@ -42,9 +42,19 @@ Atomicity:
 
 Scope boundary:
   16. `task create` and `task edit` accept neither flag (exit 2, unknown flag).
+
+Hash shapes actually seen in the wild:
+  17. an abbreviated hash, a full 40-character SHA-1, and a full 64-character
+      SHA-256 (`git init --object-format=sha256`) all round-trip unchanged.
+
+Schema migration (SPEC/VERSION.md § Migration 1.10.0 -> 1.11.0):
+  18. a 1.10.0-shape database gains both columns on the next open, its existing
+      tasks survive with both fields null, and the migrated table enforces the
+      same commit rule a freshly created one does.
 """
 
 import os
+import sqlite3
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -447,32 +457,313 @@ class TestCommitTracking:
         print("✓ task create and task edit accept neither commit flag")
 
 
+
+
+# tasksDDL110 is the `tasks` table exactly as schema 1.10.0 declared it: the
+# shape shipped immediately before the two commit columns existed, taken
+# verbatim from internal/db/schema.go at commit 1d0f66a. It is reproduced here
+# rather than derived from the current schema, because a fixture computed from
+# today's code cannot prove yesterday's database still opens.
+TASKS_DDL_1_10_0 = """
+CREATE TABLE tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL CHECK(length(title) <= 255),
+    status TEXT NOT NULL DEFAULT 'BACKLOG' CHECK(status IN ('BACKLOG', 'SPRINT', 'DOING', 'TESTING', 'COMPLETED')),
+    type TEXT NOT NULL DEFAULT 'TASK' CHECK(type IN ('USER_STORY', 'TASK', 'BUG', 'SUB_TASK', 'EPIC', 'REFACTOR', 'CHORE', 'SPIKE', 'DESIGN_UX', 'IMPROVEMENT')),
+    functional_requirements TEXT NOT NULL CHECK(length(functional_requirements) <= 4096),
+    technical_requirements TEXT NOT NULL CHECK(length(technical_requirements) <= 4096),
+    acceptance_criteria TEXT NOT NULL CHECK(length(acceptance_criteria) <= 4096),
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    tested_at TEXT,
+    closed_at TEXT,
+    completion_summary TEXT CHECK(completion_summary IS NULL OR length(completion_summary) <= 4096),
+    parent_task_id INTEGER REFERENCES tasks(id),
+    priority INTEGER NOT NULL DEFAULT 0 CHECK(priority >= 0 AND priority <= 9),
+    severity INTEGER NOT NULL DEFAULT 0 CHECK(severity >= 0 AND severity <= 9)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_type ON tasks(type);
+CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
+CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_status_priority ON tasks(status, priority DESC);
+CREATE INDEX IF NOT EXISTS idx_tasks_priority_created ON tasks(priority DESC, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id ON tasks(parent_task_id);
+"""
+
+# Hash shapes a real repository produces. The abbreviated and SHA-1 forms come
+# from this project's own history; the SHA-256 form is the length a repository
+# created with `git init --object-format=sha256` writes, which the 7..64 bound
+# exists to admit.
+ABBREVIATED_HASH = "391cff7"
+SHA1_HASH = "5f93b518375f7f65df4f275f1ee9b2b2e2fd17f0"
+SHA256_HASH = "9f2c" + "a1b3" * 14 + "7e5d"
+
+
+class TestCommitHashShapes:
+    """A hash is accepted at every length git actually emits, and comes back
+    byte for byte. The 7..64 bound is not an arbitrary range: it spans the
+    conventional abbreviation through a full SHA-256 object name."""
+
+    def setup_method(self):
+        self.test = GroadmapTestBase()
+        self.test.setup()
+        self.roadmap = self.test.create_roadmap("acquirer-settlement")
+        self.sprint_id = self.test.create_sprint(
+            self.roadmap,
+            "Reconcile every settlement window against the acquirer report",
+            title="Settlement reconciliation",
+        )
+
+    def teardown_method(self):
+        self.test.teardown()
+
+    def test_every_hash_length_git_emits_round_trips(self):
+        assert len(SHA256_HASH) == 64, "the SHA-256 fixture must be a full object name"
+
+        for label, opening, closing in [
+            ("abbreviated", ABBREVIATED_HASH, "2578d18"),
+            ("full SHA-1", SHA1_HASH, "6742fc4a81de9ce610fd9d0803344bf8f4ceb86d"),
+            ("full SHA-256", SHA256_HASH, SHA256_HASH),
+        ]:
+            task_id = self.test.create_task(
+                self.roadmap,
+                title=f"Reconcile the {label} settlement window",
+                functional_requirements="Every settlement window balances against the acquirer report.",
+                technical_requirements="Compare both ledgers per window and record the delta.",
+                acceptance_criteria="An unbalanced window raises an alert within the hour.",
+            )
+            self.test.run_cmd([
+                "sprint", "add-tasks", "-r", self.roadmap, str(self.sprint_id), str(task_id)
+            ])
+            if label == "abbreviated":
+                self.test.run_cmd(["sprint", "start", "-r", self.roadmap, str(self.sprint_id)])
+
+            self.test.run_cmd([
+                "task", "stat", "-r", self.roadmap, str(task_id), "DOING", "--commit-open", opening])
+            self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(task_id), "TESTING"])
+            self.test.run_cmd([
+                "task", "stat", "-r", self.roadmap, str(task_id), "COMPLETED", "--commit-close", closing])
+
+            task = self.test.run_cmd_json(
+                ["task", "get", "-r", self.roadmap, str(task_id)])[0]
+            assert task["commit_open"] == opening, (
+                f"{label}: commit_open came back as {task['commit_open']!r}, not the {len(opening)}-character "
+                f"hash that was written")
+            assert task["commit_close"] == closing, (
+                f"{label}: commit_close came back as {task['commit_close']!r}, not the {len(closing)}-character "
+                f"hash that was written")
+        print("✓ abbreviated, full SHA-1 and full SHA-256 hashes all round-trip unchanged")
+
+
+class TestCommitColumnsMigration:
+    """A database written by the previous release opens, gains both columns and
+    keeps its rows (SPEC/VERSION.md § Migration 1.10.0 -> 1.11.0).
+
+    The property that matters is not that the migration runs — it is that a
+    MIGRATED database and a FRESH one behave identically afterwards. `ALTER
+    TABLE ... ADD COLUMN` can only append, so the two tables declare the columns
+    in different positions and their DDL text will never match; what must match
+    is what they accept and reject."""
+
+    ROADMAP = "regional-clearing-ledger"
+
+    def setup_method(self):
+        self.test = GroadmapTestBase()
+        self.test.setup()
+
+    def teardown_method(self):
+        self.test.teardown()
+
+    def _db_path(self, roadmap):
+        return self.test.roadmaps_dir / roadmap / "project.db"
+
+    def _schema_version(self, roadmap):
+        con = sqlite3.connect(str(self._db_path(roadmap)))
+        try:
+            row = con.execute(
+                "SELECT value FROM _metadata WHERE key = 'schema_version'").fetchone()
+            return row[0] if row else None
+        finally:
+            con.close()
+
+    def _build_1_10_0_fixture(self, roadmap):
+        """Create a roadmap through the CLI, then rebuild `tasks` to its verbatim
+        1.10.0 shape, seed it with rows the old binary could have written, and
+        roll the recorded schema_version back. Returns the seeded ids."""
+        self.test.create_roadmap(roadmap)
+        db_path = self._db_path(roadmap)
+        assert db_path.exists(), f"precondition: the CLI must have created {db_path}"
+
+        con = sqlite3.connect(str(db_path))
+        try:
+            # The table is still empty, so the drop cannot cascade.
+            con.execute("DROP TABLE tasks")
+            con.executescript(TASKS_DDL_1_10_0)
+
+            now = "2026-02-17T11:20:00.000Z"
+            insert = (
+                "INSERT INTO tasks (title, status, type, functional_requirements, "
+                "technical_requirements, acceptance_criteria, created_at, started_at, "
+                "closed_at, completion_summary, priority, severity) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+
+            def seed(title, status, started, closed, summary, priority):
+                cur = con.execute(insert, (
+                    title, status, "TASK",
+                    "Clearing batches reconcile against the central ledger to the cent.",
+                    "Stream each batch and compare running totals against the ledger.",
+                    "A divergent batch is quarantined before settlement.",
+                    now, started, closed, summary, priority, 0,
+                ))
+                return cur.lastrowid
+
+            backlog_id = seed(
+                "Quarantine divergent clearing batches before settlement",
+                "BACKLOG", None, None, None, 7)
+            # A task the old binary had already carried to COMPLETED. It is the
+            # row that proves the migration preserves data it cannot backfill:
+            # the work was done at some commit, but nothing recorded which.
+            completed_id = seed(
+                "Stream the nightly clearing batch instead of buffering it",
+                "COMPLETED", now, now, "Replaced the buffer with a streaming reader.", 5)
+
+            con.execute("UPDATE _metadata SET value = '1.10.0' WHERE key = 'schema_version'")
+            con.commit()
+        finally:
+            con.close()
+
+        return backlog_id, completed_id
+
+    def test_a_1_10_0_database_gains_both_columns_and_keeps_its_rows(self):
+        backlog_id, completed_id = self._build_1_10_0_fixture(self.ROADMAP)
+        assert self._schema_version(self.ROADMAP) == "1.10.0", "fixture must start at 1.10.0"
+
+        # The next command against the roadmap runs the migration chain.
+        tasks = self.test.run_cmd_json(["task", "list", "-r", self.ROADMAP])
+
+        # Compared against a freshly created roadmap rather than a literal:
+        # opening a 1.10.0 database runs the WHOLE chain, so it lands on
+        # whatever the newest version is. What must hold is that a migrated
+        # database and a fresh one agree — a claim that does not rot on the
+        # next schema bump.
+        fresh = self.test.create_roadmap()
+        assert self._schema_version(self.ROADMAP) == self._schema_version(fresh), (
+            "a migrated database must reach the same schema version a fresh one is stamped with")
+
+        by_id = {t["id"]: t for t in tasks}
+        assert set(by_id) == {backlog_id, completed_id}, (
+            f"the migration lost or invented rows: {sorted(by_id)}")
+        for task_id in (backlog_id, completed_id):
+            assert by_id[task_id]["commit_open"] is None, (
+                f"task {task_id} must migrate with commit_open null; there is nothing to backfill it from")
+            assert by_id[task_id]["commit_close"] is None, (
+                f"task {task_id} must migrate with commit_close null")
+        assert by_id[completed_id]["completion_summary"] == (
+            "Replaced the buffer with a streaming reader."), "the migration must not disturb existing data"
+        print("✓ a 1.10.0 database migrates, gains both columns null, and keeps every row")
+
+    def test_the_migrated_table_enforces_the_same_commit_rule_as_a_fresh_one(self):
+        self._build_1_10_0_fixture(self.ROADMAP)
+        self.test.run_cmd(["task", "list", "-r", self.ROADMAP])  # triggers the migration
+        fresh = self.test.create_roadmap()
+
+        # Both databases are driven through the SAME command with the SAME
+        # values, and must answer identically. This half exercises the COMMAND
+        # layer, which validates before any write; the storage CHECK is probed
+        # separately below, because a command-level assertion alone would pass
+        # even on a migration that added the columns without their constraint.
+        for roadmap in (self.ROADMAP, fresh):
+            task_id = self.test.create_task(
+                roadmap,
+                title="Verify the clearing reconciliation after migration",
+                functional_requirements="The clearing ledger reconciles after a schema migration.",
+                technical_requirements="Re-run the reconciliation against the migrated database.",
+                acceptance_criteria="The totals match the pre-migration report.",
+            )
+            sprint_id = self.test.create_sprint(
+                roadmap, "Confirm the ledger survives the schema migration",
+                title="Post-migration verification")
+            self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint_id), str(task_id)])
+            self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint_id)])
+
+            exit_code, _, stderr = self.test.run_cmd(
+                ["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "nothex!"],
+                check=False)
+            assert exit_code == EXIT_INVALID, (
+                f"{roadmap}: a malformed hash must be rejected with exit {EXIT_INVALID}, "
+                f"got {exit_code}")
+            assert _first_line(stderr) == (
+                'Error: invalid commit hash for --commit-open: "nothex!" '
+                "(expected 7 to 64 hexadecimal characters)"), (
+                f"{roadmap}: unexpected rejection message: {_first_line(stderr)!r}")
+
+            self.test.run_cmd([
+                "task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", SHA1_HASH])
+            task = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])[0]
+            assert task["commit_open"] == SHA1_HASH, (
+                f"{roadmap}: a valid hash must be stored; got {task['commit_open']!r}")
+
+            # The storage backstop, reached under the CLI. ALTER TABLE ADD COLUMN
+            # accepts a CHECK clause, but nothing forces a migration to include
+            # one, and a migration that omitted it would leave the constraint on
+            # fresh databases only. Every assertion above would still pass.
+            self._assert_check_rejects(roadmap, task_id)
+        print("✓ a migrated table and a fresh one accept and reject exactly the same hashes, "
+              "at the command layer and at the storage layer")
+
+    def _assert_check_rejects(self, roadmap, task_id):
+        """Write straight to SQLite, under the binary, and require the column
+        constraint itself to refuse the values the SPEC puts out of bounds."""
+        con = sqlite3.connect(str(self._db_path(roadmap)))
+        try:
+            for column in ("commit_open", "commit_close"):
+                for value in ("nothex!", "A" * 40, "a" * 6, "a" * 65):
+                    try:
+                        con.execute(
+                            f"UPDATE tasks SET {column} = ? WHERE id = ?", (value, task_id))
+                    except sqlite3.IntegrityError:
+                        continue
+                    raise AssertionError(
+                        f"{roadmap}: the {column} CHECK accepted {value!r}; the migrated and the "
+                        f"fresh schema must both carry the constraint")
+            con.rollback()
+        finally:
+            con.close()
+
+
 def _run_all():
     passed = 0
     failed = 0
     failures = []
-    cls = TestCommitTracking
-    for name in sorted(m for m in dir(cls) if m.startswith("test_")):
-        instance = cls()
-        instance.setup_method()
-        try:
-            getattr(instance, name)()
-            passed += 1
-        except AssertionError as exc:
-            failed += 1
-            failures.append((name, exc))
-            print(f"✗ {name}")
-        except Exception as exc:  # noqa: BLE001
-            failed += 1
-            failures.append((name, exc))
-            print(f"✗ {name} (error)")
-        finally:
-            instance.teardown_method()
+    # Every class in the module, so a suite added below the runner is not
+    # silently skipped — which is exactly what happened when the migration and
+    # hash-shape suites were first appended.
+    for cls in (TestCommitTracking, TestCommitHashShapes, TestCommitColumnsMigration):
+        for name in sorted(m for m in dir(cls) if m.startswith("test_")):
+            label = f"{cls.__name__}.{name}"
+            instance = cls()
+            instance.setup_method()
+            try:
+                getattr(instance, name)()
+                passed += 1
+            except AssertionError as exc:
+                failed += 1
+                failures.append((label, exc))
+                print(f"✗ {label}")
+            except Exception as exc:  # noqa: BLE001
+                failed += 1
+                failures.append((label, exc))
+                print(f"✗ {label} (error)")
+            finally:
+                instance.teardown_method()
     print("\n" + "=" * 60)
     print(f"Commit tracking tests: {passed} passed, {failed} failed")
     print("=" * 60)
-    for name, exc in failures:
-        print(f"\n✗ {name}\n  {exc}")
+    for label, exc in failures:
+        print(f"\n✗ {label}\n  {exc}")
     return failed == 0
 
 
