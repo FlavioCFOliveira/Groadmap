@@ -128,6 +128,24 @@
     return item;
   }
 
+  /* commitItem renders one of the two commit hashes. The value is monospaced,
+   * because a hash is read character by character when it is compared against a
+   * repository, and it is not a link: the modal is read-only and offline and
+   * holds no repository URL from which a code-host link could be built
+   * (SPEC/WEB.md § Task Detail Modal, Fields shown). An absent hash takes the
+   * same placeholder as every other absent field, so a task that has not
+   * started and one whose commit_close was cleared by a reopen read alike. */
+  function commitItem(label, value) {
+    var item = el("div", "datagrid-item");
+    item.appendChild(el("div", "datagrid-title", label));
+    if (value) {
+      item.appendChild(el("div", "datagrid-content font-monospace text-truncate", value));
+    } else {
+      item.appendChild(el("div", "datagrid-content text-secondary", ABSENT));
+    }
+    return item;
+  }
+
   /* idBadges renders a dependency list as reference badges, or the absent
    * placeholder when the list is empty. */
   function idBadges(ids) {
@@ -242,6 +260,8 @@
     grid.appendChild(timestampItem("Started", task.started_at));
     grid.appendChild(timestampItem("Tested", task.tested_at));
     grid.appendChild(timestampItem("Closed", task.closed_at));
+    grid.appendChild(commitItem("Commit open", task.commit_open));
+    grid.appendChild(commitItem("Commit close", task.commit_close));
 
     var fragment = document.createDocumentFragment();
     fragment.appendChild(grid);
