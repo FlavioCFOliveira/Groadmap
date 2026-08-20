@@ -3283,7 +3283,13 @@ tasks.
   `Task` model in `MODELS.md § Task`: `id`, `title`, `status`, `type`, `priority`,
   `severity`, `functional_requirements`, `technical_requirements`,
   `acceptance_criteria`, `completion_summary`, `parent_task_id`, `subtask_count`,
-  `depends_on`, `blocks`, `created_at`, `started_at`, `tested_at`, and `closed_at`.
+  `depends_on`, `blocks`, `created_at`, `started_at`, `tested_at`, `closed_at`,
+  `commit_open`, and `commit_close`. The two commit hashes are short single-line
+  values, and the modal presents each as plain text alongside the lifecycle
+  timestamps, under the same rules as every other short field it shows. The modal
+  adds no link to any code-hosting service and no copy control for them: it is
+  read-only and offline, and it holds no repository URL from which such a link
+  could be built.
   This includes the long free-text fields
   (`functional_requirements`, `technical_requirements`, `acceptance_criteria`, and
   `completion_summary`), which the modal presents formatted for readable display.
@@ -4614,7 +4620,7 @@ Rules:
     `priority`, `severity`, `functional_requirements`, `technical_requirements`,
     `acceptance_criteria`, `completion_summary`, `parent_task_id`, `subtask_count`,
     `depends_on`, `blocks`, `created_at`, `started_at`, `tested_at`,
-    `closed_at`). The page carries one modal element, not one per
+    `closed_at`, `commit_open`, `commit_close`). The page carries one modal element, not one per
     task, and opening a task fetches that task's fields and comments from
     `GET /roadmaps/{name}/tasks/{id}/data` to fill it. The modal is read-only: it
     contains no form, no edit

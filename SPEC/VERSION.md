@@ -61,7 +61,7 @@ The `_metadata` table records the active schema version. Migration steps and the
 
 ### Current Schema Version
 
-`SchemaVersion = "1.10.0"` (defined in `internal/db/schema.go`).
+`SchemaVersion = "1.11.0"` (defined in `internal/db/schema.go`).
 
 ### Migration Commands
 
@@ -290,6 +290,59 @@ two operations are not in the valid set the application writes and accepts, and 
 command reaches them by name, but the migration deletes no audit row: a roadmap's
 recorded history stays complete. The `operation` column carries no `CHECK`, so the
 retained rows need no schema accommodation (see `DATABASE.md § audit Table`).
+
+### Migration 1.10.0 → 1.11.0
+
+Adds the two commit-tracking columns, `commit_open` and `commit_close`, to the
+`tasks` table. Both are nullable `TEXT` columns carrying a git commit hash in the
+format specified in `DATABASE.md § Commit Hash Format Constraint`, and each takes
+that section's `CHECK` constraint with the column.
+
+**There is no backfill, and there can be none.** The two values record which commit
+a task was started from and which commit it was concluded at. Groadmap holds no
+record of either fact for work already done: it runs no git command and reads no
+repository, so nothing in the database or on disk could supply a truthful value for
+a task that reached `DOING` or `COMPLETED` before this migration. Every existing
+task therefore migrates with NULL in both columns, and it keeps them until its next
+transition into `DOING` or into `COMPLETED` supplies a value. A task that is already
+`COMPLETED` when the migration runs keeps a NULL `commit_close` permanently unless
+it is reopened and completed again.
+
+Consequently the two columns are nullable even though the CLI makes them mandatory
+on the transitions that write them. The mandatory rule governs the transition, not
+the column: it guarantees that no task can enter `DOING` or `COMPLETED` from now on
+without a hash, and it says nothing about tasks that reached those states earlier.
+Making either column `NOT NULL` would require inventing a value for that history,
+which is exactly what this migration refuses to do.
+
+Both `ADD COLUMN` steps are guarded by the column-existence check specified in
+`DATABASE.md § Migration Idempotency (ALTER TABLE ADD COLUMN)`, so re-running the
+migration set against an already-migrated database is a no-op rather than a
+"duplicate column name" error. The two guards are independent: a database that
+somehow carries one column and not the other is brought to the full shape.
+
+The `CHECK` constraint travels with each `ADD COLUMN` statement, so a migrated
+database enforces the commit-hash format exactly as a fresh one does. SQLite does
+not re-validate existing rows when a column is added, and it does not need to here:
+every existing row receives NULL in the new column, and NULL satisfies the
+constraint. Fresh databases created at schema version 1.11.0 receive both columns,
+with the same constraints, directly from the `tasks` `CREATE TABLE` statement (see
+`DATABASE.md § tasks Table`).
+
+```sql
+-- Add each column only when it does not already exist (see
+-- DATABASE.md § Migration Idempotency (ALTER TABLE ADD COLUMN)). When absent, run:
+ALTER TABLE tasks ADD COLUMN commit_open TEXT CHECK(commit_open IS NULL OR (length(commit_open) BETWEEN 7 AND 64 AND commit_open NOT GLOB '*[^0-9a-f]*'));
+ALTER TABLE tasks ADD COLUMN commit_close TEXT CHECK(commit_close IS NULL OR (length(commit_close) BETWEEN 7 AND 64 AND commit_close NOT GLOB '*[^0-9a-f]*'));
+
+-- Update schema version
+UPDATE _metadata SET value = '1.11.0' WHERE key = 'schema_version';
+```
+
+No index is created on either column. Neither is a filter, a sort key, or a join
+key for any query in `DATABASE.md § Main SQL Queries`: both are read as part of the
+`Task` object and are never searched. An index would cost write time on every status
+change and buy nothing.
 
 ## Release Process
 

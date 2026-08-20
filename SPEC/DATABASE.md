@@ -66,6 +66,8 @@ Each roadmap is stored in an individual SQLite database. The schema is designed 
 |  - tested_at (TEXT ISO8601, NULL)      |
 |  - closed_at (TEXT ISO8601, NULL)      |
 |  - completion_summary (TEXT, NULL)     |
+|  - commit_open (TEXT hex 7-64, NULL)   |
+|  - commit_close (TEXT hex 7-64, NULL)  |
 |  - parent_task_id (INTEGER FK, NULL)   |
 |  - priority (INTEGER 0-9)              |
 |  - severity (INTEGER 0-9)              |
@@ -148,6 +150,10 @@ CREATE TABLE IF NOT EXISTS tasks (
     tested_at TEXT,                         -- ISO 8601 UTC, set when task moves to TESTING
     closed_at TEXT,                         -- ISO 8601 UTC, set when task moves to COMPLETED
     completion_summary TEXT CHECK(completion_summary IS NULL OR length(completion_summary) <= 4096),  -- Optional summary of work done, set only on TESTING → COMPLETED
+    -- Git commit hashes bracketing the work. Stored lowercase; the CHECK rejects any other case
+    -- because GLOB is case-sensitive in SQLite, so it backs the application's lowercase normalisation.
+    commit_open TEXT CHECK(commit_open IS NULL OR (length(commit_open) BETWEEN 7 AND 64 AND commit_open NOT GLOB '*[^0-9a-f]*')),    -- Commit the task was started from, set on every transition into DOING
+    commit_close TEXT CHECK(commit_close IS NULL OR (length(commit_close) BETWEEN 7 AND 64 AND commit_close NOT GLOB '*[^0-9a-f]*')),  -- Commit the task was concluded at, set on every transition into COMPLETED
     parent_task_id INTEGER REFERENCES tasks(id),  -- NULL for top-level tasks; non-NULL links to parent task (sub-task hierarchy)
 
     -- Group 3: Numeric metadata fields
@@ -261,7 +267,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 - `TASK_PRIORITY_CHANGE` - Priority change (0-9) via `task priority`
 - `TASK_SEVERITY_CHANGE` - Severity change (0-9) via `task severity`
 - `TASK_UPDATE` - Generic update via `task edit` (title, type, functional_requirements, technical_requirements, acceptance_criteria). A type change made through `task edit` is recorded here, not under a dedicated operation.
-- `TASK_REOPEN` - Task returned to BACKLOG via `task reopen`; lifecycle timestamps and completion_summary cleared. The sprint_tasks row is removed only when the source state is SPRINT, DOING, or TESTING; from COMPLETED the row is kept
+- `TASK_REOPEN` - Task returned to BACKLOG via `task reopen`; lifecycle timestamps, completion_summary, and commit_close cleared, commit_open preserved. The sprint_tasks row is removed only when the source state is SPRINT, DOING, or TESTING; from COMPLETED the row is kept
 - `TASK_ADD_DEP` - Dependency added (logged against both task_id and depends_on_task_id)
 - `TASK_REMOVE_DEP` - Dependency removed (logged against both task_id and depends_on_task_id)
 - `TASK_COMMENT_CREATE` - Comment added to a task via `task comment-add` (logged against the parent task)
@@ -408,7 +414,7 @@ CREATE TABLE IF NOT EXISTS _metadata (
 
 -- Insert schema version on creation
 INSERT INTO _metadata (key, value) VALUES
-    ('schema_version', '1.10.0'),
+    ('schema_version', '1.11.0'),
     ('created_at', '2026-03-20T00:00:00.000Z'),
     ('application', 'Groadmap');
 ```
@@ -433,8 +439,8 @@ Returns every task, each row carrying the complete `Task` object: the task's sto
 ```sql
 SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
        t.acceptance_criteria, t.created_at, t.started_at, t.tested_at,
-       t.closed_at, t.completion_summary, t.parent_task_id,
-       t.priority, t.severity,
+       t.closed_at, t.completion_summary, t.commit_open, t.commit_close,
+       t.parent_task_id, t.priority, t.severity,
        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count,
        (SELECT COALESCE(group_concat(d), '') FROM (
            SELECT depends_on_task_id AS d FROM task_dependencies
@@ -526,8 +532,8 @@ Returns all tasks in a sprint ordered by their position in the sprint task list,
 ```sql
 SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
        t.acceptance_criteria, t.created_at, t.started_at, t.tested_at,
-       t.closed_at, t.completion_summary, t.parent_task_id,
-       t.priority, t.severity,
+       t.closed_at, t.completion_summary, t.commit_open, t.commit_close,
+       t.parent_task_id, t.priority, t.severity,
        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count,
        (SELECT COALESCE(group_concat(d), '') FROM (
            SELECT depends_on_task_id AS d FROM task_dependencies
@@ -582,28 +588,37 @@ UPDATE tasks SET status = 'SPRINT' WHERE id IN (?, ?, ...);
 Date tracking fields are automatically managed by the application based on state transitions:
 
 ```sql
--- When transitioning to DOING: set started_at
+-- When transitioning to DOING: set started_at and commit_open. The caller always
+-- supplies commit_open on this transition, already normalised to lowercase, so the
+-- statement never writes NULL to that column here. A second entry into DOING (from
+-- TESTING) runs the same statement and overwrites the earlier value.
 UPDATE tasks
-SET status = 'DOING', started_at = ?
+SET status = 'DOING', started_at = ?, commit_open = ?
 WHERE id = ?;
 
--- When transitioning to TESTING: set tested_at
+-- When transitioning to TESTING: set tested_at. Neither commit column changes.
 UPDATE tasks
 SET status = 'TESTING', tested_at = ?
 WHERE id = ?;
 
--- When transitioning to COMPLETED: set closed_at
+-- When transitioning to COMPLETED: set closed_at, completion_summary, and
+-- commit_close. completion_summary is optional and becomes NULL when --summary is
+-- absent; commit_close is mandatory and is always a value, never NULL.
 UPDATE tasks
-SET status = 'COMPLETED', closed_at = ?
+SET status = 'COMPLETED', closed_at = ?, completion_summary = ?, commit_close = ?
 WHERE id = ?;
 
--- Returning a task to BACKLOG: clear the tracking dates and the completion
--- summary. The same statement serves `task stat <ids> BACKLOG` (accepted from
--- SPRINT and COMPLETED only) and `task reopen` (accepted from any non-BACKLOG
--- state). Neither command writes to sprint_tasks; see
+-- Returning a task to BACKLOG: clear the tracking dates, the completion summary,
+-- and commit_close, and PRESERVE commit_open. The same statement serves
+-- `task stat <ids> BACKLOG` (accepted from SPRINT and COMPLETED only) and
+-- `task reopen` (accepted from any non-BACKLOG state). commit_open is deliberately
+-- absent from the SET list: the commit the work started from stays a true
+-- historical fact, while the commit it was concluded at is invalidated by the
+-- reopening. Neither command writes to sprint_tasks; see
 -- STATE_MACHINE.md § Sprint Membership and the BACKLOG Status.
 UPDATE tasks
-SET status = 'BACKLOG', started_at = NULL, tested_at = NULL, closed_at = NULL, completion_summary = NULL
+SET status = 'BACKLOG', started_at = NULL, tested_at = NULL, closed_at = NULL,
+    completion_summary = NULL, commit_close = NULL
 WHERE id = ?;
 
 -- Generic status update without date tracking changes
@@ -634,9 +649,11 @@ UPDATE tasks SET status = 'SPRINT' WHERE id IN (?, ?, ...);
 -- Remove from junction table, scoped to the named sprint
 DELETE FROM sprint_tasks WHERE sprint_id = ? AND task_id = ?;
 
--- Reset the task, whatever its status was inside the sprint
+-- Reset the task, whatever its status was inside the sprint. commit_close is
+-- cleared with the tracking dates; commit_open is preserved (see Update Status above).
 UPDATE tasks
-SET status = 'BACKLOG', started_at = NULL, tested_at = NULL, closed_at = NULL, completion_summary = NULL
+SET status = 'BACKLOG', started_at = NULL, tested_at = NULL, closed_at = NULL,
+    completion_summary = NULL, commit_close = NULL
 WHERE id = ?;
 ```
 
@@ -646,9 +663,11 @@ The status reset MUST run before the membership rows are deleted; once the
 `sprint_tasks` rows are gone the subquery selects nothing.
 
 ```sql
--- Reset every member task, whatever its status was inside the sprint
+-- Reset every member task, whatever its status was inside the sprint. commit_close
+-- is cleared with the tracking dates; commit_open is preserved (see Update Status above).
 UPDATE tasks
-SET status = 'BACKLOG', started_at = NULL, tested_at = NULL, closed_at = NULL, completion_summary = NULL
+SET status = 'BACKLOG', started_at = NULL, tested_at = NULL, closed_at = NULL,
+    completion_summary = NULL, commit_close = NULL
 WHERE id IN (
     SELECT task_id FROM sprint_tasks WHERE sprint_id = ?
 );
@@ -821,10 +840,12 @@ UPDATE sprints SET status = 'CLOSED', closed_at = ? WHERE id = ?;
 -- Remove sprint (and relationships in sprint_tasks)
 DELETE FROM sprints WHERE id = ?;
 
--- Reset every member task, whatever its status was inside the sprint
+-- Reset every member task, whatever its status was inside the sprint. commit_close
+-- is cleared with the tracking dates; commit_open is preserved (see Update Status above).
 -- Note: in implementation, do this before deleting sprint
 UPDATE tasks
-SET status = 'BACKLOG', started_at = NULL, tested_at = NULL, closed_at = NULL, completion_summary = NULL
+SET status = 'BACKLOG', started_at = NULL, tested_at = NULL, closed_at = NULL,
+    completion_summary = NULL, commit_close = NULL
 WHERE id IN (
     SELECT task_id FROM sprint_tasks WHERE sprint_id = ?
 );
@@ -1191,6 +1212,10 @@ entry, is wrapped in one transaction) to these specific sprint operations.
 | started_at | TEXT | NULLABLE, ISO 8601 format | Tracking |
 | tested_at | TEXT | NULLABLE, ISO 8601 format | Tracking |
 | closed_at | TEXT | NULLABLE, ISO 8601 format | Tracking |
+| completion_summary | TEXT | NULLABLE, CHECK length <= 4096 chars | Tracking |
+| commit_open | TEXT | NULLABLE, CHECK 7-64 lowercase hexadecimal characters | Tracking |
+| commit_close | TEXT | NULLABLE, CHECK 7-64 lowercase hexadecimal characters | Tracking |
+| parent_task_id | INTEGER | NULLABLE, REFERENCES tasks(id) | Tracking |
 | priority | INTEGER | NOT NULL, DEFAULT 0, CHECK 0-9 | Metadata |
 | severity | INTEGER | NOT NULL, DEFAULT 0, CHECK 0-9 | Metadata |
 
@@ -1349,6 +1374,8 @@ The following length constraints are enforced at the database level using CHECK 
 | `tasks.technical_requirements` | 4096 characters | `CHECK(length(technical_requirements) <= 4096)` |
 | `tasks.acceptance_criteria` | 4096 characters | `CHECK(length(acceptance_criteria) <= 4096)` |
 | `tasks.completion_summary` | 4096 characters | `CHECK(completion_summary IS NULL OR length(completion_summary) <= 4096)` |
+| `tasks.commit_open` | 64 characters (minimum 7) | `CHECK(commit_open IS NULL OR (length(commit_open) BETWEEN 7 AND 64 AND commit_open NOT GLOB '*[^0-9a-f]*'))` |
+| `tasks.commit_close` | 64 characters (minimum 7) | `CHECK(commit_close IS NULL OR (length(commit_close) BETWEEN 7 AND 64 AND commit_close NOT GLOB '*[^0-9a-f]*'))` |
 | `sprints.title` | 255 characters | `CHECK(length(title) <= 255)` |
 | `task_comments.body` | 4096 characters | `CHECK(length(body) <= 4096)` |
 | `sprint_comments.body` | 4096 characters | `CHECK(length(body) <= 4096)` |
@@ -1365,6 +1392,42 @@ The following fields have a maximum length enforced at the application layer but
 - Validate inputs BEFORE database insertion to provide clear error messages
 - Trim whitespace before length checking
 - Return specific error messages indicating which field exceeded the limit
+
+---
+
+## Commit Hash Format Constraint
+
+The two commit columns of the `tasks` table, `commit_open` and `commit_close`,
+carry a format constraint that is not a length constraint alone, so it is stated
+here in full. The `CHECK` on each column is the database-level backstop for the
+rule the application enforces first (see `MODELS.md § Task`, Commit Hash
+Constraint).
+
+Each `CHECK` has three parts and all three must hold together:
+
+1. `<column> IS NULL` — the column is nullable and NULL is always valid. A task
+   that has never entered `DOING` has a NULL `commit_open`; a task that has never
+   entered `COMPLETED`, or that has since returned to `BACKLOG`, has a NULL
+   `commit_close`.
+2. `length(<column>) BETWEEN 7 AND 64` — the value is at least 7 and at most 64
+   characters, inclusive. Values of any length outside that range are rejected,
+   including the empty string.
+3. `<column> NOT GLOB '*[^0-9a-f]*'` — the value contains no character outside
+   `0`-`9` and `a`-`f`. The pattern matches any value that contains at least one
+   character outside that set, so its negation asserts that every character is in
+   it.
+
+**The third part is case-sensitive, and deliberately so.** SQLite's `GLOB`
+operator compares case-sensitively, unlike `LIKE`. The pattern therefore rejects
+`5F93B51` as firmly as it rejects `5f93b5g`, which makes the constraint a genuine
+backstop for the application's lowercase normalisation rather than a restatement
+of the hexadecimal alphabet alone. A value that reaches the database in any case
+other than lowercase means the normalisation step was skipped, and the constraint
+fails the write instead of storing an unnormalised value.
+
+Because the constraint rejects every non-hexadecimal character, it also rejects
+leading and trailing whitespace. The application does not trim these values, so a
+padded value is invalid at both layers.
 
 ---
 

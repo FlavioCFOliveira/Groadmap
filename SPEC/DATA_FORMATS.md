@@ -144,6 +144,8 @@ Sprint state machine (states, transitions, reopening): see `STATE_MACHINE.md § 
   "tested_at": null,
   "closed_at": null,
   "completion_summary": null,
+  "commit_open": null,
+  "commit_close": null,
   "parent_task_id": null,
   "priority": 9,
   "severity": 0,
@@ -152,6 +154,21 @@ Sprint state machine (states, transitions, reopening): see `STATE_MACHINE.md § 
   "blocks": []
 }
 ```
+
+**`commit_open` and `commit_close`.** Both are JSON strings when set and `null`
+when not, following the same null convention as the lifecycle timestamps beside
+them. A set value is always a lowercase hexadecimal string of 7 to 64 characters:
+the CLI accepts any letter case on input and stores the normalised form, so a
+consumer of this JSON never sees an uppercase hash and never needs to fold case
+before comparing two values. `commit_open` is `null` until the task first enters
+`DOING`, and survives every later return to `BACKLOG`. `commit_close` is `null`
+until the task enters `COMPLETED`, and returns to `null` on every return to
+`BACKLOG`. A task can therefore carry a non-null `commit_open` with a null
+`commit_close` in any status, while the reverse combination — a null `commit_open`
+with a non-null `commit_close` — can only arise on a task that reached `COMPLETED`
+before the columns existed. `MODELS.md § Task` is canonical for the format and
+`STATE_MACHINE.md § Commit Tracking Fields` for when each value is written and
+cleared.
 
 ### Sprint
 
@@ -594,6 +611,8 @@ the corresponding CLI output.
     "tested_at": null,
     "closed_at": null,
     "completion_summary": null,
+    "commit_open": "5f93b51",
+    "commit_close": null,
     "parent_task_id": null,
     "priority": 9,
     "severity": 0,
@@ -629,8 +648,9 @@ the corresponding CLI output.
 2. `task` is one [Task](#task) object, whose fields are defined for the `Task`
    model in `MODELS.md § Task`. Every field the task detail modal displays is
    present, including the long free-text fields (`functional_requirements`,
-   `technical_requirements`, `acceptance_criteria`, and `completion_summary`) and
-   the lifecycle timestamps.
+   `technical_requirements`, `acceptance_criteria`, and `completion_summary`), the
+   lifecycle timestamps, and the two commit hashes (`commit_open` and
+   `commit_close`).
 3. `comments` is an array of [Task Comment](#task-comment) objects, whose fields
    are defined for the `TaskComment` model in `MODELS.md § Task Comment`.
 4. **Order.** The `comments` array is ordered **oldest first**: `created_at`
@@ -935,7 +955,7 @@ MUST NOT show `null` in place of an empty array.
 | `long` | string | yes | Long flag including the `--` prefix. |
 | `short` | string or null | yes | Short flag including the `-` prefix, or `null` when no short form exists. |
 | `type` | string | yes | One of `string`, `integer`, `boolean`, `enum`, `list:string`, `list:integer`, `date`. |
-| `required` | boolean | yes | True when the flag must be supplied; false otherwise. |
+| `required` | boolean | yes | True when the flag must be supplied on every invocation of the subcommand; false otherwise. A flag that is mandatory only for some values of a positional argument carries `required: false`, and its `description` states the condition under which it becomes mandatory. The `--commit-open` and `--commit-close` flags of `task stat` are the case in point: each is mandatory for one target status and rejected for every other, so neither can be marked required for the subcommand as a whole. |
 | `default` | any or null | yes | Default value when the flag is omitted; `null` when there is no default. |
 | `enum` | string or null | yes | Name of the enum (key into the top-level `enums` map) when `type` is `enum`; otherwise `null`. |
 | `range` | object or absent | no | `{min, max}` when the flag is a bounded integer. |
@@ -1060,6 +1080,7 @@ Each follows the shape shown above.
 | `next_without_open_sprint` | Calling `rmp task next` while no sprint is in `OPEN` state. Open a sprint with `sprint start` first. |
 | `complete_with_open_dependencies` | Transitioning a task to `COMPLETED` while it has incomplete subtasks or declared dependencies. Complete the blockers first or remove the dependency. |
 | `summary_on_non_completed_transition` | Passing `--summary` on any transition other than `→ COMPLETED`. The flag is accepted only for that one transition. |
+| `missing_commit_hash_on_transition` | Running `task stat <ids> DOING` without `--commit-open`, or `task stat <ids> COMPLETED` without `--commit-close`. Each flag is mandatory on its own transition and rejected on every other one. The agent must supply the hash itself; `rmp` never reads a git repository to obtain it. |
 | `partial_reorder` | Passing only a subset of a sprint's task IDs to `sprint reorder`. The command requires the complete ordered set; partial reorders are rejected. |
 | `non_iso_date_input` | Supplying dates in a non-ISO 8601 format to filter flags such as `--since` / `--until` / `--created-since` / `--created-until`. The contract's `conventions.datetime_format` is the authoritative input format; `YYYY-MM-DD` is also accepted by date-range filters. |
 | `assume_partial_batch_success` | Assuming a batch operation may partially succeed. All batch operations are fail-fast: either every ID is valid and the operation runs, or no change is made. |

@@ -166,6 +166,37 @@ Maps to the `tasks` table and `Task` JSON object.
 - `TechnicalRequirements`: Maximum 4096 characters
 - `AcceptanceCriteria`: Maximum 4096 characters
 - `CompletionSummary`: Maximum 4096 characters (optional, set only on close)
+- `CommitOpen`: 7 to 64 hexadecimal characters, lowercase (optional, set only on entry into `DOING`)
+- `CommitClose`: 7 to 64 hexadecimal characters, lowercase (optional, set only on entry into `COMPLETED`)
+
+**Commit Hash Constraint:**
+
+The `CommitOpen` and `CommitClose` fields hold git commit hashes and share one
+format rule. A value that the application stores MUST satisfy all of the
+following:
+
+1. It consists solely of hexadecimal characters (`0`-`9`, `a`-`f`, `A`-`F`).
+2. Its length is at least 7 characters and at most 64 characters, inclusive. The
+   lower bound admits the conventional abbreviated hash; the upper bound admits
+   both the 40-character SHA-1 hash and the 64-character SHA-256 hash that a
+   repository created with `git init --object-format=sha256` produces.
+3. The application accepts the value in any letter case and **normalises it to
+   lowercase before storing it**. Every stored value is therefore lowercase, and
+   two callers who supply the same hash in different cases produce the same
+   stored value.
+
+The application applies no other transformation. It does not trim surrounding
+whitespace, so a value carrying a leading or trailing space contains a
+non-hexadecimal character and is rejected. An empty value is rejected, because
+its length is below the lower bound. Every rejection uses exit code 6 and makes
+no change to any task. The database enforces the same rule as a backstop through
+a `CHECK` constraint on each column (see `DATABASE.md § tasks Table`).
+
+Groadmap never derives these values. It runs no git command, reads no working
+directory, and inspects no repository: the caller supplies the hash explicitly on
+the command line (see `COMMANDS.md § Change Status (stat)`). The application
+therefore does not verify that the hash names a commit that exists in any
+repository; it validates the format alone.
 
 **Free-Text Control-Character Constraint:**
 
@@ -194,7 +225,7 @@ every field listed above on every command that accepts the field
 
 ```go
 // Task represents a task in the roadmap.
-// Field order optimized for memory layout (232 bytes, zero padding on 64-bit systems).
+// Field order optimized for memory layout (248 bytes, zero padding on 64-bit systems).
 // Groups: Content (strings), Tracking (pointers), Metadata (ints), Dependencies (slices).
 // All Group 1 fields are mandatory (NOT NULL) with enforced maximum lengths.
 type Task struct {
@@ -208,11 +239,13 @@ type Task struct {
     AcceptanceCriteria     string     `json:"acceptance_criteria"`      // How to verify: completion criteria, max 4096 chars
     CreatedAt              string     `json:"created_at"`               // ISO 8601 UTC, auto-set on creation
 
-    // Group 2: Nullable tracking fields - lifecycle timestamps and parent link (40 bytes: 5 x 8)
+    // Group 2: Nullable tracking fields - lifecycle timestamps, commit hashes, and parent link (56 bytes: 7 x 8)
     StartedAt          *string `json:"started_at"`           // ISO 8601 UTC, auto-set on DOING transition
     TestedAt           *string `json:"tested_at"`            // ISO 8601 UTC, auto-set on TESTING transition
     ClosedAt           *string `json:"closed_at"`            // ISO 8601 UTC, auto-set on COMPLETED transition
     CompletionSummary  *string `json:"completion_summary"`   // Optional summary of work done, settable only on TESTING → COMPLETED, max 4096 chars
+    CommitOpen         *string `json:"commit_open"`          // Git commit hash the task was started from; mandatory on every transition into DOING, 7-64 lowercase hex chars
+    CommitClose        *string `json:"commit_close"`         // Git commit hash the task was concluded at; mandatory on every transition into COMPLETED, 7-64 lowercase hex chars
     ParentTaskID       *int    `json:"parent_task_id"`       // NULL for top-level tasks; non-NULL links to parent task
 
     // Group 3: Numeric metadata fields (32 bytes: 4 x 8)
@@ -226,6 +259,14 @@ type Task struct {
     Blocks    []int `json:"blocks"`     // IDs of tasks that depend on this task (tasks this task is blocking)
 }
 ```
+
+**The block above groups the fields by role, for reading.** It is not the
+declaration order the Go source must use. The struct occupies 248 bytes with zero
+padding in either arrangement, because every field is 8-byte aligned, but the
+`govet:fieldalignment` linter also governs the pointer-scan prefix and rejects this
+reading order. `Memory Layout Optimization` below states the declaration order the
+linter produces, and that order is the canonical one; copying the block above into
+the Go source verbatim fails the lint validation gate.
 
 ### Sprint
 Maps to the `sprints` table and `Sprint` JSON object.
@@ -552,10 +593,11 @@ and must not be changed without also accepting the linter's revised order.
 - `map[K]V`: 8 bytes (header pointer), 8-byte aligned
 - `int` / `float64`: 8 bytes, 8-byte aligned
 
-**Task struct (232 bytes, zero padding on 64-bit):**
+**Task struct (248 bytes, zero padding on 64-bit):**
 ```
-Group 1: Pointer fields (5 × 8 = 40 bytes)
-  ParentTaskID, CompletionSummary, TestedAt, ClosedAt, StartedAt
+Group 1: Pointer fields (7 × 8 = 56 bytes)
+  ParentTaskID, CompletionSummary, CommitOpen, CommitClose, TestedAt,
+  ClosedAt, StartedAt
 
 Group 2: String fields (7 × 16 = 112 bytes)
   AcceptanceCriteria, CreatedAt, Status, TechnicalRequirements,
@@ -630,7 +672,7 @@ sprint_tasks table:
 
 ### Cache Line Considerations
 
-The Task struct (232 bytes) spans approximately 4 cache lines (64 bytes each).
+The Task struct (248 bytes) spans approximately 4 cache lines (64 bytes each).
 The `fieldalignment`-driven grouping keeps fields of the same kind contiguous,
 so common access patterns (e.g. iterating the pointer or string groups during
 display) stay within a small number of cache lines.

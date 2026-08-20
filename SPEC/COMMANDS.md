@@ -59,6 +59,12 @@ The following fields have mandatory length constraints enforced by the applicati
 | `technical_requirements` | Yes | 4096 chars | How: technical description |
 | `acceptance_criteria` | Yes | 4096 chars | How to verify: completion criteria |
 | `completion_summary` | No | 4096 chars | Summary of work done; only accepted on `task stat` when target status is `COMPLETED` |
+| `commit_open` | Conditional | 64 chars (minimum 7) | Git commit hash the task was started from; mandatory on `task stat` when the target status is `DOING`, and rejected on every other target status |
+| `commit_close` | Conditional | 64 chars (minimum 7) | Git commit hash the task was concluded at; mandatory on `task stat` when the target status is `COMPLETED`, and rejected on every other target status |
+
+The two commit fields accept hexadecimal characters only, in any letter case, and
+the application stores them lowercase. `MODELS.md § Task` (Commit Hash Constraint)
+is canonical for the format; `task create` and `task edit` accept neither field.
 
 ### Comment Field Constraints
 
@@ -557,9 +563,17 @@ Success (no open tasks in sprint):
 rmp task stat -r <name> <ids> <state>
 rmp task set-status -r <name> <ids> <state>
 
+# Transitioning to DOING: --commit-open is mandatory
+rmp task stat -r <name> <ids> DOING --commit-open 5f93b51
+rmp task stat -r <name> <ids> DOING -co 5f93b51
+
+# Transitioning to COMPLETED: --commit-close is mandatory
+rmp task stat -r <name> <ids> COMPLETED --commit-close 2578d18
+rmp task stat -r <name> <ids> COMPLETED -cc 2578d18
+
 # With optional completion summary (only valid when transitioning to COMPLETED)
-rmp task stat -r <name> <ids> COMPLETED --summary "Brief description of what was done"
-rmp task stat -r <name> <ids> COMPLETED -s "Brief description of what was done"
+rmp task stat -r <name> <ids> COMPLETED --commit-close 2578d18 --summary "Brief description of what was done"
+rmp task stat -r <name> <ids> COMPLETED -cc 2578d18 -s "Brief description of what was done"
 ```
 
 **Description:** Updates the status of one or more tasks (bulk supported).
@@ -569,6 +583,39 @@ rmp task stat -r <name> <ids> COMPLETED -s "Brief description of what was done"
 | Flag | Short | Type | Description |
 |------|-------|------|-------------|
 | `--summary` | `-s` | string | Optional completion summary. Only accepted when target state is `COMPLETED`. Maximum 4096 characters. |
+| `--commit-open` | `-co` | string | Git commit hash the task is started from. **Mandatory** when target state is `DOING`, and rejected for every other target state. 7 to 64 hexadecimal characters; stored lowercase. |
+| `--commit-close` | `-cc` | string | Git commit hash the task is concluded at. **Mandatory** when target state is `COMPLETED`, and rejected for every other target state. 7 to 64 hexadecimal characters; stored lowercase. |
+
+**Commit Tracking Behavior:**
+
+The two commit flags are the only way a task's `commit_open` and `commit_close`
+values are ever written. Groadmap never derives them: it invokes no git command,
+reads no working directory, and inspects no repository. The caller supplies the
+hash, and the application validates its format alone — it does not check that the
+hash names a commit that exists anywhere. `MODELS.md § Task` (Commit Hash
+Constraint) is canonical for the format.
+
+- **`--commit-open` is mandatory on every transition into `DOING`.** Both such
+  transitions require it: `SPRINT → DOING`, the first entry into `DOING`, and
+  `TESTING → DOING`, a re-entry after testing sent the work back. On a re-entry the
+  supplied value **replaces** the value stored previously; the command keeps no
+  history of earlier values.
+- **`--commit-close` is mandatory on the `TESTING → COMPLETED` transition,** the
+  only transition into `COMPLETED`.
+- **Each flag is rejected on any other target state.** `--commit-open` on a target
+  other than `DOING`, and `--commit-close` on a target other than `COMPLETED`, are
+  rejected with exit code 6 and no changes made. This mirrors the rule that governs
+  `--summary`, which is accepted only when the target is `COMPLETED`.
+- **One hash applies to the whole batch.** When several IDs are given, every task in
+  the batch receives the same supplied hash, exactly as every task in a batch
+  receives the same `--summary`. A caller who needs different hashes for different
+  tasks issues separate commands.
+- **`commit_open` survives a return to `BACKLOG`; `commit_close` does not.** See
+  **Transitioning to BACKLOG** below and `STATE_MACHINE.md § Commit Tracking
+  Fields`.
+- **Neither field is editable.** `task create` accepts neither flag, because a task
+  is created in `BACKLOG`, and `task edit` cannot change either value. A wrong hash
+  is corrected by performing the transition again where the state machine allows it.
 
 **Batch Operation Behavior (Fail-Fast):**
 
@@ -584,14 +631,34 @@ All batch operations validate ALL IDs and status transitions before applying any
 | Target state is `SPRINT` | 6 | **No changes made** | "Error: status SPRINT can only be set automatically via 'sprint add-tasks'" |
 | `--summary` used with non-COMPLETED state | 6 | **No changes made** | "Error: --summary flag is only allowed when transitioning to COMPLETED" |
 | `--summary` exceeds 4096 characters | 6 | **No changes made** | "Error: Completion summary must not exceed 4096 characters (got N)" |
+| `--commit-open` used with non-DOING state | 6 | **No changes made** | "Error: --commit-open flag is only allowed when transitioning to DOING" |
+| `--commit-close` used with non-COMPLETED state | 6 | **No changes made** | "Error: --commit-close flag is only allowed when transitioning to COMPLETED" |
+| Target state is `DOING` and `--commit-open` is absent | 6 | **No changes made** | "Error: --commit-open is required when transitioning to DOING" |
+| Target state is `COMPLETED` and `--commit-close` is absent | 6 | **No changes made** | "Error: --commit-close is required when transitioning to COMPLETED" |
+| `--commit-open` or `--commit-close` value is not a valid commit hash | 6 | **No changes made** | "Error: invalid commit hash for --commit-open: \"X\" (expected 7 to 64 hexadecimal characters)" |
+| `--commit-open` or `--commit-close` written with no value after it | 2 | **No changes made** | "Error: --commit-open requires a value" |
 
 **Validation Order:**
+
+The order below is normative. Steps 1 to 4 need no database and MUST run before
+it is opened; steps 5 to 7 read the database but write nothing; step 8 is the only
+step that writes. A command rejected at any step therefore makes no change to any
+task, including the other tasks of a multi-ID invocation whose IDs were valid.
+
 1. Parse all IDs and validate format (must be positive integers)
-2. Validate `--summary` flag: reject if target state is not `COMPLETED`; validate length if provided
-3. Verify all IDs exist in the roadmap
-4. Validate status transition for each task against state machine rules
-5. Only after full validation succeeds, update all tasks and audit log
-6. If any validation fails, exit immediately without making changes
+2. Validate the target state: reject an unrecognised state, and reject the state `SPRINT`, which only `sprint add-tasks` may set
+3. Validate `--summary`: reject if the target state is not `COMPLETED`; validate length if provided
+4. Validate the commit flags against the target state, in this order:
+   1. Reject `--commit-open` if it is present and the target state is not `DOING`
+   2. Reject `--commit-close` if it is present and the target state is not `COMPLETED`
+   3. Reject if the target state is `DOING` and `--commit-open` is absent
+   4. Reject if the target state is `COMPLETED` and `--commit-close` is absent
+   5. Validate the format of the commit flag the target state requires, and normalise the accepted value to lowercase. The four checks above leave at most one commit flag in play, so no ordering between the two is needed here
+5. Verify all IDs exist in the roadmap
+6. Validate status transition for each task against state machine rules
+7. When the target state is `COMPLETED`, apply the sub-task hierarchy guard and then the dependency guard (see `STATE_MACHINE.md § Sub-task Hierarchy Guard` and `STATE_MACHINE.md § Dependency Guard`)
+8. Only after full validation succeeds, update all tasks and audit log, in a single transaction
+9. If any validation fails, exit immediately without making changes
 
 **Completion Summary Behavior:**
 - `--summary` is optional even when transitioning to `COMPLETED`
@@ -599,7 +666,7 @@ All batch operations validate ALL IDs and status transitions before applying any
 - When transitioning to BACKLOG, `completion_summary` is cleared to NULL
 - `--summary` has no effect on non-COMPLETED transitions and is rejected with an error
 
-**Transitioning to BACKLOG:** The target state `BACKLOG` is accepted from `SPRINT` and from `COMPLETED`, and rejected with exit code 6 from `DOING` and `TESTING`. The transition clears `started_at`, `tested_at`, `closed_at`, and `completion_summary` to NULL. It does not touch the `sprint_tasks` table: a task that was a member of a sprint stays a member, at the same `position`, while its status reads `BACKLOG`. Use `task reopen` to return a `DOING` or `TESTING` task to `BACKLOG`, and `sprint remove-tasks` to detach a task from its sprint. See `STATE_MACHINE.md § Valid Transitions` and `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`.
+**Transitioning to BACKLOG:** The target state `BACKLOG` is accepted from `SPRINT` and from `COMPLETED`, and rejected with exit code 6 from `DOING` and `TESTING`. The transition clears `started_at`, `tested_at`, `closed_at`, `completion_summary`, and `commit_close` to NULL, and **preserves `commit_open`**. The asymmetry is deliberate: the commit the work was started from remains a true historical fact after the task returns to the backlog, whereas the commit it was concluded at is invalidated by the reopening. The transition does not touch the `sprint_tasks` table: a task that was a member of a sprint stays a member, at the same `position`, while its status reads `BACKLOG`. Use `task reopen` to return a `DOING` or `TESTING` task to `BACKLOG`, and `sprint remove-tasks` to detach a task from its sprint. See `STATE_MACHINE.md § Valid Transitions`, `STATE_MACHINE.md § Commit Tracking Fields`, and `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`.
 
 **Output (success):** No output, exit code 0.
 
@@ -847,7 +914,7 @@ rmp task blocking -r <name> <id>
 rmp task reopen -r <name> <ids>
 ```
 
-**Description:** Returns one or more tasks to `BACKLOG` status, clearing all lifecycle timestamps (`started_at`, `tested_at`, `closed_at`) and the `completion_summary`. Accepts comma-separated IDs for bulk operations.
+**Description:** Returns one or more tasks to `BACKLOG` status, clearing all lifecycle timestamps (`started_at`, `tested_at`, `closed_at`), the `completion_summary`, and `commit_close`. It **preserves `commit_open`**, which records where the work originally started and stays true after the task returns to the backlog. Accepts comma-separated IDs for bulk operations.
 
 **Valid source states:** `SPRINT`, `DOING`, `TESTING`, `COMPLETED` — any non-BACKLOG state.
 
@@ -859,8 +926,8 @@ All IDs are validated before any transitions are applied. If any ID is invalid, 
 
 | Scenario | Exit Code | Behavior | Output |
 |----------|-----------|----------|--------|
-| Task transitions to BACKLOG from `SPRINT`, `DOING`, or `TESTING` | 0 | Timestamps and `completion_summary` cleared; `sprint_tasks` row removed | No stdout |
-| Task transitions to BACKLOG from `COMPLETED` | 0 | Timestamps and `completion_summary` cleared; `sprint_tasks` row kept | No stdout |
+| Task transitions to BACKLOG from `SPRINT`, `DOING`, or `TESTING` | 0 | Timestamps, `completion_summary`, and `commit_close` cleared; `commit_open` preserved; `sprint_tasks` row removed | No stdout |
+| Task transitions to BACKLOG from `COMPLETED` | 0 | Timestamps, `completion_summary`, and `commit_close` cleared; `commit_open` preserved; `sprint_tasks` row kept | No stdout |
 | Task already in BACKLOG | 0 | No change; any `sprint_tasks` row is kept | Informational message to stderr |
 | Invalid task ID | 4 | **No tasks modified** | Error to stderr |
 
@@ -1387,7 +1454,7 @@ All sprint task operations validate ALL IDs before making any changes.
 | Command | Task Status Change | Description |
 |---------|-------------------|-------------|
 | `add-tasks` | BACKLOG → SPRINT | Tasks automatically change to SPRINT status when added to sprint |
-| `remove-tasks` | SPRINT, DOING, TESTING, or COMPLETED → BACKLOG | Tasks automatically return to BACKLOG when removed from sprint, whatever their status. The command also clears `started_at`, `tested_at`, `closed_at`, and `completion_summary` |
+| `remove-tasks` | SPRINT, DOING, TESTING, or COMPLETED → BACKLOG | Tasks automatically return to BACKLOG when removed from sprint, whatever their status. The command also clears `started_at`, `tested_at`, `closed_at`, `completion_summary`, and `commit_close`, and preserves `commit_open` |
 | `move-tasks` | (No change) | Status is preserved when moving between sprints |
 
 **Note:** The status SPRINT is automatically managed by sprint operations. Users MUST NOT manually set status to SPRINT using `task stat`; attempts to do so are rejected with exit code 6 and the error message `"Error: status SPRINT can only be set automatically via 'sprint add-tasks'"`. Manual status transitions follow: BACKLOG → SPRINT (automatic) → DOING → TESTING → COMPLETED. `task stat <ids> BACKLOG` is also accepted from `SPRINT` and from `COMPLETED`, and it does not remove the task from its sprint: the task keeps its `sprint_tasks` row while its status reads `BACKLOG`. See `STATE_MACHINE.md § Valid Transitions` for the full set and `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` for the membership rule.
@@ -1626,8 +1693,8 @@ A member task can already be in `BACKLOG` status before the sprint is removed (s
 1. Validate sprint ID exists
 2. For each task in the sprint:
    - Set status to BACKLOG (regardless of current status)
-   - Clear `started_at`, `tested_at`, `closed_at`, and `completion_summary` to NULL
-   - Preserve all other fields (title, requirements, priority, severity, etc.)
+   - Clear `started_at`, `tested_at`, `closed_at`, `completion_summary`, and `commit_close` to NULL
+   - Preserve all other fields (title, requirements, priority, severity, `commit_open`, etc.)
 3. Delete sprint_tasks junction table entries
 4. Delete sprint from sprints table
 5. Log SPRINT_DELETE operation in audit log with cascade info

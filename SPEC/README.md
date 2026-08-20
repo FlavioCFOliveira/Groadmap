@@ -36,6 +36,10 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Web HTTP server timeouts (read-header, write, idle) and the graph data endpoint's query time budget | `WEB.md § HTTP Server Timeouts` |
 | Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
 | Free-text control-character constraint (CWE-150 / Trojan Source) | `MODELS.md § Task` (Free-Text Control-Character Constraint) |
+| Task commit-hash format (7-64 hexadecimal characters, lowercase on storage, no git invocation) | `MODELS.md § Task` (Commit Hash Constraint) |
+| Task commit-hash `CHECK` constraints and why `GLOB` is case-sensitive | `DATABASE.md § Commit Hash Format Constraint` |
+| Task commit tracking (`commit_open` / `commit_close`: when each is written, when each is cleared, the asymmetry on reopening) | `STATE_MACHINE.md § Commit Tracking Fields` |
+| `task stat` commit flags (`--commit-open` / `--commit-close`), their validation order and errors | `COMMANDS.md § Change Status (stat)` |
 | Comment types (the one enum, and the per-entity valid subsets) | `MODELS.md § Comment Type` |
 | Task comment / sprint comment models and field constraints | `MODELS.md § Task Comment` and `MODELS.md § Sprint Comment` |
 | Comment subcommand syntax / flags (`comment-add`, `comment-list`, `comment-edit`, `comment-remove`) | `COMMANDS.md § Task Comments` and `COMMANDS.md § Sprint Comments` |
@@ -119,6 +123,8 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Comment body input source and precedence (`--body` or stdin) | `COMMANDS.md § Comment Body Input Source and Precedence` |
 | Memory layout / struct field ordering | `MODELS.md § Memory Layout Optimization` |
 | Task state transitions | `STATE_MACHINE.md § Task State Machine` |
+| Task commit-hash format (character set, length bounds, lowercase normalisation) | `MODELS.md § Task` (Commit Hash Constraint) |
+| Task commit tracking field rules (when `commit_open` and `commit_close` are written, preserved, and cleared) | `STATE_MACHINE.md § Commit Tracking Fields` |
 | Sprint state transitions | `STATE_MACHINE.md § Sprint State Machine` |
 | Sprint membership versus task status | `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` |
 | Audit operations catalogue | `DATABASE.md § audit Table` |

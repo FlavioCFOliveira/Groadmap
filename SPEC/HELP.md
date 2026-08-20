@@ -218,6 +218,43 @@ the code (e.g. `printTaskStatHelp`, `printSprintCloseHelp`,
 `printBacklogShowNextHelp`). The family help additionally summarises the
 subcommands and shared invariants.
 
+### Task family help specifics
+
+The `task stat` subcommand help follows the same structure template as every other
+subcommand but MUST additionally make the rules below explicit, because the generic
+Required / Optional split cannot express them. Both the plain-text help and the
+machine-readable AI Agent Contract (`rmp --ai-help`) MUST document them:
+
+1. **Two flags are conditionally mandatory.** `-co, --commit-open` is mandatory when
+   the target status is `DOING`, and `-cc, --commit-close` is mandatory when the
+   target status is `COMPLETED`. Neither is mandatory for the subcommand as a whole,
+   so neither belongs under a bare `Required:` heading. The help MUST list both under
+   `Optional:` and state the condition in the flag's own description, in the form
+   "required when <new-status> is DOING" and "required when <new-status> is
+   COMPLETED". A reader must be able to tell, without running the command, that
+   `rmp task stat -r x 7 DOING` on its own fails.
+2. **Each flag is rejected outside its own transition.** The help MUST state that
+   `--commit-open` is accepted only for the target status `DOING` and
+   `--commit-close` only for `COMPLETED`, alongside the existing statement of the
+   same rule for `--summary` and `COMPLETED`.
+3. **The value format.** The help MUST state that the value is a git commit hash of
+   7 to 64 hexadecimal characters, accepted in any letter case and stored lowercase.
+4. **Groadmap reads no repository.** The help MUST state that the caller supplies
+   the hash and that `rmp` runs no git command and inspects no working directory.
+   This is the point an AI agent is most likely to get wrong, because the natural
+   assumption is that a tool storing a commit hash can discover it; the contract's
+   `pitfalls` array carries the same warning (see
+   `DATA_FORMATS.md § pitfalls array entry`).
+5. **What a return to `BACKLOG` does to each field.** The `task stat` and
+   `task reopen` helps both describe the clearing behaviour of a return to
+   `BACKLOG`. Both MUST name `commit_close` among the cleared fields and MUST state
+   that `commit_open` is preserved, because the asymmetry contradicts the pattern
+   every other tracking field follows and a reader who assumes symmetry would be
+   wrong. `STATE_MACHINE.md § Commit Tracking Fields` is canonical for the rule.
+
+`COMMANDS.md § Change Status (stat)` remains canonical for the flags, the
+validation order, and the exact error text.
+
 ### Sprint family help specifics
 
 The `sprint` family help and the `sprint create` / `sprint update` subcommand
