@@ -3,11 +3,14 @@
  * The admin-shell layout, typography, colours, dark theme, tables, cards,
  * badges, buttons, and the responsive off-canvas sidebar all come from the
  * vendored Tabler framework (SPEC/WEB.md § UI Framework). This file holds
- * only what Tabler does not give us: the D3 #graph container sizing, the
- * graph detail-panel positioning, the empty-graph overlay, the in-place
- * degradation message, the layout dropdown glue, and a couple of minor
- * dark-theme tweaks. It does not re-implement any layout Tabler already
- * provides.
+ * only what Tabler does not give us: the one definite height that turns
+ * Tabler's own shell chain into a full-height page region, the column strip and
+ * scrolling shared by the two Kanban boards — the roadmap tasks page's and the
+ * sprint page's member-tasks board (Tabler ships no board component),
+ * the D3 #graph container sizing, the graph detail-panel positioning, the
+ * empty-graph overlay, the in-place degradation message, the layout dropdown
+ * glue, and a couple of minor dark-theme tweaks. It does not re-implement
+ * any layout Tabler already provides.
  *
  * Mobile-first: the base rules target small phone-sized viewports and a
  * min-width media query enhances the graph layout for wider screens
@@ -20,21 +23,12 @@
    leaving a `hidden` overlay painted on top of the rendered graph. */
 [hidden] { display: none !important; }
 
-/* ---- Sidebar section label and divider (SPEC/WEB.md § UI Framework, rule 10) ----
-   The vertical-navbar section label follows Tabler's subheader + divider idiom
-   instead of an inline-styled label. Tabler's `.subheader` already supplies the
-   small (0.75rem), uppercase, letter-spaced, muted look, so no inline style is
-   needed. These two residual rules only restore the compact navbar spacing for
-   the `navbar-heading`/`navbar-divider` idiom classes, which the vendored Tabler
-   v1.4.0 build does not style on their own. */
-.navbar-heading {
-  margin: 0;
-  padding: 0.25rem 1rem;
-}
-
-.navbar-divider {
-  margin: 0.25rem 1rem;
-}
+/* The sidebar section label and its divider carry NO rule here: they are
+   Tabler's own `subheader` and `dropdown-divider` classes plus the `px-3`/`mb-2`
+   spacing utilities, all of which the vendored distribution already styles
+   (SPEC/WEB.md § UI Framework, rule 10). A class that needs a rule in this file
+   to look right is a class Tabler does not ship, which is a divergence from the
+   framework rather than an override of it. */
 
 /* ---- Empty-state icon sizing (SPEC/WEB.md § UI Framework, rule 10) ----
    Tabler's `.empty-icon` sizes an SVG child, but the empty states use a Tabler
@@ -45,17 +39,429 @@
   font-size: 2.5rem;
 }
 
-/* ---- Roadmap detail / sprint pages ----
-   A clickable task row (opens the read-only task detail modal). Tabler/Bootstrap
-   own the modal itself; this only signals the row is interactive and gives it a
-   visible keyboard-focus affordance, so it is usable by touch and keyboard
-   (SPEC/WEB.md § Task Detail Modal, § Responsive and Mobile-First Design). */
-.task-row { cursor: pointer; }
-.task-row:focus-visible { outline: 2px solid var(--tblr-primary, #4299e1); outline-offset: -2px; }
+/* ---- The card that opens the read-only task detail modal ----
+   Both boards render it — the roadmap tasks page's Kanban board and the sprint
+   page's member-tasks board — and on both the card IS the trigger and is a real
+   <button>. Tabler/Bootstrap own the modal; this only signals the element is
+   interactive (SPEC/WEB.md § Task Detail Modal, § Responsive and Mobile-First
+   Design).
+
+   `cursor` is inherited, but a browser user-agent stylesheet may set its own
+   cursor on a button, so the card names it here rather than relying on
+   inheritance.
+
+   The rules for `.task-row` and `.task-row__trigger` were removed with the
+   sprint page's member-tasks table: a <tr> is not activatable and could hold no
+   control wrapping the whole row, so that presentation needed two targets for one
+   task — the row for the pointer and a button in one cell for the keyboard. The
+   card needs one, and it is the card. */
+.task-card { cursor: pointer; }
+
+/* The keyboard-focus affordance, on the element that actually takes focus and can
+   be activated: the card button itself. */
+.task-card:focus-visible { outline: 2px solid var(--tblr-primary, #4299e1); outline-offset: -2px; }
+
+/* ---- The floor every bounded region reads (SPEC/WEB.md § Full-Height Page
+   Regions, rule 5; § Sprint Detail Sub-Template, Height and scrolling) ----
+   The single length below which a scrolling region would present a fraction of a
+   card and stop being worth presenting at all. It is declared ONCE, on :root, and
+   every rule that needs it reads it from there.
+
+   It lives on :root and not on `.full-height-page` because the pages that need it
+   are not the same set as the pages that carry that class. The sprint page's
+   member-tasks board is bounded to 60vh with this same floor, and that page is NOT
+   a full-height page — it places the Sprint details card above the board and the
+   Comments card below it — so a property declared on the full-height shell alone
+   would not resolve there and the board would lose its floor silently. Restating
+   the length beside the board instead would be the other failure: two copies of
+   one number, free to be changed apart, stating different floors for the same
+   screen (Acceptance Criterion 136). */
+:root {
+  --full-height-region-floor: 22rem;
+}
+
+/* ---- Full-height page shell (SPEC/WEB.md § Full-Height Page Regions) ----
+   A page presenting a full-height region — one sized to the viewport so that its
+   children scroll INSIDE it and the page does not scroll to reach them — carries
+   `full-height-page` on its <body>. Both such pages carry it: the roadmap tasks
+   page for its Kanban board, and the knowledge-graph page for its graph card.
+   ONE mechanism serves the two, so neither can come to be sized by a rule the
+   other does not obey — which is how the graph card came to subtract a length
+   that forgot the query bar while the board was subtracting one that reserved
+   space for a footer no page renders.
+
+   Tabler already ships the whole chain such a region needs, and this file adds no
+   part of it: `.page` is a flex column, `.page-wrapper` is `flex: 1` and a flex
+   column in turn, and `.page-body` is `flex: 1` and a flex column too. The navbar
+   and the page header therefore take the room they need and the page body is
+   already declared to be everything left over. What the distribution does NOT
+   ship is a definite height at the top of that chain, so every `flex: 1` below
+   divides a quantity that is itself content-driven. The rule below supplies that
+   one missing height. From there the BROWSER computes what the region gets, at
+   every viewport size — including the widths where the page header wraps onto
+   further rows, the widths below `lg` where the vertical navbar is in flow rather
+   than fixed and takes height of its own, and, on the knowledge-graph page, the
+   widths at which the query bar stacks its controls below the query box instead
+   of beside it. Nothing in this file has to know any of those heights: whatever
+   the page places above the region is placed first and the region divides what is
+   left (rule 2).
+
+   That is why the region's height is no longer arithmetic. The board used to take
+   `calc(100vh - 14rem)`: a fixed reservation for a navbar, a page header, and a
+   footer. No page has rendered a footer since it was removed (§ UI Framework,
+   rule 12), and the page header's height is not a constant either — its search
+   box and three filter dropdowns wrap onto further rows as the viewport narrows.
+   Measured in a browser at a viewport 900px tall, the material above the board
+   occupied 144px at widths of 1600 and 1440, 228px at 1280 and 1100, 284px at 768
+   and 380px at 500. A 224px reservation was thus correct at no width at all: it
+   left 80px of viewport carrying nothing on a desktop, and pushed the foot of the
+   board up to 156px below the fold on a phone. An edge needs no such number kept
+   in step with the page (rules 1 to 3).
+
+   Two height declarations, not one, and the ORDER is the mechanism. `vh` is the
+   LARGE viewport height: on a mobile browser with a dynamic address bar it
+   measures the viewport as if the bar were retracted, so the bottom of the region
+   — the end of each board column's card list — sits below the fold exactly while
+   the bar is showing. `dvh` is the height actually visible at that moment. A
+   browser that does not understand `dvh` drops the second declaration and keeps
+   the first, which is the standard way to ship the unit without an @supports
+   block: the later declaration wins where it is understood and is discarded where
+   it is not (rule 4; § Responsive and Mobile-First Design, rule 9).
+
+   Tabler's own `min-height: 100%` is dropped here rather than left to interact
+   with those two. It is what stretches `.page` to the viewport on an ordinary
+   page, and the height below now does that job exactly; left in place it would
+   also be free to resolve against the LARGE viewport on the very browsers rule 4
+   is written for, overriding the dynamic height and putting the foot of the
+   region back under the address bar.
+
+   The floor those rules read — `--full-height-region-floor` — is declared at the
+   top of this file, on :root, so every page resolves it and not only the ones
+   carrying `full-height-page`. FOUR rules need it and they must agree: each of the
+   two full-height regions takes it as its own floor, the page body they end
+   against does not shrink past it, and the sprint page's bounded board takes the
+   same floor.
+
+   On the tasks page that keeps both edges of rule 1 coinciding on a viewport too
+   short for either, and only the page's vertical scroll gives way. On the
+   knowledge-graph page the query bar stands between the top of the page body and
+   the region, so once the floor binds the card's foot passes the page body's by
+   the height of that bar — measured 134px at 1280x420, the bar plus its margin.
+   That is the floor case rule 5 already sets aside, and the region's own floor is
+   what decides it: a page body floored high enough to hold a floored region AND
+   the bar above it would have to add the bar's height to the floor, and the bar's
+   height is exactly the quantity rule 3 forbids this stylesheet to name. Above the
+   floor — every viewport height at which the region is worth presenting — the two
+   edges coincide on both pages. */
+.full-height-page .page {
+  min-height: 0;
+  height: 100vh;
+  height: 100dvh;
+}
+
+/* The chrome above the region is PLACED, and takes the room it needs; the region
+   is what gives way (rules 1 and 2). This has to be said because Tabler gives
+   `.page-header` an explicit `min-height: 2.25rem`, which frees it to shrink
+   below its OWN content once the shell is capped at the viewport: measured at
+   1280x420 the header's box collapsed to that 36px floor while its content still
+   stood 124px tall, spilling the search box and the three filter dropdowns 88px
+   over the board. The vertical navbar is in this rule for the same reason, for
+   the viewports below `lg` where it is in flow rather than fixed.
+
+   The knowledge-graph page's query bar is chrome above a region too, and is
+   deliberately NOT in this selector list. It is a Tabler `.card`, and Tabler gives
+   the card no min-height of its own, so the card keeps the automatic minimum every
+   flex item has — its own content — and the flex algorithm may not take height
+   from it however short the page body is. Measured at 1280x420 and 500x360, where
+   the page body is far shorter than the bar and the card together, the bar kept
+   exactly the 118px and 194px it occupies at those widths on a 900px-tall
+   viewport. The page header is in this rule only because Tabler's explicit
+   `min-height` overrides that same protection. A `flex-shrink: 0` here would state
+   a fact the layout already guarantees, and this file states nothing twice. */
+.full-height-page .page > .navbar,
+.full-height-page .page-header {
+  flex-shrink: 0;
+}
+
+/* Every link of the chain needs an explicit minimum height, and this is the part
+   that is not obvious. A flex item's default `min-height: auto` is its
+   content-based minimum, and the content here is a board column's whole card
+   list: measured on this roadmap the board's content stands 43078px tall. Left at
+   `auto`, each link is forbidden to shrink below that, so the page body grows to
+   the full card list, the chain hands the region a height computed from the
+   content it was supposed to contain, and the region ends 42 thousand pixels below
+   the fold. The definite height at the top of the chain does not prevent this: it
+   caps `.page` alone, and every link below is free to overflow it.
+
+   `min-height: 0` frees a link to take the height handed down instead. The page
+   body takes the floor rather than 0, because it is the element the region's
+   bottom edge is measured against (Acceptance Criterion 124).
+
+   Below the floor the two do NOT end at the same place wherever the page renders
+   an element above the region inside the same container. Both are held to the same
+   minimum, so the page body must carry that element AND the floored region, and the
+   region's foot passes the page body's foot by the space the element occupies:
+   measured 134px at 1280x420 and 210px at 500x360 on the knowledge-graph page,
+   whose query bar always stands there, and 96px / 116px on the tasks page whenever
+   its controls match no task and the no-match message is shown. Nothing here can
+   close that gap: it would take a page-body floor of the region's floor PLUS the
+   height of the element above it, which is the fixed subtraction rule 3 forbids —
+   and no constant would do, because the query bar stacks its controls as the
+   viewport narrows and the no-match message wraps. Above the floor, which is every
+   viewport height at which the region is worth presenting at all, the two edges
+   coincide on both pages (SPEC/WEB.md § Full-Height Page Regions, rules 1, 3 and 5;
+   Acceptance Criterion 127). */
+.full-height-page .page-wrapper,
+.full-height-page .page-body > .container-xl {
+  min-height: 0;
+}
+
+.full-height-page .page-body {
+  min-height: var(--full-height-region-floor);
+}
+
+/* Tabler's chain stops at `.page-body`, whose child is the Bootstrap container
+   the page's own markup opens. That container is a block box: left alone it would
+   size itself to its content and leave the region inside it to size itself too,
+   which is the chain broken one link above the region. Making it the next link
+   passes the computed height through. */
+.full-height-page .page-body > .container-xl {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+
+/* ---- Kanban board (SPEC/WEB.md § Roadmap Tasks Page, layout and scrolling;
+   § Sprint Detail Sub-Template, rule 4; § Full-Height Page Regions;
+   § Responsive and Mobile-First Design, rules 9 and 10) ----
+   The vendored Tabler distribution ships no board or Kanban component, so the
+   column strip's own layout and scrolling rules live here; everything inside a
+   column is Tabler's own markup (cards, card headers, badges, empty states) and
+   carries no rule of its own in this file.
+
+   TWO boards are rendered from these rules: the roadmap tasks page's five-column
+   task board and the roadmap sprint page's three-column member-tasks board. They
+   share one set of rules rather than each carrying its own, because their columns
+   and their cards are the same kind of object and a reader moving between the two
+   pages should meet one column measure and one card measure. That is also what
+   makes the shared lengths one measure used twice rather than two that happen to
+   agree today (Acceptance Criteria 129 and 139).
+
+   The columns sit side by side and the BOARD scrolls horizontally inside this
+   container when they do not fit, so the page itself never scrolls horizontally
+   at any viewport width.
+
+   The board computes no height of its own here. On the tasks page it is a
+   full-height page region and claims what the page body has left through the
+   shell chain above; on the sprint page the `--bounded` modifier below gives it a
+   definite height instead. Either way, that height is the "available height" each
+   column scrolls its cards within. */
+.task-board {
+  display: flex;
+  align-items: stretch;
+  gap: 0.75rem;
+  flex: 1;
+  /* The floor, read from the one place it is declared (:root, at the top of this
+     file) so the board and the page body it is measured against cannot come to
+     state different floors. No fallback length is written here: a second copy of
+     the number is a copy that can be changed on its own (SPEC/WEB.md
+     § Full-Height Page Regions, rule 5; Acceptance Criterion 136). */
+  min-height: var(--full-height-region-floor);
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* Room for the horizontal scrollbar so it never overlaps the last card. */
+  padding-bottom: 0.5rem;
+}
+
+/* The sprint page's member-tasks board, and the first of the two things it does
+   differently: its height is bounded by a definite length instead of by the space
+   the page body leaves (SPEC/WEB.md § Sprint Detail Sub-Template, Height and
+   scrolling; Acceptance Criterion 136). The second is the width of its columns,
+   which is declared on the column rule below and keyed on this same modifier.
+
+   The sprint page is not a single-region page. It carries the Sprint details card
+   above the board and the Comments card below it, and all three belong to one
+   sprint presentation: a board sized to the space the page body leaves would fill
+   the rest of the viewport on its own and push the Comments card below the fold
+   for every sprint, while a board sized to its own content would push that card
+   further down with every member task the sprint gains. This bounded height
+   avoids both — the board shows a useful number of cards, scrolls the rest inside
+   its columns, and leaves the Comments card within reach.
+
+   The height is viewport-relative, so the board follows the screen at the same
+   proportion everywhere rather than fixing the layout to one device, and the
+   `min-height` the base rule above already declares floors it: on a viewport short
+   enough that 60vh falls below `--full-height-region-floor`, the board takes the
+   floor and keeps showing useful content instead of collapsing to a sliver of one
+   card. Nothing is restated here — not the floor, not a column length — because
+   this rule's whole job is the one property that differs; the column width that
+   also differs is declared where the column is, not here.
+
+   This board is deliberately NOT a full-height page region, so the ordered
+   vh/dvh pair those regions declare does not apply to it: 60vh is a fraction of
+   the viewport rather than an edge that must meet the bottom of the page body,
+   and the dynamic unit exists to keep such an edge above the fold while a mobile
+   address bar is showing (§ Full-Height Page Regions, rules 1 and 4). */
+.task-board--bounded {
+  height: 60vh;
+}
+
+/* One column, and the two boards' SHARED column rule. A column's width is what
+   decides the measure a card's title is set on, so it is stated here rather than
+   left to the content — but the two boards no longer state the same one, and this
+   rule is careful about which half is which.
+
+   Shared, and read by both boards: `min-width: 17rem`, the width below which a
+   card's text stops being legible, and the bounds that make a column scroll its
+   own cards instead of growing with them (`max-height: 100%`, `overflow: hidden`).
+   The other two lengths the boards share are declared once as well and not here:
+   the 0.75rem gap on `.task-board`, and the 0.75rem card body padding on
+   `.task-card > .card-body`. A reader moving between the tasks page and a sprint
+   page therefore meets one card measure and one minimum column.
+
+   The TASKS board's own: `width: 19rem` with `flex: 0 0 auto`. That board has one
+   column per task status, so its column count is fixed by the enum rather than by
+   what is on screen and it has a natural width of its own: dividing a viewport
+   among five columns would cut the measure this width exists to protect, so the
+   column neither grows into a wider viewport — the space beyond the five is left
+   empty — nor shrinks on a narrower one, and the remaining columns are reached by
+   scrolling the board horizontally, a touch-friendly gesture on a touch device.
+
+   The sprint page's board overrides exactly those two declarations in the rule
+   below, and restates none of the shared lengths. Every length here is in `rem`,
+   so the column follows the reader's own text size (SPEC/WEB.md § Roadmap Tasks
+   Page, Column width and card density; § Sprint Detail Sub-Template, Height and
+   scrolling, "The three columns divide the width of the board" and "Why the two
+   boards differ here"; Acceptance Criteria 129 and 139). */
+.task-board__column {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  width: 19rem;
+  min-width: 17rem;
+  max-height: 100%;
+  overflow: hidden;
+}
+
+/* The sprint page's three columns divide the width of the board equally instead
+   of carrying the fixed width above. `flex-basis: 0` makes the three shares equal
+   whatever each column holds — a column stands for a state and not for a volume
+   of work, so the width follows the viewport and never the data — and
+   `flex-grow: 1` hands out everything the board leaves once the gaps between the
+   columns are taken out, so the columns grow into the viewport rather than leaving
+   the space beside them empty. Three columns dividing a viewport are wide where
+   five would be narrow, and this board is read as one sprint at a glance rather
+   than as a view of a whole roadmap, which is what makes filling the width the
+   right shape for it and not for the tasks board.
+
+   `width: auto` is written out rather than left implicit: a flex item with a
+   definite basis ignores `width`, but the 19rem above would otherwise stand in the
+   cascade as a length this board does not carry, and would apply the moment the
+   element stopped being a flex item.
+
+   The floor still holds, and is still declared once: `min-width: 17rem` above is a
+   minimum the flex layout may not shrink past, so when three columns at that
+   minimum plus their gaps exceed the viewport the columns keep the minimum and
+   `.task-board`'s own `overflow-x: auto` scrolls the strip inside its container,
+   leaving <body> with no horizontal overflow.
+
+   The selector is keyed on the `--bounded` modifier because that is the class this
+   board already carries: the change is a stylesheet change alone, and the board
+   emits the same markup and the same classes it did before (SPEC/WEB.md § Sprint
+   Detail Sub-Template, Height and scrolling; § Responsive and Mobile-First Design,
+   rules 2 and 10; Acceptance Criterion 139). */
+.task-board--bounded > .task-board__column {
+  flex: 1 1 0;
+  width: auto;
+}
+
+/* The card list of one column scrolls VERTICALLY and independently of the other
+   columns when it exceeds the available height. min-height: 0 is what lets a
+   flex item shrink below its content height and therefore scroll at all. */
+.task-board__cards {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* The card the user reads and presses. Tabler gives a small card's body 1rem on
+   every side (`.card-sm > .card-body`); inside a column already narrowed to its
+   own width that padding is measure taken from the card's own running text — the reference
+   line, the title, the badges, and the metadata footer — so it is reduced here and
+   the width and height it frees go back to that text. The selector matches
+   Tabler's specificity and this sheet is the last one the layout links, so source
+   order settles the cascade and no !important is needed. The hit target does not
+   shrink: what the user presses is the whole card, not the text inside it
+   (SPEC/WEB.md § Roadmap Tasks Page, Column width and card density; § Sprint
+   Detail Sub-Template, Column width and card density). Both boards' cards carry
+   this one padding: the rule selects the class, and both emit it. */
+.task-card > .card-body {
+  padding: 0.75rem;
+}
+
+/* An empty column of either board keeps its heading and its 0 count badge and
+   shows Tabler's empty-state markup in place of the card list. Tabler sizes that
+   panel for a full-width card; inside a board column it is tightened so the empty
+   state stays unobtrusive. Together with the card-body padding above, these are
+   the only two presentation rules the boards add to a Tabler component. */
+.task-board__cards .empty {
+  padding: 1rem 0.5rem;
+}
+
+.task-board__cards .empty-title {
+  font-size: 1rem;
+}
 
 /* The sprint tabs wrap on narrow viewports rather than overflowing the card
    horizontally, keeping the three tabs reachable on phones. */
 .sprint-tabs { flex-wrap: wrap; }
+
+/* ---- Tasks board header controls (SPEC/WEB.md § Roadmap Tasks Page, Header
+   search control and Header filter controls; § Responsive and Mobile-First
+   Design, rule 9) ----
+   Mobile-first: the four controls - the search box and the type, minimum-priority
+   and minimum-severity dropdowns - wrap inside the page header's actions column
+   instead of forcing the page to scroll horizontally. Each control stays paired
+   with its own label, so a wrap never separates the two. */
+
+.task-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.task-controls__field {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Touch-friendly minimum height on small viewports, matching the query bar's
+   controls. */
+.task-controls .form-control,
+.task-controls .form-select {
+  min-height: 2.5rem;
+}
+
+/* Tabler's page-header actions column is `.col-auto`, which is `flex: 0 0 auto`:
+   it sizes to its content and never shrinks, so on a narrow viewport the four
+   controls above would sit on one unbreakable line far wider than the viewport
+   and the PAGE would scroll horizontally, which rule 2 forbids. Letting that
+   column shrink is what gives the wrap above somewhere to happen.
+
+   The hook is the child rather than the column: the column's own classes are
+   Tabler's PageHeader markup verbatim and are pinned by the page-header fidelity
+   guards, so nothing may be added to them. Where :has() is unsupported the rule
+   is simply skipped and the header behaves as it did before the dropdowns
+   existed. */
+.page-header .col-auto:has(> .task-controls) {
+  flex-shrink: 1;
+  min-width: 0;
+}
 
 /* Authored multi-line free-text wraps and preserves the source line breaks
    without forcing horizontal scrolling, so it stays readable on small
@@ -72,21 +478,52 @@
   overflow-wrap: anywhere;
 }
 
-/* ---- Knowledge-graph page ----
+/* ---- Knowledge-graph page (SPEC/WEB.md § Roadmap Knowledge-Graph Page, Graph
+   card layout; § Full-Height Page Regions) ----
    The graph card holds two regions: the labels sidebar on the left and the
    graph canvas on the right. The card is a flex container; the canvas region
    is the positioning context so the absolutely positioned #graph SVG host, the
-   detail panel, and the empty-graph overlay anchor to it. Mobile-first: a
-   viewport-derived height that leaves room for the Tabler navbar + page header
-   on small screens. */
+   detail panel, and the empty-graph overlay anchor to it.
+
+   The card is the page's FULL-HEIGHT REGION and computes no height of its own.
+   It grows into what the page body has left once the three things above it are
+   placed — the top navbar, the page header, and the query bar — through the same
+   shell chain the tasks page's board takes its height from. One mechanism serves
+   both regions: the viewport enters this stylesheet exactly once, as the ordered
+   `vh`/`dvh` pair on `.full-height-page .page` above, so this card carries the
+   mobile dynamic-address-bar guarantee (rule 4) without naming a viewport unit
+   here, and gains it by belonging to the chain rather than by restating it.
+
+   What stood here was `height: calc(100vh - 9rem)`, described in this very
+   comment as room for "the Tabler navbar + page header" — the defect written
+   out, because the QUERY BAR sits between the page header and this card and was
+   reserved for nowhere (rule 2). Measured in a browser with the DevTools Protocol
+   at a viewport 900px tall, the material above the card occupied 298px at widths
+   of 1920, 1600 and 1280 against that 144px reservation: the card overran the
+   fold by 154px and the document scrolled vertically, on a page whose whole
+   purpose is a canvas sized to the screen. Correcting the constant would have
+   fixed nothing, because it is not a constant: the same measurement gives 354px
+   at 768, 406px at 500 and 426px at 400, the page header wrapping onto further
+   rows as the viewport narrows while the query bar stacks its own controls below
+   the query box at 768 (rule 3, and the media query at the foot of this file).
+
+   Mobile-first: the sidebar stacks above the canvas at this width and the media
+   query lays the card out as a row from 768px up. */
 
 .graph-card {
   position: relative;
   display: flex;
+  flex: 1;
   flex-direction: column; /* mobile-first: sidebar stacks above the canvas */
   width: 100%;
-  height: calc(100vh - 9rem);
-  min-height: 320px;
+  /* The floor, read from the one place it is declared (:root, at the top of this
+     file), exactly as the board reads it: below this height the canvas is a strip
+     and the visualisation stops being worth presenting at all (SPEC/WEB.md
+     § Full-Height Page Regions, rule 5). The `320px` literal that stood here was a
+     second floor for the same screen, stated in a second unit, free to be changed
+     on its own and already 32px apart from the one every other bounded region of
+     this interface reads. */
+  min-height: var(--full-height-region-floor);
   overflow: hidden;
 }
 

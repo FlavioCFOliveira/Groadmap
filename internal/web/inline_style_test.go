@@ -71,11 +71,20 @@ func TestPages_EmptyStates_NoInlineStyleAttribute(t *testing.T) {
 }
 
 // TestSidebarSectionLabel_UsesTablerSubheaderIdiom proves the sidebar section
-// label uses Tabler's vertical-navbar subheader + hr divider idiom instead of an
-// inline-styled label (SPEC/WEB.md § UI Framework rule 10, Acceptance Criterion
-// 62). The label must carry Tabler's `subheader` class (which supplies the small
-// uppercase letter-spaced muted look) and be accompanied by an hr divider, and
-// must no longer use the previous inline-styled nav-link span.
+// label uses Tabler's subheader + divider idiom instead of an inline-styled
+// label (SPEC/WEB.md § UI Framework rule 10, Acceptance Criterion 62), and that
+// the classes it uses are ones the vendored distribution actually ships.
+//
+// The first version of this rule reached for `navbar-heading` and
+// `navbar-divider`. Neither exists: the vendored tabler.min.css defines no rule
+// for either, and `navbar-heading` appears nowhere in the Tabler source at all,
+// so the sidebar only looked right because static/style.css propped both up with
+// project rules. That is a divergence from the framework dressed as an override.
+// The label is now Tabler's own `subheader` (core/scss/ui/_type.scss, the small
+// uppercase letter-spaced muted label) and the rule above it is Tabler's
+// `dropdown-divider`, with the alignment coming from the `px-3` spacing utility.
+// TestTablerFidelity_NoClassOutsideTheVendoredStylesheets is the general guard;
+// this test pins the specific markup.
 func TestSidebarSectionLabel_UsesTablerSubheaderIdiom(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	name := seedRoadmap(t, "platform-core")
@@ -83,11 +92,17 @@ func TestSidebarSectionLabel_UsesTablerSubheaderIdiom(t *testing.T) {
 
 	body := servePage(t, mux, "/roadmaps/"+name)
 	for _, marker := range []string{
-		`class="navbar-heading subheader"`, // Tabler subheader idiom for the label
-		`class="navbar-divider"`,           // the hr divider that precedes it
+		`<hr class="dropdown-divider">`,    // Tabler's divider, above the label
+		`<h2 class="subheader px-3 mb-2">`, // Tabler's subheader label
 	} {
 		if !strings.Contains(body, marker) {
 			t.Errorf("sidebar section label missing Tabler subheader marker %q", marker)
+		}
+	}
+	// The classes Tabler does not ship must not come back.
+	for _, gone := range []string{"navbar-heading", "navbar-divider"} {
+		if strings.Contains(body, gone) {
+			t.Errorf("sidebar section label regressed to %q, a class Tabler does not define", gone)
 		}
 	}
 	// The roadmap name is rendered as the subheader text.

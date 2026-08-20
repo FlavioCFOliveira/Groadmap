@@ -77,7 +77,7 @@ each one is governed by its own set of rules.
 | Module | Path | Version | Purpose |
 |--------|------|---------|---------|
 | GoGraph | `github.com/FlavioCFOliveira/GoGraph` | Exact tag **v0.11.0** | Labelled property graph, Cypher engine, and durable store backing the `graph` command. See `GRAPH.md`. |
-| SQLite driver | `modernc.org/sqlite` | Exact version **v1.56.0** | Pure-Go SQLite driver backing every roadmap database (`~/.roadmaps/<name>/project.db`). It is the storage engine for all task, sprint, and audit data: `internal/db` registers it under the driver name `sqlite` and opens every database connection through it. Being pure Go, it needs no C toolchain and builds under `CGO_ENABLED=0`. See `DATABASE.md` for the schema it stores, `ARCHITECTURE.md § internal/db/` for the layer that opens it, and `IMPLEMENTATION.md § Database Connections` for the entry point and DSN form that layer must use. |
+| SQLite driver | `modernc.org/sqlite` | Exact version **v1.56.0** | Pure-Go SQLite driver backing every roadmap database (`~/.roadmaps/<name>/project.db`). It is the storage engine for all task, sprint, and audit data: `internal/db` registers it under the driver name `sqlite` and opens every database connection through it. Being pure Go, it needs no C toolchain and builds under `CGO_ENABLED=0`. See `DATABASE.md` for the schema it stores, `ARCHITECTURE.md § 3. internal/db/` for the layer that opens it, and `IMPLEMENTATION.md § Database Connections` for the entry point and DSN form that layer must use. |
 
 #### GoGraph Rules
 
@@ -154,7 +154,7 @@ each one is governed by its own set of rules.
 ## Vendored Web Assets
 
 The `rmp web` command serves a read-only web interface from assets embedded into
-the binary at build time (see `WEB.md` and `ARCHITECTURE.md § internal/web/ and
+the binary at build time (see `WEB.md` and `ARCHITECTURE.md § 7. internal/web/ and
 the embedded HTTP server`). These assets are part of the Go build; they are not a
 separate runtime artefact.
 

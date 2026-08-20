@@ -472,93 +472,12 @@ func TestCommentListingTypeFilter(t *testing.T) {
 	}
 }
 
-// ==================== CRITERION 3 (shape): the grouped read ====================
-//
-// The single-statement proof lives in comments_stmtcount_test.go, which counts the
-// statements the connection actually sends. This test covers what the grouped read
-// returns.
-
-// TestGroupedTaskCommentsRead proves the grouped read keys every comment by its
-// parent, orders each parent's comments oldest first, leaves a parent with no
-// comments out of the map (whose zero value ranges as empty), and returns an empty
-// map for an empty id set.
-func TestGroupedTaskCommentsRead(t *testing.T) {
-	db, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	withComments := newTestTask(t, db, "Reconcile the settlement ledger against the acquirer report")
-	alsoWithComments := newTestTask(t, db, "Alert on any settlement window that fails to balance")
-	withoutComments := newTestTask(t, db, "Document the settlement reconciliation runbook")
-
-	firstOfFirst := addTaskComment(t, db, withComments, models.CommentFinding,
-		"Window 2026-08-14 is short by 0.02 EUR: a rounding difference on refunds.", "2026-08-15T08:00:00.000Z")
-	secondOfFirst := addTaskComment(t, db, withComments, models.CommentDecision,
-		"Refund rounding moves to banker's rounding, applied at the window boundary.", "2026-08-15T09:00:00.000Z")
-	onlyOfSecond := addTaskComment(t, db, alsoWithComments, models.CommentProgress,
-		"The alert fires on the staging ledger; production wiring is next.", "2026-08-16T08:00:00.000Z")
-
-	grouped, err := db.ListTaskCommentsByTasks(testContext(),
-		[]int{withoutComments, alsoWithComments, withComments})
-	if err != nil {
-		t.Fatalf("ListTaskCommentsByTasks: %v", err)
-	}
-
-	if len(grouped) != 2 {
-		t.Errorf("the grouped read returned %d keys (%v), want 2: a parent with no comments is absent",
-			len(grouped), grouped)
-	}
-	if _, present := grouped[withoutComments]; present {
-		t.Errorf("task %d has no comments but is present in the map", withoutComments)
-	}
-	// The absent key still behaves as an empty result for the caller.
-	if len(grouped[withoutComments]) != 0 {
-		t.Errorf("grouped[%d] = %+v, want an empty result", withoutComments, grouped[withoutComments])
-	}
-
-	first := grouped[withComments]
-	if len(first) != 2 || first[0].ID != firstOfFirst || first[1].ID != secondOfFirst {
-		t.Errorf("grouped[%d] = %+v, want comments %d then %d (oldest first)",
-			withComments, first, firstOfFirst, secondOfFirst)
-	}
-	for i := range first {
-		if first[i].TaskID != withComments {
-			t.Errorf("grouped[%d] contains a comment whose task_id is %d", withComments, first[i].TaskID)
-		}
-	}
-	if second := grouped[alsoWithComments]; len(second) != 1 || second[0].ID != onlyOfSecond {
-		t.Errorf("grouped[%d] = %+v, want exactly comment %d", alsoWithComments, second, onlyOfSecond)
-	}
-
-	// An empty id set: an empty map, no error. (That it also issues no statement
-	// is proven in comments_stmtcount_test.go.)
-	empty, err := db.ListTaskCommentsByTasks(testContext(), nil)
-	if err != nil {
-		t.Fatalf("ListTaskCommentsByTasks with no ids: %v", err)
-	}
-	if empty == nil {
-		t.Error("ListTaskCommentsByTasks returned a nil map for an empty id set; it must return an empty map")
-	}
-	if len(empty) != 0 {
-		t.Errorf("ListTaskCommentsByTasks with no ids returned %d keys, want 0", len(empty))
-	}
-
-	// Duplicate ids are harmless: each row is still returned once.
-	duplicated, err := db.ListTaskCommentsByTasks(testContext(),
-		[]int{withComments, withComments, alsoWithComments})
-	if err != nil {
-		t.Fatalf("ListTaskCommentsByTasks with duplicate ids: %v", err)
-	}
-	if len(duplicated[withComments]) != 2 {
-		t.Errorf("a duplicated id yielded %d comments, want 2", len(duplicated[withComments]))
-	}
-}
-
-// TestGroupedTaskCommentsReadScalesBeyondThePlaceholderCache exercises the grouped
-// read with more ids than the connection's placeholder cache pre-generates (1000),
-// so both the cached and the generated placeholder paths are covered. Without this,
-// a page rendering more than a thousand tasks would be the first thing to try the
-// on-demand path.
-func TestGroupedTaskCommentsReadScalesBeyondThePlaceholderCache(t *testing.T) {
+// TestGroupedTaskCommentCountsReadScalesBeyondThePlaceholderCache exercises the
+// grouped read with more ids than the connection's placeholder cache pre-generates
+// (1000), so both the cached and the generated placeholder paths are covered.
+// Without this, a board rendering more than a thousand tasks would be the first
+// thing to try the on-demand path.
+func TestGroupedTaskCommentCountsReadScalesBeyondThePlaceholderCache(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
@@ -575,13 +494,13 @@ func TestGroupedTaskCommentsReadScalesBeyondThePlaceholderCache(t *testing.T) {
 			ids = append(ids, candidate)
 		}
 
-		grouped, err := db.ListTaskCommentsByTasks(testContext(), ids)
+		counts, err := db.CountTaskCommentsByTasks(testContext(), ids)
 		if err != nil {
-			t.Fatalf("ListTaskCommentsByTasks over %d ids: %v", parents, err)
+			t.Fatalf("CountTaskCommentsByTasks over %d ids: %v", parents, err)
 		}
-		if len(grouped) != 1 || len(grouped[taskID]) != 1 {
-			t.Errorf("the grouped read over %d ids returned %d keys, want exactly the one commented task",
-				parents, len(grouped))
+		if len(counts) != 1 || counts[taskID] != 1 {
+			t.Errorf("the grouped read over %d ids returned %d entries, want exactly the one "+
+				"commented task", parents, len(counts))
 		}
 	}
 }
@@ -725,21 +644,6 @@ func TestCommentReadsCarryUpdatedAtWithoutAliasing(t *testing.T) {
 			t.Errorf("comment %d shares its updated_at storage with another row", c.ID)
 		}
 		seen[c.UpdatedAt] = true
-	}
-
-	// The grouped read materialises the same column through the same converter.
-	grouped, err := db.ListTaskCommentsByTasks(testContext(), []int{taskID})
-	if err != nil {
-		t.Fatalf("ListTaskCommentsByTasks: %v", err)
-	}
-	for _, c := range grouped[taskID] {
-		if c.ID == pristine {
-			continue
-		}
-		if c.UpdatedAt == nil || *c.UpdatedAt != editedAt[c.ID] {
-			t.Errorf("the grouped read reports updated_at = %v for comment %d, want %q",
-				c.UpdatedAt, c.ID, editedAt[c.ID])
-		}
 	}
 
 	// And the by-id read.
@@ -1180,11 +1084,11 @@ func TestCommentReadsWorkOnAReadOnlyConnection(t *testing.T) {
 	} else if len(comments) != 1 {
 		t.Errorf("the read-only sprint listing returned %d comments, want 1", len(comments))
 	}
-	if grouped, err := readOnly.ListTaskCommentsByTasks(testContext(), []int{taskID}); err != nil {
-		t.Errorf("ListTaskCommentsByTasks on a read-only connection: %v", err)
-	} else if len(grouped[taskID]) != 1 {
-		t.Errorf("the read-only grouped read returned %d comments for task %d, want 1",
-			len(grouped[taskID]), taskID)
+	if counts, err := readOnly.CountTaskCommentsByTasks(testContext(), []int{taskID}); err != nil {
+		t.Errorf("CountTaskCommentsByTasks on a read-only connection: %v", err)
+	} else if counts[taskID] != 1 {
+		t.Errorf("the read-only grouped read counted %d comments for task %d, want 1",
+			counts[taskID], taskID)
 	}
 	if _, err := readOnly.GetTaskComment(testContext(), taskCommentID); err != nil {
 		t.Errorf("GetTaskComment on a read-only connection: %v", err)
@@ -1238,11 +1142,156 @@ func TestCommentsCascadeThroughTheQueryLayer(t *testing.T) {
 		t.Errorf("the listing of a deleted task returned %d comments, want 0", len(list))
 	}
 
-	grouped, err := db.ListTaskCommentsByTasks(testContext(), []int{taskID})
+	counts, err := db.CountTaskCommentsByTasks(testContext(), []int{taskID})
 	if err != nil {
-		t.Fatalf("ListTaskCommentsByTasks on a deleted task: %v", err)
+		t.Fatalf("CountTaskCommentsByTasks on a deleted task: %v", err)
 	}
-	if len(grouped) != 0 {
-		t.Errorf("the grouped read of a deleted task returned %d keys, want 0", len(grouped))
+	if len(counts) != 0 {
+		t.Errorf("the grouped read of a deleted task returned %d entries, want 0", len(counts))
+	}
+}
+
+// ==================== THE GROUPED COUNTING READ ====================
+
+// TestGroupedTaskCommentCountsRead proves the counting read keys every task by
+// its own count, leaves a task with no comment out of the map (whose missing key
+// reads as zero), and returns an empty map for an empty id set — the contract of
+// SPEC/DATABASE.md § Count Comments for Many Parents (Grouped).
+func TestGroupedTaskCommentCountsRead(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	three := newTestTask(t, db, "Reconcile the settlement ledger against the acquirer report")
+	one := newTestTask(t, db, "Alert on any settlement window that fails to balance")
+	none := newTestTask(t, db, "Document the settlement reconciliation runbook")
+
+	for i, body := range []string{
+		"Window 2026-08-14 is short by 0.02 EUR: a rounding difference on refunds.",
+		"Refund rounding moves to banker's rounding, applied at the window boundary.",
+		"The residual is zero for every window since the change.",
+	} {
+		addTaskComment(t, db, three, models.CommentProgress, body,
+			fmt.Sprintf("2026-08-1%dT08:00:00.000Z", i+5))
+	}
+	addTaskComment(t, db, one, models.CommentNote,
+		"The alert fires on the staging ledger; production wiring is next.",
+		"2026-08-16T08:00:00.000Z")
+
+	counts, err := db.CountTaskCommentsByTasks(testContext(), []int{none, one, three})
+	if err != nil {
+		t.Fatalf("CountTaskCommentsByTasks: %v", err)
+	}
+
+	if len(counts) != 2 {
+		t.Errorf("the counting read returned %d entries (%v), want 2: a task with no comment "+
+			"produces no group", len(counts), counts)
+	}
+	if _, present := counts[none]; present {
+		t.Errorf("task %d has no comment but is present in the map", none)
+	}
+	if got := counts[none]; got != 0 {
+		t.Errorf("counts[%d] = %d, want the zero value for an absent key", none, got)
+	}
+	if got := counts[three]; got != 3 {
+		t.Errorf("counts[%d] = %d, want 3", three, got)
+	}
+	if got := counts[one]; got != 1 {
+		t.Errorf("counts[%d] = %d, want 1", one, got)
+	}
+
+	// The counting read agrees with the single-parent listing, which is the read
+	// that still materialises the bodies: same tasks, same numbers.
+	for _, id := range []int{none, one, three} {
+		listed, lerr := db.ListTaskComments(testContext(), id, nil)
+		if lerr != nil {
+			t.Fatalf("ListTaskComments(%d): %v", id, lerr)
+		}
+		if counts[id] != len(listed) {
+			t.Errorf("task %d: the count read says %d and the listing says %d",
+				id, counts[id], len(listed))
+		}
+	}
+
+	empty, err := db.CountTaskCommentsByTasks(testContext(), nil)
+	if err != nil {
+		t.Fatalf("CountTaskCommentsByTasks with no ids: %v", err)
+	}
+	if empty == nil {
+		t.Error("CountTaskCommentsByTasks returned a nil map for an empty id set; it must return an empty map")
+	}
+	if len(empty) != 0 {
+		t.Errorf("CountTaskCommentsByTasks with no ids returned %d entries, want 0", len(empty))
+	}
+
+	// Duplicate ids are harmless: each task is counted once.
+	duplicated, err := db.CountTaskCommentsByTasks(testContext(), []int{three, three, one})
+	if err != nil {
+		t.Fatalf("CountTaskCommentsByTasks with duplicate ids: %v", err)
+	}
+	if duplicated[three] != 3 || len(duplicated) != 2 {
+		t.Errorf("a duplicated id yielded %v, want 3 for task %d across 2 entries", duplicated, three)
+	}
+}
+
+// TestGroupedTaskCommentCountsReadIssuesOneStatement is the database-level gate
+// for Acceptance Criterion 70 on the board's path: the comment counts of N tasks
+// are read with exactly ONE statement, whatever N, and with none for an empty id
+// set.
+func TestGroupedTaskCommentCountsReadIssuesOneStatement(t *testing.T) {
+	db, counter, cleanup := setupCountingDB(t)
+	defer cleanup()
+
+	taskIDs := make([]int, 0, 12)
+	for i := range 12 {
+		id := newTestTask(t, db, "Reconcile settlement window "+string(rune('A'+i)))
+		addTaskComment(t, db, id, models.CommentFinding,
+			"The window balances to the cent after the rounding fix.", "2026-08-17T07:00:00.000Z")
+		addTaskComment(t, db, id, models.CommentProgress,
+			"The reconciliation job now reports the residual per window.", "2026-08-17T08:00:00.000Z")
+		taskIDs = append(taskIDs, id)
+	}
+	if counter.count() == 0 {
+		t.Fatal("the statement counter did not observe the seeding writes, so it is not counting")
+	}
+
+	for _, tasks := range []int{1, 3, 12} {
+		ids := taskIDs[:tasks]
+
+		counter.reset()
+		counts, err := db.CountTaskCommentsByTasks(testContext(), ids)
+		if err != nil {
+			t.Fatalf("CountTaskCommentsByTasks(%d tasks): %v", tasks, err)
+		}
+		if got := counter.count(); got != 1 {
+			t.Errorf("the counting read of %d tasks issued %d statements, want exactly 1", tasks, got)
+		}
+		if len(counts) != tasks {
+			t.Errorf("the counting read of %d tasks returned %d entries, want %d", tasks, len(counts), tasks)
+		}
+		for _, id := range ids {
+			if counts[id] != 2 {
+				t.Errorf("counts[%d] = %d, want 2", id, counts[id])
+			}
+		}
+
+		// The alternative the SPEC forbids on this path, on the same instrument.
+		counter.reset()
+		for _, id := range ids {
+			if _, err := db.ListTaskComments(testContext(), id, nil); err != nil {
+				t.Fatalf("ListTaskComments(%d): %v", id, err)
+			}
+		}
+		if got := counter.count(); got != tasks {
+			t.Errorf("the per-task loop over %d tasks issued %d statements, want %d; the "+
+				"instrument does not track statements one-for-one", tasks, got, tasks)
+		}
+	}
+
+	counter.reset()
+	if _, err := db.CountTaskCommentsByTasks(testContext(), nil); err != nil {
+		t.Fatalf("CountTaskCommentsByTasks with no ids: %v", err)
+	}
+	if got := counter.count(); got != 0 {
+		t.Errorf("the counting read of an empty id set issued %d statements, want 0", got)
 	}
 }

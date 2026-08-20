@@ -7,7 +7,7 @@
 **JSON output is reserved for query operations and record creation.**
 
 - **Query operations (JSON)**: `list`, `ls`, `get`, `next`, `tasks`, `stats`, `show`, `history`, `hist`, `comment-list`, `c-ls`.
-- **Server startup (JSON)**: `web` prints a single JSON object naming the served URL on successful startup (e.g. `{"url": "http://127.0.0.1:8787"}`), then keeps running; see `COMMANDS.md § Web Interface`. While running, the server returns HTTP responses (HTML pages and the JSON graph data endpoint), which are not command stdout output.
+- **Server startup (JSON)**: `web` prints a single JSON object naming the served URL on successful startup (e.g. `{"url": "http://127.0.0.1:8787"}`), then keeps running; see `COMMANDS.md § Web Interface`. While running, the server returns HTTP responses (HTML pages and its JSON endpoints, the graph data endpoint and the task detail endpoint), which are not command stdout output.
 - **Creation operations (JSON)**: `create`, `new`, `comment-add`, `c-add`. These commands return a JSON object containing the ID of the newly created record (e.g., `{"id": 42}`).
 - **Other database modifications (No output)**: Commands that update, delete, or change the state of entities (status, priority, etc.) respond with **no content** on success, signaling completion via exit code `0`.
 - **Help commands (Plain text)**: When no command is provided, or when using `-h` and `--help` flags, the application displays information in **plain text**, following traditional CLI application formats (not JSON).
@@ -16,6 +16,11 @@
 - Errors are written as explicit human-readable messages to stderr
 - Input-related errors (missing parameters, wrong types, unknown commands or subcommands) additionally show the **specific help of the command or subcommand** that was invoked
 - Uses standard Unix exit codes for script integration
+- This rule governs **command output**. It does not govern the HTTP responses of
+  the running `web` server, which are not command stdout or stderr (see the
+  server-startup bullet above). The graph data endpoint answers a rejected or
+  failed query with a JSON error object, specified in
+  [Graph View Data](#graph-view-data), **Error Shape**.
 
 ### Input
 
@@ -79,7 +84,10 @@ Help commands display human-readable text to stdout.
 
 ### Error Response
 
-Error responses follow typical CLI conventions (NOT JSON).
+Error responses follow typical CLI conventions (NOT JSON). This covers command
+output only; the `web` server's HTTP error responses are separate, and the graph
+data endpoint's JSON error object is specified in
+[Graph View Data](#graph-view-data), **Error Shape**.
 
 ---
 
@@ -419,11 +427,14 @@ bar sends. When `q` is absent or empty, the endpoint runs the default query
 full-graph view a request with no parameters always produced (backward
 compatible). User-supplied `q` is validated as **read-only** before execution
 (reusing the graph guard-rail) and the resolved `limit` is applied as a `LIMIT`
-clause only when the query does not already contain a top-level `LIMIT`. The full
-parameter contract, the read-only guard-rail, the limit-injection rule, and the
+clause only when the query both lacks a top-level `LIMIT` of its own and is a
+statement form that admits a `LIMIT` clause. The full parameter contract, the
+read-only guard-rail, the limit-injection and suppression rules, and the
 failure modes are specified in `WEB.md § Graph Data Endpoint` and
-`WEB.md § Query-Bar Error Handling`; this section specifies only the response
-shape, which is identical regardless of which query produced it.
+`WEB.md § Query-Bar Error Handling`; this section specifies the response shapes —
+the successful one below, which is identical regardless of which query produced
+it, and the error one in [Error Shape](#error-shape) — and not the behaviour that
+selects between them.
 
 This is the canonical specification of the graph view-data shape. It **reuses**
 the graph-element and property-type conventions already defined in
@@ -453,10 +464,13 @@ Field reference:
 
 Rules:
 
-1. `nodes` and `edges` are always present. An empty graph returns
-   `{"nodes": [], "edges": []}` (empty arrays, never `null`). A roadmap that has
-   never used the `graph` command is treated as an empty graph and returns this
-   empty object; it is not an error (see `GRAPH.md § Persistence Layout`, rule 2).
+1. `nodes` and `edges` are always present **in a successful response**. An empty
+   graph returns `{"nodes": [], "edges": []}` (empty arrays, never `null`). A
+   roadmap that has never used the `graph` command is treated as an empty graph and
+   returns this empty object; it is not an error (see
+   `GRAPH.md § Persistence Layout`, rule 2). A response that is not successful
+   carries neither field: it carries the object in [Error Shape](#error-shape)
+   below, or, for an internal read error, no JSON at all.
 2. Each node object follows the Node mapping and each edge object follows the
    Relationship mapping in [Graph element mapping](#graph-element-mapping),
    including the `properties` object, whose values follow the
@@ -484,6 +498,147 @@ Rules:
    counts from the nodes' `labels` arrays and the edge-type inventory and counts
    from the edges' `type` field, client-side, from this same response. That feature
    consumes this shape and does not change it; no field is added here for it.
+
+### Error Shape
+
+A request the graph data endpoint refuses, and a query that fails, are answered
+with this object in place of the node-and-edge object above. The endpoint returns
+it for each of the three query-bar failures, always with HTTP `400 Bad Request`.
+The status, the failure classes, and the rules that select between them are
+specified in `WEB.md § Query-Bar Error Handling`, which is canonical for them; this
+section is canonical for the shape.
+
+```json
+{
+  "error": "query rejected: not read-only",
+  "kind": "not_read_only"
+}
+```
+
+Field reference:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `error` | string | The human-readable reason. The graph page shows it in place as its failure message. |
+| `kind` | string | The machine-readable failure class: `not_read_only`, `invalid_limit`, or `execution`. |
+
+Rules:
+
+1. Both fields are always present and both are always strings. The object carries
+   these two fields and no others, and it carries neither `nodes` nor `edges`.
+2. `kind` takes exactly three values, one per failure class in
+   `WEB.md § Query-Bar Error Handling`: `not_read_only` for a query the read-only
+   guard-rail rejected before execution, `invalid_limit` for a `limit` that is not
+   one of the six allowed values, and `execution` for a query that was accepted as
+   read-only and then failed once running. A query cancelled for exhausting the
+   endpoint's query time budget is an execution failure and carries `execution`;
+   the budget adds no fourth value (see `WEB.md § Graph Query Time Budget`).
+3. `error` is written to be read by a person and is not parsed. For an execution
+   failure it carries the engine's own diagnostic text, so a given query produces
+   the same diagnostic here as it produces on the CLI (see
+   `GRAPH.md § Error Handling and Exit Codes`, rule 2). For an invalid limit it
+   names the rejected value.
+4. The object is serialized exactly as every other response of this endpoint is:
+   HTML-safe, so `<`, `>`, and `&` are escaped (see `WEB.md § Graph Data Endpoint`),
+   pretty-printed with two-space indentation, and terminated by a newline (see
+   [Implementation Notes](#implementation-notes)).
+5. This is the endpoint's error contract for the three query-bar failures only. An
+   internal read error — a graph store that cannot be opened, for example — is
+   answered HTTP `500` as on every other route of the web interface and does not
+   carry this shape (see `WEB.md § Query-Bar Error Handling`, rule 7).
+
+---
+
+## Task Detail Data
+
+The web interface's task detail endpoint (`GET /roadmaps/{name}/tasks/{id}/data`,
+see `WEB.md § Task Detail Endpoint`) returns one task's full field set together
+with that task's comments, as a single JSON object. The read-only task detail
+modal fetches it when a user opens a task, and fills the page's single modal
+element with the result (see `WEB.md § Task Detail Modal`). The endpoint reads the
+roadmap's `project.db` **read-only**: it writes nothing, alters no schema, and
+produces no audit entry.
+
+This is the canonical specification of the task detail response shape. It
+**composes** the two object shapes this file already defines and introduces no new
+field definitions of its own: the task object is the [Task](#task) shape and each
+comment is the [Task Comment](#task-comment) shape. A value therefore carries the
+same field name, the same type, and the same null convention here as it does in
+the corresponding CLI output.
+
+### Shape
+
+```json
+{
+  "task": {
+    "id": 42,
+    "title": "Implement JWT authentication system",
+    "status": "DOING",
+    "type": "USER_STORY",
+    "functional_requirements": "Users must be able to authenticate securely",
+    "technical_requirements": "Create authentication module with JWT token support",
+    "acceptance_criteria": "Functional login with 24h valid tokens; proper error handling",
+    "created_at": "2026-03-12T10:00:00.000Z",
+    "specialists": "go-elite-developer,security-expert",
+    "started_at": "2026-03-12T10:30:00.000Z",
+    "tested_at": null,
+    "closed_at": null,
+    "completion_summary": null,
+    "parent_task_id": null,
+    "priority": 9,
+    "severity": 0,
+    "subtask_count": 0,
+    "depends_on": [],
+    "blocks": []
+  },
+  "comments": [
+    {
+      "id": 12,
+      "task_id": 42,
+      "type": "FINDING",
+      "body": "The JWT middleware rejects tokens whose exp claim is exactly the current second.",
+      "created_at": "2026-03-12T11:15:00.000Z",
+      "updated_at": null
+    },
+    {
+      "id": 13,
+      "task_id": 42,
+      "type": "DECISION",
+      "body": "Token expiry is compared with !time.Now().Before(exp), so the boundary second expires.",
+      "created_at": "2026-03-12T11:40:00.000Z",
+      "updated_at": "2026-03-12T14:05:00.000Z"
+    }
+  ]
+}
+```
+
+**Notes:**
+
+1. The object carries exactly two members, `task` and `comments`. No other
+   top-level member is added.
+2. `task` is one [Task](#task) object, whose fields are defined for the `Task`
+   model in `MODELS.md § Task`. Every field the task detail modal displays is
+   present, including the long free-text fields (`functional_requirements`,
+   `technical_requirements`, `acceptance_criteria`, and `completion_summary`) and
+   the lifecycle timestamps.
+3. `comments` is an array of [Task Comment](#task-comment) objects, whose fields
+   are defined for the `TaskComment` model in `MODELS.md § Task Comment`.
+4. **Order.** The `comments` array is ordered **oldest first**: `created_at`
+   ascending, with the comment `id` ascending as the tie-breaker. This is exactly
+   the order `rmp task comment-list` returns for the same task (see
+   `DATABASE.md § Comments`), and exactly the order the modal's timeline presents,
+   so one ordering rule serves the CLI and the web interface alike.
+5. **Completeness.** Every comment of the task is present. The endpoint applies no
+   type filter, no count limit, and no pagination.
+6. **A task with no comment yields `[]`, never `null`**, consistent with the
+   empty-array rule in [Implementation Notes](#implementation-notes).
+7. Free-text values preserve the author's interior line breaks as `\n` escapes in
+   JSON, exactly as they do in CLI output.
+8. The response is JSON-encoded and is never interpolated into HTML by the server.
+   Because these values reach the browser as data rather than as server-rendered
+   markup, the client that renders them MUST write every value into the DOM as
+   text and never as markup; that requirement is specified in
+   `WEB.md § Task Detail Modal`.
 
 ---
 

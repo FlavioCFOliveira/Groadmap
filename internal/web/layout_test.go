@@ -112,10 +112,15 @@ func TestPages_DarkThemeAttribute(t *testing.T) {
 
 // TestPages_AdminShellMarkup asserts every page renders the Tabler admin-shell
 // chrome: a vertical navigation sidebar that lists Roadmaps, the page-wrapper
-// shell, a page header, and the read-only indicator. The off-canvas collapse
+// shell, a page header, and the top navbar. The off-canvas collapse
 // is driven by Tabler's JS via the navbar-toggler + collapse markup, so its
 // presence is the structural proof of the hamburger menu on small viewports
 // (SPEC/WEB.md Acceptance Criteria 23/24).
+//
+// What the top navbar CARRIES is roadmap-dependent — the selected roadmap's
+// name, and nothing at all on the roadmap index page — so it is asserted by
+// TestShell_TopNavbarNamesTheSelectedRoadmap rather than by this sweep, which
+// covers only what every page shares.
 func TestPages_AdminShellMarkup(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	name := seedRoadmap(t, "platform-core")
@@ -130,7 +135,7 @@ func TestPages_AdminShellMarkup(t *testing.T) {
 			"navbar-toggler",    // hamburger control (off-canvas collapse on small viewports)
 			`id="sidebar-menu"`, // collapsible sidebar target the toggler controls
 			">Roadmaps<",        // the always-present Roadmaps sidebar link
-			">Read-only<",       // the read-only indicator in the top navbar
+			`<header class="navbar navbar-expand-md d-print-none">`, // the top navbar
 		} {
 			if !strings.Contains(body, marker) {
 				t.Errorf("page %s missing admin-shell marker %q", path, marker)
@@ -794,49 +799,6 @@ func TestServerTimeouts(t *testing.T) {
 	}
 	if srv.IdleTimeout != 120*time.Second {
 		t.Errorf("IdleTimeout = %v, want 120s", srv.IdleTimeout)
-	}
-}
-
-// TestTasksPage_PreservesAllTaskFields asserts the dedicated tasks page
-// presents the full 15-column Tasks table (ID, Title, Status, Type, Priority,
-// Severity, Specialists, Parent, Subtasks, Depends on, Blocks, Created,
-// Started, Tested, Closed) inside a responsive table, with status as a Tabler
-// badge. This is the same Tasks table the combined detail page used to carry,
-// now at its own endpoint (SPEC/WEB.md § Roadmap Tasks Page, Acceptance
-// Criterion 9).
-func TestTasksPage_PreservesAllTaskFields(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	name := seedRoadmap(t, "platform-core")
-	mux := buildMux()
-
-	body := servePage(t, mux, "/roadmaps/"+name+"/tasks")
-
-	// The seeded task is in a responsive table inside a card.
-	if !strings.Contains(body, "table-responsive") {
-		t.Errorf("tasks page task table is not in a .table-responsive wrapper")
-	}
-	for _, header := range []string{
-		"ID", "Title", "Status", "Type", "Priority", "Severity", "Specialists",
-		"Parent", "Subtasks", "Depends on", "Blocks", "Created", "Started",
-		"Tested", "Closed",
-	} {
-		if !strings.Contains(body, "<th>"+header+"</th>") {
-			t.Errorf("tasks table missing column header %q", header)
-		}
-	}
-
-	// Status as a Tabler badge, coloured by the semantic mapping: the seeded
-	// task is added to a sprint, so its status is SPRINT, which maps to the
-	// bg-cyan-lt variant (SPEC/WEB.md § Status, Priority, and Severity Badge
-	// Colours).
-	if !strings.Contains(body, `<td><span class="badge bg-cyan-lt">SPRINT</span></td>`) {
-		t.Errorf("tasks page status not rendered as the semantic Tabler badge for SPRINT")
-	}
-
-	// The full task table is the tasks page's content; it carries no sprint
-	// tabs (those live on the sprints landing page).
-	if strings.Contains(body, `id="tab-current"`) {
-		t.Errorf("tasks page must NOT render the sprint tabs")
 	}
 }
 

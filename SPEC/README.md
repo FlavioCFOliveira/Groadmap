@@ -16,10 +16,10 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Knowledge graph feature (design, persistence, guard rails) | `GRAPH.md` |
 | Read-only web interface (`rmp web`, server, pages, graph viz) | `WEB.md` |
 | Web roadmap sprints page / landing (`/roadmaps/{name}`, sprint tabs Próximos / Actual / Concluídos) | `WEB.md § Roadmap Sprints Page` |
-| Web roadmap tasks page (`/roadmaps/{name}/tasks`, full task table) | `WEB.md § Roadmap Tasks Page` |
+| Web roadmap tasks page (`/roadmaps/{name}/tasks`, Kanban task board, header search and type / priority / severity filters) | `WEB.md § Roadmap Tasks Page` |
 | Web sprint page (`/roadmaps/{name}/sprints/{id}`) | `WEB.md § Roadmap Sprint Page` |
 | Web shared sprint-card partial (header, description, task-count footer; used by all three sprints-page tabs) | `WEB.md § Shared Sprint-Card Partial` |
-| Web sprint detail sub-template (status summary line, metadata datagrid, member-tasks table; single sprint page only) | `WEB.md § Sprint Detail Sub-Template` |
+| Web sprint detail sub-template (status summary line, metadata datagrid, member-tasks board; single sprint page only) | `WEB.md § Sprint Detail Sub-Template` |
 | Web task detail modal (read-only task popup) | `WEB.md § Task Detail Modal` |
 | Web graph labels sidebar (node-label / edge-type inventory, counts, section totals, highlight, collapse/expand) | `WEB.md § Graph Labels Sidebar` |
 | Web graph query bar (editable Cypher query box, Search button, node-limit dropdown) | `WEB.md § Graph Query Bar` |
@@ -33,9 +33,9 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Web UI framework (Tabler admin shell, dark theme, Tabler-fidelity rules, card tabs) | `WEB.md § UI Framework` |
 | Web status / priority / severity badge colours (semantic Tabler `bg-*-lt` mapping) | `WEB.md § Status, Priority, and Severity Badge Colours` |
 | Web HTTP security headers (CSP, X-Frame-Options, etc.) | `WEB.md § Security Headers` |
-| Web HTTP server timeouts (read-header, write, idle) | `WEB.md § HTTP Server Timeouts` |
+| Web HTTP server timeouts (read-header, write, idle) and the graph data endpoint's query time budget | `WEB.md § HTTP Server Timeouts` |
 | Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
-| Free-text control-character constraint (CWE-150 / Trojan Source) | `MODELS.md § Free-Text Control-Character Constraint` |
+| Free-text control-character constraint (CWE-150 / Trojan Source) | `MODELS.md § Task` (Free-Text Control-Character Constraint) |
 | Comment types (the one enum, and the per-entity valid subsets) | `MODELS.md § Comment Type` |
 | Task comment / sprint comment models and field constraints | `MODELS.md § Task Comment` and `MODELS.md § Sprint Comment` |
 | Comment subcommand syntax / flags (`comment-add`, `comment-list`, `comment-edit`, `comment-remove`) | `COMMANDS.md § Task Comments` and `COMMANDS.md § Sprint Comments` |
@@ -61,6 +61,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Memory layout / struct ordering | `MODELS.md § Memory Layout Optimization` |
 | State transitions (Task) | `STATE_MACHINE.md § Task State Machine` |
 | State transitions (Sprint) | `STATE_MACHINE.md § Sprint State Machine` |
+| Sprint membership versus task status (a `BACKLOG` task that is still a sprint member) | `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` |
 | System design / modules | `ARCHITECTURE.md` |
 | Data directory layout | `ARCHITECTURE.md § Directory Structure` |
 | File and directory permissions (`0700`, `0600`, enforcement, failure mode) | `ARCHITECTURE.md § Open-Time Permission Enforcement` |
@@ -118,6 +119,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Memory layout / struct field ordering | `MODELS.md § Memory Layout Optimization` |
 | Task state transitions | `STATE_MACHINE.md § Task State Machine` |
 | Sprint state transitions | `STATE_MACHINE.md § Sprint State Machine` |
+| Sprint membership versus task status | `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` |
 | Audit operations catalogue | `DATABASE.md § audit Table` |
 | SQL DDL (table definitions, indexes, constraints) | `DATABASE.md` |
 | Schema migrations | `VERSION.md § Migrations` |

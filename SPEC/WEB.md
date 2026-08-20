@@ -9,6 +9,7 @@
 - [Startup Schema Migration](#startup-schema-migration)
 - [Bind Address and Port Selection](#bind-address-and-port-selection)
 - [HTTP Server Timeouts](#http-server-timeouts)
+  - [Graph Query Time Budget](#graph-query-time-budget)
 - [Security Headers](#security-headers)
 - [Cache Policy](#cache-policy)
 - [Routes and Pages](#routes-and-pages)
@@ -17,6 +18,7 @@
   - [Roadmap Tasks Page](#roadmap-tasks-page)
   - [Roadmap Sprint Page](#roadmap-sprint-page)
   - [Roadmap Audit Log Page](#roadmap-audit-log-page)
+  - [Shared Page-Header Partial](#shared-page-header-partial)
   - [Shared Sprint-Card Partial](#shared-sprint-card-partial)
   - [Sprint Detail Sub-Template](#sprint-detail-sub-template)
   - [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page)
@@ -26,6 +28,7 @@
   - [Graph Data Endpoint](#graph-data-endpoint)
   - [Static Assets](#static-assets)
   - [Task Detail Modal](#task-detail-modal)
+  - [Task Detail Endpoint](#task-detail-endpoint)
 - [Read-Only Data Flow](#read-only-data-flow)
   - [Tasks and Sprints from SQLite](#tasks-and-sprints-from-sqlite)
   - [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)
@@ -34,6 +37,7 @@
   - [Embedded Asset Categories](#embedded-asset-categories)
   - [Frontend Rules](#frontend-rules)
   - [UI Framework](#ui-framework)
+  - [Full-Height Page Regions](#full-height-page-regions)
   - [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours)
   - [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library)
 - [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)
@@ -97,18 +101,20 @@ The web interface exposes the following kinds of page for each roadmap:
    sprint-card partial, so all sprints share identical card markup across the
    three tabs. Each card shows a header ("Sprint #<ID>" with a status badge), the
    sprint description, and a footer with the sprint's task count, and links to that
-   sprint's own page. The Actual tab does not expand the OPEN sprint into an inline
-   task table or per-task modals; the full sprint detail block is shown only on the
-   single Roadmap Sprint Page (see
+   sprint's own page. The Actual tab does not expand the OPEN sprint into an
+   inline member-tasks board or per-task modals; the full sprint detail block is
+   shown only on the single Roadmap Sprint Page (see
    [Shared Sprint-Card Partial](#shared-sprint-card-partial)). It does not render
-   the full tasks table.
+   the roadmap's task board.
 3. A roadmap tasks page, served at `/roadmaps/{name}/tasks` and read from that
-   roadmap's `project.db`. It presents the full task table of the roadmap (every
-   task, any status), with each task row clickable to open the read-only task
-   detail modal.
+   roadmap's `project.db`. It presents every task of the roadmap (any status) as a
+   Kanban board of five fixed columns, one per task status, with each task shown as
+   a card in the column of its status and each card clickable to open the read-only
+   task detail modal. The page renders no task table.
 4. A roadmap sprint page that shows all details of a single sprint and the
-   sprint's task list in planned in-sprint execution order, read from that
-   roadmap's `project.db`.
+   sprint's member tasks as a Kanban board of three fixed columns — `WAITING`,
+   `DOING`, and `CLOSED` — whose cards follow the planned in-sprint execution
+   order, read from that roadmap's `project.db`.
 5. A roadmap audit log page, served at `/roadmaps/{name}/audit` and read from
    that roadmap's `project.db`. It presents the roadmap's full audit log — every
    audit entry of any operation and entity type — as a read-only table ordered by
@@ -164,21 +170,36 @@ task detail modal that displays all of the task's fields (see
    ("Sprint #<ID>" with a status badge), the sprint description, and a footer with
    that sprint's total task count, and links to the sprint's own page. The OPEN
    sprint or sprints under Actual are rendered with this same card; the Actual tab
-   does not expand the OPEN sprint into an inline task table or per-task modals.
-   Próximos lists PENDING sprints ordered by ascending sprint `Order` (the unique
-   execution order; the next sprint to execute, lowest `Order`, first); Actual lists
-   the OPEN sprint or sprints ordered by ascending sprint `Order`; Concluídos lists
-   CLOSED sprints ordered by descending sprint `Order` (the last/highest-`Order`
-   closed sprint first). Each sprint shown in any tab is a clickable link to that
-   sprint's own page. The sprints page does not render the full tasks table (see
+   does not expand the OPEN sprint into an inline member-tasks board or per-task
+   modals. Próximos lists PENDING sprints ordered by ascending sprint `Order`
+   (the unique execution order; the next sprint to execute, lowest `Order`,
+   first); Actual lists the OPEN sprint or sprints ordered by ascending sprint
+   `Order`; Concluídos lists CLOSED sprints ordered by descending sprint
+   `Order` (the last/highest-`Order` closed sprint first). Each sprint shown in
+   any tab is a clickable link to that sprint's own page. The sprints page does not render the roadmap's task board (see
    [Roadmap Sprints Page](#roadmap-sprints-page),
    [Roadmap Sprint Page](#roadmap-sprint-page), and
    [Shared Sprint-Card Partial](#shared-sprint-card-partial)).
-7. The roadmap tasks page shows the selected roadmap's full task table — every
-   task of the roadmap, of any status — with the fields and relationships already
-   defined in `MODELS.md` and `DATABASE.md`, read from that roadmap's `project.db`.
-   It is served at `/roadmaps/{name}/tasks`. Each task row is clickable: selecting
-   a row opens the read-only task detail modal for that task (see
+7. The roadmap tasks page shows every task of the selected roadmap, of any
+   status, as a **Kanban board**, read from that roadmap's `project.db` and using
+   the fields and relationships already defined in `MODELS.md` and `DATABASE.md`.
+   It is served at `/roadmaps/{name}/tasks`. The board has exactly five fixed
+   columns, one per `TaskStatus` value, in the order `BACKLOG`, `SPRINT`, `DOING`,
+   `TESTING`, `COMPLETED`; every column is always present, even when empty, and
+   each column header carries a badge with that column's task count. Each task is
+   shown as one card in the column of its `status`, so every task appears exactly
+   once and no task is omitted. Each card is clickable: selecting a card opens the
+   read-only task detail modal for that task, which is where the task's full field
+   set is shown. The board is read-only: it offers no drag-and-drop and no other
+   control that moves a task between columns. The page renders no task table. The
+   page header carries a **search input** that narrows the board to the tasks whose
+   title or `#<id>` reference contains the term, and **three filter dropdowns** —
+   task type, minimum priority, and minimum severity — that narrow the board by what
+   a task is. The search term and the three filters combine conjunctively, the
+   column counts follow the narrowed set, and each control travels in its own URL
+   query parameter (`q`, `type`, `priority`, and `severity`), so requesting the page
+   with those parameters renders the identical narrowed board. The board offers
+   **no** status filter, because the columns already are the status (see
    [Roadmap Tasks Page](#roadmap-tasks-page) and
    [Task Detail Modal](#task-detail-modal)).
 8. When a user selects a roadmap on the index page, the user lands on that
@@ -187,7 +208,13 @@ task detail modal that displays all of the task's fields (see
    [Roadmap Index Page](#roadmap-index-page) and
    [Roadmap Sprints Page](#roadmap-sprints-page)).
 9. The roadmap sprint page shows all details of a single sprint, the sprint's
-   task list in the planned in-sprint execution order, and the sprint's own
+   member tasks as a Kanban board of three fixed columns — `WAITING` holding the
+   sprint's `BACKLOG` and `SPRINT` tasks, `DOING` its `DOING` and `TESTING` tasks,
+   and `CLOSED` its `COMPLETED` tasks — whose cards are ordered by what each column
+   is about, the `WAITING` column by the planned in-sprint execution order and the
+   `DOING` and `CLOSED` columns by recency (`started_at` and `closed_at`
+   descending), and whose column counts are the `P`, `A`, and `C` values of the
+   sprint status summary line on the same page, and the sprint's own
    comments in a Comments card, read from that roadmap's
    `project.db`. It is served at `/roadmaps/{name}/sprints/{id}`, is read-only, and
    returns HTTP `404 Not Found` when `{id}` is not a valid integer or is not a
@@ -203,15 +230,20 @@ task detail modal that displays all of the task's fields (see
    clamped to the nearest valid page; an empty audit log renders successfully with
    a clear empty-state message (see
    [Roadmap Audit Log Page](#roadmap-audit-log-page)).
-11. Anywhere a task is shown clickable — the tasks page's task table and the sprint
-   page's task list — selecting the task opens a read-only task detail modal that
-   displays all of the task's fields and, after them, that task's comments as a
-   chronological timeline. The modal
+11. Anywhere a task is shown clickable — the board cards of the tasks page and
+   the board cards of the sprint page — selecting the task opens a read-only task
+   detail modal that displays all of the task's fields and, after them, that task's
+   comments as a chronological timeline. The element that opens the modal is a
+   `<button>` on every such surface, and on both boards that `<button>` is the card
+   itself, so the pointer, touch, Enter, and Space all
+   open it without any added JavaScript. The modal
    only displays data: it contains no form, no edit control, and no submit action,
-   and it requires no new server endpoint and no new write path. The comments of
-   every task rendered on a page are loaded in one grouped query, never one query
-   per task (see
-   [Task Detail Modal](#task-detail-modal)).
+   and it opens no write path. A page renders **one** modal element, not one per
+   task, and fills it on demand: opening a task fetches that task's fields and
+   comments from the read-only endpoint `GET /roadmaps/{name}/tasks/{id}/data`.
+   Every value that endpoint returns is written into the page as text and never as
+   markup (see [Task Detail Modal](#task-detail-modal) and
+   [Task Detail Endpoint](#task-detail-endpoint)).
 12. The roadmap knowledge-graph page shows the selected roadmap's knowledge graph
    as an interactive node-link visualisation rendered with **D3.js**, read from
    that roadmap's GoGraph store, opened read-only exactly as the `graph query` and
@@ -270,7 +302,8 @@ task detail modal that displays all of the task's fields (see
     the roadmap sprints page, the roadmap tasks page, the roadmap sprint page, the
     roadmap audit log page, and the knowledge-graph page — and to the interactive
     components, including the
-    sprint tabs, the task detail modal, and the interactive knowledge-graph
+    sprint tabs, the tasks page's Kanban board, the sprint page's member-tasks
+    board, the task detail modal, and the interactive knowledge-graph
     visualisation, which MUST all remain usable on touch and small-viewport devices
     (see [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
 17. **Tabler admin-shell layout in the dark theme.** The interface presents a
@@ -279,8 +312,8 @@ task detail modal that displays all of the task's fields (see
     roadmap's Sprints, Tasks, Audit, and Graph views, resolving to
     `/roadmaps/{name}`, `/roadmaps/{name}/tasks`, `/roadmaps/{name}/audit`, and
     `/roadmaps/{name}/graph` respectively and
-    highlighting the active view), a top navbar, page headers, and Tabler cards,
-    tables, and badges. The interface is built on the vendored Tabler framework;
+    highlighting the active view), a top navbar naming the selected roadmap, page
+    headers, and Tabler cards, tables, and badges. The interface is built on the vendored Tabler framework;
     on small viewports the navigation sidebar collapses to an off-canvas
     (hamburger) menu (see [UI Framework](#ui-framework) and
     [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
@@ -288,6 +321,17 @@ task detail modal that displays all of the task's fields (see
     directory is unreadable, or a flag value is invalid) are reported as plain
     text to stderr and map to the existing exit codes; no new exit code is
     introduced (see [Error Handling and Exit Codes](#error-handling-and-exit-codes)).
+19. **The graph data endpoint bounds its own work.** The endpoint executes the
+    caller-supplied Cypher query under a per-request time budget of 5 seconds,
+    derived from the request context, so no single request can hold the server for
+    as long as that query takes to run. The budget bounds the work the query
+    causes, whereas the injected node `LIMIT` bounds only the result it returns; a
+    query cancelled for exceeding the budget is surfaced as a query execution
+    failure, with the message the page already shows for one, and introduces no new
+    HTTP status and no new exit code (see
+    [Graph Query Time Budget](#graph-query-time-budget),
+    [Graph Data Endpoint](#graph-data-endpoint), and
+    [Query-Bar Error Handling](#query-bar-error-handling)).
 
 ## Command Surface
 
@@ -466,7 +510,80 @@ or stalled client connection cannot hold server resources indefinitely. The
 
 These three timeouts are mandatory. They protect the read-only server from
 resource exhaustion by slow or idle connections and apply uniformly to every
-route.
+route. They bound the connection only. The work a handler performs once the
+request has been read is bounded separately, on the one route whose work a caller
+drives, by the budget specified next.
+
+### Graph Query Time Budget
+
+The three timeouts above bound the connection, not the work the server does for a
+request. A client that sends its headers promptly, stays connected, and reads the
+response as soon as it arrives satisfies all three however long the server takes
+to produce that response. One route's work is driven by caller-supplied input:
+the graph data endpoint (`GET /roadmaps/{name}/graph/data`) executes a Cypher
+query the caller writes (see [Graph Data Endpoint](#graph-data-endpoint) and
+[Graph Query Bar](#graph-query-bar)). That route MUST therefore bound its own
+work with an explicit time budget.
+
+1. **Budget: 5 seconds.** The graph data endpoint MUST execute the caller's query
+   under a deadline of 5 seconds. The deadline starts when the endpoint begins
+   executing the query and covers the endpoint's execution of it: the run against
+   the engine's read path and the walk over the result that run produces (see
+   [Graph Data Endpoint](#graph-data-endpoint)). The value sits well above the
+   slowest execution measured on a small store — a three-way Cartesian product
+   over a 252-node store spent 1.32 seconds of server time to return a single
+   aggregate row — and well below the 30-second `WriteTimeout`, so a query that
+   exhausts the budget is cancelled, and its failure is rendered, while the
+   response can still be written.
+2. **Derived from the request context.** The deadline MUST be derived from the
+   request's own context, so the two sources of cancellation compose rather than
+   replace one another: a client that disconnects still cancels the query
+   immediately, exactly as it did before the budget existed, and a client that
+   stays connected can no longer hold the query running beyond the budget.
+3. **The budget bounds the work; the node limit bounds the result.** These are two
+   different bounds, and neither substitutes for the other. The `LIMIT` clause the
+   endpoint injects (see [Graph Data Endpoint](#graph-data-endpoint)) bounds the
+   **result**: how many rows the query returns, and therefore how large the
+   response is. It does not bound the **work** the engine performs to produce
+   those rows. A query that aggregates over a Cartesian product, for example,
+   scans the whole product before any limit applies: its cost grows with the size
+   of the store while its response stays a few bytes long. The time budget is the
+   only bound on that work.
+4. **Exceeding the budget is a query execution failure.** When the budget is
+   exhausted, the endpoint cancels the query and reports the request as a **query
+   execution failure** — case 3 of
+   [Query-Bar Error Handling](#query-bar-error-handling), the same classification
+   a query that fails in the engine receives, and distinct from the read-only
+   guard-rail rejection of case 1 and from the invalid limit of case 2. The page
+   surfaces the existing "query failed to execute" message in place: the page does
+   not crash, the failure triggers no write and no navigation, the graph already
+   shown is left as it is, and the user can edit the query, lower the node limit,
+   and search again.
+5. **No new status and no new error class.** The budget introduces no new HTTP
+   status, no new sentinel error, and no new process exit code. A request whose
+   query exceeded the budget is answered exactly as any other query execution
+   failure is answered — HTTP `400 Bad Request` with `kind` `execution`, the
+   status and the kind the execution-failure class already carries (see
+   [Query-Bar Error Handling](#query-bar-error-handling), rules 3 and 5) — so the
+   budget adds no row to the HTTP status mapping in
+   [Routes and Pages](#routes-and-pages) and leaves the exit-code mapping in
+   [Error Handling and Exit Codes](#error-handling-and-exit-codes) unchanged.
+   Exhausting the budget never terminates the process: the server keeps serving.
+6. **Ordinary queries are unaffected.** A query that completes within the budget
+   is served exactly as it was served before the budget existed: the same nodes
+   and edges, in the same response shape, with nothing truncated, no ordering
+   changed, and no latency added. The budget is observable only to a query that
+   would otherwise have run for longer than it.
+7. **Per request, and cancellation writes nothing.** Each graph data request gets
+   its own budget; requests do not share one, and one request's budget is
+   unaffected by any other request in flight. Cancelling a query changes nothing
+   on disk: the store is opened read-only, so an abandoned query writes no data,
+   runs no checkpoint, and truncates no write-ahead log, exactly as a completed
+   one does (see
+   [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
+8. **The budget is the whole of the bound.** This version bounds the work of a
+   graph data request and nothing else. It introduces no request rate limit and no
+   new endpoint.
 
 ## Security Headers
 
@@ -518,6 +635,7 @@ showing a state that no longer matches the data.
    - the roadmap index page (`/`);
    - the roadmap sprints page (`/roadmaps/{name}`);
    - the roadmap tasks page (`/roadmaps/{name}/tasks`);
+   - the task detail endpoint (`/roadmaps/{name}/tasks/{id}/data`);
    - the roadmap sprint page (`/roadmaps/{name}/sprints/{id}`);
    - the roadmap audit log page (`/roadmaps/{name}/audit`);
    - the knowledge-graph page shell (`/roadmaps/{name}/graph`);
@@ -526,7 +644,11 @@ showing a state that no longer matches the data.
    It also covers the data-state-dependent error responses — for example a
    `404 Not Found` for a roadmap or a sprint that does not exist, and a `500` from
    a read failure — because whether such a path is found depends on the current
-   database or store state, so those responses are themselves data-derived.
+   database or store state, so those responses are themselves data-derived. The
+   `400 Bad Request` responses of the graph data endpoint (see
+   [Query-Bar Error Handling](#query-bar-error-handling)) carry the header as well.
+   The rule is applied per route rather than per outcome, so every response of a
+   route in the list above carries `no-store` whatever its status.
 2. **`no-store`, not merely `no-cache`.** `Cache-Control: no-store` is the chosen
    directive. The response MUST NOT be stored by any cache, so a reload, a
    back/forward navigation, or a re-fetch always re-reads the current database or
@@ -559,8 +681,9 @@ produced from embedded `html/template` templates. Page routes return HTML
 |-------|--------|---------|----------|
 | `/` | GET, HEAD | Roadmap index | HTML list of roadmaps |
 | `/roadmaps/{name}` | GET, HEAD | Roadmap sprints page (landing; sprint tabs) | HTML |
-| `/roadmaps/{name}/tasks` | GET, HEAD | Roadmap tasks page (full task table) | HTML |
-| `/roadmaps/{name}/sprints/{id}` | GET, HEAD | Roadmap sprint page (all sprint details and the sprint's task list) | HTML |
+| `/roadmaps/{name}/tasks` | GET, HEAD | Roadmap tasks page (Kanban task board; optional `q` search parameter and optional `type`, `priority`, and `severity` filter parameters, see [Roadmap Tasks Page](#roadmap-tasks-page)) | HTML |
+| `/roadmaps/{name}/tasks/{id}/data` | GET, HEAD | One task's fields and comments, for the task detail modal (see [Task Detail Endpoint](#task-detail-endpoint)) | JSON |
+| `/roadmaps/{name}/sprints/{id}` | GET, HEAD | Roadmap sprint page (all sprint details and the sprint's member-tasks board) | HTML |
 | `/roadmaps/{name}/audit` | GET, HEAD | Roadmap audit log page (full audit log, paginated; optional `page` parameter; see [Roadmap Audit Log Page](#roadmap-audit-log-page)) | HTML |
 | `/roadmaps/{name}/graph` | GET, HEAD | Roadmap knowledge-graph page (interactive visualisation) | HTML |
 | `/roadmaps/{name}/graph/data` | GET, HEAD | Graph nodes and edges for the visualisation (optional `q` Cypher query and `limit` node-limit parameters; see [Graph Data Endpoint](#graph-data-endpoint)) | JSON |
@@ -582,6 +705,15 @@ Path-parameter rules:
    `{id}` that is not the `id` of a sprint belonging to the named roadmap, is
    answered with HTTP `404 Not Found`. The `{name}` part of the sprint route is
    validated by rules 1 and 2 above, exactly as on the other roadmap routes.
+4. `{id}`, on the task detail endpoint `/roadmaps/{name}/tasks/{id}/data`, is a
+   task identifier and follows the same discipline. It MUST be a valid integer; a
+   non-integer `{id}`, or an integer `{id}` that is not the `id` of a task
+   belonging to the named roadmap, is answered with HTTP `404 Not Found`. The
+   `{name}` part is validated by rules 1 and 2 above before any filesystem path is
+   built, exactly as on every other roadmap route, so the endpoint carries the same
+   path-traversal guard as the pages (see
+   [Task Detail Endpoint](#task-detail-endpoint) and
+   [Security and Constraints](#security-and-constraints)).
 
 HTTP status mapping for page and data routes:
 
@@ -590,9 +722,15 @@ HTTP status mapping for page and data routes:
 | Page or data served successfully | 200 |
 | Roadmap name invalid, or roadmap not found | 404 |
 | Sprint `{id}` not a valid integer, or not a sprint of the roadmap | 404 |
+| Task `{id}` not a valid integer, or not a task of the roadmap | 404 |
 | Audit `page` parameter out of range, non-integer, or garbage | 200 (clamped to nearest valid page; see [Roadmap Audit Log Page](#roadmap-audit-log-page)) |
+| Tasks `q` search parameter absent, empty, unmatched, or undecodable | 200 (never an error; see [Roadmap Tasks Page](#roadmap-tasks-page)) |
+| Tasks `type`, `priority`, or `severity` filter parameter absent, unknown, malformed, or undecodable | 200 (never an error; the dimension applies no filter; see [Roadmap Tasks Page](#roadmap-tasks-page)) |
+| Graph data `q` rejected by the read-only guard-rail | 400 (`kind` `not_read_only`; the query is not executed; see [Query-Bar Error Handling](#query-bar-error-handling)) |
+| Graph data `limit` not one of the six allowed values | 400 (`kind` `invalid_limit`; the query is not executed; see [Query-Bar Error Handling](#query-bar-error-handling)) |
+| Graph data query fails once running, a query cancelled for exhausting the time budget included | 400 (`kind` `execution`; see [Query-Bar Error Handling](#query-bar-error-handling)) |
 | Non-read HTTP method on any route | 405 |
-| Unhandled internal error reading data (I/O, corrupt store) | 500 |
+| Unhandled internal error reading data (I/O, corrupt store), a graph store that fails to open included | 500 |
 
 The HTTP status codes above describe the running server's HTTP responses and are
 distinct from the process exit codes in
@@ -622,9 +760,9 @@ how the `rmp web` process itself terminates.
 - **Landing page.** This is the roadmap's landing page: selecting a roadmap on the
   index page lands the user here (see [Roadmap Index Page](#roadmap-index-page)).
 - **Content:** A read-only presentation of the named roadmap's sprints, read from
-  that roadmap's `project.db`. This page does **not** render the full tasks table;
-  the full task table is its own page at `/roadmaps/{name}/tasks` (see
-  [Roadmap Tasks Page](#roadmap-tasks-page)).
+  that roadmap's `project.db`. This page does **not** render the roadmap's tasks;
+  the roadmap's full set of tasks has its own page, the Kanban task board at
+  `/roadmaps/{name}/tasks` (see [Roadmap Tasks Page](#roadmap-tasks-page)).
 - **Sprints.** The page presents the roadmap's sprints as three tabs. From left
   to right the tab labels are exactly **Próximos**, **Actual**, and
   **Concluídos**, and the **Actual** tab is the active tab by default when the
@@ -643,14 +781,28 @@ how the `rmp web` process itself terminates.
   (see [UI Framework](#ui-framework), rule 9). The status badge each card shows uses
   the semantic colour mapping in
   [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours).
+
+  **Each tab carries its own count badge.** Beside its label, each of the three tabs
+  shows a Tabler badge whose **text** is the number of sprints in that tab and whose
+  **colour** is the variant the sprint status mapping assigns to the status that tab
+  groups: Próximos carries `bg-secondary-lt` (the `PENDING` variant), Actual carries
+  `bg-blue-lt` (`OPEN`), and Concluídos carries `bg-green-lt` (`CLOSED`) (see
+  [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
+  rule 2). The colour states which status the tab groups, and the text states how many
+  sprints the tab holds; the two are independent, so the badge of a tab that holds no
+  sprint shows the count `0` and keeps the colour of its status. The Próximos colour
+  is the same `bg-secondary-lt` a badge carries when nothing colours it, so that tab
+  on its own cannot show whether the mapping was applied; the three tabs are read
+  together, with `bg-blue-lt` on Actual and `bg-green-lt` on Concluídos beside it.
+
   - **Actual** (the default active tab) presents the OPEN sprint or sprints —
     those in progress — ordered by ascending sprint `Order` (the unique sprint
     execution order; see `MODELS.md § Sprint`). Each OPEN sprint is shown with the
     shared sprint-card partial, the same card the other two tabs use. The Actual
-    tab does not expand the OPEN sprint into an inline task table or per-task
-    modals; the full sprint detail block is shown only on the single Roadmap
-    Sprint Page (see [Roadmap Sprint Page](#roadmap-sprint-page)). When no sprint
-    is OPEN, the Actual tab shows a clear empty-state message and no card.
+    tab does not expand the OPEN sprint into an inline member-tasks board or
+    per-task modals; the full sprint detail block is shown only on the single
+    Roadmap Sprint Page (see [Roadmap Sprint Page](#roadmap-sprint-page)). When no
+    sprint is OPEN, the Actual tab shows a clear empty-state message and no card.
   - **Próximos** lists the PENDING sprints — planned but not yet started — ordered
     by ascending sprint `Order` (the unique sprint execution order; see
     `MODELS.md § Sprint`). The sprint with the lowest `Order`, the next sprint to
@@ -663,8 +815,8 @@ how the `rmp web` process itself terminates.
   - Every sprint shown in any of the three tabs is a clickable link to that
     sprint's own page at `/roadmaps/{name}/sprints/{id}` (see
     [Roadmap Sprint Page](#roadmap-sprint-page)). The sprints page itself shows no
-    member tasks and opens no task detail modal; member tasks are clickable on the
-    single Roadmap Sprint Page and on the tasks page (see
+    member tasks and opens no task detail modal; tasks are clickable on the single
+    Roadmap Sprint Page and on the tasks page's board (see
     [Task Detail Modal](#task-detail-modal)).
 - **Sprint description line breaks.** Wherever a sprint's `description` text is
   shown in a sprint card on this page — across all three tabs — the description
@@ -685,31 +837,896 @@ how the `rmp web` process itself terminates.
 ### Roadmap Tasks Page
 
 - **Route:** `GET /roadmaps/{name}/tasks`
-- **Content:** A read-only presentation of the named roadmap's full task table —
-  every task of the roadmap, of any status — read from that roadmap's
-  `project.db`. This is the same Tasks table presentation that the roadmap's
-  landing page used to carry, now served at its own endpoint.
-- **Tasks.** The page presents the tasks of the roadmap with the fields defined
-  for the `Task` model in `MODELS.md § Task`: title, status, type, priority,
-  severity, functional/technical/acceptance text, specialists, lifecycle
-  timestamps, parent task link, subtask relationships, and dependency
-  relationships (`depends_on` and `blocks`). The page does not redefine these
-  fields; `MODELS.md` and `DATABASE.md` remain canonical. Each task row in the
-  task table is clickable: selecting a row opens the read-only task detail modal
-  for that task (see [Task Detail Modal](#task-detail-modal)).
+- **Content:** A read-only presentation of every task of the named roadmap, of
+  any status, read from that roadmap's `project.db` and laid out as a **Kanban
+  board**: one fixed column per task status, each column holding one card per
+  task in that status. The board is the page's only task presentation; the page
+  renders no task table and offers no alternative table view. Every field a task
+  has remains reachable from this page through the read-only task detail modal,
+  which opens when the user selects a card (see
+  [Task Detail Modal](#task-detail-modal)). The Roadmap Sprint Page presents its
+  member tasks as a board too, so both surfaces that show a clickable task are
+  boards whose card is the modal trigger; the two boards differ in what their
+  columns stand for and in what their cards show. This page has **five** columns,
+  one per task status, and its card leads with the reference line; the sprint
+  page's board has **three**, grouping the sprint's tasks the way the sprint status
+  summary line groups them, and its card leads with the title (see
+  [Sprint Detail Sub-Template](#sprint-detail-sub-template)). The five-column
+  specification below governs this page alone.
+- **Structural inspiration only.** The board follows the structure of a GitLab
+  issue board — columns that stand for states, cards that stand for work items,
+  and a task count on each column header — and deliberately departs from it in
+  interaction: this board moves nothing and edits nothing (see **Read-only**
+  below).
+- **Columns.** The board has exactly five columns, one for each value of the
+  `TaskStatus` enum (`MODELS.md § Enums`). From left to right the columns follow
+  the order of the task state machine's flow (`STATE_MACHINE.md § Task State
+  Machine`):
+
+  1. `BACKLOG`
+  2. `SPRINT`
+  3. `DOING`
+  4. `TESTING`
+  5. `COMPLETED`
+
+  The columns are fixed: all five are always present, in that order, whatever the
+  roadmap's data contains, and a column holding no task is still rendered.
+  Neither the set of columns nor their order depends on the data. Each column
+  title is the status identifier exactly as the enum spells it, in upper case
+  (`BACKLOG`, `SPRINT`, `DOING`, `TESTING`, `COMPLETED`), and is not translated.
+- **Unbounded read: every task, never a page of them.** The page reads **every**
+  task of the roadmap. The read carries no limit, no page size, and no truncation,
+  and the board has no pagination: whatever the roadmap holds, the board shows.
+
+  The display default that sizes `rmp task list` output — `-l, --limit <n>`,
+  default `100` (see `COMMANDS.md § List Tasks`) — MUST NOT be applied to this
+  read. That default exists to size the output of one command invocation, where the
+  caller who wants more asks for more and can see that the listing was cut. This
+  page offers no such affordance, and it does not merely list: it groups the tasks
+  into five columns and prints a count on each column header as a statement of fact
+  about the roadmap. Under a partial read those counts would be wrong and would
+  still be presented as true, with nothing on the page to reveal that tasks were
+  omitted. Reading every task is therefore what makes the counts in **Count per
+  column** correct by construction, and it is a correctness requirement of this
+  page rather than a performance choice (see `DATABASE.md § Main SQL Queries`,
+  "List All").
+
+  A search term and the header filters narrow what the board **shows**; neither
+  narrows what the page **reads**. The read stays the full task list either way, so
+  criteria applied by the server and the same criteria applied in the browser select
+  from the identical set — which is what makes the two paths equivalent (see
+  **Server and client produce the same board**).
+- **Placement.** Each task of the roadmap appears in exactly one column: the
+  column of that task's own `status`. The board omits no task and duplicates
+  none, so the five column counts sum to the roadmap's total number of tasks. The
+  `tasks.status` column is restricted by a CHECK constraint to exactly these five
+  values (`DATABASE.md § tasks Table`), so no task can carry a status outside
+  them: the board has no sixth column and no "other" column.
+- **Count per column.** Each column header shows the status name together with a
+  Tabler badge carrying the number of tasks in that column, the way a GitLab
+  issue board shows the issue count of each list. A column holding no task shows
+  the count `0`. The count always equals the number of cards that column is
+  actually showing: when the header controls narrow the board, the counts narrow
+  with it (see **Effect on the board** below).
+
+  **The badge carries the colour of its column's status.** A column of this board
+  is exactly one `TaskStatus` value (see **Columns** above), so the badge is a
+  hybrid: its **text** is the count of tasks in the column, and its **colour** is
+  the variant the task status table assigns to that column's status (see
+  [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
+  rule 2). The colours are the ones that table already holds; this board introduces
+  no new colour and no new band, and it keys on that mapping rather than restating
+  the variants here. The count itself selects no colour, so a column that holds no
+  task shows `0` in the colour of its status, exactly as a tab that holds no sprint
+  does (see [Roadmap Sprints Page](#roadmap-sprints-page)). The colour earns its
+  place because the header is where the reader identifies the column: the mapping
+  already gives each status a colour the reader meets wherever that status is
+  written out, and carrying it here lets the five columns tell themselves apart by
+  the same key rather than by their heading text alone.
+- **Order within a column.** The cards of a column appear in a deterministic
+  order: descending `priority` and, for tasks of equal priority, ascending
+  `created_at`. This is the order in which the page's own read already returns the
+  roadmap's tasks — the default `ListTasks` ordering,
+  `ORDER BY priority DESC, created_at ASC` (see
+  `DATABASE.md § Main SQL Queries`, "List All"). Grouping the tasks into columns
+  preserves that relative order: the tasks of one column appear in the same
+  relative order in which the read returned them, so the board introduces no
+  second sort and no ordering of its own.
+- **Card content.** Each card presents one task, in this order:
+  1. A **reference line** at the top of the card showing the task reference
+     `#<id>` (the task's `id`) and the task's `type` (the `TaskType` value; see
+     `MODELS.md § Enums`). Both are rendered as muted text. The `type` carries no
+     colour: the semantic colour mapping in
+     [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours)
+     covers task and sprint status, priority, and severity only, and is not
+     extended to the task type.
+  2. The task **`title`**, presented as the card's prominent main content.
+  3. A **`priority` badge** and a **`severity` badge**, in that order, each
+     carrying that task's integer value and coloured by the band the value falls
+     in, using exactly the mapping in
+     [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours).
+     No new badge colour and no new band is introduced here.
+
+     **Each badge names the value it carries with a one-letter prefix.** The
+     priority badge reads `P` immediately followed by the task's `priority`, and
+     the severity badge reads `S` immediately followed by the task's `severity`,
+     with no space and no separator between the letter and the digits: a task of
+     priority `5` and severity `3` shows `P5` and `S3`.
+
+     The prefix is the label the card has no room to write out. Wherever else this
+     interface shows these two values, a word names each of them — the task detail
+     modal writes the field's name beside the value (see
+     [Task Detail Modal](#task-detail-modal)) — but a card is read at a glance, and
+     without the prefix it would put two bare integers side by side and state
+     nowhere which one is the priority and which one is the severity. A reader
+     would have to know the order by heart to tell `5` from `3`. The prefix states
+     that word in the one character the card can spare for it.
+
+     **This rule governs the card of both boards.** The card of the sprint page's
+     member-tasks board renders the same pair in the same way (see
+     [Sprint Detail Sub-Template](#sprint-detail-sub-template)). The rule is stated
+     here once for both cards rather than twice, so that the two cannot drift apart
+     on it: the two boards differ in what their columns stand for and in what else
+     their cards show, and they keep **one** form for this pair.
+
+     **The prefix is a label, not a value.** It changes what the badge reads and
+     nothing else. The colour still follows the value alone, through exactly the
+     band mapping named above: `P5` takes the colour that mapping assigns to the
+     priority `5`, and the prefix selects no colour, introduces no band, and
+     changes no meaning. The card's accessible name is unaffected as well: it is
+     `Open details for task #<id>: <title>` (see **Clickable card** below), it
+     carries neither value, and so it carries no prefix.
+
+     **Only these two badges take a prefix.** A prefix earns its place only where
+     no label names the value, which is true of the priority and severity badges on
+     a board card and of no other badge in this interface. A status badge is never
+     ambiguous, because its own text is the status name — it reads `COMPLETED`, not
+     a bare integer — so it takes no prefix wherever it is shown; this card shows no
+     status badge at all (see below). The priority and severity badges of the task
+     detail modal take no prefix either, for the reason stated there.
+  4. A **metadata footer** showing only the indicators the task actually has:
+     the sprint the task belongs to, its `specialists`, its number of subtasks
+     (`subtask_count`), its number of `depends_on` entries, its number of `blocks`
+     entries, and its number of comments. Each indicator is rendered with the icon
+     or label that identifies what it counts, so the footer is readable without a
+     legend.
+
+     **The sprint indicator.** A task that belongs to a sprint shows that sprint
+     on its card, the way a GitLab issue card shows the issue's milestone. The
+     card identifies the sprint by its `title` together with `Sprint #<id>` (the
+     `Sprint` model's `title` and `id`; see `MODELS.md § Sprint`). Both parts are
+     shown because the `title` alone does not identify a sprint: `MODELS.md § Sprint`
+     requires the `title` to be present and caps its length, but places no
+     uniqueness constraint on it, so two sprints of one roadmap may carry the same
+     title, while the `id` is the primary key and is unique. Showing both is also
+     the identification idiom the rest of the interface already uses for a sprint
+     (see [Shared Sprint-Card Partial](#shared-sprint-card-partial) and
+     [Roadmap Sprint Page](#roadmap-sprint-page)).
+
+     A task belongs to **at most one** sprint, so the indicator names at most one
+     sprint and never a list. This is guaranteed by the schema, not by convention:
+     `sprint_tasks.task_id` carries a `UNIQUE` constraint (see
+     `DATABASE.md § sprint_tasks Table (1:N Relationship)` and
+     `DATABASE.md § Relationships`).
+
+     The sprint indicator is **plain text, not a link**. The whole card is a single
+     `<button>` that opens the task detail modal (see **Clickable card** below), and
+     a link cannot be nested inside it: a button's content model admits no
+     interactive descendant, so a nested link would be invalid markup and would put
+     two competing activation targets in one control, leaving pointer, touch, and
+     keyboard activation ambiguous about which target the user meant. The sprint's
+     own page stays one step away through the sidebar and the sprints page, so
+     nothing becomes unreachable.
+
+  The card shows **no status badge**, because the column the card sits in already
+  states the task's status.
+
+  **Absent metadata renders nothing.** An indicator whose value is absent, empty,
+  or zero is not rendered at all: no dash, no placeholder, no empty slot. A task
+  that belongs to no sprint shows no sprint indicator — not a dash, not "None", not
+  an empty slot; a task with no `specialists` value, or with an empty `specialists`
+  value, shows no specialists indicator; a task with `subtask_count` `0`, with no
+  `depends_on` entry, with no `blocks` entry, or with no comment shows no
+  corresponding indicator. A task with none of the six shows no metadata footer at
+  all.
+
+  The card presents a subset of the task's fields by design. Every field of the
+  `Task` model — including the long free-text fields, the lifecycle timestamps,
+  the parent task link, and the full dependency lists — is shown in the task
+  detail modal the card opens (see [Task Detail Modal](#task-detail-modal)). The
+  card does not redefine any field; `MODELS.md` and `DATABASE.md` remain
+  canonical.
+
+  The absent-metadata rule above governs **this** board's card. The card of the
+  sprint page's member-tasks board departs from it deliberately and always renders
+  both of its counters, for the reason stated where that card is defined (see
+  [Sprint Detail Sub-Template](#sprint-detail-sub-template), **The card**).
+- **Clickable card.** Selecting a card opens the read-only task detail modal for
+  that task (see [Task Detail Modal](#task-detail-modal)). Opening the modal
+  fetches that task's fields and comments from the read-only endpoint
+  `GET /roadmaps/{name}/tasks/{id}/data` and fills the page's single modal shell
+  with them (see [Task Detail Endpoint](#task-detail-endpoint)). That request is
+  made when the user opens the task, not while the page is rendered, so it adds no
+  query to the page's own read and no per-task cost to the board. It opens no write
+  path.
+
+  The card **is** the trigger, and the trigger is a `<button type="button">`, a
+  natively activatable element. A pointer click, a touch tap, and the keyboard
+  (Enter and Space) therefore all open the modal through the browser's own
+  activation behaviour, with no added JavaScript, so the board is fully usable
+  without a pointing device. Because a `<button>` is focusable and exposes the
+  button role on its own, the card carries no `tabindex` and no `role="button"`:
+  both would be redundant, and neither would grant activation to an element that
+  lacked it (see [Task Detail Modal](#task-detail-modal), *The trigger is a
+  natively activatable element*). The card's accessible name is
+  `Open details for task #<id>: <title>`, naming the action and identifying the
+  task by `id` and `title`, and containing the card's own visible title text. The
+  card keeps the Tabler card presentation specified under
+  **Markup** above; making it a button changes the element, not the appearance.
+- **Header search control.** The page header's actions column carries a **search
+  input** that narrows the board. That input and the three filter dropdowns of
+  **Header filter controls** below are the only controls in that column: the page
+  header presents no link to the knowledge-graph page, because the admin-shell
+  sidebar already lists **Graph** among the roadmap's own links on every page (see
+  [UI Framework](#ui-framework), rule 1), so a header link would be a second route
+  to a destination the page already offers, and removing it costs no access. The
+  actions column keeps the Tabler idiom fixed in [UI Framework](#ui-framework),
+  rule 16.
+
+  The input carries a real, programmatically associated **label** naming what it
+  searches. A `placeholder` MUST NOT stand in for that label: a placeholder is not
+  an accessible name and disappears as soon as the user types. Where the label is
+  visible, the input's accessible name contains the visible label text, by the rule
+  in [Task Detail Modal](#task-detail-modal), *The trigger is a natively activatable
+  element*. The control is reachable and operable from the keyboard.
+- **What the search matches.** A task matches a term when the term occurs in that
+  task's **searchable text**, which is the concatenation of exactly two things the
+  card itself displays:
+  1. the task `title`;
+  2. the task reference `#<id>`, written with its leading `#`.
+
+  Including the reference is deliberate: the card shows `#<id>` in its reference
+  line, so a user reading a card can see it, and typing `42` to reach task 42 is
+  the obvious gesture. Because the reference is matched as the literal string
+  `#42`, both `42` and `#42` find it under the one substring rule below, with no
+  special case for either form.
+
+  `specialists` is deliberately **excluded**, and so is every other task field. The
+  search answers "which task is this?" from what identifies a task on its card;
+  matching an attribute answers a different question, "which tasks share this
+  property?", which is the job of the type, priority, and severity filters below and
+  would make one control serve two purposes with no way for the user to tell which
+  one produced a hit. Keeping the two apart is what lets them compose (see **Header
+  filter controls** and **How the criteria compose** below).
+- **Matching rule.** Matching is **case-insensitive** and by **substring**: a task
+  matches when its searchable text contains the term. Leading and trailing
+  whitespace is stripped from the term before matching, and a term that is empty
+  or entirely whitespace is **no term at all** — the board shows every task.
+  Whitespace inside the term is significant and is matched literally.
+
+  The paragraph above names two transformations of the term, and each of the two has
+  to be stated exactly rather than only described. **The trim rule** below fixes
+  which code points count as the whitespace that is stripped. Case-insensitivity
+  means one specific transformation, applied to the task's searchable text and to
+  the term before the two are compared, and **The folding rule** below states which
+  transformation it is. Stating each exactly — rather than requiring only that
+  whitespace be removed and that the viewer's locale be ignored — is what keeps the
+  two paths of **Server and client produce the same board** below from disagreeing
+  about a term: a description both paths satisfy while returning different terms
+  fixes nothing.
+- **The trim rule.** Before the term is folded, every code point carrying Unicode's
+  **White_Space** property — the property Unicode's own character database
+  publishes under that name — is removed from the **start** of the term and from its
+  **end**. Removal stops at the first code point that does not carry the property,
+  so a code point carrying it anywhere else in the term survives, is part of the
+  term, and is matched literally (see **Matching rule** above). A term made only of
+  such code points becomes the empty string, which is no term at all and shows every
+  task.
+
+  The set is named by that property, and deliberately **not** by either platform's
+  own trimming function, because the two functions do not implement the same set and
+  a rule stated as "surrounding whitespace is stripped" would therefore fix nothing:
+  both platforms satisfy that description while disagreeing about which term they
+  produce. The difference is observable rather than academic, and this specification
+  fixes both code points on which the two disagree — they disagree in **opposite**
+  directions:
+  - `U+0085` (NEXT LINE) **carries** the White_Space property, so it **IS** removed
+    from the ends of a term, although the JavaScript platform's own trimming keeps
+    it: that platform trims the code points it classes as white space together with
+    its line terminators, and `U+0085` is in neither group.
+  - `U+FEFF` (ZERO WIDTH NO-BREAK SPACE) does **not** carry the White_Space
+    property, so it is **NOT** removed, although the JavaScript platform's own
+    trimming removes it: that platform lists this one format character in its white
+    space explicitly.
+
+  Those two are the whole of the difference at any one Unicode version: swept over
+  every code point of Unicode, no third code point is removed by one trimming and
+  kept by the other. Ordinary terms are therefore untouched by the distinction — the
+  space, the tab, the carriage return, and the line feed a user can type are removed
+  under either.
+
+  **The cost of the choice is stated plainly rather than patched over.** A term
+  pasted with a leading byte-order mark keeps that `U+FEFF`, and so matches nothing
+  on an ordinary roadmap. It does so on **both** paths, which is the property this
+  rule exists to protect: a term whose two paths disagree — a card on one of them
+  and nothing on the other — would break **Server and client produce the same
+  board** below, and that disagreement, not the empty result, is the defect. Nothing
+  is stripped after the trim to compensate, for the reason **The folding rule** below
+  gives for its own post-fold fixups.
+
+  **Trim first, then fold.** The term is trimmed and then folded, in that order, and
+  **both** paths perform those two steps in that same order. The order is not
+  observable under the Unicode version in force: the fold replaces each code point
+  with exactly one code point and reorders none (see **The folding rule** below),
+  and swept over every code point of Unicode no code point carrying the White_Space
+  property folds to anything but itself, while no code point outside the property
+  folds into it — so trimming and folding commute and either order yields the same
+  term. Fixing the order is what keeps the contract from resting on that
+  coincidence: were some code point ever to fold into a whitespace one, the two
+  paths would still perform the same two steps in the same order and would still
+  return one term.
+
+  **The task's searchable text is folded but never trimmed.** The trim applies to
+  the term alone. A task's own leading or trailing whitespace is part of its text
+  and is matched literally, exactly as whitespace inside a term is; the term is
+  trimmed because a user reaches for the space bar around what they type, which is
+  not a statement about the task.
+- **The folding rule.** The task's searchable text and the term are folded by
+  Unicode's **simple lowercase mapping**: the single replacement code point that
+  the Unicode Character Database gives a code point, applied to each code point on
+  its own, with a code point that has no such mapping folding to itself. Three
+  properties follow from that definition, and every implementation of the rule MUST
+  have all three:
+  1. **Unconditional.** What a code point folds to never depends on the code points
+     around it. No context — the start or the end of a word, the letters before or
+     after it, the presence of another cased letter — changes the result.
+  2. **One code point in, one code point out.** The fold replaces each code point
+     with exactly one code point. It adds none, removes none, and reorders none, so
+     folding never lengthens or shortens the text.
+  3. **Locale-independent.** The fold consults no locale, so the same term and the
+     same task produce the same verdict wherever the page is rendered and whatever
+     locale the browser reports. A locale-sensitive case conversion MUST NOT be
+     used.
+
+  The rule is deliberately **not** Unicode's Default Case Conversion — the full
+  case conversion, with its conditional rules and its multi-code-point special-case
+  mappings, which is the conversion a programming language's ordinary lower-case
+  function may implement. The difference is observable rather than academic, and
+  this specification fixes both code points on which the two conversions disagree:
+  - `U+0130` (LATIN CAPITAL LETTER I WITH DOT ABOVE) folds to `U+0069` alone, and
+    never to the two code points `U+0069 U+0307` the full conversion produces for
+    it.
+  - `U+03A3` (GREEK CAPITAL LETTER SIGMA) folds to `U+03C3` in **every** position,
+    word-final included, and never to the final form `U+03C2` the full conversion
+    produces where its Final_Sigma condition holds.
+
+  Those two are the whole of the difference at any one Unicode version: swept over
+  every code point of Unicode in a range of neighbouring contexts, no third code
+  point folds differently under the two conversions. Ordinary ASCII and accented
+  Latin text is therefore untouched by the distinction — `A` folds to `a`, `Á` to
+  `á`, letter for letter.
+
+  **Nothing is rewritten after the mapping.** A `U+03C2` the user typed is already a
+  lower-case letter, folds to itself, and MUST NOT be rewritten to `U+03C3`
+  afterwards: a task titled `οδός` carries that `U+03C2` in its folded searchable
+  text, so a term rewritten that way would stop finding it. The same holds for
+  every other post-fold fixup, such as removing a `U+0307` the user typed. The cost
+  of the simple mapping is stated plainly rather than patched over: a task whose
+  title ends in a literal `ς` is not found by typing that word in capitals, because
+  the capital folds to `σ`. Both paths return that same verdict, which is the
+  property the rule exists to protect; whether two differently spelled forms of one
+  word should match each other is a different question from case, and this rule does
+  not answer it.
+
+  A term whose bytes are not valid UTF-8 is not a sequence of code points at all:
+  the server replaces each invalid byte with `U+FFFD` before folding, and the term
+  is then folded and matched like any other — it matches nothing on an ordinary
+  roadmap, and it is neither an error nor an absent term (see **No malformed term
+  is an error** below).
+- **One rule, and only one implementation of it.** A task's searchable text is
+  folded **once, by the server**. The client folds only the term, and compares it
+  against text the server already folded; no client-side code folds a task's
+  `title` or its reference, and no client-side code trims either. The two paths
+  therefore cannot disagree about a task's text, because only one of them ever
+  transforms it.
+
+  The term is the one value both sides fold, and it is where the two could still
+  drift, because each platform's own lower-case function implements whichever
+  conversion that platform chose. The client therefore **MUST NOT** fold the term
+  with the JavaScript platform's case conversion, locale-sensitive or not. It folds
+  the term with the **server's own mapping**, which the server ships to it together
+  with the script that narrows the board. The client consults no case-conversion
+  table of the browser's, and the fold of a term is the server's answer on both
+  paths by construction, rather than by two implementations happening to agree.
+
+  Shipping the mapping settles a second question with the same move. A browser's
+  case tables are of whatever Unicode version that browser ships, which Groadmap
+  neither chooses nor can detect, so a fold that consulted them would be a fold two
+  browsers could answer differently for the same term. The shipped mapping removes
+  the browser from the answer entirely.
+
+  **The term's trim is the server's by the same construction.** Normalising a term
+  is two steps, and the client MUST NOT take either of them from the platform: it
+  **MUST NOT** trim the term with the JavaScript platform's trimming function, any
+  more than it may fold it with that platform's case conversion. It removes the
+  term's leading and trailing whitespace by the **server's own whitespace set**,
+  which the server ships to it together with the mapping and the script that narrows
+  the board, so which code points a term loses at its ends is the server's answer on
+  both paths by construction. Leaving that one step to the platform would be enough
+  to break the equivalence on its own, and would break it quietly: the two trimmings
+  agree on every code point but the two **The trim rule** above names, so every
+  ordinary term would go on agreeing and hide the disagreement.
+
+  On the server, the corpus fold and the term fold are likewise **one** rule: the
+  server folds a task's searchable text and folds a term through the same folding
+  function, not through two implementations of one description, so the two cannot
+  drift apart on that side either.
+- **What keeps the shipped rule equal to the server's.** The binary ships the client
+  the two things a term's normalisation is made of — the whitespace set and the case
+  mapping — and **one** check covers both of them. It is one check and not two
+  beside each other because the two are parts of one rule: a check that took only
+  the mapping as its subject would leave the whitespace set free to drift, and a set
+  that drifts separates the two paths exactly as a drifting mapping would.
+
+  Each part is checked against the server's own function over **the whole of
+  Unicode**: every code point, not a sample, and against that function itself, never
+  against a stored copy of its expected results — such a copy can be updated to
+  match a changed fold or a changed whitespace set, and would then prove nothing.
+  The check fails when a single code point folds differently on the two sides, and
+  it fails the same way when a single code point is whitespace to one side and not
+  to the other. It fails the same way again when a toolchain upgrade changes either
+  of them, so a change of Unicode version cannot move one side of the rule and leave
+  the other behind unnoticed. The check also asserts, as an absence in the script the
+  binary serves, that the narrowing script calls neither a case conversion of the
+  platform nor a trimming function of the platform.
+
+  The check is an ordinary Go test. It runs no JavaScript and requires no
+  JavaScript engine, no Node.js, no network access, and no module dependency, so it
+  holds within the constraints already fixed in `BUILD.md § External Dependencies`
+  and `BUILD.md § Vendored Web Assets`, rule 2. It is the discipline the badge
+  colour mapping already follows wherever a client script carries that mapping too
+  (see
+  [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
+  rule 2).
+- **Header filter controls.** Beside the search input, the page header's actions
+  column carries **three filter dropdowns** (select controls) that narrow the board
+  by what a task **is**, where the search narrows it by what a task is **called**:
+
+  1. a **type filter**, offering the ten `TaskType` values (`MODELS.md § Enums`);
+  2. a **minimum-priority filter**, offering the thresholds `1` to `9` over the
+     task's `priority` (`MODELS.md § Task`);
+  3. a **minimum-severity filter**, offering the thresholds `1` to `9` over the
+     task's `severity` (`MODELS.md § Task`).
+
+  The ten type values are enumerated in `MODELS.md § Enums` and are not restated
+  here, so the type filter cannot drift from the enum. The thresholds are the
+  `priority` and `severity` range of `MODELS.md § Task` without its `0` floor, for
+  the reason **What each filter matches** below gives.
+
+  These are exactly the three dimensions the CLI already filters `rmp task list` by
+  — `-y, --type`, `-p, --priority`, and `--severity` (see
+  `COMMANDS.md § List Tasks`) — so the page presents no less capability over the
+  board than the command that lists the same data. Each dimension is also
+  visible on the card the filter acts on: the card's reference line shows the task's
+  `type`, and the two badges show its `priority` and its `severity` (see **Card
+  content** above), so the user filters by values the board already displays, as the
+  search matches text the card already displays.
+
+  Each dropdown offers, as its **first** option, a value meaning *no filter on this
+  dimension* — for example `Any type` — and that option is the selected one whenever
+  the dimension carries no filter. That option is a **value**, not the control's
+  name: each dropdown carries a real, programmatically associated **label** naming
+  the dimension it filters, and neither a first option nor a `placeholder` stands in
+  for that label, by the same rule **Header search control** above applies to the
+  search input. Each control is reachable and operable from the keyboard.
+
+  **Each dimension takes exactly one value.** A dimension carries one filter or it
+  carries none; it never carries a set. `rmp task list` is single-valued on all
+  three flags, a threshold is a single number by construction, and one value per
+  dimension keeps a single filtering model across the three controls instead of a
+  set-valued model for the categorical dimension and a scalar one for the two
+  ordinal dimensions.
+
+  **A filter value is never echoed into the page.** Unlike the term, a filter value
+  is not caller-supplied text rendered back to the user: the options are the fixed
+  sets enumerated above, emitted by the server from the enum and from the range, and
+  all a parameter does is decide which of those options is marked as selected. A
+  value that is not one of them selects the no-filter option (see **No filter value
+  is an error** below), so no caller-supplied string reaches the page through
+  `type`, `priority`, or `severity`, and the question that **Escaping the term**
+  below answers for `q` does not arise for the filters.
+- **What each filter matches.** The three dimensions do not compare the same way,
+  and each keeps the meaning the CLI flag of the same name already carries (see
+  `COMMANDS.md § List Tasks`), so one parameter name means one thing across the two
+  surfaces:
+  - **Type is an equality.** A task matches when its `type` is **equal to** the
+    selected `TaskType` value. The comparison is exact against the value as
+    `MODELS.md § Enums` spells it, in upper case; a differently spelled or
+    differently cased value is not one of the ten and is handled by **No filter
+    value is an error** below.
+  - **Priority and severity are thresholds.** A task matches the priority filter
+    when its `priority` is **greater than or equal to** the selected value, and the
+    severity filter when its `severity` is greater than or equal to the selected
+    value. This is the meaning `rmp task list` already gives `-p, --priority <n>`
+    ("Filter priority >= n") and `--severity <n>` ("Filter severity >= n"), and
+    `priority` and `severity` are ordinal `0`-`9` ranges rather than categories
+    (`MODELS.md § Task`), so "at least" is the comparison that fits them.
+
+    The offered thresholds start at `1` and not at `0` because a threshold of `0`
+    admits every task and is therefore the unfiltered board, which already has its
+    own option and its own URL form — the parameter absent (see **The URL carries
+    the filters** below). Offering `0` would give one board two URLs and two
+    control settings, which is what **An empty term leaves no parameter** exists to
+    prevent for the term.
+- **Why the board offers no status filter.** The board deliberately offers **no**
+  filter over a task's `status`, and the omission follows from the layout rather
+  than from an oversight:
+  1. **The columns already are the status.** The board has exactly five fixed
+     columns, one per `TaskStatus` value, and each task sits in the column of its
+     own status (see **Columns** and **Placement** above). The narrowing a status
+     filter would perform is the narrowing the layout has performed already: a user
+     who wants the `DOING` tasks reads the `DOING` column, which is already
+     separate, already ordered, and already counted.
+  2. **Keeping the columns would make the board state something false.** A status
+     filter that left the five columns in place would leave the excluded columns
+     present, in order, and showing the count `0`, while the roadmap holds tasks in
+     those statuses. A column count is a statement of fact about what that column
+     shows (see **Count per column** above), so the board would state that the
+     roadmap holds no task in a status that in fact holds many.
+  3. **Dropping the columns would contradict the layout.** A status filter that
+     instead dropped or hid the excluded columns would break the rule that all five
+     columns are always present, in order, whatever the data contains (see
+     **Columns** above), and would leave the filter and the layout disagreeing
+     about how many columns a board has.
+  4. **Two controls would state one fact.** With a status filter active, a card's
+     status would be stated twice on one screen — by the column the card sits in
+     and by the control that admitted it — and nothing would keep a reader from
+     taking the two statements for two different facts.
+
+  Status is therefore the one task attribute this page presents **structurally**,
+  and the header controls filter only attributes the layout does not already
+  express.
+- **No filter value is an error.** A filter parameter whose value is not one the
+  dimension accepts applies **no filter on that dimension**, and the board is
+  rendered exactly as though that parameter were absent. This covers every way a
+  value can fail to be accepted: a `type` that is not one of the ten `TaskType`
+  values, including one that differs from a value only in case; a `priority` or
+  `severity` that is not an integer, or is an integer outside `1` to `9` — `0`
+  included, because a threshold of `0` is no filter (see **What each filter
+  matches** above); a value carrying a sign, surrounding spaces, or any other
+  decoration; a parameter present with an empty value; and a parameter the server
+  cannot decode.
+
+  The dimensions are independent under this rule: an unusable `type` leaves an
+  accepted `priority` applied and the search term applying, and narrows nothing of
+  its own. No filter value produces an error page and none changes the route's
+  status codes — **No malformed term is an error** below holds for the filters
+  exactly as it holds for the term, and the page answers HTTP 200 whatever the
+  three parameters carry.
+
+  **One value is read per dimension.** Because each dimension takes exactly one
+  value (see **Header filter controls** above), a URL that repeats a parameter —
+  `?type=BUG&type=EPIC` — is read as its **first** occurrence and the remaining
+  occurrences are ignored, so a hand-written URL has one defined reading rather
+  than an implementation-defined one. A single value that packs several —
+  `?type=BUG,EPIC` — is not a list: it is one string, that string is not one of the
+  ten `TaskType` values, and the rule above therefore ignores it. Neither form is a
+  partly valid filter, so this contract needs no rule for "some values accepted,
+  some not": a dimension is filtered by one accepted value, or it is not filtered.
+- **Effect on the board.** A task that does not satisfy every active criterion is
+  not shown. Everything the board states about itself then refers to the **shown
+  set**, not to the roadmap.
+  This holds continuously: as the user types a term or changes a filter, the counts,
+  the empty states, and the no-match message are updated together with the cards, so
+  the board is never left stating something true of a previous set of controls or of
+  the unnarrowed roadmap:
+  - Each column shows only its matching cards, in the order fixed by **Order within
+    a column**, which the narrowing preserves.
+  - **Each column's count is the number of cards that column is showing.** The
+    counts follow the narrowing. A count that kept reporting the unfiltered total
+    while the column displayed fewer cards would state something false about what
+    the user is looking at, which is exactly what **Count per column** exists to
+    prevent.
+  - **"Shown" means visible to the user, not present in the document.** A card that
+    is present but marked as not visible is not shown: it counts towards nothing the
+    board states, and a column whose every card is in that state displays its empty
+    state exactly as a column with no such card would.
+  - The five columns remain present and in order. Neither searching nor filtering
+    ever drops, hides, or reorders a column. The board offers no status filter, so
+    no control narrows the columns themselves (see **Why the board offers no status
+    filter** above).
+  - A column left with no matching card shows its ordinary in-column empty state.
+  - When **no** task matches, the board says so: it shows a clear message naming
+    that no task matches the controls the board is currently narrowed by, alongside
+    the five empty columns, rather than leaving five silently empty columns for the
+    user to interpret. One message covers the term and the filters together, because
+    the shown set is their conjunction and singling out one control would attribute
+    the empty result to a cause the board cannot know. This is distinct from a
+    roadmap that holds no task at all, which is not the result of any control and is
+    covered by **Empty states**.
+- **The URL carries the term.** The term travels in the URL query parameter **`q`**
+  on `/roadmaps/{name}/tasks`. The name matches the role `q` already has on the
+  graph data endpoint — the text the user typed into a search control (see
+  [Graph Data Endpoint](#graph-data-endpoint)) — and the two are distinct routes,
+  so the shared name carries one meaning per route and no ambiguity.
+  - **Live typing updates the URL in place.** As the user types, the page replaces
+    the current history entry so the address bar always reflects the board on
+    screen. It MUST NOT push a new history entry per keystroke, which would turn
+    the browser Back button into an undo key for typing.
+  - **An empty term leaves no parameter.** When the term is empty or entirely
+    whitespace, `q` is **removed** from the URL rather than left present and empty:
+    the unfiltered board's URL is the bare page URL. "Entirely whitespace" is the
+    trim rule's whitespace and no other (see **The trim rule** above), so the two
+    paths agree on which terms are no term at all: a term of `U+FEFF` alone is not
+    one of them, and `q` keeps it.
+  - **Cold load arrives already narrowed.** When the page is requested with a `q`
+    value, the **server** applies the term, and the document it sends already
+    carries the narrowing in its final state: the narrowed column counts, the
+    in-column empty states, and the no-match message where nothing matches. Nothing
+    on the client applies the term after load. A document that arrived unnarrowed
+    and was narrowed by a script afterwards is forbidden: it would flash the
+    unfiltered board before narrowing it, and where scripting is unavailable it
+    would leave the URL carrying a term while the board ignored it.
+
+    The non-matching cards **may** be present in that document, provided they
+    arrive already marked as not visible and count towards nothing the board
+    states. Their presence is not a concession but the enabling condition for
+    **Live typing** above: clearing or widening the search restores cards, and a
+    card the document never carried could not be restored without going back to the
+    server, which would make the narrowing instantaneous in one direction only. The
+    rule forbids narrowing applied *after* load; it does not forbid cards *present*
+    in the document.
+- **The URL carries the filters.** Each filter travels in its own URL query
+  parameter on `/roadmaps/{name}/tasks` — **`type`**, **`priority`**, and
+  **`severity`** — named after the `rmp task list` flags that carry the same three
+  dimensions (see `COMMANDS.md § List Tasks`). Each obeys the rules that **The URL
+  carries the term** states for `q`, for the same reasons:
+  - **Changing a filter updates the URL in place.** Selecting a value replaces the
+    current history entry rather than pushing a new one, so the browser Back button
+    leaves the board rather than stepping backwards through the control row.
+    Narrowing the board is one kind of act and does not become a different kind of
+    act because the user performed it with a dropdown instead of a keyboard.
+  - **A dimension with no filter leaves no parameter.** While a dropdown sits on its
+    no-filter option, that dimension's parameter is **removed** from the URL rather
+    than left present and empty. Clearing every control — the search input and all
+    three dropdowns — therefore restores the full board with its true counts, and
+    leaves the bare page URL, with no parameter of any kind behind it.
+  - **Cold load arrives already narrowed.** When the page is requested with any
+    combination of `q`, `type`, `priority`, and `severity`, the **server** applies
+    every one of them, and the document it sends already carries the narrowing in
+    its final state: the narrowed column counts, the in-column empty states, the
+    no-match message where nothing matches, and each control already showing the
+    value that produced the board. Nothing on the client applies a filter after
+    load. Non-matching cards **may** be present in that document under exactly the
+    condition that **The URL carries the term** sets — they arrive already marked
+    as not visible and count towards nothing the board states — which is what lets
+    widening or clearing a filter restore them without a request to the server.
+
+  The four parameters are independent of each other and of their position in the
+  query string: the board depends on which values are present, never on the order
+  in which the query string carries them.
+- **Server and client produce the same board (the property that matters).** For any
+  roadmap and any combination of a term and the three filters, the board reached by
+  setting those controls on the page and the board reached by requesting the page
+  URL carrying the same values in `q`, `type`, `priority`, and `severity` are the
+  **same**: the same cards, in the same columns, in the same order, with the same
+  column counts, and the same empty states. The two paths implement one matching
+  rule per criterion and one conjunction over them, and MUST NOT diverge — that
+  equivalence is what makes a narrowed board shareable and reloadable, and it is the
+  property to test. For the term, one rule per criterion means the trim rule and the
+  folding rule above, each with a single implementation of it, shipped from the
+  server to the client (see **The trim rule**, **The folding rule**, and **One rule,
+  and only one implementation of it**); for a filter it means one comparison per
+  dimension (see **What each filter matches**).
+- **No malformed term is an error.** Every string is a valid term. A term that
+  matches nothing renders the empty board described above, with HTTP 200. A term
+  longer than any searchable text simply matches nothing. A `q` the server cannot
+  decode is treated as absent, and the unfiltered board is served. The search never
+  produces an error page and never changes the route's status codes, and neither
+  does any filter value (see **No filter value is an error** above).
+- **How the criteria compose.** The search term is **one** criterion, and each
+  active filter is one more. The shown set is the set of tasks satisfying **every**
+  active criterion, and a board with no active criterion shows every task. The
+  conjunction is total and holds in every direction: `?q=cache&type=BUG&priority=7`
+  shows the `BUG` tasks of priority `7` or above whose title or `#<id>` reference
+  contains `cache`, and no other task. Narrowing a criterion can only shrink the
+  shown set, never grow it, and no criterion ever re-admits a task another criterion
+  excluded.
+
+  The criteria are independent: each dimension decides only its own question, none
+  of them changes how another is compared, and each carries its own URL query
+  parameter under the same rules as `q` — absent when inactive, applied by the
+  server on a cold load, equivalent between the two paths. A further criterion added
+  later composes the same way and requires no change to this contract.
+- **Escaping the term.** The term is the one caller-supplied string this page
+  echoes back — a filter value never is (see **Header filter controls** above) — and
+  it is treated exactly as every other caller-supplied value:
+  - Where the **server** renders it — into the search input's value, and into the
+    no-match message — it is escaped by `html/template`'s contextual auto-escaping
+    (see [Frontend Rules](#frontend-rules), rule 1).
+  - Where the **script** renders it, it is written through `textContent` or an
+    equivalent that cannot interpret markup, never `innerHTML` and never
+    `insertAdjacentHTML`, by the same rule the task detail modal follows (see
+    [Task Detail Modal](#task-detail-modal), *Client-side rendering is text-only*,
+    and [Security and Constraints](#security-and-constraints), rule 7).
+
+  A term containing HTML markup therefore renders as visible characters on both
+  paths and can introduce no element, attribute, or script into the page.
+- **Implementation constraints already in force.** The narrowing script — the one
+  script that applies the term and the three filters alike — is embedded and served
+  from `/static/...` like every other client script (see
+  [Embedded Asset Categories](#embedded-asset-categories) and
+  [Frontend Rules](#frontend-rules), rules 2 and 5). No inline script is
+  introduced and the Content-Security-Policy in [Security Headers](#security-headers)
+  is unchanged. Every class the controls emit resolves in the embedded stylesheets
+  and no template carries a `style` attribute (see [UI Framework](#ui-framework),
+  rules 8 and 10). The filter dropdowns introduce no component the vendored Tabler
+  distribution does not already ship: the select control is the one the
+  knowledge-graph page's layout dropdown already uses (see
+  [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page)).
+- **Read-only.** The page renders data only. The board offers **no
+  drag-and-drop** and no control of any other kind that moves a task between
+  columns, reorders cards, changes a task's status, or creates or edits a task or
+  a column. This is a deliberate and explicit divergence from the GitLab issue
+  board the layout is modelled on: the inspiration is structural — columns per
+  state, cards, per-column counts — and never interactive. The page contains no
+  form, button, or link that submits a change, and the `rmp` CLI remains the sole
+  write path for every task (see
+  [Security and Constraints](#security-and-constraints)).
+
+  Read-only constrains what the page may **change**, not what it may **show**. A
+  control that only alters which of the already-read tasks the user is looking at —
+  the header search of **Header search control** and the three dropdowns of
+  **Header filter controls** above — changes no task, writes nothing, and is
+  therefore not an exception to this rule. The distinction is
+  between altering the data and altering the view of it: the first is forbidden
+  here, the second is not.
+- **Empty states.** A column that holds no task renders its own clear, unobtrusive
+  empty state inside the column, below the column header, in place of the card
+  list; the column, its title, and its `0` count badge stay visible. A roadmap
+  with no task at all renders the board with all five columns present and each
+  one showing that in-column empty state. The page does **not** replace the board
+  with a page-level empty state, and it never drops or hides a column: the five
+  columns are fixed (see **Columns** above), and an empty roadmap is shown as an
+  empty board, not as an absent one.
+
+  A roadmap that holds no task and a narrowing that matches no task are different
+  conditions and read differently. The first is the state of the roadmap and shows
+  the five in-column empty states alone. The second is the result of the controls
+  the user set — a term, a filter, or any combination of them — so the board
+  additionally says that no task matches those controls (see **Effect on the board**
+  above). In both cases the five columns stay.
+- **Layout and scrolling.** The five columns are presented side by side. When
+  they do not fit the viewport, the **board** scrolls horizontally inside its own
+  container; the page itself never scrolls horizontally, so `<body>` produces no
+  horizontal overflow at any viewport width.
+
+  The board is a **full-height page region**: its height is the space the page body
+  leaves once the top navbar and the page header are placed above it, it ends where
+  the page body ends, and that edge lies within the viewport, exactly as
+  [Full-Height Page Regions](#full-height-page-regions) requires. The board gives up
+  no space for a page footer, because the shell renders none (see
+  [UI Framework](#ui-framework), rule 12). That height is the **available height**
+  each column is measured against: a column scrolls vertically and independently of
+  the others when its card list exceeds it, as a GitLab issue board's lists do.
+
+  The board's own horizontal scrollbar is drawn in space reserved for it **beneath**
+  the columns rather than over them, so the last card of a column stays fully
+  visible while the board can still be scrolled sideways.
+
+  On narrow viewports the board stays usable: each column keeps a minimum width at
+  which its cards remain legible, the user reaches the remaining columns by
+  scrolling the board horizontally (a touch-friendly gesture on a touch device),
+  the cards present touch-friendly hit targets, and the task detail modal a card
+  opens stays usable on the same viewport (see
+  [Responsive and Mobile-First Design](#responsive-and-mobile-first-design), rule
+  9, and [Task Detail Modal](#task-detail-modal)). On a viewport too short to
+  present a usable board, the board takes the minimum height of
+  [Full-Height Page Regions](#full-height-page-regions), rule 5.
+- **Column width and card density.** How much of a task's own text the board can
+  place on one line is decided by two lengths — how wide a column is, and how much
+  padding the card inside it spends on its own margins — so both are fixed here
+  rather than left to whatever a framework default happens to be.
+
+  Each of the five columns is **19rem** wide and never narrower than **17rem**. All
+  five carry the same width: a column stands for a state, not for a volume of work,
+  so a column holding many tasks is no wider than one holding none and the board's
+  shape does not change with the data. A column does not stretch to fill a viewport
+  wider than the board needs either; the space beyond the five columns is left empty,
+  which keeps the measure of a card's title the same at every viewport width.
+
+  These widths are this board's own. The sprint page's member-tasks board departs
+  from them deliberately: its three columns divide the width of that board equally
+  and grow with the viewport, for the reason stated where that board is defined (see
+  [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Height and
+  scrolling**). The `17rem` minimum, the `0.75rem` gap between columns, and the
+  `0.75rem` card body padding below are carried by both boards; the `19rem` column
+  width is carried by this one alone.
+
+  Inside a column, the card the user reads and activates carries **0.75rem** of
+  padding on all four sides of its body, in place of the `1rem` the vendored Tabler
+  distribution gives a small card's body. The card's body holds running text — the
+  reference line, the title, the two badges, and the metadata footer — inside a
+  measure the column has already narrowed, so padding taken off the body is width
+  returned to that text and height returned to the card. The hit target is
+  unaffected, because what the user presses is the whole card and not the text
+  inside it (see **Card content** and **Clickable card** above). The rule is an
+  override of a vendored component's own spacing, declared in the project override
+  stylesheet, which is where such an override belongs (see
+  [UI Framework](#ui-framework), rule 10); it changes no class the board emits and
+  no markup.
+
+  Both lengths are expressed in `rem`, so they scale with the reader's own text
+  size: enlarging the browser's font enlarges the column and the card's padding with
+  it, and the relation between the text and the space around it is preserved.
+- **Markup.** The board obeys the markup rules already in force and introduces no
+  exception to them. Templates carry no inline `style` attribute (see
+  [Frontend Rules](#frontend-rules) and [UI Framework](#ui-framework), rule 10).
+  Every class the board emits is defined in the embedded stylesheets — either in
+  the vendored Tabler distribution or in the project override stylesheet
+  `static/style.css` — and no class targets a framework component the vendored
+  distribution does not ship (see [UI Framework](#ui-framework), rules 8 and 10).
+  Where Tabler provides the component that does the work, the board uses Tabler's
+  markup: the cards are Tabler cards, the column headers use Tabler's card-header
+  idiom, the counts and the priority and severity badges are Tabler badges, and
+  the in-column empty state uses Tabler's empty-state markup. The vendored Tabler
+  distribution ships no board or Kanban component, so the column strip's own
+  layout and scrolling rules live in `static/style.css`, which is the specified
+  home for project styling no Tabler class covers (see
+  [UI Framework](#ui-framework), rule 10). The page keeps the admin shell and the
+  page header that every other page uses, unchanged and still governed by
+  [UI Framework](#ui-framework), rules 11 to 18.
 - **Relationships shown.** The page surfaces, in a read-only view, the
-  relationships already modelled in the data: task-to-sprint membership, task
-  parent/subtask hierarchy, and task dependency edges. The presentation MUST
-  reflect the same relationships defined in `DATABASE.md § Relationships`; it
-  introduces no new relationship.
+  relationships already modelled in the data, and each one is surfaced in a
+  specific place:
+  - **Task-to-sprint membership** is shown on the card, as the sprint indicator of
+    the metadata footer: the card names the one sprint the task belongs to, and
+    shows nothing when the task belongs to none.
+  - **Task parent/subtask hierarchy** and **task dependency edges** are shown on
+    the card as counts — the subtask count and the `depends_on` and `blocks`
+    counts — and in full in the task detail modal, which lists the parent task and
+    the dependency ids themselves (see
+    [Task Detail Modal](#task-detail-modal)).
+
+  The presentation MUST reflect the same relationships defined in
+  `DATABASE.md § Relationships`; it introduces no new relationship.
+- **Read cost.** Rendering the page performs **three** reads and no more:
+  1. the roadmap's full task list, unbounded (see **Unbounded read** above);
+  2. **one** grouped query returning the comment **count** of every task the page
+     renders (see `DATABASE.md § Count Comments for Many Parents (Grouped)`);
+  3. **one** grouped query that resolves the sprint of every task the page
+     renders, over the whole set of rendered task ids at once (see
+     `DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)`).
+
+  The page reads comment **counts**, not comment bodies. The card displays a
+  number, so reading the text of every comment of every task in order to display it
+  would be work the page throws away; a task's comment text is read only when a
+  user opens that task's modal, one task at a time, by the task detail endpoint
+  (see [Task Detail Endpoint](#task-detail-endpoint)). No page reads the comment
+  text of many tasks at once.
+
+  When the roadmap has no task, the page issues the task-list read only: neither
+  the count query nor the sprint query is issued, because both take a set of
+  rendered task ids and that set is empty.
+
+  Grouping the tasks into the five columns, counting each column, and matching each
+  card to its sprint are done in memory over the results already read. The board
+  adds no further query — none per column and none per card — and never issues one
+  query per task. The number of queries the page issues does not grow with the
+  number of tasks, the number of sprints, or the number of columns. Opening a modal
+  adds one request for that one task, made only on demand.
+
+  A search term and the three filters change none of this. Applying them on a cold
+  load selects from the task list the page already reads and issues no additional
+  query: a filter adds no clause to that read, no second read, and no per-dimension
+  query, because it is applied in memory over the rows already in hand exactly as
+  the term is. Narrowing in the browser issues no request at all, because every card
+  is already in the document.
 - **Path parameters.** `{name}` is validated against the roadmap-name rules
   exactly as on the other roadmap routes (the path-traversal guard in
   [Routes and Pages](#routes-and-pages) and
   [Security and Constraints](#security-and-constraints)); an invalid or
   nonexistent `{name}` returns HTTP `404 Not Found`.
-- **Read-only.** The page renders data only. It contains no form, button, or
-  link that submits a change; there is no edit affordance of any kind. The task
-  detail modal displays a read-only view and submits no change.
 
 ### Roadmap Sprint Page
 
@@ -725,8 +1742,12 @@ how the `rmp web` process itself terminates.
 - **Page header.** The page header presents the sprint `title` (the required
   title defined for the `Sprint` model in `MODELS.md § Sprint`) alongside the text
   `Sprint #<ID>` (the sprint's `id`), so the sprint is identifiable by both its
-  title and its id. The page does not redefine these fields; `MODELS.md` remains
-  canonical.
+  title and its id. It is rendered by the shared partial, which places
+  `Sprint #<ID>` in the pretitle and the `title` with its status badge in the
+  title (see [Shared Page-Header Partial](#shared-page-header-partial)); the
+  roadmap name is not repeated there. The actions column carries a link back to
+  the roadmap's sprints page. The page does not redefine these fields;
+  `MODELS.md` remains canonical.
 - **Sprint status summary line.** At the top of the sprint presentation the page
   shows the sprint status summary line defined in
   [Sprint Detail Sub-Template](#sprint-detail-sub-template).
@@ -742,14 +1763,28 @@ how the `rmp web` process itself terminates.
   so no forced horizontal scrolling is introduced (see
   [Frontend Rules](#frontend-rules), rule 6). The page does not redefine these
   fields; `MODELS.md` and `DATABASE.md` remain canonical.
-- **Task list.** The page lists the sprint's tasks in the planned in-sprint
-  execution order, which is the `sprint_tasks` order (the ordered set of task IDs
-  the `Sprint` model exposes as `tasks`; see `MODELS.md § Sprint` and
-  `DATABASE.md § Relationships`). Each task in the list is clickable: selecting a
-  task opens the read-only task detail modal for that task (see
+- **Member-tasks board.** The page presents the sprint's tasks as a Kanban board
+  of three fixed columns — `WAITING`, `DOING`, and `CLOSED` — holding one card per
+  task, placed between the sprint details above it and the sprint's comments below
+  it. The columns group the tasks by the same
+  categorisation the sprint status summary line uses, so each column's count is one
+  of that line's own numbers, and each column orders its own cards: the `WAITING`
+  column keeps the planned in-sprint execution order, which is the `sprint_tasks`
+  order (the ordered set of task IDs the `Sprint` model exposes as `tasks`; see
+  `MODELS.md § Sprint` and `DATABASE.md § Relationships`), while the `DOING` and
+  `CLOSED` columns lead with the most recent — `started_at` descending and
+  `closed_at` descending — because those two columns record what has happened
+  rather than what is planned, with the planned order breaking their ties (see
+  [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Order within a
+  column**). Each card is clickable: selecting a card opens
+  the read-only task detail modal for that task. The card **is** the element that
+  opens the modal and it is a `<button>`, so the modal opens from the pointer, from
+  touch, and from the keyboard alike. The board carries no control that moves a
+  task between columns (see
+  [Sprint Detail Sub-Template](#sprint-detail-sub-template) and
   [Task Detail Modal](#task-detail-modal)).
-- **Sprint comments.** After the task list, the page shows the sprint's own
-  comments in a Comments card, oldest first (see
+- **Sprint comments.** After the member-tasks board, the page shows the sprint's
+  own comments in a Comments card, oldest first (see
   [Sprint Detail Sub-Template](#sprint-detail-sub-template)). The card shows the
   comments of the sprint itself, not those of its member tasks; a task's comments
   are shown in that task's detail modal.
@@ -798,7 +1833,7 @@ how the `rmp web` process itself terminates.
 - **Empty state.** When the roadmap's audit log is empty, the page renders
   successfully (HTTP 200) with a clear empty-state message and shows **page 1 of 1**.
   An empty audit log is not an error.
-- **Pagination controls.** The page footer shows a read-only **numbered
+- **Pagination controls.** The audit card's footer shows a read-only **numbered
   pagination bar** in the Tabler style (the first option at
   `https://preview.tabler.io/pagination.html`), rendered in the shape
   `‹ 1 … 4 5 6 … 20 ›`. Each visible page number is a `GET` link to that page
@@ -826,7 +1861,8 @@ how the `rmp web` process itself terminates.
      hidden page.
   5. When the total page count is small enough that the anchors and the window
      already cover every page, every page number is shown and no ellipsis appears.
-- **"Page X of Y" indicator.** The page footer keeps the textual "Page X of Y"
+- **"Page X of Y" indicator.** The audit card's footer keeps the textual
+  "Page X of Y"
   indicator alongside the numbered pagination bar. It is a read-only, accessible
   affordance that states the current page and the total page count in words; it
   reflects the same `page` value and `TotalPages` total as the numbered bar.
@@ -835,8 +1871,11 @@ how the `rmp web` process itself terminates.
   link rendered as `a.page-link`. The current page item carries the `active` state,
   and a disabled **Previous** or **Next** chevron and the ellipsis item carry the
   `disabled` state. `aria` attributes mark the disabled chevrons and the
-  active/current page so the bar is fully accessible. The markup contains only
-  `GET` links and inert items: no form, no button, and no write path.
+  active/current page so the bar is fully accessible, and the whole bar sits inside
+  a `<nav>` element carrying a descriptive `aria-label`, the wrapper Tabler emits
+  around its pagination component (see [UI Framework](#ui-framework),
+  rule 15). The markup contains only `GET` links and inert items: no form, no
+  button, and no write path.
 - **Defense in depth: within the audit hard cap.** The data layer clamps an
   unbounded or oversized audit limit to `MaxAuditLimit` (value **500**; see
   `DATABASE.md § Audit Result Limit`). A fixed 100-entries-per-page request is
@@ -851,6 +1890,72 @@ how the `rmp web` process itself terminates.
   log writes no row and produces no new audit entry, because a read is not a change
   (see [Tasks and Sprints from SQLite](#tasks-and-sprints-from-sqlite) and
   `DATABASE.md § audit Table`).
+
+### Shared Page-Header Partial
+
+Every page's header title column is rendered by **one** partial, so the six pages
+cannot drift into six conventions for saying the same kind of thing. The partial
+renders the `<div class="col">` of the Tabler page-header row: an optional
+pretitle, the title, an optional status badge inside the title, and an optional
+lead line. A page MUST NOT hand-write a `page-pretitle` or a `page-title` element.
+
+1. **The title names the view, not the roadmap.** The roadmap is named twice in
+   the shell already — in the sidebar's per-roadmap section label and in the top
+   navbar (see [UI Framework](#ui-framework), rule 19) — so repeating it in the
+   page title would state the same fact a third time on one screen while leaving
+   the view the user is actually looking at unnamed on the sprints page. The
+   titles are exactly:
+
+   | Page | Pretitle | Title |
+   |---|---|---|
+   | Roadmap Index | — | `Roadmaps` |
+   | Roadmap Sprints | — | `Sprints` |
+   | Roadmap Tasks | — | `Tasks` |
+   | Roadmap Audit Log | — | `Audit` |
+   | Roadmap Knowledge-Graph | — | `Knowledge graph` |
+   | Roadmap Sprint | `Sprint #<ID>` | the sprint's `title`, with its status badge |
+
+2. **The sprint page is the one hierarchical header.** It is the only page that
+   presents an individual record rather than a view of the roadmap, so it alone
+   carries a pretitle, and that pretitle is `Sprint #<ID>` — the roadmap name is
+   not repeated in it. The sprint's `title` stays the page title and keeps the
+   status badge specified in
+   [Roadmap Sprint Page](#roadmap-sprint-page), so the sprint remains identifiable
+   by both its title and its id.
+
+3. **The lead line belongs to the roadmap index alone.** The index page's title is
+   followed by a lead line naming the directory the roadmaps are discovered under.
+   No other page carries one.
+
+4. **The actions column stays with the page.** The partial covers the title column
+   only. What a page puts in its actions column is genuinely page-specific markup —
+   a search input, a `<select>`, a link — and folding those into the shared partial
+   would require it to know every page that uses it. Each page therefore renders
+   its own actions column, in the Tabler idiom fixed in
+   [UI Framework](#ui-framework), rule 16, and the `page-header`, `container-xl`
+   and `row g-2 align-items-center` wrapper likewise stays in the page.
+
+5. **The actions column carries controls, not duplicated navigation.** A control
+   that acts on the page belongs there; a link to a destination the admin-shell
+   sidebar already lists on every page does not, because it is a second route to
+   somewhere the page already offers and removing it costs no access. Concretely:
+
+   | Page | Actions column |
+   |---|---|
+   | Roadmap Index | none |
+   | Roadmap Sprints | none |
+   | Roadmap Tasks | the search input and the type, priority, and severity filter dropdowns (see [Roadmap Tasks Page](#roadmap-tasks-page), **Header search control** and **Header filter controls**) |
+   | Roadmap Audit Log | none |
+   | Roadmap Knowledge-Graph | the layout dropdown (see [Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page)) |
+   | Roadmap Sprint | a link back to the roadmap's sprints page |
+
+   The sprint page's back link is **not** duplicated navigation: it returns to the
+   parent record of the one being shown, which is a relationship the sidebar's flat
+   view list does not express.
+
+6. **Values are escaped.** The sprint `title` and any other data-derived value
+   reaching the partial is rendered through `html/template` as text, exactly as it
+   was before the partial existed.
 
 ### Shared Sprint-Card Partial
 
@@ -915,17 +2020,12 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      `task_count`), `Created` (`created_at`), `Started` (`started_at`), and
      `Closed` (`closed_at`); the fields are defined for the `Sprint` model in
      `MODELS.md § Sprint` and are not redefined here;
-   - the **full member-tasks table** listing the sprint's tasks in planned
-     in-sprint execution order (the `sprint_tasks` order; see `MODELS.md § Sprint`
-     and `DATABASE.md § Relationships`), with the columns `ID`, `Title`, `Status`,
-     `Type`, `Priority`, and `Severity`. The `Status`, `Priority`, and `Severity`
-     cells render their values as Tabler badges coloured by the semantic mapping in
-     [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours).
-     Each task row is clickable and opens the
-     read-only task detail modal for that task (see
-     [Task Detail Modal](#task-detail-modal)). When the sprint has no tasks, the
-     sub-template shows a clear empty-state message in place of the table.
-   - the **Comments card**, a separate card placed after the member-tasks card and
+   - the **member-tasks board**, a Kanban board of three fixed columns holding the
+     sprint's tasks, one card per task (defined below). The board is the sprint's
+     member-task presentation and sits between the two cards that surround it:
+     directly below the sprint metadata datagrid and directly above the Comments
+     card;
+   - the **Comments card**, a separate card placed after the member-tasks board and
      rendered last in the sub-template (defined below).
 
 3. **Sprint status summary line.** At the top of the sub-template the sub-template
@@ -934,7 +2034,7 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
 
    `<pct>% - P:<p> A:<a> C:<c> - T:<t>`
 
-   for example `69% - P:8 A:3 C:18 - T:55`. The components are:
+   for example `33% - P:8 A:29 C:18 - T:55`. The components are:
    - `<pct>` is the sprint **completion percentage**: the number of `COMPLETED`
      tasks divided by the total number of tasks in the sprint, expressed as a
      percentage and **rounded to the nearest integer percent**. When the sprint
@@ -956,7 +2056,419 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
    its `Summary.TotalTasks`); the summary line reuses that categorisation rather
    than defining a new one.
 
-4. **Comments card.** The last card of the sub-template presents the sprint's own
+4. **Member-tasks board.** The sprint's member tasks are presented as a Kanban
+   board of three fixed columns, one card per task. The **GitLab issue board** is
+   the acknowledged model for this presentation: columns that stand for states of
+   the work, cards that stand for work items, a count on each column header, and
+   counters at the trailing edge of a card. As on the tasks page, the model is
+   structural and never interactive (see **Read-only** below).
+
+   - **Three fixed columns, in this order.** From left to right the columns are
+     `WAITING`, `DOING`, and `CLOSED`, and each holds the sprint's tasks in the
+     statuses named here (the task status enum is defined in `MODELS.md § Enums`):
+
+     | Column | Holds the sprint's tasks whose status is |
+     |---|---|
+     | `WAITING` | `BACKLOG` or `SPRINT` |
+     | `DOING` | `DOING` or `TESTING` |
+     | `CLOSED` | `COMPLETED` |
+
+     The grouping is deliberately the **same categorisation the sprint status
+     summary line already uses** — pending = `BACKLOG` + `SPRINT`, open/in-progress
+     = `DOING` + `TESTING`, completed = `COMPLETED` — which is the categorisation
+     `models.CalculateSprintShowResult` produces in its `Summary.Pending`,
+     `Summary.InProgress`, and `Summary.Completed` counters (see rule 3 above). The
+     board defines no new categorisation; it reuses that one, so the two
+     presentations of one sprint cannot disagree about which tasks are waiting,
+     which are being worked on, and which are done.
+
+     Each column heading is written exactly as spelled above, in upper case, and is
+     not translated.
+   - **The column counts are the summary line's own numbers.** Because the grouping
+     is that one, each column's count **equals** the corresponding value of the
+     summary line rendered at the top of the same page: the `WAITING` column's count
+     is `P`, the `DOING` column's count is `A`, the `CLOSED` column's count is `C`,
+     and the three counts sum to `T`. That identity is what makes a fourth or
+     "other" column unnecessary rather than merely unwanted: the task status enum is
+     closed (`MODELS.md § Enums`) and `tasks.status` is restricted by a CHECK
+     constraint to exactly its five values (`DATABASE.md § tasks Table`), so every
+     member task carries one of those five, each of the five is claimed by exactly
+     one column, and no task of the sprint can fall outside the board.
+   - **Every column is always rendered.** All three columns are present, in that
+     order, whatever the sprint holds; a column is never dropped or hidden, and
+     neither the set of columns nor their order depends on the data. A column
+     holding no task renders the in-column empty state in the idiom the tasks board
+     already uses — a clear, unobtrusive empty state inside the column, below the
+     column header, in place of the card list, with the column, its heading, and its
+     `0` count badge still visible (see
+     [Roadmap Tasks Page](#roadmap-tasks-page), **Empty states**). A sprint with no
+     member task is therefore shown as an empty board rather than as an absent one,
+     and the sub-template puts no page-level empty state in place of the board.
+   - **Column header.** Each column header shows the column heading together with a
+     Tabler badge carrying that column's task count, exactly as the tasks board's
+     column header does (see [Roadmap Tasks Page](#roadmap-tasks-page), **Count per
+     column**). The badge is the same hybrid it is there: its **text** is the number
+     of member tasks in the column, and its **colour** is the semantic colour of the
+     status the column groups, taken from the task status table (see
+     [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
+     rule 2). No new colour and no new band is introduced here.
+
+     A column of this board groups a **set** of statuses rather than a single one:
+     `WAITING` groups `BACKLOG` and `SPRINT`, `DOING` groups `DOING` and `TESTING`,
+     and `CLOSED` holds `COMPLETED` alone (see the table above). The colour is
+     therefore the one the mapping assigns to the **canonical status of the group** —
+     the status a task is normally in at that stage of the sprint. `WAITING` takes
+     the colour of `SPRINT`, `DOING` takes the colour of `DOING`, and `CLOSED` takes
+     the colour of `COMPLETED`. A task waiting in a sprint is normally a `SPRINT`
+     task: a `BACKLOG` task inside a sprint is the exceptional case, the case of a
+     task returned to the backlog without leaving the sprint, so `SPRINT` is the
+     status the `WAITING` column stands for. The column named `DOING` taking the
+     colour of the status named `DOING` is the reading a user will expect, and any
+     other choice would leave the board's own heading disagreeing with its colour.
+     `CLOSED` calls for no such choice, because it holds one status and that status
+     is its canonical one.
+   - **Order within a column.** Each column orders its cards by the question that
+     column answers, so the three columns do not share one order:
+
+     | Column | Order | What the reader gets from it |
+     |---|---|---|
+     | `WAITING` | `sprint_tasks` `position` ascending | The next task to develop at the top, the last one at the bottom |
+     | `DOING` | `started_at` descending | The task that entered `DOING` most recently at the top, the one that has been there longest at the bottom |
+     | `CLOSED` | `closed_at` descending | The task closed most recently at the top, the one closed longest ago at the bottom |
+
+     **Why the three columns differ.** `WAITING` holds work that has not started. It
+     is a queue, and what a reader wants from a queue is the plan: `position`
+     ascending is the order the user planned, and it answers "which task do I
+     develop next?". `DOING` and `CLOSED` are not queues. They are records of what
+     has happened, and what a reader wants from a record is recency: "what has just
+     been picked up?" and "what has just been finished?". A task's place in the plan
+     says nothing about when work on it began or ended, so ordering those two
+     columns by the plan puts the card the reader came for somewhere in the middle
+     of the column. The board therefore does hold more than one notion of order, and
+     it holds it deliberately rather than arbitrarily: each column is ordered by the
+     one thing that column is about.
+
+     **`started_at` orders the whole `DOING` column, and `tested_at` orders
+     nothing.** That column groups two statuses, `DOING` and `TESTING` (see the
+     table of columns above), and `started_at` records entry into `DOING` for both
+     of them: a task reaches `TESTING` only from `DOING`, and the task state machine
+     sets `started_at` on the `SPRINT → DOING` transition (see
+     `STATE_MACHINE.md § Date Tracking Fields`). One key therefore serves the whole
+     column, and a `TESTING` card takes its place from when its task entered
+     `DOING`, not from when it entered `TESTING`. `MODELS.md § Task` stays canonical
+     for `started_at`, `tested_at`, and `closed_at`; this rule does not redefine
+     them.
+
+     **The tiebreaker is the plan.** Two cards of one column can carry the same
+     ordering timestamp: `task stat` changes the status of several tasks in a single
+     bulk operation (see `COMMANDS.md § Change Status (stat)`), and tasks moved
+     together can carry one and the same timestamp, so equal timestamps are an
+     ordinary case and not a theoretical one. When the ordering timestamp of two cards is equal, and when a
+     card's ordering timestamp is absent, the cards are ordered by `sprint_tasks`
+     `position` ascending. The fallback is the plan because the plan is the only
+     other order the sprint defines: falling back to the task `id`, or to the order
+     the rows happened to arrive in, would order the column by something the sprint
+     does not mean. A card whose ordering timestamp is absent sorts **last** in its
+     column, after every card that carries one, because a column ordered by recency
+     has nowhere else to put a card that states no time. `MODELS.md § Task` makes
+     both timestamps nullable, so this rule says what happens when one is absent
+     rather than assuming one is always there.
+
+     Together the two keys make every column's order **total and deterministic**:
+     for any two cards of a column the rule states which of them is above the other,
+     and two renderings of the same data produce the same board, which is what lets a
+     test assert it. `position` is also the key the
+     page's own read orders by, so where two member tasks of one sprint carry the
+     same `position` the board keeps the relative order that read gave them; beyond
+     its column key the board introduces no order of its own.
+
+     **The ordering costs no read.** The page reads its member tasks once, in
+     `sprint_tasks` position order (see `MODELS.md § Sprint`,
+     `DATABASE.md § Relationships`, and
+     `DATABASE.md § List Sprint Tasks Ordered by Position`), and that is still what
+     the read returns. The board groups those rows into the three columns and
+     reorders two of the three afterwards, in memory, over the rows already in hand:
+     no second read, no query per column, and no query per card. The tiebreaker
+     needs no extra data either, because the position order is the order in which
+     the rows arrived, so a stable sort by the column's timestamp leaves the cards
+     that timestamp does not separate in exactly the order the tiebreaker calls for.
+   - **The card.** Each card presents one member task on three lines, in this
+     order:
+     1. the task **`title`**, leading the card — the one place this board
+        deliberately differs from the tasks board's card, which leads with its
+        reference line instead, because the GitLab issue board card leads with the
+        title and this board follows the model it is drawn from;
+     2. the task **reference** `#<id>` (the task's `id`) on its own line, rendered
+        as secondary, muted text, so the card is identifiable by its id without the
+        id competing with the title for the reader's attention;
+     3. **one line carrying both of the card's remaining groups**: the task's two
+        badges at the **leading edge** of that line, and the task's two counters at
+        its **trailing edge**.
+
+        The **`priority`** and **`severity`** lead the line, each as a Tabler badge
+        carrying that task's integer value behind the one-letter prefix that names
+        it — `P` for the priority and `S` for the severity, so a task of priority
+        `5` and severity `3` shows `P5` and `S3` — and coloured by the band the
+        value falls in, using exactly the mapping in
+        [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours).
+        They occupy the place the GitLab card gives its labels. No new badge colour
+        and no new band is introduced here. The prefix rule itself is stated once,
+        for the card of both boards, in [Roadmap Tasks Page](#roadmap-tasks-page),
+        **Card content**, item 3, and is not restated here: this card renders the
+        pair exactly as the tasks board's card does, and the two boards keep one
+        form for it.
+
+        The **counters** close the same line at its trailing edge, which is where
+        the GitLab card puts its counters. They are the task's number of comments
+        and its number of subtasks (`subtask_count`), **in that order: the comment
+        count first, then the subtask count**. Each is rendered as an icon followed
+        by its number — `ti ti-message` for the comment count and `ti ti-subtask`
+        for the subtask count, the same two icons the tasks board's card metadata
+        uses (see [Roadmap Tasks Page](#roadmap-tasks-page)). Both counters are
+        always rendered, including when the number they carry is `0` (see **Both
+        counters are always rendered** below).
+
+     **Why the badges and the counters share a line.** Between them the two groups
+     answer one question about the task — what this task **is**, and how much is
+     **attached** to it — and a card is read at a glance, so the reader takes them
+     in together rather than one after the other. Giving each group a line of its
+     own also made every card taller than its content needs, and height is the
+     scarce dimension here: the column a card sits in is bounded and scrolls (see
+     **Height and scrolling** below), so every row of height a card does not need is
+     a card the reader has to scroll to reach.
+
+     **The line wraps rather than overflowing.** The leading group and the trailing
+     group sit on one line for as long as the card is wide enough to hold both. When
+     it is not — a column held at its `17rem` minimum, or a reader whose text size
+     is large — the line **wraps**, placing the trailing group below the leading one
+     inside the same card. It never overflows the card's edge, and it never makes
+     the card, the column, or the page scroll horizontally (see
+     [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
+     rules 2 and 10). The rule is stated as behaviour because that is what a reader
+     and a test can observe; the card carries no inline `style` attribute and every
+     class it emits is defined either in the vendored Tabler distribution or in the
+     project override stylesheet `static/style.css` (see
+     [UI Framework](#ui-framework), rules 8 and 10, and **Markup** below).
+
+     **The two cards differ here, and the difference is deliberate.** The tasks
+     board's card keeps its **separate metadata footer** and does not fold it into
+     the badge line (see [Roadmap Tasks Page](#roadmap-tasks-page), **Card
+     content**, item 4). That footer lists six indicators of mixed kinds, two of
+     which — the sprint the task belongs to and its `specialists` — are text rather
+     than counts and carry no bounded width, so the list cannot share a line with
+     the badges: it would either push them off the line or wrap beneath them and
+     spend the height the merge exists to save. This card carries exactly two
+     indicators, both counts and both short, so it can. The two cards therefore
+     diverge in this one line and in nothing else: the badge form and its prefixes,
+     the two icons, the badge colours, the absent status badge, and the card as the
+     modal trigger all stay shared. This is a stated divergence, not drift.
+
+     **The counter order differs from the tasks board's too.** On this card the
+     comment count comes first and the subtask count second. The tasks board's
+     metadata footer keeps its own order, in which the subtask count precedes the
+     comment count among the six indicators it lists. The two orders are stated
+     separately because the two groups are separate — a pair read at the trailing
+     edge of a line here, a list of six heterogeneous indicators in a block of its
+     own there — and neither order is derived from the other. Each is fixed in this
+     specification rather than left to the template, so that what a card shows is
+     testable rather than incidental.
+
+     The card carries **no status badge**: the column the card sits in already
+     states the task's status, which is the reason the tasks board's card omits one
+     as well.
+
+     The card shows those six data points and no others: no task type, no
+     `specialists`, and no dependency counts. It presents a subset of the task's
+     fields by design, because a card is read at a glance and a column of cards is
+     read as a whole; every field of the `Task` model is shown in the task detail
+     modal the card opens (see [Task Detail Modal](#task-detail-modal)). The card
+     does not redefine any field; `MODELS.md` and `DATABASE.md` remain canonical.
+
+     **Both counters are always rendered.** The comment count and the subtask count
+     are present on every card of this board, including when either or both are `0`:
+     a task with no comment shows the comment icon followed by `0`, a task with no
+     subtask shows the subtask icon followed by `0`, and the trailing edge of the
+     third line therefore carries both numbers on every card the board renders.
+
+     This is a deliberate departure from the tasks board's card, which renders an
+     indicator only when it has something to count (see
+     [Roadmap Tasks Page](#roadmap-tasks-page), **Absent metadata renders
+     nothing**). The two cards differ because what they carry differs. This card
+     carries exactly two indicators and both of them are counts, so rendering both
+     always makes every card of the board the same shape and makes each number
+     meaningful: a `0` states that the task has no comment, where an absent counter
+     leaves the reader unable to tell "no comments" from "this card does not show
+     comments". The tasks board's card carries six heterogeneous indicators, two of
+     which — the sprint the task belongs to and its `specialists` — are text rather
+     than counts and have no zero to show, so always rendering all six is not even
+     well defined there.
+   - **The card is the trigger, and the trigger is a `<button>`.** Selecting a card
+     opens the read-only task detail modal for that task, and the card itself is a
+     `<button type="button">`, a natively activatable element, exactly as the tasks
+     board's card is. A pointer click, a touch tap, Enter, and Space therefore all
+     open the modal through the browser's own activation behaviour, with no added
+     JavaScript. The card carries no `tabindex` and no `role="button"`: both would
+     be redundant on a `<button>`, and a non-activatable element made to announce
+     itself as a button MUST NOT be the trigger (see
+     [Task Detail Modal](#task-detail-modal), *The trigger is a natively activatable
+     element*). The card's accessible name is
+     `Open details for task #<id>: <title>`, the same form both existing surfaces
+     use. The `title` is required in it, not optional: the card's visible label is
+     the task title, and an accessible name that omitted it would leave the control
+     impossible to activate by speech input, which is what WCAG 2.5.3 Label in Name
+     (Level A) forbids.
+
+     The card can hold that contract whole, which a table row cannot. A row is not
+     an activatable element and can hold no single control that wraps it, so a
+     tabular presentation has to push the trigger down into one cell and leave the
+     row itself clickable by pointer alone — two targets for one task. A card is a
+     single element and can **be** the control, so pointer, touch, and keyboard
+     reach the same target. No `<tr>` on this page is a modal trigger or carries
+     one.
+   - **Opening the modal costs the page nothing.** Opening a card fetches that
+     task's fields and comments from the read-only endpoint
+     `GET /roadmaps/{name}/tasks/{id}/data` and fills the page's single modal shell
+     — the one modal element the page renders, not one per task — with them (see
+     [Task Detail Modal](#task-detail-modal) and
+     [Task Detail Endpoint](#task-detail-endpoint)). That request is made when the
+     user opens a task, not while the page is rendered, so the board adds no query
+     to the page's own read and no per-card cost.
+   - **Height and scrolling.** The board is **height-limited**: it takes a definite,
+     bounded height rather than growing with the number of member tasks, and each
+     column scrolls **vertically and independently** inside that height when its
+     cards exceed it, as a GitLab issue board's lists do. When the three columns do
+     not fit the viewport's width, the **column strip** scrolls horizontally inside
+     its own container, exactly as the tasks board's strip does, and the page itself
+     never scrolls horizontally (see
+     [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
+     rules 2 and 10).
+
+     The board is deliberately **not** a full-height page region, and that is where
+     it departs from the tasks board. The sprint page is not a single-region page:
+     it carries the Sprint details card above the board and the Comments card below
+     it, and all three belong to one sprint presentation. A board sized to the space
+     the page body leaves would fill the rest of the viewport on its own and push
+     the Comments card below the fold for every sprint, while a board sized to its
+     own content would push that card further down with every member task the sprint
+     gains. The bounded height avoids both
+     (see [Full-Height Page Regions](#full-height-page-regions)).
+
+     **The height is `60vh`, with a floor read from `--full-height-region-floor`.**
+     Both are declared in the project override stylesheet, and both are fixed here
+     rather than left to taste, so that what the board does is testable rather than
+     a matter of judgement:
+     - The height is **viewport-relative** (`60vh`), so the board follows the
+       screen: it presents more of a column on a tall display and less on a short
+       one, at the same proportion of the screen everywhere, while leaving the rest
+       of the page body to the cards above and below it.
+     - The floor is the value of the **`--full-height-region-floor`** custom
+       property, which is the floor the shell already holds the page body to (see
+       [Full-Height Page Regions](#full-height-page-regions), rule 5). The board
+       reads that property rather than restating the length, because a second copy
+       of a number is a copy that can be changed on its own, and the two would then
+       state different floors for the same screen. On a viewport short enough that
+       `60vh` falls below it, the board takes the floor instead, so it keeps showing
+       useful content rather than collapsing to a sliver of one card. The property
+       MUST resolve on this page: it is declared where every page reads it, not on
+       the full-height shell alone, because the sprint page is not a full-height
+       page and would otherwise find nothing to read.
+
+     **The three columns divide the width of the board.** The three columns share
+     the board's width equally: all three carry the same width, and that width is an
+     equal share of what the board leaves once the gaps between the columns are
+     taken out, so the columns grow into whatever the viewport gives them instead of
+     leaving the space beside them empty. A column stands for a state and not for a
+     volume of work, so the three widths stay equal whatever number of tasks each
+     column holds: the width follows the viewport, never the data.
+
+     A column is never narrower than **17rem**, the width at which its cards stay
+     legible. When three columns at that minimum, plus the gaps between them, do not
+     fit the viewport, the columns keep the minimum and the column strip scrolls
+     horizontally inside its own container exactly as it does when the board is
+     wider than the viewport for any other reason, while `<body>` still produces no
+     horizontal overflow (see **Height and scrolling** above and
+     [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
+     rules 2 and 10).
+
+     The columns are separated by a **0.75rem** gap, and the body of a card carries
+     **0.75rem** of padding on all four sides. Those two lengths, together with the
+     `17rem` minimum above, are the lengths the tasks board's columns and cards
+     already carry (see [Roadmap Tasks Page](#roadmap-tasks-page), **Column width
+     and card density**). What the two boards no longer share is the column width
+     itself.
+
+     **Why the two boards differ here.** The five columns of the tasks board are
+     unchanged by this rule: each is **19rem** wide, never narrower than **17rem**,
+     and does not grow into a viewport wider than that board needs. Dividing a
+     viewport among five columns would leave each one narrow enough to hurt the
+     measure a card's title is read on, which is the length that board's fixed width
+     exists to protect; three columns dividing the same viewport are wide, not
+     narrow. The two boards are also read differently. The tasks board is a view of
+     a whole roadmap, and its column count is fixed by the task status enum rather
+     than by what is on screen, so the board has a natural width of its own and the
+     space beyond it is left empty. This board has three columns and is read as one
+     sprint at a glance, which is what makes filling the width the right shape for
+     it. The lengths that remain shared — the `17rem` minimum, the `0.75rem` gap,
+     and the `0.75rem` card body padding — stay shared, so a reader moving between
+     the tasks page and a sprint page still meets one card measure and one minimum
+     column.
+
+     Every one of these lengths is expressed in `rem`, so the minimum column and the
+     card scale with the reader's own text size.
+
+     On a narrow viewport the board stays usable on the tasks board's terms: each
+     column keeps the minimum width above, at which its cards remain legible, the
+     horizontal strip scroll is reachable by a touch gesture, the cards present
+     touch-friendly hit targets, and the task detail modal a card opens stays usable
+     at the same viewport (see [Task Detail Modal](#task-detail-modal)).
+   - **Read cost: one grouped comment count, and nothing per card.** The card shows
+     a comment count, so the page reads one. That count is read with **one grouped
+     query** over the whole set of rendered member-task ids (see
+     `DATABASE.md § Count Comments for Many Parents (Grouped)`) — never one query
+     per card, and never a comment **body**: the card displays a number, and reading
+     the text of every comment of every member task in order to display a number
+     would be work the page throws away. A member task's comment text is read only
+     when the user opens that task's modal, one task at a time, through the task
+     detail endpoint. When the sprint has no member task the page issues no such
+     query at all, because the query takes a set of rendered task ids and that set
+     is empty.
+
+     The page therefore issues exactly **two** comment reads whatever the number of
+     member tasks: the sprint's own comment listing, which the Comments card renders
+     in full as a log (see `DATABASE.md § Comments`), and this one grouped count.
+     Neither grows with the number of member tasks, which is the invariant that
+     matters here (see
+     [Tasks and Sprints from SQLite](#tasks-and-sprints-from-sqlite)).
+
+     The **subtask count needs no read of its own**: the sprint's member-task read
+     already returns each task's `subtask_count` (`MODELS.md § Task` defines it as a
+     count computed with the task rather than a stored column), so the card's
+     subtask number is already in hand. Grouping the member tasks into the three
+     columns, ordering each column, and counting each column are done in memory over
+     the rows already read, so the board adds no query per column and none per
+     card.
+   - **Read-only.** The board offers **no drag-and-drop** and no control of any
+     other kind that moves a task between columns, reorders cards, changes a task's
+     status, or creates or edits anything. It contains no form and no write path;
+     its only interaction is opening the read-only task detail modal. This is the
+     same deliberate divergence from the GitLab issue board the tasks page states:
+     the inspiration is structural — columns per state, cards, per-column counts —
+     and never interactive, and the `rmp` CLI remains the sole write path for every
+     task (see [Security and Constraints](#security-and-constraints)).
+   - **Markup.** The board introduces no exception to the markup rules already in
+     force: no template carries an inline `style` attribute, and every class the
+     board emits is defined either in the vendored Tabler distribution or in the
+     project override stylesheet `static/style.css` (see
+     [UI Framework](#ui-framework), rules 8 and 10). Where Tabler provides the
+     component, the board uses Tabler's markup — Tabler cards for the task cards,
+     the card-header idiom for the column headers, Tabler badges for the counts and
+     for the priority and severity values, and Tabler's empty-state markup for an
+     empty column. The vendored Tabler distribution ships no board or Kanban
+     component, so the column strip's own layout, height, and scrolling rules live
+     in `static/style.css`, which is the specified home for project styling no
+     Tabler class covers.
+
+5. **Comments card.** The last card of the sub-template presents the sprint's own
    comments — the sprint's progression log. The fields of a comment are defined for
    the `SprintComment` model in `MODELS.md § Sprint Comment`; the sub-template does
    not redefine them.
@@ -969,8 +2481,14 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      as the tie-breaker). Every comment of the sprint is rendered: no type filter,
      no count limit.
    - **Card header.** A `card-header` with the card title `Comments` and a Tabler
-     badge showing the number of comments, following the member-tasks card's header
-     idiom.
+     badge showing the number of comments, following the same header idiom the
+     member-tasks board's column headers use. The idiom is shared; the colour is
+     not. This badge counts comments, and a comment carries no status of any kind,
+     so there is nothing for the semantic mapping to key on and the badge keeps the
+     neutral `bg-secondary-lt` variant while a column badge of the board above takes
+     the colour of the status its column groups (see
+     [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
+     rule 2, **The discriminating test**).
    - **What each entry shows.** For one comment, in order: its `type` as a badge,
      its `created_at` timestamp, its `updated_at` timestamp when that value is not
      null (marking the entry as edited), and its `body`.
@@ -985,17 +2503,17 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      CLI, and the card renders it preserving the author's line breaks (see
      [Frontend Rules](#frontend-rules), rule 6).
    - **Empty state.** When the sprint has no comments, the card shows a clear
-     empty-state message in place of the timeline, in the same idiom the
-     member-tasks card uses when the sprint has no tasks. The card itself is always
+     empty-state message in place of the timeline, in the same idiom a column of the
+     member-tasks board uses when it holds no task. The card itself is always
      present.
    - **Read-only.** The card renders data only: no form, no input, no edit control,
      and no submit action.
 
-5. **Read-only.** The sub-template renders data only. It contains no form, button,
+6. **Read-only.** The sub-template renders data only. It contains no form, button,
    or link that submits a change; the only interaction is opening the read-only
-   task detail modal from a task row.
+   task detail modal from a board card.
 
-6. **Authored line breaks.** Wherever the sub-template renders the sprint's
+7. **Authored line breaks.** Wherever the sub-template renders the sprint's
    `description`, it preserves the author's line breaks as specified in
    [Frontend Rules](#frontend-rules), rule 6.
 
@@ -1019,7 +2537,12 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
   edge types and lets the user highlight elements interactively; it is specified in
   [Graph Labels Sidebar](#graph-labels-sidebar). The labels sidebar and the
   visualisation read from the same already-fetched graph data; the sidebar adds no
-  new request and no new endpoint.
+  new request and no new endpoint. The card is a **full-height page region**: its
+  height is the space the page body leaves once the top navbar, the page header,
+  and the query bar are placed above it, it ends where the page body ends, and that
+  edge lies within the viewport, exactly as
+  [Full-Height Page Regions](#full-height-page-regions) requires — so the page does
+  not scroll vertically to reveal the bottom of the canvas.
 - **Layout selection.** The page provides a dropdown (select control) that lets
   the user choose which layout renders the graph, offering the complete set of
   layouts from the "Networks" section of the D3 gallery: Force-directed graph,
@@ -1174,9 +2697,12 @@ already consumes; it adds no new endpoint and no write path.
 
 6. **Node limit applied by the endpoint.** The dropdown value is the `limit`
    parameter sent on the request. The endpoint applies it as a `LIMIT` clause only
-   when the user's query does not already contain a top-level `LIMIT`, so a user
-   who writes their own `LIMIT` keeps it and the dropdown value is not applied; the
-   injection and precedence rule is specified in
+   when the user's query both lacks a top-level `LIMIT` of its own and is a
+   statement form that admits a `LIMIT` clause. A user who writes their own `LIMIT`
+   keeps it and the dropdown value is not applied; a schema-introspection command
+   or a standalone procedure call admits no `LIMIT` at all, so the dropdown value
+   does not apply to it either and the query runs as written rather than failing in
+   the parser. The injection, precedence, and suppression rules are specified in
    [Graph Data Endpoint](#graph-data-endpoint).
 
 7. **Read-only.** The query bar submits only read-only Cypher. A query containing
@@ -1191,9 +2717,11 @@ already consumes; it adds no new endpoint and no write path.
    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
 
 8. **Error surfacing.** When a search fails — because the query is rejected as not
-   read-only, because the limit is invalid, or because the query fails to execute —
-   the page shows a clear, read-only message in place and does not crash, exactly
-   as the layout degradation does; the distinct cases are specified in
+   read-only, because the limit is invalid, or because the query fails to execute,
+   which includes exhausting the endpoint's query time budget (see
+   [Graph Query Time Budget](#graph-query-time-budget)) — the page shows a clear,
+   read-only message in place and does not crash, exactly as the layout
+   degradation does; the distinct cases are specified in
    [Query-Bar Error Handling](#query-bar-error-handling).
 
 9. **Coexistence with the other graph controls.** The query bar coexists with the
@@ -1219,19 +2747,27 @@ layout degradation already specified (see
 [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library),
 rule 5). The failure modes are kept distinct so the user understands what to fix.
 
+The endpoint answers each of the three with HTTP `400 Bad Request` and a JSON body
+that names the failure's class in a `kind` field, in the shape specified in
+`DATA_FORMATS.md § Graph View Data`, **Error Shape**. Rules 5 to 9 below fix the
+status, the precedence between the three, the boundary against the `500` of an
+internal read error, and what the body carries.
+
 1. **Query rejected: not read-only.** When the submitted query contains a writing
    clause or a DDL clause, the endpoint's read-only guard-rail rejects it before
    execution (see [Graph Data Endpoint](#graph-data-endpoint)) and the query is
    never run. The page surfaces a clear message stating that the query was rejected
    because it is not read-only, distinct from an execution failure. The graph
-   already shown is left in place; the rejection changes nothing in the store.
+   already shown is left in place; the rejection changes nothing in the store. The
+   endpoint answers HTTP `400 Bad Request` with `kind` `not_read_only`.
 
 2. **Invalid limit.** When the `limit` parameter is not one of the six allowed
    values (`50`, `100`, `250`, `500`, `1000`, `3000`), the endpoint rejects the
    request as an invalid limit and does not execute the query; the page surfaces a
    clear message naming the invalid limit. Because the limit values originate from
    the page's own dropdown, this state is normally only reachable by a crafted
-   request, but the endpoint rejects it rather than guessing a value.
+   request, but the endpoint rejects it rather than guessing a value. The endpoint
+   answers HTTP `400 Bad Request` with `kind` `invalid_limit`.
 
 3. **Query failed to execute.** When the submitted query is accepted as read-only
    but then fails in the engine — for example, invalid Cypher syntax — the page
@@ -1239,12 +2775,101 @@ rule 5). The failure modes are kept distinct so the user understands what to fix
    the read-only rejection in case 1. A syntactically invalid read-only query is an
    execution failure, not a guard-rail rejection, mirroring the CLI behaviour where
    a query that passes the clause check is still rejected by the engine at execution
-   time (see `GRAPH.md § Per-Subcommand Validation Rules`, note 3).
+   time (see `GRAPH.md § Per-Subcommand Validation Rules`, note 3). A query that
+   the endpoint cancels because it exhausted the endpoint's 5-second query time
+   budget is an execution failure of this same case and is surfaced with this same
+   message; the budget is specified in
+   [Graph Query Time Budget](#graph-query-time-budget). The endpoint answers HTTP
+   `400 Bad Request` with `kind` `execution` in every case of this rule.
 
 4. **In-place, read-only, non-fatal.** In every case the message is shown in place
    on the page, the page does not crash, and the failure triggers no write and no
    navigation, exactly as the layout-degradation message does. The user can edit
    the query or change the limit and search again.
+
+5. **One status, three kinds.** All three failures carry HTTP `400 Bad Request`,
+   and the body's `kind` field is what distinguishes them. One status fits all
+   three because in each of them the server is able to serve the route and refuses
+   the request the caller made: the query carries a clause the endpoint's contract
+   forbids, the `limit` falls outside the closed set the endpoint publishes, or the
+   query the caller wrote cannot be executed. RFC 9110, Section 15.5.1, defines
+   `400` as the status for a request the server "cannot or will not process ... due
+   to something that is perceived to be a client error", and RFC 9110, Section
+   15.5, puts the explanation of the error in the response representation, which is
+   exactly what the `kind` and `error` fields are. Splitting the three across
+   different statuses would assert a distinction HTTP does not carry, while the
+   body already carries it precisely.
+
+   A query cancelled for exhausting the time budget carries this same `400` and
+   this same `execution` kind. It is neither a `503` nor a `504`. RFC 9110, Section
+   15.6.4, defines `503` as a temporary overload or scheduled maintenance "which
+   will likely be alleviated after some delay": this server is neither overloaded
+   nor under maintenance, it keeps serving every other request, and delay
+   alleviates nothing, because the same query over the same store exhausts the same
+   budget again. RFC 9110, Section 15.6.5, defines `504` for a server "acting as a
+   gateway or proxy" that did not receive a timely response "from an upstream
+   server": this server is neither, and the engine it runs the query on is
+   in-process, not an upstream server. What is true of a budget exhaustion is that
+   the caller asked this endpoint for more work than it spends on one request, and
+   that the caller changes the outcome by writing a cheaper query. `400` states
+   that; the two 5xx codes state something else that is not the case here.
+
+6. **Precedence: the `limit` is resolved before the guard rail runs.** One request
+   can be wrong in more than one way at once. The endpoint resolves the `limit`
+   first and validates the query as read-only second, so a request carrying both an
+   invalid `limit` and a query that is not read-only is answered `invalid_limit`,
+   not `not_read_only`. The order in which cases 1 to 3 appear above is the order in
+   which they are easiest to explain and is **not** an order of precedence; this
+   rule is the order of precedence and is the one to implement. The two orders
+   differ in nothing else: under either, the request is rejected before the query
+   runs and before the graph store is opened, so neither reads nor writes anything.
+   The case is in practice reachable only by a crafted request, because the page's
+   dropdown offers only the six allowed values (see
+   [Graph Query Bar](#graph-query-bar), rule 3).
+
+7. **The boundary against the internal read error is drawn at when the failure
+   surfaces, not at what the failure is.** This endpoint answers an internal read
+   error with `500`, exactly as every other route does (see
+   [Routes and Pages](#routes-and-pages) and
+   [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store),
+   rule 5). What separates that `500` from the `400` of case 3 is the moment the
+   failure surfaces: a failure to open the roadmap's graph store is an internal read
+   error and is answered `500`, while a failure that surfaces once the query is
+   running — from the run itself, or from the walk over the result it produces — is
+   a query execution failure and is answered `400`.
+
+   The boundary is a rule about timing, and it is deliberately not a claim about
+   what the failure is. A store corruption that a scan discovers while the query is
+   already running surfaces as a query execution failure and is therefore reported
+   as one, with `400` and `kind` `execution`, even though its cause is the store and
+   not the query. The endpoint classifies the engine's failures no further than
+   this. Drawing the boundary at the moment of surfacing keeps it verifiable from
+   outside the server, where drawing it at the cause would make the contract depend
+   on which failures the engine happens to tell apart.
+
+8. **The response body.** Each of the three failures carries a JSON body of exactly
+   two string fields, `error` and `kind`, in the shape specified in
+   `DATA_FORMATS.md § Graph View Data`, **Error Shape**, which is canonical for it.
+   `kind` is the machine-readable class — `not_read_only`, `invalid_limit`, or
+   `execution` — and `error` is the human-readable reason the page shows in place.
+   The `error` of an execution failure carries the engine's own diagnostic text, so
+   the user reads for a given query the same diagnostic the CLI prints for it (see
+   `GRAPH.md § Error Handling and Exit Codes`, rule 2) and can act on it; the
+   `error` of an invalid limit names the rejected value, which is what case 2's
+   message requires. The `500` of an internal read error does not carry this shape:
+   it is answered as every other route's internal read error is.
+
+9. **A request the caller abandoned is answered, but nobody reads the answer.** A
+   client that disconnects mid-query cancels the query immediately (see
+   [Graph Query Time Budget](#graph-query-time-budget), rule 2). The endpoint
+   treats that cancellation as a query execution failure like any other and answers
+   it with the same `400` and the same `execution` kind, with an `error` naming the
+   cancellation rather than the budget, because the two have different causes and
+   the budget must not be blamed for a caller that gave up. That answer reaches no
+   one: the client that would have read it is gone. It is specified here because it
+   is a third reason the `execution` kind arises, and a contract naming only two
+   would be incomplete on the day it is written. It is not an outcome a connected
+   client can observe, so no client-side test can assert it.
 
 ### Graph Labels Sidebar
 
@@ -1422,7 +3047,17 @@ write.
   graph-element and property-type conventions already defined in
   `DATA_FORMATS.md § Graph Query Result` (the node and relationship object shapes
   and the property-type-to-JSON mapping) rather than inventing a new element
-  encoding.
+  encoding. A request that fails carries the error object instead, specified in
+  the same file (see the next bullet).
+- **Failure responses.** The three ways a request to this endpoint fails — the
+  read-only guard-rail rejection, an invalid `limit`, and a query execution
+  failure — are each answered with HTTP `400 Bad Request` and a JSON body naming
+  the failure's class in a `kind` field, in the shape specified in
+  `DATA_FORMATS.md § Graph View Data`, **Error Shape**. The status, the `kind`
+  values, the precedence between the three, and the boundary against the `500` of
+  an internal read error are specified in
+  [Query-Bar Error Handling](#query-bar-error-handling); this section does not
+  restate them.
 - **Query parameters.** The endpoint accepts two optional URL query parameters
   that the graph page's query bar (see
   [Graph Query Bar](#graph-query-bar)) sends, and that drive which Cypher query
@@ -1469,16 +3104,80 @@ write.
   read-only.
 - **Node-limit injection.** The endpoint applies the resolved `limit` (the
   parameter value, or the default `100` when absent) by appending a top-level
-  `LIMIT <n>` clause to the query, **only when the user's query does not already
-  contain a top-level `LIMIT` clause**. The user's own `LIMIT` takes precedence
-  and is respected as-is: when the query already has a top-level `LIMIT`, the
-  endpoint injects nothing and the dropdown value is not applied. The
-  presence-of-`LIMIT` check is performed on the **masked normalization** of the
-  query (see `GRAPH.md § Literal-Aware Normalization`), so a `LIMIT` keyword that
-  appears only inside a string literal, a comment, or a backtick-quoted identifier
-  does not count as an existing top-level `LIMIT` and does not suppress injection.
-  The default query has no `LIMIT`, so a request that uses the default query
+  `LIMIT <n>` clause to the query. Injection is **suppressed** in exactly the two
+  cases below, and applies in every other case. The default query has no `LIMIT`
+  and is an ordinary reading query, so a request that uses the default query
   always has the resolved limit applied to it.
+  - **Suppression 1: the query already carries a top-level `LIMIT`.** The user's
+    own `LIMIT` takes precedence and is respected as-is: the endpoint injects
+    nothing and the dropdown value is not applied. The presence-of-`LIMIT` check is
+    performed on the **masked normalization** of the query (see
+    `GRAPH.md § Literal-Aware Normalization`), so a `LIMIT` keyword that appears
+    only inside a string literal, a comment, or a backtick-quoted identifier does
+    not count as an existing top-level `LIMIT` and does not suppress injection.
+  - **Suppression 2: the query is a statement form that admits no `LIMIT`
+    clause.** Not every read the guard rail admits can carry a `LIMIT` clause.
+    Appending one to a statement that cannot carry it bounds nothing: it makes the
+    statement fail in the **parser**, so a read form the guard rail accepts, and
+    that `rmp graph query` runs, would be unusable through this endpoint and the
+    endpoint would be stricter than the contract it publishes. The endpoint MUST
+    therefore inject nothing into either form below, and MUST execute each of them
+    as the caller wrote it.
+    - **A schema-introspection command.** The `SHOW INDEXES`, `SHOW INDEX`,
+      `SHOW CONSTRAINTS`, and `SHOW CONSTRAINT` forms that
+      `GRAPH.md § Schema Introspection` defines as a read-only class of their own.
+      Suppression covers the **whole** class, including a command that carries a
+      `YIELD`, `WHERE`, or `RETURN` tail: no form of the command admits a `LIMIT`
+      clause, so a tail does not make one injectable.
+    - **A standalone procedure call.** A statement whose first clause is `CALL`
+      and that has **no top-level `RETURN`**. The call's result is not projected,
+      and the unprojected form admits no `LIMIT` clause. A `CALL` that **is**
+      projected through a top-level `RETURN` — the `CALL ... YIELD ... RETURN ...`
+      form — is an ordinary reading query for this rule: it admits a `LIMIT`, and
+      the endpoint injects the resolved limit into it exactly as it does into a
+      `MATCH ... RETURN` query. The presence of a top-level `RETURN` is the whole
+      of the boundary: a `LIMIT` clause attaches only to a `RETURN` or a `WITH`
+      projection, so a call carrying a `YIELD` but no top-level `RETURN` admits no
+      `LIMIT` either, and is a standalone call for this rule.
+  - **Recognising the two non-limitable forms.** Both are recognised on the
+    **masked normalization** of the query, exactly as Suppression 1 and the
+    read-only guard-rail are (see `GRAPH.md § Literal-Aware Normalization`), so a
+    `SHOW`, `CALL`, or `RETURN` keyword that appears only inside a string literal,
+    a comment, or a backtick-quoted identifier does not affect the decision.
+    Recognition is **anchored to the start of the statement**, the same anchoring
+    `GRAPH.md § Schema Introspection` requires of the introspection class: a `CALL`
+    that appears inside a larger query, and an identifier, label, or property named
+    `show` or `call`, do not make the statement one of these forms. Suppression 2
+    changes no operation class: both forms are read-only before this rule and
+    after it, and the guard rail of the preceding bullet still runs on them first
+    and still decides, alone, whether they execute at all.
+  - **Separator: the injected clause begins on a new line.** When the endpoint does
+    inject, it MUST separate the injected `LIMIT <n>` from the query with a
+    **newline**, never with a space. A query whose last line ends in a line comment
+    (`MATCH (n) RETURN n //`) swallows anything appended on that same line, so a
+    space-separated injection lands **inside** the comment and the limit silently
+    does not apply — the endpoint then returns the whole graph and the cap it
+    exists to enforce is defeated. A newline terminates the comment, so the
+    injected clause is always top-level and always applies. Cypher treats the
+    newline as ordinary whitespace, so every query that worked before is
+    unaffected.
+  - **A suppressed query is not bounded by the node limit.** Suppression means no
+    `LIMIT` is applied, so the resolved limit does not cap these queries and the
+    dropdown value has no effect on them. What still bounds them is the
+    per-request time budget, which applies to every query the endpoint executes,
+    injected or not (see [Graph Query Time Budget](#graph-query-time-budget)): the
+    budget bounds the **work**, the node limit bounds the **result**, and only the
+    second is suppressed here.
+- **Per-request query time budget.** The endpoint MUST execute the query under a
+  5-second deadline derived from the request context, so a query that would run
+  for longer is cancelled instead of holding the server for as long as it takes to
+  finish. The budget bounds the **work** the query causes; the injected `LIMIT`
+  bounds only the **result** it returns, and neither substitutes for the other. A
+  query cancelled for exceeding the budget is a query execution failure and is
+  surfaced as one (see
+  [Query-Bar Error Handling](#query-bar-error-handling), case 3). The rule,
+  including the reason for the value, is specified in
+  [Graph Query Time Budget](#graph-query-time-budget).
 - **Result-to-graph extraction.** The endpoint builds the
   `{"nodes": [...], "edges": [...]}` response (see
   `DATA_FORMATS.md § Graph View Data`) by walking the **entire** query result and
@@ -1536,11 +3235,54 @@ The task detail modal is a popup overlay that displays the full set of fields fo
 one task. It is not a separate route; it is part of the pages that show clickable
 tasks.
 
-- **Where it appears.** Anywhere a task is shown clickable: the task table on the
-  roadmap tasks page and the task list on the roadmap sprint page. The roadmap
-  sprints page shows no clickable tasks, because every sprint there is rendered as
-  a card with no member-tasks table. Selecting a task opens the modal for that
-  task.
+- **Where it appears.** Anywhere a task is shown clickable: the task cards on the
+  roadmap tasks page's Kanban board and the task cards on the roadmap sprint page's
+  member-tasks board. The roadmap sprints page shows no clickable tasks, because
+  every sprint there is rendered as a card with no member tasks on it. Selecting a
+  task opens the modal for that task.
+- **The trigger is a natively activatable element.** Every element that opens the
+  modal MUST be a `<button>`, so that a pointer click, a touch tap, Enter, and
+  Space all open the modal through the browser's own activation behaviour, with no
+  added JavaScript. This is the property every surface that shows a clickable task
+  shares, and it holds for each surface on its own terms: the surfaces are not
+  defined by reference to one another, and no surface satisfies it by copying
+  another's markup.
+
+  A `<button>` is the applicable element, not a link. A link is activatable only
+  when it carries an `href`, and the modal is not a route: it has no URL to point
+  at (see [Routes and Pages](#routes-and-pages)). A link also answers Enter alone,
+  where a button answers Enter and Space, so choosing a button is what makes the
+  same keyboard contract hold identically on every surface.
+
+  A non-interactive element made to look interactive — a `<div>` or a `<tr>`
+  carrying `role="button"` and `tabindex="0"` — MUST NOT be the trigger.
+  `tabindex` grants focus and `role` announces the element as a button, but
+  neither grants activation, so such an element takes focus and announces itself
+  as a button that cannot be pressed. The vendored framework does not close that
+  gap: it binds its modal trigger behaviour to the click event only and registers
+  no key handler for a trigger, and adding one is not available to this interface,
+  because the Content-Security-Policy in [Security Headers](#security-headers)
+  admits script only from `/static/` and [Frontend Rules](#frontend-rules) allow
+  no inline script. The trigger therefore has to be an element that is activatable
+  to begin with.
+
+  Each trigger carries an **accessible name that names the action and identifies
+  the task by both its `id` and its `title`**. The name is
+  `Open details for task #<id>: <title>`, so a user reaching the trigger without
+  sight of the surrounding layout knows both what the control does and which task
+  the modal will show.
+
+  Where the trigger has a **visible text label**, the accessible name MUST contain
+  that visible label text. This is the case on both boards, whose card carries the
+  task title as its own visible text: on the Roadmap Sprint Page the title leads
+  the card, and on the roadmap tasks page it is the card's prominent main content.
+  Including the `title` in the name is what satisfies the rule on each of them. A
+  name that omits the visible label breaks activation by speech
+  input: a speech-input user says the words they can see, and a control whose
+  accessible name does not contain them cannot be activated that way, even though
+  it reads correctly to a screen reader. This requirement is the one stated by
+  WCAG 2.5.3 Label in Name (Level A), cited here as the grounding for this rule;
+  it is the reason the name carries the `title` and not the `id` alone.
 - **Fields shown.** The modal displays all of the task's fields as defined for the
   `Task` model in `MODELS.md § Task`: `id`, `title`, `status`, `type`, `priority`,
   `severity`, `functional_requirements`, `technical_requirements`,
@@ -1553,7 +3295,21 @@ tasks.
   modal renders them preserving the author's line breaks (newlines); the text
   still wraps within the modal, so no forced horizontal scrolling is introduced
   (see [Frontend Rules](#frontend-rules), rule 6). The page does not redefine
-  these fields; `MODELS.md` and `DATABASE.md` remain canonical.
+  these fields; `MODELS.md` and `DATABASE.md` remain canonical. On the roadmap
+  tasks page the modal is the sole place a task's full field set is shown, because
+  the board card presents only the subset defined in
+  [Roadmap Tasks Page](#roadmap-tasks-page).
+- **No prefix on the modal's priority and severity badges.** The one-letter prefix
+  the board card's `priority` and `severity` badges carry (see
+  [Roadmap Tasks Page](#roadmap-tasks-page), **Card content**, item 3) belongs to
+  the card and is not rendered here. That prefix exists because a card shows the two
+  values with no word naming either of them; the modal names every field it
+  displays, so the field's own name already stands beside each of these two values,
+  and a prefix would state the same thing twice. A prefix earns its place only where
+  no label names the value, which is true of the board card and of no other surface
+  in this interface. The badge colours are the same either way and stay those of
+  [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
+  because the mapping keys on the value and never on the badge's prefix.
 - **Comments timeline.** Directly after the completion-summary block, and as the
   last block of the modal body, the modal renders the task's comments as a
   chronological timeline. The fields of a comment are defined for the
@@ -1594,31 +3350,116 @@ tasks.
   edit control, and no submit action of any kind. This includes the comments
   timeline: comments are displayed, never created, edited, or deleted from the
   web interface.
-- **No new server endpoint and no new write path.** The modal is populated from
-  read-only task data already delivered to the page that opens it: the task data
-  and its comments are server-rendered into the page (as auto-escaped HTML) or
-  carried in a JSON data island (JSON-encoded, not interpolated into HTML). The
-  modal introduces no new server endpoint and no new write path; the CLI remains
-  the sole write path (see
+- **One modal element, filled on demand.** A page that shows clickable tasks
+  renders **one** modal element, not one per task. That element is an empty shell:
+  it carries no task's data until a user opens a task. When the user opens one, the
+  page's script fetches that task's data from
+  `GET /roadmaps/{name}/tasks/{id}/data` (see
+  [Task Detail Endpoint](#task-detail-endpoint)) and fills the shell with it. The
+  document the server sends therefore carries the modal's markup once, and its size
+  does not grow with the number of tasks the page shows. A user opens one task at a
+  time, and a task the user never opens is never fetched.
+- **Client-side rendering is text-only (security-critical).** Because the task's
+  values now reach the browser as JSON rather than as server-rendered HTML, the
+  server's `html/template` contextual auto-escaping no longer stands between a
+  stored value and the page structure: the responsibility moves to the script that
+  fills the modal. Therefore **every** value the script writes into the DOM MUST be
+  written through the DOM `textContent` property, or an equivalent that cannot
+  interpret markup. The script MUST NOT use `innerHTML`, MUST NOT use
+  `insertAdjacentHTML`, and MUST NOT build DOM by assigning a string that embeds a
+  value to any markup-parsing sink.
+
+  This governs every caller-authored value on this path, all of which are free text
+  a user wrote through the CLI: the task `title`, `functional_requirements`,
+  `technical_requirements`, `acceptance_criteria`, `completion_summary`,
+  `specialists`, and every comment `body`. A value containing HTML control
+  characters MUST render as the characters themselves and MUST NOT be able to
+  introduce an element, an attribute, or a script into the page. The
+  control-character constraint in `MODELS.md § Task` rejects terminal and
+  bidirectional control characters at write time; it does not reject HTML markup,
+  so it is not a substitute for this rule.
+- **Failure is visible in the modal.** The modal already depends on JavaScript,
+  because the vendored framework is what opens it. When the fetch for a task's data
+  fails — a network error, a non-200 response, or a body that does not parse — the
+  modal MUST open and show a clear error message in place of the task's content,
+  naming that the task's detail could not be loaded. It MUST NOT stay blank, MUST
+  NOT close silently, and MUST NOT leave the previously opened task's data on
+  display. The failure is a read failure and offers no retry that writes anything.
+- **No new write path.** The endpoint the modal fetches is read-only and serves
+  `GET` and `HEAD` only; the modal introduces no write path, and the CLI remains
+  the sole write path (see [Task Detail Endpoint](#task-detail-endpoint) and
   [Security and Constraints](#security-and-constraints)).
-- **One grouped comment query, never N+1.** A page that shows clickable tasks
-  renders one modal per task, so the server MUST load the comments of every
-  rendered task with a single grouped query over the whole set of rendered task
-  ids (`WHERE task_id IN (...)`, ordered by task id then `created_at`; see
-  `DATABASE.md § List Comments for Many Parents (Grouped)`), and MUST NOT issue
-  one query per task. When the page renders no task, the query is not issued at
-  all.
-- **Output escaping.** Roadmap-derived text shown in the modal is escaped
-  consistently with [Security and Constraints](#security-and-constraints):
-  `html/template` contextual auto-escaping for HTML, or JSON encoding for a data
-  island. Task field values that contain HTML control characters cannot alter page
-  structure.
 - **Popup and touch usability.** The modal is a popup overlay (for example a
   Tabler or Bootstrap modal) rendered inside the Tabler admin shell. It MUST be
   usable on touch input and on small viewports: it fits the viewport without
   horizontal overflow, scrolls its content when the task's text is long, and
   offers touch-friendly controls to open and dismiss it (see
   [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)).
+
+### Task Detail Endpoint
+
+- **Route:** `GET /roadmaps/{name}/tasks/{id}/data`
+- **Purpose:** Feeds the task detail modal. The page holds one empty modal shell,
+  and the page's JavaScript fetches this endpoint when the user opens a task,
+  filling that shell with the returned task's fields and comments (see
+  [Task Detail Modal](#task-detail-modal)).
+- **Path shape.** The endpoint follows the one JSON-endpoint convention this
+  interface already has: the graph page is served at `/roadmaps/{name}/graph` and
+  its JSON at `/roadmaps/{name}/graph/data` (see
+  [Graph Data Endpoint](#graph-data-endpoint)). The `/data` suffix is what marks a
+  path as a JSON payload rather than an HTML page, which keeps the bare
+  `{collection}/{id}` shape reserved for the HTML-page idiom that
+  `/roadmaps/{name}/sprints/{id}` uses. `/roadmaps/{name}/tasks/{id}` is therefore
+  not a route and is answered `404 Not Found`. The endpoint is scoped to a task of
+  a roadmap rather than to a page, so both surfaces that show a clickable task —
+  the tasks page's board and the Roadmap Sprint Page's member-tasks board — use
+  this same endpoint.
+- **Response:** JSON carrying the task's fields and its comments, in the shape
+  specified in `DATA_FORMATS.md § Task Detail Data`. That shape **composes** the
+  object shapes already defined in `DATA_FORMATS.md § Task` and
+  `DATA_FORMATS.md § Task Comment` (whose fields are defined for the `Task` and
+  `TaskComment` models in `MODELS.md § Task` and `MODELS.md § Task Comment`) rather
+  than introducing a new object encoding, so a value carries the same field names,
+  the same types, and the same null conventions here as it does in CLI output.
+  `DATA_FORMATS.md` is canonical for the response shape, including the ordering of
+  the `comments` array (oldest first, the order the modal's timeline presents) and
+  the `[]`-not-`null` convention for a task with no comment; this file does not
+  restate them.
+- **Path parameters.** `{name}` and `{id}` follow the discipline in
+  [Routes and Pages](#routes-and-pages), rules 1, 2, and 4: `{name}` is validated
+  against the roadmap-name rules before any filesystem path is built, and an
+  invalid or nonexistent `{name}`, a non-integer `{id}`, or an `{id}` that is not a
+  task of the named roadmap each return HTTP `404 Not Found`. The 404 for a task of
+  another roadmap is what keeps a roadmap's data reachable only through its own
+  path space.
+- **Methods.** `GET` and `HEAD` only. Any other method is answered HTTP
+  `405 Method Not Allowed`, exactly as on every other route (see
+  [Functional Requirements](#functional-requirements), requirement 4).
+- **Read-only.** The endpoint reads the roadmap's `project.db` through the same
+  read-only open path the pages use, writes nothing, and exposes no write path. It
+  produces no audit entry, because a read is not a change (see
+  [Tasks and Sprints from SQLite](#tasks-and-sprints-from-sqlite)). The `rmp` CLI
+  remains the sole write path.
+- **Reads.** One read for the task and one for that task's comments, for the single
+  task requested. The endpoint is requested only when a user opens a modal, so it
+  is not on the page-rendering path and does not reintroduce a per-task query into
+  page rendering (see [Roadmap Tasks Page](#roadmap-tasks-page), **Read cost**).
+- **Cache policy.** The response is data-derived and therefore carries
+  `Cache-Control: no-store` from the existing header treatment, like every other
+  data-derived response (see [Cache Policy](#cache-policy)).
+- **Security headers and Content-Security-Policy.** The endpoint requires **no**
+  change to the Content-Security-Policy. The policy specified in
+  [Security Headers](#security-headers) already admits `connect-src 'self'` and
+  `script-src 'self'`, which is what permits a same-origin fetch driven by a script
+  served from `/static/`. The graph page already fetches its data this way, so
+  runtime fetch is an established pattern of this interface and not an exception
+  made for this endpoint. No inline script is introduced (see
+  [Frontend Rules](#frontend-rules)).
+- **Output encoding.** The response body is JSON-encoded, never HTML. Task and
+  comment text is carried as JSON string values and is never interpolated into
+  markup by the server. How the client renders those values is
+  security-critical and is specified in [Task Detail Modal](#task-detail-modal),
+  **Client-side rendering is text-only**.
 
 ## Read-Only Data Flow
 
@@ -1639,20 +3480,49 @@ re-presents an earlier, now-stale response in its place.
    defined in
    `DATABASE.md § Main SQL Queries`. The sprints page reads the roadmap's sprints
    and each sprint's total task count for its card footer, but no member tasks,
-   because the page renders every sprint as a card with no member-tasks table; the
-   tasks page reads the roadmap's full task list; the audit log page reads the
+   because the page renders every sprint as a card with no member tasks on it; the
+   tasks page reads the roadmap's full task list, which its Kanban board then
+   groups into the five status columns in memory, with no further query — none per
+   column and none per card (see [Roadmap Tasks Page](#roadmap-tasks-page)); the
+   sprint page reads that sprint and its member tasks in `sprint_tasks` position
+   order, which its own board then groups into the three columns and orders in
+   memory — the `WAITING` column keeping the position order the read returned, the
+   `DOING` and `CLOSED` columns reordered by `started_at` and `closed_at`
+   descending — again with no further query per column and none per card (see
+   [Sprint Detail Sub-Template](#sprint-detail-sub-template)); the
+   audit log page reads the
    roadmap's audit entries ordered by `performed_at` descending, one fixed-size page
    at a time (see [Roadmap Audit Log Page](#roadmap-audit-log-page) and
-   `DATABASE.md § Audit`). The task data the task detail modal
-   displays comes from the same read queries; the modal adds no separate request.
+   `DATABASE.md § Audit`).
    The web interface adds no new schema, no new table, and no new write query.
-   A page that renders task detail modals additionally reads the comments of every
-   task it renders, in one grouped query over the whole set of rendered task ids,
-   and the sprint page reads that sprint's own comments in one further query (see
-   `DATABASE.md § Comments`). Both are existing read queries of the comment
-   feature, issued server-side while the page is rendered; neither adds a request
-   from the browser, and the number of comment queries per page does not grow with
-   the number of tasks shown.
+   The data the task detail modal displays is **not** read while the page is
+   rendered: the page carries one empty modal shell, and the task's fields and
+   comments are read only when a user opens that task, by the read-only task detail
+   endpoint (see [Task Detail Endpoint](#task-detail-endpoint)). A page that shows
+   clickable tasks therefore reads, at render time, only what it displays itself:
+   both boards read a comment **count** per rendered task, in one grouped counting
+   query over the whole set of rendered task ids, because a card shows a count and
+   no comment text (see
+   `DATABASE.md § Count Comments for Many Parents (Grouped)`). On the tasks page
+   that grouped count is the page's only comment read. The Roadmap Sprint Page
+   additionally presents the sprint's own comment log, so it reads that sprint's
+   comments in full in one further query (see `DATABASE.md § Comments`): the sprint
+   page therefore issues exactly **two** comment reads — the sprint's own listing
+   and the one grouped count over its member tasks — whatever the number of member
+   tasks, and it reads the comment **body** of no member task. The grouped count is
+   skipped entirely when the sprint has no member task, because it takes a set of
+   rendered task ids and that set is empty; the sprint's own comment listing is
+   still issued, because the Comments card is always present. Every one of these is
+   a read query issued server-side while the page
+   is rendered, and the number of them per page does not grow with the number of
+   tasks shown. The tasks page issues one further grouped query,
+   which resolves the sprint of every task it renders over the whole set of
+   rendered task ids at once, so each board card can name the sprint its task
+   belongs to (see `DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)`).
+   That query is issued once per page, never once per task and never once per
+   board column, and it is skipped entirely when the page renders no task. The
+   sprint page issues no sprint-resolution query at all: every card on its board
+   belongs to the one sprint the page is showing, so there is nothing to resolve.
 2. The server opens the database for reading only. It MUST NOT modify rows, MUST
    NOT write an audit entry, and MUST NOT alter the schema. A web read produces no
    audit-log entry, because the audit log records changes and a read is not a
@@ -1852,8 +3722,14 @@ read from the host filesystem at runtime.
    asset set. The specific fidelity requirements that follow from this principle —
    card tabs (rule 9), semantic status badges (see
    [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours)),
-   no presentational inline styles (rule 10), and the minor markup-fidelity
-   adjustments (rule 11) — are concrete applications of it.
+   no presentational inline styles and no class the vendored distribution does not
+   ship (rule 10), the minor markup-fidelity adjustments (rule 11), the admin-shell
+   element order (rule 12), the single sidebar collapse, toggler, and brand
+   (rule 13), `aria-current` on the active navigation link (rule 14), the labelled
+   pagination wrapper (rule 15), the page-header actions column (rule 16), the
+   fluid-layout container idiom (rule 17), the `main` page-body landmark
+   (rule 18), and the top navbar's content (rule 19) — are concrete applications
+   of it.
 9. **Card tabs follow Tabler's "card with tabs" example.** The Roadmap Sprints
    Page tab control (the three tabs Próximos, Actual, Concluídos; see
    [Roadmap Sprints Page](#roadmap-sprints-page)) follows Tabler's "card with
@@ -1866,20 +3742,38 @@ read from the host filesystem at runtime.
    built on Bootstrap; see rule 1), not a hand-rolled show/hide script. Each tab's
    trigger is a Tabler `nav-link` (`<a class="nav-link" data-bs-toggle="tab">`), and
    the **Actual** tab is the one carrying the `active` state on page load. The three
-   tabs and their counts or badges, and the default-active Actual tab, are preserved
-   exactly as specified in [Roadmap Sprints Page](#roadmap-sprints-page).
-10. **No presentational inline styles.** Templates MUST NOT carry presentational
-    inline `style="..."` attributes. All styling lives in the vendored Tabler
-    classes and utilities, or in the project override stylesheet (`static/style.css`),
-    served from `/static/...` (see
+   tabs and their count badges, and the default-active Actual tab, are preserved
+   exactly as specified in [Roadmap Sprints Page](#roadmap-sprints-page), including
+   the semantic colour each count badge carries there.
+10. **No presentational inline styles, and no class the vendored Tabler
+    distribution does not ship.** Templates MUST NOT carry presentational inline
+    `style="..."` attributes. All styling lives in the vendored Tabler classes and
+    utilities, or in the project override stylesheet (`static/style.css`), served
+    from `/static/...` (see
     [Embedded Asset Categories](#embedded-asset-categories)). In particular, the
     navigation sidebar's section label and the empty-state icon sizing carry no
-    inline `style`: the sidebar section separator follows Tabler's vertical-navbar
-    subheader and `hr` idiom (a Tabler navbar subheader and divider, not an
-    inline-styled label), and any presentational sizing such as the empty-state
-    icon's dimensions lives in a Tabler utility class or in `static/style.css`. This
-    keeps the markup faithful to the Tabler examples and keeps presentation out of
-    the templates, consistent with the Content-Security-Policy in
+    inline `style`. The sidebar's per-roadmap section label is a Tabler
+    `subheader` — the small uppercase letter-spaced muted label the vendored
+    distribution defines — and the rule above it is a Tabler `dropdown-divider`.
+    The label is aligned with the sidebar links by a Tabler spacing utility
+    (`px-3`, the same 1rem horizontal padding Tabler gives a vertical-navbar
+    `nav-link` at the viewport widths where the sidebar is expanded), never by a
+    project stylesheet rule. Any presentational sizing, such as the empty-state
+    icon's dimensions, lives in a Tabler utility class or in `static/style.css`.
+
+    A template MUST use only class names the vendored Tabler distribution actually
+    provides. `navbar-heading` and `navbar-divider` are not Tabler class names —
+    the vendored distribution defines neither — and MUST NOT appear in any
+    template. The project stylesheet MUST NOT carry a rule whose selector targets a
+    framework class the vendored distribution does not define: such a rule does not
+    override Tabler, it re-creates a component Tabler never shipped, which is the
+    divergence rule 8 forbids. When a template appears to need such a rule, the
+    template is wrong and is brought back to the Tabler class that already provides
+    the behaviour. `static/style.css` remains the place for project-specific
+    styling that no Tabler class covers.
+
+    Keeping presentation out of the templates this way keeps the markup faithful to
+    the Tabler examples and is consistent with the Content-Security-Policy in
     [Security Headers](#security-headers) (which already permits the framework's own
     `style-src 'unsafe-inline'` for Tabler, while the project's own styling stays in
     the stylesheet).
@@ -1890,10 +3784,245 @@ read from the host filesystem at runtime.
       alignment classes, as the Tabler page-header example does.
     - **The sidebar brand** uses the Tabler `<h1 class="navbar-brand
       navbar-brand-autodark">` element, as the Tabler vertical-navbar example does.
-    - **The footer** follows Tabler's footer row structure, as the Tabler footer
-      example does.
     These adjustments only align the markup with the Tabler examples; they introduce
     no new page, no new content, and no write path, and the pages remain read-only.
+12. **Admin-shell element order.** Tabler places the top navbar as a direct child
+    of the page container: in the official page-layout examples, and in Tabler's own
+    built admin shell, `<header class="navbar navbar-expand-... d-print-none">` is a
+    **sibling** of `<div class="page-wrapper">` inside `<div class="page">`, never a
+    descendant of it. The vendored stylesheet depends on that shape: its
+    `.navbar-expand-lg.navbar-vertical~.navbar` and
+    `.navbar-expand-lg.navbar-vertical~.page-wrapper` rules give the top navbar and
+    the page wrapper the 15rem offset that clears the vertical sidebar, and a
+    general sibling selector matches only elements that follow the `<aside>` at the
+    same level. The templates MUST therefore place, inside `<div class="page">` and
+    in this order: the sidebar `<aside>`, the top `<header>`, and then
+    `<div class="page-wrapper">`, which holds the page header and the page body. A
+    template MUST NOT nest the top `<header>` inside
+    `<div class="page-wrapper">`, and the top navbar carries `d-print-none` as the
+    Tabler shell does.
+
+    The shell carries **no footer**. No page renders a `<footer>` element, so the
+    page body is the last region inside `<div class="page-wrapper">` on every page.
+13. **One sidebar collapse, one toggler, one brand.** Tabler's vertical navbar
+    holds its collapsible menu region inside the sidebar `<aside>`, identified by
+    `class="collapse navbar-collapse"` and `id="sidebar-menu"`, and gives that
+    region exactly one `navbar-toggler`, also inside the `<aside>`. Where Tabler's
+    top navbar carries a toggler of its own, that toggler targets the top navbar's
+    own `#navbar-menu` collapse, never the sidebar's; and in Tabler's own layout
+    that combines a sidebar with a top navbar, the top navbar hides its brand, so
+    the shell shows one brand only. The templates MUST follow this: the sidebar
+    collapse carries `class="collapse navbar-collapse"` and `id="sidebar-menu"` and
+    lives inside the `<aside>`; exactly one `navbar-toggler` in the whole shell
+    targets `#sidebar-menu`, and it lives inside that same `<aside>`; and the top
+    navbar carries neither a second toggler for `#sidebar-menu` nor a second brand,
+    so each page renders exactly one brand, the sidebar brand of rule 11. Two
+    togglers driving one collapse would give a small viewport two hamburger
+    controls for the same menu, and a second brand would show the product name
+    twice. Tabler renders that collapse region as a `<nav>` element carrying
+    `aria-label="Sidebar"`, so the menu is a navigation landmark with an accessible
+    name that tells it apart from the page's other navigation; the templates MUST
+    use that element and that label. The off-canvas
+    (hamburger) behaviour specified in
+    [Responsive and Mobile-First Design](#responsive-and-mobile-first-design) is
+    unchanged, with a single control driving it.
+14. **`aria-current` on the active navigation link.** Tabler marks the active entry
+    of its vertical navbar with the `active` class on the `<li class="nav-item">`,
+    and marks the active link of its navigation examples with `aria-current="page"`
+    on the `<a class="nav-link">`. The templates MUST do both wherever they
+    highlight the active view: the `<li>` carries `active` and the `<a>` inside it
+    carries `aria-current="page"`. This applies to the sidebar's roadmap-index entry
+    and to the active view among a roadmap's Sprints, Tasks, Audit, and Graph links
+    (see rule 1), so the active view reaches assistive technology and is not
+    conveyed by colour alone.
+15. **Pagination is wrapped in a labelled `nav`.** Tabler emits its pagination
+    component inside a `<nav>` element carrying a descriptive `aria-label`, which is
+    also how Bootstrap, the framework Tabler is built on (see rule 1), specifies
+    that component. The wrapper is what makes assistive technology announce the
+    control as a navigation section and tell it apart from the page's other
+    navigation. The audit log
+    page's numbered pagination bar MUST therefore sit inside a
+    `<nav aria-label="...">` whose label names what the bar navigates. The
+    `ul.pagination` list, its `li.page-item` items, and its `a.page-link` links stay
+    exactly as specified in [Roadmap Audit Log Page](#roadmap-audit-log-page); the
+    wrapper adds the landmark and the accessible name and changes no pagination
+    behaviour.
+16. **Page-header actions column.** Tabler's page-header component emits its
+    actions column as `<div class="col-auto ms-auto d-print-none">`, its
+    `d-print-none` matching the `d-print-none` the `page-header` element itself
+    carries. Where a page header carries actions, the templates MUST use that
+    column idiom unchanged, `d-print-none` included.
+17. **The fluid layout idiom is `layout-fluid` plus `container-xl`.** Tabler's
+    full-width layout pairs `class="layout-fluid"` on `<body>` with ordinary
+    `container-xl` page containers. The vendored stylesheet's
+    `.layout-fluid .container,.layout-fluid [class*=" container-"],.layout-fluid [class^=container-]{max-width:100%}`
+    rule exists for exactly that pairing and is what releases those containers to
+    the full viewport width. A `container-fluid` page container is already full
+    width on its own, which leaves the `layout-fluid` body class with nothing to act
+    on and silently drops the idiom. The templates MUST therefore carry
+    `layout-fluid` on `<body>` and use `container-xl` for the shell containers: the
+    top navbar, the page header, and the page body. The
+    `container-fluid` inside the sidebar `<aside>` is Tabler's own vertical-navbar
+    markup and stays exactly as Tabler ships it.
+18. **The page body is a `main` landmark.** Tabler's built admin shell renders the
+    page body as `<main class="page-body">`, so the region that holds each page's
+    own content is the document's `main` landmark and assistive technology can jump
+    straight to it past the sidebar, the top navbar, and the page header. The
+    templates MUST use that element for the page body, keeping the `page-body`
+    class, which is what the vendored stylesheet styles; the element carries no
+    identifier, because the one Tabler puts there exists only to anchor a skip link
+    whose styling lives in Tabler's demonstration stylesheet rather than in the
+    distributed one this project vendors, and this interface offers no skip link.
+    The change is behaviour-neutral: `.page-body` is a class selector, so the
+    element it sits on affects no layout rule. Tabler's older hand-written
+    page-layout snippet still shows a `<div>` here; where a documented snippet and
+    the framework's own built shell disagree, the built shell of the vendored
+    distribution governs, and the templates MUST NOT be reverted to the `<div>`.
+19. **The top navbar names the selected roadmap.** The shell's top navbar carries
+    one thing: the name of the roadmap whose data the current page shows. Every
+    page but the roadmap index is scoped to a single roadmap — its sprints, one of
+    those sprints, its tasks, its audit log, or its knowledge graph — and the name
+    is what tells one roadmap's pages from another's at a glance. The sidebar's own
+    per-roadmap section label collapses out of sight behind the off-canvas menu on
+    a small viewport (rule 5), so the top navbar is the one region that names the
+    selected roadmap at every viewport width.
+
+    The name is rendered prominently and with vendored Tabler classes only: the
+    name alone, carrying Tabler's `h3` type utility, inside the
+    `navbar-nav flex-row` / `nav-item` idiom Tabler uses for the top navbar's own
+    content. **No glyph precedes it.** An icon here would be the same on every
+    page of every roadmap, so it would distinguish nothing, while the sidebar
+    already gives each of the roadmap's views its own distinguishing glyph; a
+    roadmap is identified by its name, which is what the URL, the sidebar label,
+    and the page title all use. A long name is truncated with Tabler's `text-truncate`
+    rather than wrapped or allowed to overflow, so the navbar keeps its height and
+    the page never scrolls horizontally because of it (see
+    [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)). The
+    name shown is the validated roadmap segment of the request path — the same
+    value that selected the database (see [Routes and Pages](#routes-and-pages)) —
+    rendered through `html/template` as text, so it is escaped exactly like every
+    other value the interface shows.
+
+    **The roadmap index page names no roadmap.** `/` lists the roadmaps and belongs
+    to none of them, so its top navbar renders nothing at all: no name and no
+    placeholder text. The region is simply empty, exactly as the sidebar's
+    per-roadmap section is absent on that page.
+
+    **The navbar carries no read-only indicator.** It MUST NOT carry a badge,
+    label, or icon declaring the interface read-only. That the interface never
+    writes is a guarantee of the server, specified in
+    [Security and Constraints](#security-and-constraints) and in
+    each page's own **Read-only** rule, and it is already evident on every page:
+    no form, no submit control, no edit affordance anywhere. Restating it in the
+    one shell region that can instead identify the page's subject spends that
+    region on what the user cannot act on. This mirrors the removal of the
+    read-only footer band, whose whole content was the same restatement (rule 12).
+
+### Full-Height Page Regions
+
+Two pages present a region sized to the **viewport** rather than to its own
+content, so that the region's children scroll **inside** it and the page itself
+does not scroll to reach them: the Kanban board of the roadmap tasks page (see
+[Roadmap Tasks Page](#roadmap-tasks-page), **Layout and scrolling**) and the graph
+card of the knowledge-graph page (see
+[Roadmap Knowledge-Graph Page](#roadmap-knowledge-graph-page), **Graph card
+layout**). Each sits inside the `main.page-body` landmark of the admin shell (see
+[UI Framework](#ui-framework), rule 18). These two are the whole set: this
+subsection introduces no region and no page, and states only how a region of this
+kind is sized.
+
+**The Roadmap Sprint Page's member-tasks board is deliberately not one of them.**
+It is a board with per-column vertical scrolling, like the tasks page's board, but
+its height is bounded by a definite length rather than by the space the page body
+leaves (see [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Height and
+scrolling**). The reason is that the sprint page is not a single-region page: the
+Sprint details card sits above the board and the Comments card below it, and all
+three belong to one sprint presentation. A board taking the space the page body
+leaves would fill the rest of the viewport on its own and push the Comments card
+below the fold for every sprint, while a board sized to its own content would push
+that card further down with every member task the sprint gains. A definite,
+bounded height avoids both: the board shows a useful number of cards, scrolls the
+rest inside its columns, and leaves the Comments card within reach. Rules 1 to 5
+below therefore do not apply to that board, and a check written against them MUST
+NOT be run on it.
+
+1. **Two edges fix the height, and both MUST hold at every viewport size.**
+   - **The region ends where the page body ends.** The bottom edge of the region
+     coincides with the bottom edge of the page body, leaving no band of unused
+     page body beneath it.
+   - **That edge lies within the viewport.** The page does not scroll vertically
+     to reveal the end of the region.
+
+   Neither edge is sufficient on its own, and a check that asserts one of them
+   alone passes on a defective layout. A region that stops short of the page
+   body's end sits well within the viewport and satisfies the second edge while
+   wasting exactly the space it failed to take. A region that overruns the bottom
+   of the viewport still ends where the page body ends and satisfies the first
+   edge, because the overrun is itself what stretched the page body to that
+   height. Only the two together state that the region takes the space the page
+   body has, and no more.
+2. **No space is reserved for anything the page does not render.** What the region
+   gives up at the top is what the shell and the page actually place above it: the
+   top navbar and the page header on both pages, the query bar as well on the
+   knowledge-graph page (see [Graph Query Bar](#graph-query-bar)), and the no-match
+   message on the roadmap tasks page for as long as the board's controls match no
+   task (see [Roadmap Tasks Page](#roadmap-tasks-page), **Empty states**). Removing
+   one of those elements reduces what the region gives up by that element's height,
+   and adding one increases it — not as a follow-up correction to a value recorded
+   somewhere, but because rule 1 is stated over the page body's edges and the page
+   body has already moved. In particular the shell carries no footer and no page
+   renders a `<footer>` element (see [UI Framework](#ui-framework), rule 12), so no
+   full-height region gives up any space for one.
+3. **A fixed subtraction from the viewport height does not satisfy rule 1.** The
+   height of the material above a full-height region is not a constant. The page
+   header's actions column wraps as the viewport narrows — the tasks page header
+   carries a search input and three filter dropdowns (see
+   [Roadmap Tasks Page](#roadmap-tasks-page), **Header search control** and
+   **Header filter controls**) — so the page header occupies more rows on a narrow
+   viewport than on a wide one and the page body begins lower. A height obtained by
+   subtracting a fixed length from the viewport height therefore matches the space
+   available at one viewport width at best and misses it at every other: too tall
+   where the page header is tall, which pushes the region past the fold, and too
+   short where the page header is short, which leaves the unused band rule 1
+   forbids. Rule 1 is stated over edges rather than over a subtracted length for
+   that reason — an edge needs no value kept in step with the page.
+4. **The viewport is the one the browser is showing at that moment.** A mobile
+   browser with a retracting address bar has two viewport heights: the **large**
+   viewport height, which measures the viewport as if the bar were retracted, and
+   the **dynamic** viewport height, which measures what is visible while the bar is
+   on screen. A full-height region MUST be sized against the dynamic height, so
+   that rule 1's second edge holds while the bar is showing and not only once it
+   has gone; sized against the large height, the end of the region sits below the
+   fold for exactly as long as the bar is on screen. A browser that does not
+   support the dynamic height MUST still receive a viewport-derived height rather
+   than none: the two are declared together and in that order — the large height
+   first, the dynamic height second — so a browser that understands only the first
+   keeps it and a browser that understands both applies the second. In CSS these
+   are the `vh` and `dvh` units, and that ordered pair of declarations is how the
+   dynamic unit ships without a feature query. This is the vertical counterpart of
+   the fluid-layout requirement in
+   [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
+   rules 2 and 9.
+5. **A floor keeps the region usable on a very short viewport.** Below some
+   viewport height the space the page body leaves is too small to present the
+   region at all: a board column would show a fraction of a single card, and the
+   graph canvas would be a strip. Each full-height region therefore carries a
+   **minimum height**, and when the space the page body leaves falls below that
+   minimum the region takes the minimum instead. In that case, and only in that
+   case, the region's bottom edge may fall below the viewport and the page may
+   scroll vertically to reach it: rule 1's second edge yields to the floor, because
+   a region compressed past legibility is worse than one the reader scrolls to.
+   Rule 1's first edge yields with it wherever the page places an element above the
+   region inside the same container — the knowledge-graph page's query bar always,
+   and the tasks page's no-match message for as long as the board's controls match
+   no task (see rule 2). The page body is held to the same minimum as the region, so
+   below the floor it carries that element and the floored region together, and the
+   region's foot passes the page body's foot by the space the element occupies.
+   Nothing in the stylesheet closes that gap: closing it would take a page-body
+   floor of the region's floor plus the height of the element above it, and that is
+   the fixed subtraction rule 3 forbids. The floor is the single exception to
+   rule 1 — to both of its edges — and not a licence to overrun the viewport, or to
+   end anywhere but where the page body ends, at ordinary viewport heights.
 
 ### Status, Priority, and Severity Badge Colours
 
@@ -1911,7 +4040,7 @@ status enum and sprint status enum are defined in `MODELS.md § Enums`, the task
 status lifecycle in `STATE_MACHINE.md § Task State Machine`, the sprint status
 lifecycle in `STATE_MACHINE.md § Sprint State Machine`, and the `priority` and
 `severity` integer ranges (`0`-`9`) in `MODELS.md § Task`. The severity bands reuse
-the canonical criticality ranges defined in `COMMANDS.md § Show Sprint`
+the canonical criticality ranges defined in `COMMANDS.md § Show Sprint Status Report`
 (low `0`-`2`, medium `3`-`5`, high `6`-`7`, critical `8`-`9`); this file does not
 redefine them.
 
@@ -1956,22 +4085,106 @@ Rules:
    colour variant in the tables above. The priority and severity bands together
    cover the whole `0`-`9` range with no gap and no overlap, so every valid integer
    value resolves to exactly one band.
-2. **Applied consistently everywhere a badge is shown.** The same mapping is applied
-   wherever a status, priority, or severity badge appears: the tasks table (see
-   [Roadmap Tasks Page](#roadmap-tasks-page)), the sprint detail member-tasks table
-   (see [Sprint Detail Sub-Template](#sprint-detail-sub-template)), the task detail
-   modal (see [Task Detail Modal](#task-detail-modal)), the sprint cards (see
+2. **Applied consistently everywhere a badge is shown.** The mapping governs a
+   badge's **colour**, and it is keyed on a value: a task status, a sprint status, a
+   `priority`, or a `severity`. The same mapping is applied wherever a badge carries
+   one of those values: the priority and severity badges on the tasks page's board
+   cards (see [Roadmap Tasks Page](#roadmap-tasks-page)), the priority and severity
+   badges on the cards of the sprint detail member-tasks board (see
+   [Sprint Detail Sub-Template](#sprint-detail-sub-template)), the task detail modal
+   (see [Task Detail Modal](#task-detail-modal)), the sprint cards (see
    [Shared Sprint-Card Partial](#shared-sprint-card-partial)), the Roadmap Sprint
    Page header and metadata datagrid (see [Roadmap Sprint Page](#roadmap-sprint-page)
-   and [Sprint Detail Sub-Template](#sprint-detail-sub-template)), and the sprint
-   tabs on the Roadmap Sprints Page (see [Roadmap Sprints Page](#roadmap-sprints-page)).
-   A status, priority, or severity badge anywhere in the interface uses the variant
-   the relevant table above assigns to its value; no status, priority, or severity
-   badge uses a single fixed colour across differing values. The mapping governs
-   those three badge kinds only. The comment-type badge shown in the task detail
-   modal and the sprint Comments card is deliberately outside it and uses the
-   neutral `bg-secondary-lt` variant for every type value (see
-   [Task Detail Modal](#task-detail-modal)).
+   and [Sprint Detail Sub-Template](#sprint-detail-sub-template)), the sprint
+   tabs on the Roadmap Sprints Page (see [Roadmap Sprints Page](#roadmap-sprints-page)),
+   and the per-column count badge of each of the two Kanban boards (see
+   [Roadmap Tasks Page](#roadmap-tasks-page) and
+   [Sprint Detail Sub-Template](#sprint-detail-sub-template)).
+   A badge that carries one of those values uses the variant the relevant table above
+   assigns to it, and no such badge uses a single fixed colour across differing
+   values.
+
+   **A badge carries a value in one of two ways.** The mapping applies to both. The
+   second is a closed list of named cases, not a general licence; the test that
+   decides membership of that list is stated below it:
+   - **The badge's own text is the value.** Every site listed above except the sprint
+     tabs and the two boards' per-column count badges is this case: the badge reads
+     `COMPLETED`, `OPEN`, `7`, or `2`, and it takes the colour the relevant table
+     assigns to the value it carries. On the card of
+     either board the priority and severity badges write that value behind a
+     one-letter prefix — `P7`, `S2` — which names the field the value belongs to,
+     because a card carries no label that would (see
+     [Roadmap Tasks Page](#roadmap-tasks-page), **Card content**, item 3). The prefix is a label and not a value: this mapping keys on
+     the value alone and never on the prefix, so `P7` takes the colour of the
+     priority `7`, and no band, no colour variant, and no enum value changes because
+     of it.
+   - **The badge counts the members of a group with one status to key on.** Three
+     sites are this case: the three sprint tabs on the Roadmap Sprints Page, the
+     per-column count badge of the Roadmap Tasks Page's Kanban board, and the
+     per-column count badge of the sprint detail member-tasks board. Each such badge
+     is a hybrid: the **colour** is the variant the relevant table above assigns to
+     the status the counted group has, directly or through its canonical status,
+     while the **text** is the number of members in the group. The count itself
+     selects no colour: it is not a value this mapping knows, and it adds no fourth
+     badge kind.
+     - Each **sprint tab** groups the sprints of exactly one sprint status — Próximos
+       the `PENDING` sprints, Actual the `OPEN` sprints, Concluídos the `CLOSED`
+       sprints (see [Roadmap Sprints Page](#roadmap-sprints-page)) — so a tab has a
+       sprint status even though no sprint status is written on it. Próximos therefore
+       carries `bg-secondary-lt`, Actual carries `bg-blue-lt`, and Concluídos carries
+       `bg-green-lt`, each showing its own count.
+     - Each column of the **tasks board** is exactly one task status, because that
+       board has one column per `TaskStatus` value (see
+       [Roadmap Tasks Page](#roadmap-tasks-page)), so its count badge takes the
+       variant the task status table above assigns to that column's status.
+     - Each column of the **sprint board** groups a set of task statuses rather than a
+       single one — `WAITING` groups `BACKLOG` and `SPRINT`, `DOING` groups `DOING`
+       and `TESTING`, and `CLOSED` holds `COMPLETED` alone — so its count badge takes
+       the variant assigned to the **canonical status of the group**, the status a
+       task is normally in at that stage of the sprint: `SPRINT` for `WAITING`,
+       `DOING` for `DOING`, and `COMPLETED` for `CLOSED`. Why each group's canonical
+       status is the one named here is stated where that board is defined (see
+       [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Column header**).
+
+   **The discriminating test: has the counted group one status to key on?** The
+   mapping colours a count badge where the group it counts has one status value to key
+   on — whether the group has that status directly, as a sprint tab and a tasks board
+   column do, or through its canonical status, as a sprint board column does. Where
+   the counted group has no status at all, the badge stays neutral and this mapping
+   does not govern it.
+
+   Two count badges stay neutral under that test, and the rule above does not reach
+   either. The **Comments card header count** on the Roadmap Sprint Page counts
+   comments, and a comment carries no status of any kind (see
+   [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Comments card**), so
+   the tables above have nothing to key on and the badge carries the neutral
+   `bg-secondary-lt`. A count over a **group of mixed status for which no canonical
+   status is defined** stays neutral for the same reason: such a group has no one
+   status value, and colouring it would mean choosing a colour this mapping assigns to
+   nothing.
+
+   **Read the three tab colours as a set, never one at a time.** `PENDING` maps to
+   `bg-secondary-lt`, which is also the neutral variant a count badge carries when
+   nothing colours it, so the Próximos tab looks the same whether the mapping colours
+   it or not. Looking the same is not being correct: the Próximos badge conforms only
+   when its colour comes from the sprint status table, exactly as the other two do,
+   and on its own it demonstrates nothing about this rule. What separates a
+   conforming rendering from a non-conforming one is that Actual carries `bg-blue-lt`
+   and Concluídos carries `bg-green-lt`; a rendering that gives all three tabs
+   `bg-secondary-lt` conforms on none of them.
+
+   The same trap sits on the tasks board, where `BACKLOG` maps to `bg-secondary-lt`:
+   that column's count badge renders identically whether the mapping colours it or
+   not, so the board's five column badges are read together and never one at a time.
+
+   The mapping governs the colour of those three kinds of value only — task and
+   sprint status, `priority`, and `severity` — whether the badge writes the value that
+   colours it or counts a group that has that value. It governs no other badge. The
+   comment-type badge shown in the task detail modal and the sprint Comments card is
+   deliberately outside it and uses the neutral `bg-secondary-lt` variant for every
+   type value (see [Task Detail Modal](#task-detail-modal)), and every count badge the
+   discriminating test leaves out is outside it as well and stays governed by the
+   section that defines it.
 3. **No new enum value.** The mapping introduces no status, priority, or severity
    value that is not already defined in `MODELS.md` and `STATE_MACHINE.md`. Should a
    new enum value or a revised band be introduced there, this table is updated in the
@@ -2028,7 +4241,9 @@ Rules:
    navigation.
 6. **Touch and small-viewport configuration.** D3.js supports touch gestures. The
    visualisation and its container MUST be configured to be touch- and
-   small-viewport-friendly: the container is fluid and fits the viewport, and the
+   small-viewport-friendly: the container is fluid and fits the viewport, ending
+   within it as a full-height page region (see
+   [Full-Height Page Regions](#full-height-page-regions)), and the
    visualisation supports touch pan, pinch-to-zoom, and tap to select and inspect,
    so node and edge detail can be reached without a mouse hover (see
    [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)). The
@@ -2052,23 +4267,31 @@ experience is the baseline that larger viewports enhance.
    through `min-width` media queries, so the unqualified styles are the
    small-screen styles and wider screens progressively enhance them.
 2. **Fluid layouts.** Layouts adapt fluidly across viewport sizes. On small
-   screens there is no horizontal scrolling, typography stays readable, and
-   navigation and other interactive controls present touch-friendly, appropriately
-   sized hit targets.
+   screens the page produces no horizontal scrolling — `<body>` never overflows
+   horizontally at any viewport width — typography stays readable, and navigation
+   and other interactive controls present touch-friendly, appropriately sized hit
+   targets. A component that deliberately scrolls horizontally **inside its own
+   container**, such as the Kanban board on the roadmap tasks page (rule 9) or the
+   member-tasks board on the roadmap sprint page (rule 10), is not page-level
+   horizontal overflow and is permitted; the prohibition is on the page itself
+   scrolling horizontally.
 3. **Applies to every page.** The mobile-first, responsive requirement applies to
    every page: the roadmap index page, the roadmap sprints page (the sprint tabs),
-   the roadmap tasks page (the full task table), the roadmap sprint page, the
+   the roadmap tasks page (the Kanban task board), the roadmap sprint page, the
    roadmap audit log page (the audit table), and the knowledge-graph page.
 4. **Usable tabular data on narrow screens.** The roadmap sprints page, the
-   roadmap tasks page, the roadmap sprint page, and the roadmap audit log page
-   present sprint, task, and audit data
-   that is tabular by nature. This data MUST remain usable on narrow screens, for
+   roadmap sprint page, and the roadmap audit log page present sprint and audit data
+   that is tabular by nature — among it the sprint metadata datagrid and the audit
+   table. This data MUST remain usable on narrow screens, for
    example through responsive or stacked tables or an equivalent layout that
-   avoids horizontal overflow, while still presenting the fields and relationships
+   avoids page-level horizontal overflow, while still presenting the fields and
+   relationships
    defined for those pages (see [Roadmap Sprints Page](#roadmap-sprints-page),
-   [Roadmap Tasks Page](#roadmap-tasks-page),
    [Roadmap Sprint Page](#roadmap-sprint-page), and
-   [Roadmap Audit Log Page](#roadmap-audit-log-page)).
+   [Roadmap Audit Log Page](#roadmap-audit-log-page)). Neither page presents its
+   tasks as a table: the roadmap tasks page presents them as a Kanban board, which
+   rule 9 governs, and the roadmap sprint page presents its member tasks as a board
+   as well, which rule 10 governs.
 5. **Touch- and small-viewport-usable sprint tabs and task modal.** The three
    sprint tabs on the roadmap sprints page (Próximos, Actual, Concluídos) and the
    task detail modal MUST remain usable on touch input and on small viewports. The
@@ -2080,7 +4303,9 @@ experience is the baseline that larger viewports enhance.
    [Task Detail Modal](#task-detail-modal)).
 6. **Touch- and mobile-usable graph visualisation.** The interactive
    knowledge-graph visualisation MUST remain usable on touch and mobile devices.
-   Its container is fluid and fits the viewport, and it supports touch gestures —
+   Its container is fluid and fits the viewport, ending within it as a full-height
+   page region (see [Full-Height Page Regions](#full-height-page-regions)), and it
+   supports touch gestures —
    pan, pinch-to-zoom, and tap to select and inspect — so node and edge detail can
    be reached without a mouse hover (see
    [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library)).
@@ -2098,6 +4323,46 @@ experience is the baseline that larger viewports enhance.
    section intact; on small viewports the admin-shell navigation sidebar
    collapses to an off-canvas (hamburger) menu so the pages stay usable without
    horizontal overflow on phones.
+9. **Usable Kanban board on narrow screens.** The roadmap tasks page presents its
+   tasks as a board of five fixed columns side by side (see
+   [Roadmap Tasks Page](#roadmap-tasks-page)). When the five columns do not fit the
+   viewport, the board scrolls horizontally inside its own container, and the page
+   itself still does not scroll horizontally (rule 2). Each column scrolls
+   vertically and independently when its card list exceeds the available height,
+   which is the height the board takes as a full-height page region — the space the
+   page body leaves, measured against the viewport the browser is showing at that
+   moment (see [Full-Height Page Regions](#full-height-page-regions)). On
+   narrow viewports the board MUST remain usable: each column keeps a minimum width
+   at which its cards stay legible, the horizontal board scroll is reachable by a
+   touch gesture, and the cards and their badges present touch-friendly hit targets
+   that open the read-only task detail modal (see
+   [Task Detail Modal](#task-detail-modal)). The page header's search input and its
+   three filter dropdowns are likewise usable on a narrow viewport: they fit the
+   header's actions column without page-level horizontal overflow, wrapping within
+   that column rather than forcing the page to scroll horizontally, and each
+   presents a touch-friendly target.
+10. **Usable member-tasks board on narrow screens.** The roadmap sprint page
+   presents the sprint's member tasks as a board of three fixed columns side by
+   side (see [Sprint Detail Sub-Template](#sprint-detail-sub-template)). When the
+   three columns do not fit the viewport, the column strip scrolls horizontally
+   inside its own container and the page itself still does not scroll horizontally
+   (rule 2). Each column scrolls vertically and independently when its cards exceed
+   the board's height, which is a bounded length and **not** the space the page body
+   leaves, because the sprint page places the Sprint details card above the board
+   and the Comments card below it (see
+   [Full-Height Page Regions](#full-height-page-regions)). On narrow viewports the
+   board MUST remain usable on the same terms as the tasks page's board: each column
+   keeps a minimum width at which its cards stay legible, the horizontal strip
+   scroll is reachable by a touch gesture, and the cards and their badges present
+   touch-friendly hit targets that open the read-only task detail modal (see
+   [Task Detail Modal](#task-detail-modal)). The board's height is `60vh` with a
+   floor read from the `--full-height-region-floor` custom property. Its three
+   columns divide the board's width equally and grow with the viewport, never
+   falling below the tasks board's own `17rem` minimum and separated by that board's
+   `0.75rem` gap, so every length is viewport-relative or in `rem` and scales with
+   the screen and with the reader's own text size rather than fixing the layout to
+   one device (see [Sprint Detail Sub-Template](#sprint-detail-sub-template),
+   **Height and scrolling**).
 
 ## Error Handling and Exit Codes
 
@@ -2133,7 +4398,7 @@ Rules:
    bind failure; the process binds an ephemeral port instead and starts normally.
 4. Once the server is serving, per-request failures (roadmap not found, corrupt
    graph store, read error) are handled inside the running server as HTTP status
-   responses (404, 405, 500) and do **not** terminate the process. The process
+   responses (400, 404, 405, 500) and do **not** terminate the process. The process
    exit code is determined by how the server itself is started and stopped.
 5. Errors written to stderr by `rmp web` carry the standard AI-agent hint and
    follow the plain-text error format in `HELP.md § Error message format`.
@@ -2199,14 +4464,23 @@ Rules:
    fully offline, and the server makes no outbound network request (see
    [Self-Contained Deliverable](#self-contained-deliverable) and
    [Frontend and Embedded Assets](#frontend-and-embedded-assets)).
-7. **Output escaping.** Roadmap-derived text (task and sprint fields, including
-   the task fields shown in the task detail modal, task and sprint comment bodies,
-   and graph node and edge labels
-   and property values) is rendered through `html/template`'s contextual
+7. **Output escaping.** Roadmap-derived text (task and sprint fields, task and
+   sprint comment bodies, and graph node and edge labels
+   and property values) that the server renders into a page is rendered through
+   `html/template`'s contextual
    auto-escaping, so data that contains HTML control characters cannot alter page
-   structure. Task data and comment data carried to the page as a JSON data island
-   for the task detail modal, and graph data delivered as JSON to the
-   visualisation, are encoded as JSON, not interpolated into HTML.
+   structure. Data delivered as JSON instead — the task detail endpoint's task and
+   comment data, and the graph data delivered to the visualisation — is encoded as
+   JSON and never interpolated into HTML.
+
+   Where a value reaches the browser as JSON, the server's auto-escaping no longer
+   protects the page, so the client script MUST write every such value into the DOM
+   through `textContent` or an equivalent that cannot interpret markup, and MUST
+   NOT use `innerHTML` or `insertAdjacentHTML`. This applies to every value the
+   task detail modal renders and to every value the graph detail panel renders (see
+   [Task Detail Modal](#task-detail-modal), **Client-side rendering is text-only**,
+   and [Frontend Rules](#frontend-rules), rule 6). A stored value can therefore
+   alter neither page structure on the server-rendered path nor on the JSON path.
 8. **Security headers on every HTML response.** Every HTML response carries the
    Content-Security-Policy, X-Content-Type-Options (`nosniff`), X-Frame-Options
    (`DENY`), and Referrer-Policy (`same-origin`) headers specified in
@@ -2217,12 +4491,20 @@ Rules:
    HTML-safe JSON (`<`, `>`, and `&` serialized as Unicode escape sequences), so
    roadmap-derived graph text cannot break an HTML or script context (see
    [Graph Data Endpoint](#graph-data-endpoint)).
-10. **No directory listings; bounded connection timeouts.** The static handler
-   never serves a directory listing: a request for a directory under `/static/`
-   returns HTTP `404` (see [Static Assets](#static-assets)). The HTTP server is
-   configured with explicit ReadHeaderTimeout, WriteTimeout, and IdleTimeout values
-   so a slow or idle client cannot exhaust server resources (see
-   [HTTP Server Timeouts](#http-server-timeouts)).
+10. **No directory listings; bounded connection timeouts and a bounded graph
+   query.** The static handler never serves a directory listing: a request for a
+   directory under `/static/` returns HTTP `404` (see
+   [Static Assets](#static-assets)). The HTTP server is configured with explicit
+   ReadHeaderTimeout, WriteTimeout, and IdleTimeout values so a slow or idle client
+   cannot exhaust server resources (see
+   [HTTP Server Timeouts](#http-server-timeouts)). Those three timeouts bound the
+   connection and not the work a request causes, so the one route that executes
+   caller-supplied input — the graph data endpoint — additionally bounds that work
+   with a per-request query time budget of 5 seconds, after which the query is
+   cancelled and the page shows the existing query-execution-failure message (see
+   [Graph Query Time Budget](#graph-query-time-budget)). Without that budget a
+   single `GET` could hold the server for as long as the caller's query took to
+   run, because the injected node limit bounds the result and not the work.
 11. **No stale data; `no-store` on data-derived responses.** Every data-derived
    response (the roadmap index page, the roadmap sprints page, the roadmap tasks
    page, the roadmap sprint page, the roadmap audit log page, the knowledge-graph
@@ -2271,19 +4553,26 @@ Rules:
    the sprint description, and a footer task count) and each card links to the
    sprint's own page. The OPEN sprint under
    Actual is shown with the same card as the other sprints and is not expanded into
-   an inline member-tasks table or per-task modals, using the fields and
+   an inline member-tasks board or per-task modals, using the fields and
    relationships defined in `MODELS.md` and `DATABASE.md`. The page does **not**
-   render the full tasks table, and it contains no form, button, or link that
+   render the roadmap's task board, and it contains no form, button, or link that
    submits a change.
 9. `GET /roadmaps/{name}/tasks` for an existing roadmap returns HTTP 200 and an
-   HTML page that renders the roadmap's full task table — every task, of any
-   status — with the fields and relationships defined in `MODELS.md` and
-   `DATABASE.md`. This is a distinct endpoint from the sprints page. Each task row
-   is clickable and opens a working read-only task detail modal, and the page
-   contains no form, button, or link that submits a change. `GET /roadmaps/{name}/tasks`
+   HTML page that renders every task of the roadmap, of any status, as a **Kanban
+   board**, using the fields and relationships defined in `MODELS.md` and
+   `DATABASE.md`. This is a distinct endpoint from the sprints page. The page
+   renders **no** task table and offers no table view of the tasks: the board is
+   the page's only task presentation, and a task's full field set is reached
+   through the task detail modal a card opens. The page contains no form, button,
+   or link that submits a change. `GET /roadmaps/{name}/tasks`
    for a non-existent roadmap, or a request whose `{name}` violates the
    roadmap-name rules, returns HTTP 404 without touching the filesystem outside
-   `~/.roadmaps/`.
+   `~/.roadmaps/`. Acceptance Criteria 81 to 92 define the board itself,
+   Acceptance Criterion 93 fixes the modal trigger on every surface that shows a
+   clickable task, Acceptance Criteria 94 to 99 fix the task detail endpoint that
+   fills the modal, Acceptance Criteria 100 to 107 fix the header search, and
+   Acceptance Criteria 112 to 117 fix the header's type, priority, and severity
+   filters.
 10. `GET /roadmaps/{name}` for a non-existent roadmap returns HTTP 404, and a
     request whose `{name}` violates the roadmap-name rules (for example
     `../etc`) returns HTTP 404 without touching the filesystem outside
@@ -2301,7 +4590,7 @@ Rules:
     sprint `Order`; every `CLOSED` sprint appears under Concluídos ordered by
     descending sprint `Order` (highest `Order`, the last in execution order,
     first). The OPEN sprint under Actual is shown with the same card as the other
-    tabs and is not expanded into an inline task table or per-task modals. A tab
+    tabs and is not expanded into an inline member-tasks board or per-task modals. A tab
     with no matching sprint shows a clear empty-state message.
 13. On the roadmap sprints page, every sprint card in any tab shows a header
     presenting the sprint `title` together with `Sprint #<ID>` and a status badge,
@@ -2312,24 +4601,31 @@ Rules:
     HTTP 200 and an HTML page showing all details of that sprint (id, status,
     `title`, description, execution `order`, capacity `max_tasks`, `created_at`,
     `started_at`, `closed_at`, and
-    `task_count`) and the sprint's task list in `sprint_tasks` order (the planned
-    in-sprint execution order); the page header presents the sprint `title`
+    `task_count`) and the sprint's member tasks as a three-column board whose
+    `WAITING` column follows the `sprint_tasks` order (the planned
+    in-sprint execution order) while its `DOING` and `CLOSED` columns lead with the
+    most recently started and the most recently closed task respectively; the page
+    header presents the sprint `title`
     alongside `Sprint #<ID>`, and the sprint metadata datagrid shows the sprint
     `Title` and the execution `Order` in addition to the ID, Status, Capacity,
     Tasks, Created, Started, and Closed fields; the page contains no form, button,
     or link that submits a change. A request whose `{id}` is not a valid integer, or is an
     integer that is not a sprint of the named roadmap, returns HTTP 404, and a
     request whose `{name}` is invalid or nonexistent returns HTTP 404.
-15. Clicking a task anywhere it is shown clickable — the tasks page's task table
-    and the sprint page's task list — opens a modal
+15. Clicking a task anywhere it is shown clickable — the board cards of the tasks
+    page and the board cards of the sprint page — opens a modal
     popup that displays all of that task's fields (`id`, `title`, `status`, `type`,
     `priority`, `severity`, `functional_requirements`, `technical_requirements`,
     `acceptance_criteria`, `specialists`, `completion_summary`, `parent_task_id`,
     `subtask_count`, `depends_on`, `blocks`, `created_at`, `started_at`,
-    `tested_at`, `closed_at`). The modal is read-only: it contains no form, no edit
-    control, and no submit action, and it triggers no new server request and no new
-    write path. The modal and the sprint tabs are usable on touch input and on a
-    small phone-sized viewport.
+    `tested_at`, `closed_at`). The page carries one modal element, not one per
+    task, and opening a task fetches that task's fields and comments from
+    `GET /roadmaps/{name}/tasks/{id}/data` to fill it. The modal is read-only: it
+    contains no form, no edit
+    control, and no submit action, and it opens no
+    write path. The modal opens from the pointer, from touch, and from the keyboard
+    on every surface that shows a clickable task, and the modal and the sprint tabs
+    are usable on touch input and on a small phone-sized viewport.
 16. The admin-shell sidebar's per-roadmap links target the four distinct endpoints:
     the Sprints link points to `/roadmaps/{name}` (the landing page), the Tasks
     link points to `/roadmaps/{name}/tasks`, the Audit link points to
@@ -2392,21 +4688,31 @@ Rules:
 27. On a small phone-sized viewport, the roadmap index page, the roadmap sprints
     page, the roadmap tasks page, the roadmap sprint page, the roadmap audit log
     page, and the knowledge-graph
-    page each render without horizontal scrolling, with readable typography and
-    touch-friendly hit targets, demonstrating the mobile-first base styles.
-28. On the roadmap sprints page, the roadmap tasks page, the roadmap sprint
-    page, and the roadmap audit log page at a narrow viewport, the sprint, task,
-    and audit data remains usable without
+    page each render without page-level horizontal scrolling — `<body>` produces no
+    horizontal overflow — with readable typography and
+    touch-friendly hit targets, demonstrating the mobile-first base styles. The
+    horizontal scroll the tasks page's Kanban board performs inside its own
+    container is not page-level overflow and does not violate this criterion (see
+    Acceptance Criterion 88), and neither is the horizontal scroll the sprint page's
+    member-tasks board performs inside its own container (see Acceptance
+    Criterion 136).
+28. On the roadmap sprints page, the roadmap sprint page, and the roadmap audit
+    log page at a narrow viewport, the sprint and audit data remains usable without
+    page-level
     horizontal overflow (for example through responsive or stacked tables or an
     equivalent layout) while still showing the fields and relationships defined for
-    those pages.
+    those pages. Neither page presents its tasks as a table: the roadmap tasks page
+    presents them as a board, whose narrow-viewport behaviour Acceptance
+    Criterion 88 covers, and the roadmap sprint page presents its member tasks as a
+    board, whose narrow-viewport behaviour Acceptance Criterion 136 covers.
 29. Every HTML page the interface serves includes the responsive viewport meta
     tag, and no page loads a CSS framework or reset from a remote origin; the
     Tabler CSS framework in use is vendored and served from `/static/...`.
 30. Every page renders in the Tabler admin-shell layout — a navigation sidebar
     (listing the roadmaps and, within a roadmap, that roadmap's Sprints, Tasks,
-    Audit, and Graph views), a top navbar, and a page header — using Tabler cards,
-    tables, and badges, and the interface renders in Tabler's dark theme.
+    Audit, and Graph views), a top navbar naming the selected roadmap, and a page
+    header — using Tabler cards, tables, and badges, and the interface renders in
+    Tabler's dark theme.
 31. On a small phone-sized viewport, the admin-shell navigation sidebar is not
     shown expanded inline; it collapses to an off-canvas (hamburger) menu that the
     user can open, so each page stays usable without horizontal overflow.
@@ -2452,24 +4758,27 @@ Rules:
     sprints use identical card markup. The OPEN sprint under the Actual tab is shown
     with the same card as the other sprints: it shows the header (`Sprint #<ID>`
     with a status badge), the sprint description, and the footer task count, and it
-    is not expanded into an inline sprint metadata datagrid, member-tasks table, or
+    is not expanded into an inline sprint metadata datagrid, member-tasks board, or
     per-task modals on the sprints page. The full sprint detail block (sprint status
-    summary line, metadata datagrid, member-tasks table, and Comments card) is shown
+    summary line, metadata datagrid, member-tasks board, and Comments card) is shown
     only on the single Roadmap Sprint Page (see
     [Shared Sprint-Card Partial](#shared-sprint-card-partial) and
     [Sprint Detail Sub-Template](#sprint-detail-sub-template)).
 39. At the top of the full sprint presentation on the single Roadmap Sprint Page, a
     sprint status summary line is shown in the
     exact format `<pct>% - P:<p> A:<a> C:<c> - T:<t>` (for example
-    `69% - P:8 A:3 C:18 - T:55`), where `<pct>` is the completion percentage
+    `33% - P:8 A:29 C:18 - T:55`), where `<pct>` is the completion percentage
     (`COMPLETED` tasks divided by total tasks, rounded to the nearest integer
     percent, and `0%` when the sprint has no tasks), `P` is the count of the
     sprint's tasks in `BACKLOG` or `SPRINT`, `A` is the count in `DOING` or
     `TESTING`, `C` is the count in `COMPLETED`, and `T` is the sprint's total task
-    count; every value counts only the sprint's own member tasks. For a sprint
-    with, for example, 55 member tasks of which 8 are pending, 3 in progress, and
-    18 completed (with the remaining 26 in other statuses), the line reads
-    `33% - P:8 A:3 C:18 - T:55` (18 of 55 completed rounds to 33%).
+    count; every value counts only the sprint's own member tasks. `P`, `A`, and `C`
+    partition the sprint's tasks and therefore always sum to `T`: the three
+    categories cover all five values of the task status enum, and `tasks.status`
+    admits no sixth value (`MODELS.md § Enums` and `DATABASE.md § tasks Table`). For
+    a sprint with, for example, 55 member tasks of which 8 are pending, 29 are in
+    progress, and 18 are completed, the line reads
+    `33% - P:8 A:29 C:18 - T:55` (18 of 55 completed rounds to 33%).
 40. Every sprint card under any tab of the roadmap sprints page — Próximos, Actual,
     and Concluídos — displays that sprint's total number of tasks in its footer.
 41. When `rmp web` starts against a roadmap whose on-disk `project.db` is at an
@@ -2547,20 +4856,29 @@ Rules:
     backtick-quoted identifier does not trip the rejection: for example
     `MATCH (m) WHERE m.title = "mentions delete and set" RETURN m` is accepted as
     read-only and executes, while `MATCH (n) DELETE n` is rejected and does not
-    execute (see [Graph Data Endpoint](#graph-data-endpoint),
+    execute. The rejected request is answered HTTP `400 Bad Request` with a JSON
+    body whose `kind` is `not_read_only` (see
+    [Graph Data Endpoint](#graph-data-endpoint),
     [Query-Bar Error Handling](#query-bar-error-handling), and
     `GRAPH.md § Literal-Aware Normalization`).
 48. The endpoint applies the node limit by appending `LIMIT <n>` only when the
-    user's query does not already contain a top-level `LIMIT`: a request whose `q`
-    has no top-level `LIMIT` returns at most the resolved limit's worth of results
-    (the dropdown value, or `100` when `limit` is absent), while a request whose `q`
-    already contains its own top-level `LIMIT` keeps that `LIMIT` and the dropdown
-    value is not applied. The existing-`LIMIT` detection runs on the masked
-    normalization, so a `LIMIT` keyword appearing only inside a string literal, a
-    comment, or a backtick-quoted identifier does not count as an existing top-level
-    `LIMIT` and does not suppress injection. A `limit` parameter that is not one of
-    the six allowed values is rejected as an invalid limit and the query is not
-    executed; the page surfaces a clear invalid-limit message (see
+    user's query both lacks a top-level `LIMIT` of its own and is a statement form
+    that admits a `LIMIT` clause (Acceptance Criterion 111 covers the forms that do
+    not): a request whose `q` has no top-level `LIMIT` returns at most the resolved
+    limit's worth of results (the dropdown value, or `100` when `limit` is absent),
+    while a request whose `q` already contains its own top-level `LIMIT` keeps that
+    `LIMIT` and the dropdown value is not applied. The existing-`LIMIT` detection
+    runs on the masked normalization, so a `LIMIT` keyword appearing only inside a
+    string literal, a comment, or a backtick-quoted identifier does not count as an
+    existing top-level `LIMIT` and does not suppress injection. The injected clause
+    is separated from the query by a newline, never by a space, so a query whose
+    last line ends in a line comment (`MATCH (n) RETURN n //`) still has the limit
+    applied: the comment does not swallow the injected clause, and the endpoint
+    does not return the whole graph. A `limit` parameter that is not one of the six
+    allowed values is rejected
+    as an invalid limit and the query is not executed; the request is answered
+    HTTP `400 Bad Request` with a JSON body whose `kind` is `invalid_limit`, and
+    the page surfaces a clear invalid-limit message naming the rejected value (see
     [Graph Data Endpoint](#graph-data-endpoint) and
     [Query-Bar Error Handling](#query-bar-error-handling)).
 49. The endpoint builds the `{"nodes": [...], "edges": [...]}` response by walking
@@ -2580,7 +4898,9 @@ Rules:
     rejection, invalid limit, or execution failure — the message is shown in place,
     the page does not crash, and the failure triggers no write and no navigation,
     consistent with the graceful layout degradation; the user can edit the query or
-    change the limit and search again (see
+    change the limit and search again. All three failures are answered HTTP
+    `400 Bad Request`, and the body's `kind` is what tells them apart
+    (Acceptance Criterion 123; see
     [Query-Bar Error Handling](#query-bar-error-handling)).
 51. The labels sidebar shows an absolute total in each section header, derived
     client-side from the same already-fetched graph data as the per-entry
@@ -2669,7 +4989,7 @@ Rules:
     out-of-range or unparseable `page` value. When the audit log is empty, the page
     returns HTTP 200 with a clear empty-state message and shows page 1 of 1 (see
     [Roadmap Audit Log Page](#roadmap-audit-log-page)).
-59. The audit log page footer shows read-only Previous and Next navigation controls
+59. The audit card's footer shows read-only Previous and Next navigation controls
     and a "Page X of Y" indicator, using accessible Tabler pagination markup. The
     Previous control is disabled or absent on the first page and the Next control is
     disabled or absent on the last page. The controls are `GET` links that change
@@ -2684,8 +5004,9 @@ Rules:
     placed inside the card header (not a card title in the header with a separate
     `nav-tabs` list in the card body), tab activation uses Bootstrap's native tabs
     behaviour via `data-bs-toggle="tabs"`, and the three tabs (Próximos, Actual,
-    Concluídos) with their counts or badges and the default-active **Actual** tab are
-    preserved exactly as specified (see [UI Framework](#ui-framework), rule 9, and
+    Concluídos) with their count badges and the default-active **Actual** tab are
+    preserved exactly as specified, including the semantic colour of each tab's count
+    badge (Acceptance Criterion 120; see [UI Framework](#ui-framework), rule 9, and
     [Roadmap Sprints Page](#roadmap-sprints-page)).
 61. Every status, priority, and severity badge uses the semantically meaningful
     Tabler colour variant assigned to its value in
@@ -2698,22 +5019,33 @@ Rules:
     `bg-secondary-lt`; a severity in `8`-`9` renders `bg-red-lt`, `6`-`7` renders
     `bg-orange-lt`, `3`-`5` renders `bg-yellow-lt`, and `0`-`2` renders
     `bg-secondary-lt`. The same value maps to the same colour everywhere a badge for
-    it is shown — the tasks table, the sprint detail member-tasks table, the task
+    it is shown — the priority and severity badges on the tasks page's board cards
+    and on the cards of the sprint detail member-tasks board, the task
     detail modal, the sprint cards, the Roadmap Sprint Page header and metadata
-    datagrid, and the sprints-page tabs — and the mapping introduces no enum value
-    beyond those defined in `MODELS.md` and `STATE_MACHINE.md`.
+    datagrid, the sprints-page tabs, where the colour is the variant of the status
+    the tab groups while the badge text is that tab's sprint count (Acceptance
+    Criterion 120), and the per-column count badge of each of the two Kanban boards,
+    where the colour is the variant of the status the column groups while the badge
+    text is that column's task count (Acceptance Criterion 140) — and the mapping
+    introduces no enum value beyond those defined in `MODELS.md` and
+    `STATE_MACHINE.md`.
 62. No template carries a presentational inline `style="..."` attribute: all styling
     is provided by vendored Tabler classes and utilities or by the project override
-    stylesheet (`static/style.css`). In particular, the navigation sidebar's section
-    label uses Tabler's vertical-navbar subheader and `hr` divider idiom rather than
-    an inline-styled label, and the empty-state icon's sizing lives in a Tabler
-    utility class or in `static/style.css` rather than in an inline `style`
-    attribute (see [UI Framework](#ui-framework), rule 10).
+    stylesheet (`static/style.css`). In particular, the navigation sidebar's
+    per-roadmap section label is a Tabler `subheader` element preceded by a Tabler
+    `dropdown-divider` rule and aligned with the sidebar links by the `px-3` spacing
+    utility, rather than an inline-styled label, and the empty-state icon's sizing
+    lives in a Tabler utility class or in `static/style.css` rather than in an
+    inline `style` attribute. Every framework class name a template uses is present
+    in the vendored `tabler.min.css`: a search of the templates for `navbar-heading`
+    or for `navbar-divider` returns no match, and `static/style.css` carries no rule
+    whose selector targets a framework class the vendored distribution does not
+    define (see [UI Framework](#ui-framework), rule 10).
 63. The templates follow Tabler's markup idioms in the minor markup-fidelity places:
     page-header rows use Tabler's `row g-2 align-items-center` gutter and alignment
-    classes, the sidebar brand uses the Tabler
-    `<h1 class="navbar-brand navbar-brand-autodark">` element, and the footer follows
-    Tabler's footer row structure. These are markup-fidelity adjustments only: the
+    classes, and the sidebar brand uses the Tabler
+    `<h1 class="navbar-brand navbar-brand-autodark">` element. These are
+    markup-fidelity adjustments only: the
     read-only nature of the interface and the content shown are unchanged (see
     [UI Framework](#ui-framework), rule 11).
 64. The task detail modal renders the task's comments as a timeline placed after the
@@ -2733,8 +5065,8 @@ Rules:
     is unchanged (Acceptance Criterion 61 continues to hold).
 67. A task with no comments opens a modal that shows a clear empty-state message in
     place of the timeline, not an empty list and not a missing section.
-68. The Roadmap Sprint Page renders a Comments card after the member-tasks card, as
-    the last card of the sprint detail sub-template. It shows the sprint's own
+68. The Roadmap Sprint Page renders a Comments card after the member-tasks board,
+    as the last card of the sprint detail sub-template. It shows the sprint's own
     comments oldest first, in the same order `rmp sprint comment-list` returns, with
     a card header titled `Comments` carrying a badge with the comment count. A sprint
     with no comments still renders the card, showing an empty-state message in place
@@ -2742,12 +5074,23 @@ Rules:
 69. The sprint Comments card shows only the sprint's own comments. A comment written
     against a member task appears in that task's detail modal and nowhere in the
     Comments card, and no aggregate of task comments is presented at sprint level.
-70. Rendering a page with N clickable tasks issues exactly one query for the comments
-    of all N tasks, not N queries: an instrumented count of comment queries for a
-    tasks page or a sprint page is 1 for the task comments (plus 1 for the sprint's
-    own comments on the sprint page), independent of N. A page that renders no task
-    issues no task-comment query at all (see
-    `DATABASE.md § List Comments for Many Parents (Grouped)`).
+70. Rendering a page that shows N clickable tasks never issues one comment query per
+    task: an instrumented count of comment queries is independent of N on every such
+    page. On the tasks page the count is 1 — a single grouped **counting** query for
+    all N cards, and no comment-listing query at all, because the board shows counts
+    and no comment text (see
+    `DATABASE.md § Count Comments for Many Parents (Grouped)`). On the sprint page it
+    is 2, whatever N is: one listing query for that sprint's **own** comments, which
+    the Comments card renders in full as a log (see `DATABASE.md § Comments`), plus
+    one grouped **counting** query over the whole set of rendered member-task ids,
+    which is what gives each board card its comment number. The sprint page issues no
+    comment-listing query for a member task, so it reads the comment **body** of no
+    task it renders. A page that renders no task issues no task-comment query of
+    either kind: a sprint with no member task skips the grouped count entirely, while
+    still issuing the sprint's own comment listing, because the Comments card is
+    always present. A task's comment bodies are read only when a user opens
+    that task's modal, one task at a time (see
+    [Task Detail Endpoint](#task-detail-endpoint)).
 71. The comments timeline uses only the Tabler Timeline classes already present in
     the vendored `tabler.min.css` (`timeline`, `timeline-event`,
     `timeline-event-icon`, `timeline-event-card`). The feature adds no CSS file, no
@@ -2761,10 +5104,899 @@ Rules:
     body containing HTML control characters is rendered as text and cannot alter the
     page structure, in the modal and in the Comments card alike (see
     [Security and Constraints](#security-and-constraints)).
+74. Every page's admin shell places, inside `<div class="page">` and in this order,
+    the sidebar `<aside>`, the top `<header class="navbar ... d-print-none">`, and
+    `<div class="page-wrapper">`, which holds the page header and the page body. The
+    top `<header>` is a sibling of `<div class="page-wrapper">` and
+    is never nested inside it, which is the shape the vendored stylesheet's
+    `.navbar-vertical~.navbar` and `.navbar-vertical~.page-wrapper` offset rules
+    require. No page renders a `<footer>` element: the page body is the last region
+    inside `<div class="page-wrapper">` on every page, including the knowledge-graph
+    page (see [UI Framework](#ui-framework), rule 12).
+75. The sidebar's collapsible region carries `class="collapse navbar-collapse"` and
+    `id="sidebar-menu"`, is rendered as a `<nav>` element with `aria-label="Sidebar"`,
+    and lives inside the sidebar `<aside>`. Exactly one `navbar-toggler` in the
+    rendered page targets `#sidebar-menu`, and it lives inside that same `<aside>`;
+    the top navbar carries neither a second toggler for `#sidebar-menu` nor a second
+    brand, so each page renders exactly one `navbar-brand` element (see
+    [UI Framework](#ui-framework), rules 11 and 13).
+76. The active navigation entry is marked twice: its `<li class="nav-item">` carries
+    the `active` class and the `<a class="nav-link">` inside it carries
+    `aria-current="page"`. This holds for the sidebar's roadmap-index entry and for
+    the active view among a roadmap's Sprints, Tasks, Audit, and Graph links (see
+    [UI Framework](#ui-framework), rule 14).
+77. The audit log page's `<ul class="pagination">` list sits inside a `<nav>` element
+    carrying a descriptive `aria-label`. The pagination structure and behaviour
+    specified in Acceptance Criteria 58 and 59 are unchanged (see
+    [UI Framework](#ui-framework), rule 15, and
+    [Roadmap Audit Log Page](#roadmap-audit-log-page)).
+78. Every page header that carries actions emits its actions column as
+    `<div class="col-auto ms-auto d-print-none">` (see
+    [UI Framework](#ui-framework), rule 16).
+79. Every page carries `class="layout-fluid"` on `<body>` and uses `container-xl` for
+    its shell containers: the top navbar, the page header, and the page body. No
+    page container uses `container-fluid`; the only `container-fluid` in
+    the shell is the one inside the sidebar `<aside>`, which is Tabler's own
+    vertical-navbar markup (see [UI Framework](#ui-framework), rule 17).
+80. Every page renders its page body as `<main class="page-body">`, the element
+    Tabler's built admin shell uses, so each page exposes exactly one `main`
+    landmark holding that page's own content. No page renders the page body as a
+    `<div>` (see [UI Framework](#ui-framework), rule 18).
+81. The roadmap tasks page's Kanban board renders exactly five columns, one per
+    `TaskStatus` value, ordered left to right `BACKLOG`, `SPRINT`, `DOING`,
+    `TESTING`, `COMPLETED` — the order of the task state machine's flow. Each
+    column title is the status identifier in upper case, untranslated. The five
+    columns are fixed: all of them are rendered on every request, in that order,
+    whatever the roadmap's data contains, and neither the set of columns nor their
+    order varies with the data. The board renders no sixth column and no "other"
+    column, because `tasks.status` is restricted to those five values by a CHECK
+    constraint (see [Roadmap Tasks Page](#roadmap-tasks-page),
+    `MODELS.md § Enums`, `STATE_MACHINE.md § Task State Machine`, and
+    `DATABASE.md § tasks Table`).
+82. Every task of the roadmap appears on the board exactly once, as one card in the
+    column matching that task's `status`. No task is omitted and no task is
+    duplicated: for a roadmap with N tasks, the five column counts sum to exactly N,
+    and a task whose status changes appears only in the column of its new status on
+    the next request. This holds for every N, with no upper bound: the page's task
+    read carries no limit and no pagination, and the `rmp task list` display default
+    of `100` is not applied to it. For a roadmap holding more than 100 tasks the
+    board renders all of them and the column counts still sum to N, so no count the
+    page prints is ever a count of a truncated result (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Unbounded read**, and
+    `DATABASE.md § Main SQL Queries`, "List All").
+83. Each column header shows the status name together with a Tabler badge carrying
+    the number of tasks in that column. A column holding no task shows the count
+    `0`, and the count of each column equals the number of cards rendered in it.
+84. Within every column the cards appear in a deterministic order: descending
+    `priority`, and ascending `created_at` for tasks of equal priority — the default
+    `ListTasks` ordering (`ORDER BY priority DESC, created_at ASC`; see
+    `DATABASE.md § Main SQL Queries`, "List All"). Grouping the tasks into columns
+    preserves that relative order, so the cards of one column follow the same
+    relative order the page's read returned, and the board applies no second sort of
+    its own.
+85. Each card of the roadmap tasks page's Kanban board shows, in order: a reference
+    line carrying `#<id>` and the task's `type` as muted text with no colour applied
+    to the type; the task
+    `title` as the card's prominent main content; a `priority` badge reading `P`
+    immediately followed by the task's priority and a `severity` badge reading `S`
+    immediately followed by the task's severity, with no space and no separator
+    between the letter and the digits — a task of priority `5` and severity `3`
+    shows `P5` and `S3`, and a badge carrying the bare integer does not satisfy this
+    criterion — each coloured by the mapping in
+    [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours)
+    applied to the value alone and not to the prefixed text, so the prefix changes no
+    badge colour (Acceptance Criterion 61 continues to hold); and a metadata footer
+    listing only
+    the indicators the task actually has, among the sprint the task belongs to, its
+    `specialists`, its
+    `subtask_count`, its number of `depends_on` entries, its number of `blocks`
+    entries, and its number of comments. The card shows **no status badge**, because
+    the column already states the status. An indicator whose value is absent, empty,
+    or zero renders nothing at all — no dash and no placeholder — and a task with
+    none of the six indicators renders no metadata footer. That absent-metadata rule
+    is this board's own: the card of the sprint's member-tasks board is not governed
+    by it and always renders both of its counters (Acceptance Criterion 134). The
+    prefix belongs to the board card and to nothing else: the same task's `priority`
+    and `severity` in the
+    task detail modal render as the bare integer beside the field name that already
+    names it (Acceptance Criterion 15 continues to hold), and the card's accessible
+    name carries neither value and therefore carries no prefix (Acceptance Criterion
+    86 continues to hold).
+86. Selecting a board card opens the read-only task detail modal for that task,
+    which displays that task's full field set as specified in Acceptance Criterion
+    15. Opening the modal fetches that task's data from
+    `GET /roadmaps/{name}/tasks/{id}/data` and reaches no write path; that request
+    is made on demand, not while the page renders. The card is a
+    `<button type="button">`, so it is focusable and activatable natively: a
+    pointer click, a touch tap, Enter, and Space each open the modal, and no
+    JavaScript is added to make that work. The card carries no `tabindex` and no
+    `role="button"`, both redundant on a button, and its accessible name is
+    `Open details for task #<id>: <title>`, so a card can be opened without a
+    pointing device and can be named aloud by a speech-input user from the title it
+    displays (see [Roadmap Tasks Page](#roadmap-tasks-page) and
+    [Task Detail Modal](#task-detail-modal)).
+87. The board is read-only. It offers no drag-and-drop, and no control of any other
+    kind that moves a task between columns, reorders cards, changes a task's status,
+    or creates or edits a task or a column. The page contains no form, button, or
+    link that submits a change, and the `rmp` CLI remains the sole write path. This
+    is a deliberate divergence from the GitLab issue board the layout is modelled
+    on: the inspiration is structural (columns per state, cards, per-column counts)
+    and never interactive (see [Roadmap Tasks Page](#roadmap-tasks-page)).
+88. A column holding no task renders a clear, unobtrusive empty state inside the
+    column, in place of the card list, while the column, its title, and its `0`
+    count badge stay visible. A roadmap with no task at all returns HTTP 200 and
+    renders the board with all five columns present, each showing that in-column
+    empty state; the page never replaces the board with a page-level empty state and
+    never hides or drops a column. The five columns are presented side by side, and
+    when they do not fit the viewport the board scrolls horizontally inside its own
+    container while the page itself does not scroll horizontally (Acceptance
+    Criterion 27 continues to hold). Each column scrolls vertically and independently
+    when its card list exceeds the available height, which is the board's own height
+    and is fixed by Acceptance Criterion 124. On a narrow viewport each column
+    keeps a minimum width at which its cards stay legible, the horizontal board
+    scroll is reachable by a touch gesture, and the cards and badges present
+    touch-friendly hit targets (see
+    [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
+    rule 9).
+89. Rendering the tasks page for a roadmap with at least one task issues exactly
+    three reads: the roadmap's full task list, one grouped query returning the
+    comment **count** of every task rendered, and one grouped query that resolves
+    the sprint of every task rendered. The page reads no comment **body**: an
+    instrumented count of comment-listing queries for the tasks page is 0, and of
+    comment-counting queries is 1, independent of the number of tasks. For a
+    roadmap with no task the page issues the task-list read
+    only, and neither grouped query. Grouping the tasks into the five columns,
+    counting each column, and matching each card to
+    its sprint are performed in memory over the results already
+    read, so the board adds no further query — none per column and none per card —
+    and the query count is independent of the number of tasks, sprints, and columns
+    (see `DATABASE.md § Count Comments for Many Parents (Grouped)` and
+    `DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)`).
+90. The board's markup obeys the rules already in force and introduces no exception:
+    no template carries a presentational inline `style` attribute, and every class
+    the board emits is defined either in the vendored Tabler distribution or in the
+    project override stylesheet `static/style.css` (Acceptance Criterion 62 continues
+    to hold). The board reuses Tabler's own components where Tabler provides them —
+    Tabler cards for the task cards, the card-header idiom for the column headers,
+    Tabler badges for the counts and for the priority and severity values, and
+    Tabler's empty-state markup for an empty column — and the column strip's layout
+    and scrolling rules live in `static/style.css`, because the vendored distribution
+    ships no board or Kanban component. The page's admin shell and page header are
+    unchanged (Acceptance Criteria 74 to 76 and 78 to 80 continue to
+    hold; see [UI Framework](#ui-framework), rules 8 and 10).
+91. The card of a task that belongs to a sprint shows that sprint in its metadata
+    footer, identified by the sprint `title` together with `Sprint #<id>`, as plain
+    text and not as a link. It names exactly one sprint and never a list, because
+    `sprint_tasks.task_id` carries a `UNIQUE` constraint and a task therefore
+    belongs to at most one sprint. The card of a task that belongs to no sprint
+    shows no sprint indicator at all: no dash, no "None", and no empty slot. A task
+    with no sprint and none of the other five indicators renders no metadata footer
+    (Acceptance Criterion 85 continues to hold; see
+    [Roadmap Tasks Page](#roadmap-tasks-page), `MODELS.md § Sprint`, and
+    `DATABASE.md § Relationships`).
+92. Resolving the sprint of the rendered tasks issues exactly one query for the
+    whole set of rendered task ids, not one per task and not one per board column:
+    an instrumented count of sprint-resolution queries for a tasks page rendering N
+    tasks is 1, independent of N and of how many distinct sprints those tasks
+    belong to. A tasks page that renders no task issues no sprint-resolution query
+    at all. This is measured the same way Acceptance Criterion 70 measures the
+    comment-query count (see
+    `DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)`).
+93. On every surface that renders a clickable task, the element that opens the task
+    detail modal is a `<button>` in the served HTML, activatable by pointer, touch,
+    Enter, and Space. No modal trigger anywhere in the served HTML is a
+    `<div>` or a `<tr>` carrying `role="button"`, and none relies on `tabindex` to
+    be reachable in place of being activatable. On both boards the trigger is the
+    board card itself, rendered as `<button type="button">`: on the roadmap tasks
+    page and on the Roadmap Sprint Page alike. No `<tr>` in the served HTML is a
+    modal trigger or carries one, on any page.
+    Each trigger's accessible name is `Open details for task #<id>: <title>`,
+    carrying the task's `id` and its `title`, on both surfaces. In particular the
+    name contains the task title, which is the trigger's visible label on both
+    boards, so the accessible name contains the visible label
+    text, as WCAG 2.5.3 Label in Name (Level A) requires, and the control can be
+    activated by speech input by speaking the title that is displayed. An
+    accessible name carrying the `id` alone, such as `Open details for task #<id>`,
+    does not satisfy this criterion. The
+    property holds without any JavaScript being added: the page loads no script
+    beyond those it already loads from `/static/`, and the Content-Security-Policy
+    of Acceptance Criterion 33 is unchanged (see
+    [Task Detail Modal](#task-detail-modal),
+    [Roadmap Tasks Page](#roadmap-tasks-page), and
+    [Sprint Detail Sub-Template](#sprint-detail-sub-template)).
+94. `GET /roadmaps/{name}/tasks/{id}/data` for a task of an existing roadmap returns
+    HTTP 200 and JSON in the shape defined in `DATA_FORMATS.md § Task Detail Data`:
+    an object with exactly two members, `task` carrying that task's full field set
+    and `comments` carrying that task's comments, ordered oldest first — the same
+    order `rmp task comment-list` returns and the same order the modal's timeline
+    shows — with every comment present, no type filter and no count limit, and `[]`
+    for a task with no comment. The shape composes the `Task` and `Task Comment`
+    objects `DATA_FORMATS.md` already defines and introduces no new object shape
+    (see [Task Detail Endpoint](#task-detail-endpoint)).
+95. The task detail endpoint enforces the same path-parameter discipline as every
+    other roadmap route: a request whose `{name}` violates the roadmap-name rules,
+    or names a roadmap that does not exist, returns HTTP 404 without touching the
+    filesystem outside `~/.roadmaps/`; a non-integer `{id}` returns HTTP 404; and an
+    integer `{id}` that is a task of some other roadmap, or of no roadmap, returns
+    HTTP 404 rather than that task's data. The endpoint serves `GET` and `HEAD` only
+    and answers any other method with HTTP 405. Its response carries
+    `Cache-Control: no-store`, like every other data-derived response (Acceptance
+    Criterion 37 continues to hold).
+96. The served tasks page contains exactly **one** modal element, not one per task.
+    The document therefore no longer carries any task's modal content, and its size
+    does not grow with the per-task modal content: measured against the recorded
+    baseline of 930,188 bytes for 100 tasks — of which 774,484 bytes, 83 percent,
+    were the rendered modals — the document for the same 100 tasks is smaller by
+    substantially the whole of that modal share, and the remaining size grows only
+    with the cards. Opening a card fetches that task's data and fills the single
+    modal with every field the modal presented before, plus that task's comments in
+    the specified order: nothing the modal displayed is lost (see
+    [Task Detail Modal](#task-detail-modal)).
+97. Every value the modal script writes into the DOM is written as text, never as
+    markup: the script uses `textContent` or an equivalent that cannot interpret
+    markup, and uses neither `innerHTML` nor `insertAdjacentHTML`. A task whose
+    `title`, `completion_summary`, requirement free-text, or comment `body` contains
+    HTML markup renders that markup as visible characters and introduces no element,
+    no attribute, and no script into the page. This is proven by a test that fails if
+    the script writes such a value as markup, covering at least a hostile task title
+    and a hostile comment body (see [Task Detail Modal](#task-detail-modal),
+    **Client-side rendering is text-only**, and
+    [Security and Constraints](#security-and-constraints), rule 7).
+98. The Content-Security-Policy is unchanged by the task detail endpoint: it remains
+    exactly the value fixed in Acceptance Criterion 33, whose `connect-src 'self'`
+    and `script-src 'self'` already admit a same-origin fetch driven by a script
+    served from `/static/`. No inline script is introduced, every script the page
+    loads still comes from `/static/`, and the page makes no request to any origin
+    but its own (Acceptance Criteria 23 and 33 continue to hold).
+99. When the fetch for a task's data fails — a network error, a non-200 response, or
+    a body that does not parse — the modal opens and shows a clear error message in
+    place of the task's content, stating that the task's detail could not be loaded.
+    It does not stay blank, does not close silently, and does not leave the
+    previously opened task's data on display. The failure path writes nothing (see
+    [Task Detail Modal](#task-detail-modal), **Failure is visible in the modal**).
+100. The roadmap tasks page header carries a search input in its actions column and
+    **no** knowledge-graph link. The graph stays reachable from this page through
+    the admin-shell sidebar's Graph entry, which every page carries (Acceptance
+    Criterion 16 continues to hold), so removing the header link removes a duplicate
+    route to the graph and no access. The input has a programmatically associated
+    accessible label naming what it searches — a `placeholder` does not stand in for
+    that label — and is reachable and operable from the keyboard (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Header search control**).
+101. Typing a term narrows the board without a page reload, and every column count
+    equals the number of cards that column is then showing — the cards visible to
+    the user, not the cards present in the document. A task matches when the
+    term occurs, case-insensitively and as a substring, in that task's `title` or in
+    its `#<id>` reference written with the leading `#`; both `42` and `#42` therefore
+    find task 42. No other task field is matched: a term equal to a task's
+    `specialists` value, and matching nothing in that task's title or reference, does
+    not match it. Leading and trailing whitespace is stripped from the term by the
+    rule Acceptance Criterion 121 fixes, and a term that is empty or entirely
+    whitespace under that rule shows every task. The case-insensitive comparison
+    folds the term and the task's searchable text by the rule Acceptance
+    Criterion 118 fixes, so the same term and task yield the same verdict regardless
+    of the browser's reported locale, of the browser, and of the Unicode version
+    that browser's case and whitespace tables implement.
+102. A column left with no matching card renders its ordinary in-column empty state,
+    and the five columns stay present and in order — narrowing the board drops,
+    hides, and reorders no column (Acceptance Criterion 81 continues to hold). When
+    no task matches, the board states that no task matches the controls the board is
+    narrowed by — one message covering the term and the filters together — rather
+    than presenting five silently empty columns; that message is distinct from the
+    state of a roadmap that holds no task at all, which shows the in-column empty
+    states alone (Acceptance Criterion 88 continues to hold).
+103. The term travels in the `q` URL query parameter on `/roadmaps/{name}/tasks`. As
+    the user types, the page updates the URL in place, replacing the current history
+    entry rather than pushing one entry per keystroke. Clearing the search restores
+    every card and every unnarrowed count and **removes** `q` from the URL, leaving
+    no empty parameter behind.
+104. For any roadmap and any term, the board produced by typing that term into the
+    search control and the board produced by requesting the page URL carrying that
+    term in `q` are identical — the same cards, in the same columns, in the same
+    order, with the same column counts and the same empty states — asserted by
+    comparing the two. The document served for a cold load with `q` already carries
+    the narrowing in its final state — the narrowed column counts, the in-column
+    empty states, and the no-match message where applicable — and nothing on the
+    client applies the term after load. Non-matching cards **may** be present in
+    that document provided they arrive already marked as not visible and count
+    towards nothing the board states; their presence is what lets clearing the
+    search restore them without a request to the server, as Acceptance Criterion 103
+    requires. What is forbidden is a document that arrives unnarrowed and is
+    narrowed by a script after load. The identity holds for **every** term, the four
+    code points included on which a platform's own normalisation of a term differs
+    from the rules this specification fixes. Two of them are the case conversion's:
+    a term carrying `U+0130`, and a term carrying `U+03A3` where the full
+    conversion's Final_Sigma condition would hold, select the same cards on both
+    paths and in every browser (Acceptance Criteria 118 and 119). Two are the
+    trimming's, and they differ in opposite directions: a term whose first code
+    point is `U+0085` loses it on both paths and finds what the rest of the term
+    matches, and a term whose first code point is `U+FEFF` keeps it on both paths
+    and finds nothing on an ordinary roadmap. None of the four is a term one path
+    narrows by while the other ignores it (Acceptance Criteria 121 and 122).
+105. No `q` value produces an error page: a term matching nothing, a term longer than
+    any searchable text, and a `q` the server cannot decode each return HTTP 200,
+    the last treated as though `q` were absent. Applying a term adds no database
+    query: the page's read remains the full task list specified in Acceptance
+    Criterion 89, and narrowing in the browser issues no request at all. A task's
+    searchable text is folded once by the server, never by the client, and never
+    trimmed at all, so the two paths cannot disagree about a task's text; the term
+    is the only value both of them transform, and both trim it with the server's own
+    whitespace set and fold it with the server's own mapping (Acceptance Criteria
+    119 and 122).
+106. A term containing HTML markup renders as visible characters and introduces no
+    element, attribute, or script into the page: the server escapes it through
+    `html/template` where it echoes it into the search input and into the no-match
+    message, and the script writes it only as text, never through `innerHTML` or
+    `insertAdjacentHTML`. This is proven by a test that fails if the term is written
+    as markup (Acceptance Criterion 97 continues to hold for the modal, and rule 7 of
+    [Security and Constraints](#security-and-constraints) governs both).
+107. The search introduces no inline script and no Content-Security-Policy change:
+    the narrowing script loads from `/static/` like every other client script, and
+    the policy remains exactly the value fixed in Acceptance Criterion 33
+    (Acceptance Criteria 23 and 98 continue to hold). Every class the control emits
+    resolves in the embedded stylesheets and no template carries a `style` attribute
+    (Acceptance Criterion 62 continues to hold).
+108. The top navbar of every roadmap-scoped page — the roadmap's sprints page, a
+    sprint's own page, the tasks board, the audit log page, and the knowledge-graph
+    page — shows the name of the roadmap in the request path, rendered prominently
+    with the vendored Tabler `h3` type utility and with no glyph or other element
+    beside it, and a long name is truncated rather than wrapped or overflowing.
+    The roadmap index page, which belongs to no roadmap, renders that region
+    empty: no name and no placeholder text. No page's top navbar carries a badge,
+    label, or icon declaring the interface read-only. The name is HTML-escaped
+    through `html/template` like every other value, the markup uses only classes
+    the vendored Tabler distribution ships, and no template carries a `style`
+    attribute (Acceptance Criteria 62 and 63 continue to hold; see
+    [UI Framework](#ui-framework), rule 19).
+109. Every page's header title column is rendered by the shared page-header
+    partial: no page hand-writes a `page-pretitle` or a `page-title` element, and
+    the titles read exactly `Roadmaps`, `Sprints`, `Tasks`, `Audit`,
+    `Knowledge graph`, and — on a sprint's own page — that sprint's `title` with
+    its status badge, under the pretitle `Sprint #<ID>`. No page title contains the
+    roadmap name, which the shell already states in the sidebar and in the top
+    navbar. Each page's actions column carries only what
+    [Shared Page-Header Partial](#shared-page-header-partial) fixes: the tasks
+    page's search input and its three filter dropdowns, the knowledge-graph page's
+    layout dropdown, and the sprint page's link back to the roadmap's sprints page.
+    The sprints, audit, and index page headers carry no actions column, and no page
+    header links to the knowledge-graph page — Acceptance Criterion 100 held that
+    for the tasks page and now holds for every page.
+110. `GET /roadmaps/{name}/graph/data` executes the caller's query under a
+    5-second deadline derived from the request context. A query that would run for
+    longer is cancelled when the budget is exhausted instead of running to
+    completion: the request is answered as a query execution failure, and the page
+    shows the same "query failed to execute" message it shows for a query that
+    fails in the engine — distinct from the "query rejected: not read-only" message
+    of Acceptance Criterion 47 and from the invalid-limit message of Acceptance
+    Criterion 48. The request is answered HTTP `400 Bad Request` with `kind`
+    `execution`, the same status and the same kind a query that fails in the engine
+    receives, so no new HTTP status and no new exit code is introduced. This is
+    proven with a query whose work the node limit does not bound, such as an
+    aggregate over a Cartesian product (`MATCH (a),(b),(c) RETURN count(*)`), which
+    returns a single row and is therefore unaffected by the injected `LIMIT`. A
+    query that completes within the budget returns exactly the response it returned
+    before the budget existed, with nothing truncated and no ordering changed, and
+    a client that disconnects still cancels the query immediately. A cancelled
+    request writes nothing: the store is unchanged, no checkpoint runs, no
+    write-ahead log is truncated, and the server keeps serving later requests (see
+    [Graph Query Time Budget](#graph-query-time-budget)).
+111. `GET /roadmaps/{name}/graph/data` injects no node `LIMIT` into a statement form
+    that admits no `LIMIT` clause, and runs that form instead of failing it in the
+    parser. Two forms admit none: a schema-introspection command (`SHOW INDEXES`,
+    `SHOW INDEX`, `SHOW CONSTRAINTS`, or `SHOW CONSTRAINT`, with or without a
+    `YIELD`, `WHERE`, or `RETURN` tail) and a standalone procedure call (a statement
+    whose first clause is `CALL` and that has no top-level `RETURN`). A request
+    whose `q` is either form executes and succeeds; neither is answered with the
+    parse failure that appending a `LIMIT` to it produces. Both are classified
+    read-only by the guard rail and both run from `rmp graph query`, so the endpoint
+    is no stricter than the contract it publishes (see
+    [Graph Data Endpoint](#graph-data-endpoint) and
+    `GRAPH.md § Schema Introspection`). A `CALL` projected through a top-level
+    `RETURN` (`CALL ... YIELD ... RETURN ...`) is **not** a standalone call: it
+    admits a `LIMIT`, receives the injection, and returns at most the resolved
+    limit's worth of rows. The two forms are recognised on the masked
+    normalization and anchored to the start of the statement, so a `SHOW`, `CALL`,
+    or `RETURN` keyword inside a string literal, a comment, or a backtick-quoted
+    identifier, and a `CALL` nested inside a larger query, do not trigger
+    suppression. Every ordinary reading query is unaffected and keeps the behaviour
+    of Acceptance Criterion 48: a query with no top-level `LIMIT` still receives the
+    injection, a query with its own top-level `LIMIT` still keeps it, and a query
+    whose last line ends in a line comment still has the injected clause applied on
+    a new line. A suppressed query is not bounded by the node limit; it remains
+    bounded by the 5-second query time budget (see Acceptance Criterion 110 and
+    [Graph Query Time Budget](#graph-query-time-budget)).
+
+112. The roadmap tasks page header carries, beside the search input, exactly three
+    filter dropdowns in its actions column: a type filter offering the ten
+    `TaskType` values of `MODELS.md § Enums`, a minimum-priority filter offering the
+    thresholds `1` to `9`, and a minimum-severity filter offering the thresholds `1`
+    to `9`. Each dropdown offers a first option meaning no filter on that dimension,
+    and that option is selected whenever the dimension carries no filter. Each
+    dropdown carries a programmatically associated accessible label naming the
+    dimension it filters — neither that first option nor a `placeholder` stands in
+    for the label — and each is reachable and operable from the keyboard
+    (Acceptance Criterion 100 continues to hold for the search input). The header
+    offers **no** status filter, and no control of any kind narrows, drops, or
+    reorders the five columns; [Roadmap Tasks Page](#roadmap-tasks-page), **Why the
+    board offers no status filter**, records the four reasons for that omission, so
+    the absence is specified rather than merely unimplemented.
+113. Each filter narrows the board by its own dimension and every column count
+    equals the number of cards that column is then showing, as Acceptance Criterion
+    101 requires of the term. A task matches the type filter when its `type` is
+    **equal** to the selected value, compared exactly against the spelling in
+    `MODELS.md § Enums`; it matches the priority filter when its `priority` is
+    **greater than or equal to** the selected threshold, and the severity filter
+    when its `severity` is greater than or equal to the selected threshold. These
+    are the meanings `rmp task list` gives `-y, --type`, `-p, --priority`, and
+    `--severity` (see `COMMANDS.md § List Tasks`), so the same value selects the
+    same tasks on the board and on the command line. Each dimension carries at most
+    one value.
+114. The three filters combine **conjunctively**, with each other and with the
+    search term: the board shows exactly the tasks satisfying every active control,
+    and a board with no active control shows every task. A request
+    for `?q=cache&type=BUG&priority=7` shows the `BUG` tasks of priority `7` or
+    above whose `title` or `#<id>` reference contains `cache`, and no other task.
+    Activating a further control can only shrink the shown set; no control re-admits
+    a task another control excluded.
+115. A `type`, `priority`, or `severity` value the dimension does not accept applies
+    **no filter on that dimension** and returns HTTP 200 with the board rendered as
+    though that parameter were absent — never an error page and never a changed
+    status code. This holds for a `type` outside the ten `TaskType` values or
+    differing from one only in case, a `priority` or `severity` that is not an
+    integer or is an integer outside `1` to `9` (`0` included, a threshold of `0`
+    being no filter), a value carrying a sign or surrounding spaces, a parameter
+    present with an empty value, and a parameter the server cannot decode. The other
+    dimensions are unaffected: with an unusable `type` and an accepted `priority`,
+    the board is narrowed by the priority and by the term alone. A repeated
+    parameter (`?type=BUG&type=EPIC`) is read as its first occurrence; a
+    comma-packed value (`?type=BUG,EPIC`) is one string, matches no `TaskType`
+    value, and is therefore ignored whole — no filter is ever partly applied.
+116. Each active filter travels in its own URL query parameter on
+    `/roadmaps/{name}/tasks` — `type`, `priority`, `severity` — and a dimension on
+    its no-filter option leaves **no** parameter behind. Changing a dropdown updates
+    the URL in place, replacing the current history entry rather than pushing a new
+    one, exactly as Acceptance Criterion 103 requires of typing. For any roadmap and
+    any combination of a term and the three filters, the board produced by setting
+    those controls on the page and the board produced by requesting the URL carrying
+    the same values are identical — the same cards, in the same columns, in the same
+    order, with the same column counts and the same empty states — asserted by
+    comparing the two, and the document served for such a cold load already carries
+    the narrowing in its final state with each control showing the value that
+    produced it (Acceptance Criterion 104 continues to hold, including its treatment
+    of non-matching cards present but marked as not visible). Clearing every control
+    restores the full board with its true unnarrowed counts and leaves the bare page
+    URL, carrying none of the four parameters.
+117. The filters add no database query: the page's read remains the full task list
+    of Acceptance Criterion 89, a filter contributes no clause to it and no read of
+    its own, and narrowing in the browser issues no request at all. No filter value
+    is echoed into the page — the dropdown options are the server's own enumeration
+    of the enum and the range, and an unaccepted value selects the no-filter option
+    — so no caller-supplied string reaches the page through `type`, `priority`, or
+    `severity`. The filters introduce no inline script and no
+    Content-Security-Policy change: they are applied by the same `/static/` script
+    that applies the term, and the policy remains exactly the value fixed in
+    Acceptance Criterion 33 (Acceptance Criteria 23, 98, and 107 continue to hold).
+    Every class the dropdowns emit resolves in the embedded stylesheets, the select
+    control is one the vendored Tabler distribution already ships, and no template
+    carries a `style` attribute (Acceptance Criterion 62 continues to hold).
+118. The task's searchable text and the term are folded by Unicode's **simple
+    lowercase mapping**, applied to each code point on its own: unconditional, one
+    code point in and one code point out, and consulting no locale. It is **not**
+    Unicode's Default Case Conversion, and the two code points where the
+    conversions disagree resolve as this criterion states: `U+0130` folds to
+    `U+0069` and never to `U+0069 U+0307`, and `U+03A3` folds to `U+03C3` in every
+    position, word-final included, and never to `U+03C2`. Nothing is rewritten
+    after the mapping: a `U+03C2` in a term stays `U+03C2`, so a term of `οδός`
+    finds a task titled `οδός`, which a post-fold rewrite of `ς` to `σ` would stop
+    finding. ASCII and accented Latin fold letter for letter — `A` to `a`, `Á` to
+    `á` — and a term of `ΟΔΟΣ` finds a task titled `ΟΔΟΣ` on both paths. A term
+    whose bytes are not valid UTF-8 is folded with each invalid byte replaced by
+    `U+FFFD` and is then matched like any other term, being neither an error nor an
+    absent term (Acceptance Criterion 105 continues to hold; see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **The folding rule**).
+119. The client folds the term with the mapping the server ships to it and calls no
+    case conversion of the JavaScript platform: neither `toLowerCase` nor
+    `toLocaleLowerCase` appears in the narrowing script, asserted as an absence in
+    the script the binary serves, the way Acceptance Criterion 97 asserts the modal
+    script's markup sinks. The shipped mapping is compared against the server's own
+    folding function over the whole of Unicode — every code point, not a sample —
+    and against that function itself, never against a stored copy of its expected
+    results; the comparison fails when one code point folds differently on the two
+    sides, including when a toolchain upgrade changes a mapping. The server folds a
+    task's searchable text and folds a term through that one function, not through
+    two implementations of one description. The check is an ordinary Go test: it
+    runs no JavaScript and requires no JavaScript engine, no Node.js, no network
+    access, and no module dependency, so `BUILD.md § External Dependencies` and
+    `BUILD.md § Vendored Web Assets`, rule 2, continue to hold. Because the client
+    consults no case table of the browser's, the board a term produces does not
+    depend on which Unicode version the browser implements, and two browsers of
+    different Unicode versions produce the same board (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **One rule, and only one
+    implementation of it**, and **What keeps the shipped rule equal to the
+    server's**).
+120. Each of the three tabs on the Roadmap Sprints Page carries a Tabler badge whose
+    text is the number of sprints in that tab and whose colour is the variant the
+    sprint status mapping assigns to the status that tab groups: Próximos carries
+    `bg-secondary-lt` (the `PENDING` variant), Actual carries `bg-blue-lt` (`OPEN`),
+    and Concluídos carries `bg-green-lt` (`CLOSED`). The three tabs therefore do not
+    share one fixed colour. A tab that holds no sprint shows the count `0` and keeps
+    the colour of its status, because the colour follows the tab's status and not the
+    sprints in it. The check asserts all three tabs together, because only Actual and
+    Concluídos can make it fail: `PENDING` maps to `bg-secondary-lt`, which is also
+    the neutral colour a badge carries when nothing colours it, so the Próximos badge
+    renders identically whether the mapping colours it or not, and a check that
+    asserts Próximos alone passes without exercising the rule. The check fails on a
+    rendering that gives all three tabs `bg-secondary-lt` (see
+    [Roadmap Sprints Page](#roadmap-sprints-page) and
+    [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
+    rule 2).
+121. Before the term is folded, every code point carrying Unicode's **White_Space**
+    property is removed from the start of the term and from its end, and no other
+    code point is removed from anywhere: a code point carrying that property
+    elsewhere in the term survives and is matched literally, and a term made only of
+    such code points becomes the empty string and shows every task. Whitespace is
+    that property and **not** the set either platform's own trimming function
+    removes, and the two code points where those functions disagree resolve as this
+    criterion states, in opposite directions: `U+0085` (NEXT LINE) carries the
+    property and **IS** removed, although the JavaScript platform's own trimming
+    keeps it; `U+FEFF` (ZERO WIDTH NO-BREAK SPACE) does not carry the property and
+    is **NOT** removed, although that platform's own trimming removes it — so a term
+    pasted with a leading byte-order mark matches nothing on an ordinary roadmap,
+    and does so on **both** paths, which is the property this criterion protects
+    rather than a defect in it. Swept over every code point of Unicode, those two are the
+    whole of the difference: no third code point is removed by one trimming and kept
+    by the other. The term is trimmed **and then** folded, in that order, on both
+    paths. The task's searchable text is folded but never trimmed, so a task's own
+    leading or trailing whitespace is part of its text (Acceptance Criteria 101 and
+    104 continue to hold; see [Roadmap Tasks Page](#roadmap-tasks-page), **The trim
+    rule**).
+122. The client removes the term's leading and trailing whitespace by the whitespace
+    set the server ships to it and calls no trimming function of the JavaScript
+    platform: no call to `trim`, `trimStart`, `trimEnd`, or the legacy aliases
+    `trimLeft` and `trimRight` appears in the narrowing script, asserted as an
+    absence in the script the binary serves, the way Acceptance Criterion 119
+    asserts the platform's case conversions. The shipped set is covered by the
+    **same** check that criterion fixes and not by a second check beside it, and
+    with the same three properties: it is compared against the server's own
+    whitespace function over the whole of Unicode — every code point, not a sample —
+    and against that function itself, never against a stored copy of its expected
+    results; and the comparison fails when a single code point is whitespace to one
+    side and not to the other, including when a toolchain upgrade changes which code
+    points carry the property. The check remains an ordinary Go test: it runs no
+    JavaScript and requires no JavaScript engine, no Node.js, no network access, and
+    no module dependency, so `BUILD.md § External Dependencies` and
+    `BUILD.md § Vendored Web Assets`, rule 2, continue to hold. Because the client
+    consults no whitespace table of the browser's, the board a term produces does
+    not depend on which Unicode version the browser implements, exactly as
+    Acceptance Criterion 119 requires of the fold (Acceptance Criterion 121; see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **One rule, and only one
+    implementation of it**, and **What keeps the shipped rule equal to the
+    server's**).
+123. Every query-bar failure of `GET /roadmaps/{name}/graph/data` is answered with
+    HTTP `400 Bad Request` and a JSON body of exactly two string fields, `error`
+    and `kind`, and never with HTTP 200 and never with the
+    `{"nodes": ..., "edges": ...}` shape. `kind` takes exactly three values:
+    `not_read_only` for a query the read-only guard-rail rejected (Acceptance
+    Criterion 47), `invalid_limit` for a `limit` outside the six allowed values
+    (Acceptance Criterion 48), and `execution` for a query that failed once running,
+    which includes a query cancelled for exhausting the 5-second time budget
+    (Acceptance Criterion 110). One status serves all three and the `kind` is what
+    distinguishes them. The precedence is fixed and testable: a request carrying
+    both an invalid `limit` and a query that is not read-only is answered
+    `invalid_limit`, because the endpoint resolves the limit before it runs the
+    guard rail. The boundary against the internal read error is drawn at the moment
+    the failure surfaces: a graph store that fails to open is answered HTTP 500,
+    while a failure surfacing once the query is running is answered HTTP 400 with
+    `kind` `execution`, a store corruption a scan discovers mid-query included. The
+    `error` of an execution failure carries the engine's diagnostic and the page
+    renders it in place; the `error` of an invalid limit names the rejected value
+    (see [Query-Bar Error Handling](#query-bar-error-handling) and
+    `DATA_FORMATS.md § Graph View Data`, **Error Shape**).
+124. Each full-height page region — the Kanban board of the roadmap tasks page and
+    the graph card of the knowledge-graph page — satisfies **both** edges of
+    [Full-Height Page Regions](#full-height-page-regions), rule 1, when the page is
+    rendered in a browser: the region's bottom edge coincides with the bottom edge
+    of that page's `main.page-body` element, and that edge lies within the viewport,
+    with the document scrolling vertically no further than the viewport height. The
+    check measures both regions and asserts both edges, because either edge alone
+    passes on a defective layout, and each of the two regions demonstrates one of
+    those failures. A region that stops short of the page body's end leaves an
+    unused band beneath itself while remaining comfortably within the viewport, so a
+    check that asserts only the second edge accepts it. A region that overruns the
+    bottom of the viewport still ends exactly where the page body ends, because its
+    own overrun stretched the page body to that height, so a check that asserts only
+    the first edge accepts it too. A criterion phrased as the region "using the
+    available height", or as its height matching a particular length, establishes
+    neither edge: every height is the available height of some layout, and a length
+    is only ever correct for the page as it stood when the length was chosen.
+125. Acceptance Criterion 124 is checked at a set of viewport widths chosen so that
+    the roadmap tasks page header renders at more than one height — at a wide
+    viewport its search input and three filter dropdowns share a row with the page
+    title, and as the viewport narrows they wrap onto further rows (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Header search control** and
+    **Header filter controls**) — and both edges hold at every one of those widths.
+    Each of those widths is exercised at a viewport tall enough that the floor does
+    not bind: below the floor the region takes its minimum whatever the material
+    above it measures, so a check made there would record the floor instead of the
+    tracking these widths exist to vary, and what holds below the floor is
+    Acceptance Criterion 127's to state. This is what a height obtained by
+    subtracting a fixed length from the viewport height cannot pass: such a height
+    is correct at whichever width its length was chosen for and wrong at every
+    other, over-reserving where the page header is short and under-reserving where
+    it is tall, so a check made at a single width would accept it and leave the
+    defect in place. No full-height region reserves space for a page footer, and no
+    page renders a `<footer>` element (Acceptance Criterion 74 continues to hold;
+    see [UI Framework](#ui-framework), rule 12, and
+    [Full-Height Page Regions](#full-height-page-regions), rules 2 and 3).
+126. Each full-height page region's height is declared **twice** in the stylesheet
+    the binary serves, in this order: first against the large viewport height
+    (`vh`), then against the dynamic viewport height (`dvh`). The check asserts both
+    declarations **and** their order, and fails when either is removed or the two
+    are swapped. With the dynamic declaration alone, a browser that does not
+    implement the unit receives no viewport-derived height at all and the region
+    collapses to its content. With the large declaration alone, or with the large
+    one placed second, a mobile browser sizes the region as though the address bar
+    were retracted, so the end of the region sits below the fold for as long as the
+    bar is on screen and the second edge of Acceptance Criterion 124 fails on
+    exactly the devices the mobile-first requirement is written for. The order is
+    the whole mechanism — the later declaration wins where it is understood and is
+    discarded where it is not — so asserting that both units appear, without
+    asserting which comes second, does not establish it (see
+    [Full-Height Page Regions](#full-height-page-regions), rule 4, and
+    [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
+    rule 9).
+127. On a viewport short enough that the space the page body leaves falls below a
+    full-height region's minimum height, the region takes that minimum rather than
+    shrinking to the space available, and the vertical page scrolling that follows
+    is permitted. Below the floor **neither** edge of Acceptance Criterion 124 is
+    guaranteed. The second edge does not hold on either region: the floored region
+    is what the page scrolls vertically to reach. The first edge does not hold
+    either wherever the page renders an element above the region inside the same
+    container, because the page body is held to the same minimum as the region and
+    must then carry that element and the floored region together, so the region's
+    foot passes the page body's foot by the space the element occupies. The
+    knowledge-graph page always renders such an element: its query bar sits between
+    the top of the page body and the graph card (see
+    [Graph Query Bar](#graph-query-bar)). The roadmap tasks page renders one
+    whenever its controls match no task, the no-match message then standing above
+    the board (see [Roadmap Tasks Page](#roadmap-tasks-page), **Empty states**). No
+    stylesheet closes that gap: closing it would take a page-body floor of the
+    region's floor plus the height of the element above it, which is the fixed
+    subtraction [Full-Height Page Regions](#full-height-page-regions), rule 3,
+    forbids, and that height is no constant — the query bar stacks its own controls
+    as the viewport narrows and the no-match message wraps — so a length chosen for
+    one viewport width is wrong at the rest. Above the floor, which is every
+    viewport height at which the region is worth presenting at all, both edges hold
+    on both pages: this exception is the floor case alone and weakens Acceptance
+    Criterion 124 nowhere else. The check exercises both a viewport at which the
+    floor binds and one at which it does not, because a check run only below the
+    floor passes on a region that never tracks the page body at all, while a check
+    run only above it leaves the floor free to be deleted as though it were the
+    defect that Acceptance Criterion 124 describes (see
+    [Full-Height Page Regions](#full-height-page-regions), rule 5).
+128. The Kanban board reserves space beneath its columns for its own horizontal
+    scrollbar: the bottom edge of a column sits above the bottom edge of the board
+    by at least the reserved amount, so the scrollbar is drawn in that space and
+    never over a card, and the last card of a column stays fully visible while the
+    board can still be scrolled sideways. The check fails on a board whose columns
+    extend to its bottom edge, where the scrollbar overlaps the last card (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Layout and scrolling**).
+129. Each of the five columns of the Kanban board is `19rem` wide and never narrower
+    than `17rem`, all five carry the same width whatever number of tasks each holds,
+    and none stretches to fill a viewport wider than the board needs. The body of a
+    task card on that board carries `0.75rem` of padding on all four sides, which is
+    strictly less than the padding the vendored Tabler distribution declares for a
+    small card's body, and the project override stylesheet declares it in a rule of
+    at least the specificity of Tabler's own, in the stylesheet the layout links
+    last, so the override wins on the cascade with no `!important`. Both lengths are
+    expressed in `rem`. This is a stylesheet change only: the board emits the same
+    markup and the same classes, carries no inline `style` attribute, and
+    Acceptance Criteria 27, 88, and 124 to 128 continue to hold (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **Column width and card density**).
+130. `GET /roadmaps/{name}/sprints/{id}` renders the sprint's member tasks as a
+    Kanban board of exactly three columns, presented left to right with the headings
+    `WAITING`, `DOING`, and `CLOSED`, and the served HTML carries no member-tasks
+    table and no task table of any kind on this page. Each column holds exactly the
+    sprint's tasks in the statuses assigned to it — `WAITING` the `BACKLOG` and
+    `SPRINT` tasks, `DOING` the `DOING` and `TESTING` tasks, and `CLOSED` the
+    `COMPLETED` tasks — so every member task appears on the board exactly once and
+    none is omitted or duplicated. All three columns are rendered whatever the sprint
+    holds: a column with no task keeps its heading and its `0` count badge and shows
+    the in-column empty state in place of its card list, and a sprint with no member
+    task renders the board with all three columns present, each showing that empty
+    state, rather than a page-level empty state or an absent board. The Sprint
+    details card above the board and the Comments card below it keep their positions
+    (see [Sprint Detail Sub-Template](#sprint-detail-sub-template)).
+131. Each column count equals its counterpart in the sprint status summary line
+    rendered at the top of the same page: the `WAITING` column's badge equals `P`,
+    the `DOING` column's badge equals `A`, the `CLOSED` column's badge equals `C`,
+    and the three sum to `T` (Acceptance Criterion 39 continues to hold). The check
+    compares the two renderings of one sprint against each other, rather than each
+    against a number the check computes on its own, because the property under test
+    is that the board and the summary line group the sprint's tasks by the **same**
+    categorisation: a board that grouped the statuses differently could still show
+    three counts that each looked plausible on its own. For the sprint whose summary
+    line reads `33% - P:8 A:29 C:18 - T:55`, the three column badges read `8`, `29`,
+    and `18`, and the board shows 55 cards in total.
+132. Each column of the sprint's member-tasks board orders its cards by its own
+    key. In the `WAITING` column the cards appear in the sprint's planned in-sprint
+    execution order, which is the `sprint_tasks` position order the page reads
+    (`position` ascending; see
+    `DATABASE.md § List Sprint Tasks Ordered by Position`), so for any two tasks of
+    that column the card of the task with the lower `position` appears above the
+    other. In the `DOING` column the cards appear by `started_at` descending, the
+    most recently started task first, and that holds for the column's `TESTING`
+    cards as well: a `TESTING` card takes its place from `started_at`, never from
+    `tested_at`. In the `CLOSED` column the cards appear by `closed_at` descending,
+    the most recently closed task first. Where two cards of one column carry the
+    same ordering timestamp, and where a card carries none, those cards are ordered
+    by `sprint_tasks` `position` ascending, and a card carrying no ordering
+    timestamp appears after every card of that column that carries one. Reordering
+    the sprint's tasks through the CLI and reloading the page therefore reorders the
+    cards of the `WAITING` column and leaves the order of the `DOING` and `CLOSED`
+    columns unchanged; the check MUST assert both halves of that split, because a
+    board that ordered all three columns by `position` and a board that ordered all
+    three by recency each satisfy one half on its own. The check's data MUST make
+    the three candidate orders differ from one another — the `position` order, the
+    ordering-timestamp order, and the task `id` order — so that no assertion can
+    pass on an order that merely coincides with the specified one. No ordering by
+    priority, severity, title, or id is observable anywhere on the board.
+133. Each card of the sprint's member-tasks board shows exactly six data points, on
+    three lines, in this order: the task `title` leading the card; the reference
+    `#<id>` on its own line as secondary text; and one line carrying, at its leading
+    edge, a `priority` badge reading `P` immediately followed by the task's priority
+    and a `severity` badge reading `S` immediately followed by the task's severity,
+    and, at its trailing edge, the number of comments followed by the number of
+    subtasks, each as an icon (`ti ti-message` and `ti ti-subtask` respectively)
+    followed by its number. The badges and the counters share that one line, and the
+    card renders no separate footer row for the counters. The check MUST assert the
+    counter order, because a card showing the subtask count before the comment count
+    satisfies every other clause of this criterion. On a column too narrow to hold
+    the two groups side by side that line wraps inside the card instead of
+    overflowing its edge, and `<body>` still produces no page-level horizontal
+    overflow (Acceptance Criterion 27 continues to hold). The card carries no inline
+    `style` attribute, and every class it emits is defined either in the vendored
+    Tabler distribution or in `static/style.css` (Acceptance Criterion 62 continues
+    to hold). A task of priority `5` and severity `3` shows `P5` and `S3`; a badge
+    carrying the bare integer does not satisfy this criterion, and this card renders
+    the pair exactly as the tasks board's card does (Acceptance Criterion 85
+    continues to hold). The card of the roadmap tasks page's board is unchanged by
+    this criterion: it keeps its separate metadata footer and that footer's own
+    indicator order. The priority and severity badges
+    take the colours the semantic mapping assigns to their values, which the prefix
+    does not affect (Acceptance Criterion 61
+    continues to hold). The card carries **no** status badge, because the column
+    already states the status, and it shows no task type, no `specialists`, and no
+    dependency counts. The task's full field set is reached through the task detail
+    modal the card opens (see [Sprint Detail Sub-Template](#sprint-detail-sub-template)
+    and [Task Detail Modal](#task-detail-modal)).
+134. Every card of the sprint's member-tasks board renders both of its counters: the
+    comment count and the subtask count are present on every card, including when
+    either or both are `0`, so a task with no comment and no subtask still shows the
+    comment icon followed by `0` and the subtask icon followed by `0`, and both
+    numbers sit at the trailing edge of the card's third line, which every card of
+    the board renders. The check asserts a card whose two
+    counts are both zero, because a card that has something to count renders the same
+    markup whether this criterion holds or not. The card of the roadmap tasks page's
+    board is not governed by this criterion and keeps its own rule, under which an
+    indicator whose value is absent, empty, or zero renders nothing at all
+    (Acceptance Criterion 85 continues to hold).
+135. Selecting a card of the sprint's member-tasks board opens the read-only task
+    detail modal for that task, and the card **is** the trigger: in the served HTML
+    the card is a `<button type="button">`, activatable by pointer, touch, Enter, and
+    Space, carrying no `tabindex` and no `role="button"`. Its accessible name is
+    `Open details for task #<id>: <title>`, containing the task title that is the
+    card's visible label; a name carrying the `id` alone does not satisfy this
+    criterion. Opening a card fetches that task's data from
+    `GET /roadmaps/{name}/tasks/{id}/data` and fills the page's single modal shell,
+    of which the page renders one and not one per task. The page loads no script
+    beyond those it already loads from `/static/`, and the Content-Security-Policy of
+    Acceptance Criterion 33 is unchanged (Acceptance Criteria 93 and 97 to 99
+    continue to hold).
+136. The sprint's member-tasks board is height-limited and scrolls per column: each
+    column scrolls vertically and independently when its cards exceed the board's
+    height. That height is **`60vh`** in the project override stylesheet, floored at
+    the value of the **`--full-height-region-floor`** custom property, and it is
+    **not** the space the page body leaves. The floor is read from that property and
+    the length is not restated beside it, so the board and the page body cannot come
+    to state different floors; the check fails on a stylesheet that writes the floor
+    out as a literal length of its own, and it fails on a sprint page where the
+    property does not resolve, because the sprint page carries no full-height shell
+    to declare it. On a viewport short enough that `60vh` falls below the floor, the
+    board takes the floor. The board is therefore not a full-height page region, and
+    Acceptance Criteria 124 to 127 are not asserted against it: adding member tasks
+    to the sprint leaves the board's height unchanged and does not push the Comments
+    card further down the page. When the three columns do not fit the viewport, the
+    column strip scrolls horizontally inside its own container while `<body>`
+    produces no horizontal overflow (Acceptance Criterion 27 continues to hold), and
+    on a narrow viewport each column keeps a minimum width at which its cards stay
+    legible, with touch-friendly hit targets on the cards (see
+    [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Height and
+    scrolling**, and
+    [Responsive and Mobile-First Design](#responsive-and-mobile-first-design),
+    rule 10).
+137. The comment number on each card of the sprint's member-tasks board comes from
+    **one** grouped counting query issued over the whole set of rendered member-task
+    ids, never one query per card: an instrumented count of comment-counting queries
+    for a sprint page rendering N member tasks is 1, independent of N, and of
+    comment-listing queries for member tasks is 0 (see
+    `DATABASE.md § Count Comments for Many Parents (Grouped)` and Acceptance
+    Criterion 70). A sprint with no member task issues no such query at all. The
+    subtask number on a card costs no query of its own, because the sprint's
+    member-task read already returns each task's `subtask_count`; grouping the tasks
+    into the three columns and counting each column are performed in memory over the
+    rows already read, so the board adds no query per column and none per card.
+138. The sprint's member-tasks board is read-only: it offers no drag-and-drop and no
+    control of any other kind that moves a task between columns, reorders cards,
+    changes a task's status, or creates or edits a task, a column, or a comment. The
+    served HTML contains no form, no input, and no control in the board that submits
+    a change: the only button in the board is the card itself, and activating it
+    opens the read-only modal. There is no route and no client-side path through
+    which the board can write; the `rmp` CLI remains the sole write path.
+139. The three columns of the sprint's member-tasks board divide the width of the
+    board equally: all three carry the same width whatever number of tasks each
+    holds, and that width grows with the viewport, so widening the viewport widens
+    the three columns together and leaves no unused space beside them. No column is
+    ever narrower than `17rem`; when three columns at that minimum, plus the
+    `0.75rem` gaps between them, do not fit the viewport, the columns keep the
+    minimum and the column strip scrolls horizontally inside its own container while
+    `<body>` produces no horizontal overflow (Acceptance Criterion 27 continues to
+    hold). The check measures the columns at a viewport wide enough for the equal
+    division and again at one too narrow for it, because a board measured at one
+    width alone passes as readily on columns that never grow as on columns that
+    never stop growing. The body of a task card on that board carries `0.75rem` of
+    padding on all four sides, which is strictly less than the padding the vendored
+    Tabler distribution declares for a small
+    card's body, and the project override stylesheet declares it in a rule of at
+    least the specificity of Tabler's own, in the stylesheet the layout links last,
+    so the override wins on the cascade with no `!important`. Every one of these
+    lengths is expressed in `rem`. The five columns of the roadmap tasks page's board
+    are unchanged: each stays `19rem` wide with a `17rem` minimum and still does not
+    grow into a wider viewport (Acceptance Criterion 129 continues to hold). The two
+    boards' column widths are therefore deliberately not one value, and this
+    criterion no longer requires them to agree; what the two boards still share is
+    the `17rem` minimum, the `0.75rem` gap, and the `0.75rem` card body padding, and
+    the check compares those three across the two boards and fails when they diverge.
+    This is a stylesheet change only: the board emits the same markup and the same
+    classes, carries no inline `style` attribute, and Acceptance Criteria 27, 130,
+    and 136
+    continue to hold (see
+    [Sprint Detail Sub-Template](#sprint-detail-sub-template), **Height and
+    scrolling**).
+140. Each per-column count badge of the two Kanban boards carries the semantic colour
+    of the status its column groups, while its text stays that column's task count
+    (Acceptance Criteria 83 and 131 continue to hold). On the roadmap tasks page's
+    board a column is exactly one task status, so the badge takes that status's
+    variant: `BACKLOG` `bg-secondary-lt`, `SPRINT` `bg-cyan-lt`, `DOING`
+    `bg-blue-lt`, `TESTING` `bg-yellow-lt`, and `COMPLETED` `bg-green-lt`. On the
+    sprint's member-tasks board a column groups a set of statuses — two for `WAITING`
+    and for `DOING`, and `COMPLETED` alone for `CLOSED` — so the badge takes the
+    variant of the group's canonical status: `WAITING` carries `SPRINT`'s
+    `bg-cyan-lt`, `DOING` carries `DOING`'s `bg-blue-lt`, and `CLOSED` carries
+    `COMPLETED`'s `bg-green-lt`. A column holding no task shows the count `0` and
+    keeps the colour of its status, because the colour follows the column and not the
+    cards in it, and a narrowed board keeps each column's colour while its count
+    follows the narrowing (Acceptance Criteria 101 and 113 continue to hold). The
+    check asserts all the columns of a board together, exactly as Acceptance
+    Criterion 120 asserts the three tabs together: `BACKLOG` maps to
+    `bg-secondary-lt`, which is also the neutral colour a badge carries when nothing
+    colours it, so that column alone renders identically whether the mapping was
+    applied or not, and the check fails on a rendering that gives every column of
+    either board `bg-secondary-lt`. The check also asserts the two count badges that
+    stay neutral, because the boundary is what keeps this rule a rule rather than a
+    licence to colour any count: the Comments card header count on the Roadmap Sprint
+    Page carries `bg-secondary-lt`, because it counts comments and a comment has no
+    status to key on, and so does any count over a group of mixed status for which no
+    canonical status is defined. The mapping introduces no new colour and no new
+    band (Acceptance Criterion 61 continues to hold; see
+    [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
+    rule 2).
 
 ## See Also
 
 - CLI command contract for `web` → `COMMANDS.md § Web Interface`
+- Task detail endpoint JSON shape (the task object and its comments) →
+  `DATA_FORMATS.md § Task Detail Data`, composed from `DATA_FORMATS.md § Task` and
+  `DATA_FORMATS.md § Task Comment`
 - Graph view data JSON shape → `DATA_FORMATS.md § Graph View Data`
 - Graph element and property-type JSON mapping reused by the graph data endpoint
   → `DATA_FORMATS.md § Graph Query Result`
@@ -2775,6 +6007,8 @@ Rules:
   the query bar's user-supplied Cypher →
   `GRAPH.md § Subcommands and Guard-Rail Validation` and
   `GRAPH.md § Literal-Aware Normalization`
+- Schema-introspection commands, the read-only class the graph data endpoint
+  admits and injects no node limit into → `GRAPH.md § Schema Introspection`
 - Roadmap discovery, data directory layout, and permissions →
   `ARCHITECTURE.md § Directory Structure`
 - SQLite schema migrations the startup step runs, and their idempotency →
@@ -2786,8 +6020,9 @@ Rules:
 - Task and Sprint fields presented in the sprints page, the tasks page, the sprint
   page, and the task detail modal → `MODELS.md` and `DATABASE.md`
 - `TaskComment` and `SprintComment` fields, the comment type values, the comment
-  read queries and their chronological ordering, and the grouped query that keeps
-  the task modals free of an N+1 read → `MODELS.md § Task Comment`,
+  read queries and their chronological ordering, and the grouped count that gives
+  each board card its comment number without reading a body →
+  `MODELS.md § Task Comment`,
   `MODELS.md § Sprint Comment`, `MODELS.md § Comment Type`, and
   `DATABASE.md § Comments`
 - CLI contract for writing and reading comments → `COMMANDS.md § Task Comments`
@@ -2798,11 +6033,37 @@ Rules:
   and `DATABASE.md § Audit Result Limit`
 - Sprint status enum and lifecycle that classify sprints into the sprints-page tabs
   → `MODELS.md § Enums` and `STATE_MACHINE.md § Sprint State Machine`
+- Task status enum and lifecycle that define the tasks-page board's five fixed
+  columns, their left-to-right order, and the CHECK constraint that admits no sixth
+  status → `MODELS.md § Enums`, `STATE_MACHINE.md § Task State Machine`, and
+  `DATABASE.md § tasks Table`
+- Default task ordering that fixes the order of the cards inside each column of the
+  tasks board → `DATABASE.md § Main SQL Queries` ("List All")
+- Lifecycle timestamps that order the `DOING` and `CLOSED` columns of the sprint
+  page's member-tasks board, and the planned order that breaks their ties →
+  `MODELS.md § Task`, `STATE_MACHINE.md § Date Tracking Fields`, and
+  `DATABASE.md § List Sprint Tasks Ordered by Position`
+- Task type enum and the `priority` and `severity` integer ranges that fix the
+  accepted values of the tasks board's header filters → `MODELS.md § Enums` and
+  `MODELS.md § Task`
+- CLI filters over the same three dimensions, whose meanings the board's header
+  filters reuse — `-y, --type` as an equality, `-p, --priority` and `--severity` as
+  thresholds → `COMMANDS.md § List Tasks`
+- Keyboard operability of a clickable task: why the modal trigger must be a
+  natively activatable element on every surface, and why no script may be added to
+  compensate → [Task Detail Modal](#task-detail-modal),
+  [Security Headers](#security-headers), and [Frontend Rules](#frontend-rules)
+- Sprint membership shown on each board card, the `UNIQUE` constraint that limits a
+  task to one sprint, and the grouped query that resolves the sprint of every
+  rendered task in one round trip → `MODELS.md § Sprint`,
+  `DATABASE.md § sprint_tasks Table (1:N Relationship)`,
+  `DATABASE.md § Relationships`, and
+  `DATABASE.md § Resolve the Sprint of Many Tasks (Grouped)`
 - Task and sprint status enums, the task and sprint lifecycles, and the
   `priority`/`severity` integer ranges and criticality bands that the badge colour
   mapping uses → `MODELS.md § Enums`, `MODELS.md § Task`,
   `STATE_MACHINE.md § Task State Machine`, `STATE_MACHINE.md § Sprint State Machine`,
-  and `COMMANDS.md § Show Sprint`
+  and `COMMANDS.md § Show Sprint Status Report`
 - Embedded asset bundling, the vendored Tabler framework and D3.js (with
   d3-sankey) assets, and the self-contained-binary build verification →
   `BUILD.md § Vendored Web Assets`

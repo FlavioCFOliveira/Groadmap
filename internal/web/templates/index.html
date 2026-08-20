@@ -6,20 +6,17 @@
 <body class="layout-fluid">
   <div class="page">
 {{template "sidebar" .}}
-    <div class="page-wrapper">
 {{template "topnavbar" .}}
+    <div class="page-wrapper">
       <div class="page-header d-print-none">
-        <div class="container-fluid">
+        <div class="container-xl">
           <div class="row g-2 align-items-center">
-            <div class="col">
-              <h2 class="page-title">Roadmaps</h2>
-              <div class="text-secondary mt-1">Read-only view of the roadmaps under <code>~/.roadmaps/</code></div>
-            </div>
+{{template "pageTitle" .Chrome.Heading}}
           </div>
         </div>
       </div>
-      <div class="page-body">
-        <div class="container-fluid">
+      <main class="page-body">
+        <div class="container-xl">
           {{if .Roadmaps}}
           <div class="row row-cards">
             {{range .Roadmaps}}
@@ -49,16 +46,7 @@
           </div>
           {{end}}
         </div>
-      </div>
-      <footer class="footer footer-transparent d-print-none">
-        <div class="container-fluid">
-          <div class="row text-center align-items-center flex-row-reverse">
-            <div class="col-12 text-secondary">
-              Read-only. The rmp CLI remains the sole write path.
-            </div>
-          </div>
-        </div>
-      </footer>
+      </main>
     </div>
   </div>
   <script src="/static/vendor/tabler/tabler.min.js"></script>

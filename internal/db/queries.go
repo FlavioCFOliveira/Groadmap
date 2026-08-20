@@ -277,10 +277,46 @@ func buildListTasksQuery(filter *TaskListFilter) (string, []any) {
 	default: // "priority" or empty — matches existing default behaviour
 		query += " ORDER BY t.priority DESC, t.created_at ASC"
 	}
-	query += " LIMIT ?"
-	args = append(args, filter.Limit)
+	// The LIMIT is emitted only when the caller asked for one. SPEC/DATABASE.md
+	// § Main SQL Queries, "List All" states the listing itself carries no LIMIT:
+	// any bound on the row count is imposed by the caller. ListTasks always
+	// clamps its limit to at least 1 before calling, so the CLI listing is
+	// unchanged; ListAllTasks passes 0 to read every row.
+	if filter.Limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, filter.Limit)
+	}
 
 	return query, args
+}
+
+// ListAllTasks returns EVERY task of the roadmap, in the default listing order
+// (priority DESC, created_at ASC), with no LIMIT and no pagination.
+//
+// It is the read the web interface's Kanban task board performs, and reading
+// every row is a correctness requirement of that page rather than a performance
+// choice: the board groups the tasks into five columns and prints a count on each
+// column header as a statement of fact about the roadmap, so a partial read would
+// not merely show fewer cards — it would publish wrong counts as true ones, with
+// nothing on the page to reveal that anything was omitted (SPEC/DATABASE.md
+// § Main SQL Queries, "List All"; SPEC/WEB.md § Roadmap Tasks Page, Unbounded
+// read).
+//
+// The display default that sizes `rmp task list` output (models.DefaultTaskLimit)
+// and the per-invocation cap (models.MaxTaskLimit) are deliberately NOT applied
+// here. They size the output of one command invocation, where a caller who wants
+// more asks for more and can see that the listing was cut; this read has no such
+// affordance. ListTasks keeps both, so the CLI is unaffected.
+func (db *DB) ListAllTasks(ctx context.Context) ([]models.Task, error) {
+	query, args := buildListTasksQuery(&TaskListFilter{})
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("listing every task: %w", err)
+	}
+	defer rows.Close()
+
+	return scanTasksWithDeps(rows)
 }
 
 // UpdateTask updates a task's fields with the provided values.
@@ -1399,6 +1435,96 @@ func (db *DB) GetSprintTasks(ctx context.Context, sprintID int) ([]int, error) {
 	}
 
 	return tasks, nil
+}
+
+// SprintRef identifies one sprint by the two values that name it without
+// ambiguity: its title and its id. The title alone does not identify a sprint —
+// SPEC/MODELS.md § Sprint requires it and caps its length but places no
+// uniqueness constraint on it, so two sprints of one roadmap may carry the same
+// title — while the id is the primary key.
+//
+// It is the value of the grouped sprint resolution below, not a domain model: it
+// carries what a caller needs to name a task's sprint, and deliberately not a
+// partially populated models.Sprint, which would look like a whole sprint while
+// carrying only two of its fields.
+type SprintRef struct {
+	Title string
+	ID    int
+}
+
+// groupedTaskSprintsQuery returns the grouped sprint resolution of
+// SPEC/DATABASE.md § Resolve the Sprint of Many Tasks (Grouped) for an IN list of
+// the given placeholders. The ORDER BY is task_id ascending, which makes the
+// result walkable in one pass against a caller-side set of task ids; no
+// tie-breaker is needed, because sprint_tasks.task_id is UNIQUE and the query
+// therefore returns at most one row per task.
+//
+// It is a function rather than a constant because the IN list has one
+// placeholder per id. Assembly is separated from execution so the index tests can
+// plan the exact SQL production runs, rather than a lookalike.
+func groupedTaskSprintsQuery(placeholders string) string {
+	return fmt.Sprintf( // #nosec G201 -- only ? placeholders are interpolated; every id is bound
+		`SELECT st.task_id, s.id, s.title
+	 FROM sprint_tasks st
+	 INNER JOIN sprints s ON s.id = st.sprint_id
+	 WHERE st.task_id IN (%s)
+	 ORDER BY st.task_id ASC`,
+		placeholders,
+	)
+}
+
+// GetSprintsByTasks returns the sprint each of the given tasks belongs to, keyed
+// by task id, in ONE statement whatever the number of tasks.
+//
+// This is the read the web interface MUST use to name the sprint on every card of
+// its Kanban board: one card per rendered task means the sprint of every rendered
+// task is needed, and resolving them one task — or one board column — at a time
+// would reintroduce the N+1 pattern the project has removed elsewhere
+// (SPEC/WEB.md § Roadmap Tasks Page, read cost; SPEC/DATABASE.md § Resolve the
+// Sprint of Many Tasks (Grouped)).
+//
+// A task that belongs to no sprint is ABSENT from the map, exactly as in
+// CountTaskCommentsByTasks and CountSubTasksByParents: it has no sprint_tasks row,
+// so the absence of an entry is the answer, and the zero value a caller reads for
+// a missing key is the zero SprintRef. At most one entry exists per task, which
+// the schema guarantees rather than the query: sprint_tasks.task_id carries a
+// UNIQUE constraint (SPEC/DATABASE.md § sprint_tasks Table). The inner join drops
+// nothing, because sprint_id is NOT NULL and carries a foreign key to sprints(id).
+//
+// An empty id set issues no statement at all and returns an empty map. Duplicate
+// ids in the input are harmless; each row is returned once. The id set is bound as
+// one placeholder per id in a single statement, so it carries the same
+// bind-variable ceiling as the sibling grouped reads named above, and for the same
+// reason applies no chunking.
+func (db *DB) GetSprintsByTasks(ctx context.Context, taskIDs []int) (map[int]SprintRef, error) {
+	sprints := make(map[int]SprintRef, len(taskIDs))
+	if len(taskIDs) == 0 {
+		return sprints, nil
+	}
+
+	args := make([]any, len(taskIDs))
+	for i, id := range taskIDs {
+		args[i] = id
+	}
+
+	rows, err := db.QueryContext(ctx, groupedTaskSprintsQuery(db.Placeholders(len(taskIDs))), args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying sprints by task: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var taskID int
+		var sprint SprintRef
+		if err := rows.Scan(&taskID, &sprint.ID, &sprint.Title); err != nil {
+			return nil, fmt.Errorf("scanning task sprint: %w", err)
+		}
+		sprints[taskID] = sprint
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating task sprint rows: %w", err)
+	}
+	return sprints, nil
 }
 
 // GetActiveSprintTasks retrieves tasks in a sprint with status SPRINT, DOING, or TESTING.

@@ -114,15 +114,15 @@ contains any of the following is rejected with exit code 6 before it is stored:
   `U+202A`-`U+202E`, `U+2066`-`U+2069`, and `U+FEFF`.
 
 This guards against terminal escape-sequence injection (CWE-150) and Trojan Source
-attacks (CVE-2021-42574). The canonical definition is in
-`MODELS.md § Free-Text Control-Character Constraint`.
+attacks (CVE-2021-42574). The canonical definition is the Free-Text
+Control-Character Constraint in `MODELS.md § Task`.
 
 ### Specialists List-Separator Constraint
 
 The `specialists` field is a comma-separated list. The comma is reserved as the
 list separator, so an individual specialist name MUST NOT contain a comma. An input
 in which a single name contains a comma is rejected with exit code 6. The canonical
-definition is in `MODELS.md § Specialists List-Separator Constraint`.
+definition is the Specialists List-Separator Constraint in `MODELS.md § Task`.
 
 ### Validation Error Messages
 
@@ -607,8 +607,10 @@ All batch operations validate ALL IDs and status transitions before applying any
 **Completion Summary Behavior:**
 - `--summary` is optional even when transitioning to `COMPLETED`
 - When provided, `completion_summary` is stored on each updated task
-- When transitioning COMPLETED → BACKLOG (reopen), `completion_summary` is cleared to NULL
+- When transitioning to BACKLOG, `completion_summary` is cleared to NULL
 - `--summary` has no effect on non-COMPLETED transitions and is rejected with an error
+
+**Transitioning to BACKLOG:** The target state `BACKLOG` is accepted from `SPRINT` and from `COMPLETED`, and rejected with exit code 6 from `DOING` and `TESTING`. The transition clears `started_at`, `tested_at`, `closed_at`, and `completion_summary` to NULL. It does not touch the `sprint_tasks` table: a task that was a member of a sprint stays a member, at the same `position`, while its status reads `BACKLOG`. Use `task reopen` to return a `DOING` or `TESTING` task to `BACKLOG`, and `sprint remove-tasks` to detach a task from its sprint. See `STATE_MACHINE.md § Valid Transitions` and `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`.
 
 **Output (success):** No output, exit code 0.
 
@@ -857,9 +859,11 @@ rmp task blocking -r <name> <id>
 rmp task reopen -r <name> <ids>
 ```
 
-**Description:** Returns one or more tasks to `BACKLOG` status, clearing all lifecycle timestamps (`started_at`, `tested_at`, `closed_at`) and the `completion_summary`. Also removes the task from its sprint association (`sprint_tasks`). Accepts comma-separated IDs for bulk operations.
+**Description:** Returns one or more tasks to `BACKLOG` status, clearing all lifecycle timestamps (`started_at`, `tested_at`, `closed_at`) and the `completion_summary`. Accepts comma-separated IDs for bulk operations.
 
 **Valid source states:** `SPRINT`, `DOING`, `TESTING`, `COMPLETED` — any non-BACKLOG state.
+
+**Effect on sprint membership:** The command removes the task's `sprint_tasks` row only when the source state is `SPRINT`, `DOING`, or `TESTING`. From the `COMPLETED` source state it leaves the row in place, so the task keeps its sprint membership and its `position` while its status reads `BACKLOG`. See `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`.
 
 **Batch Operation Behavior (Fail-Fast):**
 
@@ -867,8 +871,9 @@ All IDs are validated before any transitions are applied. If any ID is invalid, 
 
 | Scenario | Exit Code | Behavior | Output |
 |----------|-----------|----------|--------|
-| Task transitions to BACKLOG | 0 | Timestamps and `completion_summary` cleared; sprint_tasks row removed if applicable | No stdout |
-| Task already in BACKLOG | 0 | No change | Informational message to stderr |
+| Task transitions to BACKLOG from `SPRINT`, `DOING`, or `TESTING` | 0 | Timestamps and `completion_summary` cleared; `sprint_tasks` row removed | No stdout |
+| Task transitions to BACKLOG from `COMPLETED` | 0 | Timestamps and `completion_summary` cleared; `sprint_tasks` row kept | No stdout |
+| Task already in BACKLOG | 0 | No change; any `sprint_tasks` row is kept | Informational message to stderr |
 | Invalid task ID | 4 | **No tasks modified** | Error to stderr |
 
 **Output (success):** No output to stdout, exit code 0.
@@ -1219,7 +1224,7 @@ rmp sprint get -r <name> <id>
 rmp sprint tasks -r <name> <id> [-s, --status <state>] [--order-by-priority]
 ```
 
-**JSON Output:** Array of Task objects associated with the sprint, ordered by position (default) or by priority if flag specified.
+**JSON Output:** Array of Task objects associated with the sprint, ordered by sprint position (default) or, when `--order-by-priority` is given, by priority DESC with sprint position as the tiebreaker.
 
 **Options:**
 - `-s, --status <state>` - Optional filter that restricts the result to tasks
@@ -1229,7 +1234,7 @@ rmp sprint tasks -r <name> <id> [-s, --status <state>] [--order-by-priority]
   handler parses this flag and passes it to the sprint-task query, so only
   matching tasks are returned. Without it, every task in the sprint is returned
   regardless of status.
-- `--order-by-priority` - Order by priority DESC, severity DESC (legacy ordering)
+- `--order-by-priority` - Order by priority DESC, then sprint position ASC
 
 **Exit Codes:** `0` (success), `3` (missing `-r`), `4` (sprint not found), `6` (invalid `-s, --status` value).
 
@@ -1245,7 +1250,7 @@ rmp sprint open-tasks -r <name> <id> [--order-by-priority]
 - `id` - Sprint identifier
 
 **Options:**
-- `--order-by-priority` - Order by priority DESC instead of sprint position
+- `--order-by-priority` - Order by priority DESC, then sprint position ASC; without it, sprint position ASC alone
 
 **Default Ordering:** Sprint position ASC (same as `sprint tasks`).
 
@@ -1447,10 +1452,10 @@ All sprint task operations validate ALL IDs before making any changes.
 | Command | Task Status Change | Description |
 |---------|-------------------|-------------|
 | `add-tasks` | BACKLOG → SPRINT | Tasks automatically change to SPRINT status when added to sprint |
-| `remove-tasks` | SPRINT → BACKLOG | Tasks automatically return to BACKLOG when removed from sprint |
+| `remove-tasks` | SPRINT, DOING, TESTING, or COMPLETED → BACKLOG | Tasks automatically return to BACKLOG when removed from sprint, whatever their status. The command also clears `started_at`, `tested_at`, `closed_at`, and `completion_summary` |
 | `move-tasks` | (No change) | Status is preserved when moving between sprints |
 
-**Note:** The status SPRINT is automatically managed by sprint operations. Users MUST NOT manually set status to SPRINT using `task stat`; attempts to do so are rejected with exit code 6 and the error message `"Error: status SPRINT can only be set automatically via 'sprint add-tasks'"`. Manual status transitions follow: BACKLOG → SPRINT (automatic) → DOING → TESTING → COMPLETED (with `SPRINT → BACKLOG` and `COMPLETED → BACKLOG` also available — see `STATE_MACHINE.md` for the full set).
+**Note:** The status SPRINT is automatically managed by sprint operations. Users MUST NOT manually set status to SPRINT using `task stat`; attempts to do so are rejected with exit code 6 and the error message `"Error: status SPRINT can only be set automatically via 'sprint add-tasks'"`. Manual status transitions follow: BACKLOG → SPRINT (automatic) → DOING → TESTING → COMPLETED. `task stat <ids> BACKLOG` is also accepted from `SPRINT` and from `COMPLETED`, and it does not remove the task from its sprint: the task keeps its `sprint_tasks` row while its status reads `BACKLOG`. See `STATE_MACHINE.md § Valid Transitions` for the full set and `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` for the membership rule.
 
 **Output (success):** No output, exit code 0.
 
@@ -1672,18 +1677,21 @@ rmp sprint rm -r <name> <id>
 
 When a sprint is removed, all tasks currently associated with it are automatically returned to the backlog:
 
-| Current Task Status | New Status | sprint_id |
-|---------------------|------------|-----------|
-| SPRINT | BACKLOG | NULL |
-| DOING | BACKLOG | NULL |
-| TESTING | BACKLOG | NULL |
-| COMPLETED | BACKLOG | NULL |
+| Current Task Status | New Status | Sprint membership |
+|---------------------|------------|-------------------|
+| BACKLOG | BACKLOG | `sprint_tasks` row deleted |
+| SPRINT | BACKLOG | `sprint_tasks` row deleted |
+| DOING | BACKLOG | `sprint_tasks` row deleted |
+| TESTING | BACKLOG | `sprint_tasks` row deleted |
+| COMPLETED | BACKLOG | `sprint_tasks` row deleted |
+
+A member task can already be in `BACKLOG` status before the sprint is removed (see `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`); for such a task the status write is a no-op and only the membership row goes away.
 
 **Process:**
 1. Validate sprint ID exists
 2. For each task in the sprint:
    - Set status to BACKLOG (regardless of current status)
-   - Clear sprint_id (set to NULL)
+   - Clear `started_at`, `tested_at`, `closed_at`, and `completion_summary` to NULL
    - Preserve all other fields (title, requirements, priority, severity, etc.)
 3. Delete sprint_tasks junction table entries
 4. Delete sprint from sprints table
@@ -2450,7 +2458,7 @@ process exits 0 (see `WEB.md § Server Lifecycle`).
 ### Exit Codes
 
 These are the exit codes of the `rmp web` **process**. They are distinct from the
-per-request HTTP status codes the running server returns (200, 404, 405, 500),
+per-request HTTP status codes the running server returns (200, 400, 404, 405, 500),
 which are specified in `WEB.md § Routes and Pages`.
 
 | Exit Code | Cause |

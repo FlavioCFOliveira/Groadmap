@@ -25,7 +25,7 @@ This will detect your OS and architecture, download the latest release from GitH
 - **State Machine**: Validated task and sprint status transitions with automatic date tracking
 - **Bulk Operations**: Support for multiple task IDs in single commands
 - **Knowledge Graph**: Per-roadmap queryable graph (nodes, edges, Cypher) for capturing project elements and their relationships
-- **Web Interface**: Read-only, self-contained, mobile-first browser view of all roadmaps, their tasks and sprints, and an interactive knowledge-graph visualisation, built on the Tabler admin-shell UI in a dark theme (`rmp web`)
+- **Web Interface**: Read-only, self-contained, mobile-first browser view of all roadmaps, their sprints, their tasks on a searchable and filterable Kanban board, and an interactive knowledge-graph visualisation, built on the Tabler admin-shell UI in a dark theme (`rmp web`)
 
 ## Roadmap Selection (Always Required)
 
@@ -562,7 +562,7 @@ Under the roadmap's home directory at `~/.roadmaps/<name>/graph/` (a directory, 
 
 **What is `rmp web`?**
 
-A read-only, browser-based view of everything the CLI manages. It starts an HTTP server embedded in the `rmp` binary that lists every roadmap under `~/.roadmaps/`. Selecting a roadmap lands you on its sprints page with the current sprint selected; from there a separate page shows the roadmap's full task list, another shows the roadmap's full audit log (paginated, most recent first), and another shows an interactive visualisation of its knowledge graph. It only presents data; the CLI remains the sole write path.
+A read-only, browser-based view of everything the CLI manages. It starts an HTTP server embedded in the `rmp` binary that lists every roadmap under `~/.roadmaps/`. Selecting a roadmap lands you on its sprints page with the current sprint selected; from there a separate page shows every task of the roadmap on a Kanban board, another shows the roadmap's full audit log (paginated, most recent first), and another shows an interactive visualisation of its knowledge graph. It only presents data; the CLI remains the sole write path.
 
 ```bash
 # Start on the default host (loopback) and port and open the browser
@@ -583,13 +583,16 @@ On startup the served URL is printed as JSON (`{"url": "http://127.0.0.1:8787"}`
 - **Read-only.** No route creates, edits, or deletes anything; serving a page writes no rows, no audit-log entry, and never checkpoints the graph store. Only `GET`/`HEAD` are accepted (any other method returns HTTP 405).
 - **No `-r` flag.** It is the one command exempt from the always-required-roadmap rule; it lists all roadmaps and you pick one in the browser.
 - **Long-lived.** It keeps serving until interrupted; `Ctrl+C` (`SIGINT`) or `SIGTERM` shuts it down gracefully (exit 0).
-- **Tabler dark-theme UI.** The interface is built on the vendored Tabler admin-dashboard framework in its dark theme: a navigation sidebar (which collapses to a hamburger menu on small viewports), a top navbar, page headers, and Tabler cards, tables, and badges.
+- **A Kanban tasks board.** The Tasks page lays every task of the roadmap out on a board of five fixed status columns - `BACKLOG`, `SPRINT`, `DOING`, `TESTING`, `COMPLETED` - each with a count badge, all five always present whatever the data holds. There is no pagination: whatever the roadmap holds, the board shows. Each card carries the task's `#id` and type, its title, its priority and severity badges, and only the metadata it actually has (sprint, specialists, subtask, dependency and comment counts); clicking a card opens the read-only task detail modal.
+- **The board's header controls.** A search box matches the task title and the `#id` reference, and three dropdowns filter by type (an equality over the ten task types), by minimum priority and by minimum severity (both thresholds, `>= n`, exactly as the `rmp task list` flags of the same names). They combine conjunctively, and each is a URL query parameter (`q`, `type`, `priority`, `severity`), so a narrowed board is a link you can share and opening it cold renders the same board the live controls produced. An unknown value simply applies no filter on its dimension. There is no status filter, because the columns already are the status.
+- **A graph query bar with a time budget.** The knowledge-graph page is driven by an editable read-only Cypher query with a node-limit dropdown. The data endpoint executes each query under a 5-second budget: the budget bounds the **work** the query causes, while the node limit bounds only the **result** it returns, so a query that scans a Cartesian product is stopped even though its response would be tiny. A cancelled or failed query is reported in place and the page keeps working.
+- **Tabler dark-theme UI.** The interface is built on the vendored Tabler admin-dashboard framework in its dark theme: a navigation sidebar (which collapses to a hamburger menu on small viewports), a top navbar naming the selected roadmap, page headers whose title names the view you are on (Sprints, Tasks, Audit, Knowledge graph), and Tabler cards, tables, and badges. On the Sprints page each of the three tabs carries a count badge in the colour of the sprint status that tab groups.
 - **Self-contained and offline.** Every asset (HTML, CSS, JavaScript, the vendored Tabler framework and D3.js graph library with the d3-sankey plugin, the Tabler Icons webfont, and the Inter font) is embedded in the binary via `go:embed` and served only from `/static/`; no page references a CDN, a remote font host, or any other remote origin, and the server makes no outbound request.
 - **Loopback by default.** It binds the loopback interface (`127.0.0.1`), so the read-only interface is reachable only from the local machine. Exposing it on the network is the explicit opt-in via `--host 0.0.0.0` (or any other non-loopback address), which also prints a network-exposure warning to stderr. Roadmap names from the URL are validated before any filesystem path is built (path-traversal guard).
 - **Responsive, mobile-first.** Every page, including the graph visualisation, adapts to small touch viewports.
 - **Comments are visible.** Opening a task shows its comments as a chronological timeline in the read-only task detail modal, and a sprint's own page carries a Comments card with the sprint's log. Both are oldest first and read-only: comments are displayed, never written, from the browser.
 
-See [DOCS/commands/web.md](DOCS/commands/web.md) for the full route list and exit codes.
+See [DOCS/commands/web.md](DOCS/commands/web.md) for the full route list, the tasks board in detail, the graph query bar, and the exit codes.
 
 ---
 

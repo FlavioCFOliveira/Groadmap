@@ -130,9 +130,14 @@ func TestHandleTasks_HappyPath(t *testing.T) {
 	if !contains(body, "Wire read-only web server to SQLite") {
 		t.Errorf("tasks body missing seeded task title")
 	}
-	// The full task table is present (its unique Type column header).
-	if !contains(body, "<th>Type</th>") {
-		t.Errorf("tasks page missing the full task table (no Type column header)")
+	// The Kanban board is the page's task presentation, and it renders no task
+	// table (SPEC/WEB.md § Roadmap Tasks Page; board_test.go pins the board
+	// itself).
+	if !contains(body, `data-role="task-board"`) {
+		t.Errorf("tasks page missing the Kanban task board")
+	}
+	if contains(body, "<th>Type</th>") {
+		t.Errorf("tasks page renders a task table; the board replaced it")
 	}
 	// A task detail modal is rendered for the seeded task.
 	if !contains(body, "task-modal-") {

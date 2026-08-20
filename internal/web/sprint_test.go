@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -230,10 +231,17 @@ func TestSprints_CardHeaderTabs(t *testing.T) {
 			t.Errorf("card header missing tab label %q", label)
 		}
 	}
-	// Each tab badge renders its count: 2 PENDING, 1 OPEN, 2 CLOSED.
+	// Each tab badge renders its count — 2 PENDING, 1 OPEN, 2 CLOSED — in the
+	// colour the sprint status mapping gives the status that tab groups: the
+	// count is the text, the tab's status is the colour (Acceptance Criteria 60
+	// and 120). The three are asserted TOGETHER: PENDING maps to the neutral
+	// bg-secondary-lt, so the Próximos badge alone is satisfied by a fixed-colour
+	// rendering too. TestSprintsPage_TabCountBadgesCarryTheirTabStatusColour in
+	// badge_test.go is the dedicated regression test for the colours.
 	for _, badge := range []string{
-		`<span class="badge bg-secondary-lt ms-1">2</span>`, // Próximos count
-		`<span class="badge bg-secondary-lt ms-1">1</span>`, // Actual count
+		`>Próximos <span class="badge bg-secondary-lt ms-1">2</span>`,
+		`>Actual <span class="badge bg-blue-lt ms-1">1</span>`,
+		`>Concluídos <span class="badge bg-green-lt ms-1">2</span>`,
 	} {
 		if !strings.Contains(header, badge) {
 			t.Errorf("card header missing count badge %q", badge)
@@ -412,8 +420,8 @@ func TestClassifySprints_OrderingRules(t *testing.T) {
 }
 
 // TestSprintPage_HappyPath drives handleSprint against a sprint of an existing
-// roadmap: 200 HTML showing all sprint fields and the member-task list, with
-// every task row clickable to a modal and no edit affordance (SPEC/WEB.md
+// roadmap: 200 HTML showing all sprint fields and the sprint's member tasks, with
+// every task card clickable to a modal and no edit affordance (SPEC/WEB.md
 // § Roadmap Sprint Page; Acceptance Criterion 13).
 func TestSprintPage_HappyPath(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
@@ -431,12 +439,12 @@ func TestSprintPage_HappyPath(t *testing.T) {
 	if !strings.Contains(body, "Deliver the sprint detail page and task modal") {
 		t.Errorf("sprint page missing the sprint description")
 	}
-	// Member tasks listed, each row clickable to a modal.
+	// Member tasks presented, each card clickable to a modal.
 	if !strings.Contains(body, "Build the read-only sprint page route and template") {
-		t.Errorf("sprint page does not list its member task")
+		t.Errorf("sprint page does not present its member task")
 	}
-	if !strings.Contains(body, `data-bs-target="#task-modal-`+itoa(f.openTaskID)+`"`) {
-		t.Errorf("sprint page task row is not wired to its task modal")
+	if !strings.Contains(body, `data-task-id="`+itoa(f.openTaskID)+`"`) {
+		t.Errorf("sprint page task card is not wired to the task detail modal")
 	}
 	// Read-only: no form, no submit, no edit control.
 	low := strings.ToLower(body)
@@ -445,24 +453,61 @@ func TestSprintPage_HappyPath(t *testing.T) {
 	}
 }
 
-// TestSprintPage_TaskOrder asserts the sprint page lists tasks in sprint_tasks
-// position order (the planned in-sprint execution order), not by id or status
-// (SPEC/WEB.md § Roadmap Sprint Page; Acceptance Criterion 13). The OPEN sprint
-// was seeded with openTaskID added before openTaskID2.
+// TestSprintPage_TaskOrder asserts that the sprint page presents the tasks of
+// its WAITING column in sprint_tasks position order — the planned in-sprint
+// execution order — and not by id (SPEC/WEB.md § Roadmap Sprint Page; Acceptance
+// Criteria 13, 14 and 132).
+//
+// WAITING is the one column of the three that is ordered by position: it holds
+// the work that has not started, so its order is the plan and answers "which task
+// do I develop next?". The DOING and CLOSED columns are records rather than
+// queues and are ordered by started_at and closed_at descending; they are not
+// this test's subject, and the whole three-column rule is pinned by
+// TestSprintBoard_EachColumnOrdersByItsOwnKey in sprint_board_test.go. The
+// fixture's two OPEN-sprint member tasks are both in SPRINT status, so both cards
+// sit in WAITING and their document order is the order within that column.
+//
+// The assertion is made discriminating by reordering the sprint through the
+// production write path: the fixture adds the two tasks in id order, so the
+// as-seeded page cannot tell a position-ordered column from an id-ordered one,
+// and the reordered page can — the two orders are then opposites.
 func TestSprintPage_TaskOrder(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	f := seedSprintFixture(t, "web-sprint-order")
 	mux := buildMux()
 
-	body := servePage(t, mux, "/roadmaps/"+f.name+"/sprints/"+itoa(f.openID))
+	const (
+		firstTitle  = "Build the read-only sprint page route and template"
+		secondTitle = "Render one task detail modal per shown task"
+	)
+	path := "/roadmaps/" + f.name + "/sprints/" + itoa(f.openID)
 
-	first := strings.Index(body, "Build the read-only sprint page route and template")
-	second := strings.Index(body, "Render one task detail modal per shown task")
-	if first < 0 || second < 0 {
-		t.Fatalf("sprint page is missing one of its member tasks (first=%d second=%d)", first, second)
+	cardOrder := func(body string) (int, int) {
+		t.Helper()
+		first := strings.Index(body, firstTitle)
+		second := strings.Index(body, secondTitle)
+		if first < 0 || second < 0 {
+			t.Fatalf("sprint page is missing one of its member tasks (first=%d second=%d)",
+				first, second)
+		}
+		return first, second
 	}
+
+	// As planned: openTaskID was added to the sprint first, so its card is first.
+	first, second := cardOrder(servePage(t, mux, path))
 	if first > second {
-		t.Errorf("sprint page tasks out of execution order: task #%d must precede task #%d", f.openTaskID, f.openTaskID2)
+		t.Errorf("sprint page tasks out of execution order: task #%d must precede task #%d",
+			f.openTaskID, f.openTaskID2)
+	}
+
+	// Re-planned through the production write path: the WAITING column follows.
+	reorderSprintTasks(t, f.name, f.openID, []int{f.openTaskID2, f.openTaskID})
+
+	first, second = cardOrder(servePage(t, mux, path))
+	if second > first {
+		t.Errorf("after reordering the sprint, task #%d must precede task #%d: the WAITING "+
+			"column follows the sprint_tasks position order, which no longer matches the id "+
+			"order", f.openTaskID2, f.openTaskID)
 	}
 }
 
@@ -504,52 +549,96 @@ func TestSprintPage_NotFoundCases(t *testing.T) {
 
 // TestTaskModal_WiringAndContent asserts the read-only task detail modal
 // mechanism on every page that shows clickable tasks: the tasks page and the
-// sprint page. Each clickable task is wired with data-bs-toggle="modal" to a
-// matching modal element, the modal shows the long free-text fields, and it
-// contains no form/input/submit. The asserted task (f.openTaskID) is a member of
-// the OPEN sprint, so its modal is rendered on the sprint page, and it also
-// appears in the full task table on the tasks page. The sprints landing page is
-// deliberately excluded: it renders every sprint as a compact card and opens no
-// task detail modal (SPEC/WEB.md § Task Detail Modal, § Shared Sprint-Card
-// Partial; Acceptance Criteria 8/15/38).
+// sprint page. Each page carries ONE modal shell, each clickable task is wired to
+// it by data-bs-toggle="modal" plus the task id the script fetches, and the
+// endpoint that fills the shell returns the long free-text fields the modal
+// presents. The sprints landing page is deliberately excluded: it renders every
+// sprint as a compact card and opens no task detail modal (SPEC/WEB.md § Task
+// Detail Modal, § Task Detail Endpoint, § Shared Sprint-Card Partial; Acceptance
+// Criteria 8/15/38/96).
+var rePerTaskModal = regexp.MustCompile(`id="task-modal-\d+"`)
+
 func TestTaskModal_WiringAndContent(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	f := seedSprintFixture(t, "web-task-modal")
 	mux := buildMux()
 
 	for _, path := range []string{
-		"/roadmaps/" + f.name + "/tasks",                     // tasks page (full task table)
+		"/roadmaps/" + f.name + "/tasks",                     // tasks page (the board)
 		"/roadmaps/" + f.name + "/sprints/" + itoa(f.openID), // sprint page
 	} {
 		body := servePage(t, mux, path)
 
-		// A clickable control is wired to a modal via Bootstrap data attributes.
+		// A clickable control is wired to the modal via Bootstrap data attributes,
+		// and carries the id of the task the script fetches.
 		if !strings.Contains(body, `data-bs-toggle="modal"`) {
 			t.Errorf("page %s has no modal-toggling control", path)
 		}
-		target := `data-bs-target="#task-modal-` + itoa(f.openTaskID) + `"`
-		if !strings.Contains(body, target) {
-			t.Errorf("page %s missing modal trigger %q", path, target)
+		if !strings.Contains(body, `data-bs-target="#task-modal"`) {
+			t.Errorf("page %s has no trigger pointing at the modal shell", path)
 		}
-		// The matching modal element exists.
-		modal := `id="task-modal-` + itoa(f.openTaskID) + `"`
-		if !strings.Contains(body, modal) {
-			t.Errorf("page %s missing modal element %q", path, modal)
+		if !strings.Contains(body, `data-task-id="`+itoa(f.openTaskID)+`"`) {
+			t.Errorf("page %s missing the trigger for task #%d", path, f.openTaskID)
 		}
-		// The modal shows the long free-text fields.
-		for _, section := range []string{
-			"Functional requirements", "Technical requirements", "Acceptance criteria", "Completion summary",
-			"Operators can inspect a sprint and its task list from the browser", // functional text
+
+		// Exactly ONE modal element, and it is the empty shell: no task's data
+		// travels in the document.
+		if got := strings.Count(body, `id="task-modal"`); got != 1 {
+			t.Errorf("page %s carries %d modal shells, want exactly 1", path, got)
+		}
+		// A per-task modal carried a numeric id; the shell's own elements are named
+		// (task-modal-title, task-modal-ref, ...), so the digits are what
+		// distinguish the two.
+		if rePerTaskModal.MatchString(body) {
+			t.Errorf("page %s still renders a per-task modal", path)
+		}
+		for _, absent := range []string{
+			"Functional requirements", "Technical requirements", "Acceptance criteria",
+			"Operators can inspect a sprint and its task list from the browser",
 		} {
-			if !strings.Contains(body, section) {
-				t.Errorf("page %s task modal missing %q", path, section)
+			if strings.Contains(body, absent) {
+				t.Errorf("page %s carries the modal content %q; it must be fetched on demand",
+					path, absent)
 			}
 		}
-		// Read-only: the modal (and the page) carry no form/input/submit.
+
+		// Read-only: no form and no submit control on either page. The tasks page
+		// carries exactly one input — its board's search box, which submits nothing
+		// and only changes which of the already-read tasks are shown; the sprint
+		// page's board carries none at all (SPEC/WEB.md § Roadmap Tasks Page,
+		// Read-only; § Sprint Detail Sub-Template, rule 4, Read-only).
 		low := strings.ToLower(body)
-		if strings.Contains(low, "<form") || strings.Contains(low, "<input") || strings.Contains(low, "type=\"submit\"") {
-			t.Errorf("page %s task modal must be read-only: no form/input/submit", path)
+		if strings.Contains(low, "<form") || strings.Contains(low, `type="submit"`) {
+			t.Errorf("page %s must be read-only: no form and no submit control", path)
 		}
+		wantInputs := 0
+		if strings.HasSuffix(path, "/tasks") {
+			wantInputs = 1
+		}
+		if got := strings.Count(low, "<input"); got != wantInputs {
+			t.Errorf("page %s carries %d input elements, want %d", path, got, wantInputs)
+		}
+	}
+
+	// What the shell is filled with: the endpoint returns every field the modal
+	// presents, for the same task the triggers point at.
+	view := decodeTaskDetail(t, mux, f.name, f.openTaskID)
+	if view.Task.ID != f.openTaskID {
+		t.Fatalf("the endpoint returned task #%d, want #%d", view.Task.ID, f.openTaskID)
+	}
+	for label, value := range map[string]string{
+		"functional requirements": view.Task.FunctionalRequirements,
+		"technical requirements":  view.Task.TechnicalRequirements,
+		"acceptance criteria":     view.Task.AcceptanceCriteria,
+		"title":                   view.Task.Title,
+		"created_at":              view.Task.CreatedAt,
+	} {
+		if value == "" {
+			t.Errorf("the task detail carries no %s", label)
+		}
+	}
+	if view.Task.FunctionalRequirements != "Operators can inspect a sprint and its task list from the browser" {
+		t.Errorf("the task detail's functional requirements = %q", view.Task.FunctionalRequirements)
 	}
 }
 

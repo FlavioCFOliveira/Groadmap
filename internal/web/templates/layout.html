@@ -9,6 +9,14 @@
   roadmap, active nav section). The dark theme is set with
   data-bs-theme="dark" on <html>; no toggle is offered.
 
+  Element order inside .page is the Tabler order: the sidebar <aside>, then the
+  top <header>, then .page-wrapper — the header is a SIBLING of the wrapper, not
+  a child of it. The vendored stylesheet offsets both with the same sibling rule
+  (.navbar-expand-lg.navbar-vertical~.navbar and ~.page-wrapper both get
+  margin-left:15rem), which only applies to that shape. The #sidebar-menu
+  collapse has exactly one toggler, the one inside the <aside>; the top navbar
+  carries no second toggler and no second brand.
+
   Asset order in <head> is fixed: Inter font, Tabler core CSS, Tabler Icons
   CSS, then the reworked override stylesheet. All come from /static/...; no
   remote origin, no CDN, no Google Fonts.
@@ -35,82 +43,132 @@
           <span class="fw-bold">Groadmap</span>
         </a>
       </h1>
-      <div class="collapse navbar-collapse" id="sidebar-menu">
+      <nav class="collapse navbar-collapse" id="sidebar-menu" aria-label="Sidebar">
         <ul class="navbar-nav pt-lg-3">
           <li class="nav-item{{if eq .Chrome.Active "roadmaps"}} active{{end}}">
-            <a class="nav-link" href="/">
+            <a class="nav-link" href="/"{{if eq .Chrome.Active "roadmaps"}} aria-current="page"{{end}}>
               <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-list"></i></span>
               <span class="nav-link-title">Roadmaps</span>
             </a>
           </li>
           {{with .Chrome.Roadmap}}
+          {{/*
+            The per-roadmap section label. Tabler v1.4.0 ships no navbar-specific
+            heading or divider class, so the label is its own `subheader` (the
+            small uppercase letter-spaced muted label, core/scss/ui/_type.scss)
+            and the rule above it is Tabler's `dropdown-divider`. The px-3 gutter
+            is Tabler's own spacing utility and resolves to the exact inline
+            padding of a vertical-navbar nav-link (var(--tblr-page-padding) =
+            var(--tblr-spacer-3) = 1rem), so the label lines up with the links
+            without a single line of project CSS (SPEC/WEB.md § UI Framework,
+            rule 10).
+          */}}
           <li class="nav-item mt-3">
-            <hr class="navbar-divider">
-            <h2 class="navbar-heading subheader">{{.}}</h2>
+            <hr class="dropdown-divider">
+            <h2 class="subheader px-3 mb-2">{{.}}</h2>
           </li>
           <li class="nav-item{{if eq $.Chrome.Active "sprints"}} active{{end}}">
-            <a class="nav-link" href="/roadmaps/{{.}}">
+            <a class="nav-link" href="/roadmaps/{{.}}"{{if eq $.Chrome.Active "sprints"}} aria-current="page"{{end}}>
               <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-run"></i></span>
               <span class="nav-link-title">Sprints</span>
             </a>
           </li>
           <li class="nav-item{{if eq $.Chrome.Active "tasks"}} active{{end}}">
-            <a class="nav-link" href="/roadmaps/{{.}}/tasks">
+            <a class="nav-link" href="/roadmaps/{{.}}/tasks"{{if eq $.Chrome.Active "tasks"}} aria-current="page"{{end}}>
               <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-checklist"></i></span>
               <span class="nav-link-title">Tasks</span>
             </a>
           </li>
           <li class="nav-item{{if eq $.Chrome.Active "audit"}} active{{end}}">
-            <a class="nav-link" href="/roadmaps/{{.}}/audit">
+            <a class="nav-link" href="/roadmaps/{{.}}/audit"{{if eq $.Chrome.Active "audit"}} aria-current="page"{{end}}>
               <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-history"></i></span>
               <span class="nav-link-title">Audit</span>
             </a>
           </li>
           <li class="nav-item{{if eq $.Chrome.Active "graph"}} active{{end}}">
-            <a class="nav-link" href="/roadmaps/{{.}}/graph">
+            <a class="nav-link" href="/roadmaps/{{.}}/graph"{{if eq $.Chrome.Active "graph"}} aria-current="page"{{end}}>
               <span class="nav-link-icon d-md-none d-lg-inline-block"><i class="ti ti-affiliate"></i></span>
               <span class="nav-link-title">Graph</span>
             </a>
           </li>
           {{end}}
         </ul>
-      </div>
+      </nav>
     </div>
   </aside>{{end}}
 
+{{/*
+  The top navbar. It names the roadmap the current page belongs to, and holds
+  nothing else: the sidebar already owns the brand and the single #sidebar-menu
+  toggler, so repeating either here would give a small viewport two hamburgers
+  driving one collapse and the word Groadmap twice. Tabler's own header toggler
+  targets its own #navbar-menu, which this interface does not have (SPEC/WEB.md
+  § UI Framework, rules 13 and 19).
+
+  The name is what tells one roadmap's pages from another's at a glance, and the
+  sidebar's own per-roadmap label collapses out of sight behind the off-canvas
+  menu on a small viewport, so this is the one region that names the selected
+  roadmap at every viewport width. It replaces a badge reading "Read-only": that
+  the interface never writes is a guarantee of the server, evident on every page
+  from the absence of any control that writes, so restating it here spent the one
+  region that can identify the page's subject on what the user cannot act on.
+
+  .Chrome.Roadmap is empty on the roadmap index page, which belongs to no
+  roadmap, and the {{with}} leaves the region empty there — no name, no glyph, no
+  placeholder. The value is the validated roadmap segment of the request path and
+  goes through html/template as text, so it is escaped like every other value.
+
+  The name stands alone: no glyph precedes it. An icon here would be the same on
+  every page of every roadmap and so would distinguish nothing, while the sidebar
+  already gives each of the roadmap's views its own.
+
+  overflow-hidden on the flex items is what lets text-truncate act: a flex item's
+  automatic minimum size is its content, so without it a long name would push the
+  navbar wider instead of being clipped. The nav-item needs no d-flex now that it
+  holds a single child (SPEC/WEB.md § UI Framework, rule 19; Acceptance
+  Criterion 108).
+*/}}
 {{define "topnavbar"}}  <header class="navbar navbar-expand-md d-print-none">
-    <div class="container-fluid">
-      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#sidebar-menu" aria-controls="sidebar-menu" aria-expanded="false" aria-label="Toggle navigation">
-        <span class="navbar-toggler-icon"></span>
-      </button>
-      <div class="navbar-brand d-md-none">
-        <a href="/" class="text-decoration-none">Groadmap</a>
-      </div>
-      <div class="navbar-nav flex-row order-md-last">
-        <div class="nav-item d-flex align-items-center">
-          <span class="badge bg-secondary-lt"><i class="ti ti-lock me-1"></i>Read-only</span>
+    <div class="container-xl">
+      {{with .Chrome.Roadmap}}
+      <div class="navbar-nav flex-row overflow-hidden">
+        <div class="nav-item overflow-hidden">
+          <span class="h3 mb-0 text-truncate" data-role="active-roadmap">{{.}}</span>
         </div>
       </div>
+      {{end}}
     </div>
   </header>{{end}}
 
 {{/*
-  taskModal renders ONE Bootstrap modal for a single task (dot = a web.taskView:
-  the task, whose own fields are reached through embedding, plus .Comments, its
-  work log). Each clickable task on a page is a control with
-  data-bs-toggle="modal" data-bs-target="#task-modal-{ID}", and the page renders
-  one taskModal per task it shows; tabler.min.js (Bootstrap 5.3) drives open and
-  close natively, so no custom JavaScript and no new server endpoint are needed
-  (SPEC/WEB.md § Task Detail Modal). The modal is read-only: it has no form, no
-  input, and no submit control — only a close control.
+  pageTitle is the ONE partial that renders a page header's title column, so the
+  six pages cannot drift into six conventions for saying the same kind of thing
+  (SPEC/WEB.md § Shared Page-Header Partial; Acceptance Criterion 109). No page
+  writes a page-pretitle or a page-title element of its own.
 
-  Every roadmap-derived field (title, the long free-text requirements, the
-  completion summary, specialists, and every comment body) is emitted through
-  html/template's contextual auto-escaping, so task data that contains HTML
-  control characters cannot alter page structure (SPEC/WEB.md § Security and
-  Constraints, rule 6). The long free-text fields and the comment bodies render
-  inside .task-modal__text blocks that wrap and preserve their line breaks.
+  Dot is a web.pageHeading. The title names the VIEW — Roadmaps, Sprints, Tasks,
+  Audit, Knowledge graph — and never the roadmap: the shell states the roadmap
+  twice already, in the sidebar's section label and in the top navbar, so a third
+  statement here would repeat a fact the user can see while leaving the view they
+  are actually looking at unnamed.
+
+  Three fields are optional and belong to one page each. Pretitle is the sprint
+  page's, the only page presenting an individual record rather than a view, where
+  it carries Sprint #<id> and the title becomes the sprint's own title plus its
+  status Badge. Lead and LeadCode are the roadmap index's lead line, whose
+  trailing path renders inside <code>. $ is the pageHeading itself, which the
+  {{with}} blocks shadow.
+
+  The actions column is NOT here: a search input, a <select> and a link are
+  genuinely different markup, and folding them in would force this partial to
+  know every page that uses it (SPEC/WEB.md § Shared Page-Header Partial, rule 4).
 */}}
+{{define "pageTitle"}}            <div class="col">
+              {{with .Pretitle}}<div class="page-pretitle">{{.}}</div>{{end}}
+              <h2 class="page-title">{{.Title}}{{with .Badge}}<span class="badge {{$.BadgeClass}} ms-2">{{.}}</span>{{end}}</h2>
+              {{with .Lead}}<div class="text-secondary mt-1">{{.}}{{with $.LeadCode}} <code>{{.}}</code>{{end}}</div>{{end}}
+            </div>{{end}}
+
 {{/*
   sprintCard renders the single shared sprint card used by EVERY tab of the
   Roadmap Sprints Page — Próximos, Actual, and Concluídos — so all sprints share
@@ -150,20 +208,22 @@
   Page (SPEC/WEB.md § Sprint Detail Sub-Template; Acceptance Criteria 38/39).
 
   Dot is a web.sprintDetail: .Name (roadmap), .Sprint (models.Sprint), .Tasks
-  (member tasks in planned in-sprint execution order, each with its own comment
-  log), .Comments (the sprint's own comments, oldest first), and .Summary
-  (the precomputed completion summary). It renders, in order: the sprint status
-  summary line, the sprint metadata datagrid, the full member-tasks table
-  with each row clickable to open the read-only task detail modal, and the
-  sprint's Comments card. The caller is responsible for rendering one taskModal
-  per shown task.
+  (member tasks in planned in-sprint execution order), .Columns (those same tasks
+  grouped into the member-tasks board's three fixed columns), .Comments (the
+  sprint's own comments, oldest first), and .Summary (the precomputed completion
+  summary). It renders, in order: the sprint status summary line, the sprint
+  metadata datagrid, the member-tasks board with each card clickable to open the
+  read-only task detail modal, and the sprint's Comments card. The caller renders
+  the single taskModalShell the page carries; a member task carries the NUMBER of
+  its comments and never their text, because the modal a card opens is filled on
+  demand from the task detail endpoint.
 
   The "Tasks" datagrid value uses len .Tasks (the loaded member tasks) rather
   than .Sprint.TaskCount: GetSprint populates TaskCount, but len .Tasks is the
   authoritative count of the rows actually rendered here (SPEC/WEB.md § Sprint
   Detail Sub-Template).
 */}}
-{{define "sprintDetail"}}          <div class="sprint-summary-line h3 mb-3" data-role="sprint-summary">{{.Summary.Line}}</div>
+{{define "sprintDetail"}}          <div class="h3 mb-3" data-role="sprint-summary">{{.Summary.Line}}</div>
 
           <div class="card mb-3">
             <div class="card-header">
@@ -212,43 +272,210 @@
             </div>
           </div>
 
-          <div class="card mb-3">
-            <div class="card-header">
-              <h3 class="card-title">Tasks <span class="badge bg-secondary-lt ms-2">{{len .Tasks}}</span></h3>
-              <div class="card-actions text-secondary">In planned execution order</div>
-            </div>
-            {{if .Tasks}}
-            <div class="table-responsive">
-              <table class="table table-vcenter card-table">
-                <thead>
-                  <tr>
-                    <th>ID</th>
-                    <th>Title</th>
-                    <th>Status</th>
-                    <th>Type</th>
-                    <th>Priority</th>
-                    <th>Severity</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {{range .Tasks}}
-                  <tr class="task-row" data-bs-toggle="modal" data-bs-target="#task-modal-{{.ID}}" tabindex="0" role="button" aria-label="Open details for task #{{.ID}}">
-                    <td>#{{.ID}}</td>
-                    <td>{{.Title}}</td>
-                    <td><span class="badge {{taskStatusBadge .Status}}">{{.Status}}</span></td>
-                    <td>{{.Type}}</td>
-                    <td><span class="badge {{priorityBadge .Priority}}">{{.Priority}}</span></td>
-                    <td><span class="badge {{severityBadge .Severity}}">{{.Severity}}</span></td>
-                  </tr>
-                  {{end}}
-                </tbody>
-              </table>
-            </div>
-            {{else}}
-            <div class="card-body">
-              <div class="empty">
-                <p class="empty-title">No tasks in this sprint</p>
-                <p class="empty-subtitle text-secondary">This sprint has no tasks assigned yet.</p>
+          {{/*
+            The member-tasks board: three FIXED columns — WAITING, DOING, CLOSED —
+            holding one card per member task, placed between the Sprint details
+            card above and the Comments card below (SPEC/WEB.md § Sprint Detail
+            Sub-Template, rule 4; Acceptance Criteria 130 to 139).
+
+            It replaces the six-column member-tasks table. The table could not
+            hold the trigger contract whole: a <tr> is not an activatable element
+            and can contain no single control wrapping the row, so the pointer got
+            the row and the keyboard got a button in one cell — two targets for
+            one task. A card IS a single element and can BE the control, so
+            pointer, touch, Enter and Space all reach the same target.
+
+            The columns come from the model (web.groupIntoSprintBoardColumns over
+            models.CategorizeTaskStatus), never from a literal here, so the board
+            and the sprint status summary line above group the sprint's tasks by
+            ONE categorisation: each column's badge is that line's own P, A or C,
+            by construction rather than by coincidence. All three columns are
+            rendered whatever the sprint holds, so a sprint with no member task is
+            an empty board rather than an absent one, and the sub-template puts no
+            page-level empty state in place of it.
+
+            The board is NOT wrapped in an outer card: the columns ARE the cards,
+            exactly as on the tasks page. Everything inside a column is Tabler's
+            own markup — cards, the card-header idiom, badges, the empty state —
+            and the board emits the tasks board's own classes rather than classes
+            of its own, so the lengths the two boards share are literally one
+            measure used twice: the 17rem minimum column, the 0.75rem gap and the
+            0.75rem card body padding (SPEC/WEB.md § Sprint Detail Sub-Template,
+            Height and scrolling; Acceptance Criterion 139).
+
+            task-board--bounded is what the stylesheet keys BOTH of this board's
+            departures on, and no markup of this board says more than that. Its
+            height is bounded (60vh, floored at --full-height-region-floor) rather
+            than taken from the space the page body leaves, because the sprint page
+            is not a single-region page and a full-height board would push the
+            Comments card below the fold for every sprint (SPEC/WEB.md
+            § Full-Height Page Regions; Acceptance Criterion 136); and its three
+            columns divide the board's width equally and grow with the viewport
+            instead of carrying the tasks board's fixed 19rem, because three
+            columns dividing a viewport are wide where five would be narrow
+            (SPEC/WEB.md § Sprint Detail Sub-Template, Height and scrolling, "The
+            three columns divide the width of the board"; Acceptance Criterion
+            139). Both are declared in static/style.css and neither adds a class
+            here.
+
+            READ-ONLY: no drag-and-drop, no control that moves a task between
+            columns, reorders cards, or edits anything. The only button in the
+            board is the card itself, and it opens the read-only detail modal
+            (Acceptance Criterion 138).
+          */}}
+          <div class="task-board task-board--bounded mb-3" data-role="task-board">
+            {{range .Columns}}
+            <div class="card task-board__column" data-role="task-board-column">
+              {{/*
+                The column header: the heading, and a hybrid badge whose TEXT is
+                the number of member tasks in the column and whose COLOUR is the
+                semantic colour of the status the column groups.
+
+                A column of this board groups a SET of statuses, so the colour is
+                the one the mapping assigns to the group's canonical status — the
+                status a task is normally in at that stage of the sprint. The model
+                names it (sprintBoardColumns, in data.go), and it is handed to
+                taskStatusBadge, the SAME helper every task status badge takes its
+                colour from. Nothing here writes a colour class out: a literal
+                would be a second mapping, free to drift from the first, and the
+                canonical status of each group is a fact about the board's columns
+                rather than about its markup (SPEC/WEB.md § Sprint Detail
+                Sub-Template, Column header; § Status, Priority, and Severity Badge
+                Colours, rule 2; Acceptance Criteria 61 and 140).
+              */}}
+              <div class="card-header">
+                <h3 class="card-title">{{.Heading}} <span class="badge {{taskStatusBadge .CanonicalStatus}} ms-2">{{len .Tasks}}</span></h3>
+              </div>
+              <div class="card-body task-board__cards">
+                {{range .Tasks}}
+                {{/*
+                  The card IS the modal trigger, and it is a real <button>: the
+                  vendored Bootstrap binds the modal data-api on click only, and
+                  per the HTML activation behaviour only a button, an anchor with
+                  href, or a form control turns Enter and Space into a click.
+                  role="button" and tabindex are therefore absent: a button has
+                  both natively, and an element that needs them is an element that
+                  cannot be pressed. The accessible name names the task AND carries
+                  its title, which is the card's visible label — a control whose
+                  accessible name omits its visible label fails WCAG 2.5.3 (Label
+                  in Name, Level A) (Acceptance Criterion 135).
+
+                  The card's content is phrasing content — spans, not divs —
+                  because that is a button's content model; the Tabler card classes
+                  are unchanged, and w-100/p-0/text-start are the utilities that
+                  keep a button looking like the card it is.
+
+                  This card differs from the tasks board's in exactly two places,
+                  both deliberate and both stated in the SPEC. First, the TITLE
+                  leads and the reference follows it as muted text on its own
+                  line, because the GitLab issue board card this board is modelled
+                  on leads with the title. Second, the badges and the counters
+                  share ONE line instead of the counters getting a footer row of
+                  their own, and on that line the comment count precedes the
+                  subtask count (SPEC/WEB.md § Sprint Detail Sub-Template, The
+                  card; Acceptance Criterion 133). The card carries no status
+                  badge — the column it sits in already states the status — and no
+                  type, no specialists and no dependency counts: a card is read at
+                  a glance, and every field of the task is in the modal the card
+                  opens.
+                */}}
+                <button type="button" class="card card-sm task-card w-100 p-0 text-start" data-bs-toggle="modal" data-bs-target="#task-modal" data-task-id="{{.ID}}" aria-label="Open details for task #{{.ID}}: {{.Title}}">
+                  <span class="card-body d-block">
+                    <span class="d-block fw-bold text-break" data-role="task-card-title">{{.Title}}</span>
+                    <span class="d-block small text-secondary mb-1" data-role="task-card-ref">#{{.ID}}</span>
+                    {{/*
+                      The card's third and last line, carrying BOTH of its
+                      remaining groups: the two badges at the leading edge and the
+                      two counters at the trailing edge. They share a line because
+                      between them they answer one question — what this task IS,
+                      and how much is ATTACHED to it — and because the column a
+                      card sits in is bounded and scrolls, so a row of height the
+                      card does not need is a card the reader has to scroll to
+                      reach (SPEC/WEB.md § Sprint Detail Sub-Template, Why the
+                      badges and the counters share a line; Acceptance Criterion
+                      133). This card therefore renders NO separate counter footer,
+                      which is where it parts company with the tasks board's card.
+
+                      The layout is Bootstrap's own leading/trailing idiom and
+                      nothing else: justify-content-between puts the first flex
+                      item at the start of the line and the last at its end, and
+                      flex-wrap turns "too narrow to hold both" into a WRAP rather
+                      than an overflow. A wrapped flex line holding one item
+                      resolves space-between to flex-start, so on a column at its
+                      17rem minimum the counters drop directly BELOW the badges,
+                      inside the same card, and neither the card, nor the column,
+                      nor the page scrolls sideways. Both inner groups carry
+                      flex-wrap for the same reason, one level down. No inline
+                      style, and every class here is Tabler's (Acceptance Criteria
+                      27 and 62).
+                    */}}
+                    <span class="d-flex flex-wrap align-items-center justify-content-between gap-1" data-role="task-card-summary">
+                      {{/*
+                        The pair is rendered exactly as the tasks board's card
+                        renders it: P then the priority, S then the severity, with
+                        no space and no separator, so a task of priority 5 and
+                        severity 3 reads P5 and S3. The rule is stated once for the
+                        card of BOTH boards, in SPEC/WEB.md § Roadmap Tasks Page,
+                        Card content, item 3 (Acceptance Criteria 85 and 133), and
+                        is not restated here: the two boards keep ONE form for this
+                        pair, and changing it on one card alone is the drift that
+                        statement exists to prevent.
+
+                        The prefix is a label, not a value. The colour helpers are
+                        handed .Priority and .Severity themselves, so the band is
+                        the band of the value and the prefix reaches no mapping.
+                      */}}
+                      <span class="d-flex flex-wrap gap-1" data-role="task-card-badges">
+                        <span class="badge {{priorityBadge .Priority}}">P{{.Priority}}</span>
+                        <span class="badge {{severityBadge .Severity}}">S{{.Severity}}</span>
+                      </span>
+                      {{/*
+                        The counters, closing the line at its TRAILING edge, which
+                        is where the GitLab card puts its own. The COMMENT count
+                        comes first and the subtask count second — the reverse of
+                        the tasks board's footer order, and stated separately from
+                        it because the two groups are separate: a pair read at the
+                        trailing edge of a line here, a list of six heterogeneous
+                        indicators in a block of its own there.
+
+                        BOTH are always rendered, including when the number they
+                        carry is 0, so every card of this board is the same shape.
+                        This is a deliberate departure from the tasks board's card,
+                        which renders an indicator only when it has something to
+                        count. The two cards differ because what they carry differs:
+                        this card carries exactly two indicators and both of them are
+                        counts, so a 0 STATES that the task has no comment, where an
+                        absent counter leaves the reader unable to tell "no comments"
+                        from "this card does not show comments". The tasks board's
+                        card carries six heterogeneous indicators, two of which are
+                        text rather than counts and have no zero to show, so always
+                        rendering all six is not even well defined there (SPEC/WEB.md
+                        § Sprint Detail Sub-Template, Both counters are always
+                        rendered; Acceptance Criterion 134).
+                      */}}
+                      <span class="d-flex flex-wrap gap-2 small text-secondary" data-role="task-card-counters">
+                        <span data-role="task-card-comments"><i class="ti ti-message me-1"></i>{{.CommentCount}}</span>
+                        <span data-role="task-card-subtasks"><i class="ti ti-subtask me-1"></i>{{.SubtaskCount}}</span>
+                      </span>
+                    </span>
+                  </span>
+                </button>
+                {{end}}
+                {{/*
+                  The column's own empty state, in the idiom the tasks board uses:
+                  Tabler's empty-state markup inside the column, below the header,
+                  in place of the card list, with the column, its heading and its 0
+                  badge still visible. It is rendered only when the column holds no
+                  card — unlike the tasks board's, which is always present and
+                  toggled, because this board carries no narrowing control that
+                  could empty a column in the browser.
+                */}}
+                {{if not .Tasks}}
+                <div class="empty" data-role="task-board-column-empty">
+                  <p class="empty-title">No tasks</p>
+                  <p class="empty-subtitle text-secondary">No task of this sprint is {{.Heading}} right now.</p>
+                </div>
+                {{end}}
               </div>
             </div>
             {{end}}
@@ -256,15 +483,15 @@
 
           {{/*
             The sprint's own progression log, rendered as the LAST card of the
-            sub-template, after the member-tasks card (SPEC/WEB.md § Sprint Detail
+            sub-template, after the member-tasks board (SPEC/WEB.md § Sprint Detail
             Sub-Template, Comments card; Acceptance Criteria 68/69).
 
             .Comments carries the comments of the SPRINT itself. A member task's
             comments are not shown, aggregated, or merged in here: they are
-            reachable through that task's own detail modal. The card is always
-            present; a sprint with no comments shows the empty state in place of
-            the timeline, in the same idiom the member-tasks card uses when the
-            sprint has no tasks.
+            reachable through that task's own detail modal, and a board card shows
+            only how MANY a task has. The card is always present; a sprint with no
+            comments shows the empty state in place of the timeline, in the same
+            idiom a column of the member-tasks board uses when it holds no task.
           */}}
           <div class="card">
             <div class="card-header">
@@ -283,117 +510,49 @@
             </div>
           </div>{{end}}
 
-{{define "taskModal"}}  <div class="modal modal-blur fade" id="task-modal-{{.ID}}" tabindex="-1" aria-labelledby="task-modal-{{.ID}}-title" aria-hidden="true">
+{{/*
+  taskModalShell is the ONE task detail modal a page renders. It is an empty
+  shell: it carries no task's data, and every page that shows a clickable task
+  renders it exactly once, whatever the number of tasks (SPEC/WEB.md § Task Detail
+  Modal, One modal element, filled on demand).
+
+  Before this, a page rendered one fully populated modal per task, whether or not
+  the user ever opened one: on a 100-task board that was 774,484 of the document's
+  930,188 bytes — 83 percent — for content a user opens one of at a time.
+
+  When the user opens a task, /static/task-modal.js fetches that task's fields and
+  comments from GET /roadmaps/{name}/tasks/{id}/data (the base path is the
+  data-task-base attribute below, and the trigger carries the task id in
+  data-task-id) and fills this shell. Every value it writes goes in as TEXT, never
+  as markup: the server's html/template escaping no longer stands between a stored
+  value and the page structure once the values travel as JSON, so the script is
+  what must not interpret them (SPEC/WEB.md § Task Detail Modal, Client-side
+  rendering is text-only).
+
+  Dot is the page's own view model; only .Name is read.
+*/}}
+{{define "taskModalShell"}}  <div class="modal modal-blur fade" id="task-modal" tabindex="-1" aria-labelledby="task-modal-title" aria-hidden="true" data-task-base="/roadmaps/{{.Name}}/tasks">
     <div class="modal-dialog modal-lg modal-dialog-scrollable modal-dialog-centered" role="document">
       <div class="modal-content">
         <div class="modal-header">
           <div>
-            <div class="text-secondary">Task #{{.ID}}</div>
-            <h5 class="modal-title" id="task-modal-{{.ID}}-title">{{.Title}}</h5>
+            <div class="text-secondary" id="task-modal-ref"></div>
+            <h5 class="modal-title" id="task-modal-title"></h5>
           </div>
-          <span class="badge {{taskStatusBadge .Status}} ms-auto me-2">{{.Status}}</span>
+          <span class="badge ms-auto me-2" id="task-modal-status" hidden></span>
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
         <div class="modal-body">
-          <div class="datagrid mb-3">
-            <div class="datagrid-item">
-              <div class="datagrid-title">Type</div>
-              <div class="datagrid-content">{{.Type}}</div>
-            </div>
-            <div class="datagrid-item">
-              <div class="datagrid-title">Priority</div>
-              <div class="datagrid-content"><span class="badge {{priorityBadge .Priority}}">{{.Priority}}</span></div>
-            </div>
-            <div class="datagrid-item">
-              <div class="datagrid-title">Severity</div>
-              <div class="datagrid-content"><span class="badge {{severityBadge .Severity}}">{{.Severity}}</span></div>
-            </div>
-            <div class="datagrid-item">
-              <div class="datagrid-title">Specialists</div>
-              <div class="datagrid-content">{{with .Specialists}}{{.}}{{else}}&mdash;{{end}}</div>
-            </div>
-            <div class="datagrid-item">
-              <div class="datagrid-title">Parent task</div>
-              <div class="datagrid-content">{{with .ParentTaskID}}#{{.}}{{else}}&mdash;{{end}}</div>
-            </div>
-            <div class="datagrid-item">
-              <div class="datagrid-title">Subtasks</div>
-              <div class="datagrid-content">{{.SubtaskCount}}</div>
-            </div>
-            <div class="datagrid-item">
-              <div class="datagrid-title">Depends on</div>
-              <div class="datagrid-content">
-                {{if .DependsOn}}<span class="d-flex flex-wrap gap-1">{{range .DependsOn}}<span class="badge bg-secondary-lt">#{{.}}</span>{{end}}</span>{{else}}&mdash;{{end}}
-              </div>
-            </div>
-            <div class="datagrid-item">
-              <div class="datagrid-title">Blocks</div>
-              <div class="datagrid-content">
-                {{if .Blocks}}<span class="d-flex flex-wrap gap-1">{{range .Blocks}}<span class="badge bg-secondary-lt">#{{.}}</span>{{end}}</span>{{else}}&mdash;{{end}}
-              </div>
-            </div>
-            <div class="datagrid-item">
-              <div class="datagrid-title">Created</div>
-              <div class="datagrid-content text-secondary">{{.CreatedAt}}</div>
-            </div>
-            <div class="datagrid-item">
-              <div class="datagrid-title">Started</div>
-              <div class="datagrid-content text-secondary">{{with .StartedAt}}{{.}}{{else}}&mdash;{{end}}</div>
-            </div>
-            <div class="datagrid-item">
-              <div class="datagrid-title">Tested</div>
-              <div class="datagrid-content text-secondary">{{with .TestedAt}}{{.}}{{else}}&mdash;{{end}}</div>
-            </div>
-            <div class="datagrid-item">
-              <div class="datagrid-title">Closed</div>
-              <div class="datagrid-content text-secondary">{{with .ClosedAt}}{{.}}{{else}}&mdash;{{end}}</div>
-            </div>
-          </div>
-
-          <div class="mb-3">
-            <div class="datagrid-title mb-1">Functional requirements</div>
-            <div class="task-modal__text">{{.FunctionalRequirements}}</div>
-          </div>
-          <div class="mb-3">
-            <div class="datagrid-title mb-1">Technical requirements</div>
-            <div class="task-modal__text">{{.TechnicalRequirements}}</div>
-          </div>
-          <div class="mb-3">
-            <div class="datagrid-title mb-1">Acceptance criteria</div>
-            <div class="task-modal__text">{{.AcceptanceCriteria}}</div>
-          </div>
-          <div class="mb-3">
-            <div class="datagrid-title mb-1">Completion summary</div>
-            <div class="task-modal__text">{{with .CompletionSummary}}{{.}}{{else}}&mdash;{{end}}</div>
-          </div>
-
           {{/*
-            The task's work log, directly after the completion-summary block and
-            last in the modal body: what was tried, what was found, and why the
-            work went the way it did (SPEC/WEB.md § Task Detail Modal, comments
-            timeline; Acceptance Criteria 64/65/67).
-
-            The comments arrive on the taskView already paired with the task by
-            the page loader's single grouped query, so opening a modal issues no
-            request of its own: no new server endpoint and no write path. A task
-            with no comments reaches the else branch and shows an explicit
-            empty state, not an empty list and not a missing section.
-
-            The empty state is a plain message rather than the Tabler .empty panel
-            the sprint Comments card uses: this block sits among the modal's other
-            text blocks (the requirements, the completion summary), and a centred
-            3rem-padded panel among them would read as a different kind of content.
-            The sprint card, by contrast, is a card and follows the member-tasks
-            card's panel idiom, as SPEC/WEB.md § Sprint Detail Sub-Template asks.
+            Three mutually exclusive states, all present in the shell and toggled
+            by the script: the load in progress, the failure message, and the
+            task's content. The failure is shown IN the modal, never silently and
+            never leaving the previously opened task on display (SPEC/WEB.md
+            § Task Detail Modal, Failure is visible in the modal).
           */}}
-          <div>
-            <div class="datagrid-title mb-1">Comments</div>
-            {{if .Comments}}
-            {{template "commentTimeline" .Comments}}
-            {{else}}
-            <div class="text-secondary">No comments have been recorded on this task yet.</div>
-            {{end}}
-          </div>
+          <div class="text-secondary" id="task-modal-loading">Loading the task detail&hellip;</div>
+          <div class="text-danger" id="task-modal-error" role="alert" hidden></div>
+          <div id="task-modal-content"></div>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>

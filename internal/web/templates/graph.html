@@ -3,19 +3,35 @@
 <head>
 {{template "head" .}}
 </head>
-<body class="layout-fluid">
+{{/*
+  full-height-page next to Tabler's layout-fluid: this page presents a full-height
+  region, the graph card below, whose height is the space the page body leaves
+  once the navbar, the page header and the query bar are placed. The class is what
+  static/style.css hangs the one definite height on, at the top of the flex chain
+  Tabler already ships, so the browser computes the card's height instead of the
+  stylesheet subtracting a guess from the viewport — a guess that forgot the query
+  bar entirely and put the foot of the card 154px below the fold
+  (SPEC/WEB.md § Full-Height Page Regions).
+*/}}
+<body class="layout-fluid full-height-page">
   <div class="page">
 {{template "sidebar" .}}
-    <div class="page-wrapper">
 {{template "topnavbar" .}}
+    <div class="page-wrapper">
       <div class="page-header d-print-none">
-        <div class="container-fluid">
+        <div class="container-xl">
           <div class="row g-2 align-items-center">
-            <div class="col">
-              <div class="page-pretitle">Knowledge graph</div>
-              <h2 class="page-title">{{.Name}}</h2>
-            </div>
-            <div class="col-auto ms-auto">
+{{template "pageTitle" .Chrome.Heading}}
+            {{/*
+              The actions column carries the layout dropdown and nothing else: a
+              control that acts on this page. The link that stood beside it was
+              labelled "Tasks & sprints" but pointed at /roadmaps/{name}, the
+              sprints page alone — a leftover from before those two endpoints were
+              split, and the same retired label the roadmap index already forbids.
+              It was also a second route to a page the sidebar lists on every page
+              (SPEC/WEB.md § Shared Page-Header Partial, rule 5).
+            */}}
+            <div class="col-auto ms-auto d-print-none">
               <div class="d-flex align-items-center gap-2 flex-wrap">
                 <label for="layout-select" class="form-label mb-0 text-secondary d-none d-sm-inline">Layout</label>
                 <select id="layout-select" class="form-select form-select-sm graph-layout-select" aria-label="Graph layout">
@@ -29,14 +45,13 @@
                   <option value="chord-directed">Directed chord diagram</option>
                   <option value="chord-dependency">Chord dependency diagram</option>
                 </select>
-                <a class="btn btn-outline-secondary btn-sm" href="/roadmaps/{{.Name}}"><i class="ti ti-arrow-left me-1"></i>Tasks &amp; sprints</a>
               </div>
             </div>
           </div>
         </div>
       </div>
-      <div class="page-body">
-        <div class="container-fluid h-100">
+      <main class="page-body">
+        <div class="container-xl">
           <form id="query-bar" class="graph-query-bar card mb-3" novalidate>
             <div class="card-body">
               <div class="graph-query-bar__row">
@@ -112,7 +127,7 @@
 
               <div id="empty-graph" class="graph-empty" hidden>
                 <div class="empty">
-                  <div class="empty-icon"><i class="ti ti-affiliate-off empty-icon-glyph"></i></div>
+                  <div class="empty-icon"><i class="ti ti-hierarchy-off empty-icon-glyph"></i></div>
                   <p class="empty-title">No knowledge graph yet</p>
                   <p class="empty-subtitle text-secondary">
                     This roadmap has no knowledge graph yet. Add nodes and edges with the CLI, for example:
@@ -125,7 +140,7 @@
             </div>
           </div>
         </div>
-      </div>
+      </main>
     </div>
   </div>
   <script src="/static/vendor/tabler/tabler.min.js"></script>

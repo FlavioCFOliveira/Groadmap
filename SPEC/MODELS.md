@@ -43,13 +43,15 @@ const (
 
 | Status | Set Automatically | Set Manually | Description |
 |--------|-------------------|--------------|-------------|
-| `BACKLOG` | Yes (on remove from sprint) | Yes | Task is in backlog, not assigned to sprint |
+| `BACKLOG` | Yes (on remove from sprint) | Yes | Task is in the backlog. It usually belongs to no sprint, but it can still be a sprint member; see `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` |
 | `SPRINT` | **Yes** | No | Task is assigned to sprint. **Do not set manually** - use `sprint add-tasks` |
 | `DOING` | No | Yes | Task is being worked on |
 | `TESTING` | No | Yes | Task is in testing phase |
 | `COMPLETED` | No | Yes | Task is complete |
 
 **Important:** The `SPRINT` status is automatically managed by sprint operations (`sprint add-tasks`, `sprint remove-tasks`). Attempting to manually transition to `SPRINT` via `task stat` should be rejected.
+
+**Status is not membership:** The `status` column does not record which sprint a task belongs to; the `sprint_tasks` table does (see `DATABASE.md § sprint_tasks Table (1:N Relationship)`). A task whose status is `BACKLOG` may still be a member of a sprint. `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` is the canonical description of that state.
 
 ### Task Type
 ```go

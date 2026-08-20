@@ -6,43 +6,44 @@
 <body class="layout-fluid">
   <div class="page">
 {{template "sidebar" .}}
-    <div class="page-wrapper">
 {{template "topnavbar" .}}
+    <div class="page-wrapper">
       <div class="page-header d-print-none">
-        <div class="container-fluid">
+        <div class="container-xl">
           <div class="row g-2 align-items-center">
-            <div class="col">
-              <div class="page-pretitle">{{.Name}} / Sprint #{{.Sprint.ID}}</div>
-              <h2 class="page-title">{{.Sprint.Title}} <span class="badge {{sprintStatusBadge .Sprint.Status}} ms-2">{{.Sprint.Status}}</span></h2>
-            </div>
-            <div class="col-auto ms-auto">
+{{template "pageTitle" .Chrome.Heading}}
+            {{/*
+              The one navigation link kept in an actions column. It returns to the
+              parent of the record on display, a relationship the sidebar's flat
+              list of views does not express, so it is not the duplicated
+              navigation removed elsewhere (SPEC/WEB.md § Shared Page-Header
+              Partial, rule 5).
+            */}}
+            <div class="col-auto ms-auto d-print-none">
               <a class="btn btn-outline-secondary" href="/roadmaps/{{.Name}}"><i class="ti ti-arrow-left me-1"></i>Back to sprints</a>
             </div>
           </div>
         </div>
       </div>
-      <div class="page-body">
-        <div class="container-fluid">
+      <main class="page-body">
+        <div class="container-xl">
 
 {{template "sprintDetail" .Detail}}
 
         </div>
-      </div>
-      <footer class="footer footer-transparent d-print-none">
-        <div class="container-fluid">
-          <div class="row text-center align-items-center flex-row-reverse">
-            <div class="col-12 text-secondary">
-              Read-only. The rmp CLI remains the sole write path.
-            </div>
-          </div>
-        </div>
-      </footer>
+      </main>
     </div>
   </div>
 
-  {{/* One read-only task detail modal per task in this sprint. */}}
-  {{range .Tasks}}{{template "taskModal" .}}{{end}}
+  {{/*
+    ONE read-only task detail modal for the whole page: an empty shell filled on
+    demand from the task detail endpoint when the user opens a task, so the
+    document carries no task's modal content at all (SPEC/WEB.md § Task Detail
+    Modal, One modal element, filled on demand).
+  */}}
+{{template "taskModalShell" .}}
 
   <script src="/static/vendor/tabler/tabler.min.js"></script>
+  <script src="/static/task-modal.js"></script>
 </body>
 </html>{{end}}
