@@ -395,8 +395,17 @@ No. Only one sprint can be `OPEN` at a time. Close the current sprint before sta
 
 **How do I start working on a task?**
 ```bash
-rmp task stat -r <name> <id> DOING          # Sets started_at automatically
+rmp task stat -r <name> <id> DOING --commit-open $(git rev-parse HEAD)
 ```
+- `--commit-open` (short `-co`) is **mandatory** on every transition into `DOING`.
+  It records the git commit the work starts from, so the task is tied to a point
+  in the code history. Without it the command is rejected with exit code 6 and
+  nothing changes.
+- You supply the hash. `rmp` runs no git command and reads no repository: it
+  validates the format and never checks that the commit exists anywhere.
+- A hash is 7 to 64 hexadecimal characters — an abbreviated hash, a full SHA-1,
+  or a full SHA-256 — accepted in any letter case and stored lowercase.
+- `started_at` is set automatically.
 
 **How do I mark a task as ready for testing?**
 ```bash
@@ -405,27 +414,43 @@ rmp task stat -r <name> <id> TESTING        # Sets tested_at automatically
 
 **What do I do if a task fails testing?**
 ```bash
-rmp task stat -r <name> <id> DOING          # Return to development
+rmp task stat -r <name> <id> DOING --commit-open $(git rev-parse HEAD)
 ```
+- Returning to `DOING` is a transition into `DOING` like any other, so
+  `--commit-open` is required again. The new hash **replaces** the previous one:
+  the task now starts from where the rework starts.
 
 **How do I complete a task?**
 ```bash
-rmp task stat -r <name> <id> COMPLETED
-rmp task stat -r <name> <id> COMPLETED --summary "Implemented OAuth2 with PKCE flow"
+rmp task stat -r <name> <id> COMPLETED --commit-close $(git rev-parse HEAD)
+rmp task stat -r <name> <id> COMPLETED -cc 2578d18 --summary "Implemented OAuth2 with PKCE flow"
 ```
+- `--commit-close` (short `-cc`) is **mandatory** on the transition into
+  `COMPLETED`, and records the commit the work is concluded at. Same format
+  rules as `--commit-open`.
 - `--summary` is optional (max 4096 chars) and only valid on the `TESTING → COMPLETED` transition.
 - `closed_at` is set automatically.
+- Each commit flag is rejected (exit 6) on any target status other than its own:
+  `--commit-open` only on `DOING`, `--commit-close` only on `COMPLETED`.
 
 **How do I bulk-change task status?**
 ```bash
 rmp task stat -r <name> 1,2,3 TESTING
+rmp task stat -r <name> 1,2,3 DOING --commit-open 5f93b51   # one hash, every task
 ```
+- A single hash applies to every id in the batch. Batches are fail-fast: if any
+  id or any flag is rejected, **no** task in the batch changes.
 
 **How do I reopen a completed task?**
 ```bash
-rmp task reopen -r <name> <id>              # Returns to BACKLOG, clears all lifecycle timestamps
+rmp task reopen -r <name> <id>              # Returns to BACKLOG, clears the lifecycle timestamps
 rmp task reopen -r <name> 1,2,3             # Bulk reopen
 ```
+- Reopening clears `started_at`, `tested_at`, `closed_at`, `completion_summary`
+  and `commit_close` — but **preserves `commit_open`**. Reopening withdraws the
+  claim that the task was concluded at a given commit; it does not make the work
+  stop having started where it started. No command ever clears `commit_open`; the
+  next transition into `DOING` replaces it.
 
 **How do I change priority or severity?**
 ```bash
@@ -681,6 +706,17 @@ rmp <command> -r <name> ...    # Pass -r explicitly; there is no default roadmap
 - `tested_at` — set when a task moves to `TESTING`
 - `closed_at` — set when a task moves to `COMPLETED`
 - All three are cleared when a task is reopened to `BACKLOG`
+
+**How are commit hashes tracked?**
+- `commit_open` — the commit the work starts from, supplied with `--commit-open`
+  on every transition into `DOING`
+- `commit_close` — the commit the work is concluded at, supplied with
+  `--commit-close` on the transition into `COMPLETED`
+- Neither is derived: `rmp` runs no git command and reads no repository
+- Returning to `BACKLOG` — by `task stat BACKLOG`, `task reopen`,
+  `sprint remove-tasks` or `sprint remove` — clears `commit_close` and preserves
+  `commit_open`. This is deliberately asymmetric with the timestamps above,
+  which are all cleared.
 
 ## License
 
