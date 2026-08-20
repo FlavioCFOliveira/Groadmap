@@ -181,22 +181,23 @@ func staticWorkflows() []Workflow {
 				"Roadmap `<name>` exists.",
 				"The target task is in SPRINT status (i.e. it has already been attached to a sprint via `rmp sprint add-tasks`).",
 				"The task has no incomplete dependencies (verify with `rmp task blockers -r <name> <task-id>`).",
+				"You can supply the two git commit hashes the transitions require. rmp runs no git command and reads no repository, so obtain them yourself, for example with `git rev-parse HEAD`.",
 			},
 			Steps: []WorkflowStep{
 				{
-					Command: "rmp task stat -r <name> <task-id> DOING",
-					Purpose: "Start work on the task. Sets started_at to the current timestamp.",
+					Command: "rmp task stat -r <name> <task-id> DOING --commit-open <hash>",
+					Purpose: "Start work on the task. Sets started_at to the current timestamp and records the commit the work starts from. --commit-open is mandatory here: without it the command is rejected with exit 6.",
 				},
 				{
 					Command: "rmp task stat -r <name> <task-id> TESTING",
-					Purpose: "Mark the task as ready for testing once implementation is done. Sets tested_at to the current timestamp.",
+					Purpose: "Mark the task as ready for testing once implementation is done. Sets tested_at to the current timestamp. Neither commit flag is accepted on this transition.",
 				},
 				{
-					Command: "rmp task stat -r <name> <task-id> COMPLETED --summary \"<one-paragraph completion summary>\"",
-					Purpose: "Close the task. Sets closed_at and stores the completion summary on the task. --summary is accepted only on this final transition.",
+					Command: "rmp task stat -r <name> <task-id> COMPLETED --commit-close <hash> --summary \"<one-paragraph completion summary>\"",
+					Purpose: "Close the task. Sets closed_at, records the commit the work is concluded at, and stores the completion summary. --commit-close is mandatory here; --summary is accepted only on this final transition and is optional.",
 				},
 			},
-			ExpectedOutcome: "The task is in COMPLETED status, carries the supplied completion_summary, and has all three of started_at, tested_at, and closed_at set.",
+			ExpectedOutcome: "The task is in COMPLETED status, carries the supplied completion_summary, has all three of started_at, tested_at, and closed_at set, and carries both commit_open and commit_close in lowercase.",
 		},
 		{
 			Name: "record_task_working_log",

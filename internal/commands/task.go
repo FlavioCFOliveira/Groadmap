@@ -48,15 +48,22 @@ Numeric ranges:
   --priority, --severity      0-9 (0 = lowest, 9 = highest)
 
 Status workflow (per SPEC/STATE_MACHINE.md):
-  BACKLOG --[sprint add-tasks]--> SPRINT --[task stat DOING]--> DOING
+  BACKLOG --[sprint add-tasks]--> SPRINT --[task stat DOING -co <hash>]--> DOING
         DOING --[task stat TESTING]--> TESTING
-        TESTING --[task stat COMPLETED]--> COMPLETED --[task reopen / stat BACKLOG]--> BACKLOG
+        TESTING --[task stat COMPLETED -cc <hash>]--> COMPLETED
+        COMPLETED --[task reopen / stat BACKLOG]--> BACKLOG
   Rules enforced:
     - 'task stat <id> SPRINT' is rejected (exit 6). Use 'sprint add-tasks' instead.
     - 'task remove' is only allowed while a task is in BACKLOG.
     - Marking COMPLETED is rejected (exit 6) if any subtask or dependency is not yet COMPLETED.
+    - Every transition into DOING requires --commit-open / -co, and the transition into
+      COMPLETED requires --commit-close / -cc. Each flag is rejected (exit 6) on any other
+      target status, and its absence on its own target status is rejected (exit 6) too.
+    - A commit hash is 7 to 64 hexadecimal characters, any letter case, stored lowercase.
+      You supply it: rmp runs no git command and reads no repository.
     - On COMPLETED transition you may attach a free-form summary with --summary / -s (max 4096 chars).
-    - 'task reopen' (or 'stat BACKLOG' from COMPLETED) clears started_at, tested_at, closed_at, completion_summary.
+    - 'task reopen' (or 'stat BACKLOG' from COMPLETED) clears started_at, tested_at, closed_at,
+      completion_summary and commit_close; commit_open is preserved.
 
 Commands:
   list, ls [OPTIONS]                          List tasks (any status; filter with --status)
@@ -65,8 +72,8 @@ Commands:
   next [num]                                  Get next [num] incomplete tasks from the OPEN sprint
   edit <task-id> [OPTIONS]                    Edit fields of a task (status NOT editable here)
   remove, rm <task-ids>                       Remove task(s) — BACKLOG only, no active subtasks
-  stat, set-status <task-ids> <new-status>    Set task status (manual transitions; SPRINT is rejected)
-  reopen <task-ids>                           Reopen task(s) to BACKLOG, clearing lifecycle timestamps
+  stat, set-status <task-ids> <new-status>    Set task status (DOING/COMPLETED require a commit hash)
+  reopen <task-ids>                           Reopen task(s) to BACKLOG, clearing all but commit_open
   prio, set-priority <task-ids> <priority>    Set task priority (0-9) for one or many tasks
   sev, set-severity <task-ids> <severity>     Set task severity (0-9) for one or many tasks
   subtasks <task-id>                          List direct subtasks (one level; no grand-children)
@@ -106,8 +113,14 @@ Options (create / edit):
        --severity <n>               Initial/new severity (0-9, default 0)
        --parent <id>                Parent task ID (on create only — makes a sub-task)
 
-Options (stat to COMPLETED):
-  -s, --summary <text>              Completion summary (max 4096 chars; only valid when
+Options (stat):
+  -co, --commit-open <hash>         Git commit the work starts from (7-64 hex chars,
+                                    stored lowercase). REQUIRED when the target status
+                                    is DOING; rejected for any other target status.
+  -cc, --commit-close <hash>        Git commit the work is concluded at (7-64 hex chars,
+                                    stored lowercase). REQUIRED when the target status
+                                    is COMPLETED; rejected for any other target status.
+  -s,  --summary <text>             Completion summary (max 4096 chars; only valid when
                                     target status is COMPLETED)
 
 Options (comment-add / comment-list / comment-edit):
@@ -162,8 +175,8 @@ Examples:
   rmp task create -r myproject -t "Fix bug" -fr "User can login" -tr "Update auth" -ac "Login works"
   rmp task create -r myproject -t "Add metrics" --type CHORE -p 3
   rmp task edit -r myproject 42 -t "Updated title" -p 8
-  rmp task stat -r myproject 1,2,3 DOING
-  rmp task stat -r myproject 7 COMPLETED --summary "Shipped behind feature flag"
+  rmp task stat -r myproject 1,2,3 DOING --commit-open 5f93b51
+  rmp task stat -r myproject 7 COMPLETED -cc 2578d18 --summary "Shipped behind feature flag"
   rmp task prio -r myproject 1,2,3 8
   rmp task sev -r myproject 5 9
   rmp task add-dep -r myproject 10 7

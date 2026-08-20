@@ -73,16 +73,26 @@ func staticPitfalls() []Pitfall {
 			Description: "Transitioning a task to COMPLETED while it has incomplete declared dependencies " +
 				"(blockers). The transition is rejected; complete the blockers first or remove the dependency.",
 			WrongExample:   "rmp task stat -r myproject 42 COMPLETED",
-			CorrectExample: "rmp task blockers -r myproject 42 && rmp task stat -r myproject <blocker-id> COMPLETED && rmp task stat -r myproject 42 COMPLETED",
+			CorrectExample: "rmp task blockers -r myproject 42 && rmp task stat -r myproject <blocker-id> COMPLETED --commit-close <hash> && rmp task stat -r myproject 42 COMPLETED --commit-close <hash>",
 			Reference:      "task stat; task blockers; task remove-dep; SPEC/STATE_MACHINE.md § Dependency rules.",
 		},
 		{
 			ID: "summary_on_non_completed_transition",
 			Description: "Passing `--summary` on any transition other than `→ COMPLETED`. The flag is " +
 				"accepted only when the target status is COMPLETED; using it on any other transition is rejected.",
-			WrongExample:   "rmp task stat -r myproject 42 DOING --summary \"started work\"",
-			CorrectExample: "rmp task stat -r myproject 42 COMPLETED --summary \"work done and verified\"",
+			WrongExample:   "rmp task stat -r myproject 42 DOING --commit-open 5f93b51 --summary \"started work\"",
+			CorrectExample: "rmp task stat -r myproject 42 COMPLETED --commit-close 2578d18 --summary \"work done and verified\"",
 			Reference:      "task stat --summary flag.",
+		},
+		{
+			ID: "missing_commit_hash_on_transition",
+			Description: "Running `task stat <ids> DOING` without `--commit-open`, or " +
+				"`task stat <ids> COMPLETED` without `--commit-close`. Each flag is mandatory on its " +
+				"own transition and rejected on every other one. The agent must supply the hash " +
+				"itself; rmp never reads a git repository to obtain it.",
+			WrongExample:   "rmp task stat -r myproject 42 DOING",
+			CorrectExample: "rmp task stat -r myproject 42 DOING --commit-open $(git rev-parse HEAD)",
+			Reference:      "task stat --commit-open / --commit-close flags; SPEC/STATE_MACHINE.md § Commit Tracking Fields.",
 		},
 		{
 			ID: "partial_reorder",
@@ -106,8 +116,8 @@ func staticPitfalls() []Pitfall {
 			ID: "assume_partial_batch_success",
 			Description: "Assuming a batch operation may partially succeed. All batch operations in rmp are " +
 				"fail-fast: either every ID is valid and the operation runs end-to-end, or no change is made.",
-			WrongExample:   "rmp task stat -r myproject 42,99999,43 COMPLETED",
-			CorrectExample: "rmp task get -r myproject 42,43 && rmp task stat -r myproject 42,43 COMPLETED",
+			WrongExample:   "rmp task stat -r myproject 42,99999,43 COMPLETED --commit-close 2578d18",
+			CorrectExample: "rmp task get -r myproject 42,43 && rmp task stat -r myproject 42,43 COMPLETED --commit-close 2578d18",
 			Reference:      "task stat; task get; SPEC/COMMANDS.md § Batch Operation Behavior (Fail-Fast).",
 		},
 		{
@@ -123,8 +133,8 @@ func staticPitfalls() []Pitfall {
 			Description: "Parsing stdout after a modification command (status change, priority change, " +
 				"reorder, delete, etc.). Such commands deliberately return empty stdout on success; rely " +
 				"on the exit code instead.",
-			WrongExample:   "result=$(rmp task stat -r myproject 42 DOING) && echo \"$result\"",
-			CorrectExample: "rmp task stat -r myproject 42 DOING && echo \"transition succeeded\"",
+			WrongExample:   "result=$(rmp task stat -r myproject 42 DOING --commit-open 5f93b51) && echo \"$result\"",
+			CorrectExample: "rmp task stat -r myproject 42 DOING --commit-open 5f93b51 && echo \"transition succeeded\"",
 			Reference:      "task stat; task prio; sprint reorder; conventions.stdout_on_success.",
 		},
 		{
