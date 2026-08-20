@@ -228,7 +228,6 @@ rmp task create -r <name> \
   -tr "Technical requirements - How to build it?" \
   -ac "Acceptance criteria - How to verify it?" \
   --type USER_STORY --priority 7 --severity 3 \
-  --specialists "go-developer,exhaustive-qa-engineer"
 ```
 
 **What task types are available?**
@@ -255,7 +254,6 @@ rmp task list -r <name> --status BACKLOG
 rmp task list -r <name> --status DOING,TESTING
 rmp task list -r <name> --type BUG --severity 8,9
 rmp task list -r <name> --priority 7 --status SPRINT
-rmp task list -r <name> --specialists "go-developer"
 rmp task list -r <name> --created-since 2026-03-01
 rmp task list -r <name> --sort created --limit 50
 ```
@@ -436,12 +434,6 @@ rmp task sev -r <name> <id> 8               # Severity 0-9
 rmp task prio -r <name> 1,2,3 7             # Bulk update
 ```
 
-**How do I assign or remove specialists?**
-```bash
-rmp task assign -r <name> <id> "go-developer"
-rmp task unassign -r <name> <id> "go-developer"
-```
-
 **How do I record what I found while doing the work?**
 
 Comments are the work log. They are typed and timestamped, and a task or a sprint holds as many as the work needs.
@@ -583,7 +575,7 @@ On startup the served URL is printed as JSON (`{"url": "http://127.0.0.1:8787"}`
 - **Read-only.** No route creates, edits, or deletes anything; serving a page writes no rows, no audit-log entry, and never checkpoints the graph store. Only `GET`/`HEAD` are accepted (any other method returns HTTP 405).
 - **No `-r` flag.** It is the one command exempt from the always-required-roadmap rule; it lists all roadmaps and you pick one in the browser.
 - **Long-lived.** It keeps serving until interrupted; `Ctrl+C` (`SIGINT`) or `SIGTERM` shuts it down gracefully (exit 0).
-- **A Kanban tasks board.** The Tasks page lays every task of the roadmap out on a board of five fixed status columns - `BACKLOG`, `SPRINT`, `DOING`, `TESTING`, `COMPLETED` - each with a count badge, all five always present whatever the data holds. There is no pagination: whatever the roadmap holds, the board shows. Each card carries the task's `#id` and type, its title, its priority and severity badges, and only the metadata it actually has (sprint, specialists, subtask, dependency and comment counts); clicking a card opens the read-only task detail modal.
+- **A Kanban tasks board.** The Tasks page lays every task of the roadmap out on a board of five fixed status columns - `BACKLOG`, `SPRINT`, `DOING`, `TESTING`, `COMPLETED` - each with a count badge, all five always present whatever the data holds. There is no pagination: whatever the roadmap holds, the board shows. Each card carries the task's `#id` and type, its title, its priority and severity badges, and only the metadata it actually has (sprint, subtask, dependency and comment counts); clicking a card opens the read-only task detail modal.
 - **The board's header controls.** A search box matches the task title and the `#id` reference, and three dropdowns filter by type (an equality over the ten task types), by minimum priority and by minimum severity (both thresholds, `>= n`, exactly as the `rmp task list` flags of the same names). They combine conjunctively, and each is a URL query parameter (`q`, `type`, `priority`, `severity`), so a narrowed board is a link you can share and opening it cold renders the same board the live controls produced. An unknown value simply applies no filter on its dimension. There is no status filter, because the columns already are the status.
 - **A graph query bar with a time budget.** The knowledge-graph page is driven by an editable read-only Cypher query with a node-limit dropdown. The data endpoint executes each query under a 5-second budget: the budget bounds the **work** the query causes, while the node limit bounds only the **result** it returns, so a query that scans a Cartesian product is stopped even though its response would be tiny. A cancelled or failed query is reported in place and the page keeps working.
 - **Tabler dark-theme UI.** The interface is built on the vendored Tabler admin-dashboard framework in its dark theme: a navigation sidebar (which collapses to a hamburger menu on small viewports), a top navbar naming the selected roadmap, page headers whose title names the view you are on (Sprints, Tasks, Audit, Knowledge graph), and Tabler cards, tables, and badges. On the Sprints page each of the three tabs carries a count badge in the colour of the sprint status that tab groups.

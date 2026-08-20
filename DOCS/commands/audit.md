@@ -41,8 +41,6 @@ Lists audit log entries with optional filters.
 - `TASK_PRIORITY_CHANGE` - Task priority changed
 - `TASK_SEVERITY_CHANGE` - Task severity changed
 - `TASK_REOPEN` - Task reopened to BACKLOG
-- `TASK_ASSIGN` - Specialist assigned to a task
-- `TASK_UNASSIGN` - Specialist removed from a task
 - `TASK_ADD_DEP` - Dependency edge added between tasks
 - `TASK_REMOVE_DEP` - Dependency edge removed between tasks
 
