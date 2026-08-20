@@ -76,7 +76,14 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Exit codes | `ARCHITECTURE.md § Exit Codes` |
 | Database schema (DDL) | `DATABASE.md § DDL - Table Creation` |
 | SQL queries | `DATABASE.md § Main SQL Queries` |
-| Audit operations catalogue | `DATABASE.md § audit Table` |
+| Audit operations catalogue (the canonical list, including the LEGACY values) | `DATABASE.md § audit Table` |
+| Audit: how many entries an operation writes and what each says | `DATABASE.md § One Row per Thing That Happened` |
+| Audit entry `related_entity_id` (which operations write it, and what the counterpart is) | `DATABASE.md § The Two Entities of a Relational Operation` |
+| Audit entry `commit_hash` (which operations write it, and why a reopening does not clear it) | `DATABASE.md § The Commit Hash of an Audit Entry` |
+| Audit entry model, enums, and struct layout | `MODELS.md § Audit Entry`, `MODELS.md § Audit Operation`, `MODELS.md § Entity Type` |
+| Audit entry JSON shape (seven keys, two nullable) | `DATA_FORMATS.md § Audit Entry` |
+| Audit log append-only guarantee | `ARCHITECTURE.md § Security Guarantees` |
+| Audit help surfaces (operation list, LEGACY marking, output keys) | `HELP.md § Audit family help specifics` |
 | Concurrency (WAL, pool, retry) | `IMPLEMENTATION.md § Concurrency Model` |
 | Query caching | `IMPLEMENTATION.md § Query Caching` |
 | Performance practices | `IMPLEMENTATION.md § Performance Considerations` |

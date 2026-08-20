@@ -227,7 +227,7 @@ task detail modal that displays all of the task's fields (see
    returns HTTP `404 Not Found` when `{id}` is not a valid integer or is not a
    sprint of the named roadmap (see [Roadmap Sprint Page](#roadmap-sprint-page)).
 10. The roadmap audit log page shows the selected roadmap's full audit log — every
-   audit entry of any operation and entity type — with the `AuditEntry` fields
+   audit entry of any operation and entity type — with all seven `AuditEntry` fields
    already defined in `MODELS.md` and `DATABASE.md`, read from that roadmap's
    `project.db`. It is served at `/roadmaps/{name}/audit`, is read-only, and
    presents the entries as a table ordered by the audit entry's `performed_at`
@@ -1813,11 +1813,50 @@ how the `rmp web` process itself terminates.
   roadmap's `project.db` (the `audit` table). The page renders the entries as a
   server-rendered HTML table. It is read-only: it shows no clickable row action, no
   modal, and no edit affordance of any kind.
-- **Columns.** The table shows the `AuditEntry` fields defined for the audit entry
-  in `MODELS.md § Audit Entry` and `DATABASE.md § audit Table`: the entry `ID`, the
-  `Operation`, the `Entity Type`, the `Entity ID`, and the `Performed At` timestamp
-  (the ISO 8601 UTC timestamp). The page does not redefine these fields;
-  `MODELS.md` and `DATABASE.md` remain canonical.
+- **Columns.** The table shows **every** `AuditEntry` field defined in
+  `MODELS.md § Audit Entry` and `DATABASE.md § audit Table`, in this order: the entry
+  `ID`, the `Operation`, the `Entity Type`, the `Entity ID`, the `Related Entity ID`,
+  the `Commit`, and the `Performed At` timestamp (the ISO 8601 UTC timestamp). The
+  page does not redefine these fields; `MODELS.md` and `DATABASE.md` remain
+  canonical.
+- **The two nullable columns are always rendered.** `Related Entity ID` and `Commit`
+  are `null` on the operations that do not carry them, and the page renders a
+  neutral placeholder in that cell — an em dash — rather than an empty cell, so a
+  reader can tell an absent value from a rendering fault. Neither column is hidden,
+  collapsed, or dropped when every entry on the visible page happens to be `null`:
+  the column set is fixed and does not depend on the data.
+- **Why both columns are shown.** Without `Related Entity ID`, two entries of the
+  same operation against the same entity are indistinguishable on the page: every
+  `SPRINT_ADD_TASK` row of a sprint reads identically and none of them says which
+  task was added, and every `TASK_STATUS_SPRINT` row of a task says it joined a
+  sprint without saying which one. Without `Commit`, the page cannot show the commit
+  that bracketed a task's work, which is the reason the column exists. A presentation
+  that omits either column fails to present the audit log.
+- **`Related Entity ID` renders per entry, never inferred from the operation.** The
+  column holds the counterpart entity of the operation that produced the entry, and
+  is `null` when that operation has no counterpart (see
+  `DATABASE.md § The Two Entities of a Relational Operation`). Whether a value is
+  present does not follow from the operation name: a `TASK_STATUS_BACKLOG` entry
+  written by `sprint remove-tasks` names the sprint the task left, while one written
+  by `task stat` carries `null`. The page therefore renders the value each entry
+  actually carries and MUST NOT derive, suppress, or substitute it based on the
+  operation shown beside it.
+- **`Commit` renders the stored value verbatim.** The value is 7 to 64 lowercase
+  hexadecimal characters. The page does not abbreviate it, does not expand it, does
+  not link it to any repository, and does not verify that it names a commit that
+  exists: Groadmap contacts no repository (see `MODELS.md § Task`, Commit Hash
+  Constraint). Rendering it in a monospaced face is permitted; altering the text is
+  not.
+- **`Operation` renders whatever value the entry carries.** The value is an opaque
+  string: a stored entry can carry an operation the catalogue does not list, and the
+  page MUST render it as received rather than failing, dropping the row, or
+  substituting a fallback (see `DATA_FORMATS.md § Audit Entry`). This includes the
+  catalogue's LEGACY operations, which appear on entries written before the
+  catalogue was refined.
+- **Wide-table behaviour.** The seven columns MUST NOT force the page body to scroll
+  horizontally on a narrow viewport. The table scrolls inside its own container,
+  consistent with the responsive rules in
+  [Responsive and Mobile-First Design](#responsive-and-mobile-first-design).
 - **Ordering.** The entries are ordered by the audit entry's `performed_at`
   timestamp **descending**, so the most recently performed operation appears first.
   `performed_at` is the audit entry's completion timestamp. This is the same

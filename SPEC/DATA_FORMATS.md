@@ -269,15 +269,81 @@ One entry of a sprint's progression log, as returned by `rmp sprint comment-list
 
 ### Audit Entry
 
+Every audit entry carries the same seven keys. Two of them are nullable and are
+present with the value `null` on the entries that do not carry them; a key is never
+omitted.
+
 ```json
 {
   "id": 1,
-  "operation": "TASK_STATUS_CHANGE",
+  "operation": "TASK_STATUS_DOING",
   "entity_type": "TASK",
   "entity_id": 42,
+  "related_entity_id": null,
+  "commit_hash": "5f93b51",
   "performed_at": "2026-03-12T15:30:00.000Z"
 }
 ```
+
+An entry that carries neither of the two nullable values, which is the common case:
+
+```json
+{
+  "id": 2,
+  "operation": "TASK_STATUS_TESTING",
+  "entity_type": "TASK",
+  "entity_id": 42,
+  "related_entity_id": null,
+  "commit_hash": null,
+  "performed_at": "2026-03-12T15:40:00.000Z"
+}
+```
+
+An entry for a relational operation, which names its counterpart:
+
+```json
+{
+  "id": 3,
+  "operation": "SPRINT_ADD_TASK",
+  "entity_type": "SPRINT",
+  "entity_id": 7,
+  "related_entity_id": 42,
+  "commit_hash": null,
+  "performed_at": "2026-03-12T16:30:00.000Z"
+}
+```
+
+**Field notes:**
+
+| Key | Type | Notes |
+|-----|------|-------|
+| `id` | integer | Primary key of the entry. |
+| `operation` | string | What happened. Opaque to the reader; see below. |
+| `entity_type` | string | `"TASK"` or `"SPRINT"` — the entity whose history the entry belongs to. |
+| `entity_id` | integer | Id of that entity. Always positive. |
+| `related_entity_id` | integer or null | The counterpart entity of the operation that produced the entry, or `null` when that operation has no counterpart. `DATABASE.md § The Two Entities of a Relational Operation` is canonical. |
+| `commit_hash` | string or null | The git commit bracketing a task's development work, 7 to 64 lowercase hexadecimal characters, or `null`. Non-null on `TASK_STATUS_DOING` and `TASK_STATUS_COMPLETED` only; `DATABASE.md § The Commit Hash of an Audit Entry` is canonical. |
+| `performed_at` | string | ISO 8601 UTC. Shared by every entry a single command wrote. |
+
+**Both nullable keys are always present.** A consumer reads `related_entity_id` and
+`commit_hash` on every entry and finds either a value or `null`. Neither key is
+omitted for the operations that do not use it, so an agent can rely on the key set
+being identical across entries and needs no per-operation knowledge to parse one.
+
+**`related_entity_id` is what distinguishes two entries of the same operation.**
+Two `SPRINT_ADD_TASK` entries against the same sprint differ only in `id`,
+`related_entity_id`, and possibly `performed_at`. A consumer that renders an audit
+log MUST show `related_entity_id`, because without it those entries are
+indistinguishable to a reader.
+
+**The same operation value may carry it or not, and `null` is meaningful.** Whether
+the key holds a value depends on the operation that produced the entry, not on the
+operation name alone: a `TASK_STATUS_BACKLOG` entry written by `sprint remove-tasks`
+names the sprint the task left, while one written by `task stat` carries `null`
+because no sprint was party to that operation. A consumer MUST therefore read the key
+per entry and MUST NOT infer its presence from the operation name. A `null` means the
+operation had no counterpart; it never means a counterpart existed and went
+unrecorded.
 
 A comment operation is recorded against the parent entity, never against the comment: `TASK_COMMENT_CREATE` carries `entity_type: "TASK"` and the owning task's id in `entity_id`. See `DATABASE.md § audit Table`.
 
@@ -292,6 +358,22 @@ every unfiltered audit read. A consumer of this object — including an AI agent
 reading the JSON — MUST therefore treat `operation` as an opaque string, MUST render
 whatever value it receives, and MUST NOT fail, drop the entry, or substitute a
 fallback when the value is not one it recognises.
+
+The catalogue also publishes four LEGACY operations — `TASK_STATUS_CHANGE`,
+`TASK_UPDATE`, `SPRINT_UPDATE`, and `SPRINT_MOVE_TASK`. Unlike `TASK_ASSIGN` and
+`TASK_UNASSIGN`, these are in the valid set and are accepted as `--operation` filter
+values, but no command writes them: they appear only on entries written before the
+catalogue was refined. A consumer treats them exactly like any other value it
+receives.
+
+**Acceptance criteria:**
+
+1. Every entry `rmp audit list` and `rmp audit history` emit carries all seven keys, including `related_entity_id` and `commit_hash`, whatever the operation.
+2. An entry with no counterpart emits `"related_entity_id": null`, never `0` and never an omitted key.
+3. An entry with no commit emits `"commit_hash": null`, never `""` and never an omitted key.
+4. A `SPRINT_ADD_TASK` entry emits the added task's id in `related_entity_id`, and the `TASK_STATUS_SPRINT` entry written alongside it emits the sprint's id in `related_entity_id`; the two entries carry transposed ids and the same `performed_at`.
+5. A `TASK_STATUS_BACKLOG` entry written by `sprint remove-tasks` emits the sprint's id, and one written by `task stat` emits `null`.
+6. A `TASK_STATUS_DOING` entry emits the `--commit-open` value, normalised to lowercase, in `commit_hash`.
 
 ---
 
@@ -813,6 +895,31 @@ a sprint rejects (see `HELP.md § Comment subcommand help specifics`).
     {"value": "COMPLETED", "description": "Task is complete."}
   ],
   "state_machine_reference": "STATE_MACHINE.md § Task State Machine"
+}
+```
+
+**The audit enums are published in full.** `AuditOperation` carries every value in
+`ValidAuditOperations` — the canonical catalogue of `DATABASE.md § audit Table` — and
+`AuditEntityType` carries `TASK` and `SPRINT`. Two rules apply to `AuditOperation`
+specifically:
+
+1. **No value is omitted.** `audit list --operation` accepts exactly the values in
+   this enum, so a value missing from the contract is a filter an agent cannot
+   discover. This includes the four LEGACY values.
+2. **A LEGACY value says so in its own `description`.** The description MUST state
+   that no command writes the value and that it exists so the entries already
+   carrying it stay filterable, and it MUST name the operations that replaced it. An
+   agent that reads only the value list would otherwise choose a LEGACY operation
+   when composing a filter for current activity and get an empty result with no
+   explanation.
+
+```json
+"AuditOperation": {
+  "values": [
+    {"value": "TASK_STATUS_DOING",     "description": "A task entered DOING. The entry carries the commit the work started from."},
+    {"value": "TASK_STATUS_CHANGE",    "description": "LEGACY. No command writes this. It survives on entries written before status operations named their destination; filter TASK_STATUS_BACKLOG, TASK_STATUS_SPRINT, TASK_STATUS_DOING, TASK_STATUS_TESTING, or TASK_STATUS_COMPLETED for current activity."}
+  ],
+  "catalogue_reference": "DATABASE.md § audit Table"
 }
 ```
 

@@ -435,6 +435,11 @@ rmp task new -r <name> -t <title> -fr <fr> -tr <tr> -ac <ac>
 
 There is no exit code 5 for this command: a missing `--parent` target is a not-found condition (exit 4), not an already-exists condition.
 
+**Audit:** One `TASK_CREATE` entry against the created task (`entity_type = TASK`,
+`entity_id` = the new id), written in the same transaction as the insert.
+`related_entity_id` and `commit_hash` are NULL. Creating a sub-task with `--parent`
+writes no additional entry and no entry against the parent.
+
 ### Get Task(s)
 
 ```bash
@@ -670,6 +675,38 @@ task, including the other tasks of a multi-ID invocation whose IDs were valid.
 
 **Output (success):** No output, exit code 0.
 
+**Audit:** One entry per task in the batch, named for the state the task entered:
+
+| Target state | Operation written | `commit_hash` |
+|--------------|-------------------|---------------|
+| `BACKLOG` | `TASK_STATUS_BACKLOG` | NULL |
+| `DOING` | `TASK_STATUS_DOING` | the `--commit-open` value, normalised to lowercase |
+| `TESTING` | `TASK_STATUS_TESTING` | NULL |
+| `COMPLETED` | `TASK_STATUS_COMPLETED` | the `--commit-close` value, normalised to lowercase |
+
+`SPRINT` is not reachable through this command, so `task stat` never writes
+`TASK_STATUS_SPRINT`. Every entry carries `entity_type = TASK` with the task's own
+id and a **NULL `related_entity_id`**, including a transition to `BACKLOG`: no second
+entity is party to a `task stat` invocation, so under the governing rule
+(`DATABASE.md § The Two Entities of a Relational Operation`) there is no counterpart
+to name. The same `TASK_STATUS_BACKLOG` operation written by `sprint remove-tasks`
+does name a sprint, because there the sprint is the counterpart. All entries of one
+invocation share one `performed_at` value and are written in the same transaction as
+the status updates, so a rejected command writes no entry at all.
+
+The operation names the **destination** state, not the source: a reader learns from
+the operation value alone which state the task entered, and never has to correlate
+the entry with the task's current status. `task stat` writes no
+`TASK_STATUS_CHANGE` entry; that operation is LEGACY (see
+`DATABASE.md § audit Table`).
+
+**Acceptance criteria:**
+
+1. `rmp task stat -r <name> <a>,<b> TESTING` writes exactly two entries, `TASK_STATUS_TESTING` against `<a>` and against `<b>`, sharing one `performed_at`.
+2. `rmp task stat -r <name> <id> DOING --commit-open 5F93B51` writes one `TASK_STATUS_DOING` entry whose `commit_hash` is `5f93b51`.
+3. A batch rejected at any validation step writes zero audit entries.
+4. No invocation of `task stat` writes `TASK_STATUS_CHANGE` or `TASK_STATUS_SPRINT`.
+
 ### Change Priority (prio)
 
 ```bash
@@ -689,6 +726,11 @@ Validates all IDs before updating any priorities. Follows same validation order 
 
 **Output (success):** No output, exit code 0.
 
+**Audit:** One `TASK_PRIORITY_CHANGE` entry per task in the batch, against the task,
+with NULL `related_entity_id` and NULL `commit_hash`. `task edit -p <n>` writes the
+same operation (see `Edit Task` below), so the priority of a task has one audit
+operation whichever command changed it.
+
 ### Change Severity (sev)
 
 ```bash
@@ -707,6 +749,10 @@ Validates all IDs before updating any severities. Follows same validation order 
 | Severity out of range (0-9) | 6 | "Error: Severity must be between 0 and 9" |
 
 **Output (success):** No output, exit code 0.
+
+**Audit:** One `TASK_SEVERITY_CHANGE` entry per task in the batch, against the task,
+with NULL `related_entity_id` and NULL `commit_hash`. `task edit --severity <n>`
+writes the same operation.
 
 ### Edit Task
 
@@ -754,6 +800,51 @@ When a field is specified, it is validated before updating:
 
 **Error Output:** Validation errors written to stderr with exit code 6.
 
+**Audit:** One entry per field the invocation supplies. An invocation that supplies
+N fields writes N entries; an invocation that supplies none writes none.
+
+| Flag supplied | Operation written |
+|---------------|-------------------|
+| `-t, --title` | `TASK_TITLE_CHANGE` |
+| `-fr, --functional-requirements` | `TASK_FUNCTIONAL_REQUIREMENTS_CHANGE` |
+| `-tr, --technical-requirements` | `TASK_TECHNICAL_REQUIREMENTS_CHANGE` |
+| `-ac, --acceptance-criteria` | `TASK_ACCEPTANCE_CRITERIA_CHANGE` |
+| `-y, --type` | `TASK_TYPE_CHANGE` |
+| `-p, --priority` | `TASK_PRIORITY_CHANGE` |
+| `--severity` | `TASK_SEVERITY_CHANGE` |
+
+Every entry carries `entity_type = TASK` with the edited task's id, a NULL
+`related_entity_id`, and a NULL `commit_hash`. All entries of one invocation share
+one `performed_at` value and are written in the same transaction as the `UPDATE`, so
+a rejected edit writes no entry at all and a committed edit is never recorded for
+only some of the fields it changed.
+
+**The trigger is the presence of the flag, not a difference in value.** The command
+compares no supplied value against the value already stored. **An invocation that
+supplies a flag whose value equals the stored value still writes that field's entry**:
+`rmp task edit -r <name> <id> -t "<the title it already has>"` writes a
+`TASK_TITLE_CHANGE` entry. This is deliberate, and it is what makes `task edit`
+consistent with the dedicated setter commands: `task prio` and `task sev` already
+write their entry unconditionally, without comparing against the stored value, so
+`task edit -p` behaves the same way as `task prio`. Making one path conditional and
+the other unconditional would mean the same audit operation had two different
+triggers depending on which command produced it. The rule also keeps the audit log a
+record of the commands issued rather than of the deltas they happened to produce, and
+keeps the entry count derivable from the command line alone.
+
+**`task edit` writes no `TASK_UPDATE` entry.** That operation is LEGACY (see
+`DATABASE.md § audit Table`). This removes a former inconsistency: `task prio 5` and
+`task edit -p 5` now write the same operation, `TASK_PRIORITY_CHANGE`, so filtering
+the audit log by that operation finds every priority change however it was made.
+
+**Acceptance criteria:**
+
+1. `rmp task edit -r <name> <id> -t "New" -p 3` writes exactly two entries, one `TASK_TITLE_CHANGE` and one `TASK_PRIORITY_CHANGE`, sharing one `performed_at`.
+2. `rmp task edit -r <name> <id>` with no field flags writes zero entries and exits 0.
+3. `rmp task edit -r <name> <id> -y BUG` writes one `TASK_TYPE_CHANGE` entry and no `TASK_UPDATE` entry.
+4. An edit rejected by any validation rule writes zero entries.
+5. `rmp audit list -r <name> --operation TASK_PRIORITY_CHANGE` returns the priority changes made through `task prio` and those made through `task edit -p` alike.
+
 ### Remove Task
 
 ```bash
@@ -791,6 +882,12 @@ All batch operations validate ALL IDs before removing any tasks. This is especia
 | Task in SPRINT, DOING, TESTING, or COMPLETED | 6 | `Error: task #N cannot be deleted — status is X, must be BACKLOG` |
 | Batch with any non-BACKLOG task | 6 | Entire batch rejected, no tasks deleted |
 | Task has subtasks | 6 | `Error: task #N cannot be deleted — it has N subtask(s); remove them first` |
+
+**Audit:** One `TASK_DELETE` entry per task removed, against the task, in the same
+transaction as the deletion. The entry outlives the task: the row it names is gone,
+and the audit log keeps the record that it existed and was deleted. Deleting a task
+deletes its `task_dependencies` rows by cascade and writes no `TASK_REMOVE_DEP`
+entry for them.
 
 ---
 
@@ -842,6 +939,21 @@ rmp task add-dep -r <name> <task-id> <dep-id>
 | Circular dependency | 6 | `Error: adding dependency would create a circular dependency...` |
 | Missing arguments | 2 | `Error: task ID and dependency ID required` |
 
+**Audit:** Two `TASK_ADD_DEP` entries, one against each task of the pair, written in
+the same transaction as the insert:
+
+| Entry | `entity_id` | `related_entity_id` |
+|-------|-------------|---------------------|
+| 1 | `<task-id>` | `<dep-id>` |
+| 2 | `<dep-id>` | `<task-id>` |
+
+Both share one `performed_at`. Naming the counterpart is what makes an entry state
+*which* dependency it concerns: reading either task's history shows the other task of
+the pair, and two entries written by two different invocations are distinguishable.
+
+Adding an already-existing dependency is a no-op (see Constraints above) and writes
+no entry.
+
 ---
 
 ### Remove Task Dependency
@@ -863,6 +975,10 @@ rmp task remove-dep -r <name> <task-id> <dep-id>
 |----------|-----------|--------|
 | Dependency not found | 4 | `Error: dependency from task #N to task #N not found` |
 | Missing arguments | 2 | `Error: task ID and dependency ID required` |
+
+**Audit:** Two `TASK_REMOVE_DEP` entries, one against each task of the pair, with the
+same `entity_id` / `related_entity_id` arrangement `task add-dep` uses above, written
+in the same transaction as the delete and sharing one `performed_at`.
 
 ---
 
@@ -933,7 +1049,27 @@ All IDs are validated before any transitions are applied. If any ID is invalid, 
 
 **Output (success):** No output to stdout, exit code 0.
 
-**Audit:** Each reopened task is logged individually with operation `TASK_REOPEN`.
+**Audit:** One `TASK_REOPEN` entry per reopened task, against the task, with NULL
+`related_entity_id` and NULL `commit_hash`. Three rules apply:
+
+1. **`task reopen` writes `TASK_REOPEN` and nothing else.** It writes no
+   `TASK_STATUS_BACKLOG` entry, even though the task ends in `BACKLOG`. The two
+   operations are distinct because the commands are: `task stat <ids> BACKLOG`
+   changes the status, while `task reopen` additionally clears the lifecycle
+   timestamps, the completion summary, and `commit_close`.
+2. **No audit entry is altered.** Clearing `commit_close` on the task MUST NOT
+   change, blank, or delete any existing audit entry. The `TASK_STATUS_COMPLETED`
+   entry written when the task was completed keeps its `commit_hash`, so the record
+   of the commit that concluded the task survives the reopening even though the task
+   no longer carries it (see `DATABASE.md § The Commit Hash of an Audit Entry`).
+3. **A task already in `BACKLOG` is a no-op** (exit 0 with an informational message
+   on stderr) and writes no entry.
+
+**Acceptance criteria:**
+
+1. `rmp task reopen -r <name> <id>` on a `COMPLETED` task writes exactly one entry, with operation `TASK_REOPEN`, and writes no `TASK_STATUS_BACKLOG` entry.
+2. After the reopening, the task's earlier `TASK_STATUS_COMPLETED` entry still exists with the same `id` and the same `commit_hash`, while `tasks.commit_close` is NULL.
+3. `rmp task reopen` on a task already in `BACKLOG` leaves the audit entry count unchanged.
 
 ---
 
@@ -1212,6 +1348,11 @@ The sprint `title` is also subject to the Control-Character Constraint described
 
 **Output (success):** `{"id": 1}`, exit code 0.
 
+**Audit:** One `SPRINT_CREATE` entry against the created sprint, written in the same
+transaction as the insert, including when `--order` is omitted and the order is
+auto-assigned (see `DATABASE.md § Transactional Atomicity Guarantees`).
+`related_entity_id` and `commit_hash` are NULL.
+
 ### Get Sprint
 
 ```bash
@@ -1419,6 +1560,13 @@ rmp sprint reopen -r <name> <id>
 
 **Output (success):** No output, exit code 0.
 
+**Audit:** One entry per invocation, against the sprint, with NULL
+`related_entity_id` and NULL `commit_hash`: `SPRINT_START` for `sprint start`,
+`SPRINT_CLOSE` for `sprint close`, and `SPRINT_REOPEN` for `sprint reopen`. Closing
+with `--force` writes the same `SPRINT_CLOSE` entry as closing without it; the flag
+changes what the command permits, not what it records. None of the three commands
+changes any task's status, so none writes a `TASK_STATUS_*` entry.
+
 ### Task Assignment
 
 ```bash
@@ -1456,6 +1604,60 @@ All sprint task operations validate ALL IDs before making any changes.
 | `add-tasks` | BACKLOG → SPRINT | Tasks automatically change to SPRINT status when added to sprint |
 | `remove-tasks` | SPRINT, DOING, TESTING, or COMPLETED → BACKLOG | Tasks automatically return to BACKLOG when removed from sprint, whatever their status. The command also clears `started_at`, `tested_at`, `closed_at`, `completion_summary`, and `commit_close`, and preserves `commit_open` |
 | `move-tasks` | (No change) | Status is preserved when moving between sprints |
+
+**Audit:** Every one of these three commands writes one entry per **entity** it
+touches, never one entry per invocation:
+
+| Command | Entries per task | Detail |
+|---------|------------------|--------|
+| `add-tasks` | 2 | `SPRINT_ADD_TASK` against the sprint with `related_entity_id` = the task id, plus `TASK_STATUS_SPRINT` against the task with `related_entity_id` = the sprint id |
+| `remove-tasks` | 2 | `SPRINT_REMOVE_TASK` against the sprint with `related_entity_id` = the task id, plus `TASK_STATUS_BACKLOG` against the task with `related_entity_id` = the sprint id |
+| `move-tasks` | 2 | `SPRINT_MOVE_TASK_OUT` against the source sprint and `SPRINT_MOVE_TASK_IN` against the destination sprint, both with `related_entity_id` = the task id |
+
+Four rules govern these entries:
+
+1. **The sprint entry names the task.** Without `related_entity_id`, every
+   `SPRINT_ADD_TASK` entry of a sprint reads identically and none of them says which
+   task was added. Naming the task is what makes the sprint's history readable.
+2. **The task entry exists so the task's own history is not silent.**
+   `rmp audit history TASK <id>` shows the task entering the sprint and returning to
+   the backlog, which it could not if the change were recorded against the sprint
+   alone.
+3. **The task entry names the sprint.** `add-tasks` and `remove-tasks` each involve
+   two entities, so each of the two entries names the other one: the pair is
+   mirrored, carrying transposed ids and one shared `performed_at`. Reading
+   `audit history TASK <id>` therefore shows not just that the task joined or left a
+   sprint but **which** sprint, without consulting the sprint's own history. This
+   follows the governing rule that `related_entity_id` names the counterpart entity
+   of the operation that produced the entry
+   (`DATABASE.md § The Two Entities of a Relational Operation`); it is not a
+   command-specific exception. The same `TASK_STATUS_BACKLOG` operation written by
+   `task stat <ids> BACKLOG` carries NULL, because that invocation has no second
+   entity to name.
+4. **`move-tasks` writes no `TASK_STATUS_*` entry,** because it changes no task's
+   status (see Automatic Status Updates above). The two sprint entries are the whole
+   record of the move.
+
+`remove-tasks` writes its `TASK_STATUS_BACKLOG` entry for every task removed,
+including a task that was already in `BACKLOG` status while remaining a sprint member
+(see `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`): the entry records
+the command's effect on the task, and the entry count is therefore always exactly one
+per task named on the command line.
+
+All entries of one invocation share one `performed_at` value and are written in the
+same transaction as the membership and status changes (see
+`DATABASE.md § Transactional Atomicity Guarantees`), so a rejected command writes no
+entry at all.
+
+**Acceptance criteria:**
+
+1. `rmp sprint add-tasks -r <name> <s> <a>,<b>` writes exactly four entries: two `SPRINT_ADD_TASK` against `<s>` with `related_entity_id` `<a>` and `<b>`, and two `TASK_STATUS_SPRINT`, one against `<a>` and one against `<b>`, each with `related_entity_id = <s>`.
+2. `rmp sprint remove-tasks -r <name> <s> <a>` writes exactly two entries: `SPRINT_REMOVE_TASK` against `<s>` with `related_entity_id = <a>`, and `TASK_STATUS_BACKLOG` against `<a>` with `related_entity_id = <s>`.
+3. The entries of criteria 1 and 2 are mirrored: within one invocation, the sprint entry's `entity_id` equals the task entry's `related_entity_id`, the sprint entry's `related_entity_id` equals the task entry's `entity_id`, and both carry the same `performed_at`.
+4. `rmp task stat -r <name> <a> BACKLOG` writes one `TASK_STATUS_BACKLOG` entry with `related_entity_id IS NULL`, so the same operation is distinguishable by that column from the one `sprint remove-tasks` writes.
+5. `rmp sprint move-tasks -r <name> <from> <to> <a>` writes exactly two entries: `SPRINT_MOVE_TASK_OUT` against `<from>` and `SPRINT_MOVE_TASK_IN` against `<to>`, both with `related_entity_id = <a>`, and writes no entry with `entity_type = TASK`.
+6. No invocation of any of the three commands writes `SPRINT_MOVE_TASK`.
+7. A command rejected at any validation step writes zero entries.
 
 **Note:** The status SPRINT is automatically managed by sprint operations. Users MUST NOT manually set status to SPRINT using `task stat`; attempts to do so are rejected with exit code 6 and the error message `"Error: status SPRINT can only be set automatically via 'sprint add-tasks'"`. Manual status transitions follow: BACKLOG → SPRINT (automatic) → DOING → TESTING → COMPLETED. `task stat <ids> BACKLOG` is also accepted from `SPRINT` and from `COMPLETED`, and it does not remove the task from its sprint: the task keeps its `sprint_tasks` row while its status reads `BACKLOG`. See `STATE_MACHINE.md § Valid Transitions` for the full set and `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` for the membership rule.
 
@@ -1610,6 +1812,25 @@ rmp sprint bottom -r <name> <sprint-id> <task-id>
 | Sprint not found | 4 | "Sprint not found" |
 | Task not in sprint | 6 | "Task N is not in sprint" |
 
+#### Audit of the ordering commands
+
+The five ordering commands write one entry per invocation, against the sprint, with
+NULL `related_entity_id` and NULL `commit_hash`:
+
+| Command | Operation written |
+|---------|-------------------|
+| `sprint reorder` | `SPRINT_REORDER_TASKS` |
+| `sprint move-to`, `sprint top`, `sprint bottom` | `SPRINT_TASK_MOVE_POSITION` |
+| `sprint swap` | `SPRINT_TASK_SWAP` |
+
+**These commands write no `TASK_STATUS_*` entry and no entry against any task.**
+Ordering changes the `position` column of the `sprint_tasks` membership rows; it
+changes no task's status and no task's own fields, so the sprint is the only entity
+whose state changes and the sprint is the only entity the audit log records it
+against. A no-op move (moving a task to the position it already holds) still writes
+its entry, on the same rule that governs `task edit`: the audit log records the
+command issued, not the delta it produced.
+
 ### Update Sprint
 
 ```bash
@@ -1662,9 +1883,36 @@ The sprint `title` is also subject to the Control-Character Constraint described
 
 **Output (success):** No output, exit code 0.
 
-**Audit:** A sprint title, description, capacity, or order change is recorded under
-the existing `SPRINT_UPDATE` operation (see `DATABASE.md § audit Table`); no new
-audit operation is introduced.
+**Audit:** One entry per field the invocation supplies. An invocation that supplies
+N fields writes N entries. At least one field is required (see above), so every
+successful invocation writes at least one entry.
+
+| Flag supplied | Operation written |
+|---------------|-------------------|
+| `-t, --title` | `SPRINT_TITLE_CHANGE` |
+| `-d, --description` | `SPRINT_DESCRIPTION_CHANGE` |
+| `--max-tasks` | `SPRINT_MAX_TASKS_CHANGE` |
+| `--order` | `SPRINT_ORDER_CHANGE` |
+
+Every entry carries `entity_type = SPRINT` with the updated sprint's id, a NULL
+`related_entity_id`, and a NULL `commit_hash`. All entries of one invocation share
+one `performed_at` value and are written in the same transaction as the `UPDATE`, so
+a rejected update writes no entry at all.
+
+**The trigger is the presence of the flag, not a difference in value**, exactly as on
+`task edit`: the command compares no supplied value against the stored one, so an
+invocation supplying a field whose value equals the stored value still writes that
+field's entry.
+
+**`sprint update` writes no `SPRINT_UPDATE` entry.** That operation is LEGACY (see
+`DATABASE.md § audit Table`).
+
+**Acceptance criteria:**
+
+1. `rmp sprint update -r <name> <id> -t "New" --max-tasks 12` writes exactly two entries, one `SPRINT_TITLE_CHANGE` and one `SPRINT_MAX_TASKS_CHANGE`, sharing one `performed_at`.
+2. `rmp sprint update -r <name> <id> --order 3` writes exactly one `SPRINT_ORDER_CHANGE` entry.
+3. An update rejected by any validation rule, including an `--order` collision (exit code 5), writes zero entries.
+4. No invocation of `sprint update` writes `SPRINT_UPDATE`.
 
 ### Remove Sprint
 
@@ -1697,13 +1945,21 @@ A member task can already be in `BACKLOG` status before the sprint is removed (s
    - Preserve all other fields (title, requirements, priority, severity, `commit_open`, etc.)
 3. Delete sprint_tasks junction table entries
 4. Delete sprint from sprints table
-5. Log SPRINT_DELETE operation in audit log with cascade info
+5. Log the `SPRINT_DELETE` operation in the audit log
 
 **Rationale:**
 - Prevents data loss by preserving task content
 - Tasks return to backlog for re-prioritization and re-assignment
 - No automatic deletion of tasks (user must explicitly delete tasks if desired)
 - Clear audit trail of the cascade operation
+
+**Audit:** Exactly one `SPRINT_DELETE` entry, against the deleted sprint, with NULL
+`related_entity_id` and NULL `commit_hash`, written in the same transaction as the
+cascade (see `DATABASE.md § Transactional Atomicity Guarantees`). The command writes
+no per-task entry: unlike `sprint remove-tasks`, which names one task per entry, a
+deletion resets every member at once and the sprint an entry would name no longer
+exists when the transaction commits. The entry outlives the sprint, so the audit log
+keeps the record that the sprint existed and was deleted.
 
 **Output (success):** No output, exit code 0.
 
@@ -1915,11 +2171,22 @@ rmp audit ls -r <name>
 
 **Options:**
 - `-o, --operation <name>` - Filter by audit operation name (for example
-  `TASK_CREATE`, `SPRINT_CLOSE`). The value MUST be one of the operations in the
-  canonical catalogue (see `DATABASE.md § audit Table`); any other value is
-  rejected with exit code 6, whether or not the `audit` table happens to hold rows
-  carrying it.
-- `-e, --entity-type <type>` - Filter by entity (TASK, SPRINT, ROADMAP)
+  `TASK_CREATE`, `TASK_STATUS_DOING`, `SPRINT_CLOSE`). The value MUST be one of the
+  operations in the canonical catalogue (see `DATABASE.md § audit Table`); any other
+  value is rejected with exit code 6, whether or not the `audit` table happens to
+  hold rows carrying it. The accepted set is exactly the catalogue, **including its
+  four LEGACY operations** — `TASK_STATUS_CHANGE`, `TASK_UPDATE`, `SPRINT_UPDATE`,
+  and `SPRINT_MOVE_TASK`. No command writes those four, so on a roadmap whose
+  entries were all written at schema 1.12.0 or later each of them matches nothing and
+  the command returns `[]` with exit code 0; on an older roadmap they return the
+  entries the migration left carrying them. The filter matches by equality only:
+  there is no pattern search and no prefix search, so a caller who wants every status
+  change issues one read per `TASK_STATUS_*` value, or reads unfiltered and selects
+  from the result.
+- `-e, --entity-type <type>` - Filter by entity (TASK, SPRINT). Any other value is
+  rejected with exit code 6. There is no filter on `related_entity_id` and none on
+  `commit_hash`: both are returned on every entry and neither is a predicate (see
+  `DATABASE.md § Query Audit Entries`)
 - `--entity-id <id>` - Filter by specific entity ID. MUST be a positive integer in
   the range `1`-`2147483647` (`MaxInt32`). A value `< 1` or `> 2147483647`, or a
   non-integer value, is rejected with exit code 6.
@@ -1939,7 +2206,9 @@ rmp audit ls -r <name>
 | `--entity-id` `< 1` or `> 2147483647` | 6 | "Error: --entity-id must be between 1 and 2147483647 (got N)" |
 | `--entity-id` non-integer | 6 | "Error: --entity-id must be an integer between 1 and 2147483647" |
 
-**JSON Output:** Array of AuditEntry objects.
+**JSON Output:** Array of AuditEntry objects. Every object carries all seven keys,
+including `related_entity_id` and `commit_hash`, which are `null` on the operations
+that do not use them (see `DATA_FORMATS.md § Audit Entry`).
 
 ### Entity History
 
@@ -1951,6 +2220,18 @@ rmp audit hist -r <name> <entity-type> <entity-id>
 **Description:** Shows all audit entries related to a specific task or sprint.
 Equivalent to `rmp audit list -r <name> -e <entity-type> --entity-id <entity-id>`
 without pagination.
+
+**What a task's history now contains.** Because every entity an operation touches
+receives its own entry, `audit history TASK <id>` shows the task entering and leaving
+a sprint (`TASK_STATUS_SPRINT`, `TASK_STATUS_BACKLOG`) as well as the transitions
+`task stat` performed. Each such entry names its counterpart in `related_entity_id`:
+a sprint on the entries a membership change wrote, the other task of the pair on a
+dependency entry, and NULL on a transition `task stat` performed, which has no
+counterpart. A task's history is therefore self-contained — it says which sprint the
+task joined and left without a second query. The mirrored entries —
+`SPRINT_ADD_TASK` and `SPRINT_REMOVE_TASK` — belong to the sprint's history and are
+reached with `audit history SPRINT <sprint-id>`. See
+`DATABASE.md § The Two Entities of a Relational Operation`.
 
 **Arguments (both positional, in this order):**
 - `<entity-type>` - First positional. MUST be `TASK` or `SPRINT`. Any other value
@@ -1972,7 +2253,8 @@ without pagination.
 A non-integer entity id is a format/misuse error (exit code 2, `EXIT_MISUSE`); an
 integer that is out of the valid range is a validation error (exit code 6).
 
-**JSON Output:** Array of AuditEntry objects.
+**JSON Output:** Array of AuditEntry objects, with the same seven keys `audit list`
+returns.
 
 ### Audit Statistics
 
@@ -1991,7 +2273,9 @@ rmp audit stats -r <name> [--since <date>] [--until <date>]
 {
   "by_operation": {
     "TASK_CREATE": 15,
-    "TASK_STATUS_CHANGE": 19,
+    "TASK_STATUS_DOING": 7,
+    "TASK_STATUS_TESTING": 6,
+    "TASK_STATUS_COMPLETED": 6,
     "SPRINT_ADD_TASK": 11
   },
   "by_entity_type": {
@@ -2008,7 +2292,7 @@ rmp audit stats -r <name> [--since <date>] [--until <date>]
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `by_operation` | map[string]int | Count of entries per operation type, keyed by the full operation name (for example `TASK_CREATE`, `TASK_STATUS_CHANGE`, `SPRINT_ADD_TASK`). See `DATABASE.md § audit Table` for the operation catalogue |
+| `by_operation` | map[string]int | Count of entries per operation type, keyed by the full operation name (for example `TASK_CREATE`, `TASK_STATUS_DOING`, `SPRINT_ADD_TASK`). Each operation is its own key: the five `TASK_STATUS_*` operations are never summed into one bucket, and a LEGACY operation is counted under its own name whenever entries carrying it exist. An operation with no entries has no key. See `DATABASE.md § audit Table` for the operation catalogue |
 | `by_entity_type` | map[string]int | Count of entries per entity type (`TASK`, `SPRINT`) |
 | `first_entry_at` | string (ISO 8601 UTC) or null | Timestamp of the oldest audit entry among the filtered entries, or null when no entries match |
 | `last_entry_at` | string (ISO 8601 UTC) or null | Timestamp of the newest audit entry among the filtered entries, or null when no entries match |

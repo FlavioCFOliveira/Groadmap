@@ -10,6 +10,9 @@
   - [`sprints` Table](#sprints-table)
   - [`sprint_tasks` Table (1:N Relationship)](#sprint_tasks-table-1n-relationship)
   - [`audit` Table](#audit-table)
+    - [One Row per Thing That Happened](#one-row-per-thing-that-happened)
+    - [The Two Entities of a Relational Operation](#the-two-entities-of-a-relational-operation)
+    - [The Commit Hash of an Audit Entry](#the-commit-hash-of-an-audit-entry)
   - [`task_dependencies` Table](#task_dependencies-table)
   - [`task_comments` Table](#task_comments-table)
   - [`sprint_comments` Table](#sprint_comments-table)
@@ -24,6 +27,7 @@
 - [Data Constraints](#data-constraints)
 - [Performance Optimization](#performance-optimization)
 - [Field Length Validation](#field-length-validation)
+- [Commit Hash Format Constraint](#commit-hash-format-constraint)
 - [SQLite Validation](#sqlite-validation)
 - [Migration Idempotency (ALTER TABLE ADD COLUMN)](#migration-idempotency-alter-table-add-column)
 - [Migration Idempotency (ALTER TABLE DROP COLUMN)](#migration-idempotency-alter-table-drop-column)
@@ -95,6 +99,8 @@ Each roadmap is stored in an individual SQLite database. The schema is designed 
 |  - operation (TEXT)                    |
 |  - entity_type (TEXT)                  |
 |  - entity_id (INTEGER)                 |
+|  - related_entity_id (INTEGER, NULL)   |
+|  - commit_hash (TEXT hex 7-64, NULL)   |
 |  - performed_at (TEXT ISO8601)         |
 +----------------------------------------+
 |           task_dependencies            |
@@ -239,6 +245,8 @@ CREATE TABLE IF NOT EXISTS audit (
     operation TEXT NOT NULL,
     entity_type TEXT NOT NULL CHECK(entity_type IN ('TASK', 'SPRINT')),
     entity_id INTEGER NOT NULL,
+    related_entity_id INTEGER CHECK(related_entity_id IS NULL OR related_entity_id > 0),   -- Counterpart entity of the operation that produced the row; NULL when it has no counterpart
+    commit_hash TEXT CHECK(commit_hash IS NULL OR (length(commit_hash) BETWEEN 7 AND 64 AND commit_hash NOT GLOB '*[^0-9a-f]*')),   -- Git commit bracketing the work; NULL on every operation but two
     performed_at TEXT NOT NULL  -- ISO 8601 UTC
 );
 
@@ -253,23 +261,40 @@ CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 ```
 
 **Fields:**
-- `operation`: Operation type (e.g., `TASK_STATUS_CHANGE`, `SPRINT_START`). Values validated by application.
+- `operation`: Operation type (for example `TASK_STATUS_DOING`, `SPRINT_START`). Values validated by application.
 - `entity_type`: `'TASK'` or `'SPRINT'`. Values validated by application and enforced by the column `CHECK`.
-- `entity_id`: Affected entity ID
+- `entity_id`: Identifier of the entity whose history the row belongs to. Always a positive task id or sprint id.
+- `related_entity_id`: Identifier of the counterpart entity of the operation that produced the row, or NULL when that operation has no counterpart. See `The Two Entities of a Relational Operation` below.
+- `commit_hash`: Git commit hash bracketing a task's development work, or NULL. See `The Commit Hash of an Audit Entry` below.
 - `performed_at`: Operation timestamp
+
+**No index is created on `related_entity_id` or on `commit_hash`.** Neither column
+is a filter, a sort key, or a join key for any statement in `Main SQL Queries`
+below: the audit read statement's predicates are `operation`, `entity_type`,
+`entity_id`, and `performed_at` only, and both new columns are read as part of the
+returned entry rather than searched. An index on either would cost write time on
+every audited operation and buy nothing.
 
 **Valid values (validated by application):** This section is the canonical catalogue of audit operations. All other SPEC files referencing audit operations MUST link here rather than re-listing.
 
 **Tasks:**
-- `TASK_CREATE` - New task created
-- `TASK_DELETE` - Task deleted (only allowed while in BACKLOG; see Delete Task precondition)
-- `TASK_STATUS_CHANGE` - Every status change made by `task stat`, whatever the source and target state, including `SPRINT` → `BACKLOG` and `COMPLETED` → `BACKLOG`. Status changes made as a side effect of a sprint operation are logged against the sprint instead, as `SPRINT_ADD_TASK` / `SPRINT_REMOVE_TASK` / `SPRINT_DELETE`
-- `TASK_PRIORITY_CHANGE` - Priority change (0-9) via `task priority`
-- `TASK_SEVERITY_CHANGE` - Severity change (0-9) via `task severity`
-- `TASK_UPDATE` - Generic update via `task edit` (title, type, functional_requirements, technical_requirements, acceptance_criteria). A type change made through `task edit` is recorded here, not under a dedicated operation.
-- `TASK_REOPEN` - Task returned to BACKLOG via `task reopen`; lifecycle timestamps, completion_summary, and commit_close cleared, commit_open preserved. The sprint_tasks row is removed only when the source state is SPRINT, DOING, or TESTING; from COMPLETED the row is kept
-- `TASK_ADD_DEP` - Dependency added (logged against both task_id and depends_on_task_id)
-- `TASK_REMOVE_DEP` - Dependency removed (logged against both task_id and depends_on_task_id)
+- `TASK_CREATE` - New task created via `task create`
+- `TASK_DELETE` - Task deleted via `task remove` (only allowed while in BACKLOG; see Delete Task precondition)
+- `TASK_STATUS_BACKLOG` - Task entered `BACKLOG`. Written by `task stat <ids> BACKLOG` and by `sprint remove-tasks`, one row per task in either case. From `sprint remove-tasks` the row names the sprint the task left in `related_entity_id`; from `task stat` no sprint is party to the operation and `related_entity_id` is NULL
+- `TASK_STATUS_SPRINT` - Task entered `SPRINT`. Written by `sprint add-tasks` only, one row per task, naming the sprint the task entered in `related_entity_id`; `task stat` cannot set `SPRINT`, so no other command writes this operation and every row of it names a sprint
+- `TASK_STATUS_DOING` - Task entered `DOING` via `task stat`, one row per task. The row carries the `commit_hash` supplied as `--commit-open`
+- `TASK_STATUS_TESTING` - Task entered `TESTING` via `task stat`, one row per task
+- `TASK_STATUS_COMPLETED` - Task entered `COMPLETED` via `task stat`, one row per task. The row carries the `commit_hash` supplied as `--commit-close`
+- `TASK_REOPEN` - Task returned to BACKLOG via `task reopen`; lifecycle timestamps, completion_summary, and commit_close cleared, commit_open preserved. The sprint_tasks row is removed only when the source state is SPRINT, DOING, or TESTING; from COMPLETED the row is kept. `task reopen` writes this operation alone and writes no `TASK_STATUS_BACKLOG` row
+- `TASK_TITLE_CHANGE` - `title` supplied to `task edit`
+- `TASK_TYPE_CHANGE` - `type` supplied to `task edit`
+- `TASK_FUNCTIONAL_REQUIREMENTS_CHANGE` - `functional_requirements` supplied to `task edit`
+- `TASK_TECHNICAL_REQUIREMENTS_CHANGE` - `technical_requirements` supplied to `task edit`
+- `TASK_ACCEPTANCE_CRITERIA_CHANGE` - `acceptance_criteria` supplied to `task edit`
+- `TASK_PRIORITY_CHANGE` - Priority change (0-9) via `task prio` or via `task edit`
+- `TASK_SEVERITY_CHANGE` - Severity change (0-9) via `task sev` or via `task edit`
+- `TASK_ADD_DEP` - Dependency added via `task add-dep`; two rows are written, one against each task of the pair, and each row names the other task in `related_entity_id`
+- `TASK_REMOVE_DEP` - Dependency removed via `task remove-dep`; two rows are written, one against each task of the pair, and each row names the other task in `related_entity_id`
 - `TASK_COMMENT_CREATE` - Comment added to a task via `task comment-add` (logged against the parent task)
 - `TASK_COMMENT_UPDATE` - Comment edited via `task comment-edit` (logged against the parent task)
 - `TASK_COMMENT_DELETE` - Comment deleted via `task comment-remove` (logged against the parent task)
@@ -277,13 +302,17 @@ CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 **Sprints:**
 - `SPRINT_CREATE` - New sprint created
 - `SPRINT_DELETE` - Sprint deleted
-- `SPRINT_START` - Sprint started (PENDING → OPEN)
-- `SPRINT_CLOSE` - Sprint closed (OPEN → CLOSED)
-- `SPRINT_REOPEN` - Sprint reopened (CLOSED → OPEN)
-- `SPRINT_UPDATE` - Sprint title, description, capacity, or execution order updated via `sprint update`
-- `SPRINT_ADD_TASK` - Task added to sprint
-- `SPRINT_REMOVE_TASK` - Task removed from sprint
-- `SPRINT_MOVE_TASK` - Task moved between sprints
+- `SPRINT_START` - Sprint started (PENDING to OPEN)
+- `SPRINT_CLOSE` - Sprint closed (OPEN to CLOSED)
+- `SPRINT_REOPEN` - Sprint reopened (CLOSED to OPEN)
+- `SPRINT_TITLE_CHANGE` - `title` supplied to `sprint update`
+- `SPRINT_DESCRIPTION_CHANGE` - `description` supplied to `sprint update`
+- `SPRINT_MAX_TASKS_CHANGE` - `max_tasks` supplied to `sprint update`
+- `SPRINT_ORDER_CHANGE` - `order_index` supplied to `sprint update`
+- `SPRINT_ADD_TASK` - Task added to a sprint via `sprint add-tasks`; one row per task, against the sprint, naming the task in `related_entity_id`
+- `SPRINT_REMOVE_TASK` - Task removed from a sprint via `sprint remove-tasks`; one row per task, against the sprint, naming the task in `related_entity_id`
+- `SPRINT_MOVE_TASK_OUT` - Task moved out of the source sprint via `sprint move-tasks`; one row per task, against the source sprint, naming the task in `related_entity_id`
+- `SPRINT_MOVE_TASK_IN` - Task moved into the destination sprint via `sprint move-tasks`; one row per task, against the destination sprint, naming the task in `related_entity_id`
 - `SPRINT_REORDER_TASKS` - Sprint tasks reordered (set exact order)
 - `SPRINT_TASK_MOVE_POSITION` - Single task moved to specific position
 - `SPRINT_TASK_SWAP` - Two tasks swapped positions
@@ -291,7 +320,173 @@ CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 - `SPRINT_COMMENT_UPDATE` - Comment edited via `sprint comment-edit` (logged against the parent sprint)
 - `SPRINT_COMMENT_DELETE` - Comment deleted via `sprint comment-remove` (logged against the parent sprint)
 
+**Legacy (readable, never written):**
+
+The four operations below are never written by any command. They exist only on rows
+written before the operation catalogue was refined, and they stay in the catalogue so
+that those rows remain reachable by name: each is accepted as an
+`audit list --operation` filter value and each is counted under its own key by
+`audit stats`. An implementation MUST NOT write any of them, and MUST NOT remove them
+from the valid set.
+
+- `TASK_STATUS_CHANGE` - LEGACY. The single status-change operation the five `TASK_STATUS_*` operations above replace. It survives on rows the 1.11.0 to 1.12.0 migration could not reclassify (see `VERSION.md § Migration 1.11.0 to 1.12.0`)
+- `TASK_UPDATE` - LEGACY. The generic `task edit` operation the five per-field `TASK_*_CHANGE` operations above replace. The migration reclassifies no row carrying it, because a field edit leaves no trace of which field it touched
+- `SPRINT_UPDATE` - LEGACY. The generic `sprint update` operation the four per-field `SPRINT_*_CHANGE` operations above replace. The migration reclassifies no row carrying it, for the same reason
+- `SPRINT_MOVE_TASK` - LEGACY. The single move operation `SPRINT_MOVE_TASK_OUT` and `SPRINT_MOVE_TASK_IN` replace. The migration reclassifies no row carrying it, because such a row names neither the task that moved nor the sprint it came from
+
 **Note:** Read operations (GET, STATS, LIST_TASKS) are NOT logged to audit as they do not modify state.
+
+#### One Row per Thing That Happened
+
+The catalogue above rests on two rules that together decide how many rows an
+operation writes and what each of them says. Both are requirements on every command
+that writes to the `audit` table.
+
+1. **An operation names its destination, not merely its kind.** A status change
+   writes the operation of the state the task entered, so a reader learns the
+   outcome from the operation value alone and never has to correlate the row with
+   the task's current state. The same rule governs field edits: `task edit` and
+   `sprint update` write the operation of the field, not a generic update
+   operation.
+2. **Every entity an operation touches gets a row of its own.** An operation that
+   changes two entities writes one row against each, so neither entity's history is
+   silent about it. `sprint add-tasks`, `sprint remove-tasks`, `task add-dep`, and
+   `task remove-dep` each write rows against both sides; `sprint move-tasks` writes
+   one row against the source sprint and one against the destination sprint.
+
+**Acceptance criteria:**
+
+1. `rmp audit history TASK <id>` on a task that has passed through the full lifecycle returns rows whose `operation` values name the states entered, and returns no `TASK_STATUS_CHANGE` row for any transition performed at schema 1.12.0 or later.
+2. `rmp task stat -r <name> <a>,<b> TESTING` writes exactly two audit rows, one `TASK_STATUS_TESTING` row against `<a>` and one against `<b>`.
+3. `rmp task prio -r <name> <id> 5` and `rmp task edit -r <name> <id> -p 5` both write a `TASK_PRIORITY_CHANGE` row; neither writes `TASK_UPDATE`.
+4. No command writes any of the four LEGACY operations: after any sequence of `rmp` invocations against a database created at schema 1.12.0, `SELECT COUNT(*) FROM audit WHERE operation IN ('TASK_STATUS_CHANGE', 'TASK_UPDATE', 'SPRINT_UPDATE', 'SPRINT_MOVE_TASK')` returns 0.
+5. Each of the four LEGACY operations is accepted as an `audit list --operation` value and exits 0.
+
+#### The Two Entities of a Relational Operation
+
+**The governing rule.** `entity_type` and `entity_id` name **the entity whose
+history the row belongs to**. `related_entity_id` names **the counterpart entity of
+the operation that produced the row**, and is NULL when that operation has no
+counterpart. That single rule decides the column's value everywhere; the table below
+applies it and adds nothing to it.
+
+The rule is what makes two rows of the same operation distinguishable. Without it,
+every `SPRINT_ADD_TASK` row of a sprint reads identically and none of them says which
+task was added, and every `TASK_STATUS_SPRINT` row of a task says the task joined a
+sprint without saying which one.
+
+`related_entity_id` is non-NULL exactly in the eight cases below, and NULL for every
+other combination of operation and producing command in the catalogue:
+
+| Operation | Written by | `entity_type` / `entity_id` | `related_entity_id` |
+|---|---|---|---|
+| `SPRINT_ADD_TASK` | `sprint add-tasks` | `SPRINT` / the sprint the task was added to | the task added |
+| `TASK_STATUS_SPRINT` | `sprint add-tasks` | `TASK` / the task added | the sprint the task entered |
+| `SPRINT_REMOVE_TASK` | `sprint remove-tasks` | `SPRINT` / the sprint the task was removed from | the task removed |
+| `TASK_STATUS_BACKLOG` | `sprint remove-tasks` | `TASK` / the task removed | the sprint the task left |
+| `SPRINT_MOVE_TASK_OUT` | `sprint move-tasks` | `SPRINT` / the source sprint | the task moved |
+| `SPRINT_MOVE_TASK_IN` | `sprint move-tasks` | `SPRINT` / the destination sprint | the task moved |
+| `TASK_ADD_DEP` | `task add-dep` | `TASK` / one task of the pair | the other task of the pair |
+| `TASK_REMOVE_DEP` | `task remove-dep` | `TASK` / one task of the pair | the other task of the pair |
+
+**The two rows of a membership change mirror each other.** Adding task 42 to sprint 1
+writes a `SPRINT_ADD_TASK` row with `entity_id = 1, related_entity_id = 42` and a
+`TASK_STATUS_SPRINT` row with `entity_id = 42, related_entity_id = 1`. The two carry
+transposed ids and one shared `performed_at`, so each side of the operation is
+complete on its own: `audit history SPRINT 1` says which task was added, and
+`audit history TASK 42` says which sprint the task entered. Neither reader has to
+consult the other entity's history to learn the counterpart. `sprint remove-tasks`
+writes the same mirrored pair with `SPRINT_REMOVE_TASK` and `TASK_STATUS_BACKLOG`.
+
+**One operation value, two producing commands, one rule.**
+`TASK_STATUS_BACKLOG` is written by `task stat <ids> BACKLOG` and by
+`sprint remove-tasks`, and it carries a `related_entity_id` only from the second.
+This is the governing rule applied consistently, not a per-command exception: a
+removal from a sprint has the sprint as its counterpart, while `task stat` changes a
+task's status with no second entity party to the operation, so there is no
+counterpart to name. The field therefore means one thing everywhere — the
+counterpart, when the operation has one — and a reader never has to know which
+command wrote a row in order to interpret the column. A NULL says "this operation had
+no counterpart", never "this operation had one and it was not recorded".
+
+`TASK_STATUS_SPRINT` has only one producing command, `sprint add-tasks`, so every row
+carrying that operation names a sprint. No version of Groadmap has ever written a
+`TASK_STATUS_SPRINT` row, and the `1.11.0` to `1.12.0` migration never produces one
+(it reclassifies only to `TASK_STATUS_DOING`, `TASK_STATUS_TESTING`, and
+`TASK_STATUS_COMPLETED`), so the invariant holds for migrated databases as well as
+fresh ones.
+
+**A dependency writes two rows and each states its own direction.**
+`task add-dep <task-id> <dep-id>` writes one row against `<task-id>` naming
+`<dep-id>`, and one row against `<dep-id>` naming `<task-id>`. `task remove-dep`
+writes the same pair. Reading either task's history therefore shows which dependency
+the entry concerns, and the two rows of one invocation are distinguished from the two
+rows of any other invocation.
+
+**`sprint move-tasks` writes no `TASK_STATUS_*` row at all,** because moving a task
+between sprints preserves its status (see `COMMANDS.md § Task Assignment`). The two
+sprint rows are the whole record of the move.
+
+**`sprint remove` writes one `SPRINT_DELETE` row and no per-task row.** The
+membership rows and the member tasks' statuses are reset by the cascade the deletion
+performs, and the sprint the rows would name no longer exists after the transaction
+commits. `SPRINT_DELETE` therefore carries NULL in `related_entity_id`, exactly as
+every other operation outside the table above does.
+
+**Acceptance criteria:**
+
+1. After `rmp sprint add-tasks -r <name> <sprint-id> <a>,<b>`, the audit table holds two `SPRINT_ADD_TASK` rows against `<sprint-id>` whose `related_entity_id` values are `<a>` and `<b>`, and two `TASK_STATUS_SPRINT` rows, one against `<a>` and one against `<b>`, **both with `related_entity_id = <sprint-id>`**.
+2. After `rmp sprint remove-tasks -r <name> <sprint-id> <a>`, the audit table holds one `SPRINT_REMOVE_TASK` row against `<sprint-id>` with `related_entity_id = <a>`, and one `TASK_STATUS_BACKLOG` row against `<a>` with `related_entity_id = <sprint-id>`.
+3. After `rmp task stat -r <name> <a> BACKLOG`, the audit table holds one `TASK_STATUS_BACKLOG` row against `<a>` with `related_entity_id IS NULL`, because no sprint is party to that operation.
+4. Every row written by a membership change has a mirror: for each `SPRINT_ADD_TASK` row there is a `TASK_STATUS_SPRINT` row with the two ids transposed and the same `performed_at`, and for each `SPRINT_REMOVE_TASK` row there is a `TASK_STATUS_BACKLOG` row with the two ids transposed and the same `performed_at`.
+5. After `rmp sprint move-tasks -r <name> <from> <to> <a>`, the audit table holds one `SPRINT_MOVE_TASK_OUT` row against `<from>` and one `SPRINT_MOVE_TASK_IN` row against `<to>`, both with `related_entity_id = <a>`, and no `TASK_STATUS_*` row for `<a>`.
+6. After `rmp task add-dep -r <name> <a> <b>`, `rmp audit history TASK <a>` shows a `TASK_ADD_DEP` row with `related_entity_id = <b>`, and `rmp audit history TASK <b>` shows a `TASK_ADD_DEP` row with `related_entity_id = <a>`.
+7. `SELECT COUNT(*) FROM audit WHERE related_entity_id IS NOT NULL AND operation NOT IN ('SPRINT_ADD_TASK', 'TASK_STATUS_SPRINT', 'SPRINT_REMOVE_TASK', 'TASK_STATUS_BACKLOG', 'SPRINT_MOVE_TASK_OUT', 'SPRINT_MOVE_TASK_IN', 'TASK_ADD_DEP', 'TASK_REMOVE_DEP')` returns 0 on a database written only at schema 1.12.0 or later.
+8. `SELECT COUNT(*) FROM audit WHERE operation = 'TASK_STATUS_SPRINT' AND related_entity_id IS NULL` returns 0 on **any** database, migrated or fresh, because `sprint add-tasks` is the operation's only writer and the migration never produces it.
+9. An `INSERT` with `related_entity_id = 0` or a negative `related_entity_id` fails the `related_entity_id` `CHECK`; `related_entity_id IS NULL` is accepted.
+
+#### The Commit Hash of an Audit Entry
+
+`commit_hash` records the git commit that brackets a task's development work. It is
+written on exactly two operations and is NULL on every other operation in the
+catalogue:
+
+| Operation | Value written |
+|---|---|
+| `TASK_STATUS_DOING` | the commit the development work started from — the value supplied as `--commit-open` |
+| `TASK_STATUS_COMPLETED` | the commit that concluded the task — the value supplied as `--commit-close` |
+
+The value is the same one the transition writes to `tasks.commit_open` or
+`tasks.commit_close`, already normalised to lowercase, and it takes the same format
+constraint (see `Commit Hash Format Constraint` below). No new CLI flag exists: the
+value already reaches the transition, and the audit write takes it from there. Both
+flags are mandatory on the transitions that write them (see
+`COMMANDS.md § Change Status (stat)`), so a `TASK_STATUS_DOING` or
+`TASK_STATUS_COMPLETED` row written at schema 1.12.0 or later always carries a
+non-NULL `commit_hash`.
+
+**No command writes `commit_hash` on any other operation,** including `TASK_REOPEN`,
+which clears `tasks.commit_close` on the task. An implementation MUST NOT copy a
+task's stored commit values onto an unrelated audit row.
+
+**The audit row is immutable.** No command updates or deletes an audit row, and
+`task reopen` is the case that matters: it clears `tasks.commit_close` on the task
+but MUST NOT alter, delete, or blank any audit row. The `TASK_STATUS_COMPLETED` row
+written before the reopening keeps its `commit_hash`, so the historical record of the
+commit that once concluded the task survives a reopening even though the task itself
+no longer carries it. Re-completing the task later adds a second
+`TASK_STATUS_COMPLETED` row with the new hash rather than replacing the first. The
+same holds for a re-entry into `DOING`, which replaces `tasks.commit_open` on the
+task and adds a second `TASK_STATUS_DOING` row without touching the first.
+
+**Acceptance criteria:**
+
+1. After `rmp task stat -r <name> <id> DOING --commit-open <hash>`, the newest audit row for that task has `operation = 'TASK_STATUS_DOING'` and `commit_hash` equal to `<hash>` in lowercase, whatever case `<hash>` was supplied in.
+2. After `rmp task stat -r <name> <id> COMPLETED --commit-close <hash>`, the newest audit row for that task has `operation = 'TASK_STATUS_COMPLETED'` and `commit_hash` equal to `<hash>` in lowercase.
+3. `SELECT COUNT(*) FROM audit WHERE commit_hash IS NOT NULL AND operation NOT IN ('TASK_STATUS_DOING', 'TASK_STATUS_COMPLETED')` returns 0.
+4. After `rmp task reopen -r <name> <id>` on a task that had been completed, the earlier `TASK_STATUS_COMPLETED` row still exists, still carries the same `id`, and still carries its `commit_hash`, while `tasks.commit_close` for that task is NULL.
+5. Completing the same task a second time leaves two `TASK_STATUS_COMPLETED` rows for it, carrying the two different hashes.
+6. An `INSERT` whose `commit_hash` is not NULL and is outside 7 to 64 lowercase hexadecimal characters fails the `commit_hash` `CHECK`.
 
 **A stored row may carry an operation the catalogue does not list.** The
 `operation` column carries no `CHECK` constraint (see the DDL above), so the
@@ -315,6 +510,12 @@ them, and they apply together:
    output, the web interface, or an AI agent reading the JSON — MUST treat the
    `operation` value as an opaque string and MUST NOT assume it is one of the
    catalogue's values (see `DATA_FORMATS.md § Audit Entry`).
+
+**Legacy is not the same as uncatalogued.** The four LEGACY operations above are in
+the valid set and are reachable by name; `TASK_ASSIGN` and `TASK_UNASSIGN` are not in
+the valid set and are not reachable by name. Both kinds of row are retained and both
+are returned by an unfiltered read. The only difference is whether an `--operation`
+filter accepts the name.
 
 **Comment operations are recorded against the parent entity.** The six comment operations write `entity_type = 'TASK'` with `entity_id` set to the owning task's id, or `entity_type = 'SPRINT'` with `entity_id` set to the owning sprint's id. They never write the comment's own id and never introduce a new `entity_type` value. Two consequences follow, both intended:
 
@@ -887,57 +1088,107 @@ ORDER BY st.task_id ASC;
 
 #### Log Operation
 
+Every audit write is **one** statement, and it always names all six writable
+columns. `related_entity_id` and `commit_hash` are bound to NULL on the operations
+that do not carry them rather than being omitted from the statement, so one prepared
+statement serves every operation and no operation can silently acquire a value
+because a shorter statement was reused.
+
 ```sql
-INSERT INTO audit (operation, entity_type, entity_id, performed_at)
-VALUES (?, ?, ?, ?);
+INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+VALUES (?, ?, ?, ?, ?, ?);
 ```
 
 **Examples by operation:**
 
 ```sql
 -- Create task
-INSERT INTO audit (operation, entity_type, entity_id, performed_at)
-VALUES ('TASK_CREATE', 'TASK', 42, '2026-03-12T15:00:00.000Z');
+INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+VALUES ('TASK_CREATE', 'TASK', 42, NULL, NULL, '2026-03-12T15:00:00.000Z');
 
--- Change task status
-INSERT INTO audit (operation, entity_type, entity_id, performed_at)
-VALUES ('TASK_STATUS_CHANGE', 'TASK', 42, '2026-03-12T15:30:00.000Z');
+-- Task entered DOING; the row carries the commit the work started from
+INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+VALUES ('TASK_STATUS_DOING', 'TASK', 42, NULL, '5f93b51', '2026-03-12T15:30:00.000Z');
 
--- Change task priority
-INSERT INTO audit (operation, entity_type, entity_id, performed_at)
-VALUES ('TASK_PRIORITY_CHANGE', 'TASK', 42, '2026-03-12T15:45:00.000Z');
+-- Task entered TESTING
+INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+VALUES ('TASK_STATUS_TESTING', 'TASK', 42, NULL, NULL, '2026-03-12T15:40:00.000Z');
 
--- Change task severity
-INSERT INTO audit (operation, entity_type, entity_id, performed_at)
-VALUES ('TASK_SEVERITY_CHANGE', 'TASK', 42, '2026-03-12T16:00:00.000Z');
+-- Task entered COMPLETED; the row carries the commit that concluded it
+INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+VALUES ('TASK_STATUS_COMPLETED', 'TASK', 42, NULL, '2578d18', '2026-03-12T15:50:00.000Z');
+
+-- Change task priority (task prio, or task edit -p)
+INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+VALUES ('TASK_PRIORITY_CHANGE', 'TASK', 42, NULL, NULL, '2026-03-12T15:45:00.000Z');
+
+-- Change task title through task edit
+INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+VALUES ('TASK_TITLE_CHANGE', 'TASK', 42, NULL, NULL, '2026-03-12T15:46:00.000Z');
+
+-- Add a dependency: two rows, one per task, each naming the other
+INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+VALUES ('TASK_ADD_DEP', 'TASK', 42, 43, NULL, '2026-03-12T15:55:00.000Z');
+INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+VALUES ('TASK_ADD_DEP', 'TASK', 43, 42, NULL, '2026-03-12T15:55:00.000Z');
 
 -- Start sprint
-INSERT INTO audit (operation, entity_type, entity_id, performed_at)
-VALUES ('SPRINT_START', 'SPRINT', 1, '2026-03-12T16:00:00.000Z');
+INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+VALUES ('SPRINT_START', 'SPRINT', 1, NULL, NULL, '2026-03-12T16:00:00.000Z');
 
--- Add task to sprint
-INSERT INTO audit (operation, entity_type, entity_id, performed_at)
-VALUES ('SPRINT_ADD_TASK', 'SPRINT', 1, '2026-03-12T16:30:00.000Z');
+-- Add task 42 to sprint 1: two mirrored rows, one per entity. The ids are
+-- transposed and the timestamp is shared, so each side names its counterpart.
+INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+VALUES ('SPRINT_ADD_TASK', 'SPRINT', 1, 42, NULL, '2026-03-12T16:30:00.000Z');
+INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+VALUES ('TASK_STATUS_SPRINT', 'TASK', 42, 1, NULL, '2026-03-12T16:30:00.000Z');
+
+-- Remove task 42 from sprint 1: the same mirrored pair
+INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+VALUES ('SPRINT_REMOVE_TASK', 'SPRINT', 1, 42, NULL, '2026-03-12T16:35:00.000Z');
+INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+VALUES ('TASK_STATUS_BACKLOG', 'TASK', 42, 1, NULL, '2026-03-12T16:35:00.000Z');
+
+-- The same status operation from `task stat`, where no sprint is party to it
+INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+VALUES ('TASK_STATUS_BACKLOG', 'TASK', 42, NULL, NULL, '2026-03-12T16:36:00.000Z');
+
+-- Move task 42 from sprint 1 to sprint 2: one row per sprint, both naming the task
+INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+VALUES ('SPRINT_MOVE_TASK_OUT', 'SPRINT', 1, 42, NULL, '2026-03-12T16:45:00.000Z');
+INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+VALUES ('SPRINT_MOVE_TASK_IN', 'SPRINT', 2, 42, NULL, '2026-03-12T16:45:00.000Z');
+
+-- Change a sprint field through sprint update
+INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+VALUES ('SPRINT_MAX_TASKS_CHANGE', 'SPRINT', 1, NULL, NULL, '2026-03-12T16:50:00.000Z');
 
 -- Reorder sprint tasks
-INSERT INTO audit (operation, entity_type, entity_id, performed_at)
-VALUES ('SPRINT_REORDER_TASKS', 'SPRINT', 1, '2026-03-12T17:00:00.000Z');
+INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+VALUES ('SPRINT_REORDER_TASKS', 'SPRINT', 1, NULL, NULL, '2026-03-12T17:00:00.000Z');
 
 -- Move task to position
-INSERT INTO audit (operation, entity_type, entity_id, performed_at)
-VALUES ('SPRINT_TASK_MOVE_POSITION', 'SPRINT', 1, '2026-03-12T17:15:00.000Z');
+INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+VALUES ('SPRINT_TASK_MOVE_POSITION', 'SPRINT', 1, NULL, NULL, '2026-03-12T17:15:00.000Z');
 
 -- Swap tasks
-INSERT INTO audit (operation, entity_type, entity_id, performed_at)
-VALUES ('SPRINT_TASK_SWAP', 'SPRINT', 1, '2026-03-12T17:30:00.000Z');
+INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+VALUES ('SPRINT_TASK_SWAP', 'SPRINT', 1, NULL, NULL, '2026-03-12T17:30:00.000Z');
 ```
+
+**The rows of one command share one timestamp.** When a command writes several audit
+rows — a per-task row and a per-sprint row, the two rows of a dependency, or the N
+rows of an N-field edit — every row it writes carries the same `performed_at` value,
+because they record one operation performed at one moment inside one transaction. A
+reader can therefore group the rows of a single invocation by `(performed_at)` and
+`id` order.
 
 #### Query Audit Entries
 
-Every audit read is **one** assembled statement, not a family of statements. It names the five columns of an audit entry, appends only the predicates the caller supplied, and always orders and bounds the result:
+Every audit read is **one** assembled statement, not a family of statements. It names the seven columns of an audit entry, appends only the predicates the caller supplied, and always orders and bounds the result:
 
 ```sql
-SELECT id, operation, entity_type, entity_id, performed_at
+SELECT id, operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at
 FROM audit WHERE 1=1
   AND operation = ?          -- optional
   AND entity_type = ?        -- optional
@@ -949,7 +1200,9 @@ LIMIT ?                      -- always present, always clamped
 OFFSET ?;                    -- only when the caller asks to skip rows
 ```
 
-**The five columns are named, never `*`.** They are the whole of `AuditEntry` (`MODELS.md § Audit Entry`), and naming them fixes the result-set order the application scans rather than leaving it to the table's current shape.
+**The seven columns are named, never `*`.** They are the whole of `AuditEntry` (`MODELS.md § Audit Entry`), and naming them fixes the result-set order the application scans rather than leaving it to the table's current shape.
+
+**`related_entity_id` and `commit_hash` are read, never filtered.** Both are in the select list because a caller reading an entry needs them, and neither appears among the predicates below: the audit read surface offers no filter on either column (see `COMMANDS.md § List Audit Log`). This is why neither column is indexed.
 
 **The predicates are optional and compose.** The statement opens `WHERE 1=1` so that each predicate the caller supplied can be appended as a further `AND`; a caller that supplies none reads the whole log. Every value is a bound parameter and none is concatenated into the SQL.
 
@@ -1152,7 +1405,9 @@ so that the database never reaches a state where `tasks.status` and the
    `SPRINT` while their sprint or their `sprint_tasks` rows were gone is forbidden.
 2. **Removing tasks from a sprint (`RemoveTasksFromSprint`).** Deleting the
    affected `sprint_tasks` rows, resetting those tasks' status to `BACKLOG`, and
-   writing the audit entry MUST occur in the same transaction. No committed state
+   writing both audit entries per task — the `SPRINT_REMOVE_TASK` entry against the
+   sprint and the `TASK_STATUS_BACKLOG` entry against the task — MUST occur in the
+   same transaction. No committed state
    shows a task still marked `SPRINT`, `DOING`, or `TESTING` after its
    `sprint_tasks` row is gone. The converse combination is legitimate and is not a
    partial commit: a task in `BACKLOG` status can hold a live `sprint_tasks` row,
@@ -1167,14 +1422,17 @@ so that the database never reaches a state where `tasks.status` and the
    capacity is enforced atomically within the insert transaction, so the committed
    member count can never exceed `max_tasks`.
 4. **Adding tasks to a sprint (`AddTasksToSprint`).** Inserting the
-   `sprint_tasks` rows, updating those tasks' status to `SPRINT`, and writing
-   the `SPRINT_ADD_TASK` audit entries (one per task) MUST all occur in the same
+   `sprint_tasks` rows, updating those tasks' status to `SPRINT`, and writing both
+   audit entries per task — the `SPRINT_ADD_TASK` entry against the sprint and the
+   `TASK_STATUS_SPRINT` entry against the task — MUST all occur in the same
    transaction. A committed membership change can never exist without its audit
-   record.
+   record, and neither of the two entries can exist without the other.
 5. **Moving tasks between sprints (`MoveTasksBetweenSprints`).** The source-sprint
    membership check, the re-parenting of the `sprint_tasks` rows, and writing the
-   `SPRINT_MOVE_TASK` audit entries (one per task) MUST all occur in the same
-   transaction. A committed move can never exist without its audit record.
+   `SPRINT_MOVE_TASK_OUT` and `SPRINT_MOVE_TASK_IN` audit entries (one pair per
+   task) MUST all occur in the same transaction. A committed move can never exist
+   without its audit record, and the database never shows the source sprint's entry
+   without the destination sprint's.
 6. **Creating a sprint with an auto-assigned order (`CreateSprint`).** When the
    caller omits `--order`, computing `MAX(order_index) + 1`, inserting the
    `sprints` row with that value, and writing the `SPRINT_CREATE` audit entry MUST
@@ -1189,9 +1447,24 @@ so that the database never reaches a state where `tasks.status` and the
    comment change can never exist without its audit record, and an audit record can
    never exist for a change that was rolled back.
 
+8. **Changing a task's status (`UpdateTaskStatus`).** The `UPDATE` on every task in
+   the batch and the matching `TASK_STATUS_<TARGET>` audit entries (one per task,
+   each carrying the batch's `commit_hash` when the target is `DOING` or
+   `COMPLETED`) MUST occur in the same transaction. A committed status change can
+   never exist without its audit record, and an audit record naming a commit can
+   never exist for a transition that was rolled back.
+9. **Editing fields (`UpdateTask`, `UpdateSprint`).** The single `UPDATE` that
+   applies every supplied field and the N per-field audit entries MUST occur in the
+   same transaction. Either the whole edit and all N entries commit, or none of them
+   does; a committed edit whose audit record names only some of the fields it
+   changed is forbidden.
+
 These guarantees extend the general transactional-integrity requirement in
 `ARCHITECTURE.md § Security Guarantees` (every modification, including its audit
-entry, is wrapped in one transaction) to these specific sprint operations.
+entries, is wrapped in one transaction) to these specific operations. Where an
+operation writes more than one audit entry, "its audit entry" means all of them: the
+requirement is satisfied only when every entry the operation owes is written inside
+the same transaction as the change itself.
 
 ---
 
@@ -1256,11 +1529,15 @@ Fields are organized to match the optimized Go struct layout (Content, Tracking,
 | operation | TEXT | NOT NULL |
 | entity_type | TEXT | NOT NULL, CHECK enum values: TASK, SPRINT |
 | entity_id | INTEGER | NOT NULL |
+| related_entity_id | INTEGER | NULLABLE, CHECK NULL or `> 0`; non-NULL only where the producing operation has a counterpart |
+| commit_hash | TEXT | NULLABLE, CHECK 7-64 lowercase hexadecimal characters; non-NULL on two operations only |
 | performed_at | TEXT | NOT NULL, ISO 8601 format |
 
 **Valid values (validated by application):**
-- `operation`: See the canonical catalogue in the `audit` Table section above (Tasks + Sprints).
+- `operation`: See the canonical catalogue in the `audit` Table section above (Tasks + Sprints + Legacy).
 - `entity_type`: TASK, SPRINT
+- `related_entity_id`: See `The Two Entities of a Relational Operation` in the `audit` Table section above for the eight operation-and-command combinations that write it.
+- `commit_hash`: See `The Commit Hash of an Audit Entry` in the `audit` Table section above for the two operations that write it.
 
 ### Task_Comments
 
@@ -1376,6 +1653,7 @@ The following length constraints are enforced at the database level using CHECK 
 | `tasks.completion_summary` | 4096 characters | `CHECK(completion_summary IS NULL OR length(completion_summary) <= 4096)` |
 | `tasks.commit_open` | 64 characters (minimum 7) | `CHECK(commit_open IS NULL OR (length(commit_open) BETWEEN 7 AND 64 AND commit_open NOT GLOB '*[^0-9a-f]*'))` |
 | `tasks.commit_close` | 64 characters (minimum 7) | `CHECK(commit_close IS NULL OR (length(commit_close) BETWEEN 7 AND 64 AND commit_close NOT GLOB '*[^0-9a-f]*'))` |
+| `audit.commit_hash` | 64 characters (minimum 7) | `CHECK(commit_hash IS NULL OR (length(commit_hash) BETWEEN 7 AND 64 AND commit_hash NOT GLOB '*[^0-9a-f]*'))` |
 | `sprints.title` | 255 characters | `CHECK(length(title) <= 255)` |
 | `task_comments.body` | 4096 characters | `CHECK(length(body) <= 4096)` |
 | `sprint_comments.body` | 4096 characters | `CHECK(length(body) <= 4096)` |
@@ -1397,18 +1675,23 @@ The following fields have a maximum length enforced at the application layer but
 
 ## Commit Hash Format Constraint
 
-The two commit columns of the `tasks` table, `commit_open` and `commit_close`,
-carry a format constraint that is not a length constraint alone, so it is stated
-here in full. The `CHECK` on each column is the database-level backstop for the
-rule the application enforces first (see `MODELS.md § Task`, Commit Hash
-Constraint).
+Three columns in this schema store a git commit hash: `tasks.commit_open`,
+`tasks.commit_close`, and `audit.commit_hash`. All three carry the same format
+constraint, which is not a length constraint alone, so it is stated here once and in
+full. The `CHECK` on each column is the database-level backstop for the rule the
+application enforces first (see `MODELS.md § Task`, Commit Hash Constraint).
+
+The three `CHECK` constraints are identical apart from the column name. Any future
+column that stores a commit hash MUST take this same constraint rather than a
+variant of it.
 
 Each `CHECK` has three parts and all three must hold together:
 
 1. `<column> IS NULL` — the column is nullable and NULL is always valid. A task
    that has never entered `DOING` has a NULL `commit_open`; a task that has never
    entered `COMPLETED`, or that has since returned to `BACKLOG`, has a NULL
-   `commit_close`.
+   `commit_close`; and an audit row for any operation other than
+   `TASK_STATUS_DOING` and `TASK_STATUS_COMPLETED` has a NULL `commit_hash`.
 2. `length(<column>) BETWEEN 7 AND 64` — the value is at least 7 and at most 64
    characters, inclusive. Values of any length outside that range are rejected,
    including the empty string.
@@ -1428,6 +1711,22 @@ fails the write instead of storing an unnormalised value.
 Because the constraint rejects every non-hexadecimal character, it also rejects
 leading and trailing whitespace. The application does not trim these values, so a
 padded value is invalid at both layers.
+
+**One value, written to two columns.** A transition into `DOING` writes the same
+normalised value to `tasks.commit_open` and to the `commit_hash` of the
+`TASK_STATUS_DOING` audit row, and a transition into `COMPLETED` writes the same
+normalised value to `tasks.commit_close` and to the `commit_hash` of the
+`TASK_STATUS_COMPLETED` audit row. The normalisation happens once, before either
+write, so the two columns can never disagree about the case or the content of the
+hash. The two writes are in the same transaction (see
+`Transactional Atomicity Guarantees` above).
+
+**The two columns diverge over time, and that is intended.** `tasks.commit_close` is
+cleared when the task returns to `BACKLOG`, and `tasks.commit_open` is overwritten on
+a re-entry into `DOING`. No audit row is ever cleared or overwritten, so the audit
+table keeps the value the task no longer holds. A NULL `tasks.commit_close` beside a
+`TASK_STATUS_COMPLETED` audit row carrying a hash is therefore a correct state, not
+an inconsistency.
 
 ---
 
@@ -1468,6 +1767,24 @@ claims a migration is idempotent MUST be backed by this column-existence guard f
 every `ADD COLUMN` step; a bare `ALTER TABLE ... ADD COLUMN` without the guard is
 not idempotent and is not permitted. The schema-migration mechanism and its version
 history are specified in `VERSION.md § Migrations`.
+
+**A `CHECK` constraint travels with the added column.** SQLite accepts a `CHECK` in
+an `ADD COLUMN` clause, and the constraint applies to the new column from that point
+on. It is not re-validated against the rows already stored, and it does not need to
+be: every existing row receives NULL in the new column, and every constraint this
+specification attaches to an added column accepts NULL.
+
+**No migration in this specification rebuilds a table.** Widening or adding a
+constraint on a column that already exists is not something `ALTER TABLE` can do in
+SQLite; it requires creating a replacement table, copying every row into it, dropping
+the original, and renaming. No migration specified here needs that, because every
+constraint change this schema has made so far has been attached to a column being
+added at the same time. `ALTER TABLE ... ADD COLUMN` and the guarded
+`ALTER TABLE ... DROP COLUMN` below are therefore the only two schema-altering
+statements the migration set uses, and both are single statements with a
+column-existence guard. A future change that must alter an existing column's
+constraint would need the rebuild procedure, and it would have to be specified here
+before it is written.
 
 ---
 

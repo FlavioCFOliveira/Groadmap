@@ -61,7 +61,7 @@ The `_metadata` table records the active schema version. Migration steps and the
 
 ### Current Schema Version
 
-`SchemaVersion = "1.11.0"` (defined in `internal/db/schema.go`).
+`SchemaVersion = "1.12.0"` (defined in `internal/db/schema.go`).
 
 ### Migration Commands
 
@@ -343,6 +343,206 @@ No index is created on either column. Neither is a filter, a sort key, or a join
 key for any query in `DATABASE.md § Main SQL Queries`: both are read as part of the
 `Task` object and are never searched. An index would cost write time on every status
 change and buy nothing.
+
+### Migration 1.11.0 to 1.12.0
+
+Adds the two new columns of the `audit` table, `related_entity_id` and
+`commit_hash`, and reclassifies the legacy `TASK_STATUS_CHANGE` entries whose
+destination state the stored data determines beyond doubt.
+
+**This migration needs no table rebuild.** Both changes to the table's shape are new
+columns, and `ALTER TABLE ... ADD COLUMN` carries each column's `CHECK` constraint
+with it. Nothing about an existing column changes: `entity_type` keeps its
+`CHECK(entity_type IN ('TASK', 'SPRINT'))` unaltered, `entity_id` keeps its
+definition unaltered, and no constraint is widened, narrowed, or added to a column
+that already exists. The migration is therefore two guarded `ALTER TABLE` statements
+and a set of `UPDATE` statements — no replacement table, no row copy, no drop, and no
+rename. The rebuild procedure that altering an existing column's constraint would
+require is deliberately not used here (see
+`DATABASE.md § Migration Idempotency (ALTER TABLE ADD COLUMN)`).
+
+Both `ADD COLUMN` steps are guarded by the column-existence check specified in
+`DATABASE.md § Migration Idempotency (ALTER TABLE ADD COLUMN)`, so re-running the
+migration set against an already-migrated database is a no-op rather than a
+"duplicate column name" error. The two guards are independent: a database that
+somehow carries one column and not the other is brought to the full shape. SQLite
+does not re-validate existing rows when a column is added, and it does not need to:
+every existing row receives NULL in each new column, and NULL satisfies both
+constraints. Fresh databases created at schema version 1.12.0 receive both columns,
+with the same constraints, directly from the `audit` `CREATE TABLE` statement (see
+`DATABASE.md § audit Table`).
+
+```sql
+-- Add each column only when it does not already exist (see
+-- DATABASE.md § Migration Idempotency (ALTER TABLE ADD COLUMN)). When absent, run:
+ALTER TABLE audit ADD COLUMN related_entity_id INTEGER CHECK(related_entity_id IS NULL OR related_entity_id > 0);
+ALTER TABLE audit ADD COLUMN commit_hash TEXT CHECK(commit_hash IS NULL OR (length(commit_hash) BETWEEN 7 AND 64 AND commit_hash NOT GLOB '*[^0-9a-f]*'));
+```
+
+No index is created on either column, for the reason stated in
+`DATABASE.md § audit Table`: neither is a predicate of any audit read.
+
+**The physical column order differs between a migrated and a fresh database, and
+nothing may depend on it.** `ADD COLUMN` appends, so a migrated `audit` table ends
+`... entity_id, performed_at, related_entity_id, commit_hash`, while a table created
+fresh from the `CREATE TABLE` statement ends
+`... entity_id, related_entity_id, commit_hash, performed_at`. The two are
+equivalent, because every statement in this specification names its columns
+explicitly and none uses `SELECT *` or positional binding (see
+`DATABASE.md § Query Audit Entries`). No migration reorders the columns to make the
+two layouts identical: a reorder would require a table rebuild, and it would buy
+nothing that naming the columns does not already guarantee.
+
+#### Neither new column is backfilled
+
+Every pre-existing audit entry keeps NULL in both new columns. This is not a
+shortcut, and there is no truthful backfill available for either:
+
+- **`commit_hash`** records which commit a task was started from or concluded at.
+  Groadmap holds no record of either fact for work already done: it runs no git
+  command and reads no repository. The two columns that could have supplied a value,
+  `tasks.commit_open` and `tasks.commit_close`, were themselves introduced only in
+  1.11.0 and are NULL for every task that existed before it, so they carry nothing to
+  copy. Copying a task's current commit values onto a historical entry would also be
+  wrong in principle: the entry records a moment, and the task's current value is the
+  result of every transition since.
+- **`related_entity_id`** records the counterpart entity of the operation that wrote
+  the entry. A stored `SPRINT_ADD_TASK` entry names its sprint and nothing else, so
+  the task it refers to is not recoverable. The `sprint_tasks` table shows which
+  tasks are members of that sprint **now**, which is a different question: it cannot
+  say which of them a given entry was about, it says nothing about tasks since
+  removed, and a sprint with N entries and N members offers no correspondence between
+  the two sets. Inferring a value from it would fabricate a fact, so the migration
+  does not attempt it.
+
+  The counterpart entries that would name a sprint, `TASK_STATUS_SPRINT` and the
+  `sprint remove-tasks` form of `TASK_STATUS_BACKLOG`, raise no backfill question at
+  all: no version of Groadmap before 1.12.0 wrote either operation, and the
+  reclassification below never produces one, so no stored entry carries either value
+  when the migration runs.
+
+#### Reclassifying `TASK_STATUS_CHANGE`
+
+The migration rewrites the `operation` of a `TASK_STATUS_CHANGE` entry to the
+destination-specific operation **only when the stored data determines that
+destination by exact equality**. The rule has no tolerance window, no nearest-match,
+and no ordering heuristic:
+
+An entry is reclassified when its `performed_at` is **exactly equal** to exactly one
+of the owning task's three lifecycle timestamps:
+
+| Timestamp matched | New operation |
+|---|---|
+| `tasks.started_at` | `TASK_STATUS_DOING` |
+| `tasks.tested_at` | `TASK_STATUS_TESTING` |
+| `tasks.closed_at` | `TASK_STATUS_COMPLETED` |
+
+An entry is **not** reclassified, and keeps the value `TASK_STATUS_CHANGE`, in each
+of these cases:
+
+1. Its `performed_at` matches none of the three timestamps. This covers a transition
+   to `BACKLOG`, which stamps no timestamp, and a task later reopened, which clears
+   the timestamps that would have matched.
+2. Its `performed_at` matches more than one of the three. Two transitions recorded at
+   the same instant leave no evidence of which one the entry recorded.
+3. The task named by `entity_id` no longer exists. A deleted task takes its
+   timestamps with it.
+
+```sql
+-- Each statement rewrites only the entries whose destination is unambiguous: the
+-- timestamp it matches must be equal, and neither of the other two may also equal it.
+UPDATE audit
+SET operation = 'TASK_STATUS_DOING'
+WHERE operation = 'TASK_STATUS_CHANGE'
+  AND entity_type = 'TASK'
+  AND EXISTS (
+      SELECT 1 FROM tasks t
+      WHERE t.id = audit.entity_id
+        AND t.started_at = audit.performed_at
+        AND (t.tested_at IS NULL OR t.tested_at <> audit.performed_at)
+        AND (t.closed_at IS NULL OR t.closed_at <> audit.performed_at)
+  );
+
+UPDATE audit
+SET operation = 'TASK_STATUS_TESTING'
+WHERE operation = 'TASK_STATUS_CHANGE'
+  AND entity_type = 'TASK'
+  AND EXISTS (
+      SELECT 1 FROM tasks t
+      WHERE t.id = audit.entity_id
+        AND t.tested_at = audit.performed_at
+        AND (t.started_at IS NULL OR t.started_at <> audit.performed_at)
+        AND (t.closed_at IS NULL OR t.closed_at <> audit.performed_at)
+  );
+
+UPDATE audit
+SET operation = 'TASK_STATUS_COMPLETED'
+WHERE operation = 'TASK_STATUS_CHANGE'
+  AND entity_type = 'TASK'
+  AND EXISTS (
+      SELECT 1 FROM tasks t
+      WHERE t.id = audit.entity_id
+        AND t.closed_at = audit.performed_at
+        AND (t.started_at IS NULL OR t.started_at <> audit.performed_at)
+        AND (t.tested_at IS NULL OR t.tested_at <> audit.performed_at)
+  );
+```
+
+The three statements are independent of each other and of their order: the exclusion
+clauses make their `WHERE` conditions mutually exclusive, so no entry can satisfy two
+of them. They are also idempotent: an entry the first run rewrites no longer carries
+`TASK_STATUS_CHANGE`, so a second run matches nothing.
+
+`t.started_at = audit.performed_at` is false when `t.started_at` is NULL, because a
+comparison with NULL yields NULL rather than true. The NULL cases therefore need no
+extra guard on the matched timestamp, only on the two excluded ones.
+
+#### What the migration must not do
+
+1. **It must not infer.** Only exact timestamp equality reclassifies an entry.
+   Choosing the nearest timestamp, ordering the entries and assigning destinations by
+   position, or reading a task's current status to guess the destination are all
+   forbidden: each would write a fact the database does not hold.
+2. **It must not reclassify `TASK_UPDATE` or `SPRINT_UPDATE`.** A field edit stamps
+   no timestamp anywhere, so which field an entry recorded is unknowable. No entry
+   carrying either operation is touched.
+3. **It must not reclassify `SPRINT_MOVE_TASK`.** Such an entry names one sprint and
+   no task, so neither the pair of sprints involved nor the task that moved is
+   recoverable.
+4. **It must not delete or renumber any entry.** No `DELETE`, no `id` rewrite, and no
+   compaction. The `audit` table after the migration holds exactly the entries it
+   held before, with the same `id` values and the same `performed_at` values; only
+   some `operation` values change.
+5. **It must not write an audit entry of its own.** A migration is not a roadmap
+   operation.
+
+#### Consequence: three operations survive as LEGACY
+
+Because reclassification is deliberately incomplete, entries carrying
+`TASK_STATUS_CHANGE` remain in migrated databases, and entries carrying
+`TASK_UPDATE`, `SPRINT_UPDATE`, and `SPRINT_MOVE_TASK` remain untouched. All four
+values therefore stay in the published operation catalogue, marked LEGACY: they are
+accepted as `audit list --operation` filter values so the entries stay reachable by
+name, and no command writes any of them from 1.12.0 onward (see
+`DATABASE.md § audit Table`).
+
+```sql
+-- Update schema version
+UPDATE _metadata SET value = '1.12.0' WHERE key = 'schema_version';
+```
+
+#### Acceptance criteria
+
+1. Applying the migration to a database at 1.11.0 leaves `SELECT COUNT(*) FROM audit` unchanged, and leaves `SELECT MIN(id), MAX(id) FROM audit` unchanged.
+2. Every entry whose `operation` was not `TASK_STATUS_CHANGE` before the migration carries the same `operation` after it.
+3. `SELECT COUNT(*) FROM audit WHERE commit_hash IS NOT NULL OR related_entity_id IS NOT NULL` returns 0 immediately after the migration.
+4. An entry whose `performed_at` equals the owning task's `started_at` and equals neither `tested_at` nor `closed_at` carries `TASK_STATUS_DOING` after the migration, and the equivalent holds for `tested_at` and `closed_at`.
+5. An entry whose `performed_at` equals two of the owning task's timestamps still carries `TASK_STATUS_CHANGE` after the migration.
+6. An entry whose `entity_id` names no existing task still carries `TASK_STATUS_CHANGE` after the migration.
+7. An entry whose `performed_at` matches none of the three timestamps still carries `TASK_STATUS_CHANGE` after the migration.
+8. Running the migration set twice against the same database produces the same result as running it once, and raises no error.
+9. After the migration, `SELECT value FROM _metadata WHERE key = 'schema_version'` returns `1.12.0`.
+10. After the migration, an `INSERT` into `audit` with `related_entity_id = 0` fails, and one with `commit_hash = 'ABC1234'` fails.
 
 ## Release Process
 
