@@ -26,6 +26,7 @@
 - [Field Length Validation](#field-length-validation)
 - [SQLite Validation](#sqlite-validation)
 - [Migration Idempotency (ALTER TABLE ADD COLUMN)](#migration-idempotency-alter-table-add-column)
+- [Migration Idempotency (ALTER TABLE DROP COLUMN)](#migration-idempotency-alter-table-drop-column)
 - [Audit Result Limit](#audit-result-limit)
 - [See Also](#see-also)
 
@@ -61,7 +62,6 @@ Each roadmap is stored in an individual SQLite database. The schema is designed 
 |  - technical_requirements (TEXT)       |
 |  - acceptance_criteria (TEXT)          |
 |  - created_at (TEXT ISO8601)           |
-|  - specialists (TEXT, NULL)            |
 |  - started_at (TEXT ISO8601, NULL)     |
 |  - tested_at (TEXT ISO8601, NULL)      |
 |  - closed_at (TEXT ISO8601, NULL)      |
@@ -144,7 +144,6 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_at TEXT NOT NULL,               -- ISO 8601 UTC, set on task creation
 
     -- Group 2: Nullable tracking fields - lifecycle timestamps
-    specialists TEXT,                       -- Comma-separated specialists (nullable)
     started_at TEXT,                        -- ISO 8601 UTC, set when task moves to DOING
     tested_at TEXT,                         -- ISO 8601 UTC, set when task moves to TESTING
     closed_at TEXT,                         -- ISO 8601 UTC, set when task moves to COMPLETED
@@ -261,10 +260,8 @@ CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 - `TASK_STATUS_CHANGE` - Every status change made by `task stat`, whatever the source and target state, including `SPRINT` → `BACKLOG` and `COMPLETED` → `BACKLOG`. Status changes made as a side effect of a sprint operation are logged against the sprint instead, as `SPRINT_ADD_TASK` / `SPRINT_REMOVE_TASK` / `SPRINT_DELETE`
 - `TASK_PRIORITY_CHANGE` - Priority change (0-9) via `task priority`
 - `TASK_SEVERITY_CHANGE` - Severity change (0-9) via `task severity`
-- `TASK_UPDATE` - Generic update via `task edit` (title, type, functional_requirements, technical_requirements, acceptance_criteria, specialists). A type change made through `task edit` is recorded here, not under a dedicated operation.
+- `TASK_UPDATE` - Generic update via `task edit` (title, type, functional_requirements, technical_requirements, acceptance_criteria). A type change made through `task edit` is recorded here, not under a dedicated operation.
 - `TASK_REOPEN` - Task returned to BACKLOG via `task reopen`; lifecycle timestamps and completion_summary cleared. The sprint_tasks row is removed only when the source state is SPRINT, DOING, or TESTING; from COMPLETED the row is kept
-- `TASK_ASSIGN` - Specialist added to the task's specialists list via `task assign`; written only when the list actually changes, because assigning an already-assigned specialist is an idempotent no-op. A whole-list replacement made through `task edit` is recorded as `TASK_UPDATE` instead.
-- `TASK_UNASSIGN` - Specialist removed from the task's specialists list via `task unassign`; written only when the list actually changes, because removing a specialist that is not assigned is a no-op
 - `TASK_ADD_DEP` - Dependency added (logged against both task_id and depends_on_task_id)
 - `TASK_REMOVE_DEP` - Dependency removed (logged against both task_id and depends_on_task_id)
 - `TASK_COMMENT_CREATE` - Comment added to a task via `task comment-add` (logged against the parent task)
@@ -289,6 +286,29 @@ CREATE INDEX IF NOT EXISTS idx_audit_date ON audit(performed_at DESC);
 - `SPRINT_COMMENT_DELETE` - Comment deleted via `sprint comment-remove` (logged against the parent sprint)
 
 **Note:** Read operations (GET, STATS, LIST_TASKS) are NOT logged to audit as they do not modify state.
+
+**A stored row may carry an operation the catalogue does not list.** The
+`operation` column carries no `CHECK` constraint (see the DDL above), so the
+catalogue is enforced by the application when it writes a row and by nothing at all
+on the rows already stored. `TASK_ASSIGN` and `TASK_UNASSIGN` are the two values a
+Groadmap `audit` table can hold that the catalogue does not list. Three rules govern
+them, and they apply together:
+
+1. **They are not in the valid set.** The application writes neither value, and the
+   audit read surface accepts neither as an `--operation` filter value: a filter
+   naming one of them is rejected as an invalid operation with exit code 6, exactly
+   as any other name outside the catalogue is (see
+   `COMMANDS.md § List Audit Log`). Neither operation is reachable by name.
+2. **The rows carrying them are retained.** No migration deletes them and no read
+   path hides them. They continue to appear in an unfiltered `rmp audit list`, in
+   `rmp audit history` for the task they were logged against, in the audit
+   statistics, and on the read-only web interface's audit log page (see
+   `WEB.md § Roadmap Audit Log Page`), so a roadmap's recorded history stays
+   complete.
+3. **A reader MUST tolerate them.** Any consumer of an audit entry — the CLI's own
+   output, the web interface, or an AI agent reading the JSON — MUST treat the
+   `operation` value as an opaque string and MUST NOT assume it is one of the
+   catalogue's values (see `DATA_FORMATS.md § Audit Entry`).
 
 **Comment operations are recorded against the parent entity.** The six comment operations write `entity_type = 'TASK'` with `entity_id` set to the owning task's id, or `entity_type = 'SPRINT'` with `entity_id` set to the owning sprint's id. They never write the comment's own id and never introduce a new `entity_type` value. Two consequences follow, both intended:
 
@@ -388,7 +408,7 @@ CREATE TABLE IF NOT EXISTS _metadata (
 
 -- Insert schema version on creation
 INSERT INTO _metadata (key, value) VALUES
-    ('schema_version', '1.9.0'),
+    ('schema_version', '1.10.0'),
     ('created_at', '2026-03-20T00:00:00.000Z'),
     ('application', 'Groadmap');
 ```
@@ -402,8 +422,8 @@ INSERT INTO _metadata (key, value) VALUES
 #### Insert Task
 
 ```sql
-INSERT INTO tasks (title, status, type, functional_requirements, technical_requirements, acceptance_criteria, created_at, specialists, priority, severity)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);  -- created_at set by application (ISO 8601 UTC)
+INSERT INTO tasks (title, status, type, functional_requirements, technical_requirements, acceptance_criteria, created_at, priority, severity)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);  -- created_at set by application (ISO 8601 UTC)
 ```
 
 #### List All
@@ -412,7 +432,7 @@ Returns every task, each row carrying the complete `Task` object: the task's sto
 
 ```sql
 SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
-       t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
+       t.acceptance_criteria, t.created_at, t.started_at, t.tested_at,
        t.closed_at, t.completion_summary, t.parent_task_id,
        t.priority, t.severity,
        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count,
@@ -433,7 +453,7 @@ ORDER BY t.priority DESC, t.created_at ASC;
 - **`subtask_count`**, the number of direct subtasks, produced by the correlated subquery above. It is not a stored column — `MODELS.md § Task` defines it as computed — and this statement is where its value comes from, so the caller needs no second query and no per-task query to obtain it.
 - **`depends_on_csv`** and **`blocks_csv`**, the task's two dependency sets, each a comma-separated list of task ids in ascending id order (fixed by the inner `ORDER BY`) and the empty string when the set is empty (`COALESCE`). The application parses them into the task's `depends_on` and `blocks` values, which keeps the listing free of one dependency query per task.
 
-**One statement, several shapes.** The listing is assembled rather than fixed. It opens `WHERE 1=1` so that each optional predicate can be appended as a further `AND` — the status filter of `List by Status` below, and the priority, severity, type, specialists, and creation-date filters of the same listing — and it carries one of four orderings: `t.priority DESC, t.created_at ASC` (the default, shown above), `t.created_at ASC`, `t.status ASC, t.priority DESC, t.created_at ASC`, or `t.severity DESC, t.priority DESC, t.created_at ASC`. `COMMANDS.md § List Tasks` is canonical for which caller selects which. Every filter value is a bound parameter; none is concatenated into the SQL, and a value used in a `LIKE` predicate has its wildcards escaped first.
+**One statement, several shapes.** The listing is assembled rather than fixed. It opens `WHERE 1=1` so that each optional predicate can be appended as a further `AND` — the status filter of `List by Status` below, and the priority, severity, type, and creation-date filters of the same listing — and it carries one of four orderings: `t.priority DESC, t.created_at ASC` (the default, shown above), `t.created_at ASC`, `t.status ASC, t.priority DESC, t.created_at ASC`, or `t.severity DESC, t.priority DESC, t.created_at ASC`. `COMMANDS.md § List Tasks` is canonical for which caller selects which. Every filter value is a bound parameter; none is concatenated into the SQL, and a value used in a `LIKE` predicate has its wildcards escaped first.
 
 **Result-set size:** The listing itself imposes no bound: it carries no `OFFSET`, and it carries a `LIMIT ?` only when the caller asks for one. Any bound on the number of rows a caller receives is therefore the caller's, not this query's.
 
@@ -505,7 +525,7 @@ Returns all tasks in a sprint ordered by their position in the sprint task list,
 
 ```sql
 SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
-       t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
+       t.acceptance_criteria, t.created_at, t.started_at, t.tested_at,
        t.closed_at, t.completion_summary, t.parent_task_id,
        t.priority, t.severity,
        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count,
@@ -1168,7 +1188,6 @@ entry, is wrapped in one transaction) to these specific sprint operations.
 | technical_requirements | TEXT | NOT NULL, CHECK length <= 4096 chars, answers "How?" | Content |
 | acceptance_criteria | TEXT | NOT NULL, CHECK length <= 4096 chars, answers "How to verify?" | Content |
 | created_at | TEXT | NOT NULL, ISO 8601 format | Content |
-| specialists | TEXT | NULLABLE, comma-separated | Tracking |
 | started_at | TEXT | NULLABLE, ISO 8601 format | Tracking |
 | tested_at | TEXT | NULLABLE, ISO 8601 format | Tracking |
 | closed_at | TEXT | NULLABLE, ISO 8601 format | Tracking |
@@ -1386,6 +1405,61 @@ claims a migration is idempotent MUST be backed by this column-existence guard f
 every `ADD COLUMN` step; a bare `ALTER TABLE ... ADD COLUMN` without the guard is
 not idempotent and is not permitted. The schema-migration mechanism and its version
 history are specified in `VERSION.md § Migrations`.
+
+---
+
+## Migration Idempotency (ALTER TABLE DROP COLUMN)
+
+SQLite's `ALTER TABLE ... DROP COLUMN` is not idempotent either: re-running it for a
+column that is already gone raises a "no such column" error. Every migration that
+drops a column MUST therefore guard the `DROP COLUMN` with the same
+**column-existence check** the section above specifies, applied with the opposite
+sense — the `ALTER TABLE ... DROP COLUMN` runs only while the column is still
+present:
+
+```sql
+-- Drop the column only while it still exists
+SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = 'specialists';
+-- If the count is 1, run:
+ALTER TABLE tasks DROP COLUMN specialists;
+```
+
+Any statement in this specification or in `VERSION.md § Migrations` that claims a
+migration is idempotent MUST be backed by this guard for every `DROP COLUMN` step; a
+bare `ALTER TABLE ... DROP COLUMN` without the guard is not idempotent and is not
+permitted.
+
+**Availability.** `ALTER TABLE ... DROP COLUMN` requires SQLite 3.35.0 or later. The
+pinned pure-Go driver (see `BUILD.md § External Dependencies`) embeds a later SQLite
+release than that on every platform the project builds for, so the statement is
+always available and no table-rebuild fallback is specified.
+
+**What the drop preserves.** Dropping a column rewrites the table definition and
+leaves the rest of the table intact: every remaining column keeps its values, its
+`CHECK` constraint, and its `DEFAULT` clause; the table's indexes and foreign keys
+survive; and `AUTOINCREMENT` continues from the value it had reached. Only the
+dropped column and the values in it go.
+
+**What the drop discards.** The values the dropped column held are destroyed and are
+not recoverable from the database afterwards. A migration that drops a column
+therefore loses data by definition, and it is permitted only where losing that data
+is the purpose of the change rather than a side effect of it.
+
+**When SQLite refuses to drop a column.** `DROP COLUMN` is rejected when the column
+is a `PRIMARY KEY` or part of one, carries a `UNIQUE` constraint, is indexed, is
+named in a table-level `CHECK` constraint or in a partial index's `WHERE` clause, is
+used by a foreign key or by a generated column, or appears in a view or a trigger. A
+column that any of these describes has to be removed by rebuilding the table
+instead. Every column this specification drops MUST be free of all of them, which is
+what makes the single guarded statement above sufficient.
+
+**The column this rule governs.** `tasks.specialists` is dropped by the
+`1.9.0` → `1.10.0` migration; `VERSION.md § Migrations` is canonical for that
+migration's statements and carries them in full. The column is a plain nullable
+`TEXT` column with no index, no `CHECK`, no `UNIQUE`, no foreign key, and no view or
+trigger referring to it, so the guarded single statement removes it. The values it
+held are discarded, which is the purpose of that migration and not a side effect of
+it.
 
 ---
 

@@ -46,6 +46,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Sprint `description` semantics (must state the sprint's high-level goal) | `MODELS.md § Sprint Field Constraints` |
 | Audit result-set cap (`MaxAuditLimit`) | `DATABASE.md § Audit Result Limit` |
 | Migration idempotency (ALTER TABLE ADD COLUMN guard) | `DATABASE.md § Migration Idempotency (ALTER TABLE ADD COLUMN)` |
+| Migration idempotency (ALTER TABLE DROP COLUMN guard, what a drop preserves and discards) | `DATABASE.md § Migration Idempotency (ALTER TABLE DROP COLUMN)` |
 | `graph` command syntax / subcommands | `COMMANDS.md § Graph Management` |
 | Graph query result JSON / property-type mapping | `DATA_FORMATS.md § Graph Query Result` |
 | Cypher input via flag or stdin | `GRAPH.md § Cypher Input Source and Precedence` |

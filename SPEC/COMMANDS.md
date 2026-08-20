@@ -103,9 +103,10 @@ The rule is identical on all four subcommands that accept a body on standard inp
 ### Control-Character Constraint (All Free-Text Fields)
 
 All free-text fields — task `title`, `functional_requirements`,
-`technical_requirements`, `acceptance_criteria`, `completion_summary`,
-`specialists`, sprint `title` and `description`, and the comment `body` — reject control characters. An input that
-contains any of the following is rejected with exit code 6 before it is stored:
+`technical_requirements`, `acceptance_criteria`, `completion_summary`, sprint
+`title` and `description`, and the comment `body` — reject control characters. An
+input that contains any of the following is rejected with exit code 6 before it is
+stored:
 
 - ASCII control bytes below `0x20`, except TAB (`0x09`), LF (`0x0A`), and CR
   (`0x0D`), which are permitted.
@@ -116,13 +117,6 @@ contains any of the following is rejected with exit code 6 before it is stored:
 This guards against terminal escape-sequence injection (CWE-150) and Trojan Source
 attacks (CVE-2021-42574). The canonical definition is the Free-Text
 Control-Character Constraint in `MODELS.md § Task`.
-
-### Specialists List-Separator Constraint
-
-The `specialists` field is a comma-separated list. The comma is reserved as the
-list separator, so an individual specialist name MUST NOT contain a comma. An input
-in which a single name contains a comma is rejected with exit code 6. The canonical
-definition is the Specialists List-Separator Constraint in `MODELS.md § Task`.
 
 ### Validation Error Messages
 
@@ -370,7 +364,6 @@ rmp task ls -r <name> [OPTIONS]
 - `--severity <n>` - Filter severity >= n (0-9)
 - `-l, --limit <n>` - Limit number of results (default: 100)
 - `-y, --type <TYPE>` - Filter by task type. See `MODELS.md` — Task Type for the canonical list of 10 valid values.
-- `-sp, --specialists <name>` - Filter by specialist name (partial match, case-insensitive)
 - `--created-since <date>` - Return tasks created on or after this date (RFC3339 or YYYY-MM-DD)
 - `--created-until <date>` - Return tasks created on or before this date (RFC3339 or YYYY-MM-DD)
 - `--sort <field>` - Sort order: `priority` (default), `created`, `status`, `severity`
@@ -410,7 +403,6 @@ rmp task new -r <name> -t <title> -fr <fr> -tr <tr> -ac <ac>
 - `-y, --type <type>` - Task type (default: `TASK`). See `MODELS.md` — Task Type for the canonical list of 10 valid values.
 - `-p, --priority <0-9>` - Priority (default: 0)
 - `--severity <0-9>` - Severity (default: 0)
-- `-sp, --specialists <list>` - Comma-separated specialists
 - `--parent <id>` - Parent task ID; creates this task as a sub-task of the given parent. The parent must exist.
 
 **Validation Rules:**
@@ -494,7 +486,6 @@ Success (tasks available):
     "priority": 9,
     "severity": 9,
     "status": "SPRINT",
-    "specialists": "backend,security",
     "sprint_id": 5,
     "created_at": "2026-03-15T10:30:00.000Z",
     "started_at": null,
@@ -516,7 +507,6 @@ Success (fewer tasks than requested):
     "priority": 9,
     "severity": 9,
     "status": "SPRINT",
-    "specialists": "backend,security",
     "sprint_id": 5,
     "created_at": "2026-03-15T10:30:00.000Z",
     "started_at": null,
@@ -532,7 +522,6 @@ Success (fewer tasks than requested):
     "priority": 8,
     "severity": 9,
     "status": "SPRINT",
-    "specialists": "backend",
     "sprint_id": 5,
     "created_at": "2026-03-15T11:00:00.000Z",
     "started_at": null,
@@ -668,7 +657,6 @@ rmp task edit --roadmap <name> <id> [OPTIONS]
 - `-y, --type <type>` - Task type. See `MODELS.md` — Task Type for the canonical list of 10 valid values.
 - `-p, --priority <0-9>`
 - `--severity <0-9>`
-- `-sp, --specialists <list>`
 
 **Validation Rules:**
 
@@ -879,59 +867,6 @@ All IDs are validated before any transitions are applied. If any ID is invalid, 
 **Output (success):** No output to stdout, exit code 0.
 
 **Audit:** Each reopened task is logged individually with operation `TASK_REOPEN`.
-
-### Assign Specialist
-
-```bash
-rmp task assign -r <name> <task-id> <specialist>
-```
-
-**Description:** Adds `<specialist>` to the comma-separated specialists list on
-`<task-id>`. The specialist label is kept as a single token. The operation is
-idempotent: assigning a name that is already present is a no-op and exits 0; in
-that case an informational note is written to stderr for transparency. The note
-is not an error, and callers parsing stderr as an error signal MUST ignore it.
-
-**Arguments (both positional, in this order):**
-- `<task-id>` - Integer task id.
-- `<specialist>` - Free-form specialist label, kept as one token.
-
-**Output (success):** Empty stdout, exit code 0.
-
-**Exit Codes:**
-
-| Exit Code | Condition |
-|-----------|-----------|
-| 0 | Specialist added, or already present (no-op) |
-| 3 | Missing `-r` |
-| 4 | Task not found |
-| 6 | The new value pushes the specialists list past 500 characters |
-
-### Unassign Specialist
-
-```bash
-rmp task unassign -r <name> <task-id> <specialist>
-```
-
-**Description:** Removes `<specialist>` from the task's specialists list. If the
-list becomes empty, the specialists field is set to NULL. The operation is
-idempotent: if the specialist is not present on the task, the call is a no-op and
-exits 0; in that case an informational note is written to stderr. The note is not
-an error.
-
-**Arguments (both positional, in this order):**
-- `<task-id>` - Integer task id.
-- `<specialist>` - Specialist label to remove.
-
-**Output (success):** Empty stdout, exit code 0.
-
-**Exit Codes:**
-
-| Exit Code | Condition |
-|-----------|-----------|
-| 0 | Specialist removed, or not present (no-op) |
-| 3 | Missing `-r` |
-| 4 | Task not found |
 
 ---
 
@@ -1912,7 +1847,11 @@ rmp audit ls -r <name>
 ```
 
 **Options:**
-- `-o, --operation <type>` - Filter by operation (CREATE, UPDATE, etc.)
+- `-o, --operation <name>` - Filter by audit operation name (for example
+  `TASK_CREATE`, `SPRINT_CLOSE`). The value MUST be one of the operations in the
+  canonical catalogue (see `DATABASE.md § audit Table`); any other value is
+  rejected with exit code 6, whether or not the `audit` table happens to hold rows
+  carrying it.
 - `-e, --entity-type <type>` - Filter by entity (TASK, SPRINT, ROADMAP)
 - `--entity-id <id>` - Filter by specific entity ID. MUST be a positive integer in
   the range `1`-`2147483647` (`MaxInt32`). A value `< 1` or `> 2147483647`, or a
@@ -2530,3 +2469,11 @@ families read identically.
 only. `task remove` and `sprint remove` accept the `rm` alias but NOT `delete`;
 `rmp task delete` and `rmp sprint delete` are rejected with
 `Error: invalid input: unknown <task|sprint> subcommand: delete`.
+
+**Note on `assign` and `unassign`:** Neither name is a subcommand of the `task`
+family, and neither has a reserved exit code. `rmp task assign` and
+`rmp task unassign` are rejected by the same unknown-subcommand path that rejects
+any other unrecognised name, with
+`Error: invalid input: unknown task subcommand: <name>` on stderr, the invoked
+family's help after it, and exit code 2 (see `ARCHITECTURE.md § Exit Codes` and
+`Error Handling` above).

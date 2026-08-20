@@ -199,7 +199,7 @@ help text must match the command contract in `COMMANDS.md`.
 | Global | `rmp --version` | `COMMANDS.md § Global Commands` |
 | Global | `rmp --ai-help` / `rmp ai-help` | `COMMANDS.md § AI Help` |
 | Roadmap | `rmp roadmap [list \| create \| remove]` | `COMMANDS.md § Roadmap Management` |
-| Task | `rmp task [list \| create \| get \| next \| edit \| remove \| stat \| reopen \| prio \| sev \| assign \| unassign \| subtasks \| add-dep \| remove-dep \| blockers \| blocking]` | `COMMANDS.md § Task Management` |
+| Task | `rmp task [list \| create \| get \| next \| edit \| remove \| stat \| reopen \| prio \| sev \| subtasks \| add-dep \| remove-dep \| blockers \| blocking]` | `COMMANDS.md § Task Management` |
 | Task | `rmp task [comment-add \| comment-list \| comment-edit \| comment-remove]` | `COMMANDS.md § Task Comments` |
 | Sprint | `rmp sprint [list \| create \| get \| show \| update \| remove]` | `COMMANDS.md § Sprint Management` |
 | Sprint | `rmp sprint [comment-add \| comment-list \| comment-edit \| comment-remove]` | `COMMANDS.md § Sprint Comments` |

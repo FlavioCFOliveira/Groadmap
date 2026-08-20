@@ -165,14 +165,13 @@ Maps to the `tasks` table and `Task` JSON object.
 - `FunctionalRequirements`: Maximum 4096 characters
 - `TechnicalRequirements`: Maximum 4096 characters
 - `AcceptanceCriteria`: Maximum 4096 characters
-- `Specialists`: Maximum 500 characters (comma-separated list of specialist names)
 - `CompletionSummary`: Maximum 4096 characters (optional, set only on close)
 
 **Free-Text Control-Character Constraint:**
 
 All free-text fields — `Title`, `FunctionalRequirements`, `TechnicalRequirements`,
-`AcceptanceCriteria`, `CompletionSummary`, and `Specialists` (and the `Sprint`
-`Title` and `Description` fields, and the `Body` field of `TaskComment` and
+`AcceptanceCriteria`, and `CompletionSummary` (and the `Sprint` `Title` and
+`Description` fields, and the `Body` field of `TaskComment` and
 `SprintComment`) — MUST reject control characters. The application rejects an
 input that contains any of the following code points, with exit code 6, before the
 value is stored:
@@ -193,16 +192,9 @@ text is displayed without changing its stored bytes. This constraint applies to
 every field listed above on every command that accepts the field
 (see `COMMANDS.md § Field Validation`).
 
-**Specialists List-Separator Constraint:**
-
-The `Specialists` field is a comma-separated list of specialist names. The comma
-(`,`) is reserved as the list separator: an individual specialist name MUST NOT
-contain a comma. An input in which a single name contains a comma is rejected with
-exit code 6. This keeps the list unambiguous to split on the comma delimiter.
-
 ```go
 // Task represents a task in the roadmap.
-// Field order optimized for memory layout (240 bytes, zero padding on 64-bit systems).
+// Field order optimized for memory layout (232 bytes, zero padding on 64-bit systems).
 // Groups: Content (strings), Tracking (pointers), Metadata (ints), Dependencies (slices).
 // All Group 1 fields are mandatory (NOT NULL) with enforced maximum lengths.
 type Task struct {
@@ -216,8 +208,7 @@ type Task struct {
     AcceptanceCriteria     string     `json:"acceptance_criteria"`      // How to verify: completion criteria, max 4096 chars
     CreatedAt              string     `json:"created_at"`               // ISO 8601 UTC, auto-set on creation
 
-    // Group 2: Nullable tracking fields - lifecycle timestamps and parent link (48 bytes: 6 x 8)
-    Specialists        *string `json:"specialists"`          // Comma-separated specialists, nullable, max 500 chars; no individual name may contain a comma
+    // Group 2: Nullable tracking fields - lifecycle timestamps and parent link (40 bytes: 5 x 8)
     StartedAt          *string `json:"started_at"`           // ISO 8601 UTC, auto-set on DOING transition
     TestedAt           *string `json:"tested_at"`            // ISO 8601 UTC, auto-set on TESTING transition
     ClosedAt           *string `json:"closed_at"`            // ISO 8601 UTC, auto-set on COMPLETED transition
@@ -561,11 +552,10 @@ and must not be changed without also accepting the linter's revised order.
 - `map[K]V`: 8 bytes (header pointer), 8-byte aligned
 - `int` / `float64`: 8 bytes, 8-byte aligned
 
-**Task struct (240 bytes, zero padding on 64-bit):**
+**Task struct (232 bytes, zero padding on 64-bit):**
 ```
-Group 1: Pointer fields (6 × 8 = 48 bytes)
-  ParentTaskID, Specialists, CompletionSummary,
-  TestedAt, ClosedAt, StartedAt
+Group 1: Pointer fields (5 × 8 = 40 bytes)
+  ParentTaskID, CompletionSummary, TestedAt, ClosedAt, StartedAt
 
 Group 2: String fields (7 × 16 = 112 bytes)
   AcceptanceCriteria, CreatedAt, Status, TechnicalRequirements,
@@ -640,7 +630,7 @@ sprint_tasks table:
 
 ### Cache Line Considerations
 
-The Task struct (240 bytes) spans approximately 4 cache lines (64 bytes each).
+The Task struct (232 bytes) spans approximately 4 cache lines (64 bytes each).
 The `fieldalignment`-driven grouping keeps fields of the same kind contiguous,
 so common access patterns (e.g. iterating the pointer or string groups during
 display) stay within a small number of cache lines.

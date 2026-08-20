@@ -140,7 +140,6 @@ Sprint state machine (states, transitions, reopening): see `STATE_MACHINE.md § 
   "technical_requirements": "Create authentication module with JWT token support",
   "acceptance_criteria": "Functional login with 24h valid tokens; proper error handling",
   "created_at": "2026-03-12T10:00:00.000Z",
-  "specialists": "go-elite-developer,security-expert",
   "started_at": null,
   "tested_at": null,
   "closed_at": null,
@@ -264,6 +263,18 @@ One entry of a sprint's progression log, as returned by `rmp sprint comment-list
 ```
 
 A comment operation is recorded against the parent entity, never against the comment: `TASK_COMMENT_CREATE` carries `entity_type: "TASK"` and the owning task's id in `entity_id`. See `DATABASE.md § audit Table`.
+
+**`operation` is an opaque string to the reader.** The canonical catalogue of
+operation values is `DATABASE.md § audit Table`, and it is enforced by the
+application on write; the `operation` column itself carries no `CHECK`, so a stored
+entry can carry a value the catalogue does not list. `TASK_ASSIGN` and
+`TASK_UNASSIGN` are the two such values a Groadmap `audit` table can hold: they are
+not in the valid set, so no command writes them and no `--operation` filter accepts
+them by name, while the rows already carrying them are retained and are returned by
+every unfiltered audit read. A consumer of this object — including an AI agent
+reading the JSON — MUST therefore treat `operation` as an opaque string, MUST render
+whatever value it receives, and MUST NOT fail, drop the entry, or substitute a
+fallback when the value is not one it recognises.
 
 ---
 
@@ -579,7 +590,6 @@ the corresponding CLI output.
     "technical_requirements": "Create authentication module with JWT token support",
     "acceptance_criteria": "Functional login with 24h valid tokens; proper error handling",
     "created_at": "2026-03-12T10:00:00.000Z",
-    "specialists": "go-elite-developer,security-expert",
     "started_at": "2026-03-12T10:30:00.000Z",
     "tested_at": null,
     "closed_at": null,

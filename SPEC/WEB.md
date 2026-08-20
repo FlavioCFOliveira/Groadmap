@@ -985,11 +985,10 @@ how the `rmp web` process itself terminates.
      status badge at all (see below). The priority and severity badges of the task
      detail modal take no prefix either, for the reason stated there.
   4. A **metadata footer** showing only the indicators the task actually has:
-     the sprint the task belongs to, its `specialists`, its number of subtasks
-     (`subtask_count`), its number of `depends_on` entries, its number of `blocks`
-     entries, and its number of comments. Each indicator is rendered with the icon
-     or label that identifies what it counts, so the footer is readable without a
-     legend.
+     the sprint the task belongs to, its number of subtasks (`subtask_count`), its
+     number of `depends_on` entries, its number of `blocks` entries, and its number
+     of comments. Each indicator is rendered with the icon or label that identifies
+     what it counts, so the footer is readable without a legend.
 
      **The sprint indicator.** A task that belongs to a sprint shows that sprint
      on its card, the way a GitLab issue card shows the issue's milestone. The
@@ -1024,11 +1023,9 @@ how the `rmp web` process itself terminates.
   **Absent metadata renders nothing.** An indicator whose value is absent, empty,
   or zero is not rendered at all: no dash, no placeholder, no empty slot. A task
   that belongs to no sprint shows no sprint indicator — not a dash, not "None", not
-  an empty slot; a task with no `specialists` value, or with an empty `specialists`
-  value, shows no specialists indicator; a task with `subtask_count` `0`, with no
-  `depends_on` entry, with no `blocks` entry, or with no comment shows no
-  corresponding indicator. A task with none of the six shows no metadata footer at
-  all.
+  an empty slot; a task with `subtask_count` `0`, with no `depends_on` entry, with
+  no `blocks` entry, or with no comment shows no corresponding indicator. A task
+  with none of the five shows no metadata footer at all.
 
   The card presents a subset of the task's fields by design. Every field of the
   `Task` model — including the long free-text fields, the lifecycle timestamps,
@@ -1091,8 +1088,8 @@ how the `rmp web` process itself terminates.
   `#42`, both `42` and `#42` find it under the one substring rule below, with no
   special case for either form.
 
-  `specialists` is deliberately **excluded**, and so is every other task field. The
-  search answers "which task is this?" from what identifies a task on its card;
+  Every other task field is deliberately **excluded**. The search answers "which
+  task is this?" from what identifies a task on its card;
   matching an attribute answers a different question, "which tasks share this
   property?", which is the job of the type, priority, and severity filters below and
   would make one control serve two purposes with no way for the user to tell which
@@ -2253,10 +2250,10 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      **The two cards differ here, and the difference is deliberate.** The tasks
      board's card keeps its **separate metadata footer** and does not fold it into
      the badge line (see [Roadmap Tasks Page](#roadmap-tasks-page), **Card
-     content**, item 4). That footer lists six indicators of mixed kinds, two of
-     which — the sprint the task belongs to and its `specialists` — are text rather
-     than counts and carry no bounded width, so the list cannot share a line with
-     the badges: it would either push them off the line or wrap beneath them and
+     content**, item 4). That footer lists five indicators of mixed kinds, one of
+     which — the sprint the task belongs to — is text rather than a count and
+     carries no bounded width, so the list cannot share a line with the badges: it
+     would either push them off the line or wrap beneath them and
      spend the height the merge exists to save. This card carries exactly two
      indicators, both counts and both short, so it can. The two cards therefore
      diverge in this one line and in nothing else: the badge form and its prefixes,
@@ -2266,9 +2263,9 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      **The counter order differs from the tasks board's too.** On this card the
      comment count comes first and the subtask count second. The tasks board's
      metadata footer keeps its own order, in which the subtask count precedes the
-     comment count among the six indicators it lists. The two orders are stated
+     comment count among the five indicators it lists. The two orders are stated
      separately because the two groups are separate — a pair read at the trailing
-     edge of a line here, a list of six heterogeneous indicators in a block of its
+     edge of a line here, a list of five heterogeneous indicators in a block of its
      own there — and neither order is derived from the other. Each is fixed in this
      specification rather than left to the template, so that what a card shows is
      testable rather than incidental.
@@ -2277,9 +2274,9 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      states the task's status, which is the reason the tasks board's card omits one
      as well.
 
-     The card shows those six data points and no others: no task type, no
-     `specialists`, and no dependency counts. It presents a subset of the task's
-     fields by design, because a card is read at a glance and a column of cards is
+     The card shows those six data points and no others: no task type and no
+     dependency counts. It presents a subset of the task's fields by design,
+     because a card is read at a glance and a column of cards is
      read as a whole; every field of the `Task` model is shown in the task detail
      modal the card opens (see [Task Detail Modal](#task-detail-modal)). The card
      does not redefine any field; `MODELS.md` and `DATABASE.md` remain canonical.
@@ -2298,10 +2295,9 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      always makes every card of the board the same shape and makes each number
      meaningful: a `0` states that the task has no comment, where an absent counter
      leaves the reader unable to tell "no comments" from "this card does not show
-     comments". The tasks board's card carries six heterogeneous indicators, two of
-     which — the sprint the task belongs to and its `specialists` — are text rather
-     than counts and have no zero to show, so always rendering all six is not even
-     well defined there.
+     comments". The tasks board's card carries five heterogeneous indicators, one of
+     which — the sprint the task belongs to — is text rather than a count and has no
+     zero to show, so always rendering all five is not even well defined there.
    - **The card is the trigger, and the trigger is a `<button>`.** Selecting a card
      opens the read-only task detail modal for that task, and the card itself is a
      `<button type="button">`, a natively activatable element, exactly as the tasks
@@ -3286,9 +3282,9 @@ tasks.
 - **Fields shown.** The modal displays all of the task's fields as defined for the
   `Task` model in `MODELS.md § Task`: `id`, `title`, `status`, `type`, `priority`,
   `severity`, `functional_requirements`, `technical_requirements`,
-  `acceptance_criteria`, `specialists`, `completion_summary`, `parent_task_id`,
-  `subtask_count`, `depends_on`, `blocks`, `created_at`, `started_at`, `tested_at`,
-  and `closed_at`. This includes the long free-text fields
+  `acceptance_criteria`, `completion_summary`, `parent_task_id`, `subtask_count`,
+  `depends_on`, `blocks`, `created_at`, `started_at`, `tested_at`, and `closed_at`.
+  This includes the long free-text fields
   (`functional_requirements`, `technical_requirements`, `acceptance_criteria`, and
   `completion_summary`), which the modal presents formatted for readable display.
   These long free-text fields are multi-line as authored through the CLI, and the
@@ -3371,9 +3367,9 @@ tasks.
 
   This governs every caller-authored value on this path, all of which are free text
   a user wrote through the CLI: the task `title`, `functional_requirements`,
-  `technical_requirements`, `acceptance_criteria`, `completion_summary`,
-  `specialists`, and every comment `body`. A value containing HTML control
-  characters MUST render as the characters themselves and MUST NOT be able to
+  `technical_requirements`, `acceptance_criteria`, `completion_summary`, and every
+  comment `body`. A value containing HTML control characters MUST render as the
+  characters themselves and MUST NOT be able to
   introduce an element, an attribute, or a script into the page. The
   control-character constraint in `MODELS.md § Task` rejects terminal and
   bidirectional control characters at write time; it does not reject HTML markup,
@@ -4616,9 +4612,9 @@ Rules:
     page and the board cards of the sprint page — opens a modal
     popup that displays all of that task's fields (`id`, `title`, `status`, `type`,
     `priority`, `severity`, `functional_requirements`, `technical_requirements`,
-    `acceptance_criteria`, `specialists`, `completion_summary`, `parent_task_id`,
-    `subtask_count`, `depends_on`, `blocks`, `created_at`, `started_at`,
-    `tested_at`, `closed_at`). The page carries one modal element, not one per
+    `acceptance_criteria`, `completion_summary`, `parent_task_id`, `subtask_count`,
+    `depends_on`, `blocks`, `created_at`, `started_at`, `tested_at`,
+    `closed_at`). The page carries one modal element, not one per
     task, and opening a task fetches that task's fields and comments from
     `GET /roadmaps/{name}/tasks/{id}/data` to fill it. The modal is read-only: it
     contains no form, no edit
@@ -5188,12 +5184,11 @@ Rules:
     badge colour (Acceptance Criterion 61 continues to hold); and a metadata footer
     listing only
     the indicators the task actually has, among the sprint the task belongs to, its
-    `specialists`, its
     `subtask_count`, its number of `depends_on` entries, its number of `blocks`
     entries, and its number of comments. The card shows **no status badge**, because
     the column already states the status. An indicator whose value is absent, empty,
     or zero renders nothing at all — no dash and no placeholder — and a task with
-    none of the six indicators renders no metadata footer. That absent-metadata rule
+    none of the five indicators renders no metadata footer. That absent-metadata rule
     is this board's own: the card of the sprint's member-tasks board is not governed
     by it and always renders both of its counters (Acceptance Criterion 134). The
     prefix belongs to the board card and to nothing else: the same task's `priority`
@@ -5270,7 +5265,7 @@ Rules:
     `sprint_tasks.task_id` carries a `UNIQUE` constraint and a task therefore
     belongs to at most one sprint. The card of a task that belongs to no sprint
     shows no sprint indicator at all: no dash, no "None", and no empty slot. A task
-    with no sprint and none of the other five indicators renders no metadata footer
+    with no sprint and none of the other four indicators renders no metadata footer
     (Acceptance Criterion 85 continues to hold; see
     [Roadmap Tasks Page](#roadmap-tasks-page), `MODELS.md § Sprint`, and
     `DATABASE.md § Relationships`).
@@ -5367,10 +5362,10 @@ Rules:
     the user, not the cards present in the document. A task matches when the
     term occurs, case-insensitively and as a substring, in that task's `title` or in
     its `#<id>` reference written with the leading `#`; both `42` and `#42` therefore
-    find task 42. No other task field is matched: a term equal to a task's
-    `specialists` value, and matching nothing in that task's title or reference, does
-    not match it. Leading and trailing whitespace is stripped from the term by the
-    rule Acceptance Criterion 121 fixes, and a term that is empty or entirely
+    find task 42. No other task field is matched: a term occurring only in a task's
+    `functional_requirements`, and matching nothing in that task's title or
+    reference, does not match it. Leading and trailing whitespace is stripped from
+    the term by the rule Acceptance Criterion 121 fixes, and a term that is empty or entirely
     whitespace under that rule shows every task. The case-insensitive comparison
     folds the term and the task's searchable text by the rule Acceptance
     Criterion 118 fixes, so the same term and task yield the same verdict regardless
@@ -5865,9 +5860,9 @@ Rules:
     take the colours the semantic mapping assigns to their values, which the prefix
     does not affect (Acceptance Criterion 61
     continues to hold). The card carries **no** status badge, because the column
-    already states the status, and it shows no task type, no `specialists`, and no
-    dependency counts. The task's full field set is reached through the task detail
-    modal the card opens (see [Sprint Detail Sub-Template](#sprint-detail-sub-template)
+    already states the status, and it shows no task type and no dependency counts.
+    The task's full field set is reached through the task detail modal the card
+    opens (see [Sprint Detail Sub-Template](#sprint-detail-sub-template)
     and [Task Detail Modal](#task-detail-modal)).
 134. Every card of the sprint's member-tasks board renders both of its counters: the
     comment count and the subtask count are present on every card, including when

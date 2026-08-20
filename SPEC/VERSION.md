@@ -61,7 +61,7 @@ The `_metadata` table records the active schema version. Migration steps and the
 
 ### Current Schema Version
 
-`SchemaVersion = "1.9.0"` (defined in `internal/db/schema.go`).
+`SchemaVersion = "1.10.0"` (defined in `internal/db/schema.go`).
 
 ### Migration Commands
 
@@ -244,6 +244,52 @@ which SQLite enforces only when `foreign_keys` is on. That PRAGMA is connection
 scoped and is carried in the DSN of every connection the application opens (see
 `IMPLEMENTATION.md § Where Each PRAGMA Is Applied`), so deleting a task or a
 sprint deletes its comments.
+
+### Migration 1.9.0 → 1.10.0
+
+Drops the `specialists` column from the `tasks` table. The task model carries no
+such field, so the column holds data no part of the application reads or writes.
+
+**This migration destroys data, and that is its purpose.** Every value stored in
+`tasks.specialists` is discarded and is not recoverable from the database
+afterwards. There is no backfill, no archive column, and no audit entry recording
+the discarded values: the migration removes a field, and removing it means removing
+what it held. A roadmap whose tasks carried a value therefore loses it, which is the
+intended outcome of the change and not a side effect of it.
+
+The `DROP COLUMN` step is guarded by the column-existence check specified in
+`DATABASE.md § Migration Idempotency (ALTER TABLE DROP COLUMN)`, which is the
+`ADD COLUMN` guard applied with the opposite sense: the statement runs only while
+the column is still present. Re-running the migration set against an
+already-migrated database is therefore a no-op rather than a "no such column"
+error. Fresh databases created at schema version 1.10.0 never have the column,
+because it is absent from the `tasks` `CREATE TABLE` statement (see
+`DATABASE.md § tasks Table`), and so need no drop.
+
+```sql
+-- Drop the specialists column only while it still exists (see
+-- DATABASE.md § Migration Idempotency (ALTER TABLE DROP COLUMN)). When present, run:
+ALTER TABLE tasks DROP COLUMN specialists;
+
+-- Update schema version
+UPDATE _metadata SET value = '1.10.0' WHERE key = 'schema_version';
+```
+
+The single `ALTER TABLE ... DROP COLUMN` statement is sufficient and no table
+rebuild is required, because `specialists` is a plain nullable `TEXT` column: it is
+not a primary key or part of one, carries no `UNIQUE` constraint, is not indexed, is
+named in no `CHECK` constraint and in no partial index, is used by no foreign key
+and by no generated column, and appears in no view and in no trigger. The other
+columns of `tasks` keep their values, their `CHECK` constraints, and their
+`DEFAULT` clauses; the table's indexes and its `parent_task_id` self-reference
+survive the drop unchanged.
+
+**The audit log is not rewritten.** The `audit` table keeps every row it already
+holds, including rows whose `operation` is `TASK_ASSIGN` or `TASK_UNASSIGN`. Those
+two operations are not in the valid set the application writes and accepts, and no
+command reaches them by name, but the migration deletes no audit row: a roadmap's
+recorded history stays complete. The `operation` column carries no `CHECK`, so the
+retained rows need no schema accommodation (see `DATABASE.md § audit Table`).
 
 ## Release Process
 
