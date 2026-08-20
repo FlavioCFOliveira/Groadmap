@@ -41,6 +41,13 @@
   - [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours)
   - [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library)
 - [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)
+- [Server Logging](#server-logging)
+  - [Logger Configuration](#logger-configuration)
+  - [Levels](#levels)
+  - [What Is Logged](#what-is-logged)
+  - [What Is Not Logged](#what-is-not-logged)
+  - [Record Content](#record-content)
+  - [Log Integrity](#log-integrity)
 - [Error Handling and Exit Codes](#error-handling-and-exit-codes)
 - [Security and Constraints](#security-and-constraints)
 - [Acceptance Criteria](#acceptance-criteria)
@@ -443,8 +450,9 @@ schema migrates to it automatically, without user input.
    read-only (see [Read-Only Data Flow](#read-only-data-flow)).
 6. **Per-roadmap failure is best-effort and non-fatal.** If a roadmap's database
    cannot be migrated (for example, it is unreadable, locked by another writer, or
-   corrupt), the server logs an informational message to stderr naming that
-   roadmap and the reason, and continues with the remaining roadmaps. A migration
+   corrupt), the server logs a `WARN` record to stderr naming that roadmap and
+   the reason (see [Server Logging](#server-logging)), and continues with the
+   remaining roadmaps. A migration
    failure for one roadmap does **not** prevent the server from starting and does
    **not** prevent the other roadmaps from being served. This mirrors the
    best-effort, non-fatal tone of the legacy-layout migration sweep's
@@ -474,10 +482,11 @@ schema migrates to it automatically, without user input.
    in [Security and Constraints](#security-and-constraints) applies.
 3. **Network-exposure warning.** When the resolved bind host is not a loopback
    address (it is neither `127.0.0.1`, nor `::1`, nor any other address in the
-   loopback range), the server prints a warning to stderr stating that the
-   read-only interface is reachable from the network. The warning is informational
-   only: it does not change the exit code and does not prevent the server from
-   starting. Binding a loopback address prints no such warning.
+   loopback range), the server writes a `WARN` record to stderr stating that the
+   read-only interface is reachable from the network and naming the bound host
+   (see [Server Logging](#server-logging)). The warning is informational only: it
+   does not change the exit code and does not prevent the server from starting.
+   Binding a loopback address writes no such record.
 4. **Default port.** The default port is `8787`. When `--port` is not given, the
    server attempts to bind `8787`. If `8787` is already in use, the server falls
    back to an ephemeral port chosen by the operating system (binding port `0`),
@@ -4366,6 +4375,163 @@ experience is the baseline that larger viewports enhance.
    one device (see [Sprint Detail Sub-Template](#sprint-detail-sub-template),
    **Height and scrolling**).
 
+## Server Logging
+
+`rmp web` is the only long-lived `rmp` process. Every other command reports its
+failure on stderr and exits; the web server, by design, absorbs a per-request
+failure into an HTTP status and keeps serving (see
+[Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 4). The
+response body the browser receives is deliberately opaque — `internal server
+error` — so that a read failure, a corrupt graph store, or a template fault
+never discloses internal detail to the client. Without a log, that detail is
+discarded entirely and the operator is left with a failing page and a silent
+terminal.
+
+The server therefore writes a diagnostic log to the console. The log is the
+counterpart of the opaque response: what the response withholds, the console
+states explicitly.
+
+### Logger Configuration
+
+1. The server logs through the Go standard library's structured logger,
+   `log/slog`, configured with a `slog.TextHandler`. Every record is a single
+   line of `key=value` pairs, which reads directly on a terminal and needs no
+   parsing tool.
+2. The handler writes to **stderr**. Stdout carries only the startup success
+   object defined in `COMMANDS.md § Web Interface`, so a caller that reads
+   stdout for the served URL is never disturbed by a log record. No log record
+   is ever written to stdout.
+3. The minimum enabled level is `INFO`; `DEBUG` records are not emitted.
+4. The configuration is fixed. This version adds no logging flag to `rmp web`,
+   no environment variable, and no log file: the console is the only
+   destination, and the surface in [Command Surface](#command-surface) is
+   unchanged.
+5. Every record's `time` attribute is **always UTC**, in the project's single
+   canonical timestamp format `YYYY-MM-DDTHH:mm:ss.sssZ` — three digits of
+   milliseconds and an explicit `Z` suffix, for example
+   `2026-08-20T19:53:00.918Z`. This is the same format every Groadmap date uses
+   (`DATA_FORMATS.md § Dates - ISO 8601 with UTC`), so a log record and a task's
+   `created_at` can be compared directly, and a log read on a machine in one
+   time zone means the same instant as the same log read anywhere else.
+   `slog.TextHandler` timestamps in the **local** zone with an offset by
+   default, which satisfies neither rule; the handler MUST therefore replace the
+   `time` attribute with the UTC value in that format rather than accept the
+   default.
+6. The logger is a single package-level instance, built once at package
+   initialisation. It is replaceable, so that a test can capture the records and
+   assert their content rather than merely their presence.
+
+### Levels
+
+| Level | Meaning | Examples |
+|-------|---------|----------|
+| `ERROR` | The server failed. The condition is answered with HTTP 500 and is a fault of the server or of the environment it cannot recover from. | A roadmap's database cannot be read; a page template fails to execute; a response body fails to encode; the knowledge-graph store cannot be opened. |
+| `WARN` | The server did not fail, but an operator needs to know what happened. The condition is caused by the client or by the environment and leaves the server serving. | A query-bar query rejected as not read-only or failing in the engine (HTTP 400); a roadmap skipped by the startup schema migration; the interface bound to a non-loopback address. |
+| `INFO` | Enabled, but unused in this version: a successful request and a successful startup write no record. | — |
+
+### What Is Logged
+
+Each condition below MUST produce exactly one record.
+
+**Startup.** These three replace the ad-hoc `warning: ...` lines the server
+previously wrote to stderr with `fmt.Fprintf`. They remain non-fatal, remain on
+stderr, and remain informational: none of them changes the exit code or prevents
+the server from starting (see
+[Startup Schema Migration](#startup-schema-migration), rule 6, and
+[Bind Address and Port Selection](#bind-address-and-port-selection), item 3).
+
+| Condition | Level | `msg` |
+|-----------|-------|-------|
+| The resolved bind host is not a loopback address | `WARN` | `web interface is reachable from the network` |
+| The roadmap list cannot be read for the startup schema migration | `WARN` | `cannot list roadmaps for startup schema migration` |
+| One roadmap cannot be opened or migrated at startup | `WARN` | `startup schema migration skipped for roadmap` |
+
+**Per request.** Every response the server produces with HTTP status 500 MUST be
+accompanied by exactly one `ERROR` record naming the underlying error, and every
+HTTP 400 the graph data endpoint produces by exactly one `WARN` record.
+
+| Route or helper | Condition | Level | Status |
+|-----------------|-----------|-------|--------|
+| any roadmap-scoped route | the roadmap's existence check fails with an I/O error | `ERROR` | 500 |
+| `GET /` | the roadmap list cannot be read | `ERROR` | 500 |
+| `GET /roadmaps/{name}` | the sprints view cannot be loaded | `ERROR` | 500 |
+| `GET /roadmaps/{name}/tasks` | the task board cannot be loaded | `ERROR` | 500 |
+| `GET /roadmaps/{name}/tasks/{id}/data` | the task detail cannot be loaded for a reason other than not-found | `ERROR` | 500 |
+| `GET /roadmaps/{name}/audit` | the audit page cannot be loaded | `ERROR` | 500 |
+| `GET /roadmaps/{name}/sprints/{id}` | the sprint cannot be loaded for a reason other than not-found | `ERROR` | 500 |
+| `GET /roadmaps/{name}/graph/data` | the query bar's query was rejected as not read-only, its limit was invalid, or the accepted query failed in the engine | `WARN` | 400 |
+| `GET /roadmaps/{name}/graph/data` | the graph cannot be read for any other reason | `ERROR` | 500 |
+| HTML rendering | the page template fails to execute | `ERROR` | 500 |
+| JSON rendering | the response body fails to encode | `ERROR` | 500 |
+
+A failure that is detected by a helper and answered there — a template that
+fails to execute, a body that fails to encode — is logged by that helper, so the
+record exists exactly once and names the helper's own subject. A handler that has
+already logged its failure does not log it again on the way out.
+
+### What Is Not Logged
+
+These are deliberate exclusions, not omissions.
+
+1. **HTTP 404 and 405 are not logged.** A request for an unknown roadmap, a
+   non-integer id, an id that belongs to no record of the roadmap, an unmapped
+   path, or a non-read method on a known path is an ordinary outcome of
+   navigation, not a failure of the server. Logging them would bury the genuine
+   failures under every mistyped URL and every browser probe for an asset the
+   server does not serve. The single exception is already covered above: when a
+   roadmap's existence check fails with an I/O error the response is 500, not
+   404, and it is logged.
+2. **There is no access log.** A successful request writes no record. The log
+   exists to make failures visible, not to trace traffic.
+3. **The client address is not logged.** The server binds loopback by default and
+   serves read-only data; recording the peer of every failing request would add a
+   personal datum to the console without adding diagnostic value.
+4. **Nothing is redacted.** An error text may name a filesystem path under
+   `~/.roadmaps/`. That path is the diagnostic value of the record; it is written
+   to the operator's own console and it never reaches the HTTP response.
+
+### Record Content
+
+1. Every record carries the fixed attributes `time`, `level`, and `msg`.
+2. `msg` is a short, stable, lower-case phrase naming the condition. It is a
+   constant: no value is interpolated into it, so every record of one condition
+   groups with the others regardless of the request that produced it. What varies
+   between records belongs in the attributes.
+3. Every per-request record additionally carries:
+   - `method` — the request method;
+   - `path` — the request path;
+   - `status` — the HTTP status the server returned;
+   - `err` — the text of the underlying error, which is precisely the value the
+     HTTP response withholds.
+4. `roadmap` is carried by every record for which the roadmap name is known.
+5. Route-specific attributes name the record's subject where one exists: `task`
+   and `sprint` for the id-bearing routes, `page` for the audit page, `template`
+   for a template failure, and `kind` for the classification of a query-bar
+   failure (the same classification the response body carries; see
+   [Query-Bar Error Handling](#query-bar-error-handling)).
+6. This section changes no response. A 500 still returns the opaque
+   `internal server error` text and a 400 from the graph data endpoint still
+   returns its structured JSON error with the same `error` and `kind` fields.
+   Detail is added to the console, never to the response.
+
+### Log Integrity
+
+A request path, a roadmap name, a Cypher query, and an error text can each carry
+bytes the server did not choose. A log format that pasted those bytes in verbatim
+would let a crafted request write what reads as a second, forged record — a
+newline followed by `level=ERROR msg="..."` — into the operator's console, which
+would make the log an untrustworthy account of what happened.
+
+1. Every record MUST occupy exactly one line. A control character inside an
+   attribute value MUST be escaped, never emitted literally.
+2. `slog.TextHandler` provides this property: it quotes any value containing
+   whitespace, a quotation mark, or a control character, and escapes a newline as
+   the two characters `\` and `n`. A forged `level=` or `msg=` inside a value
+   therefore stays inside that quoted value and cannot terminate the record.
+3. The property MUST be covered by a regression test that drives a newline and a
+   `level=ERROR msg=` sequence through a logged attribute and asserts that the
+   emitted record is still a single line.
+
 ## Error Handling and Exit Codes
 
 The `rmp web` process uses the existing sentinel errors and exit-code mapping in
@@ -4401,7 +4567,9 @@ Rules:
 4. Once the server is serving, per-request failures (roadmap not found, corrupt
    graph store, read error) are handled inside the running server as HTTP status
    responses (400, 404, 405, 500) and do **not** terminate the process. The process
-   exit code is determined by how the server itself is started and stopped.
+   exit code is determined by how the server itself is started and stopped. The
+   detail of such a failure is withheld from the response and written to the
+   console instead, under the rules in [Server Logging](#server-logging).
 5. Errors written to stderr by `rmp web` carry the standard AI-agent hint and
    follow the plain-text error format in `HELP.md § Error message format`.
 6. If a future need arises for a dedicated web error class, it MUST be added
@@ -5992,9 +6160,48 @@ Rules:
     [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
     rule 2).
 
+141. Every HTTP 500 the running server returns is accompanied by exactly one
+    `log/slog` `ERROR` record on stderr, and no 500 is silent. The record names
+    the request `method` and `path`, the `status`, and the underlying error text
+    under `err` — the value the response body withholds. The response body is
+    unchanged: it remains the opaque `internal server error` text, and the error
+    detail never reaches the client. Stdout carries only the startup URL object;
+    no log record is ever written to it.
+142. An HTTP 400 from `GET /roadmaps/{name}/graph/data` — a query-bar query
+    rejected as not read-only, an invalid limit, or an accepted query that failed
+    in the engine — is accompanied by exactly one `WARN` record carrying the
+    failure `kind` and the reason under `err`, matching the `kind` and `error` the
+    structured JSON response already carries. The failure still triggers no write,
+    no checkpoint, and no navigation.
+143. A successful request writes no log record, and neither does an HTTP 404 or an
+    HTTP 405: an unknown roadmap, a non-integer or unknown id, an unmapped path,
+    and a non-read method on a known path all leave the console silent. The
+    exception is the I/O failure of a roadmap's existence check, which is a 500
+    and is logged.
+144. Every record's `time` attribute is UTC, in the canonical Groadmap format
+    `YYYY-MM-DDTHH:mm:ss.sssZ` — exactly three digits of milliseconds and a `Z`
+    suffix, for example `2026-08-20T19:53:00.918Z`. It is never the local-zone
+    timestamp with a numeric offset that `slog.TextHandler` produces by default,
+    and the timestamp is UTC whatever the machine's `TZ` setting is.
+145. A record is always exactly one line. A request path, roadmap name, or error
+    text containing a newline and a `level=ERROR msg="..."` sequence is emitted
+    escaped inside its quoted attribute value, so a crafted request cannot forge a
+    second log record on the operator's console.
+146. The three startup diagnostics — the non-loopback bind, the unreadable
+    roadmap list, and a roadmap skipped by the startup schema migration — are
+    `WARN` records on stderr rather than ad-hoc `warning: ` lines. They remain
+    non-fatal: `rmp web` still starts, still prints its URL object to stdout, and
+    still exits 0 on a graceful shutdown. The non-loopback record still states
+    that the interface is reachable from the network and still names the bound
+    host.
+
 ## See Also
 
 - CLI command contract for `web` → `COMMANDS.md § Web Interface`
+- Canonical timestamp format the log records share with every other Groadmap
+  date → `DATA_FORMATS.md § Dates - ISO 8601 with UTC`
+- The stdout-is-JSON / stderr-is-diagnostics split the log obeys →
+  `ARCHITECTURE.md § Error Handling`
 - Task detail endpoint JSON shape (the task object and its comments) →
   `DATA_FORMATS.md § Task Detail Data`, composed from `DATA_FORMATS.md § Task` and
   `DATA_FORMATS.md § Task Comment`

@@ -55,6 +55,7 @@ import sys
 import tempfile
 import time
 import urllib.parse
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -5505,6 +5506,239 @@ class TestWebInterface:
         assert self._req(port, "/")[0] == 200
         code = self._stop(proc, signal.SIGTERM)
         assert code == 0, f"SIGTERM must exit 0 (graceful), got {code}"
+
+    # ====================================================================
+    # AC141-AC146: server logging on the console (SPEC/WEB.md § Server Logging)
+    # ====================================================================
+
+    # One slog TextHandler record: time=... level=LEVEL msg="..." key=value ...
+    _LOG_RECORD = re.compile(
+        r'^time=(?P<time>\S+) level=(?P<level>[A-Z]+) msg=(?P<msg>"[^"]*"|\S+)(?P<rest>.*)$'
+    )
+    _CANONICAL_STAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
+
+    @classmethod
+    def _log_records(cls, stderr):
+        """Parse a server's stderr into slog records.
+
+        Every record is one line by construction (SPEC/WEB.md § Log Integrity),
+        so a line that does not parse is a line the server wrote outside the
+        logger, which the caller can then assert about.
+        """
+        records = []
+        for line in stderr.splitlines():
+            if not line.strip():
+                continue
+            m = cls._LOG_RECORD.match(line)
+            records.append(
+                {
+                    "raw": line,
+                    "time": m.group("time") if m else None,
+                    "level": m.group("level") if m else None,
+                    "msg": m.group("msg").strip('"') if m else None,
+                    "rest": m.group("rest") if m else "",
+                }
+            )
+        return records
+
+    @classmethod
+    def _assert_canonical_utc(cls, record):
+        """Every record's timestamp is UTC in YYYY-MM-DDTHH:mm:ss.sssZ (AC144)."""
+        stamp = record["time"]
+        assert stamp is not None, f"record is not a slog record: {record['raw']!r}"
+        assert cls._CANONICAL_STAMP.match(stamp), (
+            "log timestamp must be UTC as YYYY-MM-DDTHH:mm:ss.sssZ; "
+            f"got {stamp!r} in record {record['raw']!r}"
+        )
+
+    def test_startup_network_warning_is_a_slog_warn_record(self):
+        """AC146: the non-loopback bind warning is a WARN record, not an ad-hoc
+        `warning: ` line, and it still names the bound host. AC141: stdout stays
+        clean, carrying only the startup URL object.
+        """
+        out = tempfile.TemporaryFile(mode="w+")
+        err = tempfile.TemporaryFile(mode="w+")
+        proc = subprocess.Popen(
+            [self.cli, "web", "--no-open", "--host", "0.0.0.0", "--port", "0"],
+            stdout=out, stderr=err, text=True, env=self._env(),
+        )
+        proc.out_file = out
+        proc.err_file = err
+        self._procs.append(proc)
+
+        url = self._read_startup_url(proc)
+        assert url is not None, f"server did not start; stderr={self._drain(err)}"
+
+        records = self._log_records(self._drain(err))
+        exposure = [r for r in records
+                    if r["msg"] == "web interface is reachable from the network"]
+        assert len(exposure) == 1, (
+            "exactly one network-exposure record expected; "
+            f"got {len(exposure)} in {[r['raw'] for r in records]}"
+        )
+        rec = exposure[0]
+        assert rec["level"] == "WARN", f"level = {rec['level']!r}, want WARN: {rec['raw']!r}"
+        assert "host=0.0.0.0" in rec["rest"], f"record must name the bound host: {rec['raw']!r}"
+        assert "warning:" not in rec["raw"], (
+            f"the ad-hoc warning prefix must be gone: {rec['raw']!r}"
+        )
+        self._assert_canonical_utc(rec)
+
+        # Stdout carries the startup object and nothing else: a caller reading
+        # stdout for the URL must never receive a log record.
+        stdout = self._drain(out)
+        assert json.loads(stdout) == {"url": url}, (
+            f"stdout must be exactly the startup URL object, got {stdout!r}"
+        )
+
+        code = self._stop(proc, signal.SIGTERM)
+        assert code == 0, f"graceful SIGTERM shutdown must exit 0, got {code}"
+
+    def test_server_error_is_logged_as_a_slog_error_record(self):
+        """AC141: every HTTP 500 the running server returns is accompanied by
+        exactly one ERROR record naming the request and the underlying error,
+        while the response body itself stays opaque.
+
+        The roadmap's database is replaced with non-database bytes AFTER the
+        server has started, so the failure is genuinely a per-request read
+        failure rather than anything the startup sweep could have reported.
+        """
+        proc, port = self._start(["--port", "0"])
+        assert self._req(port, f"/roadmaps/{ROADMAP}")[0] == 200, "precondition: page serves"
+
+        db_path = Path(self.home) / ".roadmaps" / ROADMAP / "project.db"
+        db_path.write_bytes(b"these are not the bytes of a SQLite database")
+
+        status, _, body = self._req(port, f"/roadmaps/{ROADMAP}")
+        assert status == 500, f"a corrupt database must yield 500, got {status}"
+        assert "internal server error" in body.lower(), (
+            f"the response must stay opaque, got {body!r}"
+        )
+        # The detail belongs on the console, never in the response.
+        assert "project.db" not in body and "SQLite" not in body, (
+            f"the response leaked internal detail: {body!r}"
+        )
+
+        records = self._log_records(self._drain(proc.err_file))
+        errors = [r for r in records if r["level"] == "ERROR"]
+        assert len(errors) == 1, (
+            f"exactly one ERROR record expected; got {[r['raw'] for r in records]}"
+        )
+        rec = errors[0]
+        assert rec["msg"] == "sprints page load failed", f"msg = {rec['msg']!r}"
+        for fragment in ("method=GET", f"path=/roadmaps/{ROADMAP}",
+                         f"roadmap={ROADMAP}", "status=500", "err="):
+            assert fragment in rec["raw"], (
+                f"record is missing {fragment!r}: {rec['raw']!r}"
+            )
+        self._assert_canonical_utc(rec)
+
+    def test_graph_query_bar_rejection_is_logged_as_a_slog_warn_record(self):
+        """AC142: the graph data endpoint's 400 is a WARN, not an ERROR — the
+        user's query failed, not the server — and the record carries the same
+        failure kind the JSON response body carries.
+        """
+        proc, port = self._start(["--port", "0"])
+        query = urllib.parse.quote("CREATE (n:Injected {via:'query bar'}) RETURN n")
+        status, _, body = self._req(port, f"/roadmaps/{ROADMAP}/graph/data?q={query}")
+        assert status == 400, f"a writing query must be rejected with 400, got {status}"
+        payload = json.loads(body)
+        assert payload["kind"] == "not_read_only", f"unexpected kind: {payload!r}"
+
+        records = self._log_records(self._drain(proc.err_file))
+        assert not [r for r in records if r["level"] == "ERROR"], (
+            f"a rejected user query is not a server error: {[r['raw'] for r in records]}"
+        )
+        warns = [r for r in records if r["level"] == "WARN"]
+        assert len(warns) == 1, (
+            f"exactly one WARN record expected; got {[r['raw'] for r in records]}"
+        )
+        rec = warns[0]
+        assert rec["msg"] == "graph query bar request failed", f"msg = {rec['msg']!r}"
+        for fragment in ("method=GET", f"roadmap={ROADMAP}",
+                         "kind=not_read_only", "status=400", "err="):
+            assert fragment in rec["raw"], (
+                f"record is missing {fragment!r}: {rec['raw']!r}"
+            )
+        self._assert_canonical_utc(rec)
+
+        # Console and page agree on the classification.
+        assert f'kind={payload["kind"]}' in rec["raw"]
+
+    def test_ordinary_outcomes_leave_the_console_silent(self):
+        """AC143: a successful request, a 404 and a 405 write no record at all.
+
+        Logging them would bury the genuine failures under every mistyped URL
+        and every browser probe for an asset the server does not serve.
+        """
+        proc, port = self._start(["--port", "0"])
+
+        probes = [
+            ("GET", "/", 200),
+            ("GET", f"/roadmaps/{ROADMAP}", 200),
+            ("GET", f"/roadmaps/{ROADMAP}/tasks", 200),
+            ("GET", f"/roadmaps/{ROADMAP}/audit", 200),
+            ("GET", "/roadmaps/no-such-roadmap", 404),
+            ("GET", "/favicon.ico", 404),
+            ("GET", "/no/such/page", 404),
+            ("GET", f"/roadmaps/{ROADMAP}/sprints/999999", 404),
+            ("GET", f"/roadmaps/{ROADMAP}/tasks/999999/data", 404),
+            ("POST", f"/roadmaps/{ROADMAP}", 405),
+            ("DELETE", "/", 405),
+        ]
+        for method, path, want in probes:
+            status = self._req(port, path, method=method)[0]
+            assert status == want, f"{method} {path} = {status}, want {want}"
+
+        stderr = self._drain(proc.err_file)
+        assert stderr.strip() == "", (
+            "successful requests, 404s and 405s must leave the console silent; "
+            f"stderr={stderr!r}"
+        )
+
+    def test_log_timestamps_are_utc_whatever_the_process_timezone(self):
+        """AC144: the timestamp is the real UTC instant, not the local wall
+        clock relabelled.
+
+        The server runs under a fixed +09:00 zone, which slog's TextHandler
+        would otherwise stamp as a local time with a numeric offset. The record
+        must still be UTC, within a minute of this machine's own UTC clock.
+        """
+        env = self._env()
+        env["TZ"] = "Asia/Tokyo"
+
+        out = tempfile.TemporaryFile(mode="w+")
+        err = tempfile.TemporaryFile(mode="w+")
+        before = datetime.now(timezone.utc)
+        proc = subprocess.Popen(
+            [self.cli, "web", "--no-open", "--host", "0.0.0.0", "--port", "0"],
+            stdout=out, stderr=err, text=True, env=env,
+        )
+        proc.out_file = out
+        proc.err_file = err
+        self._procs.append(proc)
+
+        url = self._read_startup_url(proc)
+        assert url is not None, f"server did not start; stderr={self._drain(err)}"
+        after = datetime.now(timezone.utc)
+
+        records = self._log_records(self._drain(err))
+        assert records, "the non-loopback bind must have produced a record"
+        rec = records[0]
+        self._assert_canonical_utc(rec)
+
+        stamp = datetime.strptime(rec["time"], "%Y-%m-%dT%H:%M:%S.%fZ").replace(
+            tzinfo=timezone.utc
+        )
+        margin = timedelta(minutes=1)
+        assert before - margin <= stamp <= after + margin, (
+            "the timestamp is not the real UTC instant: under TZ=Asia/Tokyo a "
+            f"local reading would be nine hours out. got {stamp.isoformat()}, "
+            f"window [{before.isoformat()}, {after.isoformat()}]"
+        )
+
+        code = self._stop(proc, signal.SIGTERM)
+        assert code == 0, f"graceful SIGTERM shutdown must exit 0, got {code}"
 
 
 def _run_all():

@@ -8,7 +8,7 @@ The deliverable is fully self-contained: every asset required to render and oper
 
 `rmp web` operates across all roadmaps: it lists every roadmap found under `~/.roadmaps/` and you drill into one from the browser. It is the one command that is exempt from the always-required-roadmap rule, so it does **not** accept the `-r` / `--roadmap` flag. It has no subcommands.
 
-By default the server binds the loopback interface (`127.0.0.1`), so the read-only interface is reachable only from the local machine. Exposing it on the network is the explicit opt-in `--host 0.0.0.0` (all interfaces), which also prints a network-exposure warning to stderr at startup.
+By default the server binds the loopback interface (`127.0.0.1`), so the read-only interface is reachable only from the local machine. Exposing it on the network is the explicit opt-in `--host 0.0.0.0` (all interfaces), which also writes a network-exposure warning to stderr at startup (see [Console Log](#console-log)).
 
 Unlike every other command, `rmp web` is long-lived: it keeps serving until interrupted. Sending `SIGINT` (`Ctrl+C`) or `SIGTERM` shuts the server down gracefully and the process exits 0.
 
@@ -39,7 +39,46 @@ On successful startup the served URL is printed to stdout as a single JSON objec
 }
 ```
 
-The `url` reflects the actual bound host and port, including an ephemeral port chosen by the fallback. While running, the server serves HTML pages and a JSON graph-data endpoint; those are HTTP responses, not stdout output of the command.
+The `url` reflects the actual bound host and port, including an ephemeral port chosen by the fallback. While running, the server serves HTML pages and a JSON graph-data endpoint; those are HTTP responses, not stdout output of the command. Nothing else is ever written to stdout: diagnostics go to stderr, as described under [Console Log](#console-log).
+
+## Console Log
+
+`rmp web` is long-lived, and a per-request failure never stops it: the server absorbs the failure into an HTTP status and keeps serving. The response body a browser receives is deliberately opaque — `internal server error` — so no internal detail is disclosed to the client. The console is where that detail goes instead.
+
+The server writes a structured diagnostic log to **stderr** through Go's `log/slog`, one `key=value` line per record:
+
+```
+time=2026-08-20T19:53:00.918Z level=ERROR msg="sprints page load failed" method=GET path=/roadmaps/platform roadmap=platform status=500 err="file is not a database"
+time=2026-08-20T19:53:04.226Z level=WARN msg="graph query bar request failed" method=GET path=/roadmaps/platform/graph/data roadmap=platform kind=not_read_only status=400 err="query is not read-only: CREATE is a writing clause"
+```
+
+Stdout is untouched by the log: it carries only the startup URL object, so a script that reads stdout for the served address is never disturbed by a record.
+
+### What each level means
+
+| Level | Meaning |
+|-------|---------|
+| `ERROR` | The server failed. The request was answered `500` and the fault is the server's or the environment's — a roadmap database that cannot be read, a template that will not execute, a response body that will not encode |
+| `WARN` | The server did not fail, but you need to know what happened — a query-bar query rejected or failed (`400`), a roadmap skipped by the startup schema migration, or the interface bound to a non-loopback address |
+
+### What is recorded
+
+Every record carries `time`, `level`, and `msg`. `msg` is a fixed phrase naming the condition, never an interpolated string, so all records of one condition group together. A per-request record adds `method`, `path`, `status`, and `err` — the underlying error text, which is exactly what the HTTP response withholds — plus `roadmap` once the roadmap is known, and the route's own subject where there is one (`task`, `sprint`, `page`, `template`, or the query-bar `kind`).
+
+### What is not recorded
+
+- **`404` and `405` are not logged.** An unknown roadmap, an unknown id, an unmapped path, or a write method on a read-only route is ordinary navigation, not a failure. Logging them would bury the real failures under every mistyped URL and every browser probe for an asset the server does not serve.
+- **There is no access log.** A successful request writes nothing.
+- **The client address is not recorded.**
+- **Nothing is redacted.** An error text may name a path under `~/.roadmaps/`. That is the diagnostic value of the record; it stays on your console and never reaches the HTTP response.
+
+### Timestamps and integrity
+
+Every timestamp is UTC in the single format Groadmap uses everywhere — `YYYY-MM-DDTHH:mm:ss.sssZ` — whatever time zone the machine is set to, so a log record and a task's `created_at` compare directly and a log means the same instant wherever it is read.
+
+Every record is exactly one line. A request path, a roadmap name, or an error text can carry bytes the server did not choose, so any value containing whitespace, a quotation mark, or a control character is quoted and escaped: a newline appears as `\n` inside its quoted value. A crafted request therefore cannot write what looks like a second, invented record onto your console.
+
+The log has no configuration: there is no logging flag, no environment variable, and no log file. Redirect stderr if you want the records in one.
 
 ## Routes and Pages
 
@@ -254,7 +293,7 @@ The endpoint answers each of its three failure classes with HTTP `400 Bad Reques
 
 - **One status, three kinds.** In each case the server can serve the route and refuses the request the caller made, which is what HTTP `400` states; the `kind` field is what distinguishes the three. A budget exhaustion is neither a `503` (the server is not overloaded and delay alleviates nothing, since the same query exhausts the same budget again) nor a `504` (the server is no gateway or proxy, and the engine is in-process).
 - **Precedence.** One request can be wrong in more than one way. The `limit` is resolved before the guard rail runs, so a request carrying both an invalid `limit` and a query that is not read-only is answered `invalid_limit`. Under either order the request is rejected before the query runs and before the graph store is opened, so neither reads nor writes anything.
-- **The boundary against `500`.** An internal read error — a failure to open the roadmap's graph store — is answered `500`, as on every other route, and does not carry this body shape. What separates it from the `400` of an execution failure is *when* the failure surfaces: a failure that surfaces once the query is already running, from the run itself or from the walk over its result, is a query execution failure.
+- **The boundary against `500`.** An internal read error — a failure to open the roadmap's graph store — is answered `500`, as on every other route, and does not carry this body shape. The two are also separated on the console: a `400` here is a `WARN` (your query failed), a `500` is an `ERROR` (the server failed). See [Console Log](#console-log). What separates it from the `400` of an execution failure is *when* the failure surfaces: a failure that surfaces once the query is already running, from the run itself or from the walk over its result, is a query execution failure.
 
 In every case the message is shown in place on the page, the page does not crash, and the failure triggers no write and no navigation.
 
