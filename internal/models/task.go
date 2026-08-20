@@ -4,7 +4,6 @@ package models
 import (
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
@@ -220,16 +219,16 @@ const (
 	MaxTaskFunctionalRequirements = 4096
 	MaxTaskTechnicalRequirements  = 4096
 	MaxTaskAcceptanceCriteria     = 4096
-	MaxTaskSpecialists            = 500
 	MaxTaskCompletionSummary      = 4096
 )
 
 // Task represents a task in the roadmap.
-// Field order optimized for memory layout (zero padding on 64-bit systems).
-// Groups: Content fields (strings), Tracking fields (pointers), Metadata (ints).
+// Field order optimized for memory layout (232 bytes, zero padding on 64-bit
+// systems) and enforced by the govet:fieldalignment linter.
+// Groups: Tracking fields (pointers), Content fields (strings), Dependencies
+// (slices), Metadata (ints). See SPEC/MODELS.md § Memory Layout Optimization.
 type Task struct {
 	ParentTaskID           *int       `json:"parent_task_id"`
-	Specialists            *string    `json:"specialists"`
 	CompletionSummary      *string    `json:"completion_summary"`
 	TestedAt               *string    `json:"tested_at"`
 	ClosedAt               *string    `json:"closed_at"`
@@ -274,9 +273,6 @@ func (t *Task) Validate() error {
 	}
 	if len(t.AcceptanceCriteria) > MaxTaskAcceptanceCriteria {
 		return fmt.Errorf("%w: acceptance_criteria exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskAcceptanceCriteria)
-	}
-	if t.Specialists != nil && len(*t.Specialists) > MaxTaskSpecialists {
-		return fmt.Errorf("%w: specialists exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskSpecialists)
 	}
 	if t.Priority < 0 || t.Priority > 9 {
 		// Chain utils.ErrValidation so this maps to exit 6 (invalid data) per
@@ -363,30 +359,6 @@ func (t *Task) IsComplete() bool {
 	return t.Status == StatusCompleted
 }
 
-// ParseSpecialists parses a comma-separated list of specialists.
-func ParseSpecialists(s string) []string {
-	if s == "" {
-		return nil
-	}
-	parts := strings.Split(s, ",")
-	var result []string
-	for _, p := range parts {
-		trimmed := strings.TrimSpace(p)
-		if trimmed != "" {
-			result = append(result, trimmed)
-		}
-	}
-	return result
-}
-
-// FormatSpecialists formats a slice of specialists as a comma-separated string.
-func FormatSpecialists(specialists []string) string {
-	if len(specialists) == 0 {
-		return ""
-	}
-	return strings.Join(specialists, ",")
-}
-
 // TaskUpdate represents a type-safe update operation for tasks.
 // Use pointer fields to indicate which fields should be updated (nil = no change).
 // This provides compile-time type safety and deterministic SQL generation
@@ -396,7 +368,6 @@ type TaskUpdate struct {
 	FunctionalRequirements *string
 	TechnicalRequirements  *string
 	AcceptanceCriteria     *string
-	Specialists            *string
 	Priority               *int
 	Severity               *int
 }
@@ -404,7 +375,7 @@ type TaskUpdate struct {
 // HasChanges returns true if any field is set to be updated.
 func (u *TaskUpdate) HasChanges() bool {
 	return u.Title != nil || u.FunctionalRequirements != nil || u.TechnicalRequirements != nil ||
-		u.AcceptanceCriteria != nil || u.Specialists != nil || u.Priority != nil || u.Severity != nil
+		u.AcceptanceCriteria != nil || u.Priority != nil || u.Severity != nil
 }
 
 // Validate checks if the update values are valid.
@@ -420,9 +391,6 @@ func (u *TaskUpdate) Validate() error {
 	}
 	if u.AcceptanceCriteria != nil && len(*u.AcceptanceCriteria) > MaxTaskAcceptanceCriteria {
 		return fmt.Errorf("%w: acceptance_criteria exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskAcceptanceCriteria)
-	}
-	if u.Specialists != nil && len(*u.Specialists) > MaxTaskSpecialists {
-		return fmt.Errorf("%w: specialists exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskSpecialists)
 	}
 	if u.Priority != nil && (*u.Priority < 0 || *u.Priority > 9) {
 		return fmt.Errorf("%w: priority must be between 0 and 9, got %d: %w", utils.ErrValidation, *u.Priority, ErrPriorityOutOfRange)

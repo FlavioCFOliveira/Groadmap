@@ -28,7 +28,6 @@ Filters (compose with AND):
   --severity <min>                severity >= <min> (0-9)
   -y, --type <type>               One of: USER_STORY, TASK, BUG, SUB_TASK,
                                   EPIC, REFACTOR, CHORE, SPIKE, DESIGN_UX, IMPROVEMENT
-  -sp, --specialists <substring>  Case-insensitive substring match against specialists
   --created-since <date>          Inclusive lower bound (RFC3339 or YYYY-MM-DD)
   --created-until <date>          Inclusive upper bound
 
@@ -78,7 +77,6 @@ Optional:
                                   DESIGN_UX, IMPROVEMENT
   -p, --priority <n>              0-9, default 0
   --severity <n>                  0-9, default 0
-  -sp, --specialists <list>       Comma-separated names (max 500 chars total)
   --parent <id>                   Make this task a subtask of <id> (parent must exist)
 
 Output (stdout JSON):
@@ -189,7 +187,6 @@ At least one of:
   -y, --type <type>               See 'rmp task create --help' for valid values
   -p, --priority <n>              0-9
   --severity <n>                  0-9
-  -sp, --specialists <list>       Comma-separated names (max 500 chars total)
 
 Output: empty (exit 0 on success).
 
@@ -374,64 +371,6 @@ Exit codes:
 Examples:
   rmp task sev -r myproject 5 9
   rmp task set-severity -r myproject 1,2 6
-`)
-}
-
-// printTaskAssignHelp — `rmp task assign`.
-func printTaskAssignHelp() {
-	fmt.Print(`Usage: rmp task assign -r <roadmap> <task-id> <specialist>
-
-Adds <specialist> to the comma-separated specialists list on <task-id>.
-Idempotent: assigning an already-present name is a no-op and exits 0.
-A note is written to stderr in the no-op case for transparency — it is
-informational, not an error, and callers parsing stderr as an error
-signal should ignore it. Use 'task unassign' to remove a specialist.
-
-Required:
-  -r, --roadmap <name>            Target roadmap
-  <task-id>                       Integer task id
-  <specialist>                    Free-form specialist label (kept as one token)
-
-Output: empty (exit 0 on success).
-
-Exit codes:
-  0  Success
-  2  Invalid id syntax (non-integer or non-positive id)
-  3  Missing -r
-  4  Task not found
-  6  Specialist value pushes specialists past 500 chars
-
-Examples:
-  rmp task assign -r myproject 7 alice
-  rmp task assign -r myproject 12 backend-team
-`)
-}
-
-// printTaskUnassignHelp — `rmp task unassign`.
-func printTaskUnassignHelp() {
-	fmt.Print(`Usage: rmp task unassign -r <roadmap> <task-id> <specialist>
-
-Removes <specialist> from the task's specialists list. If the list
-becomes empty, the specialists field is set to NULL. Idempotent: if the
-specialist is not present on the task, the call is a no-op and exits 0.
-A note is written to stderr in the no-op case for transparency — it is
-informational, not an error.
-
-Required:
-  -r, --roadmap <name>            Target roadmap
-  <task-id>                       Integer task id
-  <specialist>                    Specialist label to remove
-
-Output: empty (exit 0 on success).
-
-Exit codes:
-  0  Success
-  2  Invalid id syntax (non-integer or non-positive id)
-  3  Missing -r
-  4  Task not found
-
-Examples:
-  rmp task unassign -r myproject 7 alice
 `)
 }
 

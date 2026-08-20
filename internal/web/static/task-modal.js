@@ -15,11 +15,11 @@
  * attribute, or a script. This file therefore contains no innerHTML, no
  * outerHTML, no insertAdjacentHTML, no document.write, and no eval: containers
  * are emptied with replaceChildren() and built with createElement. A task title,
- * the requirement free-text, a completion summary, the specialists, and every
- * comment body are all text a user wrote through the CLI; the control-character
- * constraint in MODELS.md rejects terminal and bidirectional controls at write
- * time and does NOT reject HTML markup, so it is not a substitute for this rule
- * (SPEC/WEB.md § Task Detail Modal, Client-side rendering is text-only).
+ * the requirement free-text, a completion summary, and every comment body are all
+ * text a user wrote through the CLI; the control-character constraint in
+ * MODELS.md rejects terminal and bidirectional controls at write time and does
+ * NOT reject HTML markup, so it is not a substitute for this rule (SPEC/WEB.md
+ * § Task Detail Modal, Client-side rendering is text-only).
  *
  * No remote origin is contacted: the only fetch targets this same server, which
  * the Content-Security-Policy already admits through connect-src 'self'. The
@@ -232,7 +232,6 @@
     grid.appendChild(
       datagridItem("Severity", el("span", "badge " + (SEVERITY_BADGE[task.severity] || "bg-secondary-lt"), task.severity))
     );
-    grid.appendChild(datagridItem("Specialists", task.specialists));
     grid.appendChild(
       datagridItem("Parent task", task.parent_task_id ? "#" + String(task.parent_task_id) : ABSENT)
     );

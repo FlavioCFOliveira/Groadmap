@@ -66,6 +66,11 @@ var migrations = []Migration{
 		Name:    "Add task_comments and sprint_comments tables for durable comment records",
 		Apply:   migrateV1_8_0_toV1_9_0,
 	},
+	{
+		Version: "1.10.0",
+		Name:    "Drop the specialists column from the tasks table",
+		Apply:   migrateV1_9_0_toV1_10_0,
+	},
 }
 
 // RunMigrations executes all pending migrations in a transaction.
@@ -157,12 +162,16 @@ func (db *DB) runMigration(migration Migration) error {
 
 // columnExists reports whether table already has a column named column.
 //
-// SQLite's `ALTER TABLE … ADD COLUMN` is not idempotent: re-running it for an
-// existing column raises "duplicate column name". Because a migration may be
-// applied to a database that has already been partially or fully migrated, every
-// ADD COLUMN step guards itself with this check and skips the ALTER when the
-// column is already present (SPEC/DATABASE.md § Migration Idempotency). The query
-// is parameterized; table is a compile-time literal at every call site.
+// Neither `ALTER TABLE … ADD COLUMN` nor `ALTER TABLE … DROP COLUMN` is
+// idempotent in SQLite: re-running the first for an existing column raises
+// "duplicate column name", and re-running the second for a column already gone
+// raises "no such column". Because a migration may be applied to a database that
+// has already been partially or fully migrated, every ALTER step guards itself
+// with this one check and reads it in the sense its own statement needs — an ADD
+// runs only when the column is ABSENT, a DROP only while it is still PRESENT
+// (SPEC/DATABASE.md § Migration Idempotency (ALTER TABLE ADD COLUMN) and
+// § Migration Idempotency (ALTER TABLE DROP COLUMN)). The query is parameterized;
+// table is a compile-time literal at every call site.
 func columnExists(tx *sql.Tx, table, column string) (bool, error) {
 	var count int
 	query := fmt.Sprintf("SELECT COUNT(*) FROM pragma_table_info('%s') WHERE name = ?", table) // #nosec G201 -- table is a constant literal at every call site; column value is parameterized
@@ -479,6 +488,47 @@ func migrateV1_2_0_toV1_3_0(tx *sql.Tx) error {
 		`ALTER TABLE tasks ADD COLUMN completion_summary TEXT CHECK(completion_summary IS NULL OR length(completion_summary) <= 4096)`,
 	); err != nil {
 		return fmt.Errorf("adding completion_summary column: %w", err)
+	}
+	return nil
+}
+
+// migrateV1_9_0_toV1_10_0 drops the specialists column from the tasks table
+// (SPEC/VERSION.md § Migration 1.9.0 → 1.10.0).
+//
+// THE MIGRATION DESTROYS DATA, AND THAT IS ITS PURPOSE. Every value stored in
+// tasks.specialists is discarded and is not recoverable from the database
+// afterwards. There is deliberately no backfill, no archive column, and no audit
+// entry recording the discarded values: the change removes a field, and removing
+// a field means removing what it held.
+//
+// A single ALTER TABLE … DROP COLUMN is sufficient and no table rebuild is
+// required, because specialists is a plain nullable TEXT column: it is not a
+// primary key or part of one, carries no UNIQUE constraint, is not indexed, is
+// named in no CHECK constraint and in no partial index, is used by no foreign key
+// and by no generated column, and appears in no view and in no trigger. Every
+// other column keeps its values, its CHECK constraint and its DEFAULT clause, and
+// the table's indexes and its parent_task_id self-reference survive the drop
+// (SPEC/DATABASE.md § Migration Idempotency (ALTER TABLE DROP COLUMN)).
+//
+// Idempotent: the DROP COLUMN is guarded by columnExists read in the opposite
+// sense to the ADD COLUMN migrations — the statement runs only WHILE THE COLUMN
+// IS STILL PRESENT. Without the guard a second apply raises "no such column:
+// \"specialists\"" and the whole migration set fails.
+//
+// The audit log is NOT rewritten. Rows whose operation is TASK_ASSIGN or
+// TASK_UNASSIGN are retained untouched: audit.operation carries no CHECK, so
+// they need no schema accommodation, and a roadmap's recorded history stays
+// complete (SPEC/DATABASE.md § audit Table).
+func migrateV1_9_0_toV1_10_0(tx *sql.Tx) error {
+	exists, err := columnExists(tx, "tasks", "specialists")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	if _, err := tx.Exec(`ALTER TABLE tasks DROP COLUMN specialists`); err != nil {
+		return fmt.Errorf("dropping specialists column: %w", err)
 	}
 	return nil
 }

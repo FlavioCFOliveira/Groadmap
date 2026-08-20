@@ -125,10 +125,10 @@ var enumDescriptions = map[string]map[string]string{
 	// SPEC/DATABASE.md § `audit` Table rather than left to the reader to
 	// infer from the operation name. The names carry less than they look
 	// like they do: SPRINT_TASK_MOVE_POSITION and SPRINT_REORDER_TASKS
-	// are indistinguishable by name alone, TASK_ASSIGN does not say that
-	// it is written only when the specialists list actually changes, and
-	// the six comment operations do not say that they are recorded
-	// against the parent entity. See auditOperationDescriptions.
+	// are indistinguishable by name alone, TASK_REOPEN does not say which
+	// source states also drop the sprint_tasks row, and the six comment
+	// operations do not say that they are recorded against the parent
+	// entity. See auditOperationDescriptions.
 	"AuditOperation": auditOperationEnumDescriptions(),
 }
 
@@ -202,7 +202,7 @@ var auditOperationDescriptions = map[models.AuditOperation]string{
 	// Task lifecycle.
 	models.OpTaskCreate: "New task created.",
 	models.OpTaskUpdate: "Generic update via `task edit` (title, type, functional_requirements, " +
-		"technical_requirements, acceptance_criteria, specialists). A type change made through " +
+		"technical_requirements, acceptance_criteria). A type change made through " +
 		"`task edit` is recorded here, not under a dedicated operation.",
 	models.OpTaskDelete: "Task deleted (only allowed while in BACKLOG; see Delete Task precondition).",
 	models.OpTaskStatusChange: "Every status change made by `task stat`, whatever the source and target " +
@@ -231,15 +231,6 @@ var auditOperationDescriptions = map[models.AuditOperation]string{
 	models.OpSprintReorderTasks:     "Sprint tasks reordered (set exact order).",
 	models.OpSprintTaskMovePosition: "Single task moved to specific position.",
 	models.OpSprintTaskSwap:         "Two tasks swapped positions.",
-
-	// Task specialists.
-	models.OpTaskAssign: "Specialist added to the task's specialists list via `task assign`; written only when " +
-		"the list actually changes, because assigning an already-assigned specialist is an " +
-		"idempotent no-op. A whole-list replacement made through `task edit` is recorded as " +
-		"`TASK_UPDATE` instead.",
-	models.OpTaskUnassign: "Specialist removed from the task's specialists list via `task unassign`; written only " +
-		"when the list actually changes, because removing a specialist that is not assigned is " +
-		"a no-op.",
 
 	// Task dependencies.
 	models.OpTaskAddDep:    "Dependency added (logged against both task_id and depends_on_task_id).",

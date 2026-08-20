@@ -24,7 +24,6 @@ import (
 //   - -fr, --functional-requirements: New functional requirements (max 4096 chars)
 //   - -tr, --technical-requirements: New technical requirements (max 4096 chars)
 //   - -ac, --acceptance-criteria: New acceptance criteria (max 4096 chars)
-//   - -sp, --specialists: New specialists list (max 500 chars)
 //   - -p, --priority: New priority 0-9
 //   - --severity: New severity 0-9
 //   - -r, --roadmap: Roadmap name (uses current if not specified)
@@ -80,9 +79,6 @@ func taskEdit(args []string) error {
 	}
 	if v, ok := result.Flags["AcceptanceCriteria"]; ok {
 		updates["acceptance_criteria"] = strings.TrimSpace(v.(string))
-	}
-	if v, ok := result.Flags["Specialists"]; ok {
-		updates["specialists"] = strings.TrimSpace(v.(string))
 	}
 	// Validate priority/severity range BEFORE the UPDATE. Without this, an
 	// out-of-range value reached the SQLite CHECK constraint and surfaced as a
@@ -142,7 +138,6 @@ func taskEdit(args []string) error {
 		"functional_requirements": models.MaxTaskFunctionalRequirements,
 		"technical_requirements":  models.MaxTaskTechnicalRequirements,
 		"acceptance_criteria":     models.MaxTaskAcceptanceCriteria,
-		"specialists":             models.MaxTaskSpecialists,
 	}
 	for field, limit := range maxLengths {
 		v, ok := updates[field]
@@ -161,7 +156,7 @@ func taskEdit(args []string) error {
 
 	// Reject control / bidi / format code points in every free-text field that is
 	// being set (SPEC/MODELS.md § Free-Text Control-Character Constraint).
-	for _, field := range []string{"title", "functional_requirements", "technical_requirements", "acceptance_criteria", "specialists"} {
+	for _, field := range []string{"title", "functional_requirements", "technical_requirements", "acceptance_criteria"} {
 		v, ok := updates[field]
 		if !ok {
 			continue
@@ -172,18 +167,6 @@ func taskEdit(args []string) error {
 		}
 		if err := utils.ValidateNoControlChars(s, field); err != nil {
 			return err
-		}
-	}
-
-	// Specialists list-separator constraint: no individual name may contain a
-	// comma (SPEC/MODELS.md § Specialists List-Separator Constraint).
-	if v, ok := updates["specialists"]; ok {
-		if s, ok := v.(string); ok && s != "" {
-			for _, name := range models.ParseSpecialists(s) {
-				if strings.Contains(name, ",") {
-					return fmt.Errorf("%w: specialist name cannot contain commas", utils.ErrValidation)
-				}
-			}
 		}
 	}
 

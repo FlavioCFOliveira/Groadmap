@@ -7,7 +7,7 @@ import (
 )
 
 // SchemaVersion is the current database schema version.
-const SchemaVersion = "1.9.0"
+const SchemaVersion = "1.10.0"
 
 // CreateSchema creates all database tables and indexes.
 // This implements the DDL from SPEC/DATABASE.md.
@@ -27,7 +27,6 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_at TEXT NOT NULL,
 
     -- Group 2: Nullable tracking fields - lifecycle timestamps
-    specialists TEXT,
     started_at TEXT,
     tested_at TEXT,
     closed_at TEXT,

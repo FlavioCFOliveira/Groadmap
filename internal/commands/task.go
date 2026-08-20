@@ -69,8 +69,6 @@ Commands:
   reopen <task-ids>                           Reopen task(s) to BACKLOG, clearing lifecycle timestamps
   prio, set-priority <task-ids> <priority>    Set task priority (0-9) for one or many tasks
   sev, set-severity <task-ids> <severity>     Set task severity (0-9) for one or many tasks
-  assign <task-id> <specialist>               Add specialist to task (idempotent; stderr note on dup)
-  unassign <task-id> <specialist>             Remove specialist from task (idempotent)
   subtasks <task-id>                          List direct subtasks (one level; no grand-children)
   add-dep <task-id> <blocker-id>              Declare <task-id> depends on <blocker-id> (cycles rejected)
   remove-dep <task-id> <blocker-id>           Remove the dependency edge created by add-dep
@@ -90,7 +88,6 @@ Options (list — all filters compose with AND):
   -p, --priority <min>              Filter: priority >= min (0-9)
   --severity <min>                  Filter: severity >= min (0-9)
   -y, --type <type>                 Filter by task type
-  -sp, --specialists <substring>    Filter by specialists (case-insensitive substring)
   --created-since <date>            Include tasks created on/after this date (RFC3339 or YYYY-MM-DD)
   --created-until <date>            Include tasks created on/before this date (RFC3339 or YYYY-MM-DD)
   --sort <field>                    Sort: priority (default), created, status, severity
@@ -107,7 +104,6 @@ Options (create / edit):
   -y,  --type <type>                Task type (default: TASK)
   -p,  --priority <n>               Initial/new priority (0-9, default 0)
        --severity <n>               Initial/new severity (0-9, default 0)
-  -sp, --specialists <list>         Comma-separated specialists (max 500 chars)
        --parent <id>                Parent task ID (on create only — makes a sub-task)
 
 Options (stat to COMPLETED):
@@ -138,13 +134,12 @@ Output (stdout JSON):
   list, get, next, subtasks, blockers, blocking   Array of task objects.
   create                                          {"id": <int>}
   edit, stat, prio, sev, reopen, remove           Empty (exit 0 on success).
-  assign, unassign                                Empty (exit 0 on success).
   add-dep, remove-dep                             Empty (exit 0 on success).
   comment-add                                     {"id": <int>}
   comment-list                                    Array of comment objects.
   comment-edit, comment-remove                    Empty (exit 0 on success).
   Task object keys: id, title, status, type, functional_requirements,
-  technical_requirements, acceptance_criteria, created_at, specialists,
+  technical_requirements, acceptance_criteria, created_at,
   started_at, tested_at, closed_at, completion_summary, parent_task_id,
   priority, severity, subtask_count, depends_on, blocks.
   Comment object keys: id, task_id, type, body, created_at, updated_at

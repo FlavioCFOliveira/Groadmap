@@ -193,7 +193,7 @@
                     {{/*
                       The metadata footer shows ONLY the indicators the task has:
                       an absent, empty, or zero value renders nothing at all — no
-                      dash and no placeholder — and a task with none of the six
+                      dash and no placeholder — and a task with none of the five
                       renders no footer (SPEC/WEB.md § Roadmap Tasks Page, absent
                       metadata renders nothing). The card carries no status badge:
                       the column it sits in already states the status.
@@ -201,7 +201,6 @@
                     {{if .HasMeta}}
                     <span class="d-flex flex-wrap gap-2 mt-2 small text-secondary" data-role="task-card-meta">
                       {{with .Sprint}}<span data-role="task-card-sprint"><i class="ti ti-flag me-1"></i>{{.Title}} (Sprint #{{.ID}})</span>{{end}}
-                      {{with .SpecialistsText}}<span data-role="task-card-specialists"><i class="ti ti-users me-1"></i>{{.}}</span>{{end}}
                       {{if .SubtaskCount}}<span data-role="task-card-subtasks"><i class="ti ti-subtask me-1"></i>Subtasks: {{.SubtaskCount}}</span>{{end}}
                       {{if .DependsOn}}<span data-role="task-card-depends-on"><i class="ti ti-link me-1"></i>Depends on: {{len .DependsOn}}</span>{{end}}
                       {{if .Blocks}}<span data-role="task-card-blocks"><i class="ti ti-lock me-1"></i>Blocks: {{len .Blocks}}</span>{{end}}

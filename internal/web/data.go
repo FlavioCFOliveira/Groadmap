@@ -234,23 +234,6 @@ type taskView struct {
 	Match        bool
 }
 
-// SpecialistsText returns the task's specialists as text, or the empty string
-// when the task names none.
-//
-// It collapses the two shapes "no specialists" takes in the data — a NULL column,
-// which reaches the view as a nil pointer, and a present but blank value — into
-// the one the card's rule is written against: an indicator whose value is absent
-// or empty renders nothing at all, no dash and no placeholder (SPEC/WEB.md
-// § Roadmap Tasks Page, absent metadata renders nothing). Deciding it here rather
-// than in the template keeps `{{with .SpecialistsText}}` correct for both shapes,
-// where `{{with .Specialists}}` would render an empty indicator for the second.
-func (v *taskView) SpecialistsText() string {
-	if v.Specialists == nil {
-		return ""
-	}
-	return strings.TrimSpace(*v.Specialists)
-}
-
 // SearchText is the task's title folded by the board search's folding rule, which
 // the card carries so the browser matches against the SAME text the server
 // matched against.
@@ -269,12 +252,12 @@ func (v *taskView) SearchText() string {
 }
 
 // HasMeta reports whether the card has at least one metadata indicator to show:
-// its sprint, its specialists, its subtasks, its dependencies, the tasks it
-// blocks, or its comments. A task with none of the six renders no metadata footer
-// at all — not an empty one (SPEC/WEB.md § Roadmap Tasks Page, absent metadata
-// renders nothing; Acceptance Criterion 85).
+// its sprint, its subtasks, its dependencies, the tasks it blocks, or its
+// comments. A task with none of the five renders no metadata footer at all — not
+// an empty one (SPEC/WEB.md § Roadmap Tasks Page, absent metadata renders
+// nothing; Acceptance Criterion 85).
 //
-// The six conditions are exactly the six the footer's own items are rendered
+// The five conditions are exactly the five the footer's own items are rendered
 // under, so the footer can never be emitted empty and can never swallow an
 // indicator the card should show.
 //
@@ -285,7 +268,6 @@ func (v *taskView) SearchText() string {
 // counters are always rendered; Acceptance Criterion 134).
 func (v *taskView) HasMeta() bool {
 	return v.Sprint != nil ||
-		v.SpecialistsText() != "" ||
 		v.SubtaskCount > 0 ||
 		len(v.DependsOn) > 0 ||
 		len(v.Blocks) > 0 ||
@@ -299,10 +281,12 @@ func (v *taskView) HasMeta() bool {
 // reference as the literal string "#42" is what lets both `42` and `#42` find task
 // 42 under the one substring rule, with no special case for either form.
 //
-// Every other field — `specialists` included — is deliberately outside the search:
-// the box answers "which task is this?" from what identifies a task on its card,
-// and matching an attribute would answer a different question through the same
-// control (SPEC/WEB.md § Roadmap Tasks Page, What the search matches).
+// Every other task field is deliberately outside the search: a term occurring
+// only in a task's `functional_requirements`, and matching nothing in that task's
+// title or reference, does not match it. The box answers "which task is this?"
+// from what identifies a task on its card, and matching an attribute would answer
+// a different question through the same control (SPEC/WEB.md § Roadmap Tasks
+// Page, What the search matches; Acceptance Criterion 101).
 func (v *taskView) matchesSearch(folded string) bool {
 	if folded == "" {
 		return true

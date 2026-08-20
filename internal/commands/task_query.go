@@ -84,9 +84,6 @@ func taskList(args []string) error {
 		}
 		filter.TaskType = &tt
 	}
-	if sp, ok := result.Flags["Specialists"].(string); ok {
-		filter.Specialists = &sp
-	}
 	if sinceStr, ok := result.Flags["CreatedSince"].(string); ok {
 		t, parseErr := parseFilterDate(sinceStr)
 		if parseErr != nil {

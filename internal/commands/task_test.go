@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
@@ -255,22 +256,47 @@ func TestTaskCreate_Success(t *testing.T) {
 	}
 }
 
-func TestTaskCreate_WithSpecialists(t *testing.T) {
+// TestTaskCreate_SpecialistsFlagRejected is the inverted successor of the former
+// TestTaskCreate_WithSpecialists. The same invocation that used to succeed must
+// now fail as an unknown flag, and it must fail through the flag parser rather
+// than through a surviving handler that merely ignores the value: the task is
+// NOT created, so the run cannot be mistaken for a tolerant success
+// (SPEC/COMMANDS.md § Create Task).
+func TestTaskCreate_SpecialistsFlagRejected(t *testing.T) {
 	testName := "testtaskcreatespec"
-	_, cleanup := setupTestTaskRoadmap(t, testName)
+	database, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
 	err := HandleTask([]string{
 		"create",
 		"-r", testName,
-		"-t", "Task with specialists",
-		"-fr", "Functional",
-		"-tr", "Technical",
-		"-ac", "Criteria",
+		"-t", "Rotate the JWT signing key",
+		"-fr", "Operators can rotate the signing key without downtime",
+		"-tr", "Add a key-id header and accept the previous key during overlap",
+		"-ac", "Tokens signed with the retired key stop verifying after the overlap",
 		"-sp", "developer,tester",
 	})
-	if err != nil {
-		t.Errorf("taskCreate with specialists error = %v", err)
+	if err == nil {
+		t.Fatal("task create -sp: expected an unknown-flag error, got nil")
+	}
+	if !errors.Is(err, utils.ErrInvalidInput) {
+		t.Errorf("task create -sp: error = %v, want utils.ErrInvalidInput (exit 2)", err)
+	}
+	if !strings.Contains(err.Error(), "unknown flag") {
+		t.Errorf("task create -sp: message = %q, want it to name the unknown flag", err.Error())
+	}
+
+	// The rejection must happen before the INSERT: a handler that parsed the
+	// flag away and created the task anyway would also return an error from a
+	// later step, and this assertion is what separates the two.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var count int
+	if qErr := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM tasks").Scan(&count); qErr != nil {
+		t.Fatalf("counting tasks: %v", qErr)
+	}
+	if count != 0 {
+		t.Errorf("task create -sp created %d task(s); the rejected invocation must write nothing", count)
 	}
 }
 
@@ -606,19 +632,25 @@ func TestTaskEdit_EmptyAcceptanceCriteria(t *testing.T) {
 	}
 }
 
-func TestTaskEdit_EmptySpecialistsAllowed(t *testing.T) {
+// TestTaskEdit_SpecialistsFlagRejected is the inverted successor of the former
+// TestTaskEdit_EmptySpecialistsAllowed. The empty value that `task edit` used to
+// accept as a clear-the-field request is now rejected outright, as an unknown
+// flag, and so is a populated one (SPEC/COMMANDS.md § Edit Task).
+func TestTaskEdit_SpecialistsFlagRejected(t *testing.T) {
 	testName := "testtaskeditemptyspec"
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	// Empty specialists should be allowed (optional field)
-	err := HandleTask([]string{"edit", "-r", testName, "1", "-sp", ""})
-	// This may fail because task 1 doesn't exist, but should NOT fail due to empty specialists
-	// The error should be about task not found, not about empty field
-	if err != nil {
-		// If there's an error, it should NOT be about empty specialists
-		if strings.Contains(err.Error(), "cannot be empty") {
-			t.Errorf("specialists empty should be allowed, got error: %v", err)
+	for _, value := range []string{"", "developer,tester"} {
+		err := HandleTask([]string{"edit", "-r", testName, "1", "-sp", value})
+		if err == nil {
+			t.Fatalf("task edit -sp %q: expected an unknown-flag error, got nil", value)
+		}
+		if !errors.Is(err, utils.ErrInvalidInput) {
+			t.Errorf("task edit -sp %q: error = %v, want utils.ErrInvalidInput (exit 2)", value, err)
+		}
+		if !strings.Contains(err.Error(), "unknown flag") {
+			t.Errorf("task edit -sp %q: message = %q, want it to name the unknown flag", value, err.Error())
 		}
 	}
 }

@@ -44,10 +44,6 @@ const (
 	OpSprintTaskMovePosition AuditOperation = "SPRINT_TASK_MOVE_POSITION"
 	OpSprintTaskSwap         AuditOperation = "SPRINT_TASK_SWAP"
 
-	// Task specialist operations
-	OpTaskAssign   AuditOperation = "TASK_ASSIGN"
-	OpTaskUnassign AuditOperation = "TASK_UNASSIGN"
-
 	// Task dependency operations
 	OpTaskAddDep    AuditOperation = "TASK_ADD_DEP"
 	OpTaskRemoveDep AuditOperation = "TASK_REMOVE_DEP"
@@ -87,8 +83,6 @@ var ValidAuditOperations = []AuditOperation{
 	OpSprintReorderTasks,
 	OpSprintTaskMovePosition,
 	OpSprintTaskSwap,
-	OpTaskAssign,
-	OpTaskUnassign,
 	OpTaskAddDep,
 	OpTaskRemoveDep,
 	OpTaskCommentCreate,

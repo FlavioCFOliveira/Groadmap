@@ -20,7 +20,6 @@ func taskCommonOptionalFlags() []Flag {
 		{Long: "--type", Short: "-y", Type: "enum", Enum: "TaskType", Default: "TASK", Description: "Task type."},
 		{Long: "--priority", Short: "-p", Type: "integer", HasRange: true, RangeMin: 0, RangeMax: 9, Default: "0", Description: "Priority (0 lowest, 9 highest)."},
 		{Long: "--severity", Type: "integer", HasRange: true, RangeMin: 0, RangeMax: 9, Default: "0", Description: "Severity (0 lowest, 9 highest)."},
-		{Long: "--specialists", Short: "-sp", Type: "list:string", MaxLength: 500, Description: "Comma-separated specialists."},
 	}
 }
 
@@ -48,7 +47,6 @@ func buildTaskCommand() Command {
 					{Long: "--priority", Short: "-p", Type: "integer", HasRange: true, RangeMin: 0, RangeMax: 9, Description: "Filter: priority >= <min>."},
 					{Long: "--severity", Type: "integer", HasRange: true, RangeMin: 0, RangeMax: 9, Description: "Filter: severity >= <min>."},
 					{Long: "--type", Short: "-y", Type: "enum", Enum: "TaskType", Description: "Filter by task type."},
-					{Long: "--specialists", Short: "-sp", Type: "string", Description: "Filter by specialists (case-insensitive substring)."},
 					{Long: "--created-since", Type: "date", Description: "Include tasks created on/after this date (RFC3339 or YYYY-MM-DD)."},
 					{Long: "--created-until", Type: "date", Description: "Include tasks created on/before this date."},
 					{Long: "--sort", Type: "enum", Enum: "TaskSort", Default: "priority", Description: "Sort field."},
@@ -254,48 +252,6 @@ func buildTaskCommand() Command {
 				Examples: []Example{
 					{Title: "Single", Cmd: "rmp task sev -r myproject 5 9", Exit: 0},
 					{Title: "Unknown id", Cmd: "rmp task sev -r myproject 99999 5", Stderr: "Error: resource not found: some tasks not found", Exit: 4},
-				},
-			},
-			{
-				Name:        "assign",
-				Summary:     "Add specialist to task (idempotent; stderr note on dup).",
-				Description: "Adds <specialist> to the task's specialists list. Idempotent.",
-				Usage:       "rmp task assign -r <roadmap> <task-id> <specialist>",
-				HelpPrinter: printTaskAssignHelp,
-				Handler:     taskAssign,
-				Positional: []Argument{
-					{Name: "task-id", Type: "integer", Required: true, Description: "Integer task id."},
-					{Name: "specialist", Type: "string", Required: true, Description: "Free-form specialist label."},
-				},
-				Flags:       []Flag{sharedRoadmapFlag(), helpFlag()},
-				Output:      SuccessOutput{Kind: "empty"},
-				SideEffects: SideEffects{Database: "UPDATE tasks + audit log; one transaction.", Filesystem: "None.", Network: "None."},
-				Idempotent:  true,
-				ExitCodes:   []int{0, 3, 4, 6},
-				Examples: []Example{
-					{Title: "Assign", Cmd: "rmp task assign -r myproject 7 alice", Exit: 0},
-					{Title: "Unknown task", Cmd: "rmp task assign -r myproject 99999 alice", Stderr: "Error: resource not found: task 99999 not found", Exit: 4},
-				},
-			},
-			{
-				Name:        "unassign",
-				Summary:     "Remove specialist from task (idempotent).",
-				Description: "Removes <specialist> from the task's specialists list. Idempotent.",
-				Usage:       "rmp task unassign -r <roadmap> <task-id> <specialist>",
-				HelpPrinter: printTaskUnassignHelp,
-				Handler:     taskUnassign,
-				Positional: []Argument{
-					{Name: "task-id", Type: "integer", Required: true, Description: "Integer task id."},
-					{Name: "specialist", Type: "string", Required: true, Description: "Specialist label to remove."},
-				},
-				Flags:       []Flag{sharedRoadmapFlag(), helpFlag()},
-				Output:      SuccessOutput{Kind: "empty"},
-				SideEffects: SideEffects{Database: "UPDATE tasks + audit log.", Filesystem: "None.", Network: "None."},
-				Idempotent:  true,
-				ExitCodes:   []int{0, 3, 4},
-				Examples: []Example{
-					{Title: "Unassign", Cmd: "rmp task unassign -r myproject 7 alice", Exit: 0},
-					{Title: "Unknown task", Cmd: "rmp task unassign -r myproject 99999 alice", Stderr: "Error: resource not found: task 99999 not found", Exit: 4},
 				},
 			},
 			{

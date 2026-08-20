@@ -66,8 +66,7 @@ func TestRegistry_AllExpectedSubcommandsRegistered(t *testing.T) {
 		"roadmap": {"list", "create", "remove"},
 		"task": {
 			"list", "create", "get", "next", "edit", "remove",
-			"stat", "reopen", "prio", "sev",
-			"assign", "unassign", "subtasks",
+			"stat", "reopen", "prio", "sev", "subtasks",
 			"add-dep", "remove-dep", "blockers", "blocking",
 			"comment-add", "comment-list", "comment-edit", "comment-remove",
 		},

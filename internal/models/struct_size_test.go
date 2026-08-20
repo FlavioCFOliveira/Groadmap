@@ -17,7 +17,7 @@ var specifiedLayouts = []struct {
 	sizeOn64 uintptr
 	specSays string
 }{
-	{"Task", Task{}, 240, "SPEC/MODELS.md § Memory Layout Optimization, Task struct"},
+	{"Task", Task{}, 232, "SPEC/MODELS.md § Memory Layout Optimization, Task struct"},
 	{"SprintStats", SprintStats{}, 112, "SPEC/MODELS.md § Memory Layout Optimization, SprintStats struct"},
 	{"TaskComment", TaskComment{}, 72, "SPEC/MODELS.md § Memory Layout Optimization, TaskComment and SprintComment structs"},
 	{"SprintComment", SprintComment{}, 72, "SPEC/MODELS.md § Memory Layout Optimization, TaskComment and SprintComment structs"},

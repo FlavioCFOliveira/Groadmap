@@ -67,6 +67,13 @@ func buildStaleSchemaDB(t *testing.T, roadmapName string) {
 	// sprints lacks the `title` and `order_index` columns that 1.7.0 and 1.8.0
 	// add.  The tasks, sprint_tasks, audit, _metadata, and task_dependencies
 	// tables are present in their 1.6.0 forms.
+	//
+	// tasks.specialists is DELIBERATELY still here. The column existed at 1.6.0
+	// and was dropped by the 1.9.0 -> 1.10.0 migration, so a faithful 1.6.0
+	// fixture must carry it: it is what gives that migration something to drop on
+	// the startup path, and removing it here would make the drop untestable from
+	// this direction (SPEC/VERSION.md § Schema 1.10.0; SPEC/DATABASE.md
+	// § Migration Idempotency).
 	staleSchema := `
 CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -162,6 +169,9 @@ CREATE TABLE IF NOT EXISTS task_dependencies (
 //  2. Calls migrateRoadmapsAtStartup() — the function introduced in server.go.
 //  3. Asserts the schema_version is now the current db.SchemaVersion.
 //  4. Asserts both previously-missing columns exist in the sprints table.
+//  5. Asserts tasks.specialists, present in the 1.6.0 fixture, is GONE — the
+//     startup path runs the whole chain, including the 1.9.0 -> 1.10.0 drop, so
+//     a roadmap the web server opens can never still carry the retired column.
 func TestMigrateRoadmapsAtStartup_StaleDBBecomesCurrentSchema(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -219,6 +229,21 @@ func TestMigrateRoadmapsAtStartup_StaleDBBecomesCurrentSchema(t *testing.T) {
 		if count == 0 {
 			t.Errorf("sprints.%s missing after startup migration", col)
 		}
+	}
+
+	// And confirm the one column the chain REMOVES is gone. The fixture created
+	// tasks.specialists at the 1.6.0 shape; the 1.9.0 -> 1.10.0 migration drops
+	// it, so after the startup migration the web server never sees a roadmap that
+	// still carries the retired column.
+	var specialistsColumns int
+	if serr := database.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = 'specialists'`,
+	).Scan(&specialistsColumns); serr != nil {
+		t.Fatalf("checking tasks.specialists absence: %v", serr)
+	}
+	if specialistsColumns != 0 {
+		t.Errorf("tasks.specialists survived the startup migration (%d column(s)); the "+
+			"1.9.0 -> 1.10.0 migration drops it", specialistsColumns)
 	}
 }
 

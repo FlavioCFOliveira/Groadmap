@@ -37,7 +37,7 @@ type boardFixture struct {
 	translate int
 	rotate    int
 
-	passkey  int // SPRINT:    in the checkout sprint, with specialists and comments
+	passkey  int // SPRINT:    in the checkout sprint, blocking a task, with comments
 	ledger   int // DOING:     in the ledger sprint, with subtasks and a dependency
 	cookies  int // TESTING:   no sprint and no other indicator at all
 	parser   int // COMPLETED: subtask of ledger
@@ -56,9 +56,9 @@ func (f *boardFixture) tasksByStatus() map[models.TaskStatus][]int {
 }
 
 // seedBoardFixture builds a roadmap that populates all five board columns, with
-// two sprints, a dependency edge, a parent/subtask hierarchy, specialists, and
-// comments, so every card indicator has at least one card that shows it and at
-// least one card that must not.
+// two sprints, a dependency edge, a parent/subtask hierarchy, and comments, so
+// every one of the card's five metadata indicators has at least one card that
+// shows it and at least one card that must not.
 //
 // The BACKLOG tasks are seeded so that priority order, created_at order, and id
 // order are three DIFFERENT orders (see boardOrderingSeed below): a board that
@@ -77,8 +77,7 @@ func seedBoardFixture(t *testing.T, name string) boardFixture {
 	f := boardFixture{name: name}
 
 	newTask := func(title, created string, priority, severity int,
-		taskType models.TaskType, status models.TaskStatus,
-		specialists *string, parent *int) int {
+		taskType models.TaskType, status models.TaskStatus, parent *int) int {
 		t.Helper()
 		id, cerr := database.CreateTask(ctx, &models.Task{
 			Title:                  title,
@@ -86,7 +85,6 @@ func seedBoardFixture(t *testing.T, name string) boardFixture {
 			Status:                 status,
 			Priority:               priority,
 			Severity:               severity,
-			Specialists:            specialists,
 			ParentTaskID:           parent,
 			FunctionalRequirements: "Operators must be able to follow this work from the board.",
 			TechnicalRequirements:  "Implemented against the roadmap database, read-only on the web side.",
@@ -103,7 +101,7 @@ func seedBoardFixture(t *testing.T, name string) boardFixture {
 	// created_at order the board must render.
 	for _, seed := range boardOrderingSeed {
 		id := newTask(seed.title, seed.created, seed.priority, 2,
-			models.TypeTask, models.StatusBacklog, nil, nil)
+			models.TypeTask, models.StatusBacklog, nil)
 		switch seed.title {
 		case backlogRunbook:
 			f.runbook = id
@@ -116,17 +114,16 @@ func seedBoardFixture(t *testing.T, name string) boardFixture {
 		}
 	}
 
-	specialists := "go-developer, security-review"
 	f.passkey = newTask("Add WebAuthn passkey support to checkout",
-		"2026-02-01T09:00:00Z", 7, 4, models.TypeUserStory, models.StatusBacklog, &specialists, nil)
+		"2026-02-01T09:00:00Z", 7, 4, models.TypeUserStory, models.StatusBacklog, nil)
 	f.ledger = newTask("Reconcile the settlement ledger against the acquirer report",
-		"2026-02-02T09:00:00Z", 8, 6, models.TypeTask, models.StatusBacklog, nil, nil)
+		"2026-02-02T09:00:00Z", 8, 6, models.TypeTask, models.StatusBacklog, nil)
 	f.cookies = newTask("Audit the session-cookie flags",
-		"2026-02-03T09:00:00Z", 5, 2, models.TypeChore, models.StatusTesting, nil, nil)
+		"2026-02-03T09:00:00Z", 5, 2, models.TypeChore, models.StatusTesting, nil)
 	f.parser = newTask("Extract the acquirer report parser",
-		"2026-02-04T09:00:00Z", 4, 1, models.TypeSubTask, models.StatusCompleted, nil, &f.ledger)
+		"2026-02-04T09:00:00Z", 4, 1, models.TypeSubTask, models.StatusCompleted, &f.ledger)
 	f.backfill = newTask("Backfill the reconciliation report totals",
-		"2026-02-05T09:00:00Z", 4, 1, models.TypeSubTask, models.StatusCompleted, nil, &f.ledger)
+		"2026-02-05T09:00:00Z", 4, 1, models.TypeSubTask, models.StatusCompleted, &f.ledger)
 
 	// Two sprints, so a card that names a sprint names ITS OWN sprint: a
 	// resolution that returned one sprint for every task could not pass.
@@ -605,11 +602,10 @@ func TestTaskBoard_CardContent(t *testing.T) {
 	}
 
 	// 5. The metadata footer, holding the indicators this task has: its sprint,
-	//    its specialists, the task it blocks, and its two comments.
+	//    the task it blocks, and its two comments.
 	meta := metaFooter(t, card)
 	for _, want := range []string{
 		"Checkout hardening (Sprint #" + itoa(f.checkoutSprint) + ")",
-		"go-developer, security-review",
 		"Blocks: 1",
 		"Comments: 2",
 	} {
@@ -618,7 +614,12 @@ func TestTaskBoard_CardContent(t *testing.T) {
 		}
 	}
 	// And not the ones it does not have: it has no subtask and depends on nothing.
-	for _, absent := range []string{"Subtasks:", "Depends on:"} {
+	// The specialists indicator is in the same list because the field was removed
+	// from the Task entity outright: the footer lists FIVE indicators, and neither
+	// the retired indicator's role nor its icon may survive anywhere on the card
+	// (SPEC/WEB.md § Roadmap Tasks Page, Card content item 4; Acceptance
+	// Criterion 85).
+	for _, absent := range []string{"Subtasks:", "Depends on:", "task-card-specialists", "ti ti-users"} {
 		if strings.Contains(meta, absent) {
 			t.Errorf("the card's metadata footer shows %q for a task that has none\nfooter: %s", absent, meta)
 		}
@@ -701,7 +702,7 @@ func spanWithRole(t *testing.T, html, role string) string {
 // TestTaskBoard_AbsentMetadataRendersNothing is the gate for the second half of
 // Acceptance Criterion 85 and for Acceptance Criterion 91: an indicator whose
 // value is absent, empty, or zero renders nothing at all — no dash and no
-// placeholder — and a task with none of the six renders no metadata footer.
+// placeholder — and a task with none of the five renders no metadata footer.
 func TestTaskBoard_AbsentMetadataRendersNothing(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	f := seedBoardFixture(t, "payment-platform")
@@ -709,15 +710,16 @@ func TestTaskBoard_AbsentMetadataRendersNothing(t *testing.T) {
 
 	columns := boardColumns(t, servePage(t, mux, "/roadmaps/"+f.name+"/tasks"))
 
-	// The TESTING task belongs to no sprint, names no specialist, has no subtask,
-	// no dependency, nothing it blocks, and no comment: its card renders no
-	// metadata footer at all.
+	// The TESTING task belongs to no sprint, has no subtask, no dependency,
+	// nothing it blocks, and no comment: its card renders no metadata footer at
+	// all. Those five exhaust the footer's contributors, so this card is the
+	// empty case of the predicate rather than merely a sparse one.
 	bare := cardSlice(t, columns[3], f.cookies)
 	if strings.Contains(bare, `data-role="task-card-meta"`) {
 		t.Errorf("a task with no metadata renders a metadata footer\ncard: %s", bare)
 	}
 	for _, placeholder := range []string{"&mdash;", "None", "Sprint #", "Subtasks:", "Depends on:",
-		"Blocks:", "Comments:"} {
+		"Blocks:", "Comments:", "task-card-specialists", "ti ti-users"} {
 		if strings.Contains(bare, placeholder) {
 			t.Errorf("a task with no metadata renders %q on its card\ncard: %s", placeholder, bare)
 		}

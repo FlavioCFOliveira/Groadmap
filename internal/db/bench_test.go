@@ -41,7 +41,6 @@ CREATE TABLE IF NOT EXISTS tasks (
     technical_requirements TEXT NOT NULL,
     acceptance_criteria TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    specialists TEXT,
     started_at TEXT,
     tested_at TEXT,
     closed_at TEXT,
@@ -169,7 +168,7 @@ func BenchmarkGetTasks_CachedVsUncached(b *testing.B) {
 
 			query := fmt.Sprintf(
 				`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
-				        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
+				        t.created_at, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
 				        t.priority, t.severity,
 				        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count`+taskDepsSelect+`
 				 FROM tasks t WHERE t.id IN (%s) ORDER BY t.id`,

@@ -17,7 +17,8 @@
 //
 // The three are needed together because the three surfaces are written and
 // maintained separately, and each has already shipped a gap the other two did
-// not have: the SPEC omitted TASK_ASSIGN and TASK_UNASSIGN (task #171), and the
+// not have: the SPEC once omitted two operations the contract published (task
+// #171 — both have since been retired outright), and the
 // contract published all 29 operations with no description at all (task #175).
 //
 // What the tie below does and does not cover, stated plainly:
@@ -72,8 +73,8 @@ const (
 // catalogueEntry matches one catalogue entry, capturing the operation name and
 // its description. The start-of-line anchor is load-bearing: entry descriptions
 // cite other operations in backticks — TASK_STATUS_CHANGE's cites
-// SPRINT_ADD_TASK, TASK_ASSIGN's cites TASK_UPDATE — so an unanchored search
-// over the region would over-count.
+// SPRINT_ADD_TASK, SPRINT_REMOVE_TASK and SPRINT_DELETE — so an unanchored
+// search over the region would over-count.
 var catalogueEntry = regexp.MustCompile("^- `([A-Z_]+)` - (.+)$")
 
 // minCatalogueEntries is the floor below which a parse is treated as evidence

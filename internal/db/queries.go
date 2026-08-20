@@ -76,8 +76,8 @@ func (db *DB) CreateTask(ctx context.Context, task *models.Task) (int, error) {
 		}
 
 		result, err := db.ExecContext(ctx,
-			`INSERT INTO tasks (title, status, type, functional_requirements, technical_requirements, acceptance_criteria, created_at, specialists, priority, severity, completion_summary, parent_task_id)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+			`INSERT INTO tasks (title, status, type, functional_requirements, technical_requirements, acceptance_criteria, created_at, priority, severity, completion_summary, parent_task_id)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
 			task.Title,
 			task.Status,
 			taskType,
@@ -85,7 +85,6 @@ func (db *DB) CreateTask(ctx context.Context, task *models.Task) (int, error) {
 			task.TechnicalRequirements,
 			task.AcceptanceCriteria,
 			task.CreatedAt,
-			task.Specialists,
 			task.Priority,
 			task.Severity,
 			task.ParentTaskID,
@@ -114,7 +113,7 @@ func (db *DB) CreateTask(ctx context.Context, task *models.Task) (int, error) {
 // Uses scanTasksWithDeps to fold depends_on / blocks into the same query.
 func (db *DB) GetTask(ctx context.Context, id int) (*models.Task, error) {
 	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
-	        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
+	        t.created_at, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
 	        t.priority, t.severity,
 	        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count` + taskDepsSelect + `
 	 FROM tasks t WHERE t.id = ?`
@@ -179,7 +178,6 @@ type TaskListFilter struct {
 	MinPriority  *int
 	MinSeverity  *int
 	TaskType     *models.TaskType
-	Specialists  *string    // case-insensitive partial match against the specialists field
 	CreatedSince *time.Time // inclusive lower bound on created_at
 	CreatedUntil *time.Time // inclusive upper bound on created_at
 	Sort         string     // "priority" (default), "created", "status", "severity"
@@ -187,7 +185,7 @@ type TaskListFilter struct {
 }
 
 // ListTasks retrieves tasks with optional filters.
-// Filters: status, minPriority, minSeverity, taskType, specialists, createdSince, createdUntil, sort, limit.
+// Filters: status, minPriority, minSeverity, taskType, createdSince, createdUntil, sort, limit.
 //
 // A nil filter means "no filter at all" and is answered with the default page, as
 // in GetAuditEntries: every field of TaskListFilter is optional, so the whole
@@ -228,13 +226,13 @@ func (db *DB) ListTasks(ctx context.Context, filter *TaskListFilter) ([]models.T
 // The caller is responsible for clamping filter.Limit beforehand.
 func buildListTasksQuery(filter *TaskListFilter) (string, []any) {
 	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
-		        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
+		        t.created_at, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
 		        t.priority, t.severity,
 		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count` + taskDepsSelect + `
 		      FROM tasks t WHERE 1=1`
-	// 7 filters + LIMIT = up to 8 placeholders; +1 to absorb a future
+	// 6 filters + LIMIT = up to 7 placeholders; +1 to absorb a future
 	// arg without forcing an extra grow.
-	args := make([]any, 0, 9)
+	args := make([]any, 0, 8)
 
 	if filter.Status != nil {
 		query += " AND t.status = ?"
@@ -251,12 +249,6 @@ func buildListTasksQuery(filter *TaskListFilter) (string, []any) {
 	if filter.TaskType != nil {
 		query += " AND t.type = ?"
 		args = append(args, string(*filter.TaskType))
-	}
-	if filter.Specialists != nil {
-		// Escape SQL LIKE wildcards in the user-supplied value to prevent accidental pattern expansion.
-		escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(*filter.Specialists)
-		query += ` AND LOWER(COALESCE(t.specialists, '')) LIKE LOWER(?) ESCAPE '\'`
-		args = append(args, "%"+escaped+"%")
 	}
 	if filter.CreatedSince != nil {
 		query += " AND t.created_at >= ?"
@@ -332,7 +324,6 @@ func (db *DB) ListAllTasks(ctx context.Context) ([]models.Task, error) {
 //   - "functional_requirements": Functional requirements (string, max 4096 chars)
 //   - "technical_requirements": Technical requirements (string, max 4096 chars)
 //   - "acceptance_criteria": Acceptance criteria (string, max 4096 chars)
-//   - "specialists": Comma-separated list of specialists (string, max 500 chars)
 //   - "priority": Task priority 0-9 (int)
 //   - "severity": Task severity 0-9 (int)
 //
@@ -381,9 +372,6 @@ func (db *DB) UpdateTask(ctx context.Context, id int, updates map[string]any) er
 				args = append(args, value)
 			case "acceptance_criteria":
 				setParts = append(setParts, "acceptance_criteria = ?")
-				args = append(args, value)
-			case "specialists":
-				setParts = append(setParts, "specialists = ?")
 				args = append(args, value)
 			case "priority":
 				setParts = append(setParts, "priority = ?")
@@ -449,7 +437,7 @@ func (db *DB) UpdateTaskStruct(ctx context.Context, id int, update *models.TaskU
 
 	return retryWithBackoff("update task struct", func() error {
 		// Build SQL with deterministic field ordering
-		// Fields are always in the same order: title, functional_requirements, technical_requirements, acceptance_criteria, specialists, priority, severity
+		// Fields are always in the same order: title, functional_requirements, technical_requirements, acceptance_criteria, priority, severity
 		var setParts []string
 		var args []any
 
@@ -468,10 +456,6 @@ func (db *DB) UpdateTaskStruct(ctx context.Context, id int, update *models.TaskU
 		if update.AcceptanceCriteria != nil {
 			setParts = append(setParts, "acceptance_criteria = ?")
 			args = append(args, *update.AcceptanceCriteria)
-		}
-		if update.Specialists != nil {
-			setParts = append(setParts, "specialists = ?")
-			args = append(args, *update.Specialists)
 		}
 		if update.Priority != nil {
 			setParts = append(setParts, "priority = ?")
@@ -631,7 +615,7 @@ func (db *DB) DeleteTask(ctx context.Context, id int) error {
 func (db *DB) GetSubTasks(ctx context.Context, parentID int) ([]models.Task, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
-		        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
+		        t.created_at, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
 		        t.priority, t.severity,
 		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count`+taskDepsSelect+`
 		 FROM tasks t WHERE t.parent_task_id = ?
@@ -761,13 +745,12 @@ func parseCSVInts(s string) []int {
 func scanTasksWithDeps(rows *sql.Rows) ([]models.Task, error) {
 	tasks := make([]models.Task, 0, 100)
 
-	var specialists, startedAt, testedAt, closedAt, completionSummary sql.NullString
+	var startedAt, testedAt, closedAt, completionSummary sql.NullString
 	var parentTaskID sql.NullInt64
 	var dependsOnCSV, blocksCSV string
 
 	for rows.Next() {
 		var task models.Task
-		specialists = sql.NullString{}
 		startedAt = sql.NullString{}
 		testedAt = sql.NullString{}
 		closedAt = sql.NullString{}
@@ -785,7 +768,6 @@ func scanTasksWithDeps(rows *sql.Rows) ([]models.Task, error) {
 			&task.TechnicalRequirements,
 			&task.AcceptanceCriteria,
 			&task.CreatedAt,
-			&specialists,
 			&startedAt,
 			&testedAt,
 			&closedAt,
@@ -805,10 +787,6 @@ func scanTasksWithDeps(rows *sql.Rows) ([]models.Task, error) {
 		// taking its address. Taking the address of the loop-external scan
 		// variable would make every task in a multi-row result share the same
 		// backing storage and serialize the LAST row's values.
-		if specialists.Valid {
-			v := specialists.String
-			task.Specialists = &v
-		}
 		if startedAt.Valid {
 			v := startedAt.String
 			task.StartedAt = &v
@@ -934,7 +912,7 @@ func (db *DB) GetNextTasks(ctx context.Context, limit int) ([]models.Task, error
 
 	// Get open tasks from the sprint, ordered by sprint task position
 	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
-		         t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
+		         t.acceptance_criteria, t.created_at, t.started_at, t.tested_at,
 		         t.closed_at, t.completion_summary, t.parent_task_id,
 		         t.priority, t.severity,
 		         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count` + taskDepsSelect + `
@@ -1024,7 +1002,7 @@ func (db *DB) RemoveTaskDependencyWithAudit(ctx context.Context, taskID, depID i
 func (db *DB) GetBlockers(ctx context.Context, taskID int) ([]models.Task, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
-		        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
+		        t.created_at, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
 		        t.priority, t.severity,
 		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count`+taskDepsSelect+`
 		 FROM tasks t
@@ -1044,7 +1022,7 @@ func (db *DB) GetBlockers(ctx context.Context, taskID int) ([]models.Task, error
 func (db *DB) GetBlocking(ctx context.Context, taskID int) ([]models.Task, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
-		        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
+		        t.created_at, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
 		        t.priority, t.severity,
 		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count`+taskDepsSelect+`
 		 FROM tasks t
@@ -1533,7 +1511,7 @@ func (db *DB) GetSprintsByTasks(ctx context.Context, taskIDs []int) (map[int]Spr
 func (db *DB) GetActiveSprintTasks(ctx context.Context, sprintID int) ([]models.Task, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
-		         t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
+		         t.acceptance_criteria, t.created_at, t.started_at, t.tested_at,
 		         t.closed_at, t.completion_summary, t.parent_task_id,
 		         t.priority, t.severity,
 		         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count`+taskDepsSelect+`
@@ -1594,7 +1572,7 @@ func CompactSprintPositionsTx(tx *sql.Tx, sprintID int) error {
 // GetSprintTasksFull retrieves full task objects for a sprint, ordered by position or priority.
 func (db *DB) GetSprintTasksFull(ctx context.Context, sprintID int, status *models.TaskStatus, orderByPriority bool) ([]models.Task, error) {
 	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
-		         t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
+		         t.acceptance_criteria, t.created_at, t.started_at, t.tested_at,
 		         t.closed_at, t.completion_summary, t.parent_task_id,
 		         t.priority, t.severity,
 		         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count` + taskDepsSelect + `
@@ -1629,7 +1607,7 @@ func (db *DB) GetSprintTasksFull(ctx context.Context, sprintID int, status *mode
 // Returns an empty slice (not an error) when the sprint has no open tasks.
 func (db *DB) GetOpenSprintTasks(ctx context.Context, sprintID int, orderByPriority bool) ([]models.Task, error) {
 	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
-		         t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
+		         t.acceptance_criteria, t.created_at, t.started_at, t.tested_at,
 		         t.closed_at, t.completion_summary, t.parent_task_id,
 		         t.priority, t.severity,
 		         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count` + taskDepsSelect + `
