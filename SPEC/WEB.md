@@ -3963,10 +3963,12 @@ NOT be run on it.
    body has, and no more.
 2. **No space is reserved for anything the page does not render.** What the region
    gives up at the top is what the shell and the page actually place above it: the
-   top navbar and the page header on both pages, and the query bar as well on the
-   knowledge-graph page (see [Graph Query Bar](#graph-query-bar)). Removing one of
-   those elements reduces what the region gives up by that element's height, and
-   adding one increases it — not as a follow-up correction to a value recorded
+   top navbar and the page header on both pages, the query bar as well on the
+   knowledge-graph page (see [Graph Query Bar](#graph-query-bar)), and the no-match
+   message on the roadmap tasks page for as long as the board's controls match no
+   task (see [Roadmap Tasks Page](#roadmap-tasks-page), **Empty states**). Removing
+   one of those elements reduces what the region gives up by that element's height,
+   and adding one increases it — not as a follow-up correction to a value recorded
    somewhere, but because rule 1 is stated over the page body's edges and the page
    body has already moved. In particular the shell carries no footer and no page
    renders a `<footer>` element (see [UI Framework](#ui-framework), rule 12), so no
@@ -4009,9 +4011,18 @@ NOT be run on it.
    minimum the region takes the minimum instead. In that case, and only in that
    case, the region's bottom edge may fall below the viewport and the page may
    scroll vertically to reach it: rule 1's second edge yields to the floor, because
-   a region compressed past legibility is worse than one the reader scrolls to. The
-   floor is the single exception to rule 1, and not a licence to exceed the viewport
-   at ordinary viewport heights.
+   a region compressed past legibility is worse than one the reader scrolls to.
+   Rule 1's first edge yields with it wherever the page places an element above the
+   region inside the same container — the knowledge-graph page's query bar always,
+   and the tasks page's no-match message for as long as the board's controls match
+   no task (see rule 2). The page body is held to the same minimum as the region, so
+   below the floor it carries that element and the floored region together, and the
+   region's foot passes the page body's foot by the space the element occupies.
+   Nothing in the stylesheet closes that gap: closing it would take a page-body
+   floor of the region's floor plus the height of the element above it, and that is
+   the fixed subtraction rule 3 forbids. The floor is the single exception to
+   rule 1 — to both of its edges — and not a licence to overrun the viewport, or to
+   end anywhere but where the page body ends, at ordinary viewport heights.
 
 ### Status, Priority, and Severity Badge Colours
 
@@ -5703,13 +5714,18 @@ Rules:
     title, and as the viewport narrows they wrap onto further rows (see
     [Roadmap Tasks Page](#roadmap-tasks-page), **Header search control** and
     **Header filter controls**) — and both edges hold at every one of those widths.
-    This is what a height obtained by subtracting a fixed length from the viewport
-    height cannot pass: such a height is correct at whichever width its length was
-    chosen for and wrong at every other, over-reserving where the page header is
-    short and under-reserving where it is tall, so a check made at a single width
-    would accept it and leave the defect in place. No full-height region reserves
-    space for a page footer, and no page renders a `<footer>` element (Acceptance
-    Criterion 74 continues to hold; see [UI Framework](#ui-framework), rule 12, and
+    Each of those widths is exercised at a viewport tall enough that the floor does
+    not bind: below the floor the region takes its minimum whatever the material
+    above it measures, so a check made there would record the floor instead of the
+    tracking these widths exist to vary, and what holds below the floor is
+    Acceptance Criterion 127's to state. This is what a height obtained by
+    subtracting a fixed length from the viewport height cannot pass: such a height
+    is correct at whichever width its length was chosen for and wrong at every
+    other, over-reserving where the page header is short and under-reserving where
+    it is tall, so a check made at a single width would accept it and leave the
+    defect in place. No full-height region reserves space for a page footer, and no
+    page renders a `<footer>` element (Acceptance Criterion 74 continues to hold;
+    see [UI Framework](#ui-framework), rule 12, and
     [Full-Height Page Regions](#full-height-page-regions), rules 2 and 3).
 126. Each full-height page region's height is declared **twice** in the stylesheet
     the binary serves, in this order: first against the large viewport height
@@ -5731,8 +5747,27 @@ Rules:
 127. On a viewport short enough that the space the page body leaves falls below a
     full-height region's minimum height, the region takes that minimum rather than
     shrinking to the space available, and the vertical page scrolling that follows
-    is permitted: this is the one case in which the second edge of Acceptance
-    Criterion 124 does not hold. The check exercises both a viewport at which the
+    is permitted. Below the floor **neither** edge of Acceptance Criterion 124 is
+    guaranteed. The second edge does not hold on either region: the floored region
+    is what the page scrolls vertically to reach. The first edge does not hold
+    either wherever the page renders an element above the region inside the same
+    container, because the page body is held to the same minimum as the region and
+    must then carry that element and the floored region together, so the region's
+    foot passes the page body's foot by the space the element occupies. The
+    knowledge-graph page always renders such an element: its query bar sits between
+    the top of the page body and the graph card (see
+    [Graph Query Bar](#graph-query-bar)). The roadmap tasks page renders one
+    whenever its controls match no task, the no-match message then standing above
+    the board (see [Roadmap Tasks Page](#roadmap-tasks-page), **Empty states**). No
+    stylesheet closes that gap: closing it would take a page-body floor of the
+    region's floor plus the height of the element above it, which is the fixed
+    subtraction [Full-Height Page Regions](#full-height-page-regions), rule 3,
+    forbids, and that height is no constant — the query bar stacks its own controls
+    as the viewport narrows and the no-match message wraps — so a length chosen for
+    one viewport width is wrong at the rest. Above the floor, which is every
+    viewport height at which the region is worth presenting at all, both edges hold
+    on both pages: this exception is the floor case alone and weakens Acceptance
+    Criterion 124 nowhere else. The check exercises both a viewport at which the
     floor binds and one at which it does not, because a check run only below the
     floor passes on a region that never tracks the page body at all, while a check
     run only above it leaves the floor free to be deleted as though it were the

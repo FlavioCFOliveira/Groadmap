@@ -3,7 +3,17 @@
 <head>
 {{template "head" .}}
 </head>
-<body class="layout-fluid">
+{{/*
+  full-height-page next to Tabler's layout-fluid: this page presents a full-height
+  region, the graph card below, whose height is the space the page body leaves
+  once the navbar, the page header and the query bar are placed. The class is what
+  static/style.css hangs the one definite height on, at the top of the flex chain
+  Tabler already ships, so the browser computes the card's height instead of the
+  stylesheet subtracting a guess from the viewport — a guess that forgot the query
+  bar entirely and put the foot of the card 154px below the fold
+  (SPEC/WEB.md § Full-Height Page Regions).
+*/}}
+<body class="layout-fluid full-height-page">
   <div class="page">
 {{template "sidebar" .}}
 {{template "topnavbar" .}}
@@ -41,7 +51,7 @@
         </div>
       </div>
       <main class="page-body">
-        <div class="container-xl h-100">
+        <div class="container-xl">
           <form id="query-bar" class="graph-query-bar card mb-3" novalidate>
             <div class="card-body">
               <div class="graph-query-bar__row">

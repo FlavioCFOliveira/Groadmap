@@ -83,8 +83,12 @@
 /* ---- Full-height page shell (SPEC/WEB.md § Full-Height Page Regions) ----
    A page presenting a full-height region — one sized to the viewport so that its
    children scroll INSIDE it and the page does not scroll to reach them — carries
-   `full-height-page` on its <body>. The roadmap tasks page carries it for its
-   Kanban board.
+   `full-height-page` on its <body>. Both such pages carry it: the roadmap tasks
+   page for its Kanban board, and the knowledge-graph page for its graph card.
+   ONE mechanism serves the two, so neither can come to be sized by a rule the
+   other does not obey — which is how the graph card came to subtract a length
+   that forgot the query bar while the board was subtracting one that reserved
+   space for a footer no page renders.
 
    Tabler already ships the whole chain such a region needs, and this file adds no
    part of it: `.page` is a flex column, `.page-wrapper` is `flex: 1` and a flex
@@ -95,8 +99,12 @@
    divides a quantity that is itself content-driven. The rule below supplies that
    one missing height. From there the BROWSER computes what the region gets, at
    every viewport size — including the widths where the page header wraps onto
-   further rows, and the widths below `lg` where the vertical navbar is in flow
-   rather than fixed and takes height of its own.
+   further rows, the widths below `lg` where the vertical navbar is in flow rather
+   than fixed and takes height of its own, and, on the knowledge-graph page, the
+   widths at which the query bar stacks its controls below the query box instead
+   of beside it. Nothing in this file has to know any of those heights: whatever
+   the page places above the region is placed first and the region divides what is
+   left (rule 2).
 
    That is why the region's height is no longer arithmetic. The board used to take
    `calc(100vh - 14rem)`: a fixed reservation for a navbar, a page header, and a
@@ -129,10 +137,22 @@
 
    The floor those rules read — `--full-height-region-floor` — is declared at the
    top of this file, on :root, so every page resolves it and not only the ones
-   carrying `full-height-page`. Three rules need it and they must agree: the
-   region takes the floor, the page body it ends against does not shrink past it,
-   so the two edges of rule 1 keep coinciding on a viewport where the floor binds,
-   and the sprint page's bounded board takes the same floor. */
+   carrying `full-height-page`. FOUR rules need it and they must agree: each of the
+   two full-height regions takes it as its own floor, the page body they end
+   against does not shrink past it, and the sprint page's bounded board takes the
+   same floor.
+
+   On the tasks page that keeps both edges of rule 1 coinciding on a viewport too
+   short for either, and only the page's vertical scroll gives way. On the
+   knowledge-graph page the query bar stands between the top of the page body and
+   the region, so once the floor binds the card's foot passes the page body's by
+   the height of that bar — measured 134px at 1280x420, the bar plus its margin.
+   That is the floor case rule 5 already sets aside, and the region's own floor is
+   what decides it: a page body floored high enough to hold a floored region AND
+   the bar above it would have to add the bar's height to the floor, and the bar's
+   height is exactly the quantity rule 3 forbids this stylesheet to name. Above the
+   floor — every viewport height at which the region is worth presenting — the two
+   edges coincide on both pages. */
 .full-height-page .page {
   min-height: 0;
   height: 100vh;
@@ -146,7 +166,18 @@
    1280x420 the header's box collapsed to that 36px floor while its content still
    stood 124px tall, spilling the search box and the three filter dropdowns 88px
    over the board. The vertical navbar is in this rule for the same reason, for
-   the viewports below `lg` where it is in flow rather than fixed. */
+   the viewports below `lg` where it is in flow rather than fixed.
+
+   The knowledge-graph page's query bar is chrome above a region too, and is
+   deliberately NOT in this selector list. It is a Tabler `.card`, and Tabler gives
+   the card no min-height of its own, so the card keeps the automatic minimum every
+   flex item has — its own content — and the flex algorithm may not take height
+   from it however short the page body is. Measured at 1280x420 and 500x360, where
+   the page body is far shorter than the bar and the card together, the bar kept
+   exactly the 118px and 194px it occupies at those widths on a 900px-tall
+   viewport. The page header is in this rule only because Tabler's explicit
+   `min-height` overrides that same protection. A `flex-shrink: 0` here would state
+   a fact the layout already guarantees, and this file states nothing twice. */
 .full-height-page .page > .navbar,
 .full-height-page .page-header {
   flex-shrink: 0;
@@ -164,9 +195,22 @@
 
    `min-height: 0` frees a link to take the height handed down instead. The page
    body takes the floor rather than 0, because it is the element the region's
-   bottom edge is measured against (Acceptance Criterion 124): floored together
-   with the region, the two still end at the same place on a viewport too short
-   for either, and only the page's vertical scroll gives way (rules 1 and 5). */
+   bottom edge is measured against (Acceptance Criterion 124).
+
+   Below the floor the two do NOT end at the same place wherever the page renders
+   an element above the region inside the same container. Both are held to the same
+   minimum, so the page body must carry that element AND the floored region, and the
+   region's foot passes the page body's foot by the space the element occupies:
+   measured 134px at 1280x420 and 210px at 500x360 on the knowledge-graph page,
+   whose query bar always stands there, and 96px / 116px on the tasks page whenever
+   its controls match no task and the no-match message is shown. Nothing here can
+   close that gap: it would take a page-body floor of the region's floor PLUS the
+   height of the element above it, which is the fixed subtraction rule 3 forbids —
+   and no constant would do, because the query bar stacks its controls as the
+   viewport narrows and the no-match message wraps. Above the floor, which is every
+   viewport height at which the region is worth presenting at all, the two edges
+   coincide on both pages (SPEC/WEB.md § Full-Height Page Regions, rules 1, 3 and 5;
+   Acceptance Criterion 127). */
 .full-height-page .page-wrapper,
 .full-height-page .page-body > .container-xl {
   min-height: 0;
@@ -434,21 +478,52 @@
   overflow-wrap: anywhere;
 }
 
-/* ---- Knowledge-graph page ----
+/* ---- Knowledge-graph page (SPEC/WEB.md § Roadmap Knowledge-Graph Page, Graph
+   card layout; § Full-Height Page Regions) ----
    The graph card holds two regions: the labels sidebar on the left and the
    graph canvas on the right. The card is a flex container; the canvas region
    is the positioning context so the absolutely positioned #graph SVG host, the
-   detail panel, and the empty-graph overlay anchor to it. Mobile-first: a
-   viewport-derived height that leaves room for the Tabler navbar + page header
-   on small screens. */
+   detail panel, and the empty-graph overlay anchor to it.
+
+   The card is the page's FULL-HEIGHT REGION and computes no height of its own.
+   It grows into what the page body has left once the three things above it are
+   placed — the top navbar, the page header, and the query bar — through the same
+   shell chain the tasks page's board takes its height from. One mechanism serves
+   both regions: the viewport enters this stylesheet exactly once, as the ordered
+   `vh`/`dvh` pair on `.full-height-page .page` above, so this card carries the
+   mobile dynamic-address-bar guarantee (rule 4) without naming a viewport unit
+   here, and gains it by belonging to the chain rather than by restating it.
+
+   What stood here was `height: calc(100vh - 9rem)`, described in this very
+   comment as room for "the Tabler navbar + page header" — the defect written
+   out, because the QUERY BAR sits between the page header and this card and was
+   reserved for nowhere (rule 2). Measured in a browser with the DevTools Protocol
+   at a viewport 900px tall, the material above the card occupied 298px at widths
+   of 1920, 1600 and 1280 against that 144px reservation: the card overran the
+   fold by 154px and the document scrolled vertically, on a page whose whole
+   purpose is a canvas sized to the screen. Correcting the constant would have
+   fixed nothing, because it is not a constant: the same measurement gives 354px
+   at 768, 406px at 500 and 426px at 400, the page header wrapping onto further
+   rows as the viewport narrows while the query bar stacks its own controls below
+   the query box at 768 (rule 3, and the media query at the foot of this file).
+
+   Mobile-first: the sidebar stacks above the canvas at this width and the media
+   query lays the card out as a row from 768px up. */
 
 .graph-card {
   position: relative;
   display: flex;
+  flex: 1;
   flex-direction: column; /* mobile-first: sidebar stacks above the canvas */
   width: 100%;
-  height: calc(100vh - 9rem);
-  min-height: 320px;
+  /* The floor, read from the one place it is declared (:root, at the top of this
+     file), exactly as the board reads it: below this height the canvas is a strip
+     and the visualisation stops being worth presenting at all (SPEC/WEB.md
+     § Full-Height Page Regions, rule 5). The `320px` literal that stood here was a
+     second floor for the same screen, stated in a second unit, free to be changed
+     on its own and already 32px apart from the one every other bounded region of
+     this interface reads. */
+  min-height: var(--full-height-region-floor);
   overflow: hidden;
 }
 
