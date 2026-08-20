@@ -212,6 +212,7 @@ class GroadmapTestBase:
         "functional_requirements", "technical_requirements", "acceptance_criteria",
         "created_at",
         "started_at", "tested_at", "closed_at", "completion_summary",
+        "commit_open", "commit_close",
         "parent_task_id", "priority", "severity",
         "subtask_count", "depends_on", "blocks",
     ])

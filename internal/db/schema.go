@@ -7,7 +7,7 @@ import (
 )
 
 // SchemaVersion is the current database schema version.
-const SchemaVersion = "1.10.0"
+const SchemaVersion = "1.11.0"
 
 // CreateSchema creates all database tables and indexes.
 // This implements the DDL from SPEC/DATABASE.md.
@@ -31,6 +31,10 @@ CREATE TABLE IF NOT EXISTS tasks (
     tested_at TEXT,
     closed_at TEXT,
     completion_summary TEXT CHECK(completion_summary IS NULL OR length(completion_summary) <= 4096),
+    -- Git commit hashes bracketing the work. Stored lowercase; the CHECK rejects any other case
+    -- because GLOB is case-sensitive in SQLite, so it backs the application's lowercase normalisation.
+    commit_open TEXT CHECK(commit_open IS NULL OR (length(commit_open) BETWEEN 7 AND 64 AND commit_open NOT GLOB '*[^0-9a-f]*')),
+    commit_close TEXT CHECK(commit_close IS NULL OR (length(commit_close) BETWEEN 7 AND 64 AND commit_close NOT GLOB '*[^0-9a-f]*')),
     parent_task_id INTEGER REFERENCES tasks(id),
 
     -- Group 3: Numeric metadata fields

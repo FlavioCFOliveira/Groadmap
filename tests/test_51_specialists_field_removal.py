@@ -24,7 +24,7 @@ Route removal (each checks the EXACT documented exit code):
   6.  `audit list -o TASK_ASSIGN` / `TASK_UNASSIGN` -> exit 6 (invalid operation)
 
 Field absence:
-  7.  `task get` / `task list` / `task next` carry exactly 18 keys, none
+  7.  `task get` / `task list` / `task next` carry exactly 20 keys, none
       named "specialists".
   8.  No help output (family or subcommand) and no `--ai-help` payload
       mentions "specialist" in any casing.
@@ -32,7 +32,7 @@ Field absence:
 Schema migration 1.9.0 -> 1.10.0 (built from the verbatim historical DDL, not
 by dropping a column from a fresh 1.10.0 database — see
 _build_1_9_0_fixture):
-  9.  The next command against a 1.9.0-shape database migrates it to 1.10.0,
+  9.  The next command against a 1.9.0-shape database runs the migration chain,
       drops `tasks.specialists`, and every other column/row survives.
   10. Pre-existing `TASK_ASSIGN` / `TASK_UNASSIGN` audit rows survive the
       migration and remain visible in an UNFILTERED `audit list` / `audit
@@ -53,13 +53,15 @@ from tests.base_test import GroadmapTestBase  # noqa: E402
 EXIT_MISUSE = 2      # unknown subcommand / unknown flag
 EXIT_INVALID = 6      # validation error (unknown audit operation)
 
-# The exact 18 keys a task JSON object must carry post-removal
-# (SPEC/MODELS.md; mirrors GroadmapTestBase.TASK_KEYS minus "specialists").
+# The exact 20 keys a task JSON object must carry post-removal
+# (SPEC/MODELS.md; mirrors GroadmapTestBase.TASK_KEYS, which is "specialists"
+# removed at schema 1.10.0 and commit_open/commit_close added at 1.11.0).
 EXPECTED_TASK_KEYS = frozenset([
     "id", "title", "status", "type",
     "functional_requirements", "technical_requirements", "acceptance_criteria",
     "created_at",
     "started_at", "tested_at", "closed_at", "completion_summary",
+    "commit_open", "commit_close",
     "parent_task_id", "priority", "severity",
     "subtask_count", "depends_on", "blocks",
 ])
@@ -261,7 +263,7 @@ class TestSpecialistsFieldRemoved:
                 f"  missing: {sorted(EXPECTED_TASK_KEYS - keys)}\n"
                 f"  extra:   {sorted(keys - EXPECTED_TASK_KEYS)}"
             )
-            assert len(keys) == 18, f"{label}: expected exactly 18 keys, got {len(keys)}: {sorted(keys)}"
+            assert len(keys) == 20, f"{label}: expected exactly 20 keys, got {len(keys)}: {sorted(keys)}"
             assert "specialists" not in task, f"{label}: specialists key still present: {task!r}"
 
     # ---- 8. no mention anywhere in help / --ai-help ------------------------
@@ -376,6 +378,20 @@ class TestSpecialistsMigration1_9_0_to_1_10_0:
             "audit_row_count": len(audit_rows),
         }
 
+    def _current_schema_version(self):
+        """The schema_version a freshly created roadmap is stamped with.
+
+        The assertions below compare a MIGRATED database against this rather
+        than against a hard-coded number. Opening a 1.9.0-shape database runs
+        the WHOLE migration chain, not only the 1.9.0 -> 1.10.0 step under test,
+        so the database lands on whatever the newest version is; what the test
+        must prove is that a migrated database and a fresh one agree, which is
+        exactly the guarantee SPEC/VERSION.md makes and which does not rot on
+        the next schema bump.
+        """
+        fresh = self.test.create_roadmap()
+        return self._schema_version(fresh)
+
     def _schema_version(self, roadmap):
         con = sqlite3.connect(str(self._db_path(roadmap)))
         try:
@@ -418,8 +434,10 @@ class TestSpecialistsMigration1_9_0_to_1_10_0:
         # Any real command reopens the database and runs the pending migration.
         listed = self.test.run_cmd_json(["task", "list", "-r", roadmap])
 
-        assert self._schema_version(roadmap) == "1.10.0", (
-            "the next open after a 1.9.0-shape database must migrate to 1.10.0"
+        assert self._schema_version(roadmap) == self._current_schema_version(), (
+            "the next open after a 1.9.0-shape database must run the migration "
+            "chain to its end, landing on the same version a fresh roadmap is "
+            "created at"
         )
         assert self._specialists_column_count(roadmap) == 0, (
             "tasks.specialists must be dropped by the 1.9.0 -> 1.10.0 migration"
@@ -517,7 +535,7 @@ class TestSpecialistsMigration1_9_0_to_1_10_0:
         assert code == 0, f"a second open of an already-migrated db must succeed, got {code}: {err}"
 
         second = self.test.run_cmd_json(["task", "list", "-r", roadmap])
-        assert self._schema_version(roadmap) == first_version == "1.10.0"
+        assert self._schema_version(roadmap) == first_version == self._current_schema_version()
         assert self._audit_op_counts(roadmap) == first_audit
         assert [t["id"] for t in second] == [t["id"] for t in first], (
             "a second open must not alter the migrated data"

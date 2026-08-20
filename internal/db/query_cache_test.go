@@ -140,7 +140,8 @@ func TestQueryCacheTemplatesMatchProductionQueries(t *testing.T) {
 	wants := map[string]string{
 		OpGetTasks: fmt.Sprintf(
 			`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
-			        t.created_at, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
+			        t.created_at, t.started_at, t.tested_at, t.closed_at, t.completion_summary,
+			        t.commit_open, t.commit_close, t.parent_task_id,
 			        t.priority, t.severity,
 			        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count`+taskDepsSelect+`
 			 FROM tasks t WHERE t.id IN (%s) ORDER BY t.id`, ph),

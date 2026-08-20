@@ -71,6 +71,11 @@ var migrations = []Migration{
 		Name:    "Drop the specialists column from the tasks table",
 		Apply:   migrateV1_9_0_toV1_10_0,
 	},
+	{
+		Version: "1.11.0",
+		Name:    "Add commit_open and commit_close columns to tasks table",
+		Apply:   migrateV1_10_0_toV1_11_0,
+	},
 }
 
 // RunMigrations executes all pending migrations in a transaction.
@@ -529,6 +534,68 @@ func migrateV1_9_0_toV1_10_0(tx *sql.Tx) error {
 	}
 	if _, err := tx.Exec(`ALTER TABLE tasks DROP COLUMN specialists`); err != nil {
 		return fmt.Errorf("dropping specialists column: %w", err)
+	}
+	return nil
+}
+
+// migrateV1_10_0_toV1_11_0 adds the two commit-tracking columns, commit_open and
+// commit_close, to the tasks table (SPEC/VERSION.md § Migration 1.10.0 → 1.11.0).
+//
+// Both are nullable TEXT columns carrying a git commit hash, and each takes the
+// CHECK constraint specified in SPEC/DATABASE.md § Commit Hash Format Constraint
+// WITH the column. SQLite accepts a CHECK clause on ADD COLUMN and the constraint
+// is live on the migrated table immediately afterwards, so a migrated database
+// and a fresh one end up with identical tasks tables;
+// TestMigratedAndFreshTasksTablesAreIdentical is what stops the two copies of
+// the DDL drifting apart.
+//
+// THERE IS NO BACKFILL, AND THERE CAN BE NONE. The two values record which commit
+// a task was started from and which it was concluded at. Groadmap holds no record
+// of either fact for work already done — it runs no git command and reads no
+// repository — so nothing on disk could supply a truthful value for a task that
+// reached DOING or COMPLETED before this migration. Every existing task therefore
+// migrates with NULL in both columns and keeps them until its next transition
+// into DOING or COMPLETED supplies a value. That is also why the columns are
+// nullable even though the CLI makes them mandatory on those transitions: the
+// mandatory rule governs the transition, not the column.
+//
+// SQLite does not re-validate existing rows when a column is added, and it does
+// not need to here: every existing row receives NULL, and NULL satisfies both
+// CHECKs.
+//
+// Idempotent: each ADD COLUMN is guarded INDEPENDENTLY by its own columnExists
+// check, so re-running the migration is a no-op rather than a "duplicate column
+// name" error, and a database that somehow carries one column and not the other
+// is brought to the full shape.
+//
+// No index is created on either column. Neither is a filter, a sort key or a
+// join key for any query in SPEC/DATABASE.md § Main SQL Queries: both are read as
+// part of the Task object and are never searched, so an index would cost write
+// time on every status change and buy nothing.
+func migrateV1_10_0_toV1_11_0(tx *sql.Tx) error {
+	for _, column := range []struct {
+		name string
+		ddl  string
+	}{
+		{
+			name: "commit_open",
+			ddl:  `ALTER TABLE tasks ADD COLUMN commit_open TEXT CHECK(commit_open IS NULL OR (length(commit_open) BETWEEN 7 AND 64 AND commit_open NOT GLOB '*[^0-9a-f]*'))`,
+		},
+		{
+			name: "commit_close",
+			ddl:  `ALTER TABLE tasks ADD COLUMN commit_close TEXT CHECK(commit_close IS NULL OR (length(commit_close) BETWEEN 7 AND 64 AND commit_close NOT GLOB '*[^0-9a-f]*'))`,
+		},
+	} {
+		exists, err := columnExists(tx, "tasks", column.name)
+		if err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		if _, err := tx.Exec(column.ddl); err != nil {
+			return fmt.Errorf("adding %s column: %w", column.name, err)
+		}
 	}
 	return nil
 }

@@ -45,7 +45,7 @@ func TestCreateSchema(t *testing.T) {
 // SPEC/VERSION.md § Current Schema Version declares. Bumping the constant
 // without the corresponding migration (or the reverse) fails here.
 func TestSchemaVersionConstant(t *testing.T) {
-	const want = "1.10.0"
+	const want = "1.11.0"
 	if SchemaVersion != want {
 		t.Errorf("SchemaVersion = %q, want %q (SPEC/VERSION.md § Current Schema Version)", SchemaVersion, want)
 	}

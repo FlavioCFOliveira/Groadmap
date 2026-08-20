@@ -113,7 +113,8 @@ func (db *DB) CreateTask(ctx context.Context, task *models.Task) (int, error) {
 // Uses scanTasksWithDeps to fold depends_on / blocks into the same query.
 func (db *DB) GetTask(ctx context.Context, id int) (*models.Task, error) {
 	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
-	        t.created_at, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
+	        t.created_at, t.started_at, t.tested_at, t.closed_at, t.completion_summary,
+	        t.commit_open, t.commit_close, t.parent_task_id,
 	        t.priority, t.severity,
 	        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count` + taskDepsSelect + `
 	 FROM tasks t WHERE t.id = ?`
@@ -226,7 +227,8 @@ func (db *DB) ListTasks(ctx context.Context, filter *TaskListFilter) ([]models.T
 // The caller is responsible for clamping filter.Limit beforehand.
 func buildListTasksQuery(filter *TaskListFilter) (string, []any) {
 	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
-		        t.created_at, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
+		        t.created_at, t.started_at, t.tested_at, t.closed_at, t.completion_summary,
+		        t.commit_open, t.commit_close, t.parent_task_id,
 		        t.priority, t.severity,
 		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count` + taskDepsSelect + `
 		      FROM tasks t WHERE 1=1`
@@ -615,7 +617,8 @@ func (db *DB) DeleteTask(ctx context.Context, id int) error {
 func (db *DB) GetSubTasks(ctx context.Context, parentID int) ([]models.Task, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
-		        t.created_at, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
+		        t.created_at, t.started_at, t.tested_at, t.closed_at, t.completion_summary,
+		        t.commit_open, t.commit_close, t.parent_task_id,
 		        t.priority, t.severity,
 		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count`+taskDepsSelect+`
 		 FROM tasks t WHERE t.parent_task_id = ?
@@ -746,6 +749,7 @@ func scanTasksWithDeps(rows *sql.Rows) ([]models.Task, error) {
 	tasks := make([]models.Task, 0, 100)
 
 	var startedAt, testedAt, closedAt, completionSummary sql.NullString
+	var commitOpen, commitClose sql.NullString
 	var parentTaskID sql.NullInt64
 	var dependsOnCSV, blocksCSV string
 
@@ -755,6 +759,8 @@ func scanTasksWithDeps(rows *sql.Rows) ([]models.Task, error) {
 		testedAt = sql.NullString{}
 		closedAt = sql.NullString{}
 		completionSummary = sql.NullString{}
+		commitOpen = sql.NullString{}
+		commitClose = sql.NullString{}
 		parentTaskID = sql.NullInt64{}
 		dependsOnCSV = ""
 		blocksCSV = ""
@@ -772,6 +778,8 @@ func scanTasksWithDeps(rows *sql.Rows) ([]models.Task, error) {
 			&testedAt,
 			&closedAt,
 			&completionSummary,
+			&commitOpen,
+			&commitClose,
 			&parentTaskID,
 			&task.Priority,
 			&task.Severity,
@@ -802,6 +810,14 @@ func scanTasksWithDeps(rows *sql.Rows) ([]models.Task, error) {
 		if completionSummary.Valid {
 			v := completionSummary.String
 			task.CompletionSummary = &v
+		}
+		if commitOpen.Valid {
+			v := commitOpen.String
+			task.CommitOpen = &v
+		}
+		if commitClose.Valid {
+			v := commitClose.String
+			task.CommitClose = &v
 		}
 		if parentTaskID.Valid {
 			v := int(parentTaskID.Int64)
@@ -913,7 +929,8 @@ func (db *DB) GetNextTasks(ctx context.Context, limit int) ([]models.Task, error
 	// Get open tasks from the sprint, ordered by sprint task position
 	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
 		         t.acceptance_criteria, t.created_at, t.started_at, t.tested_at,
-		         t.closed_at, t.completion_summary, t.parent_task_id,
+		         t.closed_at, t.completion_summary,
+		         t.commit_open, t.commit_close, t.parent_task_id,
 		         t.priority, t.severity,
 		         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count` + taskDepsSelect + `
 		      FROM tasks t
@@ -1002,7 +1019,8 @@ func (db *DB) RemoveTaskDependencyWithAudit(ctx context.Context, taskID, depID i
 func (db *DB) GetBlockers(ctx context.Context, taskID int) ([]models.Task, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
-		        t.created_at, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
+		        t.created_at, t.started_at, t.tested_at, t.closed_at, t.completion_summary,
+		        t.commit_open, t.commit_close, t.parent_task_id,
 		        t.priority, t.severity,
 		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count`+taskDepsSelect+`
 		 FROM tasks t
@@ -1022,7 +1040,8 @@ func (db *DB) GetBlockers(ctx context.Context, taskID int) ([]models.Task, error
 func (db *DB) GetBlocking(ctx context.Context, taskID int) ([]models.Task, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
-		        t.created_at, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
+		        t.created_at, t.started_at, t.tested_at, t.closed_at, t.completion_summary,
+		        t.commit_open, t.commit_close, t.parent_task_id,
 		        t.priority, t.severity,
 		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count`+taskDepsSelect+`
 		 FROM tasks t
@@ -1512,7 +1531,8 @@ func (db *DB) GetActiveSprintTasks(ctx context.Context, sprintID int) ([]models.
 	rows, err := db.QueryContext(ctx,
 		`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
 		         t.acceptance_criteria, t.created_at, t.started_at, t.tested_at,
-		         t.closed_at, t.completion_summary, t.parent_task_id,
+		         t.closed_at, t.completion_summary,
+		         t.commit_open, t.commit_close, t.parent_task_id,
 		         t.priority, t.severity,
 		         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count`+taskDepsSelect+`
 		      FROM tasks t
@@ -1573,7 +1593,8 @@ func CompactSprintPositionsTx(tx *sql.Tx, sprintID int) error {
 func (db *DB) GetSprintTasksFull(ctx context.Context, sprintID int, status *models.TaskStatus, orderByPriority bool) ([]models.Task, error) {
 	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
 		         t.acceptance_criteria, t.created_at, t.started_at, t.tested_at,
-		         t.closed_at, t.completion_summary, t.parent_task_id,
+		         t.closed_at, t.completion_summary,
+		         t.commit_open, t.commit_close, t.parent_task_id,
 		         t.priority, t.severity,
 		         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count` + taskDepsSelect + `
 		      FROM tasks t
@@ -1608,7 +1629,8 @@ func (db *DB) GetSprintTasksFull(ctx context.Context, sprintID int, status *mode
 func (db *DB) GetOpenSprintTasks(ctx context.Context, sprintID int, orderByPriority bool) ([]models.Task, error) {
 	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
 		         t.acceptance_criteria, t.created_at, t.started_at, t.tested_at,
-		         t.closed_at, t.completion_summary, t.parent_task_id,
+		         t.closed_at, t.completion_summary,
+		         t.commit_open, t.commit_close, t.parent_task_id,
 		         t.priority, t.severity,
 		         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count` + taskDepsSelect + `
 		      FROM tasks t

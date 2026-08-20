@@ -257,6 +257,7 @@ func TestMigrationsIdempotent(t *testing.T) {
 		{"v1.3.0->v1.4.0 (sprints.max_tasks)", migrateV1_3_0_toV1_4_0},
 		{"v1.4.0->v1.5.0 (tasks.parent_task_id)", migrateV1_4_0_toV1_5_0},
 		{"v1.9.0->v1.10.0 (tasks.specialists, DROP)", migrateV1_9_0_toV1_10_0},
+		{"v1.10.0->v1.11.0 (tasks.commit_open, tasks.commit_close)", migrateV1_10_0_toV1_11_0},
 	}
 
 	for _, tc := range cases {

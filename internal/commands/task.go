@@ -140,7 +140,8 @@ Output (stdout JSON):
   comment-edit, comment-remove                    Empty (exit 0 on success).
   Task object keys: id, title, status, type, functional_requirements,
   technical_requirements, acceptance_criteria, created_at,
-  started_at, tested_at, closed_at, completion_summary, parent_task_id,
+  started_at, tested_at, closed_at, completion_summary,
+  commit_open, commit_close, parent_task_id,
   priority, severity, subtask_count, depends_on, blocks.
   Comment object keys: id, task_id, type, body, created_at, updated_at
   (updated_at is null until the comment is first edited).

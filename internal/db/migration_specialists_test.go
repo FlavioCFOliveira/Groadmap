@@ -250,8 +250,12 @@ func TestMigrateV1_9_0_toV1_10_0_OnNextOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading schema version after open: %v", err)
 	}
-	if version != "1.10.0" {
-		t.Fatalf("schema_version after open = %q, want 1.10.0", version)
+	// Open runs the WHOLE migration chain, not just the one under test, so the
+	// database lands on the current schema version rather than on 1.10.0. What
+	// this assertion guards is that the chain ran at all and reached its end;
+	// the 1.9.0 -> 1.10.0 step itself is asserted by the column checks below.
+	if version != SchemaVersion {
+		t.Fatalf("schema_version after open = %q, want %q (the newest version)", version, SchemaVersion)
 	}
 
 	if got := columnCount(t, database, "tasks", "specialists"); got != 0 {

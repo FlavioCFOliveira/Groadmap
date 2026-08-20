@@ -211,9 +211,10 @@ var auditOperationDescriptions = map[models.AuditOperation]string{
 		"`SPRINT_REMOVE_TASK` / `SPRINT_DELETE`.",
 	models.OpTaskPriorityChange: "Priority change (0-9) via `task priority`.",
 	models.OpTaskSeverityChange: "Severity change (0-9) via `task severity`.",
-	models.OpTaskReopen: "Task returned to BACKLOG via `task reopen`; lifecycle timestamps and " +
-		"completion_summary cleared. The sprint_tasks row is removed only when the source state is " +
-		"SPRINT, DOING, or TESTING; from COMPLETED the row is kept.",
+	models.OpTaskReopen: "Task returned to BACKLOG via `task reopen`; lifecycle timestamps, " +
+		"completion_summary, and commit_close cleared, commit_open preserved. The sprint_tasks row " +
+		"is removed only when the source state is SPRINT, DOING, or TESTING; from COMPLETED the row " +
+		"is kept.",
 
 	// Sprint lifecycle.
 	models.OpSprintCreate:     "New sprint created.",
