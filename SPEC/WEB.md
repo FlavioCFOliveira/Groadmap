@@ -4440,11 +4440,14 @@ the server from starting (see
 [Startup Schema Migration](#startup-schema-migration), rule 6, and
 [Bind Address and Port Selection](#bind-address-and-port-selection), item 3).
 
-| Condition | Level | `msg` |
-|-----------|-------|-------|
-| The resolved bind host is not a loopback address | `WARN` | `web interface is reachable from the network` |
-| The roadmap list cannot be read for the startup schema migration | `WARN` | `cannot list roadmaps for startup schema migration` |
-| One roadmap cannot be opened or migrated at startup | `WARN` | `startup schema migration skipped for roadmap` |
+| Condition | Level | `msg` | Attributes |
+|-----------|-------|-------|------------|
+| The resolved bind host is not a loopback address | `WARN` | `web interface is reachable from the network` | `host`, and a `hint` naming the flag that restricts the bind |
+| The roadmap list cannot be read for the startup schema migration | `WARN` | `cannot list roadmaps for startup schema migration` | `err` |
+| One roadmap cannot be opened or migrated at startup | `WARN` | `startup schema migration skipped for roadmap` | `roadmap`, `err` |
+
+A startup record has no request behind it, so it carries no `method`, `path`, or
+`status`; it names its own subject instead.
 
 **Per request.** Every response the server produces with HTTP status 500 MUST be
 accompanied by exactly one `ERROR` record naming the underlying error, and every
