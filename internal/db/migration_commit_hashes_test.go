@@ -308,9 +308,15 @@ func readCommitColumns(t *testing.T, database *DB, taskID int) (open, close sql.
 }
 
 // TestMigrateV1_10_0_toV1_11_0_OnNextOpen is the primary gate: a database
-// created at 1.10.0 must reach 1.11.0 on the next open, with NO user action,
-// gaining both commit columns while every existing row survives untouched and
-// receives NULL in each of them.
+// created at 1.10.0 must reach the current schema version on the next open, with
+// NO user action, gaining both commit columns while every existing row survives
+// untouched and receives NULL in each of them.
+//
+// The version it lands on is the newest one, not 1.11.0: RunMigrations applies
+// every pending migration in order, so a 1.10.0 database passes through this
+// migration and continues to the current schema. What this test pins is the
+// EFFECT of the 1.10.0 to 1.11.0 step; that later migrations run afterwards is
+// what TestSchemaVersionConstant covers.
 func TestMigrateV1_10_0_toV1_11_0_OnNextOpen(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -328,8 +334,8 @@ func TestMigrateV1_10_0_toV1_11_0_OnNextOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading schema version after open: %v", err)
 	}
-	if version != "1.11.0" {
-		t.Fatalf("schema_version after open = %q, want 1.11.0 (SPEC/VERSION.md § Current Schema Version)", version)
+	if version != "1.12.0" {
+		t.Fatalf("schema_version after open = %q, want 1.12.0 (SPEC/VERSION.md § Current Schema Version)", version)
 	}
 	if version != SchemaVersion {
 		t.Errorf("schema_version after open = %q but the SchemaVersion constant is %q; a migrated "+

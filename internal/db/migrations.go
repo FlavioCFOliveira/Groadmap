@@ -76,6 +76,11 @@ var migrations = []Migration{
 		Name:    "Add commit_open and commit_close columns to tasks table",
 		Apply:   migrateV1_10_0_toV1_11_0,
 	},
+	{
+		Version: "1.12.0",
+		Name:    "Add related_entity_id and commit_hash columns to audit table and reclassify the legacy TASK_STATUS_CHANGE entries",
+		Apply:   migrateV1_11_0_toV1_12_0,
+	},
 }
 
 // RunMigrations executes all pending migrations in a transaction.
@@ -598,4 +603,171 @@ func migrateV1_10_0_toV1_11_0(tx *sql.Tx) error {
 		}
 	}
 	return nil
+}
+
+// migrateV1_11_0_toV1_12_0 adds the two new columns of the audit table,
+// related_entity_id and commit_hash, and reclassifies the legacy
+// TASK_STATUS_CHANGE entries whose destination state the stored data determines
+// beyond doubt (SPEC/VERSION.md § Migration 1.11.0 to 1.12.0).
+//
+// NO TABLE REBUILD. Both shape changes are new columns, and ALTER TABLE ADD
+// COLUMN carries each column's CHECK with it, so nothing about an existing
+// column changes: entity_type keeps its CHECK(entity_type IN ('TASK', 'SPRINT'))
+// unaltered, entity_id keeps its definition, and no constraint is widened,
+// narrowed, or added to a column that already exists. The migration is therefore
+// two guarded ALTER TABLE statements and three UPDATE statements — no
+// replacement table, no row copy, no drop, and no rename.
+//
+// The physical column order consequently differs between a migrated and a fresh
+// database, and NOTHING MAY DEPEND ON IT. ADD COLUMN appends, so a migrated
+// audit table ends `... entity_id, performed_at, related_entity_id,
+// commit_hash`, while a fresh one ends `... entity_id, related_entity_id,
+// commit_hash, performed_at`. The two are equivalent because every statement in
+// this package names its columns explicitly and none uses SELECT * or positional
+// binding. Reordering them would require the rebuild this migration refuses.
+//
+// NEITHER NEW COLUMN IS BACKFILLED, and there is no truthful backfill available
+// for either. commit_hash records which commit a task was started from or
+// concluded at, and Groadmap runs no git command and reads no repository; the
+// two columns that could have supplied a value, tasks.commit_open and
+// tasks.commit_close, arrived only at 1.11.0 and are NULL for every task older
+// than it. related_entity_id records the counterpart entity of the operation
+// that wrote the row, and a stored SPRINT_ADD_TASK row names its sprint and
+// nothing else — sprint_tasks says which tasks are members NOW, which is a
+// different question and cannot say which of them a given row was about.
+//
+// Idempotent: each ADD COLUMN is guarded INDEPENDENTLY by its own columnExists
+// check, so re-running the migration is a no-op rather than a "duplicate column
+// name" error, and a database that somehow carries one column and not the other
+// is brought to the full shape. The three UPDATE statements are idempotent by
+// construction: a row the first run rewrites no longer carries
+// TASK_STATUS_CHANGE, so a second run matches nothing.
+//
+// No index is created on either column: neither is a filter, a sort key or a
+// join key for any audit read — the read statement's predicates are operation,
+// entity_type, entity_id and performed_at only — so an index would cost write
+// time on every audited operation and buy nothing.
+func migrateV1_11_0_toV1_12_0(tx *sql.Tx) error {
+	for _, column := range []struct {
+		name string
+		ddl  string
+	}{
+		{
+			name: "related_entity_id",
+			ddl:  `ALTER TABLE audit ADD COLUMN related_entity_id INTEGER CHECK(related_entity_id IS NULL OR related_entity_id > 0)`,
+		},
+		{
+			name: "commit_hash",
+			ddl:  `ALTER TABLE audit ADD COLUMN commit_hash TEXT CHECK(commit_hash IS NULL OR (length(commit_hash) BETWEEN 7 AND 64 AND commit_hash NOT GLOB '*[^0-9a-f]*'))`,
+		},
+	} {
+		exists, err := columnExists(tx, "audit", column.name)
+		if err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		if _, err := tx.Exec(column.ddl); err != nil {
+			return fmt.Errorf("adding audit.%s column: %w", column.name, err)
+		}
+	}
+
+	for _, step := range reclassifyStatusChangeSteps {
+		if _, err := tx.Exec(step.update); err != nil {
+			return fmt.Errorf("reclassifying TASK_STATUS_CHANGE entries as %s: %w", step.operation, err)
+		}
+	}
+
+	return nil
+}
+
+// reclassifyStatusChangeSteps rewrites the operation of a legacy
+// TASK_STATUS_CHANGE entry to the destination-specific operation ONLY WHERE THE
+// STORED DATA DETERMINES THAT DESTINATION BY EXACT EQUALITY (SPEC/VERSION.md
+// § Migration 1.11.0 to 1.12.0, Reclassifying TASK_STATUS_CHANGE). The rule has
+// no tolerance window, no nearest-match, and no ordering heuristic, and the
+// statements are transcribed from that section rather than generated, because
+// the specification's SQL is the contract.
+//
+// An entry is reclassified when its performed_at is exactly equal to exactly one
+// of the owning task's three lifecycle timestamps. It keeps TASK_STATUS_CHANGE
+// when its performed_at matches none of them (a transition to BACKLOG stamps no
+// timestamp, and a reopening clears the ones that would have matched), when it
+// matches more than one (two transitions recorded at the same instant leave no
+// evidence of which one the entry recorded), and when the task named by
+// entity_id no longer exists (a deleted task takes its timestamps with it).
+//
+// WHAT THE STATEMENTS DELIBERATELY DO NOT DO:
+//
+//   - They do not infer. Choosing the nearest timestamp, ordering the entries and
+//     assigning destinations by position, or reading a task's current status to
+//     guess the destination would each write a fact the database does not hold.
+//   - They do not touch TASK_UPDATE or SPRINT_UPDATE, whose entries record a
+//     field edit that stamps no timestamp anywhere, nor SPRINT_MOVE_TASK, whose
+//     entries name one sprint and no task. The `operation = 'TASK_STATUS_CHANGE'`
+//     predicate is what excludes them, and the `entity_type = 'TASK'` predicate
+//     keeps a sprint-scoped entry out even if its entity_id collided with a task
+//     id.
+//   - They delete and renumber nothing. No DELETE, no id rewrite, no compaction:
+//     afterwards the table holds exactly the entries it held before, with the
+//     same id and performed_at values, and only some operation values changed.
+//   - They write no audit entry of their own. A migration is not a roadmap
+//     operation.
+//
+// The three are independent of each other and of their order: the exclusion
+// clauses make their WHERE conditions mutually exclusive, so no entry can satisfy
+// two of them. `t.started_at = audit.performed_at` is false when t.started_at is
+// NULL, because a comparison with NULL yields NULL rather than true, so the NULL
+// cases need no extra guard on the matched timestamp — only on the two excluded
+// ones.
+var reclassifyStatusChangeSteps = []struct {
+	operation string
+	update    string
+}{
+	{
+		operation: "TASK_STATUS_DOING",
+		update: `
+UPDATE audit
+SET operation = 'TASK_STATUS_DOING'
+WHERE operation = 'TASK_STATUS_CHANGE'
+  AND entity_type = 'TASK'
+  AND EXISTS (
+      SELECT 1 FROM tasks t
+      WHERE t.id = audit.entity_id
+        AND t.started_at = audit.performed_at
+        AND (t.tested_at IS NULL OR t.tested_at <> audit.performed_at)
+        AND (t.closed_at IS NULL OR t.closed_at <> audit.performed_at)
+  )`,
+	},
+	{
+		operation: "TASK_STATUS_TESTING",
+		update: `
+UPDATE audit
+SET operation = 'TASK_STATUS_TESTING'
+WHERE operation = 'TASK_STATUS_CHANGE'
+  AND entity_type = 'TASK'
+  AND EXISTS (
+      SELECT 1 FROM tasks t
+      WHERE t.id = audit.entity_id
+        AND t.tested_at = audit.performed_at
+        AND (t.started_at IS NULL OR t.started_at <> audit.performed_at)
+        AND (t.closed_at IS NULL OR t.closed_at <> audit.performed_at)
+  )`,
+	},
+	{
+		operation: "TASK_STATUS_COMPLETED",
+		update: `
+UPDATE audit
+SET operation = 'TASK_STATUS_COMPLETED'
+WHERE operation = 'TASK_STATUS_CHANGE'
+  AND entity_type = 'TASK'
+  AND EXISTS (
+      SELECT 1 FROM tasks t
+      WHERE t.id = audit.entity_id
+        AND t.closed_at = audit.performed_at
+        AND (t.started_at IS NULL OR t.started_at <> audit.performed_at)
+        AND (t.tested_at IS NULL OR t.tested_at <> audit.performed_at)
+  )`,
+	},
 }

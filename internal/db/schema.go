@@ -7,7 +7,7 @@ import (
 )
 
 // SchemaVersion is the current database schema version.
-const SchemaVersion = "1.11.0"
+const SchemaVersion = "1.12.0"
 
 // CreateSchema creates all database tables and indexes.
 // This implements the DDL from SPEC/DATABASE.md.
@@ -108,6 +108,8 @@ CREATE TABLE IF NOT EXISTS audit (
     operation TEXT NOT NULL,
     entity_type TEXT NOT NULL CHECK(entity_type IN ('TASK', 'SPRINT')),
     entity_id INTEGER NOT NULL,
+    related_entity_id INTEGER CHECK(related_entity_id IS NULL OR related_entity_id > 0),   -- Counterpart entity of the operation that produced the row; NULL when it has no counterpart
+    commit_hash TEXT CHECK(commit_hash IS NULL OR (length(commit_hash) BETWEEN 7 AND 64 AND commit_hash NOT GLOB '*[^0-9a-f]*')),   -- Git commit bracketing the work; NULL on every operation but two
     performed_at TEXT NOT NULL
 );
 
