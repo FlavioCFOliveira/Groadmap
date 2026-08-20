@@ -1915,6 +1915,51 @@ func (db *DB) RemoveTasksFromSprint(ctx context.Context, taskIDs []int) error {
 
 // ==================== AUDIT QUERIES ====================
 
+// ErrAuditCommitHashNotAllowed is returned when a caller attaches a commit hash
+// to an operation that does not carry one.
+var ErrAuditCommitHashNotAllowed = errors.New("audit operation does not carry a commit hash")
+
+// auditOptionalColumns holds the two nullable columns of an audit row, both NULL
+// unless a caller sets them.
+//
+// relatedEntityID has no setter yet and is therefore always NULL: the column is
+// written on every INSERT so that the writer already has the shape, but the
+// eight operation-and-command combinations that fill it — the two sides of a
+// sprint membership change, the two sprint rows of a move, and the two rows of a
+// dependency — are populated by the task that reworks those call sites
+// (SPEC/DATABASE.md § The Two Entities of a Relational Operation). Its exported
+// option constructor lands with them, so internal/db grows no exported helper
+// that no production code reaches.
+type auditOptionalColumns struct {
+	relatedEntityID *int
+	commitHash      *string
+}
+
+// AuditOption sets one of the two optional columns of the audit row LogAuditTx
+// writes.
+//
+// The variadic-option form is deliberate, and the alternatives were weighed.
+// Both columns are NULL on the great majority of the catalogue — 33 of the 43
+// operations carry neither — so the ~20 existing call sites must keep reading
+// as they do, naming only what they actually record. An options struct would
+// have made every one of them spell out a literal with two zero fields, and a
+// second constructor per column would have needed a third for the sites that
+// one day set both. A trailing option list leaves the common call untouched,
+// costs no allocation when none is passed, and takes a fourth column the same
+// way it took these two.
+type AuditOption func(*auditOptionalColumns)
+
+// WithCommitHash records the git commit bracketing a task's development work.
+// The value is the already-normalised, lowercase hash the transition also
+// writes to tasks.commit_open or tasks.commit_close — the audit row copies what
+// the transition was given rather than reading it back from the task
+// (SPEC/DATABASE.md § The Commit Hash of an Audit Entry).
+//
+// Only TASK_STATUS_DOING and TASK_STATUS_COMPLETED accept it; see LogAuditTx.
+func WithCommitHash(hash string) AuditOption {
+	return func(row *auditOptionalColumns) { row.commitHash = &hash }
+}
+
 // LogAuditTx inserts an audit row inside an existing transaction. It is the
 // only audit writer in the package, and every transactional site that writes
 // an audit row alongside a domain mutation calls it rather than spelling out
@@ -1928,10 +1973,30 @@ func (db *DB) RemoveTasksFromSprint(ctx context.Context, taskIDs []int) error {
 // back. A convenience wrapper that inserted one row outside a transaction used
 // to live here, reachable only from test fixtures; it is gone, and the
 // fixtures now seed through this function, which is the path production runs.
-func LogAuditTx(tx *sql.Tx, op models.AuditOperation, entityType models.EntityType, entityID int, performedAt string) error {
+//
+// Being the only writer is also what makes the commit-hash rule enforceable
+// rather than merely stated. SPEC/DATABASE.md § The Commit Hash of an Audit
+// Entry allows the column on exactly two operations and forbids it on the other
+// 41, and the table-wide invariant it states — no non-NULL commit_hash outside
+// TASK_STATUS_DOING and TASK_STATUS_COMPLETED — is checked here, once, instead
+// of being left to the discipline of each call site.
+func LogAuditTx(tx *sql.Tx, op models.AuditOperation, entityType models.EntityType, entityID int, performedAt string, opts ...AuditOption) error {
+	var row auditOptionalColumns
+	for _, opt := range opts {
+		opt(&row)
+	}
+
+	if row.commitHash != nil && !models.OperationCarriesCommitHash(op) {
+		return fmt.Errorf("%w: %s", ErrAuditCommitHashNotAllowed, op)
+	}
+
+	// The nullable columns are bound as *int and *string: database/sql converts
+	// a nil pointer to SQL NULL, which is what every operation that carries
+	// neither must store.
 	_, err := tx.Exec(
-		`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-		op, entityType, entityID, performedAt,
+		`INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		op, entityType, entityID, row.relatedEntityID, row.commitHash, performedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("inserting audit entry: %w", err)
@@ -1999,7 +2064,12 @@ func buildAuditEntriesQuery(f *AuditFilter) (string, []any) {
 	// backing string for every appended clause.
 	var qb strings.Builder
 	qb.Grow(256) // rough upper bound for SELECT + 7 clauses
-	qb.WriteString(`SELECT id, operation, entity_type, entity_id, performed_at FROM audit WHERE 1=1`)
+	// Columns are named explicitly and in the DDL's own order. A migrated audit
+	// table carries related_entity_id and commit_hash appended after
+	// performed_at, while a fresh one declares them before it, so no statement
+	// here may use SELECT * or bind by position (SPEC/VERSION.md § Migration
+	// 1.11.0 to 1.12.0).
+	qb.WriteString(`SELECT id, operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at FROM audit WHERE 1=1`)
 	args := make([]any, 0, 7)
 
 	if f.Operation != nil {
@@ -2042,18 +2112,41 @@ func scanAuditEntries(rows *sql.Rows) ([]models.AuditEntry, error) {
 	// `[]`, not `null`, per SPEC/DATA_FORMATS.md Implementation Notes #6
 	// (finding #53).
 	entries := []models.AuditEntry{}
+
+	var relatedEntityID sql.NullInt64
+	var commitHash sql.NullString
+
 	for rows.Next() {
 		var entry models.AuditEntry
+		relatedEntityID = sql.NullInt64{}
+		commitHash = sql.NullString{}
+
 		err := rows.Scan(
 			&entry.ID,
 			&entry.Operation,
 			&entry.EntityType,
 			&entry.EntityID,
+			&relatedEntityID,
+			&commitHash,
 			&entry.PerformedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning audit entry: %w", err)
 		}
+
+		// Each value is copied into a fresh variable before its address is
+		// taken. Pointing every entry at the loop-external scan variable would
+		// make the whole result share one backing value and report the LAST
+		// row's counterpart and hash on all of them.
+		if relatedEntityID.Valid {
+			v := int(relatedEntityID.Int64)
+			entry.RelatedEntityID = &v
+		}
+		if commitHash.Valid {
+			v := commitHash.String
+			entry.CommitHash = &v
+		}
+
 		entries = append(entries, entry)
 	}
 

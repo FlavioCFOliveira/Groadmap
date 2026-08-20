@@ -120,7 +120,10 @@ func taskRemove(args []string) error {
 //   - Sets closed_at and commit_close when transitioning to COMPLETED
 //   - Clears lifecycle dates and commit_close when reopening to BACKLOG,
 //     preserving commit_open
-//   - Logs TASK_STATUS_CHANGE audit entry
+//   - Logs one audit entry per task, named for the state the task entered
+//     (TASK_STATUS_BACKLOG, TASK_STATUS_DOING, TASK_STATUS_TESTING or
+//     TASK_STATUS_COMPLETED), carrying the supplied commit hash on the two
+//     transitions that record one
 //   - Outputs updated task IDs as JSON to stdout
 //
 // Complexity: O(n) where n is the number of tasks being updated
@@ -309,6 +312,15 @@ func taskSetStatus(args []string) error {
 		var query string
 		var args []any
 
+		// The audit operation names the DESTINATION state, and it is decided by
+		// the same switch that decides the UPDATE, so the row and the columns
+		// it describes can never disagree about where the task went
+		// (SPEC/COMMANDS.md § Change Status (stat), Audit). auditOpts carries
+		// the commit hash on the two transitions that record one and stays
+		// empty on the others.
+		var auditOp models.AuditOperation
+		var auditOpts []db.AuditOption
+
 		placeholders := database.Placeholders(len(ids))
 
 		switch newStatus {
@@ -322,6 +334,10 @@ func taskSetStatus(args []string) error {
 				placeholders,
 			)
 			args = append([]any{newStatus, now, *commitOpen}, makeInterfaceSlice(ids)...)
+			// The audit row takes the same normalised value the column takes,
+			// from the same variable, so the two cannot drift apart.
+			auditOp = models.OpTaskStatusDoing
+			auditOpts = []db.AuditOption{db.WithCommitHash(*commitOpen)}
 
 		case models.StatusTesting:
 			// Transition to TESTING: set tested_at. Neither commit column changes.
@@ -330,6 +346,7 @@ func taskSetStatus(args []string) error {
 				placeholders,
 			)
 			args = append([]any{newStatus, now}, makeInterfaceSlice(ids)...)
+			auditOp = models.OpTaskStatusTesting
 
 		case models.StatusCompleted:
 			// Transition to COMPLETED: set closed_at, completion_summary and commit_close.
@@ -340,6 +357,8 @@ func taskSetStatus(args []string) error {
 				placeholders,
 			)
 			args = append([]any{newStatus, now, completionSummary, *commitClose}, makeInterfaceSlice(ids)...)
+			auditOp = models.OpTaskStatusCompleted
+			auditOpts = []db.AuditOption{db.WithCommitHash(*commitClose)}
 
 		case models.StatusBacklog:
 			// Reopening to BACKLOG: clear all tracking dates, the completion
@@ -353,14 +372,22 @@ func taskSetStatus(args []string) error {
 				placeholders,
 			)
 			args = append([]any{newStatus}, makeInterfaceSlice(ids)...)
+			// No sprint is party to a `task stat` invocation, so this row names
+			// no counterpart. The same TASK_STATUS_BACKLOG operation written by
+			// `sprint remove-tasks` does name one, because there the sprint is
+			// the counterpart (SPEC/DATABASE.md § The Two Entities of a
+			// Relational Operation).
+			auditOp = models.OpTaskStatusBacklog
 
 		default:
-			// Other status changes: just update status
-			query = fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
-				"UPDATE tasks SET status = ? WHERE id IN (%s)",
-				placeholders,
-			)
-			args = append([]any{newStatus}, makeInterfaceSlice(ids)...)
+			// Unreachable, and a guard rather than a fall-through. ParseTaskStatus
+			// admits five values, the SPRINT target is rejected before the database
+			// is opened, and the four cases above cover the rest. A generic "just
+			// update the status" branch would let a sixth state reach the audit
+			// write with no operation of its own and store a row that names no
+			// destination, which is the one thing a destination-named catalogue
+			// cannot express (SPEC/DATABASE.md § One Row per Thing That Happened).
+			return fmt.Errorf("%w: no status update is defined for %s", utils.ErrValidation, newStatus)
 		}
 
 		_, err := tx.Exec(query, args...)
@@ -368,9 +395,12 @@ func taskSetStatus(args []string) error {
 			return err
 		}
 
-		// Log audit with same timestamp
+		// One row per task, each naming its own task and all sharing the one
+		// timestamp captured for the invocation. The write is inside the same
+		// transaction as the UPDATE above, so a batch that fails anywhere
+		// leaves the audit table untouched.
 		for _, id := range ids {
-			if err := db.LogAuditTx(tx, models.OpTaskStatusChange, models.EntityTask, id, now); err != nil {
+			if err := db.LogAuditTx(tx, auditOp, models.EntityTask, id, now, auditOpts...); err != nil {
 				return err
 			}
 		}

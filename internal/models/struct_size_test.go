@@ -19,6 +19,7 @@ var specifiedLayouts = []struct {
 }{
 	{"Task", Task{}, 248, "SPEC/MODELS.md § Memory Layout Optimization, Task struct"},
 	{"SprintStats", SprintStats{}, 112, "SPEC/MODELS.md § Memory Layout Optimization, SprintStats struct"},
+	{"AuditEntry", AuditEntry{}, 80, "SPEC/MODELS.md § Memory Layout Optimization, AuditEntry struct"},
 	{"TaskComment", TaskComment{}, 72, "SPEC/MODELS.md § Memory Layout Optimization, TaskComment and SprintComment structs"},
 	{"SprintComment", SprintComment{}, 72, "SPEC/MODELS.md § Memory Layout Optimization, TaskComment and SprintComment structs"},
 }

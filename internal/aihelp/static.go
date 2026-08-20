@@ -205,6 +205,21 @@ var auditOperationDescriptions = map[models.AuditOperation]string{
 		"technical_requirements, acceptance_criteria). A type change made through " +
 		"`task edit` is recorded here, not under a dedicated operation.",
 	models.OpTaskDelete: "Task deleted (only allowed while in BACKLOG; see Delete Task precondition).",
+
+	// Task status. Five operations, one per destination state, each
+	// transcribed from the catalogue entry that describes it.
+	models.OpTaskStatusBacklog: "Task entered `BACKLOG`. Written by `task stat <ids> BACKLOG` and by " +
+		"`sprint remove-tasks`, one row per task in either case. From `sprint remove-tasks` the row names " +
+		"the sprint the task left in `related_entity_id`; from `task stat` no sprint is party to the " +
+		"operation and `related_entity_id` is NULL.",
+	models.OpTaskStatusSprint: "Task entered `SPRINT`. Written by `sprint add-tasks` only, one row per " +
+		"task, naming the sprint the task entered in `related_entity_id`; `task stat` cannot set `SPRINT`, " +
+		"so no other command writes this operation and every row of it names a sprint.",
+	models.OpTaskStatusDoing: "Task entered `DOING` via `task stat`, one row per task. The row carries " +
+		"the `commit_hash` supplied as `--commit-open`.",
+	models.OpTaskStatusTesting: "Task entered `TESTING` via `task stat`, one row per task.",
+	models.OpTaskStatusCompleted: "Task entered `COMPLETED` via `task stat`, one row per task. The row " +
+		"carries the `commit_hash` supplied as `--commit-close`.",
 	models.OpTaskStatusChange: "Every status change made by `task stat`, whatever the source and target " +
 		"state, including `SPRINT` → `BACKLOG` and `COMPLETED` → `BACKLOG`. Status changes made as a " +
 		"side effect of a sprint operation are logged against the sprint instead, as `SPRINT_ADD_TASK` / " +

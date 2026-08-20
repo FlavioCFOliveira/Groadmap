@@ -1210,6 +1210,17 @@ func TestLogAuditTxWritesEveryColumn(t *testing.T) {
 	if got.ID == 0 {
 		t.Error("expected the row to carry a non-zero id")
 	}
+	// The two nullable columns, on an operation that carries neither. A NULL
+	// here means "this operation had no counterpart and no commit", and it is
+	// what every operation outside the ten that fill one of the two stores.
+	if got.RelatedEntityID != nil {
+		t.Errorf("related_entity_id = %d, want NULL: SPRINT_DELETE names no counterpart "+
+			"(SPEC/DATABASE.md § The Two Entities of a Relational Operation)", *got.RelatedEntityID)
+	}
+	if got.CommitHash != nil {
+		t.Errorf("commit_hash = %q, want NULL: only TASK_STATUS_DOING and TASK_STATUS_COMPLETED "+
+			"carry one (SPEC/DATABASE.md § The Commit Hash of an Audit Entry)", *got.CommitHash)
+	}
 }
 
 // TestLogAuditTxRollsBackWithItsTransaction proves the audit row shares the

@@ -650,10 +650,13 @@ func TestTaskStat_CompletedWritesCommitCloseAndKeepsCommitOpen(t *testing.T) {
 }
 
 // TestTaskStat_AuditRecordsTheTransitionOnlyWhenItHappens checks that the audit
-// trail agrees with the columns. A commit-writing transition records the same
-// TASK_STATUS_CHANGE operation as any other status change — the feature invents
-// no operation of its own — and a rejected transition records nothing, which is
-// the audit-side proof that the rejection really did precede every write.
+// trail agrees with the columns. An accepted transition records exactly one
+// entry, named for the state the task entered, and a rejected transition records
+// nothing — which is the audit-side proof that the rejection really did precede
+// every write.
+//
+// What the entry says about the commit hash it carries is pinned separately, in
+// task_status_audit_test.go; this test is about the count.
 func TestTaskStat_AuditRecordsTheTransitionOnlyWhenItHappens(t *testing.T) {
 	f := setupCommitTrackingRoadmap(t, "commit-audit-trail")
 
@@ -674,12 +677,16 @@ func TestTaskStat_AuditRecordsTheTransitionOnlyWhenItHappens(t *testing.T) {
 		t.Fatalf("audit operations after an accepted transition = %v, want exactly one more entry than %v",
 			after, before)
 	}
-	gained := countOperation(after, string(models.OpTaskStatusChange)) -
-		countOperation(before, string(models.OpTaskStatusChange))
+	gained := countOperation(after, string(models.OpTaskStatusDoing)) -
+		countOperation(before, string(models.OpTaskStatusDoing))
 	if gained != 1 {
-		t.Errorf("the accepted transition added %d %s entries (%v → %v), want exactly 1; the commit "+
-			"fields are recorded by the ordinary status-change entry, not by an operation of their own",
-			gained, models.OpTaskStatusChange, before, after)
+		t.Errorf("the accepted transition added %d %s entries (%v → %v), want exactly 1; the entry names "+
+			"the state the task entered, so an entry into DOING adds one and only one of them",
+			gained, models.OpTaskStatusDoing, before, after)
+	}
+	if n := countOperation(after, string(models.OpTaskStatusChange)); n != 0 {
+		t.Errorf("the transition wrote %d %s entries; that operation is LEGACY and no code path may "+
+			"produce one (SPEC/DATABASE.md § audit Table, Legacy)", n, models.OpTaskStatusChange)
 	}
 }
 

@@ -94,8 +94,16 @@ class TestAuditReporting:
         # Check audit log
         result = self.test.run_cmd_json(["audit", "list", "-r", roadmap])
 
-        status_changes = [e for e in result if e["operation"] == "TASK_STATUS_CHANGE"]
-        assert len(status_changes) >= 3  # At least DOING, TESTING, COMPLETED
+        # An entry names the state the task ENTERED, so the three transitions
+        # above leave three different operations rather than three copies of one
+        # (SPEC/DATABASE.md - One Row per Thing That Happened).
+        operations = [e["operation"] for e in result]
+        for entered in ("TASK_STATUS_DOING", "TASK_STATUS_TESTING", "TASK_STATUS_COMPLETED"):
+            assert entered in operations, f"{entered} missing from {operations}"
+
+        # TASK_STATUS_CHANGE is LEGACY: readable, so the rows a pre-1.12.0
+        # binary wrote stay reachable by name, but never written again.
+        assert "TASK_STATUS_CHANGE" not in operations
 
         print("✓ Audit log tracks status changes test passed")
 
