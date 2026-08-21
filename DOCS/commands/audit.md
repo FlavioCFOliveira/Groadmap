@@ -33,39 +33,89 @@ Lists audit log entries with optional filters.
 
 **Operation Types:**
 
+The canonical catalogue is `SPEC/DATABASE.md` § `audit` Table. Each operation
+names what happened, so a reader learns the outcome from the operation alone.
+
 **Task Operations:**
-- `TASK_CREATE` - Task created
-- `TASK_UPDATE` - Task updated
-- `TASK_DELETE` - Task deleted
-- `TASK_STATUS_CHANGE` - Task status changed
-- `TASK_PRIORITY_CHANGE` - Task priority changed
-- `TASK_SEVERITY_CHANGE` - Task severity changed
-- `TASK_REOPEN` - Task reopened to BACKLOG
+- `TASK_CREATE` - Task created via `task create`
+- `TASK_DELETE` - Task deleted via `task remove` (BACKLOG only)
+
+**Task Status Operations:** one per destination state, written by `task stat`
+unless noted.
+- `TASK_STATUS_BACKLOG` - Task entered BACKLOG (also written by `sprint remove-tasks`)
+- `TASK_STATUS_SPRINT` - Task entered SPRINT (written by `sprint add-tasks` only)
+- `TASK_STATUS_DOING` - Task entered DOING; carries the `--commit-open` hash
+- `TASK_STATUS_TESTING` - Task entered TESTING
+- `TASK_STATUS_COMPLETED` - Task entered COMPLETED; carries the `--commit-close` hash
+
+**Task Field Operations:** one per field an edit supplies, one entry per field.
+- `TASK_TITLE_CHANGE` - `title` supplied to `task edit`
+- `TASK_TYPE_CHANGE` - `type` supplied to `task edit`
+- `TASK_FUNCTIONAL_REQUIREMENTS_CHANGE` - `functional_requirements` supplied to `task edit`
+- `TASK_TECHNICAL_REQUIREMENTS_CHANGE` - `technical_requirements` supplied to `task edit`
+- `TASK_ACCEPTANCE_CRITERIA_CHANGE` - `acceptance_criteria` supplied to `task edit`
+- `TASK_PRIORITY_CHANGE` - Priority changed via `task prio` or `task edit -p`
+- `TASK_SEVERITY_CHANGE` - Severity changed via `task sev` or `task edit --severity`
+- `TASK_REOPEN` - Task returned to BACKLOG via `task reopen`
+
+**Task Dependency Operations:** two entries each, one against each task of the pair.
 - `TASK_ADD_DEP` - Dependency edge added between tasks
 - `TASK_REMOVE_DEP` - Dependency edge removed between tasks
 
+**Comment Operations:** recorded against the PARENT entity; the comment's own id
+never appears in the log.
+- `TASK_COMMENT_CREATE` - Comment added to a task
+- `TASK_COMMENT_UPDATE` - Task comment edited
+- `TASK_COMMENT_DELETE` - Task comment deleted
+- `SPRINT_COMMENT_CREATE` - Comment added to a sprint
+- `SPRINT_COMMENT_UPDATE` - Sprint comment edited
+- `SPRINT_COMMENT_DELETE` - Sprint comment deleted
+
 **Sprint Operations:**
 - `SPRINT_CREATE` - Sprint created
-- `SPRINT_UPDATE` - Sprint updated
 - `SPRINT_DELETE` - Sprint deleted
-- `SPRINT_START` - Sprint started
-- `SPRINT_CLOSE` - Sprint closed
-- `SPRINT_REOPEN` - Sprint reopened
+- `SPRINT_START` - Sprint started (PENDING to OPEN)
+- `SPRINT_CLOSE` - Sprint closed (OPEN to CLOSED)
+- `SPRINT_REOPEN` - Sprint reopened (CLOSED to OPEN)
+
+**Sprint Field Operations:** one per column an update supplies.
+- `SPRINT_TITLE_CHANGE` - `title` supplied to `sprint update`
+- `SPRINT_DESCRIPTION_CHANGE` - `description` supplied to `sprint update`
+- `SPRINT_MAX_TASKS_CHANGE` - `max_tasks` supplied to `sprint update`
+- `SPRINT_ORDER_CHANGE` - `order_index` supplied to `sprint update`
+
+**Sprint Membership Operations:** one entry per task, against the sprint, naming
+the task in `related_entity_id`.
 - `SPRINT_ADD_TASK` - Task added to sprint
 - `SPRINT_REMOVE_TASK` - Task removed from sprint
-- `SPRINT_MOVE_TASK` - Task moved between sprints
+- `SPRINT_MOVE_TASK_OUT` - Task left a sprint in a move; written against the source sprint
+- `SPRINT_MOVE_TASK_IN` - Task entered a sprint in a move; written against the destination sprint
 
 **Sprint Task Ordering Operations:**
 - `SPRINT_REORDER_TASKS` - Tasks reordered in sprint
 - `SPRINT_TASK_MOVE_POSITION` - Task moved to specific position
 - `SPRINT_TASK_SWAP` - Tasks swapped positions
 
-**Output:** JSON array of audit-entry objects, newest first (`performed_at` DESC). Each object has keys `id`, `operation`, `entity_type`, `entity_id`, and `performed_at`.
+**Legacy Operations:** no command writes these. They are accepted by
+`--operation` because rows recorded before schema 1.12.0 may still carry them;
+on a roadmap written at 1.12.0 or later each returns an empty array.
+- `TASK_STATUS_CHANGE` - Replaced by the five `TASK_STATUS_*` operations
+- `TASK_UPDATE` - Replaced by the per-field task operations
+- `SPRINT_UPDATE` - Replaced by the per-field sprint operations
+- `SPRINT_MOVE_TASK` - Replaced by `SPRINT_MOVE_TASK_OUT` and `SPRINT_MOVE_TASK_IN`
+
+**Output:** JSON array of audit-entry objects, newest first (`performed_at` DESC).
+Each object has seven keys: `id`, `operation`, `entity_type`, `entity_id`,
+`performed_at`, `related_entity_id`, and `commit_hash`. The last two are `null` on
+the operations that do not use them. `commit_hash` records the git commit that
+brackets a task's development work and is written on `TASK_STATUS_DOING`, which
+carries the commit the work started from, and on `TASK_STATUS_COMPLETED`, which
+carries the commit that concluded the task. No other operation records one.
 
 **Examples:**
 ```bash
 rmp audit list -r project1
-rmp audit ls -r project1 -o TASK_STATUS_CHANGE
+rmp audit ls -r project1 -o TASK_STATUS_DOING
 rmp audit ls -r project1 -e TASK --since 2026-03-01T00:00:00.000Z
 rmp audit list -r project1 --since 2026-01-01 --until 2026-01-31 -l 500
 ```
@@ -95,7 +145,7 @@ Equivalent to `rmp audit list -r <roadmap> -e <type> --entity-id <id>` without p
 |------------|------------|------|-----------|
 | `-r` | `--roadmap` | string | Roadmap name (required) |
 
-**Output:** JSON array of audit entries for the entity
+**Output:** JSON array of audit entries for the entity, newest first, with the same seven keys `list` returns
 
 **Examples:**
 ```bash

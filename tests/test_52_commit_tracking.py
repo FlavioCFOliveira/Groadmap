@@ -51,6 +51,22 @@ Schema migration (SPEC/VERSION.md § Migration 1.10.0 -> 1.11.0):
   18. a 1.10.0-shape database gains both columns on the next open, its existing
       tasks survive with both fields null, and the migrated table enforces the
       same commit rule a freshly created one does.
+
+The audit side of the same transition (SPEC/DATABASE.md § The Commit Hash of an
+Audit Entry). The task columns above say where a task stands NOW; the audit log
+says what happened and at which commit, and it is the only surface that survives
+a reopening. The unit tests in internal/db cover the write; these prove the hash
+reaches a reader of the shipped binary:
+  19. `audit history TASK <id>` publishes all seven keys, and TASK_STATUS_DOING
+      and TASK_STATUS_COMPLETED carry the supplied hash, lowercased and equal to
+      the task's own commit_open / commit_close
+  20. NO other operation in the whole log carries a commit_hash
+  21. `task reopen` clears tasks.commit_close, yet the TASK_STATUS_COMPLETED
+      entry written before it keeps its hash — the historical record of the
+      commit that once concluded the task survives the reopening
+  22. a re-entry into DOING writes a SECOND TASK_STATUS_DOING entry with the new
+      hash while the first entry keeps the old one, so the log holds both
+      commits the work started from and the task column holds only the latest
 """
 
 import os
@@ -734,6 +750,250 @@ class TestCommitColumnsMigration:
             con.close()
 
 
+# The seven keys SPEC/COMMANDS.md § List Audit Log requires on every entry of
+# `audit list` and `audit history`. Pinned as a set rather than asserted key by
+# key so an entry that GAINS an undocumented key fails here too, which is what
+# caught commit_hash being absent from the command help while present in the
+# output.
+AUDIT_ENTRY_KEYS = {
+    "id", "operation", "entity_type", "entity_id", "performed_at",
+    "related_entity_id", "commit_hash",
+}
+
+# The two operations that carry a hash, and no others
+# (SPEC/DATABASE.md § The Commit Hash of an Audit Entry).
+COMMIT_CARRYING_OPERATIONS = {"TASK_STATUS_DOING", "TASK_STATUS_COMPLETED"}
+
+
+class TestAuditCommitHash:
+    """The audit log records the commit that brackets a task's development work.
+
+    This is the reader-facing half of the feature. `task get` shows where a task
+    stands now and loses commit_close the moment the task is reopened; the audit
+    log is immutable and therefore the only place the history survives. Every
+    assertion here goes through the compiled binary, never through SQL, because
+    what is under test is what a consumer of `rmp audit` actually receives.
+    """
+
+    def setup_method(self):
+        self.test = GroadmapTestBase()
+        self.test.setup()
+        self.roadmap = self.test.create_roadmap("payment-ledger-reconciliation")
+        self.sprint_id = self.test.create_sprint(
+            self.roadmap,
+            "Reconcile the settlement ledger against the acquirer statements",
+            title="Ledger reconciliation",
+        )
+
+    def teardown_method(self):
+        self.test.teardown()
+
+    # -- fixture helpers ---------------------------------------------------
+
+    def _new_task(self, title: str) -> int:
+        task_id = self.test.create_task(
+            self.roadmap,
+            title=title,
+            functional_requirements="Every settled payment matches exactly one acquirer line.",
+            technical_requirements="Reconcile on the acquirer reference, not on the amount.",
+            acceptance_criteria="A full day of settlements reconciles with no residual.",
+        )
+        self.test.run_cmd([
+            "sprint", "add-tasks", "-r", self.roadmap, str(self.sprint_id), str(task_id)
+        ])
+        return task_id
+
+    def _start_sprint(self):
+        self.test.run_cmd(["sprint", "start", "-r", self.roadmap, str(self.sprint_id)])
+
+    def _stat(self, task_id: int, status: str, *extra: str):
+        return self.test.run_cmd(
+            ["task", "stat", "-r", self.roadmap, str(task_id), status] + list(extra)
+        )
+
+    def _history(self, task_id: int) -> list:
+        """The task's audit entries, newest first, as the binary returns them."""
+        return self.test.run_cmd_json(
+            ["audit", "history", "-r", self.roadmap, "TASK", str(task_id)]
+        )
+
+    def _entries(self, task_id: int, operation: str) -> list:
+        """Every entry of one operation, oldest first, so index 0 is the first
+        time it happened."""
+        matching = [e for e in self._history(task_id) if e["operation"] == operation]
+        return list(reversed(matching))
+
+    def _task(self, task_id: int) -> dict:
+        return self.test.run_cmd_json(["task", "get", "-r", self.roadmap, str(task_id)])[0]
+
+    # -- 19: the two carriers publish the hash -----------------------------
+
+    def test_the_two_bracketing_entries_carry_the_supplied_hash(self):
+        task_id = self._new_task("Match the acquirer settlement file to the ledger")
+        self._start_sprint()
+
+        # Supplied uppercase on purpose: the audit entry must show the same
+        # lowercase value the task column stores, not the raw input.
+        self._stat(task_id, "DOING", "--commit-open", "4F5BA9B")
+        self._stat(task_id, "TESTING")
+        self._stat(task_id, "COMPLETED", "--commit-close", "4C4CCEA",
+                   "--summary", "A full settlement day reconciles with no residual.")
+
+        history = self._history(task_id)
+        assert history, "audit history returned nothing for a task that moved four times"
+        for entry in history:
+            assert set(entry) == AUDIT_ENTRY_KEYS, (
+                f"audit entry {entry.get('id')} publishes {sorted(entry)}, want "
+                f"{sorted(AUDIT_ENTRY_KEYS)} (SPEC/COMMANDS.md § List Audit Log, JSON Output)"
+            )
+
+        doing = self._entries(task_id, "TASK_STATUS_DOING")
+        completed = self._entries(task_id, "TASK_STATUS_COMPLETED")
+        assert len(doing) == 1, f"want one TASK_STATUS_DOING entry, got {len(doing)}"
+        assert len(completed) == 1, f"want one TASK_STATUS_COMPLETED entry, got {len(completed)}"
+
+        assert doing[0]["commit_hash"] == "4f5ba9b", (
+            "TASK_STATUS_DOING must carry the --commit-open value, lowercased "
+            "(SPEC/DATABASE.md § The Commit Hash of an Audit Entry)"
+        )
+        assert completed[0]["commit_hash"] == "4c4ccea", (
+            "TASK_STATUS_COMPLETED must carry the --commit-close value, lowercased"
+        )
+
+        task = self._task(task_id)
+        assert doing[0]["commit_hash"] == task["commit_open"], (
+            "the audit entry and the task column must hold the same value"
+        )
+        assert completed[0]["commit_hash"] == task["commit_close"], (
+            "the audit entry and the task column must hold the same value"
+        )
+        print("✓ the DOING and COMPLETED entries carry the bracketing commits, lowercased")
+
+    # -- 20: nothing else carries one --------------------------------------
+
+    def test_no_other_operation_carries_a_commit_hash(self):
+        """SPEC/DATABASE.md § The Commit Hash of an Audit Entry, criterion 3.
+
+        The fixture deliberately exercises operations of every family that
+        surrounds a transition — create, membership, an edit, a priority change,
+        a dependency, a comment, and the sprint lifecycle — so the assertion is
+        made against a log that has something to be wrong about.
+        """
+        first = self._new_task("Reconcile the chargeback ledger")
+        second = self._new_task("Backfill the acquirer reference on settled rows")
+        self._start_sprint()
+
+        self.test.run_cmd(["task", "add-dep", "-r", self.roadmap, str(first), str(second)])
+        self.test.run_cmd(["task", "edit", "-r", self.roadmap, str(first),
+                           "-t", "Reconcile the chargeback ledger against the acquirer"])
+        self.test.run_cmd(["task", "prio", "-r", self.roadmap, str(first), "7"])
+        self.test.run_cmd(["task", "sev", "-r", self.roadmap, str(first), "6"])
+
+        for task_id in (second, first):
+            self._stat(task_id, "DOING", "--commit-open", OPEN_FIRST)
+            self._stat(task_id, "TESTING")
+            self._stat(task_id, "COMPLETED", "--commit-close", CLOSE_HASH,
+                       "--summary", "The residual is zero for the sampled day.")
+
+        self.test.run_cmd(["sprint", "close", "-r", self.roadmap, str(self.sprint_id)])
+
+        entries = self.test.run_cmd_json(
+            ["audit", "list", "-r", self.roadmap, "-l", "500"]
+        )
+        operations = {e["operation"] for e in entries}
+        assert len(operations) >= 6, (
+            f"the fixture produced only {sorted(operations)}; this assertion is "
+            "worth nothing unless the log holds a variety of operations"
+        )
+
+        offenders = [
+            (e["id"], e["operation"], e["commit_hash"])
+            for e in entries
+            if e["commit_hash"] is not None
+            and e["operation"] not in COMMIT_CARRYING_OPERATIONS
+        ]
+        assert offenders == [], (
+            f"these entries carry a commit_hash on an operation that must not have "
+            f"one: {offenders} (SPEC/DATABASE.md § The Commit Hash of an Audit "
+            f"Entry, criterion 3)"
+        )
+
+        carriers = [e for e in entries if e["operation"] in COMMIT_CARRYING_OPERATIONS]
+        assert len(carriers) == 4, f"want four bracketing entries, got {len(carriers)}"
+        for entry in carriers:
+            assert entry["commit_hash"] is not None, (
+                f"entry {entry['id']} is a {entry['operation']} with no commit_hash; "
+                "the two carrying operations always record one"
+            )
+        print("✓ only TASK_STATUS_DOING and TASK_STATUS_COMPLETED carry a commit_hash")
+
+    # -- 21: the record outlives the reopening -----------------------------
+
+    def test_the_completed_entry_keeps_its_hash_after_a_reopen(self):
+        """SPEC/DATABASE.md § The Commit Hash of an Audit Entry, criterion 4."""
+        task_id = self._new_task("Settle the residual on the acquirer statement")
+        self._start_sprint()
+
+        self._stat(task_id, "DOING", "--commit-open", OPEN_FIRST)
+        self._stat(task_id, "TESTING")
+        self._stat(task_id, "COMPLETED", "--commit-close", CLOSE_HASH,
+                   "--summary", "The residual clears against the statement.")
+
+        before = self._entries(task_id, "TASK_STATUS_COMPLETED")
+        assert len(before) == 1 and before[0]["commit_hash"] == CLOSE_HASH
+
+        self.test.run_cmd(["task", "reopen", "-r", self.roadmap, str(task_id)])
+
+        task = self._task(task_id)
+        assert task["commit_close"] is None, (
+            "task reopen must clear tasks.commit_close (SPEC/COMMANDS.md § Reopen Task)"
+        )
+        assert task["commit_open"] == OPEN_FIRST, (
+            "task reopen must preserve tasks.commit_open"
+        )
+
+        after = self._entries(task_id, "TASK_STATUS_COMPLETED")
+        assert len(after) == 1, (
+            f"the reopening changed the number of TASK_STATUS_COMPLETED entries "
+            f"from 1 to {len(after)}; audit entries are immutable"
+        )
+        assert after[0]["id"] == before[0]["id"], "the historical entry was replaced"
+        assert after[0]["commit_hash"] == CLOSE_HASH, (
+            "the commit that once concluded the task must survive the reopening in "
+            "the audit log even though the task no longer names it"
+        )
+
+        reopen_entries = self._entries(task_id, "TASK_REOPEN")
+        assert len(reopen_entries) == 1, f"want one TASK_REOPEN entry, got {len(reopen_entries)}"
+        assert reopen_entries[0]["commit_hash"] is None, (
+            "TASK_REOPEN must not copy the task's stored commit values onto itself"
+        )
+        print("✓ the concluding commit survives a reopen in the log, not on the task")
+
+    # -- 22: both starts are in the log ------------------------------------
+
+    def test_a_re_entry_into_doing_adds_a_second_entry(self):
+        task_id = self._new_task("Rebuild the settlement index")
+        self._start_sprint()
+
+        self._stat(task_id, "DOING", "--commit-open", OPEN_FIRST)
+        self._stat(task_id, "TESTING")
+        self._stat(task_id, "DOING", "-co", OPEN_SECOND)
+
+        doing = self._entries(task_id, "TASK_STATUS_DOING")
+        assert len(doing) == 2, f"want two TASK_STATUS_DOING entries, got {len(doing)}"
+        assert [e["commit_hash"] for e in doing] == [OPEN_FIRST, OPEN_SECOND], (
+            "the log must hold both commits the work started from, oldest first; "
+            "got " + repr([e["commit_hash"] for e in doing])
+        )
+
+        assert self._task(task_id)["commit_open"] == OPEN_SECOND, (
+            "the task column holds the latest start only "
+            "(SPEC/STATE_MACHINE.md § Commit Tracking Fields, rule 2)"
+        )
+        print("✓ a re-entry into DOING adds an entry rather than rewriting the first")
+
+
 def _run_all():
     passed = 0
     failed = 0
@@ -741,7 +1001,8 @@ def _run_all():
     # Every class in the module, so a suite added below the runner is not
     # silently skipped — which is exactly what happened when the migration and
     # hash-shape suites were first appended.
-    for cls in (TestCommitTracking, TestCommitHashShapes, TestCommitColumnsMigration):
+    for cls in (TestCommitTracking, TestAuditCommitHash, TestCommitHashShapes,
+                TestCommitColumnsMigration):
         for name in sorted(m for m in dir(cls) if m.startswith("test_")):
             label = f"{cls.__name__}.{name}"
             instance = cls()

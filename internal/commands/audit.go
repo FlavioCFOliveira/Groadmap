@@ -38,9 +38,14 @@ Filters:
   -l, --limit <n>                 Maximum entries returned (range 1-500, default 100)
 
 Output (stdout JSON):
-  Array of audit entries:
+  Array of audit entries. Every entry carries all seven keys; the last two
+  are null on the operations that do not use them:
     [{ "id": <int>, "operation": "...", "entity_type": "TASK|SPRINT",
-       "entity_id": <int>, "performed_at": "<ISO 8601>" }, ...]
+       "entity_id": <int>, "performed_at": "<ISO 8601>",
+       "related_entity_id": <int> or null, "commit_hash": "<hex>" or null }, ...]
+  commit_hash is non-null on TASK_STATUS_DOING, which carries the commit the
+  work started from, and on TASK_STATUS_COMPLETED, which carries the commit
+  that concluded it. No other operation records one.
 
 Exit codes:
   0  Success
@@ -438,7 +443,11 @@ Options (stats):
 
 Output (stdout JSON):
   list, history       Array of audit-entry objects, performed_at DESC.
-                       Keys: id, operation, entity_type, entity_id, performed_at.
+                       Keys: id, operation, entity_type, entity_id, performed_at,
+                       related_entity_id, commit_hash. The last two are null on
+                       the operations that do not use them; commit_hash is
+                       written on TASK_STATUS_DOING and TASK_STATUS_COMPLETED
+                       alone.
   stats               AuditStats: total_entries, first_entry_at, last_entry_at,
                        by_operation (map), by_entity_type (map).
 
