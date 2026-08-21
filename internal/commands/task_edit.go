@@ -11,6 +11,28 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
+// taskEditTextFields ties each free-text column `task edit` can write to the
+// published name its validation messages use for that column and to the maximum
+// the column accepts. One table, so the three rules applied below cannot
+// disagree about which columns are free text and — the point of it — cannot
+// disagree about what to call one of them.
+//
+// The order is the order the fields are declared in SPEC/COMMANDS.md, and each
+// rule is applied in that order, so an invocation that breaks one rule on two
+// fields always names the same one. The two maps this replaced were iterated in
+// Go's randomised map order, so which of two offending fields got named varied
+// between runs of the identical command.
+var taskEditTextFields = []struct {
+	column string
+	limit  int
+	field  utils.Field
+}{
+	{"title", models.MaxTaskTitle, utils.FieldTaskTitle},
+	{"functional_requirements", models.MaxTaskFunctionalRequirements, utils.FieldTaskFunctionalRequirements},
+	{"technical_requirements", models.MaxTaskTechnicalRequirements, utils.FieldTaskTechnicalRequirements},
+	{"acceptance_criteria", models.MaxTaskAcceptanceCriteria, utils.FieldTaskAcceptanceCriteria},
+}
+
 // taskEditFieldOperations maps every column `task edit` can set to the audit
 // operation that records a change to it. The keys are the column names the
 // UPDATE statement is built from, not the flag spellings, because the statement
@@ -136,18 +158,17 @@ func taskEdit(args []string) error {
 		return nil
 	}
 
-	// Validate that required text fields are not set to empty
-	requiredFields := map[string]string{
-		"title":                   "title",
-		"functional_requirements": "functional-requirements",
-		"technical_requirements":  "technical-requirements",
-		"acceptance_criteria":     "acceptance-criteria",
-	}
-	for field, flagName := range requiredFields {
-		if value, ok := updates[field]; ok {
-			if str, ok := value.(string); ok && str == "" {
-				return fmt.Errorf("%w: %s cannot be empty", utils.ErrValidation, flagName)
-			}
+	// Validate that required text fields are not set to empty. The refusal names
+	// the FIELD, by its published name: a value did reach the application and
+	// broke a rule about its content, which is the field case of
+	// SPEC/COMMANDS.md § Published Field Names in Validation Messages. This site
+	// used to name the FLAG instead, so one command spelled one field two ways —
+	// "functional-requirements cannot be empty" next to
+	// "functional_requirements: control characters are not allowed" for the same
+	// field of the same task.
+	for _, f := range taskEditTextFields {
+		if str, ok := updates[f.column].(string); ok && str == "" {
+			return utils.FieldEmptyError(f.field)
 		}
 	}
 
@@ -155,40 +176,19 @@ func taskEdit(args []string) error {
 	// Without this, oversized values reach SQLite and surface as a generic
 	// "constraint failed" error (exit 1) instead of the documented
 	// utils.ErrFieldTooLarge (exit 6) per SPEC/COMMANDS.md.
-	maxLengths := map[string]int{
-		"title":                   models.MaxTaskTitle,
-		"functional_requirements": models.MaxTaskFunctionalRequirements,
-		"technical_requirements":  models.MaxTaskTechnicalRequirements,
-		"acceptance_criteria":     models.MaxTaskAcceptanceCriteria,
-	}
-	for field, limit := range maxLengths {
-		v, ok := updates[field]
-		if !ok {
-			continue
-		}
-		s, ok := v.(string)
-		if !ok {
-			continue
-		}
-		if len(s) > limit {
-			return fmt.Errorf("%w: %s exceeds maximum length of %d characters",
-				utils.ErrFieldTooLarge, field, limit)
+	for _, f := range taskEditTextFields {
+		if str, ok := updates[f.column].(string); ok && len(str) > f.limit {
+			return utils.FieldTooLargeError(f.field, f.limit)
 		}
 	}
 
 	// Reject control / bidi / format code points in every free-text field that is
 	// being set (SPEC/MODELS.md § Free-Text Control-Character Constraint).
-	for _, field := range []string{"title", "functional_requirements", "technical_requirements", "acceptance_criteria"} {
-		v, ok := updates[field]
-		if !ok {
-			continue
-		}
-		s, ok := v.(string)
-		if !ok {
-			continue
-		}
-		if err := utils.ValidateNoControlChars(s, field); err != nil {
-			return err
+	for _, f := range taskEditTextFields {
+		if str, ok := updates[f.column].(string); ok {
+			if err := utils.ValidateNoControlChars(str, f.field); err != nil {
+				return err
+			}
 		}
 	}
 

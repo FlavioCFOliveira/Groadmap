@@ -23,10 +23,14 @@ const MaxInt32 = math.MaxInt32 // 2,147,483,647
 //     U+2066-U+2069, and U+FEFF
 //
 // Legitimate Unicode (accents, emoji, CJK, etc.) is accepted unchanged.
-func ValidateNoControlChars(value, fieldName string) error {
+//
+// The field is named by a Field, not by a string, so the refusal can only carry
+// the published name the SPEC assigns it: see the note on Field in fields.go for
+// why that parameter is not a string.
+func ValidateNoControlChars(value string, field Field) error {
 	for _, r := range value {
 		if IsForbiddenControlChar(r) {
-			return ControlCharError(fieldName)
+			return ControlCharError(field)
 		}
 	}
 	return nil
@@ -47,13 +51,6 @@ func IsForbiddenControlChar(r rune) bool {
 	default:
 		return isBidiOrFormatControl(r)
 	}
-}
-
-// ControlCharError is the refusal ValidateNoControlChars returns, spelled once
-// so a streaming caller reports the identical message and the identical
-// sentinel (exit code 6) as the whole-value check.
-func ControlCharError(fieldName string) error {
-	return fmt.Errorf("%w: %s: control characters are not allowed", ErrValidation, fieldName)
 }
 
 // isBidiOrFormatControl reports whether r is one of the Unicode

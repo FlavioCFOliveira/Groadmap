@@ -20,17 +20,23 @@ import (
 // renders that text twice, which is what users saw until this was corrected.
 // internal/models/error_message_dedup_test.go pins every rendered message.
 var (
-	ErrInvalidTaskType       = errors.New("invalid task type")
-	ErrInvalidTaskStatus     = errors.New("invalid task status")
-	ErrInvalidStatus         = errors.New("invalid status")
-	ErrInvalidType           = errors.New("invalid type")
-	ErrInvalidCurrentStatus  = errors.New("invalid current status")
-	ErrInvalidTargetStatus   = errors.New("invalid target status")
-	ErrCannotTransition      = errors.New("cannot transition")
-	ErrTitleRequired         = errors.New("title is required")
-	ErrFuncReqRequired       = errors.New("functional_requirements is required")
-	ErrTechReqRequired       = errors.New("technical_requirements is required")
-	ErrAcceptanceCriteriaReq = errors.New("acceptance_criteria is required")
+	ErrInvalidTaskType      = errors.New("invalid task type")
+	ErrInvalidTaskStatus    = errors.New("invalid task status")
+	ErrInvalidStatus        = errors.New("invalid status")
+	ErrInvalidType          = errors.New("invalid type")
+	ErrInvalidCurrentStatus = errors.New("invalid current status")
+	ErrInvalidTargetStatus  = errors.New("invalid target status")
+	ErrCannotTransition     = errors.New("cannot transition")
+	// The four field names below come from the shared definition in
+	// internal/utils, not from a literal here, so a task's "is required" refusal
+	// and its control-character and length refusals cannot end up calling one
+	// field two things (SPEC/COMMANDS.md § Published Field Names in Validation
+	// Messages). ErrTitleRequired is shared with sprint validation, which is
+	// sound because the two entities publish the same name for their title.
+	ErrTitleRequired         = errors.New(utils.RequiredFieldMessage(utils.FieldTaskTitle))
+	ErrFuncReqRequired       = errors.New(utils.RequiredFieldMessage(utils.FieldTaskFunctionalRequirements))
+	ErrTechReqRequired       = errors.New(utils.RequiredFieldMessage(utils.FieldTaskTechnicalRequirements))
+	ErrAcceptanceCriteriaReq = errors.New(utils.RequiredFieldMessage(utils.FieldTaskAcceptanceCriteria))
 	ErrPriorityOutOfRange    = errors.New("priority must be between 0 and 9")
 	ErrSeverityOutOfRange    = errors.New("severity must be between 0 and 9")
 	ErrInvalidCommitHash     = errors.New("invalid commit hash")
@@ -277,25 +283,25 @@ func (t *Task) Validate() error {
 		return ErrTitleRequired
 	}
 	if len(t.Title) > MaxTaskTitle {
-		return fmt.Errorf("%w: title exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskTitle)
+		return utils.FieldTooLargeError(utils.FieldTaskTitle, MaxTaskTitle)
 	}
 	if t.FunctionalRequirements == "" {
 		return ErrFuncReqRequired
 	}
 	if len(t.FunctionalRequirements) > MaxTaskFunctionalRequirements {
-		return fmt.Errorf("%w: functional_requirements exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskFunctionalRequirements)
+		return utils.FieldTooLargeError(utils.FieldTaskFunctionalRequirements, MaxTaskFunctionalRequirements)
 	}
 	if t.TechnicalRequirements == "" {
 		return ErrTechReqRequired
 	}
 	if len(t.TechnicalRequirements) > MaxTaskTechnicalRequirements {
-		return fmt.Errorf("%w: technical_requirements exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskTechnicalRequirements)
+		return utils.FieldTooLargeError(utils.FieldTaskTechnicalRequirements, MaxTaskTechnicalRequirements)
 	}
 	if t.AcceptanceCriteria == "" {
 		return ErrAcceptanceCriteriaReq
 	}
 	if len(t.AcceptanceCriteria) > MaxTaskAcceptanceCriteria {
-		return fmt.Errorf("%w: acceptance_criteria exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskAcceptanceCriteria)
+		return utils.FieldTooLargeError(utils.FieldTaskAcceptanceCriteria, MaxTaskAcceptanceCriteria)
 	}
 	if t.Priority < 0 || t.Priority > 9 {
 		// Chain utils.ErrValidation so this maps to exit 6 (invalid data) per
@@ -468,16 +474,16 @@ func (u *TaskUpdate) HasChanges() bool {
 // Validate checks if the update values are valid.
 func (u *TaskUpdate) Validate() error {
 	if u.Title != nil && len(*u.Title) > MaxTaskTitle {
-		return fmt.Errorf("%w: title exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskTitle)
+		return utils.FieldTooLargeError(utils.FieldTaskTitle, MaxTaskTitle)
 	}
 	if u.FunctionalRequirements != nil && len(*u.FunctionalRequirements) > MaxTaskFunctionalRequirements {
-		return fmt.Errorf("%w: functional_requirements exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskFunctionalRequirements)
+		return utils.FieldTooLargeError(utils.FieldTaskFunctionalRequirements, MaxTaskFunctionalRequirements)
 	}
 	if u.TechnicalRequirements != nil && len(*u.TechnicalRequirements) > MaxTaskTechnicalRequirements {
-		return fmt.Errorf("%w: technical_requirements exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskTechnicalRequirements)
+		return utils.FieldTooLargeError(utils.FieldTaskTechnicalRequirements, MaxTaskTechnicalRequirements)
 	}
 	if u.AcceptanceCriteria != nil && len(*u.AcceptanceCriteria) > MaxTaskAcceptanceCriteria {
-		return fmt.Errorf("%w: acceptance_criteria exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskAcceptanceCriteria)
+		return utils.FieldTooLargeError(utils.FieldTaskAcceptanceCriteria, MaxTaskAcceptanceCriteria)
 	}
 	if u.Priority != nil && (*u.Priority < 0 || *u.Priority > 9) {
 		return fmt.Errorf("%w: %w, got %d", utils.ErrValidation, ErrPriorityOutOfRange, *u.Priority)

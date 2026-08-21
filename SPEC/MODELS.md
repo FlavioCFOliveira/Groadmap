@@ -297,6 +297,11 @@ text is displayed without changing its stored bytes. This constraint applies to
 every field listed above on every command that accepts the field
 (see `COMMANDS.md § Field Validation`).
 
+The name by which a validation message identifies one of these fields is the
+field's published name, specified once in
+`COMMANDS.md § Published Field Names in Validation Messages`. That section is
+canonical for the name and lists it for every free-text field.
+
 ```go
 // Task represents a task in the roadmap.
 // Field order optimized for memory layout (248 bytes, zero padding on 64-bit systems).

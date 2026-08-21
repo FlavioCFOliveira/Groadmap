@@ -590,6 +590,14 @@ func TestTaskEdit_EmptyTitle(t *testing.T) {
 	}
 }
 
+// The three tests below pinned the HYPHENATED flag spelling until rmp task 297.
+// `task edit` used to build this one refusal from its own map of column name to
+// FLAG name, so it answered `-fr ""` with "functional-requirements cannot be
+// empty" while answering `-fr $'a\x1bb'` with "functional_requirements: control
+// characters are not allowed" — one command, one field, two names. The refusal
+// now names the field, because a value did reach the application and broke a
+// rule about its content (SPEC/COMMANDS.md § Published Field Names in Validation
+// Messages, acceptance criterion 4).
 func TestTaskEdit_EmptyFunctionalRequirements(t *testing.T) {
 	testName := "testtaskeditemptyaction"
 	_, cleanup := setupTestTaskRoadmap(t, testName)
@@ -599,8 +607,8 @@ func TestTaskEdit_EmptyFunctionalRequirements(t *testing.T) {
 	if err == nil {
 		t.Error("taskEdit with empty functional requirements expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "functional-requirements cannot be empty") {
-		t.Errorf("expected 'functional-requirements cannot be empty' error, got: %v", err)
+	if !strings.Contains(err.Error(), "functional_requirements cannot be empty") {
+		t.Errorf("expected 'functional_requirements cannot be empty' error, got: %v", err)
 	}
 }
 
@@ -613,8 +621,8 @@ func TestTaskEdit_EmptyTechnicalRequirements(t *testing.T) {
 	if err == nil {
 		t.Error("taskEdit with empty technical requirements expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "technical-requirements cannot be empty") {
-		t.Errorf("expected 'technical-requirements cannot be empty' error, got: %v", err)
+	if !strings.Contains(err.Error(), "technical_requirements cannot be empty") {
+		t.Errorf("expected 'technical_requirements cannot be empty' error, got: %v", err)
 	}
 }
 
@@ -627,8 +635,8 @@ func TestTaskEdit_EmptyAcceptanceCriteria(t *testing.T) {
 	if err == nil {
 		t.Error("taskEdit with empty acceptance criteria expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "acceptance-criteria cannot be empty") {
-		t.Errorf("expected 'acceptance-criteria cannot be empty' error, got: %v", err)
+	if !strings.Contains(err.Error(), "acceptance_criteria cannot be empty") {
+		t.Errorf("expected 'acceptance_criteria cannot be empty' error, got: %v", err)
 	}
 }
 

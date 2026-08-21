@@ -24,7 +24,10 @@ var (
 	// nothing but whitespace. The database accepts an empty body by design (no
 	// CHECK forbids it, see SPEC/DATABASE.md), so this rule is enforced here and
 	// nowhere else.
-	ErrCommentBodyRequired = errors.New("body is required")
+	// The field name comes from the shared definition in internal/utils, not
+	// from a literal here (SPEC/COMMANDS.md § Published Field Names in
+	// Validation Messages).
+	ErrCommentBodyRequired = errors.New(utils.RequiredFieldMessage(utils.FieldCommentBody))
 )
 
 // CommentType classifies a comment. There is one enum with seven values; each
@@ -244,7 +247,7 @@ func ValidateCommentBody(body string) (string, error) {
 	// Characters, not bytes: see MaxCommentBody. The cap applies to the stored
 	// form, because trimming happens before validation and before storage.
 	if utf8.RuneCountInString(stored) > MaxCommentBody {
-		return "", fmt.Errorf("%w: body exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxCommentBody)
+		return "", utils.FieldTooLargeError(utils.FieldCommentBody, MaxCommentBody)
 	}
 
 	// The control-character rule is checked against the body as supplied, not
@@ -252,7 +255,7 @@ func ValidateCommentBody(body string) (string, error) {
 	// (0x0C), both of which the SPEC forbids, so validating the trimmed form
 	// would let a leading or trailing VT or FF pass unreported instead of
 	// rejecting the input that contains it.
-	if err := utils.ValidateNoControlChars(body, "body"); err != nil {
+	if err := utils.ValidateNoControlChars(body, utils.FieldCommentBody); err != nil {
 		return "", err
 	}
 

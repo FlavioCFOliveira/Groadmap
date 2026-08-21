@@ -156,6 +156,116 @@ The refusal wording is the one the CLI already uses for a stray positional argum
 - **Error format:** Plain text to stderr with descriptive message
 - **Exit code:** 6 for validation errors (see `ARCHITECTURE.md` — Exit Codes for canonical mapping)
 
+### Published Field Names in Validation Messages
+
+Each free-text field has exactly one **published name**. That name is what a
+validation message uses to identify the field, on every command that writes the
+field, and it does not vary with the flag through which the value reached the
+application. A caller that matches on a field name in an error message therefore
+matches one spelling per field, and can tell from the message alone which field
+the refusal is about.
+
+The published name is the lowercase, underscored name of the field, which is also
+the name of the database column that stores it (see `DATABASE.md`). It is neither
+the flag name nor the Go struct field name that `MODELS.md` declares. Flag names
+are kebab-case and carry a leading `--`, and one flag does not even repeat the
+words of the field it fills: `--summary` supplies `completion_summary`.
+The two spellings differ deliberately, and the difference is not an
+inconsistency: a flag is what the caller types on the command line, and a
+published field name is what the application calls the field it stores.
+
+| Entity | Published field name | Flag that supplies the value | Commands that write the field |
+|--------|----------------------|------------------------------|-------------------------------|
+| Task | `title` | `-t, --title` | `task create`, `task edit` |
+| Task | `functional_requirements` | `-fr, --functional-requirements` | `task create`, `task edit` |
+| Task | `technical_requirements` | `-tr, --technical-requirements` | `task create`, `task edit` |
+| Task | `acceptance_criteria` | `-ac, --acceptance-criteria` | `task create`, `task edit` |
+| Task | `completion_summary` | `-s, --summary` | `task stat`, when the target status is `COMPLETED` |
+| Sprint | `title` | `-t, --title` | `sprint create`, `sprint update` |
+| Sprint | `description` | `-d, --description` | `sprint create`, `sprint update` |
+| Task comment and sprint comment | `body` | `-b, --body`, or standard input | `task comment-add`, `task comment-edit`, `sprint comment-add`, `sprint comment-edit` |
+
+These eight fields are the free-text fields of Groadmap, the same set the
+Free-Text Control-Character Constraint governs. `MODELS.md § Task`
+(Free-Text Control-Character Constraint) is canonical for the set itself.
+
+**Messages this rule governs.** The rule applies to every validation message that
+names the field whose value broke a rule, whichever command emitted it:
+
+1. The refusal of a value that carries a forbidden control character:
+   `Error: validation error: <field>: control characters are not allowed`.
+2. The refusal of a value longer than the field's maximum:
+   `Error: field exceeds maximum size: <field> exceeds maximum length of N characters`.
+3. The refusal of an empty value for a field that requires one. Each subcommand
+   documents that message in its own section below; this rule fixes the field
+   name inside it and nothing else about it.
+4. Every rule added later over the same fields. A later rule may state its message
+   with `<field>` and leave the name to be resolved here; it MUST NOT restate the
+   mapping.
+
+In each of them, `<field>` is the published name from the table above.
+
+**Messages this rule does not govern.** A message whose subject is a **flag**
+rather than a field keeps the flag's own spelling, kebab-case with its leading
+`--`. `Error: required parameter missing: --functional-requirements` names the
+flag the command line did not carry, and is correct as it stands.
+
+The criterion that separates the two cases is what the message identifies:
+
+- The subject is the **field** when a value for it reached the application and
+  that value broke a rule about its content: too long, empty after trimming, or
+  carrying a forbidden code point. The message names the field by its published
+  name.
+- The subject is the **flag** when no value reached the application at all,
+  because the flag is absent, unknown, or not accepted where it was used. The
+  message names the flag.
+
+One command emits both kinds about one field without contradicting itself:
+`task create` reports the absence of `--functional-requirements` as a missing
+flag, and reports a supplied value carrying a control character as a violation of
+`functional_requirements`.
+
+**One definition, not one literal per call site.** Every command MUST obtain the
+published name from a single shared definition that maps each field to its
+published name. No command may spell a field name inline in the message it builds.
+The defect this requirement prevents is not a typo but the absence of that
+definition: when each call site chooses its own literal, two of them eventually
+choose differently for the same field, and one command then names one field two
+ways in two of its own messages. A single definition makes a second spelling
+impossible to introduce by accident rather than merely wrong. This specification
+does not prescribe the definition's Go shape; it requires that exactly one exists,
+that it covers the eight fields above, and that every message naming a field takes
+the name from it.
+
+**Precedence.** The message templates above are quoted to show where the field name
+appears in each. This section is canonical for that name alone, and not for the rest
+of a message's wording, which the subcommand's own section states. Some of those
+sections quote a message in a prose form that differs from the line the application
+writes, including in how the field is spelled; where such a quotation and this
+section disagree about a field's name, this section is the canonical one.
+
+**Acceptance criteria:**
+
+1. Triggering one validation rule on one field from every command that writes that
+   field produces the same field name in every resulting message, and that name is
+   the one this section publishes.
+2. Within a single command, every message that names a given field names it
+   identically, whatever rule the value broke.
+3. `task create` names `functional_requirements`, `technical_requirements`, and
+   `acceptance_criteria` exactly as `task edit` does. No validation message names
+   a field in kebab-case.
+4. `task edit` names the field, and not the flag, when it refuses an empty value
+   for a field that requires one: an empty `--functional-requirements` is refused
+   as `functional_requirements`.
+5. A message about a missing, unknown, or misplaced flag still names the flag,
+   with its hyphens and its leading `--`. `task create` invoked without
+   `--functional-requirements` still reports `--functional-requirements`.
+6. Every field name in a validation message comes from the shared definition. A
+   test fails when a command builds a validation message from an inline field-name
+   literal, or from a name the definition does not contain.
+7. The rule changes no message in which the field name already is the published
+   name.
+
 ### Control-Character Constraint (All Free-Text Fields)
 
 All free-text fields — task `title`, `functional_requirements`,
@@ -172,7 +282,9 @@ stored:
 
 This guards against terminal escape-sequence injection (CWE-150) and Trojan Source
 attacks (CVE-2021-42574). The canonical definition is the Free-Text
-Control-Character Constraint in `MODELS.md § Task`.
+Control-Character Constraint in `MODELS.md § Task`. The refusal names the field by
+its published name, as `Published Field Names in Validation Messages` above
+requires.
 
 ### Validation Error Messages
 

@@ -92,11 +92,11 @@ func sprintCreate(args []string) error {
 		return fmt.Errorf("%w: --title", utils.ErrRequired)
 	}
 	if len(title) > models.MaxSprintTitle {
-		return fmt.Errorf("%w: title exceeds maximum length of %d characters", utils.ErrFieldTooLarge, models.MaxSprintTitle)
+		return utils.FieldTooLargeError(utils.FieldSprintTitle, models.MaxSprintTitle)
 	}
 	// Reject control / bidi / format code points (SPEC/MODELS.md § Free-Text
 	// Control-Character Constraint).
-	if err := utils.ValidateNoControlChars(title, "title"); err != nil {
+	if err := utils.ValidateNoControlChars(title, utils.FieldSprintTitle); err != nil {
 		return err
 	}
 
@@ -109,7 +109,7 @@ func sprintCreate(args []string) error {
 	}
 	// Reject control / bidi / format code points (SPEC/MODELS.md § Free-Text
 	// Control-Character Constraint).
-	if err := utils.ValidateNoControlChars(description, "description"); err != nil {
+	if err := utils.ValidateNoControlChars(description, utils.FieldSprintDescription); err != nil {
 		return err
 	}
 
@@ -340,28 +340,28 @@ func sprintUpdate(args []string) error {
 		// rejected (exit code 6). Same wrapper and same phrasing as `task edit`,
 		// so both commands answer `-t ""` identically.
 		if title == "" {
-			return fmt.Errorf("%w: title cannot be empty", utils.ErrValidation)
+			return utils.FieldEmptyError(utils.FieldSprintTitle)
 		}
 		if len(title) > models.MaxSprintTitle {
-			return fmt.Errorf("%w: title exceeds maximum length of %d characters", utils.ErrFieldTooLarge, models.MaxSprintTitle)
+			return utils.FieldTooLargeError(utils.FieldSprintTitle, models.MaxSprintTitle)
 		}
 		// Reject control / bidi / format code points (SPEC/MODELS.md § Free-Text
 		// Control-Character Constraint).
-		if err := utils.ValidateNoControlChars(title, "title"); err != nil {
+		if err := utils.ValidateNoControlChars(title, utils.FieldSprintTitle); err != nil {
 			return err
 		}
 	}
 
 	if hasDescription {
 		if description == "" {
-			return fmt.Errorf("%w: description cannot be empty", utils.ErrValidation)
+			return utils.FieldEmptyError(utils.FieldSprintDescription)
 		}
 		if len(description) > models.MaxSprintDescription {
-			return fmt.Errorf("%w: description exceeds maximum length of %d characters", utils.ErrFieldTooLarge, models.MaxSprintDescription)
+			return utils.FieldTooLargeError(utils.FieldSprintDescription, models.MaxSprintDescription)
 		}
 		// Reject control / bidi / format code points (SPEC/MODELS.md § Free-Text
 		// Control-Character Constraint).
-		if err := utils.ValidateNoControlChars(description, "description"); err != nil {
+		if err := utils.ValidateNoControlChars(description, utils.FieldSprintDescription); err != nil {
 			return err
 		}
 	}

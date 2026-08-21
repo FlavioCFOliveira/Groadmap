@@ -99,16 +99,23 @@ func taskCreate(args []string) error {
 	// Reject control / bidi / format code points in all free-text fields
 	// (SPEC/MODELS.md § Free-Text Control-Character Constraint). Performed after
 	// TrimSpace, mirroring the existing field-validation order.
+	//
+	// The field is identified by a utils.Field, so the refusal carries the
+	// published name of SPEC/COMMANDS.md § Published Field Names in Validation
+	// Messages and cannot carry anything else. This is the site that used to pass
+	// the four HYPHENATED FLAG names, which is why `task create` refused
+	// `functional-requirements` while `task edit` refused
+	// `functional_requirements` for the identical value and the identical rule.
 	for _, f := range []struct {
 		value string
-		name  string
+		field utils.Field
 	}{
-		{title, "title"},
-		{functionalReqs, "functional-requirements"},
-		{technicalReqs, "technical-requirements"},
-		{acceptanceCriteria, "acceptance-criteria"},
+		{title, utils.FieldTaskTitle},
+		{functionalReqs, utils.FieldTaskFunctionalRequirements},
+		{technicalReqs, utils.FieldTaskTechnicalRequirements},
+		{acceptanceCriteria, utils.FieldTaskAcceptanceCriteria},
 	} {
-		if err := utils.ValidateNoControlChars(f.value, f.name); err != nil {
+		if err := utils.ValidateNoControlChars(f.value, f.field); err != nil {
 			return err
 		}
 	}

@@ -216,7 +216,7 @@ func TestValidateNoControlChars_AcceptsLegitimateText(t *testing.T) {
 	}
 	for _, tc := range accepted {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := ValidateNoControlChars(tc.value, "title"); err != nil {
+			if err := ValidateNoControlChars(tc.value, FieldTaskTitle); err != nil {
 				t.Errorf("ValidateNoControlChars(%q) = %v, want nil", tc.value, err)
 			}
 		})
@@ -246,7 +246,7 @@ func TestValidateNoControlChars_RejectsControlAndBidi(t *testing.T) {
 	}
 	for _, tc := range rejected {
 		t.Run(tc.name, func(t *testing.T) {
-			err := ValidateNoControlChars(tc.value, "title")
+			err := ValidateNoControlChars(tc.value, FieldTaskTitle)
 			if err == nil {
 				t.Fatalf("ValidateNoControlChars(%q) = nil, want error", tc.value)
 			}

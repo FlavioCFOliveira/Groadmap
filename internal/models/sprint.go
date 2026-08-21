@@ -12,7 +12,10 @@ import (
 // the message it is returned in; see the note on the task sentinels in task.go.
 var (
 	ErrInvalidSprintStatus = errors.New("invalid sprint status")
-	ErrDescriptionRequired = errors.New("description is required")
+	// The field name comes from the shared definition in internal/utils, not
+	// from a literal here (SPEC/COMMANDS.md § Published Field Names in
+	// Validation Messages).
+	ErrDescriptionRequired = errors.New(utils.RequiredFieldMessage(utils.FieldSprintDescription))
 	// ErrInvalidSprintOrder indicates a sprint execution order that is not a
 	// positive integer greater than zero.
 	ErrInvalidSprintOrder = errors.New("invalid sprint order")
@@ -107,13 +110,13 @@ func (s *Sprint) Validate() error {
 		return ErrTitleRequired
 	}
 	if len(s.Title) > MaxSprintTitle {
-		return fmt.Errorf("%w: title exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxSprintTitle)
+		return utils.FieldTooLargeError(utils.FieldSprintTitle, MaxSprintTitle)
 	}
 	if s.Description == "" {
 		return ErrDescriptionRequired
 	}
 	if len(s.Description) > MaxSprintDescription {
-		return fmt.Errorf("%w: description exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxSprintDescription)
+		return utils.FieldTooLargeError(utils.FieldSprintDescription, MaxSprintDescription)
 	}
 	if !IsValidSprintStatus(string(s.Status)) {
 		return fmt.Errorf("invalid status: %q: %w", s.Status, ErrInvalidSprintStatus)
