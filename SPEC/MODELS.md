@@ -351,8 +351,8 @@ type Sprint struct {
     Status      SprintStatus `json:"status"`
     Title       string       `json:"title"`            // Sprint title, required (NOT NULL), max 255 chars
     Description string       `json:"description"`      // Sprint description, required (NOT NULL), max 2048 chars; states the sprint's high-level (macro) goal
-    Tasks       []int        `json:"tasks"`            // Computed from sprint_tasks (ordered by position)
-    TaskCount   int          `json:"task_count"`       // Computed
+    Tasks       []int        `json:"tasks"`            // Computed from sprint_tasks: member task IDs, ascending ID order
+    TaskCount   int          `json:"task_count"`       // Computed from sprint_tasks: number of member tasks
     CreatedAt   string       `json:"created_at"`
     StartedAt   *string      `json:"started_at"`       // Nullable
     ClosedAt    *string      `json:"closed_at"`        // Nullable
@@ -371,6 +371,9 @@ type Sprint struct {
   - The `Description` states the goal of the sprint as a whole. It does not enumerate the individual tasks of the sprint.
 
   See `COMMANDS.md § Create Sprint` and `COMMANDS.md § Update Sprint` for the flag that writes this field, and `HELP.md § Sprint family help specifics` for the help text that states these semantics to the caller.
+- `Tasks`: Computed from the `sprint_tasks` junction table on every read; never stored in the `sprints` table. The field carries the **ids** of the sprint's member tasks as integers — task identifiers, not task objects, and not titles. The ids are ordered by ascending task id. That order is deliberately not the sprint's planned in-sprint execution order: the planned order is the `sprint_tasks.position` column, and a caller that needs it reads `COMMANDS.md § List Sprint Tasks` or the `task_order` field of `COMMANDS.md § Sprint Statistics` (see `DATABASE.md § List by Sprint`). Membership does not depend on task status: a member task is listed whatever its status, including a member task whose status is `BACKLOG` (see `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`). A sprint that holds no task carries the empty array `[]`, never `null` (see `DATA_FORMATS.md § Implementation Notes`, Empty arrays).
+- `TaskCount`: Computed from the `sprint_tasks` junction table on every read; never stored in the `sprints` table. It is the number of tasks that belong to the sprint, and it therefore always equals the number of entries in `Tasks` on the same object. It counts member tasks in every status, on the same membership rule `Tasks` follows. A sprint that holds no task carries `0`.
+- **Both computed fields are populated on every read that returns a `Sprint` object.** `rmp sprint get` populates them for the sprint it returns, and `rmp sprint list` populates them for every sprint in the array it returns, including when the listing is narrowed by `--status`. No command returns a `Sprint` object with `Tasks` or `TaskCount` left unresolved, so a reader never has to issue a second command to learn what a returned sprint holds, and two reads of the same sprint at the same moment never report different membership. See `COMMANDS.md § List Sprints`, `COMMANDS.md § Get Sprint`, and `DATABASE.md § Read the Membership of Many Sprints (Grouped)`.
 - `Order`: Required (NOT NULL), positive integer strictly greater than zero (`> 0`), and unique across every sprint in the roadmap. It records the natural, sequential execution order of sprints: the sprint with the lowest `Order` value executes first. Two sprints can never share the same `Order` value. The value is auto-assigned on creation when the caller does not supply one (see `COMMANDS.md § Create Sprint`) and can be changed while the sprint is `PENDING` or `OPEN`. Once the sprint is `CLOSED`, the `Order` value becomes immutable and can never change again, because it then represents the historical execution record (see `STATE_MACHINE.md § Sprint Order Immutability`). The JSON field name is `order`; the underlying database column is named `order_index`, because `ORDER` is a reserved SQL keyword (see `DATABASE.md § sprints Table`).
 
 ### Task Comment

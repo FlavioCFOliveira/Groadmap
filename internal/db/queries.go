@@ -834,8 +834,19 @@ func scanTasksWithDeps(rows *sql.Rows) ([]models.Task, error) {
 	return tasks, nil
 }
 
-// GetOpenSprint retrieves the currently open sprint (status = OPEN).
-// Returns ErrNotFound if no sprint is currently open.
+// GetOpenSprint retrieves the currently open sprint (status = OPEN), with its
+// membership resolved. Returns ErrNotFound if no sprint is currently open.
+//
+// It is the third read of this package that returns a models.Sprint, and it
+// answers to the same two rules as the other two: both computed fields are
+// populated, and the ids are published in ASCENDING TASK ID, fixed by the
+// aggregate's own ORDER BY rather than by the plan that feeds it
+// (SPEC/MODELS.md § Sprint Field Constraints). The statement is deliberately the
+// same shape as GetSprint's, differing only in its predicate, so the two cannot
+// drift apart into two different answers about one sprint.
+//
+// Only one sprint can be OPEN at a time, which the command layer enforces; the
+// LIMIT 1 here is the read's own guard rather than the rule itself.
 func (db *DB) GetOpenSprint(ctx context.Context) (*models.Sprint, error) {
 	var sprint models.Sprint
 	var startedAt sql.NullString
@@ -843,11 +854,14 @@ func (db *DB) GetOpenSprint(ctx context.Context) (*models.Sprint, error) {
 	var tasksJSON sql.NullString
 	var maxTasks sql.NullInt64
 
-	// Single query using JSON aggregation to get sprint data and task IDs
+	// Single query using JSON aggregation to get sprint data and task IDs, in the
+	// order the aggregate states. A sprint with no member task yields '[null]'
+	// from the outer join's single NULL row, which parseJSONIntArray reads as the
+	// empty set, so the empty case stays [] and never null.
 	err := db.QueryRowContext(ctx,
 		`SELECT
 			s.id, s.status, s.title, s.description, s.created_at, s.started_at, s.closed_at, s.max_tasks, s.order_index,
-			COALESCE(json_group_array(DISTINCT st.task_id), '[]') as tasks
+			COALESCE(json_group_array(DISTINCT st.task_id ORDER BY st.task_id), '[]') as tasks
 		 FROM sprints s
 		 LEFT JOIN sprint_tasks st ON s.id = st.sprint_id
 		 WHERE s.status = ?
@@ -1209,9 +1223,25 @@ func (db *DB) CreateSprint(ctx context.Context, sprint *models.Sprint) (int, err
 	return sprintID, nil
 }
 
-// GetSprint retrieves a sprint by ID.
-// Optimized to use a single query with JSON aggregation for tasks (SQLite 3.38+).
-// This eliminates the N+1 query pattern by fetching sprint and task IDs in one round-trip.
+// GetSprint retrieves a sprint by ID, with its membership resolved.
+//
+// One round trip: the sprint row and its member task ids come back together,
+// the ids aggregated into a JSON array, so reading a sprint never costs a
+// second statement and never one per member task.
+//
+// The id order is ASCENDING TASK ID, and it is the aggregate's own ORDER BY
+// that fixes it. That is the order SPEC/MODELS.md § Sprint Field Constraints
+// requires of the Tasks field, and stating it here is not decoration: without
+// it the result would still arrive sorted, but only because DISTINCT dedupes
+// through a sorted ephemeral index and because the join happens to walk
+// idx_sprint_tasks_lookup in (sprint_id, task_id) order. Both are properties of
+// the current query plan, not of the statement, and a specified order may not
+// rest on either. The grouped listing read states the same order for the same
+// reason (see groupedSprintMembershipQuery).
+//
+// Ascending id is deliberately NOT the sprint's planned execution order: that
+// one is sprint_tasks.position and is published by the sprint task listings
+// (SPEC/DATABASE.md § List by Sprint).
 func (db *DB) GetSprint(ctx context.Context, id int) (*models.Sprint, error) {
 	var sprint models.Sprint
 	var startedAt sql.NullString
@@ -1219,12 +1249,15 @@ func (db *DB) GetSprint(ctx context.Context, id int) (*models.Sprint, error) {
 	var tasksJSON sql.NullString
 	var maxTasks sql.NullInt64
 
-	// Single query using JSON aggregation to get sprint data and task IDs
-	// json_group_array returns a JSON array of task IDs
+	// Single query using JSON aggregation to get sprint data and task IDs.
+	// json_group_array returns a JSON array of task IDs, ordered by the
+	// aggregate's own ORDER BY rather than by the plan that feeds it. A sprint
+	// with no member task yields '[null]' from the outer join's single NULL row,
+	// which parseJSONIntArray reads as the empty set.
 	err := db.QueryRowContext(ctx,
 		`SELECT
 			s.id, s.status, s.title, s.description, s.created_at, s.started_at, s.closed_at, s.max_tasks, s.order_index,
-			COALESCE(json_group_array(DISTINCT st.task_id), '[]') as tasks
+			COALESCE(json_group_array(DISTINCT st.task_id ORDER BY st.task_id), '[]') as tasks
 		 FROM sprints s
 		 LEFT JOIN sprint_tasks st ON s.id = st.sprint_id
 		 WHERE s.id = ?
@@ -1293,7 +1326,140 @@ func parseJSONIntArray(jsonStr string) ([]int, error) {
 	return result, nil
 }
 
-// ListSprints retrieves all sprints with optional status filter.
+// groupedSprintMembershipQuery returns the grouped membership read of
+// SPEC/DATABASE.md § Read the Membership of Many Sprints (Grouped) for an IN
+// list of the given placeholders: the member task ids of several sprints at
+// once, so a listing resolves every sprint it returns in ONE statement instead
+// of one per sprint.
+//
+// It reads sprint_tasks alone and joins nothing, because membership is a
+// sprint_tasks row: the answer is a set of ids per sprint, so no tasks row is
+// fetched to produce it. It applies no predicate on task status either, for the
+// same reason — status is a tasks column — so a member task in BACKLOG status
+// is included and counted (SPEC/STATE_MACHINE.md § Sprint Membership and the
+// BACKLOG Status).
+//
+// The ORDER BY is stated, not inherited from the plan: sprint_id ascending
+// groups each sprint's rows together so the result is walkable in one pass, and
+// task_id ascending fixes the order the Tasks field publishes
+// (SPEC/MODELS.md § Sprint Field Constraints). Neither column is the sprint's
+// planned execution order, which is sprint_tasks.position.
+//
+// idx_sprint_tasks_lookup covers the statement exactly — (sprint_id, task_id),
+// the leading column for the IN lookup and the pair for the ordering — so it
+// plans as a covering index search with no sort step and no table row read.
+//
+// It is a function rather than a constant because the IN list has one
+// placeholder per id. Assembly is separated from execution so the index tests
+// can plan the exact SQL production runs, rather than a lookalike.
+func groupedSprintMembershipQuery(placeholders string) string {
+	return fmt.Sprintf( // #nosec G201 -- only ? placeholders are interpolated; every id is bound
+		`SELECT sprint_id, task_id
+	 FROM sprint_tasks
+	 WHERE sprint_id IN (%s)
+	 ORDER BY sprint_id ASC, task_id ASC`,
+		placeholders,
+	)
+}
+
+// tasksBySprints returns the member task ids of each of the given sprints, keyed
+// by sprint id, in ONE statement whatever the number of sprints.
+//
+// A sprint that holds no task is ABSENT from the map, exactly as in
+// GetSprintsByTasks and CountTaskCommentsByTasks: it has no sprint_tasks row, so
+// the absence of an entry is the answer, and the caller reads a missing key as
+// the empty set. Callers publishing the value MUST turn that nil into an empty
+// slice, never a JSON null (SPEC/DATA_FORMATS.md § Implementation Notes, Empty
+// arrays); resolveSprintMembership below is where that happens.
+//
+// An empty id set issues no statement at all and returns an empty map. The id
+// set is bound as one placeholder per id in a single statement, so it carries
+// the same bind-variable ceiling as the sibling grouped reads and, for the same
+// reason, applies no chunking.
+func (db *DB) tasksBySprints(ctx context.Context, sprintIDs []int) (map[int][]int, error) {
+	membership := make(map[int][]int, len(sprintIDs))
+	if len(sprintIDs) == 0 {
+		return membership, nil
+	}
+
+	args := make([]any, len(sprintIDs))
+	for i, id := range sprintIDs {
+		args[i] = id
+	}
+
+	rows, err := db.QueryContext(ctx, groupedSprintMembershipQuery(db.Placeholders(len(sprintIDs))), args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying sprint membership: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var sprintID, taskID int
+		if err := rows.Scan(&sprintID, &taskID); err != nil {
+			return nil, fmt.Errorf("scanning sprint membership: %w", err)
+		}
+		membership[sprintID] = append(membership[sprintID], taskID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating sprint membership rows: %w", err)
+	}
+	return membership, nil
+}
+
+// resolveSprintMembership fills in the two computed fields of every sprint of a
+// listing — Tasks and TaskCount — from ONE grouped read over the sprint ids the
+// listing already holds.
+//
+// Both fields are populated for every sprint, because SPEC/MODELS.md § Sprint
+// requires it of every read that returns a Sprint object: a listing that left
+// them at their zero values would report `"tasks": null` and `"task_count": 0`
+// for sprints that hold work, and would disagree with GetSprint about the same
+// sprint read at the same moment.
+//
+// TaskCount is the length of the ids just read, never a COUNT(*) of its own, so
+// the two fields are two readings of one result and cannot diverge. A sprint
+// with no member task gets the empty slice and zero, and the empty slice is
+// allocated rather than left nil so it marshals as `[]` and not `null`.
+func (db *DB) resolveSprintMembership(ctx context.Context, sprints []models.Sprint) error {
+	if len(sprints) == 0 {
+		return nil
+	}
+
+	ids := make([]int, len(sprints))
+	for i := range sprints {
+		ids[i] = sprints[i].ID
+	}
+
+	membership, err := db.tasksBySprints(ctx, ids)
+	if err != nil {
+		return err
+	}
+
+	for i := range sprints {
+		tasks := membership[sprints[i].ID]
+		if tasks == nil {
+			tasks = []int{}
+		}
+		sprints[i].Tasks = tasks
+		sprints[i].TaskCount = len(tasks)
+	}
+	return nil
+}
+
+// ListSprints retrieves all sprints, optionally narrowed to one status, with the
+// membership of every returned sprint resolved.
+//
+// Every Sprint object it returns carries Tasks and TaskCount populated, exactly
+// as GetSprint returns them for the same sprint: same ids, same ascending order,
+// same count (SPEC/COMMANDS.md § List Sprints). The --status filter selects which
+// SPRINTS the array contains and never touches the membership of the sprints it
+// keeps.
+//
+// The cost is TWO statements whatever the number of sprints: one read of
+// sprints, then one grouped read of the membership of all of them. No statement
+// is issued per sprint and none per returned id; a roadmap with no sprint (or
+// none matching the filter) costs one, because the grouped read is skipped
+// outright rather than sent with an empty IN list.
 func (db *DB) ListSprints(ctx context.Context, status *models.SprintStatus) ([]models.Sprint, error) {
 	query := `SELECT id, status, title, description, created_at, started_at, closed_at, max_tasks, order_index FROM sprints WHERE 1=1`
 	args := []any{}
@@ -1352,6 +1518,16 @@ func (db *DB) ListSprints(ctx context.Context, status *models.SprintStatus) ([]m
 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating sprint rows: %w", err)
+	}
+
+	// The rows are closed before the second statement is issued, so the two reads
+	// never hold two connections of the pool at once.
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("closing sprint rows: %w", err)
+	}
+
+	if err := db.resolveSprintMembership(ctx, sprints); err != nil {
+		return nil, err
 	}
 
 	return sprints, nil

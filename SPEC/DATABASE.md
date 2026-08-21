@@ -1058,6 +1058,37 @@ DELETE FROM sprint_tasks WHERE sprint_id = ?;
 DELETE FROM sprints WHERE id = ?;
 ```
 
+#### Read the Membership of Many Sprints (Grouped)
+
+Returns the member task ids of each sprint of a given set, in one round trip, so that a caller can walk the result once and index it by sprint.
+
+```sql
+-- Membership of several sprints at once. The IN list is built from the same
+-- number of placeholders as ids, never by string concatenation.
+SELECT sprint_id, task_id
+FROM sprint_tasks
+WHERE sprint_id IN (?, ?, ...)
+ORDER BY sprint_id ASC, task_id ASC;
+```
+
+**What it answers.** A `Sprint` object carries two fields that are not columns of `sprints` and are computed on every read: `tasks`, the ids of its member tasks, and `task_count`, how many there are (`MODELS.md § Sprint`). The sprint listing returns both fields populated for every sprint it returns (`COMMANDS.md § List Sprints`), and this statement is where their values come from.
+
+**Bounded query count.** The listing costs a bounded number of queries that does not grow with the number of sprints: one read of `sprints` for the sprint rows themselves, then this **one** grouped read over the ids those rows carry. The listing issues no query per sprint and no query per returned id. This is the same shape, adopted for the same reason, as `Count Comments for Many Parents (Grouped)` and `Resolve the Sprint of Many Tasks (Grouped)` below: a listing must not pay one round trip per row it returns.
+
+**Counting is not a second query.** `task_count` is the number of ids this statement returns for that sprint. No `COUNT(*)` statement is issued to obtain it, so the count and the id list are two readings of one result and can never disagree.
+
+**No row for a sprint without tasks.** A sprint that holds no task has no `sprint_tasks` row, so the result carries no entry for that sprint id. The absence of an entry is the answer: the caller reads that sprint's membership as the empty set and reports `tasks` as `[]` and `task_count` as `0` — never `null`, and never a placeholder row (see `DATA_FORMATS.md § Implementation Notes`, Empty arrays).
+
+**Reads no task row.** The statement reads `sprint_tasks` alone and joins nothing. The answer is a set of ids per sprint, so no `tasks` row is fetched to produce it, exactly as in the ids-alone read of `List by Sprint` above.
+
+**Membership is not status.** The statement applies no predicate on task status, because membership is a `sprint_tasks` row and status is a `tasks` column. A member task in `BACKLOG` status is therefore included, and both computed fields count it (see `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`).
+
+**Empty id set.** When the id set is empty, the application skips the query entirely instead of issuing a statement with an empty `IN` list, as every grouped read that takes a set of ids does.
+
+**Ordering.** `sprint_id` ascending groups the rows of one sprint together, so the result is walkable in a single pass; `task_id` ascending fixes the order of the ids inside each sprint, and that is the order the `tasks` field publishes (`MODELS.md § Sprint Field Constraints`). The ordering is fixed by the statement, so it is a property of the read and not an accident of how the rows happen to be stored. Neither column is the sprint's planned execution order: that order is `sprint_tasks.position`, read through the sprint task listings in `List by Sprint` above.
+
+**Index.** Served by `idx_sprint_tasks_lookup`, whose columns are exactly `(sprint_id, task_id)`: the leading column serves the `IN` lookup and the pair serves the ordering, so the statement needs no sort step and reads no table row, and the query plan reports a covering index search. The composite primary key of `sprint_tasks` covers the same two columns in the same order. No index is added for this query. See Performance Optimization below.
+
 #### Resolve the Sprint of Many Tasks (Grouped)
 
 Returns the sprint each task of a given set belongs to, in one round trip, so that a caller can walk the result once and index it by task without re-sorting.
@@ -1577,7 +1608,7 @@ The following composite indexes are designed to optimize frequently executed que
 |------------|-------|---------|---------|
 | `idx_tasks_status_priority` | tasks | (status, priority DESC) | Optimizes ListTasks with status filter and priority ordering |
 | `idx_tasks_priority_created` | tasks | (priority DESC, created_at) | Optimizes priority filtering with date-based ordering |
-| `idx_sprint_tasks_lookup` | sprint_tasks | (sprint_id, task_id) | Optimizes sprint task relationship lookups |
+| `idx_sprint_tasks_lookup` | sprint_tasks | (sprint_id, task_id) | Optimizes sprint task relationship lookups, and the grouped membership read of many sprints |
 | `idx_audit_date` | audit | (performed_at DESC) | Optimizes audit log date range queries |
 | `idx_task_comments_task_created` | task_comments | (task_id, created_at ASC) | Optimizes the comment listing of one task, and the grouped comment count of many tasks |
 | `idx_sprint_comments_sprint_created` | sprint_comments | (sprint_id, created_at ASC) | Optimizes the comment listing of one sprint |
@@ -1598,6 +1629,7 @@ The following composite indexes are designed to optimize frequently executed que
 **idx_sprint_tasks_lookup:**
 - Query pattern: `WHERE sprint_id = ?` in sprint_tasks table
 - Optimizes GetSprintTasks and sprint membership checks
+- The same index serves the grouped `WHERE sprint_id IN (...) ORDER BY sprint_id ASC, task_id ASC` read that resolves the `tasks` and `task_count` of every sprint the sprint listing returns (see `Read the Membership of Many Sprints (Grouped)` above): the leading column serves the lookup and the pair serves the ordering, so that read needs no sort step and touches no table row
 - Expected improvement: 70% query time reduction for sprint operations
 
 **idx_audit_date:**

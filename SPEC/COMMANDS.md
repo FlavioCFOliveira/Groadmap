@@ -1292,6 +1292,51 @@ rmp sprint ls -r <name>
 
 **JSON Output:** Array of Sprint objects.
 
+**Options:**
+- `--status <state>` - Optional filter that restricts the result to sprints whose
+  status equals `<state>` (one of PENDING, OPEN, CLOSED). It selects which
+  **sprints** the array contains; it does not filter the tasks of any sprint. An
+  invalid value is rejected with exit code 6.
+
+**Membership fields.** Every Sprint object the array contains carries its
+membership resolved, exactly as `Get Sprint` below returns it for the same sprint:
+
+- `task_count` is the sprint's real member-task count: the number of tasks that
+  belong to the sprint at the moment of the read, in any status. It is never a
+  placeholder, and a sprint that holds tasks never reports `0`.
+- `tasks` is the list of the member tasks' **ids** — integers, not task objects.
+  The listing returns ids only. A caller that needs the task records themselves
+  reads `List Sprint Tasks` below.
+- The two fields always agree: `task_count` equals the number of entries in
+  `tasks` in every Sprint object the listing returns.
+- The ids appear in ascending task-id order, the order `Get Sprint` returns them
+  in. That order is not the sprint's planned in-sprint execution order; a caller
+  that needs the planned order reads `List Sprint Tasks` below or the `task_order`
+  field of `Sprint Statistics` below. See `MODELS.md § Sprint Field Constraints`.
+- The `--status` filter does not change any of this: the sprints the filter keeps
+  carry the same `task_count` and `tasks` values they carry in the unfiltered
+  listing.
+
+**A sprint with no member task** reports `task_count` `0` and `tasks` `[]` — an
+empty JSON array, never `null` — exactly as `Get Sprint` reports the same sprint.
+The general rule is stated in `DATA_FORMATS.md § Implementation Notes`
+(Empty arrays).
+
+**One sprint, one answer.** `sprint list`, `sprint get`, and `sprint tasks` never
+disagree about the same sprint read at the same moment. The `task_count` and
+`tasks` values a sprint carries in the listing are the values `sprint get` returns
+for that sprint, and the ids in `tasks` are exactly the ids of the tasks
+`sprint tasks` returns for that sprint when no `-s, --status` filter is applied.
+The three commands present the same membership at different depths: `sprint list`
+and `sprint get` publish it as the sprint's `tasks` ids and `task_count`, while
+`sprint tasks` returns the member task records themselves, in the sprint's planned
+order, and accepts a task-status filter that the other two do not.
+
+**Read cost.** The listing resolves `task_count` and `tasks` for every sprint it
+returns in a bounded number of queries that does not grow with the number of
+sprints: it issues no query per sprint (see
+`DATABASE.md § Read the Membership of Many Sprints (Grouped)`).
+
 ### Create Sprint
 
 ```bash
@@ -1361,6 +1406,13 @@ rmp sprint get -r <name> <id>
 
 **JSON Output:** Single Sprint object, including the sprint `title` and `description` fields.
 
+**Membership fields.** The object carries `task_count`, the sprint's real
+member-task count, and `tasks`, the ids of its member tasks in ascending task-id
+order. A sprint with no member task reports `0` and `[]`. These are the same two
+fields, carrying the same values in the same order, that `List Sprints` above
+returns for this sprint; neither command resolves membership that the other leaves
+unresolved. See `MODELS.md § Sprint Field Constraints`.
+
 ### List Sprint Tasks
 
 ```bash
@@ -1368,6 +1420,17 @@ rmp sprint tasks -r <name> <id> [-s, --status <state>] [--order-by-priority]
 ```
 
 **JSON Output:** Array of Task objects associated with the sprint, ordered by sprint position (default) or, when `--order-by-priority` is given, by priority DESC with sprint position as the tiebreaker.
+
+**Relation to the sprint's membership fields.** Without `-s, --status`, the ids of
+the task objects this command returns are exactly the ids the same sprint carries
+in its `tasks` field in `List Sprints` and `Get Sprint` above, and their number is
+that sprint's `task_count`. The two presentations carry the same membership at
+different depths and in different orders: this command returns whole task records,
+in the sprint's planned in-sprint execution order by default and by priority when
+`--order-by-priority` is given, while `tasks` carries ids alone in ascending
+task-id order. With `-s, --status`, this command returns a subset of the sprint's
+member tasks, while `task_count` keeps counting every member task whatever its
+status.
 
 **Options:**
 - `-s, --status <state>` - Optional filter that restricts the result to tasks

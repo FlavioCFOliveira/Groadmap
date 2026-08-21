@@ -210,6 +210,8 @@ Example with unlimited capacity (`max_tasks` is `null`):
 
 **Note:** The `tasks` and `task_count` fields are computed at runtime from the `sprint_tasks` junction table and are not stored in the `sprints` table. The `max_tasks` field is always present in the JSON output (never omitted); it is `null` when no capacity limit is set and an integer otherwise. The `order` field is always present: it is a positive integer (`> 0`), unique across the roadmap, and is stored in the `order_index` column (the JSON name is `order` because `ORDER` is a reserved SQL keyword). See `MODELS.md § Sprint Field Constraints`.
 
+**Membership in both reads:** every read that produces a Sprint object populates `tasks` and `task_count` — the single object of `rmp sprint get` and every object of the `rmp sprint list` array alike. A Sprint object therefore never shows `tasks` as `null`, and never shows `task_count` as `0` for a sprint that holds tasks. `tasks` carries task **ids** as integers, in ascending id order, and never task objects; `task_count` always equals the number of entries in `tasks`. A sprint with no member task shows `task_count` `0` and `tasks` `[]`, as the second example above does, under the empty-array rule in `Implementation Notes` below. See `COMMANDS.md § List Sprints`.
+
 ### Task Comment
 
 One entry of a task's work log, as returned by `rmp task comment-list`. The fields are defined in `MODELS.md § Task Comment`.
