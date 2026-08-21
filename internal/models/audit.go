@@ -21,7 +21,6 @@ type AuditOperation string
 const (
 	// Task operations
 	OpTaskCreate AuditOperation = "TASK_CREATE"
-	OpTaskUpdate AuditOperation = "TASK_UPDATE"
 	OpTaskDelete AuditOperation = "TASK_DELETE"
 
 	// Task status operations, in the order the canonical catalogue publishes
@@ -44,17 +43,47 @@ const (
 	OpTaskStatusTesting   AuditOperation = "TASK_STATUS_TESTING"
 	OpTaskStatusCompleted AuditOperation = "TASK_STATUS_COMPLETED"
 
+	// The per-field operations of `task edit`, in the order the canonical
+	// catalogue publishes them. Each one names the FIELD the invocation
+	// supplied, not the bare fact that a field changed, so a reader learns
+	// from the operation value alone what the edit was about — the same rule
+	// that gives the status operations their destination
+	// (SPEC/DATABASE.md § One Row per Thing That Happened, rule 1).
+	//
+	// The group stops at five because the last two fields `task edit` can set
+	// already have an operation of their own. `task edit -p 5` and
+	// `task prio <id> 5` perform the identical mutation, so they write the
+	// identical operation, TASK_PRIORITY_CHANGE, and a filter on it finds
+	// every priority change whichever command made it; --severity pairs with
+	// `task sev` the same way (SPEC/COMMANDS.md § Edit Task).
+	OpTaskTitleChange                  AuditOperation = "TASK_TITLE_CHANGE"
+	OpTaskTypeChange                   AuditOperation = "TASK_TYPE_CHANGE"
+	OpTaskFunctionalRequirementsChange AuditOperation = "TASK_FUNCTIONAL_REQUIREMENTS_CHANGE"
+	OpTaskTechnicalRequirementsChange  AuditOperation = "TASK_TECHNICAL_REQUIREMENTS_CHANGE"
+	OpTaskAcceptanceCriteriaChange     AuditOperation = "TASK_ACCEPTANCE_CRITERIA_CHANGE"
+
 	OpTaskPriorityChange AuditOperation = "TASK_PRIORITY_CHANGE"
 	OpTaskSeverityChange AuditOperation = "TASK_SEVERITY_CHANGE"
 	OpTaskReopen         AuditOperation = "TASK_REOPEN"
 
 	// Sprint operations
-	OpSprintCreate     AuditOperation = "SPRINT_CREATE"
-	OpSprintUpdate     AuditOperation = "SPRINT_UPDATE"
-	OpSprintDelete     AuditOperation = "SPRINT_DELETE"
-	OpSprintStart      AuditOperation = "SPRINT_START"
-	OpSprintClose      AuditOperation = "SPRINT_CLOSE"
-	OpSprintReopen     AuditOperation = "SPRINT_REOPEN"
+	OpSprintCreate AuditOperation = "SPRINT_CREATE"
+	OpSprintDelete AuditOperation = "SPRINT_DELETE"
+	OpSprintStart  AuditOperation = "SPRINT_START"
+	OpSprintClose  AuditOperation = "SPRINT_CLOSE"
+	OpSprintReopen AuditOperation = "SPRINT_REOPEN"
+
+	// The per-field operations of `sprint update`, the four-member
+	// counterpart of the five above and governed by the same rule. Each is
+	// named for the column it records a change to rather than for the flag
+	// that requests it, which is why --max-tasks writes
+	// SPRINT_MAX_TASKS_CHANGE and --order writes SPRINT_ORDER_CHANGE against
+	// the order_index column (SPEC/COMMANDS.md § Update Sprint).
+	OpSprintTitleChange       AuditOperation = "SPRINT_TITLE_CHANGE"
+	OpSprintDescriptionChange AuditOperation = "SPRINT_DESCRIPTION_CHANGE"
+	OpSprintMaxTasksChange    AuditOperation = "SPRINT_MAX_TASKS_CHANGE"
+	OpSprintOrderChange       AuditOperation = "SPRINT_ORDER_CHANGE"
+
 	OpSprintAddTask    AuditOperation = "SPRINT_ADD_TASK"
 	OpSprintRemoveTask AuditOperation = "SPRINT_REMOVE_TASK"
 
@@ -99,12 +128,16 @@ const (
 	// filter value the CLI rejects, which is the defect this group exists to
 	// prevent (SPEC/MODELS.md § Audit Operation, rule 3).
 	//
-	// TASK_STATUS_CHANGE and SPRINT_MOVE_TASK are the members today, in the
-	// order the catalogue publishes its group. The catalogue also marks
-	// TASK_UPDATE and SPRINT_UPDATE legacy, but each of the two is still the
-	// operation its command writes; they move here when the per-field
-	// operations that replace them land.
+	// All four members of the catalogue's group are here, in the order it
+	// publishes them. TASK_UPDATE and SPRINT_UPDATE joined the group when the
+	// per-field operations above took over from them, and the two say between
+	// them why the group is retained rather than deleted: a stored TASK_UPDATE
+	// row records that a task was edited without recording which field the
+	// edit touched, so no migration can reclassify it into one of the five
+	// operations that replaced it. The row keeps the only name it has.
 	OpTaskStatusChange AuditOperation = "TASK_STATUS_CHANGE"
+	OpTaskUpdate       AuditOperation = "TASK_UPDATE"
+	OpSprintUpdate     AuditOperation = "SPRINT_UPDATE"
 	OpSprintMoveTask   AuditOperation = "SPRINT_MOVE_TASK"
 )
 
@@ -156,22 +189,29 @@ func OperationCarriesRelatedEntity(op AuditOperation) bool {
 // value is readable even though nothing writes it.
 var ValidAuditOperations = []AuditOperation{
 	OpTaskCreate,
-	OpTaskUpdate,
 	OpTaskDelete,
 	OpTaskStatusBacklog,
 	OpTaskStatusSprint,
 	OpTaskStatusDoing,
 	OpTaskStatusTesting,
 	OpTaskStatusCompleted,
+	OpTaskTitleChange,
+	OpTaskTypeChange,
+	OpTaskFunctionalRequirementsChange,
+	OpTaskTechnicalRequirementsChange,
+	OpTaskAcceptanceCriteriaChange,
 	OpTaskPriorityChange,
 	OpTaskSeverityChange,
 	OpTaskReopen,
 	OpSprintCreate,
-	OpSprintUpdate,
 	OpSprintDelete,
 	OpSprintStart,
 	OpSprintClose,
 	OpSprintReopen,
+	OpSprintTitleChange,
+	OpSprintDescriptionChange,
+	OpSprintMaxTasksChange,
+	OpSprintOrderChange,
 	OpSprintAddTask,
 	OpSprintRemoveTask,
 	OpSprintMoveTaskOut,
@@ -191,6 +231,8 @@ var ValidAuditOperations = []AuditOperation{
 	// LEGACY, listed last exactly as the catalogue publishes its group, and in
 	// its order within the group.
 	OpTaskStatusChange,
+	OpTaskUpdate,
+	OpSprintUpdate,
 	OpSprintMoveTask,
 }
 

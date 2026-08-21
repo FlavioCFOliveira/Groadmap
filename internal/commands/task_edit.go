@@ -11,6 +11,28 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
+// taskEditFieldOperations maps every column `task edit` can set to the audit
+// operation that records a change to it. The keys are the column names the
+// UPDATE statement is built from, not the flag spellings, because the statement
+// is what the audit rows follow: they are written in the same order the columns
+// are applied.
+//
+// Two of the seven reuse the operation of a dedicated setter command rather than
+// declaring one of their own. `task edit -p 5` and `task prio <id> 5` perform
+// the identical mutation, so recording them under different operations would
+// have meant a filter on TASK_PRIORITY_CHANGE missed half the priority changes
+// in the roadmap; --severity pairs with `task sev` the same way
+// (SPEC/COMMANDS.md § Edit Task).
+var taskEditFieldOperations = map[string]models.AuditOperation{
+	"title":                   models.OpTaskTitleChange,
+	"type":                    models.OpTaskTypeChange,
+	"functional_requirements": models.OpTaskFunctionalRequirementsChange,
+	"technical_requirements":  models.OpTaskTechnicalRequirementsChange,
+	"acceptance_criteria":     models.OpTaskAcceptanceCriteriaChange,
+	"priority":                models.OpTaskPriorityChange,
+	"severity":                models.OpTaskSeverityChange,
+}
+
 // taskEdit modifies an existing task's fields.
 //
 // Parameters:
@@ -36,7 +58,7 @@ import (
 //
 // Side effects:
 //   - Updates task record in database
-//   - Logs TASK_UPDATE audit entry
+//   - Logs one audit entry per supplied field, all sharing one performed_at
 //   - Produces no stdout on success (exit 0), per SPEC/COMMANDS.md § Edit Task
 //
 // Complexity: O(1) - single database update
@@ -176,6 +198,11 @@ func taskEdit(args []string) error {
 	}
 	defer database.Close()
 
+	// Capture timestamp once for the entire operation: every entry this
+	// invocation writes carries it, which is what makes the entries of one
+	// `task edit` recognisable as one event.
+	now := utils.NowISO8601()
+
 	// Update within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
 		// Sort field names so the generated UPDATE statement is stable
@@ -188,9 +215,21 @@ func taskEdit(args []string) error {
 
 		setParts := make([]string, 0, len(fields))
 		queryArgs := make([]any, 0, len(fields)+1)
+		ops := make([]models.AuditOperation, 0, len(fields))
 		for _, field := range fields {
+			op, known := taskEditFieldOperations[field]
+			if !known {
+				// Unreachable from the CLI: every key of `updates` is one of
+				// the seven literals above. Refusing the whole edit rather
+				// than writing the column silently is what keeps "one entry
+				// per field the invocation supplies" true of a future field
+				// too — an unmapped column fails loudly instead of changing
+				// the task with nothing in its history to show for it.
+				return fmt.Errorf("%w: no audit operation is declared for field %q", utils.ErrInvalidUpdate, field)
+			}
 			setParts = append(setParts, field+" = ?")
 			queryArgs = append(queryArgs, updates[field])
+			ops = append(ops, op)
 		}
 		queryArgs = append(queryArgs, taskID)
 
@@ -208,6 +247,14 @@ func taskEdit(args []string) error {
 			return fmt.Errorf("%w: task %d not found", utils.ErrNotFound, taskID)
 		}
 
-		return db.LogAuditTx(tx, models.OpTaskUpdate, models.EntityTask, taskID, utils.NowISO8601())
+		// One entry per field the invocation supplied, in the order the UPDATE
+		// applied them, inside the transaction that performed it: a rejected
+		// edit therefore writes no entry at all, and a committed one is never
+		// recorded for only some of the fields it changed. The trigger is the
+		// presence of the flag, not a difference in value — nothing above
+		// compares a supplied value against the stored one, so `task edit`
+		// records the command issued exactly as `task prio` already does
+		// (SPEC/COMMANDS.md § Edit Task).
+		return db.LogAuditFieldsTx(tx, models.EntityTask, taskID, now, ops...)
 	})
 }

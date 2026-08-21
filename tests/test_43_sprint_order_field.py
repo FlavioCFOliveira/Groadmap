@@ -19,7 +19,7 @@ Coverage matrix
 7.  --order update on CLOSED sprint → exit 6, value unchanged.
 8.  --order update to value already used by another sprint → exit 5.
 9.  sprint get / sprint list include "order" with correct values.
-10. audit history shows SPRINT_UPDATE after an order change.
+10. audit history shows SPRINT_ORDER_CHANGE after an order change.
 11. Help text: sprint create --help and sprint update --help mention --order;
     sprint create --ai-help flags array contains --order.
 """
@@ -356,46 +356,53 @@ class TestSprintOrderField:
             self.test.assert_sprint_shape(sprint)
 
     # ================================================================ Test 10
-    def test_audit_history_shows_sprint_update_after_order_change(self):
+    def test_audit_history_shows_sprint_order_change_after_order_change(self):
         """After an --order update, audit history for the sprint must contain
-        at least one SPRINT_UPDATE entry."""
+        at least one SPRINT_ORDER_CHANGE entry.
+
+        The entry names the field the invocation supplied. The generic
+        SPRINT_UPDATE it replaced is LEGACY and no command writes it
+        (SPEC/COMMANDS.md § Update Sprint)."""
         sid = self._create_sprint(
             "Contract Testing Sprint",
             "Add provider-side Pact contracts for every consumer integration",
         )
 
-        # Confirm there is no SPRINT_UPDATE entry before the update
+        # Confirm there is no SPRINT_ORDER_CHANGE entry before the update
         history_before = self.test.run_cmd_json(
             ["audit", "history", "-r", self.roadmap, "SPRINT", str(sid)]
         )
         ops_before = [e["operation"] for e in history_before]
-        assert "SPRINT_UPDATE" not in ops_before, (
-            f"unexpected SPRINT_UPDATE before order change: {ops_before}"
+        assert "SPRINT_ORDER_CHANGE" not in ops_before, (
+            f"unexpected SPRINT_ORDER_CHANGE before order change: {ops_before}"
         )
 
         # Perform the order change
         code, _, _ = self._update_sprint(sid, order=15)
         assert code == EXIT_OK, f"order update must succeed, got {code}"
 
-        # Verify SPRINT_UPDATE appears in audit history
+        # Verify SPRINT_ORDER_CHANGE appears in audit history
         history_after = self.test.run_cmd_json(
             ["audit", "history", "-r", self.roadmap, "SPRINT", str(sid)]
         )
         ops_after = [e["operation"] for e in history_after]
-        assert "SPRINT_UPDATE" in ops_after, (
-            f"SPRINT_UPDATE not found in audit history after order change; got: {ops_after}"
+        assert "SPRINT_ORDER_CHANGE" in ops_after, (
+            f"SPRINT_ORDER_CHANGE not found in audit history after order change; got: {ops_after}"
+        )
+        assert "SPRINT_UPDATE" not in ops_after, (
+            f"SPRINT_UPDATE is LEGACY and must never be written; got: {ops_after}"
         )
 
         # Verify the audit entry references the correct entity type and id
         update_entries = [
             e for e in history_after
-            if e["operation"] == "SPRINT_UPDATE"
+            if e["operation"] == "SPRINT_ORDER_CHANGE"
         ]
         assert any(e["entity_id"] == sid for e in update_entries), (
-            f"no SPRINT_UPDATE entry references sprint id {sid}; entries: {update_entries}"
+            f"no SPRINT_ORDER_CHANGE entry references sprint id {sid}; entries: {update_entries}"
         )
         assert all(e["entity_type"] == "SPRINT" for e in update_entries), (
-            f"SPRINT_UPDATE entry has wrong entity_type: {update_entries}"
+            f"SPRINT_ORDER_CHANGE entry has wrong entity_type: {update_entries}"
         )
 
     # ================================================================ Test 11a

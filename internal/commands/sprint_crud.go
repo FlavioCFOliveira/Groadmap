@@ -390,22 +390,30 @@ func sprintUpdate(args []string) error {
 
 		setParts := make([]string, 0, 4)
 		args := make([]any, 0, 5)
+		// One operation per supplied field, collected alongside the column it
+		// belongs to so the entries are written in the same order the UPDATE
+		// applies them (SPEC/COMMANDS.md § Update Sprint).
+		ops := make([]models.AuditOperation, 0, 4)
 
 		if title != "" {
 			setParts = append(setParts, "title = ?")
 			args = append(args, title)
+			ops = append(ops, models.OpSprintTitleChange)
 		}
 		if description != "" {
 			setParts = append(setParts, "description = ?")
 			args = append(args, description)
+			ops = append(ops, models.OpSprintDescriptionChange)
 		}
 		if hasMaxTasks {
 			setParts = append(setParts, "max_tasks = ?")
 			args = append(args, maxTasks)
+			ops = append(ops, models.OpSprintMaxTasksChange)
 		}
 		if hasOrder {
 			setParts = append(setParts, "order_index = ?")
 			args = append(args, newOrder)
+			ops = append(ops, models.OpSprintOrderChange)
 		}
 		args = append(args, sprintID)
 		query := fmt.Sprintf("UPDATE sprints SET %s WHERE id = ?", strings.Join(setParts, ", ")) // #nosec G201 -- setParts are hard-coded literal column clauses ("title = ?", "description = ?", "max_tasks = ?", "order_index = ?"); every user value is bound via tx.Exec parameters, no user data is concatenated into SQL
@@ -428,7 +436,15 @@ func sprintUpdate(args []string) error {
 			return fmt.Errorf("%w: sprint %d not found", utils.ErrNotFound, sprintID)
 		}
 
-		return db.LogAuditTx(tx, models.OpSprintUpdate, models.EntitySprint, sprintID, now)
+		// One entry per supplied field, all carrying the timestamp captured
+		// above, inside the transaction that performed the UPDATE: a rejected
+		// update — an out-of-range bound, a CLOSED sprint, an order collision —
+		// writes no entry at all. The trigger is the presence of the flag and
+		// not a difference in value: nothing above compares a supplied value
+		// against the stored one, so `sprint update --order 3` on a sprint
+		// already at 3 still records the command that was issued
+		// (SPEC/COMMANDS.md § Update Sprint).
+		return db.LogAuditFieldsTx(tx, models.EntitySprint, sprintID, now, ops...)
 	})
 }
 

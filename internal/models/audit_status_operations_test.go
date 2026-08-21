@@ -136,12 +136,16 @@ func TestLegacyStatusChangeStaysValidAndUnwritten(t *testing.T) {
 	}
 }
 
-// legacyAuditOperations are the members of the catalogue's LEGACY group that
-// internal/models has already retired — readable, never written — in the order
-// the catalogue publishes them. TASK_UPDATE and SPRINT_UPDATE are marked legacy
-// by the catalogue too, but each is still the operation its command writes, so
-// neither is here yet.
-var legacyAuditOperations = []AuditOperation{OpTaskStatusChange, OpSprintMoveTask}
+// legacyAuditOperations are the members of the catalogue's LEGACY group —
+// readable, never written — in the order the catalogue publishes them. All four
+// are here: TASK_UPDATE and SPRINT_UPDATE joined the group when the per-field
+// operations of `task edit` and `sprint update` took over from them.
+var legacyAuditOperations = []AuditOperation{
+	OpTaskStatusChange,
+	OpTaskUpdate,
+	OpSprintUpdate,
+	OpSprintMoveTask,
+}
 
 // TestOperationCarriesCommitHash pins the two-operation answer that the single
 // audit writer enforces at the point of the INSERT. The check is exhaustive over

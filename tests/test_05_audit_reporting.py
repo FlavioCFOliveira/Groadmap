@@ -44,7 +44,12 @@ class TestAuditReporting:
         print("✓ Audit log on task create test passed")
 
     def test_audit_log_tracks_task_updates(self):
-        """Test that audit log tracks task updates."""
+        """Test that audit log names the field each edit supplied.
+
+        `task edit -t` writes TASK_TITLE_CHANGE, not the generic TASK_UPDATE:
+        that operation is LEGACY and no command writes it any more
+        (SPEC/COMMANDS.md § Edit Task).
+        """
         roadmap = self.test.create_roadmap()
 
         # Create and modify task
@@ -68,9 +73,12 @@ class TestAuditReporting:
 
         operations = [e["operation"] for e in result]
         assert "TASK_CREATE" in operations
-        assert "TASK_UPDATE" in operations
+        assert "TASK_TITLE_CHANGE" in operations
         assert "TASK_PRIORITY_CHANGE" in operations
         assert "TASK_SEVERITY_CHANGE" in operations
+        assert "TASK_UPDATE" not in operations, (
+            f"TASK_UPDATE is LEGACY and must never be written; got: {operations}"
+        )
 
         print("✓ Audit log tracks task updates test passed")
 

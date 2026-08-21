@@ -224,6 +224,16 @@ var auditOperationDescriptions = map[models.AuditOperation]string{
 		"state, including `SPRINT` → `BACKLOG` and `COMPLETED` → `BACKLOG`. Status changes made as a " +
 		"side effect of a sprint operation are logged against the sprint instead, as `SPRINT_ADD_TASK` / " +
 		"`SPRINT_REMOVE_TASK` / `SPRINT_DELETE`.",
+	// Task field edits. One operation per field `task edit` can set, each
+	// naming the field rather than the fact that an edit happened; the last
+	// two of the seven fields are the priority and severity operations below,
+	// which `task edit` shares with `task prio` and `task sev`.
+	models.OpTaskTitleChange:                  "`title` supplied to `task edit`.",
+	models.OpTaskTypeChange:                   "`type` supplied to `task edit`.",
+	models.OpTaskFunctionalRequirementsChange: "`functional_requirements` supplied to `task edit`.",
+	models.OpTaskTechnicalRequirementsChange:  "`technical_requirements` supplied to `task edit`.",
+	models.OpTaskAcceptanceCriteriaChange:     "`acceptance_criteria` supplied to `task edit`.",
+
 	models.OpTaskPriorityChange: "Priority change (0-9) via `task priority`.",
 	models.OpTaskSeverityChange: "Severity change (0-9) via `task severity`.",
 	models.OpTaskReopen: "Task returned to BACKLOG via `task reopen`; lifecycle timestamps, " +
@@ -232,12 +242,21 @@ var auditOperationDescriptions = map[models.AuditOperation]string{
 		"is kept.",
 
 	// Sprint lifecycle.
-	models.OpSprintCreate:     "New sprint created.",
-	models.OpSprintUpdate:     "Sprint title, description, capacity, or execution order updated via `sprint update`.",
-	models.OpSprintDelete:     "Sprint deleted.",
-	models.OpSprintStart:      "Sprint started (PENDING → OPEN).",
-	models.OpSprintClose:      "Sprint closed (OPEN → CLOSED).",
-	models.OpSprintReopen:     "Sprint reopened (CLOSED → OPEN).",
+	models.OpSprintCreate: "New sprint created.",
+	models.OpSprintUpdate: "Sprint title, description, capacity, or execution order updated via `sprint update`.",
+	models.OpSprintDelete: "Sprint deleted.",
+	models.OpSprintStart:  "Sprint started (PENDING → OPEN).",
+	models.OpSprintClose:  "Sprint closed (OPEN → CLOSED).",
+	models.OpSprintReopen: "Sprint reopened (CLOSED → OPEN).",
+
+	// Sprint field updates, the `sprint update` counterpart of the five task
+	// field edits above. Each names the column it records, so --max-tasks and
+	// --order appear here as their columns and not as their flags.
+	models.OpSprintTitleChange:       "`title` supplied to `sprint update`.",
+	models.OpSprintDescriptionChange: "`description` supplied to `sprint update`.",
+	models.OpSprintMaxTasksChange:    "`max_tasks` supplied to `sprint update`.",
+	models.OpSprintOrderChange:       "`order_index` supplied to `sprint update`.",
+
 	models.OpSprintAddTask:    "Task added to sprint.",
 	models.OpSprintRemoveTask: "Task removed from sprint.",
 	models.OpSprintMoveTask:   "Task moved between sprints.",

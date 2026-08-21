@@ -24,7 +24,7 @@
 // What the tie below does and does not cover, stated plainly:
 //
 //   - It covers WORDING. TestGenerate_AuditOperationDescriptionsMatchSpecCatalogue
-//     re-derives all 29 descriptions from SPEC/DATABASE.md at test time and
+//     re-derives all 43 descriptions from SPEC/DATABASE.md at test time and
 //     compares byte for byte, so the transcription in static.go cannot drift from
 //     the catalogue in either direction. Editing the catalogue without editing
 //     static.go fails, and the failure prints the exact string to paste.
@@ -79,7 +79,7 @@ var catalogueEntry = regexp.MustCompile("^- `([A-Z_]+)` - (.+)$")
 
 // minCatalogueEntries is the floor below which a parse is treated as evidence
 // that the scan has stopped matching rather than as evidence about the SPEC. The
-// catalogue holds 29 entries today; the floor sits well under that so a genuine
+// catalogue holds 43 entries today; the floor sits well under that so a genuine
 // removal does not trip it, and far enough over zero that a gate measuring
 // nothing cannot report success.
 const minCatalogueEntries = 20

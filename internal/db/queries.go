@@ -2079,6 +2079,35 @@ func LogAuditTx(tx *sql.Tx, op models.AuditOperation, entityType models.EntityTy
 	return nil
 }
 
+// LogAuditFieldsTx writes one audit row per field a single invocation supplied,
+// all of them against the same entity and all of them carrying the same
+// performed_at. It is the writer for the two commands that edit fields,
+// `task edit` and `sprint update`, whose audit contract is one row per supplied
+// flag rather than one row per invocation (SPEC/COMMANDS.md § Edit Task and
+// § Update Sprint).
+//
+// ops is the operations of the supplied fields, in the order the caller built
+// its UPDATE statement, so the stored rows read in the same order the command
+// applied the columns. A caller that supplied no field passes none and no row
+// is written, which is the no-op `task edit` documents.
+//
+// The single performedAt parameter is the point of the function. "All entries of
+// one invocation share one performed_at" is what makes them recognisable as one
+// event, and a per-row timestamp is the natural way to get that wrong: with
+// millisecond resolution and a handful of rows, a re-stamped write is
+// indistinguishable from a correct one almost every time it runs, so the defect
+// would survive testing. Taking the timestamp as a parameter makes the property
+// structural — the loop has no clock to call — instead of leaving it to be
+// asserted after the fact.
+func LogAuditFieldsTx(tx *sql.Tx, entityType models.EntityType, entityID int, performedAt string, ops ...models.AuditOperation) error {
+	for _, op := range ops {
+		if err := LogAuditTx(tx, op, entityType, entityID, performedAt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // AuditFilter bundles every optional knob for GetAuditEntries. A nil
 // pointer in any of the *Field positions means "no filter on this field".
 // Limit == 0 means "no limit"; Offset == 0 means "start from the top".
