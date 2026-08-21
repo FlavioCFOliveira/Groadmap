@@ -99,6 +99,32 @@ The rule is identical on all four subcommands that accept a body on standard inp
 
 **Validation order.** `--type` is validated — for presence on `comment-add`, and for value in both subcommands — before the body is resolved, so a missing or invalid type fails immediately instead of leaving the command waiting on standard input for a body it would reject anyway.
 
+### Comment Positional Argument Contract
+
+Each of the eight comment subcommands takes **exactly one** positional argument, and that argument is always an id:
+
+| Subcommand | Positional argument | What the id identifies |
+|------------|---------------------|------------------------|
+| `task comment-add` | `<task-id>` | The task the comment is added to |
+| `task comment-list` | `<task-id>` | The task whose comments are listed |
+| `task comment-edit` | `<comment-id>` | The comment itself, in `task_comments` |
+| `task comment-remove` | `<comment-id>` | The comment itself, in `task_comments` |
+| `sprint comment-add` | `<sprint-id>` | The sprint the comment is added to |
+| `sprint comment-list` | `<sprint-id>` | The sprint whose comments are listed |
+| `sprint comment-edit` | `<comment-id>` | The comment itself, in `sprint_comments` |
+| `sprint comment-remove` | `<comment-id>` | The comment itself, in `sprint_comments` |
+
+The rules are:
+
+1. The positional id is required. An invocation that supplies none fails with exit code 2 and a message naming the id the subcommand expects, as each subcommand's own block below states.
+2. No second positional argument is accepted. Once the subcommand's own flags and their values have been consumed, any remaining positional argument fails with exit code 2 (`utils.ErrInvalidInput`) and the message `Error: invalid input: unexpected argument "X"`, where `X` is the offending token. The command neither ignores the extra token nor acts on the id that precedes it: standard input is not read, the roadmap database is not opened, no comment is added, changed, deleted, or listed, and stdout stays empty.
+3. When more than one extra positional argument is present, the command names the first of them in command-line order, and only that one, then stops.
+4. The position of the extra token does not matter. `comment-add <task-id> <extra> --type NOTE --body "text"` and `comment-add <task-id> --type NOTE --body "text" <extra>` are the same error, because the refusal is of whatever remains once the flags have been consumed, not of a specific slot on the command line.
+5. A leftover token that begins with `-` is a flag and not a positional argument, so it is reported as an unknown flag — `Error: invalid input: unknown flag: --foo` — and not as an unexpected argument. This holds for every `-`-prefixed token, digits included: on these subcommands `-1` is an unknown flag. The value of `--body` is the one exception, and it is not a leftover token at all: `--body -1` supplies the body `-1`, under rule 4 of `Comment Body Input Source and Precedence` above.
+6. The refusal happens while the arguments are parsed: after the positional id has been parsed, and before the `--type` value is validated, before the body is resolved, and before the roadmap database is opened. An invocation carrying an extra positional argument is therefore refused with exit code 2 even when it also carries an invalid `--type` value, which on its own would be exit code 6, and even when it names a roadmap, task, sprint, or comment that does not exist, which on its own would be exit code 4.
+
+The refusal wording is the one the CLI already uses for a stray positional argument elsewhere: the `graph` subcommands refuse one with the same exit code and the same `unexpected argument "X"` text, and `rmp web` refuses one under the same exit code because it takes no positional argument at all (see `Web Interface` below).
+
 ### Validation Behavior
 
 - **Whitespace trimming:** Leading and trailing whitespace is trimmed before validation
@@ -1079,8 +1105,9 @@ A task comment is a durable, typed log entry attached to a task. Task comments r
 
 The four subcommands below are flat subcommands of the `task` family, in the form `task comment-<verb>`. There is no separate `rmp comment` family, and there is no three-level `rmp task comment add` form.
 
-Three properties apply to all four and are not repeated in each block:
+Four properties apply to all four subcommands and are not repeated in full in each block:
 
+- **Each subcommand takes exactly one positional argument.** That argument is the id, and a second or later positional argument is refused with exit code 2 rather than ignored. `Comment Positional Argument Contract` above is canonical, and it governs the `sprint` comment subcommands in the same terms.
 - **Comment ids are per-family.** A comment id identifies a row in `task_comments`; the same number in the `sprint` family identifies an unrelated row in `sprint_comments`. `rmp task comment-edit 7` and `rmp sprint comment-edit 7` address different comments (see `DATABASE.md § task_comments Table`).
 - **Comments are accepted in every task status,** including `COMPLETED`. No comment subcommand checks or changes a task's status, and `task reopen` does not touch comments.
 - **`-y, --type` carries a different enum here than elsewhere in the `task` family.** On `task list`, `task create`, and `task edit`, `-y, --type` carries a `TaskType` value; on the four comment subcommands it carries a comment type. The flag spelling is deliberately reused, but the two enums are unrelated and never interchangeable: a `TaskType` value such as `BUG` is rejected on a comment subcommand with exit code 6, and a comment type such as `FINDING` is rejected on `task create` by that command's own type validation. Validation is therefore per subcommand, and the help and the AI Agent Contract keep the two sets apart (see `HELP.md § Comment subcommand help specifics`).
@@ -1101,6 +1128,7 @@ rmp task comment-add -r <name> <task-id> --type FINDING < finding.txt
 
 **Arguments:**
 - `task-id` - Task ID (required, positive integer)
+- Exactly one positional argument is accepted. A second or later positional argument is refused with exit code 2 and the message `Error: invalid input: unexpected argument "X"`; the comment is not added (see `Comment Positional Argument Contract` above).
 
 **Options:**
 - `-r, --roadmap <name>` - REQUIRED. Target roadmap.
@@ -1121,14 +1149,15 @@ rmp task comment-add -r <name> <task-id> --type FINDING < finding.txt
 **Validation Order:**
 1. Resolve the roadmap; a missing `-r` fails with exit code 3.
 2. Parse the positional `task-id`; a non-integer or non-positive value fails with exit code 2.
-3. Verify `--type` is present; an absent flag fails with exit code 2.
-4. Validate the type value against the seven task values; an invalid value fails with exit code 6.
-5. Resolve the body from `--body` or standard input; no body fails with exit code 2.
-6. Verify the task exists; a missing task fails with exit code 4.
-7. Validate the body length and its control characters; a violation fails with exit code 6.
-8. Insert the comment and write the audit entry in one transaction.
+3. Consume the subcommand's flags and their values; an unrecognised flag fails with exit code 2, and so does any positional argument left over after the `task-id` (see `Comment Positional Argument Contract` above).
+4. Verify `--type` is present; an absent flag fails with exit code 2.
+5. Validate the type value against the seven task values; an invalid value fails with exit code 6.
+6. Resolve the body from `--body` or standard input; no body fails with exit code 2.
+7. Verify the task exists; a missing task fails with exit code 4.
+8. Validate the body length and its control characters; a violation fails with exit code 6.
+9. Insert the comment and write the audit entry in one transaction.
 
-Steps 3 and 4 both precede step 5 deliberately: a missing or invalid `--type` is reported immediately, instead of leaving the command waiting on standard input for a body it is going to reject anyway.
+Steps 4 and 5 both precede step 6 deliberately: a missing or invalid `--type` is reported immediately, instead of leaving the command waiting on standard input for a body it is going to reject anyway. Step 3 precedes both for the same reason: a malformed argument list is reported before the command waits on anything or opens the roadmap.
 
 **JSON Output:** `{"id": 12}` — the id of the created comment, in the same shape `task create` uses. Exit code 0.
 
@@ -1141,6 +1170,7 @@ Steps 3 and 4 both precede step 5 deliberately: a missing or invalid `--type` is
 | Roadmap not found | 4 | `Error: resource not found: roadmap "X" not found` |
 | Invalid task ID format | 2 | `Error: invalid input: invalid task ID: "X" (must be a positive integer)` |
 | Missing task ID | 2 | `Error: required parameter missing: task ID required` |
+| Extra positional argument | 2 | `Error: invalid input: unexpected argument "X"` |
 | Unknown flag | 2 | `Error: invalid input: unknown flag: --foo` |
 | Database failure | 1 | `Error: database error: <detail>` |
 
@@ -1159,6 +1189,7 @@ rmp task c-ls -r <name> <task-id> [-y <TYPE>]
 
 **Arguments:**
 - `task-id` - Task ID (required, positive integer)
+- Exactly one positional argument is accepted. A second or later positional argument is refused with exit code 2 and the message `Error: invalid input: unexpected argument "X"`; no listing is produced (see `Comment Positional Argument Contract` above).
 
 **Options:**
 - `-r, --roadmap <name>` - REQUIRED. Target roadmap.
@@ -1178,6 +1209,7 @@ rmp task c-ls -r <name> <task-id> [-y <TYPE>]
 | Invalid `--type` value | 6 | `Error: validation error: invalid comment type "X" for a task comment; valid types: FINDING, HYPOTHESIS, TEST, DECISION, PROGRESS, UPDATE, NOTE` |
 | Invalid task ID format | 2 | `Error: invalid input: invalid task ID: "X" (must be a positive integer)` |
 | Missing task ID | 2 | `Error: required parameter missing: task ID required` |
+| Extra positional argument | 2 | `Error: invalid input: unexpected argument "X"` |
 | Roadmap not specified | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
 
 **Audit:** None. Listing is a read and writes no audit entry.
@@ -1198,6 +1230,7 @@ rmp task comment-edit -r <name> <comment-id> < revised.txt
 
 **Arguments:**
 - `comment-id` - Comment ID (required, positive integer). This is the comment's id, **not** the id of the task it belongs to.
+- Exactly one positional argument is accepted. A second or later positional argument is refused with exit code 2 and the message `Error: invalid input: unexpected argument "X"`; the comment is not changed (see `Comment Positional Argument Contract` above).
 
 **Options:**
 - `-r, --roadmap <name>` - REQUIRED. Target roadmap.
@@ -1220,11 +1253,14 @@ rmp task comment-edit -r <name> <comment-id> < revised.txt
 **Validation Order:**
 1. Resolve the roadmap; a missing `-r` fails with exit code 3.
 2. Parse the positional `comment-id`; a non-integer or non-positive value fails with exit code 2.
-3. Validate the `--type` value when the flag is present; an invalid value fails with exit code 6, before standard input is considered.
-4. Resolve the new body when one is being set, from `--body` or from standard input; when neither `--type` nor a body is supplied, the command fails with exit code 2.
-5. Verify the comment exists in `task_comments`; a missing comment fails with exit code 4.
-6. Validate the body's length and control characters; a violation fails with exit code 6.
-7. Apply the update, stamp `updated_at`, and write the audit entry in one transaction.
+3. Consume the subcommand's flags and their values; an unrecognised flag fails with exit code 2, and so does any positional argument left over after the `comment-id` (see `Comment Positional Argument Contract` above).
+4. Validate the `--type` value when the flag is present; an invalid value fails with exit code 6, before standard input is considered.
+5. Resolve the new body when one is being set, from `--body` or from standard input; when neither `--type` nor a body is supplied, the command fails with exit code 2.
+6. Verify the comment exists in `task_comments`; a missing comment fails with exit code 4.
+7. Validate the body's length and control characters; a violation fails with exit code 6.
+8. Apply the update, stamp `updated_at`, and write the audit entry in one transaction.
+
+Step 3 precedes step 5 for the same reason step 4 does: a malformed argument list is reported at once, instead of leaving the command waiting on standard input for a body it is going to reject anyway.
 
 **No-op is not accepted.** Unlike `task edit`, which succeeds with exit code 0 when no field is given, `comment-edit` requires at least one change and fails with exit code 2 when none is requested. A change is requested by a `--type` value, by a `--body` value, or by a body arriving on standard input, so the flagless form `comment-edit <comment-id> < revised.txt` is a valid edit and not a no-op: the body on standard input is the change. Only the case where `--type` is absent, `--body` is absent, and standard input is empty, whitespace only, or not connected requests no change at all, and that is the case that fails with exit code 2 and the message "at least one of --type or --body is required". `task edit` can distinguish "no flags" from "flags to apply" without ambiguity; `comment-edit` cannot on the flags alone, because an absent `--body` with an absent `--type` is precisely the form that means "read the new body from standard input", so the decision is made after standard input has been resolved.
 
@@ -1238,6 +1274,7 @@ rmp task comment-edit -r <name> <comment-id> < revised.txt
 | Roadmap not specified | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
 | Invalid comment ID format | 2 | `Error: invalid input: invalid comment ID: "X" (must be a positive integer)` |
 | Missing comment ID | 2 | `Error: required parameter missing: comment ID required` |
+| Extra positional argument | 2 | `Error: invalid input: unexpected argument "X"` |
 | Database failure | 1 | `Error: database error: <detail>` |
 
 A comment id that exists in `sprint_comments` but not in `task_comments` is a not-found condition here (exit code 4): the two id spaces are independent.
@@ -1257,11 +1294,12 @@ rmp task c-rm -r <name> <comment-id>
 
 **Arguments:**
 - `comment-id` - Comment ID (required, positive integer). This is the comment's id, **not** the id of the task it belongs to.
+- Exactly one positional argument is accepted. A second or later positional argument is refused with exit code 2 and the message `Error: invalid input: unexpected argument "X"`; nothing is deleted (see `Comment Positional Argument Contract` above).
 
 **Options:**
 - `-r, --roadmap <name>` - REQUIRED. Target roadmap.
 
-**Single-id command:** `comment-remove` takes exactly one comment id. It accepts no comma-separated list, so the batch fail-fast rules that govern `task remove` do not apply.
+**Single-id command:** `comment-remove` takes exactly one comment id, in two senses. The id is a single value: the command accepts no comma-separated list, so the batch fail-fast rules that govern `task remove` do not apply. The id is also the only positional argument: a second positional argument is an error and never a second deletion, so the command deletes either exactly one comment or none at all.
 
 **Output (success):** No output, exit code 0.
 
@@ -1273,6 +1311,7 @@ rmp task c-rm -r <name> <comment-id>
 | Roadmap not specified | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
 | Invalid comment ID format | 2 | `Error: invalid input: invalid comment ID: "X" (must be a positive integer)` |
 | Missing comment ID | 2 | `Error: required parameter missing: comment ID required` |
+| Extra positional argument | 2 | `Error: invalid input: unexpected argument "X"` |
 | Database failure | 1 | `Error: database error: <detail>` |
 
 **Audit:** Logged as `TASK_COMMENT_DELETE` against the parent task (`entity_type = TASK`, `entity_id` = the id of the task the comment belonged to), in the same transaction as the delete.
@@ -2105,7 +2144,7 @@ keeps the record that the sprint existed and was deleted.
 
 A sprint comment is a durable, typed log entry attached to a sprint. Sprint comments record only the progression of the work during the sprint's development: findings, decisions taken, progress, and the reason behind a change to the sprint's definition. Work carried out inside one task belongs in that task's own comments, not here.
 
-The four subcommands below are flat subcommands of the `sprint` family, in the form `sprint comment-<verb>`, and they mirror the four task comment subcommands exactly (see `COMMANDS.md § Task Comments`). Two differences apply throughout:
+The four subcommands below are flat subcommands of the `sprint` family, in the form `sprint comment-<verb>`, and they mirror the four task comment subcommands exactly (see `COMMANDS.md § Task Comments`). Each takes exactly one positional argument, and refuses a second one with exit code 2, under the same `Comment Positional Argument Contract` above. Two differences apply throughout:
 
 - **The accepted type set is smaller.** A sprint comment accepts `FINDING`, `DECISION`, `PROGRESS`, and `UPDATE`. The task-only values `HYPOTHESIS`, `TEST`, and `NOTE` are rejected with exit code 6.
 - **The id space is separate.** A comment id here identifies a row in `sprint_comments`. The same number in the `task` family identifies an unrelated row in `task_comments`.
@@ -2130,6 +2169,7 @@ rmp sprint comment-add -r <name> <sprint-id> --type DECISION < decision.txt
 
 **Arguments:**
 - `sprint-id` - Sprint ID (required, positive integer)
+- Exactly one positional argument is accepted. A second or later positional argument is refused with exit code 2 and the message `Error: invalid input: unexpected argument "X"`; the comment is not added (see `Comment Positional Argument Contract` above).
 
 **Options:**
 - `-r, --roadmap <name>` - REQUIRED. Target roadmap.
@@ -2147,7 +2187,7 @@ rmp sprint comment-add -r <name> <sprint-id> --type DECISION < decision.txt
 | `body` | Max 4096 chars | "Error: field exceeds maximum size: body exceeds maximum length of 4096 characters" | 6 |
 | `body` | No forbidden control characters | "Error: validation error: body: control characters are not allowed" | 6 |
 
-**Validation Order:** identical to `task comment-add`, with the sprint in place of the task: roadmap, then `sprint-id` format, then `--type` presence, then the type value against the four sprint values, then the body, then the sprint's existence, then the body's length and control characters, then the insert and its audit entry in one transaction.
+**Validation Order:** identical to `task comment-add`, with the sprint in place of the task: roadmap, then `sprint-id` format, then the flags — an unrecognised flag or a leftover positional argument fails here with exit code 2 — then `--type` presence, then the type value against the four sprint values, then the body, then the sprint's existence, then the body's length and control characters, then the insert and its audit entry in one transaction.
 
 **JSON Output:** `{"id": 4}` — the id of the created comment. Exit code 0.
 
@@ -2160,6 +2200,7 @@ rmp sprint comment-add -r <name> <sprint-id> --type DECISION < decision.txt
 | Roadmap not found | 4 | `Error: resource not found: roadmap "X" not found` |
 | Invalid sprint ID format | 2 | `Error: invalid input: invalid sprint ID: "X" (must be a positive integer)` |
 | Missing sprint ID | 2 | `Error: required parameter missing: sprint ID required` |
+| Extra positional argument | 2 | `Error: invalid input: unexpected argument "X"` |
 | Unknown flag | 2 | `Error: invalid input: unknown flag: --foo` |
 | Database failure | 1 | `Error: database error: <detail>` |
 
@@ -2178,6 +2219,7 @@ rmp sprint c-ls -r <name> <sprint-id> [-y <TYPE>]
 
 **Arguments:**
 - `sprint-id` - Sprint ID (required, positive integer)
+- Exactly one positional argument is accepted. A second or later positional argument is refused with exit code 2 and the message `Error: invalid input: unexpected argument "X"`; no listing is produced (see `Comment Positional Argument Contract` above).
 
 **Options:**
 - `-r, --roadmap <name>` - REQUIRED. Target roadmap.
@@ -2197,6 +2239,7 @@ rmp sprint c-ls -r <name> <sprint-id> [-y <TYPE>]
 | Invalid `--type` value | 6 | `Error: validation error: invalid comment type "X" for a sprint comment; valid types: FINDING, DECISION, PROGRESS, UPDATE` |
 | Invalid sprint ID format | 2 | `Error: invalid input: invalid sprint ID: "X" (must be a positive integer)` |
 | Missing sprint ID | 2 | `Error: required parameter missing: sprint ID required` |
+| Extra positional argument | 2 | `Error: invalid input: unexpected argument "X"` |
 | Roadmap not specified | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
 
 **Audit:** None. Listing is a read and writes no audit entry.
@@ -2217,6 +2260,7 @@ rmp sprint comment-edit -r <name> <comment-id> < revised.txt
 
 **Arguments:**
 - `comment-id` - Comment ID (required, positive integer). This is the comment's id, **not** the id of the sprint it belongs to.
+- Exactly one positional argument is accepted. A second or later positional argument is refused with exit code 2 and the message `Error: invalid input: unexpected argument "X"`; the comment is not changed (see `Comment Positional Argument Contract` above).
 
 **Options:**
 - `-r, --roadmap <name>` - REQUIRED. Target roadmap.
@@ -2236,7 +2280,7 @@ rmp sprint comment-edit -r <name> <comment-id> < revised.txt
 | `body` | Max 4096 chars | "Error: field exceeds maximum size: body exceeds maximum length of 4096 characters" | 6 |
 | `body` | No forbidden control characters | "Error: validation error: body: control characters are not allowed" | 6 |
 
-**Validation Order:** identical to `task comment-edit`, resolving the comment in `sprint_comments` and validating the type against the four sprint values. At least one change is required, counting a body on standard input as a change; requesting none is exit code 2.
+**Validation Order:** identical to `task comment-edit`, resolving the comment in `sprint_comments` and validating the type against the four sprint values. An unrecognised flag or a leftover positional argument fails with exit code 2 at the same point, before the type value is validated and before standard input is read. At least one change is required, counting a body on standard input as a change; requesting none is exit code 2.
 
 **Output (success):** No output, exit code 0.
 
@@ -2248,6 +2292,7 @@ rmp sprint comment-edit -r <name> <comment-id> < revised.txt
 | Roadmap not specified | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
 | Invalid comment ID format | 2 | `Error: invalid input: invalid comment ID: "X" (must be a positive integer)` |
 | Missing comment ID | 2 | `Error: required parameter missing: comment ID required` |
+| Extra positional argument | 2 | `Error: invalid input: unexpected argument "X"` |
 | Database failure | 1 | `Error: database error: <detail>` |
 
 **Audit:** Logged as `SPRINT_COMMENT_UPDATE` against the parent sprint (`entity_type = SPRINT`, `entity_id` = the id of the sprint the comment belongs to), in the same transaction as the update.
@@ -2265,11 +2310,12 @@ rmp sprint c-rm -r <name> <comment-id>
 
 **Arguments:**
 - `comment-id` - Comment ID (required, positive integer). This is the comment's id, **not** the id of the sprint it belongs to.
+- Exactly one positional argument is accepted. A second or later positional argument is refused with exit code 2 and the message `Error: invalid input: unexpected argument "X"`; nothing is deleted (see `Comment Positional Argument Contract` above).
 
 **Options:**
 - `-r, --roadmap <name>` - REQUIRED. Target roadmap.
 
-**Single-id command:** `comment-remove` takes exactly one comment id and accepts no comma-separated list.
+**Single-id command:** `comment-remove` takes exactly one comment id, in the two senses `task comment-remove` states: the id accepts no comma-separated list, and it is the only positional argument the command takes, so the command deletes either exactly one comment or none at all.
 
 **Output (success):** No output, exit code 0.
 
@@ -2281,6 +2327,7 @@ rmp sprint c-rm -r <name> <comment-id>
 | Roadmap not specified | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
 | Invalid comment ID format | 2 | `Error: invalid input: invalid comment ID: "X" (must be a positive integer)` |
 | Missing comment ID | 2 | `Error: required parameter missing: comment ID required` |
+| Extra positional argument | 2 | `Error: invalid input: unexpected argument "X"` |
 | Database failure | 1 | `Error: database error: <detail>` |
 
 **Audit:** Logged as `SPRINT_COMMENT_DELETE` against the parent sprint (`entity_type = SPRINT`, `entity_id` = the id of the sprint the comment belonged to), in the same transaction as the delete.

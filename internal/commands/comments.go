@@ -218,14 +218,63 @@ func readCommentBodyStdin() (string, error) {
 	return models.ReadCommentBody(os.Stdin)
 }
 
-// parseCommentTypeFlag runs the shared flag parser over what is left after the
+// parseCommentArgs runs the shared flag parser over what is left of a comment
+// subcommand's argument list once the positional id — and, where the subcommand
+// accepts one, the body flag — have been consumed, and refuses everything that
+// remains.
+//
+// This is the ONE place the Comment Positional Argument Contract
+// (SPEC/COMMANDS.md) is enforced. All eight comment subcommands reach it,
+// because the four shared bodies below are the only callers and each family
+// supplies data alone: there is no second copy of the rule to drift from this
+// one.
+//
+// Two refusals live here, both exit code 2 (utils.ErrInvalidInput):
+//
+//   - An unrecognised FLAG, reported by the parser itself. This already worked:
+//     the parser refuses a token it cannot match to a definition.
+//   - A leftover POSITIONAL argument, reported here. The parser COLLECTS
+//     positionals into ParseResult.Args and returns them without complaint, so a
+//     caller that ignored that slice silently ignored the extra token — which is
+//     what `comment-remove <id> <stray>` did, deleting the comment named by the
+//     id and exiting 0 (task #184).
+//
+// Only the FIRST leftover is named, in command-line order, and the parser
+// preserves that order. The refusal is position-independent for the same reason:
+// what is refused is whatever remains once the flags have been consumed, not a
+// particular slot on the command line.
+//
+// A leftover beginning with "-" never reaches this check. The parser classifies
+// every "-"-prefixed token as a flag, so "-1" here is an unknown flag and not an
+// unexpected argument — deliberately unlike the graph family, which reads a
+// negative numeric literal as a query value (SPEC/COMMANDS.md § Comment
+// Positional Argument Contract rule 5). The one "-"-prefixed token that is a
+// value, `--body -1`, is consumed by extractCommentBody before the parser runs.
+func parseCommentArgs(defs []FlagDef, args []string) (*ParseResult, error) {
+	result, err := NewFlagParser(defs).Parse(args)
+	if err != nil {
+		return nil, err
+	}
+	if len(result.Args) > 0 {
+		return nil, fmt.Errorf("%w: unexpected argument %q", utils.ErrInvalidInput, result.Args[0])
+	}
+	return result, nil
+}
+
+// parseCommentTypeFlag runs the shared parse over what is left after the
 // positional id and the body flag have been consumed, and reports the raw
 // `--type` value together with whether the flag was present at all.
 //
 // The value is returned unparsed: the accepted set depends on the family, so the
 // caller applies models.ParseTaskCommentType or models.ParseSprintCommentType.
+//
+// Every caller invokes this BEFORE validating the type value, before resolving
+// the body, and before opening the database, so a malformed argument list is
+// refused with exit code 2 ahead of the exit-6 type verdict, ahead of any wait
+// on standard input, and ahead of the exit-4 not-found verdict. That order is
+// behaviour the SPEC pins, not style.
 func parseCommentTypeFlag(args []string) (string, bool, error) {
-	result, err := NewFlagParser(commentTypeFlagDefs).Parse(args)
+	result, err := parseCommentArgs(commentTypeFlagDefs, args)
 	if err != nil {
 		return "", false, err
 	}
@@ -233,12 +282,13 @@ func parseCommentTypeFlag(args []string) (string, bool, error) {
 	return raw, ok, nil
 }
 
-// rejectUnknownFlags refuses any flag left in args. It serves `comment-remove`,
-// which takes no flag beyond the shared -r / -h, and it runs the shared flag
-// parser with an empty definition set so the "unknown flag" wording is the one
-// every other subcommand produces rather than a second copy of it.
-func rejectUnknownFlags(args []string) error {
-	_, err := NewFlagParser(nil).Parse(args)
+// rejectCommentLeftovers refuses any flag AND any positional argument left in
+// args. It serves `comment-remove`, which takes no flag beyond the shared
+// -r / -h and no positional beyond the comment id, and it goes through
+// parseCommentArgs with an empty definition set so both refusals are worded by
+// the same code every other subcommand uses rather than by a second copy of it.
+func rejectCommentLeftovers(args []string) error {
+	_, err := parseCommentArgs(nil, args)
 	return err
 }
 
@@ -598,7 +648,7 @@ func commentRemove(f *commentFamily, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := rejectUnknownFlags(rest); err != nil {
+	if err := rejectCommentLeftovers(rest); err != nil {
 		return err
 	}
 

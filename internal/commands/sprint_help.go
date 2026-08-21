@@ -743,7 +743,8 @@ Output (stdout JSON):
 Exit codes:
   0  Success
   1  Database failure
-  2  Invalid <sprint-id>, missing --type, or no comment body supplied
+  2  Invalid <sprint-id>, an extra positional argument, missing --type, or
+     no comment body supplied
   3  Missing -r
   4  Sprint not found (or roadmap not found)
   6  Invalid --type value, body over 4096 characters, or control characters
@@ -802,7 +803,7 @@ Output (stdout JSON):
 
 Exit codes:
   0  Success
-  2  Invalid <sprint-id>, or an unknown flag
+  2  Invalid <sprint-id>, an extra positional argument, or an unknown flag
   3  Missing -r
   4  Sprint not found (or roadmap not found)
   6  Invalid --type value
@@ -859,7 +860,8 @@ Output (stdout JSON):
 Exit codes:
   0  Success
   1  Database failure
-  2  Invalid <comment-id>, an empty --body value, or no change requested
+  2  Invalid <comment-id>, an extra positional argument, an empty --body
+     value, or no change requested
   3  Missing -r
   4  Comment not found (or roadmap not found)
   6  Invalid --type value, body over 4096 characters, or control characters
@@ -901,7 +903,8 @@ Output (stdout JSON):
 Exit codes:
   0  Success
   1  Database failure
-  2  Invalid or missing <comment-id>, or an unknown flag
+  2  Invalid or missing <comment-id>, an extra positional argument, or an
+     unknown flag
   3  Missing -r
   4  Comment not found (or roadmap not found)
 
