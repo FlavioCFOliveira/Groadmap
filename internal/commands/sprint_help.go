@@ -137,6 +137,7 @@ Required:
 Output (stdout JSON):
   Flat object with these keys:
     sprint_id                int
+    sprint_title             string
     sprint_description       string
     status                   "PENDING" | "OPEN" | "CLOSED"
     max_tasks                int | null         (null = no capacity cap)

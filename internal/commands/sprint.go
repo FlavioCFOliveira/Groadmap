@@ -135,8 +135,9 @@ Comment rules (per SPEC/COMMANDS.md § Sprint Comments):
 Output (stdout JSON):
   list                                     Array of sprint objects.
   get                                      Single sprint object.
-  show                                     Flat object: sprint_id, sprint_description, status,
-                                           max_tasks, capacity_pct, current_load, task_order,
+  show                                     Flat object: sprint_id, sprint_title,
+                                           sprint_description, status, max_tasks,
+                                           capacity_pct, current_load, task_order,
                                            summary, progress, severity_distribution,
                                            criticality_distribution.
                                            NOTE: does NOT include the task list.
@@ -152,8 +153,8 @@ Output (stdout JSON):
   comment-add                              {"id": <int>}
   comment-list                             Array of comment objects.
   comment-edit, comment-remove             Empty (exit 0 on success).
-  Sprint object keys: id, status, description, created_at, started_at, closed_at,
-  max_tasks, tasks (array of int), task_count.
+  Sprint object keys: id, title, status, description, order, created_at,
+  started_at, closed_at, max_tasks, tasks (array of int), task_count.
   Comment object keys: id, sprint_id, type, body, created_at, updated_at
   (updated_at is null until the comment is first edited).
 
