@@ -8,7 +8,8 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
-// Sentinel errors for sprint validation.
+// Sentinel errors for sprint validation. Each supplies the opening clause of
+// the message it is returned in; see the note on the task sentinels in task.go.
 var (
 	ErrInvalidSprintStatus = errors.New("invalid sprint status")
 	ErrDescriptionRequired = errors.New("description is required")
@@ -56,7 +57,7 @@ func ParseSprintStatus(s string) (SprintStatus, error) {
 	if status, ok := validSprintStatusMap[s]; ok {
 		return status, nil
 	}
-	return "", fmt.Errorf("invalid sprint status: %q: %w", s, ErrInvalidSprintStatus)
+	return "", fmt.Errorf("%w: %q", ErrInvalidSprintStatus, s)
 }
 
 // CanStart checks if a sprint can be started (PENDING -> OPEN).

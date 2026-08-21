@@ -9,6 +9,16 @@ import (
 )
 
 // Sentinel errors for task validation.
+//
+// Each of these supplies the OPENING CLAUSE of the message it is returned in,
+// through a %w verb at the front of the format string:
+//
+//	fmt.Errorf("%w: %q", ErrInvalidTaskType, s)  ->  invalid task type: "BOGUS"
+//
+// The literal must never restate the sentinel's own text. Building the same
+// rejection as fmt.Errorf("invalid task type: %q: %w", s, ErrInvalidTaskType)
+// renders that text twice, which is what users saw until this was corrected.
+// internal/models/error_message_dedup_test.go pins every rendered message.
 var (
 	ErrInvalidTaskType       = errors.New("invalid task type")
 	ErrInvalidTaskStatus     = errors.New("invalid task status")
@@ -94,7 +104,7 @@ func ParseTaskType(s string) (TaskType, error) {
 	if taskType, ok := validTypeMap[s]; ok {
 		return taskType, nil
 	}
-	return "", fmt.Errorf("invalid task type: %q: %w", s, ErrInvalidTaskType)
+	return "", fmt.Errorf("%w: %q", ErrInvalidTaskType, s)
 }
 
 // ValidTaskStatuses contains all valid task statuses.
@@ -129,7 +139,7 @@ func ParseTaskStatus(s string) (TaskStatus, error) {
 	if status, ok := validStatusMap[s]; ok {
 		return status, nil
 	}
-	return "", fmt.Errorf("invalid task status: %q: %w", s, ErrInvalidTaskStatus)
+	return "", fmt.Errorf("%w: %q", ErrInvalidTaskStatus, s)
 }
 
 // CanTransitionTo checks if a status transition is valid according to the state machine.
@@ -178,19 +188,19 @@ func (ts TaskStatus) CanTransitionTo(newStatus TaskStatus) bool {
 func ValidateStatusTransition(currentStatus, newStatus string) error {
 	// Validate current status
 	if !IsValidTaskStatus(currentStatus) {
-		return fmt.Errorf("invalid current status: %q: %w", currentStatus, ErrInvalidCurrentStatus)
+		return fmt.Errorf("%w: %q", ErrInvalidCurrentStatus, currentStatus)
 	}
 
 	// Validate new status
 	if !IsValidTaskStatus(newStatus) {
-		return fmt.Errorf("invalid target status: %q: %w", newStatus, ErrInvalidTargetStatus)
+		return fmt.Errorf("%w: %q", ErrInvalidTargetStatus, newStatus)
 	}
 
 	current := TaskStatus(currentStatus)
 	target := TaskStatus(newStatus)
 
 	if !current.CanTransitionTo(target) {
-		return fmt.Errorf("cannot transition from %q to %q: %w", currentStatus, newStatus, ErrCannotTransition)
+		return fmt.Errorf("%w from %q to %q", ErrCannotTransition, currentStatus, newStatus)
 	}
 
 	return nil
@@ -292,16 +302,16 @@ func (t *Task) Validate() error {
 		// SPEC/ARCHITECTURE.md; the local ErrPriorityOutOfRange sentinel is kept
 		// for internal callers. Previously only the local sentinel was chained,
 		// so handleError fell through to exit 1 (finding #46).
-		return fmt.Errorf("%w: priority must be between 0 and 9, got %d: %w", utils.ErrValidation, t.Priority, ErrPriorityOutOfRange)
+		return fmt.Errorf("%w: %w, got %d", utils.ErrValidation, ErrPriorityOutOfRange, t.Priority)
 	}
 	if t.Severity < 0 || t.Severity > 9 {
-		return fmt.Errorf("%w: severity must be between 0 and 9, got %d: %w", utils.ErrValidation, t.Severity, ErrSeverityOutOfRange)
+		return fmt.Errorf("%w: %w, got %d", utils.ErrValidation, ErrSeverityOutOfRange, t.Severity)
 	}
 	if !IsValidTaskStatus(string(t.Status)) {
-		return fmt.Errorf("invalid status: %q: %w", t.Status, ErrInvalidStatus)
+		return fmt.Errorf("%w: %q", ErrInvalidStatus, t.Status)
 	}
 	if !IsValidTaskType(string(t.Type)) {
-		return fmt.Errorf("invalid type: %q: %w", t.Type, ErrInvalidType)
+		return fmt.Errorf("%w: %q", ErrInvalidType, t.Type)
 	}
 
 	// Validate dates
@@ -470,10 +480,10 @@ func (u *TaskUpdate) Validate() error {
 		return fmt.Errorf("%w: acceptance_criteria exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskAcceptanceCriteria)
 	}
 	if u.Priority != nil && (*u.Priority < 0 || *u.Priority > 9) {
-		return fmt.Errorf("%w: priority must be between 0 and 9, got %d: %w", utils.ErrValidation, *u.Priority, ErrPriorityOutOfRange)
+		return fmt.Errorf("%w: %w, got %d", utils.ErrValidation, ErrPriorityOutOfRange, *u.Priority)
 	}
 	if u.Severity != nil && (*u.Severity < 0 || *u.Severity > 9) {
-		return fmt.Errorf("%w: severity must be between 0 and 9, got %d: %w", utils.ErrValidation, *u.Severity, ErrSeverityOutOfRange)
+		return fmt.Errorf("%w: %w, got %d", utils.ErrValidation, ErrSeverityOutOfRange, *u.Severity)
 	}
 	return nil
 }

@@ -249,7 +249,7 @@ func IsValidAuditOperation(s string) bool {
 // ParseAuditOperation parses a string into an AuditOperation.
 func ParseAuditOperation(s string) (AuditOperation, error) {
 	if !IsValidAuditOperation(s) {
-		return "", fmt.Errorf("invalid audit operation: %q: %w", s, ErrInvalidAuditOperation)
+		return "", fmt.Errorf("%w: %q", ErrInvalidAuditOperation, s)
 	}
 	return AuditOperation(s), nil
 }
@@ -271,7 +271,7 @@ func IsValidEntityType(s string) bool {
 // ParseEntityType parses a string into an EntityType.
 func ParseEntityType(s string) (EntityType, error) {
 	if !IsValidEntityType(s) {
-		return "", fmt.Errorf("invalid entity type: %q: %w", s, ErrInvalidEntityType)
+		return "", fmt.Errorf("%w: %q", ErrInvalidEntityType, s)
 	}
 	return EntityType(s), nil
 }
@@ -308,13 +308,13 @@ type AuditEntry struct {
 // Validate checks if the audit entry data is valid.
 func (a *AuditEntry) Validate() error {
 	if !IsValidAuditOperation(a.Operation) {
-		return fmt.Errorf("invalid operation: %q: %w", a.Operation, ErrInvalidOperation)
+		return fmt.Errorf("%w: %q", ErrInvalidOperation, a.Operation)
 	}
 	if !IsValidEntityType(a.EntityType) {
-		return fmt.Errorf("invalid entity type: %q: %w", a.EntityType, ErrInvalidEntityType)
+		return fmt.Errorf("%w: %q", ErrInvalidEntityType, a.EntityType)
 	}
 	if a.EntityID <= 0 {
-		return fmt.Errorf("entity_id must be positive, got %d: %w", a.EntityID, ErrEntityIDNotPositive)
+		return fmt.Errorf("%w, got %d", ErrEntityIDNotPositive, a.EntityID)
 	}
 	if a.PerformedAt == "" {
 		return ErrPerformedAtRequired
