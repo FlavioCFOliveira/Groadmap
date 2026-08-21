@@ -7,15 +7,137 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.15.0] - 2026-08-21
+
+The release in which a task stops being a status and starts being a record. Three
+sprints land together. Groadmap gains **comments** — a typed, timestamped log
+attached to a task or a sprint, so that work can answer, months later and to
+someone who was not there, what was tried, what was found, and why it went the way
+it did. It gains **commit tracking**: entering `DOING` and reaching `COMPLETED` now
+require the git commit that brackets the work, so a task points at the code history
+that produced it. Its **audit log stops being generic**: `TASK_STATUS_CHANGE`
+gives way to five destination-named operations, `TASK_UPDATE` and `SPRINT_UPDATE`
+give way to one entry per changed field, relational operations name **both**
+entities instead of one, and every entry can carry the commit that bracketed it.
+The operation catalogue grows from 23 to **43**. The read-only **web interface** is
+rebuilt around how work is actually read: the roadmap tasks page becomes a Kanban
+board with header search and three filters, the sprint page's member-task table
+becomes a three-column board that cannot disagree with its own summary line, and
+the server's absorbed errors — previously discarded — are now written to the
+console through `log/slog`.
+
+Two things are **removed or made mandatory** and will break callers. The task
+`specialists` field is gone entirely, taking `task assign` and `task unassign` with
+it. And `task stat <ids> DOING` and `task stat <ids> COMPLETED` now **refuse to run**
+without `--commit-open` and `--commit-close` respectively. Both are described in
+full in the two BREAKING sections below; read them before upgrading.
+
+Under a strict reading of Semantic Versioning 2.0.0, the two backward-incompatible
+changes above are `MAJOR` changes: existing invocations that succeeded on `1.14.0`
+now fail on `1.15.0`. The project has deliberately chosen to publish them as
+**`1.15.0`**, on the ground that the affected surface is the roadmap-authoring CLI
+rather than a consumed library API, and that both failures are loud, immediate, and
+exit non-zero rather than silently changing a result. That choice does not soften
+the incompatibility, and the two sections below state plainly what stops working.
+
+The database schema advances **four migrations in one release, `1.8.0` → `1.12.0`**,
+applied automatically and in order on the first command run against an existing
+roadmap. See **Notes** for the migration path and what is not reversible.
+
+### Removed — BREAKING
+
+- **The task `specialists` field is gone, end to end.** The field recorded which
+  specialists a task was assigned to. It is removed from the model, from storage,
+  from the command surface, from the web interface, and from the audit catalogue.
+  Nothing replaces it.
+
+  **What stops working:**
+
+  | Invocation | Result on `1.15.0` |
+  |------------|--------------------|
+  | `rmp task assign <ids> <specialists>` | Exit **2** — unknown subcommand |
+  | `rmp task unassign <ids> <specialists>` | Exit **2** — unknown subcommand |
+  | `rmp task create ... -sp/--specialists <v>` | Exit **2** — unknown flag |
+  | `rmp task edit <id> -sp/--specialists <v>` | Exit **2** — unknown flag |
+  | `rmp task list -sp/--specialists <v>` | Exit **2** — unknown flag |
+
+  **What changes in output.** The `Task` JSON object no longer carries a
+  `specialists` key, on any command that returns a task (`list`, `get`, `next`,
+  `subtasks`, `blockers`, `blocking`) and on the web interface's task detail modal.
+  A consumer that reads `task["specialists"]` must stop doing so; a consumer that
+  reads it defensively sees the key simply absent.
+
+  **What is deleted, and is not recoverable.** Migration `1.9.0 → 1.10.0` drops the
+  `tasks.specialists` column. The stored values go with it and cannot be recovered
+  from the database afterwards. A caller who needs them must export them **before**
+  running a `1.15.0` binary against the roadmap; see **Notes**.
+
+  **The audit catalogue loses two operations.** `TASK_ASSIGN` and `TASK_UNASSIGN`
+  are removed from `ValidAuditOperations` and are no longer accepted by
+  `rmp audit list --operation`. Historical rows carrying those values are **not**
+  deleted — the migration touches no audit row — but they can no longer be selected
+  by operation.
+
+### Changed — BREAKING
+
+- **A task can no longer start or finish without recording where in the code
+  history it did so.** `rmp task stat <ids> DOING` now requires `--commit-open`
+  (short `-co`) and `rmp task stat <ids> COMPLETED` now requires `--commit-close`
+  (short `-cc`). Both invocations previously succeeded with no flag at all; both
+  now **exit 6** and change nothing.
+
+  ```bash
+  # 1.14.0 — succeeded
+  rmp task stat -r myproject 42 DOING
+  rmp task stat -r myproject 42 COMPLETED --summary "Shipped"
+
+  # 1.15.0 — the same invocations exit 6 and change nothing
+  # Error: --commit-open is required when transitioning to DOING
+  # Error: --commit-close is required when transitioning to COMPLETED
+
+  # 1.15.0 — what to write instead
+  rmp task stat -r myproject 42 DOING --commit-open $(git rev-parse HEAD)
+  rmp task stat -r myproject 42 COMPLETED --commit-close $(git rev-parse HEAD) --summary "Shipped"
+  ```
+
+  **Every route into those two states is affected**, including the re-entry into
+  `DOING` from `TESTING`. On a re-entry the supplied hash **replaces** the stored
+  one; no history of earlier values is kept.
+
+  **Each flag is rejected on any other target state** (exit 6), mirroring the rule
+  that already governs `--summary`. `--commit-open` on a target other than `DOING`
+  and `--commit-close` on a target other than `COMPLETED` are refused.
+
+  **One hash applies to the whole batch.** Every task named in a comma-separated
+  `<task-ids>` receives the same value, exactly as every task receives the same
+  `--summary`. A caller needing different hashes issues separate commands.
+
+  **Validation runs before anything is resolved or written.** The commit flags are
+  checked at step 4 of the `stat` validation order — before ID resolution and before
+  any mutation — so a batch in which any check fails leaves every task in the batch
+  untouched.
+
+  **Format, and what Groadmap does not do.** A commit hash is 7 to 64 hexadecimal
+  characters, stored lowercase, and enforced by a `CHECK` constraint as well as by
+  the application. Groadmap **derives nothing**: it invokes no git command, reads no
+  working directory, inspects no repository, and does not check that the hash names
+  a commit that exists anywhere. The caller supplies the value.
+
+  **Neither field is editable.** `task create` accepts neither flag, because a task
+  is created in `BACKLOG`, and `task edit` cannot change either value. A wrong hash
+  is corrected by performing the transition again where the state machine allows it.
+
+  **Practical impact on automation.** Any script, agent, or CI step that drives
+  `task stat ... DOING` or `task stat ... COMPLETED` must be updated to pass a hash.
+  There is no environment variable, no configuration key, and no opt-out.
+
 ### Added
 
 - **Comments on tasks and sprints: a durable record of findings and decisions.**
   Groadmap recorded what work was planned and what state it was in, but nothing of
-  what was learned while doing it. A task or a sprint can now answer, months later
-  and to someone who was not there, what was tried, what was found, and why it went
-  the way it did. A comment is a typed, timestamped log entry attached to a task or
-  a sprint; a task or sprint holds as many as the work needs, and the log is read
-  oldest first, because the order is the story it tells.
+  what was learned while doing it. A comment is a typed, timestamped log entry
+  attached to a task or a sprint; a task or sprint holds as many as the work needs,
+  and the log is read oldest first, because the order is the story it tells.
 
   Eight new subcommands, four in each family, in the flat form
   `<family> comment-<verb>`. There is no separate `rmp comment` family and no
@@ -48,16 +170,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   enum keys, `TaskCommentType` and `SprintCommentType`.
 
 - **A comment body from standard input.** The body is supplied through `--body` or,
-  when that flag is absent, read in full from standard input to EOF — the same
-  mechanism the `graph` subcommands already use for `--query`, so a multi-line
-  finding can be piped or redirected in without shell quoting. There is no
-  `--body-file` flag and no path argument; the commands open no file. On
-  `comment-edit` standard input is read only when `--type` is absent too, so a
-  type-only edit never blocks waiting for input. `--type` is validated before the
-  body is resolved, so a missing or invalid type fails immediately rather than
-  leaving the command waiting on input it would reject anyway. Bodies are trimmed
-  at the edges, preserve interior line breaks, are capped at 4096 characters, and
-  reject control characters like every other free-text field.
+  when that flag is absent, read from standard input — the same mechanism the
+  `graph` subcommands already use for `--query`, so a multi-line finding can be
+  piped or redirected in without shell quoting. There is no `--body-file` flag and
+  no path argument; the commands open no file. On `comment-edit` standard input is
+  read only when `--type` is absent too, so a type-only edit never blocks waiting
+  for input. `--type` is validated before the body is resolved, so a missing or
+  invalid type fails immediately rather than leaving the command waiting on input it
+  would reject anyway. Bodies are trimmed at the edges, preserve interior line
+  breaks, are capped at 4096 characters, and reject control characters like every
+  other free-text field. The read is **bounded**: it stops the moment the body
+  cannot fit, so an oversized body is refused without ever being buffered.
 
 - **Comments on the read-only web interface.** The task detail modal renders the
   task's comments as a chronological timeline placed last in the modal body, and
@@ -70,7 +193,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   interface displays comments and never writes them: the CLI remains the sole write
   path.
 
-- **Six new audit operations.** `TASK_COMMENT_CREATE`, `TASK_COMMENT_UPDATE`,
+- **`commit_open` and `commit_close` on the task model.** Two nullable fields
+  recording the commit the work started from and the commit it was concluded at.
+  Both are returned on every `Task` JSON object, `null` until the task reaches
+  `DOING` and `COMPLETED` respectively, and both are shown on the web interface's
+  task detail modal. See the BREAKING section above for how they are written.
+
+- **Five destination-named audit operations replace one generic status
+  operation.** `TASK_STATUS_BACKLOG`, `TASK_STATUS_SPRINT`, `TASK_STATUS_DOING`,
+  `TASK_STATUS_TESTING`, and `TASK_STATUS_COMPLETED`. The audit log previously
+  recorded that a task's status changed but never to what; the destination was
+  recoverable only by replaying the whole history. `TASK_STATUS_CHANGE` is retained
+  as a **LEGACY** value — still accepted by `audit list --operation`, never written
+  again.
+
+- **Nine per-field audit operations replace two generic update operations.**
+  `TASK_TITLE_CHANGE`, `TASK_TYPE_CHANGE`, `TASK_FUNCTIONAL_REQUIREMENTS_CHANGE`,
+  `TASK_TECHNICAL_REQUIREMENTS_CHANGE`, `TASK_ACCEPTANCE_CRITERIA_CHANGE`,
+  `SPRINT_TITLE_CHANGE`, `SPRINT_DESCRIPTION_CHANGE`, `SPRINT_MAX_TASKS_CHANGE`, and
+  `SPRINT_ORDER_CHANGE`. An edit now writes **one entry per field supplied**, in the
+  deterministic field order the `UPDATE` statement is built with, all sharing one
+  `performed_at`. A row is written per flag **supplied**, not per value that
+  differs: supplying a value equal to the stored one still writes its row, exactly
+  as `task prio` already did. `TASK_UPDATE` and `SPRINT_UPDATE` join the LEGACY
+  group.
+
+  This also settles an inconsistency: `task prio <id> 5` wrote
+  `TASK_PRIORITY_CHANGE` while `task edit <id> -p 5`, performing the identical
+  mutation, wrote `TASK_UPDATE`. Both now write `TASK_PRIORITY_CHANGE`.
+
+- **A directional pair replaces the single move operation.**
+  `SPRINT_MOVE_TASK_OUT` and `SPRINT_MOVE_TASK_IN` are written against the source
+  and the destination sprint respectively, so a sprint's history records losing
+  tasks as well as gaining them. `SPRINT_MOVE_TASK` joins the LEGACY group.
+
+- **Six comment audit operations.** `TASK_COMMENT_CREATE`, `TASK_COMMENT_UPDATE`,
   `TASK_COMMENT_DELETE`, `SPRINT_COMMENT_CREATE`, `SPRINT_COMMENT_UPDATE`, and
   `SPRINT_COMMENT_DELETE`. Each is written in the same transaction as the change it
   records, and each is logged against the **parent** entity, never against the
@@ -78,32 +235,323 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   leaves a trace that it existed and was removed. Listing comments is a read and
   writes no audit entry.
 
+- **Two new audit columns, and two new keys on every audit entry.**
+  `related_entity_id` names the counterpart of a relational operation, and
+  `commit_hash` carries the commit that bracketed the work. Both are returned on
+  **every** entry returned by `rmp audit list` and `rmp audit history`, `null` where
+  unused, taking the entry from five keys to **seven**.
+
+- **A structural guarantee on both new columns.** `LogAuditTx`, the package's only
+  audit writer, refuses a commit hash on any operation outside
+  `TASK_STATUS_DOING` and `TASK_STATUS_COMPLETED`, and refuses a counterpart on any
+  operation outside the eight relational ones. The invariant is enforced by the
+  writer rather than restated at each call site: the wrong call cannot compile a row
+  into existence.
+
+- **The roadmap tasks page is a Kanban board.** `/roadmaps/{name}/tasks` presents
+  every task of the roadmap as a read-only board of five fixed status columns, each
+  header carrying a count badge. The page reads every task of the roadmap, so its
+  per-column counts state facts about the roadmap rather than about a page of it.
+  Each card is a `<button>`, reachable by pointer, touch, and keyboard, and opens
+  the read-only task detail modal. The board is the page's only task presentation:
+  there is no table view.
+
+- **Header search and three filters on the tasks board.** A search box in the page
+  header plus `type`, `priority`, and `severity` filters, carried in the URL as the
+  `q`, `type`, `priority`, and `severity` query parameters. On a cold load they are
+  applied in memory over the rows already read; narrowing in the browser issues no
+  request at all, because every card is already in the document. The search term is
+  trimmed and case-folded with the **server's** whitespace set and mapping, not the
+  browser's, so the same term selects the same cards on both paths.
+
+- **The task detail modal is filled on demand from a JSON endpoint.** Opening a task
+  fetches that task's fields and comments, so the page's own read does not grow with
+  the number of tasks rendered.
+
+- **The sprint page's member tasks are a three-column board.** `WAITING`
+  (`BACKLOG` or `SPRINT`), `DOING` (`DOING` or `TESTING`), and `CLOSED`
+  (`COMPLETED`) — the same grouping the sprint's status summary line already uses,
+  so the column counts and the line agree by construction rather than by
+  coincidence. Each column is ordered by the question it answers: `WAITING` by
+  planned in-sprint execution order, because it is a queue; `DOING` and `CLOSED`
+  most-recent-first, because they are records of what has happened.
+
+- **A structured console log for `rmp web`.** The server absorbs every per-request
+  failure into an HTTP status and keeps serving, and its response body is
+  deliberately opaque so no internal detail reaches the browser. That detail was not
+  merely withheld, it was **discarded**: every `500` path dropped the error value and
+  no package imported `log/slog`, so an operator facing a failing page had a silent
+  terminal. The console is now the counterpart of the opaque response: one
+  `key=value` record per failure on **stderr**, carrying the method, the path, the
+  roadmap, the subject, the status, and the error, with UTC timestamps in the
+  project's canonical ISO 8601 form. A rejected query-bar query is a `WARN` (the
+  user's query failed); a server failure is an `ERROR`. The three ad-hoc
+  `warning: ` lines at startup — non-loopback bind, unreadable roadmap list,
+  per-roadmap migration skip — become `WARN` records, so stderr speaks with one
+  voice.
+
+  Deliberate exclusions, specified rather than omitted: `404` and `405` are not
+  logged, there is no access log, and the client address is not recorded. Logging
+  ordinary navigation would bury genuine failures under every mistyped URL. Stdout
+  still carries only the startup URL object, and the log adds no flag, no
+  configuration surface, and no dependency.
+
+- **A per-request time budget on the graph data endpoint.** The endpoint executes
+  the caller's query under a **5-second deadline** covering both the run against the
+  engine's read path and the walk over the result. The deadline is derived from the
+  request's own context, so a client that disconnects still cancels immediately and a
+  client that stays connected can no longer hold a query running indefinitely. The
+  budget bounds the **work**; the injected node `LIMIT` bounds only the **result**,
+  and neither substitutes for the other. Exhausting the budget is an ordinary query
+  execution failure: HTTP `400` with `kind` `execution`, no new status, no new error
+  class, and the server keeps serving.
+
 ### Changed
 
-- **Database schema `1.8.0` → `1.9.0`.** Migration `1.8.0 → 1.9.0` adds the
-  `task_comments` and `sprint_comments` tables and one index each,
-  `idx_task_comments_task_created` and `idx_sprint_comments_sprint_created`, both
-  on `(parent_id, created_at ASC)` to serve the oldest-first read directly. The two
-  tables are independent, so comment ids are per-family: `rmp task comment-edit 7`
-  and `rmp sprint comment-edit 7` address two unrelated comments, and an id that
-  exists only in the other family is a not-found condition (exit code 4).
+- **Database schema `1.8.0` → `1.12.0`, in four migrations.** They are applied
+  automatically, in order, on the first command run against an existing roadmap.
+
+  | Migration | What it does |
+  |-----------|--------------|
+  | `1.8.0` → `1.9.0` | Adds the `task_comments` and `sprint_comments` tables and one index each, `idx_task_comments_task_created` and `idx_sprint_comments_sprint_created`, both on `(parent_id, created_at ASC)` to serve the oldest-first read directly |
+  | `1.9.0` → `1.10.0` | **Drops** `tasks.specialists`. No table rebuild: the column is plain nullable `TEXT`, not indexed, in no `CHECK`, no foreign key, no view, and no trigger |
+  | `1.10.0` → `1.11.0` | Adds `tasks.commit_open` and `tasks.commit_close`, each nullable `TEXT` carrying its own `CHECK` (`NULL`, or 7 to 64 lowercase hexadecimal characters). No backfill and no index |
+  | `1.11.0` → `1.12.0` | Adds `audit.related_entity_id` and `audit.commit_hash`, then **reclassifies** historical `TASK_STATUS_CHANGE` rows onto the five destination-named operations |
+
+  The two comment tables are independent, so comment ids are **per-family**:
+  `rmp task comment-edit 7` and `rmp sprint comment-edit 7` address two unrelated
+  comments, and an id that exists only in the other family is a not-found condition
+  (exit code 4).
+
+- **Historical audit entries are reclassified, by exact equality and nothing else.**
+  A `TASK_STATUS_CHANGE` row becomes `TASK_STATUS_DOING`, `TASK_STATUS_TESTING`, or
+  `TASK_STATUS_COMPLETED` only when its `performed_at` equals **exactly one** of the
+  owning task's three lifecycle timestamps. It keeps `TASK_STATUS_CHANGE` when it
+  matches none (a transition to `BACKLOG` stamps no timestamp, and a reopening clears
+  the ones that would have matched), when it matches more than one, and when the task
+  no longer exists. The `audit` table is never rebuilt: no `DELETE`, no id rewrite, no
+  compaction, no new index, no backfill of the two new columns, and no audit entry of
+  the migration's own. Ids, `entity_type`, `entity_id`, and `performed_at` are
+  untouched on every row.
+
+- **The audit operation catalogue grows from 23 to 43 operations**, four of them in a
+  documented **LEGACY** group — `TASK_STATUS_CHANGE`, `TASK_UPDATE`, `SPRINT_UPDATE`,
+  and `SPRINT_MOVE_TASK`. LEGACY values are published last in
+  `ValidAuditOperations` and remain accepted by `audit list --operation`, so a query
+  still reaches the rows already stored, while no code path writes them again.
+
+- **Relational audit operations name both entities.** Adding three tasks to a sprint
+  previously wrote three rows identical in every column but `id`, all naming the
+  sprint; which tasks were added was recorded nowhere, and `audit history TASK <id>`
+  showed nothing even though the task's status had changed. `sprint add-tasks` and
+  `sprint remove-tasks` now write a mirrored pair — the sprint-scoped row naming the
+  task in `related_entity_id`, and the matching task-scoped status row — and both
+  dependency writers name the counterpart task.
+
+- **`task reopen` and the other three routes back to `BACKLOG` clear
+  `commit_close` and preserve `commit_open`.** The four routes are
+  `task stat <ids> BACKLOG`, `task reopen`, `sprint remove-tasks`, and
+  `sprint remove`. The asymmetry is deliberate and differs from the lifecycle
+  timestamps, which are all cleared: reopening invalidates where the work **ended**,
+  not where it began.
+
+- **The web interface's page chrome is rebuilt.** The read-only footer is removed
+  from every page, the selected roadmap is named in the top navbar, and every page
+  header is rendered through one shared partial. The sprints page tabs are coloured
+  by the status each one groups, rather than all three carrying a fixed neutral
+  badge.
+
+- **Two full-height regions have their height computed by the layout** — the tasks
+  board and the knowledge-graph card — instead of being sized by subtracting from
+  the viewport.
+
+- **The vendored Tabler Icons webfont advances `3.44.0` → `3.46.0`.** Every other
+  vendored web asset was audited against the registry and the release feed and was
+  already current. No rendering change; the licence is unchanged.
+
+### Fixed
+
+- **A guard-rail bypass let DDL through on an interface documented as read-only.**
+  A non-ASCII homoglyph smuggled a schema-DDL statement past the Cypher guard rail:
+  the engine's own classifier folds `U+0131` to `I` and `U+017F` to `S` through
+  `strings.ToUpper`, while the guard rail's discriminator used Go's `(?i)`, which is
+  Unicode simple case folding and does **not** contain the `I`/dotless-i pair. The
+  guard rail therefore saw an ordinary read where the engine saw DDL, and an
+  unauthenticated `GET` on the read-only web interface reached the index and
+  constraint executors. The classifier now evaluates each discriminator twice — over
+  the masked text and over its `strings.ToUpper` copy, the exact transformation the
+  engine applies — which can only add detections, so no legitimate read became
+  rejected.
+
+- **A node-limit bypass and an unbounded standard-input read** were closed in the
+  same adversarial pass. Seven further findings from that audit were recorded as
+  tracked tasks rather than left undocumented.
+
+- **The `0600` guarantee on `project.db` is now enforced on every open, not only at
+  creation.** Opening an existing database neither re-applied nor verified the mode,
+  while the surrounding directories were re-hardened to `0700` and re-verified every
+  time. A database arrives mis-permissioned in ordinary ways — restored from an
+  archive that carried no modes, copied off a FAT or NTFS mount, `rsync`'d without
+  `-p`, produced under a permissive `umask`. Groadmap now hardens and verifies on
+  every open and **fails** when the file cannot be hardened.
+
+- **A roadmap directory that is a symbolic link now fails with exit code 1, not 2.**
+  The specification classified the refusal as a database error; the code raised a
+  misuse error. A symlink is a condition of the filesystem's state, not a syntax or
+  flag error, and exit 2 is documented as misuse. Two call sites were already
+  contradicting the old classification, `rmp web` among them.
+
+- **`rmp --ai-help` published stale wording for 16 of the 43 audit operations.**
+  Four were actively wrong rather than merely dated: `TASK_STATUS_CHANGE`,
+  `TASK_UPDATE`, `SPRINT_UPDATE`, and `SPRINT_MOVE_TASK` are LEGACY values that the
+  per-destination and per-field operations replaced, yet the contract still
+  described them as the live way to record a status change, an edit, or a move. An
+  agent reading only the contract was told to expect operations no command writes.
+  The contract is regenerated verbatim from the canonical catalogue and gated
+  byte-for-byte at test time, so it cannot drift again in either direction.
+
+- **`DOCS/commands/audit.md` listed 21 of the 43 operations and denied the commit
+  feature's existence.** Both commit-carrying operations were absent, the full
+  per-destination and per-field families were missing, the four LEGACY names were
+  presented as live, and both `Output:` lines said an entry has five keys where the
+  contract requires seven. The command help under-documented the same shape in two
+  places, so `commit_hash` was undiscoverable from `rmp audit list --help`. A new
+  enum-coverage gate now requires the document to name every operation the code can
+  write, and to name none it cannot.
+
+- **`DOCS/commands/task.md` documented a `stat` command that no longer runs.** Its
+  usage line, flag table, rules, and examples showed `task stat ... DOING` and
+  `task stat ... COMPLETED` with no commit flag — invocations that now exit 6. The
+  section now documents both flags with their mandatory states, format, batch
+  semantics, and error table; `reopen` states that it clears `commit_close` and
+  preserves `commit_open`; the Task object key list gains `commit_open` and
+  `commit_close`; and the output-format line no longer names the removed `assign`
+  and `unassign` subcommands. `DOCS/commands/sprint.md` states what
+  `remove-tasks` and `remove` clear when a member task falls back to `BACKLOG`.
+
+- **The sprint board's own defects**, settled during the rebuild: three review
+  findings on the sprint board, the tasks board columns widened and the card body
+  tightened, the audit page's tree experiment reverted at the owner's request, and a
+  search term folded with the browser's mapping instead of the server's.
+
+- **Six stale specification defects settled against the binary rather than against
+  each other.** `DATABASE.md`'s reopen SQL did not clear `completion_summary` while
+  two other files said it did — observation settled it, and `DATABASE.md` was wrong
+  rather than outvoted. Six `DATABASE.md` sections documented a `SELECT` shape no
+  query in the repository has ever used, which is what hid `subtask_count`.
+  `COMMANDS.md` claimed an ordering flag sorts by severity where the code and the
+  binary's own help sort by sprint position, carried a malformed table row, and gave
+  fifteen invalid-id messages that differed from the bytes the binary prints.
+  `STATE_MACHINE.md` omitted the manual `SPRINT` → `BACKLOG` transition, making a
+  reachable state look impossible. The sprint summary line's own example was
+  arithmetically impossible.
+
+- **A test class that never ran.** `tests/test_22_task87_sprint_capacity.py`
+  declared `TestAC6CapacityPctZero` twice; Python binds the name to whichever
+  definition it evaluates last, so the first was never collected. The two bodies
+  were diffed before anything was touched and were functionally identical, so no
+  coverage was at risk — the defect is that anyone correcting the assertions had an
+  even chance of editing the definition that does not run.
+
+### Internal
+
+- **Three unreachable `internal/db` helpers were deleted, and the class that
+  produced them is now gated.** `DeleteSprint` duplicated the transaction in
+  `commands.sprintRemove` and had already drifted from it, so a published atomicity
+  guarantee was being asserted against a copy the binary does not run.
+  `LogAuditEntry` and `LogAuditEntriesBatch` opened their own connection, which the
+  architecture forbids for an audit row: it must be written inside the transaction
+  of the modification it records, or it can outlive a rollback. `LogAuditTx` is now
+  the package's only audit writer. A new AST sweep fails on any exported identifier
+  in `internal/db` that no non-test file names, and fails in both directions, so the
+  allow-list may only shrink.
+
+- **The Go test suite is hermetic** and no longer writes to the developer's home
+  directory.
+
+- **A fourth enum-coverage gate** joins the help gate, the specification gate, and
+  the contract gate, this one over `DOCS/commands/audit.md`.
+
+- **196 end-to-end call sites across 26 modules** were updated to pass a commit
+  hash, through a `commit_flags_for(status)` helper for the sites that build the
+  target status dynamically. No assertion was weakened; several were strengthened,
+  because tests asserting a transition guard would otherwise have started passing
+  for the wrong reason — a missing flag rather than the guard.
+
+- **The end-to-end module index is complete and gated against the registry**, so a
+  module cannot be added without being registered.
+
+- **The `.gosec.yaml` suppression register is reconciled with the tree.** The
+  register declares that a suppression not listed in it is a review failure, and one
+  had become unlisted — `#nosec G306` in `internal/db/permissions_test.go`. Three
+  per-class counts had drifted as code moved, and the register's own stated total was
+  one short of the grep it cites. It now lists all eight classes and 53 suppressions
+  with locations and reasons. Nothing about what is scanned or suppressed changed:
+  the file is comments only, and the `security` gate reports 0 issues before and
+  after.
 
 ### Notes
 
+- **On the Semantic Versioning classification.** This release contains two
+  backward-incompatible changes, either of which would justify a `MAJOR` bump under
+  a strict reading of Semantic Versioning 2.0.0. The project has deliberately
+  published them under `1.15.0`. Both incompatibilities fail loudly and
+  immediately — exit 2 for the removed surface, exit 6 for the missing commit
+  flags — and neither silently changes a result. Read **Removed — BREAKING** and
+  **Changed — BREAKING** above before upgrading any automation.
+
+- **Export `specialists` before you upgrade, if you need it.** Migration
+  `1.9.0 → 1.10.0` drops the column, and the values are not recoverable from the
+  database afterwards. Run the export with a `1.14.0` binary or read the column
+  directly:
+
+  ```bash
+  # Before running any 1.15.0 command against the roadmap
+  sqlite3 ~/.roadmaps/<name>/project.db \
+    "SELECT id, title, specialists FROM tasks WHERE specialists IS NOT NULL;" \
+    > specialists-backup.txt
+  ```
+
+- **The four migrations are forward-only.** They run automatically and in order on
+  the first command against an existing roadmap, and there is no downgrade path: a
+  `1.14.0` binary opening a roadmap migrated to schema `1.12.0` will not read it.
+  Back up `~/.roadmaps/<name>/` before the first `1.15.0` command if you may need to
+  return.
+
+- **No audit history is lost.** The `1.11.0 → 1.12.0` migration appends columns and
+  rewrites the `operation` value of matching rows only. It deletes nothing,
+  renumbers nothing, and compacts nothing; ids, `entity_type`, `entity_id`, and
+  `performed_at` are identical before and after. Rows the migration cannot determine
+  keep `TASK_STATUS_CHANGE`, which remains queryable.
+
 - **Comments are strictly additive.** No existing command contract, exit code, or
-  state transition changes. Comments are accepted in every task and sprint status,
-  including `COMPLETED` and `CLOSED`; no comment subcommand checks or changes an
-  entity's status, no comment ever gates a transition, and `task reopen` does not
-  touch comments. The `Task` and `Sprint` JSON objects are unchanged: they carry no
-  `comments` array and no comment count, and comments are read only through
-  `comment-list` and the web interface.
+  state transition changes on their account. Comments are accepted in every task and
+  sprint status, including `COMPLETED` and `CLOSED`; no comment subcommand checks or
+  changes an entity's status, no comment ever gates a transition, and `task reopen`
+  does not touch comments. The `Task` and `Sprint` JSON objects carry no `comments`
+  array and no comment count: comments are read only through `comment-list` and the
+  web interface.
+
 - **An edit is a replacement.** `comment-edit` replaces the stored body in place and
   stamps `updated_at`; the previous text is not retained anywhere and cannot be
   recovered. The audit log records that an edit happened, not what it replaced.
-- See `SPEC/COMMANDS.md § Task Comments` and `§ Sprint Comments`,
-  `SPEC/MODELS.md § Comment Type`, `SPEC/DATABASE.md § Comments`,
-  `SPEC/DATA_FORMATS.md § Task Comment`, `SPEC/WEB.md § Task Detail Modal`, and
-  `SPEC/VERSION.md § Migration 1.8.0 → 1.9.0`.
+
+- **The web interface remains read-only throughout.** `GET` and `HEAD` only. The
+  board moves nothing, the modal edits nothing, and no route added in this release
+  writes. No new exit code and no new schema requirement come from the web work.
+
+- **Known issues were rebuilt from scratch for this release** and are listed in
+  `release-notes/v1.15.0-20260821.md`. Items earlier releases recorded were
+  re-verified by execution rather than copied forward; one — the sprints page's
+  non-semantic tab badges — is fixed by this release and has been dropped.
+
+- See `SPEC/COMMANDS.md § Set Task Status`, `§ Task Comments` and
+  `§ Sprint Comments`, `SPEC/MODELS.md § Task` and `§ Comment Type`,
+  `SPEC/DATABASE.md § Comments` and `§ audit Table`, `SPEC/DATA_FORMATS.md
+  § Task Comment`, `SPEC/STATE_MACHINE.md § Commit Tracking Fields`,
+  `SPEC/WEB.md § Server Logging`, `§ Task Detail Modal` and `§ The Tasks Board`,
+  and `SPEC/VERSION.md § Migration 1.8.0 → 1.9.0` through
+  `§ Migration 1.11.0 → 1.12.0`.
 
 ## [1.14.0] - 2026-08-17
 
@@ -954,6 +1402,7 @@ behaviour.
   AI-contract E2E suite (`tests/test_30_aihelp_contract.py`) to lock in the
   revised help text and contract invariants.
 
+[1.15.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.14.0...v1.15.0
 [1.14.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.13.3...v1.14.0
 [1.13.3]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.13.2...v1.13.3
 [1.13.2]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.13.1...v1.13.2
