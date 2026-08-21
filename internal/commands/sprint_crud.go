@@ -390,22 +390,30 @@ func sprintUpdate(args []string) error {
 
 		setParts := make([]string, 0, 4)
 		args := make([]any, 0, 5)
+		// One operation per supplied field, collected alongside the column it
+		// belongs to so the entries are written in the same order the UPDATE
+		// applies them (SPEC/COMMANDS.md § Update Sprint).
+		ops := make([]models.AuditOperation, 0, 4)
 
 		if title != "" {
 			setParts = append(setParts, "title = ?")
 			args = append(args, title)
+			ops = append(ops, models.OpSprintTitleChange)
 		}
 		if description != "" {
 			setParts = append(setParts, "description = ?")
 			args = append(args, description)
+			ops = append(ops, models.OpSprintDescriptionChange)
 		}
 		if hasMaxTasks {
 			setParts = append(setParts, "max_tasks = ?")
 			args = append(args, maxTasks)
+			ops = append(ops, models.OpSprintMaxTasksChange)
 		}
 		if hasOrder {
 			setParts = append(setParts, "order_index = ?")
 			args = append(args, newOrder)
+			ops = append(ops, models.OpSprintOrderChange)
 		}
 		args = append(args, sprintID)
 		query := fmt.Sprintf("UPDATE sprints SET %s WHERE id = ?", strings.Join(setParts, ", ")) // #nosec G201 -- setParts are hard-coded literal column clauses ("title = ?", "description = ?", "max_tasks = ?", "order_index = ?"); every user value is bound via tx.Exec parameters, no user data is concatenated into SQL
@@ -428,7 +436,15 @@ func sprintUpdate(args []string) error {
 			return fmt.Errorf("%w: sprint %d not found", utils.ErrNotFound, sprintID)
 		}
 
-		return db.LogAuditTx(tx, models.OpSprintUpdate, models.EntitySprint, sprintID, now)
+		// One entry per supplied field, all carrying the timestamp captured
+		// above, inside the transaction that performed the UPDATE: a rejected
+		// update — an out-of-range bound, a CLOSED sprint, an order collision —
+		// writes no entry at all. The trigger is the presence of the flag and
+		// not a difference in value: nothing above compares a supplied value
+		// against the stored one, so `sprint update --order 3` on a sprint
+		// already at 3 still records the command that was issued
+		// (SPEC/COMMANDS.md § Update Sprint).
+		return db.LogAuditFieldsTx(tx, models.EntitySprint, sprintID, now, ops...)
 	})
 }
 
@@ -459,13 +475,16 @@ func sprintRemove(args []string) error {
 	// Delete within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
 		// First reset task statuses to BACKLOG, clearing ALL lifecycle
-		// timestamps and the completion summary. Tasks may have progressed to
-		// DOING/TESTING/COMPLETED inside the sprint, so leaving those fields set
-		// on a BACKLOG task violates the state machine's reopening invariant
-		// (SPEC/STATE_MACHINE.md Reopening Behavior; finding #49).
+		// timestamps, the completion summary and commit_close. Tasks may have
+		// progressed to DOING/TESTING/COMPLETED inside the sprint, so leaving
+		// those fields set on a BACKLOG task violates the state machine's
+		// reopening invariant (SPEC/STATE_MACHINE.md Reopening Behavior;
+		// finding #49). commit_open is deliberately NOT cleared: a task whose
+		// sprint is deleted keeps the record of where its work started
+		// (SPEC/STATE_MACHINE.md § Commit Tracking Fields).
 		_, resetErr := tx.Exec(
 			`UPDATE tasks SET status = 'BACKLOG', started_at = NULL, tested_at = NULL,
-			        closed_at = NULL, completion_summary = NULL WHERE id IN (
+			        closed_at = NULL, completion_summary = NULL, commit_close = NULL WHERE id IN (
 				SELECT task_id FROM sprint_tasks WHERE sprint_id = ?
 			)`,
 			sprintID,

@@ -416,7 +416,7 @@ rmp sprint add -r project1 2 5,6,7,8
 
 ### remove-tasks
 
-Removes tasks from a sprint. Tasks return to BACKLOG status.
+Removes tasks from a sprint. Tasks return to BACKLOG status: the transition clears each task's lifecycle timestamps (`started_at`, `tested_at`, `closed_at`), its `completion_summary`, and its `commit_close`, and leaves `commit_open` untouched.
 
 **Usage:** `rmp sprint remove-tasks [OPTIONS] <sprint-id> <task-ids>` or `rmp sprint rm-tasks [OPTIONS] <sprint-id> <task-ids>`
 
@@ -506,7 +506,7 @@ rmp sprint upd -r project1 1 -t "Storage refactor" -d "Refactor persistence onto
 
 ### remove
 
-Removes a sprint permanently. Member tasks are not deleted; their status reverts to `BACKLOG`.
+Removes a sprint permanently. Member tasks are not deleted; their status reverts to `BACKLOG`, which clears their lifecycle timestamps, their `completion_summary`, and their `commit_close`, and leaves `commit_open` untouched.
 
 **Usage:** `rmp sprint remove [OPTIONS] <id>` or `rmp sprint rm [OPTIONS] <id>`
 
@@ -901,7 +901,7 @@ PENDING → OPEN → CLOSED
 
 - Sprints are created with `PENDING` status by default
 - State transitions are validated (cannot close an already closed sprint)
-- When removing a sprint, associated tasks return to `BACKLOG` status
+- When removing a sprint, associated tasks return to `BACKLOG` status, which clears their lifecycle timestamps, their `completion_summary`, and their `commit_close`; `commit_open` is preserved
 - When adding tasks to a sprint, the task status changes to `SPRINT`
 - Task ordering commands maintain position consistency (0, 1, 2...n) automatically
 - The `stats` command shows the current `task_order` array for reference

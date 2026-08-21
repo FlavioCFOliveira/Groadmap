@@ -75,7 +75,7 @@ var catalogueEntry = regexp.MustCompile("^- `([A-Z_]+)` - .")
 
 // minCatalogueEntries is the floor below which the parse is treated as evidence
 // that the scan has stopped matching rather than as evidence about the SPEC. The
-// catalogue holds 29 entries today; the floor sits well under that so a genuine
+// catalogue holds 43 entries today; the floor sits well under that so a genuine
 // removal does not trip it, and far enough over zero that a gate measuring
 // nothing cannot report success. The stricter guard is the malformed-entry check
 // in the test body, which requires every list item in the region to parse.

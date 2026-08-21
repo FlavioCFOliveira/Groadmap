@@ -196,12 +196,12 @@ class TestSprintLifecycle:
         self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint_id)])
 
         # Move one task to DOING
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "DOING", "--commit-open", "5f93b51"])
         self.test.assert_task_status(roadmap, task1, "DOING")
 
         # Complete task
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "COMPLETED", "--commit-close", "cf507b0"])
         self.test.assert_task_status(roadmap, task1, "COMPLETED")
 
         # Close sprint — task2 is still SPRINT (never started), so --force is required

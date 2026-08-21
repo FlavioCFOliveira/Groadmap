@@ -212,7 +212,7 @@ If a change to the SPEC needs a narrative beyond the diff, write it in the commi
 ### Task/Sprint Creation Flow
 
 **Step 1: `roadmap-manager`** collects ALL required fields and confirms with the user:
-- Tasks: title, type, priority, status, description, technical, criteria, specialists, time, complexity
+- Tasks: title, type, priority, status, description, technical, criteria, complexity
 - Sprints: name, goal, start, end, status
 
 **Step 2: User confirmation** → `roadmap-manager` executes `rmp` CLI commands:

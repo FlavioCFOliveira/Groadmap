@@ -108,7 +108,7 @@ There is no alias for `backlog show-next`.
 
 ## Output Format
 
-Both subcommands write a JSON array of task objects to stdout. Every returned task has `status` equal to `BACKLOG`. Each task object carries the standard task keys: `id`, `title`, `status`, `type`, `functional_requirements`, `technical_requirements`, `acceptance_criteria`, `created_at`, `specialists`, `started_at`, `tested_at`, `closed_at`, `completion_summary`, `parent_task_id`, `priority`, `severity`, `subtask_count`, `depends_on`, and `blocks`. See `DOCS/commands/task.md` (Output Format) for the full key reference.
+Both subcommands write a JSON array of task objects to stdout. Every returned task has `status` equal to `BACKLOG`. Each task object carries the standard task keys: `id`, `title`, `status`, `type`, `functional_requirements`, `technical_requirements`, `acceptance_criteria`, `created_at`, `started_at`, `tested_at`, `closed_at`, `completion_summary`, `parent_task_id`, `priority`, `severity`, `subtask_count`, `depends_on`, and `blocks`. See `DOCS/commands/task.md` (Output Format) for the full key reference.
 
 ## Exit Codes
 

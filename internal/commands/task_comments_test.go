@@ -1164,10 +1164,15 @@ func TestTaskComment_AcceptedInEveryStatus(t *testing.T) {
 	}{
 		{models.StatusBacklog, nil},
 		{models.StatusSprint, func() error { return sprintAddTasks([]string{"-r", roadmap, "1", "1"}) }},
-		{models.StatusDoing, func() error { return taskSetStatus([]string{"-r", roadmap, "1", "DOING"}) }},
+		{models.StatusDoing, func() error {
+			return taskSetStatus([]string{"-r", roadmap, "1", "DOING", "--commit-open", "5f93b51"})
+		}},
 		{models.StatusTesting, func() error { return taskSetStatus([]string{"-r", roadmap, "1", "TESTING"}) }},
 		{models.StatusCompleted, func() error {
-			return taskSetStatus([]string{"-r", roadmap, "1", "COMPLETED", "--summary", "Boundary second now expires."})
+			return taskSetStatus([]string{
+				"-r", roadmap, "1", "COMPLETED",
+				"--commit-close", "2578d18", "--summary", "Boundary second now expires.",
+			})
 		}},
 	}
 	for _, s := range steps {

@@ -128,10 +128,19 @@ func setupSprintRemovalRoadmap(t *testing.T, name string) *removalFixture {
 			t.Fatalf("starting the sprint: %v", err)
 		}
 	})
-	for _, status := range []string{"DOING", "TESTING"} {
+	// The entry into DOING carries the mandatory --commit-open
+	// (SPEC/COMMANDS.md § Change Status (stat)); TESTING takes no commit flag.
+	for _, step := range []struct {
+		status string
+		flags  []string
+	}{
+		{"DOING", []string{"--commit-open", "5f93b51"}},
+		{"TESTING", nil},
+	} {
 		_ = captureStdout(t, func() {
-			if err := taskSetStatus([]string{"-r", name, itoa(fixture.taskIDs[0]), status}); err != nil {
-				t.Fatalf("moving task to %s: %v", status, err)
+			args := append([]string{"-r", name, itoa(fixture.taskIDs[0]), step.status}, step.flags...)
+			if err := taskSetStatus(args); err != nil {
+				t.Fatalf("moving task to %s: %v", step.status, err)
 			}
 		})
 	}

@@ -4,7 +4,6 @@ package models
 import (
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
@@ -24,6 +23,7 @@ var (
 	ErrAcceptanceCriteriaReq = errors.New("acceptance_criteria is required")
 	ErrPriorityOutOfRange    = errors.New("priority must be between 0 and 9")
 	ErrSeverityOutOfRange    = errors.New("severity must be between 0 and 9")
+	ErrInvalidCommitHash     = errors.New("invalid commit hash")
 )
 
 // TaskStatus represents the current state of a task.
@@ -220,17 +220,29 @@ const (
 	MaxTaskFunctionalRequirements = 4096
 	MaxTaskTechnicalRequirements  = 4096
 	MaxTaskAcceptanceCriteria     = 4096
-	MaxTaskSpecialists            = 500
 	MaxTaskCompletionSummary      = 4096
 )
 
+// Commit hash length bounds, in characters (SPEC/MODELS.md § Task, Commit Hash
+// Constraint). The lower bound admits the conventional abbreviated hash; the
+// upper bound admits both the 40-character SHA-1 hash and the 64-character
+// SHA-256 hash a repository created with `git init --object-format=sha256`
+// produces.
+const (
+	MinCommitHashLength = 7
+	MaxCommitHashLength = 64
+)
+
 // Task represents a task in the roadmap.
-// Field order optimized for memory layout (zero padding on 64-bit systems).
-// Groups: Content fields (strings), Tracking fields (pointers), Metadata (ints).
+// Field order optimized for memory layout (248 bytes, zero padding on 64-bit
+// systems) and enforced by the govet:fieldalignment linter.
+// Groups: Tracking fields (pointers), Content fields (strings), Dependencies
+// (slices), Metadata (ints). See SPEC/MODELS.md § Memory Layout Optimization.
 type Task struct {
 	ParentTaskID           *int       `json:"parent_task_id"`
-	Specialists            *string    `json:"specialists"`
 	CompletionSummary      *string    `json:"completion_summary"`
+	CommitOpen             *string    `json:"commit_open"`
+	CommitClose            *string    `json:"commit_close"`
 	TestedAt               *string    `json:"tested_at"`
 	ClosedAt               *string    `json:"closed_at"`
 	StartedAt              *string    `json:"started_at"`
@@ -274,9 +286,6 @@ func (t *Task) Validate() error {
 	}
 	if len(t.AcceptanceCriteria) > MaxTaskAcceptanceCriteria {
 		return fmt.Errorf("%w: acceptance_criteria exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskAcceptanceCriteria)
-	}
-	if t.Specialists != nil && len(*t.Specialists) > MaxTaskSpecialists {
-		return fmt.Errorf("%w: specialists exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskSpecialists)
 	}
 	if t.Priority < 0 || t.Priority > 9 {
 		// Chain utils.ErrValidation so this maps to exit 6 (invalid data) per
@@ -363,28 +372,68 @@ func (t *Task) IsComplete() bool {
 	return t.Status == StatusCompleted
 }
 
-// ParseSpecialists parses a comma-separated list of specialists.
-func ParseSpecialists(s string) []string {
-	if s == "" {
-		return nil
+// NormalizeCommitHash validates a git commit hash and returns it in the single
+// form Groadmap stores: lowercase.
+//
+// The rule is SPEC/MODELS.md § Task, Commit Hash Constraint, and it is exactly
+// three clauses. The value must consist solely of hexadecimal characters, its
+// length must be between MinCommitHashLength and MaxCommitHashLength inclusive,
+// and any letter case is accepted on input and normalised to lowercase on
+// output — so two callers who supply the same hash in different cases produce
+// the same stored value. The database enforces the same rule as a backstop
+// through the CHECK constraint on each commit column, and that CHECK is
+// case-sensitive, so skipping this normalisation is a failed write rather than
+// an unnormalised row (SPEC/DATABASE.md § Commit Hash Format Constraint).
+//
+// NO OTHER TRANSFORMATION IS APPLIED. In particular the value is NOT trimmed: a
+// leading or trailing space is a non-hexadecimal character and is rejected like
+// any other. An empty value is rejected because its length is below the lower
+// bound.
+//
+// Groadmap never derives the value and never verifies that it names a commit
+// that exists in any repository: it runs no git command and reads no working
+// directory, so only the format is checked.
+//
+// Every rejection chains utils.ErrValidation, which SPEC/ARCHITECTURE.md maps to
+// exit code 6, and additionally ErrInvalidCommitHash for callers that need to
+// discriminate this failure from other validation failures.
+//
+// The returned string aliases the input when it is already lowercase, so the
+// common path allocates nothing.
+func NormalizeCommitHash(hash string) (string, error) {
+	// Length is measured in bytes. Every accepted value is pure ASCII, where
+	// bytes and characters coincide, so this agrees with the character count
+	// SPEC/MODELS.md states for every value the function accepts; a multi-byte
+	// value that slips past this gate is then rejected by the hexadecimal check
+	// below.
+	if len(hash) < MinCommitHashLength || len(hash) > MaxCommitHashLength {
+		return "", fmt.Errorf("%w: commit hash must be between %d and %d hexadecimal characters, got %d: %w",
+			utils.ErrValidation, MinCommitHashLength, MaxCommitHashLength, len(hash), ErrInvalidCommitHash)
 	}
-	parts := strings.Split(s, ",")
-	var result []string
-	for _, p := range parts {
-		trimmed := strings.TrimSpace(p)
-		if trimmed != "" {
-			result = append(result, trimmed)
+
+	// Single pass: classify each byte and lowercase in place, copying the input
+	// only once an uppercase byte proves a copy is needed.
+	var lowered []byte
+	for i := range len(hash) {
+		c := hash[i]
+		switch {
+		case (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'):
+			// Already in the stored form.
+		case c >= 'A' && c <= 'F':
+			if lowered == nil {
+				lowered = []byte(hash)
+			}
+			lowered[i] = c + ('a' - 'A')
+		default:
+			return "", fmt.Errorf("%w: commit hash %q contains a non-hexadecimal character at position %d: %w",
+				utils.ErrValidation, hash, i, ErrInvalidCommitHash)
 		}
 	}
-	return result
-}
 
-// FormatSpecialists formats a slice of specialists as a comma-separated string.
-func FormatSpecialists(specialists []string) string {
-	if len(specialists) == 0 {
-		return ""
+	if lowered == nil {
+		return hash, nil
 	}
-	return strings.Join(specialists, ",")
+	return string(lowered), nil
 }
 
 // TaskUpdate represents a type-safe update operation for tasks.
@@ -396,7 +445,6 @@ type TaskUpdate struct {
 	FunctionalRequirements *string
 	TechnicalRequirements  *string
 	AcceptanceCriteria     *string
-	Specialists            *string
 	Priority               *int
 	Severity               *int
 }
@@ -404,7 +452,7 @@ type TaskUpdate struct {
 // HasChanges returns true if any field is set to be updated.
 func (u *TaskUpdate) HasChanges() bool {
 	return u.Title != nil || u.FunctionalRequirements != nil || u.TechnicalRequirements != nil ||
-		u.AcceptanceCriteria != nil || u.Specialists != nil || u.Priority != nil || u.Severity != nil
+		u.AcceptanceCriteria != nil || u.Priority != nil || u.Severity != nil
 }
 
 // Validate checks if the update values are valid.
@@ -420,9 +468,6 @@ func (u *TaskUpdate) Validate() error {
 	}
 	if u.AcceptanceCriteria != nil && len(*u.AcceptanceCriteria) > MaxTaskAcceptanceCriteria {
 		return fmt.Errorf("%w: acceptance_criteria exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskAcceptanceCriteria)
-	}
-	if u.Specialists != nil && len(*u.Specialists) > MaxTaskSpecialists {
-		return fmt.Errorf("%w: specialists exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskSpecialists)
 	}
 	if u.Priority != nil && (*u.Priority < 0 || *u.Priority > 9) {
 		return fmt.Errorf("%w: priority must be between 0 and 9, got %d: %w", utils.ErrValidation, *u.Priority, ErrPriorityOutOfRange)

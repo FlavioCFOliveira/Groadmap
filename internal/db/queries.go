@@ -76,8 +76,8 @@ func (db *DB) CreateTask(ctx context.Context, task *models.Task) (int, error) {
 		}
 
 		result, err := db.ExecContext(ctx,
-			`INSERT INTO tasks (title, status, type, functional_requirements, technical_requirements, acceptance_criteria, created_at, specialists, priority, severity, completion_summary, parent_task_id)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+			`INSERT INTO tasks (title, status, type, functional_requirements, technical_requirements, acceptance_criteria, created_at, priority, severity, completion_summary, parent_task_id)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
 			task.Title,
 			task.Status,
 			taskType,
@@ -85,7 +85,6 @@ func (db *DB) CreateTask(ctx context.Context, task *models.Task) (int, error) {
 			task.TechnicalRequirements,
 			task.AcceptanceCriteria,
 			task.CreatedAt,
-			task.Specialists,
 			task.Priority,
 			task.Severity,
 			task.ParentTaskID,
@@ -114,7 +113,8 @@ func (db *DB) CreateTask(ctx context.Context, task *models.Task) (int, error) {
 // Uses scanTasksWithDeps to fold depends_on / blocks into the same query.
 func (db *DB) GetTask(ctx context.Context, id int) (*models.Task, error) {
 	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
-	        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
+	        t.created_at, t.started_at, t.tested_at, t.closed_at, t.completion_summary,
+	        t.commit_open, t.commit_close, t.parent_task_id,
 	        t.priority, t.severity,
 	        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count` + taskDepsSelect + `
 	 FROM tasks t WHERE t.id = ?`
@@ -179,7 +179,6 @@ type TaskListFilter struct {
 	MinPriority  *int
 	MinSeverity  *int
 	TaskType     *models.TaskType
-	Specialists  *string    // case-insensitive partial match against the specialists field
 	CreatedSince *time.Time // inclusive lower bound on created_at
 	CreatedUntil *time.Time // inclusive upper bound on created_at
 	Sort         string     // "priority" (default), "created", "status", "severity"
@@ -187,7 +186,7 @@ type TaskListFilter struct {
 }
 
 // ListTasks retrieves tasks with optional filters.
-// Filters: status, minPriority, minSeverity, taskType, specialists, createdSince, createdUntil, sort, limit.
+// Filters: status, minPriority, minSeverity, taskType, createdSince, createdUntil, sort, limit.
 //
 // A nil filter means "no filter at all" and is answered with the default page, as
 // in GetAuditEntries: every field of TaskListFilter is optional, so the whole
@@ -228,13 +227,14 @@ func (db *DB) ListTasks(ctx context.Context, filter *TaskListFilter) ([]models.T
 // The caller is responsible for clamping filter.Limit beforehand.
 func buildListTasksQuery(filter *TaskListFilter) (string, []any) {
 	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
-		        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
+		        t.created_at, t.started_at, t.tested_at, t.closed_at, t.completion_summary,
+		        t.commit_open, t.commit_close, t.parent_task_id,
 		        t.priority, t.severity,
 		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count` + taskDepsSelect + `
 		      FROM tasks t WHERE 1=1`
-	// 7 filters + LIMIT = up to 8 placeholders; +1 to absorb a future
+	// 6 filters + LIMIT = up to 7 placeholders; +1 to absorb a future
 	// arg without forcing an extra grow.
-	args := make([]any, 0, 9)
+	args := make([]any, 0, 8)
 
 	if filter.Status != nil {
 		query += " AND t.status = ?"
@@ -251,12 +251,6 @@ func buildListTasksQuery(filter *TaskListFilter) (string, []any) {
 	if filter.TaskType != nil {
 		query += " AND t.type = ?"
 		args = append(args, string(*filter.TaskType))
-	}
-	if filter.Specialists != nil {
-		// Escape SQL LIKE wildcards in the user-supplied value to prevent accidental pattern expansion.
-		escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(*filter.Specialists)
-		query += ` AND LOWER(COALESCE(t.specialists, '')) LIKE LOWER(?) ESCAPE '\'`
-		args = append(args, "%"+escaped+"%")
 	}
 	if filter.CreatedSince != nil {
 		query += " AND t.created_at >= ?"
@@ -332,7 +326,6 @@ func (db *DB) ListAllTasks(ctx context.Context) ([]models.Task, error) {
 //   - "functional_requirements": Functional requirements (string, max 4096 chars)
 //   - "technical_requirements": Technical requirements (string, max 4096 chars)
 //   - "acceptance_criteria": Acceptance criteria (string, max 4096 chars)
-//   - "specialists": Comma-separated list of specialists (string, max 500 chars)
 //   - "priority": Task priority 0-9 (int)
 //   - "severity": Task severity 0-9 (int)
 //
@@ -381,9 +374,6 @@ func (db *DB) UpdateTask(ctx context.Context, id int, updates map[string]any) er
 				args = append(args, value)
 			case "acceptance_criteria":
 				setParts = append(setParts, "acceptance_criteria = ?")
-				args = append(args, value)
-			case "specialists":
-				setParts = append(setParts, "specialists = ?")
 				args = append(args, value)
 			case "priority":
 				setParts = append(setParts, "priority = ?")
@@ -449,7 +439,7 @@ func (db *DB) UpdateTaskStruct(ctx context.Context, id int, update *models.TaskU
 
 	return retryWithBackoff("update task struct", func() error {
 		// Build SQL with deterministic field ordering
-		// Fields are always in the same order: title, functional_requirements, technical_requirements, acceptance_criteria, specialists, priority, severity
+		// Fields are always in the same order: title, functional_requirements, technical_requirements, acceptance_criteria, priority, severity
 		var setParts []string
 		var args []any
 
@@ -468,10 +458,6 @@ func (db *DB) UpdateTaskStruct(ctx context.Context, id int, update *models.TaskU
 		if update.AcceptanceCriteria != nil {
 			setParts = append(setParts, "acceptance_criteria = ?")
 			args = append(args, *update.AcceptanceCriteria)
-		}
-		if update.Specialists != nil {
-			setParts = append(setParts, "specialists = ?")
-			args = append(args, *update.Specialists)
 		}
 		if update.Priority != nil {
 			setParts = append(setParts, "priority = ?")
@@ -631,7 +617,8 @@ func (db *DB) DeleteTask(ctx context.Context, id int) error {
 func (db *DB) GetSubTasks(ctx context.Context, parentID int) ([]models.Task, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
-		        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
+		        t.created_at, t.started_at, t.tested_at, t.closed_at, t.completion_summary,
+		        t.commit_open, t.commit_close, t.parent_task_id,
 		        t.priority, t.severity,
 		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count`+taskDepsSelect+`
 		 FROM tasks t WHERE t.parent_task_id = ?
@@ -761,17 +748,19 @@ func parseCSVInts(s string) []int {
 func scanTasksWithDeps(rows *sql.Rows) ([]models.Task, error) {
 	tasks := make([]models.Task, 0, 100)
 
-	var specialists, startedAt, testedAt, closedAt, completionSummary sql.NullString
+	var startedAt, testedAt, closedAt, completionSummary sql.NullString
+	var commitOpen, commitClose sql.NullString
 	var parentTaskID sql.NullInt64
 	var dependsOnCSV, blocksCSV string
 
 	for rows.Next() {
 		var task models.Task
-		specialists = sql.NullString{}
 		startedAt = sql.NullString{}
 		testedAt = sql.NullString{}
 		closedAt = sql.NullString{}
 		completionSummary = sql.NullString{}
+		commitOpen = sql.NullString{}
+		commitClose = sql.NullString{}
 		parentTaskID = sql.NullInt64{}
 		dependsOnCSV = ""
 		blocksCSV = ""
@@ -785,11 +774,12 @@ func scanTasksWithDeps(rows *sql.Rows) ([]models.Task, error) {
 			&task.TechnicalRequirements,
 			&task.AcceptanceCriteria,
 			&task.CreatedAt,
-			&specialists,
 			&startedAt,
 			&testedAt,
 			&closedAt,
 			&completionSummary,
+			&commitOpen,
+			&commitClose,
 			&parentTaskID,
 			&task.Priority,
 			&task.Severity,
@@ -805,10 +795,6 @@ func scanTasksWithDeps(rows *sql.Rows) ([]models.Task, error) {
 		// taking its address. Taking the address of the loop-external scan
 		// variable would make every task in a multi-row result share the same
 		// backing storage and serialize the LAST row's values.
-		if specialists.Valid {
-			v := specialists.String
-			task.Specialists = &v
-		}
 		if startedAt.Valid {
 			v := startedAt.String
 			task.StartedAt = &v
@@ -824,6 +810,14 @@ func scanTasksWithDeps(rows *sql.Rows) ([]models.Task, error) {
 		if completionSummary.Valid {
 			v := completionSummary.String
 			task.CompletionSummary = &v
+		}
+		if commitOpen.Valid {
+			v := commitOpen.String
+			task.CommitOpen = &v
+		}
+		if commitClose.Valid {
+			v := commitClose.String
+			task.CommitClose = &v
 		}
 		if parentTaskID.Valid {
 			v := int(parentTaskID.Int64)
@@ -934,8 +928,9 @@ func (db *DB) GetNextTasks(ctx context.Context, limit int) ([]models.Task, error
 
 	// Get open tasks from the sprint, ordered by sprint task position
 	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
-		         t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
-		         t.closed_at, t.completion_summary, t.parent_task_id,
+		         t.acceptance_criteria, t.created_at, t.started_at, t.tested_at,
+		         t.closed_at, t.completion_summary,
+		         t.commit_open, t.commit_close, t.parent_task_id,
 		         t.priority, t.severity,
 		         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count` + taskDepsSelect + `
 		      FROM tasks t
@@ -955,6 +950,26 @@ func (db *DB) GetNextTasks(ctx context.Context, limit int) ([]models.Task, error
 }
 
 // ==================== TASK DEPENDENCY QUERIES ====================
+
+// auditDependencyPair is one side of the mirrored pair of audit entries a
+// dependency change writes: the task whose history the entry belongs to, and
+// the other task of the pair, which the entry names.
+type auditDependencyPair struct {
+	entity  int
+	related int
+}
+
+// auditDependencyPairs returns the two sides of a dependency change in the
+// order they are written, dependent first. Both TASK_ADD_DEP and
+// TASK_REMOVE_DEP use the same arrangement (SPEC/COMMANDS.md § Remove Task
+// Dependency), so it is spelled out once rather than twice with a transposition
+// that has to be read carefully to be believed.
+func auditDependencyPairs(taskID, depID int) [2]auditDependencyPair {
+	return [2]auditDependencyPair{
+		{entity: taskID, related: depID},
+		{entity: depID, related: taskID},
+	}
+}
 
 // AddTaskDependencyWithAudit adds a dependency and writes audit entries in a single transaction.
 func (db *DB) AddTaskDependencyWithAudit(ctx context.Context, taskID, depID int) error {
@@ -982,8 +997,14 @@ func (db *DB) AddTaskDependencyWithAudit(ctx context.Context, taskID, depID int)
 			return fmt.Errorf("inserting task dependency: %w", err)
 		}
 
-		for _, auditTaskID := range []int{taskID, depID} {
-			if err := LogAuditTx(tx, models.OpTaskAddDep, models.EntityTask, auditTaskID, now); err != nil {
+		// Two entries, one against each task of the pair, each naming the other
+		// one. Naming the counterpart is what makes an entry state WHICH
+		// dependency it concerns: without it the two entries of one invocation
+		// are indistinguishable from the two of any other (SPEC/COMMANDS.md §
+		// Add Task Dependency).
+		for _, pair := range auditDependencyPairs(taskID, depID) {
+			if err := LogAuditTx(tx, models.OpTaskAddDep, models.EntityTask, pair.entity, now,
+				WithRelatedEntity(pair.related)); err != nil {
 				return err
 			}
 		}
@@ -1011,8 +1032,10 @@ func (db *DB) RemoveTaskDependencyWithAudit(ctx context.Context, taskID, depID i
 			return fmt.Errorf("%w: dependency from task #%d to task #%d not found", utils.ErrNotFound, taskID, depID)
 		}
 
-		for _, auditTaskID := range []int{taskID, depID} {
-			if err := LogAuditTx(tx, models.OpTaskRemoveDep, models.EntityTask, auditTaskID, now); err != nil {
+		// The same mirrored pair the addition writes; see auditDependencyPairs.
+		for _, pair := range auditDependencyPairs(taskID, depID) {
+			if err := LogAuditTx(tx, models.OpTaskRemoveDep, models.EntityTask, pair.entity, now,
+				WithRelatedEntity(pair.related)); err != nil {
 				return err
 			}
 		}
@@ -1024,7 +1047,8 @@ func (db *DB) RemoveTaskDependencyWithAudit(ctx context.Context, taskID, depID i
 func (db *DB) GetBlockers(ctx context.Context, taskID int) ([]models.Task, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
-		        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
+		        t.created_at, t.started_at, t.tested_at, t.closed_at, t.completion_summary,
+		        t.commit_open, t.commit_close, t.parent_task_id,
 		        t.priority, t.severity,
 		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count`+taskDepsSelect+`
 		 FROM tasks t
@@ -1044,7 +1068,8 @@ func (db *DB) GetBlockers(ctx context.Context, taskID int) ([]models.Task, error
 func (db *DB) GetBlocking(ctx context.Context, taskID int) ([]models.Task, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements, t.acceptance_criteria,
-		        t.created_at, t.specialists, t.started_at, t.tested_at, t.closed_at, t.completion_summary, t.parent_task_id,
+		        t.created_at, t.started_at, t.tested_at, t.closed_at, t.completion_summary,
+		        t.commit_open, t.commit_close, t.parent_task_id,
 		        t.priority, t.severity,
 		        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count`+taskDepsSelect+`
 		 FROM tasks t
@@ -1533,8 +1558,9 @@ func (db *DB) GetSprintsByTasks(ctx context.Context, taskIDs []int) (map[int]Spr
 func (db *DB) GetActiveSprintTasks(ctx context.Context, sprintID int) ([]models.Task, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
-		         t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
-		         t.closed_at, t.completion_summary, t.parent_task_id,
+		         t.acceptance_criteria, t.created_at, t.started_at, t.tested_at,
+		         t.closed_at, t.completion_summary,
+		         t.commit_open, t.commit_close, t.parent_task_id,
 		         t.priority, t.severity,
 		         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count`+taskDepsSelect+`
 		      FROM tasks t
@@ -1594,8 +1620,9 @@ func CompactSprintPositionsTx(tx *sql.Tx, sprintID int) error {
 // GetSprintTasksFull retrieves full task objects for a sprint, ordered by position or priority.
 func (db *DB) GetSprintTasksFull(ctx context.Context, sprintID int, status *models.TaskStatus, orderByPriority bool) ([]models.Task, error) {
 	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
-		         t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
-		         t.closed_at, t.completion_summary, t.parent_task_id,
+		         t.acceptance_criteria, t.created_at, t.started_at, t.tested_at,
+		         t.closed_at, t.completion_summary,
+		         t.commit_open, t.commit_close, t.parent_task_id,
 		         t.priority, t.severity,
 		         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count` + taskDepsSelect + `
 		      FROM tasks t
@@ -1629,8 +1656,9 @@ func (db *DB) GetSprintTasksFull(ctx context.Context, sprintID int, status *mode
 // Returns an empty slice (not an error) when the sprint has no open tasks.
 func (db *DB) GetOpenSprintTasks(ctx context.Context, sprintID int, orderByPriority bool) ([]models.Task, error) {
 	query := `SELECT t.id, t.title, t.status, t.type, t.functional_requirements, t.technical_requirements,
-		         t.acceptance_criteria, t.created_at, t.specialists, t.started_at, t.tested_at,
-		         t.closed_at, t.completion_summary, t.parent_task_id,
+		         t.acceptance_criteria, t.created_at, t.started_at, t.tested_at,
+		         t.closed_at, t.completion_summary,
+		         t.commit_open, t.commit_close, t.parent_task_id,
 		         t.priority, t.severity,
 		         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count` + taskDepsSelect + `
 		      FROM tasks t
@@ -1750,14 +1778,28 @@ func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int)
 			return err
 		}
 
-		// Audit: one SPRINT_ADD_TASK entry per task, written INSIDE this same
-		// transaction so a committed membership change can never exist without
-		// its audit record. Writing the audit in a separate post-commit call
-		// would leave a window where the insert is durable but the audit is not
-		// (SPEC/DATABASE.md § Transactional Atomicity Guarantees #4;
-		// ARCHITECTURE.md § Security Guarantees).
-		for range taskIDs {
-			if err := LogAuditTx(tx, models.OpSprintAddTask, models.EntitySprint, sprintID, now); err != nil {
+		// Audit: two entries per task, one against each entity the addition
+		// changes, written INSIDE this same transaction so a committed
+		// membership change can never exist without its audit record. Writing
+		// the audit in a separate post-commit call would leave a window where
+		// the insert is durable but the audit is not (SPEC/DATABASE.md §
+		// Transactional Atomicity Guarantees #4; ARCHITECTURE.md § Security
+		// Guarantees).
+		//
+		// The pair is mirrored: SPRINT_ADD_TASK belongs to the sprint's history
+		// and names the task, TASK_STATUS_SPRINT belongs to the task's history
+		// and names the sprint, and both carry the one `now` this transaction
+		// captured. Transposed ids and a shared performed_at are what let a
+		// reader of either entity's history learn the counterpart without
+		// consulting the other's (SPEC/DATABASE.md § The Two Entities of a
+		// Relational Operation).
+		for _, taskID := range taskIDs {
+			if err := LogAuditTx(tx, models.OpSprintAddTask, models.EntitySprint, sprintID, now,
+				WithRelatedEntity(taskID)); err != nil {
+				return err
+			}
+			if err := LogAuditTx(tx, models.OpTaskStatusSprint, models.EntityTask, taskID, now,
+				WithRelatedEntity(sprintID)); err != nil {
 				return err
 			}
 		}
@@ -1849,12 +1891,30 @@ func (db *DB) MoveTasksBetweenSprints(ctx context.Context, fromID, toID int, tas
 		// Intentionally NOT updating tasks.status: the task keeps whatever
 		// status it had (BACKLOG/SPRINT/DOING/TESTING/COMPLETED).
 
-		// Audit: one SPRINT_MOVE_TASK entry per task, written INSIDE this same
-		// transaction as the re-parenting so a committed move can never exist
-		// without its audit record (SPEC/DATABASE.md § Transactional Atomicity
-		// Guarantees #5; ARCHITECTURE.md § Security Guarantees).
-		for range taskIDs {
-			if err := LogAuditTx(tx, models.OpSprintMoveTask, models.EntitySprint, toID, now); err != nil {
+		// Audit: two entries per task, one against each sprint the move
+		// changes, written INSIDE this same transaction as the re-parenting so
+		// a committed move can never exist without its audit record
+		// (SPEC/DATABASE.md § Transactional Atomicity Guarantees #5;
+		// ARCHITECTURE.md § Security Guarantees).
+		//
+		// Both name the task, and which sprint a row belongs to is what the
+		// direction in its operation states. The single SPRINT_MOVE_TASK entry
+		// these replace was written against the destination alone, so the
+		// source sprint's history had no record of losing the task and no entry
+		// named the task at all; SPRINT_MOVE_TASK is now LEGACY and no path
+		// writes it (SPEC/DATABASE.md § One Row per Thing That Happened,
+		// rule 2).
+		//
+		// No TASK_STATUS_* entry accompanies them: the move preserves each
+		// task's status, so nothing happened to the task's own lifecycle for a
+		// status entry to record (SPEC/COMMANDS.md § Task Assignment).
+		for _, taskID := range taskIDs {
+			if err := LogAuditTx(tx, models.OpSprintMoveTaskOut, models.EntitySprint, fromID, now,
+				WithRelatedEntity(taskID)); err != nil {
+				return err
+			}
+			if err := LogAuditTx(tx, models.OpSprintMoveTaskIn, models.EntitySprint, toID, now,
+				WithRelatedEntity(taskID)); err != nil {
 				return err
 			}
 		}
@@ -1915,6 +1975,64 @@ func (db *DB) RemoveTasksFromSprint(ctx context.Context, taskIDs []int) error {
 
 // ==================== AUDIT QUERIES ====================
 
+// ErrAuditCommitHashNotAllowed is returned when a caller attaches a commit hash
+// to an operation that does not carry one.
+var ErrAuditCommitHashNotAllowed = errors.New("audit operation does not carry a commit hash")
+
+// ErrAuditRelatedEntityNotAllowed is returned when a caller names a counterpart
+// entity on an operation that has no counterpart.
+var ErrAuditRelatedEntityNotAllowed = errors.New("audit operation does not carry a related entity")
+
+// auditOptionalColumns holds the two nullable columns of an audit row, both NULL
+// unless a caller sets them.
+type auditOptionalColumns struct {
+	relatedEntityID *int
+	commitHash      *string
+}
+
+// AuditOption sets one of the two optional columns of the audit row LogAuditTx
+// writes.
+//
+// The variadic-option form is deliberate, and the alternatives were weighed.
+// Both columns are NULL on the great majority of the catalogue — 33 of the 43
+// operations carry neither — so the ~20 existing call sites must keep reading
+// as they do, naming only what they actually record. An options struct would
+// have made every one of them spell out a literal with two zero fields, and a
+// second constructor per column would have needed a third for the sites that
+// one day set both. A trailing option list leaves the common call untouched,
+// costs no allocation when none is passed, and takes a fourth column the same
+// way it took these two.
+type AuditOption func(*auditOptionalColumns)
+
+// WithCommitHash records the git commit bracketing a task's development work.
+// The value is the already-normalised, lowercase hash the transition also
+// writes to tasks.commit_open or tasks.commit_close — the audit row copies what
+// the transition was given rather than reading it back from the task
+// (SPEC/DATABASE.md § The Commit Hash of an Audit Entry).
+//
+// Only TASK_STATUS_DOING and TASK_STATUS_COMPLETED accept it; see LogAuditTx.
+func WithCommitHash(hash string) AuditOption {
+	return func(row *auditOptionalColumns) { row.commitHash = &hash }
+}
+
+// WithRelatedEntity names the counterpart entity of the operation that produced
+// the row: the task a sprint row is about, or the sprint a task row is about,
+// or the other task of a dependency pair (SPEC/DATABASE.md § The Two Entities of
+// a Relational Operation).
+//
+// It is what makes two rows of the same operation distinguishable. Without it
+// every SPRINT_ADD_TASK row of a sprint reads identically and none of them says
+// which task was added.
+//
+// Only the eight operations of that section accept it; see LogAuditTx. Passing
+// it is a decision of the call site even among those eight, because the same
+// operation can be written by a command that has a counterpart and by one that
+// has none: `sprint remove-tasks` names the sprint on its TASK_STATUS_BACKLOG
+// row and `task stat <ids> BACKLOG` names nothing on its own.
+func WithRelatedEntity(id int) AuditOption {
+	return func(row *auditOptionalColumns) { row.relatedEntityID = &id }
+}
+
 // LogAuditTx inserts an audit row inside an existing transaction. It is the
 // only audit writer in the package, and every transactional site that writes
 // an audit row alongside a domain mutation calls it rather than spelling out
@@ -1928,13 +2046,64 @@ func (db *DB) RemoveTasksFromSprint(ctx context.Context, taskIDs []int) error {
 // back. A convenience wrapper that inserted one row outside a transaction used
 // to live here, reachable only from test fixtures; it is gone, and the
 // fixtures now seed through this function, which is the path production runs.
-func LogAuditTx(tx *sql.Tx, op models.AuditOperation, entityType models.EntityType, entityID int, performedAt string) error {
+//
+// Being the only writer is also what makes both column rules enforceable rather
+// than merely stated. SPEC/DATABASE.md allows commit_hash on exactly two
+// operations and related_entity_id on exactly eight, and forbids each column
+// everywhere else; both table-wide invariants are checked here, once, instead of
+// being left to the discipline of each call site.
+func LogAuditTx(tx *sql.Tx, op models.AuditOperation, entityType models.EntityType, entityID int, performedAt string, opts ...AuditOption) error {
+	var row auditOptionalColumns
+	for _, opt := range opts {
+		opt(&row)
+	}
+
+	if row.commitHash != nil && !models.OperationCarriesCommitHash(op) {
+		return fmt.Errorf("%w: %s", ErrAuditCommitHashNotAllowed, op)
+	}
+	if row.relatedEntityID != nil && !models.OperationCarriesRelatedEntity(op) {
+		return fmt.Errorf("%w: %s", ErrAuditRelatedEntityNotAllowed, op)
+	}
+
+	// The nullable columns are bound as *int and *string: database/sql converts
+	// a nil pointer to SQL NULL, which is what every operation that carries
+	// neither must store.
 	_, err := tx.Exec(
-		`INSERT INTO audit (operation, entity_type, entity_id, performed_at) VALUES (?, ?, ?, ?)`,
-		op, entityType, entityID, performedAt,
+		`INSERT INTO audit (operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		op, entityType, entityID, row.relatedEntityID, row.commitHash, performedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("inserting audit entry: %w", err)
+	}
+	return nil
+}
+
+// LogAuditFieldsTx writes one audit row per field a single invocation supplied,
+// all of them against the same entity and all of them carrying the same
+// performed_at. It is the writer for the two commands that edit fields,
+// `task edit` and `sprint update`, whose audit contract is one row per supplied
+// flag rather than one row per invocation (SPEC/COMMANDS.md § Edit Task and
+// § Update Sprint).
+//
+// ops is the operations of the supplied fields, in the order the caller built
+// its UPDATE statement, so the stored rows read in the same order the command
+// applied the columns. A caller that supplied no field passes none and no row
+// is written, which is the no-op `task edit` documents.
+//
+// The single performedAt parameter is the point of the function. "All entries of
+// one invocation share one performed_at" is what makes them recognisable as one
+// event, and a per-row timestamp is the natural way to get that wrong: with
+// millisecond resolution and a handful of rows, a re-stamped write is
+// indistinguishable from a correct one almost every time it runs, so the defect
+// would survive testing. Taking the timestamp as a parameter makes the property
+// structural — the loop has no clock to call — instead of leaving it to be
+// asserted after the fact.
+func LogAuditFieldsTx(tx *sql.Tx, entityType models.EntityType, entityID int, performedAt string, ops ...models.AuditOperation) error {
+	for _, op := range ops {
+		if err := LogAuditTx(tx, op, entityType, entityID, performedAt); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -1999,7 +2168,12 @@ func buildAuditEntriesQuery(f *AuditFilter) (string, []any) {
 	// backing string for every appended clause.
 	var qb strings.Builder
 	qb.Grow(256) // rough upper bound for SELECT + 7 clauses
-	qb.WriteString(`SELECT id, operation, entity_type, entity_id, performed_at FROM audit WHERE 1=1`)
+	// Columns are named explicitly and in the DDL's own order. A migrated audit
+	// table carries related_entity_id and commit_hash appended after
+	// performed_at, while a fresh one declares them before it, so no statement
+	// here may use SELECT * or bind by position (SPEC/VERSION.md § Migration
+	// 1.11.0 to 1.12.0).
+	qb.WriteString(`SELECT id, operation, entity_type, entity_id, related_entity_id, commit_hash, performed_at FROM audit WHERE 1=1`)
 	args := make([]any, 0, 7)
 
 	if f.Operation != nil {
@@ -2042,18 +2216,41 @@ func scanAuditEntries(rows *sql.Rows) ([]models.AuditEntry, error) {
 	// `[]`, not `null`, per SPEC/DATA_FORMATS.md Implementation Notes #6
 	// (finding #53).
 	entries := []models.AuditEntry{}
+
+	var relatedEntityID sql.NullInt64
+	var commitHash sql.NullString
+
 	for rows.Next() {
 		var entry models.AuditEntry
+		relatedEntityID = sql.NullInt64{}
+		commitHash = sql.NullString{}
+
 		err := rows.Scan(
 			&entry.ID,
 			&entry.Operation,
 			&entry.EntityType,
 			&entry.EntityID,
+			&relatedEntityID,
+			&commitHash,
 			&entry.PerformedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning audit entry: %w", err)
 		}
+
+		// Each value is copied into a fresh variable before its address is
+		// taken. Pointing every entry at the loop-external scan variable would
+		// make the whole result share one backing value and report the LAST
+		// row's counterpart and hash on all of them.
+		if relatedEntityID.Valid {
+			v := int(relatedEntityID.Int64)
+			entry.RelatedEntityID = &v
+		}
+		if commitHash.Valid {
+			v := commitHash.String
+			entry.CommitHash = &v
+		}
+
 		entries = append(entries, entry)
 	}
 

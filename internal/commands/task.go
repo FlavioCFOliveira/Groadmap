@@ -48,15 +48,22 @@ Numeric ranges:
   --priority, --severity      0-9 (0 = lowest, 9 = highest)
 
 Status workflow (per SPEC/STATE_MACHINE.md):
-  BACKLOG --[sprint add-tasks]--> SPRINT --[task stat DOING]--> DOING
+  BACKLOG --[sprint add-tasks]--> SPRINT --[task stat DOING -co <hash>]--> DOING
         DOING --[task stat TESTING]--> TESTING
-        TESTING --[task stat COMPLETED]--> COMPLETED --[task reopen / stat BACKLOG]--> BACKLOG
+        TESTING --[task stat COMPLETED -cc <hash>]--> COMPLETED
+        COMPLETED --[task reopen / stat BACKLOG]--> BACKLOG
   Rules enforced:
     - 'task stat <id> SPRINT' is rejected (exit 6). Use 'sprint add-tasks' instead.
     - 'task remove' is only allowed while a task is in BACKLOG.
     - Marking COMPLETED is rejected (exit 6) if any subtask or dependency is not yet COMPLETED.
+    - Every transition into DOING requires --commit-open / -co, and the transition into
+      COMPLETED requires --commit-close / -cc. Each flag is rejected (exit 6) on any other
+      target status, and its absence on its own target status is rejected (exit 6) too.
+    - A commit hash is 7 to 64 hexadecimal characters, any letter case, stored lowercase.
+      You supply it: rmp runs no git command and reads no repository.
     - On COMPLETED transition you may attach a free-form summary with --summary / -s (max 4096 chars).
-    - 'task reopen' (or 'stat BACKLOG' from COMPLETED) clears started_at, tested_at, closed_at, completion_summary.
+    - 'task reopen' (or 'stat BACKLOG' from COMPLETED) clears started_at, tested_at, closed_at,
+      completion_summary and commit_close; commit_open is preserved.
 
 Commands:
   list, ls [OPTIONS]                          List tasks (any status; filter with --status)
@@ -65,12 +72,10 @@ Commands:
   next [num]                                  Get next [num] incomplete tasks from the OPEN sprint
   edit <task-id> [OPTIONS]                    Edit fields of a task (status NOT editable here)
   remove, rm <task-ids>                       Remove task(s) — BACKLOG only, no active subtasks
-  stat, set-status <task-ids> <new-status>    Set task status (manual transitions; SPRINT is rejected)
-  reopen <task-ids>                           Reopen task(s) to BACKLOG, clearing lifecycle timestamps
+  stat, set-status <task-ids> <new-status>    Set task status (DOING/COMPLETED require a commit hash)
+  reopen <task-ids>                           Reopen task(s) to BACKLOG, clearing all but commit_open
   prio, set-priority <task-ids> <priority>    Set task priority (0-9) for one or many tasks
   sev, set-severity <task-ids> <severity>     Set task severity (0-9) for one or many tasks
-  assign <task-id> <specialist>               Add specialist to task (idempotent; stderr note on dup)
-  unassign <task-id> <specialist>             Remove specialist from task (idempotent)
   subtasks <task-id>                          List direct subtasks (one level; no grand-children)
   add-dep <task-id> <blocker-id>              Declare <task-id> depends on <blocker-id> (cycles rejected)
   remove-dep <task-id> <blocker-id>           Remove the dependency edge created by add-dep
@@ -90,7 +95,6 @@ Options (list — all filters compose with AND):
   -p, --priority <min>              Filter: priority >= min (0-9)
   --severity <min>                  Filter: severity >= min (0-9)
   -y, --type <type>                 Filter by task type
-  -sp, --specialists <substring>    Filter by specialists (case-insensitive substring)
   --created-since <date>            Include tasks created on/after this date (RFC3339 or YYYY-MM-DD)
   --created-until <date>            Include tasks created on/before this date (RFC3339 or YYYY-MM-DD)
   --sort <field>                    Sort: priority (default), created, status, severity
@@ -107,11 +111,16 @@ Options (create / edit):
   -y,  --type <type>                Task type (default: TASK)
   -p,  --priority <n>               Initial/new priority (0-9, default 0)
        --severity <n>               Initial/new severity (0-9, default 0)
-  -sp, --specialists <list>         Comma-separated specialists (max 500 chars)
        --parent <id>                Parent task ID (on create only — makes a sub-task)
 
-Options (stat to COMPLETED):
-  -s, --summary <text>              Completion summary (max 4096 chars; only valid when
+Options (stat):
+  -co, --commit-open <hash>         Git commit the work starts from (7-64 hex chars,
+                                    stored lowercase). REQUIRED when the target status
+                                    is DOING; rejected for any other target status.
+  -cc, --commit-close <hash>        Git commit the work is concluded at (7-64 hex chars,
+                                    stored lowercase). REQUIRED when the target status
+                                    is COMPLETED; rejected for any other target status.
+  -s,  --summary <text>             Completion summary (max 4096 chars; only valid when
                                     target status is COMPLETED)
 
 Options (comment-add / comment-list / comment-edit):
@@ -138,14 +147,14 @@ Output (stdout JSON):
   list, get, next, subtasks, blockers, blocking   Array of task objects.
   create                                          {"id": <int>}
   edit, stat, prio, sev, reopen, remove           Empty (exit 0 on success).
-  assign, unassign                                Empty (exit 0 on success).
   add-dep, remove-dep                             Empty (exit 0 on success).
   comment-add                                     {"id": <int>}
   comment-list                                    Array of comment objects.
   comment-edit, comment-remove                    Empty (exit 0 on success).
   Task object keys: id, title, status, type, functional_requirements,
-  technical_requirements, acceptance_criteria, created_at, specialists,
-  started_at, tested_at, closed_at, completion_summary, parent_task_id,
+  technical_requirements, acceptance_criteria, created_at,
+  started_at, tested_at, closed_at, completion_summary,
+  commit_open, commit_close, parent_task_id,
   priority, severity, subtask_count, depends_on, blocks.
   Comment object keys: id, task_id, type, body, created_at, updated_at
   (updated_at is null until the comment is first edited).
@@ -166,8 +175,8 @@ Examples:
   rmp task create -r myproject -t "Fix bug" -fr "User can login" -tr "Update auth" -ac "Login works"
   rmp task create -r myproject -t "Add metrics" --type CHORE -p 3
   rmp task edit -r myproject 42 -t "Updated title" -p 8
-  rmp task stat -r myproject 1,2,3 DOING
-  rmp task stat -r myproject 7 COMPLETED --summary "Shipped behind feature flag"
+  rmp task stat -r myproject 1,2,3 DOING --commit-open 5f93b51
+  rmp task stat -r myproject 7 COMPLETED -cc 2578d18 --summary "Shipped behind feature flag"
   rmp task prio -r myproject 1,2,3 8
   rmp task sev -r myproject 5 9
   rmp task add-dep -r myproject 10 7

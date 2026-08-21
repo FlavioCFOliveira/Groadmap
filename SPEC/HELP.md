@@ -17,6 +17,10 @@ is modified.
 - [Family-help template](#family-help-template)
 - [Subcommand-help template](#subcommand-help-template)
 - [Command inventory](#command-inventory)
+  - [Task family help specifics](#task-family-help-specifics)
+  - [Sprint family help specifics](#sprint-family-help-specifics)
+  - [Audit family help specifics](#audit-family-help-specifics)
+  - [Comment subcommand help specifics](#comment-subcommand-help-specifics)
 - [Error message format](#error-message-format)
 - [AI_AGENT environment variable](#ai_agent-environment-variable)
 - [Exit codes](#exit-codes)
@@ -199,7 +203,7 @@ help text must match the command contract in `COMMANDS.md`.
 | Global | `rmp --version` | `COMMANDS.md § Global Commands` |
 | Global | `rmp --ai-help` / `rmp ai-help` | `COMMANDS.md § AI Help` |
 | Roadmap | `rmp roadmap [list \| create \| remove]` | `COMMANDS.md § Roadmap Management` |
-| Task | `rmp task [list \| create \| get \| next \| edit \| remove \| stat \| reopen \| prio \| sev \| assign \| unassign \| subtasks \| add-dep \| remove-dep \| blockers \| blocking]` | `COMMANDS.md § Task Management` |
+| Task | `rmp task [list \| create \| get \| next \| edit \| remove \| stat \| reopen \| prio \| sev \| subtasks \| add-dep \| remove-dep \| blockers \| blocking]` | `COMMANDS.md § Task Management` |
 | Task | `rmp task [comment-add \| comment-list \| comment-edit \| comment-remove]` | `COMMANDS.md § Task Comments` |
 | Sprint | `rmp sprint [list \| create \| get \| show \| update \| remove]` | `COMMANDS.md § Sprint Management` |
 | Sprint | `rmp sprint [comment-add \| comment-list \| comment-edit \| comment-remove]` | `COMMANDS.md § Sprint Comments` |
@@ -217,6 +221,55 @@ Each subcommand in the inventory has its own dedicated help printer in
 the code (e.g. `printTaskStatHelp`, `printSprintCloseHelp`,
 `printBacklogShowNextHelp`). The family help additionally summarises the
 subcommands and shared invariants.
+
+### Task family help specifics
+
+The `task stat` subcommand help follows the same structure template as every other
+subcommand but MUST additionally make the rules below explicit, because the generic
+Required / Optional split cannot express them. Both the plain-text help and the
+machine-readable AI Agent Contract (`rmp --ai-help`) MUST document them:
+
+1. **Two flags are conditionally mandatory.** `-co, --commit-open` is mandatory when
+   the target status is `DOING`, and `-cc, --commit-close` is mandatory when the
+   target status is `COMPLETED`. Neither is mandatory for the subcommand as a whole,
+   so neither belongs under a bare `Required:` heading. The help MUST list both under
+   `Optional:` and state the condition in the flag's own description, in the form
+   "required when <new-status> is DOING" and "required when <new-status> is
+   COMPLETED". A reader must be able to tell, without running the command, that
+   `rmp task stat -r x 7 DOING` on its own fails.
+2. **Each flag is rejected outside its own transition.** The help MUST state that
+   `--commit-open` is accepted only for the target status `DOING` and
+   `--commit-close` only for `COMPLETED`, alongside the existing statement of the
+   same rule for `--summary` and `COMPLETED`.
+3. **The value format.** The help MUST state that the value is a git commit hash of
+   7 to 64 hexadecimal characters, accepted in any letter case and stored lowercase.
+4. **Groadmap reads no repository.** The help MUST state that the caller supplies
+   the hash and that `rmp` runs no git command and inspects no working directory.
+   This is the point an AI agent is most likely to get wrong, because the natural
+   assumption is that a tool storing a commit hash can discover it; the contract's
+   `pitfalls` array carries the same warning (see
+   `DATA_FORMATS.md § pitfalls array entry`).
+5. **What a return to `BACKLOG` does to each field.** The `task stat` and
+   `task reopen` helps both describe the clearing behaviour of a return to
+   `BACKLOG`. Both MUST name `commit_close` among the cleared fields and MUST state
+   that `commit_open` is preserved, because the asymmetry contradicts the pattern
+   every other tracking field follows and a reader who assumes symmetry would be
+   wrong. `STATE_MACHINE.md § Commit Tracking Fields` is canonical for the rule.
+
+6. **Where the hash is recorded.** The help MUST state that the supplied hash is
+   written both to the task and to the audit entry for the transition, and that the
+   audit entry keeps it permanently: reopening the task clears `commit_close` on the
+   task but changes no audit entry. An agent that has to recover which commit
+   concluded a task that was later reopened must know to look in the audit log, and
+   it cannot infer that from the flag description alone.
+7. **Which operation the transition records.** The help MUST state that a status
+   change is recorded under an operation named for the state entered
+   (`TASK_STATUS_BACKLOG`, `TASK_STATUS_SPRINT`, `TASK_STATUS_DOING`,
+   `TASK_STATUS_TESTING`, `TASK_STATUS_COMPLETED`), so a reader composing an
+   `audit list --operation` filter picks the right value without guessing.
+
+`COMMANDS.md § Change Status (stat)` remains canonical for the flags, the
+validation order, and the exact error text.
 
 ### Sprint family help specifics
 
@@ -291,6 +344,58 @@ machine-readable AI Agent Contract (`rmp --ai-help`) MUST document them:
    `sprint create` and `sprint update` MUST carry the same semantics in its
    `description` string. See `COMMANDS.md § Create Sprint` and
    `COMMANDS.md § Update Sprint`.
+
+### Audit family help specifics
+
+The `audit` family help and the `audit list` subcommand help follow the same
+structure template as every other family but MUST additionally make the rules below
+explicit. Both the plain-text help and the machine-readable AI Agent Contract
+(`rmp --ai-help`) MUST document them:
+
+1. **The `Valid operations (for --operation filter)` block lists every operation in
+   the catalogue.** The block is rendered from the valid set itself rather than
+   maintained by hand, so an operation the command accepts can never be missing from
+   the help. `DATABASE.md § audit Table` is canonical for the catalogue; the help
+   publishes it, and MUST NOT publish a subset of it.
+2. **A LEGACY operation is labelled LEGACY where it is listed.** The four LEGACY
+   values — `TASK_STATUS_CHANGE`, `TASK_UPDATE`, `SPRINT_UPDATE`, and
+   `SPRINT_MOVE_TASK` — are accepted filter values that no command writes, so a
+   reader who picks one for current activity gets an empty result. The help MUST
+   render them in a separate labelled group, or with an inline `LEGACY` marker on
+   each, and MUST state in one sentence that no command writes them and that they
+   exist so the older entries carrying them stay filterable. Listing them
+   indistinguishably from the operations in use is the defect this rule prevents.
+3. **The status operations name their destination.** The help MUST make it visible
+   that the five `TASK_STATUS_*` operations are one per task state, so a reader
+   filtering for "tasks that started" chooses `TASK_STATUS_DOING` rather than
+   scanning a generic status-change value.
+4. **The two nullable output keys.** The `Output (stdout JSON)` block of the `audit`
+   family help MUST name all seven keys of an audit entry in its object key list,
+   `related_entity_id` and `commit_hash` included, and MUST state that both are
+   `null` on the operations that do not carry them and are never omitted. An agent
+   that does not know a key can be `null` will treat its absence of a value as an
+   error.
+5. **What `related_entity_id` means.** The help MUST state that it names the
+   counterpart entity of the operation that produced the entry — the task a
+   `SPRINT_ADD_TASK` entry added, the sprint a `TASK_STATUS_SPRINT` entry names, the
+   other task of a dependency pair — and that it is `null` when the operation has no
+   counterpart. Without that sentence the key reads as a duplicate of `entity_id`.
+   The help MUST NOT suggest that the key's presence follows from the operation name
+   alone: `TASK_STATUS_BACKLOG` carries a sprint id from `sprint remove-tasks` and
+   `null` from `task stat`.
+6. **Valid entity types.** The `-e, --entity-type` flag and the `audit history`
+   positional argument both accept exactly `TASK` and `SPRINT`. The help MUST
+   enumerate both values on both surfaces.
+7. **There is no filter on the two new columns.** The help MUST NOT imply that
+   `related_entity_id` or `commit_hash` can be filtered; the accepted filters are
+   `--operation`, `--entity-type`, `--entity-id`, `--since`, `--until`, and
+   `--limit`.
+
+In the AI Agent Contract, the `AuditOperation` enum carries every value with a
+non-empty `description`, and each LEGACY value's description states that no command
+writes it and names the operations that replaced it (see
+`DATA_FORMATS.md § enums map entry`). `COMMANDS.md § Audit Log Management` remains
+canonical for the flags, the validation order, and the exact error text.
 
 ### Comment subcommand help specifics
 

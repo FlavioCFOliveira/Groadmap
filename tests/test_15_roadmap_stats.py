@@ -143,14 +143,14 @@ class TestRoadmapStats:
         # After add-tasks, tasks 0-3 are in SPRINT status. Task 4 remains BACKLOG.
         # Advance tasks through the pipeline:
         # task_ids[0]: SPRINT -> DOING (stays in DOING)
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_ids[0]), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_ids[0]), "DOING", "--commit-open", "626346d"])
         # task_ids[1]: SPRINT -> DOING -> TESTING (stays in TESTING)
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_ids[1]), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_ids[1]), "DOING", "--commit-open", "3b9289c"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_ids[1]), "TESTING"])
         # task_ids[2]: SPRINT -> DOING -> TESTING -> COMPLETED
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_ids[2]), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_ids[2]), "DOING", "--commit-open", "24262f0"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_ids[2]), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_ids[2]), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_ids[2]), "COMPLETED", "--commit-close", "b0ab692"])
         # task_ids[3] stays in SPRINT status
 
         result = self.test.run_cmd_json(["stats", "-r", roadmap])

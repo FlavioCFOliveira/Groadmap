@@ -378,8 +378,9 @@ func TestResolveRoadmap_ExistsError(t *testing.T) {
 // the handler must respond 500 and must NOT have written a partial 200 (the
 // buffer-then-write design exists precisely to make this clean).
 func TestRenderHTML_TemplateError(t *testing.T) {
+	captureLog(t) // the error branch now logs; keep the suite's output clean
 	rec := httptest.NewRecorder()
-	renderHTML(rec, "no-such-template.html", nil)
+	renderHTML(rec, httptest.NewRequest(http.MethodGet, "/", nil), "no-such-template.html", nil)
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500", rec.Code)
 	}
@@ -394,8 +395,9 @@ func TestRenderHTML_TemplateError(t *testing.T) {
 // encoder cannot marshal (a channel) makes Encode fail, so the handler must
 // respond 500 rather than emit a malformed body with a JSON content type.
 func TestRenderJSON_EncodeError(t *testing.T) {
+	captureLog(t) // the error branch now logs; keep the suite's output clean
 	rec := httptest.NewRecorder()
-	renderJSON(rec, make(chan int)) // channels are not JSON-encodable
+	renderJSON(rec, httptest.NewRequest(http.MethodGet, "/", nil), make(chan int)) // channels are not JSON-encodable
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500", rec.Code)
 	}
@@ -409,7 +411,7 @@ func TestRenderJSON_EncodeError(t *testing.T) {
 // newline (the project-wide JSON convention).
 func TestRenderJSON_HappyPath(t *testing.T) {
 	rec := httptest.NewRecorder()
-	renderJSON(rec, graphView{Nodes: []map[string]any{}, Edges: []map[string]any{}})
+	renderJSON(rec, httptest.NewRequest(http.MethodGet, "/", nil), graphView{Nodes: []map[string]any{}, Edges: []map[string]any{}})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}

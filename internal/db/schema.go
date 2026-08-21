@@ -7,7 +7,7 @@ import (
 )
 
 // SchemaVersion is the current database schema version.
-const SchemaVersion = "1.9.0"
+const SchemaVersion = "1.12.0"
 
 // CreateSchema creates all database tables and indexes.
 // This implements the DDL from SPEC/DATABASE.md.
@@ -27,11 +27,14 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_at TEXT NOT NULL,
 
     -- Group 2: Nullable tracking fields - lifecycle timestamps
-    specialists TEXT,
     started_at TEXT,
     tested_at TEXT,
     closed_at TEXT,
     completion_summary TEXT CHECK(completion_summary IS NULL OR length(completion_summary) <= 4096),
+    -- Git commit hashes bracketing the work. Stored lowercase; the CHECK rejects any other case
+    -- because GLOB is case-sensitive in SQLite, so it backs the application's lowercase normalisation.
+    commit_open TEXT CHECK(commit_open IS NULL OR (length(commit_open) BETWEEN 7 AND 64 AND commit_open NOT GLOB '*[^0-9a-f]*')),
+    commit_close TEXT CHECK(commit_close IS NULL OR (length(commit_close) BETWEEN 7 AND 64 AND commit_close NOT GLOB '*[^0-9a-f]*')),
     parent_task_id INTEGER REFERENCES tasks(id),
 
     -- Group 3: Numeric metadata fields
@@ -105,6 +108,8 @@ CREATE TABLE IF NOT EXISTS audit (
     operation TEXT NOT NULL,
     entity_type TEXT NOT NULL CHECK(entity_type IN ('TASK', 'SPRINT')),
     entity_id INTEGER NOT NULL,
+    related_entity_id INTEGER CHECK(related_entity_id IS NULL OR related_entity_id > 0),   -- Counterpart entity of the operation that produced the row; NULL when it has no counterpart
+    commit_hash TEXT CHECK(commit_hash IS NULL OR (length(commit_hash) BETWEEN 7 AND 64 AND commit_hash NOT GLOB '*[^0-9a-f]*')),   -- Git commit bracketing the work; NULL on every operation but two
     performed_at TEXT NOT NULL
 );
 

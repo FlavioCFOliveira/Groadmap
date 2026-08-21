@@ -36,6 +36,10 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Web HTTP server timeouts (read-header, write, idle) and the graph data endpoint's query time budget | `WEB.md § HTTP Server Timeouts` |
 | Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
 | Free-text control-character constraint (CWE-150 / Trojan Source) | `MODELS.md § Task` (Free-Text Control-Character Constraint) |
+| Task commit-hash format (7-64 hexadecimal characters, lowercase on storage, no git invocation) | `MODELS.md § Task` (Commit Hash Constraint) |
+| Task commit-hash `CHECK` constraints and why `GLOB` is case-sensitive | `DATABASE.md § Commit Hash Format Constraint` |
+| Task commit tracking (`commit_open` / `commit_close`: when each is written, when each is cleared, the asymmetry on reopening) | `STATE_MACHINE.md § Commit Tracking Fields` |
+| `task stat` commit flags (`--commit-open` / `--commit-close`), their validation order and errors | `COMMANDS.md § Change Status (stat)` |
 | Comment types (the one enum, and the per-entity valid subsets) | `MODELS.md § Comment Type` |
 | Task comment / sprint comment models and field constraints | `MODELS.md § Task Comment` and `MODELS.md § Sprint Comment` |
 | Comment subcommand syntax / flags (`comment-add`, `comment-list`, `comment-edit`, `comment-remove`) | `COMMANDS.md § Task Comments` and `COMMANDS.md § Sprint Comments` |
@@ -46,6 +50,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Sprint `description` semantics (must state the sprint's high-level goal) | `MODELS.md § Sprint Field Constraints` |
 | Audit result-set cap (`MaxAuditLimit`) | `DATABASE.md § Audit Result Limit` |
 | Migration idempotency (ALTER TABLE ADD COLUMN guard) | `DATABASE.md § Migration Idempotency (ALTER TABLE ADD COLUMN)` |
+| Migration idempotency (ALTER TABLE DROP COLUMN guard, what a drop preserves and discards) | `DATABASE.md § Migration Idempotency (ALTER TABLE DROP COLUMN)` |
 | `graph` command syntax / subcommands | `COMMANDS.md § Graph Management` |
 | Graph query result JSON / property-type mapping | `DATA_FORMATS.md § Graph Query Result` |
 | Cypher input via flag or stdin | `GRAPH.md § Cypher Input Source and Precedence` |
@@ -71,7 +76,14 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Exit codes | `ARCHITECTURE.md § Exit Codes` |
 | Database schema (DDL) | `DATABASE.md § DDL - Table Creation` |
 | SQL queries | `DATABASE.md § Main SQL Queries` |
-| Audit operations catalogue | `DATABASE.md § audit Table` |
+| Audit operations catalogue (the canonical list, including the LEGACY values) | `DATABASE.md § audit Table` |
+| Audit: how many entries an operation writes and what each says | `DATABASE.md § One Row per Thing That Happened` |
+| Audit entry `related_entity_id` (which operations write it, and what the counterpart is) | `DATABASE.md § The Two Entities of a Relational Operation` |
+| Audit entry `commit_hash` (which operations write it, and why a reopening does not clear it) | `DATABASE.md § The Commit Hash of an Audit Entry` |
+| Audit entry model, enums, and struct layout | `MODELS.md § Audit Entry`, `MODELS.md § Audit Operation`, `MODELS.md § Entity Type` |
+| Audit entry JSON shape (seven keys, two nullable) | `DATA_FORMATS.md § Audit Entry` |
+| Audit log append-only guarantee | `ARCHITECTURE.md § Security Guarantees` |
+| Audit help surfaces (operation list, LEGACY marking, output keys) | `HELP.md § Audit family help specifics` |
 | Concurrency (WAL, pool, retry) | `IMPLEMENTATION.md § Concurrency Model` |
 | Query caching | `IMPLEMENTATION.md § Query Caching` |
 | Performance practices | `IMPLEMENTATION.md § Performance Considerations` |
@@ -118,6 +130,8 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Comment body input source and precedence (`--body` or stdin) | `COMMANDS.md § Comment Body Input Source and Precedence` |
 | Memory layout / struct field ordering | `MODELS.md § Memory Layout Optimization` |
 | Task state transitions | `STATE_MACHINE.md § Task State Machine` |
+| Task commit-hash format (character set, length bounds, lowercase normalisation) | `MODELS.md § Task` (Commit Hash Constraint) |
+| Task commit tracking field rules (when `commit_open` and `commit_close` are written, preserved, and cleared) | `STATE_MACHINE.md § Commit Tracking Fields` |
 | Sprint state transitions | `STATE_MACHINE.md § Sprint State Machine` |
 | Sprint membership versus task status | `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` |
 | Audit operations catalogue | `DATABASE.md § audit Table` |

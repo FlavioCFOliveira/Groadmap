@@ -52,7 +52,7 @@ class TestTaskStateMachine:
         ])
 
         # Transition to DOING
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "2578d18"])
         self.test.assert_task_status(roadmap, task_id, "DOING")
 
         print("✓ SPRINT to DOING transition test passed")
@@ -67,7 +67,7 @@ class TestTaskStateMachine:
         self.test.run_cmd([
             "sprint", "add-tasks", "-r", roadmap, str(sprint_id), str(task_id)
         ])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "391cff7"])
 
         # Transition to TESTING
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
@@ -85,11 +85,11 @@ class TestTaskStateMachine:
         self.test.run_cmd([
             "sprint", "add-tasks", "-r", roadmap, str(sprint_id), str(task_id)
         ])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "626346d"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
 
         # Transition to COMPLETED
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "8256fd0"])
         self.test.assert_task_status(roadmap, task_id, "COMPLETED")
 
         # Verify closed_at is set
@@ -116,10 +116,10 @@ class TestTaskStateMachine:
         self.test.run_cmd([
             "sprint", "add-tasks", "-r", roadmap, str(sprint_id), str(task_id)
         ])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "3b9289c"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
         self.test.run_cmd([
-            "task", "stat", "-r", roadmap, str(task_id), "COMPLETED",
+            "task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "d1e8dec",
             "--summary", "Shipped behind feature flag after manual QA on staging.",
         ])
 
@@ -158,7 +158,7 @@ class TestTaskStateMachine:
         self.test.run_cmd([
             "sprint", "add-tasks", "-r", roadmap, str(sprint_id), str(task_id)
         ])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "24262f0"])
 
         # Manual SPRINT transition must fail with exit code 6
         exit_code, _, stderr = self.test.run_cmd(
@@ -183,11 +183,11 @@ class TestTaskStateMachine:
         self.test.run_cmd([
             "sprint", "add-tasks", "-r", roadmap, str(sprint_id), str(task_id)
         ])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "6c8064a"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
 
         # Failed test - return to DOING
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "021fa2f"])
         self.test.assert_task_status(roadmap, task_id, "DOING")
 
         print("✓ TESTING to DOING transition test passed")
@@ -219,7 +219,7 @@ class TestTaskStateMachine:
 
         # BACKLOG cannot go directly to DOING
         exit_code, _, _ = self.test.run_cmd(
-            ["task", "stat", "-r", roadmap, str(task_id), "DOING"],
+            ["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "abd481c"],
             check=False
         )
         assert exit_code != 0, "BACKLOG -> DOING should be invalid"
@@ -233,7 +233,7 @@ class TestTaskStateMachine:
 
         # BACKLOG cannot go directly to COMPLETED
         exit_code, _, _ = self.test.run_cmd(
-            ["task", "stat", "-r", roadmap, str(task_id), "COMPLETED"],
+            ["task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "4999725"],
             check=False
         )
         assert exit_code != 0, "BACKLOG -> COMPLETED should be invalid"
@@ -253,7 +253,7 @@ class TestTaskStateMachine:
 
         # SPRINT cannot go directly to COMPLETED
         exit_code, _, _ = self.test.run_cmd(
-            ["task", "stat", "-r", roadmap, str(task_id), "COMPLETED"],
+            ["task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "b7591f7"],
             check=False
         )
         assert exit_code != 0, "SPRINT -> COMPLETED should be invalid"
@@ -282,7 +282,7 @@ class TestTaskStateMachine:
         self.test.assert_task_status(roadmap, task_id, "SPRINT")
 
         # Start working
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "5d6a2cd"])
         self.test.assert_task_status(roadmap, task_id, "DOING")
 
         # Submit for testing
@@ -290,7 +290,7 @@ class TestTaskStateMachine:
         self.test.assert_task_status(roadmap, task_id, "TESTING")
 
         # Test failed, return to development
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "5f93b51"])
         self.test.assert_task_status(roadmap, task_id, "DOING")
 
         # Submit for testing again
@@ -298,7 +298,7 @@ class TestTaskStateMachine:
         self.test.assert_task_status(roadmap, task_id, "TESTING")
 
         # Complete
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "fcb1c8a"])
         self.test.assert_task_status(roadmap, task_id, "COMPLETED")
 
         # Reopen (bug found in production)
@@ -330,7 +330,7 @@ class TestTaskStateMachine:
         self.test.run_cmd([
             "task", "stat", "-r", roadmap,
             ",".join(map(str, task_ids)),
-            "DOING"
+            "DOING", "--commit-open", "b0ab692"
         ])
 
         # Verify all are DOING

@@ -67,7 +67,7 @@ SPRINT_SUBS = [
 TASK_SUBS = [
     "list", "create", "get", "next", "edit", "remove",
     "stat", "reopen", "prio", "sev",
-    "assign", "unassign", "subtasks",
+    "subtasks",
     "add-dep", "remove-dep", "blockers", "blocking",
 ]
 GRAPH_SUBS = ["create", "query", "update", "delete", "search"]

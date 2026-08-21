@@ -66,9 +66,9 @@ class TestComplexWorkflow:
 
         # Advance all tasks through the pipeline
         for task_id in infra_tasks.values():
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "5f93b51"])
             self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "d1e8dec"])
 
         self.test.run_cmd(["sprint", "close", "-r", roadmap, str(sprint1)])
         self.test.assert_sprint_status(roadmap, sprint1, "CLOSED")
@@ -117,13 +117,13 @@ class TestComplexWorkflow:
         # Partially complete sprint 2
         for key in ["product_catalog", "shopping_cart"]:
             task_id = feature_tasks[key]
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "2578d18"])
             self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "4999725"])
 
         # Checkout is still in DOING
         checkout_id = feature_tasks["checkout"]
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(checkout_id), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(checkout_id), "DOING", "--commit-open", "391cff7"])
         self.test.assert_task_status(roadmap, checkout_id, "DOING")
 
         # Verify sprint summary
@@ -154,9 +154,9 @@ class TestComplexWorkflow:
 
         # Complete only the first two tasks
         for task_id in tasks[:2]:
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "626346d"])
             self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "b7591f7"])
 
         # Close sprint with incomplete tasks — tasks[2:] are still SPRINT, so --force is required
         self.test.run_cmd(["sprint", "close", "-r", roadmap, str(sprint1), "--force"])
@@ -189,9 +189,9 @@ class TestComplexWorkflow:
 
         # Complete them in sprint 2
         for task_id in tasks[2:]:
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "3b9289c"])
             self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "fcb1c8a"])
 
         self.test.run_cmd(["sprint", "close", "-r", roadmap, str(sprint2)])
         self.test.assert_sprint_status(roadmap, sprint2, "CLOSED")
@@ -226,9 +226,9 @@ class TestComplexWorkflow:
         self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint)])
 
         # Complete first task
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[0]), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[0]), "DOING", "--commit-open", "24262f0"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[0]), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[0]), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[0]), "COMPLETED", "--commit-close", "8007175"])
 
         # Close sprint prematurely — tasks[1] is still SPRINT (never started), --force required
         self.test.run_cmd(["sprint", "close", "-r", roadmap, str(sprint), "--force"])
@@ -239,9 +239,9 @@ class TestComplexWorkflow:
         self.test.assert_sprint_status(roadmap, sprint, "OPEN")
 
         # Complete the second task
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[1]), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[1]), "DOING", "--commit-open", "6c8064a"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[1]), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[1]), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[1]), "COMPLETED", "--commit-close", "8a82583"])
 
         # Now properly close
         self.test.run_cmd(["sprint", "close", "-r", roadmap, str(sprint)])
@@ -303,9 +303,9 @@ class TestComplexWorkflow:
         # Complete tasks in sprint order
         sprint_data = self.test.run_cmd_json(["sprint", "show", "-r", roadmap, str(sprint)])
         for task_id in sprint_data["task_order"]:
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "021fa2f"])
             self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "b0ab692"])
 
         self.test.run_cmd(["sprint", "close", "-r", roadmap, str(sprint)])
         self.test.assert_sprint_status(roadmap, sprint, "CLOSED")
@@ -362,9 +362,9 @@ class TestComplexWorkflow:
 
         # Team A completes all tasks
         for task_id in team_a_tasks:
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "abd481c"])
             self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "4c4ccea"])
         self.test.run_cmd(["sprint", "close", "-r", roadmap, str(sprint_a)])
 
         # No open sprints after team A
@@ -376,9 +376,9 @@ class TestComplexWorkflow:
 
         # Team B completes
         for task_id in team_b_tasks:
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "5d6a2cd"])
             self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "cf507b0"])
         self.test.run_cmd(["sprint", "close", "-r", roadmap, str(sprint_b)])
 
         # All sprints closed
@@ -435,9 +435,9 @@ class TestComplexWorkflow:
         self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint)])
 
         for task_id in task_ids:
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "5f93b51"])
             self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "8256fd0"])
 
         self.test.run_cmd(["sprint", "close", "-r", roadmap, str(sprint)])
 
@@ -462,7 +462,7 @@ class TestComplexWorkflow:
 
         # BACKLOG -> DOING (invalid: must go through SPRINT first)
         exit_code, _, _ = self.test.run_cmd(
-            ["task", "stat", "-r", roadmap, str(task_id), "DOING"], check=False
+            ["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "2578d18"], check=False
         )
         assert exit_code != 0, "BACKLOG -> DOING should be rejected"
         self.test.assert_task_status(roadmap, task_id, "BACKLOG")
@@ -488,13 +488,13 @@ class TestComplexWorkflow:
         self.test.assert_task_status(roadmap, task_id, "SPRINT")
 
         # Valid: SPRINT -> DOING -> TESTING -> COMPLETED
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "391cff7"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "d1e8dec"])
 
         # COMPLETED -> DOING (invalid: terminal state)
         exit_code, _, _ = self.test.run_cmd(
-            ["task", "stat", "-r", roadmap, str(task_id), "DOING"], check=False
+            ["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "626346d"], check=False
         )
         assert exit_code != 0, "COMPLETED -> DOING should be rejected"
         self.test.assert_task_status(roadmap, task_id, "COMPLETED")
@@ -530,7 +530,7 @@ class TestComplexWorkflow:
 
         # Bulk transition all to DOING
         ids_str = ",".join(str(t) for t in task_ids)
-        self.test.run_cmd(["task", "stat", "-r", roadmap, ids_str, "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, ids_str, "DOING", "--commit-open", "3b9289c"])
         for task_id in task_ids:
             self.test.assert_task_status(roadmap, task_id, "DOING")
 
@@ -540,7 +540,7 @@ class TestComplexWorkflow:
             self.test.assert_task_status(roadmap, task_id, "TESTING")
 
         # Bulk transition all to COMPLETED
-        self.test.run_cmd(["task", "stat", "-r", roadmap, ids_str, "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, ids_str, "COMPLETED", "--commit-close", "4999725"])
         for task_id in task_ids:
             self.test.assert_task_status(roadmap, task_id, "COMPLETED")
 
@@ -568,7 +568,7 @@ class TestComplexWorkflow:
         sprint = self.test.create_sprint(roadmap, "Search Sprint")
         self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint), str(task_id)])
         self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint)])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "24262f0"])
 
         # Edit title and priority mid-sprint
         self.test.run_cmd([
@@ -584,7 +584,7 @@ class TestComplexWorkflow:
 
         # Complete the edited task
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "b7591f7"])
         self.test.run_cmd(["sprint", "close", "-r", roadmap, str(sprint)])
 
     # ==================== Roadmap Stats Accuracy ====================
@@ -630,7 +630,7 @@ class TestComplexWorkflow:
 
         # Advance 3 tasks to DOING
         for task_id in task_ids[:3]:
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "6c8064a"])
         stats = self.test.run_cmd_json(["stats", "-r", roadmap])
         assert stats["tasks"]["sprint"] == 5
         assert stats["tasks"]["doing"] == 3
@@ -643,7 +643,7 @@ class TestComplexWorkflow:
         assert stats["tasks"]["testing"] == 2
 
         # Complete 1
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_ids[0]), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_ids[0]), "COMPLETED", "--commit-close", "fcb1c8a"])
         stats = self.test.run_cmd_json(["stats", "-r", roadmap])
         assert stats["tasks"]["completed"] == 1
         assert stats["tasks"]["testing"] == 1

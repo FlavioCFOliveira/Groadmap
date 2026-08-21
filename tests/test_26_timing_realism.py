@@ -70,9 +70,9 @@ class TestBurndownSpread:
 
         # Drive four of the five tasks to COMPLETED.
         for tid in self.task_ids[:4]:
-            self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(tid), "DOING"])
+            self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(tid), "DOING", "--commit-open", "2578d18"])
             self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(tid), "TESTING"])
-            self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(tid), "COMPLETED"])
+            self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(tid), "COMPLETED", "--commit-close", "cf507b0"])
 
         # Rewrite timestamps directly to simulate a multi-day spread.
         now = datetime.now(timezone.utc)
@@ -212,9 +212,9 @@ class TestVelocityAcrossClosedSprints:
         ])
         # Drive every task to COMPLETED through DOING/TESTING (force-allowed flow).
         for tid in task_ids:
-            self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(tid), "DOING"])
+            self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(tid), "DOING", "--commit-open", "391cff7"])
             self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(tid), "TESTING"])
-            self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(tid), "COMPLETED"])
+            self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(tid), "COMPLETED", "--commit-close", "8256fd0"])
 
         # Now backdate the sprint and its task closures.
         conn = sqlite3.connect(self.db_path)

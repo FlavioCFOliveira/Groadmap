@@ -41,6 +41,13 @@
   - [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours)
   - [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library)
 - [Responsive and Mobile-First Design](#responsive-and-mobile-first-design)
+- [Server Logging](#server-logging)
+  - [Logger Configuration](#logger-configuration)
+  - [Levels](#levels)
+  - [What Is Logged](#what-is-logged)
+  - [What Is Not Logged](#what-is-not-logged)
+  - [Record Content](#record-content)
+  - [Log Integrity](#log-integrity)
 - [Error Handling and Exit Codes](#error-handling-and-exit-codes)
 - [Security and Constraints](#security-and-constraints)
 - [Acceptance Criteria](#acceptance-criteria)
@@ -220,7 +227,7 @@ task detail modal that displays all of the task's fields (see
    returns HTTP `404 Not Found` when `{id}` is not a valid integer or is not a
    sprint of the named roadmap (see [Roadmap Sprint Page](#roadmap-sprint-page)).
 10. The roadmap audit log page shows the selected roadmap's full audit log — every
-   audit entry of any operation and entity type — with the `AuditEntry` fields
+   audit entry of any operation and entity type — with all seven `AuditEntry` fields
    already defined in `MODELS.md` and `DATABASE.md`, read from that roadmap's
    `project.db`. It is served at `/roadmaps/{name}/audit`, is read-only, and
    presents the entries as a table ordered by the audit entry's `performed_at`
@@ -443,8 +450,9 @@ schema migrates to it automatically, without user input.
    read-only (see [Read-Only Data Flow](#read-only-data-flow)).
 6. **Per-roadmap failure is best-effort and non-fatal.** If a roadmap's database
    cannot be migrated (for example, it is unreadable, locked by another writer, or
-   corrupt), the server logs an informational message to stderr naming that
-   roadmap and the reason, and continues with the remaining roadmaps. A migration
+   corrupt), the server logs a `WARN` record to stderr naming that roadmap and
+   the reason (see [Server Logging](#server-logging)), and continues with the
+   remaining roadmaps. A migration
    failure for one roadmap does **not** prevent the server from starting and does
    **not** prevent the other roadmaps from being served. This mirrors the
    best-effort, non-fatal tone of the legacy-layout migration sweep's
@@ -474,10 +482,11 @@ schema migrates to it automatically, without user input.
    in [Security and Constraints](#security-and-constraints) applies.
 3. **Network-exposure warning.** When the resolved bind host is not a loopback
    address (it is neither `127.0.0.1`, nor `::1`, nor any other address in the
-   loopback range), the server prints a warning to stderr stating that the
-   read-only interface is reachable from the network. The warning is informational
-   only: it does not change the exit code and does not prevent the server from
-   starting. Binding a loopback address prints no such warning.
+   loopback range), the server writes a `WARN` record to stderr stating that the
+   read-only interface is reachable from the network and naming the bound host
+   (see [Server Logging](#server-logging)). The warning is informational only: it
+   does not change the exit code and does not prevent the server from starting.
+   Binding a loopback address writes no such record.
 4. **Default port.** The default port is `8787`. When `--port` is not given, the
    server attempts to bind `8787`. If `8787` is already in use, the server falls
    back to an ephemeral port chosen by the operating system (binding port `0`),
@@ -985,11 +994,10 @@ how the `rmp web` process itself terminates.
      status badge at all (see below). The priority and severity badges of the task
      detail modal take no prefix either, for the reason stated there.
   4. A **metadata footer** showing only the indicators the task actually has:
-     the sprint the task belongs to, its `specialists`, its number of subtasks
-     (`subtask_count`), its number of `depends_on` entries, its number of `blocks`
-     entries, and its number of comments. Each indicator is rendered with the icon
-     or label that identifies what it counts, so the footer is readable without a
-     legend.
+     the sprint the task belongs to, its number of subtasks (`subtask_count`), its
+     number of `depends_on` entries, its number of `blocks` entries, and its number
+     of comments. Each indicator is rendered with the icon or label that identifies
+     what it counts, so the footer is readable without a legend.
 
      **The sprint indicator.** A task that belongs to a sprint shows that sprint
      on its card, the way a GitLab issue card shows the issue's milestone. The
@@ -1024,11 +1032,9 @@ how the `rmp web` process itself terminates.
   **Absent metadata renders nothing.** An indicator whose value is absent, empty,
   or zero is not rendered at all: no dash, no placeholder, no empty slot. A task
   that belongs to no sprint shows no sprint indicator — not a dash, not "None", not
-  an empty slot; a task with no `specialists` value, or with an empty `specialists`
-  value, shows no specialists indicator; a task with `subtask_count` `0`, with no
-  `depends_on` entry, with no `blocks` entry, or with no comment shows no
-  corresponding indicator. A task with none of the six shows no metadata footer at
-  all.
+  an empty slot; a task with `subtask_count` `0`, with no `depends_on` entry, with
+  no `blocks` entry, or with no comment shows no corresponding indicator. A task
+  with none of the five shows no metadata footer at all.
 
   The card presents a subset of the task's fields by design. Every field of the
   `Task` model — including the long free-text fields, the lifecycle timestamps,
@@ -1091,8 +1097,8 @@ how the `rmp web` process itself terminates.
   `#42`, both `42` and `#42` find it under the one substring rule below, with no
   special case for either form.
 
-  `specialists` is deliberately **excluded**, and so is every other task field. The
-  search answers "which task is this?" from what identifies a task on its card;
+  Every other task field is deliberately **excluded**. The search answers "which
+  task is this?" from what identifies a task on its card;
   matching an attribute answers a different question, "which tasks share this
   property?", which is the job of the type, priority, and severity filters below and
   would make one control serve two purposes with no way for the user to tell which
@@ -1807,11 +1813,50 @@ how the `rmp web` process itself terminates.
   roadmap's `project.db` (the `audit` table). The page renders the entries as a
   server-rendered HTML table. It is read-only: it shows no clickable row action, no
   modal, and no edit affordance of any kind.
-- **Columns.** The table shows the `AuditEntry` fields defined for the audit entry
-  in `MODELS.md § Audit Entry` and `DATABASE.md § audit Table`: the entry `ID`, the
-  `Operation`, the `Entity Type`, the `Entity ID`, and the `Performed At` timestamp
-  (the ISO 8601 UTC timestamp). The page does not redefine these fields;
-  `MODELS.md` and `DATABASE.md` remain canonical.
+- **Columns.** The table shows **every** `AuditEntry` field defined in
+  `MODELS.md § Audit Entry` and `DATABASE.md § audit Table`, in this order: the entry
+  `ID`, the `Operation`, the `Entity Type`, the `Entity ID`, the `Related Entity ID`,
+  the `Commit`, and the `Performed At` timestamp (the ISO 8601 UTC timestamp). The
+  page does not redefine these fields; `MODELS.md` and `DATABASE.md` remain
+  canonical.
+- **The two nullable columns are always rendered.** `Related Entity ID` and `Commit`
+  are `null` on the operations that do not carry them, and the page renders a
+  neutral placeholder in that cell — an em dash — rather than an empty cell, so a
+  reader can tell an absent value from a rendering fault. Neither column is hidden,
+  collapsed, or dropped when every entry on the visible page happens to be `null`:
+  the column set is fixed and does not depend on the data.
+- **Why both columns are shown.** Without `Related Entity ID`, two entries of the
+  same operation against the same entity are indistinguishable on the page: every
+  `SPRINT_ADD_TASK` row of a sprint reads identically and none of them says which
+  task was added, and every `TASK_STATUS_SPRINT` row of a task says it joined a
+  sprint without saying which one. Without `Commit`, the page cannot show the commit
+  that bracketed a task's work, which is the reason the column exists. A presentation
+  that omits either column fails to present the audit log.
+- **`Related Entity ID` renders per entry, never inferred from the operation.** The
+  column holds the counterpart entity of the operation that produced the entry, and
+  is `null` when that operation has no counterpart (see
+  `DATABASE.md § The Two Entities of a Relational Operation`). Whether a value is
+  present does not follow from the operation name: a `TASK_STATUS_BACKLOG` entry
+  written by `sprint remove-tasks` names the sprint the task left, while one written
+  by `task stat` carries `null`. The page therefore renders the value each entry
+  actually carries and MUST NOT derive, suppress, or substitute it based on the
+  operation shown beside it.
+- **`Commit` renders the stored value verbatim.** The value is 7 to 64 lowercase
+  hexadecimal characters. The page does not abbreviate it, does not expand it, does
+  not link it to any repository, and does not verify that it names a commit that
+  exists: Groadmap contacts no repository (see `MODELS.md § Task`, Commit Hash
+  Constraint). Rendering it in a monospaced face is permitted; altering the text is
+  not.
+- **`Operation` renders whatever value the entry carries.** The value is an opaque
+  string: a stored entry can carry an operation the catalogue does not list, and the
+  page MUST render it as received rather than failing, dropping the row, or
+  substituting a fallback (see `DATA_FORMATS.md § Audit Entry`). This includes the
+  catalogue's LEGACY operations, which appear on entries written before the
+  catalogue was refined.
+- **Wide-table behaviour.** The seven columns MUST NOT force the page body to scroll
+  horizontally on a narrow viewport. The table scrolls inside its own container,
+  consistent with the responsive rules in
+  [Responsive and Mobile-First Design](#responsive-and-mobile-first-design).
 - **Ordering.** The entries are ordered by the audit entry's `performed_at`
   timestamp **descending**, so the most recently performed operation appears first.
   `performed_at` is the audit entry's completion timestamp. This is the same
@@ -2253,10 +2298,10 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      **The two cards differ here, and the difference is deliberate.** The tasks
      board's card keeps its **separate metadata footer** and does not fold it into
      the badge line (see [Roadmap Tasks Page](#roadmap-tasks-page), **Card
-     content**, item 4). That footer lists six indicators of mixed kinds, two of
-     which — the sprint the task belongs to and its `specialists` — are text rather
-     than counts and carry no bounded width, so the list cannot share a line with
-     the badges: it would either push them off the line or wrap beneath them and
+     content**, item 4). That footer lists five indicators of mixed kinds, one of
+     which — the sprint the task belongs to — is text rather than a count and
+     carries no bounded width, so the list cannot share a line with the badges: it
+     would either push them off the line or wrap beneath them and
      spend the height the merge exists to save. This card carries exactly two
      indicators, both counts and both short, so it can. The two cards therefore
      diverge in this one line and in nothing else: the badge form and its prefixes,
@@ -2266,9 +2311,9 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      **The counter order differs from the tasks board's too.** On this card the
      comment count comes first and the subtask count second. The tasks board's
      metadata footer keeps its own order, in which the subtask count precedes the
-     comment count among the six indicators it lists. The two orders are stated
+     comment count among the five indicators it lists. The two orders are stated
      separately because the two groups are separate — a pair read at the trailing
-     edge of a line here, a list of six heterogeneous indicators in a block of its
+     edge of a line here, a list of five heterogeneous indicators in a block of its
      own there — and neither order is derived from the other. Each is fixed in this
      specification rather than left to the template, so that what a card shows is
      testable rather than incidental.
@@ -2277,9 +2322,9 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      states the task's status, which is the reason the tasks board's card omits one
      as well.
 
-     The card shows those six data points and no others: no task type, no
-     `specialists`, and no dependency counts. It presents a subset of the task's
-     fields by design, because a card is read at a glance and a column of cards is
+     The card shows those six data points and no others: no task type and no
+     dependency counts. It presents a subset of the task's fields by design,
+     because a card is read at a glance and a column of cards is
      read as a whole; every field of the `Task` model is shown in the task detail
      modal the card opens (see [Task Detail Modal](#task-detail-modal)). The card
      does not redefine any field; `MODELS.md` and `DATABASE.md` remain canonical.
@@ -2298,10 +2343,9 @@ shows sprints as compact cards through the shared sprint-card partial instead (s
      always makes every card of the board the same shape and makes each number
      meaningful: a `0` states that the task has no comment, where an absent counter
      leaves the reader unable to tell "no comments" from "this card does not show
-     comments". The tasks board's card carries six heterogeneous indicators, two of
-     which — the sprint the task belongs to and its `specialists` — are text rather
-     than counts and have no zero to show, so always rendering all six is not even
-     well defined there.
+     comments". The tasks board's card carries five heterogeneous indicators, one of
+     which — the sprint the task belongs to — is text rather than a count and has no
+     zero to show, so always rendering all five is not even well defined there.
    - **The card is the trigger, and the trigger is a `<button>`.** Selecting a card
      opens the read-only task detail modal for that task, and the card itself is a
      `<button type="button">`, a natively activatable element, exactly as the tasks
@@ -3286,9 +3330,15 @@ tasks.
 - **Fields shown.** The modal displays all of the task's fields as defined for the
   `Task` model in `MODELS.md § Task`: `id`, `title`, `status`, `type`, `priority`,
   `severity`, `functional_requirements`, `technical_requirements`,
-  `acceptance_criteria`, `specialists`, `completion_summary`, `parent_task_id`,
-  `subtask_count`, `depends_on`, `blocks`, `created_at`, `started_at`, `tested_at`,
-  and `closed_at`. This includes the long free-text fields
+  `acceptance_criteria`, `completion_summary`, `parent_task_id`, `subtask_count`,
+  `depends_on`, `blocks`, `created_at`, `started_at`, `tested_at`, `closed_at`,
+  `commit_open`, and `commit_close`. The two commit hashes are short single-line
+  values, and the modal presents each as plain text alongside the lifecycle
+  timestamps, under the same rules as every other short field it shows. The modal
+  adds no link to any code-hosting service and no copy control for them: it is
+  read-only and offline, and it holds no repository URL from which such a link
+  could be built.
+  This includes the long free-text fields
   (`functional_requirements`, `technical_requirements`, `acceptance_criteria`, and
   `completion_summary`), which the modal presents formatted for readable display.
   These long free-text fields are multi-line as authored through the CLI, and the
@@ -3371,9 +3421,9 @@ tasks.
 
   This governs every caller-authored value on this path, all of which are free text
   a user wrote through the CLI: the task `title`, `functional_requirements`,
-  `technical_requirements`, `acceptance_criteria`, `completion_summary`,
-  `specialists`, and every comment `body`. A value containing HTML control
-  characters MUST render as the characters themselves and MUST NOT be able to
+  `technical_requirements`, `acceptance_criteria`, `completion_summary`, and every
+  comment `body`. A value containing HTML control characters MUST render as the
+  characters themselves and MUST NOT be able to
   introduce an element, an attribute, or a script into the page. The
   control-character constraint in `MODELS.md § Task` rejects terminal and
   bidirectional control characters at write time; it does not reject HTML markup,
@@ -4364,6 +4414,166 @@ experience is the baseline that larger viewports enhance.
    one device (see [Sprint Detail Sub-Template](#sprint-detail-sub-template),
    **Height and scrolling**).
 
+## Server Logging
+
+`rmp web` is the only long-lived `rmp` process. Every other command reports its
+failure on stderr and exits; the web server, by design, absorbs a per-request
+failure into an HTTP status and keeps serving (see
+[Error Handling and Exit Codes](#error-handling-and-exit-codes), rule 4). The
+response body the browser receives is deliberately opaque — `internal server
+error` — so that a read failure, a corrupt graph store, or a template fault
+never discloses internal detail to the client. Without a log, that detail is
+discarded entirely and the operator is left with a failing page and a silent
+terminal.
+
+The server therefore writes a diagnostic log to the console. The log is the
+counterpart of the opaque response: what the response withholds, the console
+states explicitly.
+
+### Logger Configuration
+
+1. The server logs through the Go standard library's structured logger,
+   `log/slog`, configured with a `slog.TextHandler`. Every record is a single
+   line of `key=value` pairs, which reads directly on a terminal and needs no
+   parsing tool.
+2. The handler writes to **stderr**. Stdout carries only the startup success
+   object defined in `COMMANDS.md § Web Interface`, so a caller that reads
+   stdout for the served URL is never disturbed by a log record. No log record
+   is ever written to stdout.
+3. The minimum enabled level is `INFO`; `DEBUG` records are not emitted.
+4. The configuration is fixed. This version adds no logging flag to `rmp web`,
+   no environment variable, and no log file: the console is the only
+   destination, and the surface in [Command Surface](#command-surface) is
+   unchanged.
+5. Every record's `time` attribute is **always UTC**, in the project's single
+   canonical timestamp format `YYYY-MM-DDTHH:mm:ss.sssZ` — three digits of
+   milliseconds and an explicit `Z` suffix, for example
+   `2026-08-20T19:53:00.918Z`. This is the same format every Groadmap date uses
+   (`DATA_FORMATS.md § Dates - ISO 8601 with UTC`), so a log record and a task's
+   `created_at` can be compared directly, and a log read on a machine in one
+   time zone means the same instant as the same log read anywhere else.
+   `slog.TextHandler` timestamps in the **local** zone with an offset by
+   default, which satisfies neither rule; the handler MUST therefore replace the
+   `time` attribute with the UTC value in that format rather than accept the
+   default.
+6. The logger is a single package-level instance, built once at package
+   initialisation. It is replaceable, so that a test can capture the records and
+   assert their content rather than merely their presence.
+
+### Levels
+
+| Level | Meaning | Examples |
+|-------|---------|----------|
+| `ERROR` | The server failed. The condition is answered with HTTP 500 and is a fault of the server or of the environment it cannot recover from. | A roadmap's database cannot be read; a page template fails to execute; a response body fails to encode; the knowledge-graph store cannot be opened. |
+| `WARN` | The server did not fail, but an operator needs to know what happened. The condition is caused by the client or by the environment and leaves the server serving. | A query-bar query rejected as not read-only or failing in the engine (HTTP 400); a roadmap skipped by the startup schema migration; the interface bound to a non-loopback address. |
+| `INFO` | Enabled, but unused in this version: a successful request and a successful startup write no record. | — |
+
+### What Is Logged
+
+Each condition below MUST produce exactly one record.
+
+**Startup.** These three replace the ad-hoc `warning: ...` lines the server
+previously wrote to stderr with `fmt.Fprintf`. They remain non-fatal, remain on
+stderr, and remain informational: none of them changes the exit code or prevents
+the server from starting (see
+[Startup Schema Migration](#startup-schema-migration), rule 6, and
+[Bind Address and Port Selection](#bind-address-and-port-selection), item 3).
+
+| Condition | Level | `msg` | Attributes |
+|-----------|-------|-------|------------|
+| The resolved bind host is not a loopback address | `WARN` | `web interface is reachable from the network` | `host`, and a `hint` naming the flag that restricts the bind |
+| The roadmap list cannot be read for the startup schema migration | `WARN` | `cannot list roadmaps for startup schema migration` | `err` |
+| One roadmap cannot be opened or migrated at startup | `WARN` | `startup schema migration skipped for roadmap` | `roadmap`, `err` |
+
+A startup record has no request behind it, so it carries no `method`, `path`, or
+`status`; it names its own subject instead.
+
+**Per request.** Every response the server produces with HTTP status 500 MUST be
+accompanied by exactly one `ERROR` record naming the underlying error, and every
+HTTP 400 the graph data endpoint produces by exactly one `WARN` record.
+
+| Route or helper | Condition | Level | Status |
+|-----------------|-----------|-------|--------|
+| any roadmap-scoped route | the roadmap's existence check fails with an I/O error | `ERROR` | 500 |
+| `GET /` | the roadmap list cannot be read | `ERROR` | 500 |
+| `GET /roadmaps/{name}` | the sprints view cannot be loaded | `ERROR` | 500 |
+| `GET /roadmaps/{name}/tasks` | the task board cannot be loaded | `ERROR` | 500 |
+| `GET /roadmaps/{name}/tasks/{id}/data` | the task detail cannot be loaded for a reason other than not-found | `ERROR` | 500 |
+| `GET /roadmaps/{name}/audit` | the audit page cannot be loaded | `ERROR` | 500 |
+| `GET /roadmaps/{name}/sprints/{id}` | the sprint cannot be loaded for a reason other than not-found | `ERROR` | 500 |
+| `GET /roadmaps/{name}/graph/data` | the query bar's query was rejected as not read-only, its limit was invalid, or the accepted query failed in the engine | `WARN` | 400 |
+| `GET /roadmaps/{name}/graph/data` | the graph cannot be read for any other reason | `ERROR` | 500 |
+| HTML rendering | the page template fails to execute | `ERROR` | 500 |
+| JSON rendering | the response body fails to encode | `ERROR` | 500 |
+
+A failure that is detected by a helper and answered there — a template that
+fails to execute, a body that fails to encode — is logged by that helper, so the
+record exists exactly once and names the helper's own subject. A handler that has
+already logged its failure does not log it again on the way out.
+
+### What Is Not Logged
+
+These are deliberate exclusions, not omissions.
+
+1. **HTTP 404 and 405 are not logged.** A request for an unknown roadmap, a
+   non-integer id, an id that belongs to no record of the roadmap, an unmapped
+   path, or a non-read method on a known path is an ordinary outcome of
+   navigation, not a failure of the server. Logging them would bury the genuine
+   failures under every mistyped URL and every browser probe for an asset the
+   server does not serve. The single exception is already covered above: when a
+   roadmap's existence check fails with an I/O error the response is 500, not
+   404, and it is logged.
+2. **There is no access log.** A successful request writes no record. The log
+   exists to make failures visible, not to trace traffic.
+3. **The client address is not logged.** The server binds loopback by default and
+   serves read-only data; recording the peer of every failing request would add a
+   personal datum to the console without adding diagnostic value.
+4. **Nothing is redacted.** An error text may name a filesystem path under
+   `~/.roadmaps/`. That path is the diagnostic value of the record; it is written
+   to the operator's own console and it never reaches the HTTP response.
+
+### Record Content
+
+1. Every record carries the fixed attributes `time`, `level`, and `msg`.
+2. `msg` is a short, stable, lower-case phrase naming the condition. It is a
+   constant: no value is interpolated into it, so every record of one condition
+   groups with the others regardless of the request that produced it. What varies
+   between records belongs in the attributes.
+3. Every per-request record additionally carries:
+   - `method` — the request method;
+   - `path` — the request path;
+   - `status` — the HTTP status the server returned;
+   - `err` — the text of the underlying error, which is precisely the value the
+     HTTP response withholds.
+4. `roadmap` is carried by every record for which the roadmap name is known.
+5. Route-specific attributes name the record's subject where one exists: `task`
+   and `sprint` for the id-bearing routes, `page` for the audit page, `template`
+   for a template failure, and `kind` for the classification of a query-bar
+   failure (the same classification the response body carries; see
+   [Query-Bar Error Handling](#query-bar-error-handling)).
+6. This section changes no response. A 500 still returns the opaque
+   `internal server error` text and a 400 from the graph data endpoint still
+   returns its structured JSON error with the same `error` and `kind` fields.
+   Detail is added to the console, never to the response.
+
+### Log Integrity
+
+A request path, a roadmap name, a Cypher query, and an error text can each carry
+bytes the server did not choose. A log format that pasted those bytes in verbatim
+would let a crafted request write what reads as a second, forged record — a
+newline followed by `level=ERROR msg="..."` — into the operator's console, which
+would make the log an untrustworthy account of what happened.
+
+1. Every record MUST occupy exactly one line. A control character inside an
+   attribute value MUST be escaped, never emitted literally.
+2. `slog.TextHandler` provides this property: it quotes any value containing
+   whitespace, a quotation mark, or a control character, and escapes a newline as
+   the two characters `\` and `n`. A forged `level=` or `msg=` inside a value
+   therefore stays inside that quoted value and cannot terminate the record.
+3. The property MUST be covered by a regression test that drives a newline and a
+   `level=ERROR msg=` sequence through a logged attribute and asserts that the
+   emitted record is still a single line.
+
 ## Error Handling and Exit Codes
 
 The `rmp web` process uses the existing sentinel errors and exit-code mapping in
@@ -4399,7 +4609,9 @@ Rules:
 4. Once the server is serving, per-request failures (roadmap not found, corrupt
    graph store, read error) are handled inside the running server as HTTP status
    responses (400, 404, 405, 500) and do **not** terminate the process. The process
-   exit code is determined by how the server itself is started and stopped.
+   exit code is determined by how the server itself is started and stopped. The
+   detail of such a failure is withheld from the response and written to the
+   console instead, under the rules in [Server Logging](#server-logging).
 5. Errors written to stderr by `rmp web` carry the standard AI-agent hint and
    follow the plain-text error format in `HELP.md § Error message format`.
 6. If a future need arises for a dedicated web error class, it MUST be added
@@ -4616,9 +4828,9 @@ Rules:
     page and the board cards of the sprint page — opens a modal
     popup that displays all of that task's fields (`id`, `title`, `status`, `type`,
     `priority`, `severity`, `functional_requirements`, `technical_requirements`,
-    `acceptance_criteria`, `specialists`, `completion_summary`, `parent_task_id`,
-    `subtask_count`, `depends_on`, `blocks`, `created_at`, `started_at`,
-    `tested_at`, `closed_at`). The page carries one modal element, not one per
+    `acceptance_criteria`, `completion_summary`, `parent_task_id`, `subtask_count`,
+    `depends_on`, `blocks`, `created_at`, `started_at`, `tested_at`,
+    `closed_at`, `commit_open`, `commit_close`). The page carries one modal element, not one per
     task, and opening a task fetches that task's fields and comments from
     `GET /roadmaps/{name}/tasks/{id}/data` to fill it. The modal is read-only: it
     contains no form, no edit
@@ -5188,12 +5400,11 @@ Rules:
     badge colour (Acceptance Criterion 61 continues to hold); and a metadata footer
     listing only
     the indicators the task actually has, among the sprint the task belongs to, its
-    `specialists`, its
     `subtask_count`, its number of `depends_on` entries, its number of `blocks`
     entries, and its number of comments. The card shows **no status badge**, because
     the column already states the status. An indicator whose value is absent, empty,
     or zero renders nothing at all — no dash and no placeholder — and a task with
-    none of the six indicators renders no metadata footer. That absent-metadata rule
+    none of the five indicators renders no metadata footer. That absent-metadata rule
     is this board's own: the card of the sprint's member-tasks board is not governed
     by it and always renders both of its counters (Acceptance Criterion 134). The
     prefix belongs to the board card and to nothing else: the same task's `priority`
@@ -5270,7 +5481,7 @@ Rules:
     `sprint_tasks.task_id` carries a `UNIQUE` constraint and a task therefore
     belongs to at most one sprint. The card of a task that belongs to no sprint
     shows no sprint indicator at all: no dash, no "None", and no empty slot. A task
-    with no sprint and none of the other five indicators renders no metadata footer
+    with no sprint and none of the other four indicators renders no metadata footer
     (Acceptance Criterion 85 continues to hold; see
     [Roadmap Tasks Page](#roadmap-tasks-page), `MODELS.md § Sprint`, and
     `DATABASE.md § Relationships`).
@@ -5367,10 +5578,10 @@ Rules:
     the user, not the cards present in the document. A task matches when the
     term occurs, case-insensitively and as a substring, in that task's `title` or in
     its `#<id>` reference written with the leading `#`; both `42` and `#42` therefore
-    find task 42. No other task field is matched: a term equal to a task's
-    `specialists` value, and matching nothing in that task's title or reference, does
-    not match it. Leading and trailing whitespace is stripped from the term by the
-    rule Acceptance Criterion 121 fixes, and a term that is empty or entirely
+    find task 42. No other task field is matched: a term occurring only in a task's
+    `functional_requirements`, and matching nothing in that task's title or
+    reference, does not match it. Leading and trailing whitespace is stripped from
+    the term by the rule Acceptance Criterion 121 fixes, and a term that is empty or entirely
     whitespace under that rule shows every task. The case-insensitive comparison
     folds the term and the task's searchable text by the rule Acceptance
     Criterion 118 fixes, so the same term and task yield the same verdict regardless
@@ -5865,9 +6076,9 @@ Rules:
     take the colours the semantic mapping assigns to their values, which the prefix
     does not affect (Acceptance Criterion 61
     continues to hold). The card carries **no** status badge, because the column
-    already states the status, and it shows no task type, no `specialists`, and no
-    dependency counts. The task's full field set is reached through the task detail
-    modal the card opens (see [Sprint Detail Sub-Template](#sprint-detail-sub-template)
+    already states the status, and it shows no task type and no dependency counts.
+    The task's full field set is reached through the task detail modal the card
+    opens (see [Sprint Detail Sub-Template](#sprint-detail-sub-template)
     and [Task Detail Modal](#task-detail-modal)).
 134. Every card of the sprint's member-tasks board renders both of its counters: the
     comment count and the subtask count are present on every card, including when
@@ -5991,9 +6202,48 @@ Rules:
     [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
     rule 2).
 
+141. Every HTTP 500 the running server returns is accompanied by exactly one
+    `log/slog` `ERROR` record on stderr, and no 500 is silent. The record names
+    the request `method` and `path`, the `status`, and the underlying error text
+    under `err` — the value the response body withholds. The response body is
+    unchanged: it remains the opaque `internal server error` text, and the error
+    detail never reaches the client. Stdout carries only the startup URL object;
+    no log record is ever written to it.
+142. An HTTP 400 from `GET /roadmaps/{name}/graph/data` — a query-bar query
+    rejected as not read-only, an invalid limit, or an accepted query that failed
+    in the engine — is accompanied by exactly one `WARN` record carrying the
+    failure `kind` and the reason under `err`, matching the `kind` and `error` the
+    structured JSON response already carries. The failure still triggers no write,
+    no checkpoint, and no navigation.
+143. A successful request writes no log record, and neither does an HTTP 404 or an
+    HTTP 405: an unknown roadmap, a non-integer or unknown id, an unmapped path,
+    and a non-read method on a known path all leave the console silent. The
+    exception is the I/O failure of a roadmap's existence check, which is a 500
+    and is logged.
+144. Every record's `time` attribute is UTC, in the canonical Groadmap format
+    `YYYY-MM-DDTHH:mm:ss.sssZ` — exactly three digits of milliseconds and a `Z`
+    suffix, for example `2026-08-20T19:53:00.918Z`. It is never the local-zone
+    timestamp with a numeric offset that `slog.TextHandler` produces by default,
+    and the timestamp is UTC whatever the machine's `TZ` setting is.
+145. A record is always exactly one line. A request path, roadmap name, or error
+    text containing a newline and a `level=ERROR msg="..."` sequence is emitted
+    escaped inside its quoted attribute value, so a crafted request cannot forge a
+    second log record on the operator's console.
+146. The three startup diagnostics — the non-loopback bind, the unreadable
+    roadmap list, and a roadmap skipped by the startup schema migration — are
+    `WARN` records on stderr rather than ad-hoc `warning: ` lines. They remain
+    non-fatal: `rmp web` still starts, still prints its URL object to stdout, and
+    still exits 0 on a graceful shutdown. The non-loopback record still states
+    that the interface is reachable from the network and still names the bound
+    host.
+
 ## See Also
 
 - CLI command contract for `web` → `COMMANDS.md § Web Interface`
+- Canonical timestamp format the log records share with every other Groadmap
+  date → `DATA_FORMATS.md § Dates - ISO 8601 with UTC`
+- The stdout-is-JSON / stderr-is-diagnostics split the log obeys →
+  `ARCHITECTURE.md § Error Handling`
 - Task detail endpoint JSON shape (the task object and its comments) →
   `DATA_FORMATS.md § Task Detail Data`, composed from `DATA_FORMATS.md § Task` and
   `DATA_FORMATS.md § Task Comment`

@@ -30,7 +30,7 @@ def _close_sprint(test, roadmap, sprint_id, force=False):
 
 
 def _advance_task_to_doing(test, roadmap, task_id):
-    test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+    test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "626346d"])
 
 
 def _advance_task_to_testing(test, roadmap, task_id):
@@ -38,7 +38,7 @@ def _advance_task_to_testing(test, roadmap, task_id):
 
 
 def _advance_task_to_completed(test, roadmap, task_id):
-    test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED"])
+    test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "b0ab692"])
 
 
 class TestTask90SprintClosedGuard:

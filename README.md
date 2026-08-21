@@ -228,7 +228,6 @@ rmp task create -r <name> \
   -tr "Technical requirements - How to build it?" \
   -ac "Acceptance criteria - How to verify it?" \
   --type USER_STORY --priority 7 --severity 3 \
-  --specialists "go-developer,exhaustive-qa-engineer"
 ```
 
 **What task types are available?**
@@ -255,7 +254,6 @@ rmp task list -r <name> --status BACKLOG
 rmp task list -r <name> --status DOING,TESTING
 rmp task list -r <name> --type BUG --severity 8,9
 rmp task list -r <name> --priority 7 --status SPRINT
-rmp task list -r <name> --specialists "go-developer"
 rmp task list -r <name> --created-since 2026-03-01
 rmp task list -r <name> --sort created --limit 50
 ```
@@ -397,8 +395,17 @@ No. Only one sprint can be `OPEN` at a time. Close the current sprint before sta
 
 **How do I start working on a task?**
 ```bash
-rmp task stat -r <name> <id> DOING          # Sets started_at automatically
+rmp task stat -r <name> <id> DOING --commit-open $(git rev-parse HEAD)
 ```
+- `--commit-open` (short `-co`) is **mandatory** on every transition into `DOING`.
+  It records the git commit the work starts from, so the task is tied to a point
+  in the code history. Without it the command is rejected with exit code 6 and
+  nothing changes.
+- You supply the hash. `rmp` runs no git command and reads no repository: it
+  validates the format and never checks that the commit exists anywhere.
+- A hash is 7 to 64 hexadecimal characters — an abbreviated hash, a full SHA-1,
+  or a full SHA-256 — accepted in any letter case and stored lowercase.
+- `started_at` is set automatically.
 
 **How do I mark a task as ready for testing?**
 ```bash
@@ -407,39 +414,49 @@ rmp task stat -r <name> <id> TESTING        # Sets tested_at automatically
 
 **What do I do if a task fails testing?**
 ```bash
-rmp task stat -r <name> <id> DOING          # Return to development
+rmp task stat -r <name> <id> DOING --commit-open $(git rev-parse HEAD)
 ```
+- Returning to `DOING` is a transition into `DOING` like any other, so
+  `--commit-open` is required again. The new hash **replaces** the previous one:
+  the task now starts from where the rework starts.
 
 **How do I complete a task?**
 ```bash
-rmp task stat -r <name> <id> COMPLETED
-rmp task stat -r <name> <id> COMPLETED --summary "Implemented OAuth2 with PKCE flow"
+rmp task stat -r <name> <id> COMPLETED --commit-close $(git rev-parse HEAD)
+rmp task stat -r <name> <id> COMPLETED -cc 2578d18 --summary "Implemented OAuth2 with PKCE flow"
 ```
+- `--commit-close` (short `-cc`) is **mandatory** on the transition into
+  `COMPLETED`, and records the commit the work is concluded at. Same format
+  rules as `--commit-open`.
 - `--summary` is optional (max 4096 chars) and only valid on the `TESTING → COMPLETED` transition.
 - `closed_at` is set automatically.
+- Each commit flag is rejected (exit 6) on any target status other than its own:
+  `--commit-open` only on `DOING`, `--commit-close` only on `COMPLETED`.
 
 **How do I bulk-change task status?**
 ```bash
 rmp task stat -r <name> 1,2,3 TESTING
+rmp task stat -r <name> 1,2,3 DOING --commit-open 5f93b51   # one hash, every task
 ```
+- A single hash applies to every id in the batch. Batches are fail-fast: if any
+  id or any flag is rejected, **no** task in the batch changes.
 
 **How do I reopen a completed task?**
 ```bash
-rmp task reopen -r <name> <id>              # Returns to BACKLOG, clears all lifecycle timestamps
+rmp task reopen -r <name> <id>              # Returns to BACKLOG, clears the lifecycle timestamps
 rmp task reopen -r <name> 1,2,3             # Bulk reopen
 ```
+- Reopening clears `started_at`, `tested_at`, `closed_at`, `completion_summary`
+  and `commit_close` — but **preserves `commit_open`**. Reopening withdraws the
+  claim that the task was concluded at a given commit; it does not make the work
+  stop having started where it started. No command ever clears `commit_open`; the
+  next transition into `DOING` replaces it.
 
 **How do I change priority or severity?**
 ```bash
 rmp task prio -r <name> <id> 9              # Priority 0-9
 rmp task sev -r <name> <id> 8               # Severity 0-9
 rmp task prio -r <name> 1,2,3 7             # Bulk update
-```
-
-**How do I assign or remove specialists?**
-```bash
-rmp task assign -r <name> <id> "go-developer"
-rmp task unassign -r <name> <id> "go-developer"
 ```
 
 **How do I record what I found while doing the work?**
@@ -583,7 +600,8 @@ On startup the served URL is printed as JSON (`{"url": "http://127.0.0.1:8787"}`
 - **Read-only.** No route creates, edits, or deletes anything; serving a page writes no rows, no audit-log entry, and never checkpoints the graph store. Only `GET`/`HEAD` are accepted (any other method returns HTTP 405).
 - **No `-r` flag.** It is the one command exempt from the always-required-roadmap rule; it lists all roadmaps and you pick one in the browser.
 - **Long-lived.** It keeps serving until interrupted; `Ctrl+C` (`SIGINT`) or `SIGTERM` shuts it down gracefully (exit 0).
-- **A Kanban tasks board.** The Tasks page lays every task of the roadmap out on a board of five fixed status columns - `BACKLOG`, `SPRINT`, `DOING`, `TESTING`, `COMPLETED` - each with a count badge, all five always present whatever the data holds. There is no pagination: whatever the roadmap holds, the board shows. Each card carries the task's `#id` and type, its title, its priority and severity badges, and only the metadata it actually has (sprint, specialists, subtask, dependency and comment counts); clicking a card opens the read-only task detail modal.
+- **It tells you what went wrong.** Because a per-request failure never stops the server, the browser is given a deliberately opaque `internal server error` and the detail goes to the console instead: one structured `log/slog` line on stderr per failure, naming the request, the status, and the underlying error, with UTC timestamps. A rejected query-bar query is a `WARN`; a server failure is an `ERROR`. Successful requests, 404s and 405s stay silent, and stdout still carries only the URL object. See [DOCS/commands/web.md](DOCS/commands/web.md#console-log).
+- **A Kanban tasks board.** The Tasks page lays every task of the roadmap out on a board of five fixed status columns - `BACKLOG`, `SPRINT`, `DOING`, `TESTING`, `COMPLETED` - each with a count badge, all five always present whatever the data holds. There is no pagination: whatever the roadmap holds, the board shows. Each card carries the task's `#id` and type, its title, its priority and severity badges, and only the metadata it actually has (sprint, subtask, dependency and comment counts); clicking a card opens the read-only task detail modal.
 - **The board's header controls.** A search box matches the task title and the `#id` reference, and three dropdowns filter by type (an equality over the ten task types), by minimum priority and by minimum severity (both thresholds, `>= n`, exactly as the `rmp task list` flags of the same names). They combine conjunctively, and each is a URL query parameter (`q`, `type`, `priority`, `severity`), so a narrowed board is a link you can share and opening it cold renders the same board the live controls produced. An unknown value simply applies no filter on its dimension. There is no status filter, because the columns already are the status.
 - **A graph query bar with a time budget.** The knowledge-graph page is driven by an editable read-only Cypher query with a node-limit dropdown. The data endpoint executes each query under a 5-second budget: the budget bounds the **work** the query causes, while the node limit bounds only the **result** it returns, so a query that scans a Cartesian product is stopped even though its response would be tiny. A cancelled or failed query is reported in place and the page keeps working.
 - **Tabler dark-theme UI.** The interface is built on the vendored Tabler admin-dashboard framework in its dark theme: a navigation sidebar (which collapses to a hamburger menu on small viewports), a top navbar naming the selected roadmap, page headers whose title names the view you are on (Sprints, Tasks, Audit, Knowledge graph), and Tabler cards, tables, and badges. On the Sprints page each of the three tabs carries a count badge in the colour of the sprint status that tab groups.
@@ -689,6 +707,17 @@ rmp <command> -r <name> ...    # Pass -r explicitly; there is no default roadmap
 - `tested_at` — set when a task moves to `TESTING`
 - `closed_at` — set when a task moves to `COMPLETED`
 - All three are cleared when a task is reopened to `BACKLOG`
+
+**How are commit hashes tracked?**
+- `commit_open` — the commit the work starts from, supplied with `--commit-open`
+  on every transition into `DOING`
+- `commit_close` — the commit the work is concluded at, supplied with
+  `--commit-close` on the transition into `COMPLETED`
+- Neither is derived: `rmp` runs no git command and reads no repository
+- Returning to `BACKLOG` — by `task stat BACKLOG`, `task reopen`,
+  `sprint remove-tasks` or `sprint remove` — clears `commit_close` and preserves
+  `commit_open`. This is deliberately asymmetric with the timestamps above,
+  which are all cleared.
 
 ## License
 

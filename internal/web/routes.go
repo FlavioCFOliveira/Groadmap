@@ -2,6 +2,7 @@ package web
 
 import (
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -188,7 +189,11 @@ func resolveRoadmap(w http.ResponseWriter, r *http.Request) (string, bool) {
 	exists, err := utils.RoadmapExists(name)
 	if err != nil {
 		// An I/O error while stat-ing the (now validated) path is an
-		// internal read error, not a not-found.
+		// internal read error, not a not-found. It is the one case in which a
+		// roadmap that cannot be resolved is logged: the 404 branches below are
+		// ordinary navigation outcomes and stay silent
+		// (SPEC/WEB.md § What Is Not Logged, rule 1).
+		logServerError(r, "roadmap existence check failed", err, slog.String("roadmap", name))
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return "", false
 	}

@@ -66,6 +66,21 @@ var migrations = []Migration{
 		Name:    "Add task_comments and sprint_comments tables for durable comment records",
 		Apply:   migrateV1_8_0_toV1_9_0,
 	},
+	{
+		Version: "1.10.0",
+		Name:    "Drop the specialists column from the tasks table",
+		Apply:   migrateV1_9_0_toV1_10_0,
+	},
+	{
+		Version: "1.11.0",
+		Name:    "Add commit_open and commit_close columns to tasks table",
+		Apply:   migrateV1_10_0_toV1_11_0,
+	},
+	{
+		Version: "1.12.0",
+		Name:    "Add related_entity_id and commit_hash columns to audit table and reclassify the legacy TASK_STATUS_CHANGE entries",
+		Apply:   migrateV1_11_0_toV1_12_0,
+	},
 }
 
 // RunMigrations executes all pending migrations in a transaction.
@@ -157,12 +172,16 @@ func (db *DB) runMigration(migration Migration) error {
 
 // columnExists reports whether table already has a column named column.
 //
-// SQLite's `ALTER TABLE … ADD COLUMN` is not idempotent: re-running it for an
-// existing column raises "duplicate column name". Because a migration may be
-// applied to a database that has already been partially or fully migrated, every
-// ADD COLUMN step guards itself with this check and skips the ALTER when the
-// column is already present (SPEC/DATABASE.md § Migration Idempotency). The query
-// is parameterized; table is a compile-time literal at every call site.
+// Neither `ALTER TABLE … ADD COLUMN` nor `ALTER TABLE … DROP COLUMN` is
+// idempotent in SQLite: re-running the first for an existing column raises
+// "duplicate column name", and re-running the second for a column already gone
+// raises "no such column". Because a migration may be applied to a database that
+// has already been partially or fully migrated, every ALTER step guards itself
+// with this one check and reads it in the sense its own statement needs — an ADD
+// runs only when the column is ABSENT, a DROP only while it is still PRESENT
+// (SPEC/DATABASE.md § Migration Idempotency (ALTER TABLE ADD COLUMN) and
+// § Migration Idempotency (ALTER TABLE DROP COLUMN)). The query is parameterized;
+// table is a compile-time literal at every call site.
 func columnExists(tx *sql.Tx, table, column string) (bool, error) {
 	var count int
 	query := fmt.Sprintf("SELECT COUNT(*) FROM pragma_table_info('%s') WHERE name = ?", table) // #nosec G201 -- table is a constant literal at every call site; column value is parameterized
@@ -481,4 +500,274 @@ func migrateV1_2_0_toV1_3_0(tx *sql.Tx) error {
 		return fmt.Errorf("adding completion_summary column: %w", err)
 	}
 	return nil
+}
+
+// migrateV1_9_0_toV1_10_0 drops the specialists column from the tasks table
+// (SPEC/VERSION.md § Migration 1.9.0 → 1.10.0).
+//
+// THE MIGRATION DESTROYS DATA, AND THAT IS ITS PURPOSE. Every value stored in
+// tasks.specialists is discarded and is not recoverable from the database
+// afterwards. There is deliberately no backfill, no archive column, and no audit
+// entry recording the discarded values: the change removes a field, and removing
+// a field means removing what it held.
+//
+// A single ALTER TABLE … DROP COLUMN is sufficient and no table rebuild is
+// required, because specialists is a plain nullable TEXT column: it is not a
+// primary key or part of one, carries no UNIQUE constraint, is not indexed, is
+// named in no CHECK constraint and in no partial index, is used by no foreign key
+// and by no generated column, and appears in no view and in no trigger. Every
+// other column keeps its values, its CHECK constraint and its DEFAULT clause, and
+// the table's indexes and its parent_task_id self-reference survive the drop
+// (SPEC/DATABASE.md § Migration Idempotency (ALTER TABLE DROP COLUMN)).
+//
+// Idempotent: the DROP COLUMN is guarded by columnExists read in the opposite
+// sense to the ADD COLUMN migrations — the statement runs only WHILE THE COLUMN
+// IS STILL PRESENT. Without the guard a second apply raises "no such column:
+// \"specialists\"" and the whole migration set fails.
+//
+// The audit log is NOT rewritten. Rows whose operation is TASK_ASSIGN or
+// TASK_UNASSIGN are retained untouched: audit.operation carries no CHECK, so
+// they need no schema accommodation, and a roadmap's recorded history stays
+// complete (SPEC/DATABASE.md § audit Table).
+func migrateV1_9_0_toV1_10_0(tx *sql.Tx) error {
+	exists, err := columnExists(tx, "tasks", "specialists")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	if _, err := tx.Exec(`ALTER TABLE tasks DROP COLUMN specialists`); err != nil {
+		return fmt.Errorf("dropping specialists column: %w", err)
+	}
+	return nil
+}
+
+// migrateV1_10_0_toV1_11_0 adds the two commit-tracking columns, commit_open and
+// commit_close, to the tasks table (SPEC/VERSION.md § Migration 1.10.0 → 1.11.0).
+//
+// Both are nullable TEXT columns carrying a git commit hash, and each takes the
+// CHECK constraint specified in SPEC/DATABASE.md § Commit Hash Format Constraint
+// WITH the column. SQLite accepts a CHECK clause on ADD COLUMN and the constraint
+// is live on the migrated table immediately afterwards, so a migrated database
+// and a fresh one end up with identical tasks tables;
+// TestMigratedAndFreshTasksTablesAreIdentical is what stops the two copies of
+// the DDL drifting apart.
+//
+// THERE IS NO BACKFILL, AND THERE CAN BE NONE. The two values record which commit
+// a task was started from and which it was concluded at. Groadmap holds no record
+// of either fact for work already done — it runs no git command and reads no
+// repository — so nothing on disk could supply a truthful value for a task that
+// reached DOING or COMPLETED before this migration. Every existing task therefore
+// migrates with NULL in both columns and keeps them until its next transition
+// into DOING or COMPLETED supplies a value. That is also why the columns are
+// nullable even though the CLI makes them mandatory on those transitions: the
+// mandatory rule governs the transition, not the column.
+//
+// SQLite does not re-validate existing rows when a column is added, and it does
+// not need to here: every existing row receives NULL, and NULL satisfies both
+// CHECKs.
+//
+// Idempotent: each ADD COLUMN is guarded INDEPENDENTLY by its own columnExists
+// check, so re-running the migration is a no-op rather than a "duplicate column
+// name" error, and a database that somehow carries one column and not the other
+// is brought to the full shape.
+//
+// No index is created on either column. Neither is a filter, a sort key or a
+// join key for any query in SPEC/DATABASE.md § Main SQL Queries: both are read as
+// part of the Task object and are never searched, so an index would cost write
+// time on every status change and buy nothing.
+func migrateV1_10_0_toV1_11_0(tx *sql.Tx) error {
+	for _, column := range []struct {
+		name string
+		ddl  string
+	}{
+		{
+			name: "commit_open",
+			ddl:  `ALTER TABLE tasks ADD COLUMN commit_open TEXT CHECK(commit_open IS NULL OR (length(commit_open) BETWEEN 7 AND 64 AND commit_open NOT GLOB '*[^0-9a-f]*'))`,
+		},
+		{
+			name: "commit_close",
+			ddl:  `ALTER TABLE tasks ADD COLUMN commit_close TEXT CHECK(commit_close IS NULL OR (length(commit_close) BETWEEN 7 AND 64 AND commit_close NOT GLOB '*[^0-9a-f]*'))`,
+		},
+	} {
+		exists, err := columnExists(tx, "tasks", column.name)
+		if err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		if _, err := tx.Exec(column.ddl); err != nil {
+			return fmt.Errorf("adding %s column: %w", column.name, err)
+		}
+	}
+	return nil
+}
+
+// migrateV1_11_0_toV1_12_0 adds the two new columns of the audit table,
+// related_entity_id and commit_hash, and reclassifies the legacy
+// TASK_STATUS_CHANGE entries whose destination state the stored data determines
+// beyond doubt (SPEC/VERSION.md § Migration 1.11.0 to 1.12.0).
+//
+// NO TABLE REBUILD. Both shape changes are new columns, and ALTER TABLE ADD
+// COLUMN carries each column's CHECK with it, so nothing about an existing
+// column changes: entity_type keeps its CHECK(entity_type IN ('TASK', 'SPRINT'))
+// unaltered, entity_id keeps its definition, and no constraint is widened,
+// narrowed, or added to a column that already exists. The migration is therefore
+// two guarded ALTER TABLE statements and three UPDATE statements — no
+// replacement table, no row copy, no drop, and no rename.
+//
+// The physical column order consequently differs between a migrated and a fresh
+// database, and NOTHING MAY DEPEND ON IT. ADD COLUMN appends, so a migrated
+// audit table ends `... entity_id, performed_at, related_entity_id,
+// commit_hash`, while a fresh one ends `... entity_id, related_entity_id,
+// commit_hash, performed_at`. The two are equivalent because every statement in
+// this package names its columns explicitly and none uses SELECT * or positional
+// binding. Reordering them would require the rebuild this migration refuses.
+//
+// NEITHER NEW COLUMN IS BACKFILLED, and there is no truthful backfill available
+// for either. commit_hash records which commit a task was started from or
+// concluded at, and Groadmap runs no git command and reads no repository; the
+// two columns that could have supplied a value, tasks.commit_open and
+// tasks.commit_close, arrived only at 1.11.0 and are NULL for every task older
+// than it. related_entity_id records the counterpart entity of the operation
+// that wrote the row, and a stored SPRINT_ADD_TASK row names its sprint and
+// nothing else — sprint_tasks says which tasks are members NOW, which is a
+// different question and cannot say which of them a given row was about.
+//
+// Idempotent: each ADD COLUMN is guarded INDEPENDENTLY by its own columnExists
+// check, so re-running the migration is a no-op rather than a "duplicate column
+// name" error, and a database that somehow carries one column and not the other
+// is brought to the full shape. The three UPDATE statements are idempotent by
+// construction: a row the first run rewrites no longer carries
+// TASK_STATUS_CHANGE, so a second run matches nothing.
+//
+// No index is created on either column: neither is a filter, a sort key or a
+// join key for any audit read — the read statement's predicates are operation,
+// entity_type, entity_id and performed_at only — so an index would cost write
+// time on every audited operation and buy nothing.
+func migrateV1_11_0_toV1_12_0(tx *sql.Tx) error {
+	for _, column := range []struct {
+		name string
+		ddl  string
+	}{
+		{
+			name: "related_entity_id",
+			ddl:  `ALTER TABLE audit ADD COLUMN related_entity_id INTEGER CHECK(related_entity_id IS NULL OR related_entity_id > 0)`,
+		},
+		{
+			name: "commit_hash",
+			ddl:  `ALTER TABLE audit ADD COLUMN commit_hash TEXT CHECK(commit_hash IS NULL OR (length(commit_hash) BETWEEN 7 AND 64 AND commit_hash NOT GLOB '*[^0-9a-f]*'))`,
+		},
+	} {
+		exists, err := columnExists(tx, "audit", column.name)
+		if err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		if _, err := tx.Exec(column.ddl); err != nil {
+			return fmt.Errorf("adding audit.%s column: %w", column.name, err)
+		}
+	}
+
+	for _, step := range reclassifyStatusChangeSteps {
+		if _, err := tx.Exec(step.update); err != nil {
+			return fmt.Errorf("reclassifying TASK_STATUS_CHANGE entries as %s: %w", step.operation, err)
+		}
+	}
+
+	return nil
+}
+
+// reclassifyStatusChangeSteps rewrites the operation of a legacy
+// TASK_STATUS_CHANGE entry to the destination-specific operation ONLY WHERE THE
+// STORED DATA DETERMINES THAT DESTINATION BY EXACT EQUALITY (SPEC/VERSION.md
+// § Migration 1.11.0 to 1.12.0, Reclassifying TASK_STATUS_CHANGE). The rule has
+// no tolerance window, no nearest-match, and no ordering heuristic, and the
+// statements are transcribed from that section rather than generated, because
+// the specification's SQL is the contract.
+//
+// An entry is reclassified when its performed_at is exactly equal to exactly one
+// of the owning task's three lifecycle timestamps. It keeps TASK_STATUS_CHANGE
+// when its performed_at matches none of them (a transition to BACKLOG stamps no
+// timestamp, and a reopening clears the ones that would have matched), when it
+// matches more than one (two transitions recorded at the same instant leave no
+// evidence of which one the entry recorded), and when the task named by
+// entity_id no longer exists (a deleted task takes its timestamps with it).
+//
+// WHAT THE STATEMENTS DELIBERATELY DO NOT DO:
+//
+//   - They do not infer. Choosing the nearest timestamp, ordering the entries and
+//     assigning destinations by position, or reading a task's current status to
+//     guess the destination would each write a fact the database does not hold.
+//   - They do not touch TASK_UPDATE or SPRINT_UPDATE, whose entries record a
+//     field edit that stamps no timestamp anywhere, nor SPRINT_MOVE_TASK, whose
+//     entries name one sprint and no task. The `operation = 'TASK_STATUS_CHANGE'`
+//     predicate is what excludes them, and the `entity_type = 'TASK'` predicate
+//     keeps a sprint-scoped entry out even if its entity_id collided with a task
+//     id.
+//   - They delete and renumber nothing. No DELETE, no id rewrite, no compaction:
+//     afterwards the table holds exactly the entries it held before, with the
+//     same id and performed_at values, and only some operation values changed.
+//   - They write no audit entry of their own. A migration is not a roadmap
+//     operation.
+//
+// The three are independent of each other and of their order: the exclusion
+// clauses make their WHERE conditions mutually exclusive, so no entry can satisfy
+// two of them. `t.started_at = audit.performed_at` is false when t.started_at is
+// NULL, because a comparison with NULL yields NULL rather than true, so the NULL
+// cases need no extra guard on the matched timestamp — only on the two excluded
+// ones.
+var reclassifyStatusChangeSteps = []struct {
+	operation string
+	update    string
+}{
+	{
+		operation: "TASK_STATUS_DOING",
+		update: `
+UPDATE audit
+SET operation = 'TASK_STATUS_DOING'
+WHERE operation = 'TASK_STATUS_CHANGE'
+  AND entity_type = 'TASK'
+  AND EXISTS (
+      SELECT 1 FROM tasks t
+      WHERE t.id = audit.entity_id
+        AND t.started_at = audit.performed_at
+        AND (t.tested_at IS NULL OR t.tested_at <> audit.performed_at)
+        AND (t.closed_at IS NULL OR t.closed_at <> audit.performed_at)
+  )`,
+	},
+	{
+		operation: "TASK_STATUS_TESTING",
+		update: `
+UPDATE audit
+SET operation = 'TASK_STATUS_TESTING'
+WHERE operation = 'TASK_STATUS_CHANGE'
+  AND entity_type = 'TASK'
+  AND EXISTS (
+      SELECT 1 FROM tasks t
+      WHERE t.id = audit.entity_id
+        AND t.tested_at = audit.performed_at
+        AND (t.started_at IS NULL OR t.started_at <> audit.performed_at)
+        AND (t.closed_at IS NULL OR t.closed_at <> audit.performed_at)
+  )`,
+	},
+	{
+		operation: "TASK_STATUS_COMPLETED",
+		update: `
+UPDATE audit
+SET operation = 'TASK_STATUS_COMPLETED'
+WHERE operation = 'TASK_STATUS_CHANGE'
+  AND entity_type = 'TASK'
+  AND EXISTS (
+      SELECT 1 FROM tasks t
+      WHERE t.id = audit.entity_id
+        AND t.closed_at = audit.performed_at
+        AND (t.started_at IS NULL OR t.started_at <> audit.performed_at)
+        AND (t.tested_at IS NULL OR t.tested_at <> audit.performed_at)
+  )`,
+	},
 }

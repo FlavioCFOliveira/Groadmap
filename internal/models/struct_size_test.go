@@ -17,8 +17,9 @@ var specifiedLayouts = []struct {
 	sizeOn64 uintptr
 	specSays string
 }{
-	{"Task", Task{}, 240, "SPEC/MODELS.md § Memory Layout Optimization, Task struct"},
+	{"Task", Task{}, 248, "SPEC/MODELS.md § Memory Layout Optimization, Task struct"},
 	{"SprintStats", SprintStats{}, 112, "SPEC/MODELS.md § Memory Layout Optimization, SprintStats struct"},
+	{"AuditEntry", AuditEntry{}, 80, "SPEC/MODELS.md § Memory Layout Optimization, AuditEntry struct"},
 	{"TaskComment", TaskComment{}, 72, "SPEC/MODELS.md § Memory Layout Optimization, TaskComment and SprintComment structs"},
 	{"SprintComment", SprintComment{}, 72, "SPEC/MODELS.md § Memory Layout Optimization, TaskComment and SprintComment structs"},
 }
@@ -151,5 +152,87 @@ func TestCommentStructsKeepThePointerPrefixShort(t *testing.T) {
 					"Layout Optimization).", s.name, pointerBytes, wantPointerBytes)
 			}
 		})
+	}
+}
+
+// TestTaskPointerGroupMatchesTheSpecifiedOrder pins the first of the four groups
+// SPEC/MODELS.md § Memory Layout Optimization states for the Task struct: seven
+// pointer fields, in the named order, occupying the leading 56 bytes.
+//
+// The byte count alone cannot catch every drift here. Every Task field is 8-byte
+// aligned, so the struct is 248 bytes whatever the order and TestSpecifiedStructSizes
+// stays green while the pointer group is permuted or a *string is swapped for a
+// string of the same width. What fieldalignment actually decides is which fields
+// lead, and the two commit hashes added at schema 1.11.0 belong in that group
+// immediately after CompletionSummary — where the SPEC puts them, and where the
+// linter keeps them.
+func TestTaskPointerGroupMatchesTheSpecifiedOrder(t *testing.T) {
+	// SPEC/MODELS.md § Memory Layout Optimization, Task struct, Group 1.
+	want := []string{
+		"ParentTaskID", "CompletionSummary", "CommitOpen", "CommitClose",
+		"TestedAt", "ClosedAt", "StartedAt",
+	}
+
+	tp := reflect.TypeOf(Task{})
+
+	var got []string
+	for i := range tp.NumField() {
+		f := tp.Field(i)
+		if f.Type.Kind() != reflect.Pointer {
+			break
+		}
+		got = append(got, f.Name)
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("Task leads with %d pointer fields %v, but SPEC/MODELS.md specifies %d: %v",
+			len(got), got, len(want), want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Task pointer field %d is %q, want %q (SPEC/MODELS.md § Memory Layout "+
+				"Optimization, Task struct, Group 1: %v)", i, got[i], want[i], want)
+		}
+		if off := tp.Field(i).Offset; off != uintptr(i)*8 {
+			t.Errorf("Task field %q sits at offset %d, want %d: the pointer group must be "+
+				"contiguous from offset 0", got[i], off, i*8)
+		}
+	}
+
+	// No pointer may hide behind the string, slice and int groups: the whole
+	// point of the ordering is that the pointer-scan prefix ends at byte 56.
+	for i := len(want); i < tp.NumField(); i++ {
+		if f := tp.Field(i); f.Type.Kind() == reflect.Pointer {
+			t.Errorf("Task declares the pointer field %q at offset %d, after the pointer group; "+
+				"it belongs in Group 1", f.Name, f.Offset)
+		}
+	}
+}
+
+// TestTaskCommitFieldsAreNullableStrings pins the two commit-tracking fields to
+// the Go type and the JSON tags SPEC/MODELS.md § Task gives them. They are
+// *string, not string: SPEC/VERSION.md § Migration 1.10.0 → 1.11.0 requires the
+// columns to be nullable because no truthful value exists for work already done,
+// and a plain string could not carry that distinction — a task that never
+// entered DOING would serialise as "" instead of null.
+func TestTaskCommitFieldsAreNullableStrings(t *testing.T) {
+	tp := reflect.TypeOf(Task{})
+
+	for _, want := range []struct{ field, jsonTag string }{
+		{"CommitOpen", "commit_open"},
+		{"CommitClose", "commit_close"},
+	} {
+		f, ok := tp.FieldByName(want.field)
+		if !ok {
+			t.Errorf("Task has no field %s (SPEC/MODELS.md § Task)", want.field)
+			continue
+		}
+		if f.Type.Kind() != reflect.Pointer || f.Type.Elem().Kind() != reflect.String {
+			t.Errorf("Task.%s is %s, want *string (SPEC/MODELS.md § Task)", want.field, f.Type)
+		}
+		if tag := f.Tag.Get("json"); tag != want.jsonTag {
+			t.Errorf("Task.%s carries the JSON tag %q, want %q (SPEC/DATA_FORMATS.md § Task)",
+				want.field, tag, want.jsonTag)
+		}
 	}
 }

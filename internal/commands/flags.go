@@ -262,7 +262,6 @@ var (
 		{Name: "--type", Short: "-y", Field: "Type", Type: "string"},
 		{Name: "--priority", Short: "-p", Field: "Priority", Type: "int"},
 		{Name: "--severity", Field: "Severity", Type: "int"},
-		{Name: "--specialists", Short: "-sp", Field: "Specialists", Type: "string"},
 		{Name: "--parent", Field: "ParentID", Type: "int", DisplayName: "parent task ID"},
 	}
 
@@ -275,7 +274,6 @@ var (
 		{Name: "--type", Short: "-y", Field: "Type", Type: "string"},
 		{Name: "--priority", Short: "-p", Field: "Priority", Type: "int"},
 		{Name: "--severity", Field: "Severity", Type: "int"},
-		{Name: "--specialists", Short: "-sp", Field: "Specialists", Type: "string"},
 	}
 
 	// TaskListFlags defines flags for task listing.
@@ -285,7 +283,6 @@ var (
 		{Name: "--severity", Field: "Severity", Type: "int"},
 		{Name: "--limit", Short: "-l", Field: "Limit", Type: "int"},
 		{Name: "--type", Short: "-y", Field: "Type", Type: "string"},
-		{Name: "--specialists", Short: "-sp", Field: "Specialists", Type: "string"},
 		{Name: "--created-since", Field: "CreatedSince", Type: "string"},
 		{Name: "--created-until", Field: "CreatedUntil", Type: "string"},
 		{Name: "--sort", Field: "Sort", Type: "string"},

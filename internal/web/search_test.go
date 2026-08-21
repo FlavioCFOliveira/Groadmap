@@ -445,14 +445,31 @@ func TestTaskSearch_NarrowsTheBoardAndItsCounts(t *testing.T) {
 		}
 	}
 
-	// specialists is deliberately outside the search: the passkey task carries
-	// "go-developer, security-review" and no title contains it.
-	state, _ := servedBoard(t, mux, f.name, clientControls{Term: "security-review"})
+	// Every other task field is outside the search. The exclusion is shown with
+	// `functional_requirements`, the field Acceptance Criterion 101 now names: a
+	// term occurring only there, and in no title and no reference, matches nothing
+	// (SPEC/WEB.md § Roadmap Tasks Page, What the search matches).
+	const requirementsOnlyTerm = "Operators"
+	state, _ := servedBoard(t, mux, f.name, clientControls{Term: requirementsOnlyTerm})
 	for _, ids := range state.shownIDs() {
 		if len(ids) != 0 {
-			t.Errorf("a specialists value matched task(s) %v; the search covers the title and "+
-				"the #id reference only", ids)
+			t.Errorf("a %s value matched task(s) %v; the search covers the title and "+
+				"the #id reference only", "functional_requirements", ids)
 		}
+	}
+
+	// The control that keeps the absence above from being vacuous: the term really
+	// is in the seeded functional_requirements, and really is in no title. Without
+	// it, a term the fixture never wrote anywhere would pass the same assertion.
+	detail := decodeTaskDetail(t, mux, f.name, f.passkey)
+	if !strings.Contains(detail.Task.FunctionalRequirements, requirementsOnlyTerm) {
+		t.Fatalf("the seeded functional_requirements %q does not contain %q, so asserting the "+
+			"search ignores the field proves nothing",
+			detail.Task.FunctionalRequirements, requirementsOnlyTerm)
+	}
+	if strings.Contains(strings.ToLower(detail.Task.Title), strings.ToLower(requirementsOnlyTerm)) {
+		t.Fatalf("the seeded title %q contains %q, so the term is not exclusive to "+
+			"functional_requirements", detail.Task.Title, requirementsOnlyTerm)
 	}
 }
 

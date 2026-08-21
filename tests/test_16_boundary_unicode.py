@@ -141,7 +141,7 @@ class TestBoundaryUnicode:
             roadmap,
             title="Fix production outage caused by nil dereference in task handler",
             functional_requirements="Task handler must not panic on missing optional fields",
-            technical_requirements="Add nil guard before dereferencing specialists pointer",
+            technical_requirements="Add nil guard before dereferencing the parent task pointer",
             acceptance_criteria="No panics observed in production logs after deployment",
             severity=9,
         )
@@ -375,12 +375,12 @@ class TestBoundaryUnicode:
         )
         sprint_id = self.test.create_sprint(roadmap, "Completion-summary boundary sprint")
         self.test.move_task_to_sprint(roadmap, task_id, sprint_id)
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "6c8064a"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
 
         exact_summary = "s" * 4096
         self.test.run_cmd([
-            "task", "stat", "-r", roadmap, str(task_id), "COMPLETED",
+            "task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "4c4ccea",
             "--summary", exact_summary,
         ])
         stored = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])[0]

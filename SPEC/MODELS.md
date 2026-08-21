@@ -9,6 +9,8 @@ This document defines the Go structures and enums for Groadmap, ensuring consist
   - [Task Type](#task-type)
   - [Sprint Status](#sprint-status)
   - [Comment Type](#comment-type)
+  - [Entity Type](#entity-type)
+  - [Audit Operation](#audit-operation)
 - [Structures](#structures)
   - [Task](#task)
   - [Sprint](#sprint)
@@ -155,6 +157,73 @@ The two subsets are also kept apart on the two surfaces that publish enums to a 
 
 ---
 
+### Entity Type
+
+Names the kind of entity an audit entry belongs to.
+
+```go
+type EntityType string
+
+const (
+    EntityTask   EntityType = "TASK"
+    EntitySprint EntityType = "SPRINT"
+)
+```
+
+The set is closed at two values. It is validated by the application on every audit
+write and enforced by the `entity_type` column `CHECK` (see
+`DATABASE.md § audit Table`). A comment operation is recorded against the task or
+the sprint that owns the comment, so no `COMMENT` value exists; the audit log has no
+entity type beyond these two.
+
+`audit history` accepts exactly these two values as its first positional argument
+and rejects anything else with exit code 6, and `audit list --entity-type` accepts
+exactly these two values (see `COMMANDS.md § Audit Log Management`).
+
+### Audit Operation
+
+Names what happened. Every row of the `audit` table carries one value of this type.
+
+```go
+type AuditOperation string
+```
+
+**`DATABASE.md § audit Table` is the canonical catalogue of the constant values, and
+this section deliberately does not repeat them.** A value added to `ValidAuditOperations`
+without being added to that catalogue is a defect, and a value in that catalogue that
+no constant declares is the same defect from the other side.
+
+Three rules govern the constants themselves:
+
+1. **Every value is declared as an `AuditOperation` constant**, and
+   `ValidAuditOperations` lists every declared constant exactly once, in the order
+   the catalogue publishes them.
+2. **The name states the outcome, not the kind of change.** A status change is named
+   for the state entered (`TASK_STATUS_DOING`, not a generic status-change value),
+   and a field edit is named for the field changed (`TASK_TITLE_CHANGE`, not a
+   generic update value). The naming pattern is
+   `<ENTITY>_<SUBJECT>_<OUTCOME>`: `TASK_STATUS_<STATE>` for the five task states,
+   `<ENTITY>_<FIELD>_CHANGE` for a single-field edit, and `<ENTITY>_<VERB>` for
+   everything else.
+3. **A value the application no longer writes is not deleted.** It stays declared and
+   stays in `ValidAuditOperations` so that the rows already carrying it remain
+   reachable by an `--operation` filter, and the catalogue marks it LEGACY. Removing
+   such a constant would leave its stored entries with no filter value that reaches
+   them, which is the defect the catalogue's LEGACY group exists to prevent.
+
+**Validation surface.** `IsValidAuditOperation(name string) bool` reports whether a
+name is in the valid set, and `ParseAuditOperation(name string) (AuditOperation, error)`
+returns the constant or `ErrInvalidAuditOperation`. Both treat LEGACY values as valid,
+because they are readable, and both reject a name outside the set whether or not the
+table happens to hold rows carrying it.
+
+**Acceptance criteria:**
+
+1. Every value in `ValidAuditOperations` appears exactly once in the canonical catalogue of `DATABASE.md § audit Table`, and every operation named in that catalogue appears in `ValidAuditOperations`.
+2. `ValidAuditOperations` contains no duplicate and no empty value.
+3. `IsValidAuditOperation` returns true for each of the four LEGACY values and false for `TASK_ASSIGN` and `TASK_UNASSIGN`.
+4. `AuditEntry.Validate()` rejects an entry whose `Operation` is not in the valid set.
+
 ## Structures
 
 ### Task
@@ -165,14 +234,49 @@ Maps to the `tasks` table and `Task` JSON object.
 - `FunctionalRequirements`: Maximum 4096 characters
 - `TechnicalRequirements`: Maximum 4096 characters
 - `AcceptanceCriteria`: Maximum 4096 characters
-- `Specialists`: Maximum 500 characters (comma-separated list of specialist names)
 - `CompletionSummary`: Maximum 4096 characters (optional, set only on close)
+- `CommitOpen`: 7 to 64 hexadecimal characters, lowercase (optional, set only on entry into `DOING`)
+- `CommitClose`: 7 to 64 hexadecimal characters, lowercase (optional, set only on entry into `COMPLETED`)
+
+**Commit Hash Constraint:**
+
+The `CommitOpen` and `CommitClose` fields hold git commit hashes and share one
+format rule. A value that the application stores MUST satisfy all of the
+following:
+
+1. It consists solely of hexadecimal characters (`0`-`9`, `a`-`f`, `A`-`F`).
+2. Its length is at least 7 characters and at most 64 characters, inclusive. The
+   lower bound admits the conventional abbreviated hash; the upper bound admits
+   both the 40-character SHA-1 hash and the 64-character SHA-256 hash that a
+   repository created with `git init --object-format=sha256` produces.
+3. The application accepts the value in any letter case and **normalises it to
+   lowercase before storing it**. Every stored value is therefore lowercase, and
+   two callers who supply the same hash in different cases produce the same
+   stored value.
+
+The application applies no other transformation. It does not trim surrounding
+whitespace, so a value carrying a leading or trailing space contains a
+non-hexadecimal character and is rejected. An empty value is rejected, because
+its length is below the lower bound. Every rejection uses exit code 6 and makes
+no change to any task. The database enforces the same rule as a backstop through
+a `CHECK` constraint on each column (see `DATABASE.md § tasks Table`).
+
+The same rule governs `AuditEntry.CommitHash`, which receives the same normalised
+value on the two transitions that write it. There is one format rule for commit
+hashes in Groadmap, stated here and backstopped by an identical `CHECK` on all three
+columns that store one (see `DATABASE.md § Commit Hash Format Constraint`).
+
+Groadmap never derives these values. It runs no git command, reads no working
+directory, and inspects no repository: the caller supplies the hash explicitly on
+the command line (see `COMMANDS.md § Change Status (stat)`). The application
+therefore does not verify that the hash names a commit that exists in any
+repository; it validates the format alone.
 
 **Free-Text Control-Character Constraint:**
 
 All free-text fields — `Title`, `FunctionalRequirements`, `TechnicalRequirements`,
-`AcceptanceCriteria`, `CompletionSummary`, and `Specialists` (and the `Sprint`
-`Title` and `Description` fields, and the `Body` field of `TaskComment` and
+`AcceptanceCriteria`, and `CompletionSummary` (and the `Sprint` `Title` and
+`Description` fields, and the `Body` field of `TaskComment` and
 `SprintComment`) — MUST reject control characters. The application rejects an
 input that contains any of the following code points, with exit code 6, before the
 value is stored:
@@ -193,16 +297,9 @@ text is displayed without changing its stored bytes. This constraint applies to
 every field listed above on every command that accepts the field
 (see `COMMANDS.md § Field Validation`).
 
-**Specialists List-Separator Constraint:**
-
-The `Specialists` field is a comma-separated list of specialist names. The comma
-(`,`) is reserved as the list separator: an individual specialist name MUST NOT
-contain a comma. An input in which a single name contains a comma is rejected with
-exit code 6. This keeps the list unambiguous to split on the comma delimiter.
-
 ```go
 // Task represents a task in the roadmap.
-// Field order optimized for memory layout (240 bytes, zero padding on 64-bit systems).
+// Field order optimized for memory layout (248 bytes, zero padding on 64-bit systems).
 // Groups: Content (strings), Tracking (pointers), Metadata (ints), Dependencies (slices).
 // All Group 1 fields are mandatory (NOT NULL) with enforced maximum lengths.
 type Task struct {
@@ -216,12 +313,13 @@ type Task struct {
     AcceptanceCriteria     string     `json:"acceptance_criteria"`      // How to verify: completion criteria, max 4096 chars
     CreatedAt              string     `json:"created_at"`               // ISO 8601 UTC, auto-set on creation
 
-    // Group 2: Nullable tracking fields - lifecycle timestamps and parent link (48 bytes: 6 x 8)
-    Specialists        *string `json:"specialists"`          // Comma-separated specialists, nullable, max 500 chars; no individual name may contain a comma
+    // Group 2: Nullable tracking fields - lifecycle timestamps, commit hashes, and parent link (56 bytes: 7 x 8)
     StartedAt          *string `json:"started_at"`           // ISO 8601 UTC, auto-set on DOING transition
     TestedAt           *string `json:"tested_at"`            // ISO 8601 UTC, auto-set on TESTING transition
     ClosedAt           *string `json:"closed_at"`            // ISO 8601 UTC, auto-set on COMPLETED transition
     CompletionSummary  *string `json:"completion_summary"`   // Optional summary of work done, settable only on TESTING → COMPLETED, max 4096 chars
+    CommitOpen         *string `json:"commit_open"`          // Git commit hash the task was started from; mandatory on every transition into DOING, 7-64 lowercase hex chars
+    CommitClose        *string `json:"commit_close"`         // Git commit hash the task was concluded at; mandatory on every transition into COMPLETED, 7-64 lowercase hex chars
     ParentTaskID       *int    `json:"parent_task_id"`       // NULL for top-level tasks; non-NULL links to parent task
 
     // Group 3: Numeric metadata fields (32 bytes: 4 x 8)
@@ -235,6 +333,14 @@ type Task struct {
     Blocks    []int `json:"blocks"`     // IDs of tasks that depend on this task (tasks this task is blocking)
 }
 ```
+
+**The block above groups the fields by role, for reading.** It is not the
+declaration order the Go source must use. The struct occupies 248 bytes with zero
+padding in either arrangement, because every field is 8-byte aligned, but the
+`govet:fieldalignment` linter also governs the pointer-scan prefix and rejects this
+reading order. `Memory Layout Optimization` below states the declaration order the
+linter produces, and that order is the canonical one; copying the block above into
+the Go source verbatim fails the lint validation gate.
 
 ### Sprint
 Maps to the `sprints` table and `Sprint` JSON object.
@@ -334,17 +440,65 @@ Every constraint stated for `TaskComment` above applies to `SprintComment`, with
 Comments are accepted on a sprint in every status, including `CLOSED`. The `Sprint` struct carries no comment field and no comment count.
 
 ### Audit Entry
-Maps to the `audit` table.
+Maps to the `audit` table and to the `AuditEntry` JSON object
+(`DATA_FORMATS.md § Audit Entry`).
+
+An `AuditEntry` is one immutable record of one thing that happened to one entity.
+Nothing updates or deletes an entry once written.
 
 ```go
+// AuditEntry represents one entry in the roadmap's audit log.
+// Field order optimized for memory layout (80 bytes, zero padding on 64-bit systems).
 type AuditEntry struct {
-    ID          int    `json:"id"`
-    Operation   string `json:"operation"`
-    EntityType  string `json:"entity_type"`
-    EntityID    int    `json:"entity_id"`
-    PerformedAt string `json:"performed_at"`
+    RelatedEntityID *int    `json:"related_entity_id"` // Counterpart entity of the producing operation; nil when it has none
+    CommitHash      *string `json:"commit_hash"`       // Git commit bracketing the work; nil on every operation but two
+    Operation       string  `json:"operation"`         // One AuditOperation value, treated as opaque on read
+    EntityType      string  `json:"entity_type"`       // One EntityType value: TASK or SPRINT
+    PerformedAt     string  `json:"performed_at"`      // ISO 8601 UTC
+    ID              int     `json:"id"`                // Primary key
+    EntityID        int     `json:"entity_id"`         // The entity whose history this entry belongs to
 }
 ```
+
+#### Audit Entry Field Constraints
+
+- `Operation`: Written from the `AuditOperation` catalogue. **On read it is an opaque
+  string**: a stored row can carry a value the catalogue does not list, so no
+  consumer may assume membership (see `DATABASE.md § audit Table`).
+- `EntityType`: One of the two `EntityType` values.
+- `EntityID`: The id of the task or the sprint whose history the entry belongs to.
+  For a comment operation this is the parent task or sprint, never the comment.
+- `RelatedEntityID`: The counterpart entity of the operation that produced the
+  entry, or `nil` when that operation has no counterpart.
+  `DATABASE.md § The Two Entities of a Relational Operation` is canonical for the
+  rule and for the eight operation-and-command combinations that write it. Note that
+  one operation value can carry it or not depending on the command that produced the
+  entry: `TASK_STATUS_BACKLOG` names a sprint when `sprint remove-tasks` wrote it and
+  is `nil` when `task stat` did, because only the first has a second entity party to
+  it.
+- `CommitHash`: The git commit bracketing a task's development work, or `nil`.
+  Non-`nil` on exactly two operations, `TASK_STATUS_DOING` and
+  `TASK_STATUS_COMPLETED`; `DATABASE.md § The Commit Hash of an Audit Entry` is
+  canonical. The value satisfies the Commit Hash Constraint stated under `Task`
+  above.
+- `PerformedAt`: ISO 8601 UTC. Every entry a single command writes carries the same
+  value.
+
+**The two nullable fields are pointers, not empty values.** `RelatedEntityID` is a
+`*int` and `CommitHash` a `*string` so that "no counterpart" and "no commit"
+serialise as JSON `null` rather than as `0` and `""`. An entity id of `0` and an
+empty hash are both invalid values that the database `CHECK` constraints reject, so a
+non-pointer field could not distinguish absence from corruption.
+
+**No authorship.** An audit entry records no actor. There is no author field and no
+derivation of one from the environment, which is the same choice `TaskComment` and
+`SprintComment` make.
+
+**Acceptance criteria:**
+
+1. `AuditEntry` measures 80 bytes on a 64-bit target, pinned by the struct-size test alongside the other domain structs.
+2. Marshalling an entry whose `RelatedEntityID` and `CommitHash` are `nil` produces `"related_entity_id": null` and `"commit_hash": null`, never `0` or `""`.
+3. Round-tripping an entry through the database and back preserves both nullable fields exactly, including the distinction between `nil` and a present value.
 
 ### Roadmap (Metadata)
 Used for listing roadmaps.
@@ -561,11 +715,11 @@ and must not be changed without also accepting the linter's revised order.
 - `map[K]V`: 8 bytes (header pointer), 8-byte aligned
 - `int` / `float64`: 8 bytes, 8-byte aligned
 
-**Task struct (240 bytes, zero padding on 64-bit):**
+**Task struct (248 bytes, zero padding on 64-bit):**
 ```
-Group 1: Pointer fields (6 × 8 = 48 bytes)
-  ParentTaskID, Specialists, CompletionSummary,
-  TestedAt, ClosedAt, StartedAt
+Group 1: Pointer fields (7 × 8 = 56 bytes)
+  ParentTaskID, CompletionSummary, CommitOpen, CommitClose, TestedAt,
+  ClosedAt, StartedAt
 
 Group 2: String fields (7 × 16 = 112 bytes)
   AcceptanceCriteria, CreatedAt, Status, TechnicalRequirements,
@@ -600,6 +754,25 @@ the `*string` first and the three string headers after it, the last word that ca
 hold a pointer ends at byte 48, and the two `int` fields, which hold no pointer,
 trail. Moving `UpdatedAt` after the strings pushes that boundary to byte 56 and
 the linter rejects the struct with "struct with 56 pointer bytes could be 48".
+
+**AuditEntry struct (80 bytes, zero padding on 64-bit):**
+```
+Group 1: Pointer fields (2 × 8 = 16 bytes)
+  RelatedEntityID, CommitHash
+
+Group 2: String fields (3 × 16 = 48 bytes)
+  Operation, EntityType, PerformedAt
+
+Group 3: Int fields (2 × 8 = 16 bytes)
+  ID, EntityID
+```
+
+Every field is 8-byte aligned, so the byte count is 80 whatever the order; what the
+order decides is the pointer-scan prefix. With the two pointers first and the three
+string headers after them, the last word that can hold a pointer ends at byte 56, and
+the two `int` fields trail. Putting the `int` fields anywhere before `PerformedAt`
+pushes that boundary out and `fieldalignment` rejects the struct. This is the same
+grouping `TaskComment` and `SprintComment` follow.
 
 **SprintStats struct (112 bytes, zero padding on 64-bit):**
 ```
@@ -640,7 +813,7 @@ sprint_tasks table:
 
 ### Cache Line Considerations
 
-The Task struct (240 bytes) spans approximately 4 cache lines (64 bytes each).
+The Task struct (248 bytes) spans approximately 4 cache lines (64 bytes each).
 The `fieldalignment`-driven grouping keeps fields of the same kind contiguous,
 so common access patterns (e.g. iterating the pointer or string groups during
 display) stay within a small number of cache lines.

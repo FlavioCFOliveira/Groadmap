@@ -2,7 +2,7 @@
 
 ## Description
 
-Task management within a roadmap. Tasks track work with status, type, priority, severity, specialists, dependencies, detailed requirements, and an append-oriented comment log that records what was learned while the work was done. Every `task` subcommand operates on a single roadmap, which MUST be selected with the required `-r`/`--roadmap` flag.
+Task management within a roadmap. Tasks track work with status, type, priority, severity, dependencies, detailed requirements, and an append-oriented comment log that records what was learned while the work was done. Every `task` subcommand operates on a single roadmap, which MUST be selected with the required `-r`/`--roadmap` flag.
 
 ## Synopsis
 
@@ -28,7 +28,6 @@ Lists tasks in the selected roadmap (any status). All filters compose with AND.
 | `-p` | `--priority` | int | - | Filter: keep tasks with priority `>= min`. Lower-bound filter, not a validated `0-9` value: out-of-range numbers are accepted and simply match accordingly |
 | N/A | `--severity` | int | - | Filter: keep tasks with severity `>= min`. Lower-bound filter, not a validated `0-9` value |
 | `-y` | `--type` | enum | - | Filter by task type (one of the 10 task types) |
-| `-sp` | `--specialists` | string | - | Filter by specialists (case-insensitive substring) |
 | N/A | `--created-since` | date | - | Include tasks created on/after this date (RFC3339 or YYYY-MM-DD) |
 | N/A | `--created-until` | date | - | Include tasks created on/before this date (RFC3339 or YYYY-MM-DD) |
 | N/A | `--sort` | enum | `priority` | Sort field: priority, created, status, severity |
@@ -73,7 +72,6 @@ Creates a new task. The task lands in `BACKLOG` status.
 | `-y` | `--type` | enum | `TASK` | Task type (one of the 10 task types) |
 | `-p` | `--priority` | int | `0` | Priority 0-9 (0 lowest, 9 highest) |
 | N/A | `--severity` | int | `0` | Severity 0-9 (0 lowest, 9 highest) |
-| `-sp` | `--specialists` | string | - | Comma-separated specialists (max 500 chars) |
 | N/A | `--parent` | int | - | Parent task ID; creates this task as a SUB_TASK of the given parent and bumps the parent's `subtask_count` (create only) |
 
 **Output:** JSON object with the created task ID.
@@ -170,14 +168,12 @@ Edits one or more fields of an existing task. Only specified fields are updated,
 | `-y` | `--type` | enum | - | New task type (one of the 10 task types) |
 | `-p` | `--priority` | int | 0-9 | New priority |
 | N/A | `--severity` | int | 0-9 | New severity |
-| `-sp` | `--specialists` | string | 500 | New specialists (comma-separated) |
 
 **Output:** Empty on success (exit 0).
 
 **Examples:**
 ```bash
 rmp task edit -r project1 42 -t "Updated title" -p 8
-rmp task edit -r project1 1 --specialists "go-developer"
 ```
 
 ---
@@ -214,7 +210,7 @@ A task that is not in `BACKLOG` is rejected (exit 6).
 
 Changes the status of one or more tasks (manual transitions). Rejected transitions return exit 6.
 
-**Usage:** `rmp task stat -r <roadmap> <task-ids> <new-status> [--summary <text>]` or `rmp task set-status ...`
+**Usage:** `rmp task stat -r <roadmap> <task-ids> <new-status> [--commit-open <hash>] [--commit-close <hash>] [--summary <text>]` or `rmp task set-status ...`
 
 **Arguments:**
 | Argument | Required | Description |
@@ -226,11 +222,13 @@ Changes the status of one or more tasks (manual transitions). Rejected transitio
 | Short Flag | Long Flag | Type | Max Length | Description |
 |------------|-----------|------|------------|-------------|
 | `-r` | `--roadmap` | string | 50 | Roadmap name (required) |
+| `-co` | `--commit-open` | string | 64 | Git commit hash the work starts from. **Mandatory** when the target status is `DOING`, rejected on every other target status |
+| `-cc` | `--commit-close` | string | 64 | Git commit hash the work is concluded at. **Mandatory** when the target status is `COMPLETED`, rejected on every other target status |
 | `-s` | `--summary` | string | 4096 | Completion summary; valid only when the target status is COMPLETED |
 
 **Status Flow:**
 ```
-BACKLOG --[sprint add-tasks]--> SPRINT --[stat DOING]--> DOING --[stat TESTING]--> TESTING --[stat COMPLETED]--> COMPLETED
+BACKLOG --[sprint add-tasks]--> SPRINT --[stat DOING --commit-open]--> DOING --[stat TESTING]--> TESTING --[stat COMPLETED --commit-close]--> COMPLETED
 COMPLETED --[reopen / stat BACKLOG]--> BACKLOG
 ```
 
@@ -239,17 +237,41 @@ COMPLETED --[reopen / stat BACKLOG]--> BACKLOG
 - Marking COMPLETED is rejected (exit 6) if any subtask or dependency is not yet COMPLETED.
 - The `--summary` text is recorded as `completion_summary` and is only accepted on the TESTING -> COMPLETED transition.
 
+**Commit Tracking Rules:**
+- **`--commit-open` is mandatory on every transition into `DOING`.** Both such transitions require it: the first entry from `SPRINT`, and the re-entry from `TESTING` after testing sent the work back. On a re-entry the supplied value **replaces** the value stored before; no history of earlier values is kept.
+- **`--commit-close` is mandatory on the `TESTING -> COMPLETED` transition**, the only transition into `COMPLETED`.
+- **Each flag is rejected on any other target status** (exit 6, no changes made), mirroring the rule that governs `--summary`.
+- **Format.** A commit hash is 7 to 64 hexadecimal characters and is stored lowercase, so `5F93B51` and `5f93b51` are the same value. Groadmap validates the format alone: it invokes no git command, reads no working directory, and does not check that the hash names a commit that exists.
+- **One hash applies to the whole batch.** Every task named in `<task-ids>` receives the same value, exactly as every task receives the same `--summary`. A caller who needs different hashes issues separate commands.
+- **Neither field is editable.** `task create` accepts neither flag, because a task is created in `BACKLOG`, and `task edit` cannot change either value. A wrong hash is corrected by performing the transition again where the state machine allows it.
+- **`commit_open` survives a return to `BACKLOG`; `commit_close` does not.** All four routes back to `BACKLOG` — `stat BACKLOG`, `reopen`, `sprint remove-tasks`, and `sprint remove` — clear `commit_close` and leave `commit_open` untouched: reopening invalidates where the work ended, not where it began.
+
+**Commit Flag Errors:**
+| Condition | Exit Code | stderr |
+|-----------|-----------|--------|
+| `--commit-open` given and the target status is not `DOING` | 6 | `Error: --commit-open flag is only allowed when transitioning to DOING` |
+| `--commit-close` given and the target status is not `COMPLETED` | 6 | `Error: --commit-close flag is only allowed when transitioning to COMPLETED` |
+| Target status is `DOING` and `--commit-open` is absent | 6 | `Error: --commit-open is required when transitioning to DOING` |
+| Target status is `COMPLETED` and `--commit-close` is absent | 6 | `Error: --commit-close is required when transitioning to COMPLETED` |
+| Value is not a valid commit hash | 6 | `Error: invalid commit hash for --commit-open: "X" (expected 7 to 64 hexadecimal characters)` |
+| Flag written with no value after it | 2 | `Error: --commit-open requires a value` |
+
+In every case no task in the batch is changed: the commit flags are validated before the ids are resolved and before any write.
+
 **Examples:**
 ```bash
-rmp task stat -r project1 1,2,3 DOING
-rmp task stat -r project1 7 COMPLETED --summary "Shipped behind feature flag"
+rmp task stat -r project1 1,2,3 DOING --commit-open 5f93b51
+rmp task stat -r project1 7 DOING --commit-open $(git rev-parse HEAD)
+rmp task stat -r project1 7 TESTING
+rmp task stat -r project1 7 COMPLETED --commit-close 2578d18 --summary "Shipped behind feature flag"
+rmp task stat -r project1 7 BACKLOG
 ```
 
 ---
 
 ### reopen
 
-Returns one or more tasks to `BACKLOG` and clears their lifecycle timestamps (`started_at`, `tested_at`, `closed_at`) and `completion_summary`.
+Returns one or more tasks to `BACKLOG` and clears their lifecycle timestamps (`started_at`, `tested_at`, `closed_at`), their `completion_summary`, and their `commit_close`. `commit_open` is preserved: a reopening invalidates where the work ended, not where it began.
 
 **Usage:** `rmp task reopen -r <roadmap> <task-ids>`
 
@@ -327,58 +349,6 @@ Sets the severity of one or more tasks to the same value.
 ```bash
 rmp task sev -r project1 5 9
 rmp task set-severity -r project1 1,2,3 9
-```
-
----
-
-### assign
-
-Adds a specialist to the task's specialists list. The operation is idempotent: assigning an already-present specialist succeeds (exit 0) and emits an informational note to stderr.
-
-**Usage:** `rmp task assign -r <roadmap> <task-id> <specialist>`
-
-**Arguments:**
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `task-id` | Yes | Integer task id |
-| `specialist` | Yes | Free-form specialist label |
-
-**Flags:**
-| Short Flag | Long Flag | Type | Description |
-|------------|-----------|------|-------------|
-| `-r` | `--roadmap` | string | Roadmap name (required) |
-
-**Output:** Empty on success (exit 0).
-
-**Examples:**
-```bash
-rmp task assign -r project1 7 go-developer
-```
-
----
-
-### unassign
-
-Removes a specialist from the task's specialists list. The operation is idempotent: removing an absent specialist still succeeds (exit 0).
-
-**Usage:** `rmp task unassign -r <roadmap> <task-id> <specialist>`
-
-**Arguments:**
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `task-id` | Yes | Integer task id |
-| `specialist` | Yes | Specialist label to remove |
-
-**Flags:**
-| Short Flag | Long Flag | Type | Description |
-|------------|-----------|------|-------------|
-| `-r` | `--roadmap` | string | Roadmap name (required) |
-
-**Output:** Empty on success (exit 0).
-
-**Examples:**
-```bash
-rmp task unassign -r project1 7 go-developer
 ```
 
 ---
@@ -715,7 +685,6 @@ The only alias for `task remove` is `rm`. The `delete` alias exists for `roadmap
 | `functional-requirements` | Yes (on create) | 4096 chars | Why: functional requirements |
 | `technical-requirements` | Yes (on create) | 4096 chars | How: technical description |
 | `acceptance-criteria` | Yes (on create) | 4096 chars | How to verify: completion criteria |
-| `specialists` | No | 500 chars | Comma-separated specialist tags |
 | `summary` | No | 4096 chars | Completion summary (only on COMPLETED transition) |
 | `type` | No | one of 10 task types | Task type (default: TASK) |
 | `priority` | No | 0-9 | Priority level (default: 0) |
@@ -763,7 +732,9 @@ Carried by `-y`/`--type` on `comment-add`, `comment-list`, and `comment-edit`. A
 ### Task Object Keys
 
 Task objects returned by `list`, `get`, `next`, `subtasks`, `blockers`, and `blocking` contain:
-`id`, `title`, `status`, `type`, `functional_requirements`, `technical_requirements`, `acceptance_criteria`, `created_at`, `specialists`, `started_at`, `tested_at`, `closed_at`, `completion_summary`, `parent_task_id`, `priority`, `severity`, `subtask_count`, `depends_on`, `blocks`.
+`id`, `title`, `status`, `type`, `functional_requirements`, `technical_requirements`, `acceptance_criteria`, `created_at`, `started_at`, `tested_at`, `closed_at`, `completion_summary`, `commit_open`, `commit_close`, `parent_task_id`, `priority`, `severity`, `subtask_count`, `depends_on`, `blocks`.
+
+`commit_open` and `commit_close` are `null` until the task enters `DOING` and `COMPLETED` respectively; see [stat (set-status)](#stat-set-status).
 
 Task objects carry no `comments` array and no comment count: comments are read only through `comment-list` and the read-only web interface.
 
@@ -777,7 +748,7 @@ Comment objects returned by `comment-list` contain:
 ## Output Format
 
 All commands follow these conventions:
-- **Success:** JSON to stdout, exit code 0. `create` and `comment-add` emit `{"id": <int>}`; read commands, `comment-list` included, emit a JSON array; mutating commands (`edit`, `stat`, `prio`, `sev`, `reopen`, `remove`, `assign`, `unassign`, `add-dep`, `remove-dep`, `comment-edit`, `comment-remove`) emit empty stdout.
+- **Success:** JSON to stdout, exit code 0. `create` and `comment-add` emit `{"id": <int>}`; read commands, `comment-list` included, emit a JSON array; mutating commands (`edit`, `stat`, `prio`, `sev`, `reopen`, `remove`, `add-dep`, `remove-dep`, `comment-edit`, `comment-remove`) emit empty stdout.
 - **Errors:** Plain text to stderr, non-zero exit code.
 - **Dates:** ISO 8601 UTC with milliseconds, suffix `Z` (e.g. `2026-05-24T14:30:00.000Z`).
 
@@ -790,7 +761,7 @@ All commands follow these conventions:
 | 2 | Misuse: missing required flag, bad syntax, or an invalid id argument (a `<task-id>`, `<task-ids>`, `<blocker-id>`, or `<comment-id>` that is not a positive integer is rejected by the parser before any database access). On the comment subcommands it also covers a missing `--type` on `comment-add`, a body supplied by neither `--body` nor standard input, and a `comment-edit` that requests no change at all |
 | 3 | No roadmap specified (`-r` missing) |
 | 4 | Task or comment not found (a syntactically valid id that does not exist) |
-| 6 | Validation error: bad `--type`/`--status`/enum value, out-of-range number, oversized field, invalid state transition (including `stat SPRINT`), subtask/dependency guard, or dependency cycle. On the comment subcommands it covers a comment type outside the seven task values, a body over 4096 characters, and a body containing control characters |
+| 6 | Validation error: bad `--type`/`--status`/enum value, out-of-range number, oversized field, invalid state transition (including `stat SPRINT`), subtask/dependency guard, or dependency cycle. On `stat` it also covers a missing, misplaced, or malformed `--commit-open`/`--commit-close`. On the comment subcommands it covers a comment type outside the seven task values, a body over 4096 characters, and a body containing control characters |
 
 Note the distinction: an id that is not a positive integer (for example `abc` or `0`) is an exit-code-2 syntax error, whereas a well-formed id for a task or a comment that does not exist is an exit-code-4 not-found error. An invalid `--type` or target status value is an exit-code-6 validation error.
 

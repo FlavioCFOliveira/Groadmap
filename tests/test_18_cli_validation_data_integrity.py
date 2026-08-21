@@ -9,7 +9,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.base_test import GroadmapTestBase
+from tests.base_test import GroadmapTestBase, commit_flags_for
 
 
 class TestSequentialSprintOpening:
@@ -183,7 +183,7 @@ class TestTaskDeletionBacklogOnly:
         task_id = self._create_task(roadmap)
 
         self.test.move_task_to_sprint(roadmap, task_id)
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "021fa2f"])
 
         exit_code, _, stderr = self.test.run_cmd(
             ["task", "remove", "-r", roadmap, str(task_id)],
@@ -200,7 +200,7 @@ class TestTaskDeletionBacklogOnly:
         task_id = self._create_task(roadmap)
 
         self.test.move_task_to_sprint(roadmap, task_id)
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "abd481c"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
 
         exit_code, _, stderr = self.test.run_cmd(
@@ -218,9 +218,9 @@ class TestTaskDeletionBacklogOnly:
         task_id = self._create_task(roadmap)
 
         self.test.move_task_to_sprint(roadmap, task_id)
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "5d6a2cd"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "cf507b0"])
 
         exit_code, _, stderr = self.test.run_cmd(
             ["task", "remove", "-r", roadmap, str(task_id)],
@@ -239,7 +239,7 @@ class TestTaskDeletionBacklogOnly:
         task_doing = self._create_task(roadmap)
 
         self.test.move_task_to_sprint(roadmap, task_doing)
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_doing), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_doing), "DOING", "--commit-open", "5f93b51"])
 
         ids = f"{task_backlog},{task_doing}"
         exit_code, _, stderr = self.test.run_cmd(
@@ -303,7 +303,8 @@ class TestTaskReopenCommand:
         if target_status == "SPRINT":
             return
         for status in ["DOING", "TESTING", "COMPLETED"]:
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), status])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), status]
+                              + commit_flags_for(status))
             if status == target_status:
                 break
 

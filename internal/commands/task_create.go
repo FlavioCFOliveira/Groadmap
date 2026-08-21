@@ -24,7 +24,6 @@ import (
 // Optional flags:
 //   - -p, --priority: Task priority 0-9 (default: 0)
 //   - --severity: Task severity 0-9 (default: 0)
-//   - -sp, --specialists: Comma-separated list of specialists (max 500 chars)
 //   - -r, --roadmap: Roadmap name (uses current if not specified)
 //
 // Error conditions:
@@ -59,7 +58,6 @@ func taskCreate(args []string) error {
 	functionalReqs, _ := result.Flags["FunctionalRequirements"].(string)
 	technicalReqs, _ := result.Flags["TechnicalRequirements"].(string)
 	acceptanceCriteria, _ := result.Flags["AcceptanceCriteria"].(string)
-	specialists, _ := result.Flags["Specialists"].(string)
 	priority, _ := result.Flags["Priority"].(int)
 	severity, _ := result.Flags["Severity"].(int)
 	parentIDRaw, hasParent := result.Flags["ParentID"].(int)
@@ -69,7 +67,6 @@ func taskCreate(args []string) error {
 	functionalReqs = strings.TrimSpace(functionalReqs)
 	technicalReqs = strings.TrimSpace(technicalReqs)
 	acceptanceCriteria = strings.TrimSpace(acceptanceCriteria)
-	specialists = strings.TrimSpace(specialists)
 
 	// Parse task type (enum conversion after FlagParser)
 	taskType := models.TypeTask
@@ -110,20 +107,9 @@ func taskCreate(args []string) error {
 		{functionalReqs, "functional-requirements"},
 		{technicalReqs, "technical-requirements"},
 		{acceptanceCriteria, "acceptance-criteria"},
-		{specialists, "specialists"},
 	} {
 		if err := utils.ValidateNoControlChars(f.value, f.name); err != nil {
 			return err
-		}
-	}
-
-	// Specialists list-separator constraint: an individual specialist name MUST
-	// NOT contain a comma (SPEC/MODELS.md § Specialists List-Separator Constraint).
-	if specialists != "" {
-		for _, name := range models.ParseSpecialists(specialists) {
-			if strings.Contains(name, ",") {
-				return fmt.Errorf("%w: specialist name cannot contain commas", utils.ErrValidation)
-			}
 		}
 	}
 
@@ -169,10 +155,6 @@ func taskCreate(args []string) error {
 		ParentTaskID:           parentTaskID,
 	}
 
-	if specialists != "" {
-		task.Specialists = &specialists
-	}
-
 	if err := task.Validate(); err != nil {
 		return err
 	}
@@ -182,10 +164,10 @@ func taskCreate(args []string) error {
 	err = database.WithTransaction(func(tx *sql.Tx) error {
 		// Insert task
 		insertResult, insertErr := tx.Exec(
-			`INSERT INTO tasks (title, status, type, functional_requirements, technical_requirements, acceptance_criteria, created_at, specialists, priority, severity, parent_task_id)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO tasks (title, status, type, functional_requirements, technical_requirements, acceptance_criteria, created_at, priority, severity, parent_task_id)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			task.Title, task.Status, task.Type, task.FunctionalRequirements, task.TechnicalRequirements,
-			task.AcceptanceCriteria, task.CreatedAt, task.Specialists, task.Priority, task.Severity,
+			task.AcceptanceCriteria, task.CreatedAt, task.Priority, task.Severity,
 			task.ParentTaskID,
 		)
 		if insertErr != nil {

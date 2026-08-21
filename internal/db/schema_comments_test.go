@@ -415,8 +415,12 @@ func TestMigrateV1_8_0_toV1_9_0_OnNextOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading schema version after open: %v", err)
 	}
-	if version != "1.9.0" {
-		t.Fatalf("schema_version after open = %q, want 1.9.0", version)
+	// Opening runs the WHOLE migration chain, not just 1.8.0 -> 1.9.0, so the
+	// version to expect is the current one. TestSchemaVersionConstant pins that
+	// constant to SPEC/VERSION.md § Current Schema Version, so this stays honest
+	// while surviving every later bump.
+	if version != SchemaVersion {
+		t.Fatalf("schema_version after open = %q, want %q", version, SchemaVersion)
 	}
 
 	// No data loss: every seeded row is still there, unchanged.
@@ -615,7 +619,7 @@ func TestRunMigrationsTwiceIsANoOpOnDisk(t *testing.T) {
 
 	// Explicitly run the migration set again on the already-migrated database.
 	if err := second.RunMigrations(); err != nil {
-		t.Fatalf("re-running migrations on a 1.9.0 database: %v", err)
+		t.Fatalf("re-running migrations on an already-migrated database: %v", err)
 	}
 	secondSnapshot := schemaSnapshot(t, second.DB)
 	secondVersion, err := second.GetSchemaVersion()
@@ -623,8 +627,9 @@ func TestRunMigrationsTwiceIsANoOpOnDisk(t *testing.T) {
 		t.Fatalf("reading version after second open: %v", err)
 	}
 
-	if firstVersion != "1.9.0" || secondVersion != "1.9.0" {
-		t.Errorf("schema versions = %q then %q, want 1.9.0 both times", firstVersion, secondVersion)
+	if firstVersion != SchemaVersion || secondVersion != SchemaVersion {
+		t.Errorf("schema versions = %q then %q, want %q both times",
+			firstVersion, secondVersion, SchemaVersion)
 	}
 	if firstSnapshot != secondSnapshot {
 		t.Errorf("re-opening and re-running the migrations changed the schema.\nfirst:\n%s\nsecond:\n%s",

@@ -4,14 +4,14 @@
 #
 # Accepted findings (annotated with #nosec in source code). This register is the
 # reviewer's index: every suppression in the tree appears below with the reason
-# that makes it safe. The counts total 52 and are the ones
+# that makes it safe. The counts total 53 and are the ones
 # `grep -roh '#nosec G[0-9]*' --include='*.go' . | sort | uniq -c` reports, so a
 # new suppression that is not listed here is a review failure. (A plain grep for
-# the string reports 53: the extra hit is prose about suppressions inside a
+# the string reports 54: the extra hit is prose about suppressions inside a
 # comment in cmd/rmp/workflow_gates_test.go, not a suppression.)
 #
-# G104 (CWE-703) - Errors unhandled  [15]
-#   Locations: db/connection.go (8), db/queries.go (3), web/routes.go (2),
+# G104 (CWE-703) - Errors unhandled  [13]
+#   Locations: db/connection.go (6), db/queries.go (3), web/routes.go (2),
 #              web/server.go (1), db/connection_test.go (1)
 #   Reason: Best-effort cleanup on error paths where the original error is
 #           already captured and returned, and where a failed cleanup cannot
@@ -23,18 +23,22 @@
 #           only to run the web server's startup migration, and a test's
 #           pre-run os.RemoveAll of its own roadmap directory.
 #
-# G201 (CWE-89) - SQL string formatting  [20]
-#   Locations: commands/task_mutate.go (9), db/queries.go (7),
+# G201 (CWE-89) - SQL string formatting  [21]
+#   Locations: db/queries.go (8), commands/task_mutate.go (8),
 #              commands/task_edit.go (1), commands/sprint_crud.go (1),
+#              commands/sprint_membership_audit_test.go (1),
 #              db/comments.go (1), db/migrations.go (1)
 #   Reason: fmt.Sprintf builds only (a) an IN (?,...,?) or VALUES (?,?,?,?)
 #           placeholder list produced by db.Placeholders / QueryCache, which can
 #           emit nothing but "?" separated by commas; (b) a SET clause joined
 #           from hard-coded "column = ?" fragments selected by a switch or by
 #           literal map keys; or (c) a table name that is a compile-time literal
-#           at every call site (db/migrations.go columnExists). Every user value
-#           travels as a bound ? parameter, so no user input is ever interpolated
-#           into a statement.
+#           at every call site (db/migrations.go columnExists); or (d) a column
+#           name that is a compile-time literal at every call site, in a test
+#           helper that counts distinct values of one audit column
+#           (commands/sprint_membership_audit_test.go). Every user value travels
+#           as a bound ? parameter, so no user input is ever interpolated into a
+#           statement.
 #
 # G204 (CWE-78) - Subprocess launched with variable  [3]
 #   Locations: web/server.go (3)
@@ -52,19 +56,28 @@
 #           § Directory Structure and CLAUDE.md § 10 mandate for the
 #           ~/.roadmaps tree; gosec's file-oriented threshold does not apply.
 #
-# G304 (CWE-22) - File inclusion via variable  [10]
+# G304 (CWE-22) - File inclusion via variable  [11]
 #   Locations: utils/migrate_test.go (6), db/connection.go (1),
 #              commands/graph.go (1), commands/comments_test.go (1),
-#              web/comments_test.go (1)
+#              db/permissions_test.go (1), web/comments_test.go (1)
 #   Reason: Production paths are built inside ~/.roadmaps/<name>/ from a roadmap
 #           name already validated against ^[a-z0-9_-]+$ (no separator, no ".."),
 #           with a fixed basename: project.db pre-created O_EXCL at 0600
 #           (db/connection.go) and the graph write.lock (commands/graph.go). The
 #           test paths are a stdin fixture the test itself wrote under its own
-#           t.TempDir() (commands/comments_test.go, utils/migrate_test.go) and the
-#           listing of this repository's own package directory that the escaping
-#           test reads to assert no template bypasses html/template
-#           (web/comments_test.go).
+#           t.TempDir() (commands/comments_test.go, utils/migrate_test.go), a
+#           digest read of a database file the test itself created under its own
+#           t.TempDir() (db/permissions_test.go), and the listing of this
+#           repository's own package directory that the escaping test reads to
+#           assert no template bypasses html/template (web/comments_test.go).
+#
+# G306 (CWE-276) - Poor file permissions when writing a file  [1]
+#   Locations: db/permissions_test.go (1)
+#   Reason: The test writes the SQLite -wal/-shm sidecars at 0666 on purpose:
+#           a mode wider than 0600 is the precondition the case exists to
+#           exercise, since it asserts that opening the database restricts the
+#           sidecars it finds. Writing them at 0600 would make the assertion
+#           vacuous. Test-only; no production path writes a file at this mode.
 #
 # G404 (CWE-338) - Weak random number generator  [1]
 #   Locations: models/comment_read_test.go (1)
