@@ -67,6 +67,7 @@ so the runner refuses to start when the two disagree — see
 | `test_50_task_and_sprint_comments.py` | Comments on tasks and sprints: the eight subcommands and their aliases, a body supplied by flag, heredoc, pipe or redirect, both type enums in each direction, body validation at the 4096-character limit and against forbidden control characters, edit semantics including a no-op refusal, ordering and filtering asserted on records, the lifecycle and cascade behaviour, the six audit operations, exit codes 2/3/4/6, the help and `--ai-help` surfaces, concurrent writers, and the 1.9.0 migration. |
 | `test_51_specialists_field_removal.py` | Removal of the task `specialists` field (rmp task #246): `task assign`/`task unassign` and the `-sp`/`--specialists` flags and filter rejected with their exact documented exit codes (2 or 6 for `audit list -o TASK_ASSIGN`/`TASK_UNASSIGN`), no state or audit change on a rejected attempt, the field absent from `task get`/`list`/`next` (exactly 20 keys) and from every help surface and `--ai-help`, and the 1.9.0 -> 1.10.0 schema migration built from the verbatim historical DDL: the column dropped, other data and CHECK constraints intact, AUTOINCREMENT continuing, pre-existing `TASK_ASSIGN`/`TASK_UNASSIGN` audit rows retained and visible in an unfiltered listing, and a second open idempotent. |
 | `test_52_commit_tracking.py` | Commit tracking on `task stat` (rmp task #254): `--commit-open`/`-co` mandatory on every transition into DOING and `--commit-close`/`-cc` on the transition into COMPLETED, each refused on every other target state, a malformed hash refused at exit 6 with the 7..64 bounds proved inclusive, a flag written with no value after it refused at exit 2, the exact stderr line asserted in every rejection and the task re-read to prove nothing moved, the stored hash lowercased, `TESTING -> DOING` replacing `commit_open`, one hash applied across a batch, the asymmetric clearing on all four routes back to BACKLOG (`task stat BACKLOG`, `task reopen`, `sprint remove-tasks`, `sprint remove`) which clear `commit_close` and preserve `commit_open`, a partly-failing batch leaving every task unchanged, and neither flag accepted by `task create` or `task edit`. Also covers the three hash shapes git actually emits (abbreviated, full 40-character SHA-1, full 64-character SHA-256) round-tripping unchanged, and the 1.10.0 to 1.11.0 schema migration: a database built to the verbatim 1.10.0 `tasks` shape gains both columns null on the next open, keeps every row, reaches the same schema version a fresh roadmap is stamped with, and ends up enforcing the same commit rule at BOTH the command layer and the column CHECK — the storage half is probed by writing straight to SQLite, because a command-level assertion alone passes even on a migration that omitted the constraint. |
+| `test_53_e2e_harness_binary_staleness.py` | The harness itself (rmp task #271): `resolve_cli()` builds a binary when none exists, reuses one that is newer than every source file compiled into it, rebuilds one that is older than a touched `.go` file OR a touched `//go:embed`'d template/static asset (`internal/web/embed.go`) before handing it back — proved separately for each half, with the embedded-asset case leaving every `.go` file provably untouched — raises instead of returning a stale binary when the rebuild fails to compile, never selects a `bin/rmp`/`rmp` planted in an unrelated current working directory, and prints the resolved path and build identity exactly once per process even across several `GroadmapTestBase()` instances. |
 
 `test_09_stress_load.py` is registered in `STRESS_TEST_MODULES`, so it runs
 with `--stress` or `--all` and not in the default run. Every other module in
@@ -75,6 +76,11 @@ the table belongs to the standard run.
 ## Running the Suite
 
 Build the binary first: the suite runs the compiled artefact, not the source.
+`tests/base_test.py` also rebuilds automatically the first time a module in a
+given run finds `bin/rmp` older than the newest source file compiled into it
+— a `.go` file or a `//go:embed`'d template/static asset alike — so an
+explicit build is a courtesy that saves the first module its own rebuild, not
+a strict precondition.
 
 ```bash
 go build -o ./bin/rmp ./cmd/rmp
@@ -140,8 +146,26 @@ non-zero.
 
 ### CLI invocation
 - Tests invoke the binary through `subprocess`, never by importing Go code.
-- The binary is looked up at `bin/rmp` (and a few sibling locations) and built
-  on the spot if it is missing.
+- `tests/base_test.py` ESTABLISHES the binary rather than merely discovering
+  one: `resolve_cli()` looks only at `bin/rmp` and `rmp` under the repository
+  root — never the current working directory, so a `bin/rmp` left over from
+  an unrelated project can never be mistaken for the artefact under test —
+  and compares whichever candidate it finds against the newest source file
+  compiled into it. That comparison is not `.go`-only: `internal/web/embed.go`
+  compiles `internal/web/templates/*.html` and `internal/web/static` straight
+  into the binary via `//go:embed`, so `resolve_cli()` also walks every
+  directory a `//go:embed` directive pulls in (derived from the directive
+  itself, not hardcoded) and treats a touched template or static asset the
+  same as a touched `.go` file. A missing or stale candidate is rebuilt with
+  the same `go build -o ./bin/rmp ./cmd/rmp` the suite has always used as its
+  last-resort build step; a rebuild that fails to compile raises instead of
+  falling back to the stale binary, which fails the run loudly rather than
+  certifying code that no longer matches the source. Resolution happens once
+  per interpreter process and prints the resolved path and the binary's own
+  `--version`/mtime identity exactly once, so a run's output says which
+  artefact it exercised. `tests/test_53_e2e_harness_binary_staleness.py` is
+  the regression guard for this contract, for both the `.go` and the
+  embedded-asset half.
 - Exit code, stdout and stderr are captured and asserted separately: success
   output is JSON on stdout, errors are plain text on stderr.
 
