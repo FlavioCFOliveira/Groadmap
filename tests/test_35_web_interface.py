@@ -4850,6 +4850,91 @@ class TestWebInterface:
                 "a rejected CREATE must not have inserted a node"
             )
 
+    def test_query_bar_rejects_misspaced_introspection_with_its_own_kind(self):
+        """AC151: a schema-introspection command whose keyword spacing the
+        engine does not accept is rejected by the shared guard rail before
+        execution, answered HTTP 400 with kind invalid_keyword_spacing, and
+        never reported as not_read_only.
+
+        The kind is its own, and deliberately not not_read_only: a SHOW
+        statement reads the schema and writes nothing whatever its spacing, so
+        not_read_only would publish a classification the message printed beside
+        it contradicts, and would tell a client the query writes when it does
+        not (SPEC/WEB.md § Query-Bar Error Handling, case 10).
+
+        Each misspaced statement is paired with the identical statement carrying
+        one space, which must return the normal graph shape with HTTP 200, so
+        the two differ in the separator and in nothing else. Without that
+        control a server that had dropped schema introspection altogether would
+        satisfy every rejection assertion here.
+        """
+        proc, port = self._start(["--port", "0"])
+
+        for query, accepted in (
+            ("SHOW  INDEXES", "SHOW INDEXES"),
+            ("SHOW\tINDEX", "SHOW INDEX"),
+            ("SHOW\nCONSTRAINTS", "SHOW CONSTRAINTS"),
+            ("show  constraint", "SHOW CONSTRAINT"),
+        ):
+            status, _, body = self._req(port, self._graph_data(port, q=query))
+            assert status == 400, (
+                f"misspaced introspection {query!r} not rejected with 400; "
+                f"got {status} {body!r}"
+            )
+            err = json.loads(body)
+            assert err.get("kind") == "invalid_keyword_spacing", (
+                f"query {query!r} must carry its own failure class, not "
+                f"{err.get('kind')!r}: {err}"
+            )
+            # The query was never run: the failure body carries no graph.
+            assert set(err) == {"error", "kind"}, (
+                f"the failure body must carry exactly error and kind; got {err!r}"
+            )
+            reason = err["error"]
+            for fragment in ("schema-introspection command", "exactly one space",
+                             "keyword spacing", accepted):
+                assert fragment in reason, (
+                    f"the message for {query!r} must name {fragment!r}; got {reason!r}"
+                )
+            for forbidden in ("not read-only", "cypher: parse", 'unexpected "SHOW"'):
+                assert forbidden not in reason, (
+                    f"the message for {query!r} must never carry {forbidden!r}: "
+                    f"it is neither a write nor the engine's parse diagnostic; "
+                    f"got {reason!r}"
+                )
+
+            # The control: one space, same statement, accepted and executed.
+            status, _, body = self._req(port, self._graph_data(port, q=accepted))
+            assert status == 200, (
+                f"the single-space spelling {accepted!r} must be accepted; "
+                f"got {status} {body!r}"
+            )
+            assert json.loads(body) == {"nodes": [], "edges": []}, (
+                f"{accepted!r} is a tabular result carrying no graph elements, "
+                f"so the response is the empty graph shape; got {body!r}"
+            )
+
+        # The two guard-rail rejections stay distinct in both directions: a
+        # genuine write still answers not_read_only, so the new kind did not
+        # swallow the old one.
+        status, _, body = self._req(
+            port, self._graph_data(port, q="MATCH (n) DELETE n"))
+        assert status == 400
+        assert json.loads(body).get("kind") == "not_read_only", (
+            "a writing query must still be classified not_read_only"
+        )
+
+        # Precedence (SPEC/WEB.md § Query-Bar Error Handling, rule 6): the limit
+        # is resolved before the query is classified, so an invalid limit
+        # outranks the spacing objection.
+        status, _, body = self._req(
+            port, self._graph_data(port, q="SHOW  INDEXES", limit="7"))
+        assert status == 400
+        assert json.loads(body).get("kind") == "invalid_limit", (
+            "an invalid limit is resolved before the query is classified, so it "
+            "outranks the keyword-spacing objection"
+        )
+
     def test_query_bar_literal_masking_not_falsely_rejected(self):
         """AC47: write keywords only inside a string literal are accepted as
         read-only and executed; a genuine DELETE is rejected."""

@@ -542,6 +542,11 @@ func TestHandleGraphData_QueryBarRejectionPrecedesStoreOpen(t *testing.T) {
 		{"invalid limit alone", url.Values{"limit": {"7"}}, graphErrInvalidLimit},
 		{"not read-only alone", url.Values{"q": {`MATCH (n) DELETE n`}}, graphErrNotReadOnly},
 		{"both wrong at once", url.Values{"limit": {"7"}, "q": {`MATCH (n) DELETE n`}}, graphErrInvalidLimit},
+		// The keyword-spacing rejection is a guard-rail rejection of the same
+		// nature and carries the same guarantee: it too is decided before the
+		// store is opened, which the unopenable store proves here.
+		{"introspection keyword spacing alone", url.Values{"q": {"SHOW  INDEXES"}}, graphErrInvalidKeywordSpacing},
+		{"invalid limit outranks keyword spacing", url.Values{"limit": {"7"}, "q": {"SHOW  INDEXES"}}, graphErrInvalidLimit},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -561,7 +566,7 @@ func TestHandleGraphData_QueryBarRejectionPrecedesStoreOpen(t *testing.T) {
 }
 
 // TestHandleGraphData_ErrorBodyShape pins the failure body's exact field set for
-// each of the three failure classes: exactly two fields, `error` and `kind`, both
+// each of the four failure classes: exactly two fields, `error` and `kind`, both
 // strings and both non-empty, and neither `nodes` nor `edges`
 // (SPEC/DATA_FORMATS.md § Graph View Data, Error Shape, rule 1; Acceptance
 // Criterion 123).
@@ -582,6 +587,7 @@ func TestHandleGraphData_ErrorBodyShape(t *testing.T) {
 	}{
 		{"not read-only", url.Values{"q": {`MATCH (n) DELETE n`}}, graphErrNotReadOnly},
 		{"invalid limit", url.Values{"limit": {"7"}}, graphErrInvalidLimit},
+		{"invalid keyword spacing", url.Values{"q": {"SHOW  INDEXES"}}, graphErrInvalidKeywordSpacing},
 		{"execution failure", url.Values{"q": {`MATCH (n) RETURN`}}, graphErrExecution},
 	}
 

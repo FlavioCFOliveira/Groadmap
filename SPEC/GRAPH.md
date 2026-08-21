@@ -498,7 +498,7 @@ The guard rail classifies a query by the Cypher clauses it contains:
 | `SET`, `REMOVE` | Mutates properties or labels on existing elements | Write (mutating) |
 | `DELETE`, `DETACH DELETE` | Removes nodes or edges | Write (deleting) |
 | `CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, `DROP CONSTRAINT` | Mutates the graph schema (indexes, constraints) | DDL (schema-mutating) |
-| `SHOW INDEXES`, `SHOW INDEX`, `SHOW CONSTRAINTS`, `SHOW CONSTRAINT`, each with an optional `YIELD` / `WHERE` / `RETURN` projection tail | Lists the registered schema without altering it | Schema introspection (read-only) |
+| `SHOW INDEXES`, `SHOW INDEX`, `SHOW CONSTRAINTS`, `SHOW CONSTRAINT`, each written with exactly one space between the two keywords (see [Keyword Spacing in a Schema-Introspection Command](#keyword-spacing-in-a-schema-introspection-command)) and each with an optional `YIELD` / `WHERE` / `RETURN` projection tail | Lists the registered schema without altering it | Schema introspection (read-only) |
 | `MATCH ... RETURN`, or a schema-introspection command, with no writing clause and no DDL clause | Reads and returns data | Read-only |
 
 A query is a **writing query** when GoGraph's `cypher.QueryHasWritingClause`
@@ -546,7 +546,9 @@ or a property named `show` elsewhere in a query does not make that query an
 introspection command. Like every other clause-class check it runs on the masked
 normalization (see [Literal-Aware Normalization](#literal-aware-normalization)),
 so a `SHOW` keyword that appears only inside a string literal, a comment, or a
-backtick-quoted identifier does not trigger the classification.
+backtick-quoted identifier does not trigger the classification. Recognition is
+also exact about the spacing between the two keywords, for reasons given in
+[Keyword Spacing in a Schema-Introspection Command](#keyword-spacing-in-a-schema-introspection-command).
 
 **This classification is Groadmap's, and it is deliberately narrower than the
 engine's.** GoGraph reports schema introspection as DDL from its own
@@ -559,6 +561,111 @@ rail protects: `CREATE INDEX` and `DROP INDEX` change the graph's schema, while
 four schema-**mutating** forms, and schema introspection is a separate,
 read-only class. Where the engine's grouping and this specification disagree,
 this specification governs what each subcommand accepts.
+
+#### Keyword Spacing in a Schema-Introspection Command
+
+**The guard rail recognises a schema-introspection command only when exactly one
+space separates `SHOW` from the keyword that follows it.** `SHOW INDEXES` is a
+schema-introspection command. The same statement written with two spaces, with a
+tab, with a line break, or with a comment between the two keywords is not, and
+neither is any other spelling that places anything except a single space there.
+
+The rule governs that one separator and nothing else about the statement's
+spacing. Whitespace and comments **before** `SHOW` are accepted, and so is any
+amount of whitespace **after** the target keyword, including before a `YIELD` /
+`WHERE` / `RETURN` projection tail. `SHOW INDEXES  YIELD name` is a
+schema-introspection command; `SHOW  INDEXES YIELD name` is not. Like every other
+clause-class check, this one runs on the masked normalization of the query and
+never on the raw string (see
+[Literal-Aware Normalization](#literal-aware-normalization)); masking neutralizes
+a comment to spaces, which is why a comment between the two keywords reads as
+spacing rather than as an absent separator.
+
+**The rule is the engine's, not Groadmap's.** GoGraph decides
+whether to route a statement to its schema-introspection parser by testing that
+statement against the literal prefixes `SHOW CONSTRAINT` and `SHOW INDEX`, each
+carrying exactly one space. It trims leading whitespace and leading comments
+before applying that test, which is exactly why the separator between the two
+keywords is the only spacing that matters. A statement that misses those prefixes
+by its spacing never reaches the introspection parser: the engine routes it to
+the general Cypher grammar, which has no `SHOW` production and rejects it as a
+syntax error.
+
+**The guard rail MUST classify by what the engine accepts, and MUST NOT apply a
+broader grammar of its own.** A classification wider than the engine's admits a
+statement the engine then refuses, and the user receives a diagnostic that names
+the wrong problem: the engine reports `SHOW` as unexpected and lists the clause
+keywords it did expect, none of which is `SHOW`, so the message reads as though
+schema introspection were unsupported — while the identical statement with a
+single space returns its result set. Nothing in that message points at the
+spacing, so the user cannot reach the real cause from what is printed. The fault
+in that outcome is the classification, not the engine's diagnostic; the
+diagnostic is only where the fault becomes visible.
+
+**A statement rejected under this rule is rejected by the guard rail, not by the
+engine.** A `SHOW INDEX(ES)` or `SHOW CONSTRAINT(S)` statement whose keyword
+spacing the engine does not accept is rejected with `utils.ErrValidation` (exit
+code 6) and the guard rail's own message, before the query is handed to the
+engine. The message MUST name the cause: that the statement was read as a
+schema-introspection command, that exactly one space is required between the two
+keywords, and what the accepted spelling is. It MUST NOT be the engine's parse
+diagnostic, and this rejection MUST NOT surface with the exit code 1 that an
+engine parse failure carries (see
+[Error Handling and Exit Codes](#error-handling-and-exit-codes)). Exit code 1 for
+a genuine engine parse failure is unchanged; a statement rejected here never
+reaches the parser.
+
+**Rejecting is the specified behaviour; normalizing the spacing is not.**
+Groadmap MUST NOT rewrite the separator and execute the repaired statement.
+Normalizing would silently alter a query the user wrote, and it would make
+Groadmap the party that decides which Cypher the engine ought to have accepted.
+The accepted statement surface belongs to the engine (see
+[Dependency Maturity Risk](#dependency-maturity-risk), risk 3). The user is told
+what is wrong and rewrites the statement.
+
+**The exactness applies to this class alone and MUST NOT be carried over to the
+DDL class.** DDL matching stays tolerant of arbitrary whitespace between `CREATE`
+or `DROP` and `INDEX` or `CONSTRAINT`, and the asymmetry between the two is
+deliberate. The two classes are matched for opposite purposes, so being wider
+than the engine has opposite consequences for each. The guard rail matches DDL in
+order to **refuse** it: a match wider than the engine's can only refuse more than
+is strictly necessary, which is safe, whereas a narrower one would let a
+schema-mutating statement past the check that exists to stop it. The guard rail
+matches schema introspection in order to **admit** it: a match wider than the
+engine's admits statements the engine then refuses, which is the misdiagnosis
+described above. A reader who notices that the two matchers treat whitespace
+differently MUST NOT align them on that ground: narrowing the DDL matcher would
+reopen a guard-rail hole, and the difference is intentional.
+
+**The rule holds identically on every surface that accepts this class.**
+`graph query`, `graph search`, and the read-only web graph data endpoint apply one
+shared classification, so a statement rejected under this rule on one of them is
+rejected on all three. On the CLI the rejection is `utils.ErrValidation` and exit
+code 6, as above. The web graph data endpoint rejects the query before executing
+it and answers HTTP `400 Bad Request` with the failure class
+`invalid_keyword_spacing` and a message that likewise names the keyword spacing.
+That class is its own: the endpoint MUST NOT report the query as not read-only,
+because a `SHOW` statement is read-only whatever its spacing, and the spelling is
+the whole of the objection. `WEB.md § Query-Bar Error Handling` is canonical for
+the endpoint's failure classes and for the precedence between them, and
+`DATA_FORMATS.md § Graph View Data`, **Error Shape**, is canonical for the
+response body. Because the rejection precedes execution, the endpoint's own
+decision about injecting a node `LIMIT` into the query is never reached for such
+a statement.
+
+**The write subcommands are unaffected by this rule.** `graph create`,
+`graph update`, and `graph delete` reject a `SHOW` statement on its operation
+class, with that subcommand's own message, whatever its spacing — the objection
+that it carries none of the data-writing clauses they accept holds for the
+well-formed spelling too (see
+[Per-Subcommand Validation Rules](#per-subcommand-validation-rules), note 6).
+
+**This rule MUST be re-verified on every GoGraph upgrade.** It states a property
+of the pinned engine, so it falls under the clause-surface re-verification that
+[Dependency Maturity Risk](#dependency-maturity-risk) mitigation 5 requires before
+an upgrade is released. If a later engine recognises other spacing, this section
+and the classification MUST be updated together, so that the guard rail and the
+engine do not disagree about the same input again.
 
 #### Literal-Aware Normalization
 
@@ -683,6 +790,16 @@ Notes:
    without a `FOREACH` discriminator of its own, but it rests on that containment
    property rather than on the keyword `FOREACH`, so the property MUST be pinned
    by regression tests rather than left as an emergent consequence.
+8. **A schema-introspection command is accepted only in the spelling the engine
+   routes to its introspection parser.** `graph query` and `graph search` accept
+   the class only when exactly one space separates `SHOW` from the target
+   keyword. A `SHOW INDEX(ES)` or `SHOW CONSTRAINT(S)` statement written with any
+   other separator is rejected with `utils.ErrValidation` (exit code 6) and a
+   message naming the keyword spacing, before the query reaches the engine,
+   rather than admitted and left to fail at the parser (see
+   [Keyword Spacing in a Schema-Introspection Command](#keyword-spacing-in-a-schema-introspection-command)).
+   This changes nothing for the write subcommands, which reject the statement on
+   its class under note 6 whatever its spacing.
 
 ### Relationship Write Direction
 
@@ -898,6 +1015,7 @@ sentinel is introduced for the graph feature.
 | No query supplied (flag absent and stdin empty, or flag empty/whitespace) | `utils.ErrRequired` | 2 |
 | Query's operation class does not match the subcommand | `utils.ErrValidation` | 6 |
 | `graph update` writes a relationship bound by an incoming or undirected pattern (see [Relationship Write Direction](#relationship-write-direction)) | `utils.ErrValidation` | 6 |
+| `graph query` or `graph search` receives a `SHOW INDEX(ES)` / `SHOW CONSTRAINT(S)` statement whose keyword spacing the engine does not accept (see [Keyword Spacing in a Schema-Introspection Command](#keyword-spacing-in-a-schema-introspection-command)) | `utils.ErrValidation` | 6 |
 | Cypher fails to parse or execute in the engine | `utils.ErrDatabase` | 1 |
 | Graph store cannot be opened, recovered, read, or written (I/O, corruption, lock) | `utils.ErrDatabase` | 1 |
 | Successful execution | — | 0 |
@@ -906,8 +1024,9 @@ Rules:
 
 1. The guard-rail rejection (operation class mismatch) is detected before the
    graph store is opened for writing. A rejected query never mutates the graph.
-   The relationship-write-direction rejection is detected at the same point and
-   carries the same guarantee.
+   The relationship-write-direction rejection and the introspection
+   keyword-spacing rejection are detected at the same point and carry the same
+   guarantee; neither statement is ever handed to the engine.
 2. A Cypher parse or execution failure reported by the engine is wrapped as
    `utils.ErrDatabase` (exit code 1), consistent with treating the graph store as
    a database-class dependency. The error message names the subcommand and
@@ -1230,6 +1349,10 @@ Groadmap's usage model and expectations:
     exit code 6 regardless of keyword case and of the amount of whitespace
     between the two keywords: `create index`, `CREATE   INDEX`, `Drop Constraint`
     and their siblings are each rejected exactly as the canonical spelling is.
+    This whitespace tolerance belongs to the DDL class alone and MUST NOT be
+    carried over to the schema-introspection class, which is matched exactly
+    (see criterion 39 and
+    [Keyword Spacing in a Schema-Introspection Command](#keyword-spacing-in-a-schema-introspection-command)).
 28. For one relationship `(s:Spec)-[:VERIFIED_BY]->(v:Test)`, an outgoing
     `SET` writes and reads back from **either** endpoint: both
     `MATCH (s:Spec {key:'…'})-[e:VERIFIED_BY]->(v) SET e.last_commit = '…'` and
@@ -1292,6 +1415,22 @@ Groadmap's usage model and expectations:
     than the one [Engine Constructor by Path](#engine-constructor-by-path) gives
     for that path, or if an engine is constructed on a path that table does not
     list. This is what stops the table and the code from drifting apart again.
+39. A schema-introspection command is accepted with exactly one space between its
+    two keywords and rejected by the guard rail with any other spacing.
+    `rmp graph query -r <roadmap> --query "SHOW INDEXES"` exits 0 and returns the
+    schema listing (criterion 23), while the same command with two spaces, with a
+    tab, or with a line break in place of that single space fails with exit code 6
+    and a plain-text message that names the keyword spacing as the cause. The
+    rejected statement is never executed: the message is the guard rail's own, not
+    the engine's `unexpected "SHOW"` parse diagnostic, and the exit code is not the
+    1 that an engine parse failure carries. This holds for all four target keywords
+    (`INDEXES`, `INDEX`, `CONSTRAINTS`, `CONSTRAINT`), in any keyword case, under
+    both `graph query` and `graph search`, and on the web graph data endpoint,
+    which rejects such a query before executing it, answers HTTP `400 Bad Request`
+    with `kind` `invalid_keyword_spacing`, and does not report it as a query that
+    is not read-only (`WEB.md` Acceptance Criterion 151). Widening the introspection classification to
+    tolerate other spacing again MUST fail this criterion (see
+    [Keyword Spacing in a Schema-Introspection Command](#keyword-spacing-in-a-schema-introspection-command)).
 
 ## See Also
 

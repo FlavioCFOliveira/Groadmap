@@ -60,6 +60,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | `graph` command syntax / subcommands | `COMMANDS.md § Graph Management` |
 | Graph query result JSON / property-type mapping | `DATA_FORMATS.md § Graph Query Result` |
 | Cypher input via flag or stdin | `GRAPH.md § Cypher Input Source and Precedence` |
+| Keyword spacing the guard rail requires in a `SHOW INDEX(ES)` / `SHOW CONSTRAINT(S)` command, and why the DDL class stays whitespace-tolerant | `GRAPH.md § Keyword Spacing in a Schema-Introspection Command` |
 | Which Cypher engine constructor each graph path uses (read vs transactional write) and why a read opens no store | `GRAPH.md § Engine Constructor by Path` |
 | Graph query notifications on stderr (e.g. Cartesian-product warning) | `GRAPH.md § Query Notifications as Diagnostics` |
 | Graph store concurrency / recovery | `IMPLEMENTATION.md § Graph Store Concurrency` |

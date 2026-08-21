@@ -138,9 +138,10 @@ var (
 
 // graphQueryError classifies a query-bar failure so the handler can map it to a
 // distinct, in-page, read-only message (SPEC/WEB.md § Query-Bar Error Handling).
-// The three kinds are kept separate so the user understands what to fix: a
-// rejection (the query is not read-only), an invalid limit, or an execution
-// failure in the engine.
+// The four kinds are kept separate so the user understands what to fix: a
+// rejection (the query is not read-only), an invalid limit, a schema-
+// introspection command whose keyword spacing the engine does not accept, or an
+// execution failure in the engine.
 type graphQueryError struct {
 	// Reason is the user-facing message shown in place on the page.
 	Reason string
@@ -150,12 +151,21 @@ type graphQueryError struct {
 
 func (e *graphQueryError) Error() string { return e.Reason }
 
-// Query-bar failure kinds. They map 1:1 to the three distinct cases in
+// Query-bar failure kinds. They map 1:1 to the four distinct cases in
 // SPEC/WEB.md § Query-Bar Error Handling.
+//
+// graphErrInvalidKeywordSpacing is deliberately NOT folded into
+// graphErrNotReadOnly. A SHOW statement reads the schema and writes nothing
+// whatever its spacing, so answering not_read_only would publish a
+// classification the message printed beside it contradicts, and would tell a
+// client the query writes when it does not. The two failures also have different
+// fixes — one query must be rewritten to stop writing, the other only to close a
+// gap between two keywords (SPEC/WEB.md § Query-Bar Error Handling, case 10).
 const (
-	graphErrNotReadOnly  = "not_read_only" // query contains a writing or DDL clause
-	graphErrInvalidLimit = "invalid_limit" // limit not one of the six allowed values
-	graphErrExecution    = "execution"     // accepted as read-only but failed in the engine
+	graphErrNotReadOnly           = "not_read_only"           // query contains a writing or DDL clause
+	graphErrInvalidLimit          = "invalid_limit"           // limit not one of the six allowed values
+	graphErrInvalidKeywordSpacing = "invalid_keyword_spacing" // SHOW INDEX(ES)/CONSTRAINT(S) spelled with a separator the engine does not accept
+	graphErrExecution             = "execution"               // accepted as read-only but failed in the engine
 )
 
 // newGraphQueryError builds a classified query-bar error.
@@ -1829,7 +1839,11 @@ func applyGraphLimit(query string, limit int) string {
 //     which is exactly this class and nothing wider: every other SHOW the guard
 //     rail sees (SHOW DATABASES, SHOW FUNCTIONS, SHOW PROCEDURES, ...) is not
 //     part of it, and the engine rejects those at the parser whether or not a
-//     LIMIT is appended, so leaving them out changes nothing for them.
+//     LIMIT is appended, so leaving them out changes nothing for them. A SHOW
+//     command whose keyword spacing the engine does not accept is not part of
+//     the class either, and never reaches here: loadGraphView refuses it before
+//     the store is opened, so the question of whether it admits a LIMIT never
+//     arises (SPEC/GRAPH.md § Keyword Spacing in a Schema-Introspection Command).
 //  2. A standalone procedure call — first clause CALL, no top-level RETURN.
 //     See reLeadingCall and reTopLevelReturn for why the top-level RETURN is the
 //     whole of the boundary.
@@ -1857,9 +1871,10 @@ func admitsLimitClause(query, masked string) bool {
 // read-only via the shared cypherguard guard-rail BEFORE execution, and has a
 // LIMIT injected only when it has no top-level LIMIT of its own AND is a
 // statement form that admits a LIMIT clause. A query that contains any
-// writing or DDL clause, or an invalid limit, is returned as a classified
-// graphQueryError and is never executed; the store is not opened for it when
-// the failure is detectable before opening.
+// writing or DDL clause, a query that is a schema-introspection command whose
+// keyword spacing the engine does not accept, or an invalid limit, is returned
+// as a classified graphQueryError and is never executed; the store is not opened
+// for it when the failure is detectable before opening.
 //
 // A roadmap that has never used the graph command (no graph/ directory) is an
 // empty graph, not an error: loadGraphView returns empty arrays WITHOUT creating
@@ -1887,6 +1902,21 @@ func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphV
 	query := resolveGraphQuery(rawQuery)
 	if !cypherguard.IsReadOnly(query) {
 		return graphView{}, newGraphQueryError(graphErrNotReadOnly, "query rejected: not read-only")
+	}
+
+	// Keyword-spacing rejection, third and last in the precedence order the
+	// endpoint publishes (invalid_limit, then not_read_only, then
+	// invalid_keyword_spacing; SPEC/WEB.md § Query-Bar Error Handling, rule 6).
+	// It is decided AFTER the read-only check because the objection that a query
+	// writes outranks the objection that it is misspelled, and it carries its own
+	// kind because a SHOW statement is read-only at any spacing — reporting it as
+	// not read-only would be a false classification.
+	//
+	// The rejection precedes execution and precedes the node-limit injection, so
+	// applyGraphLimit is never reached for such a statement and the question of
+	// whether it admits a LIMIT clause never arises (see admitsLimitClause).
+	if reason, misspaced := cypherguard.IntrospectSpacingRejection(query); misspaced {
+		return graphView{}, newGraphQueryError(graphErrInvalidKeywordSpacing, "query rejected: "+reason)
 	}
 
 	roadmapDir, err := utils.GetRoadmapDir(name)

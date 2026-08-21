@@ -407,6 +407,276 @@ class TestGraphClauseSurface:
                 f"exit={code} stderr={stderr!r}")
 
 
+# ---- Schema-introspection keyword spacing (SPEC/GRAPH.md § Keyword Spacing
+# in a Schema-Introspection Command, Acceptance Criterion 39, rmp task #275) --
+
+# The four target keywords the schema-introspection class covers. Both
+# singulars appear beside both plurals because the guard rail spells the two
+# plurals with different patterns -- INDEX(ES)? against CONSTRAINTS? -- so a
+# regression in either spelling would drop one form while the other kept
+# working.
+INTROSPECT_KEYWORDS = ("INDEXES", "INDEX", "CONSTRAINTS", "CONSTRAINT")
+
+# Every separator that is not exactly one space, each of which the engine's
+# prefix test misses and its general grammar then refuses.
+MISSPACED_SEPARATORS = (
+    ("two spaces", "  "),
+    ("a tab", "\t"),
+    ("a line break", "\n"),
+    ("four spaces", "    "),
+)
+
+# The four fragments the guard rail's own refusal must carry: the class it read
+# the statement as, the rule, the name of the rule, and the accepted spelling
+# (appended per case, since it varies with the keyword).
+SPACING_MESSAGE_FRAGMENTS = (
+    "validation error",
+    "schema-introspection command",
+    "exactly one space",
+    "keyword spacing",
+)
+
+# Fragments the refusal must NEVER carry. The first three are the engine's own
+# parse diagnostic -- the misdiagnosis this criterion exists to remove, which
+# lists every clause keyword EXCEPT SHOW and so reads as though schema
+# introspection were unsupported. The fourth is the false classification: a SHOW
+# statement reads the schema and writes nothing whatever its spacing.
+FORBIDDEN_MESSAGE_FRAGMENTS = (
+    "cypher: parse",
+    'unexpected "SHOW"',
+    "database error",
+    "not read-only",
+)
+
+
+class TestGraphIntrospectionKeywordSpacing:
+    """SPEC/GRAPH.md § Keyword Spacing in a Schema-Introspection Command.
+
+    End-to-end half of Acceptance Criterion 39, against the compiled ./bin/rmp.
+
+    The defect (rmp task #275): `rmp graph query --query "SHOW  INDEXES"` --
+    two spaces -- exited 1 with
+
+        Error: database error: graph query failed: cypher: parse: unexpected
+        "SHOW" at 1:0, expected one of {CALL, YIELD, CREATE, DELETE, ...}
+
+    a list naming every clause keyword EXCEPT SHOW, while the identical
+    statement with one space returned its result set. The guard rail admitted
+    the statement because its introspection matcher tolerated arbitrary
+    whitespace between the two keywords, whereas GoGraph routes a statement to
+    its introspection parser by testing it against the literal prefixes
+    "SHOW INDEX" and "SHOW CONSTRAINT", each carrying exactly one space. The two
+    disagreed about the same input, and the user was handed a diagnostic that
+    named the wrong problem and offered no route to the real cause.
+
+    Why this belongs in THIS module rather than in a module of its own: the rule
+    narrows the very class Acceptance Criteria 23-25 establish here. It is the
+    same integration surface -- what the pinned engine accepts -- and the
+    boundary being asserted is the boundary between AC23 (one space: accepted,
+    executes, returns columns/rows) and AC39 (any other separator: refused by
+    the guard rail before the engine sees it).
+
+    The claim is a PAIRING, and each test asserts both halves against the same
+    keyword, because either half alone is satisfiable by a broken binary: a
+    build that had dropped schema introspection altogether would pass every
+    rejection assertion, and the pre-fix build passed every acceptance one.
+    """
+
+    def setup_method(self):
+        self.test = GroadmapTestBase()
+        self.test.setup()
+        self.roadmap = self.test.create_roadmap()
+        # A real store, so the accepted spelling genuinely executes against a
+        # graph rather than being accepted for the want of one.
+        self.test.run_cmd([
+            "graph", "create", "-r", self.roadmap, "--query",
+            "CREATE (:Spec {key:'schema-introspection-spacing', status:'draft'})",
+        ])
+
+    def teardown_method(self):
+        self.test.teardown()
+
+    # ---- helpers -----------------------------------------------------
+
+    def run(self, subcmd, query):
+        return self.test.run_cmd(
+            ["graph", subcmd, "-r", self.roadmap, "--query", query], check=False)
+
+    def assert_guard_rail_refusal(self, subcmd, query, accepted):
+        """Assert the guard rail itself refused query, with its own message."""
+        code, stdout, stderr = self.run(subcmd, query)
+        assert code == EXIT_GUARD_RAIL, (
+            f"AC39: `graph {subcmd}` must refuse {query!r} with exit "
+            f"{EXIT_GUARD_RAIL}; exit={code} stdout={stdout!r} stderr={stderr!r}")
+        # Exit 1 is the engine's (SPEC/GRAPH.md AC11) and is NOT this failure:
+        # a statement refused here never reaches the parser.
+        assert code != 1, (
+            f"AC39: {query!r} must not carry the exit code of an engine parse "
+            f"failure; the guard rail refuses it first")
+        for fragment in SPACING_MESSAGE_FRAGMENTS + (accepted,):
+            assert fragment in stderr, (
+                f"AC39: the refusal of {query!r} must name {fragment!r}; "
+                f"got {stderr!r}")
+        for fragment in FORBIDDEN_MESSAGE_FRAGMENTS:
+            assert fragment not in stderr, (
+                f"AC39: the refusal of {query!r} must never carry {fragment!r} "
+                f"-- that is the engine's misdiagnosis this criterion removes; "
+                f"got {stderr!r}")
+        # Refused before execution, so the command produced no result.
+        assert stdout.strip() == "", (
+            f"AC39: a refused query must write nothing to stdout; got {stdout!r}")
+
+    def assert_accepted_and_executed(self, subcmd, query):
+        """Assert query was accepted AND actually ran, returning a result set."""
+        code, stdout, stderr = self.run(subcmd, query)
+        assert code == EXIT_OK, (
+            f"AC39: `graph {subcmd}` must accept the single-space spelling "
+            f"{query!r}; exit={code} stderr={stderr!r}")
+        assert '"columns"' in stdout and '"rows"' in stdout, (
+            f"AC39: `graph {subcmd}` on {query!r} must return the columns/rows "
+            f"result shape, so the acceptance is not merely a zero exit; "
+            f"got {stdout!r}")
+
+    # ---- AC 39: one space accepted, every other separator refused ----
+
+    def test_ac39_one_space_accepted_every_other_separator_refused(self):
+        """The core criterion, for all four keywords under both read
+        subcommands: exactly one space executes, and two spaces, a tab and a
+        line break are each refused with exit 6 and the guard rail's message.
+
+        Both halves are asserted against the SAME keyword and the SAME
+        subcommand, so the pair differs in the separator and in nothing else.
+        """
+        for subcmd in ("query", "search"):
+            for keyword in INTROSPECT_KEYWORDS:
+                accepted = f"SHOW {keyword}"
+                self.assert_accepted_and_executed(subcmd, accepted)
+                for _label, sep in MISSPACED_SEPARATORS:
+                    self.assert_guard_rail_refusal(
+                        subcmd, f"SHOW{sep}{keyword}", accepted)
+
+    def test_ac39_refusal_folds_keyword_case(self):
+        """The rule folds case exactly as the engine's prefix test does, so a
+        lowercase or mixed-case statement is refused for its spacing rather than
+        admitted by a case accident -- and the message names the CANONICAL
+        spelling whatever case was typed, because it is built from the keywords
+        and never echoed back from the query.
+        """
+        cases = (
+            ("show  indexes", "SHOW INDEXES"),
+            ("Show\tIndex", "SHOW INDEX"),
+            ("sHoW\ncOnStRaInTs", "SHOW CONSTRAINTS"),
+            ("SHOW    constraint", "SHOW CONSTRAINT"),
+        )
+        for subcmd in ("query", "search"):
+            for query, accepted in cases:
+                self.assert_guard_rail_refusal(subcmd, query, accepted)
+
+    def test_ac39_only_the_keyword_separator_is_strict(self):
+        """The rule governs the separator between the two keywords and nothing
+        else about the statement's spacing.
+
+        The engine trims leading whitespace and leading comments before its
+        prefix test, and its SHOW parser is itself whitespace-tolerant once
+        reached, so whitespace BEFORE the statement and whitespace AFTER the
+        target keyword are both accepted. Refusing more than that separator
+        would be Groadmap inventing a grammar of its own, which the
+        specification forbids -- and would break spellings that work today.
+        """
+        for query in (
+            "   SHOW INDEXES",
+            "\n\t  SHOW CONSTRAINTS",
+            "// which indexes exist?\nSHOW INDEXES",
+            "/* schema check */ SHOW CONSTRAINTS",
+            "SHOW INDEXES   YIELD name",
+            "SHOW INDEXES YIELD name, type WHERE type = 'RANGE' RETURN name",
+        ):
+            for subcmd in ("query", "search"):
+                self.assert_accepted_and_executed(subcmd, query)
+
+    def test_ac39_a_comment_between_the_keywords_is_spacing(self):
+        """Classification runs on the masked normalization, which neutralizes a
+        comment to spaces, so a comment BETWEEN the two keywords reads as
+        spacing rather than as an absent separator -- and spacing is what the
+        engine refuses.
+        """
+        for subcmd in ("query", "search"):
+            self.assert_guard_rail_refusal(
+                subcmd, "SHOW /* which ones? */ INDEXES", "SHOW INDEXES")
+
+    def test_ac39_write_subcommands_still_object_on_class(self):
+        """The rule changed nothing for the write subcommands.
+
+        Their objection to a SHOW statement is that it carries none of the
+        data-writing clauses they accept, that objection is decided first, and
+        it holds at every spacing (AC24). Implementing the spacing rule in the
+        shared code path would have replaced each subcommand's own contract
+        message with a spacing complaint that says nothing about why
+        `graph create` refused a SHOW.
+        """
+        for subcmd, message in WRITE_SUBCOMMAND_MESSAGE.items():
+            for query in ("SHOW INDEXES", "SHOW  INDEXES", "SHOW\tCONSTRAINT",
+                          "SHOW\nINDEX"):
+                code, _stdout, stderr = self.run(subcmd, query)
+                assert code == EXIT_GUARD_RAIL, (
+                    f"AC39: `graph {subcmd}` must reject {query!r} with exit "
+                    f"{EXIT_GUARD_RAIL}; exit={code} stderr={stderr!r}")
+                assert message in stderr, (
+                    f"AC39: `graph {subcmd}` must reject {query!r} on its "
+                    f"operation class with {message!r}, at any spacing; "
+                    f"got {stderr!r}")
+                assert "keyword spacing" not in stderr, (
+                    f"AC39: `graph {subcmd}` must not answer a class objection "
+                    f"with a spacing complaint; got {stderr!r}")
+
+    def test_ac39_non_introspection_show_still_reaches_the_engine(self):
+        """The refusal is confined to statements that ARE schema-introspection
+        commands under some spacing.
+
+        A near miss on the keyword and a SHOW family the engine does not
+        implement must keep reaching the engine, which already names the real
+        problem for them (SPEC/GRAPH.md § Per-Subcommand Validation Rules note
+        3). A guard rail that started answering for those too would be inventing
+        a grammar, and would hide the engine's correct diagnostic behind an
+        incorrect one.
+        """
+        for query in ("SHOW  INDEXER", "SHOW  DATABASES", "SHOW  CONSTRAINTX"):
+            for subcmd in ("query", "search"):
+                code, _stdout, stderr = self.run(subcmd, query)
+                assert code == 1, (
+                    f"AC39: {query!r} is not a schema-introspection command "
+                    f"under any spacing, so it must reach the engine and carry "
+                    f"its exit code 1; exit={code} stderr={stderr!r}")
+                assert "keyword spacing" not in stderr, (
+                    f"AC39: the guard rail must not claim a spacing problem for "
+                    f"{query!r}; got {stderr!r}")
+
+    def test_ac39_refused_statement_never_reaches_the_engine(self):
+        """The refusal precedes execution and precedes the store open.
+
+        Asserted by observation rather than by inference: a misspaced SHOW
+        CONSTRAINTS is refused, and the store it would have read is afterwards
+        still readable and unchanged -- the seeded Spec node is still there and
+        the schema is still empty.
+        """
+        self.assert_guard_rail_refusal(
+            "query", "SHOW  CONSTRAINTS", "SHOW CONSTRAINTS")
+
+        result = self.test.run_cmd_json([
+            "graph", "query", "-r", self.roadmap, "--query",
+            "MATCH (s:Spec) RETURN s.key AS k"])
+        assert [row[0] for row in result["rows"]] == [
+            "schema-introspection-spacing"], (
+            f"AC39: a refused statement must leave the store untouched; "
+            f"got {result!r}")
+
+        result = self.test.run_cmd_json([
+            "graph", "query", "-r", self.roadmap, "--query", "SHOW CONSTRAINTS"])
+        assert result["rows"] == [], (
+            f"AC39: the refused statement must not have reached the engine; "
+            f"SHOW CONSTRAINTS lists {result['rows']!r}")
+
+
 # ---- Relationship Write Direction (SPEC/GRAPH.md § Relationship Write
 # Direction, Acceptance Criteria 28-30, rmp task #193) ---------------------
 
@@ -729,7 +999,8 @@ def _run_all():
     failures = []
     # Every class in the module, so a suite added below the runner is not
     # silently skipped.
-    for cls in (TestGraphClauseSurface, TestGraphRelationshipWriteDirection):
+    for cls in (TestGraphClauseSurface, TestGraphIntrospectionKeywordSpacing,
+                TestGraphRelationshipWriteDirection):
         for m in sorted(name for name in dir(cls) if name.startswith("test_")):
             label = f"{cls.__name__}.{m}"
             instance = cls()

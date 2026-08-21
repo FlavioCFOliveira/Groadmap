@@ -380,6 +380,13 @@ func maskCypherLiterals(query string) string {
 // subcmd. It returns ErrValidation when the class does not match, with a
 // message that names the subcommand and the expected class.
 //
+// The read subcommands carry one further acceptance rule, applied after the
+// class rule and only to them: a schema-introspection command is accepted only
+// in the keyword spelling the engine routes to its introspection parser
+// (SPEC/GRAPH.md § Keyword Spacing in a Schema-Introspection Command). It is a
+// rule about which statements the introspection class covers, which is why it
+// belongs to the guard rail rather than beside it.
+//
 // Classification runs on the literal-masked normalization of the query, never
 // on the raw string (SPEC/GRAPH.md § Literal-Aware Normalization): a clause
 // keyword appearing only inside a string literal, comment, or backtick
@@ -422,6 +429,25 @@ func validateGuardRail(subcmd, allowed, query string) error {
 		// Must be read-only.
 		if c.Write {
 			return fmt.Errorf("%w: graph %s accepts only %s queries", utils.ErrValidation, subcmd, allowed)
+		}
+		// Schema introspection is accepted only in the spelling the engine routes
+		// to its introspection parser: exactly one space between SHOW and the
+		// target keyword. Any other separator is refused HERE, with the guard
+		// rail's own message, instead of being admitted and left to die in the
+		// engine's parser under a diagnostic that lists every clause keyword
+		// except SHOW and so reads as though schema introspection were
+		// unsupported (SPEC/GRAPH.md § Keyword Spacing in a Schema-Introspection
+		// Command; § Per-Subcommand Validation Rules note 8).
+		//
+		// Placement carries two contracts. It is decided AFTER the class
+		// objections above, so a query that both writes and carries a badly
+		// spaced SHOW is rejected on its class, matching the precedence the web
+		// endpoint applies. And it is confined to this branch, so the write
+		// subcommands keep rejecting a SHOW on its class at any spacing (note 6)
+		// — their objection is that it carries none of the clauses they accept,
+		// which holds for the well-formed spelling too.
+		if reason, misspaced := cypherguard.IntrospectSpacingRejection(query); misspaced {
+			return fmt.Errorf("%w: graph %s: %s", utils.ErrValidation, subcmd, reason)
 		}
 	case "update":
 		// Must be write, must have SET/REMOVE, must not have CREATE/MERGE/DELETE.
