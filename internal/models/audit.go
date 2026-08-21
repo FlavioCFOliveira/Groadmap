@@ -57,7 +57,16 @@ const (
 	OpSprintReopen     AuditOperation = "SPRINT_REOPEN"
 	OpSprintAddTask    AuditOperation = "SPRINT_ADD_TASK"
 	OpSprintRemoveTask AuditOperation = "SPRINT_REMOVE_TASK"
-	OpSprintMoveTask   AuditOperation = "SPRINT_MOVE_TASK"
+
+	// The two directions of a move. `sprint move-tasks` changes two sprints,
+	// so it writes one row against each: OUT against the sprint the task left,
+	// IN against the sprint it entered, both naming the task in
+	// related_entity_id. The single SPRINT_MOVE_TASK operation they replace
+	// wrote one row against the destination alone, so the source sprint's
+	// history said nothing about losing the task (SPEC/DATABASE.md § One Row
+	// per Thing That Happened, rule 2).
+	OpSprintMoveTaskOut AuditOperation = "SPRINT_MOVE_TASK_OUT"
+	OpSprintMoveTaskIn  AuditOperation = "SPRINT_MOVE_TASK_IN"
 
 	// Sprint task ordering operations
 	OpSprintReorderTasks     AuditOperation = "SPRINT_REORDER_TASKS"
@@ -90,11 +99,13 @@ const (
 	// filter value the CLI rejects, which is the defect this group exists to
 	// prevent (SPEC/MODELS.md § Audit Operation, rule 3).
 	//
-	// TASK_STATUS_CHANGE is the only member today. The catalogue also marks
-	// TASK_UPDATE, SPRINT_UPDATE and SPRINT_MOVE_TASK legacy, but each of the
-	// three is still the operation its command writes; they move here when the
-	// per-field and per-direction operations that replace them land.
+	// TASK_STATUS_CHANGE and SPRINT_MOVE_TASK are the members today, in the
+	// order the catalogue publishes its group. The catalogue also marks
+	// TASK_UPDATE and SPRINT_UPDATE legacy, but each of the two is still the
+	// operation its command writes; they move here when the per-field
+	// operations that replace them land.
 	OpTaskStatusChange AuditOperation = "TASK_STATUS_CHANGE"
+	OpSprintMoveTask   AuditOperation = "SPRINT_MOVE_TASK"
 )
 
 // OperationCarriesCommitHash reports whether op is one of the two operations
@@ -110,6 +121,34 @@ const (
 // instead of relying on every call site to observe it.
 func OperationCarriesCommitHash(op AuditOperation) bool {
 	return op == OpTaskStatusDoing || op == OpTaskStatusCompleted
+}
+
+// OperationCarriesRelatedEntity reports whether op is one of the eight
+// operations of SPEC/DATABASE.md § The Two Entities of a Relational Operation,
+// the only ones whose row may name a counterpart entity in related_entity_id.
+//
+// It answers MAY, not MUST, and the difference is the whole reason the question
+// is asked per operation rather than per row. TASK_STATUS_BACKLOG has two
+// producing commands: from `sprint remove-tasks` the row names the sprint the
+// task left, and from `task stat <ids> BACKLOG` there is no second entity party
+// to the operation, so the column is NULL. Only the call site knows which of the
+// two wrote the row; what the operation alone decides is whether a counterpart
+// is admissible at all.
+//
+// That is exactly the invariant the catalogue states over the stored table — no
+// non-NULL related_entity_id outside these eight operations — so stating it once
+// here lets the single audit writer enforce it at the point of the INSERT,
+// rather than leaving it to the discipline of every call site.
+func OperationCarriesRelatedEntity(op AuditOperation) bool {
+	switch op {
+	case OpSprintAddTask, OpTaskStatusSprint,
+		OpSprintRemoveTask, OpTaskStatusBacklog,
+		OpSprintMoveTaskOut, OpSprintMoveTaskIn,
+		OpTaskAddDep, OpTaskRemoveDep:
+		return true
+	default:
+		return false
+	}
 }
 
 // ValidAuditOperations contains all valid audit operations, LEGACY ones
@@ -135,7 +174,8 @@ var ValidAuditOperations = []AuditOperation{
 	OpSprintReopen,
 	OpSprintAddTask,
 	OpSprintRemoveTask,
-	OpSprintMoveTask,
+	OpSprintMoveTaskOut,
+	OpSprintMoveTaskIn,
 	OpSprintReorderTasks,
 	OpSprintTaskMovePosition,
 	OpSprintTaskSwap,
@@ -148,8 +188,10 @@ var ValidAuditOperations = []AuditOperation{
 	OpSprintCommentUpdate,
 	OpSprintCommentDelete,
 
-	// LEGACY, listed last exactly as the catalogue publishes it.
+	// LEGACY, listed last exactly as the catalogue publishes its group, and in
+	// its order within the group.
 	OpTaskStatusChange,
+	OpSprintMoveTask,
 }
 
 // IsValidAuditOperation checks if a string is a valid audit operation.

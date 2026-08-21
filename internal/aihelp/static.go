@@ -241,6 +241,10 @@ var auditOperationDescriptions = map[models.AuditOperation]string{
 	models.OpSprintAddTask:    "Task added to sprint.",
 	models.OpSprintRemoveTask: "Task removed from sprint.",
 	models.OpSprintMoveTask:   "Task moved between sprints.",
+	models.OpSprintMoveTaskOut: "Task moved out of the source sprint via `sprint move-tasks`; one row per " +
+		"task, against the source sprint, naming the task in `related_entity_id`.",
+	models.OpSprintMoveTaskIn: "Task moved into the destination sprint via `sprint move-tasks`; one row " +
+		"per task, against the destination sprint, naming the task in `related_entity_id`.",
 
 	// Sprint task ordering. These three are the clearest case against
 	// inferring a description from the name.

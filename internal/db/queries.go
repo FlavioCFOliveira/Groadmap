@@ -951,6 +951,26 @@ func (db *DB) GetNextTasks(ctx context.Context, limit int) ([]models.Task, error
 
 // ==================== TASK DEPENDENCY QUERIES ====================
 
+// auditDependencyPair is one side of the mirrored pair of audit entries a
+// dependency change writes: the task whose history the entry belongs to, and
+// the other task of the pair, which the entry names.
+type auditDependencyPair struct {
+	entity  int
+	related int
+}
+
+// auditDependencyPairs returns the two sides of a dependency change in the
+// order they are written, dependent first. Both TASK_ADD_DEP and
+// TASK_REMOVE_DEP use the same arrangement (SPEC/COMMANDS.md § Remove Task
+// Dependency), so it is spelled out once rather than twice with a transposition
+// that has to be read carefully to be believed.
+func auditDependencyPairs(taskID, depID int) [2]auditDependencyPair {
+	return [2]auditDependencyPair{
+		{entity: taskID, related: depID},
+		{entity: depID, related: taskID},
+	}
+}
+
 // AddTaskDependencyWithAudit adds a dependency and writes audit entries in a single transaction.
 func (db *DB) AddTaskDependencyWithAudit(ctx context.Context, taskID, depID int) error {
 	// Self-dependency check and circular check run before opening the
@@ -977,8 +997,14 @@ func (db *DB) AddTaskDependencyWithAudit(ctx context.Context, taskID, depID int)
 			return fmt.Errorf("inserting task dependency: %w", err)
 		}
 
-		for _, auditTaskID := range []int{taskID, depID} {
-			if err := LogAuditTx(tx, models.OpTaskAddDep, models.EntityTask, auditTaskID, now); err != nil {
+		// Two entries, one against each task of the pair, each naming the other
+		// one. Naming the counterpart is what makes an entry state WHICH
+		// dependency it concerns: without it the two entries of one invocation
+		// are indistinguishable from the two of any other (SPEC/COMMANDS.md §
+		// Add Task Dependency).
+		for _, pair := range auditDependencyPairs(taskID, depID) {
+			if err := LogAuditTx(tx, models.OpTaskAddDep, models.EntityTask, pair.entity, now,
+				WithRelatedEntity(pair.related)); err != nil {
 				return err
 			}
 		}
@@ -1006,8 +1032,10 @@ func (db *DB) RemoveTaskDependencyWithAudit(ctx context.Context, taskID, depID i
 			return fmt.Errorf("%w: dependency from task #%d to task #%d not found", utils.ErrNotFound, taskID, depID)
 		}
 
-		for _, auditTaskID := range []int{taskID, depID} {
-			if err := LogAuditTx(tx, models.OpTaskRemoveDep, models.EntityTask, auditTaskID, now); err != nil {
+		// The same mirrored pair the addition writes; see auditDependencyPairs.
+		for _, pair := range auditDependencyPairs(taskID, depID) {
+			if err := LogAuditTx(tx, models.OpTaskRemoveDep, models.EntityTask, pair.entity, now,
+				WithRelatedEntity(pair.related)); err != nil {
 				return err
 			}
 		}
@@ -1750,14 +1778,28 @@ func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int)
 			return err
 		}
 
-		// Audit: one SPRINT_ADD_TASK entry per task, written INSIDE this same
-		// transaction so a committed membership change can never exist without
-		// its audit record. Writing the audit in a separate post-commit call
-		// would leave a window where the insert is durable but the audit is not
-		// (SPEC/DATABASE.md § Transactional Atomicity Guarantees #4;
-		// ARCHITECTURE.md § Security Guarantees).
-		for range taskIDs {
-			if err := LogAuditTx(tx, models.OpSprintAddTask, models.EntitySprint, sprintID, now); err != nil {
+		// Audit: two entries per task, one against each entity the addition
+		// changes, written INSIDE this same transaction so a committed
+		// membership change can never exist without its audit record. Writing
+		// the audit in a separate post-commit call would leave a window where
+		// the insert is durable but the audit is not (SPEC/DATABASE.md §
+		// Transactional Atomicity Guarantees #4; ARCHITECTURE.md § Security
+		// Guarantees).
+		//
+		// The pair is mirrored: SPRINT_ADD_TASK belongs to the sprint's history
+		// and names the task, TASK_STATUS_SPRINT belongs to the task's history
+		// and names the sprint, and both carry the one `now` this transaction
+		// captured. Transposed ids and a shared performed_at are what let a
+		// reader of either entity's history learn the counterpart without
+		// consulting the other's (SPEC/DATABASE.md § The Two Entities of a
+		// Relational Operation).
+		for _, taskID := range taskIDs {
+			if err := LogAuditTx(tx, models.OpSprintAddTask, models.EntitySprint, sprintID, now,
+				WithRelatedEntity(taskID)); err != nil {
+				return err
+			}
+			if err := LogAuditTx(tx, models.OpTaskStatusSprint, models.EntityTask, taskID, now,
+				WithRelatedEntity(sprintID)); err != nil {
 				return err
 			}
 		}
@@ -1849,12 +1891,30 @@ func (db *DB) MoveTasksBetweenSprints(ctx context.Context, fromID, toID int, tas
 		// Intentionally NOT updating tasks.status: the task keeps whatever
 		// status it had (BACKLOG/SPRINT/DOING/TESTING/COMPLETED).
 
-		// Audit: one SPRINT_MOVE_TASK entry per task, written INSIDE this same
-		// transaction as the re-parenting so a committed move can never exist
-		// without its audit record (SPEC/DATABASE.md § Transactional Atomicity
-		// Guarantees #5; ARCHITECTURE.md § Security Guarantees).
-		for range taskIDs {
-			if err := LogAuditTx(tx, models.OpSprintMoveTask, models.EntitySprint, toID, now); err != nil {
+		// Audit: two entries per task, one against each sprint the move
+		// changes, written INSIDE this same transaction as the re-parenting so
+		// a committed move can never exist without its audit record
+		// (SPEC/DATABASE.md § Transactional Atomicity Guarantees #5;
+		// ARCHITECTURE.md § Security Guarantees).
+		//
+		// Both name the task, and which sprint a row belongs to is what the
+		// direction in its operation states. The single SPRINT_MOVE_TASK entry
+		// these replace was written against the destination alone, so the
+		// source sprint's history had no record of losing the task and no entry
+		// named the task at all; SPRINT_MOVE_TASK is now LEGACY and no path
+		// writes it (SPEC/DATABASE.md § One Row per Thing That Happened,
+		// rule 2).
+		//
+		// No TASK_STATUS_* entry accompanies them: the move preserves each
+		// task's status, so nothing happened to the task's own lifecycle for a
+		// status entry to record (SPEC/COMMANDS.md § Task Assignment).
+		for _, taskID := range taskIDs {
+			if err := LogAuditTx(tx, models.OpSprintMoveTaskOut, models.EntitySprint, fromID, now,
+				WithRelatedEntity(taskID)); err != nil {
+				return err
+			}
+			if err := LogAuditTx(tx, models.OpSprintMoveTaskIn, models.EntitySprint, toID, now,
+				WithRelatedEntity(taskID)); err != nil {
 				return err
 			}
 		}
@@ -1919,17 +1979,12 @@ func (db *DB) RemoveTasksFromSprint(ctx context.Context, taskIDs []int) error {
 // to an operation that does not carry one.
 var ErrAuditCommitHashNotAllowed = errors.New("audit operation does not carry a commit hash")
 
+// ErrAuditRelatedEntityNotAllowed is returned when a caller names a counterpart
+// entity on an operation that has no counterpart.
+var ErrAuditRelatedEntityNotAllowed = errors.New("audit operation does not carry a related entity")
+
 // auditOptionalColumns holds the two nullable columns of an audit row, both NULL
 // unless a caller sets them.
-//
-// relatedEntityID has no setter yet and is therefore always NULL: the column is
-// written on every INSERT so that the writer already has the shape, but the
-// eight operation-and-command combinations that fill it — the two sides of a
-// sprint membership change, the two sprint rows of a move, and the two rows of a
-// dependency — are populated by the task that reworks those call sites
-// (SPEC/DATABASE.md § The Two Entities of a Relational Operation). Its exported
-// option constructor lands with them, so internal/db grows no exported helper
-// that no production code reaches.
 type auditOptionalColumns struct {
 	relatedEntityID *int
 	commitHash      *string
@@ -1960,6 +2015,24 @@ func WithCommitHash(hash string) AuditOption {
 	return func(row *auditOptionalColumns) { row.commitHash = &hash }
 }
 
+// WithRelatedEntity names the counterpart entity of the operation that produced
+// the row: the task a sprint row is about, or the sprint a task row is about,
+// or the other task of a dependency pair (SPEC/DATABASE.md § The Two Entities of
+// a Relational Operation).
+//
+// It is what makes two rows of the same operation distinguishable. Without it
+// every SPRINT_ADD_TASK row of a sprint reads identically and none of them says
+// which task was added.
+//
+// Only the eight operations of that section accept it; see LogAuditTx. Passing
+// it is a decision of the call site even among those eight, because the same
+// operation can be written by a command that has a counterpart and by one that
+// has none: `sprint remove-tasks` names the sprint on its TASK_STATUS_BACKLOG
+// row and `task stat <ids> BACKLOG` names nothing on its own.
+func WithRelatedEntity(id int) AuditOption {
+	return func(row *auditOptionalColumns) { row.relatedEntityID = &id }
+}
+
 // LogAuditTx inserts an audit row inside an existing transaction. It is the
 // only audit writer in the package, and every transactional site that writes
 // an audit row alongside a domain mutation calls it rather than spelling out
@@ -1974,12 +2047,11 @@ func WithCommitHash(hash string) AuditOption {
 // to live here, reachable only from test fixtures; it is gone, and the
 // fixtures now seed through this function, which is the path production runs.
 //
-// Being the only writer is also what makes the commit-hash rule enforceable
-// rather than merely stated. SPEC/DATABASE.md § The Commit Hash of an Audit
-// Entry allows the column on exactly two operations and forbids it on the other
-// 41, and the table-wide invariant it states — no non-NULL commit_hash outside
-// TASK_STATUS_DOING and TASK_STATUS_COMPLETED — is checked here, once, instead
-// of being left to the discipline of each call site.
+// Being the only writer is also what makes both column rules enforceable rather
+// than merely stated. SPEC/DATABASE.md allows commit_hash on exactly two
+// operations and related_entity_id on exactly eight, and forbids each column
+// everywhere else; both table-wide invariants are checked here, once, instead of
+// being left to the discipline of each call site.
 func LogAuditTx(tx *sql.Tx, op models.AuditOperation, entityType models.EntityType, entityID int, performedAt string, opts ...AuditOption) error {
 	var row auditOptionalColumns
 	for _, opt := range opts {
@@ -1988,6 +2060,9 @@ func LogAuditTx(tx *sql.Tx, op models.AuditOperation, entityType models.EntityTy
 
 	if row.commitHash != nil && !models.OperationCarriesCommitHash(op) {
 		return fmt.Errorf("%w: %s", ErrAuditCommitHashNotAllowed, op)
+	}
+	if row.relatedEntityID != nil && !models.OperationCarriesRelatedEntity(op) {
+		return fmt.Errorf("%w: %s", ErrAuditRelatedEntityNotAllowed, op)
 	}
 
 	// The nullable columns are bound as *int and *string: database/sql converts

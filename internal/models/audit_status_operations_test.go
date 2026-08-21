@@ -121,13 +121,27 @@ func TestLegacyStatusChangeStaysValidAndUnwritten(t *testing.T) {
 		}
 	}
 
-	// It is published last, as the catalogue publishes its LEGACY group.
-	last := ValidAuditOperations[len(ValidAuditOperations)-1]
-	if last != OpTaskStatusChange {
-		t.Errorf("ValidAuditOperations ends with %s; the LEGACY group comes last, as it does in the "+
-			"catalogue", last)
+	// The LEGACY group is published last, as the catalogue publishes it, and in
+	// the catalogue's order within the group. Asserting the whole tail rather
+	// than only its first member is what keeps the property true as the group
+	// grows: a legacy value appended anywhere else would still be readable, but
+	// the enum would no longer read as the catalogue reads.
+	tail := ValidAuditOperations[len(ValidAuditOperations)-len(legacyAuditOperations):]
+	for i, want := range legacyAuditOperations {
+		if tail[i] != want {
+			t.Errorf("the LEGACY tail of ValidAuditOperations is %v, want %v; the group comes last, as "+
+				"it does in the catalogue", tail, legacyAuditOperations)
+			break
+		}
 	}
 }
+
+// legacyAuditOperations are the members of the catalogue's LEGACY group that
+// internal/models has already retired — readable, never written — in the order
+// the catalogue publishes them. TASK_UPDATE and SPRINT_UPDATE are marked legacy
+// by the catalogue too, but each is still the operation its command writes, so
+// neither is here yet.
+var legacyAuditOperations = []AuditOperation{OpTaskStatusChange, OpSprintMoveTask}
 
 // TestOperationCarriesCommitHash pins the two-operation answer that the single
 // audit writer enforces at the point of the INSERT. The check is exhaustive over

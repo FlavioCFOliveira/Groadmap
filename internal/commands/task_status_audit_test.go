@@ -38,6 +38,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -155,6 +156,12 @@ func TestTaskStat_EveryTransitionWritesItsOwnDestinationOperation(t *testing.T) 
 	id := f.taskIDs[0]
 	before := len(auditRecordsFor(t, f.database, id))
 
+	forbiddenBefore := map[models.AuditOperation]int{}
+	for _, op := range []models.AuditOperation{models.OpTaskStatusChange, models.OpTaskStatusSprint} {
+		forbiddenBefore[op] = countRows(t, f.database,
+			`SELECT COUNT(*) FROM audit WHERE operation = ?`, string(op))
+	}
+
 	// SPRINT → DOING → TESTING → COMPLETED → BACKLOG: every transition the
 	// state machine allows from a sprint member, in one pass.
 	f.stat(t, itoa(id), "DOING", "--commit-open", commitWorkStarted)
@@ -185,11 +192,16 @@ func TestTaskStat_EveryTransitionWritesItsOwnDestinationOperation(t *testing.T) 
 	}
 
 	// Neither the retired operation nor the one this command cannot produce.
+	// The count is taken over the whole table rather than over this task's
+	// history, because a stray entry against any entity is the defect; the
+	// TASK_STATUS_SPRINT baseline is not zero, since the fixture's
+	// `sprint add-tasks` legitimately wrote one entry per seeded task, so what
+	// is asserted is that the four transitions added none.
 	for _, forbidden := range []models.AuditOperation{models.OpTaskStatusChange, models.OpTaskStatusSprint} {
 		if n := countRows(t, f.database,
-			`SELECT COUNT(*) FROM audit WHERE operation = ?`, string(forbidden)); n != 0 {
+			`SELECT COUNT(*) FROM audit WHERE operation = ?`, string(forbidden)); n != forbiddenBefore[forbidden] {
 			t.Errorf("`task stat` wrote %d %s entries; it writes neither (SPEC/COMMANDS.md § Change "+
-				"Status (stat), acceptance criterion 4)", n, forbidden)
+				"Status (stat), acceptance criterion 4)", n-forbiddenBefore[forbidden], forbidden)
 		}
 	}
 }
@@ -691,6 +703,12 @@ func TestAudit_LegacyStatusChangeIsNeverWrittenButStaysReachable(t *testing.T) {
 // SPEC/DATA_FORMATS.md § Audit Entry requires: seven keys on every entry, the
 // two nullable ones present with the value null rather than omitted, so an agent
 // can parse an entry without per-operation knowledge.
+//
+// The history read here is mixed on purpose. It holds the TASK_STATUS_SPRINT
+// entry the fixture's `sprint add-tasks` wrote, which names the sprint, and the
+// `task stat` entries, which name nothing, so both renderings of the same key
+// are asserted in one pass — an entry shape that omitted the key when it is
+// null, or one that rendered the absent counterpart as 0, fails here.
 func TestAuditEntry_BothNullableKeysAreAlwaysPresent(t *testing.T) {
 	f := setupCommitTrackingRoadmap(t, "status-audit-json-shape")
 
@@ -726,11 +744,16 @@ func TestAuditEntry_BothNullableKeysAreAlwaysPresent(t *testing.T) {
 					"with the value null (SPEC/DATA_FORMATS.md § Audit Entry)", i, key)
 			}
 		}
-		// related_entity_id is null on every `task stat` entry, and
-		// commit_hash is null on the TESTING one, so both null renderings are
-		// exercised here rather than assumed.
-		if got := string(entry["related_entity_id"]); got != "null" {
-			t.Errorf("entry %d renders related_entity_id as %s, want null", i, got)
+		// related_entity_id is null on every `task stat` entry and carries the
+		// sprint id on the one `sprint add-tasks` wrote, so the key is
+		// exercised in both renderings here rather than assumed in either.
+		want := "null"
+		if string(entry["operation"]) == strconv.Quote(string(models.OpTaskStatusSprint)) {
+			want = itoa(f.sprintID)
+		}
+		if got := string(entry["related_entity_id"]); got != want {
+			t.Errorf("entry %d (%s) renders related_entity_id as %s, want %s",
+				i, entry["operation"], got, want)
 		}
 	}
 
@@ -750,7 +773,11 @@ func TestAuditEntry_BothNullableKeysAreAlwaysPresent(t *testing.T) {
 // them, which is what happens when a scan target is hoisted out of the row loop.
 //
 // The assertion is per entry over a mixed result, so a reader that shared one
-// backing value across the rows fails on the entries that must be null.
+// backing value across the rows fails on the entries that must be null. Both
+// nullable columns are round-tripped against what SQLite actually holds:
+// related_entity_id is non-NULL on the TASK_STATUS_SPRINT entry the fixture's
+// `sprint add-tasks` wrote and NULL on every `task stat` entry, so the column
+// is read back in both states.
 func TestGetAuditEntries_RoundTripsBothNullableColumns(t *testing.T) {
 	f := setupCommitTrackingRoadmap(t, "status-audit-read-path")
 
@@ -772,7 +799,7 @@ func TestGetAuditEntries_RoundTripsBothNullableColumns(t *testing.T) {
 		byID[r.id] = r
 	}
 
-	nonNil := 0
+	nonNil, named := 0, 0
 	for i := range entries {
 		want, ok := byID[entries[i].ID]
 		if !ok {
@@ -794,15 +821,30 @@ func TestGetAuditEntries_RoundTripsBothNullableColumns(t *testing.T) {
 			}
 			nonNil++
 		}
-		if entries[i].RelatedEntityID != nil {
-			t.Errorf("entry %d reports related_entity_id %d; no `task stat` entry names a counterpart",
-				want.id, *entries[i].RelatedEntityID)
+		switch {
+		case want.relatedEntityID.Valid && entries[i].RelatedEntityID == nil:
+			t.Errorf("entry %d stores related_entity_id %d but the read path reports nil",
+				want.id, want.relatedEntityID.Int64)
+		case !want.relatedEntityID.Valid && entries[i].RelatedEntityID != nil:
+			t.Errorf("entry %d stores NULL in related_entity_id but the read path reports %d; no "+
+				"`task stat` entry names a counterpart", want.id, *entries[i].RelatedEntityID)
+		case want.relatedEntityID.Valid:
+			if int64(*entries[i].RelatedEntityID) != want.relatedEntityID.Int64 {
+				t.Errorf("entry %d stores related_entity_id %d but the read path reports %d",
+					want.id, want.relatedEntityID.Int64, *entries[i].RelatedEntityID)
+			}
+			named++
 		}
 	}
 
-	// The history holds both kinds, so neither branch above passed vacuously.
+	// The history holds both kinds of each column, so no branch above passed
+	// vacuously: two entries carry a hash, and exactly one names a counterpart.
 	if nonNil != 2 {
 		t.Errorf("the history of a task taken to COMPLETED reported %d entries carrying a hash, want 2 "+
 			"(the entry into DOING and the entry into COMPLETED)", nonNil)
+	}
+	if named != 1 {
+		t.Errorf("the history reported %d entries naming a counterpart, want 1 (the TASK_STATUS_SPRINT "+
+			"entry `sprint add-tasks` wrote, which names the sprint the task entered)", named)
 	}
 }

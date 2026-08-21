@@ -270,10 +270,11 @@ func sprintAddTasks(args []string) error {
 		}
 	}
 
-	// AddTasksToSprint writes the membership change AND its SPRINT_ADD_TASK
-	// audit entries inside one transaction, so the audit can never be lost
-	// after a committed insert (SPEC/DATABASE.md § Transactional Atomicity
-	// Guarantees #4).
+	// AddTasksToSprint writes the membership change AND the mirrored pair of
+	// audit entries it produces — SPRINT_ADD_TASK against the sprint naming the
+	// task, TASK_STATUS_SPRINT against the task naming the sprint — inside one
+	// transaction, so the audit can never be lost after a committed insert
+	// (SPEC/DATABASE.md § Transactional Atomicity Guarantees #4).
 	return database.AddTasksToSprint(ctx, sprintID, taskIDs)
 }
 
@@ -370,7 +371,28 @@ func sprintRemoveTasks(args []string) error {
 				return err
 			}
 
-			if err := db.LogAuditTx(tx, models.OpSprintRemoveTask, models.EntitySprint, sprintID, now); err != nil {
+			// Audit: two entries per task, one against each entity the removal
+			// changes, mirroring each other. SPRINT_REMOVE_TASK belongs to the
+			// sprint's history and names the task; TASK_STATUS_BACKLOG belongs
+			// to the task's history and names the sprint it left, which is what
+			// `audit history TASK <id>` needs in order to say more than that the
+			// task returned to the backlog. Both carry the one `now` captured
+			// above, so every entry of this invocation shares a performed_at
+			// (SPEC/DATABASE.md § The Two Entities of a Relational Operation).
+			//
+			// The task entry is written for every task named on the command
+			// line, including one already in BACKLOG status while remaining a
+			// sprint member: the entry records the command's effect on the task,
+			// so the count is always exactly one per task (SPEC/COMMANDS.md §
+			// Task Assignment). The same operation written by
+			// `task stat <ids> BACKLOG` names no counterpart, because no sprint
+			// is party to that invocation.
+			if err := db.LogAuditTx(tx, models.OpSprintRemoveTask, models.EntitySprint, sprintID, now,
+				db.WithRelatedEntity(taskID)); err != nil {
+				return err
+			}
+			if err := db.LogAuditTx(tx, models.OpTaskStatusBacklog, models.EntityTask, taskID, now,
+				db.WithRelatedEntity(sprintID)); err != nil {
 				return err
 			}
 		}
@@ -441,9 +463,10 @@ func sprintMoveTasks(args []string) error {
 	// preserving each task's status. Unlike AddTasksToSprint, this neither
 	// forces status to SPRINT nor applies the destination's max-tasks cap;
 	// it also validates that every task is currently in the source sprint.
-	// MoveTasksBetweenSprints writes the re-parenting AND its SPRINT_MOVE_TASK
-	// audit entries inside one transaction, so the audit can never be lost
-	// after a committed move (SPEC/DATABASE.md § Transactional Atomicity
-	// Guarantees #5).
+	// MoveTasksBetweenSprints writes the re-parenting AND the two audit entries
+	// it produces — SPRINT_MOVE_TASK_OUT against the source sprint and
+	// SPRINT_MOVE_TASK_IN against the destination, both naming the task —
+	// inside one transaction, so the audit can never be lost after a committed
+	// move (SPEC/DATABASE.md § Transactional Atomicity Guarantees #5).
 	return database.MoveTasksBetweenSprints(ctx, fromID, toID, taskIDs)
 }
