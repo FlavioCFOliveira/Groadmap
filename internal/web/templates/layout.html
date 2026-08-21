@@ -180,7 +180,8 @@
   Partial; Acceptance Criteria 8/12/13/38/40).
 
   Dot is a web.sprintCard: .Name (roadmap), .Sprint (models.Sprint), and
-  .TaskCount (the sprint's loaded member-task count). The card shows, in order:
+  .TaskCount (the sprint's own total member-task count, which the sprint record
+  carries; the page loads no member task). The card shows, in order:
   a header ("Sprint #<ID>" with a status badge), the sprint description (authored
   line breaks preserved via the .sprint-description CSS; SPEC/WEB.md § Frontend
   Rules, rule 6, and Acceptance Criterion 32), and a footer task count. The whole

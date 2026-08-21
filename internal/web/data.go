@@ -164,10 +164,11 @@ func newGraphQueryError(kind, reason string) *graphQueryError {
 
 // sprintsData is the view model handed to the roadmap sprints template (the
 // roadmap's landing page). It presents the roadmap's sprints grouped into the
-// three tabs (Próximos / Actual / Concluídos), plus the relationships modelled
-// in the data: sprint membership with in-sprint order. It is read-only;
-// nothing here is persisted. The sprints page does NOT render the full tasks
-// table (SPEC/WEB.md § Roadmap Sprints Page).
+// three tabs (Próximos / Actual / Concluídos). It is read-only; nothing here is
+// persisted. The sprints page does NOT render the full tasks table, and it
+// carries no member task: every sprint is a card whose only derived value is the
+// footer's total task count, which the sprint record itself already carries
+// (SPEC/WEB.md § Roadmap Sprints Page).
 //
 // The three sprint slices are disjoint partitions of the roadmap's sprints by
 // status (SPEC/WEB.md § Roadmap Sprints Page):
@@ -661,24 +662,32 @@ func (c sprintCompletion) Line() string {
 		c.Pct, c.Pending, c.InProgress, c.Completed, c.Total)
 }
 
-// sprintView pairs a sprint with its ordered member tasks. Tasks preserves
-// the planned in-sprint execution order (sprint_tasks position order) and
-// carries each task's full record, so the Actual tab and the sprint page can
-// show every task's status without a second lookup. Summary is the precomputed
-// completion summary the Actual tab's shared sub-template renders. Field order
-// places the slice header before the embedded Sprint value to keep the
-// pointer-scan prefix minimal (govet fieldalignment).
+// sprintView is one sprint as the Roadmap Sprints Page presents it: the sprint
+// record and nothing else. The page renders every sprint as a card with no
+// member tasks on it, so it holds no member-task slice and no completion
+// summary — the card's only derived value is the footer count, and the sprint
+// record already carries it as TaskCount (SPEC/WEB.md § Roadmap Sprints Page;
+// § Tasks and Sprints from SQLite).
+//
+// The member tasks and the completion summary belong to the single Roadmap
+// Sprint Page, which loads them into sprintPageData and renders them through the
+// sprintDetail sub-template.
 type sprintView struct {
-	Tasks   []models.Task
-	Sprint  models.Sprint
-	Summary sprintCompletion
+	Sprint models.Sprint
 }
 
 // Card returns the context object the shared "sprintCard" partial consumes for
 // one sprint on any tab of the Roadmap Sprints Page (SPEC/WEB.md § Shared
 // Sprint-Card Partial). The roadmap Name is threaded through so the partial can
-// build the card's link to the sprint's own page, and TaskCount is the loaded
-// member-task count rendered in the card footer.
+// build the card's link to the sprint's own page, and TaskCount is the sprint's
+// own total member-task count rendered in the card footer.
+//
+// TaskCount is read from the sprint record rather than counted from a loaded
+// member-task slice: every read that returns a Sprint populates it, the listing
+// included, resolving the membership of all sprints in ONE grouped read
+// (SPEC/MODELS.md § Sprint; SPEC/DATABASE.md § Read the Membership of Many
+// Sprints (Grouped)). The page therefore pays nothing per sprint for the number
+// its footer shows.
 //
 // The value receiver is deliberate: html/template invokes this method on a
 // (copied) range element, and a pointer receiver would not be in the value's
@@ -686,7 +695,7 @@ type sprintView struct {
 //
 //nolint:gocritic // value receiver required by html/template (see comment above)
 func (v sprintView) Card(name string) sprintCard {
-	return sprintCard{Name: name, Sprint: v.Sprint, TaskCount: len(v.Tasks)}
+	return sprintCard{Name: name, Sprint: v.Sprint, TaskCount: v.Sprint.TaskCount}
 }
 
 // sprintCard is the single context shape the shared "sprintCard" partial
@@ -917,10 +926,31 @@ type tasksSource interface {
 }
 
 // sprintTaskSource resolves a sprint's member tasks in the planned in-sprint
-// execution order. Both the sprints landing page and the single sprint page read
-// through it.
+// execution order. It is the read surface of the single Roadmap Sprint Page,
+// which is the only page that renders member tasks.
 type sprintTaskSource interface {
 	GetSprintTasksFull(ctx context.Context, sprintID int, status *models.TaskStatus, orderByPriority bool) ([]models.Task, error)
+}
+
+// sprintsSource is the complete read surface of the Roadmap Sprints Page: the
+// roadmap's sprint listing, and nothing else. Naming it separates opening the
+// database (loadSprints) from reading it (readSprints), so the page's queries
+// can be counted against a real database.
+//
+// The listing alone is the whole surface because it already carries every value
+// the page renders, the card footer's task count included: ListSprints resolves
+// the membership of all the sprints it returns in ONE grouped read, so TaskCount
+// is populated on every sprint it hands back (SPEC/MODELS.md § Sprint;
+// SPEC/COMMANDS.md § List Sprints).
+//
+// The member-task read (db.GetSprintTasksFull) is deliberately absent, exactly
+// as the per-task comment listing is absent from tasksSource: it is the read
+// that would make the page's cost grow with the number of sprints, and the page
+// renders no member task at all (SPEC/WEB.md § Tasks and Sprints from SQLite).
+// Its absence means the sprints page cannot express that pattern through the
+// dependency it is handed.
+type sprintsSource interface {
+	ListSprints(ctx context.Context, status *models.SprintStatus) ([]models.Sprint, error)
 }
 
 // sprintSource is the complete read surface of the single Roadmap Sprint Page:
@@ -960,18 +990,11 @@ func loadRoadmapNames() ([]string, error) {
 	return utils.ListRoadmaps()
 }
 
-// loadSprints reads a roadmap's sprints read-only for the sprints landing
-// page. It opens the roadmap database, reads every sprint, resolves each
-// sprint's ordered member tasks, and classifies the sprints into the three
-// tabs. It does NOT read the full task table — the sprints page does not
-// render it (SPEC/WEB.md § Roadmap Sprints Page). The database handle is
-// released before the function returns; no row is written and no audit entry
-// is produced (SPEC/WEB.md § Tasks and Sprints from SQLite).
-//
-// Every sprint is rendered as a compact card through the shared sprintCard
-// partial; the sprints page opens no task detail modal, so the member tasks are
-// loaded only to compute each card's footer task count (SPEC/WEB.md § Shared
-// Sprint-Card Partial).
+// loadSprints reads a roadmap's sprints read-only for the sprints landing page.
+// It opens the roadmap database and hands it to readSprints, which performs the
+// whole read. The database handle is released before the function returns; no
+// row is written and no audit entry is produced (SPEC/WEB.md § Tasks and Sprints
+// from SQLite).
 //
 // The caller is responsible for the {name} validation and existence check
 // (resolveRoadmap); this function trusts name is a validated, existing
@@ -983,22 +1006,40 @@ func loadSprints(ctx context.Context, name string) (sprintsData, error) {
 	}
 	defer database.Close() //nolint:errcheck // read-only handle; close error is non-actionable
 
-	sprints, err := database.ListSprints(ctx, nil)
+	return readSprints(ctx, database, name)
+}
+
+// readSprints is the sprints page's entire read, expressed against the page's
+// read surface rather than a concrete connection. It is ONE read and no more:
+// the roadmap's sprint listing (SPEC/WEB.md § Tasks and Sprints from SQLite).
+//
+// The page reads no member task. Every sprint is rendered as a compact card with
+// no member tasks on it, and the one derived value a card shows — the footer's
+// total task count — comes from the sprint record the listing already returned,
+// because ListSprints populates TaskCount for every sprint it returns, resolving
+// the membership of all of them in ONE grouped read (SPEC/MODELS.md § Sprint;
+// SPEC/DATABASE.md § Read the Membership of Many Sprints (Grouped)). Nothing is
+// computed here that the sprints template does not render: the member tasks and
+// the completion summary belong to the single Roadmap Sprint Page.
+//
+// Classifying the sprints into the three tabs is done here, in memory, over the
+// values already read: no query is issued per tab and none per card, so the
+// page's query count is independent of the number of sprints. It does NOT read
+// the full task table either — the sprints page does not render it
+// (SPEC/WEB.md § Roadmap Sprints Page).
+//
+// Separating it from loadSprints is what makes the query count of a page render
+// measurable against a real database: the caller supplies the source, so a test
+// can count what a render costs on a real roadmap.
+func readSprints(ctx context.Context, src sprintsSource, name string) (sprintsData, error) {
+	sprints, err := src.ListSprints(ctx, nil)
 	if err != nil {
 		return sprintsData{}, err
 	}
 
 	views := make([]sprintView, 0, len(sprints))
 	for i := range sprints {
-		orderedTasks, terr := sprintOrderedTasks(ctx, database, sprints[i].ID)
-		if terr != nil {
-			return sprintsData{}, terr
-		}
-		views = append(views, sprintView{
-			Sprint:  sprints[i],
-			Tasks:   orderedTasks,
-			Summary: newSprintCompletion(orderedTasks),
-		})
+		views = append(views, sprintView{Sprint: sprints[i]})
 	}
 
 	upcoming, current, closed := classifySprints(views)
@@ -1627,8 +1668,13 @@ func sprintBoardColumnOf(category models.TaskStatusCategory) (int, bool) {
 // idx_sprint_tasks_order index). db.GetSprintTasksFull with a nil status
 // filter and orderByPriority=false returns the full task records ordered by
 // st.position ASC, so each task carries its status, depends_on, blocks, and
-// the rest of its fields for the Actual tab, the sprint page, and the task
-// detail modal — all without a second per-task query.
+// the rest of its fields for the sprint page and the task detail modal — all
+// without a second per-task query.
+//
+// Only the single Roadmap Sprint Page reads through it. The sprints landing page
+// does not: it renders every sprint as a card with no member tasks on it, so it
+// would be paying a full member-task read per sprint for a number the sprint
+// record already carries (SPEC/WEB.md § Tasks and Sprints from SQLite).
 func sprintOrderedTasks(ctx context.Context, src sprintTaskSource, sprintID int) ([]models.Task, error) {
 	return src.GetSprintTasksFull(ctx, sprintID, nil, false)
 }

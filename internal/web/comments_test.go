@@ -803,6 +803,15 @@ func TestCommentTypeBadge_NeutralForEveryType(t *testing.T) {
 // resolution, and lastSprintIDs records the id set it was given, so Acceptance
 // Criterion 92 is measured on the same instrument as Criterion 70: one query for
 // the whole set of rendered task ids, and none for a page that renders no task.
+//
+// sprintListings counts the sprints page's ONLY read, the sprint listing, and
+// sprintTasks counts the per-sprint member-task read that page must never take:
+// it renders every sprint as a card with no member tasks on it, and the footer
+// count it shows is carried by the sprint record the listing already returned
+// (SPEC/WEB.md § Tasks and Sprints from SQLite). The member read is unreachable
+// through the sprintsSource interface, so sprintTasks is the falsifiable guard
+// that the seam still holds if that interface is ever widened — the sprints-page
+// read-cost test exercises it directly to prove it counts.
 type countingSource struct {
 	*db.DB
 	lastGroupedIDs       []int
@@ -811,9 +820,19 @@ type countingSource struct {
 	groupedTaskSprints   int
 	perTaskComments      int
 	sprintComments       int
+	sprintListings       int
 	taskList             int
 	boundedTaskList      int
 	sprintTasks          int
+}
+
+// ListSprints is the read the sprints page performs: the roadmap's sprints, with
+// the membership of every one of them resolved in the same bounded number of
+// statements whatever the number of sprints (SPEC/COMMANDS.md § List Sprints).
+func (c *countingSource) ListSprints(ctx context.Context,
+	status *models.SprintStatus) ([]models.Sprint, error) {
+	c.sprintListings++
+	return c.DB.ListSprints(ctx, status)
 }
 
 // ListAllTasks is the read the board performs: unbounded, every task of the
