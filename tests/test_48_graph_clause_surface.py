@@ -33,6 +33,23 @@ compiled ./bin/rmp:
 The schema-MUTATING DDL forms must stay rejected everywhere, in any case and
 with any spacing between the two keywords — adding an introspection class must
 not loosen the DDL rejection.
+
+A third family belongs here for the same reason: the relationship-write-
+direction check (SPEC/GRAPH.md § Relationship Write Direction, Acceptance
+Criteria 28-30, rmp task #193) is, like the two above, a rule about the
+pinned GoGraph engine's own behaviour rather than about Groadmap's clause
+grammar. `graph update` accepted a SET or REMOVE whose relationship target
+was bound by an incoming or undirected pattern, and reported unqualified
+success while GoGraph's write path silently dropped the change — the
+engine's own write-effect counters cannot detect the drop, so there is no
+post-hoc signal to test and the shape is refused before the store is opened.
+The check also treats a FOREACH body exactly as the clause-class rule above
+does — `FOREACH (x IN list | SET e.k = …)` is inspected like a top-level
+SET, for the same containment reason. `TestGraphRelationshipWriteDirection`
+below pins that a reverse-bound SET/REMOVE is refused (exit 6) and writes
+nothing, that the outgoing form and node writes reached through a reverse
+traversal keep working, and that the refusal message names the offending
+direction and the outgoing rewrite.
 """
 
 import os
@@ -390,34 +407,352 @@ class TestGraphClauseSurface:
                 f"exit={code} stderr={stderr!r}")
 
 
+# ---- Relationship Write Direction (SPEC/GRAPH.md § Relationship Write
+# Direction, Acceptance Criteria 28-30, rmp task #193) ---------------------
+
+# `graph update` cannot write relationship "e" — the exact phrase every
+# refusal in this section carries, whatever direction bound it.
+REFUSAL_PREFIX = 'graph update cannot write relationship "e"'
+OUTGOING_REWRITE_RECIPE = "anchor the outgoing pattern on that node instead of reversing the arrow"
+
+
+class TestGraphRelationshipWriteDirection:
+    """SPEC/GRAPH.md § Relationship Write Direction fixes rmp task #193:
+    `graph update` accepted a SET/REMOVE whose relationship target was bound
+    by an incoming or undirected pattern, and reported `{"ok": true}` while
+    GoGraph's write path silently dropped the change (its own write-effect
+    counters cannot see the drop, so there is no post-hoc signal — the shape
+    is refused before the graph store is opened at all).
+
+    The fixture mirrors the one the Go regression suite
+    (internal/commands/graph_relwrite_test.go) already pins at the unit
+    level: a Spec node for this very rule and a Test node for the Go file
+    that verifies it, joined by a single VERIFIED_BY edge running
+    spec -> test, which is the literal example SPEC/GRAPH.md's Acceptance
+    Criteria 28-30 use. What is new here is proving the same contract
+    end-to-end against the compiled binary and a real graph store: every
+    refused shape is confirmed to write NOTHING by reading the property back,
+    and every shape that must keep working (the outgoing form from both
+    endpoints, a node write reached through a reverse traversal, a
+    relationship read only on the right-hand side of an assignment, and
+    `graph delete`/`graph query` through an undirected pattern) is confirmed
+    to keep working by reading its result back too — so a fix that refused
+    too much, as well as one that refused too little, would fail this suite.
+    """
+
+    SPEC_KEY = "graph-write-direction"
+    TEST_KEY = "graph_relwrite_test.go"
+
+    def setup_method(self):
+        self.test = GroadmapTestBase()
+        self.test.setup()
+        self.roadmap = self.test.create_roadmap()
+        self.test.run_cmd([
+            "graph", "create", "-r", self.roadmap, "--query",
+            f"CREATE (:Spec {{key:'{self.SPEC_KEY}'}}), (:Test {{key:'{self.TEST_KEY}'}})",
+        ])
+        self.test.run_cmd([
+            "graph", "create", "-r", self.roadmap, "--query",
+            f"MATCH (s:Spec {{key:'{self.SPEC_KEY}'}}), (v:Test {{key:'{self.TEST_KEY}'}}) "
+            "MERGE (s)-[:VERIFIED_BY]->(v)",
+        ])
+
+    def teardown_method(self):
+        self.test.teardown()
+
+    # ---- helpers -----------------------------------------------------
+
+    def run(self, subcmd, query, check=False):
+        return self.test.run_cmd(
+            ["graph", subcmd, "-r", self.roadmap, "--query", query], check=check)
+
+    def json(self, subcmd, query):
+        return self.test.run_cmd_json(
+            ["graph", subcmd, "-r", self.roadmap, "--query", query])
+
+    def edge_property(self, name):
+        """The value of `name` on the seeded VERIFIED_BY edge, read through
+        the OUTGOING pattern that matches how it is actually stored — never
+        through the undirected pattern the write side refuses, since the
+        point of the read-back is to observe storage independently of it."""
+        result = self.json(
+            "query",
+            f"MATCH (s:Spec {{key:'{self.SPEC_KEY}'}})-[e:VERIFIED_BY]->(v) RETURN e.{name}",
+        )
+        assert result["rows"], f"the seeded edge itself is missing: {result!r}"
+        return result["rows"][0][0]
+
+    def node_property(self, label, key, name):
+        result = self.json(
+            "query", f"MATCH (n:{label} {{key:'{key}'}}) RETURN n.{name}")
+        assert result["rows"], f"node {label}:{key!r} not found: {result!r}"
+        return result["rows"][0][0]
+
+    # ---- AC 29 / the recorded reproduction: reverse SET is refused ---
+
+    def test_undirected_set_from_the_target_is_refused_and_writes_nothing(self):
+        # The recorded reproduction, restated on this fixture: an undirected
+        # pattern anchored on the relationship's TARGET.
+        code, stdout, stderr = self.run(
+            "update",
+            f"MATCH (v:Test {{key:'{self.TEST_KEY}'}})-[e]-(x) "
+            "SET e.last_commit = '4f5ba9b'")
+        assert code == 6, (
+            f"AC29: an undirected SET on a relationship must be refused with "
+            f"exit 6; exit={code} stdout={stdout!r} stderr={stderr!r}")
+        assert REFUSAL_PREFIX in stderr and "undirected pattern" in stderr, (
+            f"AC29: expected the undirected-pattern refusal; got {stderr!r}")
+        assert self.edge_property("last_commit") is None, (
+            "AC29: a refused undirected SET must not have reached storage")
+
+    def test_undirected_set_from_the_source_is_refused_although_it_would_have_written(self):
+        # AC29's sharper case: anchored on the SOURCE, every row this
+        # traversal matches runs forwards, so the write would in fact have
+        # landed — and it is refused all the same, because whether an
+        # undirected pattern writes depends on the data it meets, not on the
+        # query, and that cannot be the guarantee.
+        code, stdout, stderr = self.run(
+            "update",
+            f"MATCH (s:Spec {{key:'{self.SPEC_KEY}'}})-[e]-(x) "
+            "SET e.last_commit = '2c9f4b1'")
+        assert code == 6, (
+            f"AC29: an undirected SET anchored on the source must still be "
+            f"refused; exit={code} stdout={stdout!r} stderr={stderr!r}")
+        assert "undirected pattern" in stderr, (
+            f"AC29: expected the undirected-pattern refusal; got {stderr!r}")
+        assert self.edge_property("last_commit") is None, (
+            "AC29: the refusal must hold even though this traversal's rows "
+            "would all have run forwards")
+
+    def test_incoming_set_is_refused_from_the_target_anchor(self):
+        code, stdout, stderr = self.run(
+            "update",
+            f"MATCH (v:Test {{key:'{self.TEST_KEY}'}})<-[e:VERIFIED_BY]-(s) "
+            "SET e.last_commit = 'a83e716'")
+        assert code == 6, (
+            f"AC29: an incoming SET anchored on the target must be refused; "
+            f"exit={code} stdout={stdout!r} stderr={stderr!r}")
+        assert REFUSAL_PREFIX in stderr and "incoming pattern" in stderr, (
+            f"AC29: expected the incoming-pattern refusal; got {stderr!r}")
+        assert self.edge_property("last_commit") is None, (
+            "AC29: a refused incoming SET must not have reached storage")
+
+    def test_incoming_set_is_refused_from_the_source_anchor_too(self):
+        # The trigger is the pattern's DIRECTION, not which endpoint anchors
+        # it: this traversal starts at the SOURCE node and still uses the
+        # `<-[e]-` arrow, so it is refused exactly like the target-anchored
+        # form above.
+        code, stdout, stderr = self.run(
+            "update",
+            f"MATCH (x)<-[e:VERIFIED_BY]-(s:Spec {{key:'{self.SPEC_KEY}'}}) "
+            "SET e.last_commit = 'f01d922'")
+        assert code == 6, (
+            f"AC29: an incoming SET anchored on the source must be refused "
+            f"too; exit={code} stdout={stdout!r} stderr={stderr!r}")
+        assert "incoming pattern" in stderr, (
+            f"AC29: expected the incoming-pattern refusal; got {stderr!r}")
+        assert self.edge_property("last_commit") is None, (
+            "AC29: a refused incoming SET must not have reached storage "
+            "regardless of which endpoint anchors the traversal")
+
+    # ---- REMOVE is affected exactly as SET is -------------------------
+
+    def test_remove_through_an_undirected_pattern_is_refused_and_removes_nothing(self):
+        # Seed a real property through the one form that writes, so a
+        # refused REMOVE has something it could wrongly have deleted.
+        self.run(
+            "update",
+            f"MATCH (s:Spec {{key:'{self.SPEC_KEY}'}})-[e:VERIFIED_BY]->(v) "
+            "SET e.last_commit = 'b6d40ce'", check=True)
+
+        code, stdout, stderr = self.run(
+            "update",
+            f"MATCH (v:Test {{key:'{self.TEST_KEY}'}})-[e]-(x) "
+            "REMOVE e.last_commit")
+        assert code == 6, (
+            f"REMOVE through an undirected pattern must be refused exactly "
+            f"as SET is; exit={code} stdout={stdout!r} stderr={stderr!r}")
+        assert REFUSAL_PREFIX in stderr and "undirected pattern" in stderr, (
+            f"expected the undirected-pattern refusal on REMOVE; got {stderr!r}")
+        assert self.edge_property("last_commit") == "b6d40ce", (
+            "a refused REMOVE must leave the previously-set property intact")
+
+    def test_remove_through_an_incoming_pattern_is_refused_and_removes_nothing(self):
+        self.run(
+            "update",
+            f"MATCH (s:Spec {{key:'{self.SPEC_KEY}'}})-[e:VERIFIED_BY]->(v) "
+            "SET e.last_commit = '9a2eb54'", check=True)
+
+        code, stdout, stderr = self.run(
+            "update",
+            f"MATCH (v:Test {{key:'{self.TEST_KEY}'}})<-[e:VERIFIED_BY]-(s) "
+            "REMOVE e.last_commit")
+        assert code == 6, (
+            f"REMOVE through an incoming pattern must be refused exactly as "
+            f"SET is; exit={code} stdout={stdout!r} stderr={stderr!r}")
+        assert REFUSAL_PREFIX in stderr and "incoming pattern" in stderr, (
+            f"expected the incoming-pattern refusal on REMOVE; got {stderr!r}")
+        assert self.edge_property("last_commit") == "9a2eb54", (
+            "a refused REMOVE must leave the previously-set property intact")
+
+    # ---- AC 30 / DELETE is NOT affected --------------------------------
+
+    def test_delete_through_an_undirected_pattern_still_succeeds(self):
+        # DELETE resolves the relationship itself rather than through the
+        # endpoint columns the write path mishandles, so it must keep working
+        # through the very shape SET and REMOVE just had refused.
+        code, stdout, stderr = self.run(
+            "delete", f"MATCH (v:Test {{key:'{self.TEST_KEY}'}})-[e]-(x) DELETE e")
+        assert code == 0, (
+            f"AC30: DELETE through an undirected pattern must still succeed; "
+            f"exit={code} stdout={stdout!r} stderr={stderr!r}")
+        assert '"ok": true' in stdout, f"AC30: expected ok JSON, got {stdout!r}"
+
+        result = self.json(
+            "query",
+            f"MATCH (s:Spec {{key:'{self.SPEC_KEY}'}})-[e:VERIFIED_BY]->(v) RETURN e")
+        assert result["rows"] == [], (
+            f"AC30: the undirected DELETE must have removed the edge; "
+            f"got {result!r}")
+        # Only the relationship is gone; DELETE (not DETACH DELETE) leaves
+        # both nodes standing.
+        assert self.node_property("Spec", self.SPEC_KEY, "key") == self.SPEC_KEY
+        assert self.node_property("Test", self.TEST_KEY, "key") == self.TEST_KEY
+
+    # ---- AC 28: the outgoing form keeps writing from either endpoint --
+
+    def test_outgoing_set_writes_and_reads_back_from_either_endpoint(self):
+        code, stdout, stderr = self.run(
+            "update",
+            f"MATCH (s:Spec {{key:'{self.SPEC_KEY}'}})-[e:VERIFIED_BY]->(v) "
+            "SET e.from_source = 'c77e410'")
+        assert code == 0, (
+            f"AC28: an outgoing SET anchored on the source must be accepted; "
+            f"exit={code} stdout={stdout!r} stderr={stderr!r}")
+        assert self.edge_property("from_source") == "c77e410", (
+            "AC28: the property set from the source anchor must read back")
+
+        # The documented repair for an incoming edge: keep the arrow outgoing
+        # and anchor on the node the edge arrives at instead.
+        code, stdout, stderr = self.run(
+            "update",
+            f"MATCH (other)-[e:VERIFIED_BY]->(v:Test {{key:'{self.TEST_KEY}'}}) "
+            "SET e.from_target = '15af8bc'")
+        assert code == 0, (
+            f"AC28: an outgoing SET anchored on the target must be accepted; "
+            f"exit={code} stdout={stdout!r} stderr={stderr!r}")
+        assert self.edge_property("from_target") == "15af8bc", (
+            "AC28: the property set from the target anchor must read back")
+
+    # ---- AC 30: the rejection does not spread beyond the relationship
+    #      write target ---------------------------------------------------
+
+    def test_node_write_reached_through_an_undirected_traversal_is_accepted(self):
+        # The SET target is x (a node), resolved by identifier rather than by
+        # endpoint pair, so this must be admitted even though e is bound by
+        # the very undirected pattern SET/REMOVE on e refuse.
+        code, stdout, stderr = self.run(
+            "update",
+            f"MATCH (v:Test {{key:'{self.TEST_KEY}'}})-[e]-(x) "
+            "SET x.reviewed = true")
+        assert code == 0, (
+            f"AC30: a node write reached through an undirected traversal "
+            f"must be accepted; exit={code} stdout={stdout!r} stderr={stderr!r}")
+        assert '"ok": true' in stdout, f"AC30: expected ok JSON, got {stdout!r}"
+        assert self.node_property("Spec", self.SPEC_KEY, "reviewed") is True, (
+            "AC30: the node write must genuinely have reached the source node")
+
+    def test_relationship_read_through_an_undirected_traversal_is_still_accepted(self):
+        code, stdout, stderr = self.run(
+            "query", f"MATCH (v:Test {{key:'{self.TEST_KEY}'}})-[e]-(x) RETURN type(e), x.key")
+        assert code == 0, (
+            f"AC30: an undirected READ must stay accepted; "
+            f"exit={code} stdout={stdout!r} stderr={stderr!r}")
+        result = self.json(
+            "query", f"MATCH (v:Test {{key:'{self.TEST_KEY}'}})-[e]-(x) RETURN type(e), x.key")
+        assert result["rows"] == [["VERIFIED_BY", self.SPEC_KEY]], (
+            f"AC30: the undirected read must report the true relationship "
+            f"and the source node it reaches; got {result!r}")
+
+    def test_relationship_bound_only_as_a_read_reference_is_accepted(self):
+        # `e` is bound by an INCOMING pattern here, which would be refused as
+        # a write target — but the SET writes x (a node), and `e` appears
+        # only on the right-hand side of the assignment via type(e). Only the
+        # write TARGET is inspected, so this must be admitted.
+        code, stdout, stderr = self.run(
+            "update",
+            f"MATCH (v:Test {{key:'{self.TEST_KEY}'}})<-[e:VERIFIED_BY]-(x) "
+            "SET x.last_edge_type = type(e)")
+        assert code == 0, (
+            f"a relationship read only on the right-hand side of a node SET "
+            f"must be accepted even though it is incoming-bound; "
+            f"exit={code} stdout={stdout!r} stderr={stderr!r}")
+        assert self.node_property("Spec", self.SPEC_KEY, "last_edge_type") == "VERIFIED_BY", (
+            "the node write driven by the read-only relationship reference "
+            "must have reached storage")
+
+    # ---- the refusal names the direction and the outgoing rewrite -----
+
+    def test_refusal_message_names_the_variable_direction_and_rewrite(self):
+        cases = [
+            (
+                f"MATCH (v:Test {{key:'{self.TEST_KEY}'}})-[e]-(x) "
+                "SET e.last_commit = '7be3aa0'",
+                "undirected pattern",
+            ),
+            (
+                f"MATCH (v:Test {{key:'{self.TEST_KEY}'}})<-[e:VERIFIED_BY]-(s) "
+                "SET e.last_commit = '7be3aa0'",
+                "incoming pattern",
+            ),
+        ]
+        for query, want_direction in cases:
+            code, stdout, stderr = self.run("update", query)
+            assert code == 6, (
+                f"expected a refusal for {query!r}; "
+                f"exit={code} stdout={stdout!r} stderr={stderr!r}")
+            assert REFUSAL_PREFIX in stderr, (
+                f"the message must name the relationship variable; got {stderr!r}")
+            assert want_direction in stderr, (
+                f"the message must name the offending direction ({want_direction!r}); "
+                f"got {stderr!r}")
+            assert OUTGOING_REWRITE_RECIPE in stderr, (
+                f"the message must give the outgoing-anchor rewrite recipe; "
+                f"got {stderr!r}")
+            assert "MATCH (source)-[e]->(target)" in stderr, (
+                f"the message must show the outgoing rewrite shape; got {stderr!r}")
+
+
 def _run_all():
-    instance_cls = TestGraphClauseSurface
-    method_names = [m for m in dir(instance_cls) if m.startswith("test_")]
     passed = 0
     failed = 0
     failures = []
-    for m in method_names:
-        instance = instance_cls()
-        instance.setup_method()
-        try:
-            getattr(instance, m)()
-            passed += 1
-            print(f"✓ {m}")
-        except AssertionError as exc:
-            failed += 1
-            failures.append((m, exc))
-            print(f"✗ {m}")
-        except Exception as exc:  # noqa: BLE001
-            failed += 1
-            failures.append((m, exc))
-            print(f"✗ {m} (error)")
-        finally:
-            instance.teardown_method()
+    # Every class in the module, so a suite added below the runner is not
+    # silently skipped.
+    for cls in (TestGraphClauseSurface, TestGraphRelationshipWriteDirection):
+        for m in sorted(name for name in dir(cls) if name.startswith("test_")):
+            label = f"{cls.__name__}.{m}"
+            instance = cls()
+            instance.setup_method()
+            try:
+                getattr(instance, m)()
+                passed += 1
+                print(f"✓ {label}")
+            except AssertionError as exc:
+                failed += 1
+                failures.append((label, exc))
+                print(f"✗ {label}")
+            except Exception as exc:  # noqa: BLE001
+                failed += 1
+                failures.append((label, exc))
+                print(f"✗ {label} (error)")
+            finally:
+                instance.teardown_method()
     print("\n" + "=" * 60)
     print(f"Graph clause-surface tests: {passed} passed, {failed} failed")
     print("=" * 60)
-    for name, exc in failures:
-        print(f"\n✗ {name}\n  {exc}")
+    for label, exc in failures:
+        print(f"\n✗ {label}\n  {exc}")
     return failed == 0
 
 

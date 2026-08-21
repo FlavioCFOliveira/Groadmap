@@ -436,6 +436,60 @@ func validateGuardRail(subcmd, allowed, query string) error {
 	return nil
 }
 
+// validateRelationshipWriteDirection rejects a `graph update` query whose SET or
+// REMOVE targets a relationship the engine would not write (SPEC/GRAPH.md
+// § Relationship Write Direction).
+//
+// It is a SEPARATE contract from the clause-class guard rail above, not another
+// class rule: the query's operation class is already correct — it is a mutating
+// write under the subcommand that accepts mutating writes — and what is wrong is
+// the ORIENTATION of the pattern that binds the relationship being written. The
+// two checks are kept apart so the clause-class classification, which the
+// read-only web endpoint shares, is untouched by this write-path-only rule.
+//
+// Only `update` is checked. `delete` is unaffected: DELETE resolves the edge
+// itself rather than through the endpoint columns, and removes a relationship
+// bound by a reverse traversal correctly. `create` cannot reach the condition,
+// because the clause-class rule above already rejects any CREATE/MERGE query
+// that contains SET or REMOVE (so `MERGE … ON MATCH SET …` is not admitted by
+// this CLI at all).
+//
+// Detection runs on the parsed query rather than on the masked text, so a
+// relationship arrow inside a string literal or a comment cannot trip it: the
+// parser never sees those characters as pattern syntax.
+func validateRelationshipWriteDirection(subcmd, query string) error {
+	if subcmd != "update" {
+		return nil
+	}
+	unwritable := cypherguard.UnwritableRelationshipTargets(query)
+	if len(unwritable) == 0 {
+		return nil
+	}
+	t := unwritable[0]
+	return fmt.Errorf(
+		"%w: graph update cannot write relationship %q: it is bound by an %s pattern, "+
+			"and the engine writes a relationship property only through an outgoing pattern, "+
+			"so %s would be skipped while the command still reported success. "+
+			"Rewrite the traversal as outgoing: MATCH (source)-[%s]->(target) ... SET %s.<key> = <value>. "+
+			"To reach the edges arriving AT a node, anchor the outgoing pattern on that node "+
+			"instead of reversing the arrow: MATCH (other)-[%s]->(target {key:'...'}) ... SET %s.<key> = <value>",
+		utils.ErrValidation,
+		t.Variable, t.Direction, skippedLegOf(t.Direction),
+		t.Variable, t.Variable, t.Variable, t.Variable,
+	)
+}
+
+// skippedLegOf names the edges the engine would drop, for the message
+// validateRelationshipWriteDirection builds. An incoming pattern drops every
+// edge it matches; an undirected pattern drops only the ones it reaches against
+// the stored arrow, which is the incoming half of the traversal.
+func skippedLegOf(d cypherguard.Direction) string {
+	if d == cypherguard.DirectionUndirected {
+		return "the incoming half of that traversal"
+	}
+	return "the incoming direction"
+}
+
 // serializeValue converts a single expr.Value into a JSON-compatible
 // Go value for inclusion in a graphQueryResult row.
 func serializeValue(v expr.Value) any {
@@ -804,6 +858,13 @@ func runGraphWrite(subcmd, allowed string, args []string) error {
 	}
 
 	if err := validateGuardRail(subcmd, allowed, query); err != nil {
+		return err
+	}
+
+	// Refused before the store is opened, like the clause-class guard rail, so
+	// a rejected query never reaches the graph (SPEC/GRAPH.md
+	// § Relationship Write Direction).
+	if err := validateRelationshipWriteDirection(subcmd, query); err != nil {
 		return err
 	}
 
