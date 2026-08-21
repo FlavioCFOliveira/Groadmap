@@ -200,11 +200,12 @@ func commentEnumDescriptions(types []models.CommentType) map[string]string {
 // at runtime.
 var auditOperationDescriptions = map[models.AuditOperation]string{
 	// Task lifecycle.
-	models.OpTaskCreate: "New task created.",
-	models.OpTaskUpdate: "Generic update via `task edit` (title, type, functional_requirements, " +
-		"technical_requirements, acceptance_criteria). A type change made through " +
-		"`task edit` is recorded here, not under a dedicated operation.",
-	models.OpTaskDelete: "Task deleted (only allowed while in BACKLOG; see Delete Task precondition).",
+	models.OpTaskCreate: "New task created via `task create`.",
+	models.OpTaskUpdate: "LEGACY. The generic `task edit` operation the five per-field `TASK_*_CHANGE` " +
+		"operations above replace. The migration reclassifies no row carrying it, because a field edit leaves no " +
+		"trace of which field it touched.",
+	models.OpTaskDelete: "Task deleted via `task remove` (only allowed while in BACKLOG; see Delete Task " +
+		"precondition).",
 
 	// Task status. Five operations, one per destination state, each
 	// transcribed from the catalogue entry that describes it.
@@ -220,10 +221,9 @@ var auditOperationDescriptions = map[models.AuditOperation]string{
 	models.OpTaskStatusTesting: "Task entered `TESTING` via `task stat`, one row per task.",
 	models.OpTaskStatusCompleted: "Task entered `COMPLETED` via `task stat`, one row per task. The row " +
 		"carries the `commit_hash` supplied as `--commit-close`.",
-	models.OpTaskStatusChange: "Every status change made by `task stat`, whatever the source and target " +
-		"state, including `SPRINT` → `BACKLOG` and `COMPLETED` → `BACKLOG`. Status changes made as a " +
-		"side effect of a sprint operation are logged against the sprint instead, as `SPRINT_ADD_TASK` / " +
-		"`SPRINT_REMOVE_TASK` / `SPRINT_DELETE`.",
+	models.OpTaskStatusChange: "LEGACY. The single status-change operation the five `TASK_STATUS_*` operations " +
+		"above replace. It survives on rows the 1.11.0 to 1.12.0 migration could not reclassify (see `VERSION.md § " +
+		"Migration 1.11.0 to 1.12.0`).",
 	// Task field edits. One operation per field `task edit` can set, each
 	// naming the field rather than the fact that an edit happened; the last
 	// two of the seven fields are the priority and severity operations below,
@@ -234,20 +234,21 @@ var auditOperationDescriptions = map[models.AuditOperation]string{
 	models.OpTaskTechnicalRequirementsChange:  "`technical_requirements` supplied to `task edit`.",
 	models.OpTaskAcceptanceCriteriaChange:     "`acceptance_criteria` supplied to `task edit`.",
 
-	models.OpTaskPriorityChange: "Priority change (0-9) via `task priority`.",
-	models.OpTaskSeverityChange: "Severity change (0-9) via `task severity`.",
-	models.OpTaskReopen: "Task returned to BACKLOG via `task reopen`; lifecycle timestamps, " +
-		"completion_summary, and commit_close cleared, commit_open preserved. The sprint_tasks row " +
-		"is removed only when the source state is SPRINT, DOING, or TESTING; from COMPLETED the row " +
-		"is kept.",
+	models.OpTaskPriorityChange: "Priority change (0-9) via `task prio` or via `task edit`.",
+	models.OpTaskSeverityChange: "Severity change (0-9) via `task sev` or via `task edit`.",
+	models.OpTaskReopen: "Task returned to BACKLOG via `task reopen`; lifecycle timestamps, completion_summary, " +
+		"and commit_close cleared, commit_open preserved. The sprint_tasks row is removed only when the source " +
+		"state is SPRINT, DOING, or TESTING; from COMPLETED the row is kept. `task reopen` writes this operation " +
+		"alone and writes no `TASK_STATUS_BACKLOG` row.",
 
 	// Sprint lifecycle.
 	models.OpSprintCreate: "New sprint created.",
-	models.OpSprintUpdate: "Sprint title, description, capacity, or execution order updated via `sprint update`.",
+	models.OpSprintUpdate: "LEGACY. The generic `sprint update` operation the four per-field `SPRINT_*_CHANGE` " +
+		"operations above replace. The migration reclassifies no row carrying it, for the same reason.",
 	models.OpSprintDelete: "Sprint deleted.",
-	models.OpSprintStart:  "Sprint started (PENDING → OPEN).",
-	models.OpSprintClose:  "Sprint closed (OPEN → CLOSED).",
-	models.OpSprintReopen: "Sprint reopened (CLOSED → OPEN).",
+	models.OpSprintStart:  "Sprint started (PENDING to OPEN).",
+	models.OpSprintClose:  "Sprint closed (OPEN to CLOSED).",
+	models.OpSprintReopen: "Sprint reopened (CLOSED to OPEN).",
 
 	// Sprint field updates, the `sprint update` counterpart of the five task
 	// field edits above. Each names the column it records, so --max-tasks and
@@ -257,9 +258,13 @@ var auditOperationDescriptions = map[models.AuditOperation]string{
 	models.OpSprintMaxTasksChange:    "`max_tasks` supplied to `sprint update`.",
 	models.OpSprintOrderChange:       "`order_index` supplied to `sprint update`.",
 
-	models.OpSprintAddTask:    "Task added to sprint.",
-	models.OpSprintRemoveTask: "Task removed from sprint.",
-	models.OpSprintMoveTask:   "Task moved between sprints.",
+	models.OpSprintAddTask: "Task added to a sprint via `sprint add-tasks`; one row per task, against the " +
+		"sprint, naming the task in `related_entity_id`.",
+	models.OpSprintRemoveTask: "Task removed from a sprint via `sprint remove-tasks`; one row per task, against " +
+		"the sprint, naming the task in `related_entity_id`.",
+	models.OpSprintMoveTask: "LEGACY. The single move operation `SPRINT_MOVE_TASK_OUT` and `SPRINT_MOVE_TASK_IN` " +
+		"replace. The migration reclassifies no row carrying it, because such a row names neither the task that " +
+		"moved nor the sprint it came from.",
 	models.OpSprintMoveTaskOut: "Task moved out of the source sprint via `sprint move-tasks`; one row per " +
 		"task, against the source sprint, naming the task in `related_entity_id`.",
 	models.OpSprintMoveTaskIn: "Task moved into the destination sprint via `sprint move-tasks`; one row " +
@@ -272,8 +277,10 @@ var auditOperationDescriptions = map[models.AuditOperation]string{
 	models.OpSprintTaskSwap:         "Two tasks swapped positions.",
 
 	// Task dependencies.
-	models.OpTaskAddDep:    "Dependency added (logged against both task_id and depends_on_task_id).",
-	models.OpTaskRemoveDep: "Dependency removed (logged against both task_id and depends_on_task_id).",
+	models.OpTaskAddDep: "Dependency added via `task add-dep`; two rows are written, one against each task of " +
+		"the pair, and each row names the other task in `related_entity_id`.",
+	models.OpTaskRemoveDep: "Dependency removed via `task remove-dep`; two rows are written, one against each " +
+		"task of the pair, and each row names the other task in `related_entity_id`.",
 
 	// Comments. The half of the rule the catalogue entries do not state —
 	// that the comment's own id never appears — is appended once by
