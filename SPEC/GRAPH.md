@@ -8,6 +8,7 @@
   - [Dependency](#dependency)
   - [Dependency Maturity Risk](#dependency-maturity-risk)
   - [Engine Construction and Lifecycle](#engine-construction-and-lifecycle)
+  - [Engine Constructor by Path](#engine-constructor-by-path)
   - [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)
 - [Persistence Layout](#persistence-layout)
 - [Multi-Layer Modelling Conventions](#multi-layer-modelling-conventions)
@@ -222,10 +223,14 @@ implementation:
    shared lock is released as soon as this step returns**; every step below runs
    with no lock held. A write subcommand keeps the exclusive lock until step 7
    has completed.
-4. Constructs a persistent Cypher engine over that store (GoGraph exposes
-   `cypher.NewEngineWithStore` for a store-backed engine; the in-memory
-   `NewEngine`, `NewEngineWithOptions`, and `NewEngineWithRegistry` constructors
-   are not used for persisted graphs).
+4. Constructs the Cypher engine that will run the query. The two paths construct
+   it differently. A **write** subcommand wraps the recovered graph and a
+   write-ahead-log writer in a transactional store and constructs a store-backed
+   engine over that store. A **read** subcommand constructs the engine directly
+   over the graph the previous step recovered, and opens neither a transactional
+   store nor a write-ahead-log writer. Which constructor each path uses, and why
+   a read needs no store, are stated once, in
+   [Engine Constructor by Path](#engine-constructor-by-path).
 5. Runs the validated query:
    - Read subcommands (`query`, `search`) run through the engine's read path
      (`Run` / `RunAny`).
@@ -264,6 +269,60 @@ at all, so the option that would suppress it stays at its default and Groadmap
 keeps the intra-query parallelism the default provides. The rule is that an
 engine default is changed on evidence measured against this project's own graph,
 never on an upstream release note.
+
+### Engine Constructor by Path
+
+**This section is the single authoritative statement of which GoGraph engine
+constructor Groadmap uses on each path.** No other section of this specification,
+and no other SPEC file, states it independently; every one of them refers here
+instead. The table covers every Cypher engine Groadmap constructs in order to
+serve a `graph` subcommand or a web graph request.
+
+| Path | Surface | GoGraph constructor | Transactional store and write-ahead-log writer |
+|------|---------|---------------------|------------------------------------------------|
+| Read | `graph query` and `graph search`, including the schema-introspection commands they accept | `cypher.NewEngine`, over the graph the store open recovered | Neither is opened |
+| Read | The web graph page and the web graph data endpoint (see `WEB.md § Knowledge Graph from the GoGraph Store`) | `cypher.NewEngine`, over the graph the store open recovered | Neither is opened |
+| Transactional write | `graph create`, `graph update`, and `graph delete` | `cypher.NewEngineWithStore`, over a transactional store | Both are opened: the write-ahead-log writer over `wal`, and the transactional store over the recovered graph and that writer |
+
+The two path names are the ones the **Engine path** column of
+[Per-Subcommand Validation Rules](#per-subcommand-validation-rules) uses. Three
+surfaces run on those two paths: the read path serves both the CLI read
+subcommands and the web interface, and the two are not distinguished here because
+they construct the same engine.
+
+Groadmap constructs an engine through no other constructor. The pinned engine
+also exposes `NewEngineWithOptions`, `NewEngineWithRegistry`,
+`NewEngineWithStoreAndConstraints`, and `NewEngineWithStoreAndSchema`; Groadmap
+uses none of the four, and adopting one is a change to this table before it is a
+change to the code.
+
+**Why a read needs no store.** Opening the store — step 3 of
+[Engine Construction and Lifecycle](#engine-construction-and-lifecycle) — runs
+GoGraph's recovery, and recovery returns a graph that already carries the last
+committed state, replayed from the snapshot and from the write-ahead-log tail. A
+store-backed engine over that same state would observe the same graph and produce
+the same results, so a transactional store gives a read nothing further to read.
+It does cost something: constructing one requires opening a write-ahead-log
+writer, which is a write-side resource, and a read would then hold that writer
+for the whole of a query that commits nothing. The cost falls hardest on the web
+interface, which drives the read path on every graph page and every graph data
+request and which must stay strictly read-only. Constructing the plain engine is
+also what keeps the read path's on-disk guarantees simple to state and to test:
+once the open returns, the query runs against an in-memory graph and touches no
+file in the store (see [Concurrency and Recovery](#concurrency-and-recovery) and
+[What a Read Changes on Disk](#what-a-read-changes-on-disk)).
+
+**The asymmetry between the two paths is deliberate, not an omission.** A reader
+who notices that the write path is store-backed while the read path is not MUST
+NOT align the two on that ground alone: making a read store-backed would hand a
+read subcommand, and the web server, a write-ahead-log writer neither has a use
+for, in exchange for no observable difference in any result. Moving a path to a
+different constructor means amending this table first, and it requires the same
+kind of measured evidence that
+[Engine Construction and Lifecycle](#engine-construction-and-lifecycle) demands
+before an engine option is changed. The one condition that would force the change
+is a read that must observe state the recovery does not return, and no such read
+exists.
 
 ### Synchronous Checkpoint on Write
 
@@ -554,7 +613,10 @@ change is made (see [Error Handling and Exit Codes](#error-handling-and-exit-cod
 In the table below, every reference to a clause a query "contains" or to the
 result of `QueryHasWritingClause` is evaluated on the masked normalization of the
 query, not on the raw string (see
-[Literal-Aware Normalization](#literal-aware-normalization)).
+[Literal-Aware Normalization](#literal-aware-normalization)). The **Engine path**
+column names which of the two execution paths the subcommand runs on; the engine
+constructor each of those paths uses is fixed by
+[Engine Constructor by Path](#engine-constructor-by-path).
 
 | Subcommand | Accepts | Rejects | Engine path |
 |------------|---------|---------|-------------|
@@ -1223,6 +1285,13 @@ Groadmap's usage model and expectations:
     indefinitely (see [Lock Contention](#lock-contention)).
 37. Two concurrent read invocations against the same roadmap both succeed and
     neither waits on the other, because the lock they take is shared.
+38. The specification and the implementation name the same engine constructor for
+    every path. A regression test enumerates every Cypher engine the
+    implementation constructs to serve a `graph` subcommand or a web graph
+    request, and fails if any of them is constructed through a constructor other
+    than the one [Engine Constructor by Path](#engine-constructor-by-path) gives
+    for that path, or if an engine is constructed on a path that table does not
+    list. This is what stops the table and the code from drifting apart again.
 
 ## See Also
 

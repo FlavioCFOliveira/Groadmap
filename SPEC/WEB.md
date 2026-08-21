@@ -3624,9 +3624,13 @@ re-presents an earlier, now-stale response in its place.
 
 1. For a graph page or graph data request, the server resolves the roadmap's
    graph store at `~/.roadmaps/{name}/graph/` (see `GRAPH.md § Persistence
-   Layout`) and opens it through the GoGraph engine's store-backed read path, the
-   same way `graph query` and `graph search` open it (see `GRAPH.md § Engine
-   Construction and Lifecycle`).
+   Layout`), opens it, and runs the query through the engine's read path, the
+   same way `graph query` and `graph search` do (see `GRAPH.md § Engine
+   Construction and Lifecycle`). The server is on the read path, so it constructs
+   the engine without a transactional store and without a write-ahead-log writer.
+   Which constructor that is, is fixed by
+   `GRAPH.md § Engine Constructor by Path`, and this specification does not
+   restate it.
 2. The server runs a **read-only** Cypher query to retrieve the nodes and edges
    to visualise. The query contains no writing clause; it is the same class of
    query the read subcommands accept under the guard rail in

@@ -59,6 +59,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | `graph` command syntax / subcommands | `COMMANDS.md § Graph Management` |
 | Graph query result JSON / property-type mapping | `DATA_FORMATS.md § Graph Query Result` |
 | Cypher input via flag or stdin | `GRAPH.md § Cypher Input Source and Precedence` |
+| Which Cypher engine constructor each graph path uses (read vs transactional write) and why a read opens no store | `GRAPH.md § Engine Constructor by Path` |
 | Graph query notifications on stderr (e.g. Cartesian-product warning) | `GRAPH.md § Query Notifications as Diagnostics` |
 | Graph store concurrency / recovery | `IMPLEMENTATION.md § Graph Store Concurrency` |
 | Graph store access lock (shared for reads, exclusive for writes), and what happens on contention | `GRAPH.md § Concurrency and Recovery` and `GRAPH.md § Lock Contention` |
@@ -162,6 +163,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
 | Graph store concurrency / writer serialisation / reader locking / recovery | `IMPLEMENTATION.md § Graph Store Concurrency` (contract in `GRAPH.md § Concurrency and Recovery`) |
 | Graph store lock file (`write.lock`) | `GRAPH.md § Concurrency and Recovery` (layout in `GRAPH.md § Persistence Layout`) |
+| Cypher engine constructor per path (`cypher.NewEngine` on the read path, `cypher.NewEngineWithStore` on the write path) | `GRAPH.md § Engine Constructor by Path` |
 | Minimum Go version and external dependencies | `BUILD.md § Go Toolchain` |
 | Validation gate set and where it is enforced (local, CI, release) | `BUILD.md § Validation Gates` |
 | Help text canonical | code in `internal/commands/*.go` (structure in `HELP.md`) |
