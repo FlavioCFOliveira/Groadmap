@@ -17,6 +17,11 @@ func printSprintListHelp() {
 
 Lists every sprint in the roadmap, optionally filtered by status.
 
+Order is by sprint order ASC: the sprint with the lowest 'order' value
+first, which is the roadmap's planned execution order. 'order' is
+unique across the roadmap, so the sequence is total and repeatable.
+--status narrows the result; it never reorders it.
+
 Aliases: ls.
 
 Required:

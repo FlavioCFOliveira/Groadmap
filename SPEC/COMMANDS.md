@@ -1298,6 +1298,40 @@ rmp sprint ls -r <name>
   **sprints** the array contains; it does not filter the tasks of any sprint. An
   invalid value is rejected with exit code 6.
 
+**Result Ordering:** Sprints are returned ordered by `order` ascending: the sprint
+with the lowest `order` value first. That is the roadmap's planned execution
+order. `order` is the field a sprint carries for exactly this purpose — the
+sprint with the lowest `order` executes first — so the listing hands the caller
+the sprints in the sequence in which they are planned to run. The `--order` flag of
+`Create Sprint` and `Update Sprint` below is what sets the value. See
+`MODELS.md § Sprint Field Constraints`.
+
+**The ordering is total, so the result is deterministic.** A sprint's `order` is
+`NOT NULL` and unique across the roadmap, enforced by the `idx_sprints_order`
+unique index (see `DATABASE.md § sprints Table`); a value already used by another
+sprint is rejected with exit code 5 on both `Create Sprint` and `Update Sprint`
+below. No sprint can lack an `order`, and no two sprints of one roadmap can share
+one, so ordering by `order` alone places every sprint at exactly one position. The
+sequence is fully determined by the data, and repeating the same read over
+unchanged data returns the same sequence. This specification states no tie-break
+rule because no tie can occur.
+
+**The order is a published guarantee.** It is part of this command's contract, not
+an incidental property of the query that produces the result. A caller may rely on
+it.
+
+**The `--status` filter narrows the result; it never reorders it.** The filter
+selects which sprints the array contains. The sprints it keeps appear in the same
+relative sequence they hold in the unfiltered listing — `order` ascending, with
+the excluded sprints simply absent. Filtering removes entries and changes nothing
+else about the order of the entries that remain.
+
+**Relation to the web interface.** The read-only web interface presents the same
+sprints on its sprints page, and it does not present them as one sequence: it
+splits them into three status tabs and orders one of those tabs in reverse.
+`WEB.md § Roadmap Sprints Page` is canonical for the order of each tab and states
+why that tab differs from this listing.
+
 **Membership fields.** Every Sprint object the array contains carries its
 membership resolved, exactly as `Get Sprint` below returns it for the same sprint:
 

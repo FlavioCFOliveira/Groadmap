@@ -1449,6 +1449,13 @@ func (db *DB) resolveSprintMembership(ctx context.Context, sprints []models.Spri
 // ListSprints retrieves all sprints, optionally narrowed to one status, with the
 // membership of every returned sprint resolved.
 //
+// The result is ordered by Order ascending — the roadmap's planned execution
+// order, lowest first (SPEC/COMMANDS.md § List Sprints, Result Ordering). Order
+// is unique and NOT NULL across the roadmap, so the sequence is total: every
+// sprint sits at exactly one position, and repeating the read over unchanged
+// data returns the same sequence. The --status filter narrows WHICH sprints the
+// slice contains and never reorders the ones it keeps.
+//
 // Every Sprint object it returns carries Tasks and TaskCount populated, exactly
 // as GetSprint returns them for the same sprint: same ids, same ascending order,
 // same count (SPEC/COMMANDS.md § List Sprints). The --status filter selects which
@@ -1469,7 +1476,22 @@ func (db *DB) ListSprints(ctx context.Context, status *models.SprintStatus) ([]m
 		args = append(args, string(*status))
 	}
 
-	query += " ORDER BY created_at DESC"
+	// Sprints come back in the roadmap's PLANNED execution order: order_index
+	// ascending, lowest first (SPEC/COMMANDS.md § List Sprints, Result Ordering).
+	// order_index is the field a sprint carries for exactly that purpose, and it
+	// is the published order of this command, not an incidental property of the
+	// query — a caller may rely on it.
+	//
+	// The ordering is TOTAL, so no tie-break is needed and none is specified:
+	// order_index is NOT NULL and unique across the roadmap (idx_sprints_order,
+	// SPEC/DATABASE.md § sprints Table), so no two sprints can share a position
+	// and none can lack one.
+	//
+	// The clause sits AFTER the optional status predicate on purpose: --status
+	// narrows WHICH sprints the result contains and never reorders the ones it
+	// keeps, which are returned in the same relative sequence they hold in the
+	// unfiltered listing.
+	query += " ORDER BY order_index ASC"
 
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {

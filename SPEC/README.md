@@ -50,6 +50,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Sprint `description` semantics (must state the sprint's high-level goal) | `MODELS.md § Sprint Field Constraints` |
 | Sprint membership fields (`tasks` as ids, `task_count`, what an empty sprint reports, which reads populate them) | `MODELS.md § Sprint Field Constraints` and `COMMANDS.md § List Sprints` |
 | Sprint membership read cost (one grouped read for the whole listing, no query per sprint) | `DATABASE.md § Read the Membership of Many Sprints (Grouped)` |
+| Sprint listing order (`sprint list` returns sprints by `order` ascending, the planned execution order) and how the web sprint tabs relate to it | `COMMANDS.md § List Sprints` and `WEB.md § Roadmap Sprints Page` |
 | Audit result-set cap (`MaxAuditLimit`) | `DATABASE.md § Audit Result Limit` |
 | Migration idempotency (ALTER TABLE ADD COLUMN guard) | `DATABASE.md § Migration Idempotency (ALTER TABLE ADD COLUMN)` |
 | Migration idempotency (ALTER TABLE DROP COLUMN guard, what a drop preserves and discards) | `DATABASE.md § Migration Idempotency (ALTER TABLE DROP COLUMN)` |

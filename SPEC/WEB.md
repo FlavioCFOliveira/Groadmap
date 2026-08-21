@@ -827,6 +827,18 @@ how the `rmp web` process itself terminates.
     member tasks and opens no task detail modal; tasks are clickable on the single
     Roadmap Sprint Page and on the tasks page's board (see
     [Task Detail Modal](#task-detail-modal)).
+
+  **Why Concluídos reverses the sequence.** `rmp sprint list` returns a roadmap's
+  sprints in a single sequence, `order` ascending — the planned execution order
+  (see `COMMANDS.md § List Sprints`). This page keeps that sequence on Próximos
+  and Actual and deliberately reverses it on Concluídos, because the two kinds of
+  tab answer different questions: Próximos and Actual look forward at work still
+  to come, where the next sprint to execute is the one to read first, while
+  Concluídos looks back at work already finished, where the sprint executed most
+  recently is the one to read first. The reversal is a presentation choice of this
+  one tab. It changes no stored data and no other surface: the CLI listing order
+  is unaffected, and a reader who wants the whole roadmap in a single planned
+  sequence reads `rmp sprint list`.
 - **Sprint description line breaks.** Wherever a sprint's `description` text is
   shown in a sprint card on this page — across all three tabs — the description
   renders preserving the author's line breaks (newlines), because the description

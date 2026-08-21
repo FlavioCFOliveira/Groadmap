@@ -14,8 +14,11 @@ func buildSprintCommand() Command {
 		Subcommands: []Subcommand{
 			{
 				Name: "list", Aliases: []string{"ls"},
-				Summary:     "List sprints.",
-				Description: "Lists every sprint in the roadmap, optionally filtered by status.",
+				Summary: "List sprints.",
+				Description: "Lists every sprint in the roadmap, optionally filtered by status. Results are ordered by " +
+					"sprint order ASC: the sprint with the lowest `order` value first, which is the roadmap's planned " +
+					"execution order. `order` is unique across the roadmap, so the sequence is total and repeatable. " +
+					"The --status filter narrows the result and never reorders it.",
 				Usage:       "rmp sprint list -r <roadmap> [--status <state>]",
 				HelpPrinter: printSprintListHelp,
 				Handler:     sprintList,
