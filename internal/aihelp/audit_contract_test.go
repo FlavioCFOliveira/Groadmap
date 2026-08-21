@@ -17,13 +17,14 @@
 //
 // The three are needed together because the three surfaces are written and
 // maintained separately, and each has already shipped a gap the other two did
-// not have: the SPEC omitted TASK_ASSIGN and TASK_UNASSIGN (task #171), and the
+// not have: the SPEC once omitted two operations the contract published (task
+// #171 — both have since been retired outright), and the
 // contract published all 29 operations with no description at all (task #175).
 //
 // What the tie below does and does not cover, stated plainly:
 //
 //   - It covers WORDING. TestGenerate_AuditOperationDescriptionsMatchSpecCatalogue
-//     re-derives all 29 descriptions from SPEC/DATABASE.md at test time and
+//     re-derives all 43 descriptions from SPEC/DATABASE.md at test time and
 //     compares byte for byte, so the transcription in static.go cannot drift from
 //     the catalogue in either direction. Editing the catalogue without editing
 //     static.go fails, and the failure prints the exact string to paste.
@@ -72,13 +73,13 @@ const (
 // catalogueEntry matches one catalogue entry, capturing the operation name and
 // its description. The start-of-line anchor is load-bearing: entry descriptions
 // cite other operations in backticks — TASK_STATUS_CHANGE's cites
-// SPRINT_ADD_TASK, TASK_ASSIGN's cites TASK_UPDATE — so an unanchored search
-// over the region would over-count.
+// SPRINT_ADD_TASK, SPRINT_REMOVE_TASK and SPRINT_DELETE — so an unanchored
+// search over the region would over-count.
 var catalogueEntry = regexp.MustCompile("^- `([A-Z_]+)` - (.+)$")
 
 // minCatalogueEntries is the floor below which a parse is treated as evidence
 // that the scan has stopped matching rather than as evidence about the SPEC. The
-// catalogue holds 29 entries today; the floor sits well under that so a genuine
+// catalogue holds 43 entries today; the floor sits well under that so a genuine
 // removal does not trip it, and far enough over zero that a gate measuring
 // nothing cannot report success.
 const minCatalogueEntries = 20

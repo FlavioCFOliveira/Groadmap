@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -67,7 +68,9 @@ func serve(opts options) error {
 	// warning is written before the success object so a caller that reads
 	// stdout for the URL is unaffected.
 	if !isLoopbackHost(opts.host) {
-		fmt.Fprintf(os.Stderr, "warning: web interface is reachable from the network (bound to %s); use --host 127.0.0.1 to restrict to this machine\n", opts.host)
+		logger.Warn("web interface is reachable from the network",
+			slog.String("host", opts.host),
+			slog.String("hint", "use --host 127.0.0.1 to restrict to this machine"))
 	}
 
 	if perr := utils.PrintJSON(map[string]string{"url": url}); perr != nil {
@@ -96,7 +99,7 @@ func serve(opts options) error {
 // Migration; Read-Only Data Flow — finding #43).
 //
 // Best-effort and non-fatal: a roadmap that cannot be listed, opened, or
-// migrated is logged to stderr and skipped so the server still starts for the
+// migrated is logged as a WARN record on stderr and skipped so the server still starts for the
 // remaining roadmaps. The stale roadmap simply surfaces its underlying error
 // on its own routes, exactly as it would have without this step. This mirrors
 // the best-effort tone of the legacy-layout sweep and the network-exposure
@@ -104,13 +107,14 @@ func serve(opts options) error {
 func migrateRoadmapsAtStartup() {
 	names, err := utils.ListRoadmaps()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: cannot list roadmaps for startup schema migration: %v\n", err)
+		logger.Warn("cannot list roadmaps for startup schema migration", slog.String("err", err.Error()))
 		return
 	}
 	for _, name := range names {
 		database, err := db.Open(name)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: startup schema migration skipped for roadmap %q: %v\n", name, err)
+			logger.Warn("startup schema migration skipped for roadmap",
+				slog.String("roadmap", name), slog.String("err", err.Error()))
 			continue
 		}
 		_ = database.Close() // #nosec G104 -- best-effort startup migration; close error is non-actionable

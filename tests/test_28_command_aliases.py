@@ -178,7 +178,7 @@ class TestSubcommandAliases:
         sprint = self.test.create_sprint(self.roadmap, "Status alias coverage sprint")
         self.test.move_task_to_sprint(self.roadmap, self.task_id, sprint)
         # Drive to DOING using stat (short alias); set-status would also work.
-        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(self.task_id), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(self.task_id), "DOING", "--commit-open", "626346d"])
         self.test.assert_task_status(self.roadmap, self.task_id, "DOING")
         print("✓ 'stat' alias = 'set-status' (task)")
 

@@ -105,7 +105,8 @@ func TestSprintCreate_NonPositiveOrderExit6(t *testing.T) {
 }
 
 // TestSprintUpdate_OrderAllowedWhenPending verifies that --order can be changed
-// while the sprint is PENDING, persists, and emits a SPRINT_UPDATE audit row.
+// while the sprint is PENDING, persists, and emits a SPRINT_ORDER_CHANGE audit
+// row.
 func TestSprintUpdate_OrderAllowedWhenPending(t *testing.T) {
 	const roadmap = "testsprintupdateorderpending"
 	database, cleanup := setupTestTaskRoadmap(t, roadmap)
@@ -131,12 +132,12 @@ func TestSprintUpdate_OrderAllowedWhenPending(t *testing.T) {
 	}
 	var sawUpdate bool
 	for i := range history {
-		if history[i].Operation == string(models.OpSprintUpdate) {
+		if history[i].Operation == string(models.OpSprintOrderChange) {
 			sawUpdate = true
 		}
 	}
 	if !sawUpdate {
-		t.Errorf("expected a %s audit entry after order change, got %+v", models.OpSprintUpdate, history)
+		t.Errorf("expected a %s audit entry after order change, got %+v", models.OpSprintOrderChange, history)
 	}
 }
 

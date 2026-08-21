@@ -744,18 +744,20 @@ func TestOutputValidation_TaskStat_DBState(t *testing.T) {
 	transitions := []struct {
 		status     string
 		wantStatus models.TaskStatus
-		wantField  string // DB timestamp field that should be set
+		wantField  string   // DB timestamp field that should be set
+		flags      []string // commit flag the target state makes mandatory, if any
 	}{
-		{"DOING", models.StatusDoing, "started_at"},
-		{"TESTING", models.StatusTesting, "tested_at"},
-		{"COMPLETED", models.StatusCompleted, "closed_at"},
+		{"DOING", models.StatusDoing, "started_at", []string{"--commit-open", "5f93b51"}},
+		{"TESTING", models.StatusTesting, "tested_at", nil},
+		{"COMPLETED", models.StatusCompleted, "closed_at", []string{"--commit-close", "2578d18"}},
 	}
 
 	idStr := strconv.Itoa(taskID)
 	for _, tr := range transitions {
 		tr := tr
 		t.Run(tr.status, func(t *testing.T) {
-			if err := HandleTask([]string{"stat", "-r", roadmap, idStr, tr.status}); err != nil {
+			args := append([]string{"stat", "-r", roadmap, idStr, tr.status}, tr.flags...)
+			if err := HandleTask(args); err != nil {
 				t.Fatalf("task stat %s error = %v", tr.status, err)
 			}
 

@@ -147,17 +147,19 @@ class TestAuditDateFilters:
             "-t", "Updated title"
         ])
 
-        # Test since filter combined with operation filter
+        # Test since filter combined with operation filter. The edit above
+        # supplied --title, so it is recorded as TASK_TITLE_CHANGE; the generic
+        # TASK_UPDATE is LEGACY and no command writes it.
         result = self.test.run_cmd_json([
             "audit", "list", "-r", roadmap,
             "--since", mid_time,
-            "-o", "TASK_UPDATE"
+            "-o", "TASK_TITLE_CHANGE"
         ])
 
-        # Should only show TASK_UPDATE operations after mid_time
+        # Should only show TASK_TITLE_CHANGE operations after mid_time
         assert len(result) >= 1
         for entry in result:
-            assert entry["operation"] == "TASK_UPDATE"
+            assert entry["operation"] == "TASK_TITLE_CHANGE"
             assert entry["entity_id"] == task_id
 
         print("✓ Audit date filter with other filters test passed")

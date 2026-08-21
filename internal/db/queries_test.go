@@ -990,6 +990,10 @@ func countAuditByOp(t *testing.T, db *DB, op models.AuditOperation) int {
 // Atomicity Guarantees #4). A prior implementation logged the audit in a
 // separate post-commit batch call, which could leave a committed membership
 // change with no audit record if the batch failed.
+//
+// Only the sprint side is counted here. The mirrored TASK_STATUS_SPRINT entry
+// and the ids the two carry are the subject of
+// TestAddTasksToSprint_WritesTheMirroredPair in audit_related_entity_test.go.
 func TestAddTasksToSprint_WritesAuditAtomically(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -1075,9 +1079,11 @@ func TestAddTasksToSprint_NoAuditOnFailedTransaction(t *testing.T) {
 }
 
 // TestMoveTasksBetweenSprints_WritesAuditAtomically is a regression test
-// guaranteeing that MoveTasksBetweenSprints records one SPRINT_MOVE_TASK audit
-// entry per task in the SAME transaction as the re-parenting (SPEC/DATABASE.md §
-// Transactional Atomicity Guarantees #5).
+// guaranteeing that MoveTasksBetweenSprints records the pair of audit entries a
+// move produces — SPRINT_MOVE_TASK_OUT against the source sprint and
+// SPRINT_MOVE_TASK_IN against the destination — one pair per task, in the SAME
+// transaction as the re-parenting (SPEC/DATABASE.md § Transactional Atomicity
+// Guarantees #5).
 func TestMoveTasksBetweenSprints_WritesAuditAtomically(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -1113,20 +1119,29 @@ func TestMoveTasksBetweenSprints_WritesAuditAtomically(t *testing.T) {
 		t.Fatalf("failed to seed source sprint: %v", err)
 	}
 
-	before := countAuditByOp(t, db, models.OpSprintMoveTask)
+	before := map[models.AuditOperation]int{}
+	for _, op := range []models.AuditOperation{models.OpSprintMoveTaskOut, models.OpSprintMoveTaskIn} {
+		before[op] = countAuditByOp(t, db, op)
+	}
 	if err := db.MoveTasksBetweenSprints(testContext(), fromID, toID, taskIDs); err != nil {
 		t.Fatalf("failed to move tasks between sprints: %v", err)
 	}
-	after := countAuditByOp(t, db, models.OpSprintMoveTask)
 
-	if got := after - before; got != len(taskIDs) {
-		t.Errorf("expected %d SPRINT_MOVE_TASK audit entries, got %d", len(taskIDs), got)
+	for op, n := range before {
+		if got := countAuditByOp(t, db, op) - n; got != len(taskIDs) {
+			t.Errorf("expected %d %s audit entries, got %d", len(taskIDs), op, got)
+		}
+	}
+	// The operation these two replace is LEGACY: no path may write it again.
+	if n := countAuditByOp(t, db, models.OpSprintMoveTask); n != 0 {
+		t.Errorf("the move wrote %d SPRINT_MOVE_TASK entries; that operation is LEGACY and no code path "+
+			"may produce one (SPEC/DATABASE.md § audit Table, Legacy)", n)
 	}
 }
 
 // TestMoveTasksBetweenSprints_NoAuditOnFailedTransaction guarantees that a
-// rejected move (a task that is not a member of the source sprint) leaves no
-// SPRINT_MOVE_TASK audit entry behind.
+// rejected move (a task that is not a member of the source sprint) leaves
+// neither half of the move pair behind.
 func TestMoveTasksBetweenSprints_NoAuditOnFailedTransaction(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -1157,14 +1172,18 @@ func TestMoveTasksBetweenSprints_NoAuditOnFailedTransaction(t *testing.T) {
 		CreatedAt:              time.Now().Format(time.RFC3339),
 	})
 
-	before := countAuditByOp(t, db, models.OpSprintMoveTask)
+	before := map[models.AuditOperation]int{}
+	for _, op := range []models.AuditOperation{models.OpSprintMoveTaskOut, models.OpSprintMoveTaskIn} {
+		before[op] = countAuditByOp(t, db, op)
+	}
 	if err := db.MoveTasksBetweenSprints(testContext(), fromID, toID, []int{orphanID}); err == nil {
 		t.Fatal("expected membership validation error, got nil")
 	}
-	after := countAuditByOp(t, db, models.OpSprintMoveTask)
 
-	if after != before {
-		t.Errorf("expected no audit entries after rolled-back move, got %d new", after-before)
+	for op, n := range before {
+		if after := countAuditByOp(t, db, op); after != n {
+			t.Errorf("expected no %s entries after a rolled-back move, got %d new", op, after-n)
+		}
 	}
 }
 
@@ -1209,6 +1228,17 @@ func TestLogAuditTxWritesEveryColumn(t *testing.T) {
 	}
 	if got.ID == 0 {
 		t.Error("expected the row to carry a non-zero id")
+	}
+	// The two nullable columns, on an operation that carries neither. A NULL
+	// here means "this operation had no counterpart and no commit", and it is
+	// what every operation outside the ten that fill one of the two stores.
+	if got.RelatedEntityID != nil {
+		t.Errorf("related_entity_id = %d, want NULL: SPRINT_DELETE names no counterpart "+
+			"(SPEC/DATABASE.md § The Two Entities of a Relational Operation)", *got.RelatedEntityID)
+	}
+	if got.CommitHash != nil {
+		t.Errorf("commit_hash = %q, want NULL: only TASK_STATUS_DOING and TASK_STATUS_COMPLETED "+
+			"carry one (SPEC/DATABASE.md § The Commit Hash of an Audit Entry)", *got.CommitHash)
 	}
 }
 

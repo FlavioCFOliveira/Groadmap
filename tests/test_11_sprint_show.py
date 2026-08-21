@@ -166,20 +166,20 @@ class TestSprintShow:
         # Tasks 0-1 stay in SPRINT status (which is pending)
 
         # Move tasks 2-3 to DOING (indices 2,3)
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[2]), "DOING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[3]), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[2]), "DOING", "--commit-open", "3b9289c"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[3]), "DOING", "--commit-open", "24262f0"])
 
         # Move tasks 4-5 to DOING then TESTING (indices 4,5)
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[4]), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[4]), "DOING", "--commit-open", "6c8064a"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[4]), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[5]), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[5]), "DOING", "--commit-open", "021fa2f"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[5]), "TESTING"])
 
         # Complete tasks 6-9 (indices 6,7,8,9)
         for idx in [6, 7, 8, 9]:
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[idx]), "DOING"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[idx]), "DOING", "--commit-open", "abd481c"])
             self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[idx]), "TESTING"])
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[idx]), "COMPLETED"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[idx]), "COMPLETED", "--commit-close", "8256fd0"])
 
         # Get sprint show report
         result = self.test.run_cmd_json(["sprint", "show", "-r", roadmap, str(sprint_id)])
@@ -360,9 +360,9 @@ class TestSprintShow:
 
         # Complete tasks
         for task in [task1, task2]:
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task), "DOING"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task), "DOING", "--commit-open", "5d6a2cd"])
             self.test.run_cmd(["task", "stat", "-r", roadmap, str(task), "TESTING"])
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task), "COMPLETED"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task), "COMPLETED", "--commit-close", "d1e8dec"])
 
         # Close sprint
         self.test.run_cmd(["sprint", "close", "-r", roadmap, str(sprint_id)])
@@ -498,11 +498,11 @@ class TestSprintShow:
         # Apply status transitions
         for task_id, transitions in tasks:
             if transitions >= 1:
-                self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+                self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "5f93b51"])
             if transitions >= 2:
                 self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
             if transitions >= 3:
-                self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED"])
+                self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "4999725"])
 
         result = self.test.run_cmd_json(["sprint", "show", "-r", roadmap, str(sprint_id)])
 

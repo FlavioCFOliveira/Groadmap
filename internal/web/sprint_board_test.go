@@ -93,15 +93,10 @@ const (
 	sprintTaskSchema    = "Version the settlement export schema"
 )
 
-// sprintBoardSpecialists is the specialists value of the card asserted against in
-// full. The card must NOT show it: the field is reached through the task detail
-// modal the card opens (Acceptance Criterion 133).
-const sprintBoardSpecialists = "go-developer, exhaustive-qa-engineer"
-
 // seedSprintBoardFixture builds a roadmap holding one OPEN sprint with six member
 // tasks spread over all three board columns, a parent/subtask hierarchy, a
-// dependency edge, specialists, and comments, so every card indicator has at
-// least one card that shows it and at least one card that must not.
+// dependency edge, and comments, so every card indicator has at least one card
+// that shows it and at least one card that must not.
 //
 // The three orders are deliberately different. Tasks are CREATED in one order
 // (which fixes the id order), added to the sprint in a SECOND order (which fixes
@@ -128,7 +123,7 @@ func seedSprintBoardFixture(t *testing.T, name string) sprintBoardFixture {
 	f := sprintBoardFixture{name: name}
 
 	newTask := func(title, created string, priority, severity int,
-		taskType models.TaskType, specialists *string, parent *int) int {
+		taskType models.TaskType, parent *int) int {
 		t.Helper()
 		id, cerr := database.CreateTask(ctx, &models.Task{
 			Title:                  title,
@@ -136,7 +131,6 @@ func seedSprintBoardFixture(t *testing.T, name string) sprintBoardFixture {
 			Status:                 models.StatusBacklog,
 			Priority:               priority,
 			Severity:               severity,
-			Specialists:            specialists,
 			ParentTaskID:           parent,
 			FunctionalRequirements: "Operators must be able to follow this work from the sprint board.",
 			TechnicalRequirements:  "Implemented against the roadmap database, read-only on the web side.",
@@ -150,28 +144,27 @@ func seedSprintBoardFixture(t *testing.T, name string) sprintBoardFixture {
 	}
 
 	// Creation order fixes the id order, which is neither of the two orders below.
-	specialists := sprintBoardSpecialists
 	f.reconcile = newTask(sprintTaskReconcile, "2026-03-01T09:00:00Z", 9, 2,
-		models.TypeUserStory, &specialists, nil)
+		models.TypeUserStory, nil)
 	f.alerting = newTask(sprintTaskAlerting, "2026-03-02T09:00:00Z", 3, 5,
-		models.TypeTask, nil, nil)
+		models.TypeTask, nil)
 	f.retries = newTask(sprintTaskRetries, "2026-03-03T09:00:00Z", 7, 6,
-		models.TypeBug, nil, nil)
+		models.TypeBug, nil)
 	f.schema = newTask(sprintTaskSchema, "2026-03-04T09:00:00Z", 5, 3,
-		models.TypeChore, nil, nil)
+		models.TypeChore, nil)
 	f.dashboard = newTask(sprintTaskDashboard, "2026-03-05T09:00:00Z", 2, 1,
-		models.TypeTask, nil, nil)
+		models.TypeTask, nil)
 	f.runbook = newTask(sprintTaskRunbook, "2026-03-06T09:00:00Z", 8, 4,
-		models.TypeChore, nil, nil)
+		models.TypeChore, nil)
 
 	// Subtasks, which are tasks of the roadmap but NOT members of the sprint, so
 	// they raise a member's subtask_count without appearing on the board.
 	newTask("Parse the acquirer settlement file header", "2026-03-07T09:00:00Z", 4, 2,
-		models.TypeSubTask, nil, &f.reconcile)
+		models.TypeSubTask, &f.reconcile)
 	newTask("Match settlement lines to ledger entries by reference", "2026-03-08T09:00:00Z", 4, 2,
-		models.TypeSubTask, nil, &f.reconcile)
+		models.TypeSubTask, &f.reconcile)
 	newTask("Cap the webhook retry budget per acquirer", "2026-03-09T09:00:00Z", 4, 2,
-		models.TypeSubTask, nil, &f.retries)
+		models.TypeSubTask, &f.retries)
 
 	f.sprintID = newSprint(t, database, "Harden the settlement reconciliation pipeline",
 		"Close the reconciliation gaps the March incident exposed, end to end.")
@@ -1405,7 +1398,6 @@ func TestSprintBoard_CardShowsSixDataPointsInOrder(t *testing.T) {
 		"a status badge":       taskStatusBadge(models.StatusSprint),
 		"the status value":     ">SPRINT<",
 		"the task type":        string(models.TypeUserStory),
-		"the specialists":      sprintBoardSpecialists,
 		"a specialists icon":   "ti ti-users",
 		"a depends-on count":   "Depends on:",
 		"a blocks count":       "Blocks:",
@@ -1421,10 +1413,13 @@ func TestSprintBoard_CardShowsSixDataPointsInOrder(t *testing.T) {
 
 	// The controls that keep those absences from being vacuous: the task really
 	// does carry the values the card omits.
-	if !strings.Contains(servePage(t, mux, "/roadmaps/"+f.name+"/tasks"), sprintBoardSpecialists) {
-		t.Errorf("the reconciliation task names no specialists at all, so asserting the sprint " +
-			"card omits them proves nothing")
-	}
+	//
+	// The retired specialists indicator has no such control, and needs none: the
+	// Task entity no longer carries the field, so no fixture can give a task a
+	// value for it. Its icon stays in the absence table above because the icon is
+	// what would betray a surviving indicator, and it is asserted absent from the
+	// TASKS board too, where a value could once have reached a card
+	// (TestTaskBoard_CardShowsEveryPart, TestTaskBoard_AbsentMetadataRendersNothing).
 	view := decodeTaskDetail(t, mux, f.name, f.reconcile)
 	if len(view.Task.Blocks) == 0 && len(view.Task.DependsOn) == 0 {
 		t.Errorf("the reconciliation task has no dependency edge at all, so asserting the card " +

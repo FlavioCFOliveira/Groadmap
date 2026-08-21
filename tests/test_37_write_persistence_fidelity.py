@@ -3,7 +3,7 @@
 Test 37: Persistence fidelity of the state-mutating commands.
 
 For every command that changes state (task/sprint/roadmap create, edit, status
-transitions, reopen, priority/severity, assign/unassign, dependencies, remove;
+transitions, reopen, priority/severity, dependencies, remove;
 sprint create/update/start/close/reopen, add/remove/move-tasks, ordering,
 remove; roadmap create/remove) this suite issues the command with realistic
 input and then reads the state back to assert that what was PERSISTED matches
@@ -13,13 +13,18 @@ Regression guards for write-side defects:
   - sprint move-tasks must PRESERVE task status (it used to reset to SPRINT)
   - capacity / membership / BACKLOG-only guards must reject atomically and
     leave state unchanged
+
+The specialists field and the `task assign` / `task unassign` subcommands were
+removed from the task entity (rmp task #246; SPEC/VERSION.md § Migration
+1.9.0 -> 1.10.0). `test_task_assign_and_unassign_subcommands_are_gone` below
+proves the removal rather than the old assign/unassign fidelity it replaces.
 """
 
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.base_test import GroadmapTestBase
+from tests.base_test import GroadmapTestBase, commit_flags_for
 
 
 class TestWritePersistenceFidelity:
@@ -33,15 +38,12 @@ class TestWritePersistenceFidelity:
 
     # ---- helpers -----------------------------------------------------------
 
-    def _mk(self, roadmap, title, ttype="TASK", priority=0, severity=0, parent=None,
-            specialists=None):
+    def _mk(self, roadmap, title, ttype="TASK", priority=0, severity=0, parent=None):
         cmd = ["task", "create", "-r", roadmap, "-t", title,
                "-fr", "Why " + title, "-tr", "How " + title, "-ac", "Verify " + title,
                "-y", ttype, "-p", str(priority), "--severity", str(severity)]
         if parent is not None:
             cmd += ["--parent", str(parent)]
-        if specialists is not None:
-            cmd += ["-sp", specialists]
         return self.test.run_cmd_json(cmd)["id"]
 
     def _get(self, roadmap, tid):
@@ -65,7 +67,7 @@ class TestWritePersistenceFidelity:
         tid = self.test.run_cmd_json([
             "task", "create", "-r", r, "-t", "  OAuth2 PKCE flow  ",
             "-y", "BUG", "-p", "7", "--severity", "8",
-            "-fr", fr, "-tr", tr, "-ac", ac, "-sp", "Alice Silva,Bob Costa",
+            "-fr", fr, "-tr", tr, "-ac", ac,
         ])["id"]
         t = self._get(r, tid)
         assert t["title"] == "OAuth2 PKCE flow", repr(t["title"])  # trimmed
@@ -73,7 +75,6 @@ class TestWritePersistenceFidelity:
         assert t["functional_requirements"] == fr, t["functional_requirements"]
         assert t["technical_requirements"] == tr
         assert t["acceptance_criteria"] == ac
-        assert t["specialists"] == "Alice Silva,Bob Costa", t["specialists"]
         assert t["status"] == "BACKLOG" and t["parent_task_id"] is None
         self.test.assert_task_shape(t)
         print("✓ create persists every requested field (with trimming)")
@@ -86,7 +87,7 @@ class TestWritePersistenceFidelity:
                                        "-fr", "f", "-tr", "t", "-ac", "a"])["id"]
         b = self._get(r, bare)
         assert b["type"] == "TASK" and b["priority"] == 0 and b["severity"] == 0, b
-        assert b["status"] == "BACKLOG" and b["specialists"] is None and b["parent_task_id"] is None, b
+        assert b["status"] == "BACKLOG" and b["parent_task_id"] is None, b
         print("✓ create applies documented defaults")
 
     def test_create_subtask_parent_link(self):
@@ -116,12 +117,12 @@ class TestWritePersistenceFidelity:
         tid = self._mk(r, "Old")
         self.test.run_cmd(["task", "edit", "-r", r, str(tid),
                            "-t", "New title", "-y", "REFACTOR", "-p", "5", "--severity", "6",
-                           "-fr", "new fr", "-tr", "new tr", "-ac", "new ac", "-sp", "Carol Dias"])
+                           "-fr", "new fr", "-tr", "new tr", "-ac", "new ac"])
         t = self._get(r, tid)
         assert t["title"] == "New title" and t["type"] == "REFACTOR", t
         assert t["priority"] == 5 and t["severity"] == 6, t
         assert t["functional_requirements"] == "new fr" and t["technical_requirements"] == "new tr"
-        assert t["acceptance_criteria"] == "new ac" and t["specialists"] == "Carol Dias"
+        assert t["acceptance_criteria"] == "new ac", t
         print("✓ edit persists every requested field")
 
     # ---- status transitions / lifecycle timestamps ------------------------
@@ -136,7 +137,7 @@ class TestWritePersistenceFidelity:
         t = self._get(r, tid)
         assert t["status"] == "SPRINT" and t["started_at"] is None, t
 
-        self.test.run_cmd(["task", "stat", "-r", r, str(tid), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", r, str(tid), "DOING", "--commit-open", "6c8064a"])
         t = self._get(r, tid)
         assert t["status"] == "DOING" and t["started_at"] and t["tested_at"] is None, t
 
@@ -144,7 +145,7 @@ class TestWritePersistenceFidelity:
         t = self._get(r, tid)
         assert t["status"] == "TESTING" and t["tested_at"] and t["closed_at"] is None, t
 
-        self.test.run_cmd(["task", "stat", "-r", r, str(tid), "COMPLETED",
+        self.test.run_cmd(["task", "stat", "-r", r, str(tid), "COMPLETED", "--commit-close", "b7591f7",
                            "-s", "Shipped in v2.1; all green"])
         t = self._get(r, tid)
         assert t["status"] == "COMPLETED" and t["closed_at"], t
@@ -160,7 +161,7 @@ class TestWritePersistenceFidelity:
         tid = self._mk(r, "Reopen me")
         self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(s), str(tid)])
         for st in ("DOING", "TESTING", "COMPLETED"):
-            self.test.run_cmd(["task", "stat", "-r", r, str(tid), st])
+            self.test.run_cmd(["task", "stat", "-r", r, str(tid), st] + commit_flags_for(st))
         self.test.run_cmd(["task", "reopen", "-r", r, str(tid)])
         t = self._get(r, tid)
         assert t["status"] == "BACKLOG", t["status"]
@@ -181,23 +182,39 @@ class TestWritePersistenceFidelity:
         assert self._get(r, c)["severity"] == 0, "c severity untouched"
         print("✓ bulk priority/severity persist for every listed task")
 
-    # ---- assign / unassign -------------------------------------------------
+    # ---- assign / unassign: removed subcommands ----------------------------
 
-    def test_assign_unassign(self):
-        r = self.test.create_roadmap("assign")
-        tid = self._mk(r, "Assignable")
-        self.test.run_cmd(["task", "assign", "-r", r, str(tid), "Dev One"])
-        self.test.run_cmd(["task", "assign", "-r", r, str(tid), "Dev Two"])
-        self.test.run_cmd(["task", "assign", "-r", r, str(tid), "Dev One"], check=False)  # dup
-        sp = self._get(r, tid)["specialists"]
-        names = [n for n in sp.split(",")] if sp else []
-        assert names.count("Dev One") == 1, f"assign must be idempotent: {sp}"
-        assert "Dev Two" in names, sp
-        self.test.run_cmd(["task", "unassign", "-r", r, str(tid), "Dev One"])
-        sp2 = self._get(r, tid)["specialists"]
-        assert "Dev One" not in (sp2 or ""), sp2
-        assert "Dev Two" in (sp2 or ""), sp2
-        print("✓ assign (idempotent) / unassign persist correctly")
+    def test_task_assign_and_unassign_subcommands_are_gone(self):
+        """`task assign` and `task unassign` were removed together with the
+        specialists field (rmp task #246; SPEC/VERSION.md § Migration 1.9.0 ->
+        1.10.0). Both names must now be rejected as unknown task subcommands
+        (exit 2), and the rejection must be a pure no-op: the task's state is
+        read back unchanged and no audit entry is written for the attempt."""
+        r = self.test.create_roadmap("assign_removed")
+        tid = self._mk(r, "Provision the on-call escalation webhook")
+        before = self._get(r, tid)
+        before_audit_count = len(self.test.run_cmd_json(["audit", "list", "-r", r]))
+
+        code, out, err = self.test.run_cmd(
+            ["task", "assign", "-r", r, str(tid), "Dev One"], check=False)
+        assert code == 2, f"task assign must exit 2 (unknown subcommand), got {code}: {err}"
+        assert out == "", f"task assign must write nothing to stdout on rejection: {out!r}"
+        assert "assign" in err.lower(), f"stderr must name the unknown subcommand: {err!r}"
+
+        code2, out2, err2 = self.test.run_cmd(
+            ["task", "unassign", "-r", r, str(tid), "Dev One"], check=False)
+        assert code2 == 2, f"task unassign must exit 2 (unknown subcommand), got {code2}: {err2}"
+        assert out2 == "", f"task unassign must write nothing to stdout on rejection: {out2!r}"
+        assert "unassign" in err2.lower(), f"stderr must name the unknown subcommand: {err2!r}"
+
+        after = self._get(r, tid)
+        assert after == before, f"a rejected subcommand must not change task state: {before} -> {after}"
+        after_audit_count = len(self.test.run_cmd_json(["audit", "list", "-r", r]))
+        assert after_audit_count == before_audit_count, (
+            "a rejected unknown subcommand must write no audit entry: "
+            f"{before_audit_count} -> {after_audit_count}"
+        )
+        print("✓ task assign / task unassign are gone: exit 2, no stdout, no state or audit change")
 
     # ---- dependencies ------------------------------------------------------
 
@@ -291,8 +308,8 @@ class TestWritePersistenceFidelity:
         self.test.run_cmd(["sprint", "start", "-r", r, str(s1)])
         a = self._mk(r, "A"); b = self._mk(r, "B"); c = self._mk(r, "C")
         self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(s1), str(a), str(b), str(c)])
-        self.test.run_cmd(["task", "stat", "-r", r, str(b), "DOING"])
-        self.test.run_cmd(["task", "stat", "-r", r, str(c), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", r, str(b), "DOING", "--commit-open", "021fa2f"])
+        self.test.run_cmd(["task", "stat", "-r", r, str(c), "DOING", "--commit-open", "abd481c"])
         self.test.run_cmd(["task", "stat", "-r", r, str(c), "TESTING"])
         # a=SPRINT, b=DOING, c=TESTING
         self.test.run_cmd(["sprint", "move-tasks", "-r", r, str(s1), str(s2),
@@ -344,7 +361,7 @@ class TestWritePersistenceFidelity:
         self.test.run_cmd(["sprint", "start", "-r", r, str(sid)])
         a = self._mk(r, "A")
         self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(sid), str(a)])
-        self.test.run_cmd(["task", "stat", "-r", r, str(a), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", r, str(a), "DOING", "--commit-open", "5d6a2cd"])
         self.test.run_cmd(["sprint", "remove", "-r", r, str(sid)])
         assert self._get(r, a)["status"] == "BACKLOG", "sprint remove must revert members to BACKLOG"
         sprints = self.test.run_cmd_json(["sprint", "list", "-r", r])

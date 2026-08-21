@@ -350,7 +350,7 @@ func TestSprintCreate_TitleRoundTrip(t *testing.T) {
 }
 
 // TestSprintUpdate_TitleOnly verifies that --title alone is an accepted update,
-// changes the persisted title, and writes a SPRINT_UPDATE audit row.
+// changes the persisted title, and writes a SPRINT_TITLE_CHANGE audit row.
 func TestSprintUpdate_TitleOnly(t *testing.T) {
 	testName := "testsprintupdatetitle"
 	database, cleanup := setupTestTaskRoadmap(t, testName)
@@ -377,19 +377,20 @@ func TestSprintUpdate_TitleOnly(t *testing.T) {
 		t.Errorf("updated title = %q, want %q", sprint.Title, newTitle)
 	}
 
-	// A SPRINT_UPDATE audit row must exist for this sprint.
+	// A SPRINT_TITLE_CHANGE audit row must exist for this sprint: the entry
+	// names the field the invocation supplied, not the bare fact of an update.
 	history, err := database.GetEntityHistory(context.Background(), string(models.EntitySprint), sprintID)
 	if err != nil {
 		t.Fatalf("GetEntityHistory error = %v", err)
 	}
 	var sawUpdate bool
 	for i := range history {
-		if history[i].Operation == string(models.OpSprintUpdate) {
+		if history[i].Operation == string(models.OpSprintTitleChange) {
 			sawUpdate = true
 		}
 	}
 	if !sawUpdate {
-		t.Errorf("expected a %s audit entry for sprint %d, got %+v", models.OpSprintUpdate, sprintID, history)
+		t.Errorf("expected a %s audit entry for sprint %d, got %+v", models.OpSprintTitleChange, sprintID, history)
 	}
 }
 
@@ -867,12 +868,25 @@ func TestSprintRemoveTasks_ClearsLifecycleAndCompacts(t *testing.T) {
 	}
 
 	// Drive t2 all the way to COMPLETED so it has started_at/tested_at/closed_at set.
-	for _, st := range []string{"DOING", "TESTING"} {
-		if err := HandleTask([]string{"stat", "-r", testName, strconv.Itoa(t2), st}); err != nil {
-			t.Fatalf("transition t2 -> %s: %v", st, err)
+	// The entry into DOING carries the mandatory --commit-open, and the entry
+	// into COMPLETED the mandatory --commit-close (SPEC/COMMANDS.md § Change
+	// Status (stat)).
+	for _, st := range []struct {
+		status string
+		flags  []string
+	}{
+		{"DOING", []string{"--commit-open", "5f93b51"}},
+		{"TESTING", nil},
+	} {
+		args := append([]string{"stat", "-r", testName, strconv.Itoa(t2), st.status}, st.flags...)
+		if err := HandleTask(args); err != nil {
+			t.Fatalf("transition t2 -> %s: %v", st.status, err)
 		}
 	}
-	if err := HandleTask([]string{"stat", "-r", testName, strconv.Itoa(t2), "COMPLETED", "--summary", "all done"}); err != nil {
+	if err := HandleTask([]string{
+		"stat", "-r", testName, strconv.Itoa(t2), "COMPLETED",
+		"--commit-close", "2578d18", "--summary", "all done",
+	}); err != nil {
 		t.Fatalf("complete t2: %v", err)
 	}
 

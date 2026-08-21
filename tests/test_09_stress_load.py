@@ -153,9 +153,9 @@ class TestStressLoad:
         for batch_start in range(0, 50, 10):
             batch = task_ids[batch_start:batch_start + 10]
             ids_str = ",".join(str(t) for t in batch)
-            self.test.run_cmd(["task", "stat", "-r", roadmap, ids_str, "DOING"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, ids_str, "DOING", "--commit-open", "021fa2f"])
             self.test.run_cmd(["task", "stat", "-r", roadmap, ids_str, "TESTING"])
-            self.test.run_cmd(["task", "stat", "-r", roadmap, ids_str, "COMPLETED"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, ids_str, "COMPLETED", "--commit-close", "8007175"])
         elapsed = time.time() - start_time
         print(f"  Completed 50 tasks in {elapsed:.2f}s")
 
@@ -194,9 +194,9 @@ class TestStressLoad:
             self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint)])
 
             ids_str = ",".join(str(t) for t in task_ids)
-            self.test.run_cmd(["task", "stat", "-r", roadmap, ids_str, "DOING"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, ids_str, "DOING", "--commit-open", "abd481c"])
             self.test.run_cmd(["task", "stat", "-r", roadmap, ids_str, "TESTING"])
-            self.test.run_cmd(["task", "stat", "-r", roadmap, ids_str, "COMPLETED"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, ids_str, "COMPLETED", "--commit-close", "8a82583"])
             self.test.run_cmd(["sprint", "close", "-r", roadmap, str(sprint)])
 
             total_completed += 5
@@ -351,7 +351,7 @@ class TestStressLoad:
 
         # Move 50 to DOING
         ids_doing = ",".join(str(t) for t in task_ids[:50])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, ids_doing, "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, ids_doing, "DOING", "--commit-open", "5d6a2cd"])
 
         # Move 30 to TESTING
         ids_testing = ",".join(str(t) for t in task_ids[:30])
@@ -359,7 +359,7 @@ class TestStressLoad:
 
         # Complete 15
         ids_completed = ",".join(str(t) for t in task_ids[:15])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, ids_completed, "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, ids_completed, "COMPLETED", "--commit-close", "b0ab692"])
 
         start_time = time.time()
         stats = self.test.run_cmd_json(["stats", "-r", roadmap])

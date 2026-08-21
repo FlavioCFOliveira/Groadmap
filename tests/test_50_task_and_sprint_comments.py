@@ -1254,7 +1254,7 @@ class TestTaskAndSprintComments:
         seen["SPRINT"] = self.add_task_comment("UPDATE")
 
         self.run(["sprint", "start", "-r", ROADMAP, str(self.sprint)])
-        self.run(["task", "stat", "-r", ROADMAP, str(self.task), "DOING"])
+        self.run(["task", "stat", "-r", ROADMAP, str(self.task), "DOING", "--commit-open", "5f93b51"])
         self.test.assert_task_status(ROADMAP, self.task, "DOING")
         seen["DOING"] = self.add_task_comment("HYPOTHESIS")
 
@@ -1262,7 +1262,7 @@ class TestTaskAndSprintComments:
         self.test.assert_task_status(ROADMAP, self.task, "TESTING")
         seen["TESTING"] = self.add_task_comment("TEST")
 
-        self.run(["task", "stat", "-r", ROADMAP, str(self.task), "COMPLETED",
+        self.run(["task", "stat", "-r", ROADMAP, str(self.task), "COMPLETED", "--commit-close", "fcb1c8a",
                   "--summary", "Idempotency key deployed; August cycle reconciled."])
         self.test.assert_task_status(ROADMAP, self.task, "COMPLETED")
         seen["COMPLETED"] = self.add_task_comment("DECISION")
@@ -1300,9 +1300,9 @@ class TestTaskAndSprintComments:
         """
         self.run(["sprint", "add-tasks", "-r", ROADMAP, str(self.sprint), str(self.task)])
         self.run(["sprint", "start", "-r", ROADMAP, str(self.sprint)])
-        self.run(["task", "stat", "-r", ROADMAP, str(self.task), "DOING"])
+        self.run(["task", "stat", "-r", ROADMAP, str(self.task), "DOING", "--commit-open", "2578d18"])
         self.run(["task", "stat", "-r", ROADMAP, str(self.task), "TESTING"])
-        self.run(["task", "stat", "-r", ROADMAP, str(self.task), "COMPLETED",
+        self.run(["task", "stat", "-r", ROADMAP, str(self.task), "COMPLETED", "--commit-close", "8007175",
                   "--summary", "Idempotency key deployed; August cycle reconciled."])
 
         cid = self.add_task_comment("PROGRESS")
@@ -2090,7 +2090,16 @@ class TestTaskAndSprintComments:
         a create-then-comment test structurally cannot reach it: the tables are
         always already there. The roadmap is downgraded in place — the version
         rolled back and both tables dropped — and the next command must migrate
-        it forward and accept a comment immediately.
+        it forward, through every later migration (not stopping at 1.9.0; a
+        roadmap this old also loses tasks.specialists on the way to CURRENT),
+        and accept a comment immediately.
+
+        The expected post-migration version is read from the live database
+        BEFORE the downgrade, rather than hardcoded, so this test does not go
+        stale the next time SPEC/VERSION.md adds a migration: whatever version
+        the binary stamps on a freshly created roadmap today is CURRENT, and a
+        pre-1.9.0 database must land on that same CURRENT version, not on 1.9.0
+        specifically.
         """
         db_path = os.path.join(
             str(self.test.home_dir), ".roadmaps", ROADMAP, "project.db"
@@ -2099,6 +2108,9 @@ class TestTaskAndSprintComments:
 
         connection = sqlite3.connect(db_path)
         try:
+            current_version = connection.execute(
+                "SELECT value FROM _metadata WHERE key = 'schema_version'"
+            ).fetchone()[0]
             connection.execute("DROP TABLE task_comments")
             connection.execute("DROP TABLE sprint_comments")
             connection.execute(
@@ -2133,14 +2145,18 @@ class TestTaskAndSprintComments:
             connection.close()
 
         assert tables == ["sprint_comments", "task_comments"], tables
-        assert version == "1.9.0", version
+        assert version == current_version, (
+            f"a pre-1.9.0 database must migrate all the way to CURRENT "
+            f"({current_version!r}), not stop partway; got {version!r}"
+        )
 
         # And the feature works at once, on both families.
         task_cid = self.add_task_comment("FINDING")
         sprint_cid = self.add_sprint_comment("DECISION", SPRINT_DECISION_BODY)
         assert self.ids(self.task_comments()) == [task_cid]
         assert self.ids(self.sprint_comments()) == [sprint_cid]
-        print("✓ the 1.9.0 migration recreates the comment tables on reopen")
+        print("✓ the 1.9.0 migration recreates the comment tables on reopen, "
+              f"landing on CURRENT ({current_version})")
 
 
 def _run_all():

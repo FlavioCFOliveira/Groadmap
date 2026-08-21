@@ -44,7 +44,12 @@ class TestAuditReporting:
         print("✓ Audit log on task create test passed")
 
     def test_audit_log_tracks_task_updates(self):
-        """Test that audit log tracks task updates."""
+        """Test that audit log names the field each edit supplied.
+
+        `task edit -t` writes TASK_TITLE_CHANGE, not the generic TASK_UPDATE:
+        that operation is LEGACY and no command writes it any more
+        (SPEC/COMMANDS.md § Edit Task).
+        """
         roadmap = self.test.create_roadmap()
 
         # Create and modify task
@@ -68,9 +73,12 @@ class TestAuditReporting:
 
         operations = [e["operation"] for e in result]
         assert "TASK_CREATE" in operations
-        assert "TASK_UPDATE" in operations
+        assert "TASK_TITLE_CHANGE" in operations
         assert "TASK_PRIORITY_CHANGE" in operations
         assert "TASK_SEVERITY_CHANGE" in operations
+        assert "TASK_UPDATE" not in operations, (
+            f"TASK_UPDATE is LEGACY and must never be written; got: {operations}"
+        )
 
         print("✓ Audit log tracks task updates test passed")
 
@@ -87,15 +95,23 @@ class TestAuditReporting:
         ])
 
         # Change status
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "5d6a2cd"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "8256fd0"])
 
         # Check audit log
         result = self.test.run_cmd_json(["audit", "list", "-r", roadmap])
 
-        status_changes = [e for e in result if e["operation"] == "TASK_STATUS_CHANGE"]
-        assert len(status_changes) >= 3  # At least DOING, TESTING, COMPLETED
+        # An entry names the state the task ENTERED, so the three transitions
+        # above leave three different operations rather than three copies of one
+        # (SPEC/DATABASE.md - One Row per Thing That Happened).
+        operations = [e["operation"] for e in result]
+        for entered in ("TASK_STATUS_DOING", "TASK_STATUS_TESTING", "TASK_STATUS_COMPLETED"):
+            assert entered in operations, f"{entered} missing from {operations}"
+
+        # TASK_STATUS_CHANGE is LEGACY: readable, so the rows a pre-1.12.0
+        # binary wrote stay reachable by name, but never written again.
+        assert "TASK_STATUS_CHANGE" not in operations
 
         print("✓ Audit log tracks status changes test passed")
 

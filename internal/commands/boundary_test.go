@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -229,37 +230,76 @@ func TestTaskValidate_AcceptanceCriteria_OneBeyondMaxLength(t *testing.T) {
 	}
 }
 
-// ==================== models.Task.Validate — specialists length boundary ====================
+// ==================== task create/edit — the removed -sp flag is size-blind ====================
+//
+// These three cases replace the former specialists length-boundary trio
+// (exact-max / max+1 / nil). The Task entity no longer carries a specialists
+// field, so there is no length to sit on a boundary of — but the ABSENCE of a
+// boundary is itself worth pinning, because a partial removal that dropped the
+// model field while leaving the flag definition behind would still parse the
+// value and still gate it somewhere.
+//
+// The three sizes that used to straddle the old 500-byte limit are therefore
+// re-used as inputs and required to produce the SAME outcome: rejection as an
+// unknown flag (utils.ErrInvalidInput -> exit 2), never utils.ErrFieldTooLarge
+// (exit 6). If any length-dependent handling survives anywhere on the flag path,
+// these diverge (SPEC/COMMANDS.md § Create Task, § Edit Task).
 
-func TestTaskValidate_Specialists_ExactMaxLength(t *testing.T) {
-	task := baseValidTask()
-	s := repeatByte('s', models.MaxTaskSpecialists)
-	task.Specialists = &s
-	if err := task.Validate(); err != nil {
-		t.Errorf("specialists at exact max (%d bytes) should be valid, got: %v",
-			models.MaxTaskSpecialists, err)
+// specialistsBoundarySizes are the byte counts that bracketed the retired
+// 500-char specialists limit: one under it, exactly on it, and one over it.
+var specialistsBoundarySizes = []int{499, 500, 501}
+
+func TestTaskCreate_SpecialistsFlag_RejectedAtEveryFormerBoundarySize(t *testing.T) {
+	for _, n := range specialistsBoundarySizes {
+		value := repeatByte('s', n)
+		for _, flag := range []string{"-sp", "--specialists"} {
+			_, err := NewFlagParser(TaskCreateFlags).Parse([]string{flag, value})
+			if err == nil {
+				t.Fatalf("task create %s <%d bytes>: parsed successfully; the flag must not exist", flag, n)
+			}
+			if !errors.Is(err, utils.ErrInvalidInput) {
+				t.Errorf("task create %s <%d bytes>: error = %v, want utils.ErrInvalidInput (exit 2)", flag, n, err)
+			}
+			if utils.IsFieldTooLarge(err) {
+				t.Errorf("task create %s <%d bytes>: rejected as ErrFieldTooLarge (exit 6); a length gate "+
+					"survived the field removal", flag, n)
+			}
+		}
 	}
 }
 
-func TestTaskValidate_Specialists_OneBeyondMaxLength(t *testing.T) {
-	task := baseValidTask()
-	s := repeatByte('s', models.MaxTaskSpecialists+1)
-	task.Specialists = &s
-	err := task.Validate()
-	if err == nil {
-		t.Errorf("specialists at max+1 (%d bytes) should be invalid, got nil",
-			models.MaxTaskSpecialists+1)
-	}
-	if !utils.IsFieldTooLarge(err) {
-		t.Errorf("expected ErrFieldTooLarge for over-length specialists, got: %v", err)
+func TestTaskEdit_SpecialistsFlag_RejectedAtEveryFormerBoundarySize(t *testing.T) {
+	for _, n := range specialistsBoundarySizes {
+		value := repeatByte('s', n)
+		for _, flag := range []string{"-sp", "--specialists"} {
+			_, err := NewFlagParser(TaskEditFlags).Parse([]string{flag, value})
+			if err == nil {
+				t.Fatalf("task edit %s <%d bytes>: parsed successfully; the flag must not exist", flag, n)
+			}
+			if !errors.Is(err, utils.ErrInvalidInput) {
+				t.Errorf("task edit %s <%d bytes>: error = %v, want utils.ErrInvalidInput (exit 2)", flag, n, err)
+			}
+			if utils.IsFieldTooLarge(err) {
+				t.Errorf("task edit %s <%d bytes>: rejected as ErrFieldTooLarge (exit 6); a length gate "+
+					"survived the field removal", flag, n)
+			}
+		}
 	}
 }
 
-func TestTaskValidate_Specialists_Nil(t *testing.T) {
-	task := baseValidTask()
-	task.Specialists = nil
-	if err := task.Validate(); err != nil {
-		t.Errorf("nil specialists (optional field) should be valid, got: %v", err)
+// TestTaskEdit_SpecialistsFlag_EmptyValueRejectedToo is the nil/empty leg of the
+// old trio. The empty string was the one specialists value `task edit` used to
+// accept unconditionally, so it is the value most likely to slip through a
+// half-finished removal.
+func TestTaskEdit_SpecialistsFlag_EmptyValueRejectedToo(t *testing.T) {
+	for _, flag := range []string{"-sp", "--specialists"} {
+		_, err := NewFlagParser(TaskEditFlags).Parse([]string{flag, ""})
+		if err == nil {
+			t.Fatalf("task edit %s \"\": parsed successfully; the flag must not exist", flag)
+		}
+		if !errors.Is(err, utils.ErrInvalidInput) {
+			t.Errorf("task edit %s \"\": error = %v, want utils.ErrInvalidInput (exit 2)", flag, err)
+		}
 	}
 }
 

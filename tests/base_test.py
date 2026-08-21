@@ -14,6 +14,30 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any, Tuple, Union
 
 
+# Commit hashes for the two mandatory commit-tracking flags of `task stat`.
+# --commit-open is required on every transition into DOING and --commit-close on
+# the transition into COMPLETED (SPEC/COMMANDS.md § Change Status (stat)).
+# Groadmap validates the FORMAT of a hash only: it runs no git command and never
+# resolves the value against a repository, so any well-formed hash serves. These
+# two are real short hashes from this project's history.
+COMMIT_OPEN_HASH = "8007175"
+COMMIT_CLOSE_HASH = "8a82583"
+
+
+def commit_flags_for(status: str) -> List[str]:
+    """Return the commit flag `task stat` makes mandatory for a target status.
+
+    Call sites that build the target status dynamically use this so the flag
+    follows the status automatically; a call site with a literal status spells
+    the flag out instead.
+    """
+    if status == "DOING":
+        return ["--commit-open", COMMIT_OPEN_HASH]
+    if status == "COMPLETED":
+        return ["--commit-close", COMMIT_CLOSE_HASH]
+    return []
+
+
 class GroadmapTestBase:
     """Base class for all Groadmap CLI tests."""
 
@@ -130,7 +154,7 @@ class GroadmapTestBase:
             functional_requirements: Functional requirements (Why?)
             technical_requirements: Technical requirements (How?)
             acceptance_criteria: Acceptance criteria (How to verify?)
-            **kwargs: Optional fields (priority, severity, specialists)
+            **kwargs: Optional fields (priority, severity)
         """
         cmd = [
             "task", "create",
@@ -145,8 +169,6 @@ class GroadmapTestBase:
             cmd.extend(["-p", str(kwargs["priority"])])
         if "severity" in kwargs:
             cmd.extend(["--severity", str(kwargs["severity"])])
-        if "specialists" in kwargs:
-            cmd.extend(["-sp", kwargs["specialists"]])
 
         result = self.run_cmd_json(cmd)
         return result["id"]
@@ -212,8 +234,9 @@ class GroadmapTestBase:
     TASK_KEYS = frozenset([
         "id", "title", "status", "type",
         "functional_requirements", "technical_requirements", "acceptance_criteria",
-        "created_at", "specialists",
+        "created_at",
         "started_at", "tested_at", "closed_at", "completion_summary",
+        "commit_open", "commit_close",
         "parent_task_id", "priority", "severity",
         "subtask_count", "depends_on", "blocks",
     ])

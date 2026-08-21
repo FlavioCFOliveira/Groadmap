@@ -131,12 +131,12 @@ class TestSprintStats:
         ])
 
         # Move tasks to different statuses
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_doing), "DOING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_testing), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_doing), "DOING", "--commit-open", "2578d18"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_testing), "DOING", "--commit-open", "391cff7"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_testing), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_completed), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_completed), "DOING", "--commit-open", "626346d"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_completed), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_completed), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_completed), "COMPLETED", "--commit-close", "b7591f7"])
 
         # Get stats
         result = self.test.run_cmd_json(["sprint", "stats", "-r", roadmap, str(sprint_id)])
@@ -181,9 +181,9 @@ class TestSprintStats:
 
         # Complete 3 tasks
         for i in range(3):
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[i]), "DOING"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[i]), "DOING", "--commit-open", "3b9289c"])
             self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[i]), "TESTING"])
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[i]), "COMPLETED"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[i]), "COMPLETED", "--commit-close", "fcb1c8a"])
 
         # Get stats
         result = self.test.run_cmd_json(["sprint", "stats", "-r", roadmap, str(sprint_id)])
@@ -195,18 +195,18 @@ class TestSprintStats:
 
         # Complete 2 more tasks
         for i in range(3, 5):
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[i]), "DOING"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[i]), "DOING", "--commit-open", "24262f0"])
             self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[i]), "TESTING"])
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[i]), "COMPLETED"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[i]), "COMPLETED", "--commit-close", "8007175"])
 
         result = self.test.run_cmd_json(["sprint", "stats", "-r", roadmap, str(sprint_id)])
         assert result["progress_percentage"] == 50.0
 
         # Complete remaining tasks
         for i in range(5, 10):
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[i]), "DOING"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[i]), "DOING", "--commit-open", "6c8064a"])
             self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[i]), "TESTING"])
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[i]), "COMPLETED"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[i]), "COMPLETED", "--commit-close", "8a82583"])
 
         result = self.test.run_cmd_json(["sprint", "stats", "-r", roadmap, str(sprint_id)])
         assert result["progress_percentage"] == 100.0
@@ -243,20 +243,20 @@ class TestSprintStats:
         # TESTING: 2 tasks
         # COMPLETED: 2 tasks
 
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[2]), "DOING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[3]), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[2]), "DOING", "--commit-open", "021fa2f"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[3]), "DOING", "--commit-open", "abd481c"])
 
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[4]), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[4]), "DOING", "--commit-open", "5d6a2cd"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[4]), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[5]), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[5]), "DOING", "--commit-open", "5f93b51"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[5]), "TESTING"])
 
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[6]), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[6]), "DOING", "--commit-open", "2578d18"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[6]), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[6]), "COMPLETED"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[7]), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[6]), "COMPLETED", "--commit-close", "b0ab692"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[7]), "DOING", "--commit-open", "391cff7"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[7]), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[7]), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[7]), "COMPLETED", "--commit-close", "4c4ccea"])
 
         # Get stats
         result = self.test.run_cmd_json(["sprint", "stats", "-r", roadmap, str(sprint_id)])
@@ -328,9 +328,9 @@ class TestSprintStats:
         assert result["progress_percentage"] == 0.0
 
         # Progress the high priority task
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(critical_task), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(critical_task), "DOING", "--commit-open", "626346d"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(critical_task), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(critical_task), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(critical_task), "COMPLETED", "--commit-close", "cf507b0"])
 
         result = self.test.run_cmd_json(["sprint", "stats", "-r", roadmap, str(sprint_id)])
         assert result["completed_tasks"] == 1
@@ -381,13 +381,13 @@ class TestSprintStats:
         ])
 
         # Complete critical and medium bugs
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(critical_bug), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(critical_bug), "DOING", "--commit-open", "3b9289c"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(critical_bug), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(critical_bug), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(critical_bug), "COMPLETED", "--commit-close", "8256fd0"])
 
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(medium_bug), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(medium_bug), "DOING", "--commit-open", "24262f0"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(medium_bug), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(medium_bug), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(medium_bug), "COMPLETED", "--commit-close", "d1e8dec"])
 
         # Get stats
         result = self.test.run_cmd_json(["sprint", "stats", "-r", roadmap, str(sprint_id)])
@@ -562,9 +562,9 @@ class TestSprintStats:
         ])
 
         # Complete one task
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "DOING", "--commit-open", "6c8064a"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "COMPLETED", "--commit-close", "4999725"])
 
         # Get initial stats
         result = self.test.run_cmd_json(["sprint", "stats", "-r", roadmap, str(sprint_id)])
@@ -621,17 +621,17 @@ class TestSprintStats:
 
         # Complete 10 tasks (40%)
         for i in range(10):
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[i]), "DOING"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[i]), "DOING", "--commit-open", "021fa2f"])
             self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[i]), "TESTING"])
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[i]), "COMPLETED"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[i]), "COMPLETED", "--commit-close", "b7591f7"])
 
         # Move 5 tasks to DOING (20%)
         for i in range(10, 15):
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[i]), "DOING"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[i]), "DOING", "--commit-open", "abd481c"])
 
         # Move 5 tasks to TESTING (20%)
         for i in range(15, 20):
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[i]), "DOING"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[i]), "DOING", "--commit-open", "5d6a2cd"])
             self.test.run_cmd(["task", "stat", "-r", roadmap, str(tasks[i]), "TESTING"])
 
         # Get stats
@@ -683,9 +683,9 @@ class TestSprintStats:
 
         # Complete all tasks
         for task_id in tasks:
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "5f93b51"])
             self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "fcb1c8a"])
 
         # Get stats
         result = self.test.run_cmd_json(["sprint", "stats", "-r", roadmap, str(sprint_id)])
@@ -750,7 +750,7 @@ class TestSprintStats:
         assert result["total_tasks"] == 3
 
         # Move tasks through workflow and verify counts
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "DOING", "--commit-open", "2578d18"])
         result = self.test.run_cmd_json(["sprint", "stats", "-r", roadmap, str(sprint_id)])
         assert result["total_tasks"] == 3  # Total unchanged
 
@@ -758,7 +758,7 @@ class TestSprintStats:
         result = self.test.run_cmd_json(["sprint", "stats", "-r", roadmap, str(sprint_id)])
         assert result["total_tasks"] == 3
 
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task1), "COMPLETED", "--commit-close", "8007175"])
         result = self.test.run_cmd_json(["sprint", "stats", "-r", roadmap, str(sprint_id)])
         assert result["total_tasks"] == 3
         assert result["completed_tasks"] == 1

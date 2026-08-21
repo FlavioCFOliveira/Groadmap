@@ -10,7 +10,6 @@ import (
 )
 
 func TestTaskValidate(t *testing.T) {
-	validSpecialists := "developer,tester"
 	validCreatedAt := "2026-03-16T12:00:00.000Z"
 	validClosedAt := "2026-03-17T12:00:00.000Z"
 
@@ -46,7 +45,6 @@ func TestTaskValidate(t *testing.T) {
 				FunctionalRequirements: "Test functional requirements",
 				TechnicalRequirements:  "Test technical requirements",
 				AcceptanceCriteria:     "Test acceptance criteria",
-				Specialists:            &validSpecialists,
 				CreatedAt:              validCreatedAt,
 				ClosedAt:               &validClosedAt,
 			},
@@ -275,23 +273,6 @@ func TestTaskValidate(t *testing.T) {
 			},
 			wantErr: true,
 			errMsg:  "acceptance_criteria exceeds maximum length",
-		},
-		{
-			name: "specialists too long",
-			task: Task{
-				Priority:               5,
-				Severity:               3,
-				Status:                 StatusBacklog,
-				Type:                   TypeTask,
-				Title:                  "Test title",
-				FunctionalRequirements: "Test functional requirements",
-				TechnicalRequirements:  "Test technical requirements",
-				AcceptanceCriteria:     "Test acceptance criteria",
-				Specialists:            func() *string { s := strings.Repeat("a", MaxTaskSpecialists+1); return &s }(),
-				CreatedAt:              validCreatedAt,
-			},
-			wantErr: true,
-			errMsg:  "specialists exceeds maximum length",
 		},
 		// Date validation tests
 		{
@@ -554,97 +535,6 @@ func TestCanTransitionTo(t *testing.T) {
 	}
 }
 
-func TestParseSpecialists(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected []string
-	}{
-		{
-			name:     "empty string",
-			input:    "",
-			expected: nil,
-		},
-		{
-			name:     "single specialist",
-			input:    "developer",
-			expected: []string{"developer"},
-		},
-		{
-			name:     "multiple specialists",
-			input:    "developer,tester,manager",
-			expected: []string{"developer", "tester", "manager"},
-		},
-		{
-			name:     "with spaces",
-			input:    " developer , tester ",
-			expected: []string{"developer", "tester"},
-		},
-		{
-			name:     "empty items",
-			input:    "developer,,tester",
-			expected: []string{"developer", "tester"},
-		},
-		{
-			name:     "only spaces",
-			input:    "  ,  ",
-			expected: nil,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := ParseSpecialists(tt.input)
-			if len(got) != len(tt.expected) {
-				t.Errorf("ParseSpecialists() = %v, want %v", got, tt.expected)
-				return
-			}
-			for i := range got {
-				if got[i] != tt.expected[i] {
-					t.Errorf("ParseSpecialists()[%d] = %q, want %q", i, got[i], tt.expected[i])
-				}
-			}
-		})
-	}
-}
-
-func TestFormatSpecialists(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    []string
-		expected string
-	}{
-		{
-			name:     "empty slice",
-			input:    []string{},
-			expected: "",
-		},
-		{
-			name:     "nil slice",
-			input:    nil,
-			expected: "",
-		},
-		{
-			name:     "single specialist",
-			input:    []string{"developer"},
-			expected: "developer",
-		},
-		{
-			name:     "multiple specialists",
-			input:    []string{"developer", "tester", "manager"},
-			expected: "developer,tester,manager",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := FormatSpecialists(tt.input); got != tt.expected {
-				t.Errorf("FormatSpecialists() = %q, want %q", got, tt.expected)
-			}
-		})
-	}
-}
-
 // TestTaskValidateDates specifically tests the date validation logic
 func TestTaskValidateDates(t *testing.T) {
 	now := time.Now().UTC()
@@ -767,8 +657,8 @@ func TestTaskFieldLimits(t *testing.T) {
 	if MaxTaskAcceptanceCriteria <= 0 {
 		t.Error("MaxTaskAcceptanceCriteria should be positive")
 	}
-	if MaxTaskSpecialists <= 0 {
-		t.Error("MaxTaskSpecialists should be positive")
+	if MaxTaskCompletionSummary <= 0 {
+		t.Error("MaxTaskCompletionSummary should be positive")
 	}
 }
 

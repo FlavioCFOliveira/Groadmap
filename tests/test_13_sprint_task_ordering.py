@@ -548,7 +548,7 @@ class TestSprintTaskOrdering:
         assert order == custom_order, f"Custom order should be set, got {order}"
 
         # Transition first task through status changes
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_ids[2]), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_ids[2]), "DOING", "--commit-open", "391cff7"])
         self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_ids[2]), "TESTING"])
 
         # Verify order is maintained
@@ -556,7 +556,7 @@ class TestSprintTaskOrdering:
         assert order[0] == task_ids[2], f"Task order should persist after status change, got {order}"
 
         # Complete the task
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_ids[2]), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_ids[2]), "COMPLETED", "--commit-close", "8a82583"])
 
         # Verify task is still in sprint with correct order
         order = self._get_task_order(roadmap, sprint_id)

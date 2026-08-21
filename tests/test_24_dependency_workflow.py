@@ -227,9 +227,9 @@ class TestBlockerCompletionInteraction:
         # Drive B all the way to COMPLETED
         sprint_id = self.test.create_sprint(self.roadmap, "Search ranker rollout sprint")
         self.test.move_task_to_sprint(self.roadmap, self.task_b, sprint_id)
-        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(self.task_b), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(self.task_b), "DOING", "--commit-open", "6c8064a"])
         self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(self.task_b), "TESTING"])
-        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(self.task_b), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(self.task_b), "COMPLETED", "--commit-close", "cf507b0"])
 
         blockers = self.test.run_cmd_json(
             ["task", "blockers", "-r", self.roadmap, str(self.task_a)]
@@ -245,11 +245,11 @@ class TestBlockerCompletionInteraction:
         # Drive A through to TESTING. B is still BACKLOG.
         sprint_id = self.test.create_sprint(self.roadmap, "Ranker rollout sprint v2")
         self.test.move_task_to_sprint(self.roadmap, self.task_a, sprint_id)
-        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(self.task_a), "DOING"])
+        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(self.task_a), "DOING", "--commit-open", "021fa2f"])
         self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(self.task_a), "TESTING"])
 
         exit_code, _, stderr = self.test.run_cmd(
-            ["task", "stat", "-r", self.roadmap, str(self.task_a), "COMPLETED"],
+            ["task", "stat", "-r", self.roadmap, str(self.task_a), "COMPLETED", "--commit-close", "8256fd0"],
             check=False,
         )
         assert exit_code == 6, (

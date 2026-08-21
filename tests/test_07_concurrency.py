@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.base_test import GroadmapTestBase
+from tests.base_test import GroadmapTestBase, commit_flags_for
 
 
 class TestConcurrency:
@@ -100,7 +100,7 @@ class TestConcurrency:
                     try:
                         self.test.run_cmd([
                             "task", "stat", "-r", roadmap, str(task_id), status
-                        ])
+                        ] + commit_flags_for(status))
                     except AssertionError:
                         # Some transitions may fail (expected), ignore those
                         pass

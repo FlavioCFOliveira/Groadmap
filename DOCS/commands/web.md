@@ -8,7 +8,7 @@ The deliverable is fully self-contained: every asset required to render and oper
 
 `rmp web` operates across all roadmaps: it lists every roadmap found under `~/.roadmaps/` and you drill into one from the browser. It is the one command that is exempt from the always-required-roadmap rule, so it does **not** accept the `-r` / `--roadmap` flag. It has no subcommands.
 
-By default the server binds the loopback interface (`127.0.0.1`), so the read-only interface is reachable only from the local machine. Exposing it on the network is the explicit opt-in `--host 0.0.0.0` (all interfaces), which also prints a network-exposure warning to stderr at startup.
+By default the server binds the loopback interface (`127.0.0.1`), so the read-only interface is reachable only from the local machine. Exposing it on the network is the explicit opt-in `--host 0.0.0.0` (all interfaces), which also writes a network-exposure warning to stderr at startup (see [Console Log](#console-log)).
 
 Unlike every other command, `rmp web` is long-lived: it keeps serving until interrupted. Sending `SIGINT` (`Ctrl+C`) or `SIGTERM` shuts the server down gracefully and the process exits 0.
 
@@ -39,7 +39,46 @@ On successful startup the served URL is printed to stdout as a single JSON objec
 }
 ```
 
-The `url` reflects the actual bound host and port, including an ephemeral port chosen by the fallback. While running, the server serves HTML pages and a JSON graph-data endpoint; those are HTTP responses, not stdout output of the command.
+The `url` reflects the actual bound host and port, including an ephemeral port chosen by the fallback. While running, the server serves HTML pages and a JSON graph-data endpoint; those are HTTP responses, not stdout output of the command. Nothing else is ever written to stdout: diagnostics go to stderr, as described under [Console Log](#console-log).
+
+## Console Log
+
+`rmp web` is long-lived, and a per-request failure never stops it: the server absorbs the failure into an HTTP status and keeps serving. The response body a browser receives is deliberately opaque — `internal server error` — so no internal detail is disclosed to the client. The console is where that detail goes instead.
+
+The server writes a structured diagnostic log to **stderr** through Go's `log/slog`, one `key=value` line per record:
+
+```
+time=2026-08-20T19:53:00.918Z level=ERROR msg="sprints page load failed" method=GET path=/roadmaps/platform roadmap=platform status=500 err="file is not a database"
+time=2026-08-20T19:53:04.226Z level=WARN msg="graph query bar request failed" method=GET path=/roadmaps/platform/graph/data roadmap=platform kind=not_read_only status=400 err="query is not read-only: CREATE is a writing clause"
+```
+
+Stdout is untouched by the log: it carries only the startup URL object, so a script that reads stdout for the served address is never disturbed by a record.
+
+### What each level means
+
+| Level | Meaning |
+|-------|---------|
+| `ERROR` | The server failed. The request was answered `500` and the fault is the server's or the environment's — a roadmap database that cannot be read, a template that will not execute, a response body that will not encode |
+| `WARN` | The server did not fail, but you need to know what happened — a query-bar query rejected or failed (`400`), a roadmap skipped by the startup schema migration, or the interface bound to a non-loopback address |
+
+### What is recorded
+
+Every record carries `time`, `level`, and `msg`. `msg` is a fixed phrase naming the condition, never an interpolated string, so all records of one condition group together. A per-request record adds `method`, `path`, `status`, and `err` — the underlying error text, which is exactly what the HTTP response withholds — plus `roadmap` once the roadmap is known, and the route's own subject where there is one (`task`, `sprint`, `page`, `template`, or the query-bar `kind`).
+
+### What is not recorded
+
+- **`404` and `405` are not logged.** An unknown roadmap, an unknown id, an unmapped path, or a write method on a read-only route is ordinary navigation, not a failure. Logging them would bury the real failures under every mistyped URL and every browser probe for an asset the server does not serve.
+- **There is no access log.** A successful request writes nothing.
+- **The client address is not recorded.**
+- **Nothing is redacted.** An error text may name a path under `~/.roadmaps/`. That is the diagnostic value of the record; it stays on your console and never reaches the HTTP response.
+
+### Timestamps and integrity
+
+Every timestamp is UTC in the single format Groadmap uses everywhere — `YYYY-MM-DDTHH:mm:ss.sssZ` — whatever time zone the machine is set to, so a log record and a task's `created_at` compare directly and a log means the same instant wherever it is read.
+
+Every record is exactly one line. A request path, a roadmap name, or an error text can carry bytes the server did not choose, so any value containing whitespace, a quotation mark, or a control character is quoted and escaped: a newline appears as `\n` inside its quoted value. A crafted request therefore cannot write what looks like a second, invented record onto your console.
+
+The log has no configuration: there is no logging flag, no environment variable, and no log file. Redirect stderr if you want the records in one.
 
 ## Routes and Pages
 
@@ -93,7 +132,7 @@ Each card presents one task, in this order:
 1. A **reference line** with the task reference `#<id>` and the task's `type`, both in muted text. The type carries no colour.
 2. The task **`title`**, as the card's prominent main content.
 3. A **`priority` badge** and a **`severity` badge**, each naming the value it carries with a one-letter prefix — `P` for the priority and `S` for the severity, so a task of priority `5` and severity `3` shows `P5` and `S3` — and coloured by the band that value falls in. The prefix is a label, not part of the value: the colour still follows the number alone.
-4. A **metadata footer** showing only the indicators the task actually has: the sprint it belongs to (identified by the sprint's `title` together with `Sprint #<id>`, as plain text rather than a link), its `specialists`, its number of subtasks, its number of `depends_on` entries, its number of `blocks` entries, and its number of comments.
+4. A **metadata footer** showing only the indicators the task actually has: the sprint it belongs to (identified by the sprint's `title` together with `Sprint #<id>`, as plain text rather than a link), its number of subtasks, its number of `depends_on` entries, its number of `blocks` entries, and its number of comments.
 
 An indicator whose value is absent, empty or zero is not rendered at all: no dash, no placeholder, no empty slot. A task with none of the six shows no metadata footer. The card shows **no status badge**, because the column it sits in already states the task's status.
 
@@ -113,7 +152,7 @@ The page header's actions column carries four controls, and no others — a sear
 Each control carries a real, programmatically associated label naming what it acts on, and each is reachable and operable from the keyboard. A dropdown's first option is a value meaning *no filter on this dimension*, not the control's name.
 
 - **The three filters are the three dimensions `rmp task list` already filters by** — `-y, --type`, `-p, --priority` and `--severity` — and each keeps the meaning the flag of the same name carries, so one parameter name means one thing across the two surfaces. The type comparison is exact against the enum's own upper-case spelling; the thresholds start at `1` and not at `0`, because a threshold of `0` admits every task and is therefore the unfiltered board, which already has its own option and its own URL form.
-- **What the search matches** is only what identifies a task on its card: the `title` and the reference written with its leading `#`, so both `42` and `#42` find task 42. `specialists` and every other field are excluded, because matching an attribute is the job of the three filters.
+- **What the search matches** is only what identifies a task on its card: the `title` and the reference written with its leading `#`, so both `42` and `#42` find task 42. Every other field is excluded, because matching an attribute is the job of the three filters.
 - **The criteria combine conjunctively.** A task is shown when it satisfies *every* active criterion, and a board with no active criterion shows every task. `?q=cache&type=BUG&priority=7` shows the `BUG` tasks of priority `7` or above whose title or `#<id>` reference contains `cache`, and no other task. Narrowing a criterion can only shrink the shown set, never grow it.
 - **There is deliberately no status filter.** The five columns already are the status, so a status filter would perform narrowing the layout has performed already — and it could not do so without either leaving excluded columns present and stating a false count of `0`, or dropping columns and contradicting the rule that all five are always present.
 
@@ -202,7 +241,7 @@ Each card presents one member task on three lines:
 
 The badges and the counters share a line because they hold one kind of information — what the task is, and how much is attached to it — and because height is the scarce dimension in a column that is bounded and scrolls. Where the card is too narrow to hold both groups, the line wraps inside the card rather than overflowing it, so the card, its column and the page never scroll horizontally.
 
-Both counters are always rendered, including when either or both are `0`, so a zero is a statement rather than a silence. This is where the sprint card departs from the tasks board card, which renders only the indicators a task has and keeps them in a footer of their own: the sprint card carries exactly two counters and can put them on the badge line, while the tasks board card carries six indicators of mixed kinds, two of them text with no zero to show, which cannot share that line. The counter order differs for the same reason — comments before subtasks here, subtasks before comments in the tasks board's footer. The card shows no status badge, because the column it sits in already states the status, and it shows no type, specialists or dependency counts: those are in the task detail modal the card opens.
+Both counters are always rendered, including when either or both are `0`, so a zero is a statement rather than a silence. This is where the sprint card departs from the tasks board card, which renders only the indicators a task has and keeps them in a footer of their own: the sprint card carries exactly two counters and can put them on the badge line, while the tasks board card carries five indicators of mixed kinds, one of them text with no zero to show, which cannot share that line. The counter order differs for the same reason — comments before subtasks here, subtasks before comments in the tasks board's footer. The card shows no status badge, because the column it sits in already states the status, and it shows no type and no dependency counts: those are in the task detail modal the card opens.
 
 The whole card is a `<button>`, so a pointer click, a touch tap, and the keyboard (Enter and Space) all open that task's read-only detail modal.
 
@@ -254,7 +293,7 @@ The endpoint answers each of its three failure classes with HTTP `400 Bad Reques
 
 - **One status, three kinds.** In each case the server can serve the route and refuses the request the caller made, which is what HTTP `400` states; the `kind` field is what distinguishes the three. A budget exhaustion is neither a `503` (the server is not overloaded and delay alleviates nothing, since the same query exhausts the same budget again) nor a `504` (the server is no gateway or proxy, and the engine is in-process).
 - **Precedence.** One request can be wrong in more than one way. The `limit` is resolved before the guard rail runs, so a request carrying both an invalid `limit` and a query that is not read-only is answered `invalid_limit`. Under either order the request is rejected before the query runs and before the graph store is opened, so neither reads nor writes anything.
-- **The boundary against `500`.** An internal read error — a failure to open the roadmap's graph store — is answered `500`, as on every other route, and does not carry this body shape. What separates it from the `400` of an execution failure is *when* the failure surfaces: a failure that surfaces once the query is already running, from the run itself or from the walk over its result, is a query execution failure.
+- **The boundary against `500`.** An internal read error — a failure to open the roadmap's graph store — is answered `500`, as on every other route, and does not carry this body shape. The two are also separated on the console: a `400` here is a `WARN` (your query failed), a `500` is an `ERROR` (the server failed). See [Console Log](#console-log). What separates it from the `400` of an execution failure is *when* the failure surfaces: a failure that surfaces once the query is already running, from the run itself or from the walk over its result, is a query execution failure.
 
 In every case the message is shown in place on the page, the page does not crash, and the failure triggers no write and no navigation.
 

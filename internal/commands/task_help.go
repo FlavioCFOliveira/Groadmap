@@ -28,7 +28,6 @@ Filters (compose with AND):
   --severity <min>                severity >= <min> (0-9)
   -y, --type <type>               One of: USER_STORY, TASK, BUG, SUB_TASK,
                                   EPIC, REFACTOR, CHORE, SPIKE, DESIGN_UX, IMPROVEMENT
-  -sp, --specialists <substring>  Case-insensitive substring match against specialists
   --created-since <date>          Inclusive lower bound (RFC3339 or YYYY-MM-DD)
   --created-until <date>          Inclusive upper bound
 
@@ -78,7 +77,6 @@ Optional:
                                   DESIGN_UX, IMPROVEMENT
   -p, --priority <n>              0-9, default 0
   --severity <n>                  0-9, default 0
-  -sp, --specialists <list>       Comma-separated names (max 500 chars total)
   --parent <id>                   Make this task a subtask of <id> (parent must exist)
 
 Output (stdout JSON):
@@ -189,7 +187,6 @@ At least one of:
   -y, --type <type>               See 'rmp task create --help' for valid values
   -p, --priority <n>              0-9
   --severity <n>                  0-9
-  -sp, --specialists <list>       Comma-separated names (max 500 chars total)
 
 Output: empty (exit 0 on success).
 
@@ -238,7 +235,7 @@ Examples:
 
 // printTaskStatHelp — `rmp task stat`.
 func printTaskStatHelp() {
-	fmt.Print(`Usage: rmp task stat -r <roadmap> <task-ids> <new-status> [--summary <text>]
+	fmt.Print(`Usage: rmp task stat -r <roadmap> <task-ids> <new-status> [-co <hash>] [-cc <hash>] [--summary <text>]
 
 Changes the status of one or more tasks. The status machine is strict:
 
@@ -255,11 +252,33 @@ Changes the status of one or more tasks. The status machine is strict:
     - Every subtask must already be COMPLETED.
     - Every dependency (added via 'task add-dep') must already be COMPLETED.
 
+  Commit tracking (see 'Optional' below for the flag spellings):
+    - -co, --commit-open is accepted only when <new-status> is DOING, and is
+      mandatory there: 'rmp task stat -r myproject 7 DOING' on its own is
+      rejected (exit 6). On any other target status the flag is rejected
+      (exit 6).
+    - -cc, --commit-close is accepted only when <new-status> is COMPLETED,
+      and is mandatory there: 'rmp task stat -r myproject 7 COMPLETED' on its
+      own is rejected (exit 6). On any other target status the flag is
+      rejected (exit 6).
+    - -s, --summary is accepted only when <new-status> is COMPLETED, as
+      above, but it is never mandatory.
+    - Each value is a git commit hash of 7 to 64 hexadecimal characters,
+      accepted in any letter case and stored lowercase.
+    - You supply the hash. rmp runs no git command, inspects no working
+      directory and reads no repository: it validates the format and never
+      checks that the commit exists anywhere.
+    - One hash applies to every id of a multi-id invocation.
+
   Side effects:
-    DOING       sets started_at to now
+    DOING       sets started_at to now and commit_open to --commit-open
     TESTING     sets tested_at to now
-    COMPLETED   sets closed_at to now (and stores --summary if provided)
+    COMPLETED   sets closed_at to now and commit_close to --commit-close
+                (and stores --summary if provided)
     BACKLOG     clears started_at, tested_at, closed_at, completion_summary
+                and commit_close, and PRESERVES commit_open — the commit the
+                work started from stays true after a return to the backlog,
+                unlike every other field above
 
 Aliases: set-status.
 
@@ -268,24 +287,38 @@ Required:
   <task-ids>                      Comma-separated integer ids (no spaces, e.g. "1,3,5")
   <new-status>                    One of: BACKLOG, DOING, TESTING, COMPLETED
 
-Optional (only valid when <new-status> == COMPLETED):
-  -s, --summary <text>            Completion summary (max 4096 chars)
+Optional:
+  -co, --commit-open <hash>       Git commit the work starts from, 7 to 64
+                                  hexadecimal characters, stored lowercase.
+                                  Required when <new-status> is DOING;
+                                  rejected for every other target status.
+  -cc, --commit-close <hash>      Git commit the work is concluded at, 7 to 64
+                                  hexadecimal characters, stored lowercase.
+                                  Required when <new-status> is COMPLETED;
+                                  rejected for every other target status.
+  -s,  --summary <text>           Completion summary (max 4096 chars). Accepted
+                                  only when <new-status> is COMPLETED, and
+                                  optional there.
 
 Output: empty (exit 0 on success).
 
 Exit codes:
   0  Success
-  2  Invalid id syntax (non-integer or non-positive id), or missing <new-status>
+  2  Invalid id syntax (non-integer or non-positive id), missing <new-status>,
+     or --commit-open / --commit-close written with no value after it
   3  Missing -r
   4  At least one task id does not exist
   6  Invalid status, invalid transition, manual SPRINT attempt, --summary
-     supplied for a non-COMPLETED target, summary too long, or subtask/
-     dependency guard violation
+     supplied for a non-COMPLETED target, summary too long, --commit-open
+     supplied for a non-DOING target or missing on a DOING target,
+     --commit-close supplied for a non-COMPLETED target or missing on a
+     COMPLETED target, a commit hash outside the 7-to-64 hexadecimal
+     character format, or subtask/dependency guard violation
 
 Examples:
-  rmp task stat -r myproject 1 DOING
+  rmp task stat -r myproject 1 DOING --commit-open 5f93b51
   rmp task stat -r myproject 3,7 TESTING
-  rmp task stat -r myproject 7 COMPLETED --summary "Shipped behind feature flag"
+  rmp task stat -r myproject 7 COMPLETED -cc 2578d18 --summary "Shipped behind feature flag"
   rmp task stat -r myproject 9 BACKLOG    # reopen (equivalent to 'task reopen')
 `)
 }
@@ -300,6 +333,14 @@ completion_summary. Unlike 'task stat <ids> BACKLOG' (accepted only from
 SPRINT or COMPLETED), reopen works from DOING and TESTING too. It is also
 slightly more permissive: ids already in BACKLOG are skipped with a stderr
 note rather than rejected.
+
+Commit tracking:
+  commit_close is cleared with the fields above — reopening withdraws the
+  claim that the task was concluded at that commit.
+  commit_open is PRESERVED. The commit the work was started from remains a
+  true historical fact after the task returns to the backlog, so reopen is
+  deliberately asymmetric here and no command ever clears commit_open. A
+  later 'task stat <ids> DOING --commit-open <hash>' replaces it.
 
 Required:
   -r, --roadmap <name>            Target roadmap
@@ -374,64 +415,6 @@ Exit codes:
 Examples:
   rmp task sev -r myproject 5 9
   rmp task set-severity -r myproject 1,2 6
-`)
-}
-
-// printTaskAssignHelp — `rmp task assign`.
-func printTaskAssignHelp() {
-	fmt.Print(`Usage: rmp task assign -r <roadmap> <task-id> <specialist>
-
-Adds <specialist> to the comma-separated specialists list on <task-id>.
-Idempotent: assigning an already-present name is a no-op and exits 0.
-A note is written to stderr in the no-op case for transparency — it is
-informational, not an error, and callers parsing stderr as an error
-signal should ignore it. Use 'task unassign' to remove a specialist.
-
-Required:
-  -r, --roadmap <name>            Target roadmap
-  <task-id>                       Integer task id
-  <specialist>                    Free-form specialist label (kept as one token)
-
-Output: empty (exit 0 on success).
-
-Exit codes:
-  0  Success
-  2  Invalid id syntax (non-integer or non-positive id)
-  3  Missing -r
-  4  Task not found
-  6  Specialist value pushes specialists past 500 chars
-
-Examples:
-  rmp task assign -r myproject 7 alice
-  rmp task assign -r myproject 12 backend-team
-`)
-}
-
-// printTaskUnassignHelp — `rmp task unassign`.
-func printTaskUnassignHelp() {
-	fmt.Print(`Usage: rmp task unassign -r <roadmap> <task-id> <specialist>
-
-Removes <specialist> from the task's specialists list. If the list
-becomes empty, the specialists field is set to NULL. Idempotent: if the
-specialist is not present on the task, the call is a no-op and exits 0.
-A note is written to stderr in the no-op case for transparency — it is
-informational, not an error.
-
-Required:
-  -r, --roadmap <name>            Target roadmap
-  <task-id>                       Integer task id
-  <specialist>                    Specialist label to remove
-
-Output: empty (exit 0 on success).
-
-Exit codes:
-  0  Success
-  2  Invalid id syntax (non-integer or non-positive id)
-  3  Missing -r
-  4  Task not found
-
-Examples:
-  rmp task unassign -r myproject 7 alice
 `)
 }
 

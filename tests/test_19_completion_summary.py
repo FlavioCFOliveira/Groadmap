@@ -10,7 +10,7 @@ import os
 from typing import Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.base_test import GroadmapTestBase
+from tests.base_test import GroadmapTestBase, commit_flags_for
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +56,7 @@ def _advance_to_testing(test: GroadmapTestBase, roadmap: str, task_id: int):
     is rejected per SPEC/STATE_MACHINE.md.
     """
     test.move_task_to_sprint(roadmap, task_id)
-    test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING"])
+    test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "2578d18"])
     test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
 
 
@@ -68,7 +68,7 @@ def _advance_to_completed(
 ):
     """Drive a task from BACKLOG all the way to COMPLETED."""
     _advance_to_testing(test, roadmap, task_id)
-    cmd = ["task", "stat", "-r", roadmap, str(task_id), "COMPLETED"]
+    cmd = ["task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "8256fd0"]
     if summary is not None:
         cmd.extend(["--summary", summary])
     test.run_cmd(cmd)
@@ -96,7 +96,7 @@ class TestCompletionSummaryHappyPath:
 
         _advance_to_testing(self.test, roadmap, task_id)
         self.test.run_cmd([
-            "task", "stat", "-r", roadmap, str(task_id), "COMPLETED",
+            "task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "d1e8dec",
             "--summary", expected,
         ])
 
@@ -117,7 +117,7 @@ class TestCompletionSummaryHappyPath:
 
         _advance_to_testing(self.test, roadmap, task_id)
         self.test.run_cmd([
-            "task", "stat", "-r", roadmap, str(task_id), "COMPLETED",
+            "task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "4999725",
             "-s", expected,
         ])
 
@@ -134,7 +134,7 @@ class TestCompletionSummaryHappyPath:
         task_id = _create_feature_task(self.test, roadmap)
 
         _advance_to_testing(self.test, roadmap, task_id)
-        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "b7591f7"])
 
         task = _get_task(self.test, roadmap, task_id)
         assert task.get("status") == "COMPLETED"
@@ -175,7 +175,7 @@ class TestCompletionSummaryHappyPath:
         shared_summary = "Sprint review accepted; performance benchmarks within SLA thresholds."
 
         self.test.run_cmd([
-            "task", "stat", "-r", roadmap, bulk_arg, "COMPLETED",
+            "task", "stat", "-r", roadmap, bulk_arg, "COMPLETED", "--commit-close", "fcb1c8a",
             "--summary", shared_summary,
         ])
 
@@ -220,7 +220,8 @@ class TestCompletionSummaryValidation:
             "TESTING": ["DOING", "TESTING"],
         }
         for status in manual_path[target_status]:
-            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), status])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), status]
+                              + commit_flags_for(status))
         return task_id
 
     def test_summary_on_doing_target_fails(self):
@@ -229,7 +230,7 @@ class TestCompletionSummaryValidation:
         task_id = _create_feature_task(self.test, roadmap)
 
         exit_code, _, stderr = self.test.run_cmd(
-            ["task", "stat", "-r", roadmap, str(task_id), "DOING", "--summary", "premature summary"],
+            ["task", "stat", "-r", roadmap, str(task_id), "DOING", "--commit-open", "391cff7", "--summary", "premature summary"],
             check=False,
         )
         assert exit_code != 0, "--summary on DOING should fail"
@@ -293,7 +294,7 @@ class TestCompletionSummaryValidation:
         oversized_summary = "A" * 4097
 
         exit_code, _, stderr = self.test.run_cmd(
-            ["task", "stat", "-r", roadmap, str(task_id), "COMPLETED",
+            ["task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "8007175",
              "--summary", oversized_summary],
             check=False,
         )
@@ -319,7 +320,7 @@ class TestCompletionSummaryValidation:
         boundary_summary = "B" * 4096
 
         self.test.run_cmd([
-            "task", "stat", "-r", roadmap, str(task_id), "COMPLETED",
+            "task", "stat", "-r", roadmap, str(task_id), "COMPLETED", "--commit-close", "8a82583",
             "--summary", boundary_summary,
         ])
 

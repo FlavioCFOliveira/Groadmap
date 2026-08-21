@@ -2,7 +2,7 @@
 
 ## Description
 
-Task management within a roadmap. Tasks track work with status, type, priority, severity, specialists, dependencies, detailed requirements, and an append-oriented comment log that records what was learned while the work was done. Every `task` subcommand operates on a single roadmap, which MUST be selected with the required `-r`/`--roadmap` flag.
+Task management within a roadmap. Tasks track work with status, type, priority, severity, dependencies, detailed requirements, and an append-oriented comment log that records what was learned while the work was done. Every `task` subcommand operates on a single roadmap, which MUST be selected with the required `-r`/`--roadmap` flag.
 
 ## Synopsis
 
@@ -28,7 +28,6 @@ Lists tasks in the selected roadmap (any status). All filters compose with AND.
 | `-p` | `--priority` | int | - | Filter: keep tasks with priority `>= min`. Lower-bound filter, not a validated `0-9` value: out-of-range numbers are accepted and simply match accordingly |
 | N/A | `--severity` | int | - | Filter: keep tasks with severity `>= min`. Lower-bound filter, not a validated `0-9` value |
 | `-y` | `--type` | enum | - | Filter by task type (one of the 10 task types) |
-| `-sp` | `--specialists` | string | - | Filter by specialists (case-insensitive substring) |
 | N/A | `--created-since` | date | - | Include tasks created on/after this date (RFC3339 or YYYY-MM-DD) |
 | N/A | `--created-until` | date | - | Include tasks created on/before this date (RFC3339 or YYYY-MM-DD) |
 | N/A | `--sort` | enum | `priority` | Sort field: priority, created, status, severity |
@@ -73,7 +72,6 @@ Creates a new task. The task lands in `BACKLOG` status.
 | `-y` | `--type` | enum | `TASK` | Task type (one of the 10 task types) |
 | `-p` | `--priority` | int | `0` | Priority 0-9 (0 lowest, 9 highest) |
 | N/A | `--severity` | int | `0` | Severity 0-9 (0 lowest, 9 highest) |
-| `-sp` | `--specialists` | string | - | Comma-separated specialists (max 500 chars) |
 | N/A | `--parent` | int | - | Parent task ID; creates this task as a SUB_TASK of the given parent and bumps the parent's `subtask_count` (create only) |
 
 **Output:** JSON object with the created task ID.
@@ -170,14 +168,12 @@ Edits one or more fields of an existing task. Only specified fields are updated,
 | `-y` | `--type` | enum | - | New task type (one of the 10 task types) |
 | `-p` | `--priority` | int | 0-9 | New priority |
 | N/A | `--severity` | int | 0-9 | New severity |
-| `-sp` | `--specialists` | string | 500 | New specialists (comma-separated) |
 
 **Output:** Empty on success (exit 0).
 
 **Examples:**
 ```bash
 rmp task edit -r project1 42 -t "Updated title" -p 8
-rmp task edit -r project1 1 --specialists "go-developer"
 ```
 
 ---
@@ -327,58 +323,6 @@ Sets the severity of one or more tasks to the same value.
 ```bash
 rmp task sev -r project1 5 9
 rmp task set-severity -r project1 1,2,3 9
-```
-
----
-
-### assign
-
-Adds a specialist to the task's specialists list. The operation is idempotent: assigning an already-present specialist succeeds (exit 0) and emits an informational note to stderr.
-
-**Usage:** `rmp task assign -r <roadmap> <task-id> <specialist>`
-
-**Arguments:**
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `task-id` | Yes | Integer task id |
-| `specialist` | Yes | Free-form specialist label |
-
-**Flags:**
-| Short Flag | Long Flag | Type | Description |
-|------------|-----------|------|-------------|
-| `-r` | `--roadmap` | string | Roadmap name (required) |
-
-**Output:** Empty on success (exit 0).
-
-**Examples:**
-```bash
-rmp task assign -r project1 7 go-developer
-```
-
----
-
-### unassign
-
-Removes a specialist from the task's specialists list. The operation is idempotent: removing an absent specialist still succeeds (exit 0).
-
-**Usage:** `rmp task unassign -r <roadmap> <task-id> <specialist>`
-
-**Arguments:**
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `task-id` | Yes | Integer task id |
-| `specialist` | Yes | Specialist label to remove |
-
-**Flags:**
-| Short Flag | Long Flag | Type | Description |
-|------------|-----------|------|-------------|
-| `-r` | `--roadmap` | string | Roadmap name (required) |
-
-**Output:** Empty on success (exit 0).
-
-**Examples:**
-```bash
-rmp task unassign -r project1 7 go-developer
 ```
 
 ---
@@ -715,7 +659,6 @@ The only alias for `task remove` is `rm`. The `delete` alias exists for `roadmap
 | `functional-requirements` | Yes (on create) | 4096 chars | Why: functional requirements |
 | `technical-requirements` | Yes (on create) | 4096 chars | How: technical description |
 | `acceptance-criteria` | Yes (on create) | 4096 chars | How to verify: completion criteria |
-| `specialists` | No | 500 chars | Comma-separated specialist tags |
 | `summary` | No | 4096 chars | Completion summary (only on COMPLETED transition) |
 | `type` | No | one of 10 task types | Task type (default: TASK) |
 | `priority` | No | 0-9 | Priority level (default: 0) |
@@ -763,7 +706,7 @@ Carried by `-y`/`--type` on `comment-add`, `comment-list`, and `comment-edit`. A
 ### Task Object Keys
 
 Task objects returned by `list`, `get`, `next`, `subtasks`, `blockers`, and `blocking` contain:
-`id`, `title`, `status`, `type`, `functional_requirements`, `technical_requirements`, `acceptance_criteria`, `created_at`, `specialists`, `started_at`, `tested_at`, `closed_at`, `completion_summary`, `parent_task_id`, `priority`, `severity`, `subtask_count`, `depends_on`, `blocks`.
+`id`, `title`, `status`, `type`, `functional_requirements`, `technical_requirements`, `acceptance_criteria`, `created_at`, `started_at`, `tested_at`, `closed_at`, `completion_summary`, `parent_task_id`, `priority`, `severity`, `subtask_count`, `depends_on`, `blocks`.
 
 Task objects carry no `comments` array and no comment count: comments are read only through `comment-list` and the read-only web interface.
 

@@ -233,16 +233,20 @@ func TestAddTasksToSprintCapacityEnforced(t *testing.T) {
 
 // ==================== #68: migration idempotency ====================
 
-// TestMigrationsIdempotent verifies every ALTER TABLE ADD COLUMN migration is a
-// no-op (not a "duplicate column name" error) when applied to a database that
-// already has the column (finding #68, SPEC/DATABASE.md § Migration Idempotency).
+// TestMigrationsIdempotent verifies every ALTER TABLE migration is a no-op when
+// applied to a database whose schema already matches: an ADD COLUMN must not
+// raise "duplicate column name" when the column is present, and a DROP COLUMN
+// must not raise "no such column" when it is already gone (finding #68 and rmp
+// task #246; SPEC/DATABASE.md § Migration Idempotency (ALTER TABLE ADD COLUMN)
+// and § Migration Idempotency (ALTER TABLE DROP COLUMN)).
 func TestMigrationsIdempotent(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
 	// CreateSchema already produced the latest schema, so every ADD-COLUMN
-	// target column is present. Re-running each ALTER-bearing migration must be
-	// a no-op rather than raising "duplicate column name".
+	// target column is present and every DROP-COLUMN target column is already
+	// gone. Re-running each ALTER-bearing migration must be a no-op rather than
+	// raising "duplicate column name" or "no such column".
 	type migCase struct {
 		name string
 		fn   MigrationFunc
@@ -252,6 +256,9 @@ func TestMigrationsIdempotent(t *testing.T) {
 		{"v1.2.0->v1.3.0 (tasks.completion_summary)", migrateV1_2_0_toV1_3_0},
 		{"v1.3.0->v1.4.0 (sprints.max_tasks)", migrateV1_3_0_toV1_4_0},
 		{"v1.4.0->v1.5.0 (tasks.parent_task_id)", migrateV1_4_0_toV1_5_0},
+		{"v1.9.0->v1.10.0 (tasks.specialists, DROP)", migrateV1_9_0_toV1_10_0},
+		{"v1.10.0->v1.11.0 (tasks.commit_open, tasks.commit_close)", migrateV1_10_0_toV1_11_0},
+		{"v1.11.0->v1.12.0 (audit.related_entity_id, audit.commit_hash)", migrateV1_11_0_toV1_12_0},
 	}
 
 	for _, tc := range cases {

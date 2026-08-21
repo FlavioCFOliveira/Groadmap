@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -77,10 +78,11 @@ type graphPageView struct {
 func handleIndex(w http.ResponseWriter, r *http.Request) {
 	names, err := loadRoadmapNames()
 	if err != nil {
+		logServerError(r, "roadmap list read failed", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
-	renderHTML(w, "index.html", indexView{
+	renderHTML(w, r, "index.html", indexView{
 		Chrome: chrome{
 			Title:  "Groadmap — Roadmaps",
 			Active: "roadmaps",
@@ -109,6 +111,7 @@ func handleSprints(w http.ResponseWriter, r *http.Request) {
 
 	data, err := loadSprints(r.Context(), name)
 	if err != nil {
+		logServerError(r, "sprints page load failed", err, slog.String("roadmap", name))
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -118,7 +121,7 @@ func handleSprints(w http.ResponseWriter, r *http.Request) {
 		Active:  "sprints",
 		Heading: pageHeading{Title: "Sprints"},
 	}
-	renderHTML(w, "sprints.html", data)
+	renderHTML(w, r, "sprints.html", data)
 }
 
 // handleTasks renders a roadmap's tasks page: every task, any status, as a
@@ -148,6 +151,7 @@ func handleTasks(w http.ResponseWriter, r *http.Request) {
 
 	data, err := loadTasks(r.Context(), name, controls)
 	if err != nil {
+		logServerError(r, "tasks board load failed", err, slog.String("roadmap", name))
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -157,7 +161,7 @@ func handleTasks(w http.ResponseWriter, r *http.Request) {
 		Active:  "tasks",
 		Heading: pageHeading{Title: "Tasks"},
 	}
-	renderHTML(w, "tasks.html", data)
+	renderHTML(w, r, "tasks.html", data)
 }
 
 // handleTaskData serves one task's detail as JSON: the task's full field set and
@@ -194,11 +198,13 @@ func handleTaskData(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
+		logServerError(r, "task detail load failed", err,
+			slog.String("roadmap", name), slog.Int("task", id))
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	renderJSON(w, data)
+	renderJSON(w, r, data)
 }
 
 // handleAudit renders a roadmap's audit log page: one page of the full audit
@@ -232,6 +238,8 @@ func handleAudit(w http.ResponseWriter, r *http.Request) {
 
 	data, err := loadAudit(r.Context(), name, requestedPage)
 	if err != nil {
+		logServerError(r, "audit page load failed", err,
+			slog.String("roadmap", name), slog.Int("page", requestedPage))
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -241,7 +249,7 @@ func handleAudit(w http.ResponseWriter, r *http.Request) {
 		Active:  "audit",
 		Heading: pageHeading{Title: "Audit"},
 	}
-	renderHTML(w, "audit.html", data)
+	renderHTML(w, r, "audit.html", data)
 }
 
 // handleSprint renders a single sprint's page: all of its fields and its task
@@ -276,6 +284,8 @@ func handleSprint(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
+		logServerError(r, "sprint page load failed", err,
+			slog.String("roadmap", name), slog.Int("sprint", id))
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -295,7 +305,7 @@ func handleSprint(w http.ResponseWriter, r *http.Request) {
 			BadgeClass: sprintStatusBadge(data.Sprint.Status),
 		},
 	}
-	renderHTML(w, "sprint.html", data)
+	renderHTML(w, r, "sprint.html", data)
 }
 
 // handleGraphPage renders the knowledge-graph page shell. The page loads the
@@ -308,7 +318,7 @@ func handleGraphPage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	renderHTML(w, "graph.html", graphPageView{
+	renderHTML(w, r, "graph.html", graphPageView{
 		Chrome: chrome{
 			Title:   "Groadmap — " + name + " graph",
 			Roadmap: name,
@@ -349,13 +359,19 @@ func handleGraphData(w http.ResponseWriter, r *http.Request) {
 			// A classified query-bar failure is a client-visible, non-fatal
 			// condition: return it as a structured JSON error with 400 so the
 			// page can show the distinct in-place message. No write occurred.
-			renderJSONStatus(w, http.StatusBadRequest, map[string]any{"error": qe.Reason, "kind": qe.Kind})
+			// It is the user's query that failed, not the server, so it is a
+			// WARN and carries the same kind the response body does
+			// (SPEC/WEB.md § Levels).
+			logClientWarn(r, "graph query bar request failed", http.StatusBadRequest, qe,
+				slog.String("roadmap", name), slog.String("kind", qe.Kind))
+			renderJSONStatus(w, r, http.StatusBadRequest, map[string]any{"error": qe.Reason, "kind": qe.Kind})
 			return
 		}
+		logServerError(r, "graph view load failed", err, slog.String("roadmap", name))
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
-	renderJSON(w, view)
+	renderJSON(w, r, view)
 }
 
 // renderHTML executes the named template into a buffer first, so a template
@@ -363,9 +379,14 @@ func handleGraphData(w http.ResponseWriter, r *http.Request) {
 // writes the buffered HTML with the HTML content type. html/template's
 // contextual auto-escaping is the defence against injecting roadmap-derived
 // text into the page (SPEC/WEB.md § Frontend Rules, rule 1).
-func renderHTML(w http.ResponseWriter, name string, data any) {
+func renderHTML(w http.ResponseWriter, r *http.Request, name string, data any) {
 	var buf bytes.Buffer
 	if err := pageTemplates.ExecuteTemplate(&buf, name, data); err != nil {
+		// The failure is detected and answered here, so it is logged here and
+		// names its own subject: the template that would not execute
+		// (SPEC/WEB.md § What Is Logged). The handler that called us has
+		// nothing further to log on the way out.
+		logServerError(r, "page template execution failed", err, slog.String("template", name))
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -383,8 +404,8 @@ func renderHTML(w http.ResponseWriter, name string, data any) {
 // strings with D3 .text()/textContent, where the unicode escapes are decoded
 // back to the identical characters — the visualisation is unchanged
 // (SPEC/WEB.md § Graph Data Endpoint).
-func renderJSON(w http.ResponseWriter, v any) {
-	renderJSONStatus(w, http.StatusOK, v)
+func renderJSON(w http.ResponseWriter, r *http.Request, v any) {
+	renderJSONStatus(w, r, http.StatusOK, v)
 }
 
 // renderJSONStatus is renderJSON with an explicit HTTP status, used for the
@@ -394,11 +415,16 @@ func renderJSON(w http.ResponseWriter, v any) {
 // written together and never after the body, and an encode failure still yields
 // a clean 500 rather than a half-written response. HTML escaping stays ON, as in
 // renderJSON.
-func renderJSONStatus(w http.ResponseWriter, status int, v any) {
+func renderJSONStatus(w http.ResponseWriter, r *http.Request, status int, v any) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(v); err != nil {
+		// As in renderHTML: answered here, so logged here. The status the
+		// caller intended is recorded alongside the 500 actually sent, because
+		// an encode failure on a 400 body and one on a 200 body are different
+		// defects (SPEC/WEB.md § What Is Logged).
+		logServerError(r, "response body encoding failed", err, slog.Int("intended_status", status))
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
