@@ -307,12 +307,20 @@ func sprintUpdate(args []string) error {
 		return err
 	}
 
-	title, _ := result.Flags["Title"].(string)
-	description, _ := result.Flags["Description"].(string)
+	// Every decision below — the at-least-one-flag requirement, the field
+	// validation, the SET clause and the audit operations — keys on whether the
+	// flag was SUPPLIED, never on whether its value is non-empty. The two are not
+	// the same thing: `-t ""` supplies a flag carrying an empty value, and reading
+	// the empty string as "absent" made the command report a missing parameter for
+	// an invocation that supplied one, and silently drop the field when another
+	// flag kept the update alive. `task edit` already keys on presence
+	// (SPEC/COMMANDS.md § Update Sprint, § Edit Task).
+	title, hasTitle := result.Flags["Title"].(string)
+	description, hasDescription := result.Flags["Description"].(string)
 	_, hasMaxTasks := result.Flags["MaxTasks"]
 	rawOrder, hasOrder := result.Flags["Order"].(string)
 
-	if title == "" && description == "" && !hasMaxTasks && !hasOrder {
+	if !hasTitle && !hasDescription && !hasMaxTasks && !hasOrder {
 		return fmt.Errorf("%w: at least one of --title, --description, --max-tasks or --order is required", utils.ErrRequired)
 	}
 
@@ -325,23 +333,34 @@ func sprintUpdate(args []string) error {
 		}
 	}
 
-	if title != "" && len(title) > models.MaxSprintTitle {
-		return fmt.Errorf("%w: title exceeds maximum length of %d characters", utils.ErrFieldTooLarge, models.MaxSprintTitle)
-	}
-	// Reject control / bidi / format code points (SPEC/MODELS.md § Free-Text
-	// Control-Character Constraint).
-	if title != "" {
+	if hasTitle {
+		// A supplied --title must carry a value: unlike `sprint create`, where
+		// --title is a required parameter and an empty value means the parameter
+		// is missing (exit code 2), here it is an optional flag whose value is
+		// rejected (exit code 6). Same wrapper and same phrasing as `task edit`,
+		// so both commands answer `-t ""` identically.
+		if title == "" {
+			return fmt.Errorf("%w: title cannot be empty", utils.ErrValidation)
+		}
+		if len(title) > models.MaxSprintTitle {
+			return fmt.Errorf("%w: title exceeds maximum length of %d characters", utils.ErrFieldTooLarge, models.MaxSprintTitle)
+		}
+		// Reject control / bidi / format code points (SPEC/MODELS.md § Free-Text
+		// Control-Character Constraint).
 		if err := utils.ValidateNoControlChars(title, "title"); err != nil {
 			return err
 		}
 	}
 
-	if description != "" && len(description) > models.MaxSprintDescription {
-		return fmt.Errorf("%w: description exceeds maximum length of %d characters", utils.ErrFieldTooLarge, models.MaxSprintDescription)
-	}
-	// Reject control / bidi / format code points (SPEC/MODELS.md § Free-Text
-	// Control-Character Constraint).
-	if description != "" {
+	if hasDescription {
+		if description == "" {
+			return fmt.Errorf("%w: description cannot be empty", utils.ErrValidation)
+		}
+		if len(description) > models.MaxSprintDescription {
+			return fmt.Errorf("%w: description exceeds maximum length of %d characters", utils.ErrFieldTooLarge, models.MaxSprintDescription)
+		}
+		// Reject control / bidi / format code points (SPEC/MODELS.md § Free-Text
+		// Control-Character Constraint).
 		if err := utils.ValidateNoControlChars(description, "description"); err != nil {
 			return err
 		}
@@ -395,12 +414,12 @@ func sprintUpdate(args []string) error {
 		// applies them (SPEC/COMMANDS.md § Update Sprint).
 		ops := make([]models.AuditOperation, 0, 4)
 
-		if title != "" {
+		if hasTitle {
 			setParts = append(setParts, "title = ?")
 			args = append(args, title)
 			ops = append(ops, models.OpSprintTitleChange)
 		}
-		if description != "" {
+		if hasDescription {
 			setParts = append(setParts, "description = ?")
 			args = append(args, description)
 			ops = append(ops, models.OpSprintDescriptionChange)

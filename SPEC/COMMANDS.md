@@ -1857,6 +1857,18 @@ rmp sprint upd -r <name> <id> [-t "New Title"] [-d "New Description"] [--max-tas
   code 6 (see `STATE_MACHINE.md § Sprint Order Immutability`).
 
 At least one of `--title`, `--description`, `--max-tasks`, or `--order` is required.
+This requirement counts the flags the invocation supplies, not the values they
+carry: a flag supplied with an empty value is still a supplied flag, so it satisfies
+the requirement and then faces the validation rules below. An invocation that
+supplies none of the four is the only one this requirement rejects, with exit code 2
+and this message:
+
+`Error: required parameter missing: at least one of --title, --description, --max-tasks or --order is required`
+
+So `rmp sprint update -r <name> <id> -t ""` never produces that message: the flag is
+present, the requirement is met, and Title Validation then rejects the empty value
+with exit code 6. Presence rather than value is the same criterion the audit entries
+apply (see `Audit` below).
 
 **Title Validation:**
 
@@ -1869,6 +1881,23 @@ When `--title` is provided, it is validated before updating:
 
 The sprint `title` is also subject to the Control-Character Constraint described in
 `Field Validation` above.
+
+**Description Validation:**
+
+When `--description` is provided, it is validated before updating:
+
+| Scenario | Exit Code | stderr Output |
+|----------|-----------|---------------|
+| Description is empty | 6 | "Error: Description cannot be empty" |
+
+The sprint `description` is also subject to the Control-Character Constraint
+described in `Field Validation` above, and to the 2048-character maximum stated
+under `Options` above.
+
+These exit codes differ from `Create Sprint` on purpose: there `--title` and
+`--description` are required parameters, so an empty value counts as the parameter
+being missing (exit code 2), whereas here they are optional flags that must carry a
+non-empty value when supplied, so an empty value is a rejected value (exit code 6).
 
 **Bound Validation:**
 
@@ -1913,6 +1942,9 @@ field's entry.
 2. `rmp sprint update -r <name> <id> --order 3` writes exactly one `SPRINT_ORDER_CHANGE` entry.
 3. An update rejected by any validation rule, including an `--order` collision (exit code 5), writes zero entries.
 4. No invocation of `sprint update` writes `SPRINT_UPDATE`.
+5. `rmp sprint update -r <name> <id> -t ""` exits 6 with `Error: Title cannot be empty`, and `rmp sprint update -r <name> <id> -d ""` exits 6 with `Error: Description cannot be empty`. Neither reports a missing parameter, because both supply a flag.
+6. `rmp sprint update -r <name> <id> -t "" -d "New description"` exits 6, changes neither field, and writes zero entries: the empty `--title` is rejected before any field is written.
+7. `rmp sprint update -r <name> <id>` with none of the four flags is the only invocation that exits 2 with the at-least-one-flag message.
 
 ### Remove Sprint
 
