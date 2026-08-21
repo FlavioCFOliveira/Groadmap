@@ -5,10 +5,66 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // MaxInt32 is the maximum valid ID value (prevents integer overflow).
 const MaxInt32 = math.MaxInt32 // 2,147,483,647
+
+// ValidateFreeText applies both content rules a free-text field is subject to,
+// in the one order SPEC/MODELS.md fixes for them: the Free-Text UTF-8 Encoding
+// Constraint first, then the Free-Text Control-Character Constraint. It returns
+// the first refusal, or nil when the value satisfies both. Every refusal maps to
+// exit code 6.
+//
+// # Why the two rules are one call and not two
+//
+// The encoding rule is specified RELATIONALLY: it runs "immediately before the
+// control-character check, on every command and for every field the two rules
+// govern", and no other check moves. Welding the pair into a single call is what
+// makes that hold by construction — the commands do not each repeat an ordering
+// they could get wrong, and a later change to WHERE the pair sits (rmp tasks 301
+// and 302 both revisit that) carries the order with it instead of leaving one
+// half behind.
+//
+// The order itself is not a preference. The control-character rule is defined
+// over decoded CODE POINTS, and an invalid byte decodes to U+FFFD, which is not
+// a forbidden code point — so before this pairing existed, invalid UTF-8 passed
+// the control-character check and was written verbatim into a TEXT column. The
+// encoding check is what makes the rule that follows it meaningful.
+//
+// The value is checked AS SUPPLIED, before any trimming, for the reason
+// ValidateNoControlChars states below. That is sound for the encoding rule too,
+// and for a stronger reason: strings.TrimSpace can only remove runes for which
+// unicode.IsSpace is true, and no invalid byte decodes to one, so trimming can
+// neither introduce nor remove an encoding failure.
+func ValidateFreeText(value string, field Field) error {
+	if err := ValidateUTF8(value, field); err != nil {
+		return err
+	}
+	return ValidateNoControlChars(value, field)
+}
+
+// ValidateUTF8 rejects a value whose bytes are not a well-formed UTF-8 sequence,
+// returning an ErrValidation-wrapped error (exit 6) and nil otherwise. It
+// enforces SPEC/MODELS.md § Free-Text UTF-8 Encoding Constraint, which defines
+// well-formedness as the Unicode Standard, Table 3-7 does — the same definition
+// utf8.ValidString implements, so the five malformed shapes the SPEC enumerates
+// (an unintroduced continuation byte, a byte that never occurs in UTF-8 at all,
+// an overlong encoding, a surrogate code point, and a sequence the input ends
+// before completing) are refused by that one call and need no enumeration here.
+//
+// Callers reach it through ValidateFreeText, which is what pins the order it
+// runs in. It is exported in its own right because it is the rule itself, and
+// because a caller that has already applied the control-character rule by
+// another route — the streaming comment-body reader does — needs the encoding
+// half alone.
+func ValidateUTF8(value string, field Field) error {
+	if !utf8.ValidString(value) {
+		return InvalidUTF8Error(field)
+	}
+	return nil
+}
 
 // ValidateNoControlChars rejects free-text input that contains control or
 // Unicode bidirectional/format code points, returning an ErrValidation-wrapped

@@ -182,11 +182,13 @@ func taskEdit(args []string) error {
 		}
 	}
 
-	// Reject control / bidi / format code points in every free-text field that is
-	// being set (SPEC/MODELS.md § Free-Text Control-Character Constraint).
+	// Reject a value that is not valid UTF-8, and then one that carries a control
+	// / bidi / format code point, in every free-text field that is being set
+	// (SPEC/MODELS.md § Free-Text UTF-8 Encoding Constraint and § Free-Text
+	// Control-Character Constraint, applied in that order by one call).
 	for _, f := range taskEditTextFields {
 		if str, ok := updates[f.column].(string); ok {
-			if err := utils.ValidateNoControlChars(str, f.field); err != nil {
+			if err := utils.ValidateFreeText(str, f.field); err != nil {
 				return err
 			}
 		}

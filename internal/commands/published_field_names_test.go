@@ -112,19 +112,16 @@ func taskCreateArgs(roadmap string, under utils.Field, value string) []string {
 	}
 }
 
-// TestEveryCommandThatWritesAFieldNamesItTheSameWay is acceptance criteria 1 and
-// 3: one rule is triggered on one field from every command that writes it, and
-// every resulting message must carry the one published name.
+// fieldWriterCases enumerates the eight free-text fields of the SPEC table
+// together with every command that writes each one. It is the reachability
+// oracle for any rule that governs the whole set: a rule proved on this table is
+// proved on every field, from every command that can reach it.
 //
-// The name is EXTRACTED from each message rather than merely looked for in it,
-// so a message that named the field wrongly fails with the two spellings side by
-// side instead of failing a containment check that says nothing about what it
-// did say.
-func TestEveryCommandThatWritesAFieldNamesItTheSameWay(t *testing.T) {
-	const roadmap = "published-field-name-parity"
-	_, taskCommentID, sprintCommentID := setupPublishedNameRoadmap(t, roadmap)
-
-	cases := []fieldParityCase{
+// It takes the roadmap and the two seeded comment ids so a caller can build it
+// against its own fixture, which is what keeps the sweeps independent of one
+// another.
+func fieldWriterCases(roadmap string, taskCommentID, sprintCommentID int) []fieldParityCase {
+	return []fieldParityCase{
 		{field: utils.FieldTaskTitle, writers: []fieldWriter{
 			{command: "task create -t", invoke: func(v string) error {
 				return taskCreate(taskCreateArgs(roadmap, utils.FieldTaskTitle, v))
@@ -196,7 +193,21 @@ func TestEveryCommandThatWritesAFieldNamesItTheSameWay(t *testing.T) {
 			}},
 		}},
 	}
+}
 
+// TestEveryCommandThatWritesAFieldNamesItTheSameWay is acceptance criteria 1 and
+// 3: one rule is triggered on one field from every command that writes it, and
+// every resulting message must carry the one published name.
+//
+// The name is EXTRACTED from each message rather than merely looked for in it,
+// so a message that named the field wrongly fails with the two spellings side by
+// side instead of failing a containment check that says nothing about what it
+// did say.
+func TestEveryCommandThatWritesAFieldNamesItTheSameWay(t *testing.T) {
+	const roadmap = "published-field-name-parity"
+	_, taskCommentID, sprintCommentID := setupPublishedNameRoadmap(t, roadmap)
+
+	cases := fieldWriterCases(roadmap, taskCommentID, sprintCommentID)
 	if len(cases) != 8 {
 		t.Fatalf("the sweep covers %d fields, but SPEC/COMMANDS.md publishes 8; a field is missing from this table", len(cases))
 	}

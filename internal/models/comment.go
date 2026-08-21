@@ -250,12 +250,20 @@ func ValidateCommentBody(body string) (string, error) {
 		return "", utils.FieldTooLargeError(utils.FieldCommentBody, MaxCommentBody)
 	}
 
-	// The control-character rule is checked against the body as supplied, not
-	// against the trimmed form. strings.TrimSpace strips VT (0x0B) and FF
-	// (0x0C), both of which the SPEC forbids, so validating the trimmed form
-	// would let a leading or trailing VT or FF pass unreported instead of
+	// The encoding rule and the control-character rule, in that order and as one
+	// call (utils.ValidateFreeText). Both are checked against the body as
+	// supplied, not against the trimmed form: strings.TrimSpace strips VT (0x0B)
+	// and FF (0x0C), both of which the SPEC forbids, so validating the trimmed
+	// form would let a leading or trailing VT or FF pass unreported instead of
 	// rejecting the input that contains it.
-	if err := utils.ValidateNoControlChars(body, utils.FieldCommentBody); err != nil {
+	//
+	// The pair runs AFTER the cap, which is what SPEC/COMMANDS.md § Add Task
+	// Comment fixes for this field ("the body's length, then its encoding, then
+	// its control characters") and what the bounded standard-input reader
+	// requires: that reader settles the length verdict as soon as the value
+	// cannot fit and stops reading, so a body that is at once oversized and
+	// malformed is refused for its length on both input paths alike.
+	if err := utils.ValidateFreeText(body, utils.FieldCommentBody); err != nil {
 		return "", err
 	}
 
@@ -318,6 +326,26 @@ const commentBodyReadChunk = 4096
 //     whitespace held a forbidden control character: TrimSpace strips VT and FF,
 //     so such a body counts as absent (exit code 2), which is what the
 //     read-everything-then-TrimSpace implementation did.
+//
+// # Invalid UTF-8 is carried, not repaired and not refused here
+//
+// The first clause above — invalid bytes retained exactly as supplied — is a
+// REQUIREMENT of this function, not an incidental property, and it is what lets
+// SPEC/MODELS.md § Free-Text UTF-8 Encoding Constraint reach the same verdict on
+// a body read from standard input as on one supplied through --body.
+//
+// Two tempting shortcuts are both forbidden by that. Substituting U+FFFD for an
+// invalid byte would hand ValidateCommentBody a well-formed string to inspect
+// and nothing left to refuse, which is the very defect the constraint exists
+// against. Refusing the stream at the first invalid byte would move the encoding
+// verdict ahead of the cap, so a body carrying an invalid byte at offset 3 and
+// 5000 characters would report an encoding failure here while the flag path
+// reported `field exceeds maximum size` — and the length verdict is the one the
+// SPEC fixes for that body on both paths alike.
+//
+// Every verdict therefore stays where it already was: this function decides
+// nothing, and ValidateCommentBody applies the cap, then the encoding rule, then
+// the control-character rule, to whatever it is handed.
 func ReadCommentBody(src io.Reader) (string, error) {
 	var (
 		s     commentBodyScanner

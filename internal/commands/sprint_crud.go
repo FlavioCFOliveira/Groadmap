@@ -94,9 +94,10 @@ func sprintCreate(args []string) error {
 	if len(title) > models.MaxSprintTitle {
 		return utils.FieldTooLargeError(utils.FieldSprintTitle, models.MaxSprintTitle)
 	}
-	// Reject control / bidi / format code points (SPEC/MODELS.md § Free-Text
-	// Control-Character Constraint).
-	if err := utils.ValidateNoControlChars(title, utils.FieldSprintTitle); err != nil {
+	// Reject a value that is not valid UTF-8, and then one that carries a control
+	// / bidi / format code point (SPEC/MODELS.md § Free-Text UTF-8 Encoding
+	// Constraint and § Free-Text Control-Character Constraint, in that order).
+	if err := utils.ValidateFreeText(title, utils.FieldSprintTitle); err != nil {
 		return err
 	}
 
@@ -107,9 +108,10 @@ func sprintCreate(args []string) error {
 		// redundant doubled prefix (finding #54).
 		return fmt.Errorf("%w: --description", utils.ErrRequired)
 	}
-	// Reject control / bidi / format code points (SPEC/MODELS.md § Free-Text
-	// Control-Character Constraint).
-	if err := utils.ValidateNoControlChars(description, utils.FieldSprintDescription); err != nil {
+	// Reject a value that is not valid UTF-8, and then one that carries a control
+	// / bidi / format code point (SPEC/MODELS.md § Free-Text UTF-8 Encoding
+	// Constraint and § Free-Text Control-Character Constraint, in that order).
+	if err := utils.ValidateFreeText(description, utils.FieldSprintDescription); err != nil {
 		return err
 	}
 
@@ -345,9 +347,11 @@ func sprintUpdate(args []string) error {
 		if len(title) > models.MaxSprintTitle {
 			return utils.FieldTooLargeError(utils.FieldSprintTitle, models.MaxSprintTitle)
 		}
-		// Reject control / bidi / format code points (SPEC/MODELS.md § Free-Text
-		// Control-Character Constraint).
-		if err := utils.ValidateNoControlChars(title, utils.FieldSprintTitle); err != nil {
+		// Reject a value that is not valid UTF-8, and then one that carries a
+		// control / bidi / format code point (SPEC/MODELS.md § Free-Text UTF-8
+		// Encoding Constraint and § Free-Text Control-Character Constraint, in
+		// that order).
+		if err := utils.ValidateFreeText(title, utils.FieldSprintTitle); err != nil {
 			return err
 		}
 	}
@@ -359,9 +363,11 @@ func sprintUpdate(args []string) error {
 		if len(description) > models.MaxSprintDescription {
 			return utils.FieldTooLargeError(utils.FieldSprintDescription, models.MaxSprintDescription)
 		}
-		// Reject control / bidi / format code points (SPEC/MODELS.md § Free-Text
-		// Control-Character Constraint).
-		if err := utils.ValidateNoControlChars(description, utils.FieldSprintDescription); err != nil {
+		// Reject a value that is not valid UTF-8, and then one that carries a
+		// control / bidi / format code point (SPEC/MODELS.md § Free-Text UTF-8
+		// Encoding Constraint and § Free-Text Control-Character Constraint, in
+		// that order).
+		if err := utils.ValidateFreeText(description, utils.FieldSprintDescription); err != nil {
 			return err
 		}
 	}

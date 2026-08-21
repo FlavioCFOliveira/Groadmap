@@ -302,6 +302,113 @@ field's published name, specified once in
 `COMMANDS.md § Published Field Names in Validation Messages`. That section is
 canonical for the name and lists it for every free-text field.
 
+**Free-Text UTF-8 Encoding Constraint:**
+
+Every free-text field holds text encoded as UTF-8, and only text encoded as UTF-8.
+The application rejects an input whose bytes are not a valid UTF-8 sequence, with
+exit code 6, before the value is stored. This rule governs exactly the fields the
+Free-Text Control-Character Constraint above governs, and that constraint is
+canonical for the set. Read the two constraints together. They apply to the same
+fields on the same commands, and each one on its own is sufficient grounds to refuse
+an input.
+
+A byte sequence is valid UTF-8 when it is well-formed under the Unicode Standard,
+Table 3-7 ("Well-Formed UTF-8 Byte Sequences"). The application therefore rejects,
+among other malformed sequences:
+
+1. A continuation byte (`0x80`-`0xBF`) that no lead byte introduces.
+2. A byte that never occurs in valid UTF-8 at all: `0xC0`, `0xC1`, and `0xF5`-`0xFF`.
+3. An overlong encoding, meaning a code point written with more bytes than its
+   shortest form requires, such as `0xC0 0xAF` for `/` (`U+002F`).
+4. A surrogate code point, `U+D800`-`U+DFFF`, written as the three bytes
+   `0xED 0xA0 0x80` through `0xED 0xBF 0xBF`. Surrogate code points are not
+   characters and have no UTF-8 encoding.
+5. A sequence that a lead byte begins and that the input ends before completing.
+
+**Both input paths.** The rule binds the value as the caller supplied it, whichever
+way the value reached the application: as the value of a command-line flag, or as the
+byte stream the application reads from standard input. The comment `Body` is the only
+free-text field that has a standard-input source (see `COMMANDS.md § Comment Body
+Input Source and Precedence`); every other free-text field arrives by flag alone.
+The application reads that stream under a bounded budget instead of holding the whole
+value in memory, and this rule leaves the standing property of that bounded read
+intact: the verdict the caller sees is exactly the verdict a read-to-EOF
+implementation would reach. The bounded read therefore carries the bytes it read
+forward exactly as they arrived, invalid bytes included, and never substitutes a
+replacement character for one; this rule is then applied to those bytes in the order
+stated below, and reaches on them the verdict it would reach on the same bytes
+supplied through a flag.
+
+Decoding a stream in pieces raises one question, and item 5 above settles it. A
+multi-byte sequence that one read ends inside is not malformed for that reason: item
+5 is about the input ending, not about a read ending, so the application waits for
+the bytes that would complete the sequence. A sequence that a lead byte begins and
+that the input itself ends before completing is malformed under item 5, and the
+application refuses it.
+
+**Refusal.** A value that is not valid UTF-8 is a validation failure, in the same
+class and with the same exit code, 6, as a value that carries a forbidden control
+character. It carries its own message. The message body is
+`<field>: the value is not valid UTF-8`, and the full line the application writes to
+standard error is
+`Error: validation error: <field>: the value is not valid UTF-8`. `<field>` is the
+field's published name, specified by `COMMANDS.md § Published Field Names in
+Validation Messages`, which is canonical for it. That section provides for a rule
+added later over the same fields, and this constraint is one: the name resolves
+there, and this constraint does not restate the mapping. The application stores nothing and changes
+no entity when it refuses.
+
+**Order.** The application applies this rule immediately before the Free-Text
+Control-Character Constraint, on every command and for every field the two rules
+govern. The control-character rule is defined over decoded code points, so it is only
+meaningful once the bytes are known to decode, and checking the encoding first is
+what makes it so. No other check moves. This rule adds one check, immediately before the
+control-character check, wherever the control-character check runs; the position of
+every other check is unchanged (see `COMMANDS.md § Field Validation` and the
+per-command validation orders in `COMMANDS.md`).
+
+One consequence of that placement is deliberate and MUST be preserved. Because this
+rule moves no other check, the encoding check stands in the same relation to a
+field's length limit as the control-character check already stands in on the command
+that writes it. Where the command applies the length limit first, a value that is at
+once longer than the limit and not valid UTF-8 is still refused for its length and
+not for its encoding: the caller sees the `field exceeds maximum size` refusal and
+never the encoding message. The comment `Body` is such a field on all four comment
+subcommands, on the flag path and on the standard-input path alike, and it must
+remain one: there the length verdict is fixed the moment the value cannot fit within
+the cap, and applying the encoding rule ahead of the limit would both change that
+verdict and defeat the bounded read, which never materialises the whole input.
+`COMMANDS.md § UTF-8 Encoding Constraint (All Free-Text Fields)` states where the
+check falls on each command.
+
+Rationale: rejection is the only outcome under which what the caller supplied, what
+the database stores, and what every reader prints are the same string. Without this
+rule an invalid byte reaches the `TEXT` column verbatim, while the JSON encoder that
+produces command output replaces each such byte with `U+FFFD` (REPLACEMENT
+CHARACTER). The reported value then differs both from the stored value and from the
+supplied one, so the JSON output that `DATA_FORMATS.md` documents cannot round-trip
+what the field holds. Two other outcomes were considered and declined. Replacing the
+invalid bytes with `U+FFFD` at the boundary would make the stored value agree with
+the printed one, but it would silently alter what the caller wrote, so what is
+stored would no longer be what was supplied. Documenting the behaviour as it stood
+would leave the divergence between the stored value and the reported value in place,
+and that divergence is the defect. This constraint is not a defence against
+injection or escape: the application binds every value as a SQL parameter, and the
+web interface escapes every value for its context (see `WEB.md`). It exists for data
+integrity and for the output contract.
+
+**Length limits are unchanged.** This rule changes nothing about the maximum length
+each field carries, how the application measures that length, or where the
+measurement falls in the sequence of checks. Two facts about those limits hold both
+before and after this rule, and a later change must preserve both. First, the count
+the application measures is never smaller than the count SQLite's `length()`
+function returns for the same stored value, because `length()` counts only the bytes
+of a value that are not UTF-8 continuation bytes. Second, and in consequence, the
+`CHECK(length(<column>) <= <n>)` constraints that `DATABASE.md` defines cannot be
+tripped by an input the application accepted: they are an independent backstop, not
+the operative check. Neither count is to be brought into line with the other on the
+strength of this rule.
+
 ```go
 // Task represents a task in the roadmap.
 // Field order optimized for memory layout (248 bytes, zero padding on 64-bit systems).
@@ -368,8 +475,8 @@ type Sprint struct {
 
 #### Sprint Field Constraints
 
-- `Title`: Required (NOT NULL), maximum 255 characters. Same cap as the task `Title` field. Subject to the Free-Text Control-Character Constraint above.
-- `Description`: Required (NOT NULL), maximum 2048 characters. Subject to the Free-Text Control-Character Constraint above. This field is the canonical statement of the sprint's purpose, and it carries the following semantics on every command that writes it (`sprint create` and `sprint update`):
+- `Title`: Required (NOT NULL), maximum 255 characters. Same cap as the task `Title` field. Subject to the Free-Text Control-Character Constraint and the Free-Text UTF-8 Encoding Constraint above.
+- `Description`: Required (NOT NULL), maximum 2048 characters. Subject to the Free-Text Control-Character Constraint and the Free-Text UTF-8 Encoding Constraint above. This field is the canonical statement of the sprint's purpose, and it carries the following semantics on every command that writes it (`sprint create` and `sprint update`):
   - The `Description` MUST state the high-level (macro) goal of the development effort that the sprint delivers: a new development, a fix, a refactoring, or another kind of change.
   - Together with the sprint `Title`, the `Description` MUST give a human reader or an AI agent a clear macro idea of what the sprint's tasks are specifically aimed at.
   - The `Description` states the macro goal only. Detailed scope, technical detail, and acceptance conditions do not belong in the `Description`: the tasks that compose the sprint specify them in full, through their `FunctionalRequirements`, `TechnicalRequirements`, and `AcceptanceCriteria` fields (see the `Task` model above).
@@ -405,7 +512,7 @@ type TaskComment struct {
 #### Task Comment Field Constraints
 
 - `Type`: Required. One of `ValidTaskCommentTypes`. There is no default: a comment without a type is rejected before it reaches the database. See [Comment Type](#comment-type).
-- `Body`: Required, maximum 4096 characters. Leading and trailing whitespace is trimmed before validation; a value that is empty after trimming counts as absent. Subject to the Free-Text Control-Character Constraint above, so the body may contain TAB, LF, and CR but no other control character.
+- `Body`: Required, maximum 4096 characters. Leading and trailing whitespace is trimmed before validation; a value that is empty after trimming counts as absent. Subject to the Free-Text Control-Character Constraint and the Free-Text UTF-8 Encoding Constraint above, so the body may contain TAB, LF, and CR but no other control character, and its bytes must be valid UTF-8.
 - `CreatedAt`: Set by the application when the comment is created and never modified afterwards.
 - `UpdatedAt`: `null` while the comment has never been edited. Every edit sets it to the edit's timestamp, so a reader can see that the stored text is no longer the text originally written. The previous text is not retained and is not recoverable; the audit log records that the edit happened, not what was replaced (see `DATABASE.md § audit Table`).
 - `ID`: Unique within `task_comments` only. Task comment ids and sprint comment ids are independent sequences.

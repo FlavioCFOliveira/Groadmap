@@ -102,6 +102,26 @@ func (f Field) String() string {
 	return "Field(" + strconv.Itoa(int(f)) + ")"
 }
 
+// InvalidUTF8Error is the refusal of a value whose bytes are not a well-formed
+// UTF-8 sequence (SPEC/MODELS.md § Free-Text UTF-8 Encoding Constraint). It
+// carries ErrValidation, so it is the same failure CLASS and the same exit code,
+// 6, as ControlCharError: the two constraints govern the same eight fields, and
+// either one alone is grounds to refuse the input.
+//
+// It is the fourth governed message class, and the one this definition was
+// written to be extended by. The constraint that defines it states the wording
+// and then defers the field's name to SPEC/COMMANDS.md § Published Field Names
+// in Validation Messages rather than restating the mapping — which is precisely
+// what taking a Field here, and nothing else, makes true of the code as well.
+//
+// Its wording is listed in governedFragments, so the gate in
+// published_field_names_test.go watches this class as it watches the other
+// three: rewording the message here without updating that list fails the gate,
+// and hand-building this message in any other file fails it too.
+func InvalidUTF8Error(field Field) error {
+	return fmt.Errorf("%w: %s: the value is not valid UTF-8", ErrValidation, field)
+}
+
 // ControlCharError is the refusal a forbidden control character produces,
 // spelled once so every caller reports the identical message and the identical
 // sentinel (exit code 6): the whole-value check in ValidateNoControlChars, and
@@ -136,7 +156,7 @@ func FieldEmptyError(field Field) error {
 // RequiredFieldMessage is the text of the refusal of a missing value for a field
 // that requires one, in the wording the model-level validators use.
 //
-// Unlike the three constructors above it returns the MESSAGE and not an error,
+// Unlike the four constructors above it returns the MESSAGE and not an error,
 // because its callers are the package-level sentinels of internal/models, which
 // are compared with errors.Is and must stay exactly what they were: plain
 // errors.New values carrying no sentinel of their own. Chaining ErrValidation

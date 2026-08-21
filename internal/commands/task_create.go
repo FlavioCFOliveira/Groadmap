@@ -96,9 +96,16 @@ func taskCreate(args []string) error {
 		return fmt.Errorf("%w: --acceptance-criteria", utils.ErrRequired)
 	}
 
-	// Reject control / bidi / format code points in all free-text fields
-	// (SPEC/MODELS.md § Free-Text Control-Character Constraint). Performed after
-	// TrimSpace, mirroring the existing field-validation order.
+	// Reject a value that is not valid UTF-8, and then one that carries a control
+	// / bidi / format code point, in all four free-text fields (SPEC/MODELS.md §
+	// Free-Text UTF-8 Encoding Constraint and § Free-Text Control-Character
+	// Constraint; utils.ValidateFreeText applies them in that order). Performed
+	// after TrimSpace, mirroring the existing field-validation order.
+	//
+	// The two rules are applied field by field rather than in two sweeps, so the
+	// encoding check sits immediately before the control-character check of the
+	// SAME field and the precedence BETWEEN fields — title, then functional,
+	// then technical, then acceptance — is exactly what it was.
 	//
 	// The field is identified by a utils.Field, so the refusal carries the
 	// published name of SPEC/COMMANDS.md § Published Field Names in Validation
@@ -115,7 +122,7 @@ func taskCreate(args []string) error {
 		{technicalReqs, utils.FieldTaskTechnicalRequirements},
 		{acceptanceCriteria, utils.FieldTaskAcceptanceCriteria},
 	} {
-		if err := utils.ValidateNoControlChars(f.value, f.field); err != nil {
+		if err := utils.ValidateFreeText(f.value, f.field); err != nil {
 			return err
 		}
 	}

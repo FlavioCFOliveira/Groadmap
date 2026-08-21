@@ -202,10 +202,13 @@ func taskSetStatus(args []string) error {
 	if completionSummary != nil && len(*completionSummary) > models.MaxTaskCompletionSummary {
 		return utils.FieldTooLargeError(utils.FieldTaskCompletionSummary, models.MaxTaskCompletionSummary)
 	}
-	// Reject control / bidi / format code points (SPEC/MODELS.md § Free-Text
-	// Control-Character Constraint).
+	// Reject a value that is not valid UTF-8, and then one that carries a control
+	// / bidi / format code point (SPEC/MODELS.md § Free-Text UTF-8 Encoding
+	// Constraint and § Free-Text Control-Character Constraint, in that order).
+	// Both follow the length check above, which is the order SPEC/COMMANDS.md §
+	// Change Status (stat) step 3 states for --summary.
 	if completionSummary != nil {
-		if err := utils.ValidateNoControlChars(*completionSummary, utils.FieldTaskCompletionSummary); err != nil {
+		if err := utils.ValidateFreeText(*completionSummary, utils.FieldTaskCompletionSummary); err != nil {
 			return err
 		}
 	}

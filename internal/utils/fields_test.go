@@ -145,6 +145,14 @@ func TestFieldStringMarksAValueThatNamesNoField(t *testing.T) {
 func TestGovernedRefusalsCarryThePublishedNameAndTheirSentinel(t *testing.T) {
 	for _, f := range declaredFields {
 		t.Run(f.String(), func(t *testing.T) {
+			utf8Err := InvalidUTF8Error(f)
+			if want := "validation error: " + f.String() + ": the value is not valid UTF-8"; utf8Err.Error() != want {
+				t.Errorf("InvalidUTF8Error\n got: %q\nwant: %q", utf8Err.Error(), want)
+			}
+			if !errors.Is(utf8Err, ErrValidation) {
+				t.Errorf("InvalidUTF8Error must wrap ErrValidation (exit 6); got %v", utf8Err)
+			}
+
 			control := ControlCharError(f)
 			if want := "validation error: " + f.String() + ": control characters are not allowed"; control.Error() != want {
 				t.Errorf("ControlCharError\n got: %q\nwant: %q", control.Error(), want)
@@ -173,6 +181,22 @@ func TestGovernedRefusalsCarryThePublishedNameAndTheirSentinel(t *testing.T) {
 				t.Errorf("RequiredFieldMessage\n got: %q\nwant: %q", RequiredFieldMessage(f), want)
 			}
 		})
+	}
+}
+
+// TestValidateUTF8NamesTheFieldItWasGiven closes the loop between the encoding
+// rule and the name, exactly as the control-character test below does for its
+// own rule: the refusal a malformed value produces must name the field the
+// caller passed, and no other.
+func TestValidateUTF8NamesTheFieldItWasGiven(t *testing.T) {
+	for _, f := range declaredFields {
+		err := ValidateUTF8("value with a lone \x80 continuation byte", f)
+		if err == nil {
+			t.Fatalf("%s: a lone continuation byte must be refused", f)
+		}
+		if want := f.String() + ": the value is not valid UTF-8"; !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: message\n got: %q\nwant substring: %q", f, err.Error(), want)
+		}
 	}
 }
 

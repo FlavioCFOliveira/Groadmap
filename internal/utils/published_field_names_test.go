@@ -42,6 +42,7 @@ import (
 // In every message the SPEC section governs, the field name sits immediately
 // before the wording of the rule that was broken:
 //
+//	<field>: the value is not valid UTF-8
 //	<field>: control characters are not allowed
 //	<field> exceeds maximum length of N characters
 //	<field> cannot be empty
@@ -63,13 +64,31 @@ import (
 const definitionFile = "internal/utils/fields.go"
 
 // governedFragments are the distinguishing words of the message classes the SPEC
-// section governs: the control-character refusal, the length-cap refusal, and
-// the two wordings of the empty/missing-value refusal.
+// section governs: the encoding refusal, the control-character refusal, the
+// length-cap refusal, and the two wordings of the empty/missing-value refusal.
 //
-// A rule added later brings its own wording and is not listed here; it is bound
-// by the compile-time half instead, because its field name still has to reach it
-// through a Field. rmp task 180's UTF-8 refusal is the next such rule.
+// The encoding refusal is the fourth class, added by rmp task 180. Until it
+// existed, this list carried a note saying that a rule added later would not be
+// listed here and would be bound by the compile-time half alone — and it named
+// task 180's UTF-8 refusal as the next such rule. That note was a promise about
+// a rule that did not yet exist, and the promise is now due: the rule shipped,
+// so it is listed.
+//
+// Listing it is not a departure from the reasoning that note recorded, it is the
+// completion of it. SPEC/COMMANDS.md § Published Field Names in Validation
+// Messages provides explicitly for rules added later over the same eight fields,
+// and enumerates the classes of message they produce; leaving this one out would
+// leave the only governed class the gate does not watch. The compile-time half
+// binds a call site that passes a Field, which is most of them — but it says
+// nothing about a call site that hand-builds the whole message, and
+// `"body: the value is not valid UTF-8"` written out in some future file is
+// precisely the defect this gate exists to catch.
+//
+// A rule added AFTER this one belongs here too, on the same reasoning, together
+// with its own entries in TestTheGateDetectsTheDefectItWatchesFor: this gate is
+// only worth the classes it is told about.
 var governedFragments = []string{
+	"the value is not valid UTF-8",
 	"control characters are not allowed",
 	"exceeds maximum length of",
 	"cannot be empty",
@@ -106,10 +125,11 @@ func TestNoValidationMessageIsBuiltFromAFieldNameLiteral(t *testing.T) {
 			inspected++
 			if reason := violation(lit.text); reason != "" {
 				t.Errorf("%s:%d names a field inside a validation message: %s\n  literal: %q\n"+
-					"  Take the name from the shared definition instead: utils.ControlCharError,\n"+
-					"  utils.FieldTooLargeError, utils.FieldEmptyError and utils.RequiredFieldMessage\n"+
-					"  all take a utils.Field and spell the message once (SPEC/COMMANDS.md §\n"+
-					"  Published Field Names in Validation Messages, acceptance criterion 6).",
+					"  Take the name from the shared definition instead: utils.InvalidUTF8Error,\n"+
+					"  utils.ControlCharError, utils.FieldTooLargeError, utils.FieldEmptyError and\n"+
+					"  utils.RequiredFieldMessage all take a utils.Field and spell the message once\n"+
+					"  (SPEC/COMMANDS.md § Published Field Names in Validation Messages, acceptance\n"+
+					"  criterion 6). A constructor added for a new class belongs in this list too.",
 					rel, lit.line, reason, lit.text)
 			}
 		}
@@ -167,6 +187,13 @@ func TestTheGateDetectsTheDefectItWatchesFor(t *testing.T) {
 		`title is required`,
 		`%w: body exceeds maximum length of %d characters`,
 		`%w: completion_summary exceeds maximum length of %d characters`,
+		// The fourth class, rmp task 180. The first of these is the literal a
+		// future file would most plausibly carry, having copied the message out
+		// of the SPEC instead of calling utils.InvalidUTF8Error.
+		`%w: body: the value is not valid UTF-8`,
+		`%w: %s: the value is not valid UTF-8`,
+		`%w: functional-requirements: the value is not valid UTF-8`,
+		`completion_summary: the value is not valid UTF-8`,
 	}
 	for _, text := range mustFlag {
 		if violation(text) == "" {
@@ -187,6 +214,12 @@ func TestTheGateDetectsTheDefectItWatchesFor(t *testing.T) {
 			`does not succeed as a no-op. The previous body is not retained anywhere.`,
 		`functional_requirements`,
 		`SELECT title, functional_requirements FROM tasks WHERE id = ?`,
+		// The two boundaries of the fourth class, matching the ones the older
+		// classes are held to: a FLAG keeps its own spelling and is not a field
+		// (criterion 5), and a longer word that merely ENDS in a field name is
+		// not that field.
+		`--body: the value is not valid UTF-8`,
+		`somebody: the value is not valid UTF-8`,
 	}
 	for _, text := range mustPass {
 		if reason := violation(text); reason != "" {

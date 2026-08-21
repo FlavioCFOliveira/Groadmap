@@ -36,6 +36,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Web HTTP server timeouts (read-header, write, idle) and the graph data endpoint's query time budget | `WEB.md § HTTP Server Timeouts` |
 | Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
 | Free-text control-character constraint (CWE-150 / Trojan Source) | `MODELS.md § Task` (Free-Text Control-Character Constraint) |
+| Free-text UTF-8 encoding constraint (only valid UTF-8 is accepted and stored) | `MODELS.md § Task` (Free-Text UTF-8 Encoding Constraint) |
 | Published field name in a validation error message (one name per field, underscored; how it differs from the flag name) | `COMMANDS.md § Published Field Names in Validation Messages` |
 | Task commit-hash format (7-64 hexadecimal characters, lowercase on storage, no git invocation) | `MODELS.md § Task` (Commit Hash Constraint) |
 | Task commit-hash `CHECK` constraints and why `GLOB` is case-sensitive | `DATABASE.md § Commit Hash Format Constraint` |
@@ -146,6 +147,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Memory layout / struct field ordering | `MODELS.md § Memory Layout Optimization` |
 | Task state transitions | `STATE_MACHINE.md § Task State Machine` |
 | Task commit-hash format (character set, length bounds, lowercase normalisation) | `MODELS.md § Task` (Commit Hash Constraint) |
+| Free-text field encoding (only valid UTF-8 accepted and stored, on the flag path and the standard-input path alike) | `MODELS.md § Task` (Free-Text UTF-8 Encoding Constraint) |
 | Task commit tracking field rules (when `commit_open` and `commit_close` are written, preserved, and cleared) | `STATE_MACHINE.md § Commit Tracking Fields` |
 | Sprint state transitions | `STATE_MACHINE.md § Sprint State Machine` |
 | Sprint membership versus task status | `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` |

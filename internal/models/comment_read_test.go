@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/FlavioCFOliveira/Groadmap/internal/testenv"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
@@ -90,7 +91,7 @@ func differentialBodies() map[string]string {
 	const vt = "\v"      // 0x0B: forbidden, and stripped by TrimSpace
 	const ff = "\f"      // 0x0C: forbidden, and stripped by TrimSpace
 	const nel = "\u0085" // whitespace, permitted
-	return map[string]string{
+	bodies := map[string]string{
 		"empty":                       "",
 		"single character":            "a",
 		"plain sentence":              "Reviewed the audit trail and signed it off.",
@@ -138,6 +139,23 @@ func differentialBodies() map[string]string {
 		"trailing ws then control":    "finding   " + vt + "   ",
 		"content ws content":          "one     two",
 	}
+
+	// The five malformed shapes SPEC/MODELS.md § Free-Text UTF-8 Encoding
+	// Constraint enumerates, each in the four positions that decide which rule
+	// answers for it. They are drawn from the module's shared corpus so this
+	// oracle and the rule's own gates cannot end up testing different bytes.
+	//
+	// The last two shapes are the ones that matter most here: with the malformed
+	// bytes BEFORE the cap is reached, a reader that stopped at the first
+	// invalid byte would report an encoding failure where the whole-stream
+	// pipeline reports the length one, and this comparison is what catches it.
+	for _, c := range testenv.MalformedUTF8Corpus() {
+		bodies["malformed "+c.Name] = c.Value
+		bodies["malformed padded "+c.Name] = "  \n\t" + c.Value + " \r\n  "
+		bodies["malformed then over cap "+c.Name] = "abc" + c.Value + strings.Repeat("x", MaxCommentBody)
+		bodies["malformed after cap "+c.Name] = strings.Repeat("x", MaxCommentBody) + c.Value
+	}
+	return bodies
 }
 
 // TestReadCommentBodyMatchesWholeStreamPipeline is the differential proof that
@@ -180,6 +198,10 @@ func TestReadCommentBodyMatchesPipelineOnRandomInput(t *testing.T) {
 		"a", "b", "Z", "9", ".", " ", "  ", "\t", "\n", "\r", "\v", "\f",
 		"\x00", "\x1b", "\x7f", "\u0085", "\u00a0", "é", "監", "\U0001F680",
 		"\u202e", "\ufeff", "\x80", "\xff", "\xc0\x80", "\xe2\x82",
+		// The two shapes the list above did not already reach: an overlong
+		// encoding of a character a filter would look for (0xC0 0xAF is `/`),
+		// and a lone surrogate.
+		"\xc0\xaf", "\xed\xa0\x80",
 	}
 	rng := rand.New(rand.NewSource(20260817)) // #nosec G404 -- deterministic test corpus, not cryptography
 

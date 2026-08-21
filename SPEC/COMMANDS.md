@@ -99,7 +99,7 @@ The comment subcommands of the `task` and `sprint` families (`comment-add`, `com
 | `type` | Yes | - | Comment classification. Mandatory, no default. Task comments accept `FINDING`, `HYPOTHESIS`, `TEST`, `DECISION`, `PROGRESS`, `UPDATE`, `NOTE`; sprint comments accept `FINDING`, `DECISION`, `PROGRESS`, `UPDATE`. See `MODELS.md § Comment Type` for the canonical list |
 | `body` | Yes | 4096 chars | Comment text. Supplied through `--body` or, when that flag is absent, read from standard input under the bounded read |
 
-A `type` value outside the set the entity accepts is rejected with exit code 6 and a message naming the valid set for that entity. The `body` is subject to the Control-Character Constraint below.
+A `type` value outside the set the entity accepts is rejected with exit code 6 and a message naming the valid set for that entity. The `body` is subject to the Control-Character Constraint and the UTF-8 Encoding Constraint below.
 
 ### Comment Body Input Source and Precedence
 
@@ -286,6 +286,33 @@ Control-Character Constraint in `MODELS.md § Task`. The refusal names the field
 its published name, as `Published Field Names in Validation Messages` above
 requires.
 
+### UTF-8 Encoding Constraint (All Free-Text Fields)
+
+The free-text fields the Control-Character Constraint above lists accept only text
+encoded as UTF-8. An input whose bytes are not a well-formed UTF-8 sequence is
+rejected with exit code 6 before it is stored, on every command that writes the
+field, and whether the value arrived as the value of a flag or on standard input.
+The canonical definition is the Free-Text UTF-8 Encoding Constraint in
+`MODELS.md § Task`, which states what counts as well-formed, what the rule protects,
+and why the application refuses such a value instead of substituting a replacement
+character for each invalid byte.
+
+The refusal is `Error: validation error: <field>: the value is not valid UTF-8`. It
+names the field by its published name, as `Published Field Names in Validation
+Messages` above requires.
+
+**Order.** The encoding check runs immediately before the control-character check, on
+every command and for every field the two rules govern, and no other check changes
+position. The encoding check therefore stands in the same relation to a field's
+length limit as the control-character check already stands in on that command. Where
+the command applies the length limit first, a value that is at once oversized and not
+valid UTF-8 is refused as `field exceeds maximum size` and never as an encoding
+failure. That is the case for the comment `body` on all four comment subcommands,
+where the bounded standard-input read also requires it: that read fixes the length
+verdict as soon as the value cannot fit and stops reading, and it reaches the verdict
+a read-to-EOF implementation would reach. Where a command states a **Validation
+Order** below, that order states where the check falls for that command.
+
 ### Validation Error Messages
 
 | Scenario | Error Message (stderr) |
@@ -295,6 +322,7 @@ requires.
 | Requirements exceed 4096 chars | "Error: {Field} must not exceed 4096 characters (got N)" |
 | Requirements are empty | "Error: {Field} is required" |
 | Comment body exceeds 4096 chars | "Error: field exceeds maximum size: body exceeds maximum length of 4096 characters" |
+| Free-text value is not valid UTF-8 | "Error: validation error: <field>: the value is not valid UTF-8" |
 | Comment body not supplied | "Error: required parameter missing: no comment body supplied" |
 | Comment edit requests no change (no `--type`, no `--body`, no body on stdin) | "Error: required parameter missing: at least one of --type or --body is required" |
 | Comment type missing | "Error: required parameter missing: --type" |
@@ -800,6 +828,7 @@ All batch operations validate ALL IDs and status transitions before applying any
 | Target state is `SPRINT` | 6 | **No changes made** | "Error: status SPRINT can only be set automatically via 'sprint add-tasks'" |
 | `--summary` used with non-COMPLETED state | 6 | **No changes made** | "Error: --summary flag is only allowed when transitioning to COMPLETED" |
 | `--summary` exceeds 4096 characters | 6 | **No changes made** | "Error: Completion summary must not exceed 4096 characters (got N)" |
+| `--summary` value is not valid UTF-8 | 6 | **No changes made** | "Error: validation error: completion_summary: the value is not valid UTF-8" |
 | `--commit-open` used with non-DOING state | 6 | **No changes made** | "Error: --commit-open flag is only allowed when transitioning to DOING" |
 | `--commit-close` used with non-COMPLETED state | 6 | **No changes made** | "Error: --commit-close flag is only allowed when transitioning to COMPLETED" |
 | Target state is `DOING` and `--commit-open` is absent | 6 | **No changes made** | "Error: --commit-open is required when transitioning to DOING" |
@@ -816,7 +845,7 @@ task, including the other tasks of a multi-ID invocation whose IDs were valid.
 
 1. Parse all IDs and validate format (must be positive integers)
 2. Validate the target state: reject an unrecognised state, and reject the state `SPRINT`, which only `sprint add-tasks` may set
-3. Validate `--summary`: reject if the target state is not `COMPLETED`; validate length if provided
+3. Validate `--summary`: reject if the target state is not `COMPLETED`; when a value is provided, validate its length, then its encoding, then its control characters
 4. Validate the commit flags against the target state, in this order:
    1. Reject `--commit-open` if it is present and the target state is not `DOING`
    2. Reject `--commit-close` if it is present and the target state is not `COMPLETED`
@@ -1282,6 +1311,7 @@ rmp task comment-add -r <name> <task-id> --type FINDING < finding.txt
 | `type` | One of the seven task values | "Error: validation error: invalid comment type \"X\" for a task comment; valid types: FINDING, HYPOTHESIS, TEST, DECISION, PROGRESS, UPDATE, NOTE" | 6 |
 | `body` | Supplied via `--body` or stdin | "Error: required parameter missing: no comment body supplied" | 2 |
 | `body` | Max 4096 chars | "Error: field exceeds maximum size: body exceeds maximum length of 4096 characters" | 6 |
+| `body` | Valid UTF-8 | "Error: validation error: body: the value is not valid UTF-8" | 6 |
 | `body` | No forbidden control characters | "Error: validation error: body: control characters are not allowed" | 6 |
 
 **Validation Order:**
@@ -1292,7 +1322,7 @@ rmp task comment-add -r <name> <task-id> --type FINDING < finding.txt
 5. Validate the type value against the seven task values; an invalid value fails with exit code 6.
 6. Resolve the body from `--body` or standard input; no body fails with exit code 2.
 7. Verify the task exists; a missing task fails with exit code 4.
-8. Validate the body length and its control characters; a violation fails with exit code 6.
+8. Validate the body's length, then its encoding, then its control characters; a violation fails with exit code 6.
 9. Insert the comment and write the audit entry in one transaction.
 
 Steps 4 and 5 both precede step 6 deliberately: a missing or invalid `--type` is reported immediately, instead of leaving the command waiting on standard input for a body it is going to reject anyway. Step 3 precedes both for the same reason: a malformed argument list is reported before the command waits on anything or opens the roadmap.
@@ -1386,6 +1416,7 @@ rmp task comment-edit -r <name> <comment-id> < revised.txt
 | `type` | One of the seven task values | "Error: validation error: invalid comment type \"X\" for a task comment; valid types: FINDING, HYPOTHESIS, TEST, DECISION, PROGRESS, UPDATE, NOTE" | 6 |
 | `body` | `--body` present but empty or whitespace only | "Error: required parameter missing: no comment body supplied" | 2 |
 | `body` | Max 4096 chars | "Error: field exceeds maximum size: body exceeds maximum length of 4096 characters" | 6 |
+| `body` | Valid UTF-8 | "Error: validation error: body: the value is not valid UTF-8" | 6 |
 | `body` | No forbidden control characters | "Error: validation error: body: control characters are not allowed" | 6 |
 
 **Validation Order:**
@@ -1395,7 +1426,7 @@ rmp task comment-edit -r <name> <comment-id> < revised.txt
 4. Validate the `--type` value when the flag is present; an invalid value fails with exit code 6, before standard input is considered.
 5. Resolve the new body when one is being set, from `--body` or from standard input; when neither `--type` nor a body is supplied, the command fails with exit code 2.
 6. Verify the comment exists in `task_comments`; a missing comment fails with exit code 4.
-7. Validate the body's length and control characters; a violation fails with exit code 6.
+7. Validate the body's length, then its encoding, then its control characters; a violation fails with exit code 6.
 8. Apply the update, stamp `updated_at`, and write the audit entry in one transaction.
 
 Step 3 precedes step 5 for the same reason step 4 does: a malformed argument list is reported at once, instead of leaving the command waiting on standard input for a body it is going to reject anyway.
@@ -2323,9 +2354,10 @@ rmp sprint comment-add -r <name> <sprint-id> --type DECISION < decision.txt
 | `type` | One of the four sprint values | "Error: validation error: invalid comment type \"X\" for a sprint comment; valid types: FINDING, DECISION, PROGRESS, UPDATE" | 6 |
 | `body` | Supplied via `--body` or stdin | "Error: required parameter missing: no comment body supplied" | 2 |
 | `body` | Max 4096 chars | "Error: field exceeds maximum size: body exceeds maximum length of 4096 characters" | 6 |
+| `body` | Valid UTF-8 | "Error: validation error: body: the value is not valid UTF-8" | 6 |
 | `body` | No forbidden control characters | "Error: validation error: body: control characters are not allowed" | 6 |
 
-**Validation Order:** identical to `task comment-add`, with the sprint in place of the task: roadmap, then `sprint-id` format, then the flags — an unrecognised flag or a leftover positional argument fails here with exit code 2 — then `--type` presence, then the type value against the four sprint values, then the body, then the sprint's existence, then the body's length and control characters, then the insert and its audit entry in one transaction.
+**Validation Order:** identical to `task comment-add`, with the sprint in place of the task: roadmap, then `sprint-id` format, then the flags — an unrecognised flag or a leftover positional argument fails here with exit code 2 — then `--type` presence, then the type value against the four sprint values, then the body, then the sprint's existence, then the body's length, then its encoding, then its control characters, then the insert and its audit entry in one transaction.
 
 **JSON Output:** `{"id": 4}` — the id of the created comment. Exit code 0.
 
@@ -2416,6 +2448,7 @@ rmp sprint comment-edit -r <name> <comment-id> < revised.txt
 | `type` | One of the four sprint values | "Error: validation error: invalid comment type \"X\" for a sprint comment; valid types: FINDING, DECISION, PROGRESS, UPDATE" | 6 |
 | `body` | `--body` present but empty or whitespace only | "Error: required parameter missing: no comment body supplied" | 2 |
 | `body` | Max 4096 chars | "Error: field exceeds maximum size: body exceeds maximum length of 4096 characters" | 6 |
+| `body` | Valid UTF-8 | "Error: validation error: body: the value is not valid UTF-8" | 6 |
 | `body` | No forbidden control characters | "Error: validation error: body: control characters are not allowed" | 6 |
 
 **Validation Order:** identical to `task comment-edit`, resolving the comment in `sprint_comments` and validating the type against the four sprint values. An unrecognised flag or a leftover positional argument fails with exit code 2 at the same point, before the type value is validated and before standard input is read. At least one change is required, counting a body on standard input as a change; requesting none is exit code 2.
