@@ -253,8 +253,11 @@ task detail modal that displays all of the task's fields (see
    [Task Detail Endpoint](#task-detail-endpoint)).
 12. The roadmap knowledge-graph page shows the selected roadmap's knowledge graph
    as an interactive node-link visualisation rendered with **D3.js**, read from
-   that roadmap's GoGraph store, opened read-only exactly as the `graph query` and
-   `graph search` subcommands open it. The page offers the complete set of
+   that roadmap's GoGraph store, opened through the engine's read path exactly as
+   the `graph query` and `graph search` subcommands open it, and under the same
+   shared lock, held across that open alone (see
+   [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
+   The page offers the complete set of
    "Networks"-section D3 gallery layouts — Force-directed graph,
    Disjoint force-directed graph, Mobile patent suits (the **default**), Arc diagram,
    Sankey diagram, Hierarchical edge bundling, Chord diagram, Directed chord diagram,
@@ -274,10 +277,16 @@ task detail modal that displays all of the task's fields (see
    [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library),
    and
    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
-13. Read access to a knowledge graph through the web interface MUST NOT write to
-    the store and MUST NOT trigger the synchronous checkpoint or write-ahead-log
-    truncation that write subcommands perform (see
-    [Security and Constraints](#security-and-constraints) and
+13. Read access to a knowledge graph through the web interface MUST NOT write
+    graph data and MUST NOT trigger the synchronous checkpoint or write-ahead-log
+    truncation that write subcommands perform. It is not, however, without on-disk
+    effect: opening the store runs the engine's recovery, which repairs an
+    interrupted checkpoint, so a web read takes the store's shared lock across
+    that open and may change the store directory's structure without ever
+    changing its data (see
+    [Security and Constraints](#security-and-constraints),
+    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store),
+    `GRAPH.md § What a Read Changes on Disk`, and
     `GRAPH.md § Synchronous Checkpoint on Write`).
 14. **The deliverable is fully self-contained.** The shipped `rmp` binary MUST
    embed every component required to render and operate the web interface, with
@@ -467,7 +476,8 @@ schema migrates to it automatically, without user input.
    SQLite schema. The roadmap's GoGraph knowledge-graph store under
    `~/.roadmaps/<name>/graph/` is a separate persistence layer with its own
    on-open recovery and is not touched by the SQLite schema migration; it
-   continues to be opened read-only on demand by graph requests (see
+   continues to be opened on demand by graph requests, through the engine's read
+   path (see
    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
 
 ## Bind Address and Port Selection
@@ -586,10 +596,14 @@ work with an explicit time budget.
 7. **Per request, and cancellation writes nothing.** Each graph data request gets
    its own budget; requests do not share one, and one request's budget is
    unaffected by any other request in flight. Cancelling a query changes nothing
-   on disk: the store is opened read-only, so an abandoned query writes no data,
-   runs no checkpoint, and truncates no write-ahead log, exactly as a completed
-   one does (see
-   [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
+   on disk beyond what opening the store had already done before the query
+   started: an abandoned query writes no graph data, runs no checkpoint, and
+   truncates no write-ahead log, exactly as a completed one does. The budget
+   governs query execution only; the store is already open by the time it starts,
+   so cancellation neither causes nor undoes the recovery repair that opening
+   performed (see
+   [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)
+   and `GRAPH.md § What a Read Changes on Disk`).
 8. **The budget is the whole of the bound.** This version bounds the work of a
    graph data request and nothing else. It introduces no request rate limit and no
    new endpoint.
@@ -2766,8 +2780,8 @@ already consumes; it adds no new endpoint and no write path.
    guard-rail before execution and never runs (see
    [Graph Data Endpoint](#graph-data-endpoint) and
    [Query-Bar Error Handling](#query-bar-error-handling)). The query bar offers no
-   create, edit, or delete affordance; running a query through it never writes to
-   the store, never checkpoints, and never truncates the write-ahead log,
+   create, edit, or delete affordance; executing a query through it never writes
+   graph data, never checkpoints, and never truncates the write-ahead log,
    consistent with the read-only contract of the whole interface (see
    [Security and Constraints](#security-and-constraints) and
    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
@@ -3617,22 +3631,57 @@ re-presents an earlier, now-stale response in its place.
    to visualise. The query contains no writing clause; it is the same class of
    query the read subcommands accept under the guard rail in
    `GRAPH.md § Subcommands and Guard-Rail Validation`.
-3. The server MUST NOT perform any write and MUST NOT trigger the synchronous
-   checkpoint or write-ahead-log truncation that write subcommands perform after
-   a commit (see `GRAPH.md § Synchronous Checkpoint on Write` and
-   `IMPLEMENTATION.md § Graph Store Concurrency`). A read through the web
-   interface leaves the store's on-disk files unchanged, exactly as a `graph
-   query` invocation does.
-4. Opening the store runs GoGraph's recovery, which restores the last committed
-   state from the snapshot and the write-ahead-log tail (see `GRAPH.md §
-   Concurrency and Recovery`). Recovery on open is a read-path operation; it
-   restores in-memory state and does not itself constitute a Groadmap write or a
-   checkpoint.
-5. Each request opens the store, reads, serves the result, and closes the store.
-   The server does not hold the graph store open across requests, consistent with
-   the short-lived-access model in `IMPLEMENTATION.md § Graph Store Concurrency`.
-   A graph store that is corrupt or unreadable surfaces as an internal read error
-   (HTTP 500 on the affected route); there is no automatic graph-store repair.
+3. The server MUST NOT write graph data, MUST NOT run any writing or DDL clause,
+   and MUST NOT trigger the synchronous checkpoint or write-ahead-log truncation
+   that write subcommands perform after a commit (see
+   `GRAPH.md § Synchronous Checkpoint on Write` and
+   `IMPLEMENTATION.md § Graph Store Concurrency`). The write-ahead log is opened
+   for reading only and is left byte for byte as the request found it, and the
+   contents of `snapshot/` are left unchanged. A read through the web interface
+   changes no graph data, exactly as a `graph query` invocation changes none.
+4. A web read is **not**, however, free of on-disk effect, and this specification
+   does not claim that it is. Opening the store runs GoGraph's recovery, which
+   restores the last committed state from the snapshot and the write-ahead-log
+   tail, and which first repairs an interrupted checkpoint: it removes a stale
+   `snapshot.tmp` staging directory, and it promotes `snapshot.bak` to `snapshot`
+   when the live snapshot directory carries no manifest. A graph data request can
+   therefore change the store directory's structure, though never its data. The
+   exhaustive list of what a read may and may not change is
+   `GRAPH.md § What a Read Changes on Disk`, which is canonical and applies to
+   this endpoint unchanged.
+5. Because that repair is a write to the directory a checkpoint publishes into,
+   the server takes the graph store's advisory lock in **shared** mode before
+   opening the store, and releases it as soon as the open returns, exactly as a
+   CLI read subcommand does. The query then executes with no lock held. The lock,
+   its two modes, the reason the narrow hold is sufficient, and their mutual
+   exclusion are specified in `GRAPH.md § Concurrency and Recovery`; that section
+   is canonical and this one adds no rule of its own. Three consequences are
+   specific to the web interface and are stated here:
+   - A graph data request may **wait** for an in-flight `rmp graph` write against
+     the same roadmap. The wait is bounded (see `GRAPH.md § Lock Contention`), it
+     is spent before the query starts and so does not consume the endpoint's query
+     time budget (see [Graph Query Time Budget](#graph-query-time-budget)), and
+     the worst case stays well inside the server's write timeout (see
+     [HTTP Server Timeouts](#http-server-timeouts)). A request MUST NOT block
+     indefinitely on the lock.
+   - A request that still cannot take the shared lock when the bounded wait is
+     exhausted is answered HTTP `500`, the status this endpoint already returns
+     for a graph store that cannot be opened (see
+     [Routes and Pages](#routes-and-pages)). It is logged like any other `500`
+     (see [Server Logging](#server-logging)).
+   - Serving a graph data request does **not** block the CLI for the duration of
+     the request. The server holds the lock only while opening the store, so a
+     concurrent `rmp graph` write can start, commit, and checkpoint while the
+     request is still executing its query or writing its response. Only a write
+     that collides with the request's store open, a window measured in the cost
+     of loading the graph rather than of running the query, fails fast. A slow or
+     expensive graph query therefore cannot fail a concurrent CLI write.
+6. Each request opens the store, reads, serves the result, releases the shared
+   lock, and closes the store. The server does not hold the graph store open, or
+   its lock, across requests, consistent with the short-lived-access model in
+   `IMPLEMENTATION.md § Graph Store Concurrency`. A graph store that is corrupt or
+   unreadable surfaces as an internal read error (HTTP 500 on the affected route);
+   there is no automatic graph-store repair.
 
 ## Frontend and Embedded Assets
 
@@ -4644,9 +4693,13 @@ Rules:
 2. **Read-only.** The interface never writes. It exposes no route that creates,
    edits, or deletes roadmap data, tasks, sprints, audit entries, or graph
    elements. The server accepts only `GET` and `HEAD`; every other method returns
-   HTTP `405`. The graph store is opened read-only and a web read never triggers a
-   checkpoint or write-ahead-log truncation (see
-   [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
+   HTTP `405`. A web read never writes graph data and never triggers a checkpoint
+   or write-ahead-log truncation. Opening the graph store is nonetheless not a
+   read-only operation on disk — the engine's recovery repairs an interrupted
+   checkpoint on open — so the server takes the store's shared lock across that
+   open and may change the store directory's structure, never its data (see
+   [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)
+   and `GRAPH.md § What a Read Changes on Disk`).
    SQLite reads write no rows and produce no audit-log entry.
 3. **User-supplied Cypher is validated read-only before execution.** The graph
    page's query bar lets the user submit an editable Cypher query to the graph
@@ -4665,13 +4718,19 @@ Rules:
    `INDEX`/`CONSTRAINT`) is rejected and **not executed**, and the page surfaces the
    rejection (see [Query-Bar Error Handling](#query-bar-error-handling)). The query
    bar opens no write path: an accepted query runs through the engine's read path
-   only, and never checkpoints or truncates the write-ahead log.
+   only, and never checkpoints or truncates the write-ahead log. No query the user
+   can submit changes what opening the store does; the guard rail runs before the
+   store is opened, so a rejected query never reaches it at all.
 4. **Filesystem permission model is unchanged.** The web interface reads through
    the existing locations and respects the existing permission model: `0700` for
    `~/.roadmaps/` and each roadmap home directory, `0600` for `project.db`, and
    `0700` for each `graph/` store (see `ARCHITECTURE.md § Directory Structure`).
-   The web interface creates no new on-disk artefact for a read; it does not relax
-   any permission.
+   The web interface relaxes no permission, and it creates no roadmap database, no
+   roadmap home directory, and no graph store directory: a roadmap that has no
+   `graph/` directory is served as an empty graph rather than having one created
+   for it. The one artefact a graph read may create is the graph store's lock file
+   `write.lock`, inside a `graph/` directory that already exists, when no previous
+   invocation has created it (see `GRAPH.md § What a Read Changes on Disk`).
 5. **No arbitrary filesystem serving; path-traversal guard.** The static handler
    serves only assets from the embedded asset set, never an arbitrary host
    filesystem path. Roadmap names taken from the URL path are validated against
@@ -4875,9 +4934,13 @@ Rules:
     defined in `DATA_FORMATS.md § Graph View Data`, populated from a read-only
     query against the roadmap's GoGraph store.
 19. After serving any number of graph page and graph data requests for a roadmap
-    that has never been written, the graph store directory contains no `snapshot/`
-    subdirectory and no checkpoint has run, proving the web read path is read-only
-    (see `GRAPH.md § Synchronous Checkpoint on Write`).
+    that has never been written, no `snapshot/` subdirectory exists and no
+    checkpoint has run, proving the web read path never checkpoints (see
+    `GRAPH.md § Synchronous Checkpoint on Write`). For a roadmap that **has** been
+    written, serving any number of those requests leaves the `wal` file byte for
+    byte unchanged and every file under `snapshot/` unchanged, proving the read
+    path writes no graph data and truncates no log (see
+    `GRAPH.md § What a Read Changes on Disk`).
 20. Serving roadmap sprints pages, roadmap tasks pages, roadmap sprint pages, and
     roadmap audit log pages
     produces **no** new audit-log entry in the roadmap's `project.db` (a read is
@@ -6248,6 +6311,24 @@ Rules:
     still exits 0 on a graceful shutdown. The non-loopback record still states
     that the interface is reachable from the network and still names the bound
     host.
+147. A graph data request takes the graph store's shared lock while it opens the
+    store. While an `rmp graph` write against the same roadmap holds the store's
+    exclusive lock, a `GET /roadmaps/{name}/graph/data` for that roadmap does
+    **not** fail on the first collision: it waits and is served once the writer
+    releases the lock (see `GRAPH.md § Lock Contention`).
+148. The server releases the shared lock when the open returns, and this is
+    observable: an `rmp graph create` against the same roadmap, issued while a
+    slow graph data request is still executing its query, succeeds and exits 0.
+    Serving a graph read never fails a CLI write for the duration of the request.
+149. A graph data request never blocks indefinitely on the lock. When the shared
+    lock cannot be taken within the bounded wait, the request is answered HTTP 500
+    with the opaque error body every other 500 carries, accompanied by exactly one
+    `ERROR` log record, and the server keeps serving other requests throughout.
+150. A graph data request against a store left with a stale `snapshot.tmp` staging
+    directory, or with `snapshot/` absent and `snapshot.bak/` carrying a manifest,
+    is served correctly: the response carries the committed graph, and the
+    recovery repair those two states require is expected behaviour, not a defect
+    (see `GRAPH.md § What a Read Changes on Disk`).
 
 ## See Also
 
@@ -6265,6 +6346,10 @@ Rules:
 - Read-only graph access, recovery, and the checkpoint that web reads must avoid
   → `GRAPH.md § Engine Construction and Lifecycle` and
   `GRAPH.md § Synchronous Checkpoint on Write`
+- The store access lock a web graph read takes, its contention rules, and the
+  exhaustive list of what a read changes on disk →
+  `GRAPH.md § Concurrency and Recovery`, `GRAPH.md § What a Read Changes on Disk`,
+  and `GRAPH.md § Lock Contention`
 - Read-only guard-rail and literal-aware masked normalization reused to validate
   the query bar's user-supplied Cypher →
   `GRAPH.md § Subcommands and Guard-Rail Validation` and

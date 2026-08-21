@@ -77,7 +77,7 @@ transactions, or locks. The graph layer is specified in `GRAPH.md`.
 5. Each roadmap home directory is created if absent, is owned by the user only, and uses the same `0700` permissions as the data directory; its permissions are verified on access.
 6. The roadmap's SQLite database lives inside the roadmap home directory at `~/.roadmaps/<name>/project.db` with `0600` permissions, applied and verified every time `rmp` opens the database and not only when it creates it (see `ARCHITECTURE.md § Open-Time Permission Enforcement`). Its SQLite sidecars (`project.db-wal`, `project.db-shm`) live alongside it.
 7. A roadmap home directory holds the SQLite database and its sidecars, and, once the knowledge graph is used, the `graph/` subdirectory. The directory is the designated location for per-roadmap artefacts; additional file types may be added without changing this layout.
-8. The knowledge graph for a roadmap is stored in the subdirectory `~/.roadmaps/<name>/graph/` (mode `0700`), created on first use of any `rmp graph` subcommand. It is a directory because the GoGraph backing store persists through an on-disk snapshot plus a write-ahead log; after the first successful write subcommand the directory also contains a `snapshot/` subdirectory, produced by the synchronous checkpoint that runs after each write (see `GRAPH.md § Synchronous Checkpoint on Write`). Its internal layout is owned by GoGraph and is opaque to Groadmap. The graph store is the canonical subject of `GRAPH.md`; see `GRAPH.md § Persistence Layout`.
+8. The knowledge graph for a roadmap is stored in the subdirectory `~/.roadmaps/<name>/graph/` (mode `0700`), created on first use of any `rmp graph` subcommand. It is a directory because the GoGraph backing store persists through an on-disk snapshot plus a write-ahead log; after the first successful write subcommand the directory also contains a `snapshot/` subdirectory, produced by the synchronous checkpoint that runs after each write (see `GRAPH.md § Synchronous Checkpoint on Write`). The directory also holds `write.lock`, the advisory lock file Groadmap itself maintains to serialise access to the store (see `GRAPH.md § Concurrency and Recovery`). Apart from that lock file, the internal layout is owned by GoGraph and is opaque to Groadmap. The graph store is the canonical subject of `GRAPH.md`; see `GRAPH.md § Persistence Layout`.
 9. Roadmap enumeration considers the immediate **subdirectories** of `~/.roadmaps/` (one directory per roadmap), not files at the top level. A roadmap is identified by the presence of `project.db`; the optional `graph/` subdirectory does not by itself constitute a roadmap.
 10. **No symbolic links for the data directory or a roadmap home directory.** Neither the data directory `~/.roadmaps/` nor any roadmap home directory `~/.roadmaps/<name>/` may be a symbolic link. When creating, opening, or migrating a roadmap directory, `rmp` MUST refuse to follow a symbolic link: if `~/.roadmaps/` is a symlink, or if the resolved `~/.roadmaps/<name>/` path is a symlink (rather than a real directory), the operation fails with an error (`utils.ErrDatabase`, exit code 1) instead of following the link. This prevents an attacker from redirecting `project.db` writes outside the data directory and prevents `rmp` from applying its `0700`/`0600` permission changes to a directory or file outside `~/.roadmaps/` reached through a link (CWE-59, link following). The startup layout-migration sweep applies the same rule: a `.db`-named top-level symbolic link is never a migration candidate and is left untouched (see `ARCHITECTURE.md § Filesystem Layout Migration`, Edge Cases).
 
@@ -246,9 +246,12 @@ the same rule, with the sequence in step **B** followed exactly as written:
 - Restricting the mode is the only filesystem effect the read-only path may have.
   It creates no file and no directory, it never widens a mode, and it changes
   neither the contents nor the schema of the database.
-  `WEB.md § Security and Constraints` states that the web interface creates no new
-  on-disk artefact for a read and relaxes no permission; restricting a file that
-  is more permissive than `0600` is consistent with both statements.
+  `WEB.md § Security and Constraints` states that the web interface relaxes no
+  permission and creates no roadmap database, roadmap home directory, or graph
+  store directory for a read; restricting a file that is more permissive than
+  `0600` is consistent with both statements. This bullet is about the roadmap
+  database only: the graph store has its own read-path rules, and what a graph
+  read may change on disk is `GRAPH.md § What a Read Changes on Disk`.
 - The read-only path does not create, modify, or verify directories. The
   directory rule in step **A** is enforced by the writable open path and by the
   web server's startup sequence, which verifies `0700` on `~/.roadmaps/` before
@@ -422,9 +425,14 @@ pinning requirements are in `BUILD.md § Go Toolchain`.
 - Reads the same on-disk data the CLI reads: tasks and sprints from each
   roadmap's `project.db` (via the existing read queries in `DATABASE.md`) and the
   knowledge graph from each roadmap's `graph/` store (via the GoGraph engine's
-  read path, exactly as `graph query`/`search` open it). Every per-request handler
-  opens its data **read-only**: it performs **no** write to a roadmap database, no
-  audit entry, no schema change, and triggers **no** graph checkpoint.
+  read path, exactly as `graph query`/`search` open it, and under the same shared
+  lock, held across the open alone). Every per-request handler opens its data
+  **read-only**: it performs **no** write to a roadmap database, no audit entry,
+  no schema change, no write of
+  graph data, and triggers **no** graph checkpoint. Opening the graph store is the
+  one exception to "read-only" at the filesystem level: the engine's recovery
+  repairs an interrupted checkpoint on open, which is why a graph read takes a
+  lock. The exhaustive rule is `GRAPH.md § What a Read Changes on Disk`.
 - Performs one writing step, at startup only: before binding the listener it opens
   each existing roadmap's `project.db` through the normal writable open path to run
   the SQLite schema migrations (idempotent; automatic; no user input), then closes

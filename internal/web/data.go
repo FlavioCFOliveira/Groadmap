@@ -21,6 +21,7 @@ import (
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/cypherguard"
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
+	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
@@ -1842,12 +1843,14 @@ func admitsLimitClause(query, masked string) bool {
 	return true
 }
 
-// loadGraphView reads a roadmap's knowledge graph read-only and returns its
-// nodes and edges in the Graph View Data shape. It mirrors the read path of
-// commands/graph.go runGraphRead: it opens the store via recovery and runs a
-// single read-only Cypher query through the engine's read path. It MUST NOT run
-// any writing clause and MUST NOT checkpoint or truncate the WAL (SPEC/WEB.md
-// § Graph Data Endpoint, read-only guard-rail).
+// loadGraphView reads a roadmap's knowledge graph and returns its nodes and
+// edges in the Graph View Data shape. It mirrors the read path of
+// commands/graph.go runGraphRead exactly, down to the lock: it takes the graph
+// store's SHARED lock, opens the store via recovery, releases the lock as soon
+// as the open returns, and runs a single read-only Cypher query through the
+// engine's read path with no lock held. It MUST NOT run any writing clause and
+// MUST NOT checkpoint or truncate the WAL (SPEC/WEB.md § Graph Data Endpoint,
+// read-only guard-rail).
 //
 // rawQuery and rawLimit are the request's q and limit URL parameters (empty
 // when absent). The query is resolved (default when absent), validated as
@@ -1860,8 +1863,11 @@ func admitsLimitClause(query, masked string) bool {
 //
 // A roadmap that has never used the graph command (no graph/ directory) is an
 // empty graph, not an error: loadGraphView returns empty arrays WITHOUT creating
-// the directory, so a web read leaves the store's on-disk files untouched
-// (SPEC/WEB.md § Roadmap Knowledge-Graph Page, empty graph).
+// the directory (SPEC/WEB.md § Roadmap Knowledge-Graph Page, empty graph). When
+// the directory does exist, a read changes no graph DATA but is not free of
+// on-disk effect: it may create the lock file, and the recovery that opening
+// runs may complete an interrupted checkpoint. The exhaustive list is
+// SPEC/GRAPH.md § What a Read Changes on Disk.
 func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphView, error) {
 	empty := graphView{Nodes: []map[string]any{}, Edges: []map[string]any{}}
 
@@ -1906,12 +1912,33 @@ func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphV
 		return empty, nil
 	}
 
-	res, err := recovery.Open[string, float64](graphDir, recovery.Options[string, float64]{
+	// Shared store lock, held across the store open ALONE, exactly as the CLI
+	// read subcommands hold it. It is taken because opening the store is not a
+	// read-only operation on disk: recovery repairs an interrupted checkpoint
+	// first, so an unlocked request could delete or race the staging directory
+	// a concurrent `rmp graph` write is publishing its snapshot from. Waiting
+	// for the lock is bounded (at most 2.5 s) and is spent BEFORE the query
+	// starts, so it does not consume this endpoint's query time budget and
+	// stays well inside the server's write timeout. A wait that is exhausted
+	// returns a plain ErrDatabase, which handleGraphData answers with HTTP 500
+	// — the status it already returns for a store that cannot be opened
+	// (SPEC/WEB.md § Knowledge Graph from the GoGraph Store, rule 5).
+	//
+	// It is released with an explicit call rather than a defer, on both the
+	// success and the failure path, so the hold cannot be silently widened to
+	// the query by a later edit: the server must not hold the lock for the
+	// duration of a request, or a slow query would fail a concurrent CLI write.
+	releaseLock, err := graphlock.AcquireShared(graphDir)
+	if err != nil {
+		return graphView{}, err
+	}
+	res, openErr := recovery.Open[string, float64](graphDir, recovery.Options[string, float64]{
 		Codec:       txn.NewStringCodec(),
 		WeightCodec: txn.NewFloat64WeightCodec(),
 	})
-	if err != nil {
-		return graphView{}, fmt.Errorf("%w: graph store unavailable: %v", utils.ErrDatabase, err)
+	releaseLock()
+	if openErr != nil {
+		return graphView{}, fmt.Errorf("%w: graph store unavailable: %v", utils.ErrDatabase, openErr)
 	}
 
 	engine := cypher.NewEngine(res.Graph)

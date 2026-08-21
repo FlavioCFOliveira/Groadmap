@@ -25,6 +25,7 @@ import (
 	"github.com/FlavioCFOliveira/GoGraph/store/txn"
 	"github.com/FlavioCFOliveira/GoGraph/store/wal"
 	"github.com/FlavioCFOliveira/Groadmap/internal/cypherguard"
+	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
@@ -717,8 +718,17 @@ func runGraphSearch(args []string) error {
 }
 
 // runGraphRead is the shared implementation for read subcommands
-// (query and search). It opens the store in read-only recovery mode,
-// runs the query, and serialises the result.
+// (query and search). It opens the store under the shared store lock, releases
+// that lock the moment the open returns, then runs the query against the
+// in-memory graph the open produced and serialises the result.
+//
+// The lock is taken because opening the store is not a read-only operation on
+// disk: recovery repairs an interrupted checkpoint before it loads anything, so
+// an unlocked read could delete or race the staging directory a concurrent
+// writer is publishing its snapshot from (SPEC/GRAPH.md § What a Read Changes on
+// Disk). It is released at the open because that is the whole of what a read
+// touches on disk — see graphlock's package comment for the anti-widening
+// clause that governs this.
 func runGraphRead(subcmd, allowed string, args []string) error {
 	roadmapName, remaining, err := requireRoadmap(args)
 	if err != nil {
@@ -739,9 +749,17 @@ func runGraphRead(subcmd, allowed string, args []string) error {
 		return err
 	}
 
-	res, err := recovery.Open[string, float64](graphDir, graphReadOpts)
+	// Shared lock, held across the store open ALONE. Released with an explicit
+	// call rather than a defer, on both the success and the failure path, so
+	// the hold cannot be silently widened to the query by a later edit.
+	releaseLock, err := graphlock.AcquireShared(graphDir)
 	if err != nil {
-		return fmt.Errorf("%w: graph store unavailable: %v", utils.ErrDatabase, err)
+		return err
+	}
+	res, openErr := recovery.Open[string, float64](graphDir, graphReadOpts)
+	releaseLock()
+	if openErr != nil {
+		return fmt.Errorf("%w: graph store unavailable: %v", utils.ErrDatabase, openErr)
 	}
 
 	engine := cypher.NewEngine(res.Graph)
@@ -805,44 +823,6 @@ func checkpointGraph(g *lpg.Graph[string, float64], w *wal.Writer, graphDir stri
 	return nil
 }
 
-// acquireGraphWriteLock takes an exclusive, non-blocking advisory lock on the
-// graph store for the duration of a write. Two concurrent `rmp graph` writers
-// must NOT interleave their open -> commit -> checkpoint -> WAL-truncate
-// sequences: a second writer that loaded the graph before the first's commit
-// would, on checkpoint, write a FULL snapshot of its own (stale) in-memory
-// graph — missing the first writer's committed change — and then truncate the
-// WAL that still held it, silently losing an acknowledged write. Per
-// SPEC/GRAPH.md § Concurrency and Recovery rule 2, a concurrent write must
-// surface as utils.ErrDatabase (exit 1) rather than corrupt the store, so the
-// lock is acquired non-blocking and contention is reported as ErrDatabase. The
-// returned release closure unlocks and closes the lock file; the operating
-// system also releases the lock automatically if the process dies.
-//
-// This function owns the whole contract — lock-file path, file handle
-// lifetime, error wrapping, and the release closure. Only the lock and unlock
-// primitives themselves are platform-specific, because no single system call
-// provides them everywhere: lockGraphWriteFile and unlockGraphWriteFile are
-// implemented with flock(2) in graph_lock_unix.go and with LockFileEx /
-// UnlockFileEx in graph_lock_windows.go. Both implementations MUST be
-// exclusive and MUST fail immediately on contention rather than wait.
-func acquireGraphWriteLock(graphDir string) (func(), error) {
-	lockPath := filepath.Join(graphDir, "write.lock")
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600) // #nosec G304 -- lockPath is derived from a validated roadmap name under ~/.roadmaps
-	if err != nil {
-		return nil, fmt.Errorf("%w: opening graph write lock: %v", utils.ErrDatabase, err)
-	}
-	if err := lockGraphWriteFile(f); err != nil {
-		// Close before returning: the handle must not leak on the
-		// contention path, which is the path taken most often.
-		_ = f.Close()
-		return nil, fmt.Errorf("%w: graph store is busy: a concurrent write is in progress", utils.ErrDatabase)
-	}
-	return func() {
-		_ = unlockGraphWriteFile(f)
-		_ = f.Close()
-	}, nil
-}
-
 // runGraphWrite is the shared implementation for write subcommands
 // (create, update, delete). It opens the WAL store with retry,
 // runs the query in a transaction, and serialises the result.
@@ -874,8 +854,10 @@ func runGraphWrite(subcmd, allowed string, args []string) error {
 	}
 
 	// Serialise concurrent writers to prevent the lost-write corruption
-	// described in acquireGraphWriteLock. Held until after the checkpoint.
-	releaseLock, err := acquireGraphWriteLock(graphDir)
+	// described in graphlock.AcquireExclusive, and shut out a reader that would
+	// otherwise run its recovery repair over this writer's checkpoint. Held for
+	// the whole sequence, until after the checkpoint.
+	releaseLock, err := graphlock.AcquireExclusive(graphDir)
 	if err != nil {
 		return err
 	}

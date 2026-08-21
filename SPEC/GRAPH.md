@@ -19,6 +19,8 @@
 - [Query Notifications as Diagnostics](#query-notifications-as-diagnostics)
 - [Error Handling and Exit Codes](#error-handling-and-exit-codes)
 - [Concurrency and Recovery](#concurrency-and-recovery)
+  - [What a Read Changes on Disk](#what-a-read-changes-on-disk)
+  - [Lock Contention](#lock-contention)
 - [Constraints](#constraints)
 - [Acceptance Criteria](#acceptance-criteria)
 - [See Also](#see-also)
@@ -68,7 +70,10 @@ engine, and durable on-disk persistence.
    checkpoint bounds write-ahead-log growth and keeps recovery cost proportional
    to the live graph size rather than to the total history of writes (see
    [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)). Read
-   subcommands (`query`, `search`) are read-only and never checkpoint.
+   subcommands (`query`, `search`) never checkpoint and never truncate the
+   write-ahead log. What a read does change on disk, which is limited to the
+   repair of an interrupted checkpoint that opening the store performs, is
+   specified in [What a Read Changes on Disk](#what-a-read-changes-on-disk).
 7. A checkpoint that fails after the transaction has already committed durably
    MUST NOT fail the user-visible write. The write succeeded, the write-ahead log
    is durable, and the next successful write reconciles the snapshot; recovery
@@ -209,26 +214,32 @@ The CLI is a short-lived process. For each `rmp graph` invocation the
 implementation:
 
 1. Resolves the graph directory for the selected roadmap (see [Persistence Layout](#persistence-layout)).
-2. Opens the GoGraph store rooted at that directory, recovering any committed
-   state from the snapshot and write-ahead log.
-3. Constructs a persistent Cypher engine over that store (GoGraph exposes
+2. Takes the store's advisory lock, before opening the store: exclusively for a
+   write subcommand, in shared mode for a read subcommand (see
+   [Concurrency and Recovery](#concurrency-and-recovery)).
+3. Opens the GoGraph store rooted at that directory, recovering any committed
+   state from the snapshot and write-ahead log. **For a read subcommand, the
+   shared lock is released as soon as this step returns**; every step below runs
+   with no lock held. A write subcommand keeps the exclusive lock until step 7
+   has completed.
+4. Constructs a persistent Cypher engine over that store (GoGraph exposes
    `cypher.NewEngineWithStore` for a store-backed engine; the in-memory
    `NewEngine`, `NewEngineWithOptions`, and `NewEngineWithRegistry` constructors
    are not used for persisted graphs).
-4. Runs the validated query:
+5. Runs the validated query:
    - Read subcommands (`query`, `search`) run through the engine's read path
      (`Run` / `RunAny`).
    - Write subcommands (`create`, `update`, `delete`) run through the engine's
      transactional path (`RunInTx` / `RunInTxAny`) so the change is committed
      atomically.
-5. Iterates the result for read subcommands (`Columns`, then `Next` / `Record`
+6. Iterates the result for read subcommands (`Columns`, then `Next` / `Record`
    until exhausted, checking `Err`), serialises it to JSON, and writes it to
    stdout.
-6. For write subcommands only, after the transaction has committed durably,
+7. For write subcommands only, after the transaction has committed durably,
    produces a self-sufficient snapshot of the committed graph state and truncates
    the write-ahead log, synchronously, before the process exits (see
    [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)).
-7. Closes the result and the store, ensuring committed writes are durable, then
+8. Closes the result and the store, ensuring committed writes are durable, then
    exits.
 
 Parameter binding: when query parameters are supported, the implementation binds
@@ -325,6 +336,7 @@ roadmap's home directory:
 ├── project.db-wal        # SQLite sidecar (when present)
 ├── project.db-shm        # SQLite sidecar (when present)
 └── graph/                # Knowledge graph store (GoGraph)
+    ├── write.lock        # Groadmap's store access lock (see Concurrency and Recovery)
     ├── wal               # Write-ahead log (truncated after each checkpoint)
     └── snapshot/         # On-disk snapshot, present after the first write
         ├── manifest.json   # Snapshot manifest (GoGraph-owned)
@@ -345,19 +357,26 @@ Rules:
    synchronous checkpoint that runs after each successful write (see
    [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)). It is
    expected to be present after the first successful write subcommand. A graph
-   that has only ever been read, or that has never been written, may contain only
-   the `wal` entry and no `snapshot/` subdirectory.
+   that has only ever been read has no `snapshot/` subdirectory and no `wal` file:
+   a read creates neither, because the write-ahead log is created by the write
+   path and the snapshot by the checkpoint. Such a directory holds only
+   `write.lock`, and it holds that only once a read has actually opened the store.
 4. The graph directory uses permissions `0700`, consistent with the roadmap home
    directory and the data directory (see `ARCHITECTURE.md § Directory Structure`).
 5. The internal file names and on-disk format inside `graph/`, including the
    layout and contents of `snapshot/` and the format of `wal`, `manifest.json`,
-   and `tombstones.bin`, are owned by GoGraph and are not specified here. The
+   and `tombstones.bin`, are owned by GoGraph and are not specified here. The one
+   exception is `write.lock`, which GoGraph knows nothing about: Groadmap creates
+   and maintains it, and it is specified in
+   [Concurrency and Recovery](#concurrency-and-recovery). Its contents are never
+   read or written; only the advisory lock on it carries meaning. The
    `tombstones.bin` component is optional: GoGraph emits it only when the graph
    has tombstoned (deleted) nodes, so a graph that has never had a node deleted
-   need not contain it. Groadmap treats the directory as an opaque store managed
-   through the engine; the diagram above names the `wal` entry and the `snapshot/`
-   subdirectory only to document which entries are expected to appear, not their
-   internal format.
+   need not contain it. Apart from `write.lock`, Groadmap treats the directory as an
+   opaque store managed through the engine; the diagram above names the
+   `write.lock` and `wal` entries and the `snapshot/` subdirectory only to
+   document which entries are expected to appear, not their internal format, and
+   it is not an exhaustive listing of what the engine may place there.
 6. Removing a roadmap (`rmp roadmap remove <name>`) deletes the entire roadmap
    home directory recursively, which includes `graph/`. No separate graph-removal
    command is required (see `COMMANDS.md § Remove Roadmap`).
@@ -849,26 +868,133 @@ error. Groadmap does not rely on that intra-process behaviour, because each
 transaction; that one-transaction-per-process model is why the conflict path is
 not reachable today.
 
-Groadmap does not depend on the engine to serialise its writers. It serialises
-them itself, at the process level: before opening the store, a write invocation
-acquires an exclusive, non-blocking advisory lock on the roadmap's graph
-directory, and holds it across the whole open, commit, checkpoint, and
-write-ahead-log truncation sequence. A second write invocation that finds the lock
-held fails immediately rather than waiting. The operating system releases the lock
-when the holding process exits, so an invocation that crashes does not strand it.
-Read invocations do not take this lock.
+Groadmap does not depend on the engine to serialise access to the store. It
+serialises it itself, at the process level, through a single advisory lock file
+that Groadmap maintains in the roadmap's graph directory, `write.lock` (see
+[Persistence Layout](#persistence-layout)). Every invocation that opens the store
+takes that lock before opening it, in one of two modes:
 
-The lock covers the full sequence, not just the transaction, because that is the
-span that must not interleave: a second writer that had loaded the graph before the
-first writer's commit would checkpoint a full snapshot of its own stale in-memory
-graph and then truncate the write-ahead log that still held the first writer's
-committed change, silently losing an acknowledged write. Because the sequence
-Groadmap needs serialised is wider than a transaction, no engine-level writer
-exclusion would have covered it in any case.
+- A **write** invocation takes the lock **exclusively** and holds it across the
+  whole open, commit, checkpoint, and write-ahead-log truncation sequence.
+- A **read** invocation takes the lock in **shared** mode and holds it across the
+  **store open alone**: it acquires the lock before opening the store and
+  releases it as soon as the open returns. The query then runs with no lock
+  held.
+
+The two modes are mutually exclusive. While a writer holds the lock exclusively,
+no reader can hold it; while one or more readers hold it in shared mode, no
+writer can. Several readers may hold the shared lock at the same time, so reads
+never serialise against one another. The operating system releases the lock when
+the holding process exits, so an invocation that crashes does not strand it. The
+lock file itself is created by whichever invocation first needs it, reader or
+writer, and is never removed.
+
+The exclusive lock covers the writer's full sequence, not just the transaction,
+because that is the span that must not interleave: a second writer that had
+loaded the graph before the first writer's commit would checkpoint a full
+snapshot of its own stale in-memory graph and then truncate the write-ahead log
+that still held the first writer's committed change, silently losing an
+acknowledged write. Because the sequence Groadmap needs serialised is wider than
+a transaction, no engine-level writer exclusion would have covered it in any
+case.
+
+A read takes the shared lock because **opening the store is not a read-only
+operation on disk**. Opening it runs GoGraph's recovery step, and recovery
+repairs an interrupted checkpoint before it loads anything: it removes a stale
+staging directory `snapshot.tmp` unconditionally, and, when the live `snapshot/`
+directory carries no manifest while `snapshot.bak/` does, it promotes the backup
+by renaming `snapshot.bak` to `snapshot` and making that rename durable. Both
+actions repair the very directory a writer's checkpoint publishes into. Without
+the shared lock, a read could delete the staging directory a concurrent writer
+was assembling its snapshot in, or interleave with that writer's own publish
+sequence.
+
+**The store open is also the whole of what a read needs the lock for, which is
+why the lock is released the moment the open returns.** Every on-disk action a
+read performs happens inside the open: the staging-directory removal and the
+backup promotion are both part of the recovery step, and the snapshot components
+and the write-ahead log are read there and closed there. The open returns a graph
+that is fully materialised in memory, including the state replayed from the
+write-ahead-log tail; the query, the traversal, and the serialisation of the
+result that follow read that in-memory graph and touch no file in the store.
+Holding the lock past the open would therefore protect nothing that is not
+already protected, while blocking writers for as long as the query takes.
+
+This is a deliberate, load-bearing narrowness, not an oversight. A future change
+that makes any part of a read touch the store **after** the open — a lazily
+loaded component, a memory-mapped snapshot, a handle kept open past recovery, or
+a re-read during iteration — invalidates the reasoning above, and the hold MUST
+then be widened to cover the new access. Widening it in the absence of such a
+change is a regression: it reintroduces contention that buys no safety.
 
 Durability is provided by a write-ahead log with CRC32C integrity checks plus
 atomic on-disk snapshots; on opening the store, GoGraph runs recovery to restore
 the last committed state from the snapshot and log.
+
+### What a Read Changes on Disk
+
+A read changes exactly what the recovery repair above changes, and nothing else.
+Every change below happens **inside the store open**, while the shared lock is
+held; after the open returns, a read touches no file in the store at all. A read
+invocation, whether it is a CLI read subcommand or a web request:
+
+1. MUST NOT run a write transaction, and MUST NOT add, alter, or remove any node,
+   relationship, property, label, index, or constraint.
+2. MUST NOT checkpoint and MUST NOT write a snapshot. The contents of `snapshot/`
+   are left exactly as the read found them.
+3. MUST NOT truncate or otherwise write to the write-ahead log. The log is opened
+   for reading only and is left byte for byte as the read found it, so a read
+   never shortens the history a subsequent recovery replays.
+4. MAY remove a stale `snapshot.tmp` staging directory, and MAY promote
+   `snapshot.bak` to `snapshot`, as the recovery repair above describes.
+5. Creates the lock file `write.lock` when it does not already exist.
+6. Creates the graph directory itself when, and only when, the invocation is a
+   CLI read subcommand (see [Persistence Layout](#persistence-layout), rule 2).
+   The web interface never creates the graph directory: a roadmap with no graph
+   directory is an empty graph and is served as such (see `WEB.md § Knowledge
+   Graph from the GoGraph Store`).
+
+The **content** of the graph is therefore never changed by a read. What a read can
+change is the store directory's structure, and only by completing a repair that
+the next invocation to open the store would otherwise complete instead.
+
+### Lock Contention
+
+The two lock modes handle contention differently, because their callers differ.
+
+1. A **write** invocation takes the exclusive lock without waiting. A writer that
+   finds the lock held, by another writer or by a reader, fails immediately with
+   `utils.ErrDatabase` (exit code 1) rather than waiting or corrupting the store.
+   Because a reader holds the lock only across the store open, the window in
+   which a read can make a concurrent write fail is the duration of that open,
+   and is **not** proportional to how long the read's query runs. A long-running
+   query cannot fail a concurrent write.
+2. A **read** invocation MUST NOT block indefinitely and MUST NOT fail on the
+   first collision. It waits for the shared lock under the bounded
+   exponential-backoff policy specified in
+   `IMPLEMENTATION.md § Graph Store Concurrency`. If the lock is still unavailable
+   when that bounded wait is exhausted, the read fails: with `utils.ErrDatabase`
+   (exit code 1) for a CLI read subcommand, and as an internal read error
+   (HTTP 500) for the web graph data endpoint, which is the status that endpoint
+   already returns for a graph store that cannot be opened (see
+   `WEB.md § Routes and Pages`).
+
+A read waits where a write fails at once because the two are not symmetrical, and
+the asymmetry survives the narrow reader hold. What a read waits for is a
+**writer's** hold, and that hold is unchanged: it still spans the whole open,
+commit, checkpoint, and write-ahead-log truncation sequence, including a full
+snapshot rewrite whose cost grows with the live graph size. The reader's wait is
+therefore sized against the writer's critical section, not against its own, which
+is why narrowing the reader's hold does not narrow the wait it may face. Reads
+are also by far the more frequent operation, so failing a read on the first
+collision would make ordinary reads intermittently unavailable.
+
+The wait is bounded, and never unbounded, because one of the two readers is an
+HTTP request handler: an unbounded block would let a long write hang a `GET`
+until the server's write timeout fired (see `WEB.md § HTTP Server Timeouts`). A
+bounded wait keeps the worst case well inside that timeout, and it does not
+consume the endpoint's query time budget, because the wait ends before the query
+starts (see `WEB.md § Graph Query Time Budget`).
 
 Groadmap's usage model and expectations:
 
@@ -876,16 +1002,27 @@ Groadmap's usage model and expectations:
    runs one query, commits any write, checkpoints after a successful write (see
    [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)), and
    closes the store. The process does not hold the store open across invocations.
-2. Because a write invocation takes that exclusive lock before opening the store,
+2. Because a write invocation takes the lock exclusively before opening the store,
    two concurrent `rmp graph` write invocations against the **same** roadmap
    contend for it. The implementation MUST surface a contention or lock failure as
    `utils.ErrDatabase` (exit code 1) rather than corrupting the store or hanging
    indefinitely. The checkpoint that follows a successful write runs inside the
-   invocation that already holds the lock: it adds no separate lock, does not
-   change the read path, and two concurrent writers still serialise. The retry and
-   timeout behaviour for graph writes is specified in
-   `IMPLEMENTATION.md § Graph Store Concurrency`.
-3. Recovery on open restores the last committed state from the snapshot and the
+   invocation that already holds the lock: it adds no separate lock and two
+   concurrent writers still serialise. The retry and timeout behaviour for graph
+   writes is specified in `IMPLEMENTATION.md § Graph Store Concurrency`.
+3. Because a read invocation takes the same lock in shared mode, a read and a
+   write against the **same** roadmap also contend, in both directions: a read
+   waits for an in-flight write to finish, and a write that finds a read inside
+   its store open fails fast. This is deliberate. A read that opened the store
+   while a writer was publishing its checkpoint could delete or race the writer's
+   staging directory, because opening the store performs the recovery repair
+   described above. The contention is confined to the open on the reader's side:
+   once a read has loaded the graph it holds no lock, so it neither waits nor
+   blocks a writer for the time its query takes. Reads against **different**
+   roadmaps never contend, since each roadmap has its own graph directory and its
+   own lock file. The contention rules for each mode are in
+   [Lock Contention](#lock-contention).
+4. Recovery on open restores the last committed state from the snapshot and the
    write-ahead-log tail. Because every successful write now writes a self-sufficient
    snapshot and truncates the log (see
    [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)), recovery
@@ -898,7 +1035,7 @@ Groadmap's usage model and expectations:
    previous invocation opens cleanly. A graph whose store is corrupt or unreadable
    surfaces as `utils.ErrDatabase` (exit code 1); there is no automatic graph-store
    repair in this first version.
-4. The graph store is independent of the SQLite layer and the SQLite WAL
+5. The graph store is independent of the SQLite layer and the SQLite WAL
    model described in `IMPLEMENTATION.md § Concurrency Model`; the two persistence
    mechanisms do not share connections, locks, or transactions.
 
@@ -1052,6 +1189,40 @@ Groadmap's usage model and expectations:
     accepted by `graph delete` and removes the relationship, and
     `MATCH (v:Test {key:'…'})-[e]-(x) RETURN type(e)` is accepted by
     `graph query` and reports the incoming relationship.
+31. A read leaves the graph's data untouched on disk. After
+    `rmp graph query -r <roadmap> --query "MATCH (n) RETURN count(n)"` runs
+    against a store whose write-ahead log is **not** empty, the `wal` file is
+    byte for byte identical to what it was before the read, and every file under
+    `snapshot/` is unchanged, proving the read neither checkpointed nor truncated
+    the log (see [What a Read Changes on Disk](#what-a-read-changes-on-disk)).
+32. A read completes an interrupted checkpoint, and this is expected behaviour
+    rather than a defect. With a stale `snapshot.tmp` staging directory present, a
+    read removes it. With `snapshot/` absent while `snapshot.bak/` carries a
+    manifest, a read promotes the backup to `snapshot/`. In both cases the read
+    still returns the correct result and exits 0.
+33. A write and a read against the same roadmap exclude each other while the read
+    is opening the store. While a write holds the exclusive lock, a concurrent
+    read does **not** fail on the first collision: it waits and then succeeds once
+    the writer releases the lock.
+34. A read holds the shared lock across the store open only, and this is
+    observable: a read whose query runs for a long time does **not** fail a
+    concurrent `rmp graph create` issued after that read has opened the store. The
+    write succeeds and exits 0 while the read is still executing its query. This
+    criterion is what prevents the hold from being silently widened back to the
+    whole read.
+35. Nothing in the store is read after the open. With the graph directory removed
+    from disk immediately after a read has opened the store, the read still
+    returns the complete and correct result, including any state that came from
+    the write-ahead-log tail rather than the snapshot. This is the property the
+    narrow lock hold depends on (see
+    [Concurrency and Recovery](#concurrency-and-recovery)); if it ever stops
+    holding, the hold MUST be widened.
+36. A read that cannot take the shared lock within the bounded wait fails rather
+    than hanging: a CLI read subcommand exits 1 with a plain-text diagnostic on
+    stderr, and the web graph data endpoint answers HTTP 500. Neither blocks
+    indefinitely (see [Lock Contention](#lock-contention)).
+37. Two concurrent read invocations against the same roadmap both succeed and
+    neither waits on the other, because the lock they take is shared.
 
 ## See Also
 
@@ -1060,5 +1231,6 @@ Groadmap's usage model and expectations:
 - Standard input as a Cypher source → `DATA_FORMATS.md § Input`
 - GoGraph integration, directory layout, error handling → `ARCHITECTURE.md`
 - Go 1.26 toolchain bump and the GoGraph dependency → `BUILD.md § Go Toolchain`
-- Writer serialisation, recovery, write contention, and the synchronous checkpoint trade-off → `IMPLEMENTATION.md § Graph Store Concurrency`
+- Writer serialisation, reader locking, recovery, lock contention, and the synchronous checkpoint trade-off → `IMPLEMENTATION.md § Graph Store Concurrency`
+- Graph reads through the web interface, and the HTTP consequences of the read lock → `WEB.md § Knowledge Graph from the GoGraph Store`
 - Help skeleton and AI-help entry for `graph` → `HELP.md`
