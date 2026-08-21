@@ -14,7 +14,7 @@ import (
 
 // printTaskListHelp — `rmp task list`.
 func printTaskListHelp() {
-	fmt.Print(`Usage: rmp task list -r <roadmap> [filters]
+	fmt.Fprint(helpDst(), `Usage: rmp task list -r <roadmap> [filters]
 
 Returns tasks in the given roadmap across every status. Use 'rmp backlog
 list' for BACKLOG-only, 'rmp sprint tasks <id>' for one sprint, or
@@ -57,7 +57,7 @@ Examples:
 
 // printTaskCreateHelp — `rmp task create`.
 func printTaskCreateHelp() {
-	fmt.Print(`Usage: rmp task create -r <roadmap> -t <title> -fr <FR> -tr <TR> -ac <AC> [options]
+	fmt.Fprint(helpDst(), `Usage: rmp task create -r <roadmap> -t <title> -fr <FR> -tr <TR> -ac <AC> [options]
 
 Creates a new task in BACKLOG status. Title and the three requirement
 fields are mandatory; everything else takes a default.
@@ -102,7 +102,7 @@ Examples:
 
 // printTaskGetHelp — `rmp task get`.
 func printTaskGetHelp() {
-	fmt.Print(`Usage: rmp task get -r <roadmap> <task-ids>
+	fmt.Fprint(helpDst(), `Usage: rmp task get -r <roadmap> <task-ids>
 
 Returns one or more tasks by id. Each id is checked: if any id does not
 exist in the roadmap, the request fails fast with exit 4 and no rows are
@@ -130,7 +130,7 @@ Examples:
 
 // printTaskNextHelp — `rmp task next`.
 func printTaskNextHelp() {
-	fmt.Print(`Usage: rmp task next -r <roadmap> [num]
+	fmt.Fprint(helpDst(), `Usage: rmp task next -r <roadmap> [num]
 
 Returns the next <num> incomplete tasks from the currently OPEN sprint
 (statuses SPRINT, DOING, TESTING — i.e. not COMPLETED), in the order
@@ -169,7 +169,7 @@ Examples:
 
 // printTaskEditHelp — `rmp task edit`.
 func printTaskEditHelp() {
-	fmt.Print(`Usage: rmp task edit -r <roadmap> <task-id> [options]
+	fmt.Fprint(helpDst(), `Usage: rmp task edit -r <roadmap> <task-id> [options]
 
 Edits one or more fields on an existing task. At least one option must be
 provided; setting a text field to "" is rejected (use task remove instead
@@ -206,7 +206,7 @@ Examples:
 
 // printTaskRemoveHelp — `rmp task remove`.
 func printTaskRemoveHelp() {
-	fmt.Print(`Usage: rmp task remove -r <roadmap> <task-ids>
+	fmt.Fprint(helpDst(), `Usage: rmp task remove -r <roadmap> <task-ids>
 
 Deletes one or more tasks. ALL listed tasks must currently be in BACKLOG;
 the batch fails-fast (exit 6) if any is in a later status. Tasks with
@@ -235,7 +235,7 @@ Examples:
 
 // printTaskStatHelp — `rmp task stat`.
 func printTaskStatHelp() {
-	fmt.Print(`Usage: rmp task stat -r <roadmap> <task-ids> <new-status> [-co <hash>] [-cc <hash>] [--summary <text>]
+	fmt.Fprint(helpDst(), `Usage: rmp task stat -r <roadmap> <task-ids> <new-status> [-co <hash>] [-cc <hash>] [--summary <text>]
 
 Changes the status of one or more tasks. The status machine is strict:
 
@@ -325,7 +325,7 @@ Examples:
 
 // printTaskReopenHelp — `rmp task reopen`.
 func printTaskReopenHelp() {
-	fmt.Print(`Usage: rmp task reopen -r <roadmap> <task-ids>
+	fmt.Fprint(helpDst(), `Usage: rmp task reopen -r <roadmap> <task-ids>
 
 Resets a task to BACKLOG from any non-BACKLOG status
 (SPRINT/DOING/TESTING/COMPLETED), clearing started_at/tested_at/closed_at/
@@ -362,7 +362,7 @@ Examples:
 
 // printTaskPrioHelp — `rmp task prio`.
 func printTaskPrioHelp() {
-	fmt.Print(`Usage: rmp task prio -r <roadmap> <task-ids> <priority>
+	fmt.Fprint(helpDst(), `Usage: rmp task prio -r <roadmap> <task-ids> <priority>
 
 Sets the priority of one or more tasks to the same value. Use 'task edit'
 for fine-grained per-task updates.
@@ -391,7 +391,7 @@ Examples:
 
 // printTaskSevHelp — `rmp task sev`.
 func printTaskSevHelp() {
-	fmt.Print(`Usage: rmp task sev -r <roadmap> <task-ids> <severity>
+	fmt.Fprint(helpDst(), `Usage: rmp task sev -r <roadmap> <task-ids> <severity>
 
 Sets the severity of one or more tasks to the same value. Severity is
 typically used to rank bugs; for feature work, priority is preferred.
@@ -420,7 +420,7 @@ Examples:
 
 // printTaskSubtasksHelp — `rmp task subtasks`.
 func printTaskSubtasksHelp() {
-	fmt.Print(`Usage: rmp task subtasks -r <roadmap> <task-id>
+	fmt.Fprint(helpDst(), `Usage: rmp task subtasks -r <roadmap> <task-id>
 
 Lists the direct subtasks of <task-id> — tasks whose parent_task_id
 matches. Does not include grand-children; recurse from the result if
@@ -446,7 +446,7 @@ Examples:
 
 // printTaskAddDepHelp — `rmp task add-dep`.
 func printTaskAddDepHelp() {
-	fmt.Print(`Usage: rmp task add-dep -r <roadmap> <task-id> <blocker-id>
+	fmt.Fprint(helpDst(), `Usage: rmp task add-dep -r <roadmap> <task-id> <blocker-id>
 
 Records that <task-id> depends on <blocker-id>: <blocker-id> must reach
 COMPLETED before <task-id> can be marked COMPLETED. Self-edges and cycles
@@ -476,7 +476,7 @@ Examples:
 
 // printTaskRemoveDepHelp — `rmp task remove-dep`.
 func printTaskRemoveDepHelp() {
-	fmt.Print(`Usage: rmp task remove-dep -r <roadmap> <task-id> <blocker-id>
+	fmt.Fprint(helpDst(), `Usage: rmp task remove-dep -r <roadmap> <task-id> <blocker-id>
 
 Removes the dependency edge created by 'task add-dep'. Fails if the edge
 does not exist (so the user can tell apart "removed" from "was never
@@ -504,7 +504,7 @@ Examples:
 
 // printTaskBlockersHelp — `rmp task blockers`.
 func printTaskBlockersHelp() {
-	fmt.Print(`Usage: rmp task blockers -r <roadmap> <task-id>
+	fmt.Fprint(helpDst(), `Usage: rmp task blockers -r <roadmap> <task-id>
 
 Lists the tasks that <task-id> depends on AND are not yet COMPLETED.
 Used to answer "what's blocking task X right now?". The returned list
@@ -532,7 +532,7 @@ Examples:
 
 // printTaskBlockingHelp — `rmp task blocking`.
 func printTaskBlockingHelp() {
-	fmt.Print(`Usage: rmp task blocking -r <roadmap> <task-id>
+	fmt.Fprint(helpDst(), `Usage: rmp task blocking -r <roadmap> <task-id>
 
 Lists the tasks that depend on <task-id>: the inverse of 'task blockers'.
 Useful when completing <task-id> to know which downstream tasks become
@@ -569,7 +569,7 @@ func taskCommentTypes() string {
 
 // printTaskCommentAddHelp — `rmp task comment-add`.
 func printTaskCommentAddHelp() {
-	fmt.Printf(`Usage: rmp task comment-add -r <roadmap> <task-id> --type <TYPE> [--body <text>]
+	fmt.Fprintf(helpDst(), `Usage: rmp task comment-add -r <roadmap> <task-id> --type <TYPE> [--body <text>]
 
 Adds one typed entry to a task's work log: what was found, what was tried,
 what was decided and why. Comments are accepted in every task status,
@@ -633,7 +633,7 @@ BODY
 
 // printTaskCommentListHelp — `rmp task comment-list`.
 func printTaskCommentListHelp() {
-	fmt.Printf(`Usage: rmp task comment-list -r <roadmap> <task-id> [--type <TYPE>]
+	fmt.Fprintf(helpDst(), `Usage: rmp task comment-list -r <roadmap> <task-id> [--type <TYPE>]
 
 Returns every comment of the given task, oldest first: created_at ascending
 with the comment id as the tie-breaker. The order is the story the log
@@ -685,7 +685,7 @@ Examples:
 
 // printTaskCommentEditHelp — `rmp task comment-edit`.
 func printTaskCommentEditHelp() {
-	fmt.Printf(`Usage: rmp task comment-edit -r <roadmap> <comment-id> [--type <TYPE>] [--body <text>]
+	fmt.Fprintf(helpDst(), `Usage: rmp task comment-edit -r <roadmap> <comment-id> [--type <TYPE>] [--body <text>]
 
 Changes the type and/or the body of one existing task comment and stamps
 updated_at, so a later listing shows that the comment was altered. The
@@ -746,7 +746,7 @@ Examples:
 
 // printTaskCommentRemoveHelp — `rmp task comment-remove`.
 func printTaskCommentRemoveHelp() {
-	fmt.Print(`Usage: rmp task comment-remove -r <roadmap> <comment-id>
+	fmt.Fprint(helpDst(), `Usage: rmp task comment-remove -r <roadmap> <comment-id>
 
 Deletes one task comment. The row is removed outright: there is no soft
 delete and no recovery. The audit entry outlives the row, so the task's

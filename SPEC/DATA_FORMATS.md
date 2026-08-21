@@ -14,7 +14,8 @@
 
 **Error responses follow typical CLI behavior (NOT JSON):**
 - Errors are written as explicit human-readable messages to stderr
-- Input-related errors (missing parameters, wrong types, unknown commands or subcommands) additionally show the **specific help of the command or subcommand** that was invoked
+- A failing invocation writes **nothing to stdout**; the error text and everything accompanying it go to stderr
+- Help follows an error only on a **dispatch failure**, meaning an unresolved command name or an unresolved subcommand name, in which case the help for the level at which the name could not be resolved is written to stderr after the error. No other error class appends help. See `HELP.md § Error message format` and `COMMANDS.md § Dispatch Failures (Unresolved Command or Subcommand Names)`
 - Uses standard Unix exit codes for script integration
 - This rule governs **command output**. It does not govern the HTTP responses of
   the running `web` server, which are not command stdout or stderr (see the

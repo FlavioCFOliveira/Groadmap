@@ -22,6 +22,10 @@ is modified.
   - [Audit family help specifics](#audit-family-help-specifics)
   - [Comment subcommand help specifics](#comment-subcommand-help-specifics)
 - [Error message format](#error-message-format)
+  - [Stderr part order](#stderr-part-order)
+  - [Recovery help after a dispatch failure](#recovery-help-after-a-dispatch-failure)
+  - [Exit code of a dispatch failure](#exit-code-of-a-dispatch-failure)
+  - [Stdout silence on failure](#stdout-silence-on-failure)
 - [AI_AGENT environment variable](#ai_agent-environment-variable)
 - [Exit codes](#exit-codes)
 
@@ -522,51 +526,165 @@ Examples:
 
 ## Error message format
 
-When a command is invoked incorrectly, the application writes a
-plain-text error to stderr. JSON is not used for errors. Help is **not**
-auto-appended to the error — users invoke `--help` explicitly when they
-want it. The required shape is:
+When a command fails, the application writes a plain-text error to
+stderr. JSON is never used for errors. A failing invocation writes
+nothing to stdout at all; see `Stdout silence on failure` below.
+
+### Error line
+
+Every failing invocation writes exactly one error line, in this shape:
 
 ```
 Error: <human-readable description of the problem>
-
-AI agents: run `rmp --ai-help` for a machine-readable command contract.
 ```
 
 The wording starts with `Error: ` (with the colon and the trailing
 space). For input-related errors (missing parameters, unknown flags,
-unknown subcommands, invalid argument formats) the description names
+unresolved subcommands, invalid argument formats) the description names
 the offending flag or value. For non-input errors (resource not found,
 already exists, database failure) the description names the entity and
 its id where relevant.
 
-After the error line, the printer writes one blank line followed by the
-AI-agent hint:
+### Stderr part order
 
-```
-AI agents: run `rmp --ai-help` for a machine-readable command contract.
-```
+Stderr is assembled from up to four parts. They always appear in this
+order:
 
-The hint:
+| Order | Part | When it is present |
+|-------|------|--------------------|
+| 1 | The AI-agent hint line, followed by one blank line | Only when `AI_AGENT=1` is active for the invocation. See `AI_AGENT environment variable` below |
+| 2 | The `Error: ` line | On every failing invocation |
+| 3 | One blank line, then the recovery help | Only on a dispatch failure. See `Recovery help after a dispatch failure` below |
+| 4 | One blank line, then the AI-agent hint line | On every failing invocation, unless a suppression rule below applies |
 
-- Is written to stderr, after the `Error: ` line, on every error path.
-- Is one line of plain text, identical across every error.
-- Does not change the exit code.
-- Is suppressed when the failing command is itself `rmp --ai-help`,
-  `rmp ai-help`, `rmp <command> --ai-help`, or
-  `rmp <command> <subcommand> --ai-help`, to avoid recursive guidance
-  from the contract emitter.
-- Is suppressed when `AI_AGENT=1` is active for this invocation: in
-  that case the env-var hint has already been emitted as the first
-  line of stderr, and repeating it on the error path would duplicate
-  the same message. See the deduplication rule in
-  `AI_AGENT environment variable` below.
+Parts 1 and 4 carry the same sentence, and they are never both present
+in the same invocation: the deduplication rule in
+`AI_AGENT environment variable` keeps the reader's count at exactly one.
 
-Example: missing required arguments on `rmp task create`
+### Recovery help after a dispatch failure
+
+A **dispatch failure** is the case in which `rmp` cannot resolve a name
+it was given to a command or to a subcommand. There are exactly two
+classes:
+
+1. **Unresolved command.** The first non-flag token of the invocation
+   does not name a command or a command alias, as in `rmp nadadisto`.
+2. **Unresolved subcommand.** The command resolves, but the next
+   non-flag token does not name one of that command's subcommands or
+   subcommand aliases, as in `rmp task nadadisto`. The commands that
+   dispatch subcommands are `roadmap`, `task`, `sprint`, `backlog`,
+   `audit`, and `graph`.
+
+On a dispatch failure, and only on a dispatch failure, the CLI writes
+the **recovery help** to stderr after the error line. The recovery help
+is the help body for the level at which the name could not be resolved,
+so the reader is shown the list of names that would have worked:
+
+| Class | Recovery help written to stderr |
+|-------|---------------------------------|
+| Unresolved command | The global help body, that is, the body `rmp --help` prints |
+| Unresolved subcommand | The family help body of the command that did resolve, that is, the body `rmp <command> --help` prints |
+
+The recovery help omits the AI-agent banner that opens the same body on
+stdout (see `AI agent banner`), together with the blank line that
+follows the banner. The banner and the hint carry the same sentence, and
+the invocation already ends with the hint.
+
+No other error class appends help. A missing required parameter, an
+unknown flag, an invalid enum value, an out-of-range value, a rejected
+state transition, a resource that does not exist, a name conflict, and a
+database failure each produce the error line and the hint alone. The
+error line already names the offending flag or value in those cases, so
+the reader recovers by running `--help` explicitly.
+
+Three commands accept no subcommand, so no dispatch failure can arise
+for them and the recovery help never applies: `stats`, `web`, and
+`ai-help`. `web` and `ai-help` reject an unexpected positional argument
+as an invalid argument, with exit code `2` and no help, as specified in
+`COMMANDS.md § Web Interface` and `COMMANDS.md § AI Help`.
+
+### Error text of a dispatch failure
+
+The two classes use the same wording, differing only in the level they
+name:
+
+| Class | Error line |
+|-------|-----------|
+| Unresolved command | `Error: unknown command: <name>` |
+| Unresolved subcommand | `Error: unknown <command> subcommand: <name>` |
+
+Neither line carries a sentinel prefix. In particular neither is
+prefixed with `invalid input: `, because a dispatch failure is not
+carried by `utils.ErrInvalidInput` and does not exit with that
+sentinel's code. See `ARCHITECTURE.md § Sentinel Error Catalogue`.
+
+### Exit code of a dispatch failure
+
+Both dispatch-failure classes exit **127** (`EXIT_CMD_NOT_FOUND`). They
+are the same failure observed at two levels of the command tree, and the
+exit code does not distinguish them. The catalogue is in
+`ARCHITECTURE.md § Exit Codes`.
+
+One case is deliberately excluded. When an unresolved command or
+subcommand name is used to scope the AI contract, as in
+`rmp nadadisto --ai-help` or `rmp task nadadisto --ai-help`, the name is
+a scope selector for `--ai-help` rather than a name being dispatched.
+That failure keeps exit code **2**, and it prints no recovery help. It
+is specified in `COMMANDS.md § AI Help`.
+
+### Stdout silence on failure
+
+An invocation that exits with a non-zero code writes **zero bytes** to
+stdout. Every part of a failure report goes to stderr: the error line,
+the recovery help, and the hint. A consumer may therefore treat a
+non-empty stdout as evidence that the invocation succeeded.
+
+Help that the reader asked for is not a failure, and this rule does not
+restrict it. Each of the following exits `0` and writes its help body to
+stdout:
+
+- `rmp` with no arguments, and `rmp help`.
+- `rmp --help` and `rmp -h`.
+- `rmp <command>` with no subcommand, and `rmp <command> --help`.
+- `rmp <command> <subcommand> --help`.
+
+### Examples
+
+A missing required parameter: error line and hint, no help, exit code 2.
 
 ```
 $ rmp task create -r myproject
 Error: required parameter missing: --title
+
+AI agents: run `rmp --ai-help` for a machine-readable command contract.
+```
+
+An unresolved subcommand: error line, family help, hint, exit code 127.
+Nothing reaches stdout.
+
+```
+$ rmp task nadadisto -r myproject
+Error: unknown task subcommand: nadadisto
+
+Usage: rmp task <subcommand> [options]
+
+Subcommands:
+  create, new      Create a task
+  ...the remainder of the family help body...
+
+AI agents: run `rmp --ai-help` for a machine-readable command contract.
+```
+
+An unresolved command: error line, global help, hint, exit code 127.
+
+```
+$ rmp nadadisto
+Error: unknown command: nadadisto
+
+Groadmap - A CLI tool for managing technical roadmaps
+
+Usage: rmp [command] [subcommand] [arguments] [options]
+  ...the remainder of the global help body...
 
 AI agents: run `rmp --ai-help` for a machine-readable command contract.
 ```

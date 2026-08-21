@@ -41,7 +41,7 @@ so the runner refuses to start when the two disagree — see
 | `test_24_dependency_workflow.py` | Task dependencies: `add-dep`/`remove-dep`, the `blockers`/`blocking` inverse queries, `depends_on` and `blocks` on `task get`, self-dependency and cycles rejected, COMPLETED dependencies dropped from blockers, the completion guard, and the audit entries for both operations. |
 | `test_25_completion_guards.py` | The two completion guards: incomplete subtasks and incomplete dependencies each block COMPLETED naming the blocking IDs, the subtask guard is evaluated first when both would fire, and a rejected transition leaves the task in its original status. |
 | `test_26_timing_realism.py` | Time-aware reporting driven by back-dated timestamps written straight into SQLite: a burndown series with one row per completion day, `days_elapsed` reflecting a sprint's real age, and roadmap velocity averaged across recently closed sprints. |
-| `test_27_exit_code_extremes.py` | The two ends of the exit-code contract the rest of the suite does not reach: an unknown command or subcommand exits 127 and prints usage, and a SIGINT delivered to a running process collapses to exit 130. |
+| `test_27_exit_code_extremes.py` | The two ends of the exit-code contract the rest of the suite does not reach: an unresolved command or subcommand name exits 127, writing the error and the recovery help to stderr and nothing to stdout, and a SIGINT delivered to a running process collapses to exit 130. |
 | `test_28_command_aliases.py` | The documented aliases: the top-level `t`, `s`, `bl`, `aud` and `road`, and the subcommand `ls`, `rm`, `new`, `hist`, `upd`, `stat`, `prio`, `sev`, `add`, `rm-tasks`, `mv-tasks`, `mvto`, `btm` and `order`, each proven equivalent to its long form. |
 | `test_29_subprocess_concurrency.py` | Concurrency as the user meets it, between OS processes rather than threads: eight parallel `rmp` processes creating tasks lose no row, and readers never fail while another process bursts writes (the WAL promise). |
 | `test_30_aihelp_contract.py` | The `--ai-help` / `ai-help` contract: JSON shape and every required key, a stable `schema_version`, scope filtering, pretty-printing and UTF-8, the six workflows and twelve pitfalls, the help banner, the `AI_AGENT` hint and its deduplication, flag ranges, single-action subcommands as one-element arrays, empty arrays never null, `binary_version` matching main.go, and the loopback default for `web`. |
@@ -189,7 +189,7 @@ codes against the binary:
 - `4` — resource not found
 - `5` — resource already exists
 - `6` — invalid data: validation and state-machine rejections
-- `127` — unknown command or subcommand
+- `127` — dispatch failure: an unresolved command or subcommand name
 - `130` — interrupted by SIGINT
 
 `126` (`EXIT_NOT_EXECUTABLE`) is specified but no end-to-end scenario

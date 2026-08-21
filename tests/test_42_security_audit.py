@@ -679,17 +679,17 @@ class TestSecurityAudit:
         were removed entirely (rmp task #246; SPEC/VERSION.md § Migration 1.9.0
         -> 1.10.0), which eliminates the injection vector at its root rather
         than escaping or rejecting the delimiter within it. The probe now
-        asserts that removal: `task assign` must be an unknown subcommand
-        (exit 2), so there is no longer any comma-delimited list for a crafted
-        name to corrupt."""
+        asserts that removal: `task assign` must be an unresolved subcommand
+        (exit 127, a dispatch failure), so there is no longer any
+        comma-delimited list for a crafted name to corrupt."""
         rm = self.test.create_roadmap()
         tid = self.test.create_task(rm, "task", "fr", "tr", "ac")
         code, out, _ = self._run(["task", "assign", "-r", rm, str(tid),
                                   "alice,bob,charlie"])
-        assert code == 2, (
+        assert code == 127, (
             f"OPEN #86: `task assign` is reachable (exit {code}); the "
             "specialist comma-injection surface must be fully removed")
-        assert out == "", "a rejected unknown subcommand must write nothing to stdout"
+        assert out == "", "a rejected unresolved subcommand must write nothing to stdout"
         got = self._json(["task", "get", "-r", rm, str(tid)])
         got = got[0] if isinstance(got, list) else got
         assert "specialists" not in got, (

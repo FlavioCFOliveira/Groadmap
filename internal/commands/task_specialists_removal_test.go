@@ -6,8 +6,8 @@
 // independently:
 //
 //  1. `rmp task assign` and `rmp task unassign` are not subcommands. They are
-//     rejected by the SAME unknown-subcommand path that rejects any other
-//     unrecognised name — no reserved exit code of their own, no bespoke branch
+//     rejected by the SAME dispatch-failure path that rejects any other
+//     unresolved name — no reserved exit code of their own, no bespoke branch
 //     (SPEC/COMMANDS.md § Command Aliases Reference, note on `assign` and
 //     `unassign`).
 //  2. `task create` and `task edit` reject `-sp` / `--specialists` as an unknown
@@ -24,10 +24,17 @@
 // carries. handleError tests ErrNotFound, ErrAlreadyExists, ErrNoRoadmap and
 // ErrValidation/ErrFieldTooLarge BEFORE ErrInvalidInput, so an error that
 // wrapped one of those as well as ErrInvalidInput would NOT exit 2. Every
-// rejection asserted here is therefore checked twice: it must wrap
-// utils.ErrInvalidInput, and it must wrap none of the sentinels that outrank it.
-// The literal `2` is pinned end-to-end by
-// cmd/rmp.TestSpecialistsRemoval_AssignUnassignExitMisuse.
+// rejection asserted here is therefore checked twice: it must wrap the
+// sentinel of its class, and it must wrap none of the sentinels that outrank
+// it.
+//
+// The two classes are NOT the same, and conflating them is what the
+// dispatch-failure fix corrected. A retired SUBCOMMAND name is an unresolved
+// name: utils.ErrUnknownCommand, exit 127. A retired FLAG is a malformed
+// argument to a command that did resolve: utils.ErrInvalidInput, exit 2.
+// requireDispatchFailure and requireMisuse below pin one class each. The
+// literals `127` and `2` are pinned end-to-end by
+// cmd/rmp.TestSpecialistsRemoval_AssignUnassignExitCmdNotFound.
 package commands
 
 import (
@@ -79,8 +86,31 @@ func requireMisuse(t *testing.T, label string, err error) {
 	}
 }
 
+// requireDispatchFailure asserts that err is the kind of error that exits 127:
+// it wraps utils.ErrUnknownCommand, and it does NOT wrap utils.ErrInvalidInput.
+//
+// The negative half is the load-bearing one. Wrapping a dispatch failure in
+// ErrInvalidInput is precisely the defect this suite now guards against: it
+// lands the failure on exit 2 instead of 127, and it prefixes the message with
+// "invalid input: ", misreporting the class to the reader
+// (SPEC/ARCHITECTURE.md § Sentinel Error Catalogue).
+func requireDispatchFailure(t *testing.T, label string, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("%s: expected an error, got nil", label)
+	}
+	if !errors.Is(err, utils.ErrUnknownCommand) {
+		t.Errorf("%s: error = %v, want it to wrap utils.ErrUnknownCommand (exit 127)", label, err)
+	}
+	if errors.Is(err, utils.ErrInvalidInput) {
+		t.Errorf("%s: error also wraps utils.ErrInvalidInput, which handleError matches "+
+			"as exit 2; a dispatch failure must be carried by ErrUnknownCommand alone "+
+			"(error: %v)", label, err)
+	}
+}
+
 // ---------------------------------------------------------------------------
-// 1. assign / unassign are unknown subcommands.
+// 1. assign / unassign are unresolved subcommand names (dispatch failure).
 // ---------------------------------------------------------------------------
 
 // TestSpecialistsRemoval_AssignUnassignRejectedAsUnknownSubcommand feeds the two
@@ -101,7 +131,7 @@ func TestSpecialistsRemoval_AssignUnassignRejectedAsUnknownSubcommand(t *testing
 		// cannot be blamed on a missing prerequisite.
 		err := HandleTask([]string{name, "-r", testName, "7", "backend-team"})
 		label := "rmp task " + name
-		requireMisuse(t, label, err)
+		requireDispatchFailure(t, label, err)
 		if err != nil {
 			want := "unknown task subcommand: " + name
 			if !strings.Contains(err.Error(), want) {
@@ -110,7 +140,7 @@ func TestSpecialistsRemoval_AssignUnassignRejectedAsUnknownSubcommand(t *testing
 		}
 
 		// Bare, with no arguments at all.
-		requireMisuse(t, "rmp task "+name+" (bare)", HandleTask([]string{name}))
+		requireDispatchFailure(t, "rmp task "+name+" (bare)", HandleTask([]string{name}))
 	}
 }
 
@@ -126,7 +156,7 @@ func TestSpecialistsRemoval_AssignUnassignHaveNoHelpPage(t *testing.T) {
 			out := captureStdout(t, func() {
 				err = HandleTask([]string{name, helpToken})
 			})
-			requireMisuse(t, label, err)
+			requireDispatchFailure(t, label, err)
 			if strings.TrimSpace(out) != "" {
 				t.Errorf("%s: printed a help page to stdout (%d bytes); the subcommand must not exist",
 					label, len(out))

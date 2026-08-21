@@ -49,6 +49,21 @@ var (
 	// ErrRequired indicates a required field or parameter is missing.
 	ErrRequired = errors.New("required parameter missing")
 
+	// ErrUnknownCommand indicates a dispatch failure: a name the CLI was
+	// given does not resolve to a command, or does not resolve to a
+	// subcommand of the command that did resolve. It maps to exit code
+	// 127 (EXIT_CMD_NOT_FOUND).
+	//
+	// A dispatch failure MUST be carried by this sentinel and MUST NOT be
+	// wrapped in ErrInvalidInput. The two are distinct classes:
+	// ErrInvalidInput covers a malformed flag or argument supplied to a
+	// command that WAS resolved (exit 2); ErrUnknownCommand covers a name
+	// that could not be resolved at all (exit 127). Wrapping the second in
+	// the first is what used to make an unresolved subcommand exit 2, and
+	// it also prefixed the message with "invalid input: ", misreporting the
+	// class to the reader (SPEC/ARCHITECTURE.md § Sentinel Error Catalogue).
+	ErrUnknownCommand = errors.New("unknown command")
+
 	// ErrNoRoadmap indicates no roadmap is selected.
 	ErrNoRoadmap = errors.New("no roadmap selected")
 
@@ -83,6 +98,11 @@ func IsInvalidInput(err error) bool {
 // IsRequired checks if an error is ErrRequired or wraps it.
 func IsRequired(err error) bool {
 	return errors.Is(err, ErrRequired)
+}
+
+// IsUnknownCommand checks if an error is ErrUnknownCommand or wraps it.
+func IsUnknownCommand(err error) bool {
+	return errors.Is(err, ErrUnknownCommand)
 }
 
 // IsNoRoadmap checks if an error is ErrNoRoadmap or wraps it.

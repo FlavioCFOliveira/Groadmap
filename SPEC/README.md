@@ -80,6 +80,10 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Filesystem layout migration (per-roadmap directories) | `ARCHITECTURE.md § Filesystem Layout Migration` |
 | Error handling / sentinel errors | `ARCHITECTURE.md § Error Handling` |
 | Exit codes | `ARCHITECTURE.md § Exit Codes` |
+| Error output shape (the parts of stderr and the order they appear in) | `HELP.md § Error message format` |
+| Dispatch failure (an unresolved command or subcommand name): exit code `127`, the help written after the error, the excluded `--ai-help` scope case | `HELP.md § Error message format` and `COMMANDS.md § Dispatch Failures (Unresolved Command or Subcommand Names)` |
+| Which error classes append help, and which do not | `HELP.md § Recovery help after a dispatch failure` |
+| Stdout silence on a failing invocation, and the help invocations that exit `0` | `HELP.md § Stdout silence on failure` and `COMMANDS.md § Failing Invocations Write Nothing to Stdout` |
 | Database schema (DDL) | `DATABASE.md § DDL - Table Creation` |
 | SQL queries | `DATABASE.md § Main SQL Queries` |
 | Audit operations catalogue (the canonical list, including the LEGACY values) | `DATABASE.md § audit Table` |
@@ -130,6 +134,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 |-------|------------------|
 | Exit codes (numeric values and sentinel names) | `ARCHITECTURE.md § Exit Codes` |
 | Sentinel errors and wrapping rules | `ARCHITECTURE.md § Error Handling` |
+| Error output shape (stderr parts and their order, which error classes append help, stdout silence on failure) | `HELP.md § Error message format` |
 | Filesystem permission model (`0700` directories, `0600` database, when enforced, failure mode) | `ARCHITECTURE.md § Open-Time Permission Enforcement` |
 | Enums (`TaskType`, `TaskStatus`, `SprintStatus`, `CommentType`) | `MODELS.md § Enums` |
 | Comment type per-entity valid subsets (task: 7 values, sprint: 4 values) | `MODELS.md § Comment Type` |

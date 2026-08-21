@@ -541,7 +541,9 @@ Errors follow typical CLI conventions:
 - Plain text format (human-readable)
 - Uses standard Unix exit codes
 
-**Input-related errors** (missing parameters, invalid arguments, unknown commands/subcommands) additionally display the **specific help for the command or subcommand** that was invoked.
+A failing invocation writes **nothing to stdout**. The error line, the AI-agent hint, and any help that accompanies the error all go to stderr.
+
+Help follows an error in exactly one case: a **dispatch failure**, meaning the CLI cannot resolve the name it was given to a command (`rmp nadadisto`) or to a subcommand of a command (`rmp task nadadisto`). In that case the help for the level at which the name could not be resolved follows the error on stderr. No other error class appends help; a missing parameter, an unknown flag, an invalid value, a resource that does not exist, or a database failure each produce the error line and the hint alone. `HELP.md § Error message format` is the canonical specification of the error output: which parts appear, in which order, and on which stream.
 
 **Example - General error:**
 ```
@@ -549,13 +551,23 @@ $ rmp task get -r project1 999
 Error: Task with ID 999 not found in roadmap 'project1'
 ```
 
-**Example - Input error (shows help):**
+**Example - Missing parameter (no help is appended):**
 ```
 $ rmp task create -r project1
-Error: Missing required parameters: --functional-requirements, --technical-requirements, --acceptance-criteria
+Error: required parameter missing: --title
 
-Usage: rmp task create [OPTIONS]
-...
+AI agents: run `rmp --ai-help` for a machine-readable command contract.
+```
+
+**Example - Dispatch failure (family help follows the error, exit code 127):**
+```
+$ rmp task nadadisto -r project1
+Error: unknown task subcommand: nadadisto
+
+Usage: rmp task <subcommand> [options]
+...the remainder of the family help body...
+
+AI agents: run `rmp --ai-help` for a machine-readable command contract.
 ```
 
 ### Error Reuse Policy (Mandatory)
@@ -576,6 +588,9 @@ The canonical set of sentinel errors is defined exclusively in `internal/utils/e
 | `utils.ErrDatabase` | 1 | Any SQLite or I/O failure |
 | `utils.ErrValidation` | 6 | Value out of allowed range or invalid enum value |
 | `utils.ErrFieldTooLarge` | 6 | String field exceeds its maximum character limit |
+| `utils.ErrUnknownCommand` | 127 | Dispatch failure: the name given does not resolve to a command or to a subcommand of a command |
+
+A dispatch failure MUST be carried by `utils.ErrUnknownCommand` and MUST NOT be wrapped in `utils.ErrInvalidInput`. The two are distinct classes: `utils.ErrInvalidInput` covers a malformed flag or argument supplied to a command that was resolved, and exits `2`; `utils.ErrUnknownCommand` covers a command or subcommand name that could not be resolved at all, and exits `127`. Wrapping the second in the first is what makes an unresolved subcommand exit `2` instead of `127`, and it also prefixes the message with `invalid input: `, which misreports the class to the reader.
 
 #### Wrapping Rules
 
@@ -647,7 +662,7 @@ Groadmap follows standard Unix/Linux exit code conventions. Success output is JS
 | `5` | `EXIT_EXISTS` | Resource already exists | Duplicate roadmap/task names |
 | `6` | `EXIT_INVALID_DATA` | Invalid input data | Validation failures (dates, ranges) |
 | `126` | `EXIT_NOT_EXECUTABLE` | Command not executable | Permission issues |
-| `127` | `EXIT_CMD_NOT_FOUND` | Command not found | Unknown command/subcommand |
+| `127` | `EXIT_CMD_NOT_FOUND` | Command not found | Dispatch failure: an unresolved command name or an unresolved subcommand name |
 | `130` | `EXIT_SIGINT` | Interrupted by Ctrl+C | SIGINT received |
 
 ### Error Code Mapping
@@ -671,8 +686,8 @@ Internal error codes map to exit codes as follows:
 | `NO_ROADMAP` | 3 | No roadmap selected and none specified |
 | `DB_ERROR` | 1 | Database operation failed |
 | `SYSTEM_ERROR` | 1 | Internal system error |
-| `UNKNOWN_SUBCOMMAND` | 2 | Invalid subcommand specified |
-| `UNKNOWN_COMMAND` | 127 | Unknown command or subcommand |
+| `UNKNOWN_SUBCOMMAND` | 127 | Subcommand name does not resolve within the command that was given |
+| `UNKNOWN_COMMAND` | 127 | Command name does not resolve |
 | `UPDATE_FAILED` | 1 | Failed to update resource |
 | `DELETE_FAILED` | 1 | Failed to delete resource |
 
@@ -746,7 +761,13 @@ The contract emitter is in-process and reads no external state. The
 only runtime errors it can surface are I/O errors writing to stdout,
 which map to exit code 1 via the standard error-handling path. When
 `--ai-help` is combined with an unknown command or subcommand name
-preceding it, the CLI emits exit code 2 with the standard error format.
+preceding it, the CLI emits exit code 2 with the standard error format,
+and no help follows the error. This is a deliberate exception to the
+exit code `127` specified for a dispatch failure in
+`HELP.md § Exit code of a dispatch failure`: the name preceding
+`--ai-help` is a scope selector for the contract emitter, not a name
+being dispatched, so an unusable selector is an invalid argument to
+`--ai-help` rather than a command that could not be found.
 
 ## See Also
 

@@ -44,7 +44,7 @@ type graphOKResult struct {
 
 // printGraphHelp prints the family-level help for rmp graph.
 func printGraphHelp() {
-	fmt.Print(`Usage: rmp graph <subcommand> -r <roadmap> [-q <cypher>]
+	fmt.Fprint(helpDst(), `Usage: rmp graph <subcommand> -r <roadmap> [-q <cypher>]
 
 Manage the knowledge graph for a roadmap using Cypher queries.
 Each subcommand validates that the supplied query matches its operation class
@@ -85,7 +85,7 @@ Examples:
 }
 
 func printGraphCreateHelp() {
-	fmt.Print(`Usage: rmp graph create -r <roadmap> [-q <cypher>]
+	fmt.Fprint(helpDst(), `Usage: rmp graph create -r <roadmap> [-q <cypher>]
 
 Execute a CREATE or MERGE query against the roadmap's knowledge graph.
 The query MUST contain CREATE and/or MERGE clauses and MUST NOT contain
@@ -117,7 +117,7 @@ Examples:
 }
 
 func printGraphQueryHelp() {
-	fmt.Print(`Usage: rmp graph query -r <roadmap> [-q <cypher>]
+	fmt.Fprint(helpDst(), `Usage: rmp graph query -r <roadmap> [-q <cypher>]
 
 Execute a read-only MATCH ... RETURN query against the roadmap's knowledge
 graph. The query MUST NOT contain any writing clause.
@@ -152,7 +152,7 @@ Examples:
 }
 
 func printGraphUpdateHelp() {
-	fmt.Print(`Usage: rmp graph update -r <roadmap> [-q <cypher>]
+	fmt.Fprint(helpDst(), `Usage: rmp graph update -r <roadmap> [-q <cypher>]
 
 Execute a SET or REMOVE query against the roadmap's knowledge graph.
 The query MUST contain SET and/or REMOVE clauses and MUST NOT contain
@@ -184,7 +184,7 @@ Examples:
 }
 
 func printGraphDeleteHelp() {
-	fmt.Print(`Usage: rmp graph delete -r <roadmap> [-q <cypher>]
+	fmt.Fprint(helpDst(), `Usage: rmp graph delete -r <roadmap> [-q <cypher>]
 
 Execute a DELETE or DETACH DELETE query against the roadmap's knowledge
 graph. The query MUST contain DELETE and/or DETACH DELETE and MUST NOT
@@ -216,7 +216,7 @@ Examples:
 }
 
 func printGraphSearchHelp() {
-	fmt.Print(`Usage: rmp graph search -r <roadmap> [-q <cypher>]
+	fmt.Fprint(helpDst(), `Usage: rmp graph search -r <roadmap> [-q <cypher>]
 
 Execute a read-only traversal query against the roadmap's knowledge graph.
 Variable-length path patterns (e.g. -[*1..3]-) are supported. The query

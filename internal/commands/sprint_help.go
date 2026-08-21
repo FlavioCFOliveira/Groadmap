@@ -13,7 +13,7 @@ import (
 
 // printSprintListHelp — `rmp sprint list`.
 func printSprintListHelp() {
-	fmt.Print(`Usage: rmp sprint list -r <roadmap> [--status <state>]
+	fmt.Fprint(helpDst(), `Usage: rmp sprint list -r <roadmap> [--status <state>]
 
 Lists every sprint in the roadmap, optionally filtered by status.
 
@@ -46,7 +46,7 @@ Examples:
 
 // printSprintCreateHelp — `rmp sprint create`.
 func printSprintCreateHelp() {
-	fmt.Print(`Usage: rmp sprint create -r <roadmap> -t <title> -d <description> [--max-tasks <n>] [--order <n>]
+	fmt.Fprint(helpDst(), `Usage: rmp sprint create -r <roadmap> -t <title> -d <description> [--max-tasks <n>] [--order <n>]
 
 Creates a new sprint in PENDING status. The sprint will not accept work
 until it is moved to OPEN via 'rmp sprint start <id>'.
@@ -101,7 +101,7 @@ Examples:
 
 // printSprintGetHelp — `rmp sprint get`.
 func printSprintGetHelp() {
-	fmt.Print(`Usage: rmp sprint get -r <roadmap> <sprint-id>
+	fmt.Fprint(helpDst(), `Usage: rmp sprint get -r <roadmap> <sprint-id>
 
 Returns the sprint object for <sprint-id>. For a richer summary with
 counts and severity distribution, use 'rmp sprint show <sprint-id>'.
@@ -127,7 +127,7 @@ Examples:
 
 // printSprintShowHelp — `rmp sprint show`.
 func printSprintShowHelp() {
-	fmt.Print(`Usage: rmp sprint show -r <roadmap> <sprint-id>
+	fmt.Fprint(helpDst(), `Usage: rmp sprint show -r <roadmap> <sprint-id>
 
 Returns a stand-up-style summary of a sprint: identification, status,
 capacity, task-count totals split into pending / in-progress /
@@ -169,7 +169,7 @@ Examples:
 
 // printSprintUpdateHelp — `rmp sprint update`.
 func printSprintUpdateHelp() {
-	fmt.Print(`Usage: rmp sprint update -r <roadmap> <sprint-id> [-t <title>] [-d <text>] [--max-tasks <n>] [--order <n>]
+	fmt.Fprint(helpDst(), `Usage: rmp sprint update -r <roadmap> <sprint-id> [-t <title>] [-d <text>] [--max-tasks <n>] [--order <n>]
 
 Edits the title, description, capacity cap, or execution order of an
 existing sprint. At least one of -t, -d, --max-tasks or --order must be
@@ -228,7 +228,7 @@ Examples:
 
 // printSprintRemoveHelp — `rmp sprint remove`.
 func printSprintRemoveHelp() {
-	fmt.Print(`Usage: rmp sprint remove -r <roadmap> <sprint-id>
+	fmt.Fprint(helpDst(), `Usage: rmp sprint remove -r <roadmap> <sprint-id>
 
 Deletes the sprint. All member tasks — regardless of their current
 status (SPRINT, DOING, TESTING, or even COMPLETED) — are reverted to
@@ -261,7 +261,7 @@ Examples:
 
 // printSprintStartHelp — `rmp sprint start`.
 func printSprintStartHelp() {
-	fmt.Print(`Usage: rmp sprint start -r <roadmap> <sprint-id>
+	fmt.Fprint(helpDst(), `Usage: rmp sprint start -r <roadmap> <sprint-id>
 
 Transitions a sprint from PENDING (or CLOSED, see 'reopen') to OPEN.
 Only one sprint can be OPEN per roadmap at any time — enforced at the
@@ -290,7 +290,7 @@ Examples:
 
 // printSprintCloseHelp — `rmp sprint close`.
 func printSprintCloseHelp() {
-	fmt.Print(`Usage: rmp sprint close -r <roadmap> <sprint-id> [--force]
+	fmt.Fprint(helpDst(), `Usage: rmp sprint close -r <roadmap> <sprint-id> [--force]
 
 Transitions an OPEN sprint to CLOSED. By default, the close is rejected
 (exit 6) if any task in the sprint is still SPRINT, DOING, or TESTING —
@@ -323,7 +323,7 @@ Examples:
 
 // printSprintReopenHelp — `rmp sprint reopen`.
 func printSprintReopenHelp() {
-	fmt.Print(`Usage: rmp sprint reopen -r <roadmap> <sprint-id>
+	fmt.Fprint(helpDst(), `Usage: rmp sprint reopen -r <roadmap> <sprint-id>
 
 Transitions a CLOSED sprint back to OPEN (e.g. when a follow-up
 issue surfaces and you want to keep work attached to the same sprint).
@@ -355,7 +355,7 @@ Examples:
 
 // printSprintTasksHelp — `rmp sprint tasks`.
 func printSprintTasksHelp() {
-	fmt.Print(`Usage: rmp sprint tasks -r <roadmap> <sprint-id> [-s <state>] [--order-by-priority]
+	fmt.Fprint(helpDst(), `Usage: rmp sprint tasks -r <roadmap> <sprint-id> [-s <state>] [--order-by-priority]
 
 Lists every task assigned to <sprint-id>, regardless of status (so
 COMPLETED tasks are included). Use 'sprint open-tasks' to exclude
@@ -391,7 +391,7 @@ Examples:
 
 // printSprintOpenTasksHelp — `rmp sprint open-tasks`.
 func printSprintOpenTasksHelp() {
-	fmt.Print(`Usage: rmp sprint open-tasks -r <roadmap> <sprint-id> [--order-by-priority]
+	fmt.Fprint(helpDst(), `Usage: rmp sprint open-tasks -r <roadmap> <sprint-id> [--order-by-priority]
 
 Lists tasks assigned to <sprint-id> whose status is one of SPRINT,
 DOING, or TESTING (i.e. all incomplete sprint work). Useful for
@@ -420,7 +420,7 @@ Examples:
 
 // printSprintStatsHelp — `rmp sprint stats`.
 func printSprintStatsHelp() {
-	fmt.Print(`Usage: rmp sprint stats -r <roadmap> <sprint-id>
+	fmt.Fprint(helpDst(), `Usage: rmp sprint stats -r <roadmap> <sprint-id>
 
 Returns the SprintStats object: per-status counts, completion
 percentage, ordered task ids, burndown series (one entry per day),
@@ -465,7 +465,7 @@ Examples:
 
 // printSprintAddTasksHelp — `rmp sprint add-tasks`.
 func printSprintAddTasksHelp() {
-	fmt.Print(`Usage: rmp sprint add-tasks -r <roadmap> <sprint-id> <task-ids>
+	fmt.Fprint(helpDst(), `Usage: rmp sprint add-tasks -r <roadmap> <sprint-id> <task-ids>
 
 Atomically moves the listed tasks into <sprint-id> AND flips their
 status from BACKLOG to SPRINT. This is the ONLY path to SPRINT status:
@@ -494,7 +494,7 @@ Examples:
 
 // printSprintRemoveTasksHelp — `rmp sprint remove-tasks`.
 func printSprintRemoveTasksHelp() {
-	fmt.Print(`Usage: rmp sprint remove-tasks -r <roadmap> <sprint-id> <task-ids>
+	fmt.Fprint(helpDst(), `Usage: rmp sprint remove-tasks -r <roadmap> <sprint-id> <task-ids>
 
 Removes the listed tasks from <sprint-id> and flips their status back
 to BACKLOG. The tasks themselves are NOT deleted.
@@ -521,7 +521,7 @@ Examples:
 
 // printSprintMoveTasksHelp — `rmp sprint move-tasks`.
 func printSprintMoveTasksHelp() {
-	fmt.Print(`Usage: rmp sprint move-tasks -r <roadmap> <from-id> <to-id> <task-ids>
+	fmt.Fprint(helpDst(), `Usage: rmp sprint move-tasks -r <roadmap> <from-id> <to-id> <task-ids>
 
 Moves tasks from one sprint to another in a single transaction. Task
 statuses are preserved across the move (a DOING task stays DOING).
@@ -550,7 +550,7 @@ Examples:
 
 // printSprintReorderHelp — `rmp sprint reorder`.
 func printSprintReorderHelp() {
-	fmt.Print(`Usage: rmp sprint reorder -r <roadmap> <sprint-id> <task-ids-csv>
+	fmt.Fprint(helpDst(), `Usage: rmp sprint reorder -r <roadmap> <sprint-id> <task-ids-csv>
 
 Sets the exact ordering of tasks within <sprint-id>. The list MUST
 include every task currently in the sprint, in the desired order; the
@@ -580,7 +580,7 @@ Examples:
 
 // printSprintMoveToHelp — `rmp sprint move-to`.
 func printSprintMoveToHelp() {
-	fmt.Print(`Usage: rmp sprint move-to -r <roadmap> <sprint-id> <task-id> <position>
+	fmt.Fprint(helpDst(), `Usage: rmp sprint move-to -r <roadmap> <sprint-id> <task-id> <position>
 
 Moves a single task to an exact position within the sprint. Position
 is zero-based. Other tasks shift to keep the order dense (no gaps).
@@ -610,7 +610,7 @@ Examples:
 
 // printSprintSwapHelp — `rmp sprint swap`.
 func printSprintSwapHelp() {
-	fmt.Print(`Usage: rmp sprint swap -r <roadmap> <sprint-id> <task-id-1> <task-id-2>
+	fmt.Fprint(helpDst(), `Usage: rmp sprint swap -r <roadmap> <sprint-id> <task-id-1> <task-id-2>
 
 Exchanges the positions of two tasks within the same sprint.
 
@@ -635,7 +635,7 @@ Examples:
 
 // printSprintTopHelp — `rmp sprint top`.
 func printSprintTopHelp() {
-	fmt.Print(`Usage: rmp sprint top -r <roadmap> <sprint-id> <task-id>
+	fmt.Fprint(helpDst(), `Usage: rmp sprint top -r <roadmap> <sprint-id> <task-id>
 
 Moves a single task to the top of the sprint (position 0). Other tasks
 shift down by one position to make room.
@@ -659,7 +659,7 @@ Examples:
 
 // printSprintBottomHelp — `rmp sprint bottom`.
 func printSprintBottomHelp() {
-	fmt.Print(`Usage: rmp sprint bottom -r <roadmap> <sprint-id> <task-id>
+	fmt.Fprint(helpDst(), `Usage: rmp sprint bottom -r <roadmap> <sprint-id> <task-id>
 
 Moves a single task to the last position of the sprint. Other tasks
 shift up by one position.
@@ -696,7 +696,7 @@ func sprintCommentTypes() string {
 
 // printSprintCommentAddHelp — `rmp sprint comment-add`.
 func printSprintCommentAddHelp() {
-	fmt.Printf(`Usage: rmp sprint comment-add -r <roadmap> <sprint-id> --type <TYPE> [--body <text>]
+	fmt.Fprintf(helpDst(), `Usage: rmp sprint comment-add -r <roadmap> <sprint-id> --type <TYPE> [--body <text>]
 
 Adds one typed entry to a sprint's log: what was found, what was decided,
 how the work progressed, and why the sprint's own definition changed. Work
@@ -764,7 +764,7 @@ BODY
 
 // printSprintCommentListHelp — `rmp sprint comment-list`.
 func printSprintCommentListHelp() {
-	fmt.Printf(`Usage: rmp sprint comment-list -r <roadmap> <sprint-id> [--type <TYPE>]
+	fmt.Fprintf(helpDst(), `Usage: rmp sprint comment-list -r <roadmap> <sprint-id> [--type <TYPE>]
 
 Returns every comment of the given sprint, oldest first: created_at
 ascending with the comment id as the tie-breaker. Read top to bottom, the
@@ -817,7 +817,7 @@ Examples:
 
 // printSprintCommentEditHelp — `rmp sprint comment-edit`.
 func printSprintCommentEditHelp() {
-	fmt.Printf(`Usage: rmp sprint comment-edit -r <roadmap> <comment-id> [--type <TYPE>] [--body <text>]
+	fmt.Fprintf(helpDst(), `Usage: rmp sprint comment-edit -r <roadmap> <comment-id> [--type <TYPE>] [--body <text>]
 
 Changes the type and/or the body of one existing sprint comment and stamps
 updated_at, so a later listing shows that the comment was altered. The
@@ -878,7 +878,7 @@ Examples:
 
 // printSprintCommentRemoveHelp — `rmp sprint comment-remove`.
 func printSprintCommentRemoveHelp() {
-	fmt.Print(`Usage: rmp sprint comment-remove -r <roadmap> <comment-id>
+	fmt.Fprint(helpDst(), `Usage: rmp sprint comment-remove -r <roadmap> <comment-id>
 
 Deletes one sprint comment. The row is removed outright: there is no soft
 delete and no recovery. The audit entry outlives the row, so the sprint's

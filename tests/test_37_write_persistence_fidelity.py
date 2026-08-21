@@ -192,8 +192,9 @@ class TestWritePersistenceFidelity:
     def test_task_assign_and_unassign_subcommands_are_gone(self):
         """`task assign` and `task unassign` were removed together with the
         specialists field (rmp task #246; SPEC/VERSION.md § Migration 1.9.0 ->
-        1.10.0). Both names must now be rejected as unknown task subcommands
-        (exit 2), and the rejection must be a pure no-op: the task's state is
+        1.10.0). Both names must now be rejected as unresolved task subcommands
+        (exit 127 — a dispatch failure, see SPEC/COMMANDS.md § Dispatch
+        Failures), and the rejection must be a pure no-op: the task's state is
         read back unchanged and no audit entry is written for the attempt."""
         r = self.test.create_roadmap("assign_removed")
         tid = self._mk(r, "Provision the on-call escalation webhook")
@@ -202,13 +203,13 @@ class TestWritePersistenceFidelity:
 
         code, out, err = self.test.run_cmd(
             ["task", "assign", "-r", r, str(tid), "Dev One"], check=False)
-        assert code == 2, f"task assign must exit 2 (unknown subcommand), got {code}: {err}"
+        assert code == 127, f"task assign must exit 127 (dispatch failure), got {code}: {err}"
         assert out == "", f"task assign must write nothing to stdout on rejection: {out!r}"
         assert "assign" in err.lower(), f"stderr must name the unknown subcommand: {err!r}"
 
         code2, out2, err2 = self.test.run_cmd(
             ["task", "unassign", "-r", r, str(tid), "Dev One"], check=False)
-        assert code2 == 2, f"task unassign must exit 2 (unknown subcommand), got {code2}: {err2}"
+        assert code2 == 127, f"task unassign must exit 127 (dispatch failure), got {code2}: {err2}"
         assert out2 == "", f"task unassign must write nothing to stdout on rejection: {out2!r}"
         assert "unassign" in err2.lower(), f"stderr must name the unknown subcommand: {err2!r}"
 
@@ -219,7 +220,7 @@ class TestWritePersistenceFidelity:
             "a rejected unknown subcommand must write no audit entry: "
             f"{before_audit_count} -> {after_audit_count}"
         )
-        print("✓ task assign / task unassign are gone: exit 2, no stdout, no state or audit change")
+        print("✓ task assign / task unassign are gone: exit 127, no stdout, no state or audit change")
 
     # ---- dependencies ------------------------------------------------------
 

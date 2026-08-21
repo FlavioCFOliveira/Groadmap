@@ -27,7 +27,7 @@ func HandleTask(args []string) error {
 // specifics item 1). The comment-type list is rendered from
 // models.ValidTaskCommentTypes rather than typed out, so it cannot go stale.
 func printTaskHelp() {
-	fmt.Printf(`Usage: rmp task [command] [arguments] [options]
+	fmt.Fprintf(helpDst(), `Usage: rmp task [command] [arguments] [options]
 
 Valid status values (for --status filter and 'stat' setter):
   BACKLOG, SPRINT, DOING, TESTING, COMPLETED

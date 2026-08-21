@@ -43,7 +43,7 @@ func HandleStats(args []string) error {
 
 // printStatsHelp prints the help text for the stats command.
 func printStatsHelp() {
-	fmt.Print(`Usage: rmp stats [options]
+	fmt.Fprint(helpDst(), `Usage: rmp stats [options]
 
 Provides comprehensive statistics about a roadmap, including sprint and
 task distribution, and average velocity across the last 5 closed sprints.

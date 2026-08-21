@@ -23,7 +23,7 @@ func HandleSprint(args []string) error {
 // rendered from models.ValidSprintCommentTypes rather than typed out, so it cannot
 // go stale and cannot accidentally show the seven task values.
 func printSprintHelp() {
-	fmt.Printf(`Usage: rmp sprint [command] [arguments] [options]
+	fmt.Fprintf(helpDst(), `Usage: rmp sprint [command] [arguments] [options]
 
 Valid sprint status values (for --status filter):
   PENDING (never started), OPEN (active), CLOSED

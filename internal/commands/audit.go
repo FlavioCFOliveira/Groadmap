@@ -16,7 +16,7 @@ func HandleAudit(args []string) error {
 
 // printAuditListHelp — `rmp audit list`.
 func printAuditListHelp() {
-	fmt.Print(`Usage: rmp audit list -r <roadmap> [filters]
+	fmt.Fprint(helpDst(), `Usage: rmp audit list -r <roadmap> [filters]
 
 Returns audit-log entries for the roadmap, newest first (performed_at
 DESC). Filters compose with AND.
@@ -64,7 +64,7 @@ Examples:
 
 // printAuditHistoryHelp — `rmp audit history`.
 func printAuditHistoryHelp() {
-	fmt.Print(`Usage: rmp audit history -r <roadmap> <entity-type> <entity-id>
+	fmt.Fprint(helpDst(), `Usage: rmp audit history -r <roadmap> <entity-type> <entity-id>
 
 Returns every audit entry recorded for a single entity, newest first.
 Equivalent to 'rmp audit list -r <roadmap> -e <entity-type> --entity-id <id>'
@@ -95,7 +95,7 @@ Examples:
 
 // printAuditStatsHelp — `rmp audit stats`.
 func printAuditStatsHelp() {
-	fmt.Print(`Usage: rmp audit stats -r <roadmap> [--since <date>] [--until <date>]
+	fmt.Fprint(helpDst(), `Usage: rmp audit stats -r <roadmap> [--since <date>] [--until <date>]
 
 Aggregates the audit log over an optional time window: total entries,
 the first/last timestamps observed, and per-operation/per-entity-type
@@ -400,7 +400,7 @@ func wrapEnumList(label, indent string, names []string) string {
 // than typed out, so it cannot go stale: the six comment operations were
 // missing from the hand-written list this replaces.
 func printAuditHelp() {
-	fmt.Printf(`Usage: rmp audit [command] [arguments] [options]
+	fmt.Fprintf(helpDst(), `Usage: rmp audit [command] [arguments] [options]
 
 Aliases: aud.
 

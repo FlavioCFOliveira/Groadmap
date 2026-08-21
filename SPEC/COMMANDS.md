@@ -41,8 +41,32 @@ Errors follow typical CLI conventions (NOT JSON format):
 - Plain text format (human-readable)
 - Uses standard Unix exit codes
 
-### Input-Related Errors
-When errors are related to inputs (misuse of commands or subcommands), the **specific help for that command or subcommand** is displayed after the error.
+### Failing Invocations Write Nothing to Stdout
+
+An invocation that exits with a non-zero code writes **zero bytes** to stdout. The error line, any help that accompanies it, and the AI-agent hint all go to stderr. A consumer may therefore treat a non-empty stdout as evidence that the invocation succeeded.
+
+Help that the reader asked for is not a failure: `rmp` with no arguments, `rmp help`, `rmp --help`, `rmp -h`, `rmp <command>` with no subcommand, `rmp <command> --help`, and `rmp <command> <subcommand> --help` each exit `0` and write their help body to stdout.
+
+### Dispatch Failures (Unresolved Command or Subcommand Names)
+
+A **dispatch failure** is the case in which `rmp` cannot resolve a name it was given to a command or to a subcommand. There are exactly two classes, and they behave identically:
+
+| Class | Example | Error line |
+|-------|---------|-----------|
+| Unresolved command | `rmp nadadisto` | `Error: unknown command: nadadisto` |
+| Unresolved subcommand | `rmp task nadadisto` | `Error: unknown task subcommand: nadadisto` |
+
+Both classes:
+
+1. Exit with code **127** (`EXIT_CMD_NOT_FOUND`). The catalogue is in [ARCHITECTURE.md § Exit Codes](./ARCHITECTURE.md#exit-codes).
+2. Write the **help for the level at which the name could not be resolved** to stderr, after the error line: the global help body for an unresolved command, and the family help body of the command that did resolve for an unresolved subcommand.
+3. Write nothing to stdout.
+
+The commands that dispatch subcommands, and for which the second class can arise, are `roadmap`, `task`, `sprint`, `backlog`, `audit`, and `graph`. The commands `stats`, `web`, and `ai-help` accept no subcommand, so no dispatch failure arises for them.
+
+A dispatch failure is the **only** error class after which help is written. Every other error class — a missing required parameter, an unknown flag, an invalid enum value, an out-of-range value, a rejected state transition, a resource that does not exist, a name conflict, and a database failure — produces the error line and the AI-agent hint alone, with no help. The reader recovers from those by running `--help` explicitly, because the error line already names the offending flag or value.
+
+`HELP.md § Error message format` is the canonical specification of the error output: the parts of stderr, their order, the exact error wording, and the suppression of the AI-agent banner inside the help written on an error path.
 
 ---
 
@@ -241,6 +265,8 @@ rmp ai-help
 | 0 | Contract emitted successfully. |
 | 2 | `ai-help` invoked with unexpected positional arguments or flags; `--ai-help` used with an unknown command or subcommand name preceding it. |
 
+An unknown command or subcommand name preceding `--ai-help` exits `2`, not the `127` specified for a dispatch failure in `§ Dispatch Failures (Unresolved Command or Subcommand Names)`, and no help follows the error. The name is a scope selector for the contract emitter rather than a name being dispatched, so an unusable selector is an invalid argument to `--ai-help`. See `ARCHITECTURE.md § Failure modes`.
+
 **Discoverability requirements:**
 
 1. The first line of the plain-text output of `rmp --help` and of every family-level and subcommand-level `--help` is the banner:
@@ -257,7 +283,7 @@ rmp ai-help
    AI agents: run `rmp --ai-help` for a machine-readable command contract.
    ```
 
-   This rule applies uniformly to input errors (missing flags, unknown subcommands), validation errors, not-found errors, conflict errors, and database errors. The hint is one line, plain text, written to stderr, and does not change the exit code. The hint is not appended when the command itself is `rmp --ai-help`, `rmp ai-help`, `rmp <command> --ai-help`, or `rmp <command> <subcommand> --ai-help` (to avoid recursion in error paths of the contract emitter). The hint is also not appended when `AI_AGENT=1` is active for this invocation; in that case the env-var hint already occupies the top of stderr and the trailing hint is suppressed to avoid duplication (see rule 3 below).
+   This rule applies uniformly to input errors (missing flags, unresolved subcommands), validation errors, not-found errors, conflict errors, and database errors. On a dispatch failure the hint stays last, after the help written per `§ Dispatch Failures (Unresolved Command or Subcommand Names)`, so the hint remains the final line of stderr on every error path. The hint is one line, plain text, written to stderr, and does not change the exit code. The hint is not appended when the command itself is `rmp --ai-help`, `rmp ai-help`, `rmp <command> --ai-help`, or `rmp <command> <subcommand> --ai-help` (to avoid recursion in error paths of the contract emitter). The hint is also not appended when `AI_AGENT=1` is active for this invocation; in that case the env-var hint already occupies the top of stderr and the trailing hint is suppressed to avoid duplication (see rule 3 below).
 
 3. When the environment variable `AI_AGENT` is set to the literal value `1`, every invocation of `rmp` writes the same hint line to stderr **before** any other output, regardless of whether the invocation succeeds or fails:
 
@@ -2995,12 +3021,15 @@ families read identically.
 **Note on the `delete` alias:** The `delete` alias is scoped to `roadmap remove`
 only. `task remove` and `sprint remove` accept the `rm` alias but NOT `delete`;
 `rmp task delete` and `rmp sprint delete` are rejected with
-`Error: invalid input: unknown <task|sprint> subcommand: delete`.
+`Error: unknown <task|sprint> subcommand: delete` and exit code `127`, as a
+dispatch failure (see `§ Dispatch Failures (Unresolved Command or Subcommand
+Names)`).
 
 **Note on `assign` and `unassign`:** Neither name is a subcommand of the `task`
 family, and neither has a reserved exit code. `rmp task assign` and
-`rmp task unassign` are rejected by the same unknown-subcommand path that rejects
-any other unrecognised name, with
-`Error: invalid input: unknown task subcommand: <name>` on stderr, the invoked
-family's help after it, and exit code 2 (see `ARCHITECTURE.md § Exit Codes` and
-`Error Handling` above).
+`rmp task unassign` are rejected by the same dispatch-failure path that rejects
+any other unresolved name, with
+`Error: unknown task subcommand: <name>` on stderr, the `task` family help after
+it, nothing on stdout, and exit code `127` (see
+`§ Dispatch Failures (Unresolved Command or Subcommand Names)` and
+`ARCHITECTURE.md § Exit Codes`).
