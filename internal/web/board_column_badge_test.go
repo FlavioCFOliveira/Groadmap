@@ -216,10 +216,7 @@ func TestBoardColumnBadges_CarryTheColourOfTheStatusTheyGroup(t *testing.T) {
 // Both view models are built with no task at all, so every column shows 0 — which
 // also proves the colour is chosen with no card to read a status from.
 func TestBoardColumnBadges_ClassComesFromTheOneHelper(t *testing.T) {
-	funcs := make(map[string]any, len(badgeFuncMap))
-	for name, fn := range badgeFuncMap {
-		funcs[name] = fn
-	}
+	funcs := templateFuncs()
 	funcs["taskStatusBadge"] = func(s models.TaskStatus) string { return "probe-" + string(s) }
 
 	tmpl, err := template.New("").Funcs(funcs).ParseFS(templatesFS, "templates/*.html")

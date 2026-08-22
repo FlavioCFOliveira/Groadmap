@@ -39,16 +39,35 @@
                     <th>Operation</th>
                     <th>Entity Type</th>
                     <th>Entity ID</th>
+                    <th>Related Entity ID</th>
+                    <th>Commit</th>
                     <th>Performed At</th>
                   </tr>
                 </thead>
                 <tbody>
                   {{range .Entries}}
+                  {{/*
+                    The two nullable columns. Both are rendered by the helpers in
+                    audit.go rather than by an {{if}} written here, so the rule
+                    that decides "value or placeholder" — and the presentation
+                    each of the two answers takes — has one source, shared with
+                    the task detail modal's own commit hashes.
+
+                    The Commit cell shows the stored hash verbatim: the page does
+                    not abbreviate it, does not expand it, and links it to no
+                    repository. The Related Entity ID cell shows the counterpart
+                    the entry itself carries and never one inferred from the
+                    operation beside it (SPEC/WEB.md § Roadmap Audit Log Page).
+                  */}}
+                  {{$related := auditRelatedEntityCell .RelatedEntityID}}
+                  {{$commit := auditCommitHashCell .CommitHash}}
                   <tr>
                     <td>{{.ID}}</td>
                     <td>{{.Operation}}</td>
                     <td>{{.EntityType}}</td>
                     <td>{{.EntityID}}</td>
+                    <td{{with $related.Class}} class="{{.}}"{{end}}>{{$related.Text}}</td>
+                    <td{{with $commit.Class}} class="{{.}}"{{end}}>{{$commit.Text}}</td>
                     <td class="text-nowrap text-secondary">{{.PerformedAt}}</td>
                   </tr>
                   {{end}}

@@ -437,10 +437,7 @@ func TestSprintsPage_EmptyTabKeepsItsStatusColour(t *testing.T) {
 // The view model is the zero value, so every tab holds no sprint and shows 0 —
 // which also proves the colour is chosen with no sprint to read a status from.
 func TestSprintsTemplate_TabBadgeClassComesFromTheHelper(t *testing.T) {
-	funcs := make(map[string]any, len(badgeFuncMap))
-	for name, fn := range badgeFuncMap {
-		funcs[name] = fn
-	}
+	funcs := templateFuncs()
 	funcs["sprintStatusBadge"] = func(s models.SprintStatus) string { return "probe-" + string(s) }
 
 	tmpl, err := template.New("").Funcs(funcs).ParseFS(templatesFS, "templates/*.html")
