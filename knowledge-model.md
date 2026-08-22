@@ -90,8 +90,8 @@ One specification document under `SPEC/`.
 
 | Property | Required | Notes |
 |---|---|---|
-| `key` | yes | File name, e.g. `DATABASE.md`. |
-| `path` | yes | Repository-relative path. |
+| `key` | yes | Repository-relative path, e.g. `SPEC/DATABASE.md`. |
+| `path` | yes | Same as `key`. |
 | `area` | yes | Functional area the document owns, per CLAUDE.md section 2. |
 | `summary` | yes | One-line description of what the document specifies. |
 | `last_commit`, `last_commit_date` | yes | Provenance. |
@@ -150,8 +150,8 @@ criterion is the document's purpose, not its location: the per-command pages und
 `DOCS/commands/`, the repository `README.md`, `CHANGELOG.md`, and `tests/README.md` are all
 `Doc`s today. Distinct from `Spec`, which is the project's technical specification: the two
 have different audiences and different owners (`doc-manager` versus
-`specification-manager`). The key is the repository-relative path, which also avoids
-colliding with the `Spec` node whose key is the bare name `README.md`.
+`specification-manager`). The key is the repository-relative path, the same rule every
+file-anchored label follows.
 
 `CHANGELOG.md` is a `Doc` and not a `Release`. A `Release` is one published version of the
 binary; the changelog is the prose a reader consults to learn what changed, it carries the
