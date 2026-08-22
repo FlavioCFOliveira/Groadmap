@@ -151,8 +151,8 @@ The refusal wording is the one the CLI already uses for a stray positional argum
 
 ### Validation Behavior
 
-- **Whitespace trimming:** Leading and trailing whitespace is trimmed before validation
-- **Empty strings:** Treated as missing for required fields
+- **Whitespace trimming:** Leading and trailing whitespace is trimmed before validation and before storage, on every free-text field; interior whitespace is never altered. The UTF-8 and control-character checks are the deliberate exception and run on the value as supplied, ahead of the trim — see `Emptiness Constraint (All Required Free-Text Fields)` below
+- **Empty strings:** Treated as missing for required fields, and so is a value that is empty only once trimmed. `Emptiness Constraint (All Required Free-Text Fields)` below states the exit code and the message each command emits
 - **Error format:** Plain text to stderr with descriptive message
 - **Exit code:** 6 for validation errors (see `ARCHITECTURE.md` — Exit Codes for canonical mapping)
 
@@ -196,9 +196,10 @@ names the field whose value broke a rule, whichever command emitted it:
    `Error: validation error: <field>: control characters are not allowed`.
 2. The refusal of a value longer than the field's maximum:
    `Error: field exceeds maximum size: <field> exceeds maximum length of N characters`.
-3. The refusal of an empty value for a field that requires one. Each subcommand
-   documents that message in its own section below; this rule fixes the field
-   name inside it and nothing else about it.
+3. The refusal of an empty value for a field that requires one, which
+   `Emptiness Constraint (All Required Free-Text Fields)` below states in full and
+   each subcommand restates in its own section; this rule fixes the field name inside
+   it and nothing else about it.
 4. Every rule added later over the same fields. A later rule may state its message
    with `<field>` and leave the name to be resolved here; it MUST NOT restate the
    mapping.
@@ -313,14 +314,136 @@ verdict as soon as the value cannot fit and stops reading, and it reaches the ve
 a read-to-EOF implementation would reach. Where a command states a **Validation
 Order** below, that order states where the check falls for that command.
 
+### Emptiness Constraint (All Required Free-Text Fields)
+
+A free-text field that is required to be non-empty is judged **after** the value has
+been trimmed. A value made only of whitespace leaves nothing behind once leading and
+trailing whitespace is removed, so it counts as absent and the command refuses it,
+stores nothing, and changes no entity. The canonical definition is the Free-Text
+Emptiness and Trimming Constraint in `MODELS.md § Task`, which also states the
+criterion's rationale and the order it must run in; this section states the refusal
+each command emits.
+
+Seven of the eight free-text fields are required to be non-empty and are governed
+here: task `title`, `functional_requirements`, `technical_requirements`, and
+`acceptance_criteria`; sprint `title` and `description`; and the comment `body`. The
+eighth, `completion_summary`, is optional, so no value of it is ever refused for being
+empty; `task stat` accepts a transition to `COMPLETED` that carries no `--summary` at
+all.
+
+**The refusal.** Every command that writes one of the seven fields judges emptiness by
+the identical criterion. The refusal differs in one place only, and that difference is
+a published rule that predates this constraint:
+
+| Field | Commands that write it | Exit code | Message on stderr |
+|-------|------------------------|-----------|-------------------|
+| `title`, `functional_requirements`, `technical_requirements`, `acceptance_criteria` | `task create`, `task edit` | 6 | `Error: validation error: <field> cannot be empty` |
+| `title`, `description` | `sprint create`, `sprint update` | 6 | `Error: validation error: <field> cannot be empty` |
+| `body` | `task comment-add`, `task comment-edit`, `sprint comment-add`, `sprint comment-edit` | 2 | `Error: required parameter missing: no comment body supplied`, except on a `comment-edit` that requested no other change, where it is `Error: required parameter missing: at least one of --type or --body is required` |
+
+`<field>` is the field's published name, which
+`Published Field Names in Validation Messages` above is canonical for; this section
+does not restate that mapping. The comment `body` keeps exit code 2 and its own
+wording because a body is a required parameter that may arrive on standard input, and
+a body that is empty after trimming is the same condition as a body that never
+arrived: `Comment Body Input Source and Precedence` above states that rule, and this
+constraint leaves it exactly as it stands.
+
+**A value that names nothing is not the same as no value at all.** Two questions are
+answered in order, and only the second one belongs to this constraint:
+
+1. **Was the flag supplied with any text at all?** On `task create` and
+   `sprint create` the free-text flags are required parameters, and a required flag
+   that is absent, or that carries the literal empty string, counts as not supplied.
+   The command fails with exit code 2 and names the **flag**:
+   `Error: required parameter missing: --title`. `Create Task` and `Create Sprint`
+   below state that rule, it predates this constraint, and this constraint does not
+   change it. On `task edit` and `sprint update` the same flags are optional, so this
+   question does not arise there: a supplied flag is a supplied flag whatever it
+   carries, and its value goes straight to the second question.
+2. **Is the supplied value empty once trimmed?** A value that carries text as supplied
+   has reached the application and is validated as a value. When trimming leaves
+   nothing of it, the command refuses it as stated in the table above, naming the
+   **field**.
+
+A whitespace-only value falls on the second side of that boundary on every command,
+including the two create commands: the caller did supply text, and the text turns out
+to name nothing. `rmp sprint create -r <name> -t '   ' -d 'A real macro goal.'`
+therefore fails with exit code 6 and creates no sprint, while
+`rmp sprint create -r <name> -t '' -d 'A real macro goal.'` continues to fail with
+exit code 2 under question 1.
+
+**What is stored is the trimmed value.** This is a separate statement from the rule
+above and is not derived from it: judging emptiness after a trim would still be
+possible while storing the bytes as supplied. The application does not do that. It
+removes leading and trailing whitespace before the value reaches the database, on all
+eight free-text fields and on every command that writes one, `completion_summary`
+included, as `Validation Behavior` above states. One consequence is required: a
+field's maximum length is measured on the trimmed value, the same value the
+database stores, so a value of exactly the maximum length carrying surrounding
+whitespace is accepted. Interior whitespace is never altered.
+
+**This constraint does not move the control-character check.** The encoding check and
+the control-character check run on the value **as supplied**, before any trimming; the
+emptiness check runs on the **trimmed** value, after it. Both facts hold at once, and
+the reason the first must not be simplified into the second is that VT (`0x0B`) and FF
+(`0x0C`) are forbidden control characters that the trim also removes, so trimming first
+would let a leading or trailing VT or FF through with the character silently discarded
+(CWE-150). `MODELS.md § Task` (Free-Text Emptiness and Trimming Constraint) states the
+full sequence and is canonical for it. The visible consequence on every command is that
+a value consisting solely of VT is refused as
+`Error: validation error: <field>: control characters are not allowed` and never as an
+empty value.
+
+This constraint fixes where the emptiness check falls relative to the trim, and where
+the trim falls relative to the encoding and control-character checks. It moves no
+other check, and it says nothing about where a field's maximum length is checked
+relative to the other two; each command's own section states that.
+
+**Acceptance criteria:**
+
+1. `rmp sprint create -r <name> -t '   ' -d 'A real macro goal.'` exits 6, writes
+   `Error: validation error: title cannot be empty` to stderr, writes nothing to
+   stdout, and creates no sprint.
+2. `rmp sprint create -r <name> -t 'A real title' -d '   '` exits 6 with
+   `Error: validation error: description cannot be empty` and creates no sprint.
+3. `rmp sprint update -r <name> <id> -t '   '` and
+   `rmp sprint update -r <name> <id> -d '   '` each exit 6 with the corresponding
+   message, leave the stored value unchanged, and write no audit entry.
+4. `rmp task create` with any one of `-t`, `-fr`, `-tr`, or `-ac` carrying a
+   whitespace-only value exits 6 and names the field, not the flag, and creates no
+   task. The same invocation with the flag omitted still exits 2 and names the flag.
+5. `rmp task edit <id> -t '   '` exits 6 with
+   `Error: validation error: title cannot be empty`, unchanged from its behaviour
+   before this constraint, and the same holds for `-fr`, `-tr`, and `-ac`.
+6. Each of the four comment subcommands refuses a whitespace-only body with exit code
+   2, on the `--body` path and on the standard-input path alike. The wording is the
+   one `Comment Body Input Source and Precedence` above already fixes for a body that
+   never arrived: `Error: required parameter missing: no comment body supplied` in
+   every case except a `comment-edit` whose body was to come from standard input and
+   which supplies no `--type` either, where the refusal remains
+   `Error: required parameter missing: at least one of --type or --body is required`.
+7. A whitespace-only value is refused whichever whitespace it is made of. Spaces, TAB,
+   LF, CR, and any mixture of them are refused, and so is a value made only of no-break
+   spaces (`U+00A0`) or of NEL (`U+0085`): the criterion is what the trim leaves
+   behind, not which whitespace character the caller supplied.
+8. On every command that writes a free-text field, a value carrying surrounding
+   whitespace and a non-empty core is accepted and read back trimmed, and a value of
+   exactly the field's maximum length carrying surrounding whitespace is accepted.
+9. A value carrying a leading or trailing VT or FF is refused as a control-character
+   violation on every command that writes a free-text field, and a value consisting
+   solely of VT is refused as a control-character violation rather than as an empty
+   value.
+10. The end-to-end suite exercises criteria 1 to 9 against the compiled binary.
+
 ### Validation Error Messages
 
 | Scenario | Error Message (stderr) |
 |----------|------------------------|
 | Title exceeds 255 chars | "Error: Title must not exceed 255 characters (got N)" |
-| Title is empty | "Error: Title is required" |
+| A required free-text value is empty, or empty once trimmed, on `task edit` or `sprint update`, and on `task create` or `sprint create` when the flag carries text | "Error: validation error: <field> cannot be empty" |
+| A required free-text flag is absent, or carries the literal empty string, on `task create` or `sprint create` | "Error: required parameter missing: --<flag>" |
 | Requirements exceed 4096 chars | "Error: {Field} must not exceed 4096 characters (got N)" |
-| Requirements are empty | "Error: {Field} is required" |
 | Comment body exceeds 4096 chars | "Error: field exceeds maximum size: body exceeds maximum length of 4096 characters" |
 | Free-text value is not valid UTF-8 | "Error: validation error: <field>: the value is not valid UTF-8" |
 | Comment body not supplied | "Error: required parameter missing: no comment body supplied" |
@@ -612,6 +735,21 @@ rmp task new -r <name> -t <title> -fr <fr> -tr <tr> -ac <ac>
 | `acceptance-criteria` | Required, max 4096 chars | "Acceptance criteria are required and must not exceed 4096 characters" |
 | `type` | One of 10 valid values | "Error: invalid task type: <value>" |
 
+**Empty and whitespace-only values.** `--title`, `--functional-requirements`,
+`--technical-requirements`, and `--acceptance-criteria` are required parameters, and
+two different failures follow from a value that carries no usable text. An invocation
+that omits one of the four flags, or supplies it with the literal empty string, fails
+with exit code 2 and names the **flag**:
+`Error: required parameter missing: --title`. An invocation that supplies one of them
+with text that is empty once trimmed — a value made only of spaces, for example —
+fails with exit code 6 and names the **field**:
+`Error: validation error: title cannot be empty`. No task is created in either case,
+and stdout stays empty. `task create` applies exactly the criterion `task edit`
+applies; `Emptiness Constraint (All Required Free-Text Fields)` under `Field
+Validation` above is canonical for it, and
+`Published Field Names in Validation Messages` above is canonical for the field name
+inside the second message.
+
 **Output (success):** `{"id": 42}`, exit code 0.
 
 **Error Output:** Validation errors written to stderr with exit code 6.
@@ -620,10 +758,10 @@ rmp task new -r <name> -t <title> -fr <fr> -tr <tr> -ac <ac>
 | Exit Code | Condition |
 |-----------|-----------|
 | 0 | Task created |
-| 2 | A required flag is missing |
+| 2 | A required flag is missing, or carries the literal empty string |
 | 3 | Roadmap not specified |
 | 4 | `--parent` points to a task that does not exist |
-| 6 | Validation error (oversize field, invalid enum/range, invalid type) |
+| 6 | Validation error (a required free-text value that is empty once trimmed, oversize field, invalid enum/range, invalid type) |
 
 There is no exit code 5 for this command: a missing `--parent` target is a not-found condition (exit 4), not an already-exists condition.
 
@@ -971,20 +1109,20 @@ When a field is specified, it is validated before updating:
 | Field | Constraint | Error Message (stderr) | Exit Code |
 |-------|------------|------------------------|-----------|
 | `title` | Required, max 255 chars | "Error: Title is required and must not exceed 255 characters" | 6 |
-| `title` | Empty string | "Error: Title cannot be empty" | 6 |
+| `title` | Empty, or empty once trimmed | "Error: validation error: title cannot be empty" | 6 |
 | `functional-requirements` | Required, max 4096 chars | "Error: Functional requirements are required and must not exceed 4096 characters" | 6 |
-| `functional-requirements` | Empty string | "Error: Functional requirements cannot be empty" | 6 |
+| `functional-requirements` | Empty, or empty once trimmed | "Error: validation error: functional_requirements cannot be empty" | 6 |
 | `technical-requirements` | Required, max 4096 chars | "Error: Technical requirements are required and must not exceed 4096 characters" | 6 |
-| `technical-requirements` | Empty string | "Error: Technical requirements cannot be empty" | 6 |
+| `technical-requirements` | Empty, or empty once trimmed | "Error: validation error: technical_requirements cannot be empty" | 6 |
 | `acceptance-criteria` | Required, max 4096 chars | "Error: Acceptance criteria are required and must not exceed 4096 characters" | 6 |
-| `acceptance-criteria` | Empty string | "Error: Acceptance criteria cannot be empty" | 6 |
+| `acceptance-criteria` | Empty, or empty once trimmed | "Error: validation error: acceptance_criteria cannot be empty" | 6 |
 | `priority` | Range 0-9 | "Error: Priority must be between 0 and 9" | 6 |
 | `severity` | Range 0-9 | "Error: Severity must be between 0 and 9" | 6 |
 | `type` | One of 10 valid values | "Error: invalid task type: <value>" | 6 |
 
 **Validation Behavior:**
-- **Whitespace trimming:** Leading and trailing whitespace is trimmed before validation
-- **Empty strings:** Setting a required field to empty string fails validation
+- **Whitespace trimming:** Leading and trailing whitespace is trimmed before validation and before storage, and the stored value is the trimmed one. The UTF-8 and control-character checks run on the value as supplied, ahead of the trim (see `Emptiness Constraint (All Required Free-Text Fields)` under `Field Validation` above)
+- **Empty strings:** Setting a required field to a value that is empty, or that is empty once trimmed, fails validation with exit code 6 and names the field
 - **Partial updates:** Only specified fields are validated and updated
 - **Type validation:** Non-integer values for priority/severity fail with exit code 2 (malformed input)
 - **No-op:** If no fields are specified, command succeeds with no changes (exit code 0)
@@ -1587,9 +1725,11 @@ rmp sprint new -r <name> -t "Title" -d "Description" [--max-tasks <n>] [--order 
 ```
 
 **Required parameters:** BOTH `-t, --title` and `-d, --description` are mandatory.
-Omitting either one (or passing it empty) fails with exit code 2 and the message
-`Error: required parameter missing: --title` (or `--description`). Every example
-below supplies both.
+Omitting either one, or passing it the literal empty string, fails with exit code 2
+and the message `Error: required parameter missing: --title` (or `--description`).
+Passing one a value that carries text but is empty once trimmed is a different case
+and fails with exit code 6: see **Title and Description Validation** below. Every
+example below supplies both.
 
 **Options:**
 - `-t, --title <text>` - Sprint title (required), maximum 255 characters
@@ -1612,16 +1752,25 @@ below supplies both.
   `order` plus one (the first sprint in a roadmap receives `1`). See
   `MODELS.md § Sprint Field Constraints` and `DATABASE.md § Create Sprint`.
 
-**Title Validation:**
+**Title and Description Validation:**
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
-| Title missing or empty | 2 | "Error: required parameter missing: --title" |
-| Description missing or empty | 2 | "Error: required parameter missing: --description" |
+| Title missing, or the literal empty string | 2 | "Error: required parameter missing: --title" |
+| Description missing, or the literal empty string | 2 | "Error: required parameter missing: --description" |
+| Title supplied, but empty once trimmed | 6 | "Error: validation error: title cannot be empty" |
+| Description supplied, but empty once trimmed | 6 | "Error: validation error: description cannot be empty" |
 | Title exceeds 255 characters | 6 | "Error: Title must not exceed 255 characters (got N)" |
 
-The sprint `title` is also subject to the Control-Character Constraint described in
-`Field Validation` above.
+No sprint is created under any of these rows, and stdout stays empty.
+
+The sprint `title` and `description` are also subject to the Control-Character
+Constraint, the UTF-8 Encoding Constraint, and the Emptiness Constraint described in
+`Field Validation` above. `sprint create` judges emptiness by the same criterion
+`sprint update` and `task edit` apply: after trimming, so a value made only of
+whitespace names nothing and is refused. The maximum length is measured on the
+trimmed value, so a title of exactly 255 characters carrying surrounding whitespace is
+accepted and stored trimmed.
 
 **Bound Validation:**
 
@@ -2181,11 +2330,12 @@ When `--title` is provided, it is validated before updating:
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
-| Title is empty | 6 | "Error: Title cannot be empty" |
+| Title is empty, or empty once trimmed | 6 | "Error: validation error: title cannot be empty" |
 | Title exceeds 255 characters | 6 | "Error: Title must not exceed 255 characters (got N)" |
 
-The sprint `title` is also subject to the Control-Character Constraint described in
-`Field Validation` above.
+The sprint `title` is also subject to the Control-Character Constraint, the UTF-8
+Encoding Constraint, and the Emptiness Constraint described in `Field Validation`
+above.
 
 **Description Validation:**
 
@@ -2193,16 +2343,25 @@ When `--description` is provided, it is validated before updating:
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
-| Description is empty | 6 | "Error: Description cannot be empty" |
+| Description is empty, or empty once trimmed | 6 | "Error: validation error: description cannot be empty" |
 
-The sprint `description` is also subject to the Control-Character Constraint
-described in `Field Validation` above, and to the 2048-character maximum stated
-under `Options` above.
+The sprint `description` is also subject to the Control-Character Constraint, the
+UTF-8 Encoding Constraint, and the Emptiness Constraint described in
+`Field Validation` above, and to the 2048-character maximum stated under `Options`
+above.
 
 These exit codes differ from `Create Sprint` on purpose: there `--title` and
-`--description` are required parameters, so an empty value counts as the parameter
-being missing (exit code 2), whereas here they are optional flags that must carry a
-non-empty value when supplied, so an empty value is a rejected value (exit code 6).
+`--description` are required parameters, so the literal empty string counts as the
+parameter being missing (exit code 2), whereas here they are optional flags that must
+carry a non-empty value when supplied, so the literal empty string is a rejected value
+(exit code 6).
+
+**That difference is confined to the literal empty string.** A value that carries text
+and is empty only once trimmed — a value made only of whitespace — is a rejected value
+on `sprint create` and `sprint update` alike, with exit code 6 and the same message,
+because the caller did supply text and the text names nothing. See
+`Emptiness Constraint (All Required Free-Text Fields)` under `Field Validation`
+above.
 
 **Bound Validation:**
 
@@ -2247,9 +2406,10 @@ field's entry.
 2. `rmp sprint update -r <name> <id> --order 3` writes exactly one `SPRINT_ORDER_CHANGE` entry.
 3. An update rejected by any validation rule, including an `--order` collision (exit code 5), writes zero entries.
 4. No invocation of `sprint update` writes `SPRINT_UPDATE`.
-5. `rmp sprint update -r <name> <id> -t ""` exits 6 with `Error: Title cannot be empty`, and `rmp sprint update -r <name> <id> -d ""` exits 6 with `Error: Description cannot be empty`. Neither reports a missing parameter, because both supply a flag.
-6. `rmp sprint update -r <name> <id> -t "" -d "New description"` exits 6, changes neither field, and writes zero entries: the empty `--title` is rejected before any field is written.
-7. `rmp sprint update -r <name> <id>` with none of the four flags is the only invocation that exits 2 with the at-least-one-flag message.
+5. `rmp sprint update -r <name> <id> -t ""` exits 6 with `Error: validation error: title cannot be empty`, and `rmp sprint update -r <name> <id> -d ""` exits 6 with `Error: validation error: description cannot be empty`. Neither reports a missing parameter, because both supply a flag.
+6. `rmp sprint update -r <name> <id> -t "   "` and `rmp sprint update -r <name> <id> -d "   "` produce the same two refusals as criterion 5, leave the stored value unchanged, and write zero entries.
+7. `rmp sprint update -r <name> <id> -t "" -d "New description"` exits 6, changes neither field, and writes zero entries: the empty `--title` is rejected before any field is written.
+8. `rmp sprint update -r <name> <id>` with none of the four flags is the only invocation that exits 2 with the at-least-one-flag message.
 
 ### Remove Sprint
 

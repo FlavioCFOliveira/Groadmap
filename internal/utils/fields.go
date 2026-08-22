@@ -140,15 +140,24 @@ func FieldTooLargeError(field Field, limit int) error {
 	return fmt.Errorf("%w: %s exceeds maximum length of %d characters", ErrFieldTooLarge, field, limit)
 }
 
-// FieldEmptyError is the refusal of an empty value supplied for a field that
-// requires one, carrying ErrValidation (exit code 6). It is the wording the
-// update commands use — `task edit`, `sprint update` — where the flag is
-// optional but its value may not be empty.
+// FieldEmptyError is the refusal of a value that names nothing, supplied for a
+// field that requires one, carrying ErrValidation (exit code 6).
 //
 // It names the FIELD, not the flag, because a value did reach the application
 // and that value broke a rule about its content. The absence of a required flag
 // is the other case and keeps the flag's own spelling: see
 // SPEC/COMMANDS.md § Published Field Names in Validation Messages.
+//
+// All four commands that write a required task or sprint free-text field emit
+// it, and they emit it for the identical condition — the value is empty once
+// trimmed (SPEC/COMMANDS.md § Emptiness Constraint (All Required Free-Text
+// Fields)). Where they still differ is only the LITERAL empty string: on
+// `task edit` and `sprint update` the flag is optional, so an empty value is a
+// rejected value and reaches this refusal; on `task create` and `sprint create`
+// the flag is a required parameter, so an empty value means the parameter never
+// arrived and the refusal names the flag with exit code 2 instead. A value made
+// of whitespace falls on this side of that boundary on all four, because the
+// caller did supply text and the text turns out to name nothing.
 func FieldEmptyError(field Field) error {
 	return fmt.Errorf("%w: %s cannot be empty", ErrValidation, field)
 }

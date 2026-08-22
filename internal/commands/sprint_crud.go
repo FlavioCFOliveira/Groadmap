@@ -91,13 +91,29 @@ func sprintCreate(args []string) error {
 		// redundant doubled prefix (finding #54).
 		return fmt.Errorf("%w: --title", utils.ErrRequired)
 	}
-	if len(title) > models.MaxSprintTitle {
+	// The cap keeps the position it has always had on this field — ahead of the
+	// content rules, which is what rmp task 302 measures and this task does not
+	// move — but it now measures strings.TrimSpace of the value, because that is
+	// the value stored (SPEC/MODELS.md § Free-Text Emptiness and Trimming
+	// Constraint, Rule 2). Measuring the value as supplied is what made a title
+	// of exactly 255 real characters carrying surrounding whitespace refused
+	// here and accepted by `task create`, for a value the column would have held.
+	if len(strings.TrimSpace(title)) > models.MaxSprintTitle {
 		return utils.FieldTooLargeError(utils.FieldSprintTitle, models.MaxSprintTitle)
 	}
-	// Reject a value that is not valid UTF-8, and then one that carries a control
-	// / bidi / format code point (SPEC/MODELS.md § Free-Text UTF-8 Encoding
-	// Constraint and § Free-Text Control-Character Constraint, in that order).
-	if err := utils.ValidateFreeText(title, utils.FieldSprintTitle); err != nil {
+	// The encoding rule and the control-character rule on the value AS SUPPLIED,
+	// then the trim, then the emptiness judgement on the trimmed value — the one
+	// order SPEC/MODELS.md § Free-Text Emptiness and Trimming Constraint fixes,
+	// owned by utils.RequireFreeText so this command cannot get it wrong on its
+	// own. `title` is rebound to the trimmed value, which is what is stored.
+	//
+	// This path previously did not trim at all. That is precisely why a title of
+	// three spaces created a sprint no reader surface could name, and equally why
+	// the control-character rule was intact here: adding the trim WITHOUT the
+	// order would have refused the three spaces and, in the same change, let a
+	// leading VT or FF through with the character silently discarded.
+	title, err = utils.RequireFreeText(title, utils.FieldSprintTitle)
+	if err != nil {
 		return err
 	}
 
@@ -108,10 +124,13 @@ func sprintCreate(args []string) error {
 		// redundant doubled prefix (finding #54).
 		return fmt.Errorf("%w: --description", utils.ErrRequired)
 	}
-	// Reject a value that is not valid UTF-8, and then one that carries a control
-	// / bidi / format code point (SPEC/MODELS.md § Free-Text UTF-8 Encoding
-	// Constraint and § Free-Text Control-Character Constraint, in that order).
-	if err := utils.ValidateFreeText(description, utils.FieldSprintDescription); err != nil {
+	// Same sequence as the title above. No inline cap runs on this field: for
+	// `sprint create` the description's length is checked by sprint.Validate()
+	// inside the transaction, and that position is deliberately left where it is
+	// (rmp task 302 settles it). Validate() now receives the trimmed value, so
+	// what the cap measures is what the column holds either way.
+	description, err = utils.RequireFreeText(description, utils.FieldSprintDescription)
+	if err != nil {
 		return err
 	}
 
@@ -335,39 +354,38 @@ func sprintUpdate(args []string) error {
 		}
 	}
 
+	// A supplied --title must carry a value: unlike `sprint create`, where
+	// --title is a required parameter and the literal empty string means the
+	// parameter is missing (exit code 2), here it is an optional flag whose
+	// value is rejected (exit code 6). Same wrapper and same phrasing as
+	// `task edit`, so both commands answer `-t ""` identically — and, since this
+	// task, answer `-t "   "` identically too.
 	if hasTitle {
-		// A supplied --title must carry a value: unlike `sprint create`, where
-		// --title is a required parameter and an empty value means the parameter
-		// is missing (exit code 2), here it is an optional flag whose value is
-		// rejected (exit code 6). Same wrapper and same phrasing as `task edit`,
-		// so both commands answer `-t ""` identically.
-		if title == "" {
-			return utils.FieldEmptyError(utils.FieldSprintTitle)
-		}
-		if len(title) > models.MaxSprintTitle {
+		// The cap keeps its position ahead of the content rules and now measures
+		// the trimmed value, the value stored (SPEC/MODELS.md § Free-Text
+		// Emptiness and Trimming Constraint, Rule 2).
+		if len(strings.TrimSpace(title)) > models.MaxSprintTitle {
 			return utils.FieldTooLargeError(utils.FieldSprintTitle, models.MaxSprintTitle)
 		}
-		// Reject a value that is not valid UTF-8, and then one that carries a
-		// control / bidi / format code point (SPEC/MODELS.md § Free-Text UTF-8
-		// Encoding Constraint and § Free-Text Control-Character Constraint, in
-		// that order).
-		if err := utils.ValidateFreeText(title, utils.FieldSprintTitle); err != nil {
+		// Content rules on the value AS SUPPLIED, then the trim, then the
+		// emptiness judgement on the trimmed value. `-t ""` still reaches
+		// FieldEmptyError — the empty string survives both content rules and
+		// trims to itself — so this command answers the literal empty string
+		// exactly as it did, and now answers a whitespace-only value the same
+		// way instead of storing it.
+		title, err = utils.RequireFreeText(title, utils.FieldSprintTitle)
+		if err != nil {
 			return err
 		}
 	}
 
 	if hasDescription {
-		if description == "" {
-			return utils.FieldEmptyError(utils.FieldSprintDescription)
-		}
-		if len(description) > models.MaxSprintDescription {
+		// Same sequence, same reasons, as the title above.
+		if len(strings.TrimSpace(description)) > models.MaxSprintDescription {
 			return utils.FieldTooLargeError(utils.FieldSprintDescription, models.MaxSprintDescription)
 		}
-		// Reject a value that is not valid UTF-8, and then one that carries a
-		// control / bidi / format code point (SPEC/MODELS.md § Free-Text UTF-8
-		// Encoding Constraint and § Free-Text Control-Character Constraint, in
-		// that order).
-		if err := utils.ValidateFreeText(description, utils.FieldSprintDescription); err != nil {
+		description, err = utils.RequireFreeText(description, utils.FieldSprintDescription)
+		if err != nil {
 			return err
 		}
 	}

@@ -9,6 +9,8 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import subprocess
+
 from tests.base_test import GroadmapTestBase, commit_flags_for
 
 
@@ -462,6 +464,445 @@ class TestTaskReopenCommand:
         assert task_b in reopen_ids, f"Audit must include TASK_REOPEN for task {task_b}"
 
         print("✓ TASK_REOPEN audit logged for each reopened task")
+
+
+class TestFreeTextEmptinessAndTrimming:
+    """Task #278 -- SPEC/COMMANDS.md, Emptiness Constraint (All Required
+    Free-Text Fields), and SPEC/MODELS.md, Free-Text Emptiness and Trimming
+    Constraint.
+
+    The constraint has three steps, and the order between them is the whole
+    point:
+
+      1. the UTF-8 encoding rule and the control-character rule, on the value
+         AS SUPPLIED;
+      2. the trim;
+      3. the emptiness judgement, on the TRIMMED value.
+
+    VT (0x0B) and FF (0x0C) are forbidden control characters that
+    strings.TrimSpace also removes, so trimming first would let a leading or
+    trailing one through with the character silently discarded (CWE-150). The
+    observable signature of the correct order, asserted below, is that a value
+    made only of VT is refused as a CONTROL CHARACTER and never as empty.
+
+    These run against the compiled binary, which is SPEC/COMMANDS.md acceptance
+    criterion 10.
+    """
+
+    # Whitespace that carries no forbidden control character: every one of these
+    # trims away to nothing, so every one is an emptiness refusal. The set is
+    # Go's unicode.IsSpace, wider than ASCII, which is why NBSP and NEL are here
+    # (acceptance criterion 7). They are written as escapes because they are
+    # invisible in a source file.
+    WHITESPACE_ONLY = [
+        ("three spaces", "   "),
+        ("a TAB", "\t"),
+        ("an LF", "\n"),
+        ("a CR", "\r"),
+        ("a mixture", " \t\r\n "),
+        ("a no-break space (U+00A0)", "\u00a0"),
+        ("a NEL (U+0085)", "\u0085"),
+    ]
+
+    VT = "\v"  # 0x0B, forbidden AND whitespace
+    FF = "\f"  # 0x0C, forbidden AND whitespace
+
+    CONTROL_REFUSAL = "control characters are not allowed"
+
+    def setup_method(self):
+        self.test = GroadmapTestBase()
+        self.test.setup()
+        self.roadmap = self.test.create_roadmap()
+        self.task = self.test.create_task(
+            self.roadmap,
+            "Reject an expired refresh token",
+            "A refresh token past its exp must not mint an access token",
+            "Check exp inside the refresh handler before the signature lookup",
+            "A table-driven test covers the second on either side of exp",
+        )
+        self.sprint = self.test.create_sprint(
+            self.roadmap,
+            "Close the JWT boundary-second defect and lock it behind a regression test.",
+            title="Expiry hardening",
+        )
+
+    def teardown_method(self):
+        self.test.teardown()
+
+    # ---- helpers -------------------------------------------------------
+
+    def _refused(self, args, code, message):
+        """Run a command that must fail, and assert the whole contract of the
+        refusal: the exit code, the message on stderr, and silent stdout."""
+        exit_code, stdout, stderr = self.test.run_cmd(args, check=False)
+        assert exit_code == code, (
+            f"rmp {' '.join(args)!r}\n  expected exit {code}, got {exit_code}\n  stderr: {stderr!r}"
+        )
+        assert message in stderr, (
+            f"rmp {' '.join(args)!r}\n  stderr does not carry the refusal\n"
+            f"  expected substring: {message!r}\n  got: {stderr!r}"
+        )
+        assert stdout.strip() == "", f"a failing invocation wrote to stdout: {stdout!r}"
+
+    def _sprint_count(self):
+        return len(self.test.run_cmd_json(["sprint", "list", "-r", self.roadmap]))
+
+    def _task_count(self):
+        return len(self.test.run_cmd_json(["task", "list", "-r", self.roadmap]))
+
+    def _audit_count(self):
+        return len(self.test.run_cmd_json(["audit", "list", "-r", self.roadmap]))
+
+    def _sprint(self, sprint_id):
+        return self.test.run_cmd_json(["sprint", "get", "-r", self.roadmap, str(sprint_id)])
+
+    def _task(self, task_id):
+        result = self.test.run_cmd_json(["task", "get", "-r", self.roadmap, str(task_id)])
+        return result[0] if isinstance(result, list) else result
+
+    # ---- criteria 1 and 2 ----------------------------------------------
+
+    def test_sprint_create_refuses_a_whitespace_only_title_or_description(self):
+        """Criteria 1 and 2: the defect this task was opened for.
+
+        Before this change `rmp sprint create -t '   '` exited 0 and created a
+        sprint whose title was three spaces, so every reader surface showed a
+        sprint with no visible name.
+        """
+        before = self._sprint_count()
+
+        self._refused(
+            ["sprint", "create", "-r", self.roadmap, "-t", "   ", "-d", "A real macro goal."],
+            6, "Error: validation error: title cannot be empty",
+        )
+        self._refused(
+            ["sprint", "create", "-r", self.roadmap, "-t", "A real title", "-d", "   "],
+            6, "Error: validation error: description cannot be empty",
+        )
+
+        assert self._sprint_count() == before, "a refused sprint create created a sprint"
+        print("[OK] sprint create refuses a whitespace-only title and description")
+
+    # ---- criterion 3 ---------------------------------------------------
+
+    def test_sprint_update_refuses_whitespace_and_writes_no_audit_entry(self):
+        """Criterion 3: the stored value is unchanged and no audit entry is written."""
+        before = self._sprint(self.sprint)
+        audit_before = self._audit_count()
+
+        self._refused(
+            ["sprint", "update", "-r", self.roadmap, str(self.sprint), "-t", "   "],
+            6, "Error: validation error: title cannot be empty",
+        )
+        self._refused(
+            ["sprint", "update", "-r", self.roadmap, str(self.sprint), "-d", "   "],
+            6, "Error: validation error: description cannot be empty",
+        )
+
+        after = self._sprint(self.sprint)
+        assert after["title"] == before["title"], "a refused sprint update changed the title"
+        assert after["description"] == before["description"], "a refused sprint update changed the description"
+        assert self._audit_count() == audit_before, "a refused sprint update wrote an audit entry"
+        print("[OK] sprint update refuses whitespace, changes nothing, audits nothing")
+
+    # ---- criterion 4 ---------------------------------------------------
+
+    def test_task_create_names_the_field_for_whitespace_and_the_flag_when_omitted(self):
+        """Criterion 4, and the third decision on this task.
+
+        A whitespace-only value DID reach the application, so the refusal names
+        the FIELD with exit 6. An omitted flag, or one carrying the literal empty
+        string, never delivered a value, so it stays exit 2 naming the FLAG.
+        Before this change the first case was reported as the second.
+        """
+        fields = [
+            ("-t", "--title", "title"),
+            ("-fr", "--functional-requirements", "functional_requirements"),
+            ("-tr", "--technical-requirements", "technical_requirements"),
+            ("-ac", "--acceptance-criteria", "acceptance_criteria"),
+        ]
+        valid = {
+            "-t": "Reject an expired refresh token",
+            "-fr": "A refresh token past its exp must not mint an access token",
+            "-tr": "Check exp inside the refresh handler",
+            "-ac": "A table-driven test covers both sides of exp",
+        }
+        before = self._task_count()
+
+        for flag, long_flag, field in fields:
+            args = ["task", "create", "-r", self.roadmap]
+            for f, v in valid.items():
+                args.extend([f, "   " if f == flag else v])
+            self._refused(args, 6, f"Error: validation error: {field} cannot be empty")
+
+            # The literal empty string, and the flag omitted entirely, both stay
+            # exit 2 naming the flag.
+            empty_args = ["task", "create", "-r", self.roadmap]
+            for f, v in valid.items():
+                empty_args.extend([f, "" if f == flag else v])
+            self._refused(empty_args, 2, f"Error: required parameter missing: {long_flag}")
+
+            omitted = ["task", "create", "-r", self.roadmap]
+            for f, v in valid.items():
+                if f != flag:
+                    omitted.extend([f, v])
+            self._refused(omitted, 2, f"Error: required parameter missing: {long_flag}")
+
+        assert self._task_count() == before, "a refused task create created a task"
+        print("[OK] task create names the field for whitespace and the flag when no value arrived")
+
+    # ---- criterion 5 ---------------------------------------------------
+
+    def test_task_edit_refuses_whitespace_only_values_naming_the_field(self):
+        """Criterion 5: unchanged behaviour, pinned so it stays unchanged."""
+        before = self._task(self.task)
+
+        for flag, field in [
+            ("-t", "title"),
+            ("-fr", "functional_requirements"),
+            ("-tr", "technical_requirements"),
+            ("-ac", "acceptance_criteria"),
+        ]:
+            self._refused(
+                ["task", "edit", "-r", self.roadmap, str(self.task), flag, "   "],
+                6, f"Error: validation error: {field} cannot be empty",
+            )
+
+        after = self._task(self.task)
+        for key in ("title", "functional_requirements", "technical_requirements", "acceptance_criteria"):
+            assert after[key] == before[key], f"a refused task edit changed {key}"
+        print("[OK] task edit refuses a whitespace-only value on all four fields")
+
+    # ---- criterion 6 ---------------------------------------------------
+
+    def test_comment_subcommands_refuse_a_whitespace_only_body_with_exit_two(self):
+        """Criterion 6: the comment body is the one required free-text field
+        whose empty refusal is NOT exit 6.
+
+        A body that is empty once trimmed is the same condition as a body that
+        never arrived, so all four subcommands report a missing parameter under
+        the rule SPEC/COMMANDS.md (Comment Body Input Source and Precedence)
+        already fixes, and this constraint leaves that rule alone.
+        """
+        task_comment = self.test.run_cmd_json([
+            "task", "comment-add", "-r", self.roadmap, str(self.task),
+            "--type", "FINDING", "--body", "The refresh path reuses the access-token clock.",
+        ])["id"]
+        sprint_comment = self.test.run_cmd_json([
+            "sprint", "comment-add", "-r", self.roadmap, str(self.sprint),
+            "--type", "DECISION", "--body", "The sprint closes only once the regression test is green.",
+        ])["id"]
+
+        missing = "Error: required parameter missing: no comment body supplied"
+        for args in [
+            ["task", "comment-add", "-r", self.roadmap, str(self.task), "--type", "FINDING", "--body", "   "],
+            ["task", "comment-edit", "-r", self.roadmap, str(task_comment), "--body", "   "],
+            ["sprint", "comment-add", "-r", self.roadmap, str(self.sprint), "--type", "DECISION", "--body", "   "],
+            ["sprint", "comment-edit", "-r", self.roadmap, str(sprint_comment), "--body", "   "],
+        ]:
+            self._refused(args, 2, missing)
+
+        # The standard-input path reaches the same verdict.
+        env = dict(os.environ, HOME=str(self.test.home_dir))
+        proc = subprocess.run(
+            [self.test.cli_path, "task", "comment-add", "-r", self.roadmap,
+             str(self.task), "--type", "FINDING"],
+            input="   \t \n ", capture_output=True, text=True, env=env,
+        )
+        assert proc.returncode == 2, f"stdin path: expected exit 2, got {proc.returncode}: {proc.stderr!r}"
+        assert missing in proc.stderr, f"stdin path stderr: {proc.stderr!r}"
+
+        bodies = self.test.run_cmd_json(["task", "comment-list", "-r", self.roadmap, str(self.task)])
+        assert len(bodies) == 1, f"a refused comment write changed the log: {bodies}"
+        assert bodies[0]["body"] == "The refresh path reuses the access-token clock."
+        print("[OK] all four comment subcommands refuse a whitespace-only body with exit 2")
+
+    # ---- criterion 7 ---------------------------------------------------
+
+    def test_every_kind_of_whitespace_is_refused_not_only_spaces(self):
+        """Criterion 7: the criterion is what the trim leaves behind, not which
+        whitespace character the caller supplied. TAB, LF, CR, mixtures, and the
+        non-ASCII U+00A0 and U+0085 all count."""
+        for label, value in self.WHITESPACE_ONLY:
+            self._refused(
+                ["sprint", "create", "-r", self.roadmap, "-t", value, "-d", "A real macro goal."],
+                6, "Error: validation error: title cannot be empty",
+            )
+            self._refused(
+                ["sprint", "update", "-r", self.roadmap, str(self.sprint), "-d", value],
+                6, "Error: validation error: description cannot be empty",
+            )
+            args = ["task", "create", "-r", self.roadmap, "-t", value,
+                    "-fr", "A real requirement", "-tr", "A real approach", "-ac", "A real check"]
+            self._refused(args, 6, "Error: validation error: title cannot be empty")
+        print(f"[OK] all {len(self.WHITESPACE_ONLY)} kinds of whitespace are refused")
+
+    # ---- criterion 8 ---------------------------------------------------
+
+    def test_padded_values_are_accepted_and_stored_trimmed(self):
+        """Criterion 8, first half: a value with a non-empty core survives its
+        padding, and what is read back is the trimmed value."""
+        title = "Refresh-token guard"
+        description = "Close the refresh path and lock it behind a regression test."
+
+        sprint_id = self.test.run_cmd_json([
+            "sprint", "create", "-r", self.roadmap,
+            "-t", f"  {title}  ", "-d", f"\t{description}\n",
+        ])["id"]
+        stored = self._sprint(sprint_id)
+        assert stored["title"] == title, f"stored title {stored['title']!r}, want {title!r}"
+        assert stored["description"] == description, f"stored description {stored['description']!r}"
+
+        self.test.run_cmd(["sprint", "update", "-r", self.roadmap, str(sprint_id), "-t", f"   {title} II   "])
+        assert self._sprint(sprint_id)["title"] == f"{title} II"
+
+        task_title = "Reject a refresh token whose exp is the current second"
+        task_id = self.test.run_cmd_json([
+            "task", "create", "-r", self.roadmap,
+            "-t", f"  {task_title}  ", "-fr", "  A real requirement  ",
+            "-tr", "  A real approach  ", "-ac", "  A real check  ",
+        ])["id"]
+        stored_task = self._task(task_id)
+        assert stored_task["title"] == task_title, f"stored task title {stored_task['title']!r}"
+        assert stored_task["functional_requirements"] == "A real requirement"
+        assert stored_task["technical_requirements"] == "A real approach"
+        assert stored_task["acceptance_criteria"] == "A real check"
+
+        self.test.run_cmd(["task", "edit", "-r", self.roadmap, str(task_id), "-t", f"   {task_title} II   "])
+        assert self._task(task_id)["title"] == f"{task_title} II"
+        print("[OK] a padded value is accepted and read back trimmed")
+
+    def test_the_cap_measures_the_trimmed_value(self):
+        """Criterion 8, second half, and the side defect the trim closes.
+
+        Before this change `sprint create` and `sprint update` measured the value
+        AS SUPPLIED, so 255 real characters wrapped in spaces were refused there
+        while `task create` accepted them -- one cap, two answers, for a value the
+        column would have held either way.
+
+        The paired negative case is what stops this being vacuous: one character
+        over the maximum, unpadded, is still refused.
+        """
+        at_limit = "A" * 255
+        over = "A" * 256
+
+        sprint_id = self.test.run_cmd_json([
+            "sprint", "create", "-r", self.roadmap,
+            "-t", f"   {at_limit}   ", "-d", "A real macro goal.",
+        ])["id"]
+        assert self._sprint(sprint_id)["title"] == at_limit
+        self._refused(
+            ["sprint", "create", "-r", self.roadmap, "-t", over, "-d", "A real macro goal."],
+            6, "title exceeds maximum length of 255 characters",
+        )
+
+        self.test.run_cmd(["sprint", "update", "-r", self.roadmap, str(sprint_id), "-t", f" {at_limit} "])
+        self._refused(
+            ["sprint", "update", "-r", self.roadmap, str(sprint_id), "-t", over],
+            6, "title exceeds maximum length of 255 characters",
+        )
+
+        desc_at_limit = "D" * 2048
+        other = self.test.run_cmd_json([
+            "sprint", "create", "-r", self.roadmap,
+            "-t", "Description cap probe", "-d", f"   {desc_at_limit}   ",
+        ])["id"]
+        assert self._sprint(other)["description"] == desc_at_limit
+
+        task_id = self.test.run_cmd_json([
+            "task", "create", "-r", self.roadmap, "-t", f"  {at_limit}  ",
+            "-fr", "A real requirement", "-tr", "A real approach", "-ac", "A real check",
+        ])["id"]
+        assert self._task(task_id)["title"] == at_limit
+        print("[OK] the cap measures the trimmed value on the sprint pair as well as the task pair")
+
+    # ---- criterion 9 ---------------------------------------------------
+
+    def test_a_value_of_only_VT_is_refused_as_a_control_character_not_as_empty(self):
+        """Criterion 9, and the visible signature of the specified ORDER.
+
+        VT is a forbidden control character AND whitespace, so it is refused
+        either way and the exit code is 6 either way. What separates the two
+        possible orders is WHICH rule answers. Asserting a non-zero exit here
+        would prove nothing.
+        """
+        probes = [("only VT", self.VT), ("only FF", self.FF), ("VT among spaces", f"  {self.VT}  ")]
+
+        for label, value in probes:
+            for args, field in [
+                (["sprint", "create", "-r", self.roadmap, "-t", value, "-d", "A real macro goal."], "title"),
+                (["sprint", "create", "-r", self.roadmap, "-t", "A real title", "-d", value], "description"),
+                (["sprint", "update", "-r", self.roadmap, str(self.sprint), "-t", value], "title"),
+                (["sprint", "update", "-r", self.roadmap, str(self.sprint), "-d", value], "description"),
+                (["task", "create", "-r", self.roadmap, "-t", value, "-fr", "A real requirement",
+                  "-tr", "A real approach", "-ac", "A real check"], "title"),
+                (["task", "create", "-r", self.roadmap, "-t", "A real title", "-fr", value,
+                  "-tr", "A real approach", "-ac", "A real check"], "functional_requirements"),
+            ]:
+                exit_code, _, stderr = self.test.run_cmd(args, check=False)
+                assert exit_code == 6, f"{label}: expected exit 6, got {exit_code}: {stderr!r}"
+                assert self.CONTROL_REFUSAL in stderr, (
+                    f"{label} on {' '.join(args[:2])} was refused as EMPTY rather than as a control "
+                    f"character: the trim ran ahead of the control-character check (CWE-150)\n"
+                    f"  stderr: {stderr!r}"
+                )
+                assert f"{field}: {self.CONTROL_REFUSAL}" in stderr, f"wrong field named: {stderr!r}"
+        print("[OK] a value made only of VT or FF is refused as a control character, never as empty")
+
+    def test_a_leading_or_trailing_VT_or_FF_is_refused_not_discarded(self):
+        """Criterion 9, the half that carries the security consequence: the value
+        has real content, so the trim-first order does not refuse it at all -- it
+        strips the forbidden character and stores the rest with exit 0."""
+        content = "Deliver the refresh-token guard"
+        edges = [
+            ("leading VT", self.VT + content),
+            ("trailing VT", content + self.VT),
+            ("leading FF", self.FF + content),
+            ("trailing FF", content + self.FF),
+        ]
+        for label, value in edges:
+            for args in [
+                ["sprint", "create", "-r", self.roadmap, "-t", value, "-d", "A real macro goal."],
+                ["sprint", "update", "-r", self.roadmap, str(self.sprint), "-d", value],
+                ["task", "create", "-r", self.roadmap, "-t", value, "-fr", "A real requirement",
+                 "-tr", "A real approach", "-ac", "A real check"],
+            ]:
+                exit_code, stdout, stderr = self.test.run_cmd(args, check=False)
+                assert exit_code == 6, (
+                    f"{label} on {' '.join(args[:2])}: expected exit 6, got {exit_code}. "
+                    f"The character was discarded in silence (CWE-150). stdout: {stdout!r}"
+                )
+                assert self.CONTROL_REFUSAL in stderr, f"{label}: stderr {stderr!r}"
+        print("[OK] a leading or trailing VT or FF is refused, not silently discarded")
+
+    def test_the_completion_summary_is_stored_trimmed_and_refuses_a_control_character(self):
+        """completion_summary is the one free-text field Rule 1 does not govern
+        -- it is optional -- but Rule 2 and the ORDER both apply to it.
+
+        The order matters here for the same reason: this path used to trim the
+        value at flag-extraction time, so a leading VT was gone before the
+        control-character rule ever saw it and the summary was stored with the
+        byte discarded and exit code 0.
+        """
+        summary = "Closed the boundary second and covered it with a table-driven test."
+
+        self.test.run_cmd(["sprint", "add-tasks", "-r", self.roadmap, str(self.sprint), str(self.task)])
+        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(self.task), "DOING",
+                           *commit_flags_for("DOING")])
+        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(self.task), "TESTING"])
+
+        self._refused(
+            ["task", "stat", "-r", self.roadmap, str(self.task), "COMPLETED",
+             *commit_flags_for("COMPLETED"), "--summary", self.VT + summary],
+            6, f"completion_summary: {self.CONTROL_REFUSAL}",
+        )
+
+        self.test.run_cmd(["task", "stat", "-r", self.roadmap, str(self.task), "COMPLETED",
+                           *commit_flags_for("COMPLETED"), "--summary", f"   {summary}   "])
+        assert self._task(self.task)["completion_summary"] == summary, (
+            f"completion_summary stored as {self._task(self.task)['completion_summary']!r}"
+        )
+        print("[OK] completion_summary is stored trimmed and refuses a leading control character")
 
 
 if __name__ == "__main__":

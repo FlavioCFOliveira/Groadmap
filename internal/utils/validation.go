@@ -45,6 +45,64 @@ func ValidateFreeText(value string, field Field) error {
 	return ValidateNoControlChars(value, field)
 }
 
+// TrimFreeText applies steps 1 and 2 of the sequence SPEC/MODELS.md § Free-Text
+// Emptiness and Trimming Constraint fixes for a free-text value, and returns the
+// value to store: the encoding rule and the control-character rule on the value
+// AS SUPPLIED, and only then the trim.
+//
+// It is the whole of the constraint for the one free-text field that is optional,
+// `completion_summary`, which Rule 2 governs and Rule 1 does not. Every required
+// field goes through RequireFreeText below, which adds step 3.
+//
+// # Why the trim cannot come first
+//
+// The order is the reason this helper exists at all. VT (0x0B) and FF (0x0C) are
+// forbidden by the control-character rule AND are whitespace to
+// strings.TrimSpace, so trimming first hands the check a value the offending
+// character has already been removed from: the input is accepted, the character
+// is discarded in silence, and the CWE-150 guard fails at the position where such
+// a character is easiest to hide. Writing the sequence once, here, is what stops
+// each call site from having to get it right on its own — and what makes the
+// single observable signature of the correct order, a value made only of VT
+// refused as a CONTROL CHARACTER and never as empty, hold everywhere at once.
+//
+// The length cap is deliberately NOT part of this helper. Where the cap runs
+// relative to these two rules differs per command, SPEC/COMMANDS.md leaves that
+// order to each command's own section, and rmp task 302 is what settles it; a cap
+// folded in here would silently move it on half the paths. What the SPEC does fix
+// is WHAT the cap measures — the trimmed value, the same value stored — so a
+// caller whose cap runs before the content rules measures strings.TrimSpace of
+// the value it is about to pass in.
+func TrimFreeText(value string, field Field) (string, error) {
+	if err := ValidateFreeText(value, field); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(value), nil
+}
+
+// RequireFreeText is TrimFreeText plus step 3: the emptiness judgement, applied
+// to the TRIMMED value, for one of the seven free-text fields that are required
+// to be non-empty (SPEC/MODELS.md § Free-Text Emptiness and Trimming Constraint,
+// Rule 1). It returns the value to store, or the first refusal.
+//
+// A value made only of whitespace leaves nothing behind and counts as absent, so
+// it is refused with FieldEmptyError — naming the FIELD, because a value did
+// reach the application and broke a rule about its content. The absence of a
+// required flag is the other case entirely and keeps the flag's own spelling; a
+// caller that has such a flag decides that question BEFORE calling this, against
+// the value as supplied (SPEC/COMMANDS.md § Emptiness Constraint (All Required
+// Free-Text Fields)).
+func RequireFreeText(value string, field Field) (string, error) {
+	trimmed, err := TrimFreeText(value, field)
+	if err != nil {
+		return "", err
+	}
+	if trimmed == "" {
+		return "", FieldEmptyError(field)
+	}
+	return trimmed, nil
+}
+
 // ValidateUTF8 rejects a value whose bytes are not a well-formed UTF-8 sequence,
 // returning an ErrValidation-wrapped error (exit 6) and nil otherwise. It
 // enforces SPEC/MODELS.md § Free-Text UTF-8 Encoding Constraint, which defines

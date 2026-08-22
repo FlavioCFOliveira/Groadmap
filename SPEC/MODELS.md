@@ -409,6 +409,121 @@ tripped by an input the application accepted: they are an independent backstop, 
 the operative check. Neither count is to be brought into line with the other on the
 strength of this rule.
 
+**Free-Text Emptiness and Trimming Constraint:**
+
+Two rules govern the whitespace at the edges of a free-text value. They answer
+different questions, and this specification keeps them apart on purpose: a change to
+one is not a change to the other, and an implementation can satisfy either one while
+breaking the other.
+
+**Rule 1 — when a required field is judged empty: after trimming.** A free-text field
+that is required to be non-empty is judged against the value that remains once
+leading and trailing whitespace has been removed. A value made only of whitespace
+leaves nothing behind and counts as absent, so the command refuses it, stores nothing,
+and changes no entity. The rule governs the seven free-text fields that are required
+to be non-empty:
+
+1. Task `Title`, `FunctionalRequirements`, `TechnicalRequirements`, and
+   `AcceptanceCriteria`.
+2. Sprint `Title` and `Description`.
+3. The `Body` of `TaskComment` and `SprintComment`.
+
+Task `CompletionSummary` is the one free-text field Rule 1 does not govern, and the
+reason is that the field is optional: `task stat` accepts a transition to `COMPLETED`
+that supplies no `--summary` at all, so a supplied value that is empty after trimming
+is a summary the caller chose not to write rather than a violation. Rule 2 below
+still governs it.
+
+Rule 1 binds every command that writes one of the seven fields, and it does not vary
+between them. `task create` and `task edit` judge a task field by this criterion
+alike; `sprint create` and `sprint update` judge a sprint field by it alike; the four
+comment subcommands judge a `Body` by it alike. What varies is the refusal, not the
+criterion: `task create`, `task edit`, `sprint create`, and `sprint update` refuse
+with exit code 6 and a message naming the field, while the comment `Body` is refused
+with exit code 2 under a rule of its own that predates this constraint and that this
+constraint leaves untouched (`COMMANDS.md § Comment Body Input Source and
+Precedence`). `COMMANDS.md § Emptiness Constraint (All Required Free-Text Fields)` is
+canonical for every refusal; this constraint is canonical for the criterion.
+
+**Rule 2 — what is stored: the trimmed value.** The application removes leading and
+trailing whitespace before the value reaches the database. This holds for all eight
+free-text fields, `CompletionSummary` included, and on every command that writes one.
+The stored value is therefore not the value as supplied whenever the two differ, and
+two callers who supply the same text with different surrounding whitespace store the
+same value. Interior whitespace is never altered: no line break, and no interior run
+of spaces, is removed or collapsed by this rule. A comment body is expected to be
+multi-line and survives as written (see `COMMANDS.md § Comment Body Input Source and
+Precedence`).
+
+One consequence of Rule 2 is required and MUST be preserved: **the field's maximum
+length is measured on the trimmed value**, which is the same value the database
+stores. A value of exactly the maximum length carrying surrounding whitespace is
+therefore accepted, and what the application counted is what the column holds.
+Measuring the value as supplied instead would refuse an input that the stored value
+would have accommodated, and would leave the count the application checked different
+from the count in the column — the same class of divergence between what the caller
+supplied, what the database stores, and what a reader is shown that the Free-Text
+UTF-8 Encoding Constraint above exists to close. Rule 2 fixes **what** the length
+check measures. It fixes nothing about **when** that check runs relative to the other
+checks, which each command's own section in `COMMANDS.md` states.
+
+**Order, and why a single trim is not enough.** The value is examined at two separate
+points, and exactly one trim falls between them. The sequence is:
+
+1. The Free-Text UTF-8 Encoding Constraint, and immediately after it the Free-Text
+   Control-Character Constraint, are applied to the value **as the caller supplied
+   it**, before any whitespace is removed.
+2. The value is trimmed.
+3. Rule 1 is applied to the **trimmed** value.
+
+Step 1 MUST NOT be moved after step 2, and the reason is specific rather than
+stylistic. VT (`0x0B`, line tabulation) and FF (`0x0C`, form feed) are forbidden
+control characters under the Free-Text Control-Character Constraint above, and they
+are also whitespace under the definition the trim applies. Trimming first removes a
+leading or trailing VT or FF, and the control-character check then examines a value
+from which the forbidden character has already vanished: the input is accepted, the
+character is discarded in silence, and the protection against terminal escape-sequence
+injection (CWE-150) that the constraint exists to provide fails at exactly the
+position where such a character is easiest to hide. Applying the encoding and
+control-character checks to the value as supplied is what closes that hole, and this
+constraint does not move them.
+
+**Both facts hold at the same time, and neither weakens the other: emptiness is
+judged after a trim, and control characters are judged before it.** The reading to
+avoid is the intuitive one — trim once on the way in, then run every check on the
+result. That reading satisfies Rule 1 and breaks the Control-Character Constraint.
+The sequence above is the one that satisfies both, and any validator written or
+refactored for one of these fields MUST implement it.
+
+One observable consequence follows, and a test MUST pin it: a value whose only
+content is a forbidden control character that the trim would also remove — a value
+consisting solely of VT, for instance — is refused as a control-character violation
+and **not** as an empty value, because the control-character check reaches it first.
+That refusal is the visible signature of the order being correct, and it changes the
+moment the trim moves ahead of the check.
+
+**Acceptance criteria:**
+
+1. For each of the seven fields Rule 1 governs, and on each command that writes it, a
+   value made only of spaces is refused and the entity is neither created nor changed.
+   The exit code is 6 for the task and sprint fields and 2 for the comment `Body`, as
+   `COMMANDS.md § Emptiness Constraint (All Required Free-Text Fields)` states.
+2. The same is true of a value made only of TAB, of LF, of CR, of any mixture of them,
+   or of a whitespace character outside ASCII such as `U+00A0` (no-break space) or
+   `U+0085` (NEL): the criterion is what the trim leaves behind, not which whitespace
+   character the caller supplied.
+3. On every command that writes a free-text field, a value carrying surrounding
+   whitespace and a non-empty core is accepted, and the value read back afterwards is
+   the trimmed one.
+4. A value of exactly a field's maximum length carrying surrounding whitespace is
+   accepted on every command that writes that field.
+5. A value carrying a leading or trailing VT or FF is refused with exit code 6 as a
+   control-character violation on every command that writes a free-text field, and
+   the refusal names the control-character rule and not the emptiness rule.
+6. A value consisting solely of VT is refused as a control-character violation, not
+   as an empty value.
+7. Moving the control-character check onto the trimmed value fails at least one test.
+
 ```go
 // Task represents a task in the roadmap.
 // Field order optimized for memory layout (248 bytes, zero padding on 64-bit systems).
@@ -475,8 +590,8 @@ type Sprint struct {
 
 #### Sprint Field Constraints
 
-- `Title`: Required (NOT NULL), maximum 255 characters. Same cap as the task `Title` field. Subject to the Free-Text Control-Character Constraint and the Free-Text UTF-8 Encoding Constraint above.
-- `Description`: Required (NOT NULL), maximum 2048 characters. Subject to the Free-Text Control-Character Constraint and the Free-Text UTF-8 Encoding Constraint above. This field is the canonical statement of the sprint's purpose, and it carries the following semantics on every command that writes it (`sprint create` and `sprint update`):
+- `Title`: Required (NOT NULL), maximum 255 characters. Same cap as the task `Title` field. Subject to the Free-Text Control-Character Constraint, the Free-Text UTF-8 Encoding Constraint, and the Free-Text Emptiness and Trimming Constraint above, so a value that is empty after trimming is refused on `sprint create` and `sprint update` alike, and the value stored is the trimmed one.
+- `Description`: Required (NOT NULL), maximum 2048 characters. Subject to the Free-Text Control-Character Constraint, the Free-Text UTF-8 Encoding Constraint, and the Free-Text Emptiness and Trimming Constraint above, on the same terms as the sprint `Title`. This field is the canonical statement of the sprint's purpose, and it carries the following semantics on every command that writes it (`sprint create` and `sprint update`):
   - The `Description` MUST state the high-level (macro) goal of the development effort that the sprint delivers: a new development, a fix, a refactoring, or another kind of change.
   - Together with the sprint `Title`, the `Description` MUST give a human reader or an AI agent a clear macro idea of what the sprint's tasks are specifically aimed at.
   - The `Description` states the macro goal only. Detailed scope, technical detail, and acceptance conditions do not belong in the `Description`: the tasks that compose the sprint specify them in full, through their `FunctionalRequirements`, `TechnicalRequirements`, and `AcceptanceCriteria` fields (see the `Task` model above).
@@ -494,7 +609,7 @@ Maps to the `task_comments` table and the `TaskComment` JSON object.
 A `TaskComment` is one entry in the durable log attached to a task. The log records exclusively the work carried out within the scope of that task: findings, hypotheses raised and tested, tests run, decisions taken, progress, the reason behind a change to the task's definition, and notes. Read oldest-first, the log shows how the work on that task progressed.
 
 **Field Length Constraints:**
-- `Body`: Required, minimum 1 character after trimming, maximum 4096 characters (`models.MaxCommentBody`)
+- `Body`: Required, minimum 1 character after trimming, maximum 4096 characters (`models.MaxCommentBody`). Both bounds are measured on the trimmed value (Free-Text Emptiness and Trimming Constraint above).
 
 ```go
 // TaskComment represents one comment attached to a task.
@@ -512,7 +627,7 @@ type TaskComment struct {
 #### Task Comment Field Constraints
 
 - `Type`: Required. One of `ValidTaskCommentTypes`. There is no default: a comment without a type is rejected before it reaches the database. See [Comment Type](#comment-type).
-- `Body`: Required, maximum 4096 characters. Leading and trailing whitespace is trimmed before validation; a value that is empty after trimming counts as absent. Subject to the Free-Text Control-Character Constraint and the Free-Text UTF-8 Encoding Constraint above, so the body may contain TAB, LF, and CR but no other control character, and its bytes must be valid UTF-8.
+- `Body`: Required, maximum 4096 characters. Subject to the Free-Text Control-Character Constraint, the Free-Text UTF-8 Encoding Constraint, and the Free-Text Emptiness and Trimming Constraint above, so the body may contain TAB, LF, and CR but no other control character, its bytes must be valid UTF-8, a value that is empty after trimming counts as absent, and the value stored is the trimmed one. The `Body` is the one required free-text field whose refusal of an empty value is not exit code 6: it is refused with exit code 2, under a rule of its own that predates this constraint (see `COMMANDS.md § Comment Body Input Source and Precedence`).
 - `CreatedAt`: Set by the application when the comment is created and never modified afterwards.
 - `UpdatedAt`: `null` while the comment has never been edited. Every edit sets it to the edit's timestamp, so a reader can see that the stored text is no longer the text originally written. The previous text is not retained and is not recoverable; the audit log records that the edit happened, not what was replaced (see `DATABASE.md § audit Table`).
 - `ID`: Unique within `task_comments` only. Task comment ids and sprint comment ids are independent sequences.
@@ -530,7 +645,7 @@ Maps to the `sprint_comments` table and the `SprintComment` JSON object.
 A `SprintComment` is one entry in the durable log attached to a sprint. The log records only the progression of the work during the sprint's development: findings, decisions, progress, and the reason behind a change to the sprint's definition. Detailed per-task work belongs in that task's own comments.
 
 **Field Length Constraints:**
-- `Body`: Required, minimum 1 character after trimming, maximum 4096 characters (`models.MaxCommentBody`)
+- `Body`: Required, minimum 1 character after trimming, maximum 4096 characters (`models.MaxCommentBody`). Both bounds are measured on the trimmed value (Free-Text Emptiness and Trimming Constraint above).
 
 ```go
 // SprintComment represents one comment attached to a sprint.
