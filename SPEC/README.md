@@ -102,6 +102,8 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Audit entry JSON shape (seven keys, two nullable) | `DATA_FORMATS.md § Audit Entry` |
 | Audit log append-only guarantee | `ARCHITECTURE.md § Security Guarantees` |
 | Audit help surfaces (operation list, LEGACY marking, output keys) | `HELP.md § Audit family help specifics` |
+| Audit operation entity type (which entity each operation is recorded against, why it is declared rather than read off the operation's name, and the gate that fails on an unclassified operation) | `HELP.md § Audit operation entity-type classification` |
+| Audit operation `entity_type` and `legacy` members of the AI Agent Contract enum | `DATA_FORMATS.md § enums map entry` |
 | Concurrency (WAL, pool, retry) | `IMPLEMENTATION.md § Concurrency Model` |
 | Query caching | `IMPLEMENTATION.md § Query Caching` |
 | Performance practices | `IMPLEMENTATION.md § Performance Considerations` |
@@ -159,6 +161,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Sprint state transitions | `STATE_MACHINE.md § Sprint State Machine` |
 | Sprint membership versus task status | `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` |
 | Audit operations catalogue | `DATABASE.md § audit Table` |
+| Audit operation entity-type classification and LEGACY marking (the single declaration both published help surfaces render from) | `HELP.md § Audit operation entity-type classification` |
 | SQL DDL (table definitions, indexes, constraints) | `DATABASE.md` |
 | In-sprint task order and the uniqueness of `sprint_tasks.position` | `DATABASE.md § Position Uniqueness Within a Sprint` |
 | Introducing a uniqueness constraint over rows that already exist | `DATABASE.md § Introducing a Uniqueness Constraint over Existing Rows` |

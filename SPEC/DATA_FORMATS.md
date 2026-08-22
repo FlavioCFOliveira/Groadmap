@@ -914,8 +914,8 @@ a sprint rejects (see `HELP.md § Comment subcommand help specifics`).
 
 **The audit enums are published in full.** `AuditOperation` carries every value in
 `ValidAuditOperations` — the canonical catalogue of `DATABASE.md § audit Table` — and
-`AuditEntityType` carries `TASK` and `SPRINT`. Two rules apply to `AuditOperation`
-specifically:
+`AuditEntityType` carries `TASK` and `SPRINT`. Four rules apply to
+`AuditOperation` specifically:
 
 1. **No value is omitted.** `audit list --operation` accepts exactly the values in
    this enum, so a value missing from the contract is a filter an agent cannot
@@ -926,16 +926,69 @@ specifically:
    agent that reads only the value list would otherwise choose a LEGACY operation
    when composing a filter for current activity and get an empty result with no
    explanation.
+3. **Every value names the entity it is recorded against.** Each element of
+   `AuditOperation.values` carries an `entity_type` member holding `TASK` or
+   `SPRINT`: the value an audit entry's own `entity_type` field holds on a row
+   carrying that operation (see `§ Audit Entry`). The member is present on every
+   value of this enum, and is never `null` and never empty. Without it an agent
+   composing an `audit list` filter cannot tell whose history an operation belongs
+   to, and the only thing left to infer it from is the operation's name;
+   `HELP.md § Audit operation entity-type classification` states why that
+   inference is not permitted and what both published surfaces read instead.
+
+   The entity type cannot travel inside `description`. That string carries the
+   catalogue entry's own text from `DATABASE.md § audit Table`, so it says what the
+   catalogue says and nothing more, and prose is not a member a consumer can read a
+   value from without parsing it.
+
+4. **Every value states whether a command still writes it.** Each element of
+   `AuditOperation.values` carries a `legacy` member holding a boolean: `true` on
+   the four LEGACY values rule 2 governs, `false` on every other value. The member
+   is present on every value of this enum, and is never `null`. The member and the
+   `description` state the same fact and MUST agree: a value carrying `true` is a
+   value whose description says no command writes it.
+
+   Both forms are required because they serve different consumers, and the prose
+   form alone does not serve the second one. Rule 2's sentence explains to a reader
+   why the operation returns nothing and which operations to filter instead.
+   `--ai-help` exists to be read by machine, and recovering the LEGACY status from
+   that sentence makes a consumer depend on wording this specification is free to
+   change, so the same fact travels separately in a member the consumer can test.
+   An agent composing a filter over the operations still in use reads one field
+   rather than searching a string.
+
+   `legacy` and `entity_type` come from the same single declaration, the one
+   `HELP.md § Audit operation entity-type classification` rule 2 requires and which
+   carries both facts. The contract derives neither of them from the value's name
+   and neither of them from its `description`.
 
 ```json
 "AuditOperation": {
   "values": [
-    {"value": "TASK_STATUS_DOING",     "description": "A task entered DOING. The entry carries the commit the work started from."},
-    {"value": "TASK_STATUS_CHANGE",    "description": "LEGACY. No command writes this. It survives on entries written before status operations named their destination; filter TASK_STATUS_BACKLOG, TASK_STATUS_SPRINT, TASK_STATUS_DOING, TASK_STATUS_TESTING, or TASK_STATUS_COMPLETED for current activity."}
+    {"value": "TASK_STATUS_DOING",     "entity_type": "TASK",   "legacy": false, "description": "A task entered DOING. The entry carries the commit the work started from."},
+    {"value": "SPRINT_ADD_TASK",       "entity_type": "SPRINT", "legacy": false, "description": "Task added to a sprint via `sprint add-tasks`; one row per task, against the sprint, naming the task in `related_entity_id`."},
+    {"value": "TASK_STATUS_CHANGE",    "entity_type": "TASK",   "legacy": true,  "description": "LEGACY. No command writes this. It survives on entries written before status operations named their destination; filter TASK_STATUS_BACKLOG, TASK_STATUS_SPRINT, TASK_STATUS_DOING, TASK_STATUS_TESTING, or TASK_STATUS_COMPLETED for current activity."}
   ],
   "catalogue_reference": "DATABASE.md § audit Table"
 }
 ```
+
+**`entity_type` and `legacy` appear only where they apply.** Each is a member of an
+`enums[].values[]` element, not a member every such element carries: each is present
+on every value of `AuditOperation` and absent from the values of every other enum.
+This follows the convention the contract already uses for members that do not
+apply to an entry, where `commands[].flags[]` omits `range`, `min_length`, and
+`max_length` rather than publishing them as `null`. Absent is the right form here
+rather than `null`: a `TaskStatus` value is not recorded against an entity at all
+and no `TaskStatus` value is LEGACY, so keys whose values would be `null` on every
+enum but this one would suggest that the contract has a general notion of an enum
+value's entity and a general notion of an enum value's LEGACY status, and it has
+neither.
+
+Adding these members widens a published contract, which is a deliberate change and
+not a detail. A consumer that reads the members it knows is unaffected; a consumer
+that enumerates members sees exactly two new keys, both on the values of exactly
+one enum.
 
 **Every published value carries a description.** Each element of `values` MUST
 carry a `description` that is not empty after trimming whitespace. The rule

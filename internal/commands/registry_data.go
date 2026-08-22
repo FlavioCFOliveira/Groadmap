@@ -340,14 +340,14 @@ func buildAuditCommand() Command {
 				},
 				Output: SuccessOutput{
 					Kind:   "array",
-					Schema: "Array of audit entries: {id, operation, entity_type, entity_id, performed_at}.",
+					Schema: "Array of audit entries: {id, operation, entity_type, entity_id, performed_at, related_entity_id, commit_hash}. All seven keys are always present and never omitted. related_entity_id is the counterpart entity of the operation that produced the entry, and is null when the operation has no counterpart; commit_hash is set on TASK_STATUS_DOING and TASK_STATUS_COMPLETED alone and is null otherwise. Neither can be filtered on.",
 				},
 				SideEffects: SideEffects{Database: "Read-only.", Filesystem: "None.", Network: "None."},
 				Idempotent:  true,
 				ExitCodes:   []int{0, 3, 6},
 				Examples: []Example{
 					{Title: "All audit entries", Cmd: "rmp audit list -r myproject", Exit: 0},
-					{Title: "Filter by operation", Cmd: "rmp audit list -r myproject -o TASK_STATUS_CHANGE -e TASK", Exit: 0},
+					{Title: "Filter by operation", Cmd: "rmp audit list -r myproject -o TASK_STATUS_DOING -e TASK", Exit: 0},
 					{Title: "Invalid operation filter", Cmd: "rmp audit list -r myproject -o BOGUS_OP", Stderr: "Error: validation error: invalid operation: BOGUS_OP", Exit: 6},
 				},
 			},

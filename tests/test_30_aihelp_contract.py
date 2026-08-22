@@ -934,6 +934,308 @@ class TestAIHelpContractExitExamples:
         )
 
 
+class TestAIHelpAuditOperationMembers:
+    """Rules 3 and 4 of SPEC/DATA_FORMATS.md § enums map entry, at binary level.
+
+    Every value of the AuditOperation enum carries an `entity_type` member
+    holding TASK or SPRINT: the value an audit entry's own entity_type field
+    holds on a row carrying that operation. Without it an agent composing an
+    `audit list` filter cannot tell whose history the filter returns, and the
+    only thing left to infer it from is the operation's name.
+
+    Every value also carries a `legacy` boolean: true on the four values no
+    command writes, false on every other value. Both members appear ONLY where
+    they apply: both are absent from the values of every other enum, following
+    the convention the contract already uses where `commands[].flags[]` omits
+    `range`, `min_length` and `max_length` rather than publishing them as null.
+    """
+
+    # The four values the catalogue accepts but no command writes.
+    LEGACY_OPERATIONS = {"TASK_STATUS_CHANGE", "TASK_UPDATE", "SPRINT_UPDATE", "SPRINT_MOVE_TASK"}
+
+    # The marking rule 2 puts at the head of a LEGACY value's own description.
+    LEGACY_DESCRIPTION_PREFIX = "LEGACY."
+
+    def setup_method(self):
+        self.test = GroadmapTestBase()
+        self.test.setup()
+        self.cli = self.test.cli_path
+
+    def teardown_method(self):
+        self.test.teardown()
+
+    def _enums(self):
+        _, out, _ = _run_raw(self.cli, ["--ai-help"])
+        doc = json.loads(out)
+        enums = doc["enums"]
+        assert isinstance(enums, dict) and enums, "the contract publishes no enums map"
+        return enums
+
+    def test_every_audit_operation_value_carries_an_entity_type(self):
+        """Present on every value, never null, never empty, always TASK or SPRINT."""
+        enums = self._enums()
+        values = enums["AuditOperation"]["values"]
+        assert len(values) >= 40, f"only {len(values)} audit operations published"
+
+        checked = 0
+        for entry in values:
+            name = entry["value"]
+            assert "entity_type" in entry, (
+                f"enums.AuditOperation {name} carries no entity_type member; an agent cannot tell "
+                f"whose history `audit list --operation {name}` returns"
+            )
+            got = entry["entity_type"]
+            assert got in ("TASK", "SPRINT"), (
+                f"enums.AuditOperation {name} publishes entity_type {got!r}; the audit table's CHECK "
+                f"admits exactly TASK and SPRINT"
+            )
+            checked += 1
+
+        assert checked == len(values), (
+            f"only {checked} of {len(values)} values were checked; a loop that stops matching reports "
+            f"success while measuring nothing"
+        )
+        print(f"✓ all {checked} AuditOperation values publish an entity_type of TASK or SPRINT")
+
+    def test_entity_type_appears_on_no_other_enum(self):
+        """A TaskStatus value is not recorded against an entity at all.
+
+        Absent is the right form rather than null: a key that was null on every
+        enum but this one would suggest the contract has a general notion of an
+        enum value's entity, which it does not.
+        """
+        enums = self._enums()
+        others = 0
+        for name, definition in enums.items():
+            if name == "AuditOperation":
+                continue
+            others += 1
+            for entry in definition["values"]:
+                assert "entity_type" not in entry, (
+                    f"enums.{name} value {entry['value']!r} carries an entity_type member; the member "
+                    f"belongs to AuditOperation alone"
+                )
+        assert others >= 5, (
+            f"only {others} enums other than AuditOperation were examined, so the 'appears only where "
+            f"it applies' half of rule 3 measured almost nothing"
+        )
+        print(f"✓ entity_type is absent from the values of all {others} other enums")
+
+    def test_entity_type_agrees_with_the_audit_rows_actually_written(self):
+        """Rule 4: a declaration states what the writer writes, observed on a row.
+
+        The classification is a claim about stored data. This drives a spread of
+        mutating commands, reads the rows back out of the audit log, and
+        requires the entity_type of every row to equal the entity_type the
+        contract publishes for that row's operation.
+        """
+        enums = self._enums()
+        declared = {v["value"]: v["entity_type"] for v in enums["AuditOperation"]["values"]}
+
+        roadmap = self.test.create_roadmap()
+        task = self.test.create_task(
+            roadmap, "Prove the classification against real rows",
+            "A declared entity type must match the writer",
+            "Drive the writers and read the rows back",
+            "Every observed row agrees with the contract",
+        )
+        blocker = self.test.create_task(
+            roadmap, "Land the shared declaration first",
+            "The classification has one home",
+            "Declare it beside the operation constants",
+            "Both surfaces render from it",
+        )
+        sprint_a = self.test.create_sprint(roadmap, "Classification rollout")
+        sprint_b = self.test.create_sprint(roadmap, "Classification follow-up")
+
+        self.test.run_cmd(["task", "edit", "-r", roadmap, str(task), "-t", "Prove it against real rows"])
+        self.test.run_cmd(["task", "add-dep", "-r", roadmap, str(task), str(blocker)])
+        self.test.run_cmd(["task", "remove-dep", "-r", roadmap, str(task), str(blocker)])
+        self.test.run_cmd(["sprint", "update", "-r", roadmap, str(sprint_a), "-d", "Classification rollout, restated"])
+        self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint_a), str(task)])
+        self.test.run_cmd(["sprint", "move-tasks", "-r", roadmap, str(sprint_a), str(sprint_b), str(task)])
+        self.test.run_cmd(["sprint", "remove-tasks", "-r", roadmap, str(sprint_b), str(task)])
+        self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint_a)])
+        self.test.run_cmd([
+            "task", "comment-add", "-r", roadmap, str(task),
+            "--type", "NOTE", "-b", "Observed against a real audit row.",
+        ])
+
+        rows = self.test.run_cmd_json(["audit", "list", "-r", roadmap, "-l", "500"])
+        assert len(rows) >= 12, f"only {len(rows)} audit rows were written, so the sweep did not run"
+
+        seen = set()
+        for row in rows:
+            op = row["operation"]
+            assert op in declared, f"the audit log holds {op}, which the contract does not publish"
+            assert row["entity_type"] == declared[op], (
+                f"a real audit row carrying {op} holds entity_type {row['entity_type']!r} but the "
+                f"contract declares {declared[op]!r}; the declaration is a claim about stored data "
+                f"and this row falsifies it"
+            )
+            seen.add(op)
+
+        assert len(seen) >= 10, (
+            f"only {len(seen)} distinct operations were observed; the sweep is no longer exercising a "
+            f"spread of writers and this check has stopped proving much"
+        )
+        # Both entity types must be represented, or the check could pass with a
+        # classification that collapsed onto one of them.
+        entities = {row["entity_type"] for row in rows}
+        assert entities == {"TASK", "SPRINT"}, (
+            f"the observed rows cover {sorted(entities)}; a sweep that reaches only one entity cannot "
+            f"detect a classification collapsed onto it"
+        )
+        print(f"✓ {len(seen)} operations observed on real rows agree with the published entity_type")
+
+
+    def test_every_audit_operation_value_publishes_a_legacy_flag(self):
+        """Rule 4: present on every value, a real boolean, never null.
+
+        The false half is the one worth stating. The member is published from a
+        pointer precisely so that false survives serialisation; a plain boolean
+        with `omitempty` would drop the key from all 39 operations still in use
+        and leave their status to be inferred from an absence, which is the
+        inference the member exists to remove.
+        """
+        enums = self._enums()
+        values = enums["AuditOperation"]["values"]
+
+        trues, falses = set(), set()
+        for entry in values:
+            name = entry["value"]
+            assert "legacy" in entry, (
+                f"enums.AuditOperation {name} carries no legacy member; a consumer filtering for the "
+                f"operations still in use would have to search the description prose for the word LEGACY"
+            )
+            got = entry["legacy"]
+            assert isinstance(got, bool), (
+                f"enums.AuditOperation {name} publishes legacy={got!r} ({type(got).__name__}); the "
+                f"member is a boolean and is never null"
+            )
+            (trues if got else falses).add(name)
+
+        assert trues == self.LEGACY_OPERATIONS, (
+            f"the contract marks {sorted(trues)} as legacy; the four values no command writes are "
+            f"{sorted(self.LEGACY_OPERATIONS)}"
+        )
+        assert falses, (
+            "no value published legacy=false, so the member is being omitted on the operations still "
+            "in use — exactly what a boolean with omitempty would do"
+        )
+        assert len(trues) + len(falses) == len(values), (
+            f"{len(trues) + len(falses)} of {len(values)} values were classified"
+        )
+        print(f"✓ legacy published on all {len(values)} values: {len(trues)} true, {len(falses)} false")
+
+    def test_legacy_flag_agrees_with_the_description_marking(self):
+        """Rule 4: the member and the description state the same fact and must agree.
+
+        They exist for different readers — the prefix is prose for a human, the
+        member is a field for a machine — which is exactly why they can drift. A
+        value marked in one and not the other tells a person and a program
+        opposite things about whether the operation is still being recorded.
+        """
+        enums = self._enums()
+        values = enums["AuditOperation"]["values"]
+
+        compared = 0
+        marked = 0
+        for entry in values:
+            name, flag, desc = entry["value"], entry["legacy"], entry["description"]
+            has_prefix = desc.startswith(self.LEGACY_DESCRIPTION_PREFIX)
+            if has_prefix:
+                marked += 1
+            assert flag == has_prefix, (
+                f"enums.AuditOperation {name}: legacy={flag} but the description "
+                f"{'opens' if has_prefix else 'does not open'} with "
+                f"{self.LEGACY_DESCRIPTION_PREFIX!r}. One of the two is wrong, and a consumer reading "
+                f"the other one is being misled.\n  description: {desc}"
+            )
+            compared += 1
+
+        assert compared == len(values), f"{compared} of {len(values)} values were compared"
+        assert 0 < marked < len(values), (
+            f"{marked} of {len(values)} descriptions carry the LEGACY marking; with none or all of "
+            f"them marked the agreement above holds without ever comparing both branches"
+        )
+        print(f"✓ the legacy member agrees with the description marking on all {compared} values")
+
+    def test_legacy_flag_agrees_with_what_the_audit_log_records(self):
+        """Rule 4 against real rows: nothing marked legacy is actually written.
+
+        The two checks above compare the contract with itself. This one drives a
+        spread of mutating commands and reads the audit log back: an operation
+        published as legacy must not appear among the rows, and operations
+        published as not legacy must. Without this half, a contract could be
+        perfectly self-consistent and still describe a catalogue that moved on.
+        """
+        enums = self._enums()
+        legacy_flags = {v["value"]: v["legacy"] for v in enums["AuditOperation"]["values"]}
+
+        roadmap = self.test.create_roadmap()
+        task = self.test.create_task(
+            roadmap, "Publish the LEGACY marking as a field",
+            "Agents should test a field, not grep a sentence",
+            "Carry the marking in the same declaration as the entity type",
+            "The member and the description agree",
+        )
+        sprint_a = self.test.create_sprint(roadmap, "Legacy marking rollout")
+        sprint_b = self.test.create_sprint(roadmap, "Legacy marking follow-up")
+
+        self.test.run_cmd(["task", "edit", "-r", roadmap, str(task), "-t", "Publish LEGACY as a field", "-p", "6"])
+        self.test.run_cmd(["sprint", "update", "-r", roadmap, str(sprint_a), "-d", "Legacy marking rollout, restated"])
+        self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint_a), str(task)])
+        self.test.run_cmd(["sprint", "move-tasks", "-r", roadmap, str(sprint_a), str(sprint_b), str(task)])
+        self.test.run_cmd(["sprint", "remove-tasks", "-r", roadmap, str(sprint_b), str(task)])
+
+        rows = self.test.run_cmd_json(["audit", "list", "-r", roadmap, "-l", "500"])
+        assert len(rows) >= 10, f"only {len(rows)} audit rows were written, so the sweep did not run"
+
+        written = {row["operation"] for row in rows}
+        for op in sorted(written):
+            assert op in legacy_flags, f"the audit log holds {op}, which the contract does not publish"
+            assert legacy_flags[op] is False, (
+                f"the sweep recorded {op}, which the contract publishes as legacy=true. A command writes "
+                f"it again, so every consumer filtering for current activity is now skipping live rows"
+            )
+
+        assert len(written) >= 8, (
+            f"only {len(written)} distinct operations were observed; the sweep is no longer exercising a "
+            f"spread of writers"
+        )
+
+        # The other direction of the same fact: a legacy value stays an ACCEPTED
+        # filter, which is the whole reason it is still published.
+        for op in sorted(self.LEGACY_OPERATIONS):
+            code, _, _ = self.test.run_cmd(["audit", "list", "-r", roadmap, "-o", op], check=False)
+            assert code == 0, (
+                f"`audit list --operation {op}` exited {code}; a value published as legacy is still an "
+                f"accepted filter, so the older entries carrying it stay reachable"
+            )
+        print(f"✓ {len(written)} operations recorded by real commands, none of them published as legacy")
+
+    def test_legacy_appears_on_no_other_enum(self):
+        """The converse half of rule 4: no TaskStatus value is LEGACY.
+
+        Publishing "legacy": false there would suggest the contract has a general
+        notion of an enum value's LEGACY status, which it has not.
+        """
+        enums = self._enums()
+        others = 0
+        for name, definition in enums.items():
+            if name == "AuditOperation":
+                continue
+            others += 1
+            for entry in definition["values"]:
+                assert "legacy" not in entry, (
+                    f"enums.{name} value {entry['value']!r} carries a legacy member; the member belongs "
+                    f"to AuditOperation alone"
+                )
+        assert others >= 5, f"only {others} other enums were examined"
+        print(f"✓ legacy is absent from the values of all {others} other enums")
+
+
 def _run_all():
     """Run every test class sequentially and report a summary."""
     suites = [
@@ -952,6 +1254,7 @@ def _run_all():
         TestAIHelpContractRanges,
         TestAIHelpContractConventions,
         TestAIHelpContractExitExamples,
+        TestAIHelpAuditOperationMembers,
     ]
     passed = 0
     failed = 0

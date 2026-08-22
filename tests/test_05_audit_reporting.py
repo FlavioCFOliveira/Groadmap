@@ -9,7 +9,7 @@ import os
 from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.base_test import GroadmapTestBase
+from tests.base_test import GroadmapTestBase, commit_flags_for
 
 
 class TestAuditReporting:
@@ -343,6 +343,225 @@ class TestAuditReporting:
         assert low not in ids
 
         print("✓ List tasks by severity test passed")
+
+
+    # ------------------------------------------------------------------
+    # Acceptance criterion 3 of rmp task #266: the published side effects of
+    # the six mutating subcommands name the operations each one writes.
+    #
+    # This is the EMPIRICAL half of that criterion. The Go gate in
+    # internal/commands/registry_audit_side_effects_test.go checks that the
+    # published text names a declared set of operations; it cannot observe a
+    # write, so a set that is merely plausible would satisfy it. Here the
+    # commands are actually run against the compiled binary, the rows they
+    # produce are read back out of the audit log, and every operation OBSERVED
+    # must appear in the text the contract publishes for that subcommand.
+    # ------------------------------------------------------------------
+
+    def _ai_help_side_effects(self, contract, family, subcommand):
+        """Return side_effects.database for one subcommand of the contract."""
+        for cmd in contract["commands"]:
+            if cmd["name"] != family:
+                continue
+            for sub in cmd["subcommands"]:
+                if sub["name"] == subcommand:
+                    return sub["side_effects"]["database"]
+            raise AssertionError(
+                f"`{family} {subcommand}` is absent from the --ai-help contract"
+            )
+        raise AssertionError(f"command family `{family}` is absent from the --ai-help contract")
+
+    def _audit_ids(self, roadmap):
+        """Return the set of audit entry ids currently recorded for a roadmap."""
+        rows = self.test.run_cmd_json(["audit", "list", "-r", roadmap, "-l", "500"])
+        return {row["id"] for row in rows}
+
+    def _operations_written_by(self, roadmap, run):
+        """Run `run` and return the operations of the audit rows it added.
+
+        Attribution is by entry id rather than by timestamp: several entries of
+        one invocation deliberately share a single performed_at, and a
+        timestamp window would also sweep in rows written by the setup.
+        """
+        before = self._audit_ids(roadmap)
+        run()
+        rows = self.test.run_cmd_json(["audit", "list", "-r", roadmap, "-l", "500"])
+        added = [row for row in rows if row["id"] not in before]
+        assert added, "the invocation added no audit entry at all, so this case observes nothing"
+        return {row["operation"] for row in added}
+
+    def test_audit_side_effects_name_every_operation_actually_written(self):
+        """The six mutating subcommands publish the operations they really write.
+
+        An agent reads side_effects.database to learn what a write did. Saying
+        "audit log" tells it that a row appeared without telling it which
+        `audit list --operation` filter finds the row again, which is the only
+        thing it can do with the knowledge.
+        """
+        roadmap = self.test.create_roadmap()
+        contract = self.test.run_cmd_json(["--ai-help"])
+
+        observed = {}
+
+        # --- task edit: one operation per supplied field ---------------------
+        edit_task = self.test.create_task(
+            roadmap, "Harden the audit writer", "Operators need a trustworthy log",
+            "Wrap every write in the transaction that performs it",
+            "Every mutation has exactly one entry"
+        )
+        observed[("task", "edit")] = self._operations_written_by(
+            roadmap,
+            lambda: self.test.run_cmd([
+                "task", "edit", "-r", roadmap, str(edit_task),
+                "-t", "Harden the audit writer and its tests",
+                "-tr", "Wrap every write in the transaction that performs it, and prove it",
+                "-p", "7",
+            ]),
+        )
+
+        # --- task stat: one operation per destination status -----------------
+        stat_task = self.test.create_task(
+            roadmap, "Publish the operation catalogue", "Agents filter on operations",
+            "Render the help block from the catalogue", "Both surfaces list all values"
+        )
+        stat_sprint = self.test.create_sprint(roadmap, "Audit catalogue delivery")
+        self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(stat_sprint), str(stat_task)])
+
+        def walk_the_lifecycle():
+            for status in ("DOING", "TESTING", "COMPLETED", "BACKLOG"):
+                self.test.run_cmd(
+                    ["task", "stat", "-r", roadmap, str(stat_task), status]
+                    + commit_flags_for(status)
+                )
+
+        observed[("task", "stat")] = self._operations_written_by(roadmap, walk_the_lifecycle)
+
+        # --- sprint update: one operation per supplied field -----------------
+        upd_sprint = self.test.create_sprint(roadmap, "Contract enrichment")
+        observed[("sprint", "update")] = self._operations_written_by(
+            roadmap,
+            lambda: self.test.run_cmd([
+                "sprint", "update", "-r", roadmap, str(upd_sprint),
+                "-t", "Contract enrichment and help parity",
+                "-d", "Carry the enriched catalogue into both published surfaces",
+            ]),
+        )
+
+        # --- sprint add-tasks: the mirrored pair -----------------------------
+        add_sprint = self.test.create_sprint(roadmap, "Entity type classification")
+        add_task = self.test.create_task(
+            roadmap, "Declare the entity type of every operation",
+            "The help must not guess whose history a row belongs to",
+            "Declare the classification beside the constants",
+            "A gate fails on an unclassified value"
+        )
+        observed[("sprint", "add-tasks")] = self._operations_written_by(
+            roadmap,
+            lambda: self.test.run_cmd([
+                "sprint", "add-tasks", "-r", roadmap, str(add_sprint), str(add_task)
+            ]),
+        )
+
+        # --- sprint remove-tasks: the mirrored pair back out -----------------
+        observed[("sprint", "remove-tasks")] = self._operations_written_by(
+            roadmap,
+            lambda: self.test.run_cmd([
+                "sprint", "remove-tasks", "-r", roadmap, str(add_sprint), str(add_task)
+            ]),
+        )
+
+        # --- sprint move-tasks: out of one sprint and into another -----------
+        move_from = self.test.create_sprint(roadmap, "Source of the move")
+        move_to = self.test.create_sprint(roadmap, "Destination of the move")
+        move_task = self.test.create_task(
+            roadmap, "Name the counterpart entity", "related_entity_id reads as a duplicate",
+            "State the rule on both audit help surfaces",
+            "Neither surface leaves the key unexplained"
+        )
+        self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(move_from), str(move_task)])
+        observed[("sprint", "move-tasks")] = self._operations_written_by(
+            roadmap,
+            lambda: self.test.run_cmd([
+                "sprint", "move-tasks", "-r", roadmap,
+                str(move_from), str(move_to), str(move_task)
+            ]),
+        )
+
+        assert len(observed) == 6, (
+            f"{len(observed)} subcommands were driven, want the 6 named by the acceptance criterion"
+        )
+
+        checked = 0
+        for (family, sub), operations in sorted(observed.items()):
+            text = self._ai_help_side_effects(contract, family, sub)
+            assert operations, f"`{family} {sub}` wrote no audit row, so this case asserts nothing"
+            for op in sorted(operations):
+                assert op in text, (
+                    f"`rmp {family} {sub}` really writes {op} — the row was read back out of the "
+                    f"audit log — but the contract's side_effects.database for it never names the "
+                    f"operation, so an agent cannot find the row again.\n  text: {text}"
+                )
+                checked += 1
+
+        assert checked >= 12, (
+            f"only {checked} operation observations were made across the six subcommands; four of "
+            f"them write two or more operations, so a total this low means the driving stopped "
+            f"producing rows and the assertions above ran on empty sets"
+        )
+
+        print("✓ Audit side effects name every operation actually written test passed")
+
+    def test_audit_side_effects_do_not_claim_a_legacy_operation(self):
+        """No subcommand writes one of the four LEGACY operations.
+
+        The catalogue keeps them accepted so old entries stay filterable. If a
+        command started writing one again, the help would be telling readers to
+        stop filtering on a value that is still being recorded.
+        """
+        legacy = {"TASK_STATUS_CHANGE", "TASK_UPDATE", "SPRINT_UPDATE", "SPRINT_MOVE_TASK"}
+
+        roadmap = self.test.create_roadmap()
+        task_id = self.test.create_task(
+            roadmap, "Exercise every writer", "The legacy set must stay empty",
+            "Drive the mutating subcommands", "No legacy operation is recorded"
+        )
+        sprint_a = self.test.create_sprint(roadmap, "First sprint of the sweep")
+        sprint_b = self.test.create_sprint(roadmap, "Second sprint of the sweep")
+
+        self.test.run_cmd(["task", "edit", "-r", roadmap, str(task_id), "-t", "Exercise every writer twice"])
+        self.test.run_cmd([
+            "sprint", "update", "-r", roadmap, str(sprint_a),
+            "-d", "First sprint of the sweep, restated",
+        ])
+        self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint_a), str(task_id)])
+        self.test.run_cmd([
+            "sprint", "move-tasks", "-r", roadmap, str(sprint_a), str(sprint_b), str(task_id)
+        ])
+        self.test.run_cmd(["sprint", "remove-tasks", "-r", roadmap, str(sprint_b), str(task_id)])
+
+        rows = self.test.run_cmd_json(["audit", "list", "-r", roadmap, "-l", "500"])
+        assert len(rows) >= 8, f"only {len(rows)} audit rows were written, so the sweep did not run"
+
+        written = {row["operation"] for row in rows}
+        offenders = sorted(written & legacy)
+        assert not offenders, (
+            f"the sweep recorded LEGACY operation(s) {offenders}; both published surfaces state "
+            f"that no command writes them, so either a writer was reinstated or the LEGACY marking "
+            f"is now false"
+        )
+
+        # Non-vacuity: each LEGACY value must still be an ACCEPTED filter, which
+        # is the whole reason it stays in the catalogue.
+        for op in sorted(legacy):
+            code, _, _ = self.test.run_cmd(
+                ["audit", "list", "-r", roadmap, "-o", op], check=False
+            )
+            assert code == 0, (
+                f"`audit list --operation {op}` exited {code}; the value is published as an accepted "
+                f"filter that returns the older entries carrying it"
+            )
+
+        print("✓ Audit side effects do not claim a legacy operation test passed")
 
 
 def main():

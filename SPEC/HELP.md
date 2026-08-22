@@ -20,6 +20,7 @@ is modified.
   - [Task family help specifics](#task-family-help-specifics)
   - [Sprint family help specifics](#sprint-family-help-specifics)
   - [Audit family help specifics](#audit-family-help-specifics)
+  - [Audit operation entity-type classification](#audit-operation-entity-type-classification)
   - [Comment subcommand help specifics](#comment-subcommand-help-specifics)
 - [Error message format](#error-message-format)
   - [Stderr part order](#stderr-part-order)
@@ -360,13 +361,17 @@ explicit. Both the plain-text help and the machine-readable AI Agent Contract
    the catalogue.** The block is rendered from the valid set itself rather than
    maintained by hand, so an operation the command accepts can never be missing from
    the help. `DATABASE.md § audit Table` is canonical for the catalogue; the help
-   publishes it, and MUST NOT publish a subset of it.
+   publishes it, and MUST NOT publish a subset of it. Rendering the block from the
+   valid set is also the reason a coverage gate over the block cannot fail when the
+   catalogue grows, which is what
+   `§ Audit operation entity-type classification` rule 5 addresses.
 2. **A LEGACY operation is labelled LEGACY where it is listed.** The four LEGACY
    values — `TASK_STATUS_CHANGE`, `TASK_UPDATE`, `SPRINT_UPDATE`, and
    `SPRINT_MOVE_TASK` — are accepted filter values that no command writes, so a
    reader who picks one for current activity gets an empty result. The help MUST
-   render them in a separate labelled group, or with an inline `LEGACY` marker on
-   each, and MUST state in one sentence that no command writes them and that they
+   render them in their own labelled group, whose form
+   `§ Audit operation entity-type classification` rule 6 fixes, and MUST state in
+   one sentence that no command writes them and that they
    exist so the older entries carrying them stay filterable. Listing them
    indistinguishably from the operations in use is the defect this rule prevents.
 3. **The status operations name their destination.** The help MUST make it visible
@@ -397,9 +402,143 @@ explicit. Both the plain-text help and the machine-readable AI Agent Contract
 
 In the AI Agent Contract, the `AuditOperation` enum carries every value with a
 non-empty `description`, and each LEGACY value's description states that no command
-writes it and names the operations that replaced it (see
+writes it and names the operations that replaced it. Every value of that enum also
+carries a boolean `legacy` member, `true` on exactly the four LEGACY values named
+above and `false` on every other value, so a consumer of the contract tests a field
+instead of matching the word `LEGACY` inside a description (see
 `DATA_FORMATS.md § enums map entry`). `COMMANDS.md § Audit Log Management` remains
 canonical for the flags, the validation order, and the exact error text.
+
+### Audit operation entity-type classification
+
+Every operation in the catalogue is recorded against exactly one entity. A row
+carrying the operation writes that entity's type — `TASK` or `SPRINT` — in the
+audit entry's `entity_type` column, and the entry belongs to that entity's
+history. Both published surfaces, the `audit` family help and the AI Agent
+Contract (`rmp --ai-help`), MUST publish every operation together with the entity
+type it is recorded against, so that a reader choosing an `--operation` filter
+knows whose history the filter returns before running it.
+
+Six rules govern how that classification is produced, published, and guarded.
+
+1. **The classification is declared, never inferred from the operation's name.**
+   `MODELS.md § Audit Operation` names an operation `<ENTITY>_<SUBJECT>_<OUTCOME>`,
+   and for every operation a command writes today the entity in the name is also
+   the entity the operation is recorded against. That agreement is a property the
+   catalogue happens to have, not a rule the catalogue is held to, and an
+   implementation MUST NOT turn it into one by reading the classification off the
+   name.
+
+   What separates the two is the difference between arranging a list and
+   asserting a fact. Printing an operation under a heading that names `TASK`
+   states that the rows carrying that operation hold `entity_type = 'TASK'`, which
+   is a claim about stored data. The day one operation is recorded against the
+   entity its name does not begin with — a `TASK_*` operation written against a
+   sprint — an inferred claim becomes false, and it becomes false silently,
+   because a prefix match has no way to notice that it now disagrees with the
+   writer. A declared claim cannot fail that way: it sits beside the operation it
+   describes, so an operation whose writer changes while its declaration does not
+   is a contradiction that rules 4 and 5 make someone see.
+
+2. **One declaration, read by both surfaces.** The classification lives in a
+   single declaration next to the operation constants in `internal/models`, and
+   both surfaces render from it. Neither surface may hold its own copy: a
+   classification written twice is a classification that can disagree with itself,
+   and the disagreement would appear as a plain-text help and a machine-readable
+   contract that describe the same operation differently. This is the principle of
+   `ARCHITECTURE.md § AI Agent Contract Generation` (Single source of truth)
+   applied to a fact the command registry does not carry, the registry describing
+   commands and flags rather than the operation catalogue.
+
+   The same declaration carries the LEGACY marking that rule 2 of
+   `§ Audit family help specifics` requires, for the reason rule 1 gives. Whether
+   an operation is still written is also a fact about the code, and a surface that
+   recovers it by searching a description string for the word `LEGACY` is
+   inferring again, from text this specification requires for a reader rather than
+   for a parser.
+
+   `DATABASE.md § audit Table` remains canonical for which operations exist and
+   for what each of them records; the declaration is the machine-readable form of
+   the entity each operation is recorded against, and it MUST NOT contradict that
+   catalogue. The declaration MUST NOT be derived from the catalogue's group
+   headings either: those headings are the layout of a document, and the coverage
+   gate over the catalogue region requires only that they still exist, not that
+   any entry sits under the right one.
+
+3. **The classification is total.** Every value the catalogue holds has exactly
+   one declared entity type, LEGACY values included. There is no third value, no
+   unknown, and no value that declines to answer: `entity_type` is `NOT NULL` on
+   every row of the audit table and its `CHECK` admits exactly `TASK` and `SPRINT`
+   (see `DATABASE.md § audit Table`), so an operation with no entity type would
+   describe rows that cannot exist.
+
+4. **A declaration states what the writer writes.** For every operation a command
+   writes, the declared entity type MUST equal the `entity_type` of the rows that
+   command produces, and the agreement MUST be established by observing such a row
+   rather than by reading the operation's name.
+
+   The four LEGACY operations have no writer left to observe. Each of their
+   declarations rests instead on the recorded evidence about the rows that already
+   carry it: the predicate the schema migration filters on when it reclassifies
+   such rows (see `VERSION.md § Migration 1.11.0 to 1.12.0`), and, for the
+   operations no migration reads, the retired writer that git history preserves. A
+   LEGACY operation MUST NOT be classified from its name either. Nothing writes it
+   any more, so the name is the only thing left to guess from, and guessing is
+   what this section exists to prevent.
+
+5. **The gate is over the classification, not over the operation list.** The
+   `Valid operations (for --operation filter)` block is rendered from the
+   catalogue itself, as rule 1 of `§ Audit family help specifics` requires, so it
+   cannot omit an operation the catalogue holds. That guarantee is real, and it is
+   also the limit of what a coverage gate over the block can detect: such a gate
+   fails when the block names an operation the catalogue does not hold — a
+   hand-written list that outlived the catalogue — and it cannot fail when the
+   catalogue grows, because a newly declared value is rendered the moment it is
+   declared. Adding one operation to the catalogue and running the full suite
+   bears this out: the gate over the canonical catalogue in the specification
+   fails, the gate over the documentation fails, and the contract gates fail,
+   while the package that renders the help passes.
+
+   A new operation therefore reaches the help by itself, but it arrives
+   unclassified. Two requirements follow, and neither is a restatement or a
+   simplification of the other:
+
+   - **(a) A gate MUST fail when any value in the catalogue has no declared
+     entity type.** This is the only check a new operation cannot pass by doing
+     nothing, and it MUST live where the operation constants are declared, so that
+     the failure reaches whoever added the value on the first test run of the
+     package they changed.
+   - **(b) The `Valid operations` block MUST NOT contain a catch-all group** — a
+     group that collects whatever the entity-type groups did not match. A
+     catch-all is what makes (a) evadable in practice: with one present, an
+     unclassified operation is still printed, under a heading that asserts nothing
+     about it, the block still lists every operation the command accepts, and the
+     reader is told nothing about the entity whose history the new operation
+     belongs to. Every group in the block MUST be labelled with exactly one entity
+     type and MUST hold exactly the operations declared against that entity type.
+
+   The catch-all in the block this rule replaces was not an oversight. It was
+   there because the grouping was done by name prefix and the prefix was not
+   trusted to match every name, which is the same distrust rule 1 states. Once the
+   classification is declared and total, nothing can be left over, and a group for
+   what is left over can only hide the failure that (a) exists to produce.
+
+6. **How each surface publishes the classification.** In the `audit` family help,
+   the `Valid operations (for --operation filter)` block is partitioned into
+   labelled groups as rule 5(b) requires, and the LEGACY operations of each entity
+   type form their own group, whose label names the entity type and the LEGACY
+   status together. The list column of the block carries operation names and
+   nothing else: an inline marker beside a name would put a token in that column
+   that is not an operation the command accepts, and the block is checked on
+   exactly that basis — everything it lists is a value `audit list --operation`
+   takes. Both facts stay readable per operation because the label of the group
+   carries them.
+
+   In the AI Agent Contract, every value of the `AuditOperation` enum carries its
+   entity type in a member of its own rather than inside its prose, and carries in
+   a second member the LEGACY marking that rule 2 of this section places in the same
+   declaration. Both members, their value sets, and the rule that each is present on
+   every value of that enum are specified in `DATA_FORMATS.md § enums map entry`.
 
 ### Comment subcommand help specifics
 
