@@ -806,7 +806,9 @@ rmp task next [num]
 rmp t next [num]
 ```
 
-**Description:** Returns the next N open tasks from the currently open sprint. Tasks are returned in the order defined by the sprint's `task_order` (set via `sprint reorder` or other ordering commands). When two tasks share the same sprint position, `priority DESC` is used as a tiebreaker, ensuring higher-priority work surfaces first.
+**Description:** Returns the next N open tasks from the currently open sprint. Tasks are returned in the order defined by the sprint's `task_order` (set via `sprint reorder` or other ordering commands).
+
+**The order is total, and the command publishes it as a guarantee.** Within one sprint no two tasks share a `position` — the schema enforces it (`DATABASE.md § Position Uniqueness Within a Sprint`) — and this command reads a single sprint, so ordering on `position` alone already places every task at exactly one rank. Repeating the same call over unchanged data returns the same tasks in the same sequence. `priority` does **not** order this listing and cannot promote a task above another: the planned order is the answer to "what do I do next", and a task's priority is what the plan was built from, not a second chance to override it.
 
 **Arguments:**
 - `num` (optional) - Number of tasks to return. If not provided, defaults to 1.
@@ -2120,6 +2122,10 @@ entry at all.
 ### Task Ordering
 
 Commands for managing sprint task order within a sprint. Tasks are ordered by position (0-based), where position 0 is the first task in the sprint.
+
+**Positions are unique within a sprint, and none of these commands can be told to break that.** No two member tasks of one sprint hold the same position; the schema enforces the invariant (`DATABASE.md § Position Uniqueness Within a Sprint`). None of the commands in this section takes a position for more than one task: `reorder` takes an order and derives every position from it, `swap` exchanges two positions that already exist, and `move-to`, `top` and `bottom` name one target slot and shift the other members around it. Every one of them therefore leaves the sprint holding a permutation of its positions.
+
+**There is consequently no "position already in use" error in this section, and none of these commands repairs a collision.** A collision cannot be requested, so there is nothing for a command to reject or to repair. Should one ever reach the database it means a defect in a write path, not bad input, and it surfaces as a database failure (exit code `1`) rather than as a validation error — see `ARCHITECTURE.md § Exit Codes`. The error tables below are complete as they stand.
 
 #### Reorder Tasks (Set Exact Order)
 

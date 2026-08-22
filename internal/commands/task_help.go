@@ -151,8 +151,9 @@ Optional:
 
 Output (stdout JSON):
   Array of task objects, ordered by sprint position ASC (i.e. the order set
-  by 'sprint reorder' / 'move-to' / 'top' / 'bottom'); priority DESC is used
-  only as a tiebreaker for tasks sharing the same position.
+  by 'sprint reorder' / 'move-to' / 'top' / 'bottom'). The order is total --
+  no two tasks of one sprint share a position -- so priority does not order
+  this listing and cannot promote a task above another.
   Empty array (exit 0) if the OPEN sprint has no SPRINT/DOING/TESTING tasks.
 
 Exit codes:

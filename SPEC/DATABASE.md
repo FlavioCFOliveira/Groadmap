@@ -9,6 +9,7 @@
   - [`tasks` Table](#tasks-table)
   - [`sprints` Table](#sprints-table)
   - [`sprint_tasks` Table (1:N Relationship)](#sprint_tasks-table-1n-relationship)
+    - [Position Uniqueness Within a Sprint](#position-uniqueness-within-a-sprint)
   - [`audit` Table](#audit-table)
     - [One Row per Thing That Happened](#one-row-per-thing-that-happened)
     - [The Two Entities of a Relational Operation](#the-two-entities-of-a-relational-operation)
@@ -31,6 +32,7 @@
 - [SQLite Validation](#sqlite-validation)
 - [Migration Idempotency (ALTER TABLE ADD COLUMN)](#migration-idempotency-alter-table-add-column)
 - [Migration Idempotency (ALTER TABLE DROP COLUMN)](#migration-idempotency-alter-table-drop-column)
+- [Introducing a Uniqueness Constraint over Existing Rows](#introducing-a-uniqueness-constraint-over-existing-rows)
 - [Audit Result Limit](#audit-result-limit)
 - [See Also](#see-also)
 
@@ -91,7 +93,7 @@ Each roadmap is stored in an individual SQLite database. The schema is designed 
 |  - sprint_id (FK → sprints.id)         |
 |  - task_id (FK → tasks.id)             |
 |  - added_at (TEXT ISO8601)             |
-|  - position (INTEGER)                  |
+|  - position (INTEGER, UNIQUE/sprint)   |
 |  - Composite PK (sprint_id, task_id)   |
 +----------------------------------------+
 |           audit                        |
@@ -210,14 +212,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_sprints_order ON sprints(order_index);
 
 ### `sprint_tasks` Table (1:N Relationship)
 
-Junction table linking sprints to their tasks. The relationship is one-sprint-to-many-tasks: a sprint contains many tasks, but each task belongs to at most one sprint at any given time. This 1:N constraint is enforced at the schema level by the `UNIQUE` constraint on `task_id`. The table also stores ordering information (`position`) for sprint task priority.
+Junction table linking sprints to their tasks. The relationship is one-sprint-to-many-tasks: a sprint contains many tasks, but each task belongs to at most one sprint at any given time. This 1:N constraint is enforced at the schema level by the `UNIQUE` constraint on `task_id`. The table also stores the sprint's planned execution order in `position`, and that order is total: no two member tasks of one sprint may hold the same `position`, and the schema enforces it (see `Position Uniqueness Within a Sprint` below).
 
 ```sql
 CREATE TABLE IF NOT EXISTS sprint_tasks (
     sprint_id INTEGER NOT NULL,
     task_id INTEGER NOT NULL UNIQUE,
     added_at TEXT NOT NULL,  -- ISO 8601 UTC
-    position INTEGER NOT NULL DEFAULT 0,  -- 0-based position in sprint task order
+    position INTEGER NOT NULL DEFAULT 0,  -- 0-based position in sprint task order; unique within one sprint (idx_sprint_tasks_order)
     PRIMARY KEY (sprint_id, task_id),
     FOREIGN KEY (sprint_id) REFERENCES sprints(id) ON DELETE CASCADE,
     FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
@@ -230,10 +232,92 @@ CREATE INDEX IF NOT EXISTS idx_sprint_tasks_task_id ON sprint_tasks(task_id);
 -- Covers: GetSprintTasks and sprint-task relationship queries
 CREATE INDEX IF NOT EXISTS idx_sprint_tasks_lookup ON sprint_tasks(sprint_id, task_id);
 
--- Index for sprint task ordering (TASK-ORDER-001)
+-- Unique composite index for sprint task ordering (TASK-ORDER-001)
 -- Covers: Sprint task listing ordered by position
-CREATE INDEX IF NOT EXISTS idx_sprint_tasks_order ON sprint_tasks(sprint_id, position ASC);
+-- Enforces: no two member tasks of one sprint hold the same position, which is what
+-- makes the planned execution order total (see Position Uniqueness Within a Sprint below)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sprint_tasks_order ON sprint_tasks(sprint_id, position ASC);
 ```
+
+#### Position Uniqueness Within a Sprint
+
+**The invariant.** Within one sprint, no two member tasks hold the same `position`.
+The pair `(sprint_id, position)` is unique across the whole table; `position` on its
+own is not, so two tasks in two different sprints may both sit at position 0.
+
+**The invariant is enforced by the schema, not by the write paths.** The unique
+index `idx_sprint_tasks_order` declared above is the enforcement point. It is the
+same index that serves every listing ordered by position, so making it unique adds
+the constraint without adding an index: the read it already covers is unchanged, and
+no second B-tree is created for the constraint alone (see `Index Design Rationale`
+below).
+
+**Why the invariant is required.** The in-sprint execution order *is*
+`sprint_tasks.position`. Three published contracts read that order and none of them
+can state a deterministic result unless it is total:
+
+1. `List Sprint Tasks Ordered by Position` above orders on `st.position ASC` alone.
+   With duplicate positions the statement has a tie it does not break, so two
+   executions over unchanged data may return different sequences.
+2. The read-only web interface's sprint board depends on the order twice over: it is
+   the `WAITING` column's own order, and it is the tiebreaker of the two columns
+   ordered by recency (`WEB.md § Sprint Detail Sub-Template`). A board whose column
+   order is not total renders in an order nobody chose.
+3. `Get Next Tasks` (`COMMANDS.md § Get Next Tasks (next)`) hands an agent the next
+   piece of work to do by reading this order.
+
+**The invariant is not left to the write paths to uphold, and the reason is the
+failure mode.** An order that is total only because every insert remembers to supply
+a position is a promise held by the code and by nothing else: a write path that omits
+`position` gets `DEFAULT 0`, collides with the sprint's first task, and nothing
+reports it — the sprint simply starts rendering in an order nobody chose, in the CLI
+and on the web board alike. A silent ambiguity in stored data is worse than a failed
+write, because a failed write names its cause at the moment it happens. The
+constraint puts the invariant where every write path is subject to it whether or not
+its author knew the invariant existed.
+
+**No user input can name a colliding position.** Positions are always computed by
+the application, never supplied by the caller:
+
+| Command | How the position is determined |
+|---------|-------------------------------|
+| `sprint add-tasks` | Appended after the sprint's current `MAX(position)`, one per task |
+| `sprint move-tasks` | Appended after the destination sprint's current `MAX(position)` |
+| `sprint reorder` | A complete permutation of the sprint's members; index `i` in the argument becomes position `i` |
+| `sprint move-to`, `sprint top`, `sprint bottom` | The caller names a target slot, and the other members shift around it, so the result is a permutation |
+| `sprint swap` | The two members exchange the positions they already hold |
+
+Every one of these produces a permutation of the sprint's positions or an append
+beyond the current maximum. None of them can be handed a duplicate: `sprint reorder`
+rejects a repeated task id and an incomplete list before it writes anything, and no
+other command accepts a position for more than one task. **The constraint therefore
+never surfaces as a caller-facing rejection.** A violation reaching the database
+means a defect in a write path, not bad input, so it is reported as a database
+failure (`utils.ErrDatabase`, exit code `1`) and not as a validation error. Every
+check that establishes a caller's request is a permutation runs inside the same
+transaction as the write it guards, so no interleaving of concurrent commands can
+turn a valid request into a colliding one.
+
+**Every write path must reach its result without a transient collision.** SQLite
+checks a unique index per row as each row is written; it has no deferred constraint
+check. A statement sequence that produces a legal final state can still fail partway
+through if an intermediate state holds two equal positions in one sprint. Any
+operation that permutes existing positions MUST therefore either
+
+- assign in an order that provably never re-uses a position still held by another
+  row of the same sprint (renumbering a sprint downwards to a dense `0..N-1` run has
+  this property, because the value assigned to the *i*-th row in ascending order is
+  never greater than the position that row already held), or
+- **park first**: move every row it will touch to a value range disjoint from the
+  one it will assign — negative positions serve, since `position = -1 - position`
+  maps distinct non-negative values to distinct negative ones — and then assign the
+  final positions. Parked values never escape the transaction, so no reader observes
+  one.
+
+The `Reorder Sprint Tasks (Set Exact Order)`, `Move Task to Position`, `Swap Tasks`
+and `Move Task to Top/Bottom` statements below all permute existing positions and
+all use the parking form for this reason. `Add Task to Sprint with Position` and
+`Add Tasks to Sprint` append beyond `MAX(position)` and need no parking.
 
 ### `audit` Table
 
@@ -768,6 +852,12 @@ ORDER BY st.position ASC;
 
 #### Add Task to Sprint with Position
 
+**This is the only statement in the application that inserts a `sprint_tasks` row.**
+Its batch form is stated in full under `Add Tasks to Sprint` below; the two sections
+describe one statement, not two, and every `sprint_tasks` row the application creates
+comes from it. Any other insert would be a new write path and would have to be
+specified here before it is written.
+
 ```sql
 -- Get max position for the sprint
 SELECT COALESCE(MAX(position), -1) + 1 AS next_position
@@ -776,11 +866,27 @@ WHERE sprint_id = ?;
 
 -- Insert into junction table with calculated position
 INSERT INTO sprint_tasks (sprint_id, task_id, added_at, position)
-VALUES (?, ?, ?, ?);
+VALUES (?, ?, ?, ?)
+ON CONFLICT(task_id) DO UPDATE SET
+    sprint_id = excluded.sprint_id,
+    added_at  = excluded.added_at,
+    position  = excluded.position;
 
 -- Update task status
 UPDATE tasks SET status = 'SPRINT' WHERE id IN (?, ?, ...);
 ```
+
+**`position` is never omitted from the column list.** The column carries
+`DEFAULT 0`, so an insert that leaves it out places the task at position 0 and
+collides with whichever task already holds it. The unique index rejects such a row
+(see `Position Uniqueness Within a Sprint` above),
+which turns a silently ambiguous sprint order into a failed write.
+
+**The `ON CONFLICT` clause re-parents rather than duplicates.** `task_id` is unique
+across the table, so adding a task that already belongs to some sprint updates the
+one row it already has: the task moves to the named sprint and takes the appended
+position. This is what keeps a task in exactly one sprint without the caller having
+to remove it from the previous one first.
 
 **Use case:** New tasks are added to the end of the sprint task list (highest position).
 
@@ -834,16 +940,6 @@ WHERE id IN (?, ?, ...);
 UPDATE tasks SET priority = ? WHERE id IN (?, ?, ...);
 ```
 
-#### Associate to Sprint
-
-```sql
--- Insert into junction table
-INSERT INTO sprint_tasks (sprint_id, task_id, added_at) VALUES (?, ?, ?);
-
--- Update task status
-UPDATE tasks SET status = 'SPRINT' WHERE id IN (?, ?, ...);
-```
-
 #### Remove from Sprint
 
 ```sql
@@ -894,12 +990,31 @@ WHERE sprint_id = ?;
 Updates positions for all tasks in a sprint based on a provided ordered list of task IDs.
 
 ```sql
--- Transaction: Update positions for each task
--- For each task ID in the ordered list at index i:
+-- Transaction:
+-- 1. Park every member of the sprint in the negative range, so that no value the
+--    assignment below writes is still held by another row of the same sprint.
+UPDATE sprint_tasks SET position = -1 - position WHERE sprint_id = ?;
+
+-- 2. Assign the final positions. For each task ID in the ordered list at index i:
 UPDATE sprint_tasks SET position = ? WHERE sprint_id = ? AND task_id = ?;
 ```
 
-**Validation:** All task IDs in the ordered list must belong to the sprint.
+**The parking step is required, not an optimisation.** A reorder is a permutation, so
+assigning the final positions directly makes the first task of the new order claim a
+position another task still holds, and the unique index rejects the statement (see
+`Position Uniqueness Within a Sprint` above). The
+negative range works because `-1 - position` maps distinct non-negative positions to
+distinct negative ones, so the parked state satisfies the constraint too, and the
+whole sequence runs in one transaction, so no reader ever observes a negative
+position.
+
+**Validation:** All task IDs in the ordered list must belong to the sprint, the list
+must contain no duplicate, and it must name every member of the sprint. The
+membership, duplicate and completeness checks MUST all run inside the same
+transaction as the two statements above. Checking completeness in an earlier, separate
+read leaves a window in which another process adds a task to the sprint: the list is
+then complete when it is read and partial when it is applied, and a partial
+assignment leaves the omitted tasks holding positions the reorder also assigns.
 
 #### Move Task to Position
 
@@ -910,25 +1025,21 @@ Moves a single task to a specific position, updating positions of other tasks ac
 -- 1. Get current position of the task
 SELECT position FROM sprint_tasks WHERE sprint_id = ? AND task_id = ?;
 
--- 2. If moving UP (new_position < current_position):
---    Shift tasks between new_position and current_position-1 down by 1
-UPDATE sprint_tasks
-SET position = position + 1
-WHERE sprint_id = ?
-  AND position >= ?
-  AND position < ?;
+-- 2. Park every member of the sprint in the negative range.
+UPDATE sprint_tasks SET position = -1 - position WHERE sprint_id = ?;
 
--- 3. If moving DOWN (new_position > current_position):
---    Shift tasks between current_position+1 and new_position up by 1
-UPDATE sprint_tasks
-SET position = position - 1
-WHERE sprint_id = ?
-  AND position > ?
-  AND position <= ?;
-
--- 4. Update the moved task to the new position
+-- 3. Assign the final positions: the members in their previous order, with the moved
+--    task lifted out and re-inserted at the target slot. For each task at index i of
+--    that sequence:
 UPDATE sprint_tasks SET position = ? WHERE sprint_id = ? AND task_id = ?;
 ```
+
+**A range shift cannot express this move.** The shift form —
+`UPDATE ... SET position = position + 1 WHERE position >= ? AND position < ?` — walks
+a contiguous run of rows and moves each onto the value its neighbour still holds, so
+the unique index rejects it on the first row, in both directions. Parking the sprint
+and then writing the resulting permutation produces the same final state and never
+presents a duplicate.
 
 **Validation:** The target position must be an integer between 0 and 2147483647 (MaxInt32) inclusive. A value less than 0 or greater than 2147483647 is rejected as a validation error.
 
@@ -946,10 +1057,21 @@ Swaps positions between two tasks in the same sprint.
 -- 1. Get positions of both tasks
 SELECT task_id, position FROM sprint_tasks WHERE sprint_id = ? AND task_id IN (?, ?);
 
--- 2. Swap positions
+-- 2. Park the first task, so the second can take the position it is vacating.
+UPDATE sprint_tasks SET position = -1 - position WHERE sprint_id = ? AND task_id = ?;
+
+-- 3. Move the second task into the first task's old position.
 UPDATE sprint_tasks SET position = ? WHERE sprint_id = ? AND task_id = ?;
+
+-- 4. Move the first task out of the parked range into the second task's old position.
 UPDATE sprint_tasks SET position = ? WHERE sprint_id = ? AND task_id = ?;
 ```
+
+**Only one row needs parking here.** A swap touches exactly two rows, and once the
+first has left its position the second can take it, so the three statements above are
+the cheapest form that never presents a duplicate. Writing the two positions directly
+fails on the first statement, because the position it assigns is the one the other
+task still holds.
 
 #### Move Task to Top/Bottom
 
@@ -960,6 +1082,8 @@ UPDATE sprint_tasks SET position = ? WHERE sprint_id = ? AND task_id = ?;
 -- Move to bottom (last position)
 -- Get current max position, then use Move Task to Position logic
 ```
+
+Both reuse `Move Task to Position` above in full, parking step included.
 
 #### Delete Task
 
@@ -1007,18 +1131,31 @@ exit code 6 before the statement runs.
 
 #### Add Tasks to Sprint
 
+The batch form of `Add Task to Sprint with Position` above, and the only statement
+that inserts a `sprint_tasks` row. One multi-row `INSERT` covers the whole batch, so
+adding *n* tasks costs one round trip rather than *n*.
+
 ```sql
 -- Get max position for the sprint
 SELECT COALESCE(MAX(position), -1) AS max_position FROM sprint_tasks WHERE sprint_id = ?;
 
--- Insert into junction table with incremental positions
-INSERT INTO sprint_tasks (sprint_id, task_id, added_at, position) VALUES (?, ?, ?, ?);
+-- Insert into junction table with incremental positions, one row group per task
+INSERT INTO sprint_tasks (sprint_id, task_id, added_at, position)
+VALUES (?, ?, ?, ?), (?, ?, ?, ?), ...
+ON CONFLICT(task_id) DO UPDATE SET
+    sprint_id = excluded.sprint_id,
+    added_at  = excluded.added_at,
+    position  = excluded.position;
 
 -- Update task status
 UPDATE tasks SET status = 'SPRINT' WHERE id IN (?, ?, ...);
 ```
 
-**Note:** Tasks are added with positions starting from max_position + 1, ensuring they appear at the end of the sprint task list.
+**Note:** Tasks are added with positions starting from max_position + 1, ensuring they appear at the end of the sprint task list. An empty sprint yields -1, so its first task takes position 0.
+
+**The batch needs no parking.** Every position it writes is strictly greater than the
+sprint's current maximum, and the values within one batch are consecutive, so no
+assigned value is ever held by another row at the moment it is written.
 
 #### Start Sprint
 
@@ -1416,6 +1553,7 @@ This statement has no `sprint_comments` form: the Roadmap Sprint Page presents o
 **Integrity rules:**
 - A task may not be in any sprint (no record in `sprint_tasks`)
 - A task can only be in one sprint at a time (`UNIQUE` constraint on `sprint_tasks.task_id`)
+- No two tasks of one sprint share a `position`, so the sprint's planned execution order is total (unique index `idx_sprint_tasks_order` over `(sprint_id, position)`)
 - When deleting sprint, relationships in `sprint_tasks` are removed (`ON DELETE CASCADE`)
 - Tasks are never automatically deleted, only disassociated
 - A task may have no comments (no record in `task_comments`); a sprint may have no comments (no record in `sprint_comments`)
@@ -1548,9 +1686,11 @@ Fields are organized to match the optimized Go struct layout (Content, Tracking,
 | sprint_id | INTEGER | NOT NULL, FK → sprints.id, ON DELETE CASCADE, part of PK |
 | task_id | INTEGER | NOT NULL, FK → tasks.id, ON DELETE CASCADE, part of PK |
 | added_at | TEXT | NOT NULL, ISO 8601 format |
-| position | INTEGER | NOT NULL, DEFAULT 0, position in sprint task order (0-based) |
+| position | INTEGER | NOT NULL, DEFAULT 0, position in sprint task order (0-based), unique within one sprint (`idx_sprint_tasks_order`) |
 
 **Note:** Composite primary key `(sprint_id, task_id)` combined with the `UNIQUE` constraint on `task_id` enforces the 1:N relationship — a task can only belong to one sprint at a time. The `position` field enables sprint task ordering, with 0 being the first position.
+
+**Note:** `position` is unique per sprint, not globally: the unique index is over the pair `(sprint_id, position)`, so two tasks in two different sprints may both hold position 0. See `DATABASE.md § Position Uniqueness Within a Sprint` for the invariant and what every write path must do to preserve it.
 
 ### Audit
 
@@ -1631,6 +1771,12 @@ The following composite indexes are designed to optimize frequently executed que
 - Optimizes GetSprintTasks and sprint membership checks
 - The same index serves the grouped `WHERE sprint_id IN (...) ORDER BY sprint_id ASC, task_id ASC` read that resolves the `tasks` and `task_count` of every sprint the sprint listing returns (see `Read the Membership of Many Sprints (Grouped)` above): the leading column serves the lookup and the pair serves the ordering, so that read needs no sort step and touches no table row
 - Expected improvement: 70% query time reduction for sprint operations
+
+**idx_sprint_tasks_order:**
+- Query pattern: `WHERE sprint_id = ? ORDER BY position ASC` in the `sprint_tasks` table
+- Serves every listing of a sprint's tasks in the planned execution order, and supplies the `position` tiebreaker of the priority-ordered listing, so neither needs a sort step
+- **The index is `UNIQUE`, and that is deliberate.** The constraint that no two tasks of one sprint share a position is enforced by this index rather than by a second one declared for the purpose. A separate unique index over `(sprint_id, position)` would be an exact duplicate of this one: same table, same columns, same order. Making the existing index unique adds the constraint at no storage cost and leaves the reads it already serves unchanged
+- Also serves `SELECT MAX(position) WHERE sprint_id = ?`, the read that computes where an appended task goes
 
 **idx_audit_date:**
 - Query pattern: `WHERE performed_at >= ? AND performed_at <= ?`
@@ -1872,6 +2018,128 @@ migration's statements and carries them in full. The column is a plain nullable
 trigger referring to it, so the guarded single statement removes it. The values it
 held are discarded, which is the purpose of that migration and not a side effect of
 it.
+
+---
+
+## Introducing a Uniqueness Constraint over Existing Rows
+
+A migration that adds a `UNIQUE` index to a table that already holds rows differs
+from every other migration in this specification: it can fail on data, not only on
+schema. `CREATE UNIQUE INDEX` validates every existing row at creation time, so a
+database that already contains a duplicate cannot receive the index at all. This
+section states what such a migration MUST do. It applies to any future uniqueness
+constraint as well as to the one over `(sprint_id, position)`.
+
+**No table rebuild is required.** Every uniqueness constraint in this schema is a
+`CREATE UNIQUE INDEX` statement, never a table-level `UNIQUE` clause, so adding one
+never triggers the rebuild procedure described in
+`Migration Idempotency (ALTER TABLE ADD COLUMN)` above. `idx_one_open_sprint`,
+`idx_sprints_order` and `idx_sprint_tasks_order` are all declared this way.
+
+### The required sequence
+
+A migration that adds a uniqueness constraint MUST perform these steps, in this
+order, inside the migration's single transaction:
+
+1. **Repair the existing rows** so that they satisfy the constraint. The repair runs
+   **before** the index exists, which is what makes it possible at all: with no
+   unique index in force, the intermediate states of the repair cannot violate one.
+2. **Create the index.** `CREATE UNIQUE INDEX IF NOT EXISTS` for a new index; for an
+   existing non-unique index that is being tightened, `DROP INDEX IF EXISTS` followed
+   by `CREATE UNIQUE INDEX IF NOT EXISTS` under the same name, so that the schema
+   ends with exactly one index over those columns.
+3. **Fail closed if the index still cannot be created.** The migration MUST NOT
+   attempt to delete, truncate, or otherwise discard rows in order to make the index
+   succeed.
+
+Running steps 1 and 2 in one transaction is what makes step 3 safe: if the index creation
+fails, the whole migration is rolled back, the repair is undone with it, and the
+recorded `schema_version` is not advanced. The database is left exactly as it was.
+
+### The repair must not read its own writes
+
+A repair that renumbers a column MUST derive each row's new value from a source the
+`UPDATE` does not modify. SQLite applies an `UPDATE` row by row, and a correlated
+subquery in the `SET` clause that reads the table being updated observes rows that
+the same statement has already rewritten. Ranking rows by the very column being
+written is therefore **wrong**: rows that have already moved are no longer counted
+where they were, later rows are ranked too low, and the statement can leave
+duplicates behind even though its logic is correct on paper.
+
+The sound form ranks in a subquery that is computed as a unit and joined to the
+target, which is the form the `1.0.0` → `1.1.0` migration already uses:
+
+```sql
+-- Renumber each sprint's positions to a dense 0..N-1 run, preserving the order the
+-- rows already had. ROW_NUMBER() is computed over the whole table before any row is
+-- written, so no row is ranked against a value this statement has already changed.
+UPDATE sprint_tasks
+SET position = ranked.new_pos
+FROM (
+    SELECT sprint_id, task_id,
+           ROW_NUMBER() OVER (
+               PARTITION BY sprint_id
+               ORDER BY position ASC, task_id ASC
+           ) - 1 AS new_pos
+    FROM sprint_tasks
+) AS ranked
+WHERE sprint_tasks.sprint_id = ranked.sprint_id
+  AND sprint_tasks.task_id   = ranked.task_id;
+```
+
+**The ordering keys are what make the repair honest.** `position ASC` keeps the order
+the roadmap's owner planned, and `task_id ASC` breaks the ties that are precisely the
+rows in violation. Ranking by a different column — `added_at`, for instance — would
+also produce a valid dense run, but it would silently replace the planned order with
+the order the tasks happened to be added in, which is a data loss dressed up as a
+repair.
+
+**The repair is idempotent and safe on a conforming database.** On a sprint whose
+positions are already a dense `0..N-1` run it assigns every row the value it already
+holds. On a sprint with gaps it closes them without changing the relative order. On a
+sprint with duplicates it separates them, putting the lower task id first. Running it
+twice yields the same result as running it once.
+
+### Verify before writing the migration
+
+The data that a migration will run against MUST be measured before the migration is
+written, not assumed. For a uniqueness constraint the check is a direct count of the
+groups that violate it:
+
+```sql
+SELECT COUNT(*) FROM (
+    SELECT sprint_id, position
+    FROM sprint_tasks
+    GROUP BY sprint_id, position
+    HAVING COUNT(*) > 1
+);
+```
+
+A count of zero establishes that the constraint holds for the database measured; it
+establishes nothing about anyone else's. That is why the repair in step 1 is
+mandatory rather than conditional on the measurement: a migration that fails on
+another person's database is worse than the gap it closes, and the measurement can
+only ever cover the databases within reach.
+
+### The failure surface
+
+If the index creation fails despite the repair, the failure is reported through the
+ordinary migration path. The behaviour is:
+
+| Property | Value |
+|----------|-------|
+| Exit code | `1` (`EXIT_FAILURE`; the migration error carries no sentinel and falls through to the general failure code, consistent with `utils.ErrDatabase`) |
+| stdout | Empty. A failing invocation writes nothing to stdout (`COMMANDS.md § Failing Invocations Write Nothing to Stdout`) |
+| stderr | `Error: running migrations: migration <version> failed: applying migration: <step>: <SQLite error>`, followed by a blank line and the standard AI-agent hint (`HELP.md § Error message format`) |
+| Database | Unchanged. The transaction is rolled back, the repair is undone with it, and `_metadata.schema_version` keeps its previous value |
+
+**The command that triggered the migration does not run.** Migrations are applied
+when the database is opened, so a migration failure aborts the invocation that opened
+it, and every later invocation against that roadmap fails the same way until the
+cause is removed. This is the intended behaviour — a roadmap whose schema could not
+be brought up to date must not be served by a binary that expects the newer schema —
+and it is also the reason the repair exists: a migration that merely refuses leaves
+the roadmap unusable, while a migration that repairs leaves it correct.
 
 ---
 
