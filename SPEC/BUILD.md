@@ -526,7 +526,57 @@ annotated with a `#nosec` comment at the site in the Go source, which suppresses
 that finding. The repository also carries `.gosec.yaml`, a commented record of
 accepted findings and the reason each one is accepted. That file is a record for
 reviewers, not scan configuration: the invocation above passes no `-conf` flag,
-and `gosec` applies a configuration file only when `-conf` names one.
+`gosec` applies a configuration file only when `-conf` names one, and its
+configuration reader is a JSON decoder, so a commented YAML document could not
+serve as one even if the flag were passed.
+
+**The register is gated.** A record no gate reads drifts away from the code, and
+this one did. `internal/testenv/nosec_register_gate_test.go` parses `.gosec.yaml`
+and sweeps the module for suppressions with `go/ast`, reading comment groups the
+way `gosec` reads them, and fails when the two disagree in either direction: a
+suppression the register does not account for, and a register line naming a count
+the source no longer carries. It also refuses a suppression that names no rule —
+which would suppress every rule on its node — and one that carries no
+`-- justification`. The gate runs under `go test ./...`, so it is enforced in all
+three places the validation gates run, exactly like the scan it describes.
+
+**Two counts, both true.** The register accounts for every suppression in the
+module. `gosec`'s own summary line reports a smaller number, because it does not
+scan `_test.go` files unless `-tests` is passed, and smaller still on a platform
+where a file carrying one is not built. The register states the module-wide count
+and the rule that derives the scanner's from it; a published figure quoting the
+scanner's summary is therefore consistent with the register rather than in
+conflict with it.
+
+**Test files are not scanned, and that gap is measured rather than forgotten.**
+`gosec` skips `_test.go` files unless `-tests` is passed, and the invocation above
+does not pass it. That is a deliberate decision, not an oversight, and it was
+taken against a measurement rather than an assumption: the tree HAS been scanned
+with `-tests`, and the result is recorded here so a later reader can weigh the
+decision instead of rediscovering it.
+
+Scanned with `-tests`, the scan reports 103 issues. Ninety-eight of them are in
+test code. The remaining five are in production files — three in
+`internal/commands/flags.go` and two in `internal/commands/graph.go`, all G602
+(slice index out of range) — and all five were verified to be false positives:
+each indexing site is preceded by an `i+1 >= len(args)` check that returns before
+any index is taken, and the SSA analyzer that raises G602 does not model that
+short-circuit.
+
+Turning `-tests` on would therefore find no defect and cost two things. First, the
+ninety-eight test-code findings would each have to be suppressed individually, and
+because of the register gate above, every one of those suppressions would also
+have to be argued for and recorded. That is a large amount of noise bought with no
+defect found. Second, and worse, the five G602 would have to be suppressed
+permanently at their sites, which would silence a genuine G602 appearing at those
+same nodes later. Suppressing a real future finding to close a gap that currently
+hides nothing is a worse position than the gap itself.
+
+The gap that remains is therefore precisely this: findings that exist only in
+`_test.go` files are not reported by the `security` gate. It is accepted, and it
+is reviewed by re-running the scan with `-tests` when the question is reopened —
+not by trusting this paragraph, which records a measurement taken at a point in
+time.
 
 **Where the gate runs.** The scan is not local-only. It runs in all three places
 that enforce the validation gates — the local `make check`, the CI workflow
