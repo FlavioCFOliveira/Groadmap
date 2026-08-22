@@ -8,6 +8,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -26,6 +27,7 @@ import (
 	"github.com/FlavioCFOliveira/GoGraph/store/wal"
 	"github.com/FlavioCFOliveira/Groadmap/internal/cypherguard"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
+	"github.com/FlavioCFOliveira/Groadmap/internal/terminal"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
@@ -40,6 +42,38 @@ type graphQueryResult struct {
 // query has no RETURN clause.
 type graphOKResult struct {
 	OK bool `json:"ok"`
+}
+
+// maxQueryBytes is the maximum length of a Cypher query: 1 MiB, which is
+// 1048576 bytes (SPEC/GRAPH.md § Maximum Query Length). A longer query is
+// refused with utils.ErrValidation (exit code 6) and the message
+// "query exceeds maximum length of 1048576 bytes", whichever of the two sources
+// carried it.
+//
+// BYTES, not characters, and the difference from the comment body's 4096-CHARACTER
+// cap is deliberate. A comment body is stored text whose length the author reads
+// back, so it is counted in the units it was written in. A query is an
+// instruction that is executed and discarded, never stored, and the harm this
+// maximum exists against is memory, which is counted in bytes. A 1 MiB query
+// written in multi-byte characters therefore carries fewer than 1048576
+// characters, and that is the intended reading.
+//
+// The size is generous on purpose: a graph bootstrap script carrying hundreds of
+// MERGE statements stays far below it, while the unbounded read this replaces
+// needed 256 MiB of input to reach 867 MB of resident memory and 15.9 s of wall
+// time. A maximum someone reaches doing ordinary work is a maximum that gets
+// widened later, and widening a published limit is worse than choosing it well
+// once; 64 KiB was considered and declined for exactly that reason.
+const maxQueryBytes = 1 << 20
+
+// queryTooLongError builds the refusal for a query that exceeds
+// maxQueryBytes. It wraps utils.ErrValidation, so the refusal carries exit code
+// 6 — NOT the exit code 2 that a missing query carries. The two are different
+// classes and SPEC/GRAPH.md § Standard Input That Supplies No Query forbids
+// collapsing them: supplying no query at all is a missing required parameter,
+// while supplying a query the command refuses to accept is a validation failure.
+func queryTooLongError() error {
+	return fmt.Errorf("%w: query exceeds maximum length of %d bytes", utils.ErrValidation, maxQueryBytes)
 }
 
 // printGraphHelp prints the family-level help for rmp graph.
@@ -302,10 +336,15 @@ func isFlagLike(tok string) bool {
 	return false
 }
 
-// readQuery extracts the Cypher query from args. It consumes --query /
-// -q from args and returns the trimmed query string, or reads all of
-// stdin when the flag is absent. An empty or whitespace-only result is
-// returned as ErrRequired.
+// readQuery extracts the Cypher query from args. It consumes --query / -q from
+// args and returns the trimmed query string, or reads the query from standard
+// input when the flag is absent. An empty or whitespace-only result is returned
+// as ErrRequired.
+//
+// Both sources are subject to maxQueryBytes, and the check happens here rather
+// than deeper in: an over-long query is never masked, never classified by the
+// guard rail, never handed to the engine, and never reaches an opened store
+// (SPEC/GRAPH.md § Maximum Query Length rule 3).
 func readQuery(args []string) (string, error) {
 	var queryVal string
 	var queryFound bool
@@ -347,6 +386,15 @@ func readQuery(args []string) (string, error) {
 	}
 
 	if queryFound {
+		// The maximum applies to BOTH sources (SPEC/GRAPH.md § Maximum Query
+		// Length rule 2), so the same text never passes at one door and fails at
+		// the other. A cap enforced only on the standard-input path would refuse
+		// in one place what it accepts in the other, which is not a maximum. The
+		// count is taken over the bytes AS SUPPLIED, which is why it precedes the
+		// trim of precedence rule 5.
+		if len(queryVal) > maxQueryBytes {
+			return "", queryTooLongError()
+		}
 		q := strings.TrimSpace(queryVal)
 		if q == "" {
 			return "", fmt.Errorf("%w: no query supplied", utils.ErrRequired)
@@ -354,12 +402,93 @@ func readQuery(args []string) (string, error) {
 		return q, nil
 	}
 
-	// --query absent: read stdin in full.
-	raw, err := io.ReadAll(os.Stdin)
-	if err != nil {
+	// --query absent: the query comes from standard input.
+	return readQueryStdin(os.Stdin)
+}
+
+// readQueryStdin obtains the Cypher query from src, which is the process's
+// standard input, when --query is absent (SPEC/GRAPH.md § Cypher Input Source
+// and Precedence, rules 2 and 3).
+//
+// A TERMINAL IS REFUSED WITHOUT BEING READ AT ALL. That ordering is the whole
+// point of this function and is part of the contract rather than an accident of
+// how fast the check runs: an invocation that forgot the flag, with a terminal on
+// standard input, must fail at once instead of waiting for a query nobody is
+// going to type. The failure it closes was observed, not imagined — such an
+// invocation printed nothing and never returned, and was killed after roughly
+// forty minutes.
+//
+// The refusal is ErrRequired (exit code 2), the same class and the same message
+// an empty or whitespace-only stream reaches. It is NOT the ErrValidation (exit
+// code 6) that an over-long query carries: supplying no query at all is a missing
+// required parameter, while supplying one the command refuses to accept is a
+// validation failure. SPEC/GRAPH.md § Standard Input That Supplies No Query
+// forbids collapsing the two.
+func readQueryStdin(src *os.File) (string, error) {
+	if terminal.IsTerminal(src) {
+		return "", fmt.Errorf("%w: no query supplied", utils.ErrRequired)
+	}
+	return readQueryStream(src)
+}
+
+// readQueryStream reads a Cypher query from an open, non-terminal stream under a
+// HARD BOUND and applies the rules its length and content are subject to.
+//
+// # Why this is not io.ReadAll
+//
+// The previous implementation drained the stream to EOF, so a hostile or runaway
+// writer decided how much this process buffered: 256 MiB offered to
+// `rmp graph query` produced 867 MB of peak resident memory and 15.9 s of wall
+// time, all of it spent on a "query" that was never going to be accepted (the
+// time went into the guard rail's masking pass and the engine's parse attempt,
+// both run over 256 MB of input). That is CWE-400 / CWE-789 — an allocation
+// sized by whoever is writing — against a command whose largest acceptable input
+// is 1 MiB.
+//
+// The read therefore stops at maxQueryBytes+1 bytes. That one extra byte already
+// settles the verdict, because no later byte can bring the count back down: if it
+// arrives, the query is over the maximum and is refused; if the stream ends
+// first, everything it carried is in hand. Peak memory is the buffer, and it does
+// not grow with the amount the writer sends. A producer still writing when the
+// command exits sees the usual broken pipe; the bound is a promise about what
+// this process consumes and retains, not about what the producer manages to push
+// into the operating system's pipe buffer.
+//
+// The buffer is allocated once at its full size rather than grown by io.ReadAll,
+// which reaches roughly 1.3x the data through its doubling and copies every byte
+// again at each growth. One allocation of a known size keeps the peak exactly
+// what the maximum promises, and 1 MiB is nothing beside the graph store this
+// command is about to open.
+//
+// One difference from the comment body's bounded read is deliberate and must not
+// be "aligned" away (SPEC/GRAPH.md § Bounded Standard-Input Read). That read
+// looks past its cap for trailing whitespace, so its verdict is exactly the
+// verdict a read-to-EOF implementation would reach after trimming. This one does
+// not: the maximum counts the bytes standard input supplies, so 1048576 bytes of
+// Cypher followed by trailing whitespace is refused even though trimming that
+// whitespace would have brought it to the maximum. A query's length is not a
+// value anybody reads back, and a producer that pads a megabyte of Cypher with
+// more whitespace is not a case worth reading further for.
+func readQueryStream(src io.Reader) (string, error) {
+	buf := make([]byte, maxQueryBytes+1)
+	n, err := io.ReadFull(src, buf)
+	// io.ReadFull reports the ordinary outcome — a stream shorter than the buffer
+	// — as io.EOF (nothing arrived) or io.ErrUnexpectedEOF (something did), so
+	// neither is a failure here. Anything else is a genuine I/O failure of the
+	// process rather than bad user input, and maps to exit code 1.
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 		return "", fmt.Errorf("%w: reading query from stdin: %v", utils.ErrDatabase, err)
 	}
-	q := strings.TrimSpace(string(raw))
+
+	if n > maxQueryBytes {
+		return "", queryTooLongError()
+	}
+
+	// The trim happens AFTER the length check (SPEC/GRAPH.md § Cypher Input
+	// Source and Precedence, rule 5). A stream that carries only whitespace
+	// therefore trims to nothing and is refused as a missing parameter, exactly
+	// as an empty stream is.
+	q := strings.TrimSpace(string(buf[:n]))
 	if q == "" {
 		return "", fmt.Errorf("%w: no query supplied", utils.ErrRequired)
 	}

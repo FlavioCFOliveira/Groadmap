@@ -60,6 +60,8 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | `graph` command syntax / subcommands | `COMMANDS.md § Graph Management` |
 | Graph query result JSON / property-type mapping | `DATA_FORMATS.md § Graph Query Result` |
 | Cypher input via flag or stdin | `GRAPH.md § Cypher Input Source and Precedence` |
+| Maximum Cypher query length (1 MiB, counted in bytes) and the exit code for exceeding it | `GRAPH.md § Maximum Query Length` |
+| Bounded standard-input read of a Cypher query, and the refusal of an empty, whitespace-only, or terminal standard input | `GRAPH.md § Bounded Standard-Input Read` and `GRAPH.md § Standard Input That Supplies No Query` |
 | Keyword spacing the guard rail requires in a `SHOW INDEX(ES)` / `SHOW CONSTRAINT(S)` command, and why the DDL class stays whitespace-tolerant | `GRAPH.md § Keyword Spacing in a Schema-Introspection Command` |
 | Which Cypher engine constructor each graph path uses (read vs transactional write) and why a read opens no store | `GRAPH.md § Engine Constructor by Path` |
 | Graph query notifications on stderr (e.g. Cartesian-product warning) | `GRAPH.md § Query Notifications as Diagnostics` |
@@ -143,7 +145,9 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Enums (`TaskType`, `TaskStatus`, `SprintStatus`, `CommentType`) | `MODELS.md § Enums` |
 | Comment type per-entity valid subsets (task: 7 values, sprint: 4 values) | `MODELS.md § Comment Type` |
 | Published field names in validation messages (field to published name, and when a message names the flag instead) | `COMMANDS.md § Published Field Names in Validation Messages` |
+| Which commands read standard input at all (exactly two flag values, and no other command) | `DATA_FORMATS.md § Input` |
 | Comment body input source and precedence (`--body` or stdin) | `COMMANDS.md § Comment Body Input Source and Precedence` |
+| Cypher query input source, maximum query length, and the bounded standard-input read | `GRAPH.md § Cypher Input Source and Precedence` |
 | Comment positional arguments (exactly one id per subcommand; an extra one is exit code 2) | `COMMANDS.md § Comment Positional Argument Contract` |
 | Memory layout / struct field ordering | `MODELS.md § Memory Layout Optimization` |
 | Task state transitions | `STATE_MACHINE.md § Task State Machine` |

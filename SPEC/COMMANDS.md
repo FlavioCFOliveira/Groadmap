@@ -2836,21 +2836,18 @@ in `GRAPH.md § Subcommands and Guard-Rail Validation`.
 - `-r, --roadmap <name>` - REQUIRED. Target roadmap (see
   `COMMANDS.md § Roadmap Selection (Always Required)`).
 - `--query <cypher>` - The Cypher query to run. When omitted, the query is read
-  in full from standard input.
+  from standard input under a bound; it is not read to EOF.
 - `-h, --help` - Show the subcommand help.
 
-**Query input source and precedence** (specified in
-`GRAPH.md § Cypher Input Source and Precedence`):
-
-1. When `--query` is present and non-empty, its value is used and standard input
-   is not read.
-2. When `--query` is absent, the entire standard input is read and used as the
-   query.
-3. When `--query` is absent and standard input is empty or not connected, the
-   command fails with exit code 2 (no query supplied).
-4. When `--query` is present but empty or whitespace only, the command fails with
-   exit code 2.
-5. Leading and trailing whitespace is trimmed before validation and execution.
+**Query input source and precedence.** The query has exactly two sources,
+`--query` and standard input, and omitting `--query` selects the second. Every
+rule over those sources is specified in
+`GRAPH.md § Cypher Input Source and Precedence`, which is canonical for it: which
+source wins, the maximum query length and the bounded read that enforces it, and
+what happens when no query is supplied at all. This section does not restate
+those rules. It restated them once, and the copy contradicted the original the
+day the original changed, which is the outcome `README.md § 3. Canonical Sources`
+exists to prevent.
 
 ### Output
 
@@ -2886,10 +2883,11 @@ in `GRAPH.md § Subcommands and Guard-Rail Validation`.
 |-----------|-------|
 | 0 | Query executed successfully. |
 | 1 | Cypher failed to parse or execute, or the graph store could not be opened, read, or written (`utils.ErrDatabase`). |
-| 2 | No query supplied: `--query` absent and stdin empty, or `--query` empty/whitespace (`utils.ErrRequired`). |
+| 2 | No query supplied: `--query` absent and standard input empty, whitespace only, or a terminal; or `--query` present with an empty, whitespace-only, or absent value (`utils.ErrRequired`). |
 | 3 | No roadmap selected and none provided via `-r` (`utils.ErrNoRoadmap`). |
 | 4 | Selected roadmap does not exist (`utils.ErrNotFound`). |
 | 6 | The query's operation class does not match the subcommand (`utils.ErrValidation`). |
+| 6 | The query is longer than the maximum query length of 1 MiB (1048576 bytes), whether it arrived through `--query` or through standard input (`utils.ErrValidation`). See `GRAPH.md § Maximum Query Length`. |
 
 The canonical exit-code catalogue is in `ARCHITECTURE.md § Exit Codes`; the graph
 feature introduces no new codes.
@@ -3008,7 +3006,8 @@ Output (success): JSON in the shape defined in
 |----------|-----------|------------------------------|
 | Roadmap not specified | 3 | "Error: no roadmap selected: use -r <name> or --roadmap <name>" |
 | Roadmap not found | 4 | "Error: resource not found: roadmap 'name'" |
-| No query supplied | 2 | "Error: required parameter missing: --query (or pipe a query on stdin)" |
+| No query supplied | 2 | "Error: required parameter missing: no query supplied" |
+| Query above the maximum length | 6 | "Error: validation error: query exceeds maximum length of 1048576 bytes" |
 | Operation-class mismatch | 6 | "Error: graph create accepts only CREATE/MERGE queries" |
 | Cypher parse/execution error | 1 | "Error: graph query failed: <engine diagnostic>" |
 | Graph store open/read/write failure | 1 | "Error: graph store unavailable: <detail>" |

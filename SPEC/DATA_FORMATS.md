@@ -47,9 +47,14 @@ comment body of the comment subcommands of the `task` and `sprint` families.**
 - Short flags: `-r <name>`, `-p 5`
 - Long flags: `--roadmap <name>`, `--priority 5`
 - Comma-separated lists: `1,2,3`
-- Standard input: the full stdin contents are read as the Cypher query when
-  `rmp graph <subcommand>` is invoked without `--query`, and as the comment body
-  when a comment subcommand is invoked without `--body`.
+- Standard input: the alternative source for the two flag values named above —
+  the Cypher query when `rmp graph <subcommand>` is invoked without `--query`,
+  and the comment body when a comment subcommand is invoked without `--body`.
+  Neither is read to EOF: each read is bounded, and the bound, the unit it counts
+  in, and what each refusal costs belong to that value's own canonical section,
+  which this file does not restate. Those sections are
+  `GRAPH.md § Cypher Input Source and Precedence` for the query and
+  `COMMANDS.md § Comment Body Input Source and Precedence` for the comment body.
 
 ---
 

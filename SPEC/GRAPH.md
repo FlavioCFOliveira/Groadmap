@@ -905,17 +905,34 @@ Notes:
 Each graph subcommand obtains its Cypher from one of two sources:
 
 1. The `--query "<cypher>"` flag.
-2. Standard input, read in full, when the `--query` flag is absent. This allows
-   piping a query, for example `cat query.cypher | rmp graph query -r myproject`.
+2. Standard input, read under a bound, when the `--query` flag is absent. This
+   allows piping a query, for example
+   `cat query.cypher | rmp graph query -r myproject`.
+
+Whichever source carries it, a query is subject to the maximum length stated in
+[Maximum Query Length](#maximum-query-length) below.
 
 Precedence and rules:
 
 1. When `--query` is present and non-empty, its value is used and standard input
    is not read.
-2. When `--query` is absent, the entire contents of standard input are read and
-   used as the query.
-3. When `--query` is absent and standard input is empty (or not connected), the
-   command fails with `utils.ErrRequired` (exit code 2): no query was supplied.
+2. When `--query` is absent, the query is read from standard input. The read is
+   bounded and is **not** a read to EOF: see
+   [Bounded Standard-Input Read](#bounded-standard-input-read) below.
+3. When `--query` is absent and standard input supplies no query, the command
+   fails with `utils.ErrRequired` (exit code 2) and the message
+   `Error: required parameter missing: no query supplied`. Standard input supplies
+   no query in each of these cases:
+   - Standard input is a terminal, meaning an interactive character device.
+   - Standard input is already at end of stream: it is closed, or it is connected
+     to a source that carries nothing, such as `/dev/null`.
+   - Everything standard input carries is whitespace, so nothing remains after
+     the trim of rule 5.
+
+   A terminal is refused **without being read at all**, so an invocation that
+   forgot the flag fails at once instead of waiting for a query nobody is going
+   to type. The other two cases are decided as soon as the stream ends (see
+   [Standard Input That Supplies No Query](#standard-input-that-supplies-no-query)).
 4. When `--query` is present, its value is the token that immediately follows it.
    The command fails with `utils.ErrRequired` (exit code 2) whenever that value is
    absent. The value is absent in either of these cases:
@@ -932,7 +949,9 @@ Precedence and rules:
    to the engine like any other query, and the engine then accepts or rejects it on
    its own Cypher-validity merits.
 5. Leading and trailing whitespace is trimmed from the query before the guard-rail
-   check and before execution.
+   check and before execution. The trim happens **after** the length check, which
+   counts the bytes as supplied (see
+   [Maximum Query Length](#maximum-query-length)).
 
 Standard input carries the Cypher query itself here: what the `graph` subcommands
 read from it is the instruction they execute, not a value they store. Other
@@ -941,6 +960,107 @@ stated in `DATA_FORMATS.md § Input`, which is the canonical statement of every
 command that reads standard input: it lists the `--query` of the `graph`
 subcommands together with the `--body` of the comment subcommands of the `task`
 and `sprint` families.
+
+#### Maximum Query Length
+
+A Cypher query MUST NOT exceed **1 MiB, which is 1048576 bytes**. A query longer
+than that is refused with `utils.ErrValidation` (exit code 6) and the message:
+
+```
+Error: validation error: query exceeds maximum length of 1048576 bytes
+```
+
+The rules are:
+
+1. **The maximum counts bytes, not characters.** This is a real difference from
+   the comment body's cap, which counts 4096 **characters**
+   (`COMMANDS.md § Comment Body Input Source and Precedence`), and the two units
+   are each correct for what they measure. A comment body is stored text whose
+   length is a property the user reads back, so it is counted in the units the
+   user wrote it in. A query is an instruction that is executed and discarded,
+   never stored, and the harm this maximum exists against is memory, which is
+   counted in bytes. A 1 MiB query written in multi-byte characters therefore
+   carries fewer than 1048576 characters, and that is the intended reading.
+2. **The maximum applies to both sources.** A query is refused at the same length
+   whether it arrived through `--query` or through standard input, so the same
+   text never passes at one door and fails at the other. The count is taken over
+   the bytes as supplied, before the trim of rule 5 above.
+3. **The length check runs first.** It precedes the guard-rail classification,
+   the literal masking that classification depends on
+   ([Literal-Aware Normalization](#literal-aware-normalization)), the opening of
+   the graph store, and the engine. An over-long query is never masked, never
+   classified, never parsed, and never executed; nothing in the graph changes and
+   stdout stays empty.
+4. **Why 1 MiB and not something tighter.** One MiB is roughly a million
+   characters, which is generous even for a graph bootstrap script carrying
+   hundreds of `MERGE` statements, while the harm measured against the unbounded
+   read this replaces needed 256 MiB of input to reach 867 MB of resident memory
+   and 15.9 seconds of wall time. A maximum that someone reaches while doing ordinary work is a
+   maximum that gets widened later, and widening a published limit is worse than
+   choosing it well once. A 64 KiB cap was considered and declined for exactly
+   that reason.
+
+#### Bounded Standard-Input Read
+
+When the query comes from standard input, the command does **not** read the
+stream to EOF. It consumes at most one byte beyond the maximum — 1048577 bytes —
+because that one byte already settles the verdict:
+
+- While what has arrived still fits within the maximum, reading continues.
+- The moment one byte more than the maximum has arrived, the verdict is fixed,
+  because no later byte can bring the count back down. The command stops reading
+  and fails with exit code 6 and the message given above.
+- Peak memory is therefore bounded by the maximum and does not grow with the
+  amount the writer sends.
+
+This is a security property and not an implementation detail: an over-long query
+is refused without ever being buffered, so a producer that writes without limit
+cannot drive the command's memory. The measured behaviour of the unbounded read
+this replaces was 867 MB of peak resident memory and 15.9 seconds of wall time
+for 256 MiB offered to `rmp graph query`, the time going into the guard rail's
+masking pass and the engine's parse attempt, both run over a 256 MB "query" that
+was never going to be accepted.
+
+A producer still writing when the command exits observes the usual broken-pipe
+result. The bound is a promise about what `rmp` consumes and retains, not about
+what the producer manages to write: the operating system's pipe buffer holds
+bytes the command never reads, so a writer may push somewhat more than 1048577
+bytes before the pipe breaks.
+
+One difference from the comment body's bounded read is deliberate and must not be
+"aligned" away. That read looks past its cap for trailing whitespace, so that the
+verdict it reaches is exactly the verdict a read-to-EOF implementation would
+reach after trimming. This read does not: the maximum counts the bytes standard
+input supplies, so a stream of 1048576 bytes of Cypher followed by trailing
+whitespace is refused even though trimming that whitespace would have brought it
+to the maximum. The simpler rule is the right one here because a query's length
+is not a value anybody reads back, and a producer that pads a megabyte of Cypher
+with more whitespace is not a case worth reading further for.
+
+#### Standard Input That Supplies No Query
+
+Rule 3 above refuses an empty, whitespace-only, or terminal standard input with
+exit code 2. For the terminal, the refusal comes **before any read**, and that
+is part of the contract rather than a remark about how fast the check happens to
+be: the command MUST NOT wait for input on a terminal, and MUST fail with exit
+code 2 instead.
+
+The failure this closes was observed rather than imagined. An invocation that
+omitted `--query`, with a terminal on standard input, printed nothing and never
+returned; it was terminated after roughly forty minutes. Nothing on the command
+line looks wrong, no diagnostic appears, and any automated caller — a script, a
+CI step, an agent — blocks indefinitely. This half of the unbounded read is the
+cheaper one to trigger: it needs no hostile input and consumes no memory. An interactive terminal is not a source a `graph` subcommand
+ever expects a query from, because the two documented ways to supply one are the
+flag and a pipe or a redirection.
+
+The exit code is 2 and not the 6 that an over-long query carries, and the two
+MUST NOT be collapsed into one class. Supplying no query at all is a missing
+required parameter, which is exit code 2 across the CLI; supplying a query the
+command refuses to accept is a validation failure, which is exit code 6. The
+comment body reaches the same two verdicts for the same two conditions
+(`COMMANDS.md § Comment Body Input Source and Precedence`, rule 3 for the missing
+body and the bounded read for the over-long one).
 
 ## Query Notifications as Diagnostics
 
@@ -1012,7 +1132,8 @@ sentinel is introduced for the graph feature.
 |-----------|----------|-----------|
 | No roadmap selected and none provided via `-r` | `utils.ErrNoRoadmap` | 3 |
 | Selected roadmap does not exist | `utils.ErrNotFound` | 4 |
-| No query supplied (flag absent and stdin empty, or flag empty/whitespace) | `utils.ErrRequired` | 2 |
+| No query supplied: `--query` absent and standard input empty, whitespace only, or a terminal; or `--query` present with an empty, whitespace-only, or absent value (see [Cypher Input Source and Precedence](#cypher-input-source-and-precedence)) | `utils.ErrRequired` | 2 |
+| Query longer than the maximum query length of 1 MiB, from either source (see [Maximum Query Length](#maximum-query-length)) | `utils.ErrValidation` | 6 |
 | Query's operation class does not match the subcommand | `utils.ErrValidation` | 6 |
 | `graph update` writes a relationship bound by an incoming or undirected pattern (see [Relationship Write Direction](#relationship-write-direction)) | `utils.ErrValidation` | 6 |
 | `graph query` or `graph search` receives a `SHOW INDEX(ES)` / `SHOW CONSTRAINT(S)` statement whose keyword spacing the engine does not accept (see [Keyword Spacing in a Schema-Introspection Command](#keyword-spacing-in-a-schema-introspection-command)) | `utils.ErrValidation` | 6 |
@@ -1026,7 +1147,11 @@ Rules:
    graph store is opened for writing. A rejected query never mutates the graph.
    The relationship-write-direction rejection and the introspection
    keyword-spacing rejection are detected at the same point and carry the same
-   guarantee; neither statement is ever handed to the engine.
+   guarantee; neither statement is ever handed to the engine. The two refusals
+   that belong to the query's source are detected earlier still, before the
+   guard rail classifies anything: the missing-query refusal (exit code 2) and
+   the maximum-length refusal (exit code 6), both stated in
+   [Cypher Input Source and Precedence](#cypher-input-source-and-precedence).
 2. A Cypher parse or execution failure reported by the engine is wrapped as
    `utils.ErrDatabase` (exit code 1), consistent with treating the graph store as
    a database-class dependency. The error message names the subcommand and
@@ -1431,12 +1556,40 @@ Groadmap's usage model and expectations:
     is not read-only (`WEB.md` Acceptance Criterion 151). Widening the introspection classification to
     tolerate other spacing again MUST fail this criterion (see
     [Keyword Spacing in a Schema-Introspection Command](#keyword-spacing-in-a-schema-introspection-command)).
+40. A query longer than the maximum is refused, and the read that refuses it is
+    bounded. A producer that offers `rmp graph query -r <roadmap>` far more than
+    1 MiB on standard input, with `--query` absent, sees the command exit 6 with
+    `Error: validation error: query exceeds maximum length of 1048576 bytes` on
+    stderr while it is still writing: the pipe breaks after the producer has
+    managed to send only a small fraction of what it offered, which is what
+    bounds the command's peak memory. Stdout is empty and the graph is unchanged.
+    The refusal is the length check's own, not the engine's: the exit code is 6
+    and not the 1 an engine parse failure carries, and the message is the one
+    above rather than an engine diagnostic. A legitimate query of several hundred
+    kilobytes, supplied the same way, still executes normally and exits 0, so the
+    bound refuses only what the maximum forbids. Lowering the maximum below what
+    ordinary work needs, or restoring a read that drains whatever it is offered,
+    MUST fail this criterion (see
+    [Maximum Query Length](#maximum-query-length) and
+    [Bounded Standard-Input Read](#bounded-standard-input-read)).
+41. An invocation that supplies no query fails at once instead of blocking.
+    `rmp graph query -r <roadmap>` with `--query` absent fails with exit code 2
+    and `Error: required parameter missing: no query supplied` on stderr in each
+    of the three cases the rule names: standard input at end of stream, standard
+    input carrying only whitespace, and standard input connected to a terminal.
+    The terminal case is the one that regressed into a hang, and it is asserted
+    on wall-clock time: the process exits without waiting for input, rather than
+    sitting there until something kills it. Criterion 8 fixes the exit code for
+    the first case; this criterion fixes the message, all three cases, and the
+    requirement that none of them waits (see
+    [Standard Input That Supplies No Query](#standard-input-that-supplies-no-query)).
 
 ## See Also
 
 - CLI command contract for `graph` → `COMMANDS.md § Graph Management`
 - Graph query result JSON and property-type mapping → `DATA_FORMATS.md § Graph Query Result`
 - Standard input as a Cypher source → `DATA_FORMATS.md § Input`
+- The sibling standard-input rule for the comment body, whose cap counts characters rather than bytes → `COMMANDS.md § Comment Body Input Source and Precedence`
 - GoGraph integration, directory layout, error handling → `ARCHITECTURE.md`
 - Go 1.26 toolchain bump and the GoGraph dependency → `BUILD.md § Go Toolchain`
 - Writer serialisation, reader locking, recovery, lock contention, and the synchronous checkpoint trade-off → `IMPLEMENTATION.md § Graph Store Concurrency`
