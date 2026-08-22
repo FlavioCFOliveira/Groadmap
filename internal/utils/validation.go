@@ -23,9 +23,8 @@ const MaxInt32 = math.MaxInt32 // 2,147,483,647
 // control-character check, on every command and for every field the two rules
 // govern", and no other check moves. Welding the pair into a single call is what
 // makes that hold by construction — the commands do not each repeat an ordering
-// they could get wrong, and a later change to WHERE the pair sits (rmp tasks 301
-// and 302 both revisit that) carries the order with it instead of leaving one
-// half behind.
+// they could get wrong, and a later change to WHERE the pair sits (rmp task 302
+// revisits that) carries the order with it instead of leaving one half behind.
 //
 // The order itself is not a preference. The control-character rule is defined
 // over decoded CODE POINTS, and an invalid byte decodes to U+FFFD, which is not

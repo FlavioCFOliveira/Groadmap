@@ -875,6 +875,209 @@ class TestFreeTextEmptinessAndTrimming:
                 assert self.CONTROL_REFUSAL in stderr, f"{label}: stderr {stderr!r}"
         print("[OK] a leading or trailing VT or FF is refused, not silently discarded")
 
+    def _stdin_cmd(self, args, body):
+        """Run the binary with body on standard input, so the bounded reader
+        models.ReadCommentBody is the code under test rather than the flag."""
+        env = dict(os.environ, HOME=str(self.test.home_dir))
+        proc = subprocess.run(
+            [self.test.cli_path, *args],
+            input=body, capture_output=True, text=True, env=env,
+        )
+        return proc.returncode, proc.stdout, proc.stderr
+
+    def _comment_body_writers(self, task_comment, sprint_comment):
+        """The eight ways a comment body reaches the application: each of the
+        four subcommands, on the --body path and on the standard-input path.
+
+        The two comment-edit standard-input entries supply no --type, because
+        standard input is read only when the type flag is absent (SPEC/COMMANDS.md,
+        Comment Body Input Source and Precedence, rule 2).
+
+        The third element is the missing-parameter refusal that writer emits for a
+        body that trims away to nothing and carries no forbidden character. It is
+        "no comment body supplied" everywhere except a comment-edit reading
+        standard input, which requested no other change either.
+        """
+        supplied = "Error: required parameter missing: no comment body supplied"
+        no_change = ("Error: required parameter missing: at least one of --type "
+                     "or --body is required")
+        task, sprint = str(self.task), str(self.sprint)
+        return [
+            ("task comment-add --body", "flag",
+             ["task", "comment-add", "-r", self.roadmap, task, "--type", "FINDING"], supplied),
+            ("task comment-add <stdin>", "stdin",
+             ["task", "comment-add", "-r", self.roadmap, task, "--type", "FINDING"], supplied),
+            ("task comment-edit --body", "flag",
+             ["task", "comment-edit", "-r", self.roadmap, str(task_comment)], supplied),
+            ("task comment-edit <stdin>", "stdin",
+             ["task", "comment-edit", "-r", self.roadmap, str(task_comment)], no_change),
+            ("sprint comment-add --body", "flag",
+             ["sprint", "comment-add", "-r", self.roadmap, sprint, "--type", "DECISION"], supplied),
+            ("sprint comment-add <stdin>", "stdin",
+             ["sprint", "comment-add", "-r", self.roadmap, sprint, "--type", "DECISION"], supplied),
+            ("sprint comment-edit --body", "flag",
+             ["sprint", "comment-edit", "-r", self.roadmap, str(sprint_comment)], supplied),
+            ("sprint comment-edit <stdin>", "stdin",
+             ["sprint", "comment-edit", "-r", self.roadmap, str(sprint_comment)], no_change),
+        ]
+
+    def _run_comment_writer(self, origin, args, body):
+        if origin == "stdin":
+            return self._stdin_cmd(args, body)
+        return self.test.run_cmd([*args, "--body", body], check=False)
+
+    def _seed_comments(self):
+        task_comment = self.test.run_cmd_json([
+            "task", "comment-add", "-r", self.roadmap, str(self.task),
+            "--type", "FINDING", "--body", "The refresh path reuses the access-token clock.",
+        ])["id"]
+        sprint_comment = self.test.run_cmd_json([
+            "sprint", "comment-add", "-r", self.roadmap, str(self.sprint),
+            "--type", "DECISION", "--body", "The sprint closes only once the regression test is green.",
+        ])["id"]
+        return task_comment, sprint_comment
+
+    # ---- rmp task 301 --------------------------------------------------
+
+    def test_task_edit_refuses_a_VT_or_FF_on_all_four_fields(self):
+        """rmp task 301: `task edit` was the residual after task 278 aligned the
+        other nine writers. It trimmed while building its updates map, so a
+        leading or trailing VT or FF was gone before the control-character rule
+        ever saw it -- the invocation exited 0 with the byte discarded in silence
+        (CWE-150) -- and a value made only of VT was reported as EMPTY.
+
+        Both halves are asserted here, on all four fields, at both edges, for both
+        characters. The message is what discriminates: a control-character refusal
+        and an emptiness refusal are both exit 6, so asserting the exit code alone
+        would prove nothing.
+        """
+        content = "Deliver the refresh-token guard"
+        before = self._task(self.task)
+
+        for flag, field in [
+            ("-t", "title"),
+            ("-fr", "functional_requirements"),
+            ("-tr", "technical_requirements"),
+            ("-ac", "acceptance_criteria"),
+        ]:
+            # A value made only of VT or FF: refused as a CONTROL CHARACTER,
+            # never as empty. This is the signature of the order.
+            for label, value in [
+                ("only VT", self.VT),
+                ("only FF", self.FF),
+                ("VT among spaces", f"  {self.VT}  "),
+            ]:
+                exit_code, _, stderr = self.test.run_cmd(
+                    ["task", "edit", "-r", self.roadmap, str(self.task), flag, value], check=False)
+                assert exit_code == 6, f"{flag} {label}: expected exit 6, got {exit_code}: {stderr!r}"
+                assert f"{field}: {self.CONTROL_REFUSAL}" in stderr, (
+                    f"task edit {flag} refused {label} as an EMPTY value rather than as a control "
+                    f"character: the trim ran ahead of the control-character check (CWE-150)\n"
+                    f"  stderr: {stderr!r}"
+                )
+
+            # A leading or trailing VT or FF in front of real content: refused,
+            # not stripped and stored.
+            for label, value in [
+                ("leading VT", self.VT + content),
+                ("trailing VT", content + self.VT),
+                ("leading FF", self.FF + content),
+                ("trailing FF", content + self.FF),
+            ]:
+                exit_code, stdout, stderr = self.test.run_cmd(
+                    ["task", "edit", "-r", self.roadmap, str(self.task), flag, value], check=False)
+                assert exit_code == 6, (
+                    f"task edit {flag} ACCEPTED a {label}: the character was discarded in silence "
+                    f"(CWE-150). exit {exit_code}, stdout {stdout!r}"
+                )
+                assert f"{field}: {self.CONTROL_REFUSAL}" in stderr, f"{flag} {label}: {stderr!r}"
+
+        after = self._task(self.task)
+        for key in ("title", "functional_requirements", "technical_requirements", "acceptance_criteria"):
+            assert after[key] == before[key], f"a refused task edit changed {key}"
+        print("[OK] task edit refuses a leading or trailing VT or FF on all four fields")
+
+    def test_a_VT_only_comment_body_is_a_control_character_not_an_absent_body(self):
+        """rmp task 301, the comment layer, on BOTH body origins.
+
+        The comment `body` answers an absent value with exit code 2 rather than 6,
+        so here the two possible orders are separated by the exit CLASS as well as
+        by the message: trimming first made a body of one VT look like a body that
+        never arrived (exit 2), with the forbidden character discarded in silence.
+        """
+        task_comment, sprint_comment = self._seed_comments()
+
+        for label, value in [
+            ("only VT", self.VT),
+            ("only FF", self.FF),
+            ("VT among spaces", f"  {self.VT}  "),
+            ("FF among TAB and LF", f"\t{self.FF}\n"),
+        ]:
+            for name, origin, args, _absent in self._comment_body_writers(task_comment, sprint_comment):
+                exit_code, stdout, stderr = self._run_comment_writer(origin, args, value)
+                assert exit_code == 6, (
+                    f"{name} with {label}: expected exit 6, got {exit_code}. A body made only of a "
+                    f"forbidden control character was reported as a body that never ARRIVED, with the "
+                    f"character discarded in silence (CWE-150).\n  stderr: {stderr!r}"
+                )
+                assert f"body: {self.CONTROL_REFUSAL}" in stderr, f"{name} with {label}: {stderr!r}"
+                assert stdout.strip() == "", f"{name} wrote to stdout on a refusal: {stdout!r}"
+
+        bodies = self.test.run_cmd_json(["task", "comment-list", "-r", self.roadmap, str(self.task)])
+        assert len(bodies) == 1, f"a refused comment write changed the log: {bodies}"
+        assert bodies[0]["body"] == "The refresh path reuses the access-token clock."
+        print("[OK] a VT-only comment body is refused as a control character on both origins")
+
+    def test_a_leading_or_trailing_VT_or_FF_in_a_comment_body_is_refused(self):
+        """The other half for the comment layer, on both origins: the body has
+        real content, so a trim-first order does not refuse it at all."""
+        task_comment, sprint_comment = self._seed_comments()
+        content = "The refresh path reuses the access-token clock."
+
+        for label, value in [
+            ("leading VT", self.VT + content),
+            ("trailing VT", content + self.VT),
+            ("leading FF", self.FF + content),
+            ("trailing FF", content + self.FF),
+        ]:
+            for name, origin, args, _absent in self._comment_body_writers(task_comment, sprint_comment):
+                exit_code, stdout, stderr = self._run_comment_writer(origin, args, value)
+                assert exit_code == 6, (
+                    f"{name} ACCEPTED a body carrying a {label}: exit {exit_code}, stdout {stdout!r}. "
+                    f"The character was discarded in silence (CWE-150)."
+                )
+                assert f"body: {self.CONTROL_REFUSAL}" in stderr, f"{name} with {label}: {stderr!r}"
+
+        bodies = self.test.run_cmd_json(["task", "comment-list", "-r", self.roadmap, str(self.task)])
+        assert len(bodies) == 1 and bodies[0]["updated_at"] is None, (
+            f"a refused comment write reached the table: {bodies}"
+        )
+        print("[OK] a leading or trailing VT or FF in a comment body is refused on both origins")
+
+    def test_a_whitespace_only_comment_body_is_still_an_absent_body(self):
+        """The guard on the two tests above: moving the emptiness judgement behind
+        the content rules must refuse NOTHING new.
+
+        Every probe here trims away to nothing and carries no forbidden character,
+        so every one must still reach the missing-parameter verdict, exit 2, on
+        both origins -- exactly as it did before rmp task 301.
+        """
+        task_comment, sprint_comment = self._seed_comments()
+
+        for label, value in self.WHITESPACE_ONLY:
+            for name, origin, args, absent in self._comment_body_writers(task_comment, sprint_comment):
+                exit_code, stdout, stderr = self._run_comment_writer(origin, args, value)
+                assert exit_code == 2, (
+                    f"{name} with {label}: expected exit 2 (a body that never arrived), got {exit_code}."
+                    f"\n  stderr: {stderr!r}"
+                )
+                assert absent in stderr, f"{name} with {label}\n  stderr: {stderr!r}"
+                assert stdout.strip() == "", f"{name} wrote to stdout on a refusal: {stdout!r}"
+
+        bodies = self.test.run_cmd_json(["task", "comment-list", "-r", self.roadmap, str(self.task)])
+        assert len(bodies) == 1, f"a refused comment write changed the log: {bodies}"
+        print("[OK] a whitespace-only comment body is still an absent body on both origins")
+
     def test_the_completion_summary_is_stored_trimmed_and_refuses_a_control_character(self):
         """completion_summary is the one free-text field Rule 1 does not govern
         -- it is optional -- but Rule 2 and the ORDER both apply to it.

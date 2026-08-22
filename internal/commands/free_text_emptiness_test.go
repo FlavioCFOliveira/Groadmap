@@ -125,7 +125,8 @@ func taskCreateWithField(roadmap string, under utils.Field, value string) []stri
 // The seventh required field, the comment `body`, is refused with exit code 2
 // under a rule of its own that predates this constraint
 // (SPEC/COMMANDS.md, Comment Body Input Source and Precedence), so it is swept
-// separately by TestWhitespaceOnlyCommentBodyIsAMissingParameter below. The
+// separately, through commentBodyWriters below, which also reaches it by the
+// standard-input origin the flag-shaped signature here cannot express. The
 // eighth free-text field, `completion_summary`, is optional and Rule 1 does not
 // govern it at all.
 func requiredFreeTextWriters(roadmap string) []freeTextWriter {
@@ -360,10 +361,17 @@ func TestLiteralEmptyStringKeepsItsOwnRefusal(t *testing.T) {
 	})
 }
 
-// aligned lists the (command, field) pairs that implement the specified order
-// today. Every one of them refuses a value made only of VT as a
-// CONTROL-CHARACTER violation, which is the observable signature of step 1
+// alignedFreeTextWriters lists every (command, field) pair whose refusal is exit
+// code 6 and names the field. Every one of them refuses a value made only of VT
+// as a CONTROL-CHARACTER violation, which is the observable signature of step 1
 // running on the value as supplied.
+//
+// It is the whole of that population: `task edit` was the one residual and rmp
+// task 301 closed it, so there is no longer an exemption to record. The comment
+// `body` is the one required free-text field this list does not carry, because
+// its refusals belong to a different class entirely (exit code 2, the
+// missing-parameter wording); commentBodyWriters below sweeps it under the same
+// two probes.
 func alignedFreeTextWriters(roadmap string) []freeTextWriter {
 	return []freeTextWriter{
 		{"task create -t", utils.FieldTaskTitle, func(v string) error {
@@ -377,6 +385,18 @@ func alignedFreeTextWriters(roadmap string) []freeTextWriter {
 		}},
 		{"task create -ac", utils.FieldTaskAcceptanceCriteria, func(v string) error {
 			return taskCreate(taskCreateWithField(roadmap, utils.FieldTaskAcceptanceCriteria, v))
+		}},
+		{"task edit -t", utils.FieldTaskTitle, func(v string) error {
+			return taskEdit([]string{"-r", roadmap, "1", "-t", v})
+		}},
+		{"task edit -fr", utils.FieldTaskFunctionalRequirements, func(v string) error {
+			return taskEdit([]string{"-r", roadmap, "1", "-fr", v})
+		}},
+		{"task edit -tr", utils.FieldTaskTechnicalRequirements, func(v string) error {
+			return taskEdit([]string{"-r", roadmap, "1", "-tr", v})
+		}},
+		{"task edit -ac", utils.FieldTaskAcceptanceCriteria, func(v string) error {
+			return taskEdit([]string{"-r", roadmap, "1", "-ac", v})
 		}},
 		{"sprint create -t", utils.FieldSprintTitle, func(v string) error {
 			return sprintCreate([]string{"-r", roadmap, "-t", v, "-d", "Deliver the refresh-token guard."})
@@ -473,35 +493,207 @@ func TestALeadingOrTrailingVTOrFFIsRefusedNotDiscarded(t *testing.T) {
 	}
 }
 
-// TestControlCharacterOrderIsStillOpenOnTaskEdit records, rather than hides, the
-// one command this task deliberately did not touch.
+// commentBodyWriter is one of the eight ways a comment body reaches the
+// application: each of the four subcommands, on the `--body` path and on the
+// standard-input path. Both origins are swept because the two are handled by
+// different code — the flag value arrives as a plain string, standard input goes
+// through the bounded reader models.ReadCommentBody — and the SPEC gives them one
+// verdict, so a test that exercised only the flag would leave the reader free to
+// disagree with it.
 //
-// `task edit` trims while building its updates map, so it has exactly the hole
-// described above: a leading or trailing VT or FF is discarded in silence, and a
-// value made only of VT is reported as empty rather than as a control character.
-// That divergence is rmp task 301, which is open in this sprint and owns the
-// two task paths; SPEC/MODELS.md now publishes the order 301 has to implement,
-// so 301 is no longer a pending decision.
-//
-// This test asserts the CURRENT verdict on purpose. When 301 lands it will fail,
-// and its failure message says what to do -- which is the point: the exemption
-// cannot outlive the defect in silence.
-func TestControlCharacterOrderIsStillOpenOnTaskEdit(t *testing.T) {
-	const roadmap = "free-text-order-task-edit-residual"
-	setupEmptinessRoadmap(t, roadmap)
+// absent is the missing-parameter refusal the writer emits for a body that
+// carries no forbidden character and trims away to nothing. It is "no comment
+// body supplied" everywhere except `comment-edit` reading standard input: that
+// invocation requested no other change either, so the pinned wording is the
+// other one (SPEC/COMMANDS.md § Emptiness Constraint (All Required Free-Text
+// Fields), the `body` row of the refusal table).
+type commentBodyWriter struct {
+	command string
+	absent  string
+	invoke  func(t *testing.T, value string) error
+}
 
-	err := taskEdit([]string{"-r", roadmap, "1", "-t", freeTextVT})
-	switch {
-	case err == nil:
-		t.Fatal("task edit accepted a title made only of VT, which no order permits")
-	case err.Error() == utils.ControlCharError(utils.FieldTaskTitle).Error():
-		t.Fatal("task edit now refuses a VT-only title as a control character: rmp task 301 has landed. " +
-			"Move `task edit` into alignedFreeTextWriters and delete this test.")
-	case err.Error() == utils.FieldEmptyError(utils.FieldTaskTitle).Error():
-		// The known residual: the trim ran first, so nothing was left to refuse
-		// as a control character. Owned by rmp task 301.
-	default:
-		t.Fatalf("task edit gave an unexpected refusal for a VT-only title: %q", err.Error())
+const (
+	commentBodyAbsentMessage = "required parameter missing: no comment body supplied"
+	commentBodyNoChange      = "required parameter missing: at least one of --type or --body is required"
+)
+
+// commentBodyWriters enumerates those eight. The two `comment-edit` standard-input
+// entries deliberately supply no `--type`: standard input is read only when the
+// type flag is absent, which is the rule that stops a type-only edit from
+// blocking on a terminal (SPEC/COMMANDS.md § Comment Body Input Source and
+// Precedence, rule 2).
+func commentBodyWriters(roadmap string, taskCommentID, sprintCommentID int) []commentBodyWriter {
+	return []commentBodyWriter{
+		{"task comment-add --body", commentBodyAbsentMessage, func(_ *testing.T, v string) error {
+			return taskCommentAdd([]string{"-r", roadmap, "1", "--type", "DECISION", "--body", v})
+		}},
+		{"task comment-add <stdin>", commentBodyAbsentMessage, func(t *testing.T, v string) error {
+			var err error
+			withStdin(t, v, func() {
+				err = taskCommentAdd([]string{"-r", roadmap, "1", "--type", "DECISION"})
+			})
+			return err
+		}},
+		{"task comment-edit --body", commentBodyAbsentMessage, func(_ *testing.T, v string) error {
+			return taskCommentEdit([]string{"-r", roadmap, itoa(taskCommentID), "--body", v})
+		}},
+		{"task comment-edit <stdin>", commentBodyNoChange, func(t *testing.T, v string) error {
+			var err error
+			withStdin(t, v, func() {
+				err = taskCommentEdit([]string{"-r", roadmap, itoa(taskCommentID)})
+			})
+			return err
+		}},
+		{"sprint comment-add --body", commentBodyAbsentMessage, func(_ *testing.T, v string) error {
+			return sprintCommentAdd([]string{"-r", roadmap, "1", "--type", "DECISION", "--body", v})
+		}},
+		{"sprint comment-add <stdin>", commentBodyAbsentMessage, func(t *testing.T, v string) error {
+			var err error
+			withStdin(t, v, func() {
+				err = sprintCommentAdd([]string{"-r", roadmap, "1", "--type", "DECISION"})
+			})
+			return err
+		}},
+		{"sprint comment-edit --body", commentBodyAbsentMessage, func(_ *testing.T, v string) error {
+			return sprintCommentEdit([]string{"-r", roadmap, itoa(sprintCommentID), "--body", v})
+		}},
+		{"sprint comment-edit <stdin>", commentBodyNoChange, func(t *testing.T, v string) error {
+			var err error
+			withStdin(t, v, func() {
+				err = sprintCommentEdit([]string{"-r", roadmap, itoa(sprintCommentID)})
+			})
+			return err
+		}},
+	}
+}
+
+// seedCommentsForBodyProbes creates the one task comment and the one sprint
+// comment the `comment-edit` writers address, and returns their ids.
+func seedCommentsForBodyProbes(t *testing.T, roadmap string) (taskCommentID, sprintCommentID int) {
+	t.Helper()
+
+	_ = captureStdout(t, func() {
+		if err := taskCommentAdd([]string{"-r", roadmap, "1", "--type", "DECISION", "--body", "Refuse the token whose exp is the current second."}); err != nil {
+			t.Fatalf("seeding the task comment: %v", err)
+		}
+		if err := sprintCommentAdd([]string{"-r", roadmap, "1", "--type", "DECISION", "--body", "The sprint closes only once the regression test is green."}); err != nil {
+			t.Fatalf("seeding the sprint comment: %v", err)
+		}
+	})
+	return 1, 1
+}
+
+// TestAVTOnlyCommentBodyIsRefusedAsAControlCharacterAndNotAsAnAbsentBody is the
+// comment layer's half of the ORDER, and the counterpart of
+// TestAValueOfOnlyVTIsRefusedAsAControlCharacterAndNotAsEmpty above.
+//
+// The two possible orders are separated here by the exit CLASS as well as by the
+// message, because the comment `body` answers an absent value with exit code 2
+// rather than 6:
+//
+//   - checks on the value as supplied, then the trim: exit 6, "body: control
+//     characters are not allowed". This is the specified order.
+//   - the trim first: the VT is gone, nothing is left, the body looks like one
+//     that never arrived, and the answer becomes exit 2 "no comment body
+//     supplied" -- with the forbidden character discarded in silence (CWE-150).
+//
+// This is what rmp task 301 closed on both origins.
+func TestAVTOnlyCommentBodyIsRefusedAsAControlCharacterAndNotAsAnAbsentBody(t *testing.T) {
+	const roadmap = "free-text-order-comment-body-vt-only"
+	setupEmptinessRoadmap(t, roadmap)
+	taskCommentID, sprintCommentID := seedCommentsForBodyProbes(t, roadmap)
+
+	want := utils.ControlCharError(utils.FieldCommentBody).Error()
+
+	for _, w := range commentBodyWriters(roadmap, taskCommentID, sprintCommentID) {
+		for _, probe := range []struct{ name, value string }{
+			{"only VT", freeTextVT},
+			{"only FF", freeTextFF},
+			{"VT surrounded by spaces", "  " + freeTextVT + "  "},
+			{"FF surrounded by TAB and LF", "\t" + freeTextFF + "\n"},
+		} {
+			t.Run(w.command+"/"+probe.name, func(t *testing.T) {
+				err := w.invoke(t, probe.value)
+				if err == nil {
+					t.Fatalf("%s accepted a body made only of a forbidden control character", w.command)
+				}
+				if err.Error() == want {
+					return
+				}
+				if utils.IsRequired(err) {
+					t.Fatalf("%s reported %s as a body that never ARRIVED: the trim ran ahead of the "+
+						"control-character check, which is the CWE-150 reordering SPEC/MODELS.md forbids\n"+
+						" got: %q\nwant: %q", w.command, probe.name, err.Error(), want)
+				}
+				t.Fatalf("%s\n got: %q\nwant: %q", w.command, err.Error(), want)
+			})
+		}
+	}
+}
+
+// TestALeadingOrTrailingVTOrFFInACommentBodyIsRefusedNotDiscarded is the other
+// half, and the half that carries the security consequence: the body has real
+// content, so the trim-first order does not refuse it at all -- it strips the
+// forbidden character and stores the rest.
+//
+// The `--body` origin already behaved this way before rmp task 301; the
+// standard-input origin is swept beside it so the bounded reader is held to the
+// same verdict rather than trusted to reach it.
+func TestALeadingOrTrailingVTOrFFInACommentBodyIsRefusedNotDiscarded(t *testing.T) {
+	const roadmap = "free-text-order-comment-body-vt-edges"
+	database := setupEmptinessRoadmap(t, roadmap)
+	taskCommentID, sprintCommentID := seedCommentsForBodyProbes(t, roadmap)
+
+	const content = "The refresh path reuses the access-token clock."
+	want := utils.ControlCharError(utils.FieldCommentBody).Error()
+
+	for _, w := range commentBodyWriters(roadmap, taskCommentID, sprintCommentID) {
+		for _, e := range []struct{ name, value string }{
+			{"leading VT", freeTextVT + content},
+			{"trailing VT", content + freeTextVT},
+			{"leading FF", freeTextFF + content},
+			{"trailing FF", content + freeTextFF},
+		} {
+			t.Run(w.command+"/"+e.name, func(t *testing.T) {
+				err := w.invoke(t, e.value)
+				if err == nil {
+					t.Fatalf("%s ACCEPTED a body carrying a %s: the character was discarded in silence (CWE-150)",
+						w.command, e.name)
+				}
+				if err.Error() != want {
+					t.Errorf("%s\n got: %q\nwant: %q", w.command, err.Error(), want)
+				}
+			})
+		}
+	}
+
+	assertSeededCommentsIntact(t, database, roadmap, taskCommentID)
+}
+
+// assertSeededCommentsIntact proves the refusals above wrote nothing: the two
+// seeded comments are still the only two, and the task one still carries the text
+// it was created with.
+func assertSeededCommentsIntact(t *testing.T, database *db.DB, roadmap string, taskCommentID int) {
+	t.Helper()
+
+	ctx, cancel := db.WithQuickTimeout()
+	defer cancel()
+
+	comments, err := database.ListTaskComments(ctx, 1, nil)
+	if err != nil {
+		t.Fatalf("listing the task comments of %s: %v", roadmap, err)
+	}
+	if len(comments) != 1 {
+		t.Errorf("a refused comment write changed the log: %d comments, want 1", len(comments))
+	}
+
+	comment, err := database.GetTaskComment(ctx, taskCommentID)
+	if err != nil {
+		t.Fatalf("reading the seeded task comment: %v", err)
+	}
+	if comment.Body != "Refuse the token whose exp is the current second." {
+		t.Errorf("a refused comment write changed the stored body: %q", comment.Body)
 	}
 }
 
@@ -511,69 +703,36 @@ func TestControlCharacterOrderIsStillOpenOnTaskEdit(t *testing.T) {
 // the same condition as a body that never arrived, so all four subcommands
 // report a missing parameter, and this constraint leaves that rule exactly as it
 // stands.
+//
+// It is also the guard on the two tests above: they moved the emptiness
+// judgement behind the content rules, and this proves that the move refused
+// nothing new. Every probe here trims away to nothing WITHOUT carrying a
+// forbidden character, so every one must still reach the missing-parameter
+// verdict on both origins.
 func TestWhitespaceOnlyCommentBodyIsAMissingParameter(t *testing.T) {
 	const roadmap = "free-text-emptiness-comment-body"
 	database := setupEmptinessRoadmap(t, roadmap)
+	taskCommentID, sprintCommentID := seedCommentsForBodyProbes(t, roadmap)
 
-	var taskCommentID, sprintCommentID int
-	_ = captureStdout(t, func() {
-		if err := taskCommentAdd([]string{"-r", roadmap, "1", "--type", "DECISION", "--body", "Refuse the token whose exp is the current second."}); err != nil {
-			t.Fatalf("seeding the task comment: %v", err)
-		}
-		if err := sprintCommentAdd([]string{"-r", roadmap, "1", "--type", "DECISION", "--body", "The sprint closes only once the regression test is green."}); err != nil {
-			t.Fatalf("seeding the sprint comment: %v", err)
-		}
-	})
-	taskCommentID, sprintCommentID = 1, 1
-
-	writers := []struct {
-		command string
-		invoke  func(v string) error
-	}{
-		{"task comment-add --body", func(v string) error {
-			return taskCommentAdd([]string{"-r", roadmap, "1", "--type", "DECISION", "--body", v})
-		}},
-		{"task comment-edit --body", func(v string) error {
-			return taskCommentEdit([]string{"-r", roadmap, itoa(taskCommentID), "--body", v})
-		}},
-		{"sprint comment-add --body", func(v string) error {
-			return sprintCommentAdd([]string{"-r", roadmap, "1", "--type", "DECISION", "--body", v})
-		}},
-		{"sprint comment-edit --body", func(v string) error {
-			return sprintCommentEdit([]string{"-r", roadmap, itoa(sprintCommentID), "--body", v})
-		}},
-	}
-
-	for _, w := range writers {
+	for _, w := range commentBodyWriters(roadmap, taskCommentID, sprintCommentID) {
 		for _, probe := range emptinessProbes {
 			t.Run(w.command+"/"+probe.name, func(t *testing.T) {
-				err := w.invoke(probe.value)
+				err := w.invoke(t, probe.value)
 				if err == nil {
 					t.Fatalf("%s accepted a body made only of %s", w.command, probe.name)
 				}
 				if !utils.IsRequired(err) {
 					t.Errorf("%s: a whitespace-only body is the missing-parameter class (exit 2); got %v", w.command, err)
 				}
-				const want = "required parameter missing: no comment body supplied"
-				if !strings.Contains(err.Error(), want) {
-					t.Errorf("%s\n got: %q\nwant substring: %q", w.command, err.Error(), want)
+				if !strings.Contains(err.Error(), w.absent) {
+					t.Errorf("%s\n got: %q\nwant substring: %q", w.command, err.Error(), w.absent)
 				}
 			})
 		}
 	}
 
-	// None of the refusals wrote a comment: the two seeded ones are still the
-	// only two, and the first one still carries the text it was created with.
-	ctx, cancel := db.WithQuickTimeout()
-	defer cancel()
-
-	comment, err := database.GetTaskComment(ctx, taskCommentID)
-	if err != nil {
-		t.Fatalf("reading the seeded task comment: %v", err)
-	}
-	if comment.Body != "Refuse the token whose exp is the current second." {
-		t.Errorf("a refused comment-edit changed the stored body: %q", comment.Body)
-	}
+	// None of the refusals wrote a comment.
+	assertSeededCommentsIntact(t, database, roadmap, taskCommentID)
 }
 
 // createdID runs a create command, captures the {"id": N} it prints, and returns

@@ -13,15 +13,15 @@ import (
 
 // taskEditTextFields ties each free-text column `task edit` can write to the
 // published name its validation messages use for that column and to the maximum
-// the column accepts. One table, so the three rules applied below cannot
-// disagree about which columns are free text and — the point of it — cannot
-// disagree about what to call one of them.
+// the column accepts. One table, so the rules applied below cannot disagree
+// about which columns are free text and — the point of it — cannot disagree
+// about what to call one of them.
 //
-// The order is the order the fields are declared in SPEC/COMMANDS.md, and each
-// rule is applied in that order, so an invocation that breaks one rule on two
-// fields always names the same one. The two maps this replaced were iterated in
-// Go's randomised map order, so which of two offending fields got named varied
-// between runs of the identical command.
+// The order is the order the fields are declared in SPEC/COMMANDS.md, and every
+// sweep below walks the table in that order, so an invocation that breaks one
+// rule on two fields always names the same one. The two maps this replaced were
+// iterated in Go's randomised map order, so which of two offending fields got
+// named varied between runs of the identical command.
 var taskEditTextFields = []struct {
 	column string
 	limit  int
@@ -111,18 +111,26 @@ func taskEdit(args []string) error {
 
 	updates := make(map[string]any)
 
-	// Trim leading/trailing whitespace before validation per SPEC/COMMANDS.md.
+	// Each free-text flag is recorded AS SUPPLIED. The trim that used to happen
+	// on this line now happens inside utils.RequireFreeText below, once the
+	// encoding and control-character rules have seen the value the caller
+	// actually sent (SPEC/MODELS.md § Free-Text Emptiness and Trimming
+	// Constraint, step 1 before step 2). Trimming here is what let a leading or
+	// trailing VT or FF through with the character silently discarded: both are
+	// forbidden control characters AND whitespace to strings.TrimSpace, so the
+	// check that ran later examined a value they had already vanished from
+	// (CWE-150).
 	if v, ok := result.Flags["Title"]; ok {
-		updates["title"] = strings.TrimSpace(v.(string))
+		updates["title"] = v.(string)
 	}
 	if v, ok := result.Flags["FunctionalRequirements"]; ok {
-		updates["functional_requirements"] = strings.TrimSpace(v.(string))
+		updates["functional_requirements"] = v.(string)
 	}
 	if v, ok := result.Flags["TechnicalRequirements"]; ok {
-		updates["technical_requirements"] = strings.TrimSpace(v.(string))
+		updates["technical_requirements"] = v.(string)
 	}
 	if v, ok := result.Flags["AcceptanceCriteria"]; ok {
-		updates["acceptance_criteria"] = strings.TrimSpace(v.(string))
+		updates["acceptance_criteria"] = v.(string)
 	}
 	// Validate priority/severity range BEFORE the UPDATE. Without this, an
 	// out-of-range value reached the SQLite CHECK constraint and surfaced as a
@@ -158,40 +166,50 @@ func taskEdit(args []string) error {
 		return nil
 	}
 
-	// Validate that required text fields are not set to empty. The refusal names
-	// the FIELD, by its published name: a value did reach the application and
-	// broke a rule about its content, which is the field case of
-	// SPEC/COMMANDS.md § Published Field Names in Validation Messages. This site
-	// used to name the FLAG instead, so one command spelled one field two ways —
-	// "functional-requirements cannot be empty" next to
-	// "functional_requirements: control characters are not allowed" for the same
-	// field of the same task.
-	for _, f := range taskEditTextFields {
-		if str, ok := updates[f.column].(string); ok && str == "" {
-			return utils.FieldEmptyError(f.field)
-		}
-	}
-
 	// Validate that text fields stay within their documented maximums.
 	// Without this, oversized values reach SQLite and surface as a generic
 	// "constraint failed" error (exit 1) instead of the documented
 	// utils.ErrFieldTooLarge (exit 6) per SPEC/COMMANDS.md.
+	//
+	// The cap keeps the position it has always had on this command — ahead of
+	// the content rules, which is what rmp task 302 measures and this task does
+	// not move — and it measures strings.TrimSpace of the value because that is
+	// the value stored (SPEC/MODELS.md § Free-Text Emptiness and Trimming
+	// Constraint, Rule 2). It used to measure the map entry, which was already
+	// trimmed, so what it counts is unchanged.
 	for _, f := range taskEditTextFields {
-		if str, ok := updates[f.column].(string); ok && len(str) > f.limit {
+		if str, ok := updates[f.column].(string); ok && len(strings.TrimSpace(str)) > f.limit {
 			return utils.FieldTooLargeError(f.field, f.limit)
 		}
 	}
 
-	// Reject a value that is not valid UTF-8, and then one that carries a control
-	// / bidi / format code point, in every free-text field that is being set
-	// (SPEC/MODELS.md § Free-Text UTF-8 Encoding Constraint and § Free-Text
-	// Control-Character Constraint, applied in that order by one call).
+	// The whole of SPEC/MODELS.md § Free-Text Emptiness and Trimming Constraint,
+	// through the one helper that owns its order: the encoding rule and then the
+	// control-character rule on the value AS SUPPLIED, then the trim, then the
+	// emptiness judgement on the TRIMMED value. The map entry is rebound to the
+	// trimmed value, so it is also what the UPDATE below writes (Rule 2).
+	//
+	// The emptiness judgement used to be a sweep of its own AHEAD of the cap.
+	// Moving it here is not a change of verdict: a value that trims to nothing
+	// is zero characters long, so no input exists for which the cap could answer
+	// first. What the move does settle is the order this task exists for —
+	// step 1 now runs before step 3 on this command as it already did on the
+	// nine writers rmp task 278 aligned, so a value made only of VT is refused
+	// as a CONTROL CHARACTER and never as an empty one.
+	//
+	// The refusal names the FIELD, by its published name (SPEC/COMMANDS.md
+	// § Published Field Names in Validation Messages); utils.Field is what makes
+	// that the only name it can carry.
 	for _, f := range taskEditTextFields {
-		if str, ok := updates[f.column].(string); ok {
-			if err := utils.ValidateFreeText(str, f.field); err != nil {
-				return err
-			}
+		str, ok := updates[f.column].(string)
+		if !ok {
+			continue
 		}
+		stored, textErr := utils.RequireFreeText(str, f.field)
+		if textErr != nil {
+			return textErr
+		}
+		updates[f.column] = stored
 	}
 
 	database, err := db.OpenExisting(roadmapName)

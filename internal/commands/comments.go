@@ -22,9 +22,12 @@
 //     decides nothing, and resolveCommentBody runs later, after the type verdict.
 //  2. A body that never arrived is a MISSING PARAMETER (exit code 2), not a
 //     validation failure (exit code 6). models.ValidateCommentBody reports an
-//     empty body as the latter, so this layer decides emptiness itself with
-//     models.NormalizeCommentBody and keeps the domain's exit-6 verdict
-//     unreachable from the command line.
+//     empty body as the latter, so this layer decides absence itself, through
+//     models.CommentBodyIsAbsent, and keeps the domain's exit-6 empty verdict
+//     unreachable from the command line. It decides absence and nothing else:
+//     the content rules that must run before that judgement stay in the domain,
+//     which is what stops the trim from silently swallowing a leading or
+//     trailing VT or FF.
 package commands
 
 import (
@@ -180,9 +183,26 @@ func extractCommentBody(args []string) ([]string, commentBody) {
 // subcommands, so it is reported as (_, false, nil) and the caller supplies the
 // pinned message: "no comment body supplied" on `comment-add`, "at least one of
 // --type or --body is required" on `comment-edit`.
+//
+// Whether a body is absent is asked of models.CommentBodyIsAbsent rather than of
+// models.NormalizeCommentBody, and on the value AS SUPPLIED, on both input paths
+// alike. The difference is the ORDER SPEC/MODELS.md § Free-Text Emptiness and
+// Trimming Constraint fixes: a body made only of VT or FF trims away to nothing,
+// so asking the trim alone reported it as a body that never arrived and
+// discarded the forbidden character in silence (CWE-150). Asking the domain
+// makes the content rules answer first, so such a body is refused as a control
+// character with exit code 6 and only genuinely empty whitespace reaches the
+// missing-parameter verdict.
 func resolveCommentBody(body commentBody, stdinFallback bool) (string, bool, error) {
 	if body.present {
-		if body.valueMissing || models.NormalizeCommentBody(body.value) == "" {
+		if body.valueMissing {
+			return "", false, errNoCommentBody()
+		}
+		absent, err := models.CommentBodyIsAbsent(body.value)
+		if err != nil {
+			return "", false, err
+		}
+		if absent {
 			return "", false, errNoCommentBody()
 		}
 		return body.value, true, nil
@@ -196,7 +216,11 @@ func resolveCommentBody(body commentBody, stdinFallback bool) (string, bool, err
 	if err != nil {
 		return "", false, err
 	}
-	if models.NormalizeCommentBody(raw) == "" {
+	absent, err := models.CommentBodyIsAbsent(raw)
+	if err != nil {
+		return "", false, err
+	}
+	if absent {
 		return "", false, nil
 	}
 	return raw, true, nil
@@ -208,9 +232,12 @@ func resolveCommentBody(body commentBody, stdinFallback bool) (string, bool, err
 // The bound is the point: models.ReadCommentBody applies the length rule as the
 // stream arrives and refuses the body the moment it cannot fit, instead of
 // buffering everything a writer chooses to send and only then measuring it. The
-// value it returns is already the canonical stored form, and the callers still
-// hand it to models.ValidateCommentBody, which is idempotent on that form — the
-// domain, not this layer, remains the single owner of the rules.
+// value it returns is the canonical stored form, plus the one forbidden
+// whitespace rune it carries back when the body held one, and the callers still
+// hand it to the domain — models.CommentBodyIsAbsent and then
+// models.ValidateCommentBody — which reaches the same verdict on that form as on
+// the whole stream. The domain, not this layer, remains the single owner of the
+// rules.
 //
 // A read failure is an I/O failure of the process, not bad user input, so it maps
 // to exit code 1 exactly as the graph subcommands' stdin read does.
