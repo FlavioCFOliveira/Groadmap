@@ -243,7 +243,7 @@ func buildBacklogCommand() Command {
 	return Command{
 		Name:          "backlog",
 		Aliases:       []string{"bl"},
-		Summary:       "Query BACKLOG-status tasks (planning view for tasks not yet in a sprint).",
+		Summary:       "Query BACKLOG-status tasks. Both subcommands filter on the status alone, so a BACKLOG task that is still a member of a sprint is listed too.",
 		Description:   "Dedicated commands for managing and querying tasks with status BACKLOG.",
 		HelpPrinter:   printBacklogHelp,
 		HasSubcommand: true,

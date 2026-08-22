@@ -139,7 +139,8 @@ planning shortcut.
 
 Compared to:
   - 'sprint open-tasks <id>': scope is "this sprint", any priority.
-  - 'backlog show-next [count]': operates on BACKLOG only (not yet in a sprint).
+  - 'backlog show-next [count]': BACKLOG status only; sprint membership is
+    not consulted, so a BACKLOG sprint member is returned.
   - 'task list --status SPRINT': any sprint, no implicit priority order.
 
 Required:

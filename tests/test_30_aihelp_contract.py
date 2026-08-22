@@ -28,10 +28,15 @@ Scenarios:
   (top), not twice.
 - --ai-help mixed with action flags wins (no mutation occurs).
 - --ai-help with an unknown command name exits 2.
+- The SPRINT -> BACKLOG route as three published texts describe it:
+  the `task reopen` side effects, the `backlog` family summary, and
+  the `delete_non_backlog_task` pitfall, each read back against the
+  behaviour of the compiled binary.
 """
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -42,6 +47,23 @@ from tests.base_test import GroadmapTestBase
 
 
 HINT_LINE = "AI agents: run `rmp --ai-help` for a machine-readable command contract."
+
+# Task-status words inside published prose, and the sentence boundary used to
+# read them. The semicolon matters: a clause joined that way carries its own
+# status words, and folding it into its neighbour would let one sentence's
+# states be read as another's.
+_STATUS_WORD = re.compile(r"\b(BACKLOG|SPRINT|DOING|TESTING|COMPLETED)\b")
+_SENTENCE_SPLIT = re.compile(r"(?:\.\s+|;\s+)")
+
+# The phrase the `backlog` summary must carry while both its subcommands filter
+# on the status alone, and the ways a summary can claim the opposite.
+_BACKLOG_STATUS_ONLY_MARKER = "status alone"
+_BACKLOG_EXCLUSION_CLAIMS = (
+    "not yet in a sprint",
+    "not in a sprint",
+    "outside a sprint",
+    "never in a sprint",
+)
 
 REQUIRED_TOP_LEVEL_KEYS = frozenset([
     "schema_version",
@@ -1236,6 +1258,293 @@ class TestAIHelpAuditOperationMembers:
         print(f"✓ legacy is absent from the values of all {others} other enums")
 
 
+class TestAIHelpSprintToBacklogContract:
+    """The contract's account of the SPRINT -> BACKLOG route (rmp task #232).
+
+    SPEC/STATE_MACHINE.md § Sprint Membership and the BACKLOG Status describes a
+    state three published texts used to deny existed: a task reading BACKLOG
+    while still a member of a sprint. Each of the three is checked here against
+    the behaviour of the compiled binary, observed first and read second, so a
+    text and the code it describes cannot drift apart again without this class
+    going red.
+
+    The unit-level half of these gates lives in internal/commands and
+    internal/aihelp; neither half subsumes the other. Those cannot see the
+    published JSON, and this one cannot fail at `go test` time.
+    """
+
+    NON_BACKLOG_STATES = ("SPRINT", "DOING", "TESTING", "COMPLETED")
+
+    # Real short hashes from this repository's history, so the fixture reads
+    # like a roadmap someone worked through.
+    COMMIT_OPEN = "5f93b51"
+    COMMIT_CLOSE = "391cff7"
+
+    def setup_method(self):
+        self.test = GroadmapTestBase()
+        self.test.setup()
+        self.cli = self.test.cli_path
+        self.seq = 0
+
+    def teardown_method(self):
+        self.test.teardown()
+
+    # -- fixture ---------------------------------------------------------
+
+    def _seed(self):
+        """A roadmap with one OPEN sprint and no tasks yet."""
+        roadmap = self.test.create_roadmap()
+        sprint = self.test.create_sprint(
+            roadmap,
+            "Persist sessions to the shared store so a node restart keeps every live session.",
+            title="Session store hardening",
+        )
+        self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint)])
+        return roadmap, sprint
+
+    def _task_in_state(self, roadmap, sprint, state):
+        """Manufacture a task and walk it, through the CLI, into `state`."""
+        self.seq += 1
+        titles = [
+            "Rotate the JWT signing key without downtime",
+            "Move session tokens to the encrypted store",
+            "Rate-limit the password reset endpoint",
+            "Record the audit row inside the mutation transaction",
+        ]
+        task_id = self.test.create_task(
+            roadmap,
+            f"{titles[self.seq % len(titles)]} ({self.seq})",
+            "The behaviour survives a restart of every node in the pool.",
+            "Route the write through the shared store and migrate the existing rows.",
+            "A restart leaves every live session usable.",
+        )
+        if state != "BACKLOG":
+            self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint), str(task_id)])
+            walk = {
+                "SPRINT": [],
+                "DOING": [["DOING", "--commit-open", self.COMMIT_OPEN]],
+                "TESTING": [["DOING", "--commit-open", self.COMMIT_OPEN], ["TESTING"]],
+                "COMPLETED": [
+                    ["DOING", "--commit-open", self.COMMIT_OPEN],
+                    ["TESTING"],
+                    ["COMPLETED", "--commit-close", self.COMMIT_CLOSE],
+                ],
+            }[state]
+            for step in walk:
+                self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id)] + step)
+
+        reached = self._status_of(roadmap, task_id)
+        assert reached == state, f"task #{task_id} was walked to {state} but reads {reached}"
+        return task_id
+
+    def _status_of(self, roadmap, task_id):
+        rows = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])
+        assert len(rows) == 1, f"`task get {task_id}` returned {len(rows)} tasks"
+        return rows[0]["status"]
+
+    def _members(self, roadmap, sprint):
+        rows = self.test.run_cmd_json(["sprint", "tasks", "-r", roadmap, str(sprint)])
+        return {row["id"] for row in rows}
+
+    def _contract(self):
+        return self.test.run_cmd_json(["--ai-help"])
+
+    def _subcommand(self, family, sub):
+        for command in self._contract()["commands"]:
+            if command["name"] != family:
+                continue
+            for entry in command["subcommands"]:
+                if entry["name"] == sub:
+                    return entry
+            raise AssertionError(f"`{family} {sub}` is absent from the published contract")
+        raise AssertionError(f"the `{family}` family is absent from the published contract")
+
+    @staticmethod
+    def _source_states(text):
+        """The task-status words of a fragment, minus BACKLOG.
+
+        BACKLOG is the destination of every route this class is about, never
+        the source of one, so counting it would make every set equal.
+        """
+        return {word for word in _STATUS_WORD.findall(text)} - {"BACKLOG"}
+
+    # -- the three published texts ---------------------------------------
+
+    def test_reopen_side_effects_name_the_sprint_tasks_delete(self):
+        """`task reopen` side effects name exactly the states that lose the row.
+
+        The contract used to read "UPDATE tasks + audit log per task; one
+        transaction", which omits the DELETE FROM sprint_tasks the command runs
+        from SPRINT, DOING and TESTING. An agent believing it would expect a
+        reopened task to keep its place in the sprint -- true only from
+        COMPLETED.
+        """
+        roadmap, sprint = self._seed()
+
+        detaching, keeping = set(), set()
+        for state in self.NON_BACKLOG_STATES:
+            task_id = self._task_in_state(roadmap, sprint, state)
+            assert task_id in self._members(roadmap, sprint), (
+                f"task #{task_id} walked to {state} is not a sprint member; "
+                f"the observation below would be vacuous"
+            )
+            self.test.run_cmd(["task", "reopen", "-r", roadmap, str(task_id)])
+            assert self._status_of(roadmap, task_id) == "BACKLOG", (
+                f"`task reopen` left task #{task_id} out of BACKLOG"
+            )
+            if task_id in self._members(roadmap, sprint):
+                keeping.add(state)
+            else:
+                detaching.add(state)
+
+        assert detaching, (
+            "`task reopen` detached nothing from any source state; either the fixture "
+            "never produced a member or the command stopped writing sprint_tasks"
+        )
+
+        text = self._subcommand("task", "reopen")["side_effects"]["database"]
+        assert "sprint_tasks" in text, (
+            f"`task reopen` removed the sprint_tasks row from {sorted(detaching)}, but the "
+            f"published side effects never name the table: {text!r}"
+        )
+
+        delete_sentences = [s for s in _SENTENCE_SPLIT.split(text) if "DELETE FROM sprint_tasks" in s]
+        assert len(delete_sentences) == 1, (
+            f"the published side effects should name DELETE FROM sprint_tasks in exactly one "
+            f"sentence, found {len(delete_sentences)}: {text!r}"
+        )
+        declared = self._source_states(delete_sentences[0])
+        assert declared == detaching, (
+            f"the published side effects say DELETE FROM sprint_tasks runs for {sorted(declared)}, "
+            f"but it was observed to run for {sorted(detaching)}\n  sentence: {delete_sentences[0]!r}"
+        )
+
+        for state in keeping:
+            survives = [
+                s for s in _SENTENCE_SPLIT.split(text)
+                if "sprint_tasks" in s and s != delete_sentences[0] and state in s
+            ]
+            assert survives, (
+                f"a task reopened from {state} keeps its sprint_tasks row, but no other sentence "
+                f"of the published side effects says so: {text!r}"
+            )
+
+        print(f"✓ task reopen side effects name the sprint_tasks DELETE for {sorted(detaching)} "
+              f"and its survival from {sorted(keeping)}")
+
+    def test_backlog_summary_matches_what_the_subcommands_return(self):
+        """The `backlog` family summary matches what its subcommands return.
+
+        The summary used to call the family "a planning view for tasks not yet
+        in a sprint". Both subcommands filter on the status alone, so a task
+        moved to BACKLOG by `task stat` keeps its sprint_tasks row and is listed
+        all the same.
+        """
+        roadmap, sprint = self._seed()
+
+        member = self._task_in_state(roadmap, sprint, "SPRINT")
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(member), "BACKLOG"])
+        loner = self._task_in_state(roadmap, sprint, "BACKLOG")
+
+        assert self._status_of(roadmap, member) == "BACKLOG"
+        assert member in self._members(roadmap, sprint), (
+            "`task stat <id> BACKLOG` detached the task from its sprint; SPEC/STATE_MACHINE.md "
+            "§ Sprint Membership and the BACKLOG Status says the row survives, and every claim "
+            "in this test is built on that"
+        )
+
+        listed = {t["id"] for t in self.test.run_cmd_json(["backlog", "list", "-r", roadmap])}
+        next_listed = {t["id"] for t in self.test.run_cmd_json(
+            ["backlog", "show-next", "-r", roadmap, "100"])}
+
+        assert loner in listed and loner in next_listed, (
+            f"the never-in-a-sprint task #{loner} is missing from the listings "
+            f"(list={sorted(listed)} show-next={sorted(next_listed)}); the observation would be vacuous"
+        )
+        assert (member in listed) == (member in next_listed), (
+            f"`backlog list` and `backlog show-next` disagree about the sprint-member BACKLOG task "
+            f"#{member}; one summary describes both"
+        )
+
+        lists_sprint_members = member in listed
+
+        summary = None
+        for command in self._contract()["commands"]:
+            if command["name"] == "backlog":
+                summary = command["summary"]
+        assert summary is not None, "the `backlog` family is absent from the published contract"
+
+        if lists_sprint_members:
+            assert _BACKLOG_STATUS_ONLY_MARKER in summary, (
+                f"both backlog subcommands returned the sprint-member BACKLOG task #{member}, but "
+                f"the published summary does not say the filter is the "
+                f"{_BACKLOG_STATUS_ONLY_MARKER!r}: {summary!r}"
+            )
+            for claim in _BACKLOG_EXCLUSION_CLAIMS:
+                assert claim not in summary.lower(), (
+                    f"the published summary claims {claim!r}, but both backlog subcommands returned "
+                    f"the sprint-member BACKLOG task #{member}: {summary!r}"
+                )
+        else:
+            assert _BACKLOG_STATUS_ONLY_MARKER not in summary, (
+                f"the backlog subcommands excluded the sprint-member BACKLOG task #{member}, but the "
+                f"published summary still says the filter is the "
+                f"{_BACKLOG_STATUS_ONLY_MARKER!r}: {summary!r}"
+            )
+
+        print(f"✓ the backlog summary matches the listing "
+              f"(sprint-member BACKLOG task listed: {lists_sprint_members})")
+
+    def test_delete_non_backlog_pitfall_names_the_task_stat_route(self):
+        """The `delete_non_backlog_task` pitfall names every route that works.
+
+        It used to name `sprint remove-tasks` and `task reopen` only, omitting
+        `task stat <ids> BACKLOG` -- the only route back that leaves the task in
+        its sprint, and therefore the one an agent should reach for first.
+        """
+        roadmap, sprint = self._seed()
+
+        accepted = set()
+        for state in self.NON_BACKLOG_STATES:
+            task_id = self._task_in_state(roadmap, sprint, state)
+            exit_code, _, _ = self.test.run_cmd(
+                ["task", "stat", "-r", roadmap, str(task_id), "BACKLOG"], check=False)
+            after = self._status_of(roadmap, task_id)
+            if exit_code == 0:
+                assert after == "BACKLOG", (
+                    f"`task stat {task_id} BACKLOG` from {state} exited 0 but left the task in {after}"
+                )
+                accepted.add(state)
+            else:
+                assert exit_code == 6, (
+                    f"`task stat {task_id} BACKLOG` from {state} was refused with exit {exit_code}; "
+                    f"SPEC/ARCHITECTURE.md makes a rejected transition exit 6"
+                )
+                assert after == state, (
+                    f"`task stat {task_id} BACKLOG` from {state} was refused but moved the task to {after}"
+                )
+
+        assert accepted, "`task stat <id> BACKLOG` worked from no source state at all"
+
+        pitfalls = {p["id"]: p for p in self._contract()["pitfalls"]}
+        description = pitfalls["delete_non_backlog_task"]["description"]
+
+        marker = "`task stat <ids> BACKLOG` from "
+        fragments = re.findall(re.escape(marker) + r"([^;.]*)", description)
+        assert len(fragments) == 1, (
+            f"the pitfall should name the {marker!r} route exactly once and say which source states "
+            f"it works from; found {len(fragments)}:\n{description}"
+        )
+        declared = self._source_states(fragments[0])
+        assert declared == accepted, (
+            f"the pitfall says `task stat <ids> BACKLOG` works from {sorted(declared)}, but it was "
+            f"observed to work from {sorted(accepted)}\n  description: {description}"
+        )
+
+        print(f"✓ the delete_non_backlog_task pitfall names `task stat <ids> BACKLOG` "
+              f"from exactly {sorted(accepted)}")
+
+
 def _run_all():
     """Run every test class sequentially and report a summary."""
     suites = [
@@ -1255,6 +1564,7 @@ def _run_all():
         TestAIHelpContractConventions,
         TestAIHelpContractExitExamples,
         TestAIHelpAuditOperationMembers,
+        TestAIHelpSprintToBacklogContract,
     ]
     passed = 0
     failed = 0

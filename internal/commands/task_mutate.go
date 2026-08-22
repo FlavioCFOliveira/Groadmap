@@ -98,12 +98,21 @@ func taskRemove(args []string) error {
 //
 // Valid manual status transitions (this command):
 //   - SPRINT → BACKLOG, DOING
-//   - DOING → SPRINT, TESTING
+//   - DOING → TESTING
 //   - TESTING → DOING, COMPLETED
 //   - COMPLETED → BACKLOG (reopen)
 //
 // BACKLOG → SPRINT is automatic only (via `sprint add-tasks`); manual
 // `task stat <ids> SPRINT` is rejected with exit code 6.
+//
+// DOING → SPRINT used to be listed above and never worked: the guard in
+// models.CanTransitionTo gives DOING the single target TESTING, and the SPRINT
+// rejection fifty lines below refuses that target from every source state. The
+// only command that returns a DOING or TESTING task to BACKLOG is `task reopen`
+// (SPEC/STATE_MACHINE.md § Valid Transitions). The list is pinned to the guard
+// by TestTaskStatDocComment_ListsExactlyTheTransitionsAccepted, which reads it
+// back out of this file and compares it against transitions the command was
+// observed to accept.
 //
 // Optional flags:
 //   - -r, --roadmap: Roadmap name (uses current if not specified)

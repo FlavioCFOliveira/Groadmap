@@ -45,12 +45,15 @@ func staticPitfalls() []Pitfall {
 		},
 		{
 			ID: "delete_non_backlog_task",
-			Description: "Calling `task remove` on a task that is not in BACKLOG. Removal is only allowed for " +
-				"BACKLOG tasks; non-BACKLOG tasks must be moved back to BACKLOG first " +
-				"(via `sprint remove-tasks` for SPRINT, or `task reopen` for COMPLETED).",
+			Description: "Calling `task remove` on a task that is not in BACKLOG. Removal tests the status " +
+				"alone, so a non-BACKLOG task must first be returned to BACKLOG by one of three routes: " +
+				"`task stat <ids> BACKLOG` from SPRINT or COMPLETED; `task reopen` from SPRINT, DOING, " +
+				"TESTING or COMPLETED; `sprint remove-tasks` from SPRINT, DOING, TESTING or COMPLETED. " +
+				"A task returned by `task stat <ids> BACKLOG` stays a member of its sprint, and is " +
+				"removable all the same.",
 			WrongExample:   "rmp task remove -r myproject 42",
 			CorrectExample: "rmp sprint remove-tasks -r myproject 7 42 && rmp task remove -r myproject 42",
-			Reference:      "task remove; SPEC/STATE_MACHINE.md § Deletion rule.",
+			Reference:      "task remove; SPEC/STATE_MACHINE.md § Task Deletion Precondition; SPEC/STATE_MACHINE.md § Sprint Membership and the BACKLOG Status.",
 		},
 		{
 			ID: "add_tasks_to_closed_sprint",
