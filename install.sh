@@ -87,6 +87,162 @@ get_download_url() {
     echo "https://github.com/${REPO}/releases/download/${version}/${archive_name}"
 }
 
+# Build the URL of the checksum file published beside a release archive.
+# .github/workflows/release.yml (step "Generate checksum") runs
+# `sha256sum <archive> > <archive>.sha256` from inside dist/, and the release
+# job attaches every dist/*.sha256 as an asset of its own, so the checksum for
+# an archive always sits at the archive's own URL with .sha256 appended.
+# Per SPEC/DEPLOY.md Checksum Verification.
+get_checksum_url() {
+    local download_url="$1"
+    echo "${download_url}.sha256"
+}
+
+# Fetch a URL into a destination path with whichever downloader is installed.
+# Returns non-zero when the transfer fails and when neither tool is present;
+# the caller reports the failure, because the message depends on what was being
+# fetched. Both branches are quiet: the script speaks through its own helpers.
+fetch_url() {
+    local url="$1"
+    local dest="$2"
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL -o "$dest" "$url" 2>/dev/null
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO "$dest" "$url" 2>/dev/null
+    else
+        return 1
+    fi
+}
+
+# Name the SHA-256 tool this host provides, or print nothing when it has none.
+#
+# Each accepted tool was verified to print the digest as the FIRST
+# whitespace-separated field of its output:
+#   sha256sum                 GNU coreutils on Linux, and the GNU-compatible
+#                             sha256sum(1) FreeBSD carries in base.
+#   shasum -a 256             The macOS base system (Perl's Digest::SHA).
+#   openssl dgst -sha256 -r   OpenSSL and LibreSSL, which FreeBSD and OpenBSD
+#                             carry in base. The -r flag is documented as
+#                             "print the digest in coreutils format"; openssl's
+#                             DEFAULT format is deliberately never parsed,
+#                             because OpenSSL 3 prints "SHA2-256(file)= <hex>"
+#                             where OpenSSL 1 printed "SHA256(file)= <hex>".
+# Per SPEC/DEPLOY.md Checksum Verification.
+sha256_tool() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        echo "sha256sum"
+    elif command -v shasum >/dev/null 2>&1; then
+        echo "shasum"
+    elif command -v openssl >/dev/null 2>&1; then
+        echo "openssl"
+    fi
+}
+
+# Normalise a hex digest to 64 lowercase characters on standard output, and
+# return 1 when the argument is not a well-formed SHA-256 digest. This is what
+# stops a truncated, empty or non-hex field from ever being compared as though
+# it were a digest -- an empty string compared against an empty string would
+# otherwise "match". The fold uses shell parameter substitution so it needs no
+# external tool and runs on the bash 3.2 macOS still ships.
+normalise_sha256() {
+    local digest="$1"
+    digest="${digest//A/a}"
+    digest="${digest//B/b}"
+    digest="${digest//C/c}"
+    digest="${digest//D/d}"
+    digest="${digest//E/e}"
+    digest="${digest//F/f}"
+
+    if [ "${#digest}" -ne 64 ]; then
+        return 1
+    fi
+    case "$digest" in
+        *[!0-9a-f]*) return 1 ;;
+    esac
+
+    echo "$digest"
+}
+
+# Print the SHA-256 digest of a file as 64 lowercase hex characters.
+# Returns 1 when no hashing tool is available, when the tool fails, or when its
+# output is not a digest.
+compute_sha256() {
+    local file="$1"
+    local output=""
+
+    case "$(sha256_tool)" in
+        sha256sum) output=$(sha256sum "$file" 2>/dev/null) || return 1 ;;
+        shasum)    output=$(shasum -a 256 "$file" 2>/dev/null) || return 1 ;;
+        openssl)   output=$(openssl dgst -sha256 -r "$file" 2>/dev/null) || return 1 ;;
+        *)         return 1 ;;
+    esac
+
+    normalise_sha256 "${output%% *}"
+}
+
+# Print the digest the checksum file records for one archive name, and return 1
+# when no line of that file names the archive with a well-formed digest.
+#
+# The published file is sha256sum's own output: the digest, two spaces, and the
+# archive's base name. The workflow runs sha256sum from inside dist/, so the
+# recorded name never carries a directory component. sha256sum's binary mode
+# marks the name with a leading '*' instead of the second space, and that
+# spelling is accepted too.
+#
+# The line is selected by NAME rather than simply read from the top of the file,
+# so a checksum file that describes some other archive is rejected instead of
+# being compared against this one.
+expected_sha256() {
+    local checksum_file="$1"
+    local archive_name="$2"
+    local digest name rest
+
+    while read -r digest name rest || [ -n "$digest" ]; do
+        name="${name#\*}"
+        if [ "$name" = "$archive_name" ]; then
+            if normalise_sha256 "$digest"; then
+                return 0
+            fi
+        fi
+    done < "$checksum_file"
+
+    return 1
+}
+
+# Verify a downloaded archive against the checksum file published beside it.
+# Returns 0 only when the two agree; every other outcome reports its reason
+# through the error helper and returns 1. There is no third answer, so a caller
+# that installs only on 0 installs only what was verified.
+verify_archive_checksum() {
+    local archive_path="$1"
+    local archive_name="$2"
+    local checksum_file="$3"
+
+    local expected
+    if ! expected=$(expected_sha256 "$checksum_file" "$archive_name"); then
+        error "the checksum file published for ${archive_name} records no SHA-256 digest for it."
+        error "It must carry a line of the form '<64 hex characters>  ${archive_name}'."
+        return 1
+    fi
+
+    local actual
+    if ! actual=$(compute_sha256 "$archive_path"); then
+        error "failed to compute the SHA-256 digest of ${archive_name}."
+        return 1
+    fi
+
+    if [ "$actual" != "$expected" ]; then
+        error "checksum mismatch for ${archive_name}: the downloaded archive is not the one the release published."
+        error "  expected: ${expected}"
+        error "  actual:   ${actual}"
+        return 1
+    fi
+
+    info "Checksum verified: SHA-256 ${actual}"
+    return 0
+}
+
 # Detect architecture
 detect_arch() {
     local arch
@@ -242,22 +398,47 @@ download_binary() {
     # Create temp directory for extraction
     mkdir -p "$tmp_dir"
 
-    if command -v curl >/dev/null 2>&1; then
-        if ! curl -fsSL -o "$tmp_dir/${archive_name}" "$download_url" 2>/dev/null; then
-            rm -rf "$tmp_dir"
-            error "Failed to download from ${download_url}"
-            error "Please check that the release exists for your platform"
-            exit 1
-        fi
-    elif command -v wget >/dev/null 2>&1; then
-        if ! wget -qO "$tmp_dir/${archive_name}" "$download_url" 2>/dev/null; then
-            rm -rf "$tmp_dir"
-            error "Failed to download from ${download_url}"
-            error "Please check that the release exists for your platform"
-            exit 1
-        fi
-    else
+    # Reported before anything is fetched, and the temp directory goes with it:
+    # there is nothing to clean up later if the script cannot download at all.
+    if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+        rm -rf "$tmp_dir"
         error "Neither curl nor wget is available. Please install one of them."
+        exit 1
+    fi
+
+    if ! fetch_url "$download_url" "$tmp_dir/${archive_name}"; then
+        rm -rf "$tmp_dir"
+        error "Failed to download from ${download_url}"
+        error "Please check that the release exists for your platform"
+        exit 1
+    fi
+
+    # INTEGRITY GATE. The archive is checked against the digest the release
+    # publishes BEFORE it is extracted, so a corrupted or substituted download
+    # never reaches tar, unzip, chmod or the installation directory.
+    #
+    # A checksum that cannot be downloaded is a failure, not a licence to
+    # proceed unverified: every release publishes a .sha256 beside every
+    # archive (.github/workflows/release.yml, step "Generate checksum"), so its
+    # absence means the release is not the one this installer knows how to
+    # install. What this check does and does not defend against is stated in
+    # SPEC/DEPLOY.md Checksum Verification, and it matters: the checksum is
+    # served from the same origin as the archive.
+    local checksum_url
+    checksum_url=$(get_checksum_url "$download_url")
+
+    info "Verifying checksum..."
+    if ! fetch_url "$checksum_url" "$tmp_dir/${archive_name}.sha256"; then
+        rm -rf "$tmp_dir"
+        error "Failed to download the checksum from ${checksum_url}"
+        error "Every release publishes a .sha256 beside each archive, and this installer does not install an archive it cannot verify."
+        error "To install anyway, follow the manual installation steps in SPEC/DEPLOY.md and check the archive yourself."
+        exit 1
+    fi
+
+    if ! verify_archive_checksum "$tmp_dir/${archive_name}" "${archive_name}" "$tmp_dir/${archive_name}.sha256"; then
+        rm -rf "$tmp_dir"
+        error "Refusing to install ${archive_name}. Nothing was extracted and nothing was written to the installation directory."
         exit 1
     fi
 
@@ -365,6 +546,16 @@ main() {
     # "unknown" is one detect_arch does not recognise at all. Both stop here.
     if [ "$arch" = "unsupported" ] || [ "$arch" = "unknown" ]; then
         error "architecture $(uname -m) is not supported. Supported targets: amd64, arm64, armv6, armv7. See SPEC/BUILD.md for the build matrix."
+        exit 1
+    fi
+
+    # Third guard of the same kind, and it fires for the same reason the other
+    # two do: refuse before anything is fetched rather than late. Without a
+    # SHA-256 tool the download cannot be verified, and an unverified install is
+    # not a degraded outcome this script offers -- see SPEC/DEPLOY.md Checksum
+    # Verification for why this fails closed rather than warning and carrying on.
+    if [ -z "$(sha256_tool)" ]; then
+        error "no SHA-256 tool is available, so the download cannot be verified. Install one of sha256sum (GNU coreutils), shasum (Perl Digest::SHA) or openssl, or follow the manual installation steps in SPEC/DEPLOY.md and verify the archive yourself."
         exit 1
     fi
 

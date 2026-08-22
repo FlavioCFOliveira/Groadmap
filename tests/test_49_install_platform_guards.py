@@ -33,6 +33,15 @@ under test -- and pins four properties:
 The download is never satisfied: the curl stub records the URL and fails, so the
 supported-architecture cases assert the requested asset name rather than a
 completed installation, which test_47 already covers. No network is involved.
+
+A note on the runner below, which is itself a regression fix (rmp task #185).
+This module shipped with no `if __name__ == "__main__"` block and no runner, so
+`python3 tests/test_49_install_platform_guards.py` -- exactly how run_tests.py
+executes it -- defined these classes, ran nothing, and exited 0. The suite
+counted the module as PASSED for every one of those runs. The five tests below
+all pass, and always did; they simply never ran. The runner discovers its test
+classes instead of listing them, so the same silence cannot return through a
+class that a hardcoded list forgets.
 """
 
 import shutil
@@ -49,6 +58,11 @@ INSTALL_SH = REPO_ROOT / "install.sh"
 REQUIRED_TOOLS = [
     "bash", "grep", "sed", "head", "mkdir", "rm", "mv", "cp",
     "chmod", "tar", "gzip", "gunzip", "cat", "basename", "dirname",
+    # install.sh refuses to install anything it cannot verify, so a host with
+    # no SHA-256 tool stops at a guard of its own -- before the download these
+    # cases assert on. The sandbox provides the tool; the refusal itself is
+    # driven by test_47's InstallScriptChecksumTests.
+    "sha256sum",
 ]
 
 UNAME_SHIM = """#!/usr/bin/env bash
@@ -199,3 +213,61 @@ class InstallPlatformGuardTests:
                 f"{uname_m!r} must resolve to the {expected_arch!r} target and "
                 f"request {expected_asset!r}; install.sh asked for:\n{requests}"
             )
+
+
+def _test_classes():
+    """Every test class in this module, discovered rather than listed.
+
+    A runner that names its classes one by one silently ignores the next class
+    someone adds, which is how a test file grows coverage that never runs (rmp
+    task #303). Asking the module what it holds removes that failure mode: the
+    count printed below is the count that ran.
+    """
+    return [
+        obj
+        for name, obj in sorted(globals().items())
+        if isinstance(obj, type) and name.endswith("Tests")
+    ]
+
+
+def _run_all():
+    classes = _test_classes()
+    passed = 0
+    failed = 0
+    failures = []
+    print("=" * 60)
+    print("install.sh platform guards (task #156)")
+    print(f"{len(classes)} test classes discovered: "
+          f"{', '.join(cls.__name__ for cls in classes)}")
+    print("=" * 60)
+    for cls in classes:
+        instance = cls()
+        methods = sorted(m for m in dir(instance) if m.startswith("test_"))
+        print(f"\n{cls.__name__} ({len(methods)} tests)")
+        for m in methods:
+            instance.setup_method()
+            try:
+                getattr(instance, m)()
+                passed += 1
+                print(f"  PASS {m}")
+            except AssertionError as exc:
+                failed += 1
+                failures.append((f"{cls.__name__}.{m}", exc))
+                print(f"  FAIL {m}")
+            except Exception as exc:  # noqa: BLE001
+                failed += 1
+                failures.append((f"{cls.__name__}.{m}", exc))
+                print(f"  FAIL {m} (error)")
+            finally:
+                instance.teardown_method()
+    print("\n" + "=" * 60)
+    print(f"Install platform guard tests: {passed} passed, {failed} failed")
+    print("=" * 60)
+    for name, exc in failures:
+        print(f"\nFAIL {name}\n  {exc}")
+    return failed == 0
+
+
+if __name__ == "__main__":
+    ok = _run_all()
+    sys.exit(0 if ok else 1)

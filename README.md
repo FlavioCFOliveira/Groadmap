@@ -10,6 +10,8 @@ curl -fsSL https://raw.githubusercontent.com/FlavioCFOliveira/Groadmap/main/inst
 
 This will detect your OS and architecture, download the latest release from GitHub, and install the `rmp` binary to `/usr/local/bin`. If `rmp` is already installed, it will be updated to the latest version.
 
+Before extracting anything, the script verifies the downloaded archive against the SHA-256 checksum published beside it in the same release, and refuses to install if the two differ, if the checksum is missing, or if the host has no SHA-256 tool. This detects a corrupted or truncated download and an archive replaced without its checksum; it is not a signature, so it cannot detect a release replaced at its source. `SPEC/DEPLOY.md` states the boundary in full.
+
 ## Features
 
 - **Roadmap Management**: Create, list, and remove roadmaps
