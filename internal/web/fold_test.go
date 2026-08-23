@@ -1,7 +1,6 @@
 package web
 
 import (
-	"context"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -790,12 +789,11 @@ func seedFoldFixture(t *testing.T, name string) foldFixture {
 	}
 	defer database.Close() //nolint:errcheck // test cleanup
 
-	ctx := context.Background()
 	created := 0
 	newTask := func(title string) int {
 		t.Helper()
 		created++
-		id, cerr := database.CreateTask(ctx, &models.Task{
+		id, cerr := seedTask(database, &models.Task{
 			Title:                  title,
 			Type:                   models.TypeTask,
 			Status:                 models.StatusBacklog,

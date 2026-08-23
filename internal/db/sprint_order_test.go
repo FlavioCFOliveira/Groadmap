@@ -2,7 +2,6 @@ package db
 
 import (
 	"database/sql"
-	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -27,9 +26,9 @@ func TestCreateSprintAutoAssignsSequentialOrder(t *testing.T) {
 			Description: "desc",
 			CreatedAt:   utils.NowISO8601(),
 		}
-		id, err := db.CreateSprint(ctx, s)
+		id, err := seedSprint(db, s)
 		if err != nil {
-			t.Fatalf("CreateSprint #%d: %v", i, err)
+			t.Fatalf("seeding sprint #%d: %v", i, err)
 		}
 		if s.Order != i {
 			t.Errorf("auto-assigned order for sprint #%d = %d, want %d", i, s.Order, i)
@@ -59,9 +58,9 @@ func TestCreateSprintExplicitOrderRespected(t *testing.T) {
 		CreatedAt:   utils.NowISO8601(),
 		Order:       42,
 	}
-	id, err := db.CreateSprint(ctx, s)
+	id, err := seedSprint(db, s)
 	if err != nil {
-		t.Fatalf("CreateSprint: %v", err)
+		t.Fatalf("seeding the sprint: %v", err)
 	}
 	got, err := db.GetSprint(ctx, id)
 	if err != nil {
@@ -73,34 +72,41 @@ func TestCreateSprintExplicitOrderRespected(t *testing.T) {
 
 	// A later auto-assigned sprint must continue from MAX+1 = 43.
 	s2 := &models.Sprint{Status: models.SprintPending, Title: "S2", Description: "d", CreatedAt: utils.NowISO8601()}
-	if _, err := db.CreateSprint(ctx, s2); err != nil {
-		t.Fatalf("CreateSprint #2: %v", err)
+	if _, err := seedSprint(db, s2); err != nil {
+		t.Fatalf("seeding the second sprint: %v", err)
 	}
 	if s2.Order != 43 {
 		t.Errorf("auto order after explicit 42 = %d, want 43", s2.Order)
 	}
 }
 
-// TestCreateSprintDuplicateOrderRejected verifies that creating a sprint with an
-// order already in use fails with ErrAlreadyExists (exit code 5), enforced by the
-// idx_sprints_order unique index.
+// TestCreateSprintDuplicateOrderRejected verifies the two halves of the
+// duplicate-order refusal this layer owns: idx_sprints_order rejects the second
+// insert, and IsUniqueConstraintErr recognises the refusal.
+//
+// Those are exactly what `sprint create` depends on to answer exit code 5 — it
+// calls IsUniqueConstraintErr on the insert error and re-dresses it as
+// utils.ErrAlreadyExists (SPEC/DATABASE.md § Create Sprint). The exit code
+// itself is asserted where it is produced: against the binary, in
+// tests/test_43_sprint_order_field.py. Asserting it here would have required
+// the insert helper to carry the command's error mapping, which is how the db
+// layer grew the duplicate write methods this package has just retired.
 func TestCreateSprintDuplicateOrderRejected(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
-	ctx := testContext()
 
 	first := &models.Sprint{Status: models.SprintPending, Title: "A", Description: "d", CreatedAt: utils.NowISO8601(), Order: 7}
-	if _, err := db.CreateSprint(ctx, first); err != nil {
-		t.Fatalf("CreateSprint first: %v", err)
+	if _, err := seedSprint(db, first); err != nil {
+		t.Fatalf("creating the first sprint: %v", err)
 	}
 
 	dup := &models.Sprint{Status: models.SprintPending, Title: "B", Description: "d", CreatedAt: utils.NowISO8601(), Order: 7}
-	_, err := db.CreateSprint(ctx, dup)
+	_, err := seedSprint(db, dup)
 	if err == nil {
 		t.Fatal("expected duplicate-order create to fail, got nil")
 	}
-	if !errors.Is(err, utils.ErrAlreadyExists) {
-		t.Errorf("duplicate order error = %v, want ErrAlreadyExists (exit 5)", err)
+	if !IsUniqueConstraintErr(err) {
+		t.Errorf("duplicate order error = %v, want one IsUniqueConstraintErr recognises", err)
 	}
 }
 
@@ -250,7 +256,7 @@ func seedPlannedSprints(t *testing.T, db *DB, planned []plannedSprint) []int {
 			CreatedAt:   utils.FormatISO8601(base.Add(time.Duration(i) * time.Minute)),
 			Order:       planned[i].order,
 		}
-		id, err := db.CreateSprint(testContext(), sprint)
+		id, err := seedSprint(db, sprint)
 		if err != nil {
 			t.Fatalf("creating fixture sprint %q at order %d: %v",
 				planned[i].title, planned[i].order, err)
@@ -515,7 +521,7 @@ func TestSprintOrderingIsTotalByConstruction(t *testing.T) {
 		CreatedAt:   utils.NowISO8601(),
 		Order:       7,
 	}
-	if _, err := db.CreateSprint(testContext(), first); err != nil {
+	if _, err := seedSprint(db, first); err != nil {
 		t.Fatalf("creating the first sprint at order 7: %v", err)
 	}
 	duplicate := &models.Sprint{
@@ -525,7 +531,7 @@ func TestSprintOrderingIsTotalByConstruction(t *testing.T) {
 		CreatedAt:   utils.NowISO8601(),
 		Order:       7,
 	}
-	if _, err := db.CreateSprint(testContext(), duplicate); err == nil {
+	if _, err := seedSprint(db, duplicate); err == nil {
 		t.Error("a second sprint was accepted at an order already taken; the listing order is " +
 			"then not total and the SPEC's no-tie-break claim is false")
 	}

@@ -13,11 +13,17 @@ import (
 // TestQueryCacheGetQueryCachedSizes verifies that GetQuery returns a template
 // whose interpolated placeholder count matches the requested size for sizes
 // that are pre-cached individually (1-100).
+//
+// Every test in this file that needs one batch-update template names
+// OpAddTasksToSprint, because it is now the only one. The eight it used to
+// spread across — the status update in its five lifecycle shapes, the priority
+// and severity updates, and the sprint removal — served db-layer methods the
+// command layer had replaced, and went with them (task #188).
 func TestQueryCacheGetQueryCachedSizes(t *testing.T) {
 	qc := NewQueryCache()
 
 	for _, size := range []int{1, 2, 5, 50, 99, 100} {
-		q := qc.GetQuery(OpUpdateTaskPriority, size)
+		q := qc.GetQuery(OpAddTasksToSprint, size)
 		if q == "" {
 			t.Fatalf("size %d: empty template", size)
 		}
@@ -51,7 +57,7 @@ func TestQueryCacheNormalizeSize(t *testing.T) {
 		if got := qc.normalizeSize(c.requested); got != c.wantBkt {
 			t.Errorf("normalizeSize(%d) = %d, want %d", c.requested, got, c.wantBkt)
 		}
-		q := qc.GetQuery(OpUpdateTaskStatus, c.requested)
+		q := qc.GetQuery(OpAddTasksToSprint, c.requested)
 		if got := countINPlaceholders(t, q); got != c.wantBkt {
 			t.Errorf("GetQuery(status, %d): IN has %d placeholders, want bucket %d",
 				c.requested, got, c.wantBkt)
@@ -68,13 +74,13 @@ func TestQueryCacheOnDemandFallback(t *testing.T) {
 	qc := NewQueryCache()
 
 	const size = 1500 // an arbitrary, non-bucket size
-	got := qc.generateQuery(OpUpdateTaskSeverity, size)
+	got := qc.generateQuery(OpAddTasksToSprint, size)
 	if n := countINPlaceholders(t, got); n != size {
 		t.Fatalf("on-demand size %d: IN has %d placeholders, want %d", size, n, size)
 	}
 
 	// The fallback must agree with buildTemplates for the same placeholder run.
-	want := buildTemplates(generatePlaceholders(size))[OpUpdateTaskSeverity]
+	want := buildTemplates(generatePlaceholders(size))[OpAddTasksToSprint]
 	if got != want {
 		t.Errorf("on-demand template diverges from buildTemplates output\n got: %q\nwant: %q", got, want)
 	}
@@ -145,15 +151,7 @@ func TestQueryCacheTemplatesMatchProductionQueries(t *testing.T) {
 			        t.priority, t.severity,
 			        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id) AS subtask_count`+taskDepsSelect+`
 			 FROM tasks t WHERE t.id IN (%s) ORDER BY t.id`, ph),
-		OpUpdateTaskStatus:          fmt.Sprintf("UPDATE tasks SET status = ? WHERE id IN (%s)", ph),
-		OpUpdateTaskStatusDoing:     fmt.Sprintf("UPDATE tasks SET status = ?, started_at = ? WHERE id IN (%s)", ph),
-		OpUpdateTaskStatusTesting:   fmt.Sprintf("UPDATE tasks SET status = ?, tested_at = ? WHERE id IN (%s)", ph),
-		OpUpdateTaskStatusCompleted: fmt.Sprintf("UPDATE tasks SET status = ?, closed_at = ? WHERE id IN (%s)", ph),
-		OpUpdateTaskStatusBacklog:   fmt.Sprintf("UPDATE tasks SET status = ?, started_at = NULL, tested_at = NULL, closed_at = NULL WHERE id IN (%s)", ph),
-		OpUpdateTaskPriority:        fmt.Sprintf("UPDATE tasks SET priority = ? WHERE id IN (%s)", ph),
-		OpUpdateTaskSeverity:        fmt.Sprintf("UPDATE tasks SET severity = ? WHERE id IN (%s)", ph),
-		OpAddTasksToSprint:          fmt.Sprintf("UPDATE tasks SET status = ? WHERE id IN (%s)", ph),
-		OpRemoveTasksFromSprint:     fmt.Sprintf("UPDATE tasks SET status = ? WHERE id IN (%s)", ph),
+		OpAddTasksToSprint: fmt.Sprintf("UPDATE tasks SET status = ? WHERE id IN (%s)", ph),
 	}
 	for op, want := range wants {
 		if got := qc.GetQuery(op, size); got != want {
@@ -212,7 +210,7 @@ func countINPlaceholders(t *testing.T, query string) int {
 }
 
 // createBenchmarkTasks inserts n minimal valid tasks via the production
-// CreateTask path and returns their IDs. Shared by query-cache and batch tests.
+// seeded insert path and returns their IDs. Shared by query-cache and batch tests.
 func createBenchmarkTasks(t *testing.T, db *DB, n int) []int {
 	t.Helper()
 	ids := make([]int, 0, n)
@@ -228,7 +226,7 @@ func createBenchmarkTasks(t *testing.T, db *DB, n int) []int {
 			Priority:               i % 10,
 			Severity:               i % 10,
 		}
-		id, err := db.CreateTask(context.Background(), task)
+		id, err := seedTask(db, task)
 		if err != nil {
 			t.Fatalf("creating task %d: %v", i, err)
 		}

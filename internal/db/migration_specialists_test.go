@@ -329,7 +329,7 @@ func TestMigrateV1_9_0_toV1_10_0_OnNextOpen(t *testing.T) {
 
 	// AUTOINCREMENT continues rather than restarting: a table rebuild that lost
 	// sqlite_sequence would hand out an id already used.
-	newID, err := database.CreateTask(testContext(), &models.Task{
+	newID, err := seedTask(database, &models.Task{
 		Title:                  "Retire the legacy settlement importer",
 		Type:                   models.TypeTask,
 		Status:                 models.StatusBacklog,

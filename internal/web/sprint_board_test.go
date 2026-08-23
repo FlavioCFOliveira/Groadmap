@@ -125,7 +125,7 @@ func seedSprintBoardFixture(t *testing.T, name string) sprintBoardFixture {
 	newTask := func(title, created string, priority, severity int,
 		taskType models.TaskType, parent *int) int {
 		t.Helper()
-		id, cerr := database.CreateTask(ctx, &models.Task{
+		id, cerr := seedTask(database, &models.Task{
 			Title:                  title,
 			Type:                   taskType,
 			Status:                 models.StatusBacklog,
@@ -175,25 +175,21 @@ func seedSprintBoardFixture(t *testing.T, name string) sprintBoardFixture {
 	if aerr := database.AddTasksToSprint(ctx, f.sprintID, members); aerr != nil {
 		t.Fatalf("adding the member tasks to the sprint: %v", aerr)
 	}
-	if serr := database.UpdateSprintStatus(ctx, f.sprintID, models.SprintOpen); serr != nil {
-		t.Fatalf("opening the sprint: %v", serr)
-	}
+	forceSprintOpen(t, database, f.sprintID)
 
 	// Membership forces every member to SPRINT, so the statuses that populate the
-	// other columns are set from there through the production write path. runbook
-	// goes back to BACKLOG, which is the second status the WAITING column holds:
-	// SPEC/WEB.md assigns BACKLOG and SPRINT to that one column, and the sprint
-	// summary line counts both as pending, so a member in BACKLOG is a state the
-	// board must place, not a contrived one.
+	// other columns are set from there. runbook goes back to BACKLOG, which is
+	// the second status the WAITING column holds: SPEC/WEB.md assigns BACKLOG and
+	// SPRINT to that one column, and the sprint summary line counts both as
+	// pending, so a member in BACKLOG is a state the board must place, not a
+	// contrived one.
 	for status, ids := range map[models.TaskStatus][]int{
 		models.StatusBacklog:   {f.runbook},
 		models.StatusDoing:     {f.dashboard},
 		models.StatusTesting:   {f.retries},
 		models.StatusCompleted: {f.schema},
 	} {
-		if uerr := database.UpdateTaskStatus(ctx, ids, status); uerr != nil {
-			t.Fatalf("moving %v to %s: %v", ids, status, uerr)
-		}
+		forceTaskLifecycle(t, database, ids, status)
 	}
 
 	// One dependency edge between two members, so the card of each carries a
@@ -252,7 +248,7 @@ func seedSprintWithMembers(t *testing.T, name string, n int) int {
 	ids := make([]int, 0, n)
 	for i := range n {
 		title := "Close reconciliation break " + itoa(i+1) + " of the March settlement window"
-		id, cerr := database.CreateTask(ctx, &models.Task{
+		id, cerr := seedTask(database, &models.Task{
 			Title:                  title,
 			Type:                   models.TypeTask,
 			Status:                 models.StatusBacklog,
@@ -782,7 +778,7 @@ func seedSprintOrderFixture(t *testing.T, name string) sprintOrderFixture {
 
 	newTask := func(title, created string, priority, severity int, taskType models.TaskType) int {
 		t.Helper()
-		id, cerr := database.CreateTask(ctx, &models.Task{
+		id, cerr := seedTask(database, &models.Task{
 			Title:                  title,
 			Type:                   taskType,
 			Status:                 models.StatusBacklog,
@@ -840,12 +836,10 @@ func seedSprintOrderFixture(t *testing.T, name string) sprintOrderFixture {
 	if aerr := database.AddTasksToSprint(ctx, f.sprintID, members); aerr != nil {
 		t.Fatalf("adding the member tasks to the sprint: %v", aerr)
 	}
-	if serr := database.UpdateSprintStatus(ctx, f.sprintID, models.SprintOpen); serr != nil {
-		t.Fatalf("opening the sprint: %v", serr)
-	}
+	forceSprintOpen(t, database, f.sprintID)
 
-	// The statuses, set through the production write path and in the order the
-	// state machine allows: SPRINT -> DOING -> TESTING -> COMPLETED. Membership
+	// The statuses, set in the order the state machine allows:
+	// SPRINT -> DOING -> TESTING -> COMPLETED. Membership
 	// already put every member in SPRINT, so the WAITING column needs no move
 	// beyond the single task returned to BACKLOG inside the sprint.
 	statusMoves := []struct {
@@ -866,9 +860,7 @@ func seedSprintOrderFixture(t *testing.T, name string) sprintOrderFixture {
 		}},
 	}
 	for _, move := range statusMoves {
-		if uerr := database.UpdateTaskStatus(ctx, move.ids, move.status); uerr != nil {
-			t.Fatalf("moving %v to %s: %v", move.ids, move.status, uerr)
-		}
+		forceTaskLifecycle(t, database, move.ids, move.status)
 	}
 
 	// The controlled ordering timestamps, replacing the "now" the transitions
@@ -1193,13 +1185,12 @@ func TestSprintBoard_TiedCardsKeepThePlannedOrderAtColumnScale(t *testing.T) {
 // column carries fifteen cards in three bulk-stamped batches of five, and returns
 // the roadmap name, the sprint id, and the task ids in creation order.
 //
-// The batches are moved through the PRODUCTION status path, one bulk
-// UpdateTaskStatus per batch, which is the shape `rmp task stat <id,id,...>
-// DOING` produces and the reason equal timestamps are ordinary. Their stamped
-// values are then replaced with the fixed ones in sprintTieStartedAt, so the
-// expected order does not depend on how far apart the clock happened to place two
-// consecutive batches; see setTaskLifecycleTimestamp for why a fixture writes
-// these directly.
+// The batches are moved one batch at a time, which is the shape
+// `rmp task stat <id,id,...> DOING` produces and the reason equal timestamps are
+// ordinary. Their stamped values are then replaced with the fixed ones in
+// sprintTieStartedAt, so the expected order does not depend on how far apart the
+// clock happened to place two consecutive batches; see setTaskLifecycleTimestamp
+// for why a fixture writes these directly.
 func seedSprintTieFixture(t *testing.T, name string) (string, int, []int) {
 	t.Helper()
 
@@ -1212,7 +1203,7 @@ func seedSprintTieFixture(t *testing.T, name string) (string, int, []int) {
 	ctx := context.Background()
 	ids := make([]int, 0, len(sprintTieCutoverServices))
 	for i, service := range sprintTieCutoverServices {
-		id, cerr := database.CreateTask(ctx, &models.Task{
+		id, cerr := seedTask(database, &models.Task{
 			Title:                  "Cut the " + service + " service over to the shared payment ledger",
 			Type:                   models.TypeTask,
 			Status:                 models.StatusBacklog,
@@ -1239,18 +1230,14 @@ func seedSprintTieFixture(t *testing.T, name string) (string, int, []int) {
 	if aerr := database.AddTasksToSprint(ctx, sprintID, members); aerr != nil {
 		t.Fatalf("adding the member tasks to the sprint: %v", aerr)
 	}
-	if serr := database.UpdateSprintStatus(ctx, sprintID, models.SprintOpen); serr != nil {
-		t.Fatalf("opening the sprint: %v", serr)
-	}
+	forceSprintOpen(t, database, sprintID)
 
 	for b := range sprintTieBatches {
 		batch := make([]int, 0, len(sprintTieBatches[b]))
 		for _, created := range sprintTieBatches[b] {
 			batch = append(batch, ids[created])
 		}
-		if uerr := database.UpdateTaskStatus(ctx, batch, models.StatusDoing); uerr != nil {
-			t.Fatalf("moving the batch %v to DOING: %v", batch, uerr)
-		}
+		forceTaskLifecycle(t, database, batch, models.StatusDoing)
 		started := sprintTieStartedAt[b]
 		for _, id := range batch {
 			setTaskLifecycleTimestamp(t, database, sqlSetTaskStartedAt, id, &started)

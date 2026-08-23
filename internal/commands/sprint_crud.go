@@ -178,11 +178,11 @@ func sprintCreate(args []string) error {
 	err = database.WithTransaction(func(tx *sql.Tx) error {
 		orderIndex := explicitOrder
 		if orderIndex <= 0 {
-			if selErr := tx.QueryRow(
-				`SELECT COALESCE(MAX(order_index), 0) + 1 FROM sprints`,
-			).Scan(&orderIndex); selErr != nil {
-				return fmt.Errorf("computing next sprint order: %w", selErr)
+			next, selErr := db.NextSprintOrderTx(tx)
+			if selErr != nil {
+				return selErr
 			}
+			orderIndex = next
 		}
 		sprint.Order = orderIndex
 
@@ -191,22 +191,14 @@ func sprintCreate(args []string) error {
 			return vErr
 		}
 
-		insertResult, insertErr := tx.Exec(
-			`INSERT INTO sprints (status, title, description, created_at, max_tasks, order_index) VALUES (?, ?, ?, ?, ?, ?)`,
-			sprint.Status, sprint.Title, sprint.Description, sprint.CreatedAt, sprint.MaxTasks, orderIndex,
-		)
+		id, insertErr := db.InsertSprintTx(tx, sprint)
 		if insertErr != nil {
 			if db.IsUniqueConstraintErr(insertErr) {
 				return fmt.Errorf("%w: sprint order %d is already in use", utils.ErrAlreadyExists, orderIndex)
 			}
 			return insertErr
 		}
-
-		id, idErr := insertResult.LastInsertId()
-		if idErr != nil {
-			return idErr
-		}
-		sprintID = int(id)
+		sprintID = id
 
 		return db.LogAuditTx(tx, models.OpSprintCreate, models.EntitySprint, sprintID, now)
 	})

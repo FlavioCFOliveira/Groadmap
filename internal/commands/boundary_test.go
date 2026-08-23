@@ -892,9 +892,16 @@ func TestBoundary_DB_Severity_MaxBoundary(t *testing.T) {
 	}
 }
 
-// ==================== DB-level UpdateTaskPriority/UpdateTaskSeverity boundary ====================
+// ==================== `task prio` / `task sev` boundary ====================
+//
+// These four drove the boundary through db-layer UpdateTaskPriority and
+// UpdateTaskSeverity methods, which the command layer had replaced with its own
+// transactions: the values 0 and 9 were being pushed through SQL `task prio`
+// and `task sev` never ran, so the commands' own boundary behaviour was
+// untested while these passed. The methods are gone (task #188) and the tests
+// now run the commands.
 
-func TestBoundary_DB_UpdateTaskPriority_MinBoundary(t *testing.T) {
+func TestBoundary_TaskPrioCommand_MinBoundary(t *testing.T) {
 	const roadmap = "boundary-db-upd-prio-min"
 	database, cleanup := setupTestTaskRoadmap(t, roadmap)
 	defer cleanup()
@@ -902,9 +909,9 @@ func TestBoundary_DB_UpdateTaskPriority_MinBoundary(t *testing.T) {
 		if err := HandleTask([]string{
 			"create",
 			"-r", roadmap,
-			"-t", "Verify UpdateTaskPriority accepts minimum value 0",
+			"-t", "Verify `task prio` accepts the minimum value 0",
 			"-fr", "Priority can be updated to 0 after task creation",
-			"-tr", "UpdateTaskPriority issues parameterized SQL UPDATE",
+			"-tr", "`task prio` issues one parameterised UPDATE inside its transaction",
 			"-ac", "Subsequent GetTask returns priority == 0",
 			"-p", "5",
 		}); err != nil {
@@ -912,9 +919,9 @@ func TestBoundary_DB_UpdateTaskPriority_MinBoundary(t *testing.T) {
 		}
 	})
 	taskID := extractIntID(t, out)
-	if err := database.UpdateTaskPriority(context.Background(), []int{taskID}, 0); err != nil {
-		t.Fatalf("UpdateTaskPriority(0) error = %v", err)
-	}
+	run(t, func() error {
+		return taskSetPriority([]string{"-r", roadmap, itoa(taskID), "0"})
+	})
 	task, err := database.GetTask(context.Background(), taskID)
 	if err != nil {
 		t.Fatalf("GetTask after priority update: %v", err)
@@ -924,7 +931,7 @@ func TestBoundary_DB_UpdateTaskPriority_MinBoundary(t *testing.T) {
 	}
 }
 
-func TestBoundary_DB_UpdateTaskPriority_MaxBoundary(t *testing.T) {
+func TestBoundary_TaskPrioCommand_MaxBoundary(t *testing.T) {
 	const roadmap = "boundary-db-upd-prio-max"
 	database, cleanup := setupTestTaskRoadmap(t, roadmap)
 	defer cleanup()
@@ -932,9 +939,9 @@ func TestBoundary_DB_UpdateTaskPriority_MaxBoundary(t *testing.T) {
 		if err := HandleTask([]string{
 			"create",
 			"-r", roadmap,
-			"-t", "Verify UpdateTaskPriority accepts maximum value 9",
+			"-t", "Verify `task prio` accepts the maximum value 9",
 			"-fr", "Priority can be updated to 9 after task creation",
-			"-tr", "UpdateTaskPriority issues parameterized SQL UPDATE",
+			"-tr", "`task prio` issues one parameterised UPDATE inside its transaction",
 			"-ac", "Subsequent GetTask returns priority == 9",
 			"-p", "0",
 		}); err != nil {
@@ -942,9 +949,9 @@ func TestBoundary_DB_UpdateTaskPriority_MaxBoundary(t *testing.T) {
 		}
 	})
 	taskID := extractIntID(t, out)
-	if err := database.UpdateTaskPriority(context.Background(), []int{taskID}, 9); err != nil {
-		t.Fatalf("UpdateTaskPriority(9) error = %v", err)
-	}
+	run(t, func() error {
+		return taskSetPriority([]string{"-r", roadmap, itoa(taskID), "9"})
+	})
 	task, err := database.GetTask(context.Background(), taskID)
 	if err != nil {
 		t.Fatalf("GetTask after priority update: %v", err)
@@ -954,7 +961,7 @@ func TestBoundary_DB_UpdateTaskPriority_MaxBoundary(t *testing.T) {
 	}
 }
 
-func TestBoundary_DB_UpdateTaskSeverity_MinBoundary(t *testing.T) {
+func TestBoundary_TaskSevCommand_MinBoundary(t *testing.T) {
 	const roadmap = "boundary-db-upd-sev-min"
 	database, cleanup := setupTestTaskRoadmap(t, roadmap)
 	defer cleanup()
@@ -962,9 +969,9 @@ func TestBoundary_DB_UpdateTaskSeverity_MinBoundary(t *testing.T) {
 		if err := HandleTask([]string{
 			"create",
 			"-r", roadmap,
-			"-t", "Verify UpdateTaskSeverity accepts minimum value 0",
+			"-t", "Verify `task sev` accepts the minimum value 0",
 			"-fr", "Severity can be updated to 0 after task creation",
-			"-tr", "UpdateTaskSeverity issues parameterized SQL UPDATE",
+			"-tr", "`task sev` issues one parameterised UPDATE inside its transaction",
 			"-ac", "Subsequent GetTask returns severity == 0",
 			"--severity", "5",
 		}); err != nil {
@@ -972,9 +979,9 @@ func TestBoundary_DB_UpdateTaskSeverity_MinBoundary(t *testing.T) {
 		}
 	})
 	taskID := extractIntID(t, out)
-	if err := database.UpdateTaskSeverity(context.Background(), []int{taskID}, 0); err != nil {
-		t.Fatalf("UpdateTaskSeverity(0) error = %v", err)
-	}
+	run(t, func() error {
+		return taskSetSeverity([]string{"-r", roadmap, itoa(taskID), "0"})
+	})
 	task, err := database.GetTask(context.Background(), taskID)
 	if err != nil {
 		t.Fatalf("GetTask after severity update: %v", err)
@@ -984,7 +991,7 @@ func TestBoundary_DB_UpdateTaskSeverity_MinBoundary(t *testing.T) {
 	}
 }
 
-func TestBoundary_DB_UpdateTaskSeverity_MaxBoundary(t *testing.T) {
+func TestBoundary_TaskSevCommand_MaxBoundary(t *testing.T) {
 	const roadmap = "boundary-db-upd-sev-max"
 	database, cleanup := setupTestTaskRoadmap(t, roadmap)
 	defer cleanup()
@@ -992,9 +999,9 @@ func TestBoundary_DB_UpdateTaskSeverity_MaxBoundary(t *testing.T) {
 		if err := HandleTask([]string{
 			"create",
 			"-r", roadmap,
-			"-t", "Verify UpdateTaskSeverity accepts maximum value 9",
+			"-t", "Verify `task sev` accepts the maximum value 9",
 			"-fr", "Severity can be updated to 9 after task creation",
-			"-tr", "UpdateTaskSeverity issues parameterized SQL UPDATE",
+			"-tr", "`task sev` issues one parameterised UPDATE inside its transaction",
 			"-ac", "Subsequent GetTask returns severity == 9",
 			"--severity", "0",
 		}); err != nil {
@@ -1002,9 +1009,9 @@ func TestBoundary_DB_UpdateTaskSeverity_MaxBoundary(t *testing.T) {
 		}
 	})
 	taskID := extractIntID(t, out)
-	if err := database.UpdateTaskSeverity(context.Background(), []int{taskID}, 9); err != nil {
-		t.Fatalf("UpdateTaskSeverity(9) error = %v", err)
-	}
+	run(t, func() error {
+		return taskSetSeverity([]string{"-r", roadmap, itoa(taskID), "9"})
+	})
 	task, err := database.GetTask(context.Background(), taskID)
 	if err != nil {
 		t.Fatalf("GetTask after severity update: %v", err)

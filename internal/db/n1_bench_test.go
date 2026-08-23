@@ -19,7 +19,7 @@ func BenchmarkGetSprint_N1Optimization(b *testing.B) {
 			sqlDB, cleanup := setupBenchDB(b)
 			defer cleanup()
 
-			db := &DB{DB: sqlDB, roadmapName: "bench", queryCache: NewQueryCache(), batchProc: NewBatchProcessor(100)}
+			db := &DB{DB: sqlDB, queryCache: NewQueryCache(), batchProc: NewBatchProcessor(100)}
 			if err := db.CreateSchema(); err != nil {
 				b.Fatalf("Failed to create schema: %v", err)
 			}
@@ -33,7 +33,7 @@ func BenchmarkGetSprint_N1Optimization(b *testing.B) {
 				Description: "Test Sprint",
 				CreatedAt:   "2026-03-18T10:00:00.000Z",
 			}
-			sprintID, err := db.CreateSprint(ctx, sprint)
+			sprintID, err := seedSprint(db, sprint)
 			if err != nil {
 				b.Fatalf("Failed to create sprint: %v", err)
 			}
@@ -51,7 +51,7 @@ func BenchmarkGetSprint_N1Optimization(b *testing.B) {
 					AcceptanceCriteria:     "Test acceptance criteria",
 					CreatedAt:              "2026-03-18T10:00:00.000Z",
 				}
-				taskID, err := db.CreateTask(ctx, task)
+				taskID, err := seedTask(db, task)
 				if err != nil {
 					b.Fatalf("Failed to create task: %v", err)
 				}
@@ -86,7 +86,7 @@ func BenchmarkGetSprint_SimulatedOldApproach(b *testing.B) {
 			sqlDB, cleanup := setupBenchDB(b)
 			defer cleanup()
 
-			db := &DB{DB: sqlDB, roadmapName: "bench", queryCache: NewQueryCache(), batchProc: NewBatchProcessor(100)}
+			db := &DB{DB: sqlDB, queryCache: NewQueryCache(), batchProc: NewBatchProcessor(100)}
 			if err := db.CreateSchema(); err != nil {
 				b.Fatalf("Failed to create schema: %v", err)
 			}
@@ -100,7 +100,7 @@ func BenchmarkGetSprint_SimulatedOldApproach(b *testing.B) {
 				Description: "Test Sprint",
 				CreatedAt:   "2026-03-18T10:00:00.000Z",
 			}
-			sprintID, err := db.CreateSprint(ctx, sprint)
+			sprintID, err := seedSprint(db, sprint)
 			if err != nil {
 				b.Fatalf("Failed to create sprint: %v", err)
 			}
@@ -118,7 +118,7 @@ func BenchmarkGetSprint_SimulatedOldApproach(b *testing.B) {
 					AcceptanceCriteria:     "Test acceptance criteria",
 					CreatedAt:              "2026-03-18T10:00:00.000Z",
 				}
-				taskID, err := db.CreateTask(ctx, task)
+				taskID, err := seedTask(db, task)
 				if err != nil {
 					b.Fatalf("Failed to create task: %v", err)
 				}

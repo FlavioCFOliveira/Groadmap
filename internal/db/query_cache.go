@@ -14,23 +14,17 @@ import (
 // fmt.Sprintf + strings.Join, so routing a builder through GetQuery changes
 // nothing observable except eliminating per-call query-plan recompilation.
 //
-// UpdateTaskStatus has several SET-clause shapes depending on the target
-// status (lifecycle-timestamp tracking per SPEC/STATE_MACHINE.md). Each shape
-// is cached under its own key so every transition benefits from plan reuse.
+// The list holds exactly the operations a production builder fetches. Eight
+// further keys used to sit here — the status update in its five lifecycle
+// shapes, the priority and severity updates, and the sprint removal — cached
+// for db-layer methods the command layer had replaced with its own inline SQL.
+// Nothing fetched them, so they were a second set of statements maintained
+// beside the ones that run; they were removed with the methods they served
+// (task #188). Adding a key here without a builder that calls GetQuery for it
+// re-creates that state.
 const (
-	OpGetTasks              = "get_tasks"
-	OpUpdateTaskStatus      = "update_task_status"
-	OpUpdateTaskPriority    = "update_task_priority"
-	OpUpdateTaskSeverity    = "update_task_severity"
-	OpAddTasksToSprint      = "add_tasks_to_sprint"
-	OpRemoveTasksFromSprint = "remove_tasks_from_sprint"
-
-	// Lifecycle-specific UpdateTaskStatus variants. The SET clause differs by
-	// the transition; the WHERE id IN (...) tail is shared.
-	OpUpdateTaskStatusDoing     = "update_task_status_doing"     // SET status, started_at
-	OpUpdateTaskStatusTesting   = "update_task_status_testing"   // SET status, tested_at
-	OpUpdateTaskStatusCompleted = "update_task_status_completed" // SET status, closed_at
-	OpUpdateTaskStatusBacklog   = "update_task_status_backlog"   // SET status, clear all timestamps
+	OpGetTasks         = "get_tasks"
+	OpAddTasksToSprint = "add_tasks_to_sprint"
 )
 
 // QueryCache stores pre-generated query templates for batch operations.
@@ -115,8 +109,8 @@ func (qc *QueryCache) initializeTemplates() {
 //   - OpGetTasks reproduces GetTasks: table alias t, the subtask_count
 //     correlated subquery, the taskDepsSelect dependency columns, and the
 //     ORDER BY t.id tail, so scanTasksWithDeps consumes an unchanged row shape.
-//   - The Add/Remove sprint variants use a status = ? parameter (not a literal)
-//     exactly as AddTasksToSprint / RemoveTasksFromSprint do.
+//   - OpAddTasksToSprint uses a status = ? parameter (not a literal) exactly as
+//     AddTasksToSprint does.
 func buildTemplates(placeholders string) map[string]string {
 	return map[string]string{
 		// GetTasks: full task projection with dependency CSV columns,
@@ -131,47 +125,9 @@ func buildTemplates(placeholders string) map[string]string {
 			placeholders,
 		),
 
-		// UpdateTaskStatus default shape: status only.
-		OpUpdateTaskStatus: fmt.Sprintf(
-			"UPDATE tasks SET status = ? WHERE id IN (%s)",
-			placeholders,
-		),
-		// Lifecycle variants set the appropriate timestamp column.
-		OpUpdateTaskStatusDoing: fmt.Sprintf(
-			"UPDATE tasks SET status = ?, started_at = ? WHERE id IN (%s)",
-			placeholders,
-		),
-		OpUpdateTaskStatusTesting: fmt.Sprintf(
-			"UPDATE tasks SET status = ?, tested_at = ? WHERE id IN (%s)",
-			placeholders,
-		),
-		OpUpdateTaskStatusCompleted: fmt.Sprintf(
-			"UPDATE tasks SET status = ?, closed_at = ? WHERE id IN (%s)",
-			placeholders,
-		),
-		OpUpdateTaskStatusBacklog: fmt.Sprintf(
-			"UPDATE tasks SET status = ?, started_at = NULL, tested_at = NULL, closed_at = NULL WHERE id IN (%s)",
-			placeholders,
-		),
-
-		// UpdateTaskPriority: priority only.
-		OpUpdateTaskPriority: fmt.Sprintf(
-			"UPDATE tasks SET priority = ? WHERE id IN (%s)",
-			placeholders,
-		),
-		// UpdateTaskSeverity: severity only.
-		OpUpdateTaskSeverity: fmt.Sprintf(
-			"UPDATE tasks SET severity = ? WHERE id IN (%s)",
-			placeholders,
-		),
-
-		// AddTasksToSprint / RemoveTasksFromSprint: status as a bound parameter
-		// (SPRINT / BACKLOG respectively), matching the production builders.
+		// AddTasksToSprint: status as a bound parameter (SPRINT), matching the
+		// production builder.
 		OpAddTasksToSprint: fmt.Sprintf(
-			"UPDATE tasks SET status = ? WHERE id IN (%s)",
-			placeholders,
-		),
-		OpRemoveTasksFromSprint: fmt.Sprintf(
 			"UPDATE tasks SET status = ? WHERE id IN (%s)",
 			placeholders,
 		),

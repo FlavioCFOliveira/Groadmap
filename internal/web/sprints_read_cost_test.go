@@ -336,7 +336,7 @@ func seedSprintsWithMembers(t *testing.T, name string, n int) map[int]int {
 	counts := make(map[int]int, n)
 	for i := range n {
 		title := titles[i%len(titles)] + " " + itoa(i+1)
-		sprintID, serr := database.CreateSprint(ctx, &models.Sprint{
+		sprintID, serr := seedSprint(database, &models.Sprint{
 			Status:      models.SprintPending,
 			Title:       title,
 			Description: "Deliver the " + strings.ToLower(title) + " workstream end to end.",
@@ -349,8 +349,7 @@ func seedSprintsWithMembers(t *testing.T, name string, n int) map[int]int {
 
 		taskIDs := make([]int, 0, i)
 		for j := range i {
-			taskID, terr := database.CreateTask(ctx,
-				seededTask(now, title+", member task "+itoa(j+1)))
+			taskID, terr := seedTask(database, seededTask(now, title+", member task "+itoa(j+1)))
 			if terr != nil {
 				t.Fatalf("creating a member task of sprint %q: %v", title, terr)
 			}

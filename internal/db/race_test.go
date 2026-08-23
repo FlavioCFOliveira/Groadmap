@@ -8,6 +8,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -46,7 +47,7 @@ func TestConcurrentTaskCreation(t *testing.T) {
 					CreatedAt:              time.Now().Format(time.RFC3339),
 				}
 
-				_, err := db.CreateTask(context.Background(), task)
+				_, err := seedTask(db, task)
 				if err != nil {
 					atomic.AddInt32(&errorCount, 1)
 					t.Logf("Task creation error: %v", err)
@@ -90,7 +91,7 @@ func TestConcurrentTaskReads(t *testing.T) {
 			AcceptanceCriteria:     "Acceptance",
 			CreatedAt:              time.Now().Format(time.RFC3339),
 		}
-		if _, err := db.CreateTask(context.Background(), task); err != nil {
+		if _, err := seedTask(db, task); err != nil {
 			t.Fatalf("failed to create initial task: %v", err)
 		}
 	}
@@ -134,7 +135,7 @@ func TestConcurrentTaskReads(t *testing.T) {
 					AcceptanceCriteria:     "Acceptance",
 					CreatedAt:              time.Now().Format(time.RFC3339),
 				}
-				db.CreateTask(context.Background(), task)
+				seedTask(db, task)
 				time.Sleep(time.Millisecond)
 			}
 		}(i)
@@ -164,7 +165,7 @@ func TestConcurrentTaskUpdates(t *testing.T) {
 			AcceptanceCriteria:     "Acceptance",
 			CreatedAt:              time.Now().Format(time.RFC3339),
 		}
-		id, err := db.CreateTask(context.Background(), task)
+		id, err := seedTask(db, task)
 		if err != nil {
 			t.Fatalf("failed to create task: %v", err)
 		}
@@ -173,19 +174,23 @@ func TestConcurrentTaskUpdates(t *testing.T) {
 
 	var wg sync.WaitGroup
 
-	// Concurrent updates to different tasks
+	// Concurrent updates to different tasks, each in its own transaction —
+	// the shape every task-mutating command uses. It used to go through an
+	// UpdateTask method in this package; the command layer had replaced that
+	// with its own transaction, so the contention being measured was
+	// contention on a path the binary never took (task #188).
 	for i, id := range taskIDs {
 		wg.Add(1)
 		go func(taskID int, iteration int) {
 			defer wg.Done()
 
-			updates := map[string]any{
-				"priority": iteration,
-			}
-
-			err := db.UpdateTask(context.Background(), taskID, updates)
+			err := db.WithTransaction(func(tx *sql.Tx) error {
+				_, execErr := tx.Exec(
+					"UPDATE tasks SET priority = ? WHERE id = ?", iteration, taskID)
+				return execErr
+			})
 			if err != nil {
-				t.Logf("UpdateTask error for task %d: %v", taskID, err)
+				t.Logf("updating task %d: %v", taskID, err)
 			}
 		}(id, i)
 	}
@@ -217,7 +222,7 @@ func TestConcurrentSprintCreation(t *testing.T) {
 				CreatedAt:   time.Now().Format(time.RFC3339),
 			}
 
-			_, err := db.CreateSprint(context.Background(), sprint)
+			_, err := seedSprint(db, sprint)
 			if err != nil {
 				atomic.AddInt32(&errorCount, 1)
 				t.Logf("Sprint creation error: %v", err)
@@ -254,7 +259,7 @@ func TestConcurrentSprintTaskOperations(t *testing.T) {
 		Description: "Test sprint",
 		CreatedAt:   time.Now().Format(time.RFC3339),
 	}
-	sprintID, err := db.CreateSprint(context.Background(), sprint)
+	sprintID, err := seedSprint(db, sprint)
 	if err != nil {
 		t.Fatalf("failed to create sprint: %v", err)
 	}
@@ -272,7 +277,7 @@ func TestConcurrentSprintTaskOperations(t *testing.T) {
 			AcceptanceCriteria:     "Acceptance",
 			CreatedAt:              time.Now().Format(time.RFC3339),
 		}
-		id, err := db.CreateTask(context.Background(), task)
+		id, err := seedTask(db, task)
 		if err != nil {
 			t.Fatalf("failed to create task: %v", err)
 		}
@@ -434,7 +439,7 @@ func TestHighConcurrencyStress(t *testing.T) {
 						AcceptanceCriteria:     "Acceptance",
 						CreatedAt:              time.Now().Format(time.RFC3339),
 					}
-					_, err := db.CreateTask(context.Background(), task)
+					_, err := seedTask(db, task)
 					if err != nil {
 						atomic.AddInt32(&errorCount, 1)
 					}
@@ -452,7 +457,7 @@ func TestHighConcurrencyStress(t *testing.T) {
 						Description: "Stress test sprint",
 						CreatedAt:   time.Now().Format(time.RFC3339),
 					}
-					_, err := db.CreateSprint(context.Background(), sprint)
+					_, err := seedSprint(db, sprint)
 					if err != nil {
 						atomic.AddInt32(&errorCount, 1)
 					}

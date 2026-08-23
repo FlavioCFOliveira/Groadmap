@@ -197,22 +197,11 @@ func taskCreate(args []string) error {
 	var taskID int
 	err = database.WithTransaction(func(tx *sql.Tx) error {
 		// Insert task
-		insertResult, insertErr := tx.Exec(
-			`INSERT INTO tasks (title, status, type, functional_requirements, technical_requirements, acceptance_criteria, created_at, priority, severity, parent_task_id)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			task.Title, task.Status, task.Type, task.FunctionalRequirements, task.TechnicalRequirements,
-			task.AcceptanceCriteria, task.CreatedAt, task.Priority, task.Severity,
-			task.ParentTaskID,
-		)
+		id, insertErr := db.InsertTaskTx(tx, task)
 		if insertErr != nil {
 			return insertErr
 		}
-
-		id, idErr := insertResult.LastInsertId()
-		if idErr != nil {
-			return idErr
-		}
-		taskID = int(id)
+		taskID = id
 
 		return db.LogAuditTx(tx, models.OpTaskCreate, models.EntityTask, taskID, now)
 	})

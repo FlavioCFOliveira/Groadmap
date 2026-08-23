@@ -103,14 +103,14 @@ func seedCommentFixture(t *testing.T, name string) commentFixture {
 	const now = "2026-08-10T08:00:00Z"
 
 	mkTask := func(title string) int {
-		id, terr := database.CreateTask(ctx, seededTask(now, title))
+		id, terr := seedTask(database, seededTask(now, title))
 		if terr != nil {
 			t.Fatalf("creating task %q: %v", title, terr)
 		}
 		return id
 	}
 	mkSprint := func(title string, order int) int {
-		id, serr := database.CreateSprint(ctx, &models.Sprint{
+		id, serr := seedSprint(database, &models.Sprint{
 			Status:      models.SprintPending,
 			Title:       title,
 			Description: title,
@@ -133,9 +133,7 @@ func seedCommentFixture(t *testing.T, name string) commentFixture {
 		[]int{f.loggedTaskID, f.markupTaskID, f.quietTaskID}); aerr != nil {
 		t.Fatalf("adding tasks to sprint: %v", aerr)
 	}
-	if serr := database.UpdateSprintStatus(ctx, f.sprintID, models.SprintOpen); serr != nil {
-		t.Fatalf("opening sprint: %v", serr)
-	}
+	forceSprintOpen(t, database, f.sprintID)
 
 	f.quietSprintID = mkSprint("Refresh the currency table from the reference feed", 20)
 	f.looseTaskID = mkTask("Retire the legacy settlement importer")
@@ -916,8 +914,7 @@ func seedTasksWithComments(t *testing.T, name string, n int) []int {
 	const now = "2026-08-10T08:00:00Z"
 	ids := make([]int, 0, n)
 	for i := 0; i < n; i++ {
-		id, terr := database.CreateTask(context.Background(),
-			seededTask(now, "Balance settlement window "+itoa(i+1)))
+		id, terr := seedTask(database, seededTask(now, "Balance settlement window "+itoa(i+1)))
 		if terr != nil {
 			t.Fatalf("creating task %d: %v", i+1, terr)
 		}

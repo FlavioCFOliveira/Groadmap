@@ -13,7 +13,7 @@ import (
 // newTestTask inserts a minimal BACKLOG task and returns its id.
 func newTestTask(t *testing.T, db *DB, title string) int {
 	t.Helper()
-	id, err := db.CreateTask(testContext(), &models.Task{
+	id, err := seedTask(db, &models.Task{
 		Priority:               1,
 		Severity:               1,
 		Status:                 models.StatusBacklog,
@@ -32,7 +32,7 @@ func newTestTask(t *testing.T, db *DB, title string) int {
 // newTestSprintWithCap inserts a sprint and, when cap > 0, sets its max_tasks.
 func newTestSprintWithCap(t *testing.T, db *DB, desc string, cap int) int {
 	t.Helper()
-	id, err := db.CreateSprint(testContext(), &models.Sprint{
+	id, err := seedSprint(db, &models.Sprint{
 		Status:      models.SprintPending,
 		Title:       desc,
 		Description: desc,
@@ -106,66 +106,12 @@ func TestGetAuditEntriesHardCap(t *testing.T) {
 
 // ==================== #66: RemoveTasksFromSprint atomicity ====================
 
-// TestRemoveTasksFromSprintAtomic verifies that after RemoveTasksFromSprint the
-// removed tasks have no sprint_tasks membership AND are reset to BACKLOG, while
-// untouched tasks keep their SPRINT membership/status. Membership and
-// tasks.status never diverge (finding #66).
-func TestRemoveTasksFromSprintAtomic(t *testing.T) {
-	db, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	sprintID := newTestSprintWithCap(t, db, "Active sprint", 0)
-	taskIDs := []int{
-		newTestTask(t, db, "Build API"),
-		newTestTask(t, db, "Add cache"),
-		newTestTask(t, db, "Tune index"),
-	}
-	if err := db.AddTasksToSprint(testContext(), sprintID, taskIDs); err != nil {
-		t.Fatalf("adding tasks: %v", err)
-	}
-
-	removed := taskIDs[:2]
-	if err := db.RemoveTasksFromSprint(testContext(), removed); err != nil {
-		t.Fatalf("RemoveTasksFromSprint: %v", err)
-	}
-
-	// Removed tasks: BACKLOG status AND no membership row.
-	for _, id := range removed {
-		task, err := db.GetTask(testContext(), id)
-		if err != nil {
-			t.Fatalf("getting task %d: %v", id, err)
-		}
-		if task.Status != models.StatusBacklog {
-			t.Errorf("removed task %d: expected BACKLOG, got %q", id, task.Status)
-		}
-		var member int
-		if err := db.QueryRowContext(testContext(),
-			"SELECT COUNT(*) FROM sprint_tasks WHERE task_id = ?", id).Scan(&member); err != nil {
-			t.Fatalf("counting membership for %d: %v", id, err)
-		}
-		if member != 0 {
-			t.Errorf("removed task %d: expected no membership, got %d rows", id, member)
-		}
-	}
-
-	// Remaining task keeps SPRINT status and membership.
-	remaining := taskIDs[2]
-	task, err := db.GetTask(testContext(), remaining)
-	if err != nil {
-		t.Fatalf("getting remaining task: %v", err)
-	}
-	if task.Status != models.StatusSprint {
-		t.Errorf("remaining task %d: expected SPRINT, got %q", remaining, task.Status)
-	}
-	var member int
-	if err := db.QueryRowContext(testContext(),
-		"SELECT COUNT(*) FROM sprint_tasks WHERE task_id = ?", remaining).Scan(&member); err != nil {
-		t.Fatalf("counting membership: %v", err)
-	}
-	if member != 1 {
-		t.Errorf("remaining task %d: expected 1 membership row, got %d", remaining, member)
-	}
-}
+// The finding-#66 gate that stood here — after removing tasks from a sprint,
+// membership and status agree — moved to internal/commands, because the method
+// it drove (RemoveTasksFromSprint) was a copy the binary never ran and is gone
+// (task #188). It is now
+// TestSprintRemoveTasksKeepsMembershipAndStatusInAgreement in
+// internal/commands/sprint_remove_tasks_atomicity_test.go, driving the command.
 
 // ==================== #67: capacity enforced inside the tx ====================
 

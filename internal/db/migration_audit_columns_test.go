@@ -154,9 +154,7 @@ func buildRoadmapAtSchema1110(t *testing.T, roadmapName string) auditFixture {
 		t.Fatalf("creating roadmap %q: %v", roadmapName, err)
 	}
 
-	ctx := testContext()
-
-	sprintID, err := database.CreateSprint(ctx, &models.Sprint{
+	sprintID, err := seedSprint(database, &models.Sprint{
 		Title:       "Settlement resilience",
 		Description: "Keep card settlements clearing while an acquirer is unavailable.",
 		Status:      models.SprintPending,
@@ -168,7 +166,7 @@ func buildRoadmapAtSchema1110(t *testing.T, roadmapName string) auditFixture {
 
 	newTask := func(title, functional string) int {
 		t.Helper()
-		id, err := database.CreateTask(ctx, &models.Task{
+		id, err := seedTask(database, &models.Task{
 			Title:                  title,
 			Type:                   models.TypeTask,
 			Status:                 models.StatusBacklog,

@@ -223,7 +223,7 @@ func seedIndexFixture(t *testing.T, db *DB) indexFixtureIDs {
 	t.Helper()
 	ctx := testContext()
 
-	sprintID, err := db.CreateSprint(ctx, &models.Sprint{
+	sprintID, err := seedSprint(db, &models.Sprint{
 		Title:       "Audit retention hardening",
 		Description: "Retain and index a full year of audit history.",
 		Status:      models.SprintPending,
@@ -236,7 +236,7 @@ func seedIndexFixture(t *testing.T, db *DB) indexFixtureIDs {
 	statuses := []models.TaskStatus{models.StatusBacklog, models.StatusCompleted}
 	var backlogIDs []int
 	for i := range 60 {
-		id, err := db.CreateTask(ctx, &models.Task{
+		id, err := seedTask(db, &models.Task{
 			Title:                  fmt.Sprintf("Harden the audit retention policy, part %d", i+1),
 			Type:                   models.TypeTask,
 			Status:                 statuses[i%len(statuses)],
@@ -258,8 +258,8 @@ func seedIndexFixture(t *testing.T, db *DB) indexFixtureIDs {
 		t.Fatalf("adding tasks to sprint: %v", err)
 	}
 
-	// CreateTask and AddTasksToSprint already write audit rows; add a spread of
-	// timestamps so the date-range plan has something to range over.
+	// AddTasksToSprint already writes audit rows; add a spread of timestamps so
+	// the date-range plan has something to range over.
 	now := time.Now().UTC()
 	for i := range 40 {
 		entry := &models.AuditEntry{

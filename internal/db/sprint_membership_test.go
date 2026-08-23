@@ -89,9 +89,7 @@ func seedSprintMembershipFixture(t *testing.T, db *DB) membershipFixture {
 	// so without this every member would share one status and the
 	// status-independence of membership would go untested.
 	backlogMember := members[3]
-	if err := db.UpdateTaskStatus(testContext(), []int{backlogMember}, models.StatusBacklog); err != nil {
-		t.Fatalf("parking member task %d in BACKLOG: %v", backlogMember, err)
-	}
+	forceTaskLifecycle(t, db, []int{backlogMember}, models.StatusBacklog)
 
 	return membershipFixture{
 		wantTasks: map[int][]int{
@@ -298,9 +296,7 @@ func TestSprintMembershipIsPublishedInAscendingTaskID(t *testing.T) {
 	// fixture: that keeps the fixture all-PENDING for the status-filter gate
 	// above, and puts the read under test on the sprint whose planned order is
 	// deliberately not the ascending one.
-	if err := db.UpdateSprintStatus(testContext(), fixture.scrambled, models.SprintOpen); err != nil {
-		t.Fatalf("opening sprint %d: %v", fixture.scrambled, err)
-	}
+	forceSprintOpen(t, db, fixture.scrambled)
 	fromOpen, err := db.GetOpenSprint(testContext())
 	if err != nil {
 		t.Fatalf("GetOpenSprint: %v", err)
@@ -343,9 +339,7 @@ func TestTheOpenSprintReadPublishesAnEmptyArrayNotNull(t *testing.T) {
 	defer cleanup()
 	fixture := seedSprintMembershipFixture(t, db)
 
-	if err := db.UpdateSprintStatus(testContext(), fixture.empty, models.SprintOpen); err != nil {
-		t.Fatalf("opening the empty sprint %d: %v", fixture.empty, err)
-	}
+	forceSprintOpen(t, db, fixture.empty)
 	fromOpen, err := db.GetOpenSprint(testContext())
 	if err != nil {
 		t.Fatalf("GetOpenSprint: %v", err)

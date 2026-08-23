@@ -382,7 +382,7 @@ func TestTaskModal_HostileValuesNeverReachThePageAsMarkup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("opening roadmap %q: %v", name, err)
 	}
-	taskID, err := database.CreateTask(context.Background(), &models.Task{
+	taskID, err := seedTask(database, &models.Task{
 		Priority:               5,
 		Severity:               5,
 		Status:                 models.StatusBacklog,

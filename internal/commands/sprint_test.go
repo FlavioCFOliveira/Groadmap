@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
@@ -99,20 +98,14 @@ func TestSprintList_InvalidStatus(t *testing.T) {
 // than leak ParseTaskStatus's model sentinel as a generic runtime error (exit 1).
 func TestSprintTasks_InvalidStatus(t *testing.T) {
 	testName := "testsprinttasksinvalidstatus"
-	database, cleanup := setupTestTaskRoadmap(t, testName)
+	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	ctx := context.Background()
-	sprintID, err := database.CreateSprint(ctx, &models.Sprint{
-		Title:       "Sprint 1",
-		Description: "first",
-		Status:      models.SprintPending,
-	})
-	if err != nil {
-		t.Fatalf("CreateSprint: %v", err)
-	}
+	sprintID := createSprintViaCommand(t, testName,
+		"Reconcile the acquirer settlement file",
+		"Match every settlement line to a ledger entry before payout.")
 
-	err = HandleSprint([]string{"tasks", "-r", testName, strconv.Itoa(sprintID), "-s", "INVALID"})
+	err := HandleSprint([]string{"tasks", "-r", testName, strconv.Itoa(sprintID), "-s", "INVALID"})
 	if err == nil {
 		t.Fatal("sprintTasks with invalid status expected error, got nil")
 	}
@@ -586,21 +579,13 @@ func TestSprintOpenTasks_NonexistentSprint(t *testing.T) {
 
 func TestSprintOpenTasks_EmptySprint(t *testing.T) {
 	testName := "testsprintopentasksempty"
-	database, cleanup := setupTestTaskRoadmap(t, testName)
+	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
 	// Create a sprint with no tasks; open-tasks must succeed and return an empty list.
-	ctx, cancel := db.WithQuickTimeout()
-	defer cancel()
-	sprintID, err := database.CreateSprint(ctx, &models.Sprint{
-		Status:      models.SprintPending,
-		Title:       "Sprint without tasks for open-tasks happy-path test",
-		Description: "Sprint without tasks for open-tasks happy-path test",
-		CreatedAt:   utils.NowISO8601(),
-	})
-	if err != nil {
-		t.Fatalf("seed sprint failed: %v", err)
-	}
+	sprintID := createSprintViaCommand(t, testName,
+		"Sprint without tasks for open-tasks happy-path test",
+		"A sprint holding no member task, so open-tasks has an empty set to report.")
 
 	if err := HandleSprint([]string{"open-tasks", "-r", testName, strconv.Itoa(sprintID)}); err != nil {
 		t.Errorf("sprintOpenTasks on empty sprint should succeed, got: %v", err)
@@ -609,23 +594,15 @@ func TestSprintOpenTasks_EmptySprint(t *testing.T) {
 
 func TestSprintOpenTasks_OrderByPriorityFlag(t *testing.T) {
 	testName := "testsprintopentasksorder"
-	database, cleanup := setupTestTaskRoadmap(t, testName)
+	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	ctx, cancel := db.WithQuickTimeout()
-	defer cancel()
-	sprintID, err := database.CreateSprint(ctx, &models.Sprint{
-		Status:      models.SprintPending,
-		Title:       "Sprint for order-by-priority verification",
-		Description: "Sprint for order-by-priority verification",
-		CreatedAt:   utils.NowISO8601(),
-	})
-	if err != nil {
-		t.Fatalf("seed sprint failed: %v", err)
-	}
+	sprintID := createSprintViaCommand(t, testName,
+		"Sprint for order-by-priority verification",
+		"A sprint whose task listing is read back ordered by priority.")
 
 	// --order-by-priority is a boolean flag and should be accepted without value.
-	err = HandleSprint([]string{"open-tasks", "-r", testName, strconv.Itoa(sprintID), "--order-by-priority"})
+	err := HandleSprint([]string{"open-tasks", "-r", testName, strconv.Itoa(sprintID), "--order-by-priority"})
 	if err != nil {
 		t.Errorf("sprintOpenTasks --order-by-priority should be accepted, got: %v", err)
 	}
@@ -789,18 +766,13 @@ func TestSprintMoveTasks_InvalidTaskID(t *testing.T) {
 	}
 }
 
-// mkSprintTask creates a BACKLOG task and returns its ID (test helper).
-func mkSprintTask(t *testing.T, database *db.DB, title string) int {
+// mkSprintTask creates a BACKLOG task through `task create` and returns its ID.
+func mkSprintTask(t *testing.T, roadmap, title string) int {
 	t.Helper()
-	id, err := database.CreateTask(context.Background(), &models.Task{
-		Title: title, FunctionalRequirements: "f", TechnicalRequirements: "t",
-		AcceptanceCriteria: "a", Type: models.TypeTask, Status: models.StatusBacklog,
-		CreatedAt: utils.NowISO8601(),
-	})
-	if err != nil {
-		t.Fatalf("creating task %q: %v", title, err)
-	}
-	return id
+	return createTaskViaCommand(t, roadmap, title,
+		"The settlement work this task names must be completed before payout runs.",
+		"Implement it against the settlement ledger and cover it with a regression test.",
+		"The behaviour this task names is observable end to end.")
 }
 
 // TestSprintRemoveTasks_MembershipGuard is a regression gate for finding #40:
@@ -814,21 +786,15 @@ func TestSprintRemoveTasks_MembershipGuard(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	s1, err := database.CreateSprint(ctx, &models.Sprint{Title: "Velocity baseline", Description: "Sprint one", Status: models.SprintPending})
-	if err != nil {
-		t.Fatalf("creating sprint 1: %v", err)
-	}
-	s2, err := database.CreateSprint(ctx, &models.Sprint{Title: "Hardening pass", Description: "Sprint two", Status: models.SprintPending})
-	if err != nil {
-		t.Fatalf("creating sprint 2: %v", err)
-	}
-	t1 := mkSprintTask(t, database, "Task in sprint one")
+	s1 := createSprintViaCommand(t, testName, "Velocity baseline", "Establish the reconciliation throughput baseline.")
+	s2 := createSprintViaCommand(t, testName, "Hardening pass", "Close the findings the baseline sprint raised.")
+	t1 := mkSprintTask(t, testName, "Task in sprint one")
 	if err := database.AddTasksToSprint(ctx, s1, []int{t1}); err != nil {
 		t.Fatalf("adding task to sprint 1: %v", err)
 	}
 
 	// Removing t1 while naming s2 (where it is NOT a member) must fail-fast.
-	err = HandleSprint([]string{"remove-tasks", "-r", testName, strconv.Itoa(s2), strconv.Itoa(t1)})
+	err := HandleSprint([]string{"remove-tasks", "-r", testName, strconv.Itoa(s2), strconv.Itoa(t1)})
 	if err == nil {
 		t.Fatal("expected membership error removing task from the wrong sprint, got nil")
 	}
@@ -856,13 +822,10 @@ func TestSprintRemoveTasks_ClearsLifecycleAndCompacts(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	s1, err := database.CreateSprint(ctx, &models.Sprint{Title: "Velocity baseline", Description: "Sprint one", Status: models.SprintPending})
-	if err != nil {
-		t.Fatalf("creating sprint: %v", err)
-	}
-	t1 := mkSprintTask(t, database, "Task one")
-	t2 := mkSprintTask(t, database, "Task two")
-	t3 := mkSprintTask(t, database, "Task three")
+	s1 := createSprintViaCommand(t, testName, "Velocity baseline", "Establish the reconciliation throughput baseline.")
+	t1 := mkSprintTask(t, testName, "Task one")
+	t2 := mkSprintTask(t, testName, "Task two")
+	t3 := mkSprintTask(t, testName, "Task three")
 	if err := database.AddTasksToSprint(ctx, s1, []int{t1, t2, t3}); err != nil {
 		t.Fatalf("adding tasks: %v", err)
 	}

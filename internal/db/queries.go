@@ -65,48 +65,42 @@ var (
 
 // ==================== TASK QUERIES ====================
 
-// CreateTask inserts a new task and returns its ID.
-func (db *DB) CreateTask(ctx context.Context, task *models.Task) (int, error) {
-	var taskID int
-	err := retryWithBackoff("create task", func() error {
-		// Default type to TASK if not specified
-		taskType := task.Type
-		if taskType == "" {
-			taskType = models.TypeTask
-		}
-
-		result, err := db.ExecContext(ctx,
-			`INSERT INTO tasks (title, status, type, functional_requirements, technical_requirements, acceptance_criteria, created_at, priority, severity, completion_summary, parent_task_id)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
-			task.Title,
-			task.Status,
-			taskType,
-			task.FunctionalRequirements,
-			task.TechnicalRequirements,
-			task.AcceptanceCriteria,
-			task.CreatedAt,
-			task.Priority,
-			task.Severity,
-			task.ParentTaskID,
-		)
-		if err != nil {
-			return fmt.Errorf("inserting task: %w", err)
-		}
-
-		id, err := result.LastInsertId()
-		if err != nil {
-			return fmt.Errorf("getting last insert id: %w", err)
-		}
-
-		taskID = int(id)
-		return nil
-	})
-
+// InsertTaskTx inserts one task row inside an existing transaction and returns
+// its id.
+//
+// This is the only implementation of the task INSERT. `task create` runs it
+// inside the transaction that also writes the TASK_CREATE audit entry
+// (SPEC/DATABASE.md § Transactional Atomicity Guarantees), and this package's
+// fixtures seed through it, so no test can be built on SQL the binary does not
+// run. The connection-scoped CreateTask that used to sit here was a second
+// INSERT with no audit entry and no transaction to share; no command could use
+// it, and only tests ever did (task #188).
+//
+// Only the columns a task is born with are written. The lifecycle columns —
+// started_at, tested_at, closed_at, completion_summary, commit_open,
+// commit_close — are left to the schema, because a new task is in BACKLOG and
+// reaches them only through a transition.
+//
+// Errors are returned unwrapped: the caller owns the message, because the same
+// failure means different things to `task create` and to a fixture.
+func InsertTaskTx(tx *sql.Tx, task *models.Task) (int, error) {
+	result, err := tx.Exec(
+		`INSERT INTO tasks (title, status, type, functional_requirements, technical_requirements, acceptance_criteria, created_at, priority, severity, parent_task_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		task.Title, task.Status, task.Type, task.FunctionalRequirements, task.TechnicalRequirements,
+		task.AcceptanceCriteria, task.CreatedAt, task.Priority, task.Severity,
+		task.ParentTaskID,
+	)
 	if err != nil {
 		return 0, err
 	}
 
-	return taskID, nil
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+
+	return int(id), nil
 }
 
 // GetTask retrieves a task by ID, including dependencies and subtask_count.
@@ -313,304 +307,27 @@ func (db *DB) ListAllTasks(ctx context.Context) ([]models.Task, error) {
 	return scanTasksWithDeps(rows)
 }
 
-// UpdateTask updates a task's fields with the provided values.
-// Uses hardcoded field names to prevent SQL injection - no dynamic field names in SQL.
+// Task mutation has no method here on purpose, and neither have the field
+// edit, the status transition, the priority and severity changes, nor the
+// delete. Each is one indivisible operation with its audit entries, and each
+// is decided by rules the database layer is the wrong place to hold: the state
+// machine and its lifecycle timestamps and commit hashes for a transition
+// (SPEC/STATE_MACHINE.md), the per-field audit operation for an edit, the
+// fail-fast existence check for a batch, and the BACKLOG-only rule plus the
+// subtask guard for a delete. They live in internal/commands, next to the
+// validation that decides them, in the transaction that also writes what
+// happened.
 //
-// Parameters:
-//   - ctx: Context for timeout and cancellation
-//   - id: The unique identifier of the task to update
-//   - updates: A map of field names to new values. Only whitelisted fields can be updated.
+// A second copy here would be unreachable from the binary and therefore
+// ungated, which is not a hypothetical: the copy of the status update that used
+// to sit at this spot never wrote an audit entry, never touched commit_open or
+// commit_close, and cleared started_at/tested_at/closed_at on a reopening while
+// leaving completion_summary behind — three ways of being wrong that nothing
+// reported, because only the shipped copy was ever exercised (task #188, after
+// the same finding closed sprint deletion in task #176).
 //
-// Allowed fields (whitelisted):
-//   - "title": Task title (string, max 255 chars)
-//   - "functional_requirements": Functional requirements (string, max 4096 chars)
-//   - "technical_requirements": Technical requirements (string, max 4096 chars)
-//   - "acceptance_criteria": Acceptance criteria (string, max 4096 chars)
-//   - "priority": Task priority 0-9 (int)
-//   - "severity": Task severity 0-9 (int)
-//
-// Error conditions:
-//   - Returns utils.ErrInvalidUpdate if a non-whitelisted field is specified
-//   - Returns utils.ErrNotFound if task with given ID doesn't exist
-//   - Returns wrapped database errors for connection/query failures
-//
-// Side effects:
-//   - Updates task record in database
-//   - Does NOT update status (use UpdateTaskStatus for that)
-//   - Does NOT create audit entries (caller should log changes)
-//
-// Security: Uses hardcoded field names in SQL to prevent injection attacks.
-func (db *DB) UpdateTask(ctx context.Context, id int, updates map[string]any) error {
-	if len(updates) == 0 {
-		return nil
-	}
-
-	return retryWithBackoff("update task", func() error {
-		setParts := make([]string, 0, len(updates))
-		args := make([]any, 0, len(updates)+1)
-
-		// Iterate updates in a deterministic order so the generated SQL is
-		// stable across runs — required for SQLite's prepared-statement
-		// cache and for reproducible behaviour in tests.
-		fields := make([]string, 0, len(updates))
-		for f := range updates {
-			fields = append(fields, f)
-		}
-		sort.Strings(fields)
-
-		// Use hardcoded field names to prevent SQL injection
-		// Field names are never dynamically inserted into SQL
-		for _, field := range fields {
-			value := updates[field]
-			switch field {
-			case "title":
-				setParts = append(setParts, "title = ?")
-				args = append(args, value)
-			case "functional_requirements":
-				setParts = append(setParts, "functional_requirements = ?")
-				args = append(args, value)
-			case "technical_requirements":
-				setParts = append(setParts, "technical_requirements = ?")
-				args = append(args, value)
-			case "acceptance_criteria":
-				setParts = append(setParts, "acceptance_criteria = ?")
-				args = append(args, value)
-			case "priority":
-				setParts = append(setParts, "priority = ?")
-				args = append(args, value)
-			case "severity":
-				setParts = append(setParts, "severity = ?")
-				args = append(args, value)
-			default:
-				return fmt.Errorf("%w: field %q cannot be updated via UpdateTask (use dedicated method)", utils.ErrInvalidUpdate, field)
-			}
-		}
-
-		if len(setParts) == 0 {
-			return fmt.Errorf("%w: no valid fields to update", utils.ErrInvalidUpdate)
-		}
-
-		args = append(args, id)
-		query := fmt.Sprintf("UPDATE tasks SET %s WHERE id = ?", strings.Join(setParts, ", "))
-
-		result, err := db.ExecContext(ctx, query, args...)
-		if err != nil {
-			return fmt.Errorf("updating task: %w", err)
-		}
-
-		affected, err := result.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("checking rows affected: %w", err)
-		}
-		if affected == 0 {
-			return fmt.Errorf("%w: task %d", utils.ErrNotFound, id)
-		}
-
-		return nil
-	})
-}
-
-// UpdateTaskStruct updates a task using the type-safe TaskUpdate struct.
-// This is the recommended approach over UpdateTask (map-based) as it provides:
-// - Compile-time type safety
-// - Deterministic SQL generation (fields always in same order)
-// - No interface{} boxing overhead
-// - Clear intent through pointer fields (nil = no change)
-//
-// Parameters:
-//   - ctx: Context for timeout and cancellation
-//   - id: The unique identifier of the task to update
-//   - update: TaskUpdate struct with pointer fields indicating which values to update
-//
-// Returns:
-//   - nil on success
-//   - utils.ErrNotFound if task doesn't exist
-//   - utils.ErrInvalidUpdate if no fields are set to update
-//   - Validation error if field values exceed limits
-//   - Wrapped database errors for connection/query failures
-func (db *DB) UpdateTaskStruct(ctx context.Context, id int, update *models.TaskUpdate) error {
-	if update == nil || !update.HasChanges() {
-		return fmt.Errorf("%w: no fields specified for update", utils.ErrInvalidUpdate)
-	}
-
-	if err := update.Validate(); err != nil {
-		return fmt.Errorf("%w: %v", utils.ErrInvalidUpdate, err)
-	}
-
-	return retryWithBackoff("update task struct", func() error {
-		// Build SQL with deterministic field ordering
-		// Fields are always in the same order: title, functional_requirements, technical_requirements, acceptance_criteria, priority, severity
-		var setParts []string
-		var args []any
-
-		if update.Title != nil {
-			setParts = append(setParts, "title = ?")
-			args = append(args, *update.Title)
-		}
-		if update.FunctionalRequirements != nil {
-			setParts = append(setParts, "functional_requirements = ?")
-			args = append(args, *update.FunctionalRequirements)
-		}
-		if update.TechnicalRequirements != nil {
-			setParts = append(setParts, "technical_requirements = ?")
-			args = append(args, *update.TechnicalRequirements)
-		}
-		if update.AcceptanceCriteria != nil {
-			setParts = append(setParts, "acceptance_criteria = ?")
-			args = append(args, *update.AcceptanceCriteria)
-		}
-		if update.Priority != nil {
-			setParts = append(setParts, "priority = ?")
-			args = append(args, *update.Priority)
-		}
-		if update.Severity != nil {
-			setParts = append(setParts, "severity = ?")
-			args = append(args, *update.Severity)
-		}
-
-		args = append(args, id)
-		query := fmt.Sprintf("UPDATE tasks SET %s WHERE id = ?", strings.Join(setParts, ", "))
-
-		result, err := db.ExecContext(ctx, query, args...)
-		if err != nil {
-			return fmt.Errorf("updating task: %w", err)
-		}
-
-		affected, err := result.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("checking rows affected: %w", err)
-		}
-		if affected == 0 {
-			return fmt.Errorf("%w: task %d", utils.ErrNotFound, id)
-		}
-
-		return nil
-	})
-}
-
-// UpdateTaskStatus updates task status and manages lifecycle timestamps.
-// Per SPEC/STATE_MACHINE.md:
-// - SPRINT → DOING: set started_at
-// - DOING → TESTING: set tested_at
-// - TESTING → COMPLETED: set closed_at
-// - COMPLETED → BACKLOG: clear started_at, tested_at, closed_at
-func (db *DB) UpdateTaskStatus(ctx context.Context, ids []int, status models.TaskStatus) error {
-	if len(ids) == 0 {
-		return nil
-	}
-
-	return retryWithBackoff("update task status", func() error {
-		now := utils.NowISO8601()
-
-		// Select the cached operation key and the leading bound parameters
-		// (those that precede the IN-clause ids) for the target status. The
-		// lifecycle variants set a timestamp column per SPEC/STATE_MACHINE.md;
-		// each has its own cached template so every transition reuses a plan.
-		var op string
-		var leadArgs []any
-		switch status {
-		case models.StatusDoing:
-			op = OpUpdateTaskStatusDoing // SET status, started_at
-			leadArgs = []any{status, now}
-		case models.StatusTesting:
-			op = OpUpdateTaskStatusTesting // SET status, tested_at
-			leadArgs = []any{status, now}
-		case models.StatusCompleted:
-			op = OpUpdateTaskStatusCompleted // SET status, closed_at
-			leadArgs = []any{status, now}
-		case models.StatusBacklog:
-			op = OpUpdateTaskStatusBacklog // SET status, clear timestamps
-			leadArgs = []any{status}
-		default:
-			op = OpUpdateTaskStatus // SET status only
-			leadArgs = []any{status}
-		}
-
-		// Chunk the id set so a large update is split into batches that stay
-		// within SQLite's variable limit (SQLITE_LIMIT_VARIABLE_NUMBER, ~999).
-		// Each chunk fetches its own cached template sized to the chunk.
-		return db.batchProc.ProcessChunks(ids, func(chunk []int) error {
-			query := db.queryCache.GetQuery(op, len(chunk))
-			args := make([]any, 0, len(leadArgs)+len(chunk))
-			args = append(args, leadArgs...)
-			for _, id := range chunk {
-				args = append(args, id)
-			}
-			if _, err := db.ExecContext(ctx, query, args...); err != nil {
-				return fmt.Errorf("updating task status: %w", err)
-			}
-			return nil
-		})
-	})
-}
-
-// UpdateTaskPriority updates task priority.
-func (db *DB) UpdateTaskPriority(ctx context.Context, ids []int, priority int) error {
-	if len(ids) == 0 {
-		return nil
-	}
-
-	return retryWithBackoff("update task priority", func() error {
-		// Cached template (OpUpdateTaskPriority) + batch chunking so large id
-		// sets stay within SQLite's variable limit.
-		return db.batchProc.ProcessChunks(ids, func(chunk []int) error {
-			query := db.queryCache.GetQuery(OpUpdateTaskPriority, len(chunk))
-			args := make([]any, 0, len(chunk)+1)
-			args = append(args, priority)
-			for _, id := range chunk {
-				args = append(args, id)
-			}
-			if _, err := db.ExecContext(ctx, query, args...); err != nil {
-				return fmt.Errorf("updating task priority: %w", err)
-			}
-			return nil
-		})
-	})
-}
-
-// UpdateTaskSeverity updates task severity.
-func (db *DB) UpdateTaskSeverity(ctx context.Context, ids []int, severity int) error {
-	if len(ids) == 0 {
-		return nil
-	}
-
-	return retryWithBackoff("update task severity", func() error {
-		// Cached template (OpUpdateTaskSeverity) + batch chunking so large id
-		// sets stay within SQLite's variable limit.
-		return db.batchProc.ProcessChunks(ids, func(chunk []int) error {
-			query := db.queryCache.GetQuery(OpUpdateTaskSeverity, len(chunk))
-			args := make([]any, 0, len(chunk)+1)
-			args = append(args, severity)
-			for _, id := range chunk {
-				args = append(args, id)
-			}
-			if _, err := db.ExecContext(ctx, query, args...); err != nil {
-				return fmt.Errorf("updating task severity: %w", err)
-			}
-			return nil
-		})
-	})
-}
-
-// DeleteTask deletes a task by ID.
-func (db *DB) DeleteTask(ctx context.Context, id int) error {
-	return retryWithBackoff("delete task", func() error {
-		result, err := db.ExecContext(ctx, "DELETE FROM tasks WHERE id = ?", id)
-		if err != nil {
-			return fmt.Errorf("deleting task: %w", err)
-		}
-
-		affected, err := result.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("checking rows affected: %w", err)
-		}
-		if affected == 0 {
-			return fmt.Errorf("%w: task %d", utils.ErrNotFound, id)
-		}
-
-		return nil
-	})
-}
+// The one part that is pure persistence — the INSERT itself — did move here,
+// as InsertTaskTx, and `task create` runs it.
 
 // GetSubTasks retrieves all direct subtasks of the given parent task ID.
 // Tasks are ordered by priority descending, then created_at ascending.
@@ -1179,58 +896,49 @@ func (db *DB) hasTransitiveDependency(ctx context.Context, fromID, targetID int)
 
 // ==================== SPRINT QUERIES ====================
 
-// CreateSprint inserts a new sprint and returns its ID.
+// NextSprintOrderTx returns the execution order a sprint created without
+// --order takes: MAX(order_index)+1, so the first sprint of an empty roadmap
+// gets 1.
 //
-// The execution order is taken from sprint.Order when it is a positive value;
-// otherwise the next available value MAX(order_index)+1 is auto-assigned (the
-// first sprint in an empty roadmap gets 1). The SELECT next_order and the INSERT
-// run inside the same transaction so two concurrent creations cannot compute the
-// same value; the idx_sprints_order unique index is the final backstop and a
-// collision surfaces as utils.ErrAlreadyExists (exit code 5). See
-// SPEC/DATABASE.md § Create Sprint and § Transactional Atomicity Guarantees #6.
-func (db *DB) CreateSprint(ctx context.Context, sprint *models.Sprint) (int, error) {
-	var sprintID int
-	err := db.WithTransaction(func(tx *sql.Tx) error {
-		orderIndex := sprint.Order
-		if orderIndex <= 0 {
-			if err := tx.QueryRow(
-				`SELECT COALESCE(MAX(order_index), 0) + 1 FROM sprints`,
-			).Scan(&orderIndex); err != nil {
-				return fmt.Errorf("computing next sprint order: %w", err)
-			}
-		}
+// It takes a transaction rather than a connection on purpose. The read and the
+// INSERT that consumes it must be one atomic step, or two concurrent creations
+// read the same MAX and both try to write it; the idx_sprints_order unique
+// index is only the final backstop, and a collision there surfaces as
+// utils.ErrAlreadyExists (exit code 5). See SPEC/DATABASE.md § Create Sprint
+// and § Transactional Atomicity Guarantees #6.
+func NextSprintOrderTx(tx *sql.Tx) (int, error) {
+	var next int
+	if err := tx.QueryRow(
+		`SELECT COALESCE(MAX(order_index), 0) + 1 FROM sprints`,
+	).Scan(&next); err != nil {
+		return 0, fmt.Errorf("computing next sprint order: %w", err)
+	}
+	return next, nil
+}
 
-		result, err := tx.Exec(
-			`INSERT INTO sprints (title, status, description, created_at, max_tasks, order_index) VALUES (?, ?, ?, ?, ?, ?)`,
-			sprint.Title,
-			sprint.Status,
-			sprint.Description,
-			sprint.CreatedAt,
-			sprint.MaxTasks,
-			orderIndex,
-		)
-		if err != nil {
-			if IsUniqueConstraintErr(err) {
-				return fmt.Errorf("%w: sprint order %d is already in use", utils.ErrAlreadyExists, orderIndex)
-			}
-			return fmt.Errorf("inserting sprint: %w", err)
-		}
-
-		id, err := result.LastInsertId()
-		if err != nil {
-			return fmt.Errorf("getting last insert id: %w", err)
-		}
-
-		sprintID = int(id)
-		sprint.Order = orderIndex
-		return nil
-	})
-
+// InsertSprintTx inserts one sprint row inside an existing transaction and
+// returns its id. sprint.Order must already hold the execution order, whether
+// the caller was given one or took it from NextSprintOrderTx.
+//
+// This is the only implementation of the sprint INSERT, for the reason recorded
+// on InsertTaskTx. The error is returned unwrapped so the caller can recognise
+// an idx_sprints_order collision with IsUniqueConstraintErr and name the order
+// that collided.
+func InsertSprintTx(tx *sql.Tx, sprint *models.Sprint) (int, error) {
+	result, err := tx.Exec(
+		`INSERT INTO sprints (status, title, description, created_at, max_tasks, order_index) VALUES (?, ?, ?, ?, ?, ?)`,
+		sprint.Status, sprint.Title, sprint.Description, sprint.CreatedAt, sprint.MaxTasks, sprint.Order,
+	)
 	if err != nil {
 		return 0, err
 	}
 
-	return sprintID, nil
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+
+	return int(id), nil
 }
 
 // GetSprint retrieves a sprint by ID, with its membership resolved.
@@ -1565,66 +1273,18 @@ func (db *DB) ListSprints(ctx context.Context, status *models.SprintStatus) ([]m
 	return sprints, nil
 }
 
-// UpdateSprint updates a sprint's description.
-func (db *DB) UpdateSprint(ctx context.Context, id int, description string) error {
-	return retryWithBackoff("update sprint", func() error {
-		result, err := db.ExecContext(ctx,
-			"UPDATE sprints SET description = ? WHERE id = ?",
-			description, id,
-		)
-		if err != nil {
-			return fmt.Errorf("updating sprint: %w", err)
-		}
-
-		affected, err := result.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("checking rows affected: %w", err)
-		}
-		if affected == 0 {
-			return fmt.Errorf("%w: sprint %d", utils.ErrNotFound, id)
-		}
-
-		return nil
-	})
-}
-
-// UpdateSprintStatus updates sprint status and timestamps.
-func (db *DB) UpdateSprintStatus(ctx context.Context, id int, status models.SprintStatus) error {
-	return retryWithBackoff("update sprint status", func() error {
-		var query string
-		var args []any
-
-		switch status {
-		case models.SprintOpen:
-			// Starting sprint
-			query = "UPDATE sprints SET status = ?, started_at = ? WHERE id = ?"
-			args = []any{status, utils.NowISO8601(), id}
-		case models.SprintClosed:
-			// Closing sprint
-			query = "UPDATE sprints SET status = ?, closed_at = ? WHERE id = ?"
-			args = []any{status, utils.NowISO8601(), id}
-		default:
-			// Other status changes
-			query = "UPDATE sprints SET status = ? WHERE id = ?"
-			args = []any{status, id}
-		}
-
-		result, err := db.ExecContext(ctx, query, args...)
-		if err != nil {
-			return fmt.Errorf("updating sprint status: %w", err)
-		}
-
-		affected, err := result.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("checking rows affected: %w", err)
-		}
-		if affected == 0 {
-			return fmt.Errorf("%w: sprint %d", utils.ErrNotFound, id)
-		}
-
-		return nil
-	})
-}
+// Sprint mutation has no method here on purpose, for the reason recorded above
+// InsertTaskTx: the update of a sprint's fields and the transitions of its
+// status are inseparable from the rules that admit them — the CLOSED-order
+// immutability check, the --order collision mapped to exit code 5, the
+// one-open-sprint rule, the active-task check behind --force — and from the
+// audit entries they owe. They live in sprintUpdate, sprintStart, sprintClose
+// and sprintReopen in internal/commands.
+//
+// The copy of the field update that used to sit here reached sprints.description
+// with no validation at all, below every free-text rule the command layer
+// enforces, and no caller: it was a route around those rules waiting for one
+// (task #188, finding recorded on it).
 
 // Sprint deletion has no method here on purpose. The whole operation — the
 // member tasks' reset to BACKLOG, the removal of the sprint_tasks rows, the
@@ -2215,56 +1875,19 @@ func (db *DB) MoveTasksBetweenSprints(ctx context.Context, fromID, toID int, tas
 	})
 }
 
-// RemoveTasksFromSprint removes tasks from a sprint.
+// Removing tasks from a sprint has no method here on purpose, for the reason
+// recorded above InsertTaskTx. It is sprintRemoveTasks in internal/commands,
+// which deletes the sprint_tasks row scoped to the named sprint, resets the
+// task with every lifecycle field it may have acquired, compacts the remaining
+// positions, and writes the two audit entries the removal owes
+// (SPEC/DATABASE.md § Transactional Atomicity Guarantees #2).
 //
-// Deleting the affected sprint_tasks rows and resetting those tasks' status to
-// BACKLOG run inside a single transaction so sprint_tasks membership and
-// tasks.status can never diverge at any committed state (SPEC/DATABASE.md §
-// Transactional Atomicity Guarantees, finding #66). WithTransaction already
-// provides lock-retry, so no outer retryWithBackoff is needed.
-func (db *DB) RemoveTasksFromSprint(ctx context.Context, taskIDs []int) error {
-	if len(taskIDs) == 0 {
-		return nil
-	}
-
-	return db.WithTransaction(func(tx *sql.Tx) error {
-		// Batch both writes so large id sets stay within SQLite's variable
-		// limit. Delete the sprint membership first, then reset task status to
-		// BACKLOG via the cached template (OpRemoveTasksFromSprint). Both passes
-		// run through the same tx so they commit or roll back together.
-
-		// Delete from sprint_tasks. The membership DELETE is not one of the
-		// cached operations, so build its IN-clause from cached placeholders.
-		if err := db.batchProc.ProcessChunks(taskIDs, func(chunk []int) error {
-			placeholders := db.queryCache.GetPlaceholders(len(chunk))
-			query := fmt.Sprintf("DELETE FROM sprint_tasks WHERE task_id IN (%s)", placeholders) // #nosec G201 -- only ? placeholders interpolated
-			args := make([]any, 0, len(chunk))
-			for _, id := range chunk {
-				args = append(args, id)
-			}
-			if _, err := tx.Exec(query, args...); err != nil {
-				return fmt.Errorf("removing tasks from sprint: %w", err)
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
-
-		// Update task status to BACKLOG. status is a bound parameter.
-		return db.batchProc.ProcessChunks(taskIDs, func(chunk []int) error {
-			query := db.queryCache.GetQuery(OpRemoveTasksFromSprint, len(chunk))
-			args := make([]any, 0, len(chunk)+1)
-			args = append(args, models.StatusBacklog)
-			for _, id := range chunk {
-				args = append(args, id)
-			}
-			if _, err := tx.Exec(query, args...); err != nil {
-				return fmt.Errorf("updating task statuses: %w", err)
-			}
-			return nil
-		})
-	})
-}
+// The copy that used to sit here had drifted from all four: it deleted by
+// task_id alone, so it yanked a task out of whatever sprint it was actually in
+// — the corruption finding #40 fixed in the shipped path — and it set status
+// to BACKLOG without clearing started_at, tested_at, closed_at,
+// completion_summary or commit_close, which is finding #49. Nothing reported
+// either, because no command reached it (task #188).
 
 // ==================== AUDIT QUERIES ====================
 

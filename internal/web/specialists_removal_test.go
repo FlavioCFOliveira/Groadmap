@@ -370,7 +370,7 @@ func seedSingleIndicatorFixture(t *testing.T, name string) singleIndicatorFixtur
 
 	newTask := func(title, created string, parent *int) int {
 		t.Helper()
-		id, cerr := database.CreateTask(ctx, &models.Task{
+		id, cerr := seedTask(database, &models.Task{
 			Title:                  title,
 			Type:                   models.TypeTask,
 			Status:                 models.StatusBacklog,

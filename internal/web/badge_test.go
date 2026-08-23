@@ -176,7 +176,7 @@ func seedBadgeRoadmap(t *testing.T, name string) (roadmap string, sprintID int) 
 		AcceptanceCriteria:     "Every badge uses the SPEC colour for its value",
 		CreatedAt:              now,
 	}
-	taskID, err := database.CreateTask(context.Background(), task)
+	taskID, err := seedTask(database, task)
 	if err != nil {
 		t.Fatalf("creating task: %v", err)
 	}
@@ -190,7 +190,7 @@ func seedBadgeRoadmap(t *testing.T, name string) (roadmap string, sprintID int) 
 		StartedAt:   &now,
 		CreatedAt:   now,
 	}
-	sprintID, err = database.CreateSprint(context.Background(), sprint)
+	sprintID, err = seedSprint(database, sprint)
 	if err != nil {
 		t.Fatalf("creating sprint: %v", err)
 	}

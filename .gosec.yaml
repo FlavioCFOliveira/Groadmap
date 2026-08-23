@@ -41,17 +41,24 @@
 # corrected before the merge. The drift was two suppressions in one commit, in
 # the safe direction, and no human would have noticed it.
 #
+# IT CAUGHT THE SECOND THE SAME WAY. rmp task 188 deleted the db-layer write
+# methods the command layer had replaced, and one of them — RemoveTasksFromSprint
+# — carried the ninth G201 in internal/db/queries.go. The register still said
+# nine; the source carried eight. Retiring code takes a suppression with it just
+# as surely as writing code adds one, and the register has to be brought down as
+# well as up.
+#
 # TWO COUNTS, BOTH TRUE, MEASURING DIFFERENT THINGS.
 #
-#   54  suppressions in the module, the number this register accounts for and
+#   53  suppressions in the module, the number this register accounts for and
 #       the number the gate sweeps. The gate reads comment groups the way gosec
 #       does, so the tag counts only where the scanner honours it: a plain
-#       `grep -c '#nosec'` answers 55, one hit being the string inside a sentence
+#       `grep -c '#nosec'` answers 54, one hit being the string inside a sentence
 #       in cmd/rmp/workflow_gates_test.go.
-#   40  suppressions gosec reads under the invocation above, which is the
+#   39  suppressions gosec reads under the invocation above, which is the
 #       `Nosec:` figure its summary prints and the figure the release notes
 #       quote. gosec does not scan _test.go files unless -tests is passed, and
-#       14 of the 54 are in test files: 54 - 14 = 40. That the scanner does not
+#       14 of the 53 are in test files: 53 - 14 = 39. That the scanner does not
 #       read those 14 is an accepted gap, measured and reasoned in
 #       SPEC/BUILD.md § Security Scan; the register accounts for them anyway, so
 #       they stay reviewed even where the scanner is silent.
@@ -81,7 +88,7 @@
 # A directive naming two rules counts once under each; today every one names
 # exactly one, so the totals below are also the number of directives.
 #
-# totals: 54 suppressions, 40 outside _test.go
+# totals: 53 suppressions, 39 outside _test.go
 #
 # G104 Audit errors not checked (CWE-703)  [11]
 #   internal/db/connection.go                          6
@@ -113,14 +120,14 @@
 #     if the roadmap home were ever created wider than 0700, which is the
 #     invariant this reason rests on.
 #
-# G201 SQL query construction using format string (CWE-89)  [22]
+# G201 SQL query construction using format string (CWE-89)  [21]
 #   internal/commands/sprint_crud.go                   1
 #   internal/commands/sprint_membership_audit_test.go  1
 #   internal/commands/task_edit.go                     1
 #   internal/commands/task_mutate.go                   8
 #   internal/db/comments.go                            1
 #   internal/db/migrations.go                          1
-#   internal/db/queries.go                             9
+#   internal/db/queries.go                             8
 #   Reason: No user value is ever interpolated; every one travels as a bound ?
 #     parameter. What fmt.Sprintf assembles is one of four things. (a) A
 #     placeholder list from db.Placeholders / QueryCache.GetPlaceholders, whose

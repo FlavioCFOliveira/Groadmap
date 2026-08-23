@@ -84,10 +84,8 @@ func buildRoadmapAtSchema1120(t *testing.T, roadmapName string, sprintTitles []s
 	}
 	defer database.Close() //nolint:errcheck // test cleanup
 
-	ctx := testContext()
-
 	for i, title := range sprintTitles {
-		id, err := database.CreateSprint(ctx, &models.Sprint{
+		id, err := seedSprint(database, &models.Sprint{
 			Title:       title,
 			Description: "Clear the settlement backlog left by the acquirer outage.",
 			Status:      models.SprintPending,
@@ -110,7 +108,7 @@ func buildRoadmapAtSchema1120(t *testing.T, roadmapName string, sprintTitles []s
 		}
 	}
 	for i := 1; i <= maxTaskID; i++ {
-		id, err := database.CreateTask(ctx, &models.Task{
+		id, err := seedTask(database, &models.Task{
 			Title:                  fmt.Sprintf("Reconcile settlement batch %d", i),
 			Type:                   models.TypeTask,
 			Status:                 models.StatusBacklog,
@@ -685,7 +683,7 @@ func seedSprintWithTasks(t *testing.T, database *DB, title string, n int) (int, 
 	t.Helper()
 
 	ctx := testContext()
-	sprintID, err := database.CreateSprint(ctx, &models.Sprint{
+	sprintID, err := seedSprint(database, &models.Sprint{
 		Title:       title,
 		Description: "Exercise the ordering commands against the unique position index.",
 		Status:      models.SprintPending,
@@ -697,7 +695,7 @@ func seedSprintWithTasks(t *testing.T, database *DB, title string, n int) (int, 
 
 	taskIDs := make([]int, 0, n)
 	for i := 1; i <= n; i++ {
-		id, err := database.CreateTask(ctx, &models.Task{
+		id, err := seedTask(database, &models.Task{
 			Title:                  fmt.Sprintf("%s step %d", title, i),
 			Type:                   models.TypeTask,
 			Status:                 models.StatusBacklog,
@@ -787,7 +785,7 @@ func TestReorderSprintTasksRejectsIncompleteListInsideTransaction(t *testing.T) 
 
 	// Another process adds a fourth task before the reorder is applied.
 	ctx := testContext()
-	latecomer, err := database.CreateTask(ctx, &models.Task{
+	latecomer, err := seedTask(database, &models.Task{
 		Title:                  "Added while the reorder was in flight",
 		Type:                   models.TypeTask,
 		Status:                 models.StatusBacklog,

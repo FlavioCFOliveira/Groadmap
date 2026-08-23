@@ -122,7 +122,7 @@ func seedFilterFixture(t *testing.T, name string) filterFixture {
 			created = models.StatusBacklog
 		}
 
-		id, cerr := database.CreateTask(ctx, &models.Task{
+		id, cerr := seedTask(database, &models.Task{
 			Title:                  seed.title,
 			Type:                   seed.taskType,
 			Status:                 created,
