@@ -709,7 +709,7 @@ esac
 
 # Exit on any error (strict mode)
 set -e
-rmp task add -r myproject -d "New task"   # Exits 3 if no roadmap specified
+rmp task create -t "New task"   # Exits 3: no roadmap given, so set -e stops the script
 ```
 
 ## AI Agent Contract Generation

@@ -229,7 +229,7 @@ rmp task create -r <name> \
   -fr "Functional requirements - Why build it?" \
   -tr "Technical requirements - How to build it?" \
   -ac "Acceptance criteria - How to verify it?" \
-  --type USER_STORY --priority 7 --severity 3 \
+  --type USER_STORY --priority 7 --severity 3
 ```
 
 **What task types are available?**
