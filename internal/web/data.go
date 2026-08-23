@@ -246,21 +246,28 @@ type taskView struct {
 	Match        bool
 }
 
-// SearchText is the task's title folded by the board search's folding rule, which
-// the card carries so the browser matches against the SAME text the server
-// matched against.
+// SearchText is the task's title normalised and folded by the board search's
+// rules, which the card carries so the browser matches against the SAME text the
+// server matched against.
 //
-// Folding the corpus once, here, is what keeps the two paths equivalent: the
-// script folds only the term the user typed, never the task text, so nothing
-// about a task's text is ever transformed twice (SPEC/WEB.md § Roadmap Tasks
-// Page, One rule, and only one implementation of it; Server and client produce
-// the same board).
+// Transforming the corpus once, here, is what keeps the two paths equivalent: the
+// script normalises and folds only the term the user typed, never the task text,
+// so nothing about a task's text is ever transformed twice (SPEC/WEB.md § Roadmap
+// Tasks Page, One rule, and only one implementation of it; Server and client
+// produce the same board).
 //
-// The fold is foldSearch, the same function foldSearchTerm folds a term with, so
-// the corpus and the term are folded by one implementation of one rule rather
-// than by two implementations of one description (see fold.go).
+// The transformation is searchableText, the same function foldSearchTerm prepares
+// a term with, so the corpus and the term are one implementation of one rule
+// rather than two implementations of one description (see fold.go). The title is
+// NOT trimmed: the trim is the term's alone, so a task's own leading or trailing
+// whitespace is part of its text.
+//
+// It is a DERIVED form and nothing else. The bytes rmp stores are untouched, and
+// the card renders v.Title itself, so normalisation reaches the comparison and
+// neither storage nor display (SPEC/WEB.md § Roadmap Tasks Page, The
+// normalisation rule; Acceptance Criterion 152).
 func (v *taskView) SearchText() string {
-	return foldSearch(v.Title)
+	return searchableText(v.Title)
 }
 
 // HasMeta reports whether the card has at least one metadata indicator to show:

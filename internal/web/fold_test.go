@@ -3,6 +3,7 @@ package web
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,12 +19,7 @@ import (
 // therefore appear in no run. Stating it as a constant and counting the sweep
 // against it is what makes "every code point, not a sample" checkable rather than
 // merely claimed (SPEC/WEB.md Acceptance Criterion 119).
-const (
-	unicodeMaxCodePoint = 0x10FFFF
-	surrogateFirst      = 0xD800
-	surrogateLast       = 0xDFFF
-	unicodeScalarValues = (unicodeMaxCodePoint + 1) - (surrogateLast - surrogateFirst + 1)
-)
+const unicodeScalarValues = (unicodeMaxCodePoint + 1) - (surrogateLast - surrogateFirst + 1)
 
 // maxReportedMismatches caps the failure output: a rule that moved wholesale
 // would otherwise print a million lines and say less than a dozen would.
@@ -46,43 +42,86 @@ type spaceSpan struct {
 	length int
 }
 
+// decompEntry is one entry of the shipped decompositions: a code point and the
+// FULL canonical decomposition it stands for. The shipped form is fixed-width, so
+// that one binary search finds an entry by index; the unused slots of a shorter
+// decomposition carry 0, which no decomposition element can be, and are dropped
+// here.
+type decompEntry struct {
+	codePoint int
+	runes     string
+}
+
+// classSpan is one span of the shipped combining classes: every code point in
+// [start, start+length) carries the same NON-ZERO canonical combining class. A
+// code point in no span carries 0, which is the default and is what both the
+// canonical ordering and the composition read as "starter".
+type classSpan struct {
+	start  int
+	length int
+	class  int
+}
+
+// composeEntry is one entry of the shipped primary composites: the code point two
+// code points compose to.
+type composeEntry struct {
+	lead      int
+	trail     int
+	composite int
+}
+
+// maxDecomposition is the longest full canonical decomposition in Unicode, and
+// the fixed entry width of the shipped decompositions less the code point itself.
+// The Hangul constants the client's arithmetic needs are fold.go's own, because
+// they are Unicode's algorithm rather than anything this project decides.
+const maxDecomposition = 4
+
 // TestTaskSearchScript_ShippedRuleIsTheServerRule is the gate for Acceptance
-// Criteria 119 and 122, and the whole reason the client stopped consulting the
-// browser's own tables to normalise a term.
+// Criteria 119, 122 and 155, and the whole reason the client stopped consulting
+// the browser's own tables to prepare a term.
 //
-// Normalising a term is TWO steps, and the client takes neither from the
-// JavaScript platform. It no longer trims with the platform's trimming, which
+// Preparing a term is THREE steps, and the client takes none of them from the
+// JavaScript platform. It does not trim with the platform's trimming, which
 // removes a DIFFERENT set from the White_Space property the trim rule fixes — it
-// keeps U+0085 and removes U+FEFF — and it no longer folds with the platform's
-// case conversion, which is Unicode's Default Case Conversion rather than the
-// simple mapping, differing on U+0130 and U+03A3. Both platform functions read
-// tables of whatever Unicode version the browser ships. The client uses the
-// server's own whitespace set and the server's own mapping instead, shipped to it
-// as SPACE_TABLE and FOLD_TABLE.
+// keeps U+0085 and removes U+FEFF. It does not fold with the platform's case
+// conversion, which is Unicode's Default Case Conversion rather than the simple
+// mapping, differing on U+0130 and U+03A3. And it does not normalise with the
+// platform's String.prototype.normalize, which would have to agree with the
+// server about COMPOSITION — the one part of the server's Unicode module that is
+// wrong, and the reason the server composes from the very table it ships. All
+// three platform functions read tables of whatever Unicode version the browser
+// ships. The client uses the server's own whitespace set, the server's own
+// normalisation data and the server's own mapping instead, shipped to it as
+// SPACE_TABLE, DECOMP_TABLE, CCC_TABLE, COMPOSE_TABLE and FOLD_TABLE.
 //
-// Those two shipped tables are second carriers of the server's rule, and carriers
-// drift unless something compares them. This is that something, and it is ONE
-// check over BOTH of them rather than two checks side by side: a check whose only
-// subject was the mapping would leave the whitespace set free to drift, and a set
-// that drifts separates the two paths exactly as a drifting mapping would. The
-// two are swept together, in one loop over Unicode, because they are two halves
-// of one rule. It compares:
+// Those five shipped tables are second carriers of the server's rule, and
+// carriers drift unless something compares them. This is that something, and it
+// is ONE check over ALL of them rather than several side by side: a check whose
+// only subject was the mapping would leave the whitespace set and the
+// normalisation data free to drift, and either of those drifting separates the
+// two paths exactly as a drifting mapping would. They are swept together, in one
+// loop over Unicode, because they are parts of one rule. It compares:
 //
 //   - the SHIPPED tables, extracted from the script the binary actually serves,
 //     never copies of them kept in the test;
-//   - against the SERVER'S OWN foldSearch and isSearchSpace, never against
-//     strings.ToLower or unicode.IsSpace directly and never against a stored
-//     table of expected results — a stored copy can be updated to match a rule
-//     that changed, and would then prove nothing, so a server that changes either
-//     half of the rule MUST fail here;
+//   - against the SERVER'S OWN foldSearch, isSearchSpace, searchDecompose,
+//     searchCombiningClass and composition data, never against strings.ToLower,
+//     unicode.IsSpace or norm directly and never against a stored table of
+//     expected results — a stored copy can be updated to match a rule that
+//     changed, and would then prove nothing, so a server that changes any part of
+//     the rule MUST fail here;
 //   - over EVERY code point of Unicode, all unicodeScalarValues of them, applied
 //     through the same binary searches the script performs, so a table that is
-//     mis-ordered, overlapping, truncated or corrupt cannot pass;
-//   - including when a toolchain upgrade moves a mapping or changes which code
-//     points carry White_Space: Go's unicode tables are of the toolchain's Unicode
-//     version, so a bump changes foldSearch or isSearchSpace, this test names what
-//     moved, and `go generate ./internal/web/` is then the fix rather than the
-//     detection.
+//     mis-ordered, overlapping, truncated or corrupt cannot pass — and the 11,172
+//     Hangul syllables no table holds an entry for are swept with the rest, so the
+//     arithmetic that stands in for those entries is held to the server's answer
+//     rather than excused by their absence;
+//   - including when a toolchain or dependency upgrade moves any of them: Go's
+//     unicode tables are of the toolchain's Unicode version, and
+//     golang.org/x/text/unicode/norm selects tables15.0.0.go under !go1.27 and
+//     tables17.0.0.go under go1.27, so either bump changes a server function, this
+//     test names what moved, and `go generate ./internal/web/` is then the fix
+//     rather than the detection.
 func TestTaskSearchScript_ShippedRuleIsTheServerRule(t *testing.T) {
 	script := readEmbeddedAsset(t, "static/task-search.js")
 
@@ -130,8 +169,11 @@ func TestTaskSearchScript_ShippedRuleIsTheServerRule(t *testing.T) {
 
 	shippedFolds := scriptFoldTable(t, script)
 	shippedSpaces := scriptSpaceTable(t, script)
+	shippedDecomps := scriptDecompTable(t, script)
+	shippedClasses := scriptClassTable(t, script)
+	shippedComposes := scriptComposeTable(t, script)
 
-	// The structure BOTH binary searches depend on: ordered, disjoint, non-empty
+	// The structure EVERY binary search depends on: ordered, disjoint, non-empty
 	// spans that stay inside Unicode and never cover a surrogate.
 	//
 	// A fault here is counted on its own rather than read off t.Failed(), which
@@ -158,16 +200,94 @@ func TestTaskSearchScript_ShippedRuleIsTheServerRule(t *testing.T) {
 		}
 		previousEnd = span.start + span.length
 	}
+	previousEnd = 0
+	for i, span := range shippedClasses {
+		for _, fault := range spanFaults(span.start, span.length, previousEnd) {
+			structural++
+			t.Errorf("CCC_TABLE span %d %+v %s", i, span, fault)
+		}
+		if span.class < 1 || span.class > 254 {
+			structural++
+			t.Errorf("CCC_TABLE span %d carries the combining class %d, which is not a "+
+				"non-zero class: 0 is the default and needs no entry", i, span.class)
+		}
+		previousEnd = span.start + span.length
+	}
+	// A decomposition table is a list of single code points rather than of spans,
+	// so its invariant is the same one stated for one code point at a time: each
+	// entry starts after the one before it, none is a surrogate, none is Hangul —
+	// which is arithmetic on both sides and in no table — and none decomposes to
+	// itself, which is the client's default and needs no entry.
+	previousEnd = 0
+	for i, entry := range shippedDecomps {
+		for _, fault := range spanFaults(entry.codePoint, 1, previousEnd) {
+			structural++
+			t.Errorf("DECOMP_TABLE entry %d (U+%04X) %s", i, entry.codePoint, fault)
+		}
+		if syllable := entry.codePoint - hangulSBase; syllable >= 0 && syllable < hangulSCount {
+			structural++
+			t.Errorf("DECOMP_TABLE entry %d holds the Hangul syllable U+%04X, which UAX #15 "+
+				"decomposes arithmetically on both sides", i, entry.codePoint)
+		}
+		if entry.runes == "" || entry.runes == string(rune(entry.codePoint)) {
+			structural++
+			t.Errorf("DECOMP_TABLE entry %d decomposes U+%04X to %q, which is no decomposition "+
+				"at all", i, entry.codePoint, entry.runes)
+		}
+		if n := len([]rune(entry.runes)); n > maxDecomposition {
+			structural++
+			t.Errorf("DECOMP_TABLE entry %d decomposes U+%04X to %d code points; the entry is "+
+				"%d wide", i, entry.codePoint, n, maxDecomposition)
+		}
+		previousEnd = entry.codePoint + 1
+	}
+	// The composites are ordered by the PAIR, which is what the client's binary
+	// search compares, and no pair appears twice: two composites for one pair
+	// would make the search's answer depend on where the halving landed.
+	for i, entry := range shippedComposes {
+		if i > 0 {
+			before := shippedComposes[i-1]
+			if entry.lead < before.lead || (entry.lead == before.lead && entry.trail <= before.trail) {
+				structural++
+				t.Errorf("COMPOSE_TABLE entry %d %+v does not follow %+v: the entries are out "+
+					"of order or the pair is repeated", i, entry, before)
+			}
+		}
+		for _, cp := range []int{entry.lead, entry.trail, entry.composite} {
+			if len(spanFaults(cp, 1, 0)) > 0 {
+				structural++
+				t.Errorf("COMPOSE_TABLE entry %d %+v names U+%04X, which is not a scalar value",
+					i, entry, cp)
+			}
+		}
+		if syllable := entry.composite - hangulSBase; syllable >= 0 && syllable < hangulSCount {
+			structural++
+			t.Errorf("COMPOSE_TABLE entry %d composes the Hangul syllable U+%04X, which UAX #15 "+
+				"composes arithmetically on both sides", i, entry.composite)
+		}
+	}
 	if structural > 0 {
 		t.Fatalf("a shipped table is structurally invalid (%d faults above): the script's "+
 			"binary search would answer for whichever half it landed in, so the sweep below "+
 			"would be noise", structural)
 	}
 
-	// EVERY code point, through BOTH shipped tables exactly as the script uses
-	// them, against the server's own two functions. One sweep, both halves: the
-	// rule is one rule.
+	// Which pair reaches each code point, on each side. The Hangul syllables are
+	// filled in by asking each side's own compose function, so the arithmetic that
+	// stands in for their absent entries is swept with everything else.
+	shippedSources := composedFrom(shippedComposes, func(lead, trail int) (int, bool) {
+		return applyComposeTable(shippedComposes, lead, trail)
+	})
+	serverSources := composedFrom(serverComposeEntries(), func(lead, trail int) (int, bool) {
+		composite, ok := searchCompose(rune(lead), rune(trail))
+		return int(composite), ok
+	})
+
+	// EVERY code point, through ALL FIVE shipped tables exactly as the script uses
+	// them, against the server's own functions. One sweep, every part: the rule is
+	// one rule.
 	swept, foldFaults, spaceFaults := 0, 0, 0
+	decompFaults, classFaults, composeFaults := 0, 0, 0
 	for cp := 0; cp <= unicodeMaxCodePoint; cp++ {
 		if cp >= surrogateFirst && cp <= surrogateLast {
 			continue
@@ -191,6 +311,32 @@ func TestTaskSearchScript_ShippedRuleIsTheServerRule(t *testing.T) {
 					"isSearchSpace says %t", cp, shipped, server)
 			}
 		}
+
+		decomposed := string(searchDecompose(rune(cp)))
+		if shippedDecomposed := applyDecompTable(shippedDecomps, cp); shippedDecomposed != decomposed {
+			decompFaults++
+			if decompFaults <= maxReportedMismatches {
+				t.Errorf("U+%04X: the shipped tables decompose to %v, the server's "+
+					"searchDecompose to %v", cp, []rune(shippedDecomposed), []rune(decomposed))
+			}
+		}
+
+		if shippedClass, serverClass := applyClassTable(shippedClasses, cp),
+			int(searchCombiningClass(rune(cp))); shippedClass != serverClass {
+			classFaults++
+			if classFaults <= maxReportedMismatches {
+				t.Errorf("U+%04X: the shipped table orders it at combining class %d, the "+
+					"server's searchCombiningClass at %d", cp, shippedClass, serverClass)
+			}
+		}
+
+		if shippedSources[cp] != serverSources[cp] {
+			composeFaults++
+			if composeFaults <= maxReportedMismatches {
+				t.Errorf("U+%04X: the shipped tables compose it from %v, the server from %v "+
+					"([0 0] meaning no pair reaches it)", cp, shippedSources[cp], serverSources[cp])
+			}
+		}
 	}
 	if foldFaults > maxReportedMismatches {
 		t.Errorf("%d code points fold differently on the two sides; the first %d are above",
@@ -199,6 +345,18 @@ func TestTaskSearchScript_ShippedRuleIsTheServerRule(t *testing.T) {
 	if spaceFaults > maxReportedMismatches {
 		t.Errorf("%d code points are whitespace to one side and not the other; the first %d "+
 			"are above", spaceFaults, maxReportedMismatches)
+	}
+	if decompFaults > maxReportedMismatches {
+		t.Errorf("%d code points decompose differently on the two sides; the first %d are above",
+			decompFaults, maxReportedMismatches)
+	}
+	if classFaults > maxReportedMismatches {
+		t.Errorf("%d code points order differently on the two sides; the first %d are above",
+			classFaults, maxReportedMismatches)
+	}
+	if composeFaults > maxReportedMismatches {
+		t.Errorf("%d code points compose differently on the two sides; the first %d are above",
+			composeFaults, maxReportedMismatches)
 	}
 	if swept != unicodeScalarValues {
 		t.Errorf("the sweep covered %d code points, want the whole of Unicode: %d",
@@ -235,6 +393,90 @@ func TestTaskSearchScript_ShippedRuleIsTheServerRule(t *testing.T) {
 	}
 	if got, want := spaceSpansCoverage(shippedSpaces), spaceSpansCoverage(canonicalSpaces); got != want {
 		t.Errorf("the shipped SPACE_TABLE holds %d code points, want %d", got, want)
+	}
+
+	canonicalDecomps := serverDecompositions()
+	if len(shippedDecomps) != len(canonicalDecomps) {
+		t.Fatalf("the shipped DECOMP_TABLE has %d entries, want the %d the server's "+
+			"searchDecompose gives", len(shippedDecomps), len(canonicalDecomps))
+	}
+	for i := range canonicalDecomps {
+		if shippedDecomps[i] != canonicalDecomps[i] {
+			t.Errorf("DECOMP_TABLE entry %d is %+v, want %+v", i, shippedDecomps[i], canonicalDecomps[i])
+		}
+	}
+
+	canonicalClasses := serverClassSpans()
+	if len(shippedClasses) != len(canonicalClasses) {
+		t.Fatalf("the shipped CCC_TABLE has %d spans, want the %d the server's combining "+
+			"classes run-encode to", len(shippedClasses), len(canonicalClasses))
+	}
+	for i := range canonicalClasses {
+		if shippedClasses[i] != canonicalClasses[i] {
+			t.Errorf("CCC_TABLE span %d is %+v, want %+v", i, shippedClasses[i], canonicalClasses[i])
+		}
+	}
+
+	canonicalComposes := serverComposeEntries()
+	if len(shippedComposes) != len(canonicalComposes) {
+		t.Fatalf("the shipped COMPOSE_TABLE has %d entries, want the %d primary composites the "+
+			"server derives", len(shippedComposes), len(canonicalComposes))
+	}
+	for i := range canonicalComposes {
+		if shippedComposes[i] != canonicalComposes[i] {
+			t.Errorf("COMPOSE_TABLE entry %d is %+v, want %+v", i, shippedComposes[i], canonicalComposes[i])
+		}
+		// And the entry is REACHABLE through the client's own binary search, so a
+		// table whose ordering the structural pass admitted still cannot answer
+		// differently in the browser than it reads on the page.
+		got, ok := applyComposeTable(shippedComposes, shippedComposes[i].lead, shippedComposes[i].trail)
+		if !ok || got != shippedComposes[i].composite {
+			t.Errorf("COMPOSE_TABLE entry %d %+v is not found by the search the script performs "+
+				"(got %d, found=%t)", i, shippedComposes[i], got, ok)
+		}
+	}
+
+	// THE COMPOSITION IS GROADMAP'S OWN, ON BOTH SIDES, AND THE WITNESSES SAY SO.
+	//
+	// The sweep above compares the shipped tables with the server's DATA, which a
+	// server that went back to composing with golang.org/x/text would leave
+	// untouched — the table is derived from that module's DECOMPOSITION, which is
+	// right, and the defect is in its runtime composition, which builds its lookup
+	// key as uint32(uint16(a))<<16 + uint32(uint16(b)) and so composes a
+	// supplementary starter as though it were its low 16 bits. So the whole rule is
+	// exercised here as well, on the three witnesses of that defect and on a
+	// legitimate supplementary composite, on BOTH sides: a simplification that
+	// replaced the composition step with norm.NFC.String would leave the client
+	// right and the server wrong, and fails here rather than silently.
+	for _, w := range []struct {
+		name          string
+		lead, trail   rune
+		composite     rune
+		shouldCompose bool
+	}{
+		{"the module masks U+1003C to U+003C and composes not-less-than", 0x1003C, 0x0338, 0x226E, false},
+		{"the module masks U+10041 to U+0041 and composes A-acute", 0x10041, 0x0301, 0x00C1, false},
+		{"the module masks U+1042B to U+042B and composes Cyrillic yeru", 0x1042B, 0x0308, 0x04F8, false},
+		{"and a legitimate supplementary composite still composes", 0x11935, 0x11930, 0x11938, true},
+	} {
+		sequence := string(w.lead) + string(w.trail)
+		want := sequence
+		if w.shouldCompose {
+			want = string(w.composite)
+		}
+		if got := searchNFC(sequence); got != want {
+			t.Errorf("%s: the SERVER normalises U+%04X U+%04X to %v, want %v", w.name,
+				w.lead, w.trail, []rune(got), []rune(want))
+		}
+		if got := clientNFC(shippedDecomps, shippedClasses, shippedComposes, sequence); got != want {
+			t.Errorf("%s: the SHIPPED tables normalise U+%04X U+%04X to %v, want %v", w.name,
+				w.lead, w.trail, []rune(got), []rune(want))
+		}
+		composite, composed := searchCompose(w.lead, w.trail)
+		if composed != w.shouldCompose || (composed && composite != w.composite) {
+			t.Errorf("%s: the server's searchCompose gives U+%04X (composed=%t) for U+%04X U+%04X, "+
+				"want composed=%t", w.name, composite, composed, w.lead, w.trail, w.shouldCompose)
+		}
 	}
 }
 
@@ -361,24 +603,58 @@ func applySpaceTable(spans []spaceSpan, cp int) bool {
 	return false
 }
 
-// clientTrimAndFold is the client's whole normalisation of a term, over the
-// SHIPPED tables: the ends stripped by the shipped whitespace set, THEN every
-// code point folded through the shipped mapping — trimTerm followed by the fold
-// loop of foldTerm, in the script's own order.
-//
-// It mirrors the script at the CODE POINT level, which is the level applyFoldTable
-// mirrors foldCodePoint at: strings.TrimFunc decodes from both ends one code point
-// at a time, exactly as trimTerm's two walks do. The script's UTF-16 surrogate
-// arithmetic has no counterpart here because a Go string is not UTF-16; what it
-// exists to guarantee — that the table is asked about the character the user
-// typed and never about half of one — is what this models directly.
-func clientTrimAndFold(folds []foldRun, spaces []spaceSpan, raw string) string {
-	trimmed := strings.TrimFunc(raw, func(r rune) bool { return applySpaceTable(spaces, int(r)) })
-	var folded strings.Builder
-	for _, r := range trimmed {
-		folded.WriteRune(rune(applyFoldTable(folds, int(r))))
+// shippedRule is every table the binary serves the client, read out of the served
+// script once and passed around together, because preparing a term uses all of
+// them and no caller has a reason to hold only some.
+type shippedRule struct {
+	folds    []foldRun
+	spaces   []spaceSpan
+	decomps  []decompEntry
+	classes  []classSpan
+	composes []composeEntry
+}
+
+// readShippedRule extracts all five tables from the script the binary actually
+// serves.
+func readShippedRule(t *testing.T) *shippedRule {
+	t.Helper()
+
+	script := readEmbeddedAsset(t, "static/task-search.js")
+	return &shippedRule{
+		folds:    scriptFoldTable(t, script),
+		spaces:   scriptSpaceTable(t, script),
+		decomps:  scriptDecompTable(t, script),
+		classes:  scriptClassTable(t, script),
+		composes: scriptComposeTable(t, script),
 	}
-	return folded.String()
+}
+
+// prepare is the client's WHOLE preparation of a term, over the SHIPPED tables:
+// the ends stripped by the shipped whitespace set, the result put into
+// Normalization Form C from the shipped normalisation data, every code point
+// folded through the shipped mapping, and Form C once more — trimTerm, toNFC, the
+// fold loop and toNFC again, in the script's own order.
+//
+// It mirrors the script at the CODE POINT level, which is the level
+// applyFoldTable mirrors foldCodePoint at: strings.TrimFunc decodes from both
+// ends one code point at a time, exactly as trimTerm's two walks do. The script's
+// UTF-16 surrogate arithmetic has no counterpart here because a Go string is not
+// UTF-16; what it exists to guarantee — that the table is asked about the
+// character the user typed and never about half of one — is what this models
+// directly.
+//
+// Nothing here reaches for Go's own Unicode tables or for the server's functions.
+// A harness that trimmed with strings.TrimSpace, folded with strings.ToLower or
+// normalised with norm would be modelling the SERVER twice over and could agree
+// with itself while the shipped tables said something else.
+func (r *shippedRule) prepare(raw string) string {
+	trimmed := strings.TrimFunc(raw, func(c rune) bool { return applySpaceTable(r.spaces, int(c)) })
+	normalised := clientNFC(r.decomps, r.classes, r.composes, trimmed)
+	var folded strings.Builder
+	for _, c := range normalised {
+		folded.WriteRune(rune(applyFoldTable(r.folds, int(c))))
+	}
+	return clientNFC(r.decomps, r.classes, r.composes, folded.String())
 }
 
 // serverFoldRuns run-encodes the SERVER's folding rule over the whole of Unicode,
@@ -513,6 +789,324 @@ func scriptSpaceTable(t *testing.T, script string) []spaceSpan {
 	return spans
 }
 
+// ==================== THE NORMALISATION DATA, SHIPPED AND SERVED ====================
+
+// scriptDecompTable extracts `var DECOMP_TABLE = [ cp, r1, r2, r3, r4, ... ];`
+// from the served script, exactly as scriptFoldTable extracts the mapping: the
+// data is read out of the asset the binary ships, so what is checked is what a
+// browser would run.
+//
+// The trailing 0 slots of a shorter decomposition are dropped here, and a 0
+// followed by a non-zero is a structural fault reported by the caller rather than
+// silently repacked — a table whose padding had moved would otherwise be read as
+// a different decomposition and compared as though it were intended.
+func scriptDecompTable(t *testing.T, script string) []decompEntry {
+	t.Helper()
+
+	numbers := scriptTableNumbers(t, script, "DECOMP_TABLE", 1+maxDecomposition,
+		"code point plus its "+strconv.Itoa(maxDecomposition)+" decomposition slots")
+	entries := make([]decompEntry, 0, len(numbers)/(1+maxDecomposition))
+	for i := 0; i < len(numbers); i += 1 + maxDecomposition {
+		var runes []rune
+		for j := 1; j <= maxDecomposition; j++ {
+			if numbers[i+j] == 0 {
+				break
+			}
+			runes = append(runes, rune(numbers[i+j]))
+		}
+		entries = append(entries, decompEntry{codePoint: numbers[i], runes: string(runes)})
+	}
+	return entries
+}
+
+// scriptClassTable extracts `var CCC_TABLE = [ start, length, class, ... ];` from
+// the served script.
+func scriptClassTable(t *testing.T, script string) []classSpan {
+	t.Helper()
+
+	numbers := scriptTableNumbers(t, script, "CCC_TABLE", 3, "start, length, class")
+	spans := make([]classSpan, 0, len(numbers)/3)
+	for i := 0; i < len(numbers); i += 3 {
+		spans = append(spans, classSpan{start: numbers[i], length: numbers[i+1], class: numbers[i+2]})
+	}
+	return spans
+}
+
+// scriptComposeTable extracts `var COMPOSE_TABLE = [ lead, trail, composite, ... ];`
+// from the served script.
+func scriptComposeTable(t *testing.T, script string) []composeEntry {
+	t.Helper()
+
+	numbers := scriptTableNumbers(t, script, "COMPOSE_TABLE", 3, "lead, trail, composite")
+	entries := make([]composeEntry, 0, len(numbers)/3)
+	for i := 0; i < len(numbers); i += 3 {
+		entries = append(entries, composeEntry{
+			lead: numbers[i], trail: numbers[i+1], composite: numbers[i+2],
+		})
+	}
+	return entries
+}
+
+// scriptTableNumbers reads one generated array literal out of the served script
+// and returns its numbers, refusing a literal that is empty or that does not hold
+// whole entries of the arity the client indexes it by.
+//
+// It is the one reader the three normalisation tables share, because the three
+// differ only in their arity — which is exactly the property that lets the
+// generator lay all five tables out through one emit function.
+func scriptTableNumbers(t *testing.T, script, name string, arity int, shape string) []int {
+	t.Helper()
+
+	block := scriptBlock(t, script, name, "[", "]")
+	text := foldTableNumber.FindAllString(block, -1)
+	if len(text) == 0 {
+		t.Fatalf("the script's %s is empty; the client would normalise nothing", name)
+	}
+	if len(text)%arity != 0 {
+		t.Fatalf("the script's %s holds %d numbers, which is not whole entries of %s; "+
+			"the table is truncated or corrupt", name, len(text), shape)
+	}
+	numbers := make([]int, len(text))
+	for i, raw := range text {
+		value, err := strconv.Atoi(raw)
+		if err != nil {
+			t.Fatalf("the script's %s holds the unparseable number %q: %v", name, raw, err)
+		}
+		numbers[i] = value
+	}
+	return numbers
+}
+
+// applyDecompTable decomposes one code point through the shipped table, mirroring
+// static/task-search.js's decomposeCodePoint step for step: Hangul by the
+// arithmetic UAX #15 fixes, everything else by binary search, and a code point no
+// entry covers decomposing to itself.
+//
+// Mirroring the search rather than scanning linearly is deliberate, for the reason
+// applyFoldTable mirrors foldCodePoint: a mis-ordered table then produces the
+// wrong answer here exactly as it would in the browser.
+func applyDecompTable(entries []decompEntry, cp int) string {
+	if syllable := cp - hangulSBase; syllable >= 0 && syllable < hangulSCount {
+		runes := []rune{
+			hangulLBase + rune(syllable/hangulNCount),
+			hangulVBase + rune(syllable%hangulNCount/hangulTCount),
+		}
+		if trailing := syllable % hangulTCount; trailing > 0 {
+			runes = append(runes, hangulTBase+rune(trailing))
+		}
+		return string(runes)
+	}
+	lo, hi := 0, len(entries)-1
+	for lo <= hi {
+		mid := (lo + hi) / 2
+		switch {
+		case cp < entries[mid].codePoint:
+			hi = mid - 1
+		case cp > entries[mid].codePoint:
+			lo = mid + 1
+		default:
+			return entries[mid].runes
+		}
+	}
+	return string(rune(cp))
+}
+
+// applyClassTable answers the combining class the shipped set gives one code
+// point, by binary search, mirroring static/task-search.js's combiningClassOf.
+func applyClassTable(spans []classSpan, cp int) int {
+	lo, hi := 0, len(spans)-1
+	for lo <= hi {
+		mid := (lo + hi) / 2
+		switch {
+		case cp < spans[mid].start:
+			hi = mid - 1
+		case cp >= spans[mid].start+spans[mid].length:
+			lo = mid + 1
+		default:
+			return spans[mid].class
+		}
+	}
+	return 0
+}
+
+// applyComposeTable composes two code points through the shipped table, mirroring
+// static/task-search.js's composePair: Hangul arithmetically, everything else by
+// binary search over the ordered PAIR.
+func applyComposeTable(entries []composeEntry, lead, trail int) (int, bool) {
+	if l, v := lead-hangulLBase, trail-hangulVBase; l >= 0 && l < hangulLCount &&
+		v >= 0 && v < hangulVCount {
+		return hangulSBase + (l*hangulVCount+v)*hangulTCount, true
+	}
+	if syllable, trailing := lead-hangulSBase, trail-hangulTBase; syllable >= 0 &&
+		syllable < hangulSCount && syllable%hangulTCount == 0 &&
+		trailing > 0 && trailing < hangulTCount {
+		return lead + trailing, true
+	}
+	lo, hi := 0, len(entries)-1
+	for lo <= hi {
+		mid := (lo + hi) / 2
+		switch {
+		case lead < entries[mid].lead || (lead == entries[mid].lead && trail < entries[mid].trail):
+			hi = mid - 1
+		case lead > entries[mid].lead || (lead == entries[mid].lead && trail > entries[mid].trail):
+			lo = mid + 1
+		default:
+			return entries[mid].composite, true
+		}
+	}
+	return 0, false
+}
+
+// serverDecompositions tabulates the SERVER's canonical decompositions over the
+// whole of Unicode, by asking searchDecompose itself. It is the expectation the
+// shipped table's size and shape are held to, and it is computed rather than
+// stored precisely so that a change to that function moves it.
+func serverDecompositions() []decompEntry {
+	var entries []decompEntry
+	for cp := 0; cp <= unicodeMaxCodePoint; cp++ {
+		if cp >= surrogateFirst && cp <= surrogateLast {
+			continue
+		}
+		if syllable := cp - hangulSBase; syllable >= 0 && syllable < hangulSCount {
+			continue // arithmetic on both sides, and in no table
+		}
+		runes := searchDecompose(rune(cp))
+		if len(runes) == 1 && runes[0] == rune(cp) {
+			continue
+		}
+		entries = append(entries, decompEntry{codePoint: cp, runes: string(runes)})
+	}
+	return entries
+}
+
+// serverClassSpans run-encodes the SERVER's combining classes over the whole of
+// Unicode, by asking searchCombiningClass itself, for the reason
+// serverDecompositions asks searchDecompose.
+func serverClassSpans() []classSpan {
+	var spans []classSpan
+	for cp := 0; cp <= unicodeMaxCodePoint; cp++ {
+		if cp >= surrogateFirst && cp <= surrogateLast {
+			continue
+		}
+		class := int(searchCombiningClass(rune(cp)))
+		if class == 0 {
+			continue
+		}
+		if n := len(spans); n > 0 && spans[n-1].class == class &&
+			spans[n-1].start+spans[n-1].length == cp {
+			spans[n-1].length++
+			continue
+		}
+		spans = append(spans, classSpan{start: cp, length: 1, class: class})
+	}
+	return spans
+}
+
+// serverComposeEntries lists the SERVER's primary composites, in the order the
+// shipped table carries them. It reads the server's own derived data rather than
+// re-deriving it, so a change to how that data is built moves this expectation
+// with it instead of leaving a second derivation to agree with the first by
+// coincidence.
+func serverComposeEntries() []composeEntry {
+	pairs := searchCompositions().pairs
+	entries := make([]composeEntry, 0, len(pairs))
+	for pair, composite := range pairs {
+		entries = append(entries, composeEntry{
+			lead: int(pair[0]), trail: int(pair[1]), composite: int(composite),
+		})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].lead != entries[j].lead {
+			return entries[i].lead < entries[j].lead
+		}
+		return entries[i].trail < entries[j].trail
+	})
+	return entries
+}
+
+// composedFrom inverts a list of primary composites into "which pair composes to
+// this code point", and adds the Hangul syllables by asking the compose function
+// it is given — the server's searchCompose on one side, the shipped table's
+// arithmetic on the other — so that the 11,172 syllables no table holds an entry
+// for are swept exactly as the tabulated composites are.
+//
+// A code point reachable on one side and not the other, or reachable from two
+// different pairs, is what the sweep that uses this reports.
+func composedFrom(entries []composeEntry, compose func(lead, trail int) (int, bool)) map[int][2]int {
+	sources := make(map[int][2]int, len(entries)+hangulSCount)
+	for _, e := range entries {
+		sources[e.composite] = [2]int{e.lead, e.trail}
+	}
+	for l := 0; l < hangulLCount; l++ {
+		for v := 0; v < hangulVCount; v++ {
+			lead, trail := hangulLBase+l, hangulVBase+v
+			syllable, ok := compose(lead, trail)
+			if !ok {
+				continue
+			}
+			sources[syllable] = [2]int{lead, trail}
+			for tr := 1; tr < hangulTCount; tr++ {
+				composite, done := compose(syllable, hangulTBase+tr)
+				if !done {
+					continue
+				}
+				sources[composite] = [2]int{syllable, hangulTBase + tr}
+			}
+		}
+	}
+	return sources
+}
+
+// clientNFC puts text into Normalization Form C over the SHIPPED tables,
+// mirroring static/task-search.js's toNFC step for step: every code point
+// replaced by its full canonical decomposition, each run of non-starters put into
+// canonical order by a stable sort on combining class, and the result recomposed
+// against the last starter unless the character is blocked from it.
+//
+// Not one of the three steps consults Go's own Unicode tables or the server's
+// functions: the decompositions, the classes and the composites all come from the
+// tables the binary serves, so a table that drifted from the server would change
+// what this returns, and a harness that reached for norm or for searchNFC would
+// be modelling the server twice over and could agree with itself while the
+// browser disagreed.
+func clientNFC(decomps []decompEntry, classes []classSpan, composes []composeEntry, text string) string {
+	decomposed := make([]rune, 0, len(text))
+	for _, r := range text {
+		decomposed = append(decomposed, []rune(applyDecompTable(decomps, int(r)))...)
+	}
+	for k := 1; k < len(decomposed); k++ {
+		class := applyClassTable(classes, int(decomposed[k]))
+		if class == 0 {
+			continue
+		}
+		for j := k; j > 0; j-- {
+			before := applyClassTable(classes, int(decomposed[j-1]))
+			if before == 0 || before <= class {
+				break
+			}
+			decomposed[j-1], decomposed[j] = decomposed[j], decomposed[j-1]
+		}
+	}
+	out := make([]rune, 0, len(decomposed))
+	starter, lastClass := -1, -1
+	for _, current := range decomposed {
+		class := applyClassTable(classes, int(current))
+		if starter >= 0 && lastClass < class {
+			if composite, ok := applyComposeTable(composes, int(out[starter]), int(current)); ok {
+				out[starter] = rune(composite)
+				continue
+			}
+		}
+		if class == 0 {
+			starter, lastClass = len(out), -1
+		} else {
+			lastClass = class
+		}
+		out = append(out, current)
+	}
+	return string(out)
+}
+
 // ==================== THE FOUR DIVERGENT CODE POINTS ====================
 
 // Titles seeded for the divergence fixture. They carry the code points on which
@@ -569,9 +1163,7 @@ func TestTaskSearch_DivergentCodePointsSelectTheSameCardsOnBothPaths(t *testing.
 	f := seedFoldFixture(t, "multilingual-settlement")
 	mux := buildMux()
 
-	script := readEmbeddedAsset(t, "static/task-search.js")
-	shippedFolds := scriptFoldTable(t, script)
-	shippedSpaces := scriptSpaceTable(t, script)
+	rule := readShippedRule(t)
 	unnarrowed, _ := servedBoard(t, mux, f.name, clientControls{})
 
 	for _, c := range []struct {
@@ -688,7 +1280,7 @@ func TestTaskSearch_DivergentCodePointsSelectTheSameCardsOnBothPaths(t *testing.
 			if got := shownBoardIDs(server); !equalIDSets(got, c.want) {
 				t.Errorf("the SERVER shows %v for %q, want %v", got, c.term, c.want)
 			}
-			client := clientShownIDs(unnarrowed, shippedFolds, shippedSpaces, c.term)
+			client := clientShownIDs(unnarrowed, rule, c.term)
 			if !equalIDSets(client, c.want) {
 				t.Errorf("the CLIENT shows %v for %q, want %v", client, c.term, c.want)
 			}
@@ -700,18 +1292,18 @@ func TestTaskSearch_DivergentCodePointsSelectTheSameCardsOnBothPaths(t *testing.
 	}
 }
 
-// clientShownIDs is what the browser would show for a term: the term normalised
-// through the SHIPPED tables — stripped by the shipped whitespace set, then
-// folded by the shipped mapping — and matched as a substring against the corpus
-// the server folded into each card, or against the card's "#<id>" reference. It
-// is the script's own trimTerm, foldTerm and matchesTerm, over the script's own
-// tables.
+// clientShownIDs is what the browser would show for a term: the term prepared
+// through the SHIPPED tables — stripped by the shipped whitespace set, normalised
+// from the shipped Unicode data, folded by the shipped mapping and normalised
+// again — and matched as a substring against the corpus the server transformed
+// into each card, or against the card's "#<id>" reference. It is the script's own
+// trimTerm, toNFC, foldTerm and matchesTerm, over the script's own tables.
 //
-// Neither step is taken from Go's standard library here: a harness that trimmed
-// with strings.TrimSpace would be modelling the SERVER's trim twice over and
-// could agree with itself while the shipped set said something else.
-func clientShownIDs(board boardState, folds []foldRun, spaces []spaceSpan, raw string) []int {
-	term := clientTrimAndFold(folds, spaces, raw)
+// No step is taken from Go's standard library here: a harness that trimmed with
+// strings.TrimSpace would be modelling the SERVER's trim twice over and could
+// agree with itself while the shipped set said something else.
+func clientShownIDs(board boardState, rule *shippedRule, raw string) []int {
+	term := rule.prepare(raw)
 
 	shown := []int{}
 	for _, column := range board.columns {

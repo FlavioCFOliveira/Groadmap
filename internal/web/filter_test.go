@@ -576,7 +576,7 @@ var filterCombinations = []clientControls{
 func filterKeeps(c clientControls, task *filterTask) bool {
 	term := foldSearchTerm(c.Term)
 	if term != "" &&
-		!strings.Contains(foldSearch(task.title), term) &&
+		!strings.Contains(searchableText(task.title), term) &&
 		!strings.Contains("#"+strconv.Itoa(task.id), term) {
 		return false
 	}

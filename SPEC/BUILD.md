@@ -71,12 +71,20 @@ Groadmap MUST NOT be built or released with a toolchain older than Go 1.26.6.
 
 ### External Dependencies
 
-Groadmap has exactly two direct module dependencies. Both are listed below, and
-each one is governed by its own set of rules.
+Groadmap has exactly **four** direct module dependencies. Each one is listed
+below, and each one is governed by its own set of rules.
+
+The table lists them in the order the first `require` block of `go.mod` lists
+them, and it carries **one row per requirement of that block and no other row**.
+The two are therefore comparable line by line, which is how this section is kept
+correct: a module that block requires and this table does not name is a defect in
+this section, and so is a row naming a module that block does not require.
 
 | Module | Path | Version | Purpose |
 |--------|------|---------|---------|
 | GoGraph | `github.com/FlavioCFOliveira/GoGraph` | Exact tag **v0.11.0** | Labelled property graph, Cypher engine, and durable store backing the `graph` command. See `GRAPH.md`. |
+| System calls | `golang.org/x/sys` | Exact version **v0.47.0** | The operating-system calls the Go standard library does not publish. Groadmap imports the module at four sites, and each of the four compiles for one platform family only. `golang.org/x/sys/unix` is imported by `internal/terminal/terminal_unix.go`, for the `TIOCGWINSZ` ioctl that decides whether a stream is a terminal, and by `internal/testenv/pty_linux.go`, for the `/dev/ptmx` sequence that opens a pseudo-terminal pair. `golang.org/x/sys/windows` is imported by `internal/terminal/terminal_windows.go`, for the `GetConsoleMode` call that asks the console subsystem that same terminal question, and by `internal/graphlock/graphlock_windows.go`, for the `LockFileEx` and `UnlockFileEx` calls that are the graph store's mutual exclusion on that platform. See `GRAPH.md § Concurrency and Recovery` for the lock the last of those four implements. |
+| Unicode data | `golang.org/x/text` | Exact version **v0.41.0** | The Unicode character data the roadmap tasks board's search normalises a term and a task's searchable text by. `internal/web` imports `golang.org/x/text/unicode/norm` — the Go project's own implementation of the normalisation forms UAX #15 defines — and no other package of the module. See `WEB.md § Roadmap Tasks Page` for the rule that normalisation serves and for the check that holds the client's copy of it equal to the server's. |
 | SQLite driver | `modernc.org/sqlite` | Exact version **v1.56.0** | Pure-Go SQLite driver backing every roadmap database (`~/.roadmaps/<name>/project.db`). It is the storage engine for all task, sprint, and audit data: `internal/db` registers it under the driver name `sqlite` and opens every database connection through it. Being pure Go, it needs no C toolchain and builds under `CGO_ENABLED=0`. See `DATABASE.md` for the schema it stores, `ARCHITECTURE.md § 3. internal/db/` for the layer that opens it, and `IMPLEMENTATION.md § Database Connections` for the entry point and DSN form that layer must use. |
 
 #### GoGraph Rules
@@ -96,6 +104,173 @@ each one is governed by its own set of rules.
    before release.
 4. `go.sum` MUST record the checksum of the pinned version. The build MUST fail
    if the module checksum does not match.
+
+#### System Call Rules
+
+1. `golang.org/x/sys` MUST be pinned to an exact, immutable version in `go.mod`,
+   not a floating reference, so that every build of a given commit issues the same
+   system calls with the same constants. The module is consumed at the exact
+   version **v0.47.0**. `go.sum` MUST record the checksum of that version, and the
+   build MUST fail if the checksum does not match.
+2. **GoGraph Rule 3 does NOT transfer to this module, and MUST NOT be copied to
+   it.** That rule treats an upgrade as a re-validation event against a whole
+   acceptance-criteria set, because GoGraph is a `0.y.z` module whose public API is
+   still moving and whose on-disk format could move with it. `golang.org/x/sys`
+   also carries a `v0.y.z` version, but neither of those risks is the one it
+   presents. It stores nothing on disk, so no format can change under a stored
+   roadmap. And a change to the **name or the signature** of any of the four
+   bindings Groadmap uses is a compilation failure, which the `build` gate catches
+   on every target it compiles (see `Validation Gates`). The version number is
+   therefore not what makes an upgrade of this module risky; Rule 3 names what
+   does.
+3. **Two of this module's four import sites are runtime-verified, and the other
+   two are build-verified only.** Every job of both workflows runs on Linux
+   (`runs-on: ubuntu-latest`), so the `test` gate executes
+   `internal/terminal/terminal_unix.go` and `internal/testenv/pty_linux.go`, and
+   executes them on Linux alone — the first of those two is the file every Unix
+   target compiles, so its macOS, FreeBSD, and OpenBSD builds are verified no
+   further than the OpenBSD targets of `Supported Build Targets` are. The
+   two files that import `golang.org/x/sys/windows` —
+   `internal/terminal/terminal_windows.go` and
+   `internal/graphlock/graphlock_windows.go` — are compiled by the `build` gate for
+   the two Windows targets and are never run by any gate. An upgrade that changed
+   what `GetConsoleMode`, `LockFileEx`, or `UnlockFileEx` **does**, rather than what
+   it is called, would therefore pass every gate and land unobserved. What is at
+   stake in the second of those files is the graph store's mutual exclusion, whose
+   contract is `GRAPH.md § Concurrency and Recovery`.
+
+   This module is consequently upgraded **deliberately** — as its own change, with
+   its own stated reason — and never as a side effect of a blanket refresh such as
+   `go get -u ./...`. It is held on the same terms as the targets
+   `Supported Build Targets` marks build-verified rather than runtime-verified: the
+   limit of the verification is stated here rather than covered over by a gate that
+   does not reach it.
+
+#### Unicode Data Rules
+
+1. `golang.org/x/text` MUST be pinned to an exact, immutable version in `go.mod`,
+   not a floating reference. The module is consumed at the exact version
+   **v0.41.0**. `go.sum` MUST record the checksum of that version, and the build
+   MUST fail if the checksum does not match.
+
+   The pin carries more weight here than for any other dependency, and for a
+   different reason. This module carries Unicode character data, and that data
+   decides **which tasks a search term finds** on the roadmap tasks board (see
+   `WEB.md § Roadmap Tasks Page`). A floated version is therefore not merely a
+   build that differs from another build: it is a product that answers the same
+   user's search differently.
+2. **The module is admitted because the standard library cannot do this.** Go's
+   `unicode` package publishes case mappings, character categories, and scripts,
+   but it publishes no canonical decomposition data and no composition data. There
+   is no way to normalise on the server without a module that carries that data,
+   and `golang.org/x/text/unicode/norm` is the Go project's own implementation of
+   it. Admitting a fourth direct dependency was accepted deliberately on that
+   ground, and on no other.
+3. **Only this module's DECOMPOSITION is used. Its COMPOSITION is not, and MUST
+   NOT be.** Groadmap takes canonical decomposition and canonical ordering — that
+   is, NFD — from `golang.org/x/text/unicode/norm`, and performs the composition
+   step itself, from a table it generates and ships to the browser (see
+   `WEB.md § Roadmap Tasks Page`). **`norm.NFC.String`, `norm.NFC.Bytes`, and every
+   part of `norm.NFKC` MUST NOT be called anywhere in Groadmap.** Those are the
+   entry points that compose, and composing through them is what this rule forbids.
+
+   **Exactly one use of `norm.NFC` is admitted: the NFC_Quick_Check property
+   lookup that derives the composition exclusions.** `norm.NFC.QuickSpanString`
+   reports how much of a string is already in Normalization Form C, which for a
+   single code point is all of it or none of it. That answer is the code point's
+   NFC_Quick_Check value, and a code point carrying a canonical decomposition is
+   NFC_QC=No exactly when Full_Composition_Exclusion is true of it, so the call is
+   how Groadmap reads which code points Unicode excludes from composition.
+
+   The admission rests on the exclusions **not being derivable from the
+   decomposition data**. A script exclusion such as `U+0958`, and a
+   post-composition-version exclusion such as `U+2ADC`, decompose exactly as an
+   ordinary composite does, so no inspection of the decompositions can separate
+   them; the exclusions have to be read from somewhere. Reading the property from
+   the same module that supplies the decompositions makes the two move together
+   when the Unicode version moves. The alternative is to write the exclusions into
+   this specification, or into the code, as a list, and that is precisely the
+   stored copy of expected results that `WEB.md § Roadmap Tasks Page`, **What keeps
+   the shipped rule equal to the server's**, refuses: such a list would go stale in
+   silence the day the Unicode version changed, in the one document a reader
+   trusts.
+
+   **Three properties keep the admission narrow, and all three are required.** The
+   call is a property query; it composes nothing, so the composition defect
+   described below cannot reach it; and it runs in the one-time derivation of the
+   composition table — once per process on the server, and once per run of the
+   generator — never on a search.
+
+   Groadmap declines to cross that boundary even where crossing would pay, and
+   declining is what keeps the boundary meaningful rather than nominal. Gating the
+   server's own normalisation on `norm.NFC.QuickSpanString`, so that text already
+   in Normalization Form C skips the work, is a correct and tempting optimisation;
+   **it is declined**, because it would put a `norm.NFC` call on the search path
+   itself, where the next reader would find a precedent instead of a boundary.
+
+   The reason no composition at all is taken from the module is a defect in it at
+   the pinned version: it composes a supplementary starter as though the starter
+   were its **low 16 bits**. Three witness values, each of which the platform's own
+   normalisation and Groadmap's leave unchanged:
+
+   | Input | `norm.NFC` returns | Correct result | Why |
+   |-------|--------------------|----------------|-----|
+   | `U+1003C` `U+0338` | `U+226E` | unchanged | `U+1003C` masked to 16 bits is `U+003C` |
+   | `U+10041` `U+0301` | `U+00C1` | unchanged | `U+10041` masked to 16 bits is `U+0041` |
+   | `U+1042B` `U+0308` | `U+04F8` | unchanged | `U+1042B` masked to 16 bits is `U+042B` |
+
+   The defect spans **15,041** pairs over **6,021** distinct leading code points.
+   The decomposition Groadmap does use is unaffected by it, and Groadmap's own
+   composition agrees with the module on all **1,112,064** single code points while
+   still composing the 13 legitimate supplementary composites — `U+11935` followed
+   by `U+11930` gives `U+11938`. It is therefore NFC where the module is right and
+   NFC where the module is wrong, not a private variant of it.
+
+   **A later simplification that replaces the composition step with a call to
+   `norm.NFC.String` would reintroduce the defect silently**, because the shipped
+   table and the server would then disagree and the guard test in Rule 6 would fail
+   with the client correct and the server wrong. This rule exists so that the reason
+   is found here rather than rediscovered.
+4. **The import adds exactly one module to the graph.**
+   `golang.org/x/text/unicode/norm` imports the standard library and
+   `golang.org/x/text/transform`, which is a package of the same module.
+   `golang.org/x/text`'s own `go.mod` requires `golang.org/x/tools`,
+   `golang.org/x/mod`, and `golang.org/x/sync`, but those serve packages Groadmap
+   does not import, so none of them enters the build or the indirect requirements
+   of `go.mod`.
+
+   No third module's version is constrained by this one either: the coupling
+   `SQLite Driver Rules`, Rule 2 imposes on `modernc.org/libc` and
+   `modernc.org/memory` has **no analogue here**, and MUST NOT be invented for it.
+5. **This module's version does not by itself fix the Unicode version. The Go
+   toolchain fixes it too.** Inside `golang.org/x/text` v0.41.0,
+   `unicode/norm` selects its character data with a build constraint on the
+   toolchain: `tables15.0.0.go` is compiled under `//go:build !go1.27` and
+   `tables17.0.0.go` under `//go:build go1.27`. With the `go 1.26.6` directive that
+   `Go Toolchain` fixes, the server normalises against Unicode 15.0.0; the first
+   build made with Go 1.27 or later normalises against Unicode 17.0.0, with no
+   change to the `golang.org/x/text` line of `go.mod` and no other signal of its
+   own.
+
+   The Unicode version of the server's rule is therefore a function of **two**
+   pins, not one. The other half of that rule is already in the same position: the
+   case fold reads the standard library's own tables, so its Unicode version comes
+   from the toolchain alone. **Raising the Go floor in `Go Toolchain` is
+   consequently also a change to the board search, and MUST be treated as one.**
+6. **Unlike the driver's coupling, a drift here IS caught, and by an ordinary
+   test.** `SQLite Driver Rules`, Rule 3 records that no gate can detect a
+   mismatched `modernc.org/libc`. The opposite holds for this module. The copy of
+   the rule the binary ships to the browser is generated from the server's own
+   normalisation, and a guard test compares the two over the whole of Unicode, so a
+   change of Unicode version — whichever of the two pins in Rule 5 produced it —
+   fails the `test` gate until that shipped copy is regenerated from the new data.
+   A server whose rule moved is **caught**, never silently followed. The check
+   itself is specified in `WEB.md § Roadmap Tasks Page`.
+
+   What that gate does not do is decide whether the new Unicode version is wanted.
+   It reports that the rule moved; regenerating is a deliberate act, taken with the
+   change to the pin that caused it and never as a way of making a failing test
+   pass.
 
 #### SQLite Driver Rules
 
@@ -786,7 +961,9 @@ separate published asset, not a fourth entry inside the archive.
 - [ ] All matrix targets build successfully
 - [ ] Binaries are statically linked (`CGO_ENABLED=0`)
 - [ ] `make check` passes: format, vet, unit tests, host build, `golangci-lint`, and the `gosec` security scan all succeed. The security scan reports no unsuppressed finding (see Validation Gates and Security Scan: gosec)
-- [ ] `go.mod` pins both direct dependencies to exact versions, and the `modernc.org/libc` and `modernc.org/memory` versions match exactly the versions required by the pinned `modernc.org/sqlite`. This is verified by reading the driver's own `go.mod` in the module cache, because no gate detects a mismatch — neither any gate run by `make check` (format, vet, test, build, `golangci-lint`, `gosec`) nor the E2E suite (see External Dependencies, SQLite Driver Rules 2 and 3)
+- [ ] `go.mod` pins **every** direct dependency the External Dependencies table names — `github.com/FlavioCFOliveira/GoGraph`, `golang.org/x/sys`, `golang.org/x/text`, and `modernc.org/sqlite` — to an exact version, and the first `require` block of `go.mod` requires those four modules and no others, so the table and the block still agree row for row (see External Dependencies)
+- [ ] The `modernc.org/libc` and `modernc.org/memory` versions match exactly the versions required by the pinned `modernc.org/sqlite`. This is verified by reading the driver's own `go.mod` in the module cache, because no gate detects a mismatch — neither any gate run by `make check` (format, vet, test, build, `golangci-lint`, `gosec`) nor the E2E suite (see External Dependencies, SQLite Driver Rules 2 and 3)
+- [ ] Any change to the pinned `golang.org/x/text` version, and any raise of the Go floor in Go Toolchain, has been treated as a change to the roadmap tasks board's search: the copy of the search rule the binary ships to the browser was regenerated from the new Unicode character data, and the guard test that holds it equal to the server's own rule passes (see External Dependencies, Unicode Data Rules 5 and 6, and `WEB.md § Roadmap Tasks Page`)
 - [ ] Archive naming follows convention: `rmp-{version}-{target}.{ext}`
 - [ ] Every published archive holds exactly the three entries Artifact Structure lists, and nothing else. Listing a `.tar.gz` (`tar -tzf`) shows `rmp`, `LICENSE`, and `README.md`; listing a Windows `.zip` (`unzip -l`) shows `rmp.exe`, `LICENSE`, and `README.md`. Every entry is at the archive root, with no leading directory component
 - [ ] The dev pre-release archive holds the same three entries as a release archive. This is checked on a published `dev` asset, not only on a release asset, because both workflows pack archives and only one of them builds release tags

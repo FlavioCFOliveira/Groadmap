@@ -17,6 +17,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Read-only web interface (`rmp web`, server, pages, graph viz) | `WEB.md` |
 | Web roadmap sprints page / landing (`/roadmaps/{name}`, sprint tabs Próximos / Actual / Concluídos) | `WEB.md § Roadmap Sprints Page` |
 | Web roadmap tasks page (`/roadmaps/{name}/tasks`, Kanban task board, header search and type / priority / severity filters) | `WEB.md § Roadmap Tasks Page` |
+| Web board search text rules (trim by White_Space, Unicode NFC normalisation, simple lowercase fold, and the three tables shipped to the browser) | `WEB.md § Roadmap Tasks Page` |
 | Web sprint page (`/roadmaps/{name}/sprints/{id}`) | `WEB.md § Roadmap Sprint Page` |
 | Web shared sprint-card partial (header, description, task-count footer; used by all three sprints-page tabs) | `WEB.md § Shared Sprint-Card Partial` |
 | Web sprint detail sub-template (status summary line, metadata datagrid, member-tasks board; single sprint page only) | `WEB.md § Sprint Detail Sub-Template` |
@@ -71,7 +72,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Graph store access lock (shared for reads, exclusive for writes), and what happens on contention | `GRAPH.md § Concurrency and Recovery` and `GRAPH.md § Lock Contention` |
 | What a graph read does and does not change on disk (the recovery repair performed on open) | `GRAPH.md § What a Read Changes on Disk` |
 | Go toolchain / external dependencies | `BUILD.md § Go Toolchain` |
-| Dependency version pins (GoGraph, `modernc.org/sqlite`, and the exact `modernc.org/libc` / `modernc.org/memory` versions the driver requires) | `BUILD.md § External Dependencies` |
+| Dependency version pins (the four direct modules — GoGraph, `golang.org/x/sys`, `golang.org/x/text`, `modernc.org/sqlite` — and the exact `modernc.org/libc` / `modernc.org/memory` versions the driver requires) | `BUILD.md § External Dependencies` |
 | AI agent contract (CLI surface) | `COMMANDS.md § AI Help` |
 | AI agent contract (JSON schema) | `DATA_FORMATS.md § AI Agent Contract` |
 | AI agent contract (generation) | `ARCHITECTURE.md § AI Agent Contract Generation` |
@@ -173,6 +174,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Graph store directory (`graph/` subdir) | `GRAPH.md § Persistence Layout` (layout referenced from `ARCHITECTURE.md § Directory Structure`) |
 | Graph query result JSON and property-type mapping | `DATA_FORMATS.md § Graph Query Result` |
 | Web graph view-data JSON shape | `DATA_FORMATS.md § Graph View Data` |
+| Board search text preparation (the trim, normalisation, and folding rules; the single implementation of each; the tables shipped to the browser) | `WEB.md § Roadmap Tasks Page` |
 | Web UI framework (Tabler admin shell, dark theme) | `WEB.md § UI Framework` |
 | Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
 | Graph store concurrency / writer serialisation / reader locking / recovery | `IMPLEMENTATION.md § Graph Store Concurrency` (contract in `GRAPH.md § Concurrency and Recovery`) |

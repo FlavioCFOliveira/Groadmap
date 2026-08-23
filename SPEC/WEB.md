@@ -1187,24 +1187,122 @@ how the `rmp web` process itself terminates.
   is stripped after the trim to compensate, for the reason **The folding rule** below
   gives for its own post-fold fixups.
 
-  **Trim first, then fold.** The term is trimmed and then folded, in that order, and
-  **both** paths perform those two steps in that same order. The order is not
-  observable under the Unicode version in force: the fold replaces each code point
-  with exactly one code point and reorders none (see **The folding rule** below),
-  and swept over every code point of Unicode no code point carrying the White_Space
-  property folds to anything but itself, while no code point outside the property
-  folds into it — so trimming and folding commute and either order yields the same
-  term. Fixing the order is what keeps the contract from resting on that
-  coincidence: were some code point ever to fold into a whitespace one, the two
-  paths would still perform the same two steps in the same order and would still
-  return one term.
+  **Trim first, then normalise, then fold.** The term is trimmed, then normalised,
+  then folded, in that order, and **both** paths perform those steps in that same
+  order (see **The normalisation rule** and **The folding rule** below). The trim's
+  place in that sequence is not observable: swept over every code point of Unicode,
+  no code point carrying the White_Space property folds to anything but itself,
+  none outside the property folds into it, and normalisation neither turns a code
+  point carrying the property into one that does not carry it nor the reverse — the
+  two code points normalisation does rewrite, `U+2000` (EN QUAD) to `U+2002` and
+  `U+2001` (EM QUAD) to `U+2003`, carry the property before and after. Trimming
+  therefore commutes with both later steps. Fixing the order is what keeps the
+  contract from resting on that coincidence: were some code point ever to fold or
+  normalise into a whitespace one, the two paths would still perform the same steps
+  in the same order and would still return one term.
 
-  **The task's searchable text is folded but never trimmed.** The trim applies to
+  The place of the **normalisation** relative to the fold is a different matter: it
+  is observable, and **The normalisation rule** below states why normalising first
+  is the only order that closes this defect.
+
+  **The task's searchable text is normalised and folded, but never trimmed.** The trim applies to
   the term alone. A task's own leading or trailing whitespace is part of its text
   and is matched literally, exactly as whitespace inside a term is; the term is
   trimmed because a user reaches for the space bar around what they type, which is
   not a statement about the task.
-- **The folding rule.** The task's searchable text and the term are folded by
+- **The normalisation rule.** After the term is trimmed, and before either the term
+  or the task's searchable text is folded, both are normalised to Unicode's
+  **Normalization Form C** — NFC, the canonical composition of the full canonical
+  decomposition, as UAX #15 defines it.
+
+  The rule exists because two different byte sequences can render as the same text.
+  A task whose `title` holds a precomposed `é` (`U+00E9`) and a task whose `title`
+  holds `e` followed by a combining acute (`U+0065 U+0301`) carry the same title to
+  every reader and two different searchable texts to a comparison of bytes, so a
+  term typed in one spelling finds one of them and silently misses the other. Both
+  paths miss it **together**, so this is not the disagreement **Server and client
+  produce the same board** below governs; it is a second and independent way the
+  search fails to find a task that visibly contains the term.
+
+  **Normalisation is for comparison only: never for storage, and never for
+  display.** The bytes `rmp` stores stay exactly the bytes it was given. A task's
+  `title` is not rewritten, `rmp task get` returns what it returned before this rule
+  existed, and the card renders the title the roadmap actually holds. The normalised
+  text is a derived form used to decide a match, exactly as the folded corpus
+  already is.
+
+  **NFC and not NFD.** Both are canonical equivalence, and either would make the two
+  spellings of `é` one text. They differ in what else they do to a **substring**
+  match, which is the comparison this search performs. NFD decomposes every accented
+  letter, so a task titled `Café Lisboa onboarding` would carry the searchable text
+  `cafe` followed by `U+0301` and the rest, and the four ASCII letters of the term
+  `cafe` would occur in it: typing `cafe` would return the task titled `Café`, and
+  typing `ae` would return one titled `Aérea`. NFC leaves a precomposed letter
+  precomposed, so neither term matches and an accented word stays one unit. The
+  rule answers what a term **is**, and it must not quietly answer whether an accent
+  should be ignored, which is a different question and one this specification does
+  not answer.
+
+  **What the rule changes, measured.** Of Unicode's 1,112,064 code points, exactly
+  **1,117** produce a different searchable text under this rule than without it, and
+  **not one of them is ASCII**. Those 1,117 are the canonical singletons and the
+  composition exclusions — `U+0340`, `U+0341`, `U+0343`, `U+0344`, `U+0374`,
+  `U+037E`, `U+0387`, the `U+0958`..`U+095F` Devanagari set, and their kind. An
+  ordinary Latin roadmap is untouched, which is what makes this rule safe to apply
+  to every task rather than only to the ones a user suspects.
+
+  **Two passes, not one.** The pipeline is trim, then NFC, then fold, then **NFC
+  again**. The second pass is not decoration: the fold can produce a sequence that
+  composes where the unfolded one did not. Unicode has no precomposed capital for
+  `H` with a line below, so NFC leaves `H` followed by `U+0331` as two code points;
+  the fold then lowers the `H`, and `h` followed by `U+0331` **does** have a
+  precomposed form, `U+1E96`. Without the second pass a task titled `H̱ydro` would
+  carry a two-code-point searchable text while a term typed as the single character
+  `ẖ` normalised to `U+1E96`, and the term would not occur in the text it plainly
+  spells. `U+1E97`, `U+1E98`, `U+1E99` and `U+01F0` behave the same way. Measured
+  over the 1,321,226 sequences of a folding code point followed by a non-starter,
+  one pass leaves the result outside NFC on **70** of them; two passes leave it in
+  NFC on **all 1,321,226**, so a third pass would change nothing and is not
+  performed.
+
+  **Normalise before folding, not after.** The order is observable: on **0** single
+  code points, but on **74** of those 1,321,226 sequences, over **32** distinct
+  leading code points. Normalising first is chosen because it is the only order that
+  closes this defect for `U+0130` (LATIN CAPITAL LETTER I WITH DOT ABOVE), the code
+  point **The folding rule** below already names. A title written with `U+0130` and a
+  title written as `U+0049` followed by `U+0307` are the same text by Unicode's own
+  definition, and normalising first gives both the same searchable text; folding
+  first would give `U+0069` for one and `U+0069 U+0307` for the other, which are two
+  different searchable texts for one title.
+
+  **The composition step is Groadmap's own; the decomposition step is not.** The
+  server obtains the canonical decomposition and the canonical ordering from
+  `golang.org/x/text/unicode/norm` (see `BUILD.md § External Dependencies`), and
+  performs the composition itself, from the same `COMPOSE_TABLE` it ships to the
+  browser (see **One rule, and only one implementation of it** below). That module's
+  own composition is **not** used, because it is wrong: at the pinned version it
+  composes a supplementary starter as though the starter were its low 16 bits, so
+  `U+1003C` followed by `U+0338` becomes `U+226E` (because `U+1003C` masked to 16
+  bits is `U+003C`), `U+10041` followed by `U+0301` becomes `U+00C1`, and `U+1042B`
+  followed by `U+0308` becomes `U+04F8`. The platform's own normalisation leaves all
+  three unchanged, and so does Groadmap's. The defect spans **15,041** pairs over
+  **6,021** distinct leading code points; the decomposition the server does use is
+  unaffected by it.
+
+  Composing from the table is not a private dialect of NFC. It is NFC where that
+  module is right and NFC where that module is wrong: the two agree on **all
+  1,112,064** single code points, and the table still composes the 13 legitimate
+  supplementary composites, `U+11935` followed by `U+11930` giving `U+11938` among
+  them. This is why the server takes the client's table rather than the client
+  taking the server's answer — the alternative would mean generating a table that
+  reproduced a truncation defect on purpose, and a client that was right while the
+  server was wrong would break **Server and client produce the same board** below,
+  which is the one property none of these rules may cost.
+
+  A term whose bytes are not valid UTF-8 is normalised like any other term, after
+  each invalid byte has been replaced by `U+FFFD` (see **The folding rule** below).
+- **The folding rule.** The task's searchable text and the term are folded — each
+  after it has been normalised (see **The normalisation rule** above) — by
   Unicode's **simple lowercase mapping**: the single replacement code point that
   the Unicode Character Database gives a code point, applied to each code point on
   its own, with a code point that has no such mapping folding to itself. Three
@@ -1257,11 +1355,11 @@ how the `rmp web` process itself terminates.
   roadmap, and it is neither an error nor an absent term (see **No malformed term
   is an error** below).
 - **One rule, and only one implementation of it.** A task's searchable text is
-  folded **once, by the server**. The client folds only the term, and compares it
-  against text the server already folded; no client-side code folds a task's
-  `title` or its reference, and no client-side code trims either. The two paths
-  therefore cannot disagree about a task's text, because only one of them ever
-  transforms it.
+  normalised and folded **once, by the server**. The client normalises and folds
+  only the term, and compares it against text the server already transformed; no
+  client-side code normalises or folds a task's `title` or its reference, and no
+  client-side code trims either. The two paths therefore cannot disagree about a
+  task's text, because only one of them ever transforms it.
 
   The term is the one value both sides fold, and it is where the two could still
   drift, because each platform's own lower-case function implements whichever
@@ -1278,8 +1376,9 @@ how the `rmp web` process itself terminates.
   browsers could answer differently for the same term. The shipped mapping removes
   the browser from the answer entirely.
 
-  **The term's trim is the server's by the same construction.** Normalising a term
-  is two steps, and the client MUST NOT take either of them from the platform: it
+  **The term's trim is the server's by the same construction.** Preparing a term for
+  comparison is three steps, and the client MUST NOT take any of them from the
+  platform: it
   **MUST NOT** trim the term with the JavaScript platform's trimming function, any
   more than it may fold it with that platform's case conversion. It removes the
   term's leading and trailing whitespace by the **server's own whitespace set**,
@@ -1290,33 +1389,94 @@ how the `rmp web` process itself terminates.
   agree on every code point but the two **The trim rule** above names, so every
   ordinary term would go on agreeing and hide the disagreement.
 
-  On the server, the corpus fold and the term fold are likewise **one** rule: the
-  server folds a task's searchable text and folds a term through the same folding
+  **The term's normalisation is the server's by that same construction, and the
+  prohibition extends to it.** The client **MUST NOT** call the JavaScript
+  platform's own normalisation — `String.prototype.normalize` — any more than it may
+  call that platform's trimming or its case conversion. It normalises the term from
+  the **tables the server ships to it**, so the normalised form of a term is the
+  server's answer on both paths by construction.
+
+  Two reasons make that prohibition stricter here than for the other two steps, and
+  the second is decisive. The first is the one already given for them: a browser's
+  normalisation tables are of whatever Unicode version that browser ships, which
+  Groadmap neither chooses nor can detect. The second is that the platform's
+  normalisation and the server's would have to agree on **composition**, and
+  composition is exactly where the server's own module is wrong (see **The
+  normalisation rule** above). The server composes from the shipped table
+  specifically so that both sides run one rule over **one set of data**, rather than
+  two expressions of one description that could agree with each other by
+  reproducing the same defect.
+
+  On the server, the corpus and the term are likewise **one** rule at every step:
+  the server normalises a task's searchable text and normalises a term through the
+  same function and the same tables, and folds both through the same folding
   function, not through two implementations of one description, so the two cannot
   drift apart on that side either.
 - **What keeps the shipped rule equal to the server's.** The binary ships the client
-  the two things a term's normalisation is made of — the whitespace set and the case
-  mapping — and **one** check covers both of them. It is one check and not two
-  beside each other because the two are parts of one rule: a check that took only
-  the mapping as its subject would leave the whitespace set free to drift, and a set
-  that drifts separates the two paths exactly as a drifting mapping would.
+  the things a term's preparation is made of — the whitespace set, the case mapping,
+  and the normalisation data — and **one** check covers all of them. It is one check
+  and not several beside each other because they are parts of one rule: a check that
+  took only the mapping as its subject would leave the whitespace set and the
+  normalisation data free to drift, and either of those drifting separates the two
+  paths exactly as a drifting mapping would.
+
+  The normalisation data is **three generated tables**, shipped in
+  `static/task-search.js` exactly as `FOLD_TABLE` and `SPACE_TABLE` already are:
+  `DECOMP_TABLE`, the full canonical decompositions, **2,061** entries;
+  `CCC_TABLE`, the canonical combining classes, **388** spans; and `COMPOSE_TABLE`,
+  the primary composites, **941** entries. Together the three are the largest part
+  of the script the binary serves — on the order of 60 KB, well over half of it.
+  They are that small only because Hangul is **not** tabulated: UAX #15 decomposes
+  and composes Hangul arithmetically, so the 11,172
+  Hangul syllables are computed on both sides rather than stored. Tabulating them
+  would take `DECOMP_TABLE` from 2,061 entries to 13,233 and `COMPOSE_TABLE` from
+  941 to 12,113, for data that a few lines of arithmetic already give exactly.
+
+  **That size is an order of magnitude and not a byte count, deliberately.** The
+  three entry counts above are backed: the check described below reads the shipped
+  tables as numbers and requires the count, and every entry, to equal what the
+  server's own function derives, so an entry count stated here cannot drift from
+  the artefact without the `test` gate failing. A byte count has no such backing.
+  It is a property of the generator's layout — the indentation, the line width,
+  and the separator its emitter writes — and the check is blind to all three,
+  because it extracts the numbers and ignores the text around them. Changing any
+  of the three would move a byte count stated here and leave every gate green. A
+  figure a reviewer trusts and no gate checks is worse than no figure at all, so
+  this section states none: whoever needs the exact size measures the artefact,
+  which is its only authority.
 
   Each part is checked against the server's own function over **the whole of
   Unicode**: every code point, not a sample, and against that function itself, never
   against a stored copy of its expected results — such a copy can be updated to
-  match a changed fold or a changed whitespace set, and would then prove nothing.
-  The check fails when a single code point folds differently on the two sides, and
-  it fails the same way when a single code point is whitespace to one side and not
-  to the other. It fails the same way again when a toolchain upgrade changes either
-  of them, so a change of Unicode version cannot move one side of the rule and leave
-  the other behind unnoticed. The check also asserts, as an absence in the script the
-  binary serves, that the narrowing script calls neither a case conversion of the
-  platform nor a trimming function of the platform.
+  match a changed fold, a changed whitespace set, or changed normalisation data, and
+  would then prove nothing. The check fails when a single code point folds
+  differently on the two sides; it fails the same way when a single code point is
+  whitespace to one side and not to the other; and it fails the same way when a
+  single code point decomposes, orders, or composes differently between the shipped
+  tables and the server. It fails the same way again when a toolchain upgrade or a
+  dependency upgrade changes any of them, so a change of Unicode version cannot move
+  one side of the rule and leave the other behind unnoticed: a server whose rule
+  moved is **caught**, never followed. The check also asserts, as an absence in the
+  script the binary serves, that the narrowing script calls neither a case
+  conversion of the platform, nor a trimming function of the platform, nor the
+  platform's own normalisation.
+
+  **The table's composition was proven correct before it was specified.** The
+  shipped `COMPOSE_TABLE` is not merely equal to the server's data — it is equal to
+  the rule Unicode defines, which is what makes the server adopting it a correction
+  rather than a divergence. A prototype driven by these tables was checked against
+  the platform's own normalisation over **69,956,194** inputs with **0** failures:
+  all 1,112,064 single code points, 850,084 starter-plus-two-mark sequences,
+  1,900,242 decomposing-starter-plus-mark pairs, 33,516 Hangul cases, and
+  66,060,288 supplementary-starter pairs — every supplementary starter against each
+  of the 63 marks a composition can consume, which is precisely the domain in which
+  the server's own module is wrong.
 
   The check is an ordinary Go test. It runs no JavaScript and requires no
-  JavaScript engine, no Node.js, no network access, and no module dependency, so it
-  holds within the constraints already fixed in `BUILD.md § External Dependencies`
-  and `BUILD.md § Vendored Web Assets`, rule 2. It is the discipline the badge
+  JavaScript engine, no Node.js, no network access, and no module beyond the direct dependencies
+  `BUILD.md § External Dependencies` names, so it holds within the constraints
+  already fixed in that section and in `BUILD.md § Vendored Web Assets`,
+  rule 2. It is the discipline the badge
   colour mapping already follows wherever a client script carries that mapping too
   (see
   [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
@@ -5704,9 +5864,10 @@ Rules:
     the term by the rule Acceptance Criterion 121 fixes, and a term that is empty or entirely
     whitespace under that rule shows every task. The case-insensitive comparison
     folds the term and the task's searchable text by the rule Acceptance
-    Criterion 118 fixes, so the same term and task yield the same verdict regardless
+    Criterion 118 fixes, over text each of them normalised by the rule Acceptance
+    Criterion 152 fixes, so the same term and task yield the same verdict regardless
     of the browser's reported locale, of the browser, and of the Unicode version
-    that browser's case and whitespace tables implement.
+    that browser's case, whitespace, and normalisation tables implement.
 102. A column left with no matching card renders its ordinary in-column empty state,
     and the five columns stay present and in order — narrowing the board drops,
     hides, and reorders no column (Acceptance Criterion 81 continues to hold). When
@@ -5742,17 +5903,22 @@ Rules:
     point is `U+0085` loses it on both paths and finds what the rest of the term
     matches, and a term whose first code point is `U+FEFF` keeps it on both paths
     and finds nothing on an ordinary roadmap. None of the four is a term one path
-    narrows by while the other ignores it (Acceptance Criteria 121 and 122).
+    narrows by while the other ignores it (Acceptance Criteria 121 and 122). The
+    identity extends to canonical spelling: a title written with `U+0130` and a title
+    written as `U+0049` followed by `U+0307` carry **one** searchable text under
+    Acceptance Criterion 152, so the board a term produces is the same whichever of
+    the two spellings the roadmap happens to store, on both paths (Acceptance
+    Criterion 153).
 105. No `q` value produces an error page: a term matching nothing, a term longer than
     any searchable text, and a `q` the server cannot decode each return HTTP 200,
     the last treated as though `q` were absent. Applying a term adds no database
     query: the page's read remains the full task list specified in Acceptance
     Criterion 89, and narrowing in the browser issues no request at all. A task's
-    searchable text is folded once by the server, never by the client, and never
-    trimmed at all, so the two paths cannot disagree about a task's text; the term
-    is the only value both of them transform, and both trim it with the server's own
-    whitespace set and fold it with the server's own mapping (Acceptance Criteria
-    119 and 122).
+    searchable text is normalised and folded once by the server, never by the client,
+    and never trimmed at all, so the two paths cannot disagree about a task's text;
+    the term is the only value both of them transform, and both trim it with the
+    server's own whitespace set, normalise it from the server's own tables, and fold
+    it with the server's own mapping (Acceptance Criteria 119, 122, and 155).
 106. A term containing HTML markup renders as visible characters and introduces no
     element, attribute, or script into the page: the server escapes it through
     `html/template` where it echoes it into the search input and into the no-match
@@ -5936,7 +6102,8 @@ Rules:
     task's searchable text and folds a term through that one function, not through
     two implementations of one description. The check is an ordinary Go test: it
     runs no JavaScript and requires no JavaScript engine, no Node.js, no network
-    access, and no module dependency, so `BUILD.md § External Dependencies` and
+    access, and no module beyond the direct dependencies
+    `BUILD.md § External Dependencies` names, so that section and
     `BUILD.md § Vendored Web Assets`, rule 2, continue to hold. Because the client
     consults no case table of the browser's, the board a term produces does not
     depend on which Unicode version the browser implements, and two browsers of
@@ -5975,11 +6142,11 @@ Rules:
     and does so on **both** paths, which is the property this criterion protects
     rather than a defect in it. Swept over every code point of Unicode, those two are the
     whole of the difference: no third code point is removed by one trimming and kept
-    by the other. The term is trimmed **and then** folded, in that order, on both
-    paths. The task's searchable text is folded but never trimmed, so a task's own
-    leading or trailing whitespace is part of its text (Acceptance Criteria 101 and
-    104 continue to hold; see [Roadmap Tasks Page](#roadmap-tasks-page), **The trim
-    rule**).
+    by the other. The term is trimmed, **then** normalised, **then** folded, in that
+    order, on both paths. The task's searchable text is normalised and folded but
+    never trimmed, so a task's own leading or trailing whitespace is part of its text
+    (Acceptance Criteria 101, 104, and 152 continue to hold; see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **The trim rule**).
 122. The client removes the term's leading and trailing whitespace by the whitespace
     set the server ships to it and calls no trimming function of the JavaScript
     platform: no call to `trim`, `trimStart`, `trimEnd`, or the legacy aliases
@@ -5994,7 +6161,8 @@ Rules:
     side and not to the other, including when a toolchain upgrade changes which code
     points carry the property. The check remains an ordinary Go test: it runs no
     JavaScript and requires no JavaScript engine, no Node.js, no network access, and
-    no module dependency, so `BUILD.md § External Dependencies` and
+    no module beyond the direct dependencies
+    `BUILD.md § External Dependencies` names, so that section and
     `BUILD.md § Vendored Web Assets`, rule 2, continue to hold. Because the client
     consults no whitespace table of the browser's, the board a term produces does
     not depend on which Unicode version the browser implements, exactly as
@@ -6390,6 +6558,79 @@ Rules:
     `GRAPH.md § Keyword Spacing in a Schema-Introspection Command` and of that
     file's Acceptance Criterion 39, which the CLI subcommands satisfy on the same
     input (see [Query-Bar Error Handling](#query-bar-error-handling), case 10).
+152. A term and a task's searchable text are normalised to Unicode's **Normalization
+    Form C** before they are folded, and the pipeline for a term is trim, then NFC,
+    then fold, then NFC, in that order, on both paths. The normalisation is for
+    comparison only: the `title` bytes the roadmap stores are unchanged, `rmp task
+    get` returns the same bytes it returned before this rule existed, and the card
+    renders the stored title, so no stored value and no rendered value is normalised
+    (Acceptance Criterion 121 fixes the trim, 118 the fold). The second NFC pass is
+    required and is proven so: over the 1,321,226 sequences of a folding code point
+    followed by a non-starter, one pass leaves the result outside NFC on **70** of
+    them — `H` followed by `U+0331` folds to `h` followed by `U+0331`, which
+    composes to `U+1E96`, and `U+1E97`, `U+1E98`, `U+1E99` and `U+01F0` behave the
+    same way — while two passes leave it in NFC on **all 1,321,226**, so a third
+    pass changes nothing and is not performed. Normalising **before** folding is
+    likewise required rather than incidental: the two orders differ on 0 single code
+    points but on **74** of those sequences, over **32** distinct leading code
+    points, and folding first would give a title spelled `U+0130` and a title
+    spelled `U+0049 U+0307` two different searchable texts (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **The normalisation rule**).
+153. A task whose `title` is stored decomposed and a task whose `title` is stored
+    precomposed are **both** found by a term typed in **either** spelling. All four
+    combinations are asserted, not a sample: decomposed title with decomposed term,
+    decomposed title with precomposed term, precomposed title with decomposed term,
+    and precomposed title with precomposed term each return the task. The property
+    holds on the server path and on the client path alike, and the board reached by
+    typing the term equals the board reached by requesting the URL carrying it in
+    `q` for every one of the four, so Acceptance Criterion 104's identity survives
+    normalisation rather than being weakened by it. `U+0130` resolves as Acceptance
+    Criteria 104 and 118 already state — a term carrying it selects the same cards
+    on both paths and in every browser, and it folds to `U+0069` and never to
+    `U+0069 U+0307` — and a title spelled `U+0049 U+0307` now carries the same
+    searchable text as one spelled `U+0130`.
+154. Normalisation changes nothing else. It does not make one word a substring of
+    another: a task titled `Café Lisboa onboarding` is **not** returned by the term
+    `cafe`, and one titled `Aérea cargo terminal` is **not** returned by the term
+    `ae`, because the form is NFC and an accented letter stays one code point rather
+    than a base followed by a mark. Measured over the whole of Unicode, exactly
+    **1,117** of the 1,112,064 code points produce a different searchable text under
+    this rule than without it, and **none of them is ASCII**, so every ASCII term and
+    every ASCII title selects exactly the tasks it selected before. The 1,117 are the
+    canonical singletons and the composition exclusions.
+155. The client normalises the term from the tables the server ships to it and calls
+    the JavaScript platform's own normalisation nowhere: no call to `normalize`
+    appears in the narrowing script, asserted as an absence in the script the binary
+    serves, the way Acceptance Criterion 119 asserts the platform's case conversions
+    and 122 its trimming functions. The shipped data is three generated tables —
+    `DECOMP_TABLE` with 2,061 entries, `CCC_TABLE` with 388 spans, and
+    `COMPOSE_TABLE` with 941 entries — and the 11,172 Hangul
+    syllables appear in none of them, being decomposed and composed arithmetically
+    per UAX #15 on both sides. All three are covered by the **same** check that
+    Acceptance Criteria 119 and 122 fix and not by a further check beside it, with
+    the same three properties: each is compared against the server's own function
+    over the whole of Unicode — every code point, not a sample — and against that
+    function itself, never against a stored copy of its expected results; and the
+    comparison fails when a shipped table holds a different number of entries than
+    the server's data, and when a single code point decomposes, orders, or composes
+    differently on the two sides, including when a toolchain or dependency upgrade
+    changes the Unicode version, so a server whose rule moved is caught rather than
+    followed. The three counts above are the counts that comparison enforces. This
+    criterion fixes no byte size for the tables, because no gate checks one and the
+    sizes move with the generator's layout alone. The server performs the composition step itself, from that same
+    `COMPOSE_TABLE`, and does **not** use the composition of
+    `golang.org/x/text/unicode/norm`: at the pinned version that module composes a
+    supplementary starter as though it were its low 16 bits, turning `U+1003C`
+    followed by `U+0338` into `U+226E`, `U+10041` followed by `U+0301` into `U+00C1`,
+    and `U+1042B` followed by `U+0308` into `U+04F8`, across 15,041 pairs over 6,021
+    leading code points, while the platform's normalisation and Groadmap's leave all
+    three unchanged. The table's composition agrees with that module on all 1,112,064
+    single code points and still composes the 13 supplementary composites, `U+11935`
+    followed by `U+11930` giving `U+11938` among them. The check remains an ordinary
+    Go test, on the terms Acceptance Criteria 119 and 122 already state (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **One rule, and only one
+    implementation of it**, and **What keeps the shipped rule equal to the
+    server's**).
 
 ## See Also
 
