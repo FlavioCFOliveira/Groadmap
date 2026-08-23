@@ -499,7 +499,7 @@ the read opened it.
 
 ## See Also
 
-- `ARCHITECTURE.md` § System design and module boundaries
-- `DATABASE.md` § Schema, queries, and indexes
-- `MODELS.md` § Memory Layout Optimization
-- `GRAPH.md` § Knowledge graph feature, persistence, and guard rails
+- System design and module boundaries → `ARCHITECTURE.md`
+- Schema, queries, and indexes → `DATABASE.md`
+- Memory Layout Optimization → `MODELS.md § Memory Layout Optimization`
+- Knowledge graph feature, persistence, and guard rails → `GRAPH.md`
