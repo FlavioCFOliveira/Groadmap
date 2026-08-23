@@ -952,10 +952,14 @@ how the `rmp web` process itself terminates.
   [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
   rule 2). The colours are the ones that table already holds; this board introduces
   no new colour and no new band, and it keys on that mapping rather than restating
-  the variants here. The count itself selects no colour, so a column that holds no
-  task shows `0` in the colour of its status, exactly as a tab that holds no sprint
-  does (see [Roadmap Sprints Page](#roadmap-sprints-page)). The colour earns its
-  place because the header is where the reader identifies the column: the mapping
+  the variants here. The badge's class is produced by the single implementation of
+  that mapping which every status badge on this page already takes its colour from;
+  no colour variant is written into the template beside it, so this header cannot
+  drift from the mapping the rest of the page obeys (Acceptance Criterion 140). The
+  count itself selects no colour, so a column that holds no task shows `0` in the
+  colour of its status, exactly as a tab that holds no sprint does (see
+  [Roadmap Sprints Page](#roadmap-sprints-page)). The colour earns its place
+  because the header is where the reader identifies the column: the mapping
   already gives each status a colour the reader meets wherever that status is
   written out, and carrying it here lets the five columns tell themselves apart by
   the same key rather than by their heading text alone.
@@ -6483,7 +6487,28 @@ Rules:
     `bg-secondary-lt`, which is also the neutral colour a badge carries when nothing
     colours it, so that column alone renders identically whether the mapping was
     applied or not, and the check fails on a rendering that gives every column of
-    either board `bg-secondary-lt`. The check also asserts the two count badges that
+    either board `bg-secondary-lt`. Asserting the columns of a board together is
+    necessary but not sufficient, and this criterion puts two further requirements on
+    the check. The first is that each badge's class is produced by the single
+    implementation of this mapping that every status badge already takes its colour
+    from, rather than written into the template as a literal or resolved through a
+    second mapping standing beside the first: a literal reads exactly as the
+    mapping's answer on the day it is written and is then free to drift from it,
+    while the mapping stated in rule 2 is the only authoritative one. The check
+    establishes that by rendering both boards a second time with that one
+    implementation replaced by a substitute whose answer names the status it was
+    called with. Under the substitution a class written into the template survives
+    unchanged and fails — on the `BACKLOG` column as well, the one column whose
+    colour a literal would not change — while a template that calls the
+    implementation renders the substitute's answer on every column, and no column
+    header of either board still carries a real `bg-*-lt` variant. The second
+    requirement is that the check pins each column to the status that column groups,
+    which no assertion about the colours alone can make: a check establishing only
+    that the columns' colours differ from one another passes unchanged on a board
+    whose columns carry each other's statuses, where the colours stay as many and as
+    distinct as they were while each sits on the wrong column. The same substitution
+    settles that, because a column headed by one status whose badge names another is
+    visible in the rendering. The check also asserts the two count badges that
     stay neutral, because the boundary is what keeps this rule a rule rather than a
     licence to colour any count: the Comments card header count on the Roadmap Sprint
     Page carries `bg-secondary-lt`, because it counts comments and a comment has no

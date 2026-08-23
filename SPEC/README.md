@@ -32,7 +32,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Self-contained web binary (offline, no CDN, embedded asset categories) | `WEB.md § Self-Contained Deliverable` |
 | Responsive / mobile-first web design | `WEB.md § Responsive and Mobile-First Design` |
 | Web UI framework (Tabler admin shell, dark theme, Tabler-fidelity rules, card tabs) | `WEB.md § UI Framework` |
-| Web status / priority / severity badge colours (semantic Tabler `bg-*-lt` mapping) | `WEB.md § Status, Priority, and Severity Badge Colours` |
+| Web status / priority / severity badge colours (semantic Tabler `bg-*-lt` mapping, including the count badges of the sprints-page tabs and of both Kanban boards' columns) | `WEB.md § Status, Priority, and Severity Badge Colours` |
 | Web HTTP security headers (CSP, X-Frame-Options, etc.) | `WEB.md § Security Headers` |
 | Web HTTP server timeouts (read-header, write, idle) and the graph data endpoint's query time budget | `WEB.md § HTTP Server Timeouts` |
 | Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
