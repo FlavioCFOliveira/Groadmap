@@ -76,8 +76,8 @@ A non-test source file authored by the project. Test sources are `Test` nodes, n
 `CodeFile`; vendored third-party files are `Component`s, never `CodeFile`.
 
 Build and deployment artefacts are `CodeFile`s on the same terms as program source. The
-`Makefile`, `install.sh`, and the workflow files under `.github/workflows/` are each a
-file the project authored and maintains, each realises a requirement the SPEC states, and
+`Makefile`, `install.sh`, the workflow files under `.github/workflows/`, and `.gitignore`
+are each a file the project authored and maintains, each realises a requirement the SPEC states, and
 each is verified by a test; nothing about them justifies a label of their own. Their
 `package` is the directory that owns them -- `.` for a repository-root file, and
 `.github/workflows` for a workflow -- rather than a Go import path, because `package` on
@@ -89,7 +89,7 @@ this label means "the component this file belongs to" and not "a compilation uni
 | `path` | yes | Same as `key`. |
 | `file` | yes | Base name. |
 | `package` | yes | Owning component's path. |
-| `language` | yes | `Go`, `Python`, `HTML`, `CSS`, `JavaScript`, `SVG`, `Bash`, `YAML` or `Make`. The last three are the build and deployment artefacts described above. |
+| `language` | yes | `Go`, `Python`, `HTML`, `CSS`, `JavaScript`, `SVG`, `Bash`, `YAML`, `Make` or `Gitignore`. The last four are the build and deployment artefacts described above. |
 | `last_commit`, `last_commit_date` | yes | Provenance. |
 
 ### Spec
