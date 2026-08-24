@@ -643,9 +643,9 @@ See [DOCS/commands/web.md](DOCS/commands/web.md) for the full route list, the ta
 **What is the difference between Priority and Severity?**
 
 - **Priority (0-9)**: business urgency, set by the Product Owner.
-  - `rmp task prio -r <name> <id> 9` / filter: `--priority 8,9`
+  - `rmp task prio -r <name> <id> 9` / filter: `--priority 8` (threshold: 8 and above)
 - **Severity (0-9)**: technical impact, set by the engineering team.
-  - `rmp task sev -r <name> <id> 8` / filter: `--severity 8,9`
+  - `rmp task sev -r <name> <id> 8` / filter: `--severity 8` (threshold: 8 and above)
 
 Both scales run 0 (lowest) to 9 (highest). Use them independently.
 
@@ -665,7 +665,7 @@ rmp task next -r <name>                   # Returns task 5 first
 **Priority** is a planning attribute for filtering and backlog grooming:
 ```bash
 rmp backlog show-next -r <name> 5         # Top 5 by priority for sprint planning
-rmp task list -r <name> --priority 8,9
+rmp task list -r <name> --priority 8      # Priority 8 and above
 ```
 
 (Distinct from both is a sprint's own `--order`, which sequences the sprints themselves across the roadmap.)
