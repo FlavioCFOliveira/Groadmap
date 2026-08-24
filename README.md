@@ -253,8 +253,8 @@ rmp task get -r <name> 1,2,3             # Bulk fetch
 **How do I filter and search tasks?**
 ```bash
 rmp task list -r <name> --status BACKLOG
-rmp task list -r <name> --status DOING,TESTING
-rmp task list -r <name> --type BUG --severity 8,9
+rmp task list -r <name> --status DOING
+rmp task list -r <name> --type BUG --severity 8
 rmp task list -r <name> --priority 7 --status SPRINT
 rmp task list -r <name> --created-since 2026-03-01
 rmp task list -r <name> --sort created --limit 50
