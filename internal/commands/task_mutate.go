@@ -217,13 +217,20 @@ func taskSetStatus(args []string) error {
 		return fmt.Errorf("%w: --summary is only valid when transitioning to COMPLETED", utils.ErrValidation)
 	}
 	// The cap keeps the position SPEC/COMMANDS.md § Change Status (stat) step 3
-	// states for --summary — ahead of the content rules — and now measures the
+	// states for --summary — ahead of the content rules — and measures the
 	// TRIMMED value, because that is the value stored (SPEC/MODELS.md §
 	// Free-Text Emptiness and Trimming Constraint, Rule 2). A summary of exactly
 	// the maximum length carrying surrounding whitespace is therefore accepted,
 	// and what was counted is what the column holds.
-	if completionSummary != nil && len(strings.TrimSpace(*completionSummary)) > models.MaxTaskCompletionSummary {
-		return utils.FieldTooLargeError(utils.FieldTaskCompletionSummary, models.MaxTaskCompletionSummary)
+	//
+	// utils.CheckFieldLength counts CHARACTERS, the unit the message names and
+	// the schema enforces. It counted bytes here until rmp task 296, which made a
+	// summary of 4096 CJK characters refused for exceeding "4096 characters".
+	if completionSummary != nil {
+		if err := utils.CheckFieldLength(strings.TrimSpace(*completionSummary),
+			utils.FieldTaskCompletionSummary, models.MaxTaskCompletionSummary); err != nil {
+			return err
+		}
 	}
 	// The encoding rule and then the control-character rule, on the value AS
 	// SUPPLIED, and only then the trim (SPEC/MODELS.md § Free-Text UTF-8 Encoding

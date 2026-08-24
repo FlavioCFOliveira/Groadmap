@@ -126,7 +126,7 @@ func TestTaskValidate_Title_ExactMaxLength(t *testing.T) {
 	task := baseValidTask()
 	task.Title = repeatByte('a', models.MaxTaskTitle)
 	if err := task.Validate(); err != nil {
-		t.Errorf("title at exact max (%d bytes) should be valid, got: %v", models.MaxTaskTitle, err)
+		t.Errorf("title at exact max (%d characters) should be valid, got: %v", models.MaxTaskTitle, err)
 	}
 }
 
@@ -135,7 +135,7 @@ func TestTaskValidate_Title_OneBeyondMaxLength(t *testing.T) {
 	task.Title = repeatByte('a', models.MaxTaskTitle+1)
 	err := task.Validate()
 	if err == nil {
-		t.Errorf("title at max+1 (%d bytes) should be invalid, got nil", models.MaxTaskTitle+1)
+		t.Errorf("title at max+1 (%d characters) should be invalid, got nil", models.MaxTaskTitle+1)
 	}
 	if !utils.IsFieldTooLarge(err) {
 		t.Errorf("expected ErrFieldTooLarge for over-length title, got: %v", err)
@@ -164,7 +164,7 @@ func TestTaskValidate_FunctionalRequirements_ExactMaxLength(t *testing.T) {
 	task := baseValidTask()
 	task.FunctionalRequirements = repeatByte('f', models.MaxTaskFunctionalRequirements)
 	if err := task.Validate(); err != nil {
-		t.Errorf("functional_requirements at exact max (%d bytes) should be valid, got: %v",
+		t.Errorf("functional_requirements at exact max (%d characters) should be valid, got: %v",
 			models.MaxTaskFunctionalRequirements, err)
 	}
 }
@@ -174,7 +174,7 @@ func TestTaskValidate_FunctionalRequirements_OneBeyondMaxLength(t *testing.T) {
 	task.FunctionalRequirements = repeatByte('f', models.MaxTaskFunctionalRequirements+1)
 	err := task.Validate()
 	if err == nil {
-		t.Errorf("functional_requirements at max+1 (%d bytes) should be invalid, got nil",
+		t.Errorf("functional_requirements at max+1 (%d characters) should be invalid, got nil",
 			models.MaxTaskFunctionalRequirements+1)
 	}
 	if !utils.IsFieldTooLarge(err) {
@@ -188,7 +188,7 @@ func TestTaskValidate_TechnicalRequirements_ExactMaxLength(t *testing.T) {
 	task := baseValidTask()
 	task.TechnicalRequirements = repeatByte('t', models.MaxTaskTechnicalRequirements)
 	if err := task.Validate(); err != nil {
-		t.Errorf("technical_requirements at exact max (%d bytes) should be valid, got: %v",
+		t.Errorf("technical_requirements at exact max (%d characters) should be valid, got: %v",
 			models.MaxTaskTechnicalRequirements, err)
 	}
 }
@@ -198,7 +198,7 @@ func TestTaskValidate_TechnicalRequirements_OneBeyondMaxLength(t *testing.T) {
 	task.TechnicalRequirements = repeatByte('t', models.MaxTaskTechnicalRequirements+1)
 	err := task.Validate()
 	if err == nil {
-		t.Errorf("technical_requirements at max+1 (%d bytes) should be invalid, got nil",
+		t.Errorf("technical_requirements at max+1 (%d characters) should be invalid, got nil",
 			models.MaxTaskTechnicalRequirements+1)
 	}
 	if !utils.IsFieldTooLarge(err) {
@@ -212,7 +212,7 @@ func TestTaskValidate_AcceptanceCriteria_ExactMaxLength(t *testing.T) {
 	task := baseValidTask()
 	task.AcceptanceCriteria = repeatByte('c', models.MaxTaskAcceptanceCriteria)
 	if err := task.Validate(); err != nil {
-		t.Errorf("acceptance_criteria at exact max (%d bytes) should be valid, got: %v",
+		t.Errorf("acceptance_criteria at exact max (%d characters) should be valid, got: %v",
 			models.MaxTaskAcceptanceCriteria, err)
 	}
 }
@@ -222,7 +222,7 @@ func TestTaskValidate_AcceptanceCriteria_OneBeyondMaxLength(t *testing.T) {
 	task.AcceptanceCriteria = repeatByte('c', models.MaxTaskAcceptanceCriteria+1)
 	err := task.Validate()
 	if err == nil {
-		t.Errorf("acceptance_criteria at max+1 (%d bytes) should be invalid, got nil",
+		t.Errorf("acceptance_criteria at max+1 (%d characters) should be invalid, got nil",
 			models.MaxTaskAcceptanceCriteria+1)
 	}
 	if !utils.IsFieldTooLarge(err) {
@@ -373,10 +373,22 @@ func TestTaskUpdateValidate_Severity_AboveMax(t *testing.T) {
 
 func TestTaskValidate_Unicode_TitleCJK(t *testing.T) {
 	task := baseValidTask()
-	// CJK characters — each is 3 UTF-8 bytes; 85 chars = 255 bytes = MaxTaskTitle.
-	task.Title = strings.Repeat("中", 85)
+	// The cap counts CHARACTERS, so the boundary is MaxTaskTitle CJK characters —
+	// 765 UTF-8 bytes, three times the number a byte-counting cap would admit.
+	//
+	// This case used to sit at 85 characters, which is where 255 BYTES falls, and
+	// called that "the exact byte boundary": it passed under either unit and so
+	// said nothing about which one was in force (rmp task 296).
+	task.Title = strings.Repeat("中", models.MaxTaskTitle)
 	if err := task.Validate(); err != nil {
-		t.Errorf("CJK title at exact byte boundary should be valid, got: %v", err)
+		t.Errorf("a CJK title of %d characters (%d bytes) is the documented maximum and must be valid, got: %v",
+			models.MaxTaskTitle, len(task.Title), err)
+	}
+
+	task.Title = strings.Repeat("中", models.MaxTaskTitle+1)
+	if err := task.Validate(); err == nil {
+		t.Errorf("a CJK title of %d characters is one over the maximum and must be refused, got nil",
+			models.MaxTaskTitle+1)
 	}
 }
 
@@ -606,8 +618,8 @@ func TestHandleTask_Create_Title_ExactMaxLength(t *testing.T) {
 			"create",
 			"-r", roadmap,
 			"-t", exactTitle,
-			"-fr", "Title at exact maximum byte boundary must be accepted",
-			"-tr", "String length validation uses byte count consistent with len() in Go",
+			"-fr", "Title at the exact maximum length must be accepted",
+			"-tr", "Length validation counts Unicode code points, matching CHECK(length(title) <= 255)",
 			"-ac", "Task is created and title stored verbatim",
 		}); err != nil {
 			t.Errorf("taskCreate with exact-max title error = %v", err)
@@ -619,7 +631,7 @@ func TestHandleTask_Create_Title_ExactMaxLength(t *testing.T) {
 		t.Fatalf("GetTask for exact-max-length title: %v", err)
 	}
 	if len(task.Title) != models.MaxTaskTitle {
-		t.Errorf("stored title byte length = %d, want %d", len(task.Title), models.MaxTaskTitle)
+		t.Errorf("stored title length = %d characters, want %d", utils.FieldLength(task.Title), models.MaxTaskTitle)
 	}
 }
 
@@ -632,12 +644,12 @@ func TestHandleTask_Create_Title_OneBeyondMaxLength(t *testing.T) {
 		"create",
 		"-r", roadmap,
 		"-t", overTitle,
-		"-fr", "Title one byte over maximum must be rejected",
+		"-fr", "Title one character over the maximum must be rejected",
 		"-tr", "Validation rejects the payload before reaching the database",
 		"-ac", "Error returned and no task row inserted",
 	})
 	if err == nil {
-		t.Errorf("title of %d bytes (max+1) should be rejected, got nil", models.MaxTaskTitle+1)
+		t.Errorf("title of %d characters (max+1) should be rejected, got nil", models.MaxTaskTitle+1)
 	}
 }
 
@@ -647,7 +659,9 @@ func TestHandleTask_Create_Unicode_CJKTitle_RoundTrip(t *testing.T) {
 	const roadmap = "boundary-unicode-cjk"
 	database, cleanup := setupTestTaskRoadmap(t, roadmap)
 	defer cleanup()
-	// 50 CJK characters = 150 UTF-8 bytes — well within 255-byte limit.
+	// 50 CJK characters, well within the 255-CHARACTER title cap. Their 150 UTF-8
+	// bytes are irrelevant to the cap; the boundary itself is exercised by
+	// TestATitleOf255CJKCharactersIsAcceptedAndOneOf256IsRefused.
 	unicodeTitle := strings.Repeat("実装", 25)
 	unicodeFR := "実装チームによる認証サービスのデプロイメント要件"
 	out := captureOutput(t, func() {
@@ -777,7 +791,7 @@ func TestHandleTask_Create_LongFunctionalRequirements_OneBeyondMax(t *testing.T)
 		"-ac", "Error returned and no task row inserted",
 	})
 	if err == nil {
-		t.Errorf("FR of %d bytes (max+1) should be rejected, got nil",
+		t.Errorf("FR of %d characters (max+1) should be rejected, got nil",
 			models.MaxTaskFunctionalRequirements+1)
 	}
 }

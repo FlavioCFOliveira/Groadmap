@@ -178,8 +178,16 @@ func taskEdit(args []string) error {
 	// Constraint, Rule 2). It used to measure the map entry, which was already
 	// trimmed, so what it counts is unchanged.
 	for _, f := range taskEditTextFields {
-		if str, ok := updates[f.column].(string); ok && len(strings.TrimSpace(str)) > f.limit {
-			return utils.FieldTooLargeError(f.field, f.limit)
+		str, ok := updates[f.column].(string)
+		if !ok {
+			continue
+		}
+		// CHARACTERS, through the one helper that owns the unit. This sweep
+		// counted bytes until rmp task 296, so `task edit -t` refused a title of
+		// 102 CJK characters for exceeding "255 characters" while the identical
+		// value was accepted as a comment body.
+		if err := utils.CheckFieldLength(strings.TrimSpace(str), f.field, f.limit); err != nil {
+			return err
 		}
 	}
 

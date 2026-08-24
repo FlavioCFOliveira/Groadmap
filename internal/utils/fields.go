@@ -3,6 +3,7 @@ package utils
 import (
 	"fmt"
 	"strconv"
+	"unicode/utf8"
 )
 
 // Field identifies one of Groadmap's eight free-text fields.
@@ -134,10 +135,74 @@ func ControlCharError(field Field) error {
 
 // FieldTooLargeError is the refusal of a value longer than the field's maximum,
 // carrying ErrFieldTooLarge (exit code 6). limit is the maximum the field
-// accepts, in whatever unit the field's own SPEC entry counts — bytes for the
-// task and sprint fields, characters for a comment body.
+// accepts, counted in the one unit every one of the eight fields is measured in:
+// Unicode code points. See FieldLength, which is what measures it, and
+// CheckFieldLength, which is what every cap in the application calls.
+//
+// The message says "characters" and it is answerable for the word. It used to
+// name characters while the task and sprint caps counted BYTES, so a title of
+// 102 CJK characters — 306 bytes — was refused for exceeding "255 characters".
+// The wording did not change when that was fixed; what changed is that it became
+// true (rmp task 296).
 func FieldTooLargeError(field Field, limit int) error {
 	return fmt.Errorf("%w: %s exceeds maximum length of %d characters", ErrFieldTooLarge, field, limit)
+}
+
+// FieldLength returns the length of a free-text value in the unit Groadmap
+// measures every one of its eight free-text fields in: Unicode code points.
+//
+// # Why code points, and why one function
+//
+// SPEC/MODELS.md states each cap as a number of CHARACTERS, and the database
+// backs each one with CHECK(length(<column>) <= <n>), where SQLite's length()
+// counts characters on a TEXT value. Code points are the reading that makes the
+// application, the specification and the schema say the same thing, and a value
+// the application accepts can therefore never trip the CHECK.
+//
+// It is one exported function rather than a call to utf8.RuneCountInString at
+// each cap because the defect it closes was not a wrong count in one place — it
+// was TWO UNITS in one codebase. The comment body counted code points while the
+// seven task and sprint caps counted bytes with len(), so a body of 4096 CJK
+// characters was accepted at its documented maximum while a title of 102 CJK
+// characters was refused for exceeding one of 255. A single definition is what
+// makes that divergence impossible to reintroduce a field at a time;
+// internal/utils/field_length_unit_test.go is the gate that keeps every cap
+// routed through it.
+//
+// # Code points, deliberately not graphemes
+//
+// A code point count is NOT a grapheme count and is not meant to be. "é" written
+// as U+0065 U+0301 (e + COMBINING ACUTE ACCENT) counts 2 here and 2 in SQLite,
+// while the precomposed U+00E9 counts 1 in both. Groadmap does not normalise
+// free text — it stores exactly the bytes the caller supplied (SPEC/MODELS.md
+// § Free-Text UTF-8 Encoding Constraint) — so counting graphemes would make the
+// application disagree with the CHECK constraint that guards the same column,
+// which is the very disagreement this unit exists to remove.
+//
+// The value is expected to be valid UTF-8, which the encoding rule guarantees
+// for anything that reaches storage (SPEC/MODELS.md § Free-Text UTF-8 Encoding
+// Constraint). The count is still well defined without that guarantee: each byte
+// that decodes to no valid rune counts as one, which is never fewer than the
+// non-continuation bytes SQLite's length() would count, so the cap stays at
+// least as strict as the schema on any input at all.
+func FieldLength(value string) int {
+	return utf8.RuneCountInString(value)
+}
+
+// CheckFieldLength returns the FieldTooLargeError refusal when value is longer
+// than limit code points, and nil otherwise. It is the whole of a length cap:
+// every cap on a task, sprint or comment free-text field is this call and
+// nothing else, so no cap can measure in a unit of its own.
+//
+// value must be the string that is STORED, not the string as supplied. Where a
+// field is trimmed before storage the trimmed value is what the column holds and
+// therefore what the cap must measure (SPEC/MODELS.md § Free-Text Emptiness and
+// Trimming Constraint, Rule 2); every caller passes it accordingly.
+func CheckFieldLength(value string, field Field, limit int) error {
+	if FieldLength(value) > limit {
+		return FieldTooLargeError(field, limit)
+	}
+	return nil
 }
 
 // FieldEmptyError is the refusal of a value that names nothing, supplied for a

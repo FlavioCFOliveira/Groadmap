@@ -93,13 +93,16 @@ func sprintCreate(args []string) error {
 	}
 	// The cap keeps the position it has always had on this field — ahead of the
 	// content rules, which is what rmp task 302 measures and this task does not
-	// move — but it now measures strings.TrimSpace of the value, because that is
+	// move — but it measures strings.TrimSpace of the value, because that is
 	// the value stored (SPEC/MODELS.md § Free-Text Emptiness and Trimming
 	// Constraint, Rule 2). Measuring the value as supplied is what made a title
 	// of exactly 255 real characters carrying surrounding whitespace refused
 	// here and accepted by `task create`, for a value the column would have held.
-	if len(strings.TrimSpace(title)) > models.MaxSprintTitle {
-		return utils.FieldTooLargeError(utils.FieldSprintTitle, models.MaxSprintTitle)
+	//
+	// utils.CheckFieldLength counts CHARACTERS, the unit both the message and
+	// CHECK(length(title) <= 255) name; it counted bytes until rmp task 296.
+	if err := utils.CheckFieldLength(strings.TrimSpace(title), utils.FieldSprintTitle, models.MaxSprintTitle); err != nil {
+		return err
 	}
 	// The encoding rule and the control-character rule on the value AS SUPPLIED,
 	// then the trim, then the emptiness judgement on the trimmed value — the one
@@ -353,11 +356,13 @@ func sprintUpdate(args []string) error {
 	// `task edit`, so both commands answer `-t ""` identically — and, since this
 	// task, answer `-t "   "` identically too.
 	if hasTitle {
-		// The cap keeps its position ahead of the content rules and now measures
+		// The cap keeps its position ahead of the content rules and measures
 		// the trimmed value, the value stored (SPEC/MODELS.md § Free-Text
-		// Emptiness and Trimming Constraint, Rule 2).
-		if len(strings.TrimSpace(title)) > models.MaxSprintTitle {
-			return utils.FieldTooLargeError(utils.FieldSprintTitle, models.MaxSprintTitle)
+		// Emptiness and Trimming Constraint, Rule 2), in CHARACTERS — the unit
+		// utils.CheckFieldLength owns and the one this command counted in bytes
+		// until rmp task 296.
+		if err := utils.CheckFieldLength(strings.TrimSpace(title), utils.FieldSprintTitle, models.MaxSprintTitle); err != nil {
+			return err
 		}
 		// Content rules on the value AS SUPPLIED, then the trim, then the
 		// emptiness judgement on the trimmed value. `-t ""` still reaches
@@ -372,9 +377,9 @@ func sprintUpdate(args []string) error {
 	}
 
 	if hasDescription {
-		// Same sequence, same reasons, as the title above.
-		if len(strings.TrimSpace(description)) > models.MaxSprintDescription {
-			return utils.FieldTooLargeError(utils.FieldSprintDescription, models.MaxSprintDescription)
+		// Same sequence, same reasons, same unit, as the title above.
+		if err := utils.CheckFieldLength(strings.TrimSpace(description), utils.FieldSprintDescription, models.MaxSprintDescription); err != nil {
+			return err
 		}
 		description, err = utils.RequireFreeText(description, utils.FieldSprintDescription)
 		if err != nil {

@@ -105,18 +105,25 @@ type Sprint struct {
 }
 
 // Validate checks if the sprint data is valid.
+//
+// Both length caps measure CHARACTERS — Unicode code points — through
+// utils.CheckFieldLength, the one place the unit is defined, and the same unit
+// SPEC/MODELS.md § Sprint Field Constraints states and the CHECK constraint on
+// sprints.title enforces. They used to measure bytes with len() (rmp task 296).
+// The value reaching this method is the trimmed one `sprint create` stores, so
+// the cap measures what the column holds.
 func (s *Sprint) Validate() error {
 	if s.Title == "" {
 		return ErrTitleRequired
 	}
-	if len(s.Title) > MaxSprintTitle {
-		return utils.FieldTooLargeError(utils.FieldSprintTitle, MaxSprintTitle)
+	if err := utils.CheckFieldLength(s.Title, utils.FieldSprintTitle, MaxSprintTitle); err != nil {
+		return err
 	}
 	if s.Description == "" {
 		return ErrDescriptionRequired
 	}
-	if len(s.Description) > MaxSprintDescription {
-		return utils.FieldTooLargeError(utils.FieldSprintDescription, MaxSprintDescription)
+	if err := utils.CheckFieldLength(s.Description, utils.FieldSprintDescription, MaxSprintDescription); err != nil {
+		return err
 	}
 	if !IsValidSprintStatus(string(s.Status)) {
 		return fmt.Errorf("invalid status: %q: %w", s.Status, ErrInvalidSprintStatus)

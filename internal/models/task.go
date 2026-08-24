@@ -278,30 +278,37 @@ type Task struct {
 }
 
 // Validate checks if the task data is valid.
+//
+// Every length cap below measures CHARACTERS — Unicode code points — through
+// utils.CheckFieldLength, which is the one place the unit is defined. These caps
+// used to measure bytes with len(), which refused a title of 102 CJK characters
+// for exceeding "255 characters" (rmp task 296). The value reaching this method
+// is the trimmed one every writer stores, so the cap measures what the column
+// holds.
 func (t *Task) Validate() error {
 	if t.Title == "" {
 		return ErrTitleRequired
 	}
-	if len(t.Title) > MaxTaskTitle {
-		return utils.FieldTooLargeError(utils.FieldTaskTitle, MaxTaskTitle)
+	if err := utils.CheckFieldLength(t.Title, utils.FieldTaskTitle, MaxTaskTitle); err != nil {
+		return err
 	}
 	if t.FunctionalRequirements == "" {
 		return ErrFuncReqRequired
 	}
-	if len(t.FunctionalRequirements) > MaxTaskFunctionalRequirements {
-		return utils.FieldTooLargeError(utils.FieldTaskFunctionalRequirements, MaxTaskFunctionalRequirements)
+	if err := utils.CheckFieldLength(t.FunctionalRequirements, utils.FieldTaskFunctionalRequirements, MaxTaskFunctionalRequirements); err != nil {
+		return err
 	}
 	if t.TechnicalRequirements == "" {
 		return ErrTechReqRequired
 	}
-	if len(t.TechnicalRequirements) > MaxTaskTechnicalRequirements {
-		return utils.FieldTooLargeError(utils.FieldTaskTechnicalRequirements, MaxTaskTechnicalRequirements)
+	if err := utils.CheckFieldLength(t.TechnicalRequirements, utils.FieldTaskTechnicalRequirements, MaxTaskTechnicalRequirements); err != nil {
+		return err
 	}
 	if t.AcceptanceCriteria == "" {
 		return ErrAcceptanceCriteriaReq
 	}
-	if len(t.AcceptanceCriteria) > MaxTaskAcceptanceCriteria {
-		return utils.FieldTooLargeError(utils.FieldTaskAcceptanceCriteria, MaxTaskAcceptanceCriteria)
+	if err := utils.CheckFieldLength(t.AcceptanceCriteria, utils.FieldTaskAcceptanceCriteria, MaxTaskAcceptanceCriteria); err != nil {
+		return err
 	}
 	if t.Priority < 0 || t.Priority > 9 {
 		// Chain utils.ErrValidation so this maps to exit 6 (invalid data) per
@@ -472,18 +479,29 @@ func (u *TaskUpdate) HasChanges() bool {
 }
 
 // Validate checks if the update values are valid.
+//
+// The length caps measure CHARACTERS through utils.CheckFieldLength, the same
+// unit and the same helper Task.Validate uses, and they are applied in the order
+// SPEC/COMMANDS.md declares the fields — title, functional, technical,
+// acceptance — so an update that breaks the cap on two fields always names the
+// same one.
 func (u *TaskUpdate) Validate() error {
-	if u.Title != nil && len(*u.Title) > MaxTaskTitle {
-		return utils.FieldTooLargeError(utils.FieldTaskTitle, MaxTaskTitle)
-	}
-	if u.FunctionalRequirements != nil && len(*u.FunctionalRequirements) > MaxTaskFunctionalRequirements {
-		return utils.FieldTooLargeError(utils.FieldTaskFunctionalRequirements, MaxTaskFunctionalRequirements)
-	}
-	if u.TechnicalRequirements != nil && len(*u.TechnicalRequirements) > MaxTaskTechnicalRequirements {
-		return utils.FieldTooLargeError(utils.FieldTaskTechnicalRequirements, MaxTaskTechnicalRequirements)
-	}
-	if u.AcceptanceCriteria != nil && len(*u.AcceptanceCriteria) > MaxTaskAcceptanceCriteria {
-		return utils.FieldTooLargeError(utils.FieldTaskAcceptanceCriteria, MaxTaskAcceptanceCriteria)
+	for _, f := range []struct {
+		value *string
+		field utils.Field
+		limit int
+	}{
+		{u.Title, utils.FieldTaskTitle, MaxTaskTitle},
+		{u.FunctionalRequirements, utils.FieldTaskFunctionalRequirements, MaxTaskFunctionalRequirements},
+		{u.TechnicalRequirements, utils.FieldTaskTechnicalRequirements, MaxTaskTechnicalRequirements},
+		{u.AcceptanceCriteria, utils.FieldTaskAcceptanceCriteria, MaxTaskAcceptanceCriteria},
+	} {
+		if f.value == nil {
+			continue
+		}
+		if err := utils.CheckFieldLength(*f.value, f.field, f.limit); err != nil {
+			return err
+		}
 	}
 	if u.Priority != nil && (*u.Priority < 0 || *u.Priority > 9) {
 		return fmt.Errorf("%w: %w, got %d", utils.ErrValidation, ErrPriorityOutOfRange, *u.Priority)

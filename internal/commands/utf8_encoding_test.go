@@ -106,7 +106,7 @@ func TestEncodingIsReportedBeforeControlCharacters(t *testing.T) {
 			for _, c := range testenv.MalformedUTF8Corpus() {
 				t.Run(tc.field.String()+"/"+w.command+"/"+c.Name, func(t *testing.T) {
 					// Malformed AND carrying an ESC, the control-character probe
-					// the published-name gate uses. Short enough for the 255-byte
+					// the published-name gate uses. Short enough for the 255-character
 					// title cap, so the length rule cannot answer instead.
 					err := w.invoke(c.Value + " " + controlCharProbe)
 					if err == nil {
@@ -198,7 +198,7 @@ func TestWellFormedTextPassesTheContentRules(t *testing.T) {
 	const roadmap = "utf8-encoding-accepts"
 	_, taskCommentID, sprintCommentID := setupPublishedNameRoadmap(t, roadmap)
 
-	// Short enough for the 255-byte task and sprint title cap, which is the
+	// Short enough for the 255-character task and sprint title cap, which is the
 	// tightest of the eight, so one value can drive every writer.
 	const value = "Reconciliação: medição 監査 \U0001F680"
 

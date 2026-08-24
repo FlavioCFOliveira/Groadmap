@@ -264,8 +264,14 @@ func ValidateCommentBody(body string) (string, error) {
 
 	// Characters, not bytes: see MaxCommentBody. The cap applies to the stored
 	// form, because trimming happens before validation and before storage.
-	if utf8.RuneCountInString(stored) > MaxCommentBody {
-		return "", utils.FieldTooLargeError(utils.FieldCommentBody, MaxCommentBody)
+	//
+	// It goes through utils.CheckFieldLength, which is the single definition of
+	// that unit for all eight free-text fields. This field counted characters
+	// while the other seven counted bytes; routing it through the shared helper
+	// is what makes "characters" one unit in this codebase rather than two
+	// (rmp task 296).
+	if err := utils.CheckFieldLength(stored, utils.FieldCommentBody, MaxCommentBody); err != nil {
+		return "", err
 	}
 
 	// The encoding rule and the control-character rule, in that order and as one
