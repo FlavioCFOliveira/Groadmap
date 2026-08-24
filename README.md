@@ -160,7 +160,9 @@ rmp graph query -r myproject \
 | 4 | Not found | Roadmap/task/sprint/comment doesn't exist |
 | 5 | Already exists | Duplicate name or duplicate sprint order |
 | 6 | Invalid data | Validation failed (dates, ranges) |
+| 126 | Not executable | Filesystem permission issue prevented execution |
 | 127 | Unknown command | Unknown command or subcommand |
+| 130 | Interrupted | Interrupted by SIGINT (Ctrl+C) |
 
 ## Technical Documentation
 
