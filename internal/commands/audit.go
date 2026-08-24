@@ -169,9 +169,13 @@ func auditList(args []string) error {
 		// Its sentinel is model-level and the exit-code mapper does not know
 		// it, so wrap in utils.ErrValidation to land on exit 6 — the same shape
 		// every other enum filter uses (SPEC/COMMANDS.md § List Audit Log).
+		// The model sentinel is chained with a SECOND %w, not rendered with %s,
+		// so errors.Is can still tell WHICH enum was rejected. Both verbs render
+		// the same bytes, so only the chain distinguishes them, and %s silently
+		// discards it (task #290).
 		parsed, parseErr := models.ParseAuditOperation(op)
 		if parseErr != nil {
-			return fmt.Errorf("%w: %s", utils.ErrValidation, parseErr.Error())
+			return fmt.Errorf("%w: %w", utils.ErrValidation, parseErr)
 		}
 		normalized := string(parsed)
 		operation = &normalized
@@ -179,7 +183,7 @@ func auditList(args []string) error {
 	if et, ok := result.Flags["EntityType"].(string); ok {
 		parsed, parseErr := models.ParseEntityType(et)
 		if parseErr != nil {
-			return fmt.Errorf("%w: %s", utils.ErrValidation, parseErr.Error())
+			return fmt.Errorf("%w: %w", utils.ErrValidation, parseErr)
 		}
 		normalized := string(parsed)
 		entityType = &normalized
@@ -254,7 +258,7 @@ func auditHistory(args []string) error {
 	// `-e` flag of `audit list` refuse a bad value in exactly the same words.
 	parsedEntityType, parseErr := models.ParseEntityType(remaining[0])
 	if parseErr != nil {
-		return fmt.Errorf("%w: %s", utils.ErrValidation, parseErr.Error())
+		return fmt.Errorf("%w: %w", utils.ErrValidation, parseErr)
 	}
 	entityType := string(parsedEntityType)
 

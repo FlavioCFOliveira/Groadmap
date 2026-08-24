@@ -294,7 +294,12 @@ Examples:
 func openGraphStore(roadmapName string) (graphDir string, err error) {
 	roadmapDir, valErr := utils.GetRoadmapDir(roadmapName)
 	if valErr != nil {
-		return "", fmt.Errorf("%w: %v", utils.ErrValidation, valErr)
+		// Chained with a second %w, not rendered with %v: GetRoadmapDir names
+		// WHICH rule the name broke (reserved, too long, bad characters), and
+		// %v would flatten that sentinel away while rendering identical bytes.
+		// utils.ErrValidation is restated here because this function is also
+		// reached from paths that do not carry it (task #290).
+		return "", fmt.Errorf("%w: %w", utils.ErrValidation, valErr)
 	}
 
 	dbPath := filepath.Join(roadmapDir, utils.DBFileName)

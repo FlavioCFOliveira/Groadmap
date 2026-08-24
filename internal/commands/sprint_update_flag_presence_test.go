@@ -74,22 +74,29 @@ const (
 // exitCodeFor mirrors the sentinel switch of cmd/rmp/main.go's handleError, so a
 // change to the sentinels these errors chain shows up here as a failure instead
 // of silently changing the exit code the user sees. The constants are repeated
-// rather than imported because they live in package main.
+// rather than imported because they live in package main; they must match the
+// block in cmd/rmp/main.go, which SPEC/ARCHITECTURE.md fixes.
+//
+// The ErrUnknownCommand case is listed first because handleError lists it
+// first: it must never be shadowed by a broader class.
 func exitCodeFor(err error) int {
 	const (
 		exitSuccess     = 0
 		exitFailure     = 1
 		exitMisuse      = 2
-		exitNotFound    = 3
+		exitNoRoadmap   = 3
+		exitNotFound    = 4
 		exitExists      = 5
 		exitInvalidData = 6
-		exitNoRoadmap   = 7
+		exitCmdNotFound = 127
 	)
 
 	if err == nil {
 		return exitSuccess
 	}
 	switch {
+	case errors.Is(err, utils.ErrUnknownCommand):
+		return exitCmdNotFound
 	case errors.Is(err, utils.ErrNotFound):
 		return exitNotFound
 	case errors.Is(err, utils.ErrAlreadyExists):

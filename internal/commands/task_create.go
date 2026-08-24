@@ -66,7 +66,7 @@ func taskCreate(args []string) error {
 	if typeStr, ok := result.Flags["Type"].(string); ok && typeStr != "" {
 		parsed, parseErr := models.ParseTaskType(typeStr)
 		if parseErr != nil {
-			return fmt.Errorf("%w: %s", utils.ErrValidation, parseErr.Error())
+			return fmt.Errorf("%w: %w", utils.ErrValidation, parseErr)
 		}
 		taskType = parsed
 	}

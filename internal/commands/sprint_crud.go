@@ -49,7 +49,11 @@ func sprintList(args []string) error {
 			// model-level sentinel the exit-code mapper does not recognise, so
 			// wrap it in utils.ErrValidation to land on exit 6, matching every
 			// other enum filter and SPEC/COMMANDS.md.
-			return fmt.Errorf("%w: %s", utils.ErrValidation, parseErr.Error())
+			// The model sentinel is chained with a SECOND %w, not rendered with
+			// %s, so errors.Is can still tell WHICH enum was rejected. Both verbs
+			// render the same bytes, so only the chain distinguishes them, and
+			// %s silently discards it (task #290).
+			return fmt.Errorf("%w: %w", utils.ErrValidation, parseErr)
 		}
 		status = &s
 	}

@@ -153,7 +153,7 @@ func taskEdit(args []string) error {
 	if typeStr, ok := result.Flags["Type"].(string); ok {
 		parsed, parseErr := models.ParseTaskType(typeStr)
 		if parseErr != nil {
-			return fmt.Errorf("%w: %s", utils.ErrValidation, parseErr.Error())
+			return fmt.Errorf("%w: %w", utils.ErrValidation, parseErr)
 		}
 		updates["type"] = string(parsed)
 	}

@@ -124,7 +124,7 @@ func backlogList(args []string) error {
 	if typeStr, ok := result.Flags["Type"].(string); ok {
 		tt, parseErr := models.ParseTaskType(typeStr)
 		if parseErr != nil {
-			return fmt.Errorf("%w: %s", utils.ErrValidation, parseErr.Error())
+			return fmt.Errorf("%w: %w", utils.ErrValidation, parseErr)
 		}
 		filter.TaskType = &tt
 	}

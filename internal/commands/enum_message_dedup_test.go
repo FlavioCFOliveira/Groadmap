@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
@@ -54,6 +55,11 @@ type enumRejection struct {
 	wantMsg string
 	// wantPhrase is the enum-naming clause that must appear exactly once.
 	wantPhrase string
+	// wantSentinel is the enum-specific sentinel that models.Parse* raised.
+	// It must stay reachable through the command's wrap, so that a caller can
+	// DISCRIMINATE which enum was rejected rather than merely classify the
+	// failure as invalid input. See TestEnumRejectionsCarrySpecificSentinel.
+	wantSentinel error
 }
 
 // enumRejectionCases is every command path that refuses an enum value.
@@ -71,40 +77,45 @@ func enumRejectionCases() []enumRejection {
 					"-y", "BOGUS",
 				})
 			},
-			wantMsg:    `validation error: invalid task type: "BOGUS"`,
-			wantPhrase: "invalid task type",
+			wantMsg:      `validation error: invalid task type: "BOGUS"`,
+			wantPhrase:   "invalid task type",
+			wantSentinel: models.ErrInvalidTaskType,
 		},
 		{
 			name: "task list --type",
 			run: func(r string) error {
 				return HandleTask([]string{"list", "-r", r, "--type", "BOGUS"})
 			},
-			wantMsg:    `validation error: invalid task type: "BOGUS"`,
-			wantPhrase: "invalid task type",
+			wantMsg:      `validation error: invalid task type: "BOGUS"`,
+			wantPhrase:   "invalid task type",
+			wantSentinel: models.ErrInvalidTaskType,
 		},
 		{
 			name: "task edit --type",
 			run: func(r string) error {
 				return HandleTask([]string{"edit", "-r", r, "1", "-y", "BOGUS"})
 			},
-			wantMsg:    `validation error: invalid task type: "BOGUS"`,
-			wantPhrase: "invalid task type",
+			wantMsg:      `validation error: invalid task type: "BOGUS"`,
+			wantPhrase:   "invalid task type",
+			wantSentinel: models.ErrInvalidTaskType,
 		},
 		{
 			name: "backlog list --type",
 			run: func(r string) error {
 				return backlogList([]string{"-r", r, "--type", "BOGUS"})
 			},
-			wantMsg:    `validation error: invalid task type: "BOGUS"`,
-			wantPhrase: "invalid task type",
+			wantMsg:      `validation error: invalid task type: "BOGUS"`,
+			wantPhrase:   "invalid task type",
+			wantSentinel: models.ErrInvalidTaskType,
 		},
 		{
 			name: "task list --status",
 			run: func(r string) error {
 				return HandleTask([]string{"list", "-r", r, "--status", "BOGUS"})
 			},
-			wantMsg:    `validation error: invalid task status: "BOGUS"`,
-			wantPhrase: "invalid task status",
+			wantMsg:      `validation error: invalid task status: "BOGUS"`,
+			wantPhrase:   "invalid task status",
+			wantSentinel: models.ErrInvalidTaskStatus,
 		},
 		{
 			// A different call site from `task list --status`: the status
@@ -114,32 +125,49 @@ func enumRejectionCases() []enumRejection {
 			run: func(r string) error {
 				return HandleTask([]string{"stat", "-r", r, "1", "NOPE"})
 			},
-			wantMsg:    `validation error: invalid task status: "NOPE"`,
-			wantPhrase: "invalid task status",
+			wantMsg:      `validation error: invalid task status: "NOPE"`,
+			wantPhrase:   "invalid task status",
+			wantSentinel: models.ErrInvalidTaskStatus,
+		},
+		{
+			// A third --status surface, distinct from `task list --status` and
+			// from `task stat`: it belongs to a sprint subcommand and parses
+			// the flag after a positional sprint id. The sweep for task #290
+			// found it wrapping with %s like the rest, so it is pinned here.
+			name: "sprint tasks <id> --status",
+			run: func(r string) error {
+				return HandleSprint([]string{"tasks", "-r", r, "1", "--status", "BOGUS"})
+			},
+			wantMsg:      `validation error: invalid task status: "BOGUS"`,
+			wantPhrase:   "invalid task status",
+			wantSentinel: models.ErrInvalidTaskStatus,
 		},
 		{
 			name: "sprint list --status",
 			run: func(r string) error {
 				return HandleSprint([]string{"list", "-r", r, "--status", "BOGUS"})
 			},
-			wantMsg:    `validation error: invalid sprint status: "BOGUS"`,
-			wantPhrase: "invalid sprint status",
+			wantMsg:      `validation error: invalid sprint status: "BOGUS"`,
+			wantPhrase:   "invalid sprint status",
+			wantSentinel: models.ErrInvalidSprintStatus,
 		},
 		{
 			name: "audit list --entity-type",
 			run: func(r string) error {
 				return HandleAudit([]string{"list", "-r", r, "-e", "BOGUS"})
 			},
-			wantMsg:    `validation error: invalid entity type: "BOGUS"`,
-			wantPhrase: "invalid entity type",
+			wantMsg:      `validation error: invalid entity type: "BOGUS"`,
+			wantPhrase:   "invalid entity type",
+			wantSentinel: models.ErrInvalidEntityType,
 		},
 		{
 			name: "audit list --operation",
 			run: func(r string) error {
 				return HandleAudit([]string{"list", "-r", r, "-o", "BOGUS"})
 			},
-			wantMsg:    `validation error: invalid audit operation: "BOGUS"`,
-			wantPhrase: "invalid audit operation",
+			wantMsg:      `validation error: invalid audit operation: "BOGUS"`,
+			wantPhrase:   "invalid audit operation",
+			wantSentinel: models.ErrInvalidAuditOperation,
 		},
 		{
 			// The second audit surface: a positional, not a flag. It shares the
@@ -150,8 +178,9 @@ func enumRejectionCases() []enumRejection {
 			run: func(r string) error {
 				return HandleAudit([]string{"history", "-r", r, "BOGUS", "1"})
 			},
-			wantMsg:    `validation error: invalid entity type: "BOGUS"`,
-			wantPhrase: "invalid entity type",
+			wantMsg:      `validation error: invalid entity type: "BOGUS"`,
+			wantPhrase:   "invalid entity type",
+			wantSentinel: models.ErrInvalidEntityType,
 		},
 	}
 }
