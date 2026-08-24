@@ -540,11 +540,17 @@ func TestOutputValidation_SprintShow_JSONStructure(t *testing.T) {
 		taskIDs[i] = extractIntID(t, out)
 	}
 
+	// The task ids are supplied as ONE comma-separated token, which is the
+	// only form the contract publishes: `sprint add-tasks` declares two
+	// positional arguments, <sprint-id> and <task-ids>, and a list of ids is
+	// a single token without spaces (SPEC/COMMANDS.md § Positional
+	// Arguments, rule 4). Written as separate tokens the invocation supplies
+	// three positional arguments against a declared maximum of two and is
+	// refused with exit code 2.
 	if err := HandleSprint([]string{
 		"add-tasks", "-r", roadmap,
 		strconv.Itoa(sprintID),
-		strconv.Itoa(taskIDs[0]),
-		strconv.Itoa(taskIDs[1]),
+		fmt.Sprintf("%d,%d", taskIDs[0], taskIDs[1]),
 	}); err != nil {
 		t.Fatalf("add-tasks error = %v", err)
 	}

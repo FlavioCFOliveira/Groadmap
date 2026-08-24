@@ -5,6 +5,7 @@
 - [Naming Conventions](#naming-conventions)
 - [Command Structure](#command-structure)
 - [Error Handling](#error-handling)
+- [Positional Arguments](#positional-arguments)
 - [Field Validation](#field-validation)
 - [Global Commands](#global-commands)
 - [AI Agent Contract](#ai-agent-contract)
@@ -97,6 +98,131 @@ A dispatch failure is the **only** error class after which help is written. Ever
 
 ---
 
+## Positional Arguments
+
+A **positional argument** is a command-line token that is neither a flag nor the value of a flag. `rmp` reads positional arguments once the command and the subcommand names have been resolved, and each command uses them for the values its own block below names: an id, a comma-separated list of ids, a status, a roadmap name, a count.
+
+This section is canonical for how many positional arguments each command accepts and for what happens when an invocation supplies more than that. It states the rule once, for the whole CLI. A command's own block may point back here, and its error table may carry the refusal alongside that command's other errors so the table stays a complete list, but no block states a rule of its own. Where a command's wording differs from the canonical line, this section names the command below.
+
+### Declared Arity
+
+Every command declares the **maximum number of positional arguments it accepts**. The declaration lives with that command's flag definitions, so the whole of a command's argument surface — its flags and its positional arity — is declared in one place, and every consumer of that surface reads the arity from the same declaration, including the machine-readable contract `rmp --ai-help` publishes (`DATA_FORMATS.md § AI Agent Contract`, key `positional_arguments`).
+
+A **single shared enforcement point** compares the positional arguments an invocation supplied against the declaration of the command being invoked. The rule is not a helper that each command calls: a check every call site must remember to perform is a check some call site will not perform, and an invocation that slips past such a check is accepted while a token the user meant to matter is silently discarded. Enforcement is therefore reached by every command by construction, from the declaration alone. A command that takes no positional argument declares a maximum of zero and is enforced identically.
+
+**Six global forms are enforced separately from that point.** `rmp help`, `rmp --help`, `rmp -h`, `rmp version`, `rmp --version`, and `rmp -v` describe the binary itself rather than any one command family. They are not entries in the command registry, and they are resolved before command lookup runs, so they exit before the shared enforcement point is ever reached. The reader must not conclude from the paragraph above that the shared point covers them: it does not, and it cannot, because nothing has been looked up when these six are answered. They obey the same contract all the same. Each of the six declares a maximum of zero positional arguments, and each refuses an excess positional argument with exit code `2` and the error line rule 1 below publishes, writing neither a help body nor a version line to stdout. This is the one place in the CLI where the rule is enforced at two points instead of one; the resolution order forces the duplication, and the two points must produce the same exit code and the same error line.
+
+The rules are:
+
+1. **An invocation that supplies more positional arguments than the command declares is refused.** The exit code is `2` (`EXIT_MISUSE`, `utils.ErrInvalidInput`) and the error line is `Error: invalid input: unexpected argument "X"`, where `X` is the offending token, echoed as the user supplied it.
+2. **The first offending token is named, and only that one.** When several positional arguments exceed the maximum, the command names the first of them in command-line order and stops.
+3. **The position of the offending token does not matter.** What is refused is whatever positional arguments remain once the command's flags and their values have been consumed, not a particular slot on the command line. An extra token written between two flags and one written at the end of the line are the same error.
+4. **A comma-separated list is one positional argument.** Every command that takes a list of ids takes it as a single token, without spaces. `rmp task get -r <name> 12,13,14` supplies one positional argument and is within an arity of one; `rmp task get -r <name> 12 13 14` supplies three and is refused.
+5. **A token that begins with `-` is normally a flag, not a positional argument.** An unrecognised one is refused as an unknown flag — `Error: invalid input: unknown flag: --foo` — under the same exit code `2`. Two families refine that classification and each states its own rule: the comment subcommands treat every `-`-prefixed token as a flag, digits included (`Comment Positional Argument Contract` below, rule 2), while the `graph` subcommands treat a `-` followed by a digit or a decimal point as a numeric value rather than a flag (`GRAPH.md § Cypher Input Source and Precedence`, rule 4). A stray `-1` is therefore an excess positional argument on a `graph` subcommand and an unknown flag on a comment subcommand.
+6. **The refusal precedes every side effect.** It happens while the arguments are parsed: before the roadmap database is opened, before the graph store is opened, and before standard input is read. A refused invocation therefore creates nothing, changes nothing, deletes nothing, writes no audit entry, and writes zero bytes to stdout. It is refused even when it also carries a value that would fail validation on its own with exit code `6`, and even when it names a roadmap, task, sprint, or comment that does not exist, which on its own would be exit code `4`.
+7. **No help follows the refusal.** An excess positional argument is not a dispatch failure, so stderr carries the error line and the AI-agent hint alone (`HELP.md § Error message format`).
+8. **The rule governs the maximum only.** A required positional argument that is absent is refused by the command's own contract, with the message that command's block publishes.
+
+An unresolved command or subcommand name is resolved before any of this and stays a dispatch failure: `rmp task nadadisto 1 2 3` exits `127` with the `task` family help, not `2`, because the name never resolved to a command whose arity could be checked (`§ Dispatch Failures (Unresolved Command or Subcommand Names)`).
+
+**Commands that publish a different line.** Three commands already refused an excess positional argument before this rule was stated, and each keeps the wording it publishes. Two of them are published here:
+
+| Command | Error line |
+|---------|-----------|
+| `rmp graph <subcommand>` | `Error: invalid input: unexpected argument "X" (graph queries use --query or stdin)` |
+| `rmp ai-help` | `Error: ai-help accepts no positional arguments or flags other than --help` |
+
+The `graph` line is the canonical line with a hint appended naming the two sources a Cypher query may come from; the exit code and the rest of the line are unchanged. The `ai-help` line carries no sentinel and covers an unrecognised flag as well as a positional argument; `§ AI Help` is canonical for it. The third is `rmp web`, whose line writes the offending token after a colon and without quotes; `§ Web Interface` publishes it, in that command's own error table.
+
+### Positional Arity by Command
+
+The table publishes the declared maximum for every command in the CLI. It is canonical for the count. Each command's own block below is canonical for what its arguments mean, which of them are required, and how each value is validated; a name in square brackets marks an optional argument.
+
+| Command | Max | Positional arguments |
+|---------|-----|----------------------|
+| `rmp` with no arguments, `rmp help`, `rmp --help`, `rmp -h` | 0 | - |
+| `rmp version`, `rmp --version`, `rmp -v` | 0 | - |
+| `rmp --ai-help`, `rmp ai-help` | 0 | - |
+| `roadmap list` | 0 | - |
+| `roadmap create` | 1 | `<name>` |
+| `roadmap remove` | 1 | `<name>` |
+| `task list` | 0 | - |
+| `task create` | 0 | - |
+| `task get` | 1 | `<ids>` |
+| `task next` | 1 | `[num]` |
+| `task edit` | 1 | `<id>` |
+| `task remove` | 1 | `<ids>` |
+| `task stat` | 2 | `<ids> <new-status>` |
+| `task prio` | 2 | `<ids> <priority>` |
+| `task sev` | 2 | `<ids> <severity>` |
+| `task reopen` | 1 | `<ids>` |
+| `task subtasks` | 1 | `<id>` |
+| `task add-dep` | 2 | `<task-id> <blocker-id>` |
+| `task remove-dep` | 2 | `<task-id> <blocker-id>` |
+| `task blockers` | 1 | `<id>` |
+| `task blocking` | 1 | `<id>` |
+| `task comment-add` | 1 | `<task-id>` |
+| `task comment-list` | 1 | `<task-id>` |
+| `task comment-edit` | 1 | `<comment-id>` |
+| `task comment-remove` | 1 | `<comment-id>` |
+| `sprint list` | 0 | - |
+| `sprint create` | 0 | - |
+| `sprint get` | 1 | `<id>` |
+| `sprint show` | 1 | `<id>` |
+| `sprint tasks` | 1 | `<id>` |
+| `sprint open-tasks` | 1 | `<id>` |
+| `sprint stats` | 1 | `<id>` |
+| `sprint start` | 1 | `<id>` |
+| `sprint close` | 1 | `<id>` |
+| `sprint reopen` | 1 | `<id>` |
+| `sprint update` | 1 | `<id>` |
+| `sprint remove` | 1 | `<id>` |
+| `sprint add-tasks` | 2 | `<sprint-id> <task-ids>` |
+| `sprint remove-tasks` | 2 | `<sprint-id> <task-ids>` |
+| `sprint move-tasks` | 3 | `<from-id> <to-id> <task-ids>` |
+| `sprint reorder` | 2 | `<sprint-id> <task-ids>` |
+| `sprint move-to` | 3 | `<sprint-id> <task-id> <position>` |
+| `sprint swap` | 3 | `<sprint-id> <task-id-1> <task-id-2>` |
+| `sprint top` | 2 | `<sprint-id> <task-id>` |
+| `sprint bottom` | 2 | `<sprint-id> <task-id>` |
+| `sprint comment-add` | 1 | `<sprint-id>` |
+| `sprint comment-list` | 1 | `<sprint-id>` |
+| `sprint comment-edit` | 1 | `<comment-id>` |
+| `sprint comment-remove` | 1 | `<comment-id>` |
+| `audit list` | 0 | - |
+| `audit history` | 2 | `<entity-type> <entity-id>` |
+| `audit stats` | 0 | - |
+| `backlog list` | 0 | - |
+| `backlog show-next` | 1 | `[count]` |
+| `stats` | 0 | - |
+| `graph create` | 0 | - |
+| `graph query` | 0 | - |
+| `graph update` | 0 | - |
+| `graph delete` | 0 | - |
+| `graph search` | 0 | - |
+| `web` | 0 | - |
+
+Three consequences of the table are worth stating, because each is a case a reader may expect to behave differently:
+
+- **A maximum of zero is a contract, not an absence of one.** Every listing, statistics, and creation command that takes all of its input through flags accepts no positional argument at all, and refuses the first one it is given. `stats` and the five `graph` subcommands are in this class: their whole input is `-r` and, for `graph`, `--query` or standard input.
+- **The graph subcommands take no positional query.** A Cypher query reaches them through `--query` or through standard input and never as a positional argument, so a bare query on the command line is an excess positional argument and is refused (`GRAPH.md § Cypher Input Source and Precedence`).
+- **An arity above one is real and is not a licence for more.** `sprint move-tasks`, `sprint move-to`, and `sprint swap` each take three positional arguments; `task stat`, `task prio`, and `task sev` each take two. The rule refuses what exceeds a command's own maximum, never everything after the first argument.
+
+### Acceptance Criteria
+
+1. `rmp roadmap create alpha-service beta-service` exits `2`, writes `Error: invalid input: unexpected argument "beta-service"` to stderr, and writes nothing to stdout. No roadmap is created: neither `alpha-service` nor `beta-service` exists afterwards, and `~/.roadmaps/` gains no directory and no database file.
+2. For every command in `§ Positional Arity by Command`, an otherwise valid invocation carrying one more positional argument than the table publishes exits `2` and writes nothing to stdout, and the same invocation carrying exactly the published maximum succeeds unchanged.
+3. Every command's declared maximum equals the number `§ Positional Arity by Command` publishes for it. A test that reads the declarations and compares them against this section fails when a command declares an arity the table does not state, and when the table names a command that declares none. The comparison covers the commands the registry holds. The six global forms named in `§ Declared Arity`, and `rmp` with no arguments, are outside the registry and are therefore outside this comparison; criterion 9 checks them at their own enforcement point.
+4. A refused invocation performs no work: the target roadmap's task, sprint, and comment rows are identical before and after, the `audit` table gains no entry, and the graph store's snapshot and write-ahead log are unchanged on disk.
+5. An invocation carrying both an excess positional argument and a value that would otherwise fail with exit code `6`, or a roadmap that would otherwise fail with exit code `4`, exits `2`.
+6. The commands that already refused an excess positional argument are unchanged: the eight comment subcommands, the five `graph` subcommands, `rmp web`, and `rmp ai-help` produce the same exit code and the same stderr line as they did before this section was written.
+7. An unresolved command or subcommand name accompanied by excess positional arguments still exits `127` and still writes its recovery help, so the arity rule never converts a dispatch failure into a misuse error.
+8. No invocation that stays within its declared arity changes in any way: its stdout, its stderr, and its exit code are what they were.
+9. Each of the six global forms refuses a trailing token. `rmp version check` and `rmp help sprint` each exit `2` and write `Error: invalid input: unexpected argument "check"` and `Error: invalid input: unexpected argument "sprint"` to stderr, and stdout stays empty: no version line and no help body. `rmp --version check`, `rmp -v check`, `rmp --help sprint`, and `rmp -h sprint` behave identically. Each of the six invoked on its own still exits `0` and still writes what it has always written.
+10. `rmp backlog show-next 5 10 -r <name>` exits `2`, writes `Error: invalid input: unexpected argument "10"` to stderr, and writes no task list to stdout, while `rmp backlog show-next 5 -r <name>` returns its five tasks unchanged.
+
+---
+
 ## Field Validation
 
 ### Task Field Constraints
@@ -165,16 +291,13 @@ Each of the eight comment subcommands takes **exactly one** positional argument,
 | `sprint comment-edit` | `<comment-id>` | The comment itself, in `sprint_comments` |
 | `sprint comment-remove` | `<comment-id>` | The comment itself, in `sprint_comments` |
 
-The rules are:
+A declared maximum of one is what `§ Positional Arity by Command` publishes for all eight, and the CLI-wide rule in `§ Positional Arguments` refuses a second positional argument with exit code 2 and the line `Error: invalid input: unexpected argument "X"`. This section is canonical for what the one id identifies on each subcommand, and for the three points on which these subcommands need a rule of their own:
 
 1. The positional id is required. An invocation that supplies none fails with exit code 2 and a message naming the id the subcommand expects, as each subcommand's own block below states.
-2. No second positional argument is accepted. Once the subcommand's own flags and their values have been consumed, any remaining positional argument fails with exit code 2 (`utils.ErrInvalidInput`) and the message `Error: invalid input: unexpected argument "X"`, where `X` is the offending token. The command neither ignores the extra token nor acts on the id that precedes it: standard input is not read, the roadmap database is not opened, no comment is added, changed, deleted, or listed, and stdout stays empty.
-3. When more than one extra positional argument is present, the command names the first of them in command-line order, and only that one, then stops.
-4. The position of the extra token does not matter. `comment-add <task-id> <extra> --type NOTE --body "text"` and `comment-add <task-id> --type NOTE --body "text" <extra>` are the same error, because the refusal is of whatever remains once the flags have been consumed, not of a specific slot on the command line.
-5. A leftover token that begins with `-` is a flag and not a positional argument, so it is reported as an unknown flag — `Error: invalid input: unknown flag: --foo` — and not as an unexpected argument. This holds for every `-`-prefixed token, digits included: on these subcommands `-1` is an unknown flag. The value of `--body` is the one exception, and it is not a leftover token at all: `--body -1` supplies the body `-1`, under rule 4 of `Comment Body Input Source and Precedence` above.
-6. The refusal happens while the arguments are parsed: after the positional id has been parsed, and before the `--type` value is validated, before the body is resolved, and before the roadmap database is opened. An invocation carrying an extra positional argument is therefore refused with exit code 2 even when it also carries an invalid `--type` value, which on its own would be exit code 6, and even when it names a roadmap, task, sprint, or comment that does not exist, which on its own would be exit code 4.
+2. A leftover token that begins with `-` is a flag and not a positional argument, so it is reported as an unknown flag — `Error: invalid input: unknown flag: --foo` — and not as an unexpected argument. This holds for every `-`-prefixed token, digits included: on these subcommands `-1` is an unknown flag, unlike the `graph` subcommands, which do not classify a negative numeric token as a flag at all. The value of `--body` is the one exception, and it is not a leftover token at all: `--body -1` supplies the body `-1`, under rule 4 of `Comment Body Input Source and Precedence` above.
+3. The refusal lands at a defined point in the subcommand's own validation order: after the positional id has been parsed, before the `--type` value is validated, and before the body is resolved. An invocation carrying an extra positional argument is therefore refused with exit code 2 even when it also carries an invalid `--type` value, which on its own would be exit code 6, and it never leaves the command waiting on standard input for a body it is going to reject.
 
-The refusal wording is the one the CLI already uses for a stray positional argument elsewhere: the `graph` subcommands refuse one with the same exit code and the same `unexpected argument "X"` text, and `rmp web` refuses one under the same exit code because it takes no positional argument at all (see `Web Interface` below).
+What the general rule already settles for these subcommands, and what this section therefore does not restate: only the first extra token is named; the position of the extra token on the command line does not matter; and nothing happens before the refusal — standard input is not read, the roadmap database is not opened, no comment is added, changed, deleted, or listed, and stdout stays empty.
 
 ### Validation Behavior
 
@@ -519,6 +642,10 @@ rmp -h
 
 **Description:** Displays general help with available commands in **plain text**. This is also the default behavior when no command is provided.
 
+A third form is the bare word: `rmp help` writes the same help body to stdout and exits `0`, identically to the two flag forms. The word `help` is not an entry in the command registry; like the flag forms, it is resolved before any command lookup, so `rmp help <command>` does not reach that command's help. The form that reaches it is `rmp <command> --help` (`HELP.md § Help structure template`).
+
+All three forms accept no positional argument. `rmp help <command>` is therefore refused, with the exit code and the error line `§ Positional Arguments` publishes.
+
 ### Version
 
 ```bash
@@ -527,6 +654,10 @@ rmp -v
 ```
 
 **Description:** Displays application version.
+
+A third form is the bare word: `rmp version` writes the same single line to stdout and exits `0`, identically to the two flag forms. The binary has always accepted it, and it is a documented form of this command, on the same footing as the bare word `help` above. The word `version` is not an entry in the command registry; like the flag forms, it is resolved before any command lookup, so there is no `rmp version <subcommand>`.
+
+All three forms accept no positional argument. An excess one is refused with the exit code and the error line `§ Positional Arguments` publishes.
 
 ### AI Help
 
@@ -574,7 +705,7 @@ An unknown command or subcommand name preceding `--ai-help` exits `2`, not the `
    AI agents: run `rmp --ai-help` for a machine-readable command contract.
    ```
 
-   The banner is followed by one blank line, then the existing help body. The banner is **not** printed by `rmp --version` / `rmp -v` (version output is parsed by scripts; extra lines would break automations) and is **not** printed by the AI contract emitters (`rmp --ai-help`, `rmp ai-help`, `rmp <command> --ai-help`, `rmp <command> <subcommand> --ai-help`), which emit JSON only.
+   The banner is followed by one blank line, then the existing help body. The banner is **not** printed by `rmp version` / `rmp --version` / `rmp -v` (version output is parsed by scripts; extra lines would break automations) and is **not** printed by the AI contract emitters (`rmp --ai-help`, `rmp ai-help`, `rmp <command> --ai-help`, `rmp <command> <subcommand> --ai-help`), which emit JSON only.
 
 2. Every error message emitted to stderr by the CLI ends with one blank line followed by the hint:
 
@@ -2972,13 +3103,17 @@ rmp backlog show-next 10 -r groadmap
 | Roadmap not found | 4 | `Error: resource not found: roadmap "X"` |
 | Roadmap not specified | 3 | `Error: no roadmap selected: use -r <name> or --roadmap <name>` |
 | `count` is not a positive integer | 6 | `Error: validation error: count must be a positive integer` |
+| Extra positional argument | 2 | `Error: invalid input: unexpected argument "X"` |
 
 `backlog show-next` takes no `--type` and no `--sort`. It accepts one optional
 positional `count` and the roadmap flags, and nothing else: a `--type` or `--sort`
 written before the `count` position is read as the `count` value and refused as a
-non-positive integer, and one written after it is ignored, leaving the invocation to
-succeed. The filtering and sorting conditions belong to `backlog list` above, whose
-own table states them.
+non-positive integer. A second positional argument is refused exactly as an excess
+positional argument is refused everywhere else in the CLI (`§ Positional Arguments`),
+with the exit code and the error line the table above publishes. `show-next` claims
+no exception here: a token the command accepted in silence would be a token the
+reader wrote believing it had an effect. The filtering and sorting conditions belong
+to `backlog list` above, whose own table states them.
 
 ---
 
@@ -3318,8 +3453,10 @@ rmp web --no-open
   browser at the served URL; a failed browser launch is not fatal.
 - `-h, --help` - Show the command help.
 
-`rmp web` accepts no positional arguments. An unexpected positional argument or an
-unknown flag is an input error (exit code 2).
+`rmp web` accepts no positional arguments; `§ Positional Arity by Command` publishes
+the declared maximum of zero. An unexpected positional argument and an unknown flag
+are both input errors (exit code 2), and `Error Cases` below publishes the line the
+command writes for each.
 
 ### Output
 
@@ -3373,6 +3510,7 @@ interface introduces no new codes.
 | `--port` out of range | 6 | "Error: validation error: --port must be an integer between 0 and 65535 (got 70000)" |
 | `--port` not an integer | 6 | "Error: validation error: --port must be an integer between 0 and 65535 (got \"notanumber\")" |
 | Unknown flag | 2 | "Error: invalid input: unknown flag: --foo" |
+| Unexpected positional argument | 2 | "Error: invalid input: unexpected argument: X" |
 | Data directory unreadable | 1 | "Error: reading data directory <absolute path of ~/.roadmaps>: database error" |
 
 The two bind rows carry the operating system's own diagnostic after the address, and its wording belongs to the platform rather than to `rmp`. The part `rmp` fixes is everything up to and including `cannot bind <host>:<port>: `; the text after it is the Go standard library's `net.OpError` rendering, shown here as observed on Linux.

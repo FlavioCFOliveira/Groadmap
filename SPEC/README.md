@@ -47,7 +47,8 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Task comment / sprint comment models and field constraints | `MODELS.md § Task Comment` and `MODELS.md § Sprint Comment` |
 | Comment subcommand syntax / flags (`comment-add`, `comment-list`, `comment-edit`, `comment-remove`) | `COMMANDS.md § Task Comments` and `COMMANDS.md § Sprint Comments` |
 | Comment body input via flag or stdin | `COMMANDS.md § Comment Body Input Source and Precedence` |
-| Comment positional argument count, and the refusal of a stray extra argument | `COMMANDS.md § Comment Positional Argument Contract` |
+| Positional argument count of any command, and the refusal of an invocation that supplies more than the command declares | `COMMANDS.md § Positional Arguments` |
+| Comment positional argument count, and what the one id identifies on each comment subcommand | `COMMANDS.md § Comment Positional Argument Contract` |
 | Comment JSON shape | `DATA_FORMATS.md § Task Comment` and `DATA_FORMATS.md § Sprint Comment` |
 | Comment tables, DDL, and cascade rules | `DATABASE.md § task_comments Table` and `DATABASE.md § sprint_comments Table` |
 | Web comment presentation (task modal timeline, sprint Comments card) | `WEB.md § Task Detail Modal` and `WEB.md § Sprint Detail Sub-Template` |
@@ -153,7 +154,8 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Which commands read standard input at all (exactly two flag values, and no other command) | `DATA_FORMATS.md § Input` |
 | Comment body input source and precedence (`--body` or stdin) | `COMMANDS.md § Comment Body Input Source and Precedence` |
 | Cypher query input source, maximum query length, and the bounded standard-input read | `GRAPH.md § Cypher Input Source and Precedence` |
-| Comment positional arguments (exactly one id per subcommand; an extra one is exit code 2) | `COMMANDS.md § Comment Positional Argument Contract` |
+| Declared positional arity per command, and the refusal of an excess positional argument (exit code 2, the published line, no side effect) | `COMMANDS.md § Positional Arguments` |
+| Comment positional arguments (exactly one id per subcommand, and what that id identifies) | `COMMANDS.md § Comment Positional Argument Contract` |
 | Memory layout / struct field ordering | `MODELS.md § Memory Layout Optimization` |
 | Task state transitions | `STATE_MACHINE.md § Task State Machine` |
 | Task commit-hash format (character set, length bounds, lowercase normalisation) | `MODELS.md § Task` (Commit Hash Constraint) |

@@ -115,11 +115,24 @@ func main() {
 	// Global flags are handled here, before any command lookup. They
 	// are intentionally NOT in the command registry because their
 	// effect is on the binary itself, not on any single command family.
+	//
+	// Because they resolve here, these six forms are NOT covered by the
+	// shared positional-arity enforcement point that every registered
+	// command reaches through Command.DispatchFamily. Each declares a
+	// maximum of zero positional arguments (SPEC/COMMANDS.md § Positional
+	// Arity by Command) and each enforces that declaration itself, through
+	// refuseGlobalPositional in global_arity.go, before writing anything.
 	switch arg {
 	case "-h", "--help", "help":
+		if err := refuseGlobalPositional(os.Args[2:]); err != nil {
+			os.Exit(handleError(err))
+		}
 		printHelp()
 		os.Exit(ExitSuccess)
 	case "-v", "--version", "version":
+		if err := refuseGlobalPositional(os.Args[2:]); err != nil {
+			os.Exit(handleError(err))
+		}
 		fmt.Printf("%s version %s\n", appName, version)
 		os.Exit(ExitSuccess)
 	}

@@ -1646,6 +1646,20 @@ class TestErrorStringParity:
             ["graph", "query", "-r", "ghost-roadmap-9182", "--query", "MATCH (n) RETURN n"], 4,
             subs={"X": "ghost-roadmap-9182"}, note="graph query roadmap not found",
         )
+        # A Cypher query written as a positional argument. The graph family
+        # declares a maximum of zero positional arguments (COMMANDS.md
+        # § Positional Arity by Command), and it is one of the three commands
+        # that publish a line of their own for the refusal: the canonical
+        # wording with a parenthetical naming the two sources a query may
+        # come from. The roadmap named here EXISTS, so the exit code proves
+        # the refusal precedes opening the graph store rather than following
+        # a lookup failure.
+        self.check(
+            'Error: invalid input: unexpected argument "X" (graph queries use --query or stdin)',
+            ["graph", "query", "-r", r, "MATCH (n:Incident) RETURN n"], 2,
+            subs={"X": "MATCH (n:Incident) RETURN n"},
+            note="graph query bare positional query",
+        )
 
     # ------------------------------------------------------------------
     # `rmp web`
@@ -1666,6 +1680,16 @@ class TestErrorStringParity:
         self.check(
             "Error: invalid input: unknown flag: --foo",
             ["web", "--foo", "--no-open"], 2, note="web unknown flag",
+        )
+        # A positional argument on `rmp web`. The command declares a maximum
+        # of zero (COMMANDS.md § Positional Arity by Command) and is the
+        # third command that publishes a line of its own for the refusal:
+        # the offending token follows a colon and carries no quotes. The
+        # refusal precedes binding the listener, so no server is started.
+        self.check(
+            "Error: invalid input: unexpected argument: X",
+            ["web", "monitoring-dashboard", "--no-open"], 2,
+            subs={"X": "monitoring-dashboard"}, note="web positional argument",
         )
 
     # ------------------------------------------------------------------

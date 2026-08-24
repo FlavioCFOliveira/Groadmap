@@ -188,7 +188,7 @@ class TestWebInterface:
 
         # OPEN sprint: the current/Actual sprint, started with two tasks.
         open_sid = self.test.create_sprint(ROADMAP, "Authentication hardening sprint")
-        self._run(["sprint", "add-tasks", "-r", ROADMAP, str(open_sid), str(t1), str(t2)])
+        self._run(["sprint", "add-tasks", "-r", ROADMAP, str(open_sid), f"{t1},{t2}"])
         self._run(["sprint", "start", "-r", ROADMAP, str(open_sid)])
 
         # PENDING sprint: planned, not started, under Próximos.
@@ -925,7 +925,7 @@ class TestWebInterface:
             priority=9,
         )
         sprint_id = self.test.create_sprint(roadmap, "Settlement reconciliation sprint")
-        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id), str(sprinted), str(doing)])
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id), f"{sprinted},{doing}"])
         self._run(["sprint", "start", "-r", roadmap, str(sprint_id)])
         self._run(["task", "stat", "-r", roadmap, str(doing), "DOING", "--commit-open", "24262f0"])
 
@@ -2678,8 +2678,7 @@ class TestWebInterface:
             task(f"Automate pre-flight check #{n}", 4 + n) for n in range(3)
         ]
         upcoming_sid = self.test.create_sprint(roadmap, "Pre-flight automation sprint")
-        self._run(["sprint", "add-tasks", "-r", roadmap, str(upcoming_sid)]
-                   + [str(i) for i in upcoming_tasks])
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(upcoming_sid), ",".join(str(i) for i in upcoming_tasks)])
         empty_sid = self.test.create_sprint(roadmap, "Rollback tooling sprint")
 
         # Concluídos: a 1-task sprint, started then force-closed.
@@ -2696,8 +2695,7 @@ class TestWebInterface:
             task(f"Gate merge on checklist item #{n}", 5 + n) for n in range(5)
         ]
         open_sid = self.test.create_sprint(roadmap, "Merge-gate rollout sprint")
-        self._run(["sprint", "add-tasks", "-r", roadmap, str(open_sid)]
-                   + [str(i) for i in open_tasks])
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(open_sid), ",".join(str(i) for i in open_tasks)])
         self._run(["sprint", "start", "-r", roadmap, str(open_sid)])
         self._run(["task", "stat", "-r", roadmap, str(open_tasks[0]), "BACKLOG"])
         self.test.assert_task_status(roadmap, open_tasks[0], "BACKLOG")
@@ -2994,8 +2992,7 @@ class TestWebInterface:
         all_ids = [t_backlog, t_sprint, t_doing, t_testing, t_completed]
 
         sprint_id = self.test.create_sprint(roadmap, "Webhook reliability sprint")
-        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id)]
-                  + [str(i) for i in all_ids])
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id), ",".join(str(i) for i in all_ids)])
         self._run(["sprint", "start", "-r", roadmap, str(sprint_id)])
 
         # BACKLOG: a completed pipeline run reopened straight back to BACKLOG,
@@ -3149,8 +3146,7 @@ class TestWebInterface:
         # id order and, in DOING and CLOSED, no column's timestamp order.
         members = [w_gamma, d_delta, c_beta, w_alpha, d_beta, c_delta,
                    w_beta, d_alpha, c_alpha, d_gamma, c_gamma]
-        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id)]
-                  + [str(i) for i in members])
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id), ",".join(str(i) for i in members)])
         self._run(["sprint", "start", "-r", roadmap, str(sprint_id)])
 
         def stat(ids, status):
@@ -3631,7 +3627,7 @@ class TestWebInterface:
 
         sprint_id = self.test.create_sprint(roadmap, "Device trust maintenance sprint")
         self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id),
-                   str(bare), str(counted)])
+                   f"{bare},{counted}"])
 
         proc, port = self._start(["--port", "0"])
         _, _, body = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
@@ -3727,8 +3723,7 @@ class TestWebInterface:
         all_ids = [t_backlog, t_sprint, t_doing, t_testing, t_completed]
 
         sprint_id = self.test.create_sprint(roadmap, "Settlement reconciliation sprint")
-        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id)]
-                  + [str(i) for i in all_ids])
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id), ",".join(str(i) for i in all_ids)])
         self._run(["sprint", "start", "-r", roadmap, str(sprint_id)])
 
         self._run(["task", "stat", "-r", roadmap, str(t_backlog), "BACKLOG"])
@@ -3991,7 +3986,7 @@ class TestWebInterface:
 
         sprint_id = self.test.create_sprint(roadmap, "Checkout latency sprint")
         self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id),
-                   str(t1), str(t2), str(t3)])
+                   f"{t1},{t2},{t3}"])
         self._run(["sprint", "start", "-r", roadmap, str(sprint_id)])
         for t in (t1, t2, t3):
             self._run(["task", "stat", "-r", roadmap, str(t), "DOING", "--commit-open", "391cff7"])

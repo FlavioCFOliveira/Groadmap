@@ -14,7 +14,7 @@ const version = "X.Y.Z"
 
 This version is:
 - Compiled into the binary at build time
-- Displayed via `rmp --version`
+- Displayed via `rmp version`, `rmp --version`, and `rmp -v`, which are three equivalent forms of the same request (`COMMANDS.md § Version`)
 - Used for release artefact naming (e.g., `rmp-v1.2.1-linux-amd64.tar.gz`)
 
 ### Database Schema Version

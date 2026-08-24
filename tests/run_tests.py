@@ -75,6 +75,7 @@ TEST_MODULES = [
     "test_54_audit_enrichment_e2e",
     "test_55_error_string_parity",
     "test_56_graph_read_direction",
+    "test_57_positional_arity",
 ]
 
 # Stress tests (run separately due to time/data volume)

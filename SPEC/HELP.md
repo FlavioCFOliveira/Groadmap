@@ -85,7 +85,7 @@ The banner is **not** printed when:
 - The contract itself is being emitted (`rmp --ai-help`, `rmp ai-help`,
   `rmp <command> --ai-help`, `rmp <command> <subcommand> --ai-help`):
   the contract is JSON and contains no plain-text help.
-- `rmp --version` / `rmp -v`: version output is not help.
+- `rmp version`, `rmp --version`, and `rmp -v`: version output is not help.
 
 ## Help structure template
 
@@ -204,8 +204,8 @@ help text must match the command contract in `COMMANDS.md`.
 
 | Family | Command | Canonical specification |
 |--------|---------|-------------------------|
-| Global | `rmp --help` | `COMMANDS.md § Global Commands` |
-| Global | `rmp --version` | `COMMANDS.md § Global Commands` |
+| Global | `rmp help`, `rmp --help`, `rmp -h` | `COMMANDS.md § Global Commands` |
+| Global | `rmp version`, `rmp --version`, `rmp -v` | `COMMANDS.md § Global Commands` |
 | Global | `rmp --ai-help` / `rmp ai-help` | `COMMANDS.md § AI Help` |
 | Roadmap | `rmp roadmap [list \| create \| remove]` | `COMMANDS.md § Roadmap Management` |
 | Task | `rmp task [list \| create \| get \| next \| edit \| remove \| stat \| reopen \| prio \| sev \| subtasks \| add-dep \| remove-dep \| blockers \| blocking]` | `COMMANDS.md § Task Management` |
@@ -738,9 +738,11 @@ the reader recovers by running `--help` explicitly.
 
 Three commands accept no subcommand, so no dispatch failure can arise
 for them and the recovery help never applies: `stats`, `web`, and
-`ai-help`. `web` and `ai-help` reject an unexpected positional argument
-as an invalid argument, with exit code `2` and no help, as specified in
-`COMMANDS.md § Web Interface` and `COMMANDS.md § AI Help`.
+`ai-help`. All three reject an unexpected positional argument as an
+invalid argument, with exit code `2` and no help. Every command in the
+CLI does: the rule, the declared maximum per command, and the commands
+that publish their own wording for the refusal are specified in
+`COMMANDS.md § Positional Arguments`.
 
 ### Error text of a dispatch failure
 

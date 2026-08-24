@@ -26,7 +26,14 @@ func buildGraphCommand() Command {
 				Usage:       "rmp graph create -r <roadmap> [--query <cypher>]",
 				HelpPrinter: printGraphCreateHelp,
 				Handler:     runGraphCreate,
-				ReadsStdin:  true,
+				// `graph` publishes its own refusal for an excess positional
+				// argument — the canonical line with a hint naming the two
+				// sources a Cypher query may come from (SPEC/COMMANDS.md
+				// § Positional Arguments; SPEC/GRAPH.md § Cypher Input Source
+				// and Precedence). The shared enforcement point defers so that
+				// wording survives.
+				PublishesOwnArityRefusal: true,
+				ReadsStdin:               true,
 				Flags: []Flag{
 					sharedRoadmapFlag(),
 					queryFlag,
@@ -77,7 +84,14 @@ func buildGraphCommand() Command {
 				Usage:       "rmp graph query -r <roadmap> [--query <cypher>]",
 				HelpPrinter: printGraphQueryHelp,
 				Handler:     runGraphQuery,
-				ReadsStdin:  true,
+				// `graph` publishes its own refusal for an excess positional
+				// argument — the canonical line with a hint naming the two
+				// sources a Cypher query may come from (SPEC/COMMANDS.md
+				// § Positional Arguments; SPEC/GRAPH.md § Cypher Input Source
+				// and Precedence). The shared enforcement point defers so that
+				// wording survives.
+				PublishesOwnArityRefusal: true,
+				ReadsStdin:               true,
 				Flags: []Flag{
 					sharedRoadmapFlag(),
 					queryFlag,
@@ -134,7 +148,14 @@ func buildGraphCommand() Command {
 				Usage:       "rmp graph update -r <roadmap> [--query <cypher>]",
 				HelpPrinter: printGraphUpdateHelp,
 				Handler:     runGraphUpdate,
-				ReadsStdin:  true,
+				// `graph` publishes its own refusal for an excess positional
+				// argument — the canonical line with a hint naming the two
+				// sources a Cypher query may come from (SPEC/COMMANDS.md
+				// § Positional Arguments; SPEC/GRAPH.md § Cypher Input Source
+				// and Precedence). The shared enforcement point defers so that
+				// wording survives.
+				PublishesOwnArityRefusal: true,
+				ReadsStdin:               true,
 				Flags: []Flag{
 					sharedRoadmapFlag(),
 					queryFlag,
@@ -174,7 +195,14 @@ func buildGraphCommand() Command {
 				Usage:       "rmp graph delete -r <roadmap> [--query <cypher>]",
 				HelpPrinter: printGraphDeleteHelp,
 				Handler:     runGraphDelete,
-				ReadsStdin:  true,
+				// `graph` publishes its own refusal for an excess positional
+				// argument — the canonical line with a hint naming the two
+				// sources a Cypher query may come from (SPEC/COMMANDS.md
+				// § Positional Arguments; SPEC/GRAPH.md § Cypher Input Source
+				// and Precedence). The shared enforcement point defers so that
+				// wording survives.
+				PublishesOwnArityRefusal: true,
+				ReadsStdin:               true,
 				Flags: []Flag{
 					sharedRoadmapFlag(),
 					queryFlag,
@@ -214,7 +242,14 @@ func buildGraphCommand() Command {
 				Usage:       "rmp graph search -r <roadmap> [--query <cypher>]",
 				HelpPrinter: printGraphSearchHelp,
 				Handler:     runGraphSearch,
-				ReadsStdin:  true,
+				// `graph` publishes its own refusal for an excess positional
+				// argument — the canonical line with a hint naming the two
+				// sources a Cypher query may come from (SPEC/COMMANDS.md
+				// § Positional Arguments; SPEC/GRAPH.md § Cypher Input Source
+				// and Precedence). The shared enforcement point defers so that
+				// wording survives.
+				PublishesOwnArityRefusal: true,
+				ReadsStdin:               true,
 				Flags: []Flag{
 					sharedRoadmapFlag(),
 					queryFlag,

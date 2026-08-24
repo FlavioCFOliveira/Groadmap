@@ -60,7 +60,8 @@ class TestComplexWorkflow:
         sprint1 = self.test.create_sprint(roadmap, "Sprint 1: Core Infrastructure")
         self.test.run_cmd([
             "sprint", "add-tasks", "-r", roadmap, str(sprint1),
-            str(infra_tasks["db_schema"]), str(infra_tasks["auth"]), str(infra_tasks["api_gateway"])
+            ",".join(str(i) for i in (
+                infra_tasks["db_schema"], infra_tasks["auth"], infra_tasks["api_gateway"]))
         ])
         self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint1)])
 
@@ -108,9 +109,10 @@ class TestComplexWorkflow:
         sprint2 = self.test.create_sprint(roadmap, "Sprint 2: Feature Development")
         self.test.run_cmd([
             "sprint", "add-tasks", "-r", roadmap, str(sprint2),
-            str(feature_tasks["product_catalog"]),
-            str(feature_tasks["shopping_cart"]),
-            str(feature_tasks["checkout"]),
+            ",".join(str(i) for i in (
+                feature_tasks["product_catalog"],
+                feature_tasks["shopping_cart"],
+                feature_tasks["checkout"])),
         ])
         self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint2)])
 
@@ -149,7 +151,7 @@ class TestComplexWorkflow:
         ]
 
         sprint1 = self.test.create_sprint(roadmap, "Migration Sprint 1")
-        self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint1)] + [str(t) for t in tasks])
+        self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint1), ",".join(str(t) for t in tasks)])
         self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint1)])
 
         # Complete only the first two tasks
@@ -222,7 +224,7 @@ class TestComplexWorkflow:
         ]
 
         sprint = self.test.create_sprint(roadmap, "Data Pipeline Sprint")
-        self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint)] + [str(t) for t in tasks])
+        self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint), ",".join(str(t) for t in tasks)])
         self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint)])
 
         # Complete first task
@@ -276,7 +278,7 @@ class TestComplexWorkflow:
         ]
 
         sprint = self.test.create_sprint(roadmap, "DevOps Sprint")
-        self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint)] + [str(t) for t in task_ids])
+        self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint), ",".join(str(t) for t in task_ids)])
         self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint)])
 
         # Reorder: Terraform first (prerequisite), then cluster, then rest
@@ -349,8 +351,8 @@ class TestComplexWorkflow:
         sprint_a = self.test.create_sprint(roadmap, "Team Alpha Sprint")
         sprint_b = self.test.create_sprint(roadmap, "Team Beta Sprint")
 
-        self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint_a)] + [str(t) for t in team_a_tasks])
-        self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint_b)] + [str(t) for t in team_b_tasks])
+        self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint_a), ",".join(str(t) for t in team_a_tasks)])
+        self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint_b), ",".join(str(t) for t in team_b_tasks)])
 
         # Only one sprint can be OPEN at a time (sequential enforcement).
         self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint_a)])
@@ -431,7 +433,7 @@ class TestComplexWorkflow:
 
         # Add all to sprint and complete
         sprint = self.test.create_sprint(roadmap, "Legacy Modernisation Sprint")
-        self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint)] + [str(t) for t in task_ids])
+        self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint), ",".join(str(t) for t in task_ids)])
         self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint)])
 
         for task_id in task_ids:
@@ -525,7 +527,7 @@ class TestComplexWorkflow:
         ]
 
         sprint = self.test.create_sprint(roadmap, "Production Deployment Sprint")
-        self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint)] + [str(t) for t in task_ids])
+        self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint), ",".join(str(t) for t in task_ids)])
         self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint)])
 
         # Bulk transition all to DOING
@@ -621,7 +623,7 @@ class TestComplexWorkflow:
         assert stats["tasks"]["backlog"] == 10
 
         sprint = self.test.create_sprint(roadmap, "Feature Sprint")
-        self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint)] + [str(t) for t in task_ids[:8]])
+        self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint), ",".join(str(t) for t in task_ids[:8])])
         self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint)])
 
         stats = self.test.run_cmd_json(["stats", "-r", roadmap])
