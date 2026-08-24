@@ -313,7 +313,7 @@ format. Its default output is never parsed, because OpenSSL 3 prints
 ### Failure Modes
 
 Every one of the following exits 1, reports the reason through the `error`
-helper, removes the temporary directory, and installs nothing:
+helper, leaves no staging directory behind, and installs nothing:
 
 | Condition | Behaviour |
 |-----------|-----------|
@@ -321,6 +321,7 @@ helper, removes the temporary directory, and installs nothing:
 | The checksum file cannot be downloaded | Refused. A missing checksum is a failure, never a reason to proceed unverified |
 | The checksum file names no digest for this archive, or none that is well formed | Refused as malformed |
 | The host has no SHA-256 tool | Refused **before anything is downloaded**, naming the three accepted tools |
+| The host has no `mktemp` | Refused **before anything is downloaded**, naming the tool. Without it there is no private directory to stage the download in (see Staging Directory) |
 
 There is no flag that disables verification. An installer whose documented
 invocation is `curl ... | bash` into a privileged location is exactly where a
@@ -337,6 +338,120 @@ the user, and the tool it asks for is already present wherever the script can ru
 at all: on Linux `sha256sum` belongs to the same coreutils package as the `mv`,
 `chmod`, `mkdir`, and `rm` the script already invokes unconditionally, and macOS
 ships `shasum` in its base system.
+
+### Staging Directory
+
+Everything the installation script downloads is staged inside a single directory
+created for that one run: the archive, the `.sha256` file beside it, the
+extraction, and the extracted binary. The script writes no downloaded byte to a
+path another local user can name in advance, and it writes no fixed path at all.
+In particular it never writes `/tmp/rmp` or `/tmp/rmp.exe`, the fixed paths the
+extracted binary once passed through.
+
+#### How the Directory Is Created
+
+The script creates the directory with
+
+```
+mktemp -d "${TMPDIR:-/tmp}/rmp_install.XXXXXXXXXX"
+```
+
+`TMPDIR` is honoured deliberately, with `/tmp` as the fallback: a host that
+confines temporary files to a particular filesystem keeps that confinement, and
+the checks below are what make honouring it safe. The template gives the
+directory the two properties the integrity gate depends on:
+
+1. **The name is unpredictable.** The implementation replaces the ten `X`
+   characters, so no other process can work the name out in advance. Ten
+   satisfies every implementation the script can meet: GNU `mktemp` requires at
+   least three, and OpenBSD's requires at least six in the last component.
+2. **Creation is exclusive, and the result is private.** `mktemp -d` creates the
+   directory or fails; it never reuses a directory that already exists. The
+   directory it creates has mode `0700`, because `mkdtemp(3)` specifies that
+   mode, and the process umask can only narrow those bits, never widen them.
+
+Together those close the time-of-check-to-time-of-use window (CWE-367, and the
+insecure temporary file of CWE-377) that the checksum cannot close on its own. The archive is still read twice, once by the hashing
+tool and once by `tar` or `unzip`, but both reads happen inside a directory no
+other user can open, so no other user has a moment in which to substitute the
+file between them. The race is closed by taking the access away rather than by
+shortening the interval: a path no other user can open offers no time of use to
+reach.
+
+The directory is created after the installation scope is chosen and before the
+first release asset is requested, so a host that cannot stage privately is told
+so with no archive downloaded.
+
+#### What the Script Refuses
+
+The script exits 1 through the `error` helper, downloads no release archive and
+no checksum file, and installs nothing, when any of the following holds:
+
+| Condition | Why it is refused |
+|-----------|-------------------|
+| `TMPDIR` is set to a value that is not an absolute path | A relative value stages the download under whatever directory the script was started from, and a value beginning with `-` reaches `mktemp`, `ls`, and `rm` as an option rather than as a path |
+| The parent directory named by `TMPDIR` does not exist, or is not a directory | There is nowhere to stage |
+| The permissions of that parent cannot be read | The check on the row below cannot be performed, so the parent cannot be trusted |
+| The parent is writable by every user and carries no sticky bit | Any local user could then rename the staging directory out of the way and put their own in its place after it was created. `/tmp` carries mode `1777` on every system the script supports |
+| `mktemp -d` fails | There is no directory to stage in, and no predictable path is used instead |
+| The created directory is a symbolic link, or is not owned by the invoking user | It is not a directory this script created and owns |
+| The created directory's permissions cannot be read, or are not `rwx------` | It is reachable by users other than its owner, which is the condition the staging directory exists to prevent |
+
+The last two conditions check what `mktemp` returned rather than assuming it,
+for the same reason the checksum path verifies the archive rather than assuming
+it: `mktemp` is resolved through `PATH` like every other tool the script runs,
+and every downloaded byte is written inside whatever it hands back. A `mktemp`
+earlier on `PATH` that returned an existing, shared, or symlinked directory
+would reinstate the defect in full, and these two checks are what make that
+refusable instead of silently accepted.
+
+#### A Refused Directory Is Left in Place
+
+The script removes only a directory that passed every check above. A directory
+that failed one of them is reported and left exactly as it was found, never
+removed. A hostile `mktemp` earlier on `PATH` could print `/`, `/etc`, or a
+directory belonging to another user, and a cleanup that trusted that output
+would delete it; refusing without removing is what keeps that failure harmless.
+
+#### When the Directory Is Removed
+
+A single `EXIT` trap removes the accepted staging directory, and everything
+inside it, on every path out of the script: success, every refusal, and every
+failure. Three further traps turn a signal into an ordinary exit so that the
+`EXIT` trap still runs, and each exits with 128 plus the number of the signal it
+handles:
+
+| Signal | Exit code |
+|--------|-----------|
+| `HUP` | 129 |
+| `INT` | 130 |
+| `TERM` | 143 |
+
+No failure site cleans up after itself. Cleanup registered once as a trap cannot
+be forgotten by a failure path added later, and it covers the exits no explicit
+removal can be written for: an interrupt at the installation-scope prompt, a
+terminal that goes away, and a command that fails where none was expected.
+
+#### Tools the Staging Directory Requires
+
+| Tool | Used for | If it is absent |
+|------|----------|-----------------|
+| `mktemp` | Creating the staging directory | The script exits 1 before any release asset is requested, and the message names the tool (see Failure Modes) |
+| `ls` | Reading the permission bits of the staging directory and of its parent, through `ls -ld` | The permissions cannot be read, so the directory is refused and nothing is downloaded |
+
+The script reads permissions with `ls -ld` rather than with `stat(1)` because
+`stat` is not in POSIX and its spellings diverge: GNU spells the mode
+`stat -c %a` and the BSDs spell it `stat -f %Lp`. The long output format of `ls`
+is specified: the first field is the file mode, one file-type character followed
+by nine permission characters. An access-control-list or SELinux marker, `+` or
+`.`, sits after those ten characters and is not part of the mode the script
+reads.
+
+The absence of `mktemp` fails closed for the same reason the absence of a
+hashing tool does. There is no fallback to a predictable path, because a
+predictable path is the defect this replaced. `mktemp` is present wherever the
+script can run at all: GNU coreutils on Linux, the base system on macOS,
+FreeBSD, and OpenBSD, and the MSYS2 coreutils package behind Git for Windows.
 
 ### What This Protects, and What It Does Not
 
@@ -373,14 +488,14 @@ is would be worse than not stating it at all.
   performs it.**
 - A malicious release that is authentic. Checksums attest to bytes, not to
   intent: a backdoor built and published by the pipeline verifies correctly.
-- A local attacker on the installing machine. The archive is verified and then
-  extracted at the same path, so an attacker who can write into the script's
-  temporary directory can replace the archive between the two reads. That
-  directory is `/tmp/rmp_install_$$`, whose name is predictable and which
-  `mkdir -p` accepts when it already exists, so it can be pre-created by another
-  local user. This is a time-of-check-to-time-of-use window (CWE-367) that the
-  checksum cannot close on its own; closing it needs a temporary directory that
-  is created unpredictably and privately.
+- A local attacker who is already `root`, or who is already the user running the
+  installer. Either can rewrite the installed binary directly, at the
+  installation directory, so the staging step gives them nothing they do not
+  already hold. The archive is still verified and extracted at the same path,
+  two reads of one file, but that path now lies inside a directory created
+  unpredictably and privately for the single run, which no other local user can
+  open (see Staging Directory). Any other local attacker therefore has no moment
+  in which to replace the archive between the two reads.
 
 Closing the remaining gap needs a signature over the checksum, made with a key
 the release pipeline does not hold and distributed out of band, or an attestation
@@ -499,11 +614,17 @@ Each release includes:
 - [ ] The architecture guard rejects both values `detect_arch()` can return for a host the build does not serve, `unsupported` and `unknown`, with that same message and exit code
 - [ ] An unsupported operating system fails the same way: the script exits 1 and standard error carries the line `ERROR: operating system {uname} is not supported. Supported systems: linux, darwin, freebsd, openbsd, windows. See SPEC/BUILD.md for the build matrix.` with `{uname}` the raw `uname -s` output
 - [ ] Every failure the script reports goes through the `error` helper, so every error line begins with the `ERROR: ` prefix and no path prints a bare message (see Diagnostic Output)
-- [ ] The downloaded archive is verified against the published `<archive>.sha256` BEFORE it is extracted, on both the `.tar.gz` and the `.zip` branch. An archive whose digest does not match is refused: the script exits non-zero, reports the mismatch with both digests, removes its temporary directory, and no file reaches the installation directory or the staging path (see Checksum Verification)
+- [ ] The downloaded archive is verified against the published `<archive>.sha256` BEFORE it is extracted, on both the `.tar.gz` and the `.zip` branch. An archive whose digest does not match is refused: the script exits non-zero, reports the mismatch with both digests, removes its staging directory (see Staging Directory), and no file reaches the installation directory (see Checksum Verification)
 - [ ] A checksum file that cannot be downloaded is a failure. The script does not fall back to an unverified installation, and it offers no flag that would
 - [ ] A checksum file that carries no well-formed digest for the archive being installed is refused as malformed. The digest is matched by name, so a checksum file describing a different archive is rejected rather than accepted from a fixed position
 - [ ] A host with none of `sha256sum`, `shasum`, or `openssl` is refused with exit 1 before any release asset is requested, and the message names all three
 - [ ] `SPEC/DEPLOY.md § Checksum Verification` states both what the check detects and what it does not, and no document in the repository describes the checksum as proof of authenticity or provenance
+- [ ] Every byte the script downloads is staged inside a directory created by `mktemp -d` from the template `${TMPDIR:-/tmp}/rmp_install.XXXXXXXXXX`. The directory the script uses differs between two runs on the same host, and `ls -ld` reports mode `drwx------` for it at the instant the verified archive is sitting in it (see Staging Directory)
+- [ ] A staging directory the script did not create is refused, with no release archive downloaded, nothing installed, and the directory left exactly as it was found. All three shapes are covered: a directory of that name that already exists, one that belongs to another user, and one that is a symbolic link to somewhere else
+- [ ] A `TMPDIR` that is writable by every user and carries no sticky bit is refused, and so is a staging directory that cannot be created. Each exits 1 through the `error` helper with no release archive and no checksum file downloaded
+- [ ] A host without `mktemp` is refused with exit 1 before any release asset is requested, and the message names the tool
+- [ ] No fixed staging path is written. Files already sitting at `/tmp/rmp` and `/tmp/rmp.exe` before the script runs are byte-identical after a successful installation
+- [ ] No exit path leaves the accepted staging directory behind: not a refusal, not a failed extraction, and not a signal. The `EXIT` trap removes it, and the `HUP`, `INT`, and `TERM` traps route a signal through that trap, exiting 129, 130, and 143
 
 ### Raspberry Pi Support
 - [ ] Detects ARMv6 on Pi Zero/1

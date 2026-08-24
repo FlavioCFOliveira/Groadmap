@@ -37,10 +37,28 @@ without a word. That class drives the same real script through the same sandbox
 and pins the verification: a matching digest installs, and a mismatched digest,
 an absent checksum, a checksum describing a different archive and a malformed
 checksum each abort with nothing installed and nothing extracted.
+
+The module carries a third class, InstallScriptStagingTests, for the directory
+that verification and extraction both happen in (rmp task #309). That directory
+was `/tmp/rmp_install_$$`, created with `mkdir -p` -- a name drawn from at most
+32768 PIDs, and a call that SUCCEEDS on a directory that already exists. Another
+local user could pre-create the whole PID space mode 0777 and wait: the archive
+was then verified and extracted inside a directory they could write to, and
+since those are two separate reads of one path, the bytes tar unpacked need not
+be the bytes sha256sum hashed. The install then carried that payload into
+/usr/local/bin under the sudo the documented `curl ... | bash` path already
+uses, so the window sat on a privilege boundary. The same file also staged the
+extracted binary at the fixed path `/tmp/rmp`. That class pins the replacement:
+the directory is created by `mktemp -d`, it is private (mode 0700) at the moment
+the verified archive sits in it, a directory the script did not create is
+refused rather than reused, a host that cannot stage privately installs nothing,
+the fixed `/tmp/rmp` paths are never written, and the staging directory survives
+no exit path -- not a refusal, not a failed extraction, not a signal.
 """
 
 import hashlib
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -67,6 +85,12 @@ REQUIRED_TOOLS = [
     # first of the three it accepts; InstallScriptChecksumTests withholds all
     # three deliberately, to drive the refusal.
     "sha256sum",
+    # install.sh stages every download in a directory mktemp creates, and reads
+    # that directory's permissions back with `ls -ld` before it writes anything
+    # into it (rmp task #309). Both are withheld deliberately by
+    # InstallScriptStagingTests, to drive the refusals.
+    "mktemp",
+    "ls",
 ]
 
 UNAME_SHIM = """#!/usr/bin/env bash
@@ -427,7 +451,11 @@ class InstallScriptChecksumTests:
                 os.unlink(stale)
             except FileNotFoundError:
                 pass
-        before = set(Path("/tmp").glob("rmp_install_*"))
+        # Matches both spellings: the directory this once created,
+        # `rmp_install_<pid>`, and the one mktemp creates now,
+        # `rmp_install.XXXXXXXXXX`. A glob that matched only the old name would
+        # quietly stop catching anything (rmp task #309).
+        before = set(Path("/tmp").glob("rmp_install*"))
 
         result = subprocess.run(
             [shutil.which("bash"), str(INSTALL_SH)],
@@ -445,7 +473,7 @@ class InstallScriptChecksumTests:
                 "FAKE_EXTRACT_LOG": str(self.extract_log),
             },
         )
-        leaked = sorted(str(p) for p in set(Path("/tmp").glob("rmp_install_*")) - before)
+        leaked = sorted(str(p) for p in set(Path("/tmp").glob("rmp_install*")) - before)
         return _Run(
             result=result,
             installed=self.home / ".local" / "bin" / "rmp",
@@ -688,6 +716,617 @@ class InstallScriptChecksumTests:
         self._assert_nothing_installed(run, "no hashing tool")
 
 
+# Logs every invocation and, in "real" mode, the directory the genuine mktemp
+# created -- which is how the test learns a path it is not allowed to predict.
+# The other two modes reproduce the conditions install.sh has to refuse:
+#   fail      creation did not succeed, the outcome on a host whose temporary
+#             directory is unusable and the outcome mktemp produces when the
+#             name it tried already exists.
+#   existing  a mktemp that hands back a directory it did not create -- exactly
+#             what `mkdir -p` did on an attacker's pre-created path. mktemp is
+#             resolved through PATH like every other tool install.sh calls, so
+#             this is not a hypothetical: it is what one PATH entry buys.
+MKTEMP_SHIM = """#!/usr/bin/env bash
+echo "mktemp $*" >> "$FAKE_MKTEMP_LOG"
+case "${FAKE_MKTEMP_MODE:-real}" in
+  fail)
+    exit 1
+    ;;
+  existing)
+    echo "$FAKE_MKTEMP_EXISTING"
+    exit 0
+    ;;
+  *)
+    dir=$(@REAL_MKTEMP@ "$@") || exit 1
+    echo "created $dir" >> "$FAKE_MKTEMP_LOG"
+    echo "$dir"
+    ;;
+esac
+"""
+
+# Records the staging directory's mode and contents at the instant tar is asked
+# to extract -- the instant between the checksum check and the unpacking, which
+# is the whole window under test -- and then delegates to the real tar.
+PROBE_TAR_SHIM = """#!/usr/bin/env bash
+echo "tar $*" >> "$FAKE_EXTRACT_LOG"
+dest=""; prev=""
+for arg in "$@"; do
+  if [ "$prev" = "-C" ]; then dest="$arg"; fi
+  prev="$arg"
+done
+if [ -n "$dest" ]; then
+  ls -ld "$dest" >> "$FAKE_STAGE_LOG"
+  ls -ld "$dest"/* >> "$FAKE_STAGE_LOG" 2>/dev/null || :
+fi
+exec @REAL_TAR@ "$@"
+"""
+
+# Signals install.sh where a scattered `rm -rf` could never run: mid-extraction,
+# with the archive and the checksum file already on disk. Exits 0, so a script
+# that did not handle the signal would carry on and install successfully --
+# which is what makes the assertion about the surviving directory meaningful.
+SIGNAL_TAR_SHIM = """#!/usr/bin/env bash
+echo "tar $*" >> "$FAKE_EXTRACT_LOG"
+kill -TERM "$PPID"
+exit 0
+"""
+
+
+class InstallScriptStagingTests:
+    """install.sh stages every download in a private directory (task #309).
+
+    Each test drives the real script through the same hermetic sandbox the two
+    classes above use, with two additions: TMPDIR points at a directory the test
+    owns, so "nothing was left behind" is an exact statement about an empty
+    directory rather than a glob over a shared /tmp; and mktemp is a shim that
+    records what install.sh asked for and can be made to fail or to misbehave.
+    """
+
+    def setup_method(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="rmp_install_stage_"))
+        self.bin = self.tmp / "bin"
+        self.fixtures = self.tmp / "fixtures"
+        self.home = self.tmp / "home"
+        # Stands in for /tmp. Private, so the sticky-bit check has nothing to
+        # complain about; the world-writable case is built per test.
+        self.stage_parent = self.tmp / "tmpdir"
+        for d in (self.bin, self.fixtures, self.home, self.stage_parent):
+            d.mkdir(parents=True)
+        self.stage_parent.chmod(0o700)
+
+        self.curl_log = self.tmp / "curl.log"
+        self.extract_log = self.tmp / "extract.log"
+        self.mktemp_log = self.tmp / "mktemp.log"
+        self.stage_log = self.tmp / "stage.log"
+
+        token = uuid.uuid4().hex
+        self.unix_payload = f"GROADMAP-TEST-UNIX-BINARY-{token}\n".encode()
+        self.win_payload = f"GROADMAP-TEST-WINDOWS-BINARY-{token}\n".encode()
+        # Written to the fixed paths install.sh used to stage at. Nothing may
+        # touch these bytes any more.
+        self.squatted_payload = f"GROADMAP-TEST-SQUATTED-FILE-{token}\n".encode()
+
+        self.unix_name = f"rmp-{VERSION}-linux-amd64.tar.gz"
+        self.win_name = f"rmp-{VERSION}-windows-amd64.zip"
+        self.unix_archive = self.fixtures / self.unix_name
+        self.win_archive = self.fixtures / self.win_name
+        self._write_tar(self.unix_archive, self.unix_payload)
+        with zipfile.ZipFile(self.win_archive, "w") as zf:
+            zf.writestr("rmp.exe", self.win_payload)
+        write_checksum(self.unix_archive)
+        write_checksum(self.win_archive)
+
+        self._write_shim("uname", UNAME_SHIM)
+        self._write_shim("curl", LOGGING_CURL_SHIM)
+        for tool in REQUIRED_TOOLS:
+            resolved = shutil.which(tool)
+            if resolved:
+                (self.bin / tool).symlink_to(resolved)
+
+        real_mktemp = shutil.which("mktemp")
+        assert real_mktemp, "this host has no mktemp, which install.sh requires"
+        (self.bin / "mktemp").unlink()
+        self._write_shim("mktemp", MKTEMP_SHIM.replace("@REAL_MKTEMP@", real_mktemp))
+
+        self.real_tar = shutil.which("tar")
+        (self.bin / "tar").unlink()
+        self._write_shim("tar", PROBE_TAR_SHIM.replace("@REAL_TAR@", self.real_tar))
+        self._write_shim("unzip", LOGGING_UNZIP_SHIM.format(python=sys.executable))
+
+    def teardown_method(self):
+        for stale in ("/tmp/rmp", "/tmp/rmp.exe"):
+            try:
+                os.unlink(stale)
+            except FileNotFoundError:
+                pass
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _write_shim(self, name, body):
+        path = self.bin / name
+        path.write_text(body)
+        path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    @staticmethod
+    def _write_tar(path, payload, member="rmp"):
+        with tempfile.TemporaryDirectory() as staging:
+            entry = Path(staging) / member
+            entry.write_bytes(payload)
+            with tarfile.open(path, "w:gz") as tf:
+                tf.add(entry, arcname=member)
+
+    def _run(self, uname_s="Linux", mktemp_mode="real", existing_dir=None,
+             tmpdir=None, with_mktemp=True, with_unzip=True, tar_shim="probe"):
+        for log in (self.curl_log, self.extract_log, self.mktemp_log, self.stage_log):
+            log.write_text("")
+        shutil.rmtree(self.home, ignore_errors=True)
+        self.home.mkdir(parents=True)
+
+        mktemp_path = self.bin / "mktemp"
+        if with_mktemp and not mktemp_path.exists():
+            self._write_shim(
+                "mktemp", MKTEMP_SHIM.replace("@REAL_MKTEMP@", shutil.which("mktemp")))
+        if not with_mktemp and mktemp_path.exists():
+            mktemp_path.unlink()
+
+        unzip_path = self.bin / "unzip"
+        if with_unzip and not unzip_path.exists():
+            self._write_shim("unzip", LOGGING_UNZIP_SHIM.format(python=sys.executable))
+        if not with_unzip and unzip_path.exists():
+            unzip_path.unlink()
+
+        body = PROBE_TAR_SHIM if tar_shim == "probe" else SIGNAL_TAR_SHIM
+        self._write_shim("tar", body.replace("@REAL_TAR@", self.real_tar))
+
+        parent = Path(tmpdir) if tmpdir else self.stage_parent
+        env = {
+            "PATH": str(self.bin),
+            "HOME": str(self.home),
+            "TMPDIR": str(parent),
+            "FAKE_UNAME_S": uname_s,
+            "FAKE_UNAME_M": "x86_64",
+            "FAKE_VERSION": VERSION,
+            "FAKE_FIXTURES": str(self.fixtures),
+            "FAKE_CURL_LOG": str(self.curl_log),
+            "FAKE_EXTRACT_LOG": str(self.extract_log),
+            "FAKE_MKTEMP_LOG": str(self.mktemp_log),
+            "FAKE_STAGE_LOG": str(self.stage_log),
+            "FAKE_MKTEMP_MODE": mktemp_mode,
+        }
+        if existing_dir is not None:
+            env["FAKE_MKTEMP_EXISTING"] = str(existing_dir)
+
+        result = subprocess.run(
+            [shutil.which("bash"), str(INSTALL_SH)],
+            input="u\n",
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        return _StagingRun(
+            result=result,
+            installed=self.home / ".local" / "bin" / "rmp",
+            requests=self.curl_log.read_text(),
+            extractions=self.extract_log.read_text(),
+            mktemp_calls=self.mktemp_log.read_text(),
+            staged=self.stage_log.read_text(),
+            survivors=sorted(p.name for p in parent.iterdir()),
+        )
+
+    @staticmethod
+    def _created_dirs(mktemp_calls):
+        return [line.split(" ", 1)[1]
+                for line in mktemp_calls.splitlines() if line.startswith("created ")]
+
+    def _assert_staging_parent_is_empty(self, run, why):
+        assert run.survivors == [], (
+            f"{why}: install.sh left {run.survivors} behind in its temporary "
+            f"directory. The staging directory must be removed on every exit "
+            f"path.\nstdout={run.result.stdout}\nstderr={run.result.stderr}"
+        )
+
+    # -- the directory itself -----------------------------------------------
+
+    def test_the_staging_directory_is_created_by_mktemp_and_is_unpredictable(self):
+        """`mkdir -p /tmp/rmp_install_$$` is replaced by an exclusive create."""
+        first = self._run()
+        assert first.result.returncode == 0, (
+            f"exit={first.result.returncode}\n{first.result.stdout}\n{first.result.stderr}"
+        )
+        second = self._run()
+        assert second.result.returncode == 0
+
+        for run in (first, second):
+            assert " -d " in run.mktemp_calls, (
+                "the staging directory must be created with `mktemp -d`, which "
+                "fails rather than succeeding on a name that already exists; "
+                f"install.sh called:\n{run.mktemp_calls}"
+            )
+            assert "XXXXXX" in run.mktemp_calls, (
+                "the template must carry enough X characters for mktemp to draw "
+                f"an unpredictable name; install.sh called:\n{run.mktemp_calls}"
+            )
+
+        made_first = self._created_dirs(first.mktemp_calls)
+        made_second = self._created_dirs(second.mktemp_calls)
+        assert len(made_first) == 1 and len(made_second) == 1, (
+            f"one staging directory per run: {made_first} then {made_second}"
+        )
+        assert made_first[0] != made_second[0], (
+            "REGRESSION (task #309): two runs staged in the same directory, so "
+            f"the name is predictable: {made_first[0]}"
+        )
+        assert not re.search(r"rmp_install_\d+$", made_first[0]), (
+            "REGRESSION (task #309): the staging directory is named from the "
+            f"process id again, which is one of 32768 values: {made_first[0]}"
+        )
+
+    def test_the_archive_is_verified_and_extracted_inside_a_private_directory(self):
+        """At the instant of extraction the directory must be mode 0700."""
+        run = self._run()
+        assert run.result.returncode == 0, (
+            f"exit={run.result.returncode}\n{run.result.stdout}\n{run.result.stderr}"
+        )
+        assert "Checksum verified" in run.result.stdout + run.result.stderr, (
+            "task #185's verification must still run; it is not weakened here"
+        )
+
+        lines = [ln for ln in run.staged.splitlines() if ln.strip()]
+        assert lines, (
+            "the tar probe recorded nothing, so the extraction directory was "
+            "never observed and this test proves nothing"
+        )
+        assert lines[0].startswith("drwx------"), (
+            "the directory holding the verified archive must be readable, "
+            "writable and searchable by its owner ALONE -- a local user who "
+            "cannot open the archive cannot swap it between the checksum check "
+            f"and the extraction. `ls -ld` reported:\n{lines[0]}"
+        )
+        assert str(self.stage_parent) in lines[0], (
+            f"the staging directory must sit under TMPDIR; got:\n{lines[0]}"
+        )
+        assert any(self.unix_name in ln for ln in lines[1:]), (
+            "the archive must be inside that private directory when tar runs, "
+            f"not beside it; the directory held:\n{run.staged}"
+        )
+        assert run.installed.read_bytes() == self.unix_payload
+        self._assert_staging_parent_is_empty(run, "a successful install")
+
+    # -- refusals ------------------------------------------------------------
+
+    def test_a_staging_directory_that_already_exists_is_refused(self):
+        """The precondition the attack needs, driven end to end.
+
+        The mktemp shim returns a directory it did not create: world-writable,
+        already populated, exactly what `mkdir -p` accepted when another local
+        user pre-created `/tmp/rmp_install_<pid>` and waited. install.sh must
+        refuse it rather than stage a download in it -- and must not delete it
+        either, because a directory this script did not create is not this
+        script's to remove.
+        """
+        squatted = self.stage_parent / "rmp_install.AAAAAAAAAA"
+        squatted.mkdir()
+        squatted.chmod(0o777)
+        marker = squatted / "planted-by-another-user"
+        marker.write_bytes(self.squatted_payload)
+
+        run = self._run(mktemp_mode="existing", existing_dir=squatted)
+
+        assert run.result.returncode != 0, (
+            "install.sh must refuse a staging directory that already existed; "
+            f"exit={run.result.returncode}\n{run.result.stdout}\n{run.result.stderr}"
+        )
+        assert "refusing to stage" in run.result.stderr, (
+            "the refusal must say what it refused and why, so the user can act "
+            f"on it; stderr was:\n{run.result.stderr}"
+        )
+        assert "releases/download" not in run.requests, (
+            "nothing may be fetched once the staging directory is refused: the "
+            f"point is to fail before anything is written. install.sh asked "
+            f"for:\n{run.requests}"
+        )
+        assert run.extractions.strip() == "", (
+            f"nothing may be extracted after the refusal; the log holds:\n{run.extractions}"
+        )
+        assert not run.installed.exists(), (
+            "REGRESSION (task #309): a binary was installed after staging in a "
+            "directory install.sh did not create"
+        )
+        assert marker.read_bytes() == self.squatted_payload, (
+            "install.sh must not touch a directory it did not create"
+        )
+        assert sorted(p.name for p in squatted.iterdir()) == ["planted-by-another-user"], (
+            "REGRESSION (task #309): install.sh wrote into a directory it did "
+            f"not create; it now holds {sorted(p.name for p in squatted.iterdir())}"
+        )
+
+    def test_a_staging_directory_belonging_to_another_user_is_refused_and_kept(self):
+        """The other half of the same refusal, and the one that must not delete.
+
+        The shim hands back /tmp itself: a directory that exists, that this
+        script did not create, and that belongs to root on every system the
+        installer supports. install.sh must refuse to stage in it -- and must
+        leave it exactly where it is. A refusal that "cleaned up" a directory it
+        did not create would be a far worse defect than the one being fixed,
+        since the path it removed would be whatever a hostile mktemp named.
+        """
+        sentinel = Path("/tmp") / f"groadmap-staging-sentinel-{uuid.uuid4().hex}"
+        sentinel.write_bytes(self.squatted_payload)
+        try:
+            run = self._run(mktemp_mode="existing", existing_dir="/tmp")
+
+            assert run.result.returncode != 0, (
+                "install.sh must refuse to stage in a directory it does not own; "
+                f"exit={run.result.returncode}\n{run.result.stdout}\n{run.result.stderr}"
+            )
+            assert "refusing to stage" in run.result.stderr, (
+                f"the refusal must say what it refused; stderr was:\n{run.result.stderr}"
+            )
+            assert "releases/download" not in run.requests, (
+                f"nothing may be fetched after the refusal; asked for:\n{run.requests}"
+            )
+            assert not run.installed.exists(), "nothing may be installed"
+            assert Path("/tmp").is_dir(), (
+                "install.sh removed the directory it refused. It must only ever "
+                "remove a staging directory it created itself"
+            )
+            assert sentinel.read_bytes() == self.squatted_payload, (
+                "install.sh emptied the directory it refused"
+            )
+        finally:
+            sentinel.unlink(missing_ok=True)
+
+    def test_a_symlinked_staging_directory_is_refused(self):
+        """A symlink is the other thing `mkdir -p` used to accept.
+
+        `mkdir -p /tmp/rmp_install_<pid>` succeeds when that path is a SYMLINK
+        to a directory, and everything afterwards then writes through it into
+        wherever it points -- a directory whose owner chose where it points.
+        The target here is private and belongs to the test user, so ownership
+        and permissions both look right and only the symlink itself can be the
+        reason for the refusal.
+        """
+        target = self.tmp / "attacker-owned-target"
+        target.mkdir()
+        target.chmod(0o700)
+        link = self.stage_parent / "rmp_install.SYMLINKED"
+        link.symlink_to(target)
+
+        run = self._run(mktemp_mode="existing", existing_dir=link)
+
+        assert run.result.returncode != 0, (
+            "a symlinked staging directory must be refused; "
+            f"exit={run.result.returncode}\n{run.result.stdout}\n{run.result.stderr}"
+        )
+        assert "refusing to stage" in run.result.stderr, (
+            f"the refusal must say what it refused; stderr was:\n{run.result.stderr}"
+        )
+        assert "releases/download" not in run.requests, (
+            f"nothing may be fetched after the refusal; asked for:\n{run.requests}"
+        )
+        assert not run.installed.exists(), "nothing may be installed"
+        assert sorted(p.name for p in target.iterdir()) == [], (
+            "REGRESSION (task #309): install.sh wrote through the symlink into "
+            f"{target}, which holds {sorted(p.name for p in target.iterdir())}"
+        )
+        assert link.is_symlink(), "install.sh must not remove what it refused"
+
+    def test_a_staging_directory_that_cannot_be_created_stops_the_install(self):
+        """Failing to create it is a refusal, never a reason to carry on."""
+        run = self._run(mktemp_mode="fail")
+
+        assert run.result.returncode != 0, (
+            "install.sh must exit non-zero when it cannot create its staging "
+            f"directory; exit={run.result.returncode}\n{run.result.stderr}"
+        )
+        assert "staging directory" in run.result.stderr, (
+            f"the failure must name what could not be created; stderr was:\n{run.result.stderr}"
+        )
+        assert "releases/download" not in run.requests, (
+            f"no archive may be requested; install.sh asked for:\n{run.requests}"
+        )
+        assert not run.installed.exists(), "nothing may be installed"
+        self._assert_staging_parent_is_empty(run, "a staging directory that could not be created")
+
+    def test_a_world_writable_staging_parent_without_the_sticky_bit_is_refused(self):
+        """A private directory is only as private as the directory holding it.
+
+        /tmp carries mode 1777 -- world-writable WITH the sticky bit -- so a
+        local user cannot rename another user's entry out of the way. Without
+        the sticky bit they can, which would put an attacker's directory back at
+        the path after mktemp created ours, and the window would be open again.
+        """
+        exposed = self.tmp / "exposed"
+        exposed.mkdir()
+        exposed.chmod(0o777)
+
+        run = self._run(tmpdir=exposed)
+
+        assert run.result.returncode != 0, (
+            "a world-writable, non-sticky temporary directory must be refused; "
+            f"exit={run.result.returncode}\n{run.result.stderr}"
+        )
+        assert "sticky" in run.result.stderr, (
+            f"the refusal must explain the condition; stderr was:\n{run.result.stderr}"
+        )
+        assert "releases/download" not in run.requests, (
+            f"no archive may be requested; install.sh asked for:\n{run.requests}"
+        )
+        assert not run.installed.exists(), "nothing may be installed"
+        assert sorted(p.name for p in exposed.iterdir()) == [], (
+            "nothing may be staged in a directory that was refused"
+        )
+
+    def test_a_host_without_mktemp_stops_before_anything_is_downloaded(self):
+        """Task #185's precedent: a missing tool aborts, it does not degrade."""
+        run = self._run(with_mktemp=False)
+
+        assert run.result.returncode == 1, (
+            "a host with no mktemp must be refused with exit 1; "
+            f"exit={run.result.returncode}\n{run.result.stderr}"
+        )
+        assert "mktemp" in run.result.stderr, (
+            f"the message must name the missing tool; stderr was:\n{run.result.stderr}"
+        )
+        assert run.requests.strip() == "", (
+            "the guard must fire before the network is touched at all, exactly "
+            "as the hashing-tool guard does; install.sh asked for:\n"
+            f"{run.requests}"
+        )
+        assert not run.installed.exists(), "nothing may be installed"
+
+    # -- the fixed paths -----------------------------------------------------
+
+    def test_the_fixed_staging_paths_are_never_written(self):
+        """`/tmp/rmp` and `/tmp/rmp.exe` carried the same defect as the directory.
+
+        A fixed name in a shared directory is reachable by every local user from
+        the moment it appears until the moment it is installed. Nothing may be
+        written through those paths any more, so a file already sitting at each
+        of them must come out of a successful install untouched.
+        """
+        for uname_s, payload in (("Linux", self.unix_payload),
+                                 ("MINGW64_NT-10.0-19045", self.win_payload)):
+            for path in (Path("/tmp/rmp"), Path("/tmp/rmp.exe")):
+                if path.exists() or path.is_symlink():
+                    path.unlink()
+                path.write_bytes(self.squatted_payload)
+            before = {p: p.stat().st_ino for p in (Path("/tmp/rmp"), Path("/tmp/rmp.exe"))}
+
+            run = self._run(uname_s=uname_s)
+            assert run.result.returncode == 0, (
+                f"the install must succeed on {uname_s}; "
+                f"exit={run.result.returncode}\n{run.result.stdout}\n{run.result.stderr}"
+            )
+            assert run.installed.read_bytes() == payload, (
+                f"the installed file is not the binary the archive carried ({uname_s})"
+            )
+            for path, inode in before.items():
+                assert path.read_bytes() == self.squatted_payload, (
+                    f"REGRESSION (task #309): install.sh wrote through the fixed "
+                    f"staging path {path} on {uname_s}"
+                )
+                assert path.stat().st_ino == inode, (
+                    f"REGRESSION (task #309): {path} was replaced on {uname_s}, so "
+                    f"install.sh still stages at a name every local user can predict"
+                )
+            self._assert_staging_parent_is_empty(run, f"a successful install on {uname_s}")
+
+    # -- cleanup on every exit path ------------------------------------------
+
+    def test_every_abort_path_removes_the_staging_directory(self):
+        """One table, one row per way out of the download (tasks #185, #309).
+
+        The cleanup used to be a `rm -rf` repeated at each of these sites, which
+        is one chance per site to forget it. It is a single EXIT trap now, and
+        this is the evidence that the trap covers every row rather than most of
+        them: after each run the temporary directory the script was given must
+        be empty.
+        """
+        cases = [
+            ("the archive cannot be downloaded", self._break_archive_download, {}),
+            ("the checksum cannot be downloaded", self._break_checksum_download, {}),
+            ("the archive was substituted", self._break_substituted_archive, {}),
+            ("the checksum describes another archive", self._break_foreign_checksum, {}),
+            ("the checksum is malformed", self._break_malformed_checksum, {}),
+            ("the checksum file is empty", self._break_empty_checksum, {}),
+            ("the archive is corrupt but verifies", self._break_corrupt_archive, {}),
+            ("the archive carries no binary", self._break_archive_without_binary, {}),
+            ("unzip is missing on the Windows path", lambda: None,
+             {"uname_s": "MINGW64_NT-10.0-19045", "with_unzip": False}),
+        ]
+
+        for why, arrange, kwargs in cases:
+            self._reset_fixtures()
+            arrange()
+            run = self._run(**kwargs)
+
+            assert run.result.returncode != 0, (
+                f"{why}: install.sh must exit non-zero; "
+                f"exit={run.result.returncode}\n{run.result.stdout}\n{run.result.stderr}"
+            )
+            assert not run.installed.exists(), (
+                f"{why}: a binary was installed anyway"
+            )
+            self._assert_staging_parent_is_empty(run, why)
+
+        self._reset_fixtures()
+
+    def test_a_signal_mid_extraction_still_removes_the_staging_directory(self):
+        """The exit path no `rm -rf` at a failure site can ever cover.
+
+        The tar shim sends SIGTERM to install.sh and then exits 0, so the script
+        is interrupted with the archive and the checksum file already written
+        into the staging directory, at a point where it believed it was about to
+        succeed. Only a trap can clean that up.
+        """
+        run = self._run(tar_shim="signal")
+
+        assert run.result.returncode == 143, (
+            "install.sh must handle SIGTERM and exit 128+15 rather than dying "
+            f"where it stands; exit={run.result.returncode}\n{run.result.stderr}"
+        )
+        assert not run.installed.exists(), (
+            "an interrupted run must not install anything"
+        )
+        assert "tar" in run.extractions, (
+            "the run must actually have reached the extraction, or the signal "
+            "arrived somewhere this test does not claim to cover"
+        )
+        self._assert_staging_parent_is_empty(run, "a run interrupted by SIGTERM")
+
+    # -- fixture arrangement --------------------------------------------------
+
+    def _reset_fixtures(self):
+        for path in self.fixtures.iterdir():
+            path.unlink()
+        self._write_tar(self.unix_archive, self.unix_payload)
+        with zipfile.ZipFile(self.win_archive, "w") as zf:
+            zf.writestr("rmp.exe", self.win_payload)
+        write_checksum(self.unix_archive)
+        write_checksum(self.win_archive)
+
+    def _break_archive_download(self):
+        self.unix_archive.unlink()
+
+    def _break_checksum_download(self):
+        self.unix_archive.with_name(self.unix_name + ".sha256").unlink()
+
+    def _break_substituted_archive(self):
+        self._write_tar(self.unix_archive, b"GROADMAP-TEST-SUBSTITUTED-ARCHIVE\n")
+
+    def _break_foreign_checksum(self):
+        write_checksum(self.unix_archive, name=f"rmp-{VERSION}-darwin-arm64.tar.gz")
+
+    def _break_malformed_checksum(self):
+        self.unix_archive.with_name(self.unix_name + ".sha256").write_text(
+            f"not-a-digest  {self.unix_name}\n", encoding="utf-8")
+
+    def _break_empty_checksum(self):
+        self.unix_archive.with_name(self.unix_name + ".sha256").write_text("")
+
+    def _break_corrupt_archive(self):
+        self.unix_archive.write_bytes(b"this is not a gzip stream at all\n")
+        write_checksum(self.unix_archive)
+
+    def _break_archive_without_binary(self):
+        self._write_tar(self.unix_archive, b"see the release notes\n", member="README.txt")
+        write_checksum(self.unix_archive)
+
+
+class _StagingRun:
+    """What one sandboxed run left behind, for the staging assertions."""
+
+    def __init__(self, result, installed, requests, extractions, mktemp_calls,
+                 staged, survivors):
+        self.result = result
+        self.installed = installed
+        self.requests = requests
+        self.extractions = extractions
+        self.mktemp_calls = mktemp_calls
+        self.staged = staged
+        self.survivors = survivors
+
+
 class _Run:
     """What one sandboxed install.sh run left behind, for the assertions."""
 
@@ -720,7 +1359,8 @@ def _run_all():
     failed = 0
     failures = []
     print("=" * 60)
-    print("install.sh extraction and checksum contract (tasks #138, #185)")
+    print("install.sh extraction, checksum and staging contract "
+          "(tasks #138, #185, #309)")
     print(f"{len(classes)} test classes discovered: "
           f"{', '.join(cls.__name__ for cls in classes)}")
     print("=" * 60)
