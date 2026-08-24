@@ -216,37 +216,29 @@ func taskSetStatus(args []string) error {
 	if completionSummary != nil && newStatus != models.StatusCompleted {
 		return fmt.Errorf("%w: --summary is only valid when transitioning to COMPLETED", utils.ErrValidation)
 	}
-	// The cap keeps the position SPEC/COMMANDS.md § Change Status (stat) step 3
-	// states for --summary — ahead of the content rules — and measures the
-	// TRIMMED value, because that is the value stored (SPEC/MODELS.md §
-	// Free-Text Emptiness and Trimming Constraint, Rule 2). A summary of exactly
-	// the maximum length carrying surrounding whitespace is therefore accepted,
-	// and what was counted is what the column holds.
+	// The whole free-text sequence for --summary, through the one helper that
+	// owns its order (rmp task 302): the LENGTH cap on the value as it will be
+	// stored, then the encoding rule and then the control-character rule on the
+	// value AS SUPPLIED, and only then the trim (SPEC/MODELS.md § Free-Text UTF-8
+	// Encoding Constraint, § Free-Text Control-Character Constraint, and
+	// § Free-Text Emptiness and Trimming Constraint).
 	//
-	// utils.CheckFieldLength counts CHARACTERS, the unit the message names and
-	// the schema enforces. It counted bytes here until rmp task 296, which made a
-	// summary of 4096 CJK characters refused for exceeding "4096 characters".
-	if completionSummary != nil {
-		if err := utils.CheckFieldLength(strings.TrimSpace(*completionSummary),
-			utils.FieldTaskCompletionSummary, models.MaxTaskCompletionSummary); err != nil {
-			return err
-		}
-	}
-	// The encoding rule and then the control-character rule, on the value AS
-	// SUPPLIED, and only then the trim (SPEC/MODELS.md § Free-Text UTF-8 Encoding
-	// Constraint, § Free-Text Control-Character Constraint, and § Free-Text
-	// Emptiness and Trimming Constraint, whose steps 1 and 2 utils.TrimFreeText
-	// owns). Trimming first would strip a leading or trailing VT or FF — both
-	// forbidden — before the check could see them.
+	// The cap keeps the position SPEC/COMMANDS.md § Change Status (stat) step 3
+	// states for --summary — ahead of the content rules — and still measures the
+	// TRIMMED value, because that is the value stored (Rule 2): a summary of
+	// exactly the maximum length carrying surrounding whitespace is accepted,
+	// and what is counted is what the column holds. What changed is only that
+	// this command no longer says so itself; the sequence is stated once, in
+	// utils.TrimFreeText, so it cannot drift from the six other write paths.
 	//
 	// `completion_summary` is the one free-text field Rule 1 does NOT govern: it
 	// is optional, and `task stat` accepts a transition to COMPLETED that
 	// supplies no --summary at all, so a value that is empty once trimmed is a
-	// summary the caller chose not to write and not a violation. Rule 2 still
-	// applies, which is why the value is rebound to the trimmed form before it
-	// reaches the UPDATE.
+	// summary the caller chose not to write and not a violation — which is why
+	// this is TrimFreeText and not RequireFreeText.
 	if completionSummary != nil {
-		stored, textErr := utils.TrimFreeText(*completionSummary, utils.FieldTaskCompletionSummary)
+		stored, textErr := utils.TrimFreeText(*completionSummary,
+			utils.FieldTaskCompletionSummary, models.MaxTaskCompletionSummary)
 		if textErr != nil {
 			return textErr
 		}

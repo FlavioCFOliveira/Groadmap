@@ -362,24 +362,39 @@ no entity when it refuses.
 Control-Character Constraint, on every command and for every field the two rules
 govern. The control-character rule is defined over decoded code points, so it is only
 meaningful once the bytes are known to decode, and checking the encoding first is
-what makes it so. No other check moves. This rule adds one check, immediately before the
-control-character check, wherever the control-character check runs; the position of
-every other check is unchanged (see `COMMANDS.md § Field Validation` and the
-per-command validation orders in `COMMANDS.md`).
+what makes it so. Both checks run on the value **as the caller supplied it**, and both
+run after the field's length cap, which answers first. The whole sequence is the length
+cap, the encoding check, the control-character check, the trim, and last the emptiness
+judgement, and it does not vary by command, by field, or by the way the value reached
+the application. The Free-Text Emptiness and Trimming Constraint below states that
+sequence in full and is canonical for it;
+`COMMANDS.md § UTF-8 Encoding Constraint (All Free-Text Fields)` states the same order
+once for every command that writes a free-text field, together with the refusal each
+step produces (see also `COMMANDS.md § Field Validation`).
 
-One consequence of that placement is deliberate and MUST be preserved. Because this
-rule moves no other check, the encoding check stands in the same relation to a
-field's length limit as the control-character check already stands in on the command
-that writes it. Where the command applies the length limit first, a value that is at
-once longer than the limit and not valid UTF-8 is still refused for its length and
-not for its encoding: the caller sees the `field exceeds maximum size` refusal and
-never the encoding message. The comment `Body` is such a field on all four comment
-subcommands, on the flag path and on the standard-input path alike, and it must
-remain one: there the length verdict is fixed the moment the value cannot fit within
-the cap, and applying the encoding rule ahead of the limit would both change that
-verdict and defeat the bounded read, which never materialises the whole input.
-`COMMANDS.md § UTF-8 Encoding Constraint (All Free-Text Fields)` states where the
-check falls on each command.
+One consequence of that order is deliberate and MUST be preserved. Because the length
+cap answers first, a value that is at once longer than the limit and not valid UTF-8 is
+refused for its length and not for its encoding: the caller sees the
+`field exceeds maximum size` refusal and never the encoding message. Every one of the
+eight free-text fields is such a field, on every command that writes one, on the flag
+path and on the standard-input path alike, and every one of them must remain one.
+
+The reason the cap holds that position is the comment `Body`, the one free-text field
+that has a standard-input source. There the length verdict is fixed the moment the value
+cannot fit within the cap, and the bounded read stops at that point without ever
+materialising the whole input; applying the encoding rule ahead of the limit would both
+change that verdict and defeat the bounded read, because a reader cannot judge the
+encoding of bytes it has refused to read. Cap-first is therefore the only order every
+field and every command can share, and the other write paths were moved onto the comment
+path's order rather than the reverse.
+
+The verdict that order produces is well defined and not an accident of it. The length
+the application measures is defined on malformed input as well: each byte that decodes
+to no valid rune counts as one, so the cap is answerable on a value whose encoding has
+not been established, and **Length limits are unchanged** below states how that count
+relates to SQLite's `length()`. The trim the measurement runs on is equally safe there,
+because it removes only whitespace code points and no byte that fails to decode is one,
+so the trim can neither introduce nor remove an encoding failure.
 
 Rationale: rejection is the only outcome under which what the caller supplied, what
 the database stores, and what every reader prints are the same string. Without this
@@ -398,16 +413,16 @@ web interface escapes every value for its context (see `WEB.md`). It exists for 
 integrity and for the output contract.
 
 **Length limits are unchanged.** This rule changes nothing about the maximum length
-each field carries, how the application measures that length, or where the
-measurement falls in the sequence of checks. Two facts about those limits hold both
-before and after this rule, and a later change must preserve both. First, the count
-the application measures is never smaller than the count SQLite's `length()`
-function returns for the same stored value, because `length()` counts only the bytes
-of a value that are not UTF-8 continuation bytes. Second, and in consequence, the
-`CHECK(length(<column>) <= <n>)` constraints that `DATABASE.md` defines cannot be
-tripped by an input the application accepted: they are an independent backstop, not
-the operative check. Neither count is to be brought into line with the other on the
-strength of this rule.
+each field carries or how the application measures that length; where the measurement
+falls in the sequence of checks is stated in **Order** above. Two facts about those
+limits hold both before and after this rule, and a later change must preserve both.
+First, the count the application measures is never smaller than the count SQLite's
+`length()` function returns for the same stored value, because `length()` counts only
+the bytes of a value that are not UTF-8 continuation bytes. Second, and in
+consequence, the `CHECK(length(<column>) <= <n>)` constraints that `DATABASE.md`
+defines cannot be tripped by an input the application accepted: they are an
+independent backstop, not the operative check. Neither count is to be brought into
+line with the other on the strength of this rule.
 
 **Where the two constraints apply beyond the model's own fields:**
 
@@ -490,19 +505,29 @@ would have accommodated, and would leave the count the application checked diffe
 from the count in the column — the same class of divergence between what the caller
 supplied, what the database stores, and what a reader is shown that the Free-Text
 UTF-8 Encoding Constraint above exists to close. Rule 2 fixes **what** the length
-check measures. It fixes nothing about **when** that check runs relative to the other
-checks, which each command's own section in `COMMANDS.md` states.
+check measures. **When** it runs is fixed once, for every command, by the Free-Text UTF-8
+Encoding Constraint above: the cap answers first, ahead of both content checks, and that
+position does not vary by command.
 
-**Order, and why a single trim is not enough.** The value is examined at two separate
-points, and exactly one trim falls between them. The sequence is:
+**Order, and why a single trim is not enough.** The value is examined in two forms — as
+the caller supplied it, and as it will be stored — and exactly one trim produces the
+second form. The sequence is:
 
-1. The Free-Text UTF-8 Encoding Constraint, and immediately after it the Free-Text
+1. The field's maximum length is checked against the value as it will be **stored**,
+   which Rule 2 above defines as the trimmed value.
+2. The Free-Text UTF-8 Encoding Constraint, and immediately after it the Free-Text
    Control-Character Constraint, are applied to the value **as the caller supplied
    it**, before any whitespace is removed.
-2. The value is trimmed.
-3. Rule 1 is applied to the **trimmed** value.
+3. The value is trimmed.
+4. Rule 1 is applied to the **trimmed** value.
 
-Step 1 MUST NOT be moved after step 2, and the reason is specific rather than
+Step 1 and step 2 examine different strings on purpose: the cap must measure what the
+column holds, for the reason Rule 2 above gives, while the two content rules must see
+the bytes the caller sent, for the reason the next paragraph gives. Step 1's position
+relative to step 4 changes no verdict in either direction, because a value that trims to
+nothing is zero characters long, so no input exists that both steps could answer for.
+
+Step 2 MUST NOT be moved after step 3, and the reason is specific rather than
 stylistic. VT (`0x0B`, line tabulation) and FF (`0x0C`, form feed) are forbidden
 control characters under the Free-Text Control-Character Constraint above, and they
 are also whitespace under the definition the trim applies. Trimming first removes a
@@ -549,6 +574,25 @@ moment the trim moves ahead of the check.
 6. A value consisting solely of VT is refused as a control-character violation, not
    as an empty value.
 7. Moving the control-character check onto the trimmed value fails at least one test.
+8. On every command that writes a free-text field, a value that is at once longer than
+   the field's maximum and not valid UTF-8 is refused for its **length**. Both refusals
+   carry exit code 6, so the exit code alone establishes nothing about the order; the
+   criterion is that the message is
+   `Error: field exceeds maximum size: <field> exceeds maximum length of N characters`
+   and not `Error: validation error: <field>: the value is not valid UTF-8`.
+9. The same holds for a value that is at once longer than the maximum and carrying a
+   forbidden control character: the refusal names the length and not the control
+   character. Here too both refusals exit 6, and the exit code distinguishes nothing.
+10. A value of exactly the field's maximum length that carries a forbidden control
+    character is refused as a control-character violation, and a value of exactly that
+    length that is not valid UTF-8 is refused for its encoding. Reaching the cap is
+    therefore never a way past the two content rules: step 1 answers only for a value
+    that exceeds the maximum.
+11. Criteria 8 to 10 hold on every command that writes a free-text field and for every
+    field that command writes, and on the comment `Body`'s standard-input path as well
+    as its flag path. A check made on one command and one field alone would pass while
+    another command disagreed, and that divergence is what these criteria exist to
+    exclude.
 
 ```go
 // Task represents a task in the roadmap.

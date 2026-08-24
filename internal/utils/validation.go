@@ -77,42 +77,95 @@ func InspectFreeText(value string) FreeTextViolation {
 	}
 }
 
-// TrimFreeText applies steps 1 and 2 of the sequence SPEC/MODELS.md § Free-Text
-// Emptiness and Trimming Constraint fixes for a free-text value, and returns the
-// value to store: the encoding rule and the control-character rule on the value
-// AS SUPPLIED, and only then the trim.
+// TrimFreeText is THE ordering every free-text write path in the application
+// runs. It applies the three rules a capped free-text value is subject to, in
+// the one order that governs all of them, and returns the value to store:
+//
+//  1. the LENGTH cap, against the value as it will be STORED;
+//  2. the Free-Text UTF-8 Encoding Constraint, against the value AS SUPPLIED;
+//  3. the Free-Text Control-Character Constraint, against the value AS SUPPLIED;
+//
+// and only then the trim. It returns the first refusal, so a value that breaks
+// more than one rule is always refused for the earliest one in that list.
 //
 // It is the whole of the constraint for the one free-text field that is optional,
 // `completion_summary`, which Rule 2 governs and Rule 1 does not. Every required
-// field goes through RequireFreeText below, which adds step 3.
+// field goes through RequireFreeText below, which adds step 4 of SPEC/MODELS.md
+// § Free-Text Emptiness and Trimming Constraint, the emptiness judgement.
+//
+// # Why the cap is in here, and why it is first
+//
+// The cap used to be the caller's business, and that is exactly why rmp task 302
+// exists: `task create` and `sprint create` ran the content rules inline and left
+// the cap to the model's Validate(), which runs afterwards, while every other
+// path capped first. A value at once over-long and carrying a BEL was refused as
+// a control character by `task create -t` and for its length by `task edit -t`,
+// and `sprint create` disagreed with ITSELF — length on --title, control
+// characters on --description — because the title had an inline cap and the
+// description did not. Six paths stated the sequence for themselves and two of
+// them stated it differently. The fix is not to correct the two: it is to leave
+// the sequence stated in one place, here, so a call site has no order to get
+// wrong.
+//
+// The cap is FIRST because the comment body's bounded standard-input reader
+// (models.ReadCommentBody) settles the length verdict WITHOUT ever buffering the
+// whole value — it stops reading as soon as the content cannot fit, which is the
+// CWE-400 defence that reader exists for — and SPEC/COMMANDS.md requires the
+// verdict a user sees to be the verdict a read-to-EOF implementation would
+// reach. A reader cannot judge the encoding of bytes it has refused to read, so
+// any order that put the encoding rule first would force that path to buffer
+// whatever a hostile writer chose to send. Cap-first is therefore the only order
+// the whole set of paths can share, and the other six were moved onto it.
+//
+// # An over-long value that is also invalid UTF-8 is refused for its LENGTH
+//
+// That is a consequence of the order above and it is deliberate. FieldLength is
+// well defined on malformed input — every byte that decodes to no valid rune
+// counts as one, so the count is never lower than SQLite's length() would
+// return — and the cap is therefore answerable on a value whose encoding has not
+// been established. It is also the verdict models.ReadCommentBody already had to
+// produce: it carries invalid bytes through unrepaired precisely so that the
+// length verdict, not the encoding verdict, is what such a body receives on both
+// of its input paths alike.
 //
 // # Why the trim cannot come first
 //
-// The order is the reason this helper exists at all. VT (0x0B) and FF (0x0C) are
-// forbidden by the control-character rule AND are whitespace to
-// strings.TrimSpace, so trimming first hands the check a value the offending
-// character has already been removed from: the input is accepted, the character
-// is discarded in silence, and the CWE-150 guard fails at the position where such
-// a character is easiest to hide. Writing the sequence once, here, is what stops
-// each call site from having to get it right on its own — and what makes the
-// single observable signature of the correct order, a value made only of VT
-// refused as a CONTROL CHARACTER and never as empty, hold everywhere at once.
+// VT (0x0B) and FF (0x0C) are forbidden by the control-character rule AND are
+// whitespace to strings.TrimSpace, so trimming first hands the check a value the
+// offending character has already been removed from: the input is accepted, the
+// character is discarded in silence, and the CWE-150 guard fails at the position
+// where such a character is easiest to hide. The single observable signature of
+// the correct order — a value made only of VT refused as a CONTROL CHARACTER and
+// never as empty — holds everywhere at once because the sequence is written here
+// and nowhere else.
 //
-// The length cap is deliberately NOT part of this helper. Where the cap runs
-// relative to these two rules differs per command, SPEC/COMMANDS.md leaves that
-// order to each command's own section, and rmp task 302 is what settles it; a cap
-// folded in here would silently move it on half the paths. What the SPEC does fix
-// is WHAT the cap measures — the trimmed value, the same value stored — so a
-// caller whose cap runs before the content rules measures strings.TrimSpace of
-// the value it is about to pass in.
-func TrimFreeText(value string, field Field) (string, error) {
+// # What the cap measures
+//
+// The STORED form, which is the trimmed value (SPEC/MODELS.md § Free-Text
+// Emptiness and Trimming Constraint, Rule 2), so the application can never
+// accept a value that CHECK(length(<column>) <= N) would then reject. Trimming
+// before measuring is safe on a value whose encoding is still unestablished:
+// strings.TrimSpace removes only runes for which unicode.IsSpace is true, and no
+// invalid byte decodes to one, so the trim can neither introduce nor remove an
+// encoding failure. Every call site used to compute that trim for itself in
+// order to pass it to CheckFieldLength; folding it in removes that repetition
+// too, because the trim and the value the cap measures are the same thing.
+//
+// limit is the field's maximum in code points. The maximums are declared in
+// package models (SPEC/MODELS.md), which cannot be imported here — models
+// imports this package — so the caller supplies it.
+func TrimFreeText(value string, field Field, limit int) (string, error) {
+	stored := strings.TrimSpace(value)
+	if err := CheckFieldLength(stored, field, limit); err != nil {
+		return "", err
+	}
 	if err := ValidateFreeText(value, field); err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(value), nil
+	return stored, nil
 }
 
-// RequireFreeText is TrimFreeText plus step 3: the emptiness judgement, applied
+// RequireFreeText is TrimFreeText plus step 4: the emptiness judgement, applied
 // to the TRIMMED value, for one of the seven free-text fields that are required
 // to be non-empty (SPEC/MODELS.md § Free-Text Emptiness and Trimming Constraint,
 // Rule 1). It returns the value to store, or the first refusal.
@@ -124,8 +177,14 @@ func TrimFreeText(value string, field Field) (string, error) {
 // caller that has such a flag decides that question BEFORE calling this, against
 // the value as supplied (SPEC/COMMANDS.md § Emptiness Constraint (All Required
 // Free-Text Fields)).
-func RequireFreeText(value string, field Field) (string, error) {
-	trimmed, err := TrimFreeText(value, field)
+//
+// The emptiness judgement sits AFTER the cap for the same reason it sits after
+// the content rules — it is step 3 and they are step 1 — and putting the cap
+// ahead of it changes no verdict in either direction: a value that trims to
+// nothing is zero code points long, so no input exists for which the two could
+// both answer.
+func RequireFreeText(value string, field Field, limit int) (string, error) {
+	trimmed, err := TrimFreeText(value, field, limit)
 	if err != nil {
 		return "", err
 	}

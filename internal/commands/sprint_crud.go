@@ -91,31 +91,22 @@ func sprintCreate(args []string) error {
 		// redundant doubled prefix (finding #54).
 		return fmt.Errorf("%w: --title", utils.ErrRequired)
 	}
+	// The whole free-text sequence, through the one helper that owns its order
+	// (rmp task 302): the LENGTH cap on the value as it will be stored, then the
+	// encoding rule and the control-character rule on the value AS SUPPLIED,
+	// then the trim, then the emptiness judgement on the trimmed value. `title`
+	// is rebound to the trimmed value, which is what is stored (SPEC/MODELS.md
+	// § Free-Text Emptiness and Trimming Constraint, Rule 2).
+	//
 	// The cap keeps the position it has always had on this field — ahead of the
-	// content rules, which is what rmp task 302 measures and this task does not
-	// move — but it measures strings.TrimSpace of the value, because that is
-	// the value stored (SPEC/MODELS.md § Free-Text Emptiness and Trimming
-	// Constraint, Rule 2). Measuring the value as supplied is what made a title
-	// of exactly 255 real characters carrying surrounding whitespace refused
-	// here and accepted by `task create`, for a value the column would have held.
-	//
-	// utils.CheckFieldLength counts CHARACTERS, the unit both the message and
-	// CHECK(length(title) <= 255) name; it counted bytes until rmp task 296.
-	if err := utils.CheckFieldLength(strings.TrimSpace(title), utils.FieldSprintTitle, models.MaxSprintTitle); err != nil {
-		return err
-	}
-	// The encoding rule and the control-character rule on the value AS SUPPLIED,
-	// then the trim, then the emptiness judgement on the trimmed value — the one
-	// order SPEC/MODELS.md § Free-Text Emptiness and Trimming Constraint fixes,
-	// owned by utils.RequireFreeText so this command cannot get it wrong on its
-	// own. `title` is rebound to the trimmed value, which is what is stored.
-	//
-	// This path previously did not trim at all. That is precisely why a title of
-	// three spaces created a sprint no reader surface could name, and equally why
-	// the control-character rule was intact here: adding the trim WITHOUT the
-	// order would have refused the three spaces and, in the same change, let a
-	// leading VT or FF through with the character silently discarded.
-	title, err = utils.RequireFreeText(title, utils.FieldSprintTitle)
+	// content rules — and still measures the trimmed value, which is what made a
+	// title of exactly 255 real characters carrying surrounding whitespace
+	// accepted here as it is by `task create`. What it no longer does is run as
+	// a statement of the order belonging to this command: the description below
+	// had no such statement at all, so one command answered the same pair of
+	// violations two different ways depending on which of its two fields carried
+	// them.
+	title, err = utils.RequireFreeText(title, utils.FieldSprintTitle, models.MaxSprintTitle)
 	if err != nil {
 		return err
 	}
@@ -127,12 +118,20 @@ func sprintCreate(args []string) error {
 		// redundant doubled prefix (finding #54).
 		return fmt.Errorf("%w: --description", utils.ErrRequired)
 	}
-	// Same sequence as the title above. No inline cap runs on this field: for
-	// `sprint create` the description's length is checked by sprint.Validate()
-	// inside the transaction, and that position is deliberately left where it is
-	// (rmp task 302 settles it). Validate() now receives the trimmed value, so
-	// what the cap measures is what the column holds either way.
-	description, err = utils.RequireFreeText(description, utils.FieldSprintDescription)
+	// The same sequence, in the same order, as the title above — which is the
+	// whole point of rmp task 302. This field had NO inline cap: its length was
+	// left to sprint.Validate() inside the transaction, which runs after the
+	// content rules, so `sprint create` refused an over-long --title carrying a
+	// BEL for its LENGTH and an over-long --description carrying the same BEL as
+	// a CONTROL CHARACTER. One command, two fields, two orders. Passing the
+	// maximum here is what removes that disagreement, and it also means the
+	// refusal now happens before the database is opened, as the title's already
+	// did.
+	//
+	// sprint.Validate() still applies both caps through the same helper. It is
+	// the model's own invariant and now only ever confirms what this line and
+	// the title's above already settled.
+	description, err = utils.RequireFreeText(description, utils.FieldSprintDescription, models.MaxSprintDescription)
 	if err != nil {
 		return err
 	}
@@ -356,21 +355,14 @@ func sprintUpdate(args []string) error {
 	// `task edit`, so both commands answer `-t ""` identically — and, since this
 	// task, answer `-t "   "` identically too.
 	if hasTitle {
-		// The cap keeps its position ahead of the content rules and measures
-		// the trimmed value, the value stored (SPEC/MODELS.md § Free-Text
-		// Emptiness and Trimming Constraint, Rule 2), in CHARACTERS — the unit
-		// utils.CheckFieldLength owns and the one this command counted in bytes
-		// until rmp task 296.
-		if err := utils.CheckFieldLength(strings.TrimSpace(title), utils.FieldSprintTitle, models.MaxSprintTitle); err != nil {
-			return err
-		}
-		// Content rules on the value AS SUPPLIED, then the trim, then the
-		// emptiness judgement on the trimmed value. `-t ""` still reaches
-		// FieldEmptyError — the empty string survives both content rules and
-		// trims to itself — so this command answers the literal empty string
-		// exactly as it did, and now answers a whitespace-only value the same
-		// way instead of storing it.
-		title, err = utils.RequireFreeText(title, utils.FieldSprintTitle)
+		// The whole free-text sequence, through the one helper that owns its
+		// order (rmp task 302): the LENGTH cap on the value as it will be
+		// stored, then the content rules on the value AS SUPPLIED, then the
+		// trim, then the emptiness judgement on the trimmed value. `-t ""` still
+		// reaches FieldEmptyError — the empty string survives the cap and both
+		// content rules and trims to itself — so this command answers the
+		// literal empty string exactly as it did.
+		title, err = utils.RequireFreeText(title, utils.FieldSprintTitle, models.MaxSprintTitle)
 		if err != nil {
 			return err
 		}
@@ -378,10 +370,7 @@ func sprintUpdate(args []string) error {
 
 	if hasDescription {
 		// Same sequence, same reasons, same unit, as the title above.
-		if err := utils.CheckFieldLength(strings.TrimSpace(description), utils.FieldSprintDescription, models.MaxSprintDescription); err != nil {
-			return err
-		}
-		description, err = utils.RequireFreeText(description, utils.FieldSprintDescription)
+		description, err = utils.RequireFreeText(description, utils.FieldSprintDescription, models.MaxSprintDescription)
 		if err != nil {
 			return err
 		}

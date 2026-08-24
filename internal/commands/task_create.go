@@ -101,12 +101,14 @@ func taskCreate(args []string) error {
 		return fmt.Errorf("%w: --acceptance-criteria", utils.ErrRequired)
 	}
 
-	// Apply the whole of SPEC/MODELS.md § Free-Text Emptiness and Trimming
-	// Constraint to each of the four fields, through the one helper that owns
-	// its order: the encoding rule and then the control-character rule on the
+	// Apply the whole free-text sequence to each of the four fields, through the
+	// one helper that owns its order: the LENGTH cap on the value as it will be
+	// stored, then the encoding rule and then the control-character rule on the
 	// value AS SUPPLIED, then the trim, then the emptiness judgement on the
-	// TRIMMED value. What is bound back into the local is the trimmed value, so
-	// it is also what the INSERT below writes (Rule 2).
+	// TRIMMED value (SPEC/MODELS.md § Free-Text Emptiness and Trimming
+	// Constraint, and SPEC/COMMANDS.md for the cap's position). What is bound
+	// back into the local is the trimmed value, so it is also what the INSERT
+	// below writes (Rule 2).
 	//
 	// The order is the point, not a detail. Trimming first would remove a
 	// leading or trailing VT or FF — forbidden control characters that
@@ -126,21 +128,28 @@ func taskCreate(args []string) error {
 	// `functional-requirements` while `task edit` refused
 	// `functional_requirements` for the identical value and the identical rule.
 	//
-	// No length cap runs here: for this command the cap lives in
-	// task.Validate() below and therefore follows the content rules. That
-	// position is untouched (rmp task 302 is what settles it), and it is only
-	// WHAT the cap measures that this constraint fixes — the trimmed value,
-	// which is what Validate() now receives.
+	// The length cap runs here too, ahead of the content rules, because
+	// utils.RequireFreeText is the one place the whole order is stated (rmp task
+	// 302). This command used to leave the cap to task.Validate() below, which
+	// runs AFTER the content rules, so a title at once over-long and carrying a
+	// BEL was refused here as a control character while `task edit -t` refused
+	// the identical value for its length. Passing the maximum in is what puts
+	// this command on the order every other write path already had.
+	//
+	// task.Validate() still applies the same caps, through the same helper. It
+	// is the model's own invariant and no longer the first thing to answer for
+	// these four values, so it now only ever confirms what this loop settled.
 	for _, f := range []struct {
 		value *string
 		field utils.Field
+		limit int
 	}{
-		{&title, utils.FieldTaskTitle},
-		{&functionalReqs, utils.FieldTaskFunctionalRequirements},
-		{&technicalReqs, utils.FieldTaskTechnicalRequirements},
-		{&acceptanceCriteria, utils.FieldTaskAcceptanceCriteria},
+		{&title, utils.FieldTaskTitle, models.MaxTaskTitle},
+		{&functionalReqs, utils.FieldTaskFunctionalRequirements, models.MaxTaskFunctionalRequirements},
+		{&technicalReqs, utils.FieldTaskTechnicalRequirements, models.MaxTaskTechnicalRequirements},
+		{&acceptanceCriteria, utils.FieldTaskAcceptanceCriteria, models.MaxTaskAcceptanceCriteria},
 	} {
-		stored, textErr := utils.RequireFreeText(*f.value, f.field)
+		stored, textErr := utils.RequireFreeText(*f.value, f.field, f.limit)
 		if textErr != nil {
 			return textErr
 		}

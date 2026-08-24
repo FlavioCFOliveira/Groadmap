@@ -239,44 +239,40 @@ func NormalizeCommentBody(body string) string {
 // rule, then the emptiness judgement. Each failure chains a utils sentinel that
 // maps to exit code 6.
 //
-// # The order, and what fixes each half of it
+// # The order, and where it is stated
 //
-// SPEC/MODELS.md § Free-Text Emptiness and Trimming Constraint fixes three of
-// the four positions: the encoding and control-character rules run on the value
-// AS SUPPLIED, the trim follows them, and the emptiness judgement runs on the
-// TRIMMED value. Judging emptiness first — which this function used to do — is
-// the CWE-150 reordering that constraint forbids: strings.TrimSpace removes VT
-// (0x0B) and FF (0x0C), both forbidden control characters, so a body made only
-// of VT trimmed away to nothing and was reported as an absent body instead of as
-// the forbidden character it was.
+// The first three are utils.TrimFreeText, which is the one statement of that
+// order in the application: every write path on every command runs it, and the
+// comment body is what fixed its shape. SPEC/COMMANDS.md § Add Task Comment
+// states the sequence as "the body's length, then its encoding, then its control
+// characters", and rmp task 302 moved the other six write paths onto it rather
+// than the reverse — because the bounded standard-input reader below settles the
+// length verdict without buffering the whole value, and no order that judged the
+// encoding first could leave that possible.
 //
-// The cap's position is fixed separately, by SPEC/COMMANDS.md § Add Task Comment
-// ("the body's length, then its encoding, then its control characters"), and it
-// is where it has always been: first. Moving the emptiness judgement past it
-// changes no verdict, because a body that trims to nothing is zero characters
-// long and the cap can never answer for it. What the cap measures is the STORED
-// form, which is also what the bounded standard-input reader requires: that
-// reader settles the length verdict as soon as the value cannot fit and stops
-// reading, so a body that is at once oversized and malformed is refused for its
-// length on both input paths alike.
+// The emptiness judgement is step 4 of SPEC/MODELS.md § Free-Text Emptiness and
+// Trimming Constraint and runs last, on the TRIMMED value. Judging it first —
+// which this function used to do — is the CWE-150 reordering that constraint
+// forbids: strings.TrimSpace removes VT (0x0B) and FF (0x0C), both forbidden
+// control characters, so a body made only of VT trimmed away to nothing and was
+// reported as an absent body instead of as the forbidden character it was. Its
+// position relative to the cap changes no verdict, because a body that trims to
+// nothing is zero characters long and the cap can never answer for it.
+//
+// It does NOT reach utils.RequireFreeText, which welds that same judgement on,
+// because the comment body's refusal for an empty value is its own:
+// ErrCommentBodyRequired, and not the FieldEmptyError the other seven fields
+// carry. What is shared is the order; what differs is one wording, and only that
+// wording is spelled here.
 func ValidateCommentBody(body string) (string, error) {
-	stored := NormalizeCommentBody(body)
-
-	// Characters, not bytes: see MaxCommentBody. The cap applies to the stored
-	// form, because trimming happens before validation and before storage.
-	//
-	// It goes through utils.CheckFieldLength, which is the single definition of
-	// that unit for all eight free-text fields. This field counted characters
-	// while the other seven counted bytes; routing it through the shared helper
-	// is what makes "characters" one unit in this codebase rather than two
-	// (rmp task 296).
-	if err := utils.CheckFieldLength(stored, utils.FieldCommentBody, MaxCommentBody); err != nil {
-		return "", err
-	}
-
-	// The encoding rule and the control-character rule, in that order and as one
-	// call (utils.ValidateFreeText), against the body AS SUPPLIED.
-	if err := utils.ValidateFreeText(body, utils.FieldCommentBody); err != nil {
+	// The cap on the stored form, then the encoding rule, then the
+	// control-character rule on the body AS SUPPLIED, then the trim — one call,
+	// so this field cannot drift from the other seven. utils.CheckFieldLength
+	// inside it is the single definition of the unit the cap counts in: this
+	// field counted characters while the other seven counted bytes until rmp
+	// task 296.
+	stored, err := utils.TrimFreeText(body, utils.FieldCommentBody, MaxCommentBody)
+	if err != nil {
 		return "", err
 	}
 
@@ -292,8 +288,8 @@ func ValidateCommentBody(body string) (string, error) {
 // SPEC/COMMANDS.md § Comment Body Input Source and Precedence pins (exit code 2,
 // "no comment body supplied"), rather than into a validation failure.
 //
-// A body is absent when nothing survives the trim. That judgement is step 3 of
-// SPEC/MODELS.md § Free-Text Emptiness and Trimming Constraint, so step 1 — the
+// A body is absent when nothing survives the trim. That judgement is step 4 of
+// SPEC/MODELS.md § Free-Text Emptiness and Trimming Constraint, so step 2 — the
 // encoding rule and the control-character rule, on the value AS SUPPLIED — has
 // to have answered first, and this function is where that happens. A body made
 // only of VT or FF is therefore refused as a forbidden control character (exit

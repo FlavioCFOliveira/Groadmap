@@ -301,7 +301,7 @@ What the general rule already settles for these subcommands, and what this secti
 
 ### Validation Behavior
 
-- **Whitespace trimming:** Leading and trailing whitespace is trimmed before validation and before storage, on every free-text field; interior whitespace is never altered. The UTF-8 and control-character checks are the deliberate exception and run on the value as supplied, ahead of the trim — see `Emptiness Constraint (All Required Free-Text Fields)` below
+- **Whitespace trimming:** Leading and trailing whitespace is trimmed before storage, on every free-text field; interior whitespace is never altered. Three checks run ahead of that trim, in one order on every command: the field's **length cap**, then the **UTF-8** check, then the **control-character** check. The cap is measured on the **trimmed** value, which is the value the database stores, while the two content checks see the value **as supplied**; that asymmetry is deliberate, and it is why a value of exactly the maximum length carrying surrounding whitespace is accepted while a value carrying a leading VT is still refused. `UTF-8 Encoding Constraint (All Free-Text Fields)` below states that order in full, and `Emptiness Constraint (All Required Free-Text Fields)` below states the trim and the emptiness judgement that follows it
 - **Empty strings:** Treated as missing for required fields, and so is a value that is empty only once trimmed. `Emptiness Constraint (All Required Free-Text Fields)` below states the exit code and the message each command emits
 - **Error format:** Plain text to stderr with descriptive message
 - **Exit code:** 6 for validation errors (see `ARCHITECTURE.md` — Exit Codes for canonical mapping)
@@ -452,17 +452,88 @@ The refusal is `Error: validation error: <field>: the value is not valid UTF-8`.
 names the field by its published name, as `Published Field Names in Validation
 Messages` above requires.
 
-**Order.** The encoding check runs immediately before the control-character check, on
-every command and for every field the two rules govern, and no other check changes
-position. The encoding check therefore stands in the same relation to a field's
-length limit as the control-character check already stands in on that command. Where
-the command applies the length limit first, a value that is at once oversized and not
-valid UTF-8 is refused as `field exceeds maximum size` and never as an encoding
-failure. That is the case for the comment `body` on all four comment subcommands,
-where the bounded standard-input read also requires it: that read fixes the length
-verdict as soon as the value cannot fit and stops reading, and it reaches the verdict
-a read-to-EOF implementation would reach. Where a command states a **Validation
-Order** below, that order states where the check falls for that command.
+**Order.** Every free-text value is validated in one order, and that order does not vary
+by command, by field, or by the way the value reached the application. The order is: the
+field's **length cap**, then the **UTF-8 encoding** check, then the **control-character**
+check, then the trim, and last the emptiness judgement that
+`Emptiness Constraint (All Required Free-Text Fields)` below governs. The encoding check
+runs immediately before the control-character check, and nothing falls between them,
+because the control-character rule is defined over decoded code points and is only
+meaningful once the bytes are known to decode.
+
+The order holds on all seven write paths — `task create`, `task edit`, `task stat` (the
+`--summary` value), `sprint create`, `sprint update`, the two `comment-add` subcommands,
+and the two `comment-edit` subcommands — for all eight free-text fields, and whether the
+value arrived as the value of a flag or on standard input. A value that breaks more than
+one rule is refused for the earliest rule in that order, so two consequences are
+universal. A value that is at once over the cap and not valid UTF-8 is refused as
+`field exceeds maximum size` and never as an encoding failure. A value that is at once
+over the cap and carrying a forbidden control character is refused as
+`field exceeds maximum size` and never as a control-character failure. Neither refusal
+depends on which command was invoked or on which field carried the value.
+
+**Why the cap answers first.** The comment `body` is the one free-text value that can
+arrive on standard input, and the command reads that stream under a bounded read: the
+read fixes the length verdict the moment the content cannot fit and stops reading, which
+is what keeps an oversized body from ever being buffered
+(see `Comment Body Input Source and Precedence` above). That section also requires the
+verdict the caller sees to be the verdict a read-to-EOF implementation would reach. A
+reader cannot judge the encoding of bytes it has refused to read, so an order that put
+the encoding check first would force that path either to buffer whatever a writer chose
+to send or to reach a different verdict. Cap-first is therefore the only order all seven
+write paths can share, and the other write paths were moved onto the comment path's
+order rather than the reverse.
+
+**The length verdict is well defined on bytes that do not decode.** Refusing an
+over-long value that is also malformed UTF-8 for its length is sound, and not an accident
+of the order. A field's length is counted in Unicode code points, and that count is
+defined on malformed input too: each byte that decodes to no valid rune counts as one, so
+the count is never lower than the count SQLite's `length()` function returns for the same
+stored value, and the cap is answerable on a value whose encoding has not been
+established. The trim the measurement runs on is equally safe there, because it removes
+only whitespace code points and no byte that fails to decode is one, so the trim can
+neither introduce nor remove an encoding failure. `MODELS.md § Task` (Free-Text UTF-8
+Encoding Constraint) is canonical for both facts.
+
+Four commands state a **Validation Order** below that restates this sequence for their
+own free-text step: `task stat`, `task comment-add`, `task comment-edit`, and
+`sprint comment-add`. Each of them restates this one rule and never a local variant; what
+such a block adds is where the free-text step falls among that command's other checks,
+which is per-command information this section does not carry. The commands that state no
+Validation Order block — `task create`, `task edit`, `sprint create`, and
+`sprint update` — need none, because the order above is unconditional and governs them in
+full.
+
+**Acceptance criteria:**
+
+1. On each of the seven write paths, and for each free-text field that path writes, a
+   value that is at once longer than the field's cap and not valid UTF-8 is refused with
+   `Error: field exceeds maximum size: <field> exceeds maximum length of N characters`
+   and never with `Error: validation error: <field>: the value is not valid UTF-8`. Both
+   refusals carry exit code 6, so the exit code alone establishes nothing about the
+   order: the criterion is which message reaches stderr.
+2. On the same paths and fields, a value that is at once longer than the cap and carrying
+   a forbidden control character is refused with the same
+   `field exceeds maximum size` message and never with
+   `Error: validation error: <field>: control characters are not allowed`. Here too both
+   refusals exit 6 and the exit code distinguishes nothing.
+3. A value of exactly the field's maximum length that carries a forbidden control
+   character is refused as a control-character violation, with
+   `Error: validation error: <field>: control characters are not allowed`. Reaching the
+   cap is therefore never a way past the content rules: the cap answers only for a value
+   that exceeds it.
+4. A value of exactly the field's maximum length that is not valid UTF-8 is refused for
+   its encoding, with `Error: validation error: <field>: the value is not valid UTF-8`.
+5. A value within the cap that is at once not valid UTF-8 and carrying a forbidden
+   control character is refused for its encoding, not for the control character.
+6. The four comment subcommands reach criteria 1 to 5 on the standard-input path exactly
+   as they reach them through `--body`, and an oversized body is refused there without
+   the whole value being read, as `Comment Body Input Source and Precedence` above
+   requires.
+7. Criteria 1 to 6 are checked on every write path and every field that path writes. A
+   check made on one command and one field alone would pass while another command
+   disagreed, and that divergence is what these criteria exist to exclude.
+8. The end-to-end suite exercises criteria 1 to 7 against the compiled binary.
 
 ### Emptiness Constraint (All Required Free-Text Fields)
 
@@ -546,9 +617,13 @@ a value consisting solely of VT is refused as
 empty value.
 
 This constraint fixes where the emptiness check falls relative to the trim, and where
-the trim falls relative to the encoding and control-character checks. It moves no
-other check, and it says nothing about where a field's maximum length is checked
-relative to the other two; each command's own section states that.
+the trim falls relative to the encoding and control-character checks. It moves no other
+check. Where a field's maximum length is checked is fixed once and for every command,
+as `UTF-8 Encoding Constraint (All Free-Text Fields)` above states: the cap answers
+first, ahead of both content checks. Its position relative to the emptiness judgement
+changes no verdict
+in either direction, because a value that trims to nothing is zero characters long, so no
+input exists that both checks could answer for.
 
 **Acceptance criteria:**
 
