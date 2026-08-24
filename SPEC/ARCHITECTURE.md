@@ -747,6 +747,15 @@ Two derivations are taken from this registry:
 - A change to a command's surface (new flag, renamed alias, new exit
   code, changed default) is one edit in the registry and is reflected
   automatically by both surfaces.
+- A `stdout_on_success.schema` that enumerates the keys of a returned
+  object — the object itself, or the element object of a returned
+  array — MUST name exactly the keys the Go struct behind it marshals
+  to JSON, no key more and no key fewer, because the enumeration is a
+  second copy of a shape the struct already fixes. The obligation binds
+  the enumerating values alone: one that only names the returned object
+  without listing its keys publishes no such copy and is not required to
+  start listing them. `HELP.md § Audit family help specifics` rule 4
+  places the parallel obligation on the plain-text `audit` help.
 
 ### Determinism
 
