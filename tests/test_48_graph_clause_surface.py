@@ -52,6 +52,7 @@ traversal keep working, and that the refusal message names the offending
 direction and the outgoing rewrite.
 """
 
+import inspect
 import os
 import sys
 
@@ -685,6 +686,13 @@ class TestGraphIntrospectionKeywordSpacing:
 REFUSAL_PREFIX = 'graph update cannot write relationship "e"'
 OUTGOING_REWRITE_RECIPE = "anchor the outgoing pattern on that node instead of reversing the arrow"
 
+# The read-direction rule (SPEC/GRAPH.md § Relationship Read Direction, rmp task
+# #288) carries its own phrase, and the subcommand name varies because the rule
+# covers `query`, `search` and `update`'s right-hand side alike. Matching on the
+# verb keeps the two rules' refusals distinguishable: a test that expects a READ
+# refusal must not pass on a WRITE refusal that happened to fire first.
+READ_REFUSAL_PREFIX = 'cannot read relationship "e"' 
+
 
 class TestGraphRelationshipWriteDirection:
     """SPEC/GRAPH.md § Relationship Write Direction fixes rmp task #193:
@@ -932,34 +940,47 @@ class TestGraphRelationshipWriteDirection:
         assert self.node_property("Spec", self.SPEC_KEY, "reviewed") is True, (
             "AC30: the node write must genuinely have reached the source node")
 
-    def test_relationship_read_through_an_undirected_traversal_is_still_accepted(self):
+    def test_relationship_read_through_an_undirected_traversal_is_refused(self):
+        # This test asserted the opposite until rmp task #288. The undirected
+        # READ was the escape hatch that made the write refusal cost no reach,
+        # and it was measured returning the WRONG relationship on a node pair
+        # carrying edges both ways. It is now refused by the read-direction
+        # rule, and the reach it used to provide comes from the outgoing
+        # rewrite asserted below instead.
         code, stdout, stderr = self.run(
             "query", f"MATCH (v:Test {{key:'{self.TEST_KEY}'}})-[e]-(x) RETURN type(e), x.key")
-        assert code == 0, (
-            f"AC30: an undirected READ must stay accepted; "
+        assert code == 6, (
+            f"an undirected READ of a relationship value must be refused; "
             f"exit={code} stdout={stdout!r} stderr={stderr!r}")
-        result = self.json(
-            "query", f"MATCH (v:Test {{key:'{self.TEST_KEY}'}})-[e]-(x) RETURN type(e), x.key")
-        assert result["rows"] == [["VERIFIED_BY", self.SPEC_KEY]], (
-            f"AC30: the undirected read must report the true relationship "
-            f"and the source node it reaches; got {result!r}")
+        assert READ_REFUSAL_PREFIX in stderr and "undirected pattern" in stderr, (
+            f"expected the undirected read refusal; got {stderr!r}")
 
-    def test_relationship_bound_only_as_a_read_reference_is_accepted(self):
-        # `e` is bound by an INCOMING pattern here, which would be refused as
-        # a write target — but the SET writes x (a node), and `e` appears
-        # only on the right-hand side of the assignment via type(e). Only the
-        # write TARGET is inspected, so this must be admitted.
+        # The rewrite the refusal names reaches the very same edge.
+        result = self.json(
+            "query", f"MATCH (x)-[e]->(v:Test {{key:'{self.TEST_KEY}'}}) RETURN type(e), x.key")
+        assert result["rows"] == [["VERIFIED_BY", self.SPEC_KEY]], (
+            f"the outgoing rewrite must report the true relationship and the "
+            f"source node it reaches; got {result!r}")
+
+    def test_relationship_bound_only_as_a_read_reference_is_refused(self):
+        # `e` is bound by an INCOMING pattern and appears only on the RIGHT-HAND
+        # SIDE of a node write. The write-direction rule inspects the write
+        # TARGET alone, so it admitted this shape — and rmp task #288 measured
+        # the consequence: the misresolved type is PERSISTED to disk while the
+        # command reports success. The read-direction rule owns the right-hand
+        # side, and refuses it.
         code, stdout, stderr = self.run(
             "update",
             f"MATCH (v:Test {{key:'{self.TEST_KEY}'}})<-[e:VERIFIED_BY]-(x) "
             "SET x.last_edge_type = type(e)")
-        assert code == 0, (
-            f"a relationship read only on the right-hand side of a node SET "
-            f"must be accepted even though it is incoming-bound; "
+        assert code == 6, (
+            f"a relationship VALUE read on the right-hand side of a node SET "
+            f"must be refused when it is incoming-bound; "
             f"exit={code} stdout={stdout!r} stderr={stderr!r}")
-        assert self.node_property("Spec", self.SPEC_KEY, "last_edge_type") == "VERIFIED_BY", (
-            "the node write driven by the read-only relationship reference "
-            "must have reached storage")
+        assert READ_REFUSAL_PREFIX in stderr, (
+            f"the refusal must come from the read rule; got {stderr!r}")
+        assert self.node_property("Spec", self.SPEC_KEY, "last_edge_type") is None, (
+            "the refused write must not have reached storage")
 
     # ---- the refusal names the direction and the outgoing rewrite -----
 
@@ -997,10 +1018,18 @@ def _run_all():
     passed = 0
     failed = 0
     failures = []
-    # Every class in the module, so a suite added below the runner is not
-    # silently skipped.
-    for cls in (TestGraphClauseSurface, TestGraphIntrospectionKeywordSpacing,
-                TestGraphRelationshipWriteDirection):
+    # Classes are DISCOVERED by inspecting this module, never listed. A listed
+    # tuple silently skips any suite added after it was written — the runner
+    # still exits 0 and the new class simply never runs (rmp task #303). The
+    # count is printed so a class that stops being discovered is visible in the
+    # output rather than inferred from a total that quietly shrank.
+    classes = [
+        obj for _name, obj in sorted(inspect.getmembers(sys.modules[__name__], inspect.isclass))
+        if obj.__module__ == __name__ and _name.startswith("Test")
+    ]
+    print(f"Discovered {len(classes)} test classes: "
+          f"{', '.join(cls.__name__ for cls in classes)}")
+    for cls in classes:
         for m in sorted(name for name in dir(cls) if name.startswith("test_")):
             label = f"{cls.__name__}.{m}"
             instance = cls()

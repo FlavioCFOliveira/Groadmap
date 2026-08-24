@@ -151,8 +151,19 @@ type graphQueryError struct {
 
 func (e *graphQueryError) Error() string { return e.Reason }
 
-// Query-bar failure kinds. They map 1:1 to the four distinct cases in
+// Query-bar failure kinds. They map 1:1 to the distinct cases in
 // SPEC/WEB.md § Query-Bar Error Handling.
+//
+// Every one of them is answered with HTTP 400 and told apart by this field, not
+// by the status: RFC 9110 section 15.5 puts the explanation of an error in the
+// response representation, so one status serves them all and the kind carries
+// the class. Splitting them across different statuses would assert a distinction
+// HTTP does not carry, while the body already carries it precisely.
+//
+// A kind exists per distinct FIX the caller must make, which is why
+// graphErrRelationshipDirection is its own kind rather than a variant of
+// graphErrNotReadOnly: such a query IS read-only and IS well formed, and what it
+// needs is the traversal rewritten as outgoing.
 //
 // graphErrInvalidKeywordSpacing is deliberately NOT folded into
 // graphErrNotReadOnly. A SHOW statement reads the schema and writes nothing
@@ -162,15 +173,41 @@ func (e *graphQueryError) Error() string { return e.Reason }
 // fixes — one query must be rewritten to stop writing, the other only to close a
 // gap between two keywords (SPEC/WEB.md § Query-Bar Error Handling, case 10).
 const (
-	graphErrNotReadOnly           = "not_read_only"           // query contains a writing or DDL clause
-	graphErrInvalidLimit          = "invalid_limit"           // limit not one of the six allowed values
-	graphErrInvalidKeywordSpacing = "invalid_keyword_spacing" // SHOW INDEX(ES)/CONSTRAINT(S) spelled with a separator the engine does not accept
-	graphErrExecution             = "execution"               // accepted as read-only but failed in the engine
+	graphErrNotReadOnly           = "not_read_only"               // query contains a writing or DDL clause
+	graphErrInvalidLimit          = "invalid_limit"               // limit not one of the six allowed values
+	graphErrInvalidKeywordSpacing = "invalid_keyword_spacing"     // SHOW INDEX(ES)/CONSTRAINT(S) spelled with a separator the engine does not accept
+	graphErrRelationshipDirection = "relationship_read_direction" // reads a relationship bound by an incoming or undirected pattern
+	graphErrExecution             = "execution"                   // accepted as read-only but failed in the engine
 )
 
 // newGraphQueryError builds a classified query-bar error.
 func newGraphQueryError(kind, reason string) *graphQueryError {
 	return &graphQueryError{Kind: kind, Reason: reason}
+}
+
+// graphRelationshipDirectionReason words the in-place message for a query that
+// reads a relationship the engine would misresolve.
+//
+// It is deliberately shorter than the CLI's refusal: this text is rendered in
+// the query bar rather than read in a terminal, so it states the objection and
+// the shape of the rewrite, and leaves the full treatment to the SPEC. The two
+// wordings are separate for the same reason every other kind's is — the CLI and
+// this endpoint address different readers — while the CLASSIFICATION behind them
+// is shared, which is what must not diverge.
+//
+// The variable name is caller-derived text (Cypher admits a backtick-quoted
+// identifier holding arbitrary characters), so it reaches the response body as
+// untrusted input. renderJSONStatus keeps encoding/json's HTML escaping ON, which
+// is what makes that echo safe; see the graph query-bar body tests, which assert
+// no raw angle bracket survives while the decoded value stays the original text.
+func graphRelationshipDirectionReason(ref cypherguard.RelReadReference) string {
+	return fmt.Sprintf(
+		"query rejected: relationship %q is bound by an %s pattern, and on a node pair carrying "+
+			"edges in both directions the engine reports the forward edge's type and orientation "+
+			"for the reverse one. Rewrite the traversal as outgoing, anchoring it on either "+
+			"endpoint: MATCH (x)-[%s]->(target {key:'...'}). To cover both directions, take the "+
+			"union of the two outgoing legs with UNION ALL.",
+		ref.Variable, ref.Direction, ref.Variable)
 }
 
 // sprintsData is the view model handed to the roadmap sprints template (the
@@ -1924,6 +1961,27 @@ func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphV
 	// whether it admits a LIMIT clause never arises (see admitsLimitClause).
 	if reason, misspaced := cypherguard.IntrospectSpacingRejection(query); misspaced {
 		return graphView{}, newGraphQueryError(graphErrInvalidKeywordSpacing, "query rejected: "+reason)
+	}
+
+	// Relationship-read direction, last in the precedence order and, like the
+	// three above, decided before the store is opened and before the query ever
+	// reaches the engine (SPEC/GRAPH.md § Relationship Read Direction, which owns
+	// the rule; SPEC/WEB.md § Query-Bar Error Handling).
+	//
+	// It is decided LAST because every earlier objection outranks it: a query
+	// that writes must be told that it writes, and a schema-introspection command
+	// the engine cannot parse has no pattern to orient. The check runs on the
+	// query the caller supplied, before applyGraphLimit injects the node limit,
+	// because injecting a LIMIT changes no relationship pattern.
+	//
+	// The classifier is the SAME one the CLI subcommands use. There is one
+	// classification of pattern direction in this project, not a second copy that
+	// could drift: this endpoint executes caller-supplied Cypher through its own
+	// engine instance, so without it the identical misresolved read would remain
+	// reachable from the query bar after the CLI had been closed off.
+	if misread := cypherguard.MisreadRelationshipReferences(query); len(misread) > 0 {
+		return graphView{}, newGraphQueryError(
+			graphErrRelationshipDirection, graphRelationshipDirectionReason(misread[0]))
 	}
 
 	roadmapDir, err := utils.GetRoadmapDir(name)

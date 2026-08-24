@@ -547,6 +547,15 @@ func TestHandleGraphData_QueryBarRejectionPrecedesStoreOpen(t *testing.T) {
 		// store is opened, which the unopenable store proves here.
 		{"introspection keyword spacing alone", url.Values{"q": {"SHOW  INDEXES"}}, graphErrInvalidKeywordSpacing},
 		{"invalid limit outranks keyword spacing", url.Values{"limit": {"7"}, "q": {"SHOW  INDEXES"}}, graphErrInvalidLimit},
+		// The relationship-read-direction rejection carries the same guarantee:
+		// it is decided from the PARSED query, before the store is opened, which
+		// the unopenable store proves here.
+		{"relationship read direction alone", url.Values{"q": {`MATCH (a)-[e]-(b) RETURN type(e)`}}, graphErrRelationshipDirection},
+		{"invalid limit outranks read direction", url.Values{"limit": {"7"}, "q": {`MATCH (a)-[e]-(b) RETURN type(e)`}}, graphErrInvalidLimit},
+		// A query that BOTH writes and reads a misoriented relationship is
+		// answered not_read_only: the objection that it writes outranks the
+		// objection that its traversal is misoriented.
+		{"not read-only outranks read direction", url.Values{"q": {`MATCH (a)-[e]-(b) SET a.seen = type(e)`}}, graphErrNotReadOnly},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -588,6 +597,7 @@ func TestHandleGraphData_ErrorBodyShape(t *testing.T) {
 		{"not read-only", url.Values{"q": {`MATCH (n) DELETE n`}}, graphErrNotReadOnly},
 		{"invalid limit", url.Values{"limit": {"7"}}, graphErrInvalidLimit},
 		{"invalid keyword spacing", url.Values{"q": {"SHOW  INDEXES"}}, graphErrInvalidKeywordSpacing},
+		{"relationship read direction", url.Values{"q": {`MATCH (a)-[e]-(b) RETURN type(e)`}}, graphErrRelationshipDirection},
 		{"execution failure", url.Values{"q": {`MATCH (n) RETURN`}}, graphErrExecution},
 	}
 

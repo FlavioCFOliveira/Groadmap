@@ -621,7 +621,7 @@ Rules:
 
 A request the graph data endpoint refuses, and a query that fails, are answered
 with this object in place of the node-and-edge object above. The endpoint returns
-it for each of the four query-bar failures, always with HTTP `400 Bad Request`.
+it for each of the five query-bar failures, always with HTTP `400 Bad Request`.
 The status, the failure classes, and the rules that select between them are
 specified in `WEB.md § Query-Bar Error Handling`, which is canonical for them; this
 section is canonical for the shape.
@@ -638,20 +638,24 @@ Field reference:
 | Field | Type | Description |
 |-------|------|-------------|
 | `error` | string | The human-readable reason. The graph page shows it in place as its failure message. |
-| `kind` | string | The machine-readable failure class: `not_read_only`, `invalid_limit`, `invalid_keyword_spacing`, or `execution`. |
+| `kind` | string | The machine-readable failure class: `not_read_only`, `invalid_limit`, `invalid_keyword_spacing`, `relationship_read_direction`, or `execution`. |
 
 Rules:
 
 1. Both fields are always present and both are always strings. The object carries
    these two fields and no others, and it carries neither `nodes` nor `edges`.
-2. `kind` takes exactly four values, one per failure class in
+2. `kind` takes exactly five values, one per failure class in
    `WEB.md § Query-Bar Error Handling`: `not_read_only` for a query the read-only
    guard-rail rejected before execution, `invalid_limit` for a `limit` that is not
    one of the six allowed values, `invalid_keyword_spacing` for a
    schema-introspection command the guard rail rejected before execution because
    its keyword spacing is not the one the engine accepts (see
-   `GRAPH.md § Keyword Spacing in a Schema-Introspection Command`), and `execution`
-   for a query that was accepted as read-only and then failed once running. A query
+   `GRAPH.md § Keyword Spacing in a Schema-Introspection Command`),
+   `relationship_read_direction` for a query the guard rail rejected before
+   execution because it reads a relationship bound by an incoming or undirected
+   fixed-length pattern (see `GRAPH.md § Relationship Read Direction`), and
+   `execution` for a query that was accepted as read-only and then failed once
+   running. A query
    cancelled for exhausting the endpoint's query time budget is an execution
    failure and carries `execution`; the budget adds no value of its own (see
    `WEB.md § Graph Query Time Budget`).
@@ -661,12 +665,16 @@ Rules:
    `GRAPH.md § Error Handling and Exit Codes`, rule 2). For an invalid limit it
    names the rejected value. For a keyword-spacing rejection it names the spacing
    and the accepted spelling, and never describes the query as not read-only: a
-   schema-introspection command reads and writes nothing whatever its spacing.
+   schema-introspection command reads and writes nothing whatever its spacing. For
+   a relationship-read-direction rejection it names the relationship variable, the
+   direction of the pattern that bound it, and the outgoing rewrite, and likewise
+   never describes the query as not read-only: such a query carries no writing
+   clause and no DDL clause, and only the orientation of its pattern is refused.
 4. The object is serialized exactly as every other response of this endpoint is:
    HTML-safe, so `<`, `>`, and `&` are escaped (see `WEB.md § Graph Data Endpoint`),
    pretty-printed with two-space indentation, and terminated by a newline (see
    [Implementation Notes](#implementation-notes)).
-5. This is the endpoint's error contract for the four query-bar failures only. An
+5. This is the endpoint's error contract for the five query-bar failures only. An
    internal read error — a graph store that cannot be opened, for example — is
    answered HTTP `500` as on every other route of the web interface and does not
    carry this shape (see `WEB.md § Query-Bar Error Handling`, rule 7).

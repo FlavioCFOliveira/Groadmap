@@ -212,20 +212,12 @@ func collectPattern(pattern *ast.Pattern, bindings map[string]Direction) {
 
 // collectPath records the direction of every named relationship along one path.
 func collectPath(path *ast.PathPattern, bindings map[string]Direction) {
-	if path == nil {
-		return
-	}
-	for el := path.Head; el != nil; el = el.Next {
-		rel := el.Relationship
-		if rel == nil || rel.Variable == nil {
-			continue
-		}
-		name := *rel.Variable
+	namedRelationships(path, func(name string, rel *ast.RelationshipPattern) {
 		if prev, ok := bindings[name]; ok && prev != DirectionOutgoing {
-			continue // already recorded as unwritable; keep the failing one
+			return // already recorded as unwritable; keep the failing one
 		}
 		bindings[name] = directionOf(rel.Direction)
-	}
+	})
 }
 
 // directionOf maps the AST's relationship direction onto the operator-facing

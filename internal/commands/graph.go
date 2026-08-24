@@ -646,6 +646,62 @@ func skippedLegOf(d cypherguard.Direction) string {
 	return "the incoming direction"
 }
 
+// validateRelationshipReadDirection rejects a query that READS the value of a
+// relationship variable bound by a pattern the engine does not resolve reliably
+// (SPEC/GRAPH.md § Relationship Read Direction).
+//
+// It is the read-side counterpart of validateRelationshipWriteDirection above,
+// and the two share one doctrine: whether an undirected or incoming pattern
+// behaves correctly depends on the data it meets, not on the query, and that
+// cannot be the guarantee. The engine recovers a bound relationship's type and
+// endpoints by probing the stored topology, so on a node pair carrying edges in
+// BOTH directions the reverse leg of the traversal is hydrated from the forward
+// pair — reporting the wrong type, the reversed orientation, dropping rows whose
+// WHERE predicate reads that type, and persisting the wrong value when a node
+// write derives from it.
+//
+// It applies to EVERY graph subcommand, because the corrupted value is harmful
+// wherever it is read: `query` and `search` deliver it to the caller, `update`'s
+// SET right-hand side persists it, and a `delete` whose WHERE predicate reads it
+// removes the wrong edges — or, as measured, none at all while reporting
+// success.
+//
+// The exemption is of the DELETE CLAUSE, not of the delete COMMAND. A bare
+// `DELETE e` names the relationship as a delete target rather than as an
+// expression, and the engine resolves that edge itself rather than through the
+// endpoint columns, so it removes the right one and stays accepted. The moment a
+// predicate over `type(e)` decides WHICH edges are deleted, the engine evaluates
+// the corrupted type, drops the row, and the destructive command reports
+// `{"ok": true}` having removed nothing — the worst symptom in this family,
+// because the caller has no reason to check. That case is an ordinary expression
+// use and is refused like any other; cypherguard draws the line by clause.
+//
+// Detection runs on the parsed query rather than on the masked text, so a
+// relationship arrow inside a string literal or a comment cannot trip it, and
+// the refusal happens before the graph store is opened.
+func validateRelationshipReadDirection(subcmd, query string) error {
+	misread := cypherguard.MisreadRelationshipReferences(query)
+	if len(misread) == 0 {
+		return nil
+	}
+	v := misread[0].Variable
+	return fmt.Errorf(
+		"%w: graph %s cannot read relationship %q: it is bound by an %s pattern, and the engine "+
+			"resolves a relationship's type and endpoints by probing the stored direction, so on a "+
+			"node pair that carries edges in BOTH directions it reports the forward edge's type and "+
+			"orientation for the reverse one: type(%s) names the wrong relationship, "+
+			"startNode(%s)/endNode(%s) reverse it, and a predicate over either silently drops the row. "+
+			"Rewrite the traversal as outgoing, which resolves correctly whatever the data: anchor it "+
+			"on the source with MATCH (source)-[%s]->(target) ... RETURN type(%s), or, to reach the "+
+			"edges arriving AT a node, on that node with MATCH (other)-[%s]->(target {key:'...'}) ... "+
+			"RETURN type(%s) - do not reverse the arrow. To cover both directions in one read, take "+
+			"the union of the two outgoing legs: MATCH (a {key:'...'})-[%s]->(x) RETURN type(%s) AS t, "+
+			"x.key AS k UNION ALL MATCH (x)-[%s]->(a {key:'...'}) RETURN type(%s) AS t, x.key AS k",
+		utils.ErrValidation, subcmd, v, misread[0].Direction,
+		v, v, v, v, v, v, v, v, v, v, v,
+	)
+}
+
 // serializeValue converts a single expr.Value into a JSON-compatible
 // Go value for inclusion in a graphQueryResult row.
 func serializeValue(v expr.Value) any {
@@ -899,6 +955,13 @@ func runGraphRead(subcmd, allowed string, args []string) error {
 		return err
 	}
 
+	// Refused before the store is opened, like the clause-class guard rail and
+	// its write-side sibling, so a rejected query never reaches the graph
+	// (SPEC/GRAPH.md § Relationship Read Direction).
+	if err := validateRelationshipReadDirection(subcmd, query); err != nil {
+		return err
+	}
+
 	graphDir, err := openGraphStore(roadmapName)
 	if err != nil {
 		return err
@@ -1000,6 +1063,17 @@ func runGraphWrite(subcmd, allowed string, args []string) error {
 	// a rejected query never reaches the graph (SPEC/GRAPH.md
 	// § Relationship Write Direction).
 	if err := validateRelationshipWriteDirection(subcmd, query); err != nil {
+		return err
+	}
+
+	// The write-direction rule owns the SET/REMOVE TARGET; this one owns every
+	// relationship VALUE the statement reads — a SET right-hand side such as
+	// `SET n.p = type(e)`, which would otherwise persist a misresolved type, and
+	// a DELETE gated by `WHERE type(e) = ...`, which would otherwise delete the
+	// wrong edges or silently none. Ordered after the write rule so a query that
+	// trips both keeps the write-side message, which names the write the caller
+	// actually asked for.
+	if err := validateRelationshipReadDirection(subcmd, query); err != nil {
 		return err
 	}
 

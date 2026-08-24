@@ -4935,6 +4935,94 @@ class TestWebInterface:
             "outranks the keyword-spacing objection"
         )
 
+    def test_query_bar_refuses_a_misresolved_relationship_read(self):
+        """rmp task #288: the endpoint runs caller-supplied Cypher through its
+        own engine, so the relationship-read direction rule
+        (SPEC/GRAPH.md) applies here exactly as it does to `rmp graph query`.
+        A read of a relationship bound by an incoming or undirected pattern is
+        refused with HTTP 400 and the kind relationship_read_direction, before
+        the store is opened.
+
+        The fixture is its own roadmap carrying a node pair with edges BOTH
+        ways and DIFFERENT types each way, because that is the only shape the
+        engine misresolves: a one-way pair reads back correctly with or without
+        the rule and could not tell them apart.
+        """
+        name = "identity-platform"
+        self._run(["roadmap", "create", name])
+        for query in [
+            "CREATE (s:Spec {key:'session-revocation'}), (v:Test {key:'revoke-on-logout'})",
+            "MATCH (s:Spec {key:'session-revocation'}), (v:Test {key:'revoke-on-logout'}) "
+            "MERGE (s)-[:VERIFIED_BY]->(v)",
+            "MATCH (s:Spec {key:'session-revocation'}), (v:Test {key:'revoke-on-logout'}) "
+            "MERGE (v)-[:COVERS]->(s)",
+        ]:
+            self._run(["graph", "create", "-r", name, "--query", query])
+
+        proc, port = self._start(["--port", "0"])
+
+        refused = [
+            "MATCH (s:Spec)-[e]-(x) RETURN type(e), x.key",
+            "MATCH (s:Spec)<-[e]-(x) RETURN type(e)",
+            "MATCH (s:Spec)-[e]-(x) RETURN startNode(e).key, endNode(e).key",
+            "MATCH (s:Spec)-[e]-(x) WHERE type(e) = 'COVERS' RETURN x.key",
+            "MATCH (s:Spec)-[e]-(x) RETURN *",
+        ]
+        for query in refused:
+            status, _, body = self._req(
+                port, self._graph_data(port, q=query, roadmap=name))
+            assert status == 400, (
+                f"{query!r} must be refused with 400; got {status} {body!r}")
+            err = json.loads(body)
+            assert err.get("kind") == "relationship_read_direction", (
+                f"{query!r} must carry its own kind; got {err!r}")
+            assert set(err) == {"error", "kind"}, (
+                f"the error body must carry exactly error and kind, never the "
+                f"success shape; got {err!r}")
+            for fragment in ('"e"', "outgoing", "UNION ALL"):
+                assert fragment in err["error"], (
+                    f"the message for {query!r} must name {fragment!r} so the "
+                    f"caller can act on it; got {err['error']!r}")
+
+        # The other half: every shape the engine resolves correctly is still
+        # answered, so the refusal cost no reach. The default query is the one
+        # that matters most — it binds a relationship variable through an
+        # OPTIONAL MATCH, and a rule keyed on the variable rather than on the
+        # direction would have broken the graph page outright.
+        for query in [
+            None,  # the endpoint default
+            "MATCH (s:Spec)-[e]->(x) RETURN type(e), x.key",
+            "MATCH (x)-[e]->(s:Spec) RETURN type(e), x.key",
+            "MATCH (s:Spec)-[:COVERS]-(x) RETURN x.key",
+            "MATCH (s:Spec)-[e]-(x) RETURN x.key",
+            "MATCH p=(s:Spec)-[e]-(x:Test) RETURN p",
+        ]:
+            status, _, body = self._req(
+                port, self._graph_data(port, q=query, roadmap=name))
+            assert status == 200, (
+                f"{query!r} resolves correctly and must not be refused; "
+                f"got {status} {body!r}")
+
+        # Precedence (SPEC/WEB.md § Query-Bar Error Handling): every earlier
+        # objection outranks this one. The two controls are what make the
+        # assertion non-vacuous — without them an endpoint that never reached
+        # the new kind at all would pass.
+        status, _, body = self._req(
+            port, self._graph_data(
+                port, q="MATCH (s:Spec)-[e]-(x) RETURN type(e)", limit="7",
+                roadmap=name))
+        assert status == 400 and json.loads(body).get("kind") == "invalid_limit", (
+            "an invalid limit is resolved first, so it outranks the "
+            f"relationship-direction objection; got {status} {body!r}")
+
+        status, _, body = self._req(
+            port, self._graph_data(
+                port, q="MATCH (s:Spec)-[e]-(x) SET x.seen = type(e)",
+                roadmap=name))
+        assert status == 400 and json.loads(body).get("kind") == "not_read_only", (
+            "the objection that a query writes outranks the objection that its "
+            f"traversal is misoriented; got {status} {body!r}")
+
     def test_query_bar_literal_masking_not_falsely_rejected(self):
         """AC47: write keywords only inside a string literal are accepted as
         read-only and executed; a genuine DELETE is rejected."""

@@ -16,6 +16,7 @@
   - [Operation Classes](#operation-classes)
   - [Per-Subcommand Validation Rules](#per-subcommand-validation-rules)
   - [Relationship Write Direction](#relationship-write-direction)
+  - [Relationship Read Direction](#relationship-read-direction)
   - [Cypher Input Source and Precedence](#cypher-input-source-and-precedence)
 - [Query Notifications as Diagnostics](#query-notifications-as-diagnostics)
 - [Error Handling and Exit Codes](#error-handling-and-exit-codes)
@@ -803,6 +804,19 @@ Notes:
 
 ### Relationship Write Direction
 
+Two rules govern the **direction** of the pattern that binds a relationship
+variable: this one, which governs writing that relationship, and
+[Relationship Read Direction](#relationship-read-direction), which governs
+reading it. Both rest on the same **direction doctrine**: an outgoing pattern
+(`-[e]->`) is correct against every graph, while an incoming (`<-[e]-`) or
+undirected (`-[e]-`) pattern is correct only against some graphs. Whether a
+reverse leg behaves is decided by the data the traversal meets — by which
+relationships the two endpoints happen to carry — and not by the query, so the
+query text alone never tells the agent whether the result it is about to get is
+right. A guarantee that holds only for the data seen so far is not a guarantee,
+so Groadmap refuses the reverse forms in both rules rather than leaving the
+outcome to the shape of the graph.
+
 A `SET` or `REMOVE` whose target is a **relationship variable** MUST bind that
 variable with an **outgoing** relationship pattern (`-[e]->`). `graph update`
 rejects a query that writes a relationship bound by an **incoming** (`<-[e]-`) or
@@ -835,12 +849,16 @@ The engine writes a relationship property by its **endpoint pair**, and it takes
 that pair from the columns the expansion emitted. Those columns carry the
 relationship the way the **pattern** walked it, not the way storage holds it, so
 for a relationship reached against the stored arrow the pair is reversed. The
-engine's **read** path corrects that orientation before it reports a
-relationship, which is why `RETURN type(e)`, `startNode(e)` and `endNode(e)` are
-right for the same match; its **write** path does not, so the write is addressed
+engine's **read** path tries to correct that orientation before it reports a
+relationship, by probing the stored topology for the pair, and the probe decides
+correctly whenever the two endpoints are joined in one direction only; its
+**write** path does not correct the orientation at all, so the write is addressed
 to a pair that has no relationship, and the storage layer answers a write to an
 absent relationship with a documented no-op. Nothing is written, no error is
-raised, and the transaction still commits.
+raised, and the transaction still commits. Where that read-side probe cannot
+decide — a node pair joined in both directions — the read is wrong in a way of
+its own, which is what [Relationship Read Direction](#relationship-read-direction)
+refuses.
 
 The divergence is upstream in GoGraph and cannot be corrected from this
 repository. Groadmap therefore refuses the query, because the alternative — a
@@ -872,18 +890,28 @@ MATCH (other)-[e]->(n {key:'…'}) SET e.last_commit = '…'
 Notes:
 
 1. The check inspects the **target** of the `SET` / `REMOVE` only. A relationship
-   a query merely traverses or reads is not affected: `MATCH (b)-[e]-(x) SET
-   x.reviewed = true` writes a node, which the engine resolves by identifier
-   rather than by endpoint pair, and is accepted. So is a relationship that
-   appears only on the right-hand side of an assignment, as in
-   `SET n.last_type = type(e)`.
-2. The check applies to `graph update` only. `graph delete` is unaffected: it
-   resolves the relationship itself rather than through the endpoint columns, and
-   removes a relationship bound by a reverse traversal correctly. The read
-   subcommands are unaffected: an undirected `MATCH … RETURN` is exactly the half
-   of the behaviour that was always right, and it remains accepted. `graph create`
-   cannot reach the condition, because the clause-class rules above already reject
-   any creating query that contains `SET` or `REMOVE`.
+   a query merely traverses is not affected by **this** rule: `MATCH (b)-[e]-(x)
+   SET x.reviewed = true` writes a node, which the engine resolves by identifier
+   rather than by endpoint pair, and is accepted. A relationship that appears on
+   the right-hand side of an assignment, as in `SET n.last_type = type(e)`, is
+   outside this rule as well, but it is an expression use and is therefore
+   governed by [Relationship Read Direction](#relationship-read-direction):
+   that form is accepted when `e` is bound by an outgoing pattern and refused
+   when `e` is bound by an incoming or undirected one.
+2. The check applies to `graph update` only. A bare `DELETE e` is unaffected: the
+   delete resolves the relationship itself rather than through the endpoint
+   columns, and removes a relationship bound by a reverse traversal correctly.
+   The other four subcommands are outside **this** rule, but none of them is
+   therefore unconstrained: reading a relationship bound by a reverse pattern has
+   a defect of its own and a refusal of its own, in
+   [Relationship Read Direction](#relationship-read-direction), which binds all
+   five subcommands. `graph delete` is among them: what that rule exempts is the
+   `DELETE` clause, so a bare `DELETE e` stays accepted while a `WHERE` predicate
+   over the same relationship is refused. `graph create` cannot reach the
+   condition of **this** rule, because the clause-class rules above already
+   reject any creating query that contains `SET` or `REMOVE`; it is nonetheless
+   bound by the read rule, which does not depend on `SET` or `REMOVE` being
+   present.
 3. A `FOREACH` body is inspected like a top-level `SET`, for the same reason the
    clause-class rules give it: `FOREACH (x IN list | SET e.k = …)` reaches the
    same write operator.
@@ -899,6 +927,171 @@ Notes:
    That repair is a consequence of projection materialisation, which the engine is
    free to elide; admitting the shape would make the guarantee depend on an
    unspecified optimisation decision and would fail open the day it changed.
+
+### Relationship Read Direction
+
+A relationship variable bound by a fixed-length **incoming** (`<-[e]-`) or
+**undirected** (`-[e]-`) pattern MUST NOT be used in an **expression**. All five
+graph subcommands — `graph query`, `graph search`, `graph create`, `graph update`
+and `graph delete` — reject a query that uses one with `utils.ErrValidation`
+(exit code 6), before the graph store is opened. A rejected query returns nothing
+and changes nothing.
+
+The rule binds every subcommand because a misresolved relationship value is
+harmful wherever it is read, and the subcommand carrying the expression decides
+only what the harm looks like: `graph query` and `graph search` deliver the wrong
+value to the caller, `graph update` persists it, `graph create` derives new graph
+content from it, and a `graph delete` whose predicate reads it deletes nothing
+while reporting success. What this rule exempts is the `DELETE` **clause**, not
+the `graph delete` **command**; note 3 below draws that line and gives the
+measurement behind it.
+
+This rule is the read-side half of the direction doctrine stated at the head of
+[Relationship Write Direction](#relationship-write-direction). Like the write
+rule, it is a **separate contract from the clause-class guard rail**, not another
+operation class: the query's class is already correct, and what is refused is the
+**orientation** of the pattern that binds the relationship being read. The
+clause-class classification is unaffected.
+
+**Used in an expression** means any of the following, anywhere in the query:
+
+- projected by `RETURN` or `WITH`, including by a `RETURN *` star projection,
+  which projects every bound variable and therefore projects the relationship;
+- passed to a function, as in `type(e)`, `startNode(e)`, `endNode(e)`,
+  `properties(e)`, or `keys(e)`;
+- read as a property, as in `e.key`;
+- used in a `WHERE` predicate;
+- used in `ORDER BY`, `SKIP`, or `LIMIT`;
+- used on the right-hand side of a `SET`, as in `SET n.last_type = type(e)`.
+
+#### The traversal contract for reading a bound relationship
+
+| Pattern binding the relationship | Expression use of that relationship | Every `graph` subcommand |
+|----------------------------------|-------------------------------------|--------------------------|
+| `(a)-[e]->(b)` — outgoing | Reports the stored type, endpoints, and properties of every matched relationship | Accepted |
+| `(a)<-[e]-(b)` — incoming | Reports the true relationship only while the two endpoints are joined in one direction; where they are joined in both, reports the opposite relationship's type and the pattern's own orientation | Rejected, exit 6 |
+| `(a)-[e]-(b)` — undirected | Reports the forward leg correctly; where the two endpoints are joined in both directions, reports the forward relationship a second time in place of the reverse one | Rejected, exit 6 |
+
+As with the write contract, this contract is a property of the **pattern**, not
+of the anchor and not of the data: an incoming or undirected pattern is refused
+whether it is anchored on the relationship's source or on its target, and it is
+refused even against a graph whose node pairs are today all joined in one
+direction only, where the read would in fact have been correct.
+
+#### Why the corrupted reads are refused rather than corrected
+
+The engine resolves a bound relationship's identity from the **endpoint pair**
+the expansion emitted, exactly as the write path does, and that pair carries the
+relationship the way the **pattern** walked it rather than the way storage holds
+it. To recover the stored orientation, the read path probes the topology: when
+the pair carries no relationship in the emitted order but carries one in the
+opposite order, the engine inverts the pair and reports the relationship it finds
+there. That probe decides correctly only while the two endpoints are joined in
+**one** direction. Where they are joined in both, the emitted order already
+carries a relationship of its own, so the engine finds one there, inverts
+nothing, and resolves the reverse leg of the traversal as though it were the
+forward one.
+
+The consequences are all silent, and all of them report success:
+
+- A projection over an undirected pattern reports the forward relationship
+  twice, once per leg, and never reports the reverse relationship at all.
+- `startNode(e)` and `endNode(e)` under an incoming pattern report the pattern's
+  orientation, which is the exact reverse of what storage holds.
+- A `WHERE` predicate over the relationship is evaluated against the wrong
+  relationship, so a row that should have matched is discarded inside the engine.
+  The result is short by that row, with exit code 0 and no notification.
+- A `SET` whose right-hand side reads the relationship persists the wrong value
+  and exits 0, so the wrong value outlives the query.
+
+Groadmap cannot repair any of this after the fact, and correction inside Groadmap
+was investigated before refusal was chosen. For `type(e)`, `startNode(e).key`,
+and their siblings, what reaches Groadmap is a bare scalar with no relationship
+identity attached to it, so there is nothing left to correct against. The `WHERE`
+case is worse: the row is dropped inside the engine before any result reaches
+Groadmap, so the missing row cannot be detected, let alone restored.
+
+The divergence is upstream in GoGraph and cannot be corrected from this
+repository. Groadmap therefore refuses the query, for the same reason the write
+rule refuses its own: the alternative — a diagnostic on stderr with exit 0 —
+still reports success for an answer that is wrong, which is the failure mode
+being removed.
+
+#### Rewriting a refused read
+
+Refusal removes no reach: **every** relationship stays readable through an
+outgoing pattern, because an outgoing pattern may be anchored on either endpoint.
+The error message offers the three rewrites below, and each of them reports the
+relationship's true stored type and orientation.
+
+Anchor the outgoing pattern on the relationship's source to read the
+relationships leaving a node:
+
+```
+MATCH (a {key:'…'})-[e]->(x) RETURN type(e)
+```
+
+Anchor it on the relationship's target to read the relationships arriving at a
+node, rather than reversing the arrow:
+
+```
+MATCH (x)-[e]->(a {key:'…'}) RETURN type(e)
+```
+
+Read both directions in one query as the union of the two outgoing legs, which is
+the rewrite for an undirected pattern:
+
+```
+MATCH (a {key:'…'})-[e]->(x) RETURN type(e) AS t, x.key AS k
+UNION ALL
+MATCH (x)-[e]->(a {key:'…'}) RETURN type(e) AS t, x.key AS k
+```
+
+Notes:
+
+1. The rule inspects **uses of the relationship variable**. A pattern that binds
+   no variable is unaffected, because no relationship value is built for it:
+   `MATCH (a {key:'…'})-[:COVERS]-(b) RETURN b.key` is an ordinary read and is
+   accepted.
+2. A **variable-length** relationship (`-[e*1..2]-`, and equally `-[e*1..1]-`)
+   and a projected **named path** (`MATCH p=(a {key:'…'})-[e]-(b) RETURN p`) are
+   accepted through an incoming or undirected pattern. Neither is resolved by the
+   endpoint-pair probe described above: the engine is told which way each hop was
+   walked instead of inferring it, so both report the true stored type and
+   orientation, including on a node pair joined in both directions. A direct
+   expression use of a fixed-length relationship variable is the only shape the
+   probe resolves incorrectly, and it is the only shape this rule refuses.
+3. The exemption is of the `DELETE` **clause**, not of the `graph delete`
+   **command**. A bare `DELETE e` names the relationship as a delete **target**
+   rather than as a value: the engine resolves that relationship itself rather
+   than through the endpoint columns, so
+   `MATCH (a {key:'…'})-[e]-(b) DELETE e` remains accepted and removes the right
+   relationship. The moment a predicate over the relationship decides **which**
+   relationships the statement deletes, that predicate is an ordinary expression
+   use, and `graph delete` refuses it exactly as the other subcommands do:
+   `MATCH (a {key:'…'})-[e]-(b) WHERE type(e) = 'COVERS' DELETE e` is rejected
+   with exit code 6. It has to be. Executed rather than refused, the engine
+   evaluates the predicate against the misresolved type, discards the row inside
+   the engine, and the destructive statement exits 0 reporting `{"ok": true}`
+   having removed nothing at all. That is the sharpest failure in this family:
+   the caller asked for a deletion, was told it succeeded, and has no reason to
+   look again.
+4. A relationship variable that appears only as the **target** of a `SET` or
+   `REMOVE` is not an expression use. That shape belongs to
+   [Relationship Write Direction](#relationship-write-direction), which continues
+   to own it and to refuse it when the binding pattern is incoming or undirected.
+5. A `WITH *` that only carries the binding forward is accepted; a later
+   expression use of the variable it carried is refused like any other.
+6. Detection runs on the **parsed** query rather than on the masked
+   normalization, exactly as the write rule's detection does. The directions read
+   are therefore the directions the engine will plan; a relationship arrow that
+   appears only inside a string literal or a comment is not pattern syntax to the
+   parser and cannot trigger a rejection; and a query the parser rejects is passed
+   through to the engine unchanged, so a syntax error is reported as a syntax
+   error rather than masked by a direction error.
+7. A `FOREACH` body is inspected like a top-level clause, for the same reason the
+   write rule gives: `FOREACH (x IN list | SET n.last_type = type(e))` reaches
+   the same expression.
 
 ### Cypher Input Source and Precedence
 
@@ -1136,6 +1329,7 @@ sentinel is introduced for the graph feature.
 | Query longer than the maximum query length of 1 MiB, from either source (see [Maximum Query Length](#maximum-query-length)) | `utils.ErrValidation` | 6 |
 | Query's operation class does not match the subcommand | `utils.ErrValidation` | 6 |
 | `graph update` writes a relationship bound by an incoming or undirected pattern (see [Relationship Write Direction](#relationship-write-direction)) | `utils.ErrValidation` | 6 |
+| Any graph subcommand — `graph query`, `graph search`, `graph create`, `graph update` or `graph delete` — uses a relationship variable bound by an incoming or undirected pattern in an expression; a bare `DELETE e` is not an expression use and stays accepted (see [Relationship Read Direction](#relationship-read-direction)) | `utils.ErrValidation` | 6 |
 | `graph query` or `graph search` receives a `SHOW INDEX(ES)` / `SHOW CONSTRAINT(S)` statement whose keyword spacing the engine does not accept (see [Keyword Spacing in a Schema-Introspection Command](#keyword-spacing-in-a-schema-introspection-command)) | `utils.ErrValidation` | 6 |
 | Cypher fails to parse or execute in the engine | `utils.ErrDatabase` | 1 |
 | Graph store cannot be opened, recovered, read, or written (I/O, corruption, lock) | `utils.ErrDatabase` | 1 |
@@ -1145,9 +1339,10 @@ Rules:
 
 1. The guard-rail rejection (operation class mismatch) is detected before the
    graph store is opened for writing. A rejected query never mutates the graph.
-   The relationship-write-direction rejection and the introspection
-   keyword-spacing rejection are detected at the same point and carry the same
-   guarantee; neither statement is ever handed to the engine. The two refusals
+   The relationship-write-direction rejection, the relationship-read-direction
+   rejection, and the introspection keyword-spacing rejection are detected at the
+   same point and carry the same guarantee; none of those statements is ever
+   handed to the engine. The two refusals
    that belong to the query's source are detected earlier still, before the
    guard rail classifies anything: the missing-query refusal (exit code 2) and
    the maximum-length refusal (exit code 6), both stated in
@@ -1495,10 +1690,15 @@ Groadmap's usage model and expectations:
     in fact have been written.
 30. The rejection does not spread beyond `graph update`'s relationship writes:
     `MATCH (v:Test {key:'…'})-[e]-(x) SET x.reviewed = true` is accepted (the
-    write targets a node), `MATCH (v:Test {key:'…'})-[e]-(x) DELETE e` is
-    accepted by `graph delete` and removes the relationship, and
-    `MATCH (v:Test {key:'…'})-[e]-(x) RETURN type(e)` is accepted by
-    `graph query` and reports the incoming relationship.
+    write targets a node, and the relationship variable is bound but never read),
+    and `MATCH (v:Test {key:'…'})-[e]-(x) DELETE e` is accepted by `graph delete`
+    and removes the relationship. Reading the relationship through that same
+    undirected pattern is refused, but by the separate
+    [Relationship Read Direction](#relationship-read-direction) rule rather than
+    by this one: `MATCH (v:Test {key:'…'})-[e]-(x) RETURN type(e)` fails with exit
+    code 6 under `graph query`, and the type is read instead through an outgoing
+    pattern anchored on the node the relationship arrives at,
+    `MATCH (x)-[e]->(v:Test {key:'…'}) RETURN type(e)` (see criteria 42 and 43).
 31. A read leaves the graph's data untouched on disk. After
     `rmp graph query -r <roadmap> --query "MATCH (n) RETURN count(n)"` runs
     against a store whose write-ahead log is **not** empty, the `wal` file is
@@ -1583,6 +1783,80 @@ Groadmap's usage model and expectations:
     the first case; this criterion fixes the message, all three cases, and the
     requirement that none of them waits (see
     [Standard Input That Supplies No Query](#standard-input-that-supplies-no-query)).
+42. Reading a relationship through an **outgoing** pattern is correct whatever the
+    data, which is what makes the refusals below cost no reach. For a node pair
+    joined in **both** directions — `(s:Spec)-[:VERIFIED_BY]->(v:Test)` and
+    `(v:Test)-[:COVERS]->(s:Spec)` —
+    `MATCH (s:Spec {key:'…'})-[e]->(x) RETURN type(e)` reports `VERIFIED_BY` and
+    nothing else, `MATCH (x)-[e]->(s:Spec {key:'…'}) RETURN type(e)` reports
+    `COVERS` and nothing else, and the union of the two legs,
+    `MATCH (s:Spec {key:'…'})-[e]->(x) RETURN type(e) AS t, x.key AS k UNION ALL MATCH (x)-[e]->(s:Spec {key:'…'}) RETURN type(e) AS t, x.key AS k`,
+    reports both, each with its own endpoint. Each of the three exits 0 (see
+    [Relationship Read Direction](#relationship-read-direction)).
+43. The same reads written through a reverse pattern are rejected with exit code 6
+    and return nothing: `MATCH (s:Spec {key:'…'})-[e]-(x) RETURN type(e)` and
+    `MATCH (s:Spec {key:'…'})<-[e]-(x) RETURN startNode(e).key, endNode(e).key`
+    each fail under `graph query`, stdout is empty, and the error message names
+    the relationship variable, the pattern direction that bound it, and the
+    outgoing rewrite. The refusal is the guard's own, not the engine's: the exit
+    code is 6 and not the 1 an engine failure carries, and the graph store is
+    never opened. An undirected pattern is rejected even against a graph whose
+    node pairs are all joined in one direction only, where the read would in fact
+    have been correct.
+44. The rule reaches **every** expression use of the bound variable, not only
+    `type(e)`. Under `graph query` and under `graph search` alike, each of
+    `RETURN e`, `RETURN *`, `RETURN properties(e)`, `RETURN e.key`,
+    `WHERE type(e) = 'COVERS'`, and `ORDER BY type(e)` is rejected with exit code
+    6 when `e` is bound by an incoming or undirected pattern, and accepted when
+    the same query binds `e` by an outgoing pattern. The `WHERE` case is the one
+    that loses a row rather than corrupting a visible value, so it MUST be refused
+    rather than executed: against the two-way pair of criterion 42,
+    `MATCH (s:Spec {key:'…'})-[e]-(x) WHERE type(e) = 'COVERS' RETURN e` matches
+    no row at all, although the `COVERS` relationship exists and an outgoing read
+    reports it.
+45. `graph update` refuses the same use on the right-hand side of a `SET`, and
+    nothing is written: `MATCH (s:Spec {key:'…'})<-[e]-(v) SET v.last_type = type(e)`
+    fails with exit code 6, and a subsequent read reports `v.last_type` absent.
+    Executed instead of refused, that query exits 0 and persists the **forward**
+    relationship's type on the node, so the refusal is what keeps a wrong value
+    off disk.
+46. The read rejection does not spread further.
+    `MATCH (s:Spec {key:'…'})-[:COVERS]-(x) RETURN x.key` is accepted, because the
+    pattern binds no relationship variable and no relationship value is built;
+    `MATCH (s:Spec {key:'…'})-[e]-(x) DELETE e` is accepted by `graph delete` and
+    removes the relationship; `MATCH (s:Spec {key:'…'})-[e]-(x) SET x.reviewed = true`
+    remains accepted by `graph update`, because the relationship variable is bound
+    but never read; `MATCH p=(s:Spec {key:'…'})-[e]-(x) RETURN p` and
+    `MATCH (s:Spec {key:'…'})-[e*1..1]-(x) RETURN e` are accepted and each reports
+    the two legs with their own types and stored orientations; and
+    `MATCH (s:Spec {key:'…'})-[e]-(x) WITH * RETURN x.key` is accepted, because
+    carrying the binding forward is not a use of it.
+47. A `graph delete` whose predicate reads the relationship is refused, and the
+    refusal is what leaves the relationships intact. Against the two-way pair of
+    criterion 42,
+    `MATCH (s:Spec {key:'…'})-[e]-(x) WHERE type(e) = 'COVERS' DELETE e` fails
+    with exit code 6 under `graph delete`, and the same statement written with an
+    incoming pattern fails likewise. The exit code alone does **not** establish
+    this criterion and MUST NOT be the only assertion: a read-back through
+    outgoing patterns MUST report **both** relationships of the pair still
+    present, because an implementation that accepted the statement would leave
+    the same two in place, and an exit-code-only check could not tell the two
+    apart. Executed rather than refused, that statement exits 0 reporting
+    `{"ok": true}` and removes nothing at all: the engine resolves the reverse
+    leg from the forward pair, evaluates the predicate against the wrong type,
+    and discards the row. This criterion fixes the exemption of note 3 as an
+    exemption of the `DELETE` **clause**; criterion 46 fixes its other half, that
+    a bare `DELETE e` through the same pattern stays accepted and removes the
+    right relationship.
+48. `graph create` is bound by the rule as well, so the rule's coverage does not
+    depend on which subcommand carries the expression.
+    `MATCH (s:Spec {key:'…'})-[e]-(x) CREATE (n:Probe {t: type(e)})` is rejected
+    with exit code 6 under `graph create`, the same statement written with an
+    incoming pattern is rejected likewise, and the `MERGE` spelling of either is
+    rejected as well. Nothing is created in any of these cases: a read-back
+    reports no `Probe` node. The refusal is the guard's own and not the engine's,
+    which the exit code distinguishes — 6, not the 1 an engine failure carries —
+    and the graph store is never opened.
 
 ## See Also
 
