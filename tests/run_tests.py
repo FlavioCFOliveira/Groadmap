@@ -71,6 +71,9 @@ TEST_MODULES = [
     "test_50_task_and_sprint_comments",
     "test_51_specialists_field_removal",
     "test_52_commit_tracking",
+    "test_53_e2e_harness_binary_staleness",
+    "test_54_audit_enrichment_e2e",
+    "test_55_error_string_parity",
 ]
 
 # Stress tests (run separately due to time/data volume)

@@ -163,10 +163,9 @@ func setupCountingDB(t *testing.T) (*DB, *stmtCounter, func()) {
 	sqlDB := sql.OpenDB(countingConnector{Connector: base, counter: counter})
 
 	database := &DB{
-		DB:          sqlDB,
-		roadmapName: "settlement-reconciliation",
-		queryCache:  NewQueryCache(),
-		batchProc:   NewBatchProcessor(100),
+		DB:         sqlDB,
+		queryCache: NewQueryCache(),
+		batchProc:  NewBatchProcessor(100),
 	}
 	if err := database.CreateSchema(); err != nil {
 		sqlDB.Close()

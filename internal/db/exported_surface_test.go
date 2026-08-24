@@ -39,35 +39,25 @@ import (
 // necessarily repeats the name it documents.
 
 // unreachedExports are the exported identifiers of this package that no
-// production code reaches today, and that are still here on purpose. Each entry
+// production code reaches, and that are still here on purpose. Each entry
 // carries the reason it survives. The gate fails both ways: an unlisted dead
 // export is a failure, and so is a listed one that has since gained a caller —
 // the list may only shrink, and it may never rot.
 //
-// Every entry below is one member of the same generation: db-layer CRUD methods
-// that the command layer replaced with its own transaction (the layer now owns
-// 17 `WithTransaction` blocks against 7 surviving db-layer write methods).
-// Removing them is a larger change than the one that closed sprint deletion and
-// the audit writers — it also strands the query-cache templates they are the
-// last users of, and rewrites the fixtures of much of this package's test suite
-// — so it is left to a task of its own rather than smuggled in here.
-var unreachedExports = map[string]string{
-	"CalculateBatches":      "BatchProcessor sizing helper; ProcessChunks does its own arithmetic. Kept with the batch API until the batch surface is reviewed as a whole.",
-	"CreateSprint":          "Superseded by the transaction in commands.sprintCreate, which also assigns order_index. Still the seed path for much of this package's test suite.",
-	"CreateTask":            "Superseded by the transaction in commands.taskCreate. Still the seed path for much of this package's test suite.",
-	"DeleteTask":            "Superseded by the transaction in commands.taskRemove, which also enforces the BACKLOG-only rule and the subtask guard.",
-	"QueryTimeout":          "Duplicate of DefaultQueryTimeout, same value. Neither is referenced by the timeout helpers that took over.",
-	"RemoveTasksFromSprint": "Superseded by the transaction in commands.sprintRemoveTasks, which also clears the lifecycle fields and compacts the order.",
-	"RoadmapName":           "Accessor for the connected roadmap's name; every caller already holds the name it opened with.",
-	"UpdateSprint":          "Superseded by the transaction in commands.sprintUpdate, which also handles --order collisions.",
-	"UpdateSprintStatus":    "Superseded by the transactions in commands.sprintStart / sprintClose / sprintReopen.",
-	"UpdateTask":            "Map-based updater superseded by the transaction in commands.taskEdit.",
-	"UpdateTaskPriority":    "Superseded by the transaction in commands.taskSetPriority.",
-	"UpdateTaskSeverity":    "Superseded by the transaction in commands.taskSetSeverity.",
-	"UpdateTaskStatus":      "Superseded by the transaction in commands.taskSetStatus, which also enforces the state machine.",
-	"UpdateTaskStruct":      "Struct-based updater superseded by the transaction in commands.taskEdit.",
-	"WithCustomTimeout":     "Context helper; callers use WithDefaultTimeout / WithQuickTimeout or their own context.",
-}
+// It is empty, and that is the intended state. It held fifteen entries when the
+// gate landed, one generation of the same defect: db-layer CRUD methods the
+// command layer had replaced with its own transactions, plus four helpers
+// nothing had ever called. Task #188 settled every one of them — eleven write
+// methods and three helpers deleted, the task and sprint INSERT promoted to the
+// transaction-scoped InsertTaskTx / InsertSprintTx that `task create` and
+// `sprint create` now run, the eight query-cache templates they were the last
+// users of removed with them, and the fixtures of this package, internal/web
+// and internal/commands rewritten onto the path the binary takes.
+//
+// An entry added here from now on is a decision, not an inheritance: it says
+// this package exports something the binary cannot reach and someone chose to
+// keep it. The reason has to say why deleting it is not the answer.
+var unreachedExports = map[string]string{}
 
 // TestEveryExportedIdentifierIsReachedFromProduction is the gate itself.
 func TestEveryExportedIdentifierIsReachedFromProduction(t *testing.T) {

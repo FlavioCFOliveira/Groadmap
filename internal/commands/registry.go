@@ -267,8 +267,9 @@ func (c *Command) FindSubcommand(name string) *Subcommand {
 // the registry-driven replacement for the per-family Handle* switches.
 // When args is empty, the family help is printed. When the first arg
 // is a help token, the family help is printed. When the first arg is
-// an unknown subcommand, an ErrInvalidInput error is returned so the
-// top-level error handler can render it.
+// an unresolved subcommand name, a *DispatchError is returned so the
+// top-level error handler can render the error, the family help as
+// recovery help, and exit 127.
 //
 // The caller is the leaf command's Handle* function; the registry is
 // queried via the embedding *Command. This indirection means
@@ -303,7 +304,14 @@ func (c *Command) DispatchFamily(args []string) error {
 
 	sub := c.FindSubcommand(subToken)
 	if sub == nil {
-		return fmt.Errorf("%w: unknown %s subcommand: %s", utils.ErrInvalidInput, c.Name, subToken)
+		// Dispatch failure, not a malformed argument: the token names no
+		// subcommand of this family. It is carried by
+		// utils.ErrUnknownCommand (exit 127) and NOT by
+		// utils.ErrInvalidInput (exit 2), and it carries the family so
+		// the error path can render that family's help as recovery help
+		// (SPEC/HELP.md § Recovery help after a dispatch failure,
+		// SPEC/ARCHITECTURE.md § Sentinel Error Catalogue).
+		return newUnknownSubcommandError(c, subToken)
 	}
 
 	// Subcommand-level help: `rmp <family> <sub> --help` (or `help` /

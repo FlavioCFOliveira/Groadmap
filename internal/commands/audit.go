@@ -16,7 +16,7 @@ func HandleAudit(args []string) error {
 
 // printAuditListHelp — `rmp audit list`.
 func printAuditListHelp() {
-	fmt.Print(`Usage: rmp audit list -r <roadmap> [filters]
+	fmt.Fprint(helpDst(), `Usage: rmp audit list -r <roadmap> [filters]
 
 Returns audit-log entries for the roadmap, newest first (performed_at
 DESC). Filters compose with AND.
@@ -28,7 +28,14 @@ Required:
 
 Filters:
   -o, --operation <op>            Filter by operation. See 'rmp audit --help'
-                                  for the full operation enum.
+                                  for the full operation enum, grouped by the
+                                  entity type each operation is recorded
+                                  against. Four LEGACY values are accepted but
+                                  written by no command; they stay accepted so
+                                  the older entries already carrying them remain
+                                  filterable, and filtering on one to find
+                                  current activity returns nothing. That listing
+                                  marks them.
   -e, --entity-type <type>        TASK or SPRINT
   --entity-id <id>                Positive integer 1-2147483647 within the entity type
   --since <date>                  Inclusive lower bound on performed_at
@@ -39,13 +46,20 @@ Filters:
 
 Output (stdout JSON):
   Array of audit entries. Every entry carries all seven keys; the last two
-  are null on the operations that do not use them:
+  are null on the operations that do not use them and are never omitted:
     [{ "id": <int>, "operation": "...", "entity_type": "TASK|SPRINT",
        "entity_id": <int>, "performed_at": "<ISO 8601>",
        "related_entity_id": <int> or null, "commit_hash": "<hex>" or null }, ...]
   commit_hash is non-null on TASK_STATUS_DOING, which carries the commit the
   work started from, and on TASK_STATUS_COMPLETED, which carries the commit
   that concluded it. No other operation records one.
+  related_entity_id names the COUNTERPART entity of the operation that produced
+  the entry - the task a SPRINT_ADD_TASK entry added, the sprint a
+  TASK_STATUS_SPRINT entry names, the other task of a dependency pair - and is
+  null when the operation has no counterpart. It is not a second copy of
+  entity_id, and its presence does not follow from the operation name:
+  TASK_STATUS_BACKLOG carries a sprint id from 'sprint remove-tasks' and null
+  from 'task stat'. Neither key can be filtered on.
 
 Exit codes:
   0  Success
@@ -56,7 +70,7 @@ Exit codes:
 
 Examples:
   rmp audit list -r myproject
-  rmp audit list -r myproject -o TASK_STATUS_CHANGE -e TASK
+  rmp audit list -r myproject -o TASK_STATUS_DOING -e TASK
   rmp audit list -r myproject --entity-id 42 --since 2026-01-01
   rmp audit list -r myproject --since 2026-01-01 --until 2026-01-31 -l 500
 `)
@@ -64,7 +78,7 @@ Examples:
 
 // printAuditHistoryHelp — `rmp audit history`.
 func printAuditHistoryHelp() {
-	fmt.Print(`Usage: rmp audit history -r <roadmap> <entity-type> <entity-id>
+	fmt.Fprint(helpDst(), `Usage: rmp audit history -r <roadmap> <entity-type> <entity-id>
 
 Returns every audit entry recorded for a single entity, newest first.
 Equivalent to 'rmp audit list -r <roadmap> -e <entity-type> --entity-id <id>'
@@ -95,7 +109,7 @@ Examples:
 
 // printAuditStatsHelp — `rmp audit stats`.
 func printAuditStatsHelp() {
-	fmt.Print(`Usage: rmp audit stats -r <roadmap> [--since <date>] [--until <date>]
+	fmt.Fprint(helpDst(), `Usage: rmp audit stats -r <roadmap> [--since <date>] [--until <date>]
 
 Aggregates the audit log over an optional time window: total entries,
 the first/last timestamps observed, and per-operation/per-entity-type
@@ -301,26 +315,43 @@ func auditStats(args []string) error {
 	return utils.PrintJSON(stats)
 }
 
-// auditOperationGroups partitions the operation enum for presentation. The
-// prefix is the entity the operation is recorded against, which is also how
-// the audit log stores it: a comment operation such as TASK_COMMENT_CREATE
-// is written against the parent task, so it belongs in the task group
-// (SPEC/DATABASE.md § audit Table).
+// auditOperationGroups partitions the operation catalogue for presentation.
+// Each group names exactly one entity type and one legacy status, and holds
+// exactly the operations declared against that pair in internal/models
+// (SPEC/HELP.md § Audit operation entity-type classification rules 5(b)
+// and 6).
 //
-// The last group is the catch-all. Its empty prefix matches every remaining
-// name, so an operation the earlier prefixes do not recognise still reaches
-// the help instead of being dropped silently.
-var auditOperationGroups = []struct{ label, prefix string }{
-	{"Task ops:", "TASK_"},
-	{"Sprint ops:", "SPRINT_"},
-	{"Other ops:", ""},
+// There is deliberately NO catch-all group. The block this replaced ended in
+// one, because it grouped by name prefix and did not trust the prefix to match
+// every name — the same distrust rule 1 states. Now that the classification is
+// declared and total, nothing can be left over, and a catch-all could only hide
+// the failure the totality gate exists to produce: an unclassified operation
+// would still be printed, under a heading asserting nothing about it, while the
+// block still listed every value the command accepts.
+//
+// Dropping an unclassified operation from the block is therefore the intended
+// behaviour, and it is what gives the coverage gate over this block teeth it
+// did not have before. The block is rendered from the catalogue, so a newly
+// declared operation used to appear here by itself and no coverage gate could
+// fail on it; now it appears only once someone classifies it, and until then
+// TestHelpEnumCoverage_AuditHelpListsEveryOperation reports the omission
+// alongside the totality gate in internal/models.
+var auditOperationGroups = []struct {
+	label      string
+	entityType models.EntityType
+	legacy     bool
+}{
+	{"TASK:", models.EntityTask, false},
+	{"SPRINT:", models.EntitySprint, false},
+	{"TASK, LEGACY:", models.EntityTask, true},
+	{"SPRINT, LEGACY:", models.EntitySprint, true},
 }
 
-// auditOperationBlock renders the "Valid operations" body of the audit
-// family help from models.ValidAuditOperations, so a newly declared
-// operation appears in the help without a second edit here. The returned
-// string is a sequence of complete lines, each terminated by a newline; a
-// group with no members contributes no line.
+// auditOperationBlock renders the "Valid operations" body of the audit family
+// help from the declared classification, so an operation reaches the help under
+// the entity type its rows actually carry rather than under one inferred from
+// its name. The returned string is a sequence of complete lines, each
+// terminated by a newline; a group with no members contributes no line.
 func auditOperationBlock() string {
 	// Column at which every operation list starts: the two-space block
 	// indent, the widest label, and one separating space. Derived from the
@@ -338,10 +369,16 @@ func auditOperationBlock() string {
 
 	grouped := make([][]string, len(auditOperationGroups))
 	for _, op := range models.ValidAuditOperations {
-		name := string(op)
+		class, declared := models.ClassifyAuditOperation(op)
+		if !declared {
+			// Unclassified: no group asserts anything true about it, and
+			// inventing one here is exactly what rule 5(b) forbids. The gates
+			// name it; the help stays silent rather than wrong.
+			continue
+		}
 		for i, g := range auditOperationGroups {
-			if strings.HasPrefix(name, g.prefix) {
-				grouped[i] = append(grouped[i], name)
+			if g.entityType == class.EntityType && g.legacy == class.Legacy {
+				grouped[i] = append(grouped[i], string(op))
 				break
 			}
 		}
@@ -400,15 +437,23 @@ func wrapEnumList(label, indent string, names []string) string {
 // than typed out, so it cannot go stale: the six comment operations were
 // missing from the hand-written list this replaces.
 func printAuditHelp() {
-	fmt.Printf(`Usage: rmp audit [command] [arguments] [options]
+	fmt.Fprintf(helpDst(), `Usage: rmp audit [command] [arguments] [options]
 
 Aliases: aud.
 
 Valid entity types (for --entity-type filter and 'history' arg):
   TASK, SPRINT
 
+Operations are grouped below by the entity type each one is recorded against:
+the value the entry's entity_type field holds, and so whose history an
+--operation filter on it returns.
+
 Valid operations (for --operation filter):
 %s
+No command writes a LEGACY operation. They stay accepted as filter values so
+that the older entries already carrying them remain filterable; filtering on
+one to find current activity returns nothing.
+
 Comment operations are recorded against the PARENT entity: a task comment
 writes entity_type TASK with the owning task's id, a sprint comment writes
 entity_type SPRINT with the owning sprint's id. There is no COMMENT entity
@@ -444,10 +489,19 @@ Options (stats):
 Output (stdout JSON):
   list, history       Array of audit-entry objects, performed_at DESC.
                        Keys: id, operation, entity_type, entity_id, performed_at,
-                       related_entity_id, commit_hash. The last two are null on
-                       the operations that do not use them; commit_hash is
+                       related_entity_id, commit_hash. All seven are always
+                       present; the last two are null on the operations that do
+                       not use them and are never omitted. commit_hash is
                        written on TASK_STATUS_DOING and TASK_STATUS_COMPLETED
-                       alone.
+                       alone. related_entity_id names the COUNTERPART entity of
+                       the operation that produced the entry - the task a
+                       SPRINT_ADD_TASK entry added, the sprint a
+                       TASK_STATUS_SPRINT entry names, the other task of a
+                       dependency pair - and is null when the operation has no
+                       counterpart. Its presence does not follow from the
+                       operation name: TASK_STATUS_BACKLOG carries a sprint id
+                       from 'sprint remove-tasks' and null from 'task stat'.
+                       Neither key can be filtered on.
   stats               AuditStats: total_entries, first_entry_at, last_entry_at,
                        by_operation (map), by_entity_type (map).
 
@@ -460,7 +514,7 @@ Exit codes:
 
 Examples:
   rmp audit list -r myproject
-  rmp audit list -r myproject -o TASK_STATUS_CHANGE -e TASK
+  rmp audit list -r myproject -o TASK_STATUS_DOING -e TASK
   rmp audit list -r myproject --since 2026-01-01 --until 2026-01-31 -l 500
   rmp audit history -r myproject TASK 1
   rmp audit history -r myproject SPRINT 3

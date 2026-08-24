@@ -14,7 +14,8 @@
 
 **Error responses follow typical CLI behavior (NOT JSON):**
 - Errors are written as explicit human-readable messages to stderr
-- Input-related errors (missing parameters, wrong types, unknown commands or subcommands) additionally show the **specific help of the command or subcommand** that was invoked
+- A failing invocation writes **nothing to stdout**; the error text and everything accompanying it go to stderr
+- Help follows an error only on a **dispatch failure**, meaning an unresolved command name or an unresolved subcommand name, in which case the help for the level at which the name could not be resolved is written to stderr after the error. No other error class appends help. See `HELP.md § Error message format` and `COMMANDS.md § Dispatch Failures (Unresolved Command or Subcommand Names)`
 - Uses standard Unix exit codes for script integration
 - This rule governs **command output**. It does not govern the HTTP responses of
   the running `web` server, which are not command stdout or stderr (see the
@@ -46,9 +47,14 @@ comment body of the comment subcommands of the `task` and `sprint` families.**
 - Short flags: `-r <name>`, `-p 5`
 - Long flags: `--roadmap <name>`, `--priority 5`
 - Comma-separated lists: `1,2,3`
-- Standard input: the full stdin contents are read as the Cypher query when
-  `rmp graph <subcommand>` is invoked without `--query`, and as the comment body
-  when a comment subcommand is invoked without `--body`.
+- Standard input: the alternative source for the two flag values named above —
+  the Cypher query when `rmp graph <subcommand>` is invoked without `--query`,
+  and the comment body when a comment subcommand is invoked without `--body`.
+  Neither is read to EOF: each read is bounded, and the bound, the unit it counts
+  in, and what each refusal costs belong to that value's own canonical section,
+  which this file does not restate. Those sections are
+  `GRAPH.md § Cypher Input Source and Precedence` for the query and
+  `COMMANDS.md § Comment Body Input Source and Precedence` for the comment body.
 
 ---
 
@@ -209,6 +215,8 @@ Example with unlimited capacity (`max_tasks` is `null`):
 ```
 
 **Note:** The `tasks` and `task_count` fields are computed at runtime from the `sprint_tasks` junction table and are not stored in the `sprints` table. The `max_tasks` field is always present in the JSON output (never omitted); it is `null` when no capacity limit is set and an integer otherwise. The `order` field is always present: it is a positive integer (`> 0`), unique across the roadmap, and is stored in the `order_index` column (the JSON name is `order` because `ORDER` is a reserved SQL keyword). See `MODELS.md § Sprint Field Constraints`.
+
+**Membership in both reads:** every read that produces a Sprint object populates `tasks` and `task_count` — the single object of `rmp sprint get` and every object of the `rmp sprint list` array alike. A Sprint object therefore never shows `tasks` as `null`, and never shows `task_count` as `0` for a sprint that holds tasks. `tasks` carries task **ids** as integers, in ascending id order, and never task objects; `task_count` always equals the number of entries in `tasks`. A sprint with no member task shows `task_count` `0` and `tasks` `[]`, as the second example above does, under the empty-array rule in `Implementation Notes` below. See `COMMANDS.md § List Sprints`.
 
 ### Task Comment
 
@@ -613,7 +621,7 @@ Rules:
 
 A request the graph data endpoint refuses, and a query that fails, are answered
 with this object in place of the node-and-edge object above. The endpoint returns
-it for each of the three query-bar failures, always with HTTP `400 Bad Request`.
+it for each of the four query-bar failures, always with HTTP `400 Bad Request`.
 The status, the failure classes, and the rules that select between them are
 specified in `WEB.md § Query-Bar Error Handling`, which is canonical for them; this
 section is canonical for the shape.
@@ -630,29 +638,35 @@ Field reference:
 | Field | Type | Description |
 |-------|------|-------------|
 | `error` | string | The human-readable reason. The graph page shows it in place as its failure message. |
-| `kind` | string | The machine-readable failure class: `not_read_only`, `invalid_limit`, or `execution`. |
+| `kind` | string | The machine-readable failure class: `not_read_only`, `invalid_limit`, `invalid_keyword_spacing`, or `execution`. |
 
 Rules:
 
 1. Both fields are always present and both are always strings. The object carries
    these two fields and no others, and it carries neither `nodes` nor `edges`.
-2. `kind` takes exactly three values, one per failure class in
+2. `kind` takes exactly four values, one per failure class in
    `WEB.md § Query-Bar Error Handling`: `not_read_only` for a query the read-only
    guard-rail rejected before execution, `invalid_limit` for a `limit` that is not
-   one of the six allowed values, and `execution` for a query that was accepted as
-   read-only and then failed once running. A query cancelled for exhausting the
-   endpoint's query time budget is an execution failure and carries `execution`;
-   the budget adds no fourth value (see `WEB.md § Graph Query Time Budget`).
+   one of the six allowed values, `invalid_keyword_spacing` for a
+   schema-introspection command the guard rail rejected before execution because
+   its keyword spacing is not the one the engine accepts (see
+   `GRAPH.md § Keyword Spacing in a Schema-Introspection Command`), and `execution`
+   for a query that was accepted as read-only and then failed once running. A query
+   cancelled for exhausting the endpoint's query time budget is an execution
+   failure and carries `execution`; the budget adds no value of its own (see
+   `WEB.md § Graph Query Time Budget`).
 3. `error` is written to be read by a person and is not parsed. For an execution
    failure it carries the engine's own diagnostic text, so a given query produces
    the same diagnostic here as it produces on the CLI (see
    `GRAPH.md § Error Handling and Exit Codes`, rule 2). For an invalid limit it
-   names the rejected value.
+   names the rejected value. For a keyword-spacing rejection it names the spacing
+   and the accepted spelling, and never describes the query as not read-only: a
+   schema-introspection command reads and writes nothing whatever its spacing.
 4. The object is serialized exactly as every other response of this endpoint is:
    HTML-safe, so `<`, `>`, and `&` are escaped (see `WEB.md § Graph Data Endpoint`),
    pretty-printed with two-space indentation, and terminated by a newline (see
    [Implementation Notes](#implementation-notes)).
-5. This is the endpoint's error contract for the three query-bar failures only. An
+5. This is the endpoint's error contract for the four query-bar failures only. An
    internal read error — a graph store that cannot be opened, for example — is
    answered HTTP `500` as on every other route of the web interface and does not
    carry this shape (see `WEB.md § Query-Bar Error Handling`, rule 7).
@@ -900,8 +914,8 @@ a sprint rejects (see `HELP.md § Comment subcommand help specifics`).
 
 **The audit enums are published in full.** `AuditOperation` carries every value in
 `ValidAuditOperations` — the canonical catalogue of `DATABASE.md § audit Table` — and
-`AuditEntityType` carries `TASK` and `SPRINT`. Two rules apply to `AuditOperation`
-specifically:
+`AuditEntityType` carries `TASK` and `SPRINT`. Four rules apply to
+`AuditOperation` specifically:
 
 1. **No value is omitted.** `audit list --operation` accepts exactly the values in
    this enum, so a value missing from the contract is a filter an agent cannot
@@ -912,16 +926,69 @@ specifically:
    agent that reads only the value list would otherwise choose a LEGACY operation
    when composing a filter for current activity and get an empty result with no
    explanation.
+3. **Every value names the entity it is recorded against.** Each element of
+   `AuditOperation.values` carries an `entity_type` member holding `TASK` or
+   `SPRINT`: the value an audit entry's own `entity_type` field holds on a row
+   carrying that operation (see `§ Audit Entry`). The member is present on every
+   value of this enum, and is never `null` and never empty. Without it an agent
+   composing an `audit list` filter cannot tell whose history an operation belongs
+   to, and the only thing left to infer it from is the operation's name;
+   `HELP.md § Audit operation entity-type classification` states why that
+   inference is not permitted and what both published surfaces read instead.
+
+   The entity type cannot travel inside `description`. That string carries the
+   catalogue entry's own text from `DATABASE.md § audit Table`, so it says what the
+   catalogue says and nothing more, and prose is not a member a consumer can read a
+   value from without parsing it.
+
+4. **Every value states whether a command still writes it.** Each element of
+   `AuditOperation.values` carries a `legacy` member holding a boolean: `true` on
+   the four LEGACY values rule 2 governs, `false` on every other value. The member
+   is present on every value of this enum, and is never `null`. The member and the
+   `description` state the same fact and MUST agree: a value carrying `true` is a
+   value whose description says no command writes it.
+
+   Both forms are required because they serve different consumers, and the prose
+   form alone does not serve the second one. Rule 2's sentence explains to a reader
+   why the operation returns nothing and which operations to filter instead.
+   `--ai-help` exists to be read by machine, and recovering the LEGACY status from
+   that sentence makes a consumer depend on wording this specification is free to
+   change, so the same fact travels separately in a member the consumer can test.
+   An agent composing a filter over the operations still in use reads one field
+   rather than searching a string.
+
+   `legacy` and `entity_type` come from the same single declaration, the one
+   `HELP.md § Audit operation entity-type classification` rule 2 requires and which
+   carries both facts. The contract derives neither of them from the value's name
+   and neither of them from its `description`.
 
 ```json
 "AuditOperation": {
   "values": [
-    {"value": "TASK_STATUS_DOING",     "description": "A task entered DOING. The entry carries the commit the work started from."},
-    {"value": "TASK_STATUS_CHANGE",    "description": "LEGACY. No command writes this. It survives on entries written before status operations named their destination; filter TASK_STATUS_BACKLOG, TASK_STATUS_SPRINT, TASK_STATUS_DOING, TASK_STATUS_TESTING, or TASK_STATUS_COMPLETED for current activity."}
+    {"value": "TASK_STATUS_DOING",     "entity_type": "TASK",   "legacy": false, "description": "A task entered DOING. The entry carries the commit the work started from."},
+    {"value": "SPRINT_ADD_TASK",       "entity_type": "SPRINT", "legacy": false, "description": "Task added to a sprint via `sprint add-tasks`; one row per task, against the sprint, naming the task in `related_entity_id`."},
+    {"value": "TASK_STATUS_CHANGE",    "entity_type": "TASK",   "legacy": true,  "description": "LEGACY. No command writes this. It survives on entries written before status operations named their destination; filter TASK_STATUS_BACKLOG, TASK_STATUS_SPRINT, TASK_STATUS_DOING, TASK_STATUS_TESTING, or TASK_STATUS_COMPLETED for current activity."}
   ],
   "catalogue_reference": "DATABASE.md § audit Table"
 }
 ```
+
+**`entity_type` and `legacy` appear only where they apply.** Each is a member of an
+`enums[].values[]` element, not a member every such element carries: each is present
+on every value of `AuditOperation` and absent from the values of every other enum.
+This follows the convention the contract already uses for members that do not
+apply to an entry, where `commands[].flags[]` omits `range`, `min_length`, and
+`max_length` rather than publishing them as `null`. Absent is the right form here
+rather than `null`: a `TaskStatus` value is not recorded against an entity at all
+and no `TaskStatus` value is LEGACY, so keys whose values would be `null` on every
+enum but this one would suggest that the contract has a general notion of an enum
+value's entity and a general notion of an enum value's LEGACY status, and it has
+neither.
+
+Adding these members widens a published contract, which is a deliberate change and
+not a detail. A consumer that reads the members it knows is unaffected; a consumer
+that enumerates members sees exactly two new keys, both on the values of exactly
+one enum.
 
 **Every published value carries a description.** Each element of `values` MUST
 carry a `description` that is not empty after trimming whitespace. The rule

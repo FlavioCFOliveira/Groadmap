@@ -209,17 +209,27 @@ func TestBoardColumnBadges_CarryTheColourOfTheStatusTheyGroup(t *testing.T) {
 // the BACKLOG column non-vacuous. Against the real mapping that column is
 // indistinguishable from a fixed bg-secondary-lt; under the probe, a fixed
 // bg-secondary-lt is exactly what a non-conforming template still shows, while a
-// conforming one shows probe-BACKLOG. It pins each column to the RIGHT status as
-// well: swapping two columns' statuses keeps five distinct classes but puts the
-// sentinels in the wrong places.
+// conforming one shows probe-BACKLOG.
+//
+// It pins each column to the RIGHT status as well, and the shape of that proof
+// DIFFERS BETWEEN THE TWO BOARDS, because their view models differ. The sprint
+// board keeps the heading and the status it colours by in SEPARATE fields, so a
+// column there can carry the right label and the wrong colour; swapping the
+// canonical status of two of its columns leaves three distinct classes, passes a
+// mere distinctness check, and fails HERE, naming both columns. The tasks board
+// holds ONE field that drives both, which is what the no-second-mapping rule
+// above requires of it, so the same swap moves the label and the colour together
+// and this check cannot see it - it looks for a (heading, sentinel) PAIR anywhere
+// on the page, and a relocated pair is still a pair. What catches a relocated
+// column there is the order-indexed assertion in
+// TestBoardColumnBadges_CarryTheColourOfTheStatusTheyGroup, which reads the
+// columns in order and names the first one out of place. Both halves were proven
+// by running the mutation rather than by argument.
 //
 // Both view models are built with no task at all, so every column shows 0 — which
 // also proves the colour is chosen with no card to read a status from.
 func TestBoardColumnBadges_ClassComesFromTheOneHelper(t *testing.T) {
-	funcs := make(map[string]any, len(badgeFuncMap))
-	for name, fn := range badgeFuncMap {
-		funcs[name] = fn
-	}
+	funcs := templateFuncs()
 	funcs["taskStatusBadge"] = func(s models.TaskStatus) string { return "probe-" + string(s) }
 
 	tmpl, err := template.New("").Funcs(funcs).ParseFS(templatesFS, "templates/*.html")

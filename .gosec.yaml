@@ -1,94 +1,225 @@
-# gosec security scan configuration for Groadmap
+# gosec accepted-findings register for Groadmap
 #
-# Run: gosec -exclude-dir=.claude/worktrees ./...
+# Scanner invocation (SPEC/BUILD.md § Security Scan):
 #
-# Accepted findings (annotated with #nosec in source code). This register is the
-# reviewer's index: every suppression in the tree appears below with the reason
-# that makes it safe. The counts total 53 and are the ones
-# `grep -roh '#nosec G[0-9]*' --include='*.go' . | sort | uniq -c` reports, so a
-# new suppression that is not listed here is a review failure. (A plain grep for
-# the string reports 54: the extra hit is prose about suppressions inside a
-# comment in cmd/rmp/workflow_gates_test.go, not a suppression.)
+#     gosec -exclude-dir=.claude/worktrees ./...
 #
-# G104 (CWE-703) - Errors unhandled  [13]
-#   Locations: db/connection.go (6), db/queries.go (3), web/routes.go (2),
-#              web/server.go (1), db/connection_test.go (1)
-#   Reason: Best-effort cleanup on error paths where the original error is
-#           already captured and returned, and where a failed cleanup cannot
-#           change the outcome: db.Close()/sqlDB.Close() after a failed open,
-#           tx.Rollback() after a failed operation or inside panic recovery,
-#           rows.Close() before issuing writes on the same transaction, the
-#           best-effort chmod of the SQLite -wal/-shm sidecars, the file close
-#           in the static-asset directory guard, the close of a database opened
-#           only to run the web server's startup migration, and a test's
-#           pre-run os.RemoveAll of its own roadmap directory.
+# WHAT THIS FILE IS. It is the reviewer's index of every suppression the source
+# carries: which rule, in which file, how many, and the reason each one is
+# accepted. It is NOT scan configuration and cannot become any. gosec applies a
+# configuration file only when -conf names one, the invocation above passes none,
+# and gosec's -conf reader is json.Unmarshal (gosec v2.28.0 config.go, ReadFrom),
+# so a commented YAML document is not a configuration it could ever read. Every
+# suppression therefore lives at its site in the Go source as a #nosec comment,
+# scoped to one rule on one node, and this file explains the ones that exist.
+# gosec honours a second syntax, //gosec:disable, which the gate below also
+# sweeps for; the tree uses none today and one would have to be registered here
+# like any other.
 #
-# G201 (CWE-89) - SQL string formatting  [21]
-#   Locations: db/queries.go (8), commands/task_mutate.go (8),
-#              commands/task_edit.go (1), commands/sprint_crud.go (1),
-#              commands/sprint_membership_audit_test.go (1),
-#              db/comments.go (1), db/migrations.go (1)
-#   Reason: fmt.Sprintf builds only (a) an IN (?,...,?) or VALUES (?,?,?,?)
-#           placeholder list produced by db.Placeholders / QueryCache, which can
-#           emit nothing but "?" separated by commas; (b) a SET clause joined
-#           from hard-coded "column = ?" fragments selected by a switch or by
-#           literal map keys; or (c) a table name that is a compile-time literal
-#           at every call site (db/migrations.go columnExists); or (d) a column
-#           name that is a compile-time literal at every call site, in a test
-#           helper that counts distinct values of one audit column
-#           (commands/sprint_membership_audit_test.go). Every user value travels
-#           as a bound ? parameter, so no user input is ever interpolated into a
-#           statement.
+# WHAT KEEPS IT TRUE. internal/testenv/nosec_register_gate_test.go parses this
+# register and sweeps the module for suppressions, and fails when the two differ
+# in either direction: a suppression in the source that this register does not
+# account for, and a line here naming a file that no longer carries the count it
+# claims. The gate runs under `go test ./...`, which is what `make check`, the CI
+# workflow and the release workflow all run, so the three places that enforce the
+# validation gates enforce this one too.
 #
-# G204 (CWE-78) - Subprocess launched with variable  [3]
-#   Locations: web/server.go (3)
-#   Reason: The browser launcher runs the conventional per-platform program
-#           (xdg-open / open / rundll32) directly through exec.Command, with no
-#           shell, passing the internally built "http://host:port" URL as a
-#           single argument. No shell metacharacter can be interpreted, and the
-#           host comes from the validated --host flag.
+# The gate exists because the register drifted without it. Task #141 recorded the
+# first drift; v1.15.0 brought the register up to date but added no check, and
+# within the day five suppression sites moved without it: three files started
+# carrying one that the register never named (internal/graphlock/graphlock.go,
+# internal/testenv/pty_linux.go, internal/commands/help_output_test.go),
+# internal/db/queries.go gained a ninth G201, and internal/commands/graph.go lost
+# the G304 that moved into graphlock.go. The register said 53; the tree had 56.
 #
-# G302 (CWE-276) - Poor file permissions  [2]
-#   Locations: commands/graph.go (2)
-#   Reason: The 0700 mode is applied to DIRECTORIES (the graph store and its
-#           snapshot directory), where owner-only access requires the execute
-#           bit. 0700 on a directory is exactly what SPEC/ARCHITECTURE.md
-#           § Directory Structure and CLAUDE.md § 10 mandate for the
-#           ~/.roadmaps tree; gosec's file-oriented threshold does not apply.
+# THE GATE CAUGHT ITS FIRST REAL DRIFT ON THE DAY IT LANDED, before this file
+# was even committed. rmp task 236 replaced three scattered best-effort
+# rows.Close() calls in error paths with a single deferred close, so
+# internal/db/queries.go went from three G104 suppressions to one. The register
+# had been written against the tree one commit earlier and still said three.
+# The gate failed, named the file, the rule and both numbers, and this file was
+# corrected before the merge. The drift was two suppressions in one commit, in
+# the safe direction, and no human would have noticed it.
 #
-# G304 (CWE-22) - File inclusion via variable  [11]
-#   Locations: utils/migrate_test.go (6), db/connection.go (1),
-#              commands/graph.go (1), commands/comments_test.go (1),
-#              db/permissions_test.go (1), web/comments_test.go (1)
-#   Reason: Production paths are built inside ~/.roadmaps/<name>/ from a roadmap
-#           name already validated against ^[a-z0-9_-]+$ (no separator, no ".."),
-#           with a fixed basename: project.db pre-created O_EXCL at 0600
-#           (db/connection.go) and the graph write.lock (commands/graph.go). The
-#           test paths are a stdin fixture the test itself wrote under its own
-#           t.TempDir() (commands/comments_test.go, utils/migrate_test.go), a
-#           digest read of a database file the test itself created under its own
-#           t.TempDir() (db/permissions_test.go), and the listing of this
-#           repository's own package directory that the escaping test reads to
-#           assert no template bypasses html/template (web/comments_test.go).
+# IT CAUGHT THE SECOND THE SAME WAY. rmp task 188 deleted the db-layer write
+# methods the command layer had replaced, and one of them — RemoveTasksFromSprint
+# — carried the ninth G201 in internal/db/queries.go. The register still said
+# nine; the source carried eight. Retiring code takes a suppression with it just
+# as surely as writing code adds one, and the register has to be brought down as
+# well as up.
 #
-# G306 (CWE-276) - Poor file permissions when writing a file  [1]
-#   Locations: db/permissions_test.go (1)
-#   Reason: The test writes the SQLite -wal/-shm sidecars at 0666 on purpose:
-#           a mode wider than 0600 is the precondition the case exists to
-#           exercise, since it asserts that opening the database restricts the
-#           sidecars it finds. Writing them at 0600 would make the assertion
-#           vacuous. Test-only; no production path writes a file at this mode.
+# TWO COUNTS, BOTH TRUE, MEASURING DIFFERENT THINGS.
 #
-# G404 (CWE-338) - Weak random number generator  [1]
-#   Locations: models/comment_read_test.go (1)
-#   Reason: math/rand builds a deterministic differential-test corpus from a
-#           fixed seed so a failure is reproducible. No security decision, key,
-#           token, or identifier derives from it.
+#   53  suppressions in the module, the number this register accounts for and
+#       the number the gate sweeps. The gate reads comment groups the way gosec
+#       does, so the tag counts only where the scanner honours it: a plain
+#       `grep -c '#nosec'` answers 54, one hit being the string inside a sentence
+#       in cmd/rmp/workflow_gates_test.go.
+#   39  suppressions gosec reads under the invocation above, which is the
+#       `Nosec:` figure its summary prints and the figure the release notes
+#       quote. gosec does not scan _test.go files unless -tests is passed, and
+#       14 of the 53 are in test files: 53 - 14 = 39. That the scanner does not
+#       read those 14 is an accepted gap, measured and reasoned in
+#       SPEC/BUILD.md § Security Scan; the register accounts for them anyway, so
+#       they stay reviewed even where the scanner is silent.
 #
-# G703 (CWE-22) - Potential file inclusion via variable  [1]
-#   Locations: web/data.go (1)
-#   Reason: os.Stat on ~/.roadmaps/<name>/graph, where <name> was validated by
-#           the route guard and again by utils.GetRoadmapDir before the path was
-#           built, so no path outside the data directory is reachable. The stat
-#           only decides whether the roadmap has a graph store yet; the read
-#           never creates it.
+# The release notes are consistent with this: v1.13.1 through v1.14.0 quote 41
+# against a tree carrying 48 suppressions of which 41 were outside test files,
+# and v1.15.0 quotes 40 against 53 of which 40 were outside test files. Neither
+# number contradicts the source; they answer different questions. On a platform
+# where a file is not built the scanner's figure is lower still — pty_linux.go is
+# Linux-only — which is why the gate checks the module-wide count and derives the
+# scanner's, rather than pinning a figure that changes with GOOS.
+#
+# MAINTENANCE. Adding a suppression means adding its line here WITH a reason that
+# survives review. A suppression that cannot be justified is a defect to fix, not
+# a line to add. Every directive must name at least one rule and carry a
+# `-- reason` after the rule; the gate refuses a naked #nosec, which would
+# suppress every rule on that node, and refuses one with no justification.
+#
+# REGISTER FORMAT, parsed strictly by the gate. A malformed line fails the gate
+# rather than being skipped.
+#
+#   totals: <module-wide> suppressions, <n> outside _test.go
+#   <Gnnn> <title>  [<count>]
+#     <path relative to the module root>  <count>
+#     Reason: <prose, continuing on the following indented lines>
+#
+# A directive naming two rules counts once under each; today every one names
+# exactly one, so the totals below are also the number of directives.
+#
+# totals: 53 suppressions, 39 outside _test.go
+#
+# G104 Audit errors not checked (CWE-703)  [11]
+#   internal/db/connection.go                          6
+#   internal/db/connection_test.go                     1
+#   internal/db/queries.go                             1
+#   internal/web/routes.go                             2
+#   internal/web/server.go                             1
+#   Reason: Cleanup whose failure cannot change the outcome already decided, on a
+#     path where the original error is the one the caller must see. sqlDB.Close()
+#     and db.Close() after a failed open or a failed configure; tx.Rollback()
+#     after a failed operation and inside panic recovery, where the operation's
+#     error or the original panic takes precedence and is re-raised; rows.Close()
+#     in the error branches of CompactSprintPositionsTx and once more before that
+#     function issues writes on the same transaction; the file close in noDirFS
+#     before it returns the Stat error or fs.ErrNotExist; the close of a database
+#     opened only to run the web server's startup migration, whose result is
+#     already logged; and a test's pre-run os.RemoveAll of the roadmap directory
+#     it is about to create.
+#     One of the six in connection.go is not cleanup and is accepted on a
+#     different ground: restrictSidecars discards the chmod that narrows the
+#     SQLite -wal/-shm sidecars to 0600, which IS a security step. It is accepted
+#     because the sidecars never leave the roadmap home directory, which the open
+#     path has already established at 0700, so the directory and not the file
+#     mode is what keeps another user out; because SPEC makes a sidecar failure
+#     non-fatal and silent, a fatal rule turning a self-resolving race between
+#     the Stat and the chmod into an intermittent command failure being the worse
+#     outcome; and because the test at permissions_test.go:487 proves the
+#     non-fatal behaviour rather than assuming it. It would stop being acceptable
+#     if the roadmap home were ever created wider than 0700, which is the
+#     invariant this reason rests on.
+#
+# G201 SQL query construction using format string (CWE-89)  [21]
+#   internal/commands/sprint_crud.go                   1
+#   internal/commands/sprint_membership_audit_test.go  1
+#   internal/commands/task_edit.go                     1
+#   internal/commands/task_mutate.go                   8
+#   internal/db/comments.go                            1
+#   internal/db/migrations.go                          1
+#   internal/db/queries.go                             8
+#   Reason: No user value is ever interpolated; every one travels as a bound ?
+#     parameter. What fmt.Sprintf assembles is one of four things. (a) A
+#     placeholder list from db.Placeholders / QueryCache.GetPlaceholders, whose
+#     generator emits nothing but "?" joined by "," (internal/db/query_cache.go,
+#     generatePlaceholders), or a "(?, ?, ?, ?)" row list built the same way. (b)
+#     A SET clause joined from hard-coded "column = ?" fragments: literal in
+#     sprint_crud.go, and in task_edit.go from keys that must be present in the
+#     package-level taskEditFieldOperations map or the whole edit is refused
+#     before the statement is built, which makes the "internal constants" claim
+#     enforced rather than asserted. (c) A table name inside pragma_table_info()
+#     in db/migrations.go columnExists, which is the one site where a value is
+#     interpolated into SQL rather than a placeholder; every call site passes a
+#     string literal (see the call-site list in that function's comment) and the
+#     column being looked for is bound. This is the site to re-examine first if a
+#     caller ever passes a variable. (d) A column name in one test helper,
+#     literal at both call sites.
+#
+# G204 Audit use of command execution (CWE-78)  [3]
+#   internal/web/server.go                             3
+#   Reason: openBrowser runs the conventional per-platform launcher (xdg-open,
+#     open, rundll32) through exec.Command, which execs the program directly with
+#     no shell, so no metacharacter is interpreted. The single argument is the URL
+#     the server built for itself as "http://" + net.JoinHostPort(host, port), so
+#     it always begins with the scheme and can never be read as an option by the
+#     launcher. host comes from this user's own --host flag on their own machine;
+#     no privilege boundary is crossed.
+#
+# G302 Poor file permissions used when creating file or using chmod (CWE-276)  [2]
+#   internal/commands/graph.go                         2
+#   Reason: The 0700 is applied to DIRECTORIES — the graph store and its snapshot
+#     directory — where owner-only access requires the execute bit, and 0700 on
+#     the ~/.roadmaps tree is what CLAUDE.md § 10 and SPEC/ARCHITECTURE.md
+#     § Directory Structure mandate. gosec's threshold is file-oriented and does
+#     not distinguish the two. A 0700 applied to a FILE would not be covered by
+#     this reason.
+#
+# G304 File path provided as taint input (CWE-22)  [13]
+#   internal/commands/comments_test.go                 1
+#   internal/commands/help_output_test.go              1
+#   internal/db/connection.go                          1
+#   internal/db/permissions_test.go                    1
+#   internal/graphlock/graphlock.go                    1
+#   internal/testenv/pty_linux.go                      1
+#   internal/utils/migrate_test.go                     6
+#   internal/web/comments_test.go                      1
+#   Reason: The production paths are built under ~/.roadmaps/<name>/ from a
+#     roadmap name already validated against ^[a-z0-9_-]+$ by utils, which admits
+#     no separator and no "..", with a fixed basename: project.db, pre-created
+#     O_EXCL at 0600 so the descriptor never exists at a umask-derived mode
+#     (db/connection.go), and the graph store's write.lock, opened only inside a
+#     graph directory the caller has already resolved through GetRoadmapDir
+#     (graphlock.go). pty_linux.go opens /dev/pts/<n> where n came from a TIOCGPTN
+#     ioctl on a descriptor the same function opened, so no name crosses a
+#     boundary. The test paths are fixtures each test wrote under its own
+#     t.TempDir(), a digest read of a database the test created there, and two
+#     source-reading audits that list this repository's own package directory.
+#
+# G306 Poor file permissions used when writing to a file (CWE-276)  [1]
+#   internal/db/permissions_test.go                    1
+#   Reason: The test writes the SQLite -wal/-shm sidecars at 0666 on purpose: a
+#     mode wider than 0600 is the precondition the case exists to exercise, since
+#     it asserts what opening the database does with the sidecars it finds.
+#     Writing them at 0600 would make the assertion vacuous. Test-only; no
+#     production path writes a file at this mode.
+#
+# G404 Insecure random number source (CWE-338)  [1]
+#   internal/models/comment_read_test.go               1
+#   Reason: math/rand builds a differential-test corpus from a fixed seed so a
+#     failure is reproducible. No key, token, identifier or security decision
+#     derives from it.
+#
+# G703 Path traversal via taint analysis (CWE-22)  [1]
+#   internal/web/data.go                               1
+#   Reason: os.Stat on ~/.roadmaps/<name>/graph, where <name> was validated by the
+#     route guard and again by utils.GetRoadmapDir before the path was built, so
+#     no path outside the data directory is reachable. The stat only decides
+#     whether the roadmap has a graph store yet; the read never creates one.
+#
+# TWO OBSERVATIONS THIS REGISTER MAKES DELIBERATELY, because a reviewer who
+# trusts the list should also know what the list does not mean.
+#
+# A suppression is not evidence that gosec had a finding. Of the 42 suppressions
+# the scanner reads, 30 suppress a reported finding and 12 currently suppress
+# nothing: gosec's G201 does not follow fmt.Sprintf through a query issued on the
+# embedded *sql.DB or through a function that only returns the assembled string,
+# and G104 does not report an error discarded by an explicit `_ =`. Those 12 are
+# documentation at the site rather than an accepted finding. They are kept and
+# listed because they are still standing scope-limited suppressions: if the rule
+# starts reporting at that node, they will silence it.
+#
+# A #nosec is a permanent blindfold over one node. Every G201 line above means
+# that if the statement at that site is ever edited to interpolate a value
+# instead of a placeholder, the scanner will not say so. That is the cost being
+# accepted, and it is the reason each entry names what makes it safe rather than
+# only asserting that it is.

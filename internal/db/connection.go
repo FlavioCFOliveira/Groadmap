@@ -30,10 +30,6 @@ const (
 	// DefaultBusyTimeout is the SQLite busy timeout in milliseconds.
 	// This prevents "database is locked" errors by waiting up to this duration.
 	DefaultBusyTimeout = 10000 // 10 seconds
-
-	// QueryTimeout is the default timeout for database queries.
-	// Note: SQLite busy_timeout handles most locking scenarios.
-	QueryTimeout = 30 * time.Second
 )
 
 // SQLite result codes. See https://www.sqlite.org/rescode.html.
@@ -136,11 +132,16 @@ func retryWithBackoff(operation string, fn func() error) error {
 }
 
 // DB wraps sql.DB with roadmap-specific operations.
+//
+// The connection does not carry the roadmap's name. It used to, behind a
+// RoadmapName accessor, and nothing ever asked: every caller opens a roadmap
+// by name and still holds that name, so the field was written twice and read
+// only by tests (task #188). A name stored here would also be a second answer
+// to "which roadmap is this", next to the path the connection was opened from.
 type DB struct {
 	*sql.DB
-	queryCache  *QueryCache
-	batchProc   *BatchProcessor
-	roadmapName string
+	queryCache *QueryCache
+	batchProc  *BatchProcessor
 }
 
 // Placeholders returns a comma-separated string of n SQL "?" placeholders,
@@ -388,10 +389,9 @@ func openRoadmap(roadmapName string, chmod chmodFunc) (*DB, error) {
 	}
 
 	db := &DB{
-		DB:          sqlDB,
-		roadmapName: roadmapName,
-		queryCache:  NewQueryCache(),
-		batchProc:   NewBatchProcessor(100),
+		DB:         sqlDB,
+		queryCache: NewQueryCache(),
+		batchProc:  NewBatchProcessor(100),
 	}
 
 	// Create schema if new database with retry logic
@@ -508,10 +508,9 @@ func openRoadmapReadOnly(roadmapName string, chmod chmodFunc) (*DB, error) {
 	restrictSidecars(dbPath, chmod)
 
 	return &DB{
-		DB:          sqlDB,
-		roadmapName: roadmapName,
-		queryCache:  NewQueryCache(),
-		batchProc:   NewBatchProcessor(100),
+		DB:         sqlDB,
+		queryCache: NewQueryCache(),
+		batchProc:  NewBatchProcessor(100),
 	}, nil
 }
 
@@ -615,11 +614,6 @@ func (db *DB) Close() error {
 	return nil
 }
 
-// RoadmapName returns the name of the connected roadmap.
-func (db *DB) RoadmapName() string {
-	return db.roadmapName
-}
-
 // WithTransaction executes a function within a database transaction.
 // Automatically commits on success or rolls back on error.
 // Uses retry logic for handling database locked errors.
@@ -670,9 +664,4 @@ func WithDefaultTimeout() (context.Context, context.CancelFunc) {
 // WithQuickTimeout returns a context with the quick query timeout.
 func WithQuickTimeout() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), QuickQueryTimeout)
-}
-
-// WithCustomTimeout returns a context with a custom timeout.
-func WithCustomTimeout(timeout time.Duration) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), timeout)
 }

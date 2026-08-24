@@ -29,10 +29,11 @@ func TestOpen_ValidRoadmap(t *testing.T) {
 		t.Error("expected non-nil DB connection")
 	}
 
-	// Verify roadmap name
-	if db.RoadmapName() != roadmapName {
-		t.Errorf("expected roadmap name %q, got %q", roadmapName, db.RoadmapName())
-	}
+	// Verify the connection is against THIS roadmap's file. The assertion used
+	// to read a name back out of a RoadmapName accessor, which only proved the
+	// connection remembered the string it was handed; asking SQLite which file
+	// it opened proves the thing the caller actually depends on.
+	assertConnectedTo(t, db, roadmapName)
 }
 
 func TestOpen_InvalidRoadmapName(t *testing.T) {
@@ -73,9 +74,7 @@ func TestOpenExisting(t *testing.T) {
 	}
 	defer db2.Close()
 
-	if db2.RoadmapName() != roadmapName {
-		t.Errorf("expected roadmap name %q, got %q", roadmapName, db2.RoadmapName())
-	}
+	assertConnectedTo(t, db2, roadmapName)
 }
 
 func TestOpenExisting_NotFound(t *testing.T) {
@@ -351,17 +350,48 @@ func TestDBClose(t *testing.T) {
 	// We just verify it doesn't panic
 }
 
-func TestRoadmapName(t *testing.T) {
-	db, err := Open("testroadmapname")
-	if err != nil {
-		t.Fatalf("failed to open database: %v", err)
-	}
-	defer db.Close()
+// assertConnectedTo fails unless the connection's main database is the file of
+// the named roadmap.
+//
+// PRAGMA database_list reports the file SQLite actually attached, so this holds
+// the open path to what utils.GetRoadmapPath resolves, end to end. It replaced
+// a RoadmapName accessor that returned the argument Open had been called with:
+// nothing in the binary ever asked a connection for its roadmap's name, because
+// every caller opens by name and still holds it, and the accessor could not
+// have caught a connection opened against the wrong file (task #188).
+func assertConnectedTo(t *testing.T, db *DB, roadmapName string) {
+	t.Helper()
 
-	name := db.RoadmapName()
-	if name != "testroadmapname" {
-		t.Errorf("expected roadmap name 'testroadmapname', got %q", name)
+	want, err := utils.GetRoadmapPath(roadmapName)
+	if err != nil {
+		t.Fatalf("resolving the path of roadmap %q: %v", roadmapName, err)
 	}
+
+	rows, err := db.Query("PRAGMA database_list")
+	if err != nil {
+		t.Fatalf("reading the attached database list: %v", err)
+	}
+	defer rows.Close()
+
+	var attached []string
+	for rows.Next() {
+		var seq int
+		var name, file string
+		if err := rows.Scan(&seq, &name, &file); err != nil {
+			t.Fatalf("scanning the attached database list: %v", err)
+		}
+		if name == "main" {
+			if file != want {
+				t.Errorf("connection is attached to %q, want the roadmap file %q", file, want)
+			}
+			return
+		}
+		attached = append(attached, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterating the attached database list: %v", err)
+	}
+	t.Fatalf("no main database attached; the connection reports %v", attached)
 }
 
 // ==================== TRANSACTION TESTS ====================
@@ -446,7 +476,7 @@ func TestGetEntityHistory(t *testing.T) {
 		CreatedAt:              time.Now().Format(time.RFC3339),
 	}
 
-	taskID, err := db.CreateTask(context.Background(), task)
+	taskID, err := seedTask(db, task)
 	if err != nil {
 		t.Fatalf("failed to create task: %v", err)
 	}

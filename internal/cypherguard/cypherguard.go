@@ -74,7 +74,41 @@ var (
 	// INDEXES, so the optional part is the two-letter "ES", whereas CONSTRAINT
 	// takes a bare "S". Writing the first as INDEXES? would match INDEXE and
 	// INDEXES and silently NOT match the singular SHOW INDEX.
-	reIntrospect = regexp.MustCompile(`(?i)\A\s*SHOW\s+(?:INDEX(?:ES)?|CONSTRAINTS?)\b`)
+	//
+	// EXACTLY ONE SPACE separates the two keywords, written as a literal space
+	// and not as \s+ (SPEC/GRAPH.md § Keyword Spacing in a Schema-Introspection
+	// Command). That is the engine's rule, not a stylistic one: GoGraph routes a
+	// statement to its introspection parser by testing it against the literal
+	// prefixes "SHOW INDEX" and "SHOW CONSTRAINT", each carrying one space, after
+	// trimming leading whitespace and leading comments. A statement that misses
+	// those prefixes by its spacing goes to the general Cypher grammar, which has
+	// no SHOW production and rejects it.
+	//
+	// This matcher exists to ADMIT, so matching wider than the engine admits
+	// statements the engine then refuses — which is what the guard rail must not
+	// do, because the user then reads a parse diagnostic that lists every clause
+	// keyword except SHOW and names the wrong problem. reDDL above stays
+	// whitespace-tolerant for the mirror-image reason: it exists to REFUSE, so
+	// matching wider only refuses more, which is fail-closed. Do NOT align the
+	// two on the ground that they treat whitespace differently.
+	reIntrospect = regexp.MustCompile(`(?i)\A\s*SHOW (?:INDEX(?:ES)?|CONSTRAINTS?)\b`)
+	// reIntrospectAnySpacing is reIntrospect with the single space relaxed to
+	// arbitrary whitespace, and it exists ONLY to recognise the statements
+	// reIntrospect must no longer admit, so they can be REFUSED deliberately.
+	//
+	// Narrowing reIntrospect alone refuses nothing: a statement that stops
+	// classifying as Introspect carries no writing and no DDL clause either, so
+	// IsReadOnly admits it from its default branch as an ordinary read and it
+	// still dies in the engine's parser under the same misleading diagnostic. The
+	// refusal has to be a rule of its own, and this matcher is what that rule
+	// tests (see introspectSpacing and IntrospectSpacingRejection).
+	//
+	// It captures the target keyword so the rejection message can name the
+	// accepted spelling of the statement the user meant. The rest of the shape —
+	// the \A anchor, the leading-whitespace tolerance, the \b terminator, and the
+	// deliberately different plural spellings — is reIntrospect's and is
+	// documented there.
+	reIntrospectAnySpacing = regexp.MustCompile(`(?i)\A\s*SHOW\s+(INDEX(?:ES)?|CONSTRAINTS?)\b`)
 )
 
 // MaskLiterals returns a copy of query in which the INTERIOR characters of
@@ -189,8 +223,10 @@ func MaskLiterals(query string) string {
 }
 
 // Classes reports which clause classes a query contains, evaluated on the
-// query's masked normalization (MaskLiterals). The four fields are independent:
-// a single query may, for example, be both Write and DDL.
+// query's masked normalization (MaskLiterals). The fields are independent, with
+// one documented exception: a single query may, for example, be both Write and
+// DDL, but Introspect and IntrospectMisspaced are mutually exclusive because
+// they answer the same question about the same statement.
 //
 // Callers build a Classes from a query with Classify and then apply their own
 // per-subcommand acceptance rules, so this struct is the shared classification
@@ -231,6 +267,23 @@ type Classes struct {
 	// cannot be reviewed and that silently absorbs whatever clause family the
 	// engine gains next.
 	Introspect bool
+	// IntrospectMisspaced is true when the masked query reads as a
+	// schema-introspection command — the SHOW INDEX(ES) / SHOW CONSTRAINT(S)
+	// family — but the separator between its two keywords is not the single space
+	// the engine routes on, so the engine would refuse it at the parser
+	// (SPEC/GRAPH.md § Keyword Spacing in a Schema-Introspection Command).
+	// Introspect and IntrospectMisspaced are mutually exclusive: a statement is
+	// either spelled the way the engine accepts or it is not.
+	//
+	// It is a field of its own, and not an absence of Introspect, for the same
+	// reason Introspect is a field: without it such a statement classifies as
+	// nothing at all and is admitted by omission — which is precisely the defect
+	// this rule exists to close. The surfaces that ADMIT this class use it to
+	// refuse the statement with the guard rail's own message before the engine
+	// ever sees it; IsReadOnly uses it to answer read-only as a recognised
+	// decision, because a SHOW statement reads the schema and writes nothing
+	// whatever its spacing.
+	IntrospectMisspaced bool
 }
 
 // Classify masks query's literals and reports the clause classes it contains.
@@ -249,14 +302,89 @@ func Classify(query string) Classes {
 	matches := func(re *regexp.Regexp) bool {
 		return re.MatchString(masked) || re.MatchString(upper)
 	}
+	_, misspaced := introspectSpacing(masked, upper)
 	return Classes{
-		Write:      cypher.QueryHasWritingClause(masked) || cypher.QueryHasWritingClause(upper),
-		Create:     matches(reCreate),
-		Mutate:     matches(reMutate),
-		Delete:     matches(reDelete),
-		DDL:        matches(reDDL),
-		Introspect: matches(reIntrospect),
+		Write:               cypher.QueryHasWritingClause(masked) || cypher.QueryHasWritingClause(upper),
+		Create:              matches(reCreate),
+		Mutate:              matches(reMutate),
+		Delete:              matches(reDelete),
+		DDL:                 matches(reDDL),
+		Introspect:          matches(reIntrospect),
+		IntrospectMisspaced: misspaced,
 	}
+}
+
+// introspectSpacing decides, from a query's masked normalization and its
+// upper-folded copy, whether the query reads as a schema-introspection command
+// whose keyword spacing the engine does not accept, and returns the accepted
+// spelling of the command the user meant ("SHOW INDEXES", "SHOW CONSTRAINT", …).
+//
+// It is the single implementation behind both Classes.IntrospectMisspaced and
+// IntrospectSpacingRejection, so the classification and the message a caller
+// prints for it can never disagree about the same query.
+//
+// Both matchers are applied to the masked text AND to its upper-folded copy, for
+// the reason upperFoldedKeywords documents: the engine falls back to
+// strings.ToUpper the moment a non-ASCII byte appears in the prefix window, and
+// Unicode uppercasing maps some non-ASCII letters onto ASCII ones. The accepted
+// spelling is built by uppercasing the captured keyword rather than by echoing
+// the query, so the returned text carries only the four ASCII keywords and never
+// a byte of user input.
+func introspectSpacing(masked, upper string) (accepted string, misspaced bool) {
+	if reIntrospect.MatchString(masked) || reIntrospect.MatchString(upper) {
+		// Spelled the way the engine routes to its introspection parser. There
+		// is nothing to refuse; Classify reports it as Introspect.
+		return "", false
+	}
+	m := reIntrospectAnySpacing.FindStringSubmatch(masked)
+	if m == nil {
+		m = reIntrospectAnySpacing.FindStringSubmatch(upper)
+	}
+	if m == nil {
+		// Not a schema-introspection command under any spacing. A SHOW family
+		// the engine does not implement (SHOW DATABASES) and a near miss on the
+		// keyword (SHOW INDEXER) both land here, and both keep reaching the
+		// engine, which names the real problem for them.
+		return "", false
+	}
+	return "SHOW " + strings.ToUpper(m[1]), true
+}
+
+// IntrospectSpacingRejection reports whether query is a schema-introspection
+// command whose keyword spacing the engine does not accept and, when it is,
+// returns the guard rail's own explanation for refusing it. reason is empty when
+// misspaced is false.
+//
+// It is the rejection rule the two surfaces that ADMIT this class apply on top
+// of the read-only contract — the CLI `graph query` and `graph search`, which
+// wrap reason in utils.ErrValidation (exit code 6), and the read-only web graph
+// data endpoint, which answers HTTP 400 with the failure class
+// invalid_keyword_spacing (SPEC/GRAPH.md § Keyword Spacing in a
+// Schema-Introspection Command; SPEC/WEB.md § Query-Bar Error Handling, case 10).
+// It lives here, beside the classification it reads, so those surfaces cannot
+// drift apart on which statements are refused or on what the user is told.
+//
+// The message names the cause the SPEC requires it to name: that the statement
+// was read as a schema-introspection command, that the engine recognises it only
+// with exactly one space between the two keywords, and what the accepted
+// spelling is. It also states that the command writes nothing, because the
+// objection is the spelling alone and a reader must not take the refusal for a
+// verdict that the query is not read-only.
+//
+// The statement is refused, never repaired: Groadmap does not rewrite the
+// separator and execute the amended query, because that would silently alter
+// what the user wrote and would make Groadmap the party deciding which Cypher
+// the engine ought to accept.
+func IntrospectSpacingRejection(query string) (reason string, misspaced bool) {
+	masked := MaskLiterals(query)
+	accepted, bad := introspectSpacing(masked, upperFoldedKeywords(masked))
+	if !bad {
+		return "", false
+	}
+	return accepted + " is a schema-introspection command the engine recognises only with exactly " +
+		"one space between its two keywords, and this query separates them with something else. " +
+		"Rewrite it as \"" + accepted + "\". The command reads the schema and writes nothing, so its " +
+		"keyword spacing is the whole of the objection.", true
 }
 
 // upperFoldedKeywords returns masked uppercased with strings.ToUpper, the exact
@@ -295,7 +423,10 @@ func upperFoldedKeywords(masked string) string {
 // clause (cypher.QueryHasWritingClause on the masked query) nor any
 // schema-mutating DDL clause. Two shapes qualify — an ordinary reading query,
 // and a schema-introspection command, which lists the registered schema without
-// altering it.
+// altering it. A schema-introspection command qualifies at ANY keyword spacing:
+// the spacing rule decides whether the engine will parse it, not whether it
+// writes, and it is enforced separately by the surfaces that admit the class
+// (see IntrospectSpacingRejection).
 //
 // This is the exact read-vs-write contract the read subcommands `graph query`
 // and `graph search` enforce, and the contract the read-only web graph data
@@ -315,6 +446,19 @@ func IsReadOnly(query string) bool {
 	case c.Introspect:
 		// Schema introspection is read-only because it was classified as such,
 		// not because nothing else matched (SPEC/GRAPH.md § Schema Introspection).
+		return true
+	case c.IntrospectMisspaced:
+		// A schema-introspection command the engine's spacing rule refuses is
+		// STILL read-only: it lists the registered schema and alters nothing,
+		// whatever separates its two keywords. Answering false here would
+		// publish a classification the guard rail's own rejection message
+		// contradicts, and would tell a caller the query writes when it does
+		// not. The spacing objection is a separate contract, applied on top of
+		// this one by the surfaces that admit the class — which is also why a
+		// query that writes AND carries a badly spaced SHOW is rejected as a
+		// write above, before this case is reached (SPEC/GRAPH.md § Keyword
+		// Spacing in a Schema-Introspection Command; SPEC/WEB.md § Query-Bar
+		// Error Handling, rule 6).
 		return true
 	default:
 		// An ordinary reading query: no writing clause, no DDL, no introspection.

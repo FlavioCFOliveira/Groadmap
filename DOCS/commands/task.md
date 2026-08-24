@@ -171,6 +171,8 @@ Edits one or more fields of an existing task. Only specified fields are updated,
 
 **Output:** Empty on success (exit 0).
 
+**Audit:** one entry per field the invocation supplies, drawn from `TASK_TITLE_CHANGE`, `TASK_TYPE_CHANGE`, `TASK_FUNCTIONAL_REQUIREMENTS_CHANGE`, `TASK_TECHNICAL_REQUIREMENTS_CHANGE`, `TASK_ACCEPTANCE_CRITERIA_CHANGE`, `TASK_PRIORITY_CHANGE`, and `TASK_SEVERITY_CHANGE`. An edit supplying three fields writes three entries; an edit supplying none writes none. The entry records that the field was written, not its old or new value, and it is written whether or not the new value differs from the stored one. No `TASK_UPDATE` entry is written: that operation is legacy (see [DOCS/commands/audit.md](audit.md)).
+
 **Examples:**
 ```bash
 rmp task edit -r project1 42 -t "Updated title" -p 8
@@ -195,6 +197,8 @@ Removes one or more tasks permanently. All target tasks MUST be in `BACKLOG` sta
 | `-r` | `--roadmap` | string | Roadmap name (required) |
 
 **Output:** Empty on success (exit 0).
+
+**Audit:** one `TASK_DELETE` entry per task removed. The task's earlier entries are not deleted with it, so its history survives in the audit log.
 
 **Examples:**
 ```bash
@@ -258,6 +262,8 @@ COMPLETED --[reopen / stat BACKLOG]--> BACKLOG
 
 In every case no task in the batch is changed: the commit flags are validated before the ids are resolved and before any write.
 
+**Audit:** one entry per task named in `<task-ids>`, naming the destination state: `TASK_STATUS_BACKLOG`, `TASK_STATUS_DOING`, `TASK_STATUS_TESTING`, or `TASK_STATUS_COMPLETED`. The `TASK_STATUS_DOING` entry records the `--commit-open` value and the `TASK_STATUS_COMPLETED` entry records the `--commit-close` value, each in the entry's own `commit_hash` field, so the audit log keeps the commit even after a later reopening clears it from the task. A `TASK_STATUS_BACKLOG` entry written here names no sprint, because no sprint is party to the operation; the one `sprint remove-tasks` writes does. No `TASK_STATUS_CHANGE` entry is written: that operation is legacy (see [DOCS/commands/audit.md](audit.md)).
+
 **Examples:**
 ```bash
 rmp task stat -r project1 1,2,3 DOING --commit-open 5f93b51
@@ -286,6 +292,8 @@ Returns one or more tasks to `BACKLOG` and clears their lifecycle timestamps (`s
 | `-r` | `--roadmap` | string | Roadmap name (required) |
 
 **Output:** Empty on success (exit 0).
+
+**Audit:** one `TASK_REOPEN` entry per task. This command writes that entry and nothing else; in particular it writes no `TASK_STATUS_BACKLOG` entry. The `TASK_STATUS_COMPLETED` entry written earlier keeps its `commit_hash`, so the commit that concluded the task remains on the record even though the task no longer carries it.
 
 **Examples:**
 ```bash
@@ -316,6 +324,8 @@ Sets the priority of one or more tasks to the same value.
 - 0 = lowest urgency
 - 9 = maximum urgency (Product Owner perspective)
 
+**Audit:** one `TASK_PRIORITY_CHANGE` entry per task named.
+
 **Examples:**
 ```bash
 rmp task prio -r project1 42 9
@@ -344,6 +354,8 @@ Sets the severity of one or more tasks to the same value.
 **Severity Scale:**
 - 0 = minimal impact
 - 9 = critical impact (Dev Team perspective)
+
+**Audit:** one `TASK_SEVERITY_CHANGE` entry per task named.
 
 **Examples:**
 ```bash
@@ -397,6 +409,8 @@ Records that a task depends on another task (the blocker, which must complete fi
 
 **Output:** Empty on success (exit 0).
 
+**Audit:** two `TASK_ADD_DEP` entries, one against each task of the pair, each naming the other task in its `related_entity_id` field. Reading either task's history therefore shows which dependency the entry concerns.
+
 **Examples:**
 ```bash
 rmp task add-dep -r project1 10 7   # task 10 depends on task 7
@@ -422,6 +436,8 @@ Removes the dependency edge previously created by `add-dep`.
 | `-r` | `--roadmap` | string | Roadmap name (required) |
 
 **Output:** Empty on success (exit 0).
+
+**Audit:** two `TASK_REMOVE_DEP` entries, one against each task of the pair, each naming the other task in its `related_entity_id` field.
 
 **Examples:**
 ```bash
@@ -675,6 +691,7 @@ The only alias for `task remove` is `rm`. The `delete` alias exists for `roadmap
 - `comment-add` and `comment-list` take the TASK's id; `comment-edit` and `comment-remove` take the COMMENT's own id.
 - Task and sprint comment ids are separate sequences, so `rmp task comment-edit 7` and `rmp sprint comment-edit 7` address two unrelated comments.
 - Comment operations are audited against the parent task, as `TASK_COMMENT_CREATE`, `TASK_COMMENT_UPDATE`, and `TASK_COMMENT_DELETE`; `comment-list` is a read and writes no audit entry.
+- Every command above that changes a task writes at least one audit entry, listed under **Audit** in that command's section. Listing commands are reads and write none, and a rejected command writes none, because the entry is written in the same transaction as the change it records. The full operation catalogue, and the meaning of the `commit_hash` and `related_entity_id` fields an entry can carry, are in [DOCS/commands/audit.md](audit.md).
 
 ## Field Limits and Constraints
 

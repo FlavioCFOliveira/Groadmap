@@ -91,12 +91,29 @@ func sprintCreate(args []string) error {
 		// redundant doubled prefix (finding #54).
 		return fmt.Errorf("%w: --title", utils.ErrRequired)
 	}
-	if len(title) > models.MaxSprintTitle {
-		return fmt.Errorf("%w: title exceeds maximum length of %d characters", utils.ErrFieldTooLarge, models.MaxSprintTitle)
+	// The cap keeps the position it has always had on this field — ahead of the
+	// content rules, which is what rmp task 302 measures and this task does not
+	// move — but it now measures strings.TrimSpace of the value, because that is
+	// the value stored (SPEC/MODELS.md § Free-Text Emptiness and Trimming
+	// Constraint, Rule 2). Measuring the value as supplied is what made a title
+	// of exactly 255 real characters carrying surrounding whitespace refused
+	// here and accepted by `task create`, for a value the column would have held.
+	if len(strings.TrimSpace(title)) > models.MaxSprintTitle {
+		return utils.FieldTooLargeError(utils.FieldSprintTitle, models.MaxSprintTitle)
 	}
-	// Reject control / bidi / format code points (SPEC/MODELS.md § Free-Text
-	// Control-Character Constraint).
-	if err := utils.ValidateNoControlChars(title, "title"); err != nil {
+	// The encoding rule and the control-character rule on the value AS SUPPLIED,
+	// then the trim, then the emptiness judgement on the trimmed value — the one
+	// order SPEC/MODELS.md § Free-Text Emptiness and Trimming Constraint fixes,
+	// owned by utils.RequireFreeText so this command cannot get it wrong on its
+	// own. `title` is rebound to the trimmed value, which is what is stored.
+	//
+	// This path previously did not trim at all. That is precisely why a title of
+	// three spaces created a sprint no reader surface could name, and equally why
+	// the control-character rule was intact here: adding the trim WITHOUT the
+	// order would have refused the three spaces and, in the same change, let a
+	// leading VT or FF through with the character silently discarded.
+	title, err = utils.RequireFreeText(title, utils.FieldSprintTitle)
+	if err != nil {
 		return err
 	}
 
@@ -107,9 +124,13 @@ func sprintCreate(args []string) error {
 		// redundant doubled prefix (finding #54).
 		return fmt.Errorf("%w: --description", utils.ErrRequired)
 	}
-	// Reject control / bidi / format code points (SPEC/MODELS.md § Free-Text
-	// Control-Character Constraint).
-	if err := utils.ValidateNoControlChars(description, "description"); err != nil {
+	// Same sequence as the title above. No inline cap runs on this field: for
+	// `sprint create` the description's length is checked by sprint.Validate()
+	// inside the transaction, and that position is deliberately left where it is
+	// (rmp task 302 settles it). Validate() now receives the trimmed value, so
+	// what the cap measures is what the column holds either way.
+	description, err = utils.RequireFreeText(description, utils.FieldSprintDescription)
+	if err != nil {
 		return err
 	}
 
@@ -157,11 +178,11 @@ func sprintCreate(args []string) error {
 	err = database.WithTransaction(func(tx *sql.Tx) error {
 		orderIndex := explicitOrder
 		if orderIndex <= 0 {
-			if selErr := tx.QueryRow(
-				`SELECT COALESCE(MAX(order_index), 0) + 1 FROM sprints`,
-			).Scan(&orderIndex); selErr != nil {
-				return fmt.Errorf("computing next sprint order: %w", selErr)
+			next, selErr := db.NextSprintOrderTx(tx)
+			if selErr != nil {
+				return selErr
 			}
+			orderIndex = next
 		}
 		sprint.Order = orderIndex
 
@@ -170,22 +191,14 @@ func sprintCreate(args []string) error {
 			return vErr
 		}
 
-		insertResult, insertErr := tx.Exec(
-			`INSERT INTO sprints (status, title, description, created_at, max_tasks, order_index) VALUES (?, ?, ?, ?, ?, ?)`,
-			sprint.Status, sprint.Title, sprint.Description, sprint.CreatedAt, sprint.MaxTasks, orderIndex,
-		)
+		id, insertErr := db.InsertSprintTx(tx, sprint)
 		if insertErr != nil {
 			if db.IsUniqueConstraintErr(insertErr) {
 				return fmt.Errorf("%w: sprint order %d is already in use", utils.ErrAlreadyExists, orderIndex)
 			}
 			return insertErr
 		}
-
-		id, idErr := insertResult.LastInsertId()
-		if idErr != nil {
-			return idErr
-		}
-		sprintID = int(id)
+		sprintID = id
 
 		return db.LogAuditTx(tx, models.OpSprintCreate, models.EntitySprint, sprintID, now)
 	})
@@ -307,12 +320,20 @@ func sprintUpdate(args []string) error {
 		return err
 	}
 
-	title, _ := result.Flags["Title"].(string)
-	description, _ := result.Flags["Description"].(string)
+	// Every decision below — the at-least-one-flag requirement, the field
+	// validation, the SET clause and the audit operations — keys on whether the
+	// flag was SUPPLIED, never on whether its value is non-empty. The two are not
+	// the same thing: `-t ""` supplies a flag carrying an empty value, and reading
+	// the empty string as "absent" made the command report a missing parameter for
+	// an invocation that supplied one, and silently drop the field when another
+	// flag kept the update alive. `task edit` already keys on presence
+	// (SPEC/COMMANDS.md § Update Sprint, § Edit Task).
+	title, hasTitle := result.Flags["Title"].(string)
+	description, hasDescription := result.Flags["Description"].(string)
 	_, hasMaxTasks := result.Flags["MaxTasks"]
 	rawOrder, hasOrder := result.Flags["Order"].(string)
 
-	if title == "" && description == "" && !hasMaxTasks && !hasOrder {
+	if !hasTitle && !hasDescription && !hasMaxTasks && !hasOrder {
 		return fmt.Errorf("%w: at least one of --title, --description, --max-tasks or --order is required", utils.ErrRequired)
 	}
 
@@ -325,24 +346,38 @@ func sprintUpdate(args []string) error {
 		}
 	}
 
-	if title != "" && len(title) > models.MaxSprintTitle {
-		return fmt.Errorf("%w: title exceeds maximum length of %d characters", utils.ErrFieldTooLarge, models.MaxSprintTitle)
-	}
-	// Reject control / bidi / format code points (SPEC/MODELS.md § Free-Text
-	// Control-Character Constraint).
-	if title != "" {
-		if err := utils.ValidateNoControlChars(title, "title"); err != nil {
+	// A supplied --title must carry a value: unlike `sprint create`, where
+	// --title is a required parameter and the literal empty string means the
+	// parameter is missing (exit code 2), here it is an optional flag whose
+	// value is rejected (exit code 6). Same wrapper and same phrasing as
+	// `task edit`, so both commands answer `-t ""` identically — and, since this
+	// task, answer `-t "   "` identically too.
+	if hasTitle {
+		// The cap keeps its position ahead of the content rules and now measures
+		// the trimmed value, the value stored (SPEC/MODELS.md § Free-Text
+		// Emptiness and Trimming Constraint, Rule 2).
+		if len(strings.TrimSpace(title)) > models.MaxSprintTitle {
+			return utils.FieldTooLargeError(utils.FieldSprintTitle, models.MaxSprintTitle)
+		}
+		// Content rules on the value AS SUPPLIED, then the trim, then the
+		// emptiness judgement on the trimmed value. `-t ""` still reaches
+		// FieldEmptyError — the empty string survives both content rules and
+		// trims to itself — so this command answers the literal empty string
+		// exactly as it did, and now answers a whitespace-only value the same
+		// way instead of storing it.
+		title, err = utils.RequireFreeText(title, utils.FieldSprintTitle)
+		if err != nil {
 			return err
 		}
 	}
 
-	if description != "" && len(description) > models.MaxSprintDescription {
-		return fmt.Errorf("%w: description exceeds maximum length of %d characters", utils.ErrFieldTooLarge, models.MaxSprintDescription)
-	}
-	// Reject control / bidi / format code points (SPEC/MODELS.md § Free-Text
-	// Control-Character Constraint).
-	if description != "" {
-		if err := utils.ValidateNoControlChars(description, "description"); err != nil {
+	if hasDescription {
+		// Same sequence, same reasons, as the title above.
+		if len(strings.TrimSpace(description)) > models.MaxSprintDescription {
+			return utils.FieldTooLargeError(utils.FieldSprintDescription, models.MaxSprintDescription)
+		}
+		description, err = utils.RequireFreeText(description, utils.FieldSprintDescription)
+		if err != nil {
 			return err
 		}
 	}
@@ -395,12 +430,12 @@ func sprintUpdate(args []string) error {
 		// applies them (SPEC/COMMANDS.md § Update Sprint).
 		ops := make([]models.AuditOperation, 0, 4)
 
-		if title != "" {
+		if hasTitle {
 			setParts = append(setParts, "title = ?")
 			args = append(args, title)
 			ops = append(ops, models.OpSprintTitleChange)
 		}
-		if description != "" {
+		if hasDescription {
 			setParts = append(setParts, "description = ?")
 			args = append(args, description)
 			ops = append(ops, models.OpSprintDescriptionChange)

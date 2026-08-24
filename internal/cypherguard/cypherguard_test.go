@@ -430,6 +430,95 @@ func TestClassify(t *testing.T) {
 			want:  cypherguard.Classes{},
 		},
 
+		// ── Schema-introspection keyword spacing ────────────────────────────
+		// The engine routes a statement to its introspection parser by testing
+		// it against the literal prefixes "SHOW INDEX" and "SHOW CONSTRAINT",
+		// each carrying exactly one space, so any other separator between the
+		// two keywords is NOT an introspection command the engine will parse
+		// (SPEC/GRAPH.md § Keyword Spacing in a Schema-Introspection Command).
+		//
+		// These cases pin the narrowing in BOTH directions at once: widening
+		// reIntrospect back to \s+ flips Introspect to true and
+		// IntrospectMisspaced to false, and every one of them fails.
+		{
+			name:  "two spaces before indexes is misspaced introspection",
+			query: "SHOW  INDEXES",
+			want:  cypherguard.Classes{IntrospectMisspaced: true},
+		},
+		{
+			name:  "a tab before index is misspaced introspection",
+			query: "SHOW\tINDEX",
+			want:  cypherguard.Classes{IntrospectMisspaced: true},
+		},
+		{
+			name:  "a line break before constraints is misspaced introspection",
+			query: "SHOW\nCONSTRAINTS",
+			want:  cypherguard.Classes{IntrospectMisspaced: true},
+		},
+		{
+			name:  "many spaces before constraint is misspaced introspection",
+			query: "SHOW     CONSTRAINT",
+			want:  cypherguard.Classes{IntrospectMisspaced: true},
+		},
+		{
+			// Masking neutralizes the comment to spaces, so a comment BETWEEN
+			// the two keywords reads as spacing rather than as an absent
+			// separator — and spacing is exactly what the engine refuses.
+			name:  "a comment between the keywords is misspaced introspection",
+			query: "SHOW /* which ones? */ INDEXES",
+			want:  cypherguard.Classes{IntrospectMisspaced: true},
+		},
+		{
+			name:  "lowercase two spaces is misspaced introspection",
+			query: "show  constraints",
+			want:  cypherguard.Classes{IntrospectMisspaced: true},
+		},
+		{
+			name:  "misspaced introspection with a projection tail is still misspaced",
+			query: "SHOW  INDEXES YIELD name, type WHERE type = 'RANGE' RETURN name",
+			want:  cypherguard.Classes{IntrospectMisspaced: true},
+		},
+		{
+			// The rule governs the separator between the two keywords and
+			// nothing else. Whitespace BEFORE the statement, and whitespace
+			// AFTER the target keyword, are both accepted, so these are ordinary
+			// introspection commands and must not be refused.
+			name:  "leading whitespace with one space between keywords is well spelled",
+			query: "\n\t  SHOW INDEXES",
+			want:  cypherguard.Classes{Introspect: true},
+		},
+		{
+			name:  "extra whitespace after the target keyword is well spelled",
+			query: "SHOW INDEXES   YIELD name",
+			want:  cypherguard.Classes{Introspect: true},
+		},
+		{
+			name:  "a leading comment with one space between keywords is well spelled",
+			query: "/* schema check */ SHOW CONSTRAINTS",
+			want:  cypherguard.Classes{Introspect: true},
+		},
+		{
+			// Not the introspection class under ANY spacing, so it is not
+			// refused for spacing either: it reaches the engine, which names the
+			// real problem for it.
+			name:  "misspaced near miss on the keyword is not introspection at all",
+			query: "SHOW  INDEXER",
+			want:  cypherguard.Classes{},
+		},
+		{
+			name:  "misspaced unimplemented show family is not introspection at all",
+			query: "SHOW  DATABASES",
+			want:  cypherguard.Classes{},
+		},
+		{
+			// Masking applies to the spacing rule exactly as it applies to every
+			// other clause check: a misspaced SHOW confined to a string literal
+			// is not a statement and must not be refused.
+			name:  "misspaced show inside a string literal is an ordinary read",
+			query: "MATCH (n:Doc) WHERE n.body = 'SHOW  INDEXES fails' RETURN n.key",
+			want:  cypherguard.Classes{},
+		},
+
 		// ── FOREACH ─────────────────────────────────────────────────────────
 		// FOREACH is a writing clause the engine gained after the version this
 		// guard rail was written against. It has no discriminator of its own:
@@ -550,6 +639,17 @@ func TestIsReadOnly(t *testing.T) {
 		{name: "nested foreach is not read-only", query: "MATCH (s:Spec) FOREACH (a IN [[1]] | FOREACH (b IN a | SET s.depth = b))", want: false},
 		{name: "property named show does not make a write read-only", query: "CREATE (n:Panel {show: 'indexes'})", want: false},
 		{name: "show keyword inside a literal stays an ordinary read", query: "MATCH (n:Doc) WHERE n.body = 'run SHOW INDEXES first' RETURN n.key", want: true},
+		// A schema-introspection command reads the schema and writes nothing at
+		// ANY keyword spacing, so the read-only verdict does not change when the
+		// spacing rule refuses it. The refusal is a separate contract, applied on
+		// top of this one by the surfaces that admit the class, and it carries
+		// its own message and its own failure class precisely because reporting
+		// such a query as not read-only would be a false classification
+		// (SPEC/GRAPH.md § Keyword Spacing in a Schema-Introspection Command;
+		// SPEC/WEB.md § Query-Bar Error Handling, case 10).
+		{name: "misspaced show indexes is still read-only", query: "SHOW  INDEXES", want: true},
+		{name: "tab-spaced show constraint is still read-only", query: "SHOW\tCONSTRAINT", want: true},
+		{name: "line-broken show index is still read-only", query: "SHOW\nINDEX", want: true},
 		{name: "empty query is read-only", query: "", want: true},
 		{name: "whitespace-only query is read-only", query: "   \n\t ", want: true},
 	}

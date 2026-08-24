@@ -1,7 +1,6 @@
 package web
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
@@ -129,7 +128,7 @@ func TestSprint_TitleIsHTMLEscaped(t *testing.T) {
 		t.Fatalf("opening roadmap %q: %v", name, err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	sprintID, err := database.CreateSprint(context.Background(), &models.Sprint{
+	sprintID, err := seedSprint(database, &models.Sprint{
 		Status:      models.SprintPending,
 		Title:       rawTitle,
 		Description: "Move the session token store behind the new auth boundary",

@@ -988,14 +988,18 @@ func TestTaskCommentEdit_UnknownCommentAndIDSpaces(t *testing.T) {
 func seedSprintComment(t *testing.T, database *db.DB) (sprintID, commentID int) {
 	t.Helper()
 
-	ctx := context.Background()
-	sprintID, err := database.CreateSprint(ctx, &models.Sprint{
+	sprint := &models.Sprint{
 		Title:       "Expiry hardening",
 		Description: "Close the JWT boundary-second defect and lock it behind a regression test.",
 		Status:      models.SprintPending,
 		CreatedAt:   utils.NowISO8601(),
-	})
-	if err != nil {
+		Order:       1,
+	}
+	if err := database.WithTransaction(func(tx *sql.Tx) error {
+		id, insertErr := db.InsertSprintTx(tx, sprint)
+		sprintID = id
+		return insertErr
+	}); err != nil {
 		t.Fatalf("creating the sprint fixture: %v", err)
 	}
 

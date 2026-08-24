@@ -43,7 +43,7 @@ func seedRoadmap(t *testing.T, name string) string {
 		AcceptanceCriteria:     "Detail page lists every task and sprint",
 		CreatedAt:              now,
 	}
-	taskID, err := database.CreateTask(context.Background(), task)
+	taskID, err := seedTask(database, task)
 	if err != nil {
 		t.Fatalf("creating task: %v", err)
 	}
@@ -54,7 +54,7 @@ func seedRoadmap(t *testing.T, name string) string {
 		Description: "Ship the read-only web UI for roadmap inspection",
 		CreatedAt:   now,
 	}
-	sprintID, err := database.CreateSprint(context.Background(), sprint)
+	sprintID, err := seedSprint(database, sprint)
 	if err != nil {
 		t.Fatalf("creating sprint: %v", err)
 	}

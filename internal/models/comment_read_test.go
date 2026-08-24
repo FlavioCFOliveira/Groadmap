@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/FlavioCFOliveira/Groadmap/internal/testenv"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
@@ -19,43 +20,53 @@ type bodyVerdict struct {
 	supplied bool
 }
 
-// referenceVerdict reproduces the pipeline the bounded reader replaced: read the
-// WHOLE stream, treat a body that trims to nothing as absent, then apply the
-// domain rules to the body AS SUPPLIED. It is the oracle every differential case
-// below is compared against, so a semantic drift in the streaming reader fails
-// the test rather than shipping.
-func referenceVerdict(raw string) bodyVerdict {
-	if NormalizeCommentBody(raw) == "" {
+// resolveBody is the pipeline the comment subcommands run once they hold the body
+// text, whichever origin produced it: ask the domain whether the body counts as
+// absent — which applies the encoding and control-character rules to the value AS
+// SUPPLIED before it answers — and, when it does not, apply the rest of the rules
+// to it.
+//
+// Both sides of the differential below go through this one function, so the
+// comparison measures the READER and nothing else. Writing the sequence out twice
+// would let the two copies drift and quietly agree with each other instead of
+// with the command layer.
+func resolveBody(raw string) bodyVerdict {
+	absent, err := CommentBodyIsAbsent(raw)
+	if err != nil {
+		// A body refused by step 1 is not a body that never arrived: it reached
+		// the application and broke a rule about its content.
+		return bodyVerdict{supplied: true, errMsg: err.Error()}
+	}
+	if absent {
 		return bodyVerdict{}
 	}
-	stored, err := ValidateCommentBody(raw)
-	v := bodyVerdict{supplied: true, stored: stored}
-	if err != nil {
-		v.errMsg = err.Error()
-		v.stored = ""
-	}
-	return v
-}
-
-// streamingVerdict resolves the same body through ReadCommentBody, wired exactly
-// as the comment subcommands wire it: the reader produces the value, and
-// ValidateCommentBody — still the sole owner of the rules — produces the verdict.
-func streamingVerdict(t *testing.T, r io.Reader) bodyVerdict {
-	t.Helper()
-	body, err := ReadCommentBody(r)
-	if err != nil {
-		t.Fatalf("ReadCommentBody returned an I/O error for an in-memory reader: %v", err)
-	}
-	if NormalizeCommentBody(body) == "" {
-		return bodyVerdict{}
-	}
-	stored, verr := ValidateCommentBody(body)
+	stored, verr := ValidateCommentBody(raw)
 	v := bodyVerdict{supplied: true, stored: stored}
 	if verr != nil {
 		v.errMsg = verr.Error()
 		v.stored = ""
 	}
 	return v
+}
+
+// referenceVerdict reproduces the pipeline the bounded reader replaced: read the
+// WHOLE stream, then resolve it. It is the oracle every differential case below
+// is compared against, so a semantic drift in the streaming reader fails the test
+// rather than shipping.
+func referenceVerdict(raw string) bodyVerdict {
+	return resolveBody(raw)
+}
+
+// streamingVerdict resolves the same body through ReadCommentBody, wired exactly
+// as the comment subcommands wire it: the reader produces the value, and the
+// domain — still the sole owner of the rules — produces the verdict.
+func streamingVerdict(t *testing.T, r io.Reader) bodyVerdict {
+	t.Helper()
+	body, err := ReadCommentBody(r)
+	if err != nil {
+		t.Fatalf("ReadCommentBody returned an I/O error for an in-memory reader: %v", err)
+	}
+	return resolveBody(body)
 }
 
 // chunkedReader hands out at most n bytes per Read, so a multi-byte sequence —
@@ -90,7 +101,7 @@ func differentialBodies() map[string]string {
 	const vt = "\v"      // 0x0B: forbidden, and stripped by TrimSpace
 	const ff = "\f"      // 0x0C: forbidden, and stripped by TrimSpace
 	const nel = "\u0085" // whitespace, permitted
-	return map[string]string{
+	bodies := map[string]string{
 		"empty":                       "",
 		"single character":            "a",
 		"plain sentence":              "Reviewed the audit trail and signed it off.",
@@ -138,6 +149,23 @@ func differentialBodies() map[string]string {
 		"trailing ws then control":    "finding   " + vt + "   ",
 		"content ws content":          "one     two",
 	}
+
+	// The five malformed shapes SPEC/MODELS.md § Free-Text UTF-8 Encoding
+	// Constraint enumerates, each in the four positions that decide which rule
+	// answers for it. They are drawn from the module's shared corpus so this
+	// oracle and the rule's own gates cannot end up testing different bytes.
+	//
+	// The last two shapes are the ones that matter most here: with the malformed
+	// bytes BEFORE the cap is reached, a reader that stopped at the first
+	// invalid byte would report an encoding failure where the whole-stream
+	// pipeline reports the length one, and this comparison is what catches it.
+	for _, c := range testenv.MalformedUTF8Corpus() {
+		bodies["malformed "+c.Name] = c.Value
+		bodies["malformed padded "+c.Name] = "  \n\t" + c.Value + " \r\n  "
+		bodies["malformed then over cap "+c.Name] = "abc" + c.Value + strings.Repeat("x", MaxCommentBody)
+		bodies["malformed after cap "+c.Name] = strings.Repeat("x", MaxCommentBody) + c.Value
+	}
+	return bodies
 }
 
 // TestReadCommentBodyMatchesWholeStreamPipeline is the differential proof that
@@ -169,6 +197,100 @@ func TestReadCommentBodyMatchesWholeStreamPipeline(t *testing.T) {
 	}
 }
 
+// TestAWhitespaceOnlyBodyCarryingVTOrFFIsRefusedAsAControlCharacter pins the
+// VERDICT, which the differential above cannot: that test compares the two
+// pipelines against each other, so both agreeing on a wrong answer passes it.
+// Before rmp task 301 both DID agree on the wrong answer — the reader returned
+// the empty string for such a body and the caller reported a body that never
+// arrived, with the forbidden character discarded in silence (CWE-150).
+//
+// These bodies are the whole discriminating class: they trim away to nothing,
+// which makes them look absent, and the only thing they carry is a character the
+// trim itself removes. VT (0x0B) and FF (0x0C) are the only two code points that
+// are at once forbidden by the control-character rule and whitespace to
+// strings.TrimSpace, so nothing else can be in this class.
+//
+// The refusal must come from step 1, on the value as supplied, on BOTH origins —
+// whole-buffer and streamed, at every chunk size — because the SPEC gives the two
+// one verdict.
+func TestAWhitespaceOnlyBodyCarryingVTOrFFIsRefusedAsAControlCharacter(t *testing.T) {
+	t.Parallel()
+
+	want := bodyVerdict{
+		supplied: true,
+		errMsg:   utils.ControlCharError(utils.FieldCommentBody).Error(),
+	}
+
+	bodies := map[string]string{
+		"only VT":                    "\v",
+		"only FF":                    "\f",
+		"VT between spaces":          "  \v  ",
+		"FF between TAB and LF":      "\t\f\n",
+		"VT after a long space run":  strings.Repeat(" ", 5000) + "\v",
+		"VT before a long space run": "\v" + strings.Repeat(" ", 5000),
+		"VT among permitted unicode": "\u00a0\v\u0085",
+		"both VT and FF":             " \v \f ",
+		"VT among every other space": " \t\r\n\v\u00a0\u0085 ",
+	}
+
+	for name, raw := range bodies {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := referenceVerdict(raw); got != want {
+				t.Errorf("whole-stream pipeline: got %+v, want %+v", got, want)
+			}
+			if got := streamingVerdict(t, strings.NewReader(raw)); got != want {
+				t.Errorf("whole-buffer read: got %+v, want %+v", got, want)
+			}
+			for _, size := range []int{1, 3, 7} {
+				if got := streamingVerdict(t, &chunkedReader{data: []byte(raw), n: size}); got != want {
+					t.Errorf("%d-byte chunks: got %+v, want %+v", size, got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestAWhitespaceOnlyBodyWithoutAForbiddenCharacterIsStillAbsent is the guard on
+// the test above: moving the emptiness judgement behind the content rules must
+// refuse nothing new. Every body here trims away to nothing and carries no
+// forbidden character, so every one must still resolve to an ABSENT body — which
+// the command layer turns into the missing-parameter refusal, exit code 2.
+func TestAWhitespaceOnlyBodyWithoutAForbiddenCharacterIsStillAbsent(t *testing.T) {
+	t.Parallel()
+
+	for name, raw := range map[string]string{
+		"empty":                 "",
+		"one space":             " ",
+		"many spaces":           strings.Repeat(" ", 5000),
+		"a TAB":                 "\t",
+		"an LF":                 "\n",
+		"a CR":                  "\r",
+		"CR LF":                 "\r\n",
+		"a mixture":             " \t\r\n ",
+		"a no-break space":      "\u00a0",
+		"a NEL":                 "\u0085",
+		"every permitted space": " \t\r\n\u00a0\u0085",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := referenceVerdict(raw); got != (bodyVerdict{}) {
+				t.Errorf("whole-stream pipeline: got %+v, want an absent body", got)
+			}
+			if got := streamingVerdict(t, strings.NewReader(raw)); got != (bodyVerdict{}) {
+				t.Errorf("whole-buffer read: got %+v, want an absent body", got)
+			}
+			for _, size := range []int{1, 3, 7} {
+				if got := streamingVerdict(t, &chunkedReader{data: []byte(raw), n: size}); got != (bodyVerdict{}) {
+					t.Errorf("%d-byte chunks: got %+v, want an absent body", size, got)
+				}
+			}
+		})
+	}
+}
+
 // TestReadCommentBodyMatchesPipelineOnRandomInput is the same differential
 // property over pseudo-random bodies built from the alphabet that matters here:
 // ordinary text, every whitespace form, the forbidden control characters, and
@@ -180,6 +302,10 @@ func TestReadCommentBodyMatchesPipelineOnRandomInput(t *testing.T) {
 		"a", "b", "Z", "9", ".", " ", "  ", "\t", "\n", "\r", "\v", "\f",
 		"\x00", "\x1b", "\x7f", "\u0085", "\u00a0", "é", "監", "\U0001F680",
 		"\u202e", "\ufeff", "\x80", "\xff", "\xc0\x80", "\xe2\x82",
+		// The two shapes the list above did not already reach: an overlong
+		// encoding of a character a filter would look for (0xC0 0xAF is `/`),
+		// and a lone surrogate.
+		"\xc0\xaf", "\xed\xa0\x80",
 	}
 	rng := rand.New(rand.NewSource(20260817)) // #nosec G404 -- deterministic test corpus, not cryptography
 

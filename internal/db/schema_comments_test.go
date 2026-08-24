@@ -541,7 +541,7 @@ func TestMigrateV1_8_0_toV1_9_0_DoubleRunIsANoOp(t *testing.T) {
 	}
 	defer sqlDB.Close() //nolint:errcheck // test cleanup
 
-	database := &DB{DB: sqlDB, roadmapName: "double-apply", queryCache: NewQueryCache(), batchProc: NewBatchProcessor(100)}
+	database := &DB{DB: sqlDB, queryCache: NewQueryCache(), batchProc: NewBatchProcessor(100)}
 	if err := database.CreateSchema(); err != nil {
 		t.Fatalf("creating schema: %v", err)
 	}
@@ -652,7 +652,7 @@ func TestMigratedAndFreshCommentTablesAreIdentical(t *testing.T) {
 			t.Fatalf("opening in-memory database: %v", err)
 		}
 		defer sqlDB.Close() //nolint:errcheck // test cleanup
-		database := &DB{DB: sqlDB, roadmapName: "shape", queryCache: NewQueryCache(), batchProc: NewBatchProcessor(100)}
+		database := &DB{DB: sqlDB, queryCache: NewQueryCache(), batchProc: NewBatchProcessor(100)}
 		if err := build(database); err != nil {
 			t.Fatalf("building schema: %v", err)
 		}
@@ -811,9 +811,8 @@ func commentSchemaSnapshot(t *testing.T, sqlDB *sql.DB) string {
 // comments have real parents to hang off.
 func seedCommentParents(t *testing.T, db *DB) (taskID, sprintID int) {
 	t.Helper()
-	ctx := testContext()
 
-	sprintID, err := db.CreateSprint(ctx, &models.Sprint{
+	sprintID, err := seedSprint(db, &models.Sprint{
 		Title:       "Comment storage foundation",
 		Description: "Give tasks and sprints a durable, typed record of what was learned.",
 		Status:      models.SprintPending,
@@ -823,7 +822,7 @@ func seedCommentParents(t *testing.T, db *DB) (taskID, sprintID int) {
 		t.Fatalf("creating sprint: %v", err)
 	}
 
-	taskID, err = db.CreateTask(ctx, &models.Task{
+	taskID, err = seedTask(db, &models.Task{
 		Title:                  "Create the comment tables and the 1.9.0 migration",
 		Type:                   models.TypeTask,
 		Status:                 models.StatusBacklog,
@@ -900,14 +899,13 @@ func assertRowCount(t *testing.T, db *DB, want int, what, query string, args ...
 // It returns the ids of the seeded tasks and sprints.
 func buildRoadmapAtSchema180(t *testing.T, roadmapName string) (taskIDs, sprintIDs []int) {
 	t.Helper()
-	ctx := testContext()
 
 	database, err := Open(roadmapName)
 	if err != nil {
 		t.Fatalf("creating roadmap %q: %v", roadmapName, err)
 	}
 
-	sprintID, err := database.CreateSprint(ctx, &models.Sprint{
+	sprintID, err := seedSprint(database, &models.Sprint{
 		Title:       "Settlement reconciliation",
 		Description: "Reconcile the internal ledger with the acquirer settlement report.",
 		Status:      models.SprintPending,
@@ -922,7 +920,7 @@ func buildRoadmapAtSchema180(t *testing.T, roadmapName string) (taskIDs, sprintI
 		"Reconcile the settlement ledger against the acquirer report",
 		"Alert on any settlement window that fails to balance",
 	} {
-		id, err := database.CreateTask(ctx, &models.Task{
+		id, err := seedTask(database, &models.Task{
 			Title:                  title,
 			Type:                   models.TypeTask,
 			Status:                 models.StatusBacklog,

@@ -191,7 +191,7 @@ func TestAuditOperationBlock_LayoutIsAlignedAndWrapped(t *testing.T) {
 			t.Errorf("blank line inside the block: %q", line)
 			continue
 		}
-		if strings.HasPrefix(strings.TrimSpace(line), "Task ops:") || strings.HasPrefix(strings.TrimSpace(line), "Sprint ops:") {
+		if auditGroupLabelled(line) {
 			// Label line: the list starts after the padded label.
 			start := strings.Index(line, ":") + 1
 			for start < len(line) && line[start] == ' ' {
@@ -254,31 +254,150 @@ func TestWrapEnumList_WrapsWithoutLosingNames(t *testing.T) {
 	}
 }
 
-// TestAuditOperationBlock_HasCatchAllGroup pins the structural guarantee that
-// makes the coverage test above impossible to defeat: the last group's prefix
-// is empty, so it matches every name the earlier prefixes reject. Without it,
-// an operation named after a third entity would be classified into no group
-// and silently vanish from the help.
-func TestAuditOperationBlock_HasCatchAllGroup(t *testing.T) {
-	if len(auditOperationGroups) == 0 {
-		t.Fatal("auditOperationGroups is empty")
-	}
-	last := auditOperationGroups[len(auditOperationGroups)-1]
-	if last.prefix != "" {
-		t.Errorf("the last operation group has prefix %q, want \"\" (the catch-all that keeps an "+
-			"unrecognised operation from being dropped from the help)", last.prefix)
-	}
-	for i, g := range auditOperationGroups[:len(auditOperationGroups)-1] {
-		if g.prefix == "" {
-			t.Errorf("group %d (%s) has an empty prefix, so it swallows every operation before the "+
-				"entity groups are consulted", i, g.label)
+// auditGroupLabelled reports whether line opens one of the declared groups,
+// read off auditOperationGroups rather than spelled out, so renaming a label
+// cannot quietly turn the layout assertions below into no-ops.
+func auditGroupLabelled(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	for _, g := range auditOperationGroups {
+		if strings.HasPrefix(trimmed, g.label) {
+			return true
 		}
 	}
-	// Today every operation matches an entity prefix, so the catch-all
-	// contributes no line: its presence must not add noise to the help.
-	if strings.Contains(auditOperationBlock(), last.label) {
-		t.Errorf("the catch-all group is rendered even though every operation matches an entity prefix:\n%s",
-			auditOperationBlock())
+	return false
+}
+
+// TestAuditOperationBlock_HasNoCatchAllGroup is rule 5(b) of
+// SPEC/HELP.md § Audit operation entity-type classification, and it is the
+// exact inverse of the guarantee this file used to pin. The block previously
+// ended in a catch-all group whose empty prefix matched every name the entity
+// prefixes rejected, so an operation named after a third entity still reached
+// the help. That was the right shape while the grouping was inferred from the
+// operation's name and the prefix was not trusted to match it.
+//
+// With the classification declared and total, nothing can be left over, and a
+// catch-all can only hide the failure the totality gate exists to produce: an
+// unclassified operation would still be printed, under a heading that asserts
+// nothing about it, while the block still listed every value the command
+// accepts and the reader was told nothing about whose history it belongs to.
+func TestAuditOperationBlock_HasNoCatchAllGroup(t *testing.T) {
+	if len(auditOperationGroups) == 0 {
+		t.Fatal("auditOperationGroups is empty, so the Valid operations block renders nothing")
+	}
+	for i, g := range auditOperationGroups {
+		if g.label == "" {
+			t.Errorf("group %d has an empty label, so its operations are printed under no heading at all", i)
+		}
+		if !models.IsValidEntityType(string(g.entityType)) {
+			t.Errorf("group %d (%s) names entity type %q, which is not a valid EntityType; a group whose "+
+				"label matches no entity type is a catch-all wearing a name", i, g.label, g.entityType)
+		}
+	}
+}
+
+// TestAuditOperationBlock_GroupsHoldExactlyTheirDeclaredOperations is the other
+// half of rule 5(b): every group must hold exactly the operations declared
+// against its (entity type, legacy) pair. A group that merely happens to look
+// right today would let a misfiled operation be published under an entity whose
+// history does not contain it, which is a false statement about stored data
+// rather than a cosmetic slip.
+func TestAuditOperationBlock_GroupsHoldExactlyTheirDeclaredOperations(t *testing.T) {
+	block := auditOperationBlock()
+
+	// Where each operation was actually printed, by group label.
+	printedUnder := map[string]string{}
+	current := ""
+	for _, line := range strings.Split(strings.TrimRight(block, "\n"), "\n") {
+		trimmed := strings.TrimSpace(line)
+		for _, g := range auditOperationGroups {
+			if strings.HasPrefix(trimmed, g.label) {
+				current = g.label
+			}
+		}
+		if current == "" {
+			t.Fatalf("the block opens with a line under no group label, so nothing can be attributed: %q", line)
+		}
+		list := line
+		if idx := strings.LastIndex(list, ":"); idx >= 0 {
+			list = list[idx+1:]
+		}
+		for _, field := range strings.FieldsFunc(list, func(r rune) bool { return r == ' ' || r == ',' }) {
+			printedUnder[field] = current
+		}
+	}
+
+	// The label a given operation is required to appear under.
+	wantLabel := func(op models.AuditOperation) string {
+		class, declared := models.ClassifyAuditOperation(op)
+		if !declared {
+			return ""
+		}
+		for _, g := range auditOperationGroups {
+			if g.entityType == class.EntityType && g.legacy == class.Legacy {
+				return g.label
+			}
+		}
+		return ""
+	}
+
+	checked := 0
+	for _, op := range models.ValidAuditOperations {
+		want := wantLabel(op)
+		if want == "" {
+			t.Errorf("%s has no group to be printed under; it is either unclassified (see "+
+				"TestAuditOperationClassification_IsTotal in internal/models) or its declared "+
+				"(entity type, legacy) pair has no group in auditOperationGroups", op)
+			continue
+		}
+		got, printed := printedUnder[string(op)]
+		if !printed {
+			t.Errorf("%s is declared but absent from the rendered block, so the help publishes a subset "+
+				"of the catalogue", op)
+			continue
+		}
+		if got != want {
+			t.Errorf("%s is printed under %q but is declared against %q; the heading asserts that its rows "+
+				"hold that entity_type, so the block is making a false statement about stored data",
+				op, got, want)
+			continue
+		}
+		checked++
+	}
+
+	// A rendering change that stopped matching would leave every assertion above
+	// unexecuted while the test still reported success.
+	if checked < len(models.ValidAuditOperations) {
+		t.Errorf("only %d of %d operations were attributed to a group; the block scan has stopped matching "+
+			"and this gate is no longer measuring the whole catalogue", checked, len(models.ValidAuditOperations))
+	}
+}
+
+// TestAuditOperationBlock_LegacyGroupsAreLabelledLegacy is rule 2 of
+// SPEC/HELP.md § Audit family help specifics, at the level the rule actually
+// operates: the LEGACY marking must be carried by the group's own label, not by
+// an inline marker beside a name. An inline marker would put a token in the list
+// column that is not an operation `audit list --operation` accepts, which is the
+// exact basis on which TestHelpEnumCoverage_AuditHelpListsEveryOperation checks
+// the block.
+func TestAuditOperationBlock_LegacyGroupsAreLabelledLegacy(t *testing.T) {
+	legacyGroups := 0
+	for _, g := range auditOperationGroups {
+		marked := strings.Contains(g.label, "LEGACY")
+		if g.legacy && !marked {
+			t.Errorf("group %q holds the LEGACY operations of %s but its label does not say LEGACY, so a "+
+				"reader cannot tell them from the operations in use", g.label, g.entityType)
+		}
+		if !g.legacy && marked {
+			t.Errorf("group %q is labelled LEGACY but holds operations commands still write, which tells a "+
+				"reader to stop filtering on values that are still being recorded", g.label)
+		}
+		if g.legacy {
+			legacyGroups++
+		}
+	}
+	if legacyGroups == 0 {
+		t.Error("no group holds LEGACY operations, so the four legacy values are listed indistinguishably " +
+			"from the operations in use")
 	}
 }
 

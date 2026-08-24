@@ -122,7 +122,7 @@ func seedFilterFixture(t *testing.T, name string) filterFixture {
 			created = models.StatusBacklog
 		}
 
-		id, cerr := database.CreateTask(ctx, &models.Task{
+		id, cerr := seedTask(database, &models.Task{
 			Title:                  seed.title,
 			Type:                   seed.taskType,
 			Status:                 created,
@@ -576,7 +576,7 @@ var filterCombinations = []clientControls{
 func filterKeeps(c clientControls, task *filterTask) bool {
 	term := foldSearchTerm(c.Term)
 	if term != "" &&
-		!strings.Contains(foldSearch(task.title), term) &&
+		!strings.Contains(searchableText(task.title), term) &&
 		!strings.Contains("#"+strconv.Itoa(task.id), term) {
 		return false
 	}

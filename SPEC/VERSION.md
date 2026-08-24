@@ -61,7 +61,7 @@ The `_metadata` table records the active schema version. Migration steps and the
 
 ### Current Schema Version
 
-`SchemaVersion = "1.12.0"` (defined in `internal/db/schema.go`).
+`SchemaVersion = "1.13.0"` (defined in `internal/db/schema.go`).
 
 ### Migration Commands
 
@@ -543,6 +543,101 @@ UPDATE _metadata SET value = '1.12.0' WHERE key = 'schema_version';
 8. Running the migration set twice against the same database produces the same result as running it once, and raises no error.
 9. After the migration, `SELECT value FROM _metadata WHERE key = 'schema_version'` returns `1.12.0`.
 10. After the migration, an `INSERT` into `audit` with `related_entity_id = 0` fails, and one with `commit_hash = 'ABC1234'` fails.
+
+### Migration 1.12.0 → 1.13.0
+
+Makes the `sprint_tasks` ordering index unique, so that no two member tasks of one
+sprint can hold the same `position` and the sprint's planned execution order is total.
+The invariant, the reasons it is required, and the rules every write path must follow
+to preserve it are specified in
+`DATABASE.md § sprint_tasks Table (1:N Relationship)` (Position Uniqueness Within a
+Sprint). The general rules this migration follows are specified in
+`DATABASE.md § Introducing a Uniqueness Constraint over Existing Rows`.
+
+The migration adds no column, so the `ALTER TABLE ADD COLUMN` guard specified in
+`DATABASE.md § Migration Idempotency (ALTER TABLE ADD COLUMN)` does not apply, and it
+rebuilds no table, because the constraint is carried by an index rather than by a
+table-level `UNIQUE` clause.
+
+#### The existing index is tightened, not duplicated
+
+`idx_sprint_tasks_order` already covers `(sprint_id, position ASC)`. A separate unique
+index over the same pair would be an exact duplicate, so the migration drops the
+existing index and recreates it under the same name as `UNIQUE`. The schema ends with
+one index over those columns, serving both the ordering reads and the constraint (see
+`DATABASE.md § Index Design Rationale`).
+
+#### Existing rows are repaired before the index is created
+
+The repair runs first, while no unique index is in force, so its intermediate states
+cannot violate one. It renumbers every sprint's positions to a dense `0..N-1` run
+ordered by `position` ascending with `task_id` ascending as the tie-breaker, which
+preserves the planned order wherever that order is unambiguous and settles it
+deterministically wherever it is not. The ranking is computed in a subquery rather
+than by a correlated count over the table being written, because a correlated count
+would observe rows the same statement had already moved and could leave duplicates
+behind; see `DATABASE.md § Introducing a Uniqueness Constraint over Existing Rows`
+(The repair must not read its own writes).
+
+The repair is not conditional on finding a violation. A database that already
+satisfies the constraint and whose positions are already dense receives the value each
+row already holds, so the statement is a no-op for it; a database with gaps has them
+closed; a database with duplicates has them separated.
+
+```sql
+-- 1. Repair: renumber each sprint's positions to a dense 0..N-1 run, preserving the
+--    planned order and breaking ties by task_id. Runs before the unique index exists.
+UPDATE sprint_tasks
+SET position = ranked.new_pos
+FROM (
+    SELECT sprint_id, task_id,
+           ROW_NUMBER() OVER (
+               PARTITION BY sprint_id
+               ORDER BY position ASC, task_id ASC
+           ) - 1 AS new_pos
+    FROM sprint_tasks
+) AS ranked
+WHERE sprint_tasks.sprint_id = ranked.sprint_id
+  AND sprint_tasks.task_id   = ranked.task_id;
+
+-- 2. Replace the non-unique ordering index with its unique form, under the same name.
+DROP INDEX IF EXISTS idx_sprint_tasks_order;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sprint_tasks_order ON sprint_tasks(sprint_id, position ASC);
+
+-- Update schema version
+UPDATE _metadata SET value = '1.13.0' WHERE key = 'schema_version';
+```
+
+#### What the migration must not do
+
+It MUST NOT delete, truncate, or otherwise discard a `sprint_tasks` row in order to
+make the index succeed. A duplicate position is an ambiguous order, not a redundant
+membership: both tasks are genuine members of the sprint and both must survive. If the
+index cannot be created even after the repair, the migration fails and the whole
+transaction is rolled back, leaving the database exactly as it was and
+`_metadata.schema_version` at `1.12.0`. The failure surface — exit code `1`, empty
+stdout, and the message shape on stderr — is specified in
+`DATABASE.md § Introducing a Uniqueness Constraint over Existing Rows` (The failure
+surface).
+
+It MUST NOT rank the repair by `added_at`. That would produce a valid dense run while
+silently replacing each sprint's planned order with the order its tasks happened to be
+added in.
+
+#### Acceptance criteria
+
+1. Applying the migration to a database at 1.12.0 leaves `SELECT COUNT(*) FROM sprint_tasks` unchanged, and leaves the set of `(sprint_id, task_id)` pairs unchanged.
+2. After the migration, `SELECT COUNT(*) FROM (SELECT sprint_id, position FROM sprint_tasks GROUP BY sprint_id, position HAVING COUNT(*) > 1)` returns 0.
+3. After the migration, every sprint's positions are a dense `0..N-1` run: for every `sprint_id`, `MIN(position)` is 0 and `MAX(position)` is `COUNT(*) - 1`.
+4. For a sprint whose positions were already distinct before the migration, the relative order of its tasks by `position` is the same after the migration as before it.
+5. For a sprint holding two tasks at the same position before the migration, the task with the lower `task_id` holds the lower position after it.
+6. `PRAGMA index_list('sprint_tasks')` reports `idx_sprint_tasks_order` with `unique = 1`, and reports no second index over `(sprint_id, position)`.
+7. After the migration, an `INSERT` or `UPDATE` that would give two tasks of one sprint the same `position` fails with a `UNIQUE` constraint error; the same position in two different sprints is accepted.
+8. Running the migration set twice against the same database produces the same result as running it once, and raises no error.
+9. A database whose `sprint_tasks` rows already satisfy the constraint and are already dense is byte-for-byte unchanged in that table by the repair step.
+10. After the migration, `SELECT value FROM _metadata WHERE key = 'schema_version'` returns `1.13.0`.
+11. A fresh database created at 1.13.0 receives the unique `idx_sprint_tasks_order` directly from the `sprint_tasks` schema definition and requires no repair.
+12. `sprint reorder`, `sprint move-to`, `sprint top`, `sprint bottom` and `sprint swap` all succeed against a migrated database, including on a full reversal of a sprint's order and on a swap of two adjacent tasks.
 
 ## Release Process
 

@@ -317,7 +317,7 @@ func TestOutputValidation_TaskList_JSONArray(t *testing.T) {
 
 func TestOutputValidation_TaskList_StatusFilter(t *testing.T) {
 	const roadmap = "outputval-tasklistfilter"
-	database, cleanup := setupTestTaskRoadmap(t, roadmap)
+	_, cleanup := setupTestTaskRoadmap(t, roadmap)
 	defer cleanup()
 
 	// Create 3 tasks via CLI
@@ -335,11 +335,14 @@ func TestOutputValidation_TaskList_StatusFilter(t *testing.T) {
 		taskIDs[i] = extractIntID(t, out)
 	}
 
-	// Manually advance one task to DOING via DB (simulates sprint add + start)
-	doingStatus := models.StatusDoing
-	if err := database.UpdateTaskStatus(context.Background(), []int{taskIDs[0]}, doingStatus); err != nil {
-		t.Fatalf("UpdateTaskStatus error = %v", err)
-	}
+	// Advance one task to DOING the way the CLI does it: sprint membership,
+	// then the transition that records the commit it started from. It used to
+	// be a db-layer UpdateTaskStatus call annotated "simulates sprint add +
+	// start" — a simulation is what the command layer is for (task #188).
+	sprintID := createSprintViaCommand(t, roadmap,
+		"Microservice rollout",
+		"Carry the deployment tasks whose status this listing filters on.")
+	driveTaskToStatus(t, roadmap, sprintID, taskIDs[0], models.StatusDoing)
 
 	// List with DOING filter
 	output := captureOutput(t, func() {

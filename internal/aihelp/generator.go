@@ -371,9 +371,23 @@ func buildEnums(reg *commands.Registry) map[string]EnumDefinition {
 // rather than crashing — the key is always present, value never null.
 func buildEnumValues(enumName string, values []string) []EnumValue {
 	descs := enumDescriptions[enumName]
+	entities := enumEntityTypes[enumName]
+	legacies := enumLegacyFlags[enumName]
 	out := make([]EnumValue, len(values))
 	for i, v := range values {
-		out[i] = EnumValue{Value: v, Description: descs[v]}
+		// entities is nil for every enum but AuditOperation, and a nil-map
+		// read yields "", which omitempty drops. The member therefore appears
+		// on exactly the values the SPEC puts it on, with no per-enum branch.
+		entry := EnumValue{Value: v, EntityType: entities[v], Description: descs[v]}
+		// legacy needs the two-value read, because false is a value this map
+		// publishes and not an absence: rule 4 requires the member on EVERY
+		// AuditOperation value, so a false must produce a pointer to false and
+		// only a missing entry may leave the member off. A nil map yields
+		// ok=false, which is exactly the behaviour every other enum needs.
+		if legacy, ok := legacies[v]; ok {
+			entry.Legacy = &legacy
+		}
+		out[i] = entry
 	}
 	return out
 }

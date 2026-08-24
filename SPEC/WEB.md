@@ -253,8 +253,11 @@ task detail modal that displays all of the task's fields (see
    [Task Detail Endpoint](#task-detail-endpoint)).
 12. The roadmap knowledge-graph page shows the selected roadmap's knowledge graph
    as an interactive node-link visualisation rendered with **D3.js**, read from
-   that roadmap's GoGraph store, opened read-only exactly as the `graph query` and
-   `graph search` subcommands open it. The page offers the complete set of
+   that roadmap's GoGraph store, opened through the engine's read path exactly as
+   the `graph query` and `graph search` subcommands open it, and under the same
+   shared lock, held across that open alone (see
+   [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
+   The page offers the complete set of
    "Networks"-section D3 gallery layouts — Force-directed graph,
    Disjoint force-directed graph, Mobile patent suits (the **default**), Arc diagram,
    Sankey diagram, Hierarchical edge bundling, Chord diagram, Directed chord diagram,
@@ -274,10 +277,16 @@ task detail modal that displays all of the task's fields (see
    [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library),
    and
    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
-13. Read access to a knowledge graph through the web interface MUST NOT write to
-    the store and MUST NOT trigger the synchronous checkpoint or write-ahead-log
-    truncation that write subcommands perform (see
-    [Security and Constraints](#security-and-constraints) and
+13. Read access to a knowledge graph through the web interface MUST NOT write
+    graph data and MUST NOT trigger the synchronous checkpoint or write-ahead-log
+    truncation that write subcommands perform. It is not, however, without on-disk
+    effect: opening the store runs the engine's recovery, which repairs an
+    interrupted checkpoint, so a web read takes the store's shared lock across
+    that open and may change the store directory's structure without ever
+    changing its data (see
+    [Security and Constraints](#security-and-constraints),
+    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store),
+    `GRAPH.md § What a Read Changes on Disk`, and
     `GRAPH.md § Synchronous Checkpoint on Write`).
 14. **The deliverable is fully self-contained.** The shipped `rmp` binary MUST
    embed every component required to render and operate the web interface, with
@@ -467,7 +476,8 @@ schema migrates to it automatically, without user input.
    SQLite schema. The roadmap's GoGraph knowledge-graph store under
    `~/.roadmaps/<name>/graph/` is a separate persistence layer with its own
    on-open recovery and is not touched by the SQLite schema migration; it
-   continues to be opened read-only on demand by graph requests (see
+   continues to be opened on demand by graph requests, through the engine's read
+   path (see
    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
 
 ## Bind Address and Port Selection
@@ -586,10 +596,14 @@ work with an explicit time budget.
 7. **Per request, and cancellation writes nothing.** Each graph data request gets
    its own budget; requests do not share one, and one request's budget is
    unaffected by any other request in flight. Cancelling a query changes nothing
-   on disk: the store is opened read-only, so an abandoned query writes no data,
-   runs no checkpoint, and truncates no write-ahead log, exactly as a completed
-   one does (see
-   [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
+   on disk beyond what opening the store had already done before the query
+   started: an abandoned query writes no graph data, runs no checkpoint, and
+   truncates no write-ahead log, exactly as a completed one does. The budget
+   governs query execution only; the store is already open by the time it starts,
+   so cancellation neither causes nor undoes the recovery repair that opening
+   performed (see
+   [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)
+   and `GRAPH.md § What a Read Changes on Disk`).
 8. **The budget is the whole of the bound.** This version bounds the work of a
    graph data request and nothing else. It introduces no request rate limit and no
    new endpoint.
@@ -737,6 +751,7 @@ HTTP status mapping for page and data routes:
 | Tasks `type`, `priority`, or `severity` filter parameter absent, unknown, malformed, or undecodable | 200 (never an error; the dimension applies no filter; see [Roadmap Tasks Page](#roadmap-tasks-page)) |
 | Graph data `q` rejected by the read-only guard-rail | 400 (`kind` `not_read_only`; the query is not executed; see [Query-Bar Error Handling](#query-bar-error-handling)) |
 | Graph data `limit` not one of the six allowed values | 400 (`kind` `invalid_limit`; the query is not executed; see [Query-Bar Error Handling](#query-bar-error-handling)) |
+| Graph data `q` is a schema-introspection command whose keyword spacing the engine does not accept | 400 (`kind` `invalid_keyword_spacing`; the query is not executed; see [Query-Bar Error Handling](#query-bar-error-handling)) |
 | Graph data query fails once running, a query cancelled for exhausting the time budget included | 400 (`kind` `execution`; see [Query-Bar Error Handling](#query-bar-error-handling)) |
 | Non-read HTTP method on any route | 405 |
 | Unhandled internal error reading data (I/O, corrupt store), a graph store that fails to open included | 500 |
@@ -827,6 +842,18 @@ how the `rmp web` process itself terminates.
     member tasks and opens no task detail modal; tasks are clickable on the single
     Roadmap Sprint Page and on the tasks page's board (see
     [Task Detail Modal](#task-detail-modal)).
+
+  **Why Concluídos reverses the sequence.** `rmp sprint list` returns a roadmap's
+  sprints in a single sequence, `order` ascending — the planned execution order
+  (see `COMMANDS.md § List Sprints`). This page keeps that sequence on Próximos
+  and Actual and deliberately reverses it on Concluídos, because the two kinds of
+  tab answer different questions: Próximos and Actual look forward at work still
+  to come, where the next sprint to execute is the one to read first, while
+  Concluídos looks back at work already finished, where the sprint executed most
+  recently is the one to read first. The reversal is a presentation choice of this
+  one tab. It changes no stored data and no other surface: the CLI listing order
+  is unaffected, and a reader who wants the whole roadmap in a single planned
+  sequence reads `rmp sprint list`.
 - **Sprint description line breaks.** Wherever a sprint's `description` text is
   shown in a sprint card on this page — across all three tabs — the description
   renders preserving the author's line breaks (newlines), because the description
@@ -925,10 +952,14 @@ how the `rmp web` process itself terminates.
   [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
   rule 2). The colours are the ones that table already holds; this board introduces
   no new colour and no new band, and it keys on that mapping rather than restating
-  the variants here. The count itself selects no colour, so a column that holds no
-  task shows `0` in the colour of its status, exactly as a tab that holds no sprint
-  does (see [Roadmap Sprints Page](#roadmap-sprints-page)). The colour earns its
-  place because the header is where the reader identifies the column: the mapping
+  the variants here. The badge's class is produced by the single implementation of
+  that mapping which every status badge on this page already takes its colour from;
+  no colour variant is written into the template beside it, so this header cannot
+  drift from the mapping the rest of the page obeys (Acceptance Criterion 140). The
+  count itself selects no colour, so a column that holds no task shows `0` in the
+  colour of its status, exactly as a tab that holds no sprint does (see
+  [Roadmap Sprints Page](#roadmap-sprints-page)). The colour earns its place
+  because the header is where the reader identifies the column: the mapping
   already gives each status a colour the reader meets wherever that status is
   written out, and carrying it here lets the five columns tell themselves apart by
   the same key rather than by their heading text alone.
@@ -1160,24 +1191,122 @@ how the `rmp web` process itself terminates.
   is stripped after the trim to compensate, for the reason **The folding rule** below
   gives for its own post-fold fixups.
 
-  **Trim first, then fold.** The term is trimmed and then folded, in that order, and
-  **both** paths perform those two steps in that same order. The order is not
-  observable under the Unicode version in force: the fold replaces each code point
-  with exactly one code point and reorders none (see **The folding rule** below),
-  and swept over every code point of Unicode no code point carrying the White_Space
-  property folds to anything but itself, while no code point outside the property
-  folds into it — so trimming and folding commute and either order yields the same
-  term. Fixing the order is what keeps the contract from resting on that
-  coincidence: were some code point ever to fold into a whitespace one, the two
-  paths would still perform the same two steps in the same order and would still
-  return one term.
+  **Trim first, then normalise, then fold.** The term is trimmed, then normalised,
+  then folded, in that order, and **both** paths perform those steps in that same
+  order (see **The normalisation rule** and **The folding rule** below). The trim's
+  place in that sequence is not observable: swept over every code point of Unicode,
+  no code point carrying the White_Space property folds to anything but itself,
+  none outside the property folds into it, and normalisation neither turns a code
+  point carrying the property into one that does not carry it nor the reverse — the
+  two code points normalisation does rewrite, `U+2000` (EN QUAD) to `U+2002` and
+  `U+2001` (EM QUAD) to `U+2003`, carry the property before and after. Trimming
+  therefore commutes with both later steps. Fixing the order is what keeps the
+  contract from resting on that coincidence: were some code point ever to fold or
+  normalise into a whitespace one, the two paths would still perform the same steps
+  in the same order and would still return one term.
 
-  **The task's searchable text is folded but never trimmed.** The trim applies to
+  The place of the **normalisation** relative to the fold is a different matter: it
+  is observable, and **The normalisation rule** below states why normalising first
+  is the only order that closes this defect.
+
+  **The task's searchable text is normalised and folded, but never trimmed.** The trim applies to
   the term alone. A task's own leading or trailing whitespace is part of its text
   and is matched literally, exactly as whitespace inside a term is; the term is
   trimmed because a user reaches for the space bar around what they type, which is
   not a statement about the task.
-- **The folding rule.** The task's searchable text and the term are folded by
+- **The normalisation rule.** After the term is trimmed, and before either the term
+  or the task's searchable text is folded, both are normalised to Unicode's
+  **Normalization Form C** — NFC, the canonical composition of the full canonical
+  decomposition, as UAX #15 defines it.
+
+  The rule exists because two different byte sequences can render as the same text.
+  A task whose `title` holds a precomposed `é` (`U+00E9`) and a task whose `title`
+  holds `e` followed by a combining acute (`U+0065 U+0301`) carry the same title to
+  every reader and two different searchable texts to a comparison of bytes, so a
+  term typed in one spelling finds one of them and silently misses the other. Both
+  paths miss it **together**, so this is not the disagreement **Server and client
+  produce the same board** below governs; it is a second and independent way the
+  search fails to find a task that visibly contains the term.
+
+  **Normalisation is for comparison only: never for storage, and never for
+  display.** The bytes `rmp` stores stay exactly the bytes it was given. A task's
+  `title` is not rewritten, `rmp task get` returns what it returned before this rule
+  existed, and the card renders the title the roadmap actually holds. The normalised
+  text is a derived form used to decide a match, exactly as the folded corpus
+  already is.
+
+  **NFC and not NFD.** Both are canonical equivalence, and either would make the two
+  spellings of `é` one text. They differ in what else they do to a **substring**
+  match, which is the comparison this search performs. NFD decomposes every accented
+  letter, so a task titled `Café Lisboa onboarding` would carry the searchable text
+  `cafe` followed by `U+0301` and the rest, and the four ASCII letters of the term
+  `cafe` would occur in it: typing `cafe` would return the task titled `Café`, and
+  typing `ae` would return one titled `Aérea`. NFC leaves a precomposed letter
+  precomposed, so neither term matches and an accented word stays one unit. The
+  rule answers what a term **is**, and it must not quietly answer whether an accent
+  should be ignored, which is a different question and one this specification does
+  not answer.
+
+  **What the rule changes, measured.** Of Unicode's 1,112,064 code points, exactly
+  **1,117** produce a different searchable text under this rule than without it, and
+  **not one of them is ASCII**. Those 1,117 are the canonical singletons and the
+  composition exclusions — `U+0340`, `U+0341`, `U+0343`, `U+0344`, `U+0374`,
+  `U+037E`, `U+0387`, the `U+0958`..`U+095F` Devanagari set, and their kind. An
+  ordinary Latin roadmap is untouched, which is what makes this rule safe to apply
+  to every task rather than only to the ones a user suspects.
+
+  **Two passes, not one.** The pipeline is trim, then NFC, then fold, then **NFC
+  again**. The second pass is not decoration: the fold can produce a sequence that
+  composes where the unfolded one did not. Unicode has no precomposed capital for
+  `H` with a line below, so NFC leaves `H` followed by `U+0331` as two code points;
+  the fold then lowers the `H`, and `h` followed by `U+0331` **does** have a
+  precomposed form, `U+1E96`. Without the second pass a task titled `H̱ydro` would
+  carry a two-code-point searchable text while a term typed as the single character
+  `ẖ` normalised to `U+1E96`, and the term would not occur in the text it plainly
+  spells. `U+1E97`, `U+1E98`, `U+1E99` and `U+01F0` behave the same way. Measured
+  over the 1,321,226 sequences of a folding code point followed by a non-starter,
+  one pass leaves the result outside NFC on **70** of them; two passes leave it in
+  NFC on **all 1,321,226**, so a third pass would change nothing and is not
+  performed.
+
+  **Normalise before folding, not after.** The order is observable: on **0** single
+  code points, but on **74** of those 1,321,226 sequences, over **32** distinct
+  leading code points. Normalising first is chosen because it is the only order that
+  closes this defect for `U+0130` (LATIN CAPITAL LETTER I WITH DOT ABOVE), the code
+  point **The folding rule** below already names. A title written with `U+0130` and a
+  title written as `U+0049` followed by `U+0307` are the same text by Unicode's own
+  definition, and normalising first gives both the same searchable text; folding
+  first would give `U+0069` for one and `U+0069 U+0307` for the other, which are two
+  different searchable texts for one title.
+
+  **The composition step is Groadmap's own; the decomposition step is not.** The
+  server obtains the canonical decomposition and the canonical ordering from
+  `golang.org/x/text/unicode/norm` (see `BUILD.md § External Dependencies`), and
+  performs the composition itself, from the same `COMPOSE_TABLE` it ships to the
+  browser (see **One rule, and only one implementation of it** below). That module's
+  own composition is **not** used, because it is wrong: at the pinned version it
+  composes a supplementary starter as though the starter were its low 16 bits, so
+  `U+1003C` followed by `U+0338` becomes `U+226E` (because `U+1003C` masked to 16
+  bits is `U+003C`), `U+10041` followed by `U+0301` becomes `U+00C1`, and `U+1042B`
+  followed by `U+0308` becomes `U+04F8`. The platform's own normalisation leaves all
+  three unchanged, and so does Groadmap's. The defect spans **15,041** pairs over
+  **6,021** distinct leading code points; the decomposition the server does use is
+  unaffected by it.
+
+  Composing from the table is not a private dialect of NFC. It is NFC where that
+  module is right and NFC where that module is wrong: the two agree on **all
+  1,112,064** single code points, and the table still composes the 13 legitimate
+  supplementary composites, `U+11935` followed by `U+11930` giving `U+11938` among
+  them. This is why the server takes the client's table rather than the client
+  taking the server's answer — the alternative would mean generating a table that
+  reproduced a truncation defect on purpose, and a client that was right while the
+  server was wrong would break **Server and client produce the same board** below,
+  which is the one property none of these rules may cost.
+
+  A term whose bytes are not valid UTF-8 is normalised like any other term, after
+  each invalid byte has been replaced by `U+FFFD` (see **The folding rule** below).
+- **The folding rule.** The task's searchable text and the term are folded — each
+  after it has been normalised (see **The normalisation rule** above) — by
   Unicode's **simple lowercase mapping**: the single replacement code point that
   the Unicode Character Database gives a code point, applied to each code point on
   its own, with a code point that has no such mapping folding to itself. Three
@@ -1230,11 +1359,11 @@ how the `rmp web` process itself terminates.
   roadmap, and it is neither an error nor an absent term (see **No malformed term
   is an error** below).
 - **One rule, and only one implementation of it.** A task's searchable text is
-  folded **once, by the server**. The client folds only the term, and compares it
-  against text the server already folded; no client-side code folds a task's
-  `title` or its reference, and no client-side code trims either. The two paths
-  therefore cannot disagree about a task's text, because only one of them ever
-  transforms it.
+  normalised and folded **once, by the server**. The client normalises and folds
+  only the term, and compares it against text the server already transformed; no
+  client-side code normalises or folds a task's `title` or its reference, and no
+  client-side code trims either. The two paths therefore cannot disagree about a
+  task's text, because only one of them ever transforms it.
 
   The term is the one value both sides fold, and it is where the two could still
   drift, because each platform's own lower-case function implements whichever
@@ -1251,8 +1380,9 @@ how the `rmp web` process itself terminates.
   browsers could answer differently for the same term. The shipped mapping removes
   the browser from the answer entirely.
 
-  **The term's trim is the server's by the same construction.** Normalising a term
-  is two steps, and the client MUST NOT take either of them from the platform: it
+  **The term's trim is the server's by the same construction.** Preparing a term for
+  comparison is three steps, and the client MUST NOT take any of them from the
+  platform: it
   **MUST NOT** trim the term with the JavaScript platform's trimming function, any
   more than it may fold it with that platform's case conversion. It removes the
   term's leading and trailing whitespace by the **server's own whitespace set**,
@@ -1263,33 +1393,94 @@ how the `rmp web` process itself terminates.
   agree on every code point but the two **The trim rule** above names, so every
   ordinary term would go on agreeing and hide the disagreement.
 
-  On the server, the corpus fold and the term fold are likewise **one** rule: the
-  server folds a task's searchable text and folds a term through the same folding
+  **The term's normalisation is the server's by that same construction, and the
+  prohibition extends to it.** The client **MUST NOT** call the JavaScript
+  platform's own normalisation — `String.prototype.normalize` — any more than it may
+  call that platform's trimming or its case conversion. It normalises the term from
+  the **tables the server ships to it**, so the normalised form of a term is the
+  server's answer on both paths by construction.
+
+  Two reasons make that prohibition stricter here than for the other two steps, and
+  the second is decisive. The first is the one already given for them: a browser's
+  normalisation tables are of whatever Unicode version that browser ships, which
+  Groadmap neither chooses nor can detect. The second is that the platform's
+  normalisation and the server's would have to agree on **composition**, and
+  composition is exactly where the server's own module is wrong (see **The
+  normalisation rule** above). The server composes from the shipped table
+  specifically so that both sides run one rule over **one set of data**, rather than
+  two expressions of one description that could agree with each other by
+  reproducing the same defect.
+
+  On the server, the corpus and the term are likewise **one** rule at every step:
+  the server normalises a task's searchable text and normalises a term through the
+  same function and the same tables, and folds both through the same folding
   function, not through two implementations of one description, so the two cannot
   drift apart on that side either.
 - **What keeps the shipped rule equal to the server's.** The binary ships the client
-  the two things a term's normalisation is made of — the whitespace set and the case
-  mapping — and **one** check covers both of them. It is one check and not two
-  beside each other because the two are parts of one rule: a check that took only
-  the mapping as its subject would leave the whitespace set free to drift, and a set
-  that drifts separates the two paths exactly as a drifting mapping would.
+  the things a term's preparation is made of — the whitespace set, the case mapping,
+  and the normalisation data — and **one** check covers all of them. It is one check
+  and not several beside each other because they are parts of one rule: a check that
+  took only the mapping as its subject would leave the whitespace set and the
+  normalisation data free to drift, and either of those drifting separates the two
+  paths exactly as a drifting mapping would.
+
+  The normalisation data is **three generated tables**, shipped in
+  `static/task-search.js` exactly as `FOLD_TABLE` and `SPACE_TABLE` already are:
+  `DECOMP_TABLE`, the full canonical decompositions, **2,061** entries;
+  `CCC_TABLE`, the canonical combining classes, **388** spans; and `COMPOSE_TABLE`,
+  the primary composites, **941** entries. Together the three are the largest part
+  of the script the binary serves — on the order of 60 KB, well over half of it.
+  They are that small only because Hangul is **not** tabulated: UAX #15 decomposes
+  and composes Hangul arithmetically, so the 11,172
+  Hangul syllables are computed on both sides rather than stored. Tabulating them
+  would take `DECOMP_TABLE` from 2,061 entries to 13,233 and `COMPOSE_TABLE` from
+  941 to 12,113, for data that a few lines of arithmetic already give exactly.
+
+  **That size is an order of magnitude and not a byte count, deliberately.** The
+  three entry counts above are backed: the check described below reads the shipped
+  tables as numbers and requires the count, and every entry, to equal what the
+  server's own function derives, so an entry count stated here cannot drift from
+  the artefact without the `test` gate failing. A byte count has no such backing.
+  It is a property of the generator's layout — the indentation, the line width,
+  and the separator its emitter writes — and the check is blind to all three,
+  because it extracts the numbers and ignores the text around them. Changing any
+  of the three would move a byte count stated here and leave every gate green. A
+  figure a reviewer trusts and no gate checks is worse than no figure at all, so
+  this section states none: whoever needs the exact size measures the artefact,
+  which is its only authority.
 
   Each part is checked against the server's own function over **the whole of
   Unicode**: every code point, not a sample, and against that function itself, never
   against a stored copy of its expected results — such a copy can be updated to
-  match a changed fold or a changed whitespace set, and would then prove nothing.
-  The check fails when a single code point folds differently on the two sides, and
-  it fails the same way when a single code point is whitespace to one side and not
-  to the other. It fails the same way again when a toolchain upgrade changes either
-  of them, so a change of Unicode version cannot move one side of the rule and leave
-  the other behind unnoticed. The check also asserts, as an absence in the script the
-  binary serves, that the narrowing script calls neither a case conversion of the
-  platform nor a trimming function of the platform.
+  match a changed fold, a changed whitespace set, or changed normalisation data, and
+  would then prove nothing. The check fails when a single code point folds
+  differently on the two sides; it fails the same way when a single code point is
+  whitespace to one side and not to the other; and it fails the same way when a
+  single code point decomposes, orders, or composes differently between the shipped
+  tables and the server. It fails the same way again when a toolchain upgrade or a
+  dependency upgrade changes any of them, so a change of Unicode version cannot move
+  one side of the rule and leave the other behind unnoticed: a server whose rule
+  moved is **caught**, never followed. The check also asserts, as an absence in the
+  script the binary serves, that the narrowing script calls neither a case
+  conversion of the platform, nor a trimming function of the platform, nor the
+  platform's own normalisation.
+
+  **The table's composition was proven correct before it was specified.** The
+  shipped `COMPOSE_TABLE` is not merely equal to the server's data — it is equal to
+  the rule Unicode defines, which is what makes the server adopting it a correction
+  rather than a divergence. A prototype driven by these tables was checked against
+  the platform's own normalisation over **69,956,194** inputs with **0** failures:
+  all 1,112,064 single code points, 850,084 starter-plus-two-mark sequences,
+  1,900,242 decomposing-starter-plus-mark pairs, 33,516 Hangul cases, and
+  66,060,288 supplementary-starter pairs — every supplementary starter against each
+  of the 63 marks a composition can consume, which is precisely the domain in which
+  the server's own module is wrong.
 
   The check is an ordinary Go test. It runs no JavaScript and requires no
-  JavaScript engine, no Node.js, no network access, and no module dependency, so it
-  holds within the constraints already fixed in `BUILD.md § External Dependencies`
-  and `BUILD.md § Vendored Web Assets`, rule 2. It is the discipline the badge
+  JavaScript engine, no Node.js, no network access, and no module beyond the direct dependencies
+  `BUILD.md § External Dependencies` names, so it holds within the constraints
+  already fixed in that section and in `BUILD.md § Vendored Web Assets`,
+  rule 2. It is the discipline the badge
   colour mapping already follows wherever a client script carries that mapping too
   (see
   [Status, Priority, and Severity Badge Colours](#status-priority-and-severity-badge-colours),
@@ -2754,8 +2945,8 @@ already consumes; it adds no new endpoint and no write path.
    guard-rail before execution and never runs (see
    [Graph Data Endpoint](#graph-data-endpoint) and
    [Query-Bar Error Handling](#query-bar-error-handling)). The query bar offers no
-   create, edit, or delete affordance; running a query through it never writes to
-   the store, never checkpoints, and never truncates the write-ahead log,
+   create, edit, or delete affordance; executing a query through it never writes
+   graph data, never checkpoints, and never truncates the write-ahead log,
    consistent with the read-only contract of the whole interface (see
    [Security and Constraints](#security-and-constraints) and
    [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
@@ -2791,10 +2982,11 @@ layout degradation already specified (see
 [Knowledge-Graph Visualisation Library](#knowledge-graph-visualisation-library),
 rule 5). The failure modes are kept distinct so the user understands what to fix.
 
-The endpoint answers each of the three with HTTP `400 Bad Request` and a JSON body
-that names the failure's class in a `kind` field, in the shape specified in
+The endpoint answers each of the four — cases 1, 2 and 3 below, and the
+guard-rail rejection of case 10 — with HTTP `400 Bad Request` and a JSON body that
+names the failure's class in a `kind` field, in the shape specified in
 `DATA_FORMATS.md § Graph View Data`, **Error Shape**. Rules 5 to 9 below fix the
-status, the precedence between the three, the boundary against the `500` of an
+status, the precedence between the four, the boundary against the `500` of an
 internal read error, and what the body carries.
 
 1. **Query rejected: not read-only.** When the submitted query contains a writing
@@ -2831,16 +3023,17 @@ internal read error, and what the body carries.
    navigation, exactly as the layout-degradation message does. The user can edit
    the query or change the limit and search again.
 
-5. **One status, three kinds.** All three failures carry HTTP `400 Bad Request`,
+5. **One status, four kinds.** All four failures carry HTTP `400 Bad Request`,
    and the body's `kind` field is what distinguishes them. One status fits all
-   three because in each of them the server is able to serve the route and refuses
+   four because in each of them the server is able to serve the route and refuses
    the request the caller made: the query carries a clause the endpoint's contract
-   forbids, the `limit` falls outside the closed set the endpoint publishes, or the
-   query the caller wrote cannot be executed. RFC 9110, Section 15.5.1, defines
+   forbids, the `limit` falls outside the closed set the endpoint publishes, the
+   query is a schema-introspection command written in a spelling the engine does
+   not accept, or the query the caller wrote cannot be executed. RFC 9110, Section 15.5.1, defines
    `400` as the status for a request the server "cannot or will not process ... due
    to something that is perceived to be a client error", and RFC 9110, Section
    15.5, puts the explanation of the error in the response representation, which is
-   exactly what the `kind` and `error` fields are. Splitting the three across
+   exactly what the `kind` and `error` fields are. Splitting the four across
    different statuses would assert a distinction HTTP does not carry, while the
    body already carries it precisely.
 
@@ -2862,9 +3055,16 @@ internal read error, and what the body carries.
    can be wrong in more than one way at once. The endpoint resolves the `limit`
    first and validates the query as read-only second, so a request carrying both an
    invalid `limit` and a query that is not read-only is answered `invalid_limit`,
-   not `not_read_only`. The order in which cases 1 to 3 appear above is the order in
-   which they are easiest to explain and is **not** an order of precedence; this
-   rule is the order of precedence and is the one to implement. The two orders
+   not `not_read_only`. The keyword-spacing rejection of case 10 is third and last:
+   a query that is not read-only is answered `not_read_only` even when it also
+   carries a badly spaced `SHOW`, because the objection that it writes outranks the
+   objection that it is misspelled. The full order is therefore `invalid_limit`,
+   then `not_read_only`, then `invalid_keyword_spacing`, and it matches the CLI,
+   where the operation-class objection is likewise decided first (see
+   `GRAPH.md § Keyword Spacing in a Schema-Introspection Command`). The order in
+   which cases 1 to 3 and case 10 appear above is the order in which they are
+   easiest to explain and is **not** an order of precedence; this rule is the order
+   of precedence and is the one to implement. The two orders
    differ in nothing else: under either, the request is rejected before the query
    runs and before the graph store is opened, so neither reads nor writes anything.
    The case is in practice reachable only by a crafted request, because the page's
@@ -2891,16 +3091,18 @@ internal read error, and what the body carries.
    outside the server, where drawing it at the cause would make the contract depend
    on which failures the engine happens to tell apart.
 
-8. **The response body.** Each of the three failures carries a JSON body of exactly
+8. **The response body.** Each of the four failures carries a JSON body of exactly
    two string fields, `error` and `kind`, in the shape specified in
    `DATA_FORMATS.md § Graph View Data`, **Error Shape**, which is canonical for it.
-   `kind` is the machine-readable class — `not_read_only`, `invalid_limit`, or
-   `execution` — and `error` is the human-readable reason the page shows in place.
+   `kind` is the machine-readable class — `not_read_only`, `invalid_limit`,
+   `invalid_keyword_spacing`, or `execution` — and `error` is the human-readable
+   reason the page shows in place.
    The `error` of an execution failure carries the engine's own diagnostic text, so
    the user reads for a given query the same diagnostic the CLI prints for it (see
    `GRAPH.md § Error Handling and Exit Codes`, rule 2) and can act on it; the
    `error` of an invalid limit names the rejected value, which is what case 2's
-   message requires. The `500` of an internal read error does not carry this shape:
+   message requires, and the `error` of a keyword-spacing rejection names the
+   spacing and the accepted spelling, which is what case 10's message requires. The `500` of an internal read error does not carry this shape:
    it is answered as every other route's internal read error is.
 
 9. **A request the caller abandoned is answered, but nobody reads the answer.** A
@@ -2914,6 +3116,33 @@ internal read error, and what the body carries.
    is a third reason the `execution` kind arises, and a contract naming only two
    would be incomplete on the day it is written. It is not an outcome a connected
    client can observe, so no client-side test can assert it.
+
+10. **Query rejected: keyword spacing the engine does not accept.** When the
+    submitted query is a schema-introspection command — `SHOW INDEXES`,
+    `SHOW INDEX`, `SHOW CONSTRAINTS`, `SHOW CONSTRAINT` — written with anything
+    other than exactly one space between the two keywords, the shared guard rail
+    rejects it before execution and the query is never run (see
+    `GRAPH.md § Keyword Spacing in a Schema-Introspection Command`, which is
+    canonical for the rule and for why it exists). The endpoint answers HTTP
+    `400 Bad Request` with `kind` `invalid_keyword_spacing`, and the page surfaces
+    a clear message naming the spacing and the accepted spelling. The graph already
+    shown is left in place; the rejection changes nothing in the store.
+
+    **Why this is a kind of its own and not `not_read_only`.** A `SHOW` statement
+    reads the schema and writes nothing, whatever its spacing, so answering
+    `not_read_only` would publish a classification that the message printed beside
+    it contradicts, and would tell a client that the query writes when it does not.
+    The two failures also have different fixes — one query must be rewritten to
+    stop writing, the other only to close a gap between two keywords — and a
+    machine-readable class exists to tell such cases apart. Adding a value is a
+    widening of the published contract, so a client that switches exhaustively over
+    `kind` sees a value it did not have before; that cost is accepted in exchange
+    for the distinction.
+
+    This case is a guard-rail rejection of the same nature as case 1 and shares its
+    precedence rule (rule 6). It is numbered last, rather than inserted beside case
+    1, so that the case and rule numbers this section publishes — and that other
+    sections, tests, and code comments cite — keep the meaning they already have.
 
 ### Graph Labels Sidebar
 
@@ -3093,12 +3322,13 @@ write.
   and the property-type-to-JSON mapping) rather than inventing a new element
   encoding. A request that fails carries the error object instead, specified in
   the same file (see the next bullet).
-- **Failure responses.** The three ways a request to this endpoint fails — the
-  read-only guard-rail rejection, an invalid `limit`, and a query execution
-  failure — are each answered with HTTP `400 Bad Request` and a JSON body naming
-  the failure's class in a `kind` field, in the shape specified in
-  `DATA_FORMATS.md § Graph View Data`, **Error Shape**. The status, the `kind`
-  values, the precedence between the three, and the boundary against the `500` of
+- **Failure responses.** The four ways a request to this endpoint fails — the
+  read-only guard-rail rejection, an invalid `limit`, the guard-rail rejection of a
+  schema-introspection command whose keyword spacing the engine does not accept,
+  and a query execution failure — are each answered with HTTP `400 Bad Request` and
+  a JSON body naming the failure's class in a `kind` field, in the shape specified
+  in `DATA_FORMATS.md § Graph View Data`, **Error Shape**. The status, the `kind`
+  values, the precedence between the four, and the boundary against the `500` of
   an internal read error are specified in
   [Query-Bar Error Handling](#query-bar-error-handling); this section does not
   restate them.
@@ -3598,29 +3828,68 @@ re-presents an earlier, now-stale response in its place.
 
 1. For a graph page or graph data request, the server resolves the roadmap's
    graph store at `~/.roadmaps/{name}/graph/` (see `GRAPH.md § Persistence
-   Layout`) and opens it through the GoGraph engine's store-backed read path, the
-   same way `graph query` and `graph search` open it (see `GRAPH.md § Engine
-   Construction and Lifecycle`).
+   Layout`), opens it, and runs the query through the engine's read path, the
+   same way `graph query` and `graph search` do (see `GRAPH.md § Engine
+   Construction and Lifecycle`). The server is on the read path, so it constructs
+   the engine without a transactional store and without a write-ahead-log writer.
+   Which constructor that is, is fixed by
+   `GRAPH.md § Engine Constructor by Path`, and this specification does not
+   restate it.
 2. The server runs a **read-only** Cypher query to retrieve the nodes and edges
    to visualise. The query contains no writing clause; it is the same class of
    query the read subcommands accept under the guard rail in
    `GRAPH.md § Subcommands and Guard-Rail Validation`.
-3. The server MUST NOT perform any write and MUST NOT trigger the synchronous
-   checkpoint or write-ahead-log truncation that write subcommands perform after
-   a commit (see `GRAPH.md § Synchronous Checkpoint on Write` and
-   `IMPLEMENTATION.md § Graph Store Concurrency`). A read through the web
-   interface leaves the store's on-disk files unchanged, exactly as a `graph
-   query` invocation does.
-4. Opening the store runs GoGraph's recovery, which restores the last committed
-   state from the snapshot and the write-ahead-log tail (see `GRAPH.md §
-   Concurrency and Recovery`). Recovery on open is a read-path operation; it
-   restores in-memory state and does not itself constitute a Groadmap write or a
-   checkpoint.
-5. Each request opens the store, reads, serves the result, and closes the store.
-   The server does not hold the graph store open across requests, consistent with
-   the short-lived-access model in `IMPLEMENTATION.md § Graph Store Concurrency`.
-   A graph store that is corrupt or unreadable surfaces as an internal read error
-   (HTTP 500 on the affected route); there is no automatic graph-store repair.
+3. The server MUST NOT write graph data, MUST NOT run any writing or DDL clause,
+   and MUST NOT trigger the synchronous checkpoint or write-ahead-log truncation
+   that write subcommands perform after a commit (see
+   `GRAPH.md § Synchronous Checkpoint on Write` and
+   `IMPLEMENTATION.md § Graph Store Concurrency`). The write-ahead log is opened
+   for reading only and is left byte for byte as the request found it, and the
+   contents of `snapshot/` are left unchanged. A read through the web interface
+   changes no graph data, exactly as a `graph query` invocation changes none.
+4. A web read is **not**, however, free of on-disk effect, and this specification
+   does not claim that it is. Opening the store runs GoGraph's recovery, which
+   restores the last committed state from the snapshot and the write-ahead-log
+   tail, and which first repairs an interrupted checkpoint: it removes a stale
+   `snapshot.tmp` staging directory, and it promotes `snapshot.bak` to `snapshot`
+   when the live snapshot directory carries no manifest. A graph data request can
+   therefore change the store directory's structure, though never its data. The
+   exhaustive list of what a read may and may not change is
+   `GRAPH.md § What a Read Changes on Disk`, which is canonical and applies to
+   this endpoint unchanged.
+5. Because that repair is a write to the directory a checkpoint publishes into,
+   the server takes the graph store's advisory lock in **shared** mode before
+   opening the store, and releases it as soon as the open returns, exactly as a
+   CLI read subcommand does. The query then executes with no lock held. The lock,
+   its two modes, the reason the narrow hold is sufficient, and their mutual
+   exclusion are specified in `GRAPH.md § Concurrency and Recovery`; that section
+   is canonical and this one adds no rule of its own. Three consequences are
+   specific to the web interface and are stated here:
+   - A graph data request may **wait** for an in-flight `rmp graph` write against
+     the same roadmap. The wait is bounded (see `GRAPH.md § Lock Contention`), it
+     is spent before the query starts and so does not consume the endpoint's query
+     time budget (see [Graph Query Time Budget](#graph-query-time-budget)), and
+     the worst case stays well inside the server's write timeout (see
+     [HTTP Server Timeouts](#http-server-timeouts)). A request MUST NOT block
+     indefinitely on the lock.
+   - A request that still cannot take the shared lock when the bounded wait is
+     exhausted is answered HTTP `500`, the status this endpoint already returns
+     for a graph store that cannot be opened (see
+     [Routes and Pages](#routes-and-pages)). It is logged like any other `500`
+     (see [Server Logging](#server-logging)).
+   - Serving a graph data request does **not** block the CLI for the duration of
+     the request. The server holds the lock only while opening the store, so a
+     concurrent `rmp graph` write can start, commit, and checkpoint while the
+     request is still executing its query or writing its response. Only a write
+     that collides with the request's store open, a window measured in the cost
+     of loading the graph rather than of running the query, fails fast. A slow or
+     expensive graph query therefore cannot fail a concurrent CLI write.
+6. Each request opens the store, reads, serves the result, releases the shared
+   lock, and closes the store. The server does not hold the graph store open, or
+   its lock, across requests, consistent with the short-lived-access model in
+   `IMPLEMENTATION.md § Graph Store Concurrency`. A graph store that is corrupt or
+   unreadable surfaces as an internal read error (HTTP 500 on the affected route);
+   there is no automatic graph-store repair.
 
 ## Frontend and Embedded Assets
 
@@ -4632,9 +4901,13 @@ Rules:
 2. **Read-only.** The interface never writes. It exposes no route that creates,
    edits, or deletes roadmap data, tasks, sprints, audit entries, or graph
    elements. The server accepts only `GET` and `HEAD`; every other method returns
-   HTTP `405`. The graph store is opened read-only and a web read never triggers a
-   checkpoint or write-ahead-log truncation (see
-   [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)).
+   HTTP `405`. A web read never writes graph data and never triggers a checkpoint
+   or write-ahead-log truncation. Opening the graph store is nonetheless not a
+   read-only operation on disk — the engine's recovery repairs an interrupted
+   checkpoint on open — so the server takes the store's shared lock across that
+   open and may change the store directory's structure, never its data (see
+   [Knowledge Graph from the GoGraph Store](#knowledge-graph-from-the-gograph-store)
+   and `GRAPH.md § What a Read Changes on Disk`).
    SQLite reads write no rows and produce no audit-log entry.
 3. **User-supplied Cypher is validated read-only before execution.** The graph
    page's query bar lets the user submit an editable Cypher query to the graph
@@ -4653,13 +4926,19 @@ Rules:
    `INDEX`/`CONSTRAINT`) is rejected and **not executed**, and the page surfaces the
    rejection (see [Query-Bar Error Handling](#query-bar-error-handling)). The query
    bar opens no write path: an accepted query runs through the engine's read path
-   only, and never checkpoints or truncates the write-ahead log.
+   only, and never checkpoints or truncates the write-ahead log. No query the user
+   can submit changes what opening the store does; the guard rail runs before the
+   store is opened, so a rejected query never reaches it at all.
 4. **Filesystem permission model is unchanged.** The web interface reads through
    the existing locations and respects the existing permission model: `0700` for
    `~/.roadmaps/` and each roadmap home directory, `0600` for `project.db`, and
    `0700` for each `graph/` store (see `ARCHITECTURE.md § Directory Structure`).
-   The web interface creates no new on-disk artefact for a read; it does not relax
-   any permission.
+   The web interface relaxes no permission, and it creates no roadmap database, no
+   roadmap home directory, and no graph store directory: a roadmap that has no
+   `graph/` directory is served as an empty graph rather than having one created
+   for it. The one artefact a graph read may create is the graph store's lock file
+   `write.lock`, inside a `graph/` directory that already exists, when no previous
+   invocation has created it (see `GRAPH.md § What a Read Changes on Disk`).
 5. **No arbitrary filesystem serving; path-traversal guard.** The static handler
    serves only assets from the embedded asset set, never an arbitrary host
    filesystem path. Roadmap names taken from the URL path are validated against
@@ -4863,9 +5142,13 @@ Rules:
     defined in `DATA_FORMATS.md § Graph View Data`, populated from a read-only
     query against the roadmap's GoGraph store.
 19. After serving any number of graph page and graph data requests for a roadmap
-    that has never been written, the graph store directory contains no `snapshot/`
-    subdirectory and no checkpoint has run, proving the web read path is read-only
-    (see `GRAPH.md § Synchronous Checkpoint on Write`).
+    that has never been written, no `snapshot/` subdirectory exists and no
+    checkpoint has run, proving the web read path never checkpoints (see
+    `GRAPH.md § Synchronous Checkpoint on Write`). For a roadmap that **has** been
+    written, serving any number of those requests leaves the `wal` file byte for
+    byte unchanged and every file under `snapshot/` unchanged, proving the read
+    path writes no graph data and truncates no log (see
+    `GRAPH.md § What a Read Changes on Disk`).
 20. Serving roadmap sprints pages, roadmap tasks pages, roadmap sprint pages, and
     roadmap audit log pages
     produces **no** new audit-log entry in the roadmap's `project.db` (a read is
@@ -5110,7 +5393,8 @@ Rules:
     rejection, invalid limit, or execution failure — the message is shown in place,
     the page does not crash, and the failure triggers no write and no navigation,
     consistent with the graceful layout degradation; the user can edit the query or
-    change the limit and search again. All three failures are answered HTTP
+    change the limit and search again. The same holds for the keyword-spacing
+    rejection of Acceptance Criterion 151. All four failures are answered HTTP
     `400 Bad Request`, and the body's `kind` is what tells them apart
     (Acceptance Criterion 123; see
     [Query-Bar Error Handling](#query-bar-error-handling)).
@@ -5584,9 +5868,10 @@ Rules:
     the term by the rule Acceptance Criterion 121 fixes, and a term that is empty or entirely
     whitespace under that rule shows every task. The case-insensitive comparison
     folds the term and the task's searchable text by the rule Acceptance
-    Criterion 118 fixes, so the same term and task yield the same verdict regardless
+    Criterion 118 fixes, over text each of them normalised by the rule Acceptance
+    Criterion 152 fixes, so the same term and task yield the same verdict regardless
     of the browser's reported locale, of the browser, and of the Unicode version
-    that browser's case and whitespace tables implement.
+    that browser's case, whitespace, and normalisation tables implement.
 102. A column left with no matching card renders its ordinary in-column empty state,
     and the five columns stay present and in order — narrowing the board drops,
     hides, and reorders no column (Acceptance Criterion 81 continues to hold). When
@@ -5622,17 +5907,22 @@ Rules:
     point is `U+0085` loses it on both paths and finds what the rest of the term
     matches, and a term whose first code point is `U+FEFF` keeps it on both paths
     and finds nothing on an ordinary roadmap. None of the four is a term one path
-    narrows by while the other ignores it (Acceptance Criteria 121 and 122).
+    narrows by while the other ignores it (Acceptance Criteria 121 and 122). The
+    identity extends to canonical spelling: a title written with `U+0130` and a title
+    written as `U+0049` followed by `U+0307` carry **one** searchable text under
+    Acceptance Criterion 152, so the board a term produces is the same whichever of
+    the two spellings the roadmap happens to store, on both paths (Acceptance
+    Criterion 153).
 105. No `q` value produces an error page: a term matching nothing, a term longer than
     any searchable text, and a `q` the server cannot decode each return HTTP 200,
     the last treated as though `q` were absent. Applying a term adds no database
     query: the page's read remains the full task list specified in Acceptance
     Criterion 89, and narrowing in the browser issues no request at all. A task's
-    searchable text is folded once by the server, never by the client, and never
-    trimmed at all, so the two paths cannot disagree about a task's text; the term
-    is the only value both of them transform, and both trim it with the server's own
-    whitespace set and fold it with the server's own mapping (Acceptance Criteria
-    119 and 122).
+    searchable text is normalised and folded once by the server, never by the client,
+    and never trimmed at all, so the two paths cannot disagree about a task's text;
+    the term is the only value both of them transform, and both trim it with the
+    server's own whitespace set, normalise it from the server's own tables, and fold
+    it with the server's own mapping (Acceptance Criteria 119, 122, and 155).
 106. A term containing HTML markup renders as visible characters and introduces no
     element, attribute, or script into the page: the server escapes it through
     `html/template` where it echoes it into the search input and into the no-match
@@ -5816,7 +6106,8 @@ Rules:
     task's searchable text and folds a term through that one function, not through
     two implementations of one description. The check is an ordinary Go test: it
     runs no JavaScript and requires no JavaScript engine, no Node.js, no network
-    access, and no module dependency, so `BUILD.md § External Dependencies` and
+    access, and no module beyond the direct dependencies
+    `BUILD.md § External Dependencies` names, so that section and
     `BUILD.md § Vendored Web Assets`, rule 2, continue to hold. Because the client
     consults no case table of the browser's, the board a term produces does not
     depend on which Unicode version the browser implements, and two browsers of
@@ -5855,11 +6146,11 @@ Rules:
     and does so on **both** paths, which is the property this criterion protects
     rather than a defect in it. Swept over every code point of Unicode, those two are the
     whole of the difference: no third code point is removed by one trimming and kept
-    by the other. The term is trimmed **and then** folded, in that order, on both
-    paths. The task's searchable text is folded but never trimmed, so a task's own
-    leading or trailing whitespace is part of its text (Acceptance Criteria 101 and
-    104 continue to hold; see [Roadmap Tasks Page](#roadmap-tasks-page), **The trim
-    rule**).
+    by the other. The term is trimmed, **then** normalised, **then** folded, in that
+    order, on both paths. The task's searchable text is normalised and folded but
+    never trimmed, so a task's own leading or trailing whitespace is part of its text
+    (Acceptance Criteria 101, 104, and 152 continue to hold; see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **The trim rule**).
 122. The client removes the term's leading and trailing whitespace by the whitespace
     set the server ships to it and calls no trimming function of the JavaScript
     platform: no call to `trim`, `trimStart`, `trimEnd`, or the legacy aliases
@@ -5874,7 +6165,8 @@ Rules:
     side and not to the other, including when a toolchain upgrade changes which code
     points carry the property. The check remains an ordinary Go test: it runs no
     JavaScript and requires no JavaScript engine, no Node.js, no network access, and
-    no module dependency, so `BUILD.md § External Dependencies` and
+    no module beyond the direct dependencies
+    `BUILD.md § External Dependencies` names, so that section and
     `BUILD.md § Vendored Web Assets`, rule 2, continue to hold. Because the client
     consults no whitespace table of the browser's, the board a term produces does
     not depend on which Unicode version the browser implements, exactly as
@@ -5885,16 +6177,19 @@ Rules:
 123. Every query-bar failure of `GET /roadmaps/{name}/graph/data` is answered with
     HTTP `400 Bad Request` and a JSON body of exactly two string fields, `error`
     and `kind`, and never with HTTP 200 and never with the
-    `{"nodes": ..., "edges": ...}` shape. `kind` takes exactly three values:
+    `{"nodes": ..., "edges": ...}` shape. `kind` takes exactly four values:
     `not_read_only` for a query the read-only guard-rail rejected (Acceptance
     Criterion 47), `invalid_limit` for a `limit` outside the six allowed values
-    (Acceptance Criterion 48), and `execution` for a query that failed once running,
-    which includes a query cancelled for exhausting the 5-second time budget
-    (Acceptance Criterion 110). One status serves all three and the `kind` is what
-    distinguishes them. The precedence is fixed and testable: a request carrying
-    both an invalid `limit` and a query that is not read-only is answered
-    `invalid_limit`, because the endpoint resolves the limit before it runs the
-    guard rail. The boundary against the internal read error is drawn at the moment
+    (Acceptance Criterion 48), `invalid_keyword_spacing` for a schema-introspection
+    command whose keyword spacing the engine does not accept (Acceptance Criterion
+    151), and `execution` for a query that failed once running, which includes a
+    query cancelled for exhausting the 5-second time budget (Acceptance Criterion
+    110). One status serves all four and the `kind` is what distinguishes them. The
+    precedence is fixed and testable: a request carrying both an invalid `limit` and
+    a query that is not read-only is answered `invalid_limit`, because the endpoint
+    resolves the limit before it runs the guard rail, and a query that is not
+    read-only is answered `not_read_only` even when it also carries a badly spaced
+    `SHOW`. The boundary against the internal read error is drawn at the moment
     the failure surfaces: a graph store that fails to open is answered HTTP 500,
     while a failure surfacing once the query is running is answered HTTP 400 with
     `kind` `execution`, a store corruption a scan discovers mid-query included. The
@@ -6192,7 +6487,28 @@ Rules:
     `bg-secondary-lt`, which is also the neutral colour a badge carries when nothing
     colours it, so that column alone renders identically whether the mapping was
     applied or not, and the check fails on a rendering that gives every column of
-    either board `bg-secondary-lt`. The check also asserts the two count badges that
+    either board `bg-secondary-lt`. Asserting the columns of a board together is
+    necessary but not sufficient, and this criterion puts two further requirements on
+    the check. The first is that each badge's class is produced by the single
+    implementation of this mapping that every status badge already takes its colour
+    from, rather than written into the template as a literal or resolved through a
+    second mapping standing beside the first: a literal reads exactly as the
+    mapping's answer on the day it is written and is then free to drift from it,
+    while the mapping stated in rule 2 is the only authoritative one. The check
+    establishes that by rendering both boards a second time with that one
+    implementation replaced by a substitute whose answer names the status it was
+    called with. Under the substitution a class written into the template survives
+    unchanged and fails — on the `BACKLOG` column as well, the one column whose
+    colour a literal would not change — while a template that calls the
+    implementation renders the substitute's answer on every column, and no column
+    header of either board still carries a real `bg-*-lt` variant. The second
+    requirement is that the check pins each column to the status that column groups,
+    which no assertion about the colours alone can make: a check establishing only
+    that the columns' colours differ from one another passes unchanged on a board
+    whose columns carry each other's statuses, where the colours stay as many and as
+    distinct as they were while each sits on the wrong column. The same substitution
+    settles that, because a column headed by one status whose badge names another is
+    visible in the rendering. The check also asserts the two count badges that
     stay neutral, because the boundary is what keeps this rule a rule rather than a
     licence to colour any count: the Comments card header count on the Roadmap Sprint
     Page carries `bg-secondary-lt`, because it counts comments and a comment has no
@@ -6236,6 +6552,110 @@ Rules:
     still exits 0 on a graceful shutdown. The non-loopback record still states
     that the interface is reachable from the network and still names the bound
     host.
+147. A graph data request takes the graph store's shared lock while it opens the
+    store. While an `rmp graph` write against the same roadmap holds the store's
+    exclusive lock, a `GET /roadmaps/{name}/graph/data` for that roadmap does
+    **not** fail on the first collision: it waits and is served once the writer
+    releases the lock (see `GRAPH.md § Lock Contention`).
+148. The server releases the shared lock when the open returns, and this is
+    observable: an `rmp graph create` against the same roadmap, issued while a
+    slow graph data request is still executing its query, succeeds and exits 0.
+    Serving a graph read never fails a CLI write for the duration of the request.
+149. A graph data request never blocks indefinitely on the lock. When the shared
+    lock cannot be taken within the bounded wait, the request is answered HTTP 500
+    with the opaque error body every other 500 carries, accompanied by exactly one
+    `ERROR` log record, and the server keeps serving other requests throughout.
+150. A graph data request against a store left with a stale `snapshot.tmp` staging
+    directory, or with `snapshot/` absent and `snapshot.bak/` carrying a manifest,
+    is served correctly: the response carries the committed graph, and the
+    recovery repair those two states require is expected behaviour, not a defect
+    (see `GRAPH.md § What a Read Changes on Disk`).
+151. A graph data request whose `q` is a schema-introspection command written with
+    two spaces, with a tab, or with a line break between `SHOW` and its target
+    keyword is answered HTTP `400 Bad Request` with a JSON body whose `kind` is
+    `invalid_keyword_spacing`, and the query is never executed: the body carries no
+    `nodes` and no `edges`, and the `error` names the spacing and the accepted
+    spelling rather than describing the query as not read-only. The same request
+    with exactly one space returns the normal `{"nodes": ..., "edges": ...}` shape
+    with HTTP 200, so the two differ only in the separator. The rejection is the
+    guard rail's, not the engine's: the response is not `kind` `execution` and
+    carries no engine parse diagnostic. This is the web surface of
+    `GRAPH.md § Keyword Spacing in a Schema-Introspection Command` and of that
+    file's Acceptance Criterion 39, which the CLI subcommands satisfy on the same
+    input (see [Query-Bar Error Handling](#query-bar-error-handling), case 10).
+152. A term and a task's searchable text are normalised to Unicode's **Normalization
+    Form C** before they are folded, and the pipeline for a term is trim, then NFC,
+    then fold, then NFC, in that order, on both paths. The normalisation is for
+    comparison only: the `title` bytes the roadmap stores are unchanged, `rmp task
+    get` returns the same bytes it returned before this rule existed, and the card
+    renders the stored title, so no stored value and no rendered value is normalised
+    (Acceptance Criterion 121 fixes the trim, 118 the fold). The second NFC pass is
+    required and is proven so: over the 1,321,226 sequences of a folding code point
+    followed by a non-starter, one pass leaves the result outside NFC on **70** of
+    them — `H` followed by `U+0331` folds to `h` followed by `U+0331`, which
+    composes to `U+1E96`, and `U+1E97`, `U+1E98`, `U+1E99` and `U+01F0` behave the
+    same way — while two passes leave it in NFC on **all 1,321,226**, so a third
+    pass changes nothing and is not performed. Normalising **before** folding is
+    likewise required rather than incidental: the two orders differ on 0 single code
+    points but on **74** of those sequences, over **32** distinct leading code
+    points, and folding first would give a title spelled `U+0130` and a title
+    spelled `U+0049 U+0307` two different searchable texts (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **The normalisation rule**).
+153. A task whose `title` is stored decomposed and a task whose `title` is stored
+    precomposed are **both** found by a term typed in **either** spelling. All four
+    combinations are asserted, not a sample: decomposed title with decomposed term,
+    decomposed title with precomposed term, precomposed title with decomposed term,
+    and precomposed title with precomposed term each return the task. The property
+    holds on the server path and on the client path alike, and the board reached by
+    typing the term equals the board reached by requesting the URL carrying it in
+    `q` for every one of the four, so Acceptance Criterion 104's identity survives
+    normalisation rather than being weakened by it. `U+0130` resolves as Acceptance
+    Criteria 104 and 118 already state — a term carrying it selects the same cards
+    on both paths and in every browser, and it folds to `U+0069` and never to
+    `U+0069 U+0307` — and a title spelled `U+0049 U+0307` now carries the same
+    searchable text as one spelled `U+0130`.
+154. Normalisation changes nothing else. It does not make one word a substring of
+    another: a task titled `Café Lisboa onboarding` is **not** returned by the term
+    `cafe`, and one titled `Aérea cargo terminal` is **not** returned by the term
+    `ae`, because the form is NFC and an accented letter stays one code point rather
+    than a base followed by a mark. Measured over the whole of Unicode, exactly
+    **1,117** of the 1,112,064 code points produce a different searchable text under
+    this rule than without it, and **none of them is ASCII**, so every ASCII term and
+    every ASCII title selects exactly the tasks it selected before. The 1,117 are the
+    canonical singletons and the composition exclusions.
+155. The client normalises the term from the tables the server ships to it and calls
+    the JavaScript platform's own normalisation nowhere: no call to `normalize`
+    appears in the narrowing script, asserted as an absence in the script the binary
+    serves, the way Acceptance Criterion 119 asserts the platform's case conversions
+    and 122 its trimming functions. The shipped data is three generated tables —
+    `DECOMP_TABLE` with 2,061 entries, `CCC_TABLE` with 388 spans, and
+    `COMPOSE_TABLE` with 941 entries — and the 11,172 Hangul
+    syllables appear in none of them, being decomposed and composed arithmetically
+    per UAX #15 on both sides. All three are covered by the **same** check that
+    Acceptance Criteria 119 and 122 fix and not by a further check beside it, with
+    the same three properties: each is compared against the server's own function
+    over the whole of Unicode — every code point, not a sample — and against that
+    function itself, never against a stored copy of its expected results; and the
+    comparison fails when a shipped table holds a different number of entries than
+    the server's data, and when a single code point decomposes, orders, or composes
+    differently on the two sides, including when a toolchain or dependency upgrade
+    changes the Unicode version, so a server whose rule moved is caught rather than
+    followed. The three counts above are the counts that comparison enforces. This
+    criterion fixes no byte size for the tables, because no gate checks one and the
+    sizes move with the generator's layout alone. The server performs the composition step itself, from that same
+    `COMPOSE_TABLE`, and does **not** use the composition of
+    `golang.org/x/text/unicode/norm`: at the pinned version that module composes a
+    supplementary starter as though it were its low 16 bits, turning `U+1003C`
+    followed by `U+0338` into `U+226E`, `U+10041` followed by `U+0301` into `U+00C1`,
+    and `U+1042B` followed by `U+0308` into `U+04F8`, across 15,041 pairs over 6,021
+    leading code points, while the platform's normalisation and Groadmap's leave all
+    three unchanged. The table's composition agrees with that module on all 1,112,064
+    single code points and still composes the 13 supplementary composites, `U+11935`
+    followed by `U+11930` giving `U+11938` among them. The check remains an ordinary
+    Go test, on the terms Acceptance Criteria 119 and 122 already state (see
+    [Roadmap Tasks Page](#roadmap-tasks-page), **One rule, and only one
+    implementation of it**, and **What keeps the shipped rule equal to the
+    server's**).
 
 ## See Also
 
@@ -6253,6 +6673,10 @@ Rules:
 - Read-only graph access, recovery, and the checkpoint that web reads must avoid
   → `GRAPH.md § Engine Construction and Lifecycle` and
   `GRAPH.md § Synchronous Checkpoint on Write`
+- The store access lock a web graph read takes, its contention rules, and the
+  exhaustive list of what a read changes on disk →
+  `GRAPH.md § Concurrency and Recovery`, `GRAPH.md § What a Read Changes on Disk`,
+  and `GRAPH.md § Lock Contention`
 - Read-only guard-rail and literal-aware masked normalization reused to validate
   the query bar's user-supplied Cypher →
   `GRAPH.md § Subcommands and Guard-Rail Validation` and

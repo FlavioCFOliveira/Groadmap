@@ -79,7 +79,7 @@ func seedBoardFixture(t *testing.T, name string) boardFixture {
 	newTask := func(title, created string, priority, severity int,
 		taskType models.TaskType, status models.TaskStatus, parent *int) int {
 		t.Helper()
-		id, cerr := database.CreateTask(ctx, &models.Task{
+		id, cerr := seedTask(database, &models.Task{
 			Title:                  title,
 			Type:                   taskType,
 			Status:                 status,
@@ -141,9 +141,7 @@ func seedBoardFixture(t *testing.T, name string) boardFixture {
 	if err := database.AddTasksToSprint(ctx, f.ledgerSprint, []int{f.ledger}); err != nil {
 		t.Fatalf("adding the ledger task to the ledger sprint: %v", err)
 	}
-	if err := database.UpdateTaskStatus(ctx, []int{f.ledger}, models.StatusDoing); err != nil {
-		t.Fatalf("moving the ledger task to DOING: %v", err)
-	}
+	forceTaskLifecycle(t, database, []int{f.ledger}, models.StatusDoing)
 
 	// One dependency edge: the ledger work depends on the passkey work, so one
 	// card shows a depends-on count and the other a blocks count.
@@ -199,7 +197,7 @@ var boardOrderingSeed = []struct {
 func newSprint(t *testing.T, database *db.DB, title, description string) int {
 	t.Helper()
 
-	id, err := database.CreateSprint(context.Background(), &models.Sprint{
+	id, err := seedSprint(database, &models.Sprint{
 		Status:      models.SprintPending,
 		Title:       title,
 		Description: description,
@@ -1297,7 +1295,6 @@ func seedTasksAcrossColumns(t *testing.T, name string, n int,
 	}
 	defer database.Close() //nolint:errcheck // test cleanup
 
-	ctx := context.Background()
 	counts := make(map[models.TaskStatus]int, len(statuses))
 	for i := range n {
 		// An uneven spread: the columns receive 1/2, 1/4, 1/8, ... of the tasks.
@@ -1308,7 +1305,7 @@ func seedTasksAcrossColumns(t *testing.T, name string, n int,
 				break
 			}
 		}
-		if _, cerr := database.CreateTask(ctx, &models.Task{
+		if _, cerr := seedTask(database, &models.Task{
 			Priority:               i % 10,
 			Severity:               i % 10,
 			Status:                 status,

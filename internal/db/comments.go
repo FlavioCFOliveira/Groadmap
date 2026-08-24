@@ -213,7 +213,7 @@ func groupedTaskCommentCountsQuery(placeholders string) string {
 // transaction and returns the new comment's id.
 //
 // created_at is taken from the comment (the caller stamps it, as with
-// CreateTask); updated_at starts NULL and is written only by a later edit. The
+// InsertTaskTx); updated_at starts NULL and is written only by a later edit. The
 // body is stored in its canonical form: NormalizeCommentBody trims it, which is
 // the form SPEC/COMMANDS.md validates and SPEC/DATABASE.md stores, so the value
 // measured against the 4096-character cap and the value written are the same one.

@@ -7,6 +7,7 @@
 - [Installation Methods](#installation-methods)
 - [Platform Detection](#platform-detection)
 - [Installation Script Reference](#installation-script-reference)
+- [Checksum Verification](#checksum-verification)
 - [Release Process](#release-process)
 - [Acceptance Criteria](#acceptance-criteria)
 
@@ -24,7 +25,7 @@ The `rmp` binary installs to a system location (default `/usr/local/bin`). Its r
 
 The full data directory layout and permission model are specified in `ARCHITECTURE.md § Directory Structure`.
 
-The `rmp web` command (read-only web interface, see `WEB.md`) reads this same data and creates no new on-disk artefact: its HTML templates, static assets, and vendored graph library are embedded in the binary, so the runtime data footprint under `~/.roadmaps/` is unchanged.
+The `rmp web` command (read-only web interface, see `WEB.md`) reads this same data and installs no new on-disk artefact: its HTML templates, static assets, and vendored graph library are embedded in the binary, so the runtime data footprint under `~/.roadmaps/` is unchanged. Serving a graph request may create the graph store's own lock file inside an existing `graph/` directory, which is part of the store rather than a deployment artefact (see `GRAPH.md § What a Read Changes on Disk`).
 
 ## Installation Methods
 
@@ -42,15 +43,25 @@ curl -fsSL https://raw.githubusercontent.com/FlavioCFOliveira/Groadmap/main/inst
 - Architecture detection (including ARM variants)
 - Raspberry Pi detection
 - Downloads latest release binary
+- Verifies the downloaded archive against the SHA-256 checksum published beside
+  it, before extracting anything (see Checksum Verification)
 - Installs to `/usr/local/bin` by default
 - Supports custom installation directory
 
 ### 2. Manual Installation
 
-Download binary from GitHub releases:
+Download binary from GitHub releases. The checksum step is not optional
+decoration: it is the same check the installation script performs, and it is
+what this method would otherwise lack (see Checksum Verification).
+
 ```bash
-# Download for your platform
+# Download for your platform, and the checksum published beside it
 curl -LO https://github.com/FlavioCFOliveira/Groadmap/releases/download/v1.0.0/rmp-v1.0.0-linux-amd64.tar.gz
+curl -LO https://github.com/FlavioCFOliveira/Groadmap/releases/download/v1.0.0/rmp-v1.0.0-linux-amd64.tar.gz.sha256
+
+# Verify before extracting. Stop here if this does not print OK.
+sha256sum -c rmp-v1.0.0-linux-amd64.tar.gz.sha256      # Linux
+shasum -a 256 -c rmp-v1.0.0-linux-amd64.tar.gz.sha256  # macOS
 
 # Extract
 tar -xzf rmp-v1.0.0-linux-amd64.tar.gz
@@ -243,6 +254,141 @@ https://github.com/FlavioCFOliveira/Groadmap/releases/download/{version}/rmp-{ve
 - Windows AMD64: `rmp-v1.0.0-windows-amd64.zip`
 - Raspberry Pi ARMv6: `rmp-v1.0.0-linux-armv6.tar.gz`
 
+## Checksum Verification
+
+The installation script verifies every archive it downloads against the SHA-256
+checksum the release publishes beside it, and it does so **before** the archive
+is extracted. Nothing that fails verification reaches `tar`, `unzip`, `chmod`, or
+the installation directory.
+
+### What Is Published
+
+`.github/workflows/release.yml`, step `Generate checksum`, runs
+`sha256sum <archive> > <archive>.sha256` from inside `dist/`, and the release job
+attaches every `dist/*.sha256` as a release asset of its own. The checksum for an
+archive therefore always sits at the archive's own download URL with `.sha256`
+appended:
+
+```
+https://github.com/FlavioCFOliveira/Groadmap/releases/download/{version}/rmp-{version}-{os}-{arch}.{ext}.sha256
+```
+
+The file holds GNU `sha256sum` text-mode output: 64 lowercase hexadecimal
+characters, two spaces, and the archive's base name, followed by a newline.
+Because the workflow runs `sha256sum` from inside `dist/`, the recorded name
+never carries a directory component:
+
+```
+2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae  rmp-v1.0.0-linux-amd64.tar.gz
+```
+
+### How the Script Verifies
+
+1. The archive is downloaded.
+2. `<archive>.sha256` is downloaded from the same release.
+3. The digest is read from the line of that file whose **name field matches the
+   archive being installed**. The digest is never taken from a fixed position, so
+   a checksum file describing some other archive is rejected rather than
+   compared against this one. A leading `*` on the name, which `sha256sum` writes
+   in binary mode, is accepted.
+4. The digest of the downloaded file is computed and the two are compared.
+
+Both digests must be exactly 64 hexadecimal characters. A field that is empty,
+truncated, or not hexadecimal is rejected as malformed rather than compared, so
+an error page served with a 200 status can never be read as a digest that
+happens to match.
+
+The script computes the digest with the first of these tools it finds:
+
+| Order | Tool | Where it comes from |
+|-------|------|---------------------|
+| 1 | `sha256sum` | GNU coreutils on Linux; FreeBSD ships a GNU-compatible `sha256sum(1)` in base |
+| 2 | `shasum -a 256` | The macOS base system (Perl's `Digest::SHA`) |
+| 3 | `openssl dgst -sha256 -r` | OpenSSL and LibreSSL, carried in base by FreeBSD and OpenBSD |
+
+`openssl` is invoked with `-r`, documented as printing the digest in coreutils
+format. Its default output is never parsed, because OpenSSL 3 prints
+`SHA2-256(file)= <digest>` where OpenSSL 1 printed `SHA256(file)= <digest>`.
+
+### Failure Modes
+
+Every one of the following exits 1, reports the reason through the `error`
+helper, removes the temporary directory, and installs nothing:
+
+| Condition | Behaviour |
+|-----------|-----------|
+| The digests differ | Refused, naming both digests |
+| The checksum file cannot be downloaded | Refused. A missing checksum is a failure, never a reason to proceed unverified |
+| The checksum file names no digest for this archive, or none that is well formed | Refused as malformed |
+| The host has no SHA-256 tool | Refused **before anything is downloaded**, naming the three accepted tools |
+
+There is no flag that disables verification. An installer whose documented
+invocation is `curl ... | bash` into a privileged location is exactly where a
+bypass switch does the most damage, and no legitimate installation needs one:
+the verification path is driven end to end by the test suite against real
+fixtures and real digests.
+
+The absence of a hashing tool fails closed rather than warning and continuing.
+The documented install path is non-interactive and its standard error routinely
+scrolls past unread, so a warning would leave the control in place in name only,
+and the party that benefits from a control failing open is the one who
+substituted the archive. The failure is also one command away from being fixed by
+the user, and the tool it asks for is already present wherever the script can run
+at all: on Linux `sha256sum` belongs to the same coreutils package as the `mv`,
+`chmod`, `mkdir`, and `rm` the script already invokes unconditionally, and macOS
+ships `shasum` in its base system.
+
+### What This Protects, and What It Does Not
+
+This section is normative. The guarantee is narrow, and stating it wider than it
+is would be worse than not stating it at all.
+
+**Verification detects:**
+
+- A download corrupted in transit or at rest: a truncated transfer, a connection
+  dropped mid-body, a damaged cache or mirror object, a short write. Before this
+  check, a truncated archive could still extract and be installed.
+- An archive replaced **asymmetrically**, where the attacker or the accident
+  reached one of the two objects and not the other. The release job uploads with
+  `gh release upload --clobber`, so an archive can be replaced in place while its
+  `.sha256` is not; a caching layer can hold one object and not the other; an
+  interception appliance that repackages executables can rewrite a large binary
+  body while passing a small text file through untouched.
+- Release-pipeline mistakes: an asset attached to the wrong tag, or a re-run that
+  produced an archive the published checksum was not computed from.
+
+**Verification does NOT detect:**
+
+- An attacker who controls the release. A compromised repository account, a
+  compromised Actions token, or a compromised workflow replaces the archive and
+  its `.sha256` together. The checksum is served from the same origin as the
+  archive and has no independent trust anchor.
+- An attacker who controls the transport for both objects. A TLS-terminating
+  proxy trusted by the client, or any position that can rewrite responses from
+  `github.com`, rewrites both.
+- An attacker who controls `install.sh` itself. The documented path fetches the
+  script from `raw.githubusercontent.com` and pipes it straight into `bash`, so
+  whoever can rewrite the script can delete this check. **The verification is
+  never stronger than the trust already placed in the delivery of the script that
+  performs it.**
+- A malicious release that is authentic. Checksums attest to bytes, not to
+  intent: a backdoor built and published by the pipeline verifies correctly.
+- A local attacker on the installing machine. The archive is verified and then
+  extracted at the same path, so an attacker who can write into the script's
+  temporary directory can replace the archive between the two reads. That
+  directory is `/tmp/rmp_install_$$`, whose name is predictable and which
+  `mkdir -p` accepts when it already exists, so it can be pre-created by another
+  local user. This is a time-of-check-to-time-of-use window (CWE-367) that the
+  checksum cannot close on its own; closing it needs a temporary directory that
+  is created unpredictably and privately.
+
+Closing the remaining gap needs a signature over the checksum, made with a key
+the release pipeline does not hold and distributed out of band, or an attestation
+anchored in a transparency log rather than in the same asset store. Neither is in
+place today, and no document in this repository may describe the current state as
+authenticity or provenance. It is integrity against corruption and against an
+adversary who does not control the release origin.
+
 ## Release Process
 
 ### Automated Release Creation
@@ -353,6 +499,11 @@ Each release includes:
 - [ ] The architecture guard rejects both values `detect_arch()` can return for a host the build does not serve, `unsupported` and `unknown`, with that same message and exit code
 - [ ] An unsupported operating system fails the same way: the script exits 1 and standard error carries the line `ERROR: operating system {uname} is not supported. Supported systems: linux, darwin, freebsd, openbsd, windows. See SPEC/BUILD.md for the build matrix.` with `{uname}` the raw `uname -s` output
 - [ ] Every failure the script reports goes through the `error` helper, so every error line begins with the `ERROR: ` prefix and no path prints a bare message (see Diagnostic Output)
+- [ ] The downloaded archive is verified against the published `<archive>.sha256` BEFORE it is extracted, on both the `.tar.gz` and the `.zip` branch. An archive whose digest does not match is refused: the script exits non-zero, reports the mismatch with both digests, removes its temporary directory, and no file reaches the installation directory or the staging path (see Checksum Verification)
+- [ ] A checksum file that cannot be downloaded is a failure. The script does not fall back to an unverified installation, and it offers no flag that would
+- [ ] A checksum file that carries no well-formed digest for the archive being installed is refused as malformed. The digest is matched by name, so a checksum file describing a different archive is rejected rather than accepted from a fixed position
+- [ ] A host with none of `sha256sum`, `shasum`, or `openssl` is refused with exit 1 before any release asset is requested, and the message names all three
+- [ ] `SPEC/DEPLOY.md § Checksum Verification` states both what the check detects and what it does not, and no document in the repository describes the checksum as proof of authenticity or provenance
 
 ### Raspberry Pi Support
 - [ ] Detects ARMv6 on Pi Zero/1

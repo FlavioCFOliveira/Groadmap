@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
-	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
@@ -381,24 +380,17 @@ func TestTaskGet_OverflowID(t *testing.T) {
 
 func TestTaskGet_MultipleIDs(t *testing.T) {
 	testName := "testtaskgetmulti"
-	db, cleanup := setupTestTaskRoadmap(t, testName)
+	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
 	// Create some tasks first
 	for i := 0; i < 3; i++ {
-		_, err := db.CreateTask(context.Background(), &models.Task{
-			Priority:               1,
-			Severity:               1,
-			Status:                 models.StatusBacklog,
-			Title:                  "Task " + string(rune('0'+i)),
-			FunctionalRequirements: "Action",
-			TechnicalRequirements:  "Result",
-			AcceptanceCriteria:     "Criteria",
-			CreatedAt:              utils.NowISO8601(),
-		})
-		if err != nil {
-			t.Fatalf("failed to create task: %v", err)
-		}
+		createTaskViaCommand(t, testName,
+			"Reconcile settlement window "+string(rune('1'+i)),
+			"Every settlement line in the window must match a ledger entry.",
+			"Match on the settlement reference and report the residual.",
+			"The window reconciles with a zero residual.",
+			"-p", "1", "--severity", "1")
 	}
 
 	// Get multiple tasks
@@ -415,17 +407,14 @@ func TestTaskGet_MultipleIDs(t *testing.T) {
 // (exit 4).
 func TestTaskGet_FailFastUnknownID(t *testing.T) {
 	testName := "testtaskgetfailfast"
-	database, cleanup := setupTestTaskRoadmap(t, testName)
+	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	if _, err := database.CreateTask(context.Background(), &models.Task{
-		Priority: 1, Severity: 1, Status: models.StatusBacklog,
-		Title: "Existing task", FunctionalRequirements: "f",
-		TechnicalRequirements: "t", AcceptanceCriteria: "a",
-		CreatedAt: utils.NowISO8601(),
-	}); err != nil {
-		t.Fatalf("failed to create task: %v", err)
-	}
+	createTaskViaCommand(t, testName, "Existing task",
+		"The batch read must distinguish a known id from an unknown one.",
+		"Resolve every requested id before returning any of them.",
+		"A batch naming one unknown id is refused whole.",
+		"-p", "1", "--severity", "1")
 
 	for _, tc := range []struct{ name, ids string }{
 		{"all invalid", "999"},
@@ -452,14 +441,11 @@ func TestTaskMutate_FailFastUnknownID(t *testing.T) {
 	database, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	if _, err := database.CreateTask(context.Background(), &models.Task{
-		Priority: 1, Severity: 1, Status: models.StatusBacklog,
-		Title: "Existing task", FunctionalRequirements: "f",
-		TechnicalRequirements: "t", AcceptanceCriteria: "a",
-		CreatedAt: utils.NowISO8601(),
-	}); err != nil {
-		t.Fatalf("failed to create task: %v", err)
-	}
+	createTaskViaCommand(t, testName, "Existing task",
+		"A batch mutation must refuse an unknown id before writing anything.",
+		"Resolve every requested id before the transaction opens.",
+		"No audit row exists for an id the batch could not resolve.",
+		"-p", "1", "--severity", "1")
 
 	for _, tc := range []struct {
 		name string
@@ -590,6 +576,14 @@ func TestTaskEdit_EmptyTitle(t *testing.T) {
 	}
 }
 
+// The three tests below pinned the HYPHENATED flag spelling until rmp task 297.
+// `task edit` used to build this one refusal from its own map of column name to
+// FLAG name, so it answered `-fr ""` with "functional-requirements cannot be
+// empty" while answering `-fr $'a\x1bb'` with "functional_requirements: control
+// characters are not allowed" — one command, one field, two names. The refusal
+// now names the field, because a value did reach the application and broke a
+// rule about its content (SPEC/COMMANDS.md § Published Field Names in Validation
+// Messages, acceptance criterion 4).
 func TestTaskEdit_EmptyFunctionalRequirements(t *testing.T) {
 	testName := "testtaskeditemptyaction"
 	_, cleanup := setupTestTaskRoadmap(t, testName)
@@ -599,8 +593,8 @@ func TestTaskEdit_EmptyFunctionalRequirements(t *testing.T) {
 	if err == nil {
 		t.Error("taskEdit with empty functional requirements expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "functional-requirements cannot be empty") {
-		t.Errorf("expected 'functional-requirements cannot be empty' error, got: %v", err)
+	if !strings.Contains(err.Error(), "functional_requirements cannot be empty") {
+		t.Errorf("expected 'functional_requirements cannot be empty' error, got: %v", err)
 	}
 }
 
@@ -613,8 +607,8 @@ func TestTaskEdit_EmptyTechnicalRequirements(t *testing.T) {
 	if err == nil {
 		t.Error("taskEdit with empty technical requirements expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "technical-requirements cannot be empty") {
-		t.Errorf("expected 'technical-requirements cannot be empty' error, got: %v", err)
+	if !strings.Contains(err.Error(), "technical_requirements cannot be empty") {
+		t.Errorf("expected 'technical_requirements cannot be empty' error, got: %v", err)
 	}
 }
 
@@ -627,8 +621,8 @@ func TestTaskEdit_EmptyAcceptanceCriteria(t *testing.T) {
 	if err == nil {
 		t.Error("taskEdit with empty acceptance criteria expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "acceptance-criteria cannot be empty") {
-		t.Errorf("expected 'acceptance-criteria cannot be empty' error, got: %v", err)
+	if !strings.Contains(err.Error(), "acceptance_criteria cannot be empty") {
+		t.Errorf("expected 'acceptance_criteria cannot be empty' error, got: %v", err)
 	}
 }
 

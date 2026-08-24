@@ -406,6 +406,8 @@ Adds tasks to a sprint. Tasks must be in BACKLOG status.
 |------------|------------|------|-----------|
 | `-r` | `--roadmap` | string | Roadmap name (required) |
 
+**Audit:** two mirrored entries per task. A `SPRINT_ADD_TASK` entry against the sprint names the task in its `related_entity_id` field, and a `TASK_STATUS_SPRINT` entry against the task names the sprint. The pair shares one `performed_at`, so `audit history SPRINT <id>` says which tasks joined and `audit history TASK <id>` says which sprint a task joined, without either reader consulting the other entity's history.
+
 **Examples:**
 ```bash
 rmp sprint add-tasks -r project1 1 10,11,12
@@ -430,6 +432,8 @@ Removes tasks from a sprint. Tasks return to BACKLOG status: the transition clea
 | Short Flag | Long Flag | Type | Description |
 |------------|------------|------|-----------|
 | `-r` | `--roadmap` | string | Roadmap name (required) |
+
+**Audit:** two mirrored entries per task, on the same rule as `add-tasks`. A `SPRINT_REMOVE_TASK` entry against the sprint names the task, and a `TASK_STATUS_BACKLOG` entry against the task names the sprint it left. This is the only way a `TASK_STATUS_BACKLOG` entry acquires a counterpart; the one `task stat <ids> BACKLOG` writes has none, because no sprint is party to that operation.
 
 **Examples:**
 ```bash
@@ -456,6 +460,8 @@ Moves tasks between sprints.
 | Short Flag | Long Flag | Type | Description |
 |------------|------------|------|-----------|
 | `-r` | `--roadmap` | string | Roadmap name (required) |
+
+**Audit:** two entries per task, both against sprints: `SPRINT_MOVE_TASK_OUT` against the source sprint and `SPRINT_MOVE_TASK_IN` against the destination, each naming the task moved in its `related_entity_id` field. No `TASK_STATUS_*` entry is written, because a move preserves each task's status. No `SPRINT_MOVE_TASK` entry is written either: that operation is legacy (see [DOCS/commands/audit.md](audit.md)).
 
 **Examples:**
 ```bash
@@ -494,6 +500,8 @@ record. (Reopening a sprint returns it to `OPEN`, making its order editable
 again.) A non-positive value exits with code 6; an order already used by another
 sprint exits with code 5.
 
+**Audit:** one entry per column the invocation supplies, drawn from `SPRINT_TITLE_CHANGE`, `SPRINT_DESCRIPTION_CHANGE`, `SPRINT_MAX_TASKS_CHANGE`, and `SPRINT_ORDER_CHANGE`. An update supplying two columns writes two entries. The entry records that the column was written, not its old or new value. No `SPRINT_UPDATE` entry is written: that operation is legacy (see [DOCS/commands/audit.md](audit.md)).
+
 **Examples:**
 ```bash
 rmp sprint update -r project1 1 -t "Auth and tracing"
@@ -519,6 +527,8 @@ Removes a sprint permanently. Member tasks are not deleted; their status reverts
 | Short Flag | Long Flag | Type | Description |
 |------------|------------|------|-----------|
 | `-r` | `--roadmap` | string | Roadmap name (required) |
+
+**Audit:** one `SPRINT_DELETE` entry, and nothing else. No per-task entry is written even though every member task reverts to `BACKLOG`: the membership rows go away with the sprint, and the sprint such an entry would have named no longer exists once the deletion commits. The sprint's earlier entries survive the deletion.
 
 **Examples:**
 ```bash
@@ -909,6 +919,7 @@ PENDING → OPEN → CLOSED
 - `comment-add` and `comment-list` take the SPRINT's id; `comment-edit` and `comment-remove` take the COMMENT's own id
 - Sprint and task comment ids are separate sequences, so `rmp sprint comment-edit 7` and `rmp task comment-edit 7` address two unrelated comments
 - Comment operations are audited against the parent sprint, as `SPRINT_COMMENT_CREATE`, `SPRINT_COMMENT_UPDATE`, and `SPRINT_COMMENT_DELETE`; `comment-list` is a read and writes no audit entry
+- Every command above that changes a sprint writes at least one audit entry; those whose entries name a counterpart task list them under **Audit** in the command's own section. Listing commands are reads and write none, and a rejected command writes none, because the entry is written in the same transaction as the change it records. The full operation catalogue, and the meaning of the `commit_hash` and `related_entity_id` fields an entry can carry, are in [DOCS/commands/audit.md](audit.md)
 
 ## Field Limits and Constraints
 

@@ -95,7 +95,7 @@ func aiHelpHandlerUnreachable(_ []string) error {
 // surface for AI consumers; the human-help text only needs to tell a
 // person how to invoke it and where the JSON shape is defined.
 func printAIHelpHelp() {
-	fmt.Println(`rmp ai-help - Emit the AI Agent Contract (JSON)
+	fmt.Fprintln(helpDst(), `rmp ai-help - Emit the AI Agent Contract (JSON)
 
 Usage:
   rmp ai-help

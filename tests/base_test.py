@@ -4,14 +4,259 @@ Base test class for Groadmap CLI tests.
 Provides common utilities and setup/teardown functionality.
 """
 
+import re
 import subprocess
 import json
 import os
 import tempfile
 import shutil
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Tuple, Union
+
+
+# --------------------------------------------------------------------------
+# CLI binary resolution (module scope)
+#
+# The suite must drive the binary that matches the source tree it exercises,
+# never a stale or foreign one. Resolution therefore happens ONCE per
+# interpreter process, at module scope rather than per GroadmapTestBase
+# instance: GroadmapTestBase.__init__ runs once per test CLASS (a module
+# typically defines several), so instance-scoped resolution would silently
+# repeat the staleness check -- and the startup banner -- many times per
+# module run. resolve_cli() memoizes into _RESOLVED_CLI and every
+# GroadmapTestBase instance in the process reuses that one result.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Directories that never hold anything compiled into the binary, so a file
+# changed under them must not be mistaken for a reason to rebuild: .git and
+# .claude are tooling (the latter includes agent scratch worktrees), bin/ is
+# build OUTPUT, and tests/ is this Python suite, not Go source or an embedded
+# asset.
+_EXCLUDED_SOURCE_DIR_NAMES = frozenset({".git", ".claude", "bin", "tests", "vendor", "node_modules"})
+
+# A //go:embed directive comment, anchored to the start of its line (the
+# grammar gofmt always produces for a directive immediately above a
+# declaration) so a line that merely MENTIONS "//go:embed" inside prose --
+# such as the docstrings in this very file -- is never mistaken for one.
+_GO_EMBED_DIRECTIVE = re.compile(r"^//go:embed[ \t]+(.+?)\s*$", re.MULTILINE)
+
+_RESOLVED_CLI: Optional[str] = None
+
+
+def _embedded_roots(repo_root: Path) -> List[Path]:
+    """Discover the directories //go:embed compiles into the binary.
+
+    internal/web/embed.go embeds `templates/*.html` and `static` (its whole
+    tree, vendored JS/CSS included) into the rmp binary via html/template and
+    http.FileServer; editing one of those files changes the binary's runtime
+    behaviour while leaving every .go file's mtime untouched, so a .go-only
+    staleness check would certify a binary that no longer matches the page
+    it renders.
+
+    This derives the embedded roots instead of hardcoding them, because
+    Go's own //go:embed grammar is simple enough that a general parser is
+    not needed to read it correctly: a directive is one or more
+    whitespace-separated patterns with no quoting mechanism at all (see the
+    `embed` package docs), so splitting on whitespace is not a heuristic,
+    it is the grammar. For each pattern, the root handed back is everything
+    before the first glob metacharacter (*, ?, [), resolved against the
+    directory the directive lives in. Walking that whole root -- rather than
+    replicating the glob -- is a deliberately conservative approximation: it
+    can make an unrelated sibling file trigger a rebuild, but it can never
+    miss a real one, and an extra rebuild is a cost this test harness can
+    always afford. Should a future directive turn out not to reduce this
+    cleanly (a glob spanning a "/", an exotic quoting need CPython's
+    tokenizer can't approximate), the fix is to special-case that one
+    pattern here, not to grow this into a general go:embed parser.
+
+    Best-effort throughout: a pattern that cannot be read, or whose target
+    no longer exists, is skipped rather than raising. A diagnostic mtime
+    scan must never be the reason the suite cannot run; the worst case is
+    silently falling back to the .go-only comparison for that one root,
+    exactly the coverage this suite had before this function existed.
+    """
+    roots: List[Path] = []
+    for go_file in repo_root.rglob("*.go"):
+        if any(
+            part in _EXCLUDED_SOURCE_DIR_NAMES
+            for part in go_file.relative_to(repo_root).parts[:-1]
+        ):
+            continue
+        try:
+            text = go_file.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+
+        for match in _GO_EMBED_DIRECTIVE.finditer(text):
+            for pattern in match.group(1).split():
+                if pattern.startswith("all:"):
+                    pattern = pattern[len("all:"):]
+                glob_pos = next((i for i, c in enumerate(pattern) if c in "*?["), None)
+                prefix = pattern if glob_pos is None else pattern[:glob_pos]
+                if glob_pos is not None and "/" not in prefix:
+                    # The wildcard sits in the pattern's first path segment
+                    # with no directory prefix (e.g. a bare "*.html"): there
+                    # is no distinct subdirectory to derive from it, so this
+                    # pattern is skipped rather than mis-deriving a fake one.
+                    continue
+                literal = prefix if glob_pos is None else prefix.rsplit("/", 1)[0]
+                if not literal:
+                    continue
+                root = (go_file.parent / literal).resolve()
+                if root.exists():
+                    roots.append(root)
+    return roots
+
+
+def _newest_source_mtime(repo_root: Path) -> float:
+    """Return the mtime of the most recently modified file compiled into the
+    binary: every .go file in the module, plus every file under a directory
+    a //go:embed directive pulls in (see _embedded_roots()).
+
+    Walks the whole repository (skipping _EXCLUDED_SOURCE_DIR_NAMES) rather
+    than hardcoding cmd/ and internal/, so a future Go source directory is
+    covered automatically without another change here. Returns 0.0 when
+    nothing is found, which can never make a binary look stale by itself.
+    """
+    newest = 0.0
+
+    for path in repo_root.rglob("*.go"):
+        if any(part in _EXCLUDED_SOURCE_DIR_NAMES for part in path.relative_to(repo_root).parts[:-1]):
+            continue
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        if mtime > newest:
+            newest = mtime
+
+    for root in _embedded_roots(repo_root):
+        candidates = [root] if root.is_file() else list(root.rglob("*"))
+        for path in candidates:
+            if not path.is_file():
+                continue
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            if mtime > newest:
+                newest = mtime
+
+    return newest
+
+
+def _build_cli(repo_root: Path) -> str:
+    """Build bin/rmp from the module root and return its absolute path.
+
+    This is the single build mechanism resolve_cli() uses, whether no
+    candidate binary exists at all or an existing one is stale -- one
+    mechanism, reused, rather than a second one added for the stale case.
+    Raises RuntimeError, naming `go build`'s own stderr, on failure: the
+    caller must let that propagate and fail the run rather than falling back
+    to a stale or absent binary.
+    """
+    result = subprocess.run(
+        ["go", "build", "-o", "./bin/rmp", "./cmd/rmp"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Could not build the CLI binary under test "
+            f"(go build -o ./bin/rmp ./cmd/rmp, cwd={repo_root}):\n{result.stderr}"
+        )
+    return str((repo_root / "bin" / "rmp").resolve())
+
+
+def _binary_identity(resolved_path: str) -> str:
+    """Describe the build the suite is about to certify: `--version` output
+    plus the binary's own mtime. Never raises: a binary that cannot even
+    report --version still gets a startup line, so the failure is visible
+    instead of aborting resolution over a diagnostic nicety.
+    """
+    try:
+        proc = subprocess.run(
+            [resolved_path, "--version"], capture_output=True, text=True, timeout=10
+        )
+        version = (proc.stdout.strip() or proc.stderr.strip()) or "<no --version output>"
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        version = f"<--version failed: {exc}>"
+
+    try:
+        mtime = datetime.fromtimestamp(
+            Path(resolved_path).stat().st_mtime, tz=timezone.utc
+        ).isoformat()
+    except OSError:
+        mtime = "<unknown mtime>"
+
+    return f"{version} (built {mtime})"
+
+
+def resolve_cli(repo_root: Optional[Path] = None, memoize: bool = True) -> str:
+    """Resolve the CLI binary this suite is about to drive.
+
+    Candidates are restricted to the repository root -- bin/rmp, then rmp --
+    never the current working directory. A binary that happens to sit in
+    whatever directory the suite is launched from must never be mistaken for
+    the artefact under test.
+
+    When a candidate exists but its mtime predates the newest source file
+    compiled into it -- a .go file OR a //go:embed'd template/static asset,
+    see _newest_source_mtime() -- it is treated exactly like a missing
+    binary: rebuilt via _build_cli() before use. This is the staleness check
+    task #271 exists to add; the acceptance regression
+    (tests/test_53_e2e_harness_binary_staleness.py) proves each branch fires
+    by neutralising it and observing the corresponding test fail.
+
+    Resolution is memoized into the module-level _RESOLVED_CLI by default, so
+    it runs (and prints its result) once per interpreter process no matter how
+    many callers ask. Pass memoize=False to force a fresh resolution, which
+    the regression test uses to probe each scenario without process restarts.
+    """
+    global _RESOLVED_CLI
+    if memoize and _RESOLVED_CLI is not None:
+        return _RESOLVED_CLI
+
+    root = (repo_root or REPO_ROOT).resolve()
+    newest_source = _newest_source_mtime(root)
+
+    chosen: Optional[Path] = None
+    for candidate in (root / "bin" / "rmp", root / "rmp"):
+        if candidate.exists():
+            chosen = candidate
+            break
+
+    if chosen is None:
+        resolved = _build_cli(root)
+        reason = f"no candidate binary at {root / 'bin' / 'rmp'} or {root / 'rmp'}; built from source"
+    else:
+        binary_mtime = chosen.stat().st_mtime
+        if binary_mtime < newest_source:
+            resolved = _build_cli(root)
+            reason = (
+                f"{chosen} was STALE (binary mtime {binary_mtime:.3f} < "
+                f"newest source mtime {newest_source:.3f}); rebuilt"
+            )
+        else:
+            resolved = str(chosen.resolve())
+            reason = (
+                f"{chosen} is current (binary mtime {binary_mtime:.3f} >= "
+                f"newest source mtime {newest_source:.3f})"
+            )
+
+    if memoize:
+        _RESOLVED_CLI = resolved
+
+    print(
+        "[groadmap-tests] resolved CLI binary: "
+        f"{resolved}\n[groadmap-tests] resolution: {reason}\n"
+        f"[groadmap-tests] identity: {_binary_identity(resolved)}"
+    )
+
+    return resolved
 
 
 # Commit hashes for the two mandatory commit-tracking flags of `task stat`.
@@ -48,28 +293,15 @@ class GroadmapTestBase:
         self.roadmaps_dir = None
 
     def _find_cli(self) -> str:
-        """Find the CLI binary path."""
-        # Try common locations
-        possible_paths = [
-            Path(__file__).parent.parent / "bin" / "rmp",
-            Path(__file__).parent.parent / "rmp",
-            Path.cwd() / "bin" / "rmp",
-            Path.cwd() / "rmp",
-        ]
-        for path in possible_paths:
-            if path.exists():
-                return str(path.absolute())
-        # Try to build it
-        project_root = Path(__file__).parent.parent
-        result = subprocess.run(
-            ["go", "build", "-o", "./bin/rmp", "./cmd/rmp"],
-            cwd=project_root,
-            capture_output=True,
-            text=True
-        )
-        if result.returncode == 0:
-            return str(project_root / "bin" / "rmp")
-        raise RuntimeError(f"Could not find or build CLI binary: {result.stderr}")
+        """Return the path to the CLI binary under test.
+
+        Delegates to the module-level resolve_cli(), which restricts
+        candidates to the repository root, rebuilds a stale binary against
+        the newest source compiled into it (.go files and //go:embed'd
+        assets alike), and memoizes the result for the process (see the
+        module-level docstring above the resolve_cli() definition).
+        """
+        return resolve_cli()
 
     def setup(self):
         """Set up test environment."""

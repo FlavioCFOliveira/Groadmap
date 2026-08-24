@@ -20,8 +20,13 @@ is modified.
   - [Task family help specifics](#task-family-help-specifics)
   - [Sprint family help specifics](#sprint-family-help-specifics)
   - [Audit family help specifics](#audit-family-help-specifics)
+  - [Audit operation entity-type classification](#audit-operation-entity-type-classification)
   - [Comment subcommand help specifics](#comment-subcommand-help-specifics)
 - [Error message format](#error-message-format)
+  - [Stderr part order](#stderr-part-order)
+  - [Recovery help after a dispatch failure](#recovery-help-after-a-dispatch-failure)
+  - [Exit code of a dispatch failure](#exit-code-of-a-dispatch-failure)
+  - [Stdout silence on failure](#stdout-silence-on-failure)
 - [AI_AGENT environment variable](#ai_agent-environment-variable)
 - [Exit codes](#exit-codes)
 
@@ -356,13 +361,17 @@ explicit. Both the plain-text help and the machine-readable AI Agent Contract
    the catalogue.** The block is rendered from the valid set itself rather than
    maintained by hand, so an operation the command accepts can never be missing from
    the help. `DATABASE.md § audit Table` is canonical for the catalogue; the help
-   publishes it, and MUST NOT publish a subset of it.
+   publishes it, and MUST NOT publish a subset of it. Rendering the block from the
+   valid set is also the reason a coverage gate over the block cannot fail when the
+   catalogue grows, which is what
+   `§ Audit operation entity-type classification` rule 5 addresses.
 2. **A LEGACY operation is labelled LEGACY where it is listed.** The four LEGACY
    values — `TASK_STATUS_CHANGE`, `TASK_UPDATE`, `SPRINT_UPDATE`, and
    `SPRINT_MOVE_TASK` — are accepted filter values that no command writes, so a
    reader who picks one for current activity gets an empty result. The help MUST
-   render them in a separate labelled group, or with an inline `LEGACY` marker on
-   each, and MUST state in one sentence that no command writes them and that they
+   render them in their own labelled group, whose form
+   `§ Audit operation entity-type classification` rule 6 fixes, and MUST state in
+   one sentence that no command writes them and that they
    exist so the older entries carrying them stay filterable. Listing them
    indistinguishably from the operations in use is the defect this rule prevents.
 3. **The status operations name their destination.** The help MUST make it visible
@@ -393,9 +402,143 @@ explicit. Both the plain-text help and the machine-readable AI Agent Contract
 
 In the AI Agent Contract, the `AuditOperation` enum carries every value with a
 non-empty `description`, and each LEGACY value's description states that no command
-writes it and names the operations that replaced it (see
+writes it and names the operations that replaced it. Every value of that enum also
+carries a boolean `legacy` member, `true` on exactly the four LEGACY values named
+above and `false` on every other value, so a consumer of the contract tests a field
+instead of matching the word `LEGACY` inside a description (see
 `DATA_FORMATS.md § enums map entry`). `COMMANDS.md § Audit Log Management` remains
 canonical for the flags, the validation order, and the exact error text.
+
+### Audit operation entity-type classification
+
+Every operation in the catalogue is recorded against exactly one entity. A row
+carrying the operation writes that entity's type — `TASK` or `SPRINT` — in the
+audit entry's `entity_type` column, and the entry belongs to that entity's
+history. Both published surfaces, the `audit` family help and the AI Agent
+Contract (`rmp --ai-help`), MUST publish every operation together with the entity
+type it is recorded against, so that a reader choosing an `--operation` filter
+knows whose history the filter returns before running it.
+
+Six rules govern how that classification is produced, published, and guarded.
+
+1. **The classification is declared, never inferred from the operation's name.**
+   `MODELS.md § Audit Operation` names an operation `<ENTITY>_<SUBJECT>_<OUTCOME>`,
+   and for every operation a command writes today the entity in the name is also
+   the entity the operation is recorded against. That agreement is a property the
+   catalogue happens to have, not a rule the catalogue is held to, and an
+   implementation MUST NOT turn it into one by reading the classification off the
+   name.
+
+   What separates the two is the difference between arranging a list and
+   asserting a fact. Printing an operation under a heading that names `TASK`
+   states that the rows carrying that operation hold `entity_type = 'TASK'`, which
+   is a claim about stored data. The day one operation is recorded against the
+   entity its name does not begin with — a `TASK_*` operation written against a
+   sprint — an inferred claim becomes false, and it becomes false silently,
+   because a prefix match has no way to notice that it now disagrees with the
+   writer. A declared claim cannot fail that way: it sits beside the operation it
+   describes, so an operation whose writer changes while its declaration does not
+   is a contradiction that rules 4 and 5 make someone see.
+
+2. **One declaration, read by both surfaces.** The classification lives in a
+   single declaration next to the operation constants in `internal/models`, and
+   both surfaces render from it. Neither surface may hold its own copy: a
+   classification written twice is a classification that can disagree with itself,
+   and the disagreement would appear as a plain-text help and a machine-readable
+   contract that describe the same operation differently. This is the principle of
+   `ARCHITECTURE.md § AI Agent Contract Generation` (Single source of truth)
+   applied to a fact the command registry does not carry, the registry describing
+   commands and flags rather than the operation catalogue.
+
+   The same declaration carries the LEGACY marking that rule 2 of
+   `§ Audit family help specifics` requires, for the reason rule 1 gives. Whether
+   an operation is still written is also a fact about the code, and a surface that
+   recovers it by searching a description string for the word `LEGACY` is
+   inferring again, from text this specification requires for a reader rather than
+   for a parser.
+
+   `DATABASE.md § audit Table` remains canonical for which operations exist and
+   for what each of them records; the declaration is the machine-readable form of
+   the entity each operation is recorded against, and it MUST NOT contradict that
+   catalogue. The declaration MUST NOT be derived from the catalogue's group
+   headings either: those headings are the layout of a document, and the coverage
+   gate over the catalogue region requires only that they still exist, not that
+   any entry sits under the right one.
+
+3. **The classification is total.** Every value the catalogue holds has exactly
+   one declared entity type, LEGACY values included. There is no third value, no
+   unknown, and no value that declines to answer: `entity_type` is `NOT NULL` on
+   every row of the audit table and its `CHECK` admits exactly `TASK` and `SPRINT`
+   (see `DATABASE.md § audit Table`), so an operation with no entity type would
+   describe rows that cannot exist.
+
+4. **A declaration states what the writer writes.** For every operation a command
+   writes, the declared entity type MUST equal the `entity_type` of the rows that
+   command produces, and the agreement MUST be established by observing such a row
+   rather than by reading the operation's name.
+
+   The four LEGACY operations have no writer left to observe. Each of their
+   declarations rests instead on the recorded evidence about the rows that already
+   carry it: the predicate the schema migration filters on when it reclassifies
+   such rows (see `VERSION.md § Migration 1.11.0 to 1.12.0`), and, for the
+   operations no migration reads, the retired writer that git history preserves. A
+   LEGACY operation MUST NOT be classified from its name either. Nothing writes it
+   any more, so the name is the only thing left to guess from, and guessing is
+   what this section exists to prevent.
+
+5. **The gate is over the classification, not over the operation list.** The
+   `Valid operations (for --operation filter)` block is rendered from the
+   catalogue itself, as rule 1 of `§ Audit family help specifics` requires, so it
+   cannot omit an operation the catalogue holds. That guarantee is real, and it is
+   also the limit of what a coverage gate over the block can detect: such a gate
+   fails when the block names an operation the catalogue does not hold — a
+   hand-written list that outlived the catalogue — and it cannot fail when the
+   catalogue grows, because a newly declared value is rendered the moment it is
+   declared. Adding one operation to the catalogue and running the full suite
+   bears this out: the gate over the canonical catalogue in the specification
+   fails, the gate over the documentation fails, and the contract gates fail,
+   while the package that renders the help passes.
+
+   A new operation therefore reaches the help by itself, but it arrives
+   unclassified. Two requirements follow, and neither is a restatement or a
+   simplification of the other:
+
+   - **(a) A gate MUST fail when any value in the catalogue has no declared
+     entity type.** This is the only check a new operation cannot pass by doing
+     nothing, and it MUST live where the operation constants are declared, so that
+     the failure reaches whoever added the value on the first test run of the
+     package they changed.
+   - **(b) The `Valid operations` block MUST NOT contain a catch-all group** — a
+     group that collects whatever the entity-type groups did not match. A
+     catch-all is what makes (a) evadable in practice: with one present, an
+     unclassified operation is still printed, under a heading that asserts nothing
+     about it, the block still lists every operation the command accepts, and the
+     reader is told nothing about the entity whose history the new operation
+     belongs to. Every group in the block MUST be labelled with exactly one entity
+     type and MUST hold exactly the operations declared against that entity type.
+
+   The catch-all in the block this rule replaces was not an oversight. It was
+   there because the grouping was done by name prefix and the prefix was not
+   trusted to match every name, which is the same distrust rule 1 states. Once the
+   classification is declared and total, nothing can be left over, and a group for
+   what is left over can only hide the failure that (a) exists to produce.
+
+6. **How each surface publishes the classification.** In the `audit` family help,
+   the `Valid operations (for --operation filter)` block is partitioned into
+   labelled groups as rule 5(b) requires, and the LEGACY operations of each entity
+   type form their own group, whose label names the entity type and the LEGACY
+   status together. The list column of the block carries operation names and
+   nothing else: an inline marker beside a name would put a token in that column
+   that is not an operation the command accepts, and the block is checked on
+   exactly that basis — everything it lists is a value `audit list --operation`
+   takes. Both facts stay readable per operation because the label of the group
+   carries them.
+
+   In the AI Agent Contract, every value of the `AuditOperation` enum carries its
+   entity type in a member of its own rather than inside its prose, and carries in
+   a second member the LEGACY marking that rule 2 of this section places in the same
+   declaration. Both members, their value sets, and the rule that each is present on
+   every value of that enum are specified in `DATA_FORMATS.md § enums map entry`.
 
 ### Comment subcommand help specifics
 
@@ -522,51 +665,165 @@ Examples:
 
 ## Error message format
 
-When a command is invoked incorrectly, the application writes a
-plain-text error to stderr. JSON is not used for errors. Help is **not**
-auto-appended to the error — users invoke `--help` explicitly when they
-want it. The required shape is:
+When a command fails, the application writes a plain-text error to
+stderr. JSON is never used for errors. A failing invocation writes
+nothing to stdout at all; see `Stdout silence on failure` below.
+
+### Error line
+
+Every failing invocation writes exactly one error line, in this shape:
 
 ```
 Error: <human-readable description of the problem>
-
-AI agents: run `rmp --ai-help` for a machine-readable command contract.
 ```
 
 The wording starts with `Error: ` (with the colon and the trailing
 space). For input-related errors (missing parameters, unknown flags,
-unknown subcommands, invalid argument formats) the description names
+unresolved subcommands, invalid argument formats) the description names
 the offending flag or value. For non-input errors (resource not found,
 already exists, database failure) the description names the entity and
 its id where relevant.
 
-After the error line, the printer writes one blank line followed by the
-AI-agent hint:
+### Stderr part order
 
-```
-AI agents: run `rmp --ai-help` for a machine-readable command contract.
-```
+Stderr is assembled from up to four parts. They always appear in this
+order:
 
-The hint:
+| Order | Part | When it is present |
+|-------|------|--------------------|
+| 1 | The AI-agent hint line, followed by one blank line | Only when `AI_AGENT=1` is active for the invocation. See `AI_AGENT environment variable` below |
+| 2 | The `Error: ` line | On every failing invocation |
+| 3 | One blank line, then the recovery help | Only on a dispatch failure. See `Recovery help after a dispatch failure` below |
+| 4 | One blank line, then the AI-agent hint line | On every failing invocation, unless a suppression rule below applies |
 
-- Is written to stderr, after the `Error: ` line, on every error path.
-- Is one line of plain text, identical across every error.
-- Does not change the exit code.
-- Is suppressed when the failing command is itself `rmp --ai-help`,
-  `rmp ai-help`, `rmp <command> --ai-help`, or
-  `rmp <command> <subcommand> --ai-help`, to avoid recursive guidance
-  from the contract emitter.
-- Is suppressed when `AI_AGENT=1` is active for this invocation: in
-  that case the env-var hint has already been emitted as the first
-  line of stderr, and repeating it on the error path would duplicate
-  the same message. See the deduplication rule in
-  `AI_AGENT environment variable` below.
+Parts 1 and 4 carry the same sentence, and they are never both present
+in the same invocation: the deduplication rule in
+`AI_AGENT environment variable` keeps the reader's count at exactly one.
 
-Example: missing required arguments on `rmp task create`
+### Recovery help after a dispatch failure
+
+A **dispatch failure** is the case in which `rmp` cannot resolve a name
+it was given to a command or to a subcommand. There are exactly two
+classes:
+
+1. **Unresolved command.** The first non-flag token of the invocation
+   does not name a command or a command alias, as in `rmp nadadisto`.
+2. **Unresolved subcommand.** The command resolves, but the next
+   non-flag token does not name one of that command's subcommands or
+   subcommand aliases, as in `rmp task nadadisto`. The commands that
+   dispatch subcommands are `roadmap`, `task`, `sprint`, `backlog`,
+   `audit`, and `graph`.
+
+On a dispatch failure, and only on a dispatch failure, the CLI writes
+the **recovery help** to stderr after the error line. The recovery help
+is the help body for the level at which the name could not be resolved,
+so the reader is shown the list of names that would have worked:
+
+| Class | Recovery help written to stderr |
+|-------|---------------------------------|
+| Unresolved command | The global help body, that is, the body `rmp --help` prints |
+| Unresolved subcommand | The family help body of the command that did resolve, that is, the body `rmp <command> --help` prints |
+
+The recovery help omits the AI-agent banner that opens the same body on
+stdout (see `AI agent banner`), together with the blank line that
+follows the banner. The banner and the hint carry the same sentence, and
+the invocation already ends with the hint.
+
+No other error class appends help. A missing required parameter, an
+unknown flag, an invalid enum value, an out-of-range value, a rejected
+state transition, a resource that does not exist, a name conflict, and a
+database failure each produce the error line and the hint alone. The
+error line already names the offending flag or value in those cases, so
+the reader recovers by running `--help` explicitly.
+
+Three commands accept no subcommand, so no dispatch failure can arise
+for them and the recovery help never applies: `stats`, `web`, and
+`ai-help`. `web` and `ai-help` reject an unexpected positional argument
+as an invalid argument, with exit code `2` and no help, as specified in
+`COMMANDS.md § Web Interface` and `COMMANDS.md § AI Help`.
+
+### Error text of a dispatch failure
+
+The two classes use the same wording, differing only in the level they
+name:
+
+| Class | Error line |
+|-------|-----------|
+| Unresolved command | `Error: unknown command: <name>` |
+| Unresolved subcommand | `Error: unknown <command> subcommand: <name>` |
+
+Neither line carries a sentinel prefix. In particular neither is
+prefixed with `invalid input: `, because a dispatch failure is not
+carried by `utils.ErrInvalidInput` and does not exit with that
+sentinel's code. See `ARCHITECTURE.md § Sentinel Error Catalogue`.
+
+### Exit code of a dispatch failure
+
+Both dispatch-failure classes exit **127** (`EXIT_CMD_NOT_FOUND`). They
+are the same failure observed at two levels of the command tree, and the
+exit code does not distinguish them. The catalogue is in
+`ARCHITECTURE.md § Exit Codes`.
+
+One case is deliberately excluded. When an unresolved command or
+subcommand name is used to scope the AI contract, as in
+`rmp nadadisto --ai-help` or `rmp task nadadisto --ai-help`, the name is
+a scope selector for `--ai-help` rather than a name being dispatched.
+That failure keeps exit code **2**, and it prints no recovery help. It
+is specified in `COMMANDS.md § AI Help`.
+
+### Stdout silence on failure
+
+An invocation that exits with a non-zero code writes **zero bytes** to
+stdout. Every part of a failure report goes to stderr: the error line,
+the recovery help, and the hint. A consumer may therefore treat a
+non-empty stdout as evidence that the invocation succeeded.
+
+Help that the reader asked for is not a failure, and this rule does not
+restrict it. Each of the following exits `0` and writes its help body to
+stdout:
+
+- `rmp` with no arguments, and `rmp help`.
+- `rmp --help` and `rmp -h`.
+- `rmp <command>` with no subcommand, and `rmp <command> --help`.
+- `rmp <command> <subcommand> --help`.
+
+### Examples
+
+A missing required parameter: error line and hint, no help, exit code 2.
 
 ```
 $ rmp task create -r myproject
 Error: required parameter missing: --title
+
+AI agents: run `rmp --ai-help` for a machine-readable command contract.
+```
+
+An unresolved subcommand: error line, family help, hint, exit code 127.
+Nothing reaches stdout.
+
+```
+$ rmp task nadadisto -r myproject
+Error: unknown task subcommand: nadadisto
+
+Usage: rmp task <subcommand> [options]
+
+Subcommands:
+  create, new      Create a task
+  ...the remainder of the family help body...
+
+AI agents: run `rmp --ai-help` for a machine-readable command contract.
+```
+
+An unresolved command: error line, global help, hint, exit code 127.
+
+```
+$ rmp nadadisto
+Error: unknown command: nadadisto
+
+Groadmap - A CLI tool for managing technical roadmaps
+
+Usage: rmp [command] [subcommand] [arguments] [options]
+  ...the remainder of the global help body...
 
 AI agents: run `rmp --ai-help` for a machine-readable command contract.
 ```

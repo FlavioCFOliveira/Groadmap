@@ -5,10 +5,123 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // MaxInt32 is the maximum valid ID value (prevents integer overflow).
 const MaxInt32 = math.MaxInt32 // 2,147,483,647
+
+// ValidateFreeText applies both content rules a free-text field is subject to,
+// in the one order SPEC/MODELS.md fixes for them: the Free-Text UTF-8 Encoding
+// Constraint first, then the Free-Text Control-Character Constraint. It returns
+// the first refusal, or nil when the value satisfies both. Every refusal maps to
+// exit code 6.
+//
+// # Why the two rules are one call and not two
+//
+// The encoding rule is specified RELATIONALLY: it runs "immediately before the
+// control-character check, on every command and for every field the two rules
+// govern", and no other check moves. Welding the pair into a single call is what
+// makes that hold by construction — the commands do not each repeat an ordering
+// they could get wrong, and a later change to WHERE the pair sits (rmp task 302
+// revisits that) carries the order with it instead of leaving one half behind.
+//
+// The order itself is not a preference. The control-character rule is defined
+// over decoded CODE POINTS, and an invalid byte decodes to U+FFFD, which is not
+// a forbidden code point — so before this pairing existed, invalid UTF-8 passed
+// the control-character check and was written verbatim into a TEXT column. The
+// encoding check is what makes the rule that follows it meaningful.
+//
+// The value is checked AS SUPPLIED, before any trimming, for the reason
+// ValidateNoControlChars states below. That is sound for the encoding rule too,
+// and for a stronger reason: strings.TrimSpace can only remove runes for which
+// unicode.IsSpace is true, and no invalid byte decodes to one, so trimming can
+// neither introduce nor remove an encoding failure.
+func ValidateFreeText(value string, field Field) error {
+	if err := ValidateUTF8(value, field); err != nil {
+		return err
+	}
+	return ValidateNoControlChars(value, field)
+}
+
+// TrimFreeText applies steps 1 and 2 of the sequence SPEC/MODELS.md § Free-Text
+// Emptiness and Trimming Constraint fixes for a free-text value, and returns the
+// value to store: the encoding rule and the control-character rule on the value
+// AS SUPPLIED, and only then the trim.
+//
+// It is the whole of the constraint for the one free-text field that is optional,
+// `completion_summary`, which Rule 2 governs and Rule 1 does not. Every required
+// field goes through RequireFreeText below, which adds step 3.
+//
+// # Why the trim cannot come first
+//
+// The order is the reason this helper exists at all. VT (0x0B) and FF (0x0C) are
+// forbidden by the control-character rule AND are whitespace to
+// strings.TrimSpace, so trimming first hands the check a value the offending
+// character has already been removed from: the input is accepted, the character
+// is discarded in silence, and the CWE-150 guard fails at the position where such
+// a character is easiest to hide. Writing the sequence once, here, is what stops
+// each call site from having to get it right on its own — and what makes the
+// single observable signature of the correct order, a value made only of VT
+// refused as a CONTROL CHARACTER and never as empty, hold everywhere at once.
+//
+// The length cap is deliberately NOT part of this helper. Where the cap runs
+// relative to these two rules differs per command, SPEC/COMMANDS.md leaves that
+// order to each command's own section, and rmp task 302 is what settles it; a cap
+// folded in here would silently move it on half the paths. What the SPEC does fix
+// is WHAT the cap measures — the trimmed value, the same value stored — so a
+// caller whose cap runs before the content rules measures strings.TrimSpace of
+// the value it is about to pass in.
+func TrimFreeText(value string, field Field) (string, error) {
+	if err := ValidateFreeText(value, field); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(value), nil
+}
+
+// RequireFreeText is TrimFreeText plus step 3: the emptiness judgement, applied
+// to the TRIMMED value, for one of the seven free-text fields that are required
+// to be non-empty (SPEC/MODELS.md § Free-Text Emptiness and Trimming Constraint,
+// Rule 1). It returns the value to store, or the first refusal.
+//
+// A value made only of whitespace leaves nothing behind and counts as absent, so
+// it is refused with FieldEmptyError — naming the FIELD, because a value did
+// reach the application and broke a rule about its content. The absence of a
+// required flag is the other case entirely and keeps the flag's own spelling; a
+// caller that has such a flag decides that question BEFORE calling this, against
+// the value as supplied (SPEC/COMMANDS.md § Emptiness Constraint (All Required
+// Free-Text Fields)).
+func RequireFreeText(value string, field Field) (string, error) {
+	trimmed, err := TrimFreeText(value, field)
+	if err != nil {
+		return "", err
+	}
+	if trimmed == "" {
+		return "", FieldEmptyError(field)
+	}
+	return trimmed, nil
+}
+
+// ValidateUTF8 rejects a value whose bytes are not a well-formed UTF-8 sequence,
+// returning an ErrValidation-wrapped error (exit 6) and nil otherwise. It
+// enforces SPEC/MODELS.md § Free-Text UTF-8 Encoding Constraint, which defines
+// well-formedness as the Unicode Standard, Table 3-7 does — the same definition
+// utf8.ValidString implements, so the five malformed shapes the SPEC enumerates
+// (an unintroduced continuation byte, a byte that never occurs in UTF-8 at all,
+// an overlong encoding, a surrogate code point, and a sequence the input ends
+// before completing) are refused by that one call and need no enumeration here.
+//
+// Callers reach it through ValidateFreeText, which is what pins the order it
+// runs in. It is exported in its own right because it is the rule itself, and
+// because a caller that has already applied the control-character rule by
+// another route — the streaming comment-body reader does — needs the encoding
+// half alone.
+func ValidateUTF8(value string, field Field) error {
+	if !utf8.ValidString(value) {
+		return InvalidUTF8Error(field)
+	}
+	return nil
+}
 
 // ValidateNoControlChars rejects free-text input that contains control or
 // Unicode bidirectional/format code points, returning an ErrValidation-wrapped
@@ -23,10 +136,14 @@ const MaxInt32 = math.MaxInt32 // 2,147,483,647
 //     U+2066-U+2069, and U+FEFF
 //
 // Legitimate Unicode (accents, emoji, CJK, etc.) is accepted unchanged.
-func ValidateNoControlChars(value, fieldName string) error {
+//
+// The field is named by a Field, not by a string, so the refusal can only carry
+// the published name the SPEC assigns it: see the note on Field in fields.go for
+// why that parameter is not a string.
+func ValidateNoControlChars(value string, field Field) error {
 	for _, r := range value {
 		if IsForbiddenControlChar(r) {
-			return ControlCharError(fieldName)
+			return ControlCharError(field)
 		}
 	}
 	return nil
@@ -47,13 +164,6 @@ func IsForbiddenControlChar(r rune) bool {
 	default:
 		return isBidiOrFormatControl(r)
 	}
-}
-
-// ControlCharError is the refusal ValidateNoControlChars returns, spelled once
-// so a streaming caller reports the identical message and the identical
-// sentinel (exit code 6) as the whole-value check.
-func ControlCharError(fieldName string) error {
-	return fmt.Errorf("%w: %s: control characters are not allowed", ErrValidation, fieldName)
 }
 
 // isBidiOrFormatControl reports whether r is one of the Unicode

@@ -30,22 +30,50 @@ func setupTestStatsRoadmap(t *testing.T, name string) (*db.DB, func()) {
 	return database, cleanup
 }
 
-// createStatsTask inserts a task with the given status directly via the db layer.
-func createStatsTask(t *testing.T, database *db.DB, title string, status models.TaskStatus) {
+// createStatsTask creates a task through `task create` and, when the fixture
+// wants it past BACKLOG, walks it there through the commands that are allowed
+// to move it — `sprint add-tasks` and `task stat`.
+//
+// It used to insert the row and its status through the db layer, which meant
+// the counts under test were counts of rows no command could have produced: a
+// task in DOING with no sprint, and no lifecycle timestamp anywhere. The route
+// costs a sprint, which stats reports but no assertion here reads.
+func createStatsTask(t *testing.T, database *db.DB, roadmap, title string, status models.TaskStatus) {
 	t.Helper()
-	task := &models.Task{
-		Title:                  title,
-		Status:                 status,
-		FunctionalRequirements: "Functional requirement for " + title,
-		TechnicalRequirements:  "Technical requirement for " + title,
-		AcceptanceCriteria:     "Acceptance criteria for " + title,
-		CreatedAt:              utils.NowISO8601(),
-		Priority:               5,
+
+	taskID := createTaskViaCommand(t, roadmap, title,
+		"Functional requirement for "+title,
+		"Technical requirement for "+title,
+		"Acceptance criteria for "+title,
+		"-p", "5")
+
+	if status == models.StatusBacklog {
+		return
 	}
-	ctx := context.Background()
-	if _, err := database.CreateTask(ctx, task); err != nil {
-		t.Fatalf("failed to create task %q: %v", title, err)
+	driveTaskToStatus(t, roadmap, statsCarrierSprint(t, database, roadmap), taskID, status)
+}
+
+// statsCarrierSprint returns the id of the roadmap's one carrier sprint,
+// creating it on first use. Every driven task passes through it, because SPRINT
+// is the only door out of BACKLOG.
+//
+// The existing sprint is looked up in the roadmap rather than remembered in a
+// package variable: a variable would survive the roadmap it names, and a second
+// run of the same test in one binary (go test -count=2) would drive tasks into
+// a sprint id that no longer exists.
+func statsCarrierSprint(t *testing.T, database *db.DB, roadmap string) int {
+	t.Helper()
+
+	sprints, err := database.ListSprints(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("reading the roadmap's sprints: %v", err)
 	}
+	if len(sprints) > 0 {
+		return sprints[0].ID
+	}
+	return createSprintViaCommand(t, roadmap,
+		"Carrier sprint",
+		"Holds the tasks this fixture drives past BACKLOG; the statistics under test do not read it.")
 }
 
 // ==================== HandleStats — Help flags ====================
@@ -110,9 +138,9 @@ func TestHandleStats_JSONOutputStructure(t *testing.T) {
 	database, cleanup := setupTestStatsRoadmap(t, name)
 	defer cleanup()
 
-	createStatsTask(t, database, "Implement authentication service", models.StatusBacklog)
-	createStatsTask(t, database, "Set up CI/CD pipeline", models.StatusBacklog)
-	createStatsTask(t, database, "Configure monitoring dashboards", models.StatusDoing)
+	createStatsTask(t, database, name, "Implement authentication service", models.StatusBacklog)
+	createStatsTask(t, database, name, "Set up CI/CD pipeline", models.StatusBacklog)
+	createStatsTask(t, database, name, "Configure monitoring dashboards", models.StatusDoing)
 
 	// Capture stdout by routing through HandleStats via -r flag
 	// We validate output by calling the db layer directly and comparing fields.
@@ -168,12 +196,12 @@ func TestHandleStats_TaskCountsAccurate(t *testing.T) {
 	database, cleanup := setupTestStatsRoadmap(t, name)
 	defer cleanup()
 
-	createStatsTask(t, database, "Implement order processing engine", models.StatusBacklog)
-	createStatsTask(t, database, "Build payment gateway integration", models.StatusBacklog)
-	createStatsTask(t, database, "Design database schema for orders", models.StatusSprint)
-	createStatsTask(t, database, "Develop REST API endpoints", models.StatusDoing)
-	createStatsTask(t, database, "Write integration tests for payments", models.StatusTesting)
-	createStatsTask(t, database, "Deploy to staging environment", models.StatusCompleted)
+	createStatsTask(t, database, name, "Implement order processing engine", models.StatusBacklog)
+	createStatsTask(t, database, name, "Build payment gateway integration", models.StatusBacklog)
+	createStatsTask(t, database, name, "Design database schema for orders", models.StatusSprint)
+	createStatsTask(t, database, name, "Develop REST API endpoints", models.StatusDoing)
+	createStatsTask(t, database, name, "Write integration tests for payments", models.StatusTesting)
+	createStatsTask(t, database, name, "Deploy to staging environment", models.StatusCompleted)
 
 	ctx := context.Background()
 	stats, err := database.GetRoadmapStats(ctx, name)

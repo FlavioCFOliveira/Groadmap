@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
-	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 )
 
 // This file is the regression gate for the defect recorded as task #204: a
@@ -490,7 +489,13 @@ func renameTask(t *testing.T, roadmap string, taskID int, title string) {
 	}
 	defer database.Close() //nolint:errcheck // test cleanup
 
-	if err := database.UpdateTaskStruct(testContext(t), taskID, &models.TaskUpdate{Title: &title}); err != nil {
+	// The rename is written directly: editing a task is taskEdit in
+	// internal/commands, which this package cannot reach (internal/commands
+	// imports internal/web), and the fixture needs the renamed row rather than
+	// the per-field audit entries the command owes.
+	if _, err := database.Exec(
+		`UPDATE tasks SET title = ? WHERE id = ?`, title, taskID,
+	); err != nil {
 		t.Fatalf("renaming task %d: %v", taskID, err)
 	}
 }

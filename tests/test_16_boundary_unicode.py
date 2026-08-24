@@ -7,6 +7,7 @@ round-trips, and SQL-injection resilience.
 
 import sys
 import os
+import subprocess
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests.base_test import GroadmapTestBase
@@ -643,6 +644,233 @@ class TestBoundaryUnicode:
 
         ec, _, _ = self.test.run_cmd(base_args + ["--severity", "10"], check=False)
         assert ec != 0, "task create --severity 10 should be rejected"
+
+
+    # ==================== UTF-8 encoding constraint ====================
+    #
+    # SPEC/MODELS.md § Free-Text UTF-8 Encoding Constraint and
+    # SPEC/COMMANDS.md § UTF-8 Encoding Constraint (All Free-Text Fields).
+    #
+    # These drive the compiled binary with argv values that are NOT valid UTF-8.
+    # Python puts arbitrary bytes into a child's argv through the surrogateescape
+    # convention: a str holding lone surrogates is turned back into the original
+    # bytes by os.fsencode, which is what subprocess applies to every argument.
+    # That is the only way to reproduce from Python what a shell does natively
+    # with `printf 'a\x80b'`, and the defect this covers was originally reported
+    # exactly that way.
+    #
+    # The comment `body` is covered in test_50: it is the one free-text field
+    # with a standard-input source, so it needs both paths rather than this one.
+
+    # The malformed shapes SPEC/MODELS.md enumerates, as raw bytes. Kept as the
+    # bytes themselves so the fixture states what reaches the process, not a
+    # decoding of it.
+    MALFORMED_UTF8 = [
+        ("lone continuation byte", b"Ledger batch SEPA-20260815-004 \x80 failed to reconcile"),
+        ("lone 0xFF", b"Settlement window closed at 17:00\xff before the last file arrived"),
+        ("overlong encoding", b"Traversal probe in the upload path: ..\xc0\xaf..\xc0\xafetc/passwd"),
+        ("lone surrogate", b"Imported from a UTF-16 feed carrying an unpaired \xed\xa0\x80 surrogate"),
+        ("truncated sequence", b"Reconciliation summary for the medi\xc3"),
+    ]
+
+    UTF8_REFUSAL = "the value is not valid UTF-8"
+
+    def _run_raw(self, args):
+        """Run rmp with argv entries that may hold bytes which are not UTF-8.
+
+        Returns (exit_code, stdout_bytes, stderr_bytes). Nothing is decoded here:
+        the point of these tests is what the process was handed and what it wrote
+        back, and a decode with a replacement policy would hide precisely the
+        bytes under test.
+        """
+        env = os.environ.copy()
+        env["HOME"] = str(self.test.home_dir)
+        argv = [self.test.cli_path]
+        for a in args:
+            argv.append(a.decode("utf-8", "surrogateescape") if isinstance(a, bytes) else str(a))
+        result = subprocess.run(argv, capture_output=True, env=env)
+        return result.returncode, result.stdout, result.stderr
+
+    def _assert_utf8_refusal(self, args, field, label):
+        """Assert one malformed value is refused with exit 6 and the pinned line.
+
+        Three things are checked, and each one closes a different way of being
+        wrong: the exit code (6, the validation class), the exact message (a
+        control-character refusal carries the same class and the same code, so
+        only the wording distinguishes the rules), and the field name inside it
+        (the published, underscored one).
+
+        A fourth is checked as well, and it is the constraint's whole point: the
+        refusal the process writes back must itself be valid UTF-8. A message
+        that echoed the offending bytes would put them straight back on the
+        caller's terminal, which is the class of defect this rule closes.
+        """
+        code, out, err = self._run_raw(args)
+        assert code == 6, (
+            f"{label}: expected exit 6, got {code}\n  stderr: {err!r}"
+        )
+        assert out == b"", f"{label}: a refused command wrote to stdout: {out!r}"
+        try:
+            text = err.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise AssertionError(
+                f"{label}: the refusal itself is not valid UTF-8 ({exc}); "
+                f"the message echoed the malformed bytes back: {err!r}"
+            ) from None
+        expected = f"Error: validation error: {field}: {self.UTF8_REFUSAL}"
+        assert expected in text, (
+            f"{label}: stderr does not carry the pinned refusal\n"
+            f"  expected: {expected!r}\n  got: {text!r}"
+        )
+
+    def test_task_create_refuses_invalid_utf8_in_every_free_text_flag(self):
+        """`task create` refuses malformed UTF-8 in title, FR, TR and AC."""
+        roadmap = self.test.create_roadmap()
+        good = {
+            "-t": "Reconcile the nightly settlement ledger",
+            "-fr": "Every posting must be matched against the settlement file",
+            "-tr": "One transaction per batch, with the cursor advanced only on commit",
+            "-ac": "A regression test covers a batch that arrives twice",
+        }
+        fields = {"-t": "title", "-fr": "functional_requirements",
+                  "-tr": "technical_requirements", "-ac": "acceptance_criteria"}
+
+        for flag, field in fields.items():
+            for label, bad in self.MALFORMED_UTF8:
+                args = ["task", "create", "-r", roadmap]
+                for f, v in good.items():
+                    args += [f, bad if f == flag else v]
+                self._assert_utf8_refusal(args, field, f"task create {flag} / {label}")
+
+        assert self.test.list_tasks(roadmap) == [], (
+            "a refused `task create` must leave no task behind"
+        )
+
+    def test_task_edit_refuses_invalid_utf8_and_changes_nothing(self):
+        """`task edit` refuses malformed UTF-8 and leaves the task untouched."""
+        roadmap = self.test.create_roadmap()
+        task_id = self.test.create_task(
+            roadmap,
+            title="Reconcile the nightly settlement ledger",
+            functional_requirements="Every posting must be matched against the settlement file",
+            technical_requirements="One transaction per batch, committed atomically",
+            acceptance_criteria="A regression test covers a batch that arrives twice",
+        )
+        before = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])[0]
+
+        for flag, field in (("-t", "title"), ("-fr", "functional_requirements"),
+                            ("-tr", "technical_requirements"), ("-ac", "acceptance_criteria")):
+            for label, bad in self.MALFORMED_UTF8:
+                self._assert_utf8_refusal(
+                    ["task", "edit", "-r", roadmap, str(task_id), flag, bad],
+                    field, f"task edit {flag} / {label}",
+                )
+
+        after = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])[0]
+        for column in ("title", "functional_requirements",
+                       "technical_requirements", "acceptance_criteria"):
+            assert after[column] == before[column], (
+                f"a refused `task edit` modified {column}: "
+                f"{before[column]!r} -> {after[column]!r}"
+            )
+
+    def test_sprint_create_and_update_refuse_invalid_utf8(self):
+        """`sprint create` and `sprint update` refuse malformed UTF-8."""
+        roadmap = self.test.create_roadmap()
+        sprint_id = self.test.create_sprint(
+            roadmap,
+            "Close the encoding gap in every free-text field.",
+            title="Encoding hardening",
+        )
+        before = self.test.list_sprints(roadmap)
+
+        for label, bad in self.MALFORMED_UTF8:
+            self._assert_utf8_refusal(
+                ["sprint", "create", "-r", roadmap, "-t", bad, "-d", "Any description"],
+                "title", f"sprint create -t / {label}")
+            self._assert_utf8_refusal(
+                ["sprint", "create", "-r", roadmap, "-t", "Any title", "-d", bad],
+                "description", f"sprint create -d / {label}")
+            self._assert_utf8_refusal(
+                ["sprint", "update", "-r", roadmap, str(sprint_id), "-t", bad],
+                "title", f"sprint update -t / {label}")
+            self._assert_utf8_refusal(
+                ["sprint", "update", "-r", roadmap, str(sprint_id), "-d", bad],
+                "description", f"sprint update -d / {label}")
+
+        after = self.test.list_sprints(roadmap)
+        assert len(after) == len(before), (
+            f"a refused sprint write created a sprint: {len(before)} -> {len(after)}")
+        assert after[0]["title"] == before[0]["title"], "a refused `sprint update` changed the title"
+        assert after[0]["description"] == before[0]["description"], (
+            "a refused `sprint update` changed the description")
+
+    def test_completion_summary_refuses_invalid_utf8(self):
+        """`task stat COMPLETED --summary` refuses malformed UTF-8.
+
+        completion_summary is the eighth free-text field and the one with a
+        single writer; it was missing from the original report of this defect and
+        stored malformed bytes exactly like the other seven.
+        """
+        roadmap = self.test.create_roadmap()
+        task_id = self.test.create_task(
+            roadmap,
+            title="Reconcile the nightly settlement ledger",
+            functional_requirements="Every posting must be matched against the settlement file",
+            technical_requirements="One transaction per batch, committed atomically",
+            acceptance_criteria="A regression test covers a batch that arrives twice",
+        )
+        sprint_id = self.test.create_sprint(roadmap, "Encoding hardening sprint")
+        self.test.move_task_to_sprint(roadmap, task_id, sprint_id)
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "DOING",
+                           "--commit-open", "6c8064a"])
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
+
+        for label, bad in self.MALFORMED_UTF8:
+            self._assert_utf8_refusal(
+                ["task", "stat", "-r", roadmap, str(task_id), "COMPLETED",
+                 "--commit-close", "4c4ccea", "--summary", bad],
+                "completion_summary", f"task stat --summary / {label}")
+
+        self.test.assert_task_status(roadmap, task_id, "TESTING")
+
+        # And the same transition succeeds with a summary carrying accented
+        # Latin, CJK and emoji: the rule refuses malformed BYTES, never
+        # unfamiliar characters.
+        summary = "Reconciliação concluída; 監査ログ verificado \U0001F680"
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED",
+                           "--commit-close", "4c4ccea", "--summary", summary])
+        stored = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])[0]
+        assert stored["completion_summary"] == summary, (
+            f"the summary did not round-trip: {stored['completion_summary']!r} != {summary!r}")
+
+    def test_encoding_refusal_precedes_the_control_character_refusal(self):
+        """A value breaking BOTH content rules reports the encoding one.
+
+        SPEC/MODELS.md § Free-Text UTF-8 Encoding Constraint, "Order": the
+        encoding check runs immediately before the control-character check. Both
+        refusals are exit 6 and both carry `validation error:`, so only the
+        wording can show which rule answered.
+        """
+        roadmap = self.test.create_roadmap()
+        for label, bad in self.MALFORMED_UTF8:
+            both = bad + b" \x1b[31m"
+            self._assert_utf8_refusal(
+                ["task", "create", "-r", roadmap, "-t", both,
+                 "-fr", "x", "-tr", "x", "-ac", "x"],
+                "title", f"encoding before control characters / {label}")
+
+        # The control-character rule is still there: a well-formed value that
+        # carries an ESC is refused by it, not by the encoding rule.
+        code, _, err = self._run_raw(
+            ["task", "create", "-r", roadmap, "-t", "Ledger \x1b[31mbatch\x1b[0m",
+             "-fr", "x", "-tr", "x", "-ac", "x"])
+        assert code == 6, f"an ESC must still be refused; got exit {code}"
+        text = err.decode("utf-8")
+        assert "title: control characters are not allowed" in text, (
+            f"the control-character rule must still answer for well-formed input: {text!r}")
+        assert self.UTF8_REFUSAL not in text, (
+            f"a well-formed value must not be reported as an encoding failure: {text!r}")
 
 
 def main():

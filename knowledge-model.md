@@ -75,13 +75,21 @@ source and third-party source distinguishable. See `SPEC/BUILD.md` section Vendo
 A non-test source file authored by the project. Test sources are `Test` nodes, never
 `CodeFile`; vendored third-party files are `Component`s, never `CodeFile`.
 
+Build and deployment artefacts are `CodeFile`s on the same terms as program source. The
+`Makefile`, `install.sh`, and the workflow files under `.github/workflows/` are each a
+file the project authored and maintains, each realises a requirement the SPEC states, and
+each is verified by a test; nothing about them justifies a label of their own. Their
+`package` is the directory that owns them -- `.` for a repository-root file, and
+`.github/workflows` for a workflow -- rather than a Go import path, because `package` on
+this label means "the component this file belongs to" and not "a compilation unit".
+
 | Property | Required | Notes |
 |---|---|---|
 | `key` | yes | Repository-relative path. |
 | `path` | yes | Same as `key`. |
 | `file` | yes | Base name. |
 | `package` | yes | Owning component's path. |
-| `language` | yes | `Go`, `Python`, `HTML`, `CSS`, `JavaScript` or `SVG`. |
+| `language` | yes | `Go`, `Python`, `HTML`, `CSS`, `JavaScript`, `SVG`, `Bash`, `YAML` or `Make`. The last three are the build and deployment artefacts described above. |
 | `last_commit`, `last_commit_date` | yes | Provenance. |
 
 ### Spec
@@ -90,8 +98,8 @@ One specification document under `SPEC/`.
 
 | Property | Required | Notes |
 |---|---|---|
-| `key` | yes | File name, e.g. `DATABASE.md`. |
-| `path` | yes | Repository-relative path. |
+| `key` | yes | Repository-relative path, e.g. `SPEC/DATABASE.md`. |
+| `path` | yes | Same as `key`. |
 | `area` | yes | Functional area the document owns, per CLAUDE.md section 2. |
 | `summary` | yes | One-line description of what the document specifies. |
 | `last_commit`, `last_commit_date` | yes | Provenance. |
@@ -150,8 +158,8 @@ criterion is the document's purpose, not its location: the per-command pages und
 `DOCS/commands/`, the repository `README.md`, `CHANGELOG.md`, and `tests/README.md` are all
 `Doc`s today. Distinct from `Spec`, which is the project's technical specification: the two
 have different audiences and different owners (`doc-manager` versus
-`specification-manager`). The key is the repository-relative path, which also avoids
-colliding with the `Spec` node whose key is the bare name `README.md`.
+`specification-manager`). The key is the repository-relative path, the same rule every
+file-anchored label follows.
 
 `CHANGELOG.md` is a `Doc` and not a `Release`. A `Release` is one published version of the
 binary; the changelog is the prose a reader consults to learn what changed, it carries the

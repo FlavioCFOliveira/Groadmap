@@ -145,7 +145,49 @@ type EnumDefinition struct {
 // crashing the generator. The field is always present in the JSON
 // (never omitted) so consumers can rely on its key.
 type EnumValue struct {
-	Value       string `json:"value"`
+	Value string `json:"value"`
+	// EntityType is the entity an audit operation is recorded against: the
+	// value the audit entry's own entity_type field holds on a row carrying
+	// this operation. It is present on every value of the AuditOperation enum
+	// and absent from the values of every other enum, which is why it is
+	// omitempty rather than a pointer rendered as null: a TaskStatus value is
+	// not recorded against an entity at all, and a key that was null on every
+	// enum but one would suggest the contract has a general notion of an enum
+	// value's entity, which it does not (SPEC/DATA_FORMATS.md § enums map
+	// entry, rule 3).
+	//
+	// It carries the entity type as a member rather than inside Description
+	// because Description is the catalogue entry's own text from
+	// SPEC/DATABASE.md and says what the catalogue says and nothing more; and
+	// because prose is not something a consumer can read a value from without
+	// parsing it.
+	EntityType string `json:"entity_type,omitempty"`
+	// Legacy reports whether a command still writes this audit operation:
+	// true on the four LEGACY values, false on every other value of the
+	// AuditOperation enum, and absent from the values of every other enum
+	// (SPEC/DATA_FORMATS.md § enums map entry, rule 4).
+	//
+	// It is a POINTER, and the two facts rule 4 states are what force that.
+	// The member must be PRESENT on every AuditOperation value, false
+	// included, which a plain bool with omitempty cannot do — omitempty drops
+	// false, so every operation still in use would silently lose the key. It
+	// must also be ABSENT from every other enum, which a plain bool without
+	// omitempty cannot do — it would publish "legacy": false on every
+	// TaskStatus and TaskType value and suggest the contract has a general
+	// notion of an enum value's LEGACY status, which it has not. A pointer
+	// with omitempty expresses exactly the required distinction: nil is
+	// omitted, and a pointer to false is not empty, so it is published.
+	// TestGenerate_AuditOperationValuesPublishTheirLegacyFlag pins both
+	// directions, false-is-published included.
+	//
+	// The same fact also travels in Description, as the "LEGACY." prefix
+	// rule 2 requires, and the two MUST agree. Both forms exist because they
+	// serve different consumers: the prose explains to a reader why the
+	// filter returns nothing, and the member lets a machine test a field
+	// instead of depending on wording the SPEC is free to change. Neither is
+	// derived from the other — both come from the single declaration in
+	// internal/models.
+	Legacy      *bool  `json:"legacy,omitempty"`
 	Description string `json:"description"`
 }
 

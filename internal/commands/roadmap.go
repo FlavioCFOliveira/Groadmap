@@ -20,7 +20,7 @@ func HandleRoadmap(args []string) error {
 
 // printRoadmapListHelp prints help for 'rmp roadmap list'.
 func printRoadmapListHelp() {
-	fmt.Print(`Usage: rmp roadmap list
+	fmt.Fprint(helpDst(), `Usage: rmp roadmap list
 
 Lists every roadmap under ~/.roadmaps/. Each roadmap is the immediate
 subdirectory of ~/.roadmaps/ that contains a project.db database.
@@ -49,7 +49,7 @@ Examples:
 
 // printRoadmapCreateHelp prints help for 'rmp roadmap create'.
 func printRoadmapCreateHelp() {
-	fmt.Print(`Usage: rmp roadmap create <name>
+	fmt.Fprint(helpDst(), `Usage: rmp roadmap create <name>
 
 Creates the roadmap home directory ~/.roadmaps/<name>/ (mode 0700) and the
 SQLite database ~/.roadmaps/<name>/project.db (mode 0600) inside it.
@@ -80,7 +80,7 @@ Examples:
 
 // printRoadmapRemoveHelp prints help for 'rmp roadmap remove'.
 func printRoadmapRemoveHelp() {
-	fmt.Print(`Usage: rmp roadmap remove <name>
+	fmt.Fprint(helpDst(), `Usage: rmp roadmap remove <name>
 
 Deletes the entire roadmap home directory ~/.roadmaps/<name>/ recursively,
 including project.db, its SQLite sidecars (project.db-wal, project.db-shm),
@@ -246,7 +246,7 @@ func requireRoadmap(args []string) (string, []string, error) {
 
 // printRoadmapHelp prints roadmap command help.
 func printRoadmapHelp() {
-	fmt.Print(`Usage: rmp roadmap [command] [arguments]
+	fmt.Fprint(helpDst(), `Usage: rmp roadmap [command] [arguments]
 
 Aliases: road.
 
@@ -269,10 +269,11 @@ Output (stdout JSON):
 
 Exit codes:
   0   Success
-  2   Unknown subcommand, or required roadmap-name argument missing
+  2   Required roadmap-name argument missing
   4   Roadmap not found (remove only)
   5   Roadmap already exists (create only)
   6   Invalid roadmap name (regex or length violation)
+  127 Unknown subcommand
 
 Examples:
   rmp roadmap list

@@ -224,7 +224,7 @@ func TestAddTasksToSprint_WritesTheMirroredPair(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	sprintID, err := db.CreateSprint(testContext(), &models.Sprint{
+	sprintID, err := seedSprint(db, &models.Sprint{
 		Status:      models.SprintPending,
 		Title:       "Transport hardening",
 		Description: "Close the TLS and connection-pool findings raised by the review.",
@@ -240,7 +240,7 @@ func TestAddTasksToSprint_WritesTheMirroredPair(t *testing.T) {
 		"Expire idle database connections before the proxy does",
 		"Emit a request id on every access log line",
 	} {
-		id, createErr := db.CreateTask(testContext(), &models.Task{
+		id, createErr := seedTask(db, &models.Task{
 			Priority:               1,
 			Severity:               1,
 			Status:                 models.StatusBacklog,
@@ -313,7 +313,7 @@ func TestAddTasksToSprint_OnePerformedAtForTheWholeInvocation(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	sprintID, err := db.CreateSprint(testContext(), &models.Sprint{
+	sprintID, err := seedSprint(db, &models.Sprint{
 		Status:      models.SprintPending,
 		Title:       "Observability rollout",
 		Description: "Make a single request traceable end to end across the fleet.",
@@ -328,7 +328,7 @@ func TestAddTasksToSprint_OnePerformedAtForTheWholeInvocation(t *testing.T) {
 	const batch = 300
 	taskIDs := make([]int, 0, batch)
 	for i := 0; i < batch; i++ {
-		id, createErr := db.CreateTask(testContext(), &models.Task{
+		id, createErr := seedTask(db, &models.Task{
 			Priority:               1,
 			Severity:               1,
 			Status:                 models.StatusBacklog,

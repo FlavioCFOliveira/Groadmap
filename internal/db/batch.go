@@ -78,15 +78,3 @@ func ProcessChunksWithResult[T any](ids []int, batchSize int, fn func(chunk []in
 func (bp *BatchProcessor) BatchSize() int {
 	return bp.batchSize
 }
-
-// CalculateBatches returns the number of batches needed for the given ID count.
-func (bp *BatchProcessor) CalculateBatches(totalIDs int) int {
-	if totalIDs <= 0 {
-		return 0
-	}
-	batches := totalIDs / bp.batchSize
-	if totalIDs%bp.batchSize > 0 {
-		batches++
-	}
-	return batches
-}

@@ -30,6 +30,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -142,9 +143,13 @@ func main() {
 	reg := commands.AppRegistry()
 	cmd := reg.FindCommand(arg)
 	if cmd == nil {
-		printError("Unknown command: " + arg)
-		printHelp()
-		os.Exit(ExitCmdNotFound)
+		// Dispatch failure at the top level. It is routed through the
+		// same handleError path as every other error so the stderr
+		// shape, the stdout silence, and the exit code all come from a
+		// single place: the general help that follows the error is the
+		// recovery help, written to stderr by writeFailureReport
+		// (SPEC/HELP.md § Recovery help after a dispatch failure).
+		os.Exit(handleError(commands.NewUnknownCommandError(arg)))
 	}
 
 	err := cmd.DispatchFamily(os.Args[2:])
@@ -157,18 +162,26 @@ func main() {
 	os.Exit(exitCode)
 }
 
-// handleError maps errors to appropriate exit codes.
+// handleError writes the failure report for err to stderr and maps it to
+// the exit code SPEC/ARCHITECTURE.md § Exit Codes assigns to its class.
 func handleError(err error) int {
 	if err == nil {
 		return ExitSuccess
 	}
 
-	printError(err.Error())
+	writeFailureReport(os.Stderr, err)
 
 	// Map sentinel errors to exit codes using errors.Is.
 	// All errors raised by internal packages go through utils.Err* sentinels
 	// with %w wrapping, so this switch is exhaustive in practice.
 	switch {
+	case errors.Is(err, utils.ErrUnknownCommand):
+		// A dispatch failure: an unresolved command name or an
+		// unresolved subcommand name. Listed first so it can never be
+		// shadowed by a broader class; it deliberately does NOT wrap
+		// utils.ErrInvalidInput, which would land it on 2
+		// (SPEC/ARCHITECTURE.md § Sentinel Error Catalogue).
+		return ExitCmdNotFound
 	case errors.Is(err, utils.ErrNotFound):
 		return ExitNotFound
 	case errors.Is(err, utils.ErrAlreadyExists):
@@ -185,12 +198,19 @@ func handleError(err error) int {
 	return ExitFailure
 }
 
-// printError prints an error message to stderr in the SPEC-mandated
-// shape (SPEC/HELP.md § Error message format):
+// writeFailureReport writes the complete stderr report for a failing
+// invocation, in the part order pinned by SPEC/HELP.md § Stderr part
+// order:
 //
-//	Error: <msg>
-//	<blank line>
-//	AI agents: run `rmp --ai-help` for a machine-readable command contract.
+//  1. the AI_AGENT=1 hint plus a blank line, when that env var is
+//     active — already written at the top of main() before this runs;
+//  2. the "Error: " line;
+//  3. a blank line then the recovery help, on a dispatch failure only;
+//  4. a blank line then the AI-agent hint, unless suppressed.
+//
+// Nothing here touches stdout: a failing invocation writes zero bytes to
+// it (SPEC/HELP.md § Stdout silence on failure), which is why the
+// recovery help goes to w rather than through the ordinary help path.
 //
 // The trailing AI-agent hint is suppressed in two situations:
 //
@@ -208,19 +228,39 @@ func handleError(err error) int {
 // `rmp invalidcmd --ai-help`), markInvoked() is NOT called because
 // Generate returns before it — so WasInvoked() stays false and the
 // agent gets the hint, helping it discover the contract entry point.
-func printError(msg string) {
-	fmt.Fprintf(os.Stderr, "Error: %s\n", msg)
+func writeFailureReport(w io.Writer, err error) {
+	fmt.Fprintf(w, "Error: %s\n", err.Error())
+
+	// Part 3. Recovery help follows a dispatch failure and nothing else.
+	// A missing parameter, an unknown flag, an invalid enum value, a
+	// not-found, a conflict and a database failure each get the error
+	// line and the hint alone: the error line already names the
+	// offending flag or value, so the reader recovers by running
+	// --help explicitly (SPEC/HELP.md § Recovery help after a dispatch
+	// failure).
+	var dispatch *commands.DispatchError
+	if errors.As(err, &dispatch) {
+		fmt.Fprintln(w)
+		// RecoveryHelp renders the family help body for an unresolved
+		// subcommand. It reports false for an unresolved top-level
+		// command, whose recovery help is the global help body — owned
+		// by this package, so it is written here.
+		if !dispatch.RecoveryHelp(w) {
+			writeGlobalHelpBody(w)
+		}
+	}
+
+	// Part 4. The hint stays last on every error path.
 	if aihelp.WasInvoked() {
 		return
 	}
-	// EmitHintOnce internally writes the hint plus a leading newline
-	// pair (the "blank line" before it). To get the SPEC shape
-	// "Error line, blank line, hint, blank line" we prepend the
+	// EmitHintOnce internally writes the hint plus a trailing newline
+	// pair. To get the SPEC shape "…, blank line, hint" we prepend the
 	// separating blank line here. Subsequent callers in the same
-	// invocation (rare — handleError runs at most once) are deduped
-	// by sync.Once and produce nothing.
-	fmt.Fprintln(os.Stderr)
-	aihelp.EmitHintOnce(os.Stderr, commands.AIBannerLine)
+	// invocation (rare — handleError runs at most once) are deduped by
+	// sync.Once and produce nothing.
+	fmt.Fprintln(w)
+	aihelp.EmitHintOnce(w, commands.AIBannerLine)
 }
 
 // printHelp prints the main help text.
@@ -234,7 +274,22 @@ func printError(msg string) {
 // so this binary cannot drift from the SPEC text.
 func printHelp() {
 	commands.WriteAIBanner(os.Stdout)
-	fmt.Printf(`%s - A CLI tool for managing technical roadmaps
+	writeGlobalHelpBody(os.Stdout)
+}
+
+// writeGlobalHelpBody writes the global help body WITHOUT the AI-agent
+// banner, to an arbitrary writer.
+//
+// Two callers need it on two different streams: printHelp writes it to
+// stdout under the banner for a help request the reader asked for, and
+// writeFailureReport writes it to stderr as the recovery help for an
+// unresolved command name. The recovery help must omit the banner:
+// the banner and the trailing hint carry the same sentence, and the
+// failing invocation already ends with the hint, so emitting both would
+// put that sentence on stderr twice (SPEC/HELP.md § Recovery help after
+// a dispatch failure).
+func writeGlobalHelpBody(w io.Writer) {
+	fmt.Fprintf(w, `%s - A CLI tool for managing technical roadmaps
 
 Usage: rmp [command] [subcommand] [arguments] [options]
 

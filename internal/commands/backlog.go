@@ -19,7 +19,7 @@ var BacklogListFlags = []FlagDef{
 
 // printBacklogListHelp — `rmp backlog list`.
 func printBacklogListHelp() {
-	fmt.Print(`Usage: rmp backlog list -r <roadmap> [filters]
+	fmt.Fprint(helpDst(), `Usage: rmp backlog list -r <roadmap> [filters]
 
 Lists every task currently in BACKLOG status. Equivalent to
 'rmp task list -r <roadmap> --status BACKLOG' but with a focused option
@@ -62,7 +62,7 @@ Examples:
 
 // printBacklogShowNextHelp — `rmp backlog show-next`.
 func printBacklogShowNextHelp() {
-	fmt.Print(`Usage: rmp backlog show-next -r <roadmap> [count]
+	fmt.Fprint(helpDst(), `Usage: rmp backlog show-next -r <roadmap> [count]
 
 Returns the top-<count> BACKLOG tasks by priority DESC, then created_at
 ASC for ties. Designed for sprint planning ("what should we pull in next?").
@@ -201,7 +201,7 @@ func backlogShowNext(args []string) error {
 
 // printBacklogHelp prints backlog command help.
 func printBacklogHelp() {
-	fmt.Print(`Usage: rmp backlog [command] [arguments] [options]
+	fmt.Fprint(helpDst(), `Usage: rmp backlog [command] [arguments] [options]
 
 Aliases: bl.
 

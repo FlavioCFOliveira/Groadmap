@@ -8,6 +8,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -25,6 +26,8 @@ import (
 	"github.com/FlavioCFOliveira/GoGraph/store/txn"
 	"github.com/FlavioCFOliveira/GoGraph/store/wal"
 	"github.com/FlavioCFOliveira/Groadmap/internal/cypherguard"
+	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
+	"github.com/FlavioCFOliveira/Groadmap/internal/terminal"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
@@ -41,9 +44,41 @@ type graphOKResult struct {
 	OK bool `json:"ok"`
 }
 
+// maxQueryBytes is the maximum length of a Cypher query: 1 MiB, which is
+// 1048576 bytes (SPEC/GRAPH.md § Maximum Query Length). A longer query is
+// refused with utils.ErrValidation (exit code 6) and the message
+// "query exceeds maximum length of 1048576 bytes", whichever of the two sources
+// carried it.
+//
+// BYTES, not characters, and the difference from the comment body's 4096-CHARACTER
+// cap is deliberate. A comment body is stored text whose length the author reads
+// back, so it is counted in the units it was written in. A query is an
+// instruction that is executed and discarded, never stored, and the harm this
+// maximum exists against is memory, which is counted in bytes. A 1 MiB query
+// written in multi-byte characters therefore carries fewer than 1048576
+// characters, and that is the intended reading.
+//
+// The size is generous on purpose: a graph bootstrap script carrying hundreds of
+// MERGE statements stays far below it, while the unbounded read this replaces
+// needed 256 MiB of input to reach 867 MB of resident memory and 15.9 s of wall
+// time. A maximum someone reaches doing ordinary work is a maximum that gets
+// widened later, and widening a published limit is worse than choosing it well
+// once; 64 KiB was considered and declined for exactly that reason.
+const maxQueryBytes = 1 << 20
+
+// queryTooLongError builds the refusal for a query that exceeds
+// maxQueryBytes. It wraps utils.ErrValidation, so the refusal carries exit code
+// 6 — NOT the exit code 2 that a missing query carries. The two are different
+// classes and SPEC/GRAPH.md § Standard Input That Supplies No Query forbids
+// collapsing them: supplying no query at all is a missing required parameter,
+// while supplying a query the command refuses to accept is a validation failure.
+func queryTooLongError() error {
+	return fmt.Errorf("%w: query exceeds maximum length of %d bytes", utils.ErrValidation, maxQueryBytes)
+}
+
 // printGraphHelp prints the family-level help for rmp graph.
 func printGraphHelp() {
-	fmt.Print(`Usage: rmp graph <subcommand> -r <roadmap> [-q <cypher>]
+	fmt.Fprint(helpDst(), `Usage: rmp graph <subcommand> -r <roadmap> [-q <cypher>]
 
 Manage the knowledge graph for a roadmap using Cypher queries.
 Each subcommand validates that the supplied query matches its operation class
@@ -84,7 +119,7 @@ Examples:
 }
 
 func printGraphCreateHelp() {
-	fmt.Print(`Usage: rmp graph create -r <roadmap> [-q <cypher>]
+	fmt.Fprint(helpDst(), `Usage: rmp graph create -r <roadmap> [-q <cypher>]
 
 Execute a CREATE or MERGE query against the roadmap's knowledge graph.
 The query MUST contain CREATE and/or MERGE clauses and MUST NOT contain
@@ -116,7 +151,7 @@ Examples:
 }
 
 func printGraphQueryHelp() {
-	fmt.Print(`Usage: rmp graph query -r <roadmap> [-q <cypher>]
+	fmt.Fprint(helpDst(), `Usage: rmp graph query -r <roadmap> [-q <cypher>]
 
 Execute a read-only MATCH ... RETURN query against the roadmap's knowledge
 graph. The query MUST NOT contain any writing clause.
@@ -151,7 +186,7 @@ Examples:
 }
 
 func printGraphUpdateHelp() {
-	fmt.Print(`Usage: rmp graph update -r <roadmap> [-q <cypher>]
+	fmt.Fprint(helpDst(), `Usage: rmp graph update -r <roadmap> [-q <cypher>]
 
 Execute a SET or REMOVE query against the roadmap's knowledge graph.
 The query MUST contain SET and/or REMOVE clauses and MUST NOT contain
@@ -183,7 +218,7 @@ Examples:
 }
 
 func printGraphDeleteHelp() {
-	fmt.Print(`Usage: rmp graph delete -r <roadmap> [-q <cypher>]
+	fmt.Fprint(helpDst(), `Usage: rmp graph delete -r <roadmap> [-q <cypher>]
 
 Execute a DELETE or DETACH DELETE query against the roadmap's knowledge
 graph. The query MUST contain DELETE and/or DETACH DELETE and MUST NOT
@@ -215,7 +250,7 @@ Examples:
 }
 
 func printGraphSearchHelp() {
-	fmt.Print(`Usage: rmp graph search -r <roadmap> [-q <cypher>]
+	fmt.Fprint(helpDst(), `Usage: rmp graph search -r <roadmap> [-q <cypher>]
 
 Execute a read-only traversal query against the roadmap's knowledge graph.
 Variable-length path patterns (e.g. -[*1..3]-) are supported. The query
@@ -301,10 +336,15 @@ func isFlagLike(tok string) bool {
 	return false
 }
 
-// readQuery extracts the Cypher query from args. It consumes --query /
-// -q from args and returns the trimmed query string, or reads all of
-// stdin when the flag is absent. An empty or whitespace-only result is
-// returned as ErrRequired.
+// readQuery extracts the Cypher query from args. It consumes --query / -q from
+// args and returns the trimmed query string, or reads the query from standard
+// input when the flag is absent. An empty or whitespace-only result is returned
+// as ErrRequired.
+//
+// Both sources are subject to maxQueryBytes, and the check happens here rather
+// than deeper in: an over-long query is never masked, never classified by the
+// guard rail, never handed to the engine, and never reaches an opened store
+// (SPEC/GRAPH.md § Maximum Query Length rule 3).
 func readQuery(args []string) (string, error) {
 	var queryVal string
 	var queryFound bool
@@ -346,6 +386,15 @@ func readQuery(args []string) (string, error) {
 	}
 
 	if queryFound {
+		// The maximum applies to BOTH sources (SPEC/GRAPH.md § Maximum Query
+		// Length rule 2), so the same text never passes at one door and fails at
+		// the other. A cap enforced only on the standard-input path would refuse
+		// in one place what it accepts in the other, which is not a maximum. The
+		// count is taken over the bytes AS SUPPLIED, which is why it precedes the
+		// trim of precedence rule 5.
+		if len(queryVal) > maxQueryBytes {
+			return "", queryTooLongError()
+		}
 		q := strings.TrimSpace(queryVal)
 		if q == "" {
 			return "", fmt.Errorf("%w: no query supplied", utils.ErrRequired)
@@ -353,12 +402,93 @@ func readQuery(args []string) (string, error) {
 		return q, nil
 	}
 
-	// --query absent: read stdin in full.
-	raw, err := io.ReadAll(os.Stdin)
-	if err != nil {
+	// --query absent: the query comes from standard input.
+	return readQueryStdin(os.Stdin)
+}
+
+// readQueryStdin obtains the Cypher query from src, which is the process's
+// standard input, when --query is absent (SPEC/GRAPH.md § Cypher Input Source
+// and Precedence, rules 2 and 3).
+//
+// A TERMINAL IS REFUSED WITHOUT BEING READ AT ALL. That ordering is the whole
+// point of this function and is part of the contract rather than an accident of
+// how fast the check runs: an invocation that forgot the flag, with a terminal on
+// standard input, must fail at once instead of waiting for a query nobody is
+// going to type. The failure it closes was observed, not imagined — such an
+// invocation printed nothing and never returned, and was killed after roughly
+// forty minutes.
+//
+// The refusal is ErrRequired (exit code 2), the same class and the same message
+// an empty or whitespace-only stream reaches. It is NOT the ErrValidation (exit
+// code 6) that an over-long query carries: supplying no query at all is a missing
+// required parameter, while supplying one the command refuses to accept is a
+// validation failure. SPEC/GRAPH.md § Standard Input That Supplies No Query
+// forbids collapsing the two.
+func readQueryStdin(src *os.File) (string, error) {
+	if terminal.IsTerminal(src) {
+		return "", fmt.Errorf("%w: no query supplied", utils.ErrRequired)
+	}
+	return readQueryStream(src)
+}
+
+// readQueryStream reads a Cypher query from an open, non-terminal stream under a
+// HARD BOUND and applies the rules its length and content are subject to.
+//
+// # Why this is not io.ReadAll
+//
+// The previous implementation drained the stream to EOF, so a hostile or runaway
+// writer decided how much this process buffered: 256 MiB offered to
+// `rmp graph query` produced 867 MB of peak resident memory and 15.9 s of wall
+// time, all of it spent on a "query" that was never going to be accepted (the
+// time went into the guard rail's masking pass and the engine's parse attempt,
+// both run over 256 MB of input). That is CWE-400 / CWE-789 — an allocation
+// sized by whoever is writing — against a command whose largest acceptable input
+// is 1 MiB.
+//
+// The read therefore stops at maxQueryBytes+1 bytes. That one extra byte already
+// settles the verdict, because no later byte can bring the count back down: if it
+// arrives, the query is over the maximum and is refused; if the stream ends
+// first, everything it carried is in hand. Peak memory is the buffer, and it does
+// not grow with the amount the writer sends. A producer still writing when the
+// command exits sees the usual broken pipe; the bound is a promise about what
+// this process consumes and retains, not about what the producer manages to push
+// into the operating system's pipe buffer.
+//
+// The buffer is allocated once at its full size rather than grown by io.ReadAll,
+// which reaches roughly 1.3x the data through its doubling and copies every byte
+// again at each growth. One allocation of a known size keeps the peak exactly
+// what the maximum promises, and 1 MiB is nothing beside the graph store this
+// command is about to open.
+//
+// One difference from the comment body's bounded read is deliberate and must not
+// be "aligned" away (SPEC/GRAPH.md § Bounded Standard-Input Read). That read
+// looks past its cap for trailing whitespace, so its verdict is exactly the
+// verdict a read-to-EOF implementation would reach after trimming. This one does
+// not: the maximum counts the bytes standard input supplies, so 1048576 bytes of
+// Cypher followed by trailing whitespace is refused even though trimming that
+// whitespace would have brought it to the maximum. A query's length is not a
+// value anybody reads back, and a producer that pads a megabyte of Cypher with
+// more whitespace is not a case worth reading further for.
+func readQueryStream(src io.Reader) (string, error) {
+	buf := make([]byte, maxQueryBytes+1)
+	n, err := io.ReadFull(src, buf)
+	// io.ReadFull reports the ordinary outcome — a stream shorter than the buffer
+	// — as io.EOF (nothing arrived) or io.ErrUnexpectedEOF (something did), so
+	// neither is a failure here. Anything else is a genuine I/O failure of the
+	// process rather than bad user input, and maps to exit code 1.
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 		return "", fmt.Errorf("%w: reading query from stdin: %v", utils.ErrDatabase, err)
 	}
-	q := strings.TrimSpace(string(raw))
+
+	if n > maxQueryBytes {
+		return "", queryTooLongError()
+	}
+
+	// The trim happens AFTER the length check (SPEC/GRAPH.md § Cypher Input
+	// Source and Precedence, rule 5). A stream that carries only whitespace
+	// therefore trims to nothing and is refused as a missing parameter, exactly
+	// as an empty stream is.
+	q := strings.TrimSpace(string(buf[:n]))
 	if q == "" {
 		return "", fmt.Errorf("%w: no query supplied", utils.ErrRequired)
 	}
@@ -378,6 +508,13 @@ func maskCypherLiterals(query string) string {
 // validateGuardRail checks that query matches the operation class required by
 // subcmd. It returns ErrValidation when the class does not match, with a
 // message that names the subcommand and the expected class.
+//
+// The read subcommands carry one further acceptance rule, applied after the
+// class rule and only to them: a schema-introspection command is accepted only
+// in the keyword spelling the engine routes to its introspection parser
+// (SPEC/GRAPH.md § Keyword Spacing in a Schema-Introspection Command). It is a
+// rule about which statements the introspection class covers, which is why it
+// belongs to the guard rail rather than beside it.
 //
 // Classification runs on the literal-masked normalization of the query, never
 // on the raw string (SPEC/GRAPH.md § Literal-Aware Normalization): a clause
@@ -422,6 +559,25 @@ func validateGuardRail(subcmd, allowed, query string) error {
 		if c.Write {
 			return fmt.Errorf("%w: graph %s accepts only %s queries", utils.ErrValidation, subcmd, allowed)
 		}
+		// Schema introspection is accepted only in the spelling the engine routes
+		// to its introspection parser: exactly one space between SHOW and the
+		// target keyword. Any other separator is refused HERE, with the guard
+		// rail's own message, instead of being admitted and left to die in the
+		// engine's parser under a diagnostic that lists every clause keyword
+		// except SHOW and so reads as though schema introspection were
+		// unsupported (SPEC/GRAPH.md § Keyword Spacing in a Schema-Introspection
+		// Command; § Per-Subcommand Validation Rules note 8).
+		//
+		// Placement carries two contracts. It is decided AFTER the class
+		// objections above, so a query that both writes and carries a badly
+		// spaced SHOW is rejected on its class, matching the precedence the web
+		// endpoint applies. And it is confined to this branch, so the write
+		// subcommands keep rejecting a SHOW on its class at any spacing (note 6)
+		// — their objection is that it carries none of the clauses they accept,
+		// which holds for the well-formed spelling too.
+		if reason, misspaced := cypherguard.IntrospectSpacingRejection(query); misspaced {
+			return fmt.Errorf("%w: graph %s: %s", utils.ErrValidation, subcmd, reason)
+		}
 	case "update":
 		// Must be write, must have SET/REMOVE, must not have CREATE/MERGE/DELETE.
 		if !c.Write || !c.Mutate || c.Create || c.Delete {
@@ -434,6 +590,60 @@ func validateGuardRail(subcmd, allowed, query string) error {
 		}
 	}
 	return nil
+}
+
+// validateRelationshipWriteDirection rejects a `graph update` query whose SET or
+// REMOVE targets a relationship the engine would not write (SPEC/GRAPH.md
+// § Relationship Write Direction).
+//
+// It is a SEPARATE contract from the clause-class guard rail above, not another
+// class rule: the query's operation class is already correct — it is a mutating
+// write under the subcommand that accepts mutating writes — and what is wrong is
+// the ORIENTATION of the pattern that binds the relationship being written. The
+// two checks are kept apart so the clause-class classification, which the
+// read-only web endpoint shares, is untouched by this write-path-only rule.
+//
+// Only `update` is checked. `delete` is unaffected: DELETE resolves the edge
+// itself rather than through the endpoint columns, and removes a relationship
+// bound by a reverse traversal correctly. `create` cannot reach the condition,
+// because the clause-class rule above already rejects any CREATE/MERGE query
+// that contains SET or REMOVE (so `MERGE … ON MATCH SET …` is not admitted by
+// this CLI at all).
+//
+// Detection runs on the parsed query rather than on the masked text, so a
+// relationship arrow inside a string literal or a comment cannot trip it: the
+// parser never sees those characters as pattern syntax.
+func validateRelationshipWriteDirection(subcmd, query string) error {
+	if subcmd != "update" {
+		return nil
+	}
+	unwritable := cypherguard.UnwritableRelationshipTargets(query)
+	if len(unwritable) == 0 {
+		return nil
+	}
+	t := unwritable[0]
+	return fmt.Errorf(
+		"%w: graph update cannot write relationship %q: it is bound by an %s pattern, "+
+			"and the engine writes a relationship property only through an outgoing pattern, "+
+			"so %s would be skipped while the command still reported success. "+
+			"Rewrite the traversal as outgoing: MATCH (source)-[%s]->(target) ... SET %s.<key> = <value>. "+
+			"To reach the edges arriving AT a node, anchor the outgoing pattern on that node "+
+			"instead of reversing the arrow: MATCH (other)-[%s]->(target {key:'...'}) ... SET %s.<key> = <value>",
+		utils.ErrValidation,
+		t.Variable, t.Direction, skippedLegOf(t.Direction),
+		t.Variable, t.Variable, t.Variable, t.Variable,
+	)
+}
+
+// skippedLegOf names the edges the engine would drop, for the message
+// validateRelationshipWriteDirection builds. An incoming pattern drops every
+// edge it matches; an undirected pattern drops only the ones it reaches against
+// the stored arrow, which is the incoming half of the traversal.
+func skippedLegOf(d cypherguard.Direction) string {
+	if d == cypherguard.DirectionUndirected {
+		return "the incoming half of that traversal"
+	}
+	return "the incoming direction"
 }
 
 // serializeValue converts a single expr.Value into a JSON-compatible
@@ -663,8 +873,17 @@ func runGraphSearch(args []string) error {
 }
 
 // runGraphRead is the shared implementation for read subcommands
-// (query and search). It opens the store in read-only recovery mode,
-// runs the query, and serialises the result.
+// (query and search). It opens the store under the shared store lock, releases
+// that lock the moment the open returns, then runs the query against the
+// in-memory graph the open produced and serialises the result.
+//
+// The lock is taken because opening the store is not a read-only operation on
+// disk: recovery repairs an interrupted checkpoint before it loads anything, so
+// an unlocked read could delete or race the staging directory a concurrent
+// writer is publishing its snapshot from (SPEC/GRAPH.md § What a Read Changes on
+// Disk). It is released at the open because that is the whole of what a read
+// touches on disk — see graphlock's package comment for the anti-widening
+// clause that governs this.
 func runGraphRead(subcmd, allowed string, args []string) error {
 	roadmapName, remaining, err := requireRoadmap(args)
 	if err != nil {
@@ -685,9 +904,17 @@ func runGraphRead(subcmd, allowed string, args []string) error {
 		return err
 	}
 
-	res, err := recovery.Open[string, float64](graphDir, graphReadOpts)
+	// Shared lock, held across the store open ALONE. Released with an explicit
+	// call rather than a defer, on both the success and the failure path, so
+	// the hold cannot be silently widened to the query by a later edit.
+	releaseLock, err := graphlock.AcquireShared(graphDir)
 	if err != nil {
-		return fmt.Errorf("%w: graph store unavailable: %v", utils.ErrDatabase, err)
+		return err
+	}
+	res, openErr := recovery.Open[string, float64](graphDir, graphReadOpts)
+	releaseLock()
+	if openErr != nil {
+		return fmt.Errorf("%w: graph store unavailable: %v", utils.ErrDatabase, openErr)
 	}
 
 	engine := cypher.NewEngine(res.Graph)
@@ -751,44 +978,6 @@ func checkpointGraph(g *lpg.Graph[string, float64], w *wal.Writer, graphDir stri
 	return nil
 }
 
-// acquireGraphWriteLock takes an exclusive, non-blocking advisory lock on the
-// graph store for the duration of a write. Two concurrent `rmp graph` writers
-// must NOT interleave their open -> commit -> checkpoint -> WAL-truncate
-// sequences: a second writer that loaded the graph before the first's commit
-// would, on checkpoint, write a FULL snapshot of its own (stale) in-memory
-// graph — missing the first writer's committed change — and then truncate the
-// WAL that still held it, silently losing an acknowledged write. Per
-// SPEC/GRAPH.md § Concurrency and Recovery rule 2, a concurrent write must
-// surface as utils.ErrDatabase (exit 1) rather than corrupt the store, so the
-// lock is acquired non-blocking and contention is reported as ErrDatabase. The
-// returned release closure unlocks and closes the lock file; the operating
-// system also releases the lock automatically if the process dies.
-//
-// This function owns the whole contract — lock-file path, file handle
-// lifetime, error wrapping, and the release closure. Only the lock and unlock
-// primitives themselves are platform-specific, because no single system call
-// provides them everywhere: lockGraphWriteFile and unlockGraphWriteFile are
-// implemented with flock(2) in graph_lock_unix.go and with LockFileEx /
-// UnlockFileEx in graph_lock_windows.go. Both implementations MUST be
-// exclusive and MUST fail immediately on contention rather than wait.
-func acquireGraphWriteLock(graphDir string) (func(), error) {
-	lockPath := filepath.Join(graphDir, "write.lock")
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600) // #nosec G304 -- lockPath is derived from a validated roadmap name under ~/.roadmaps
-	if err != nil {
-		return nil, fmt.Errorf("%w: opening graph write lock: %v", utils.ErrDatabase, err)
-	}
-	if err := lockGraphWriteFile(f); err != nil {
-		// Close before returning: the handle must not leak on the
-		// contention path, which is the path taken most often.
-		_ = f.Close()
-		return nil, fmt.Errorf("%w: graph store is busy: a concurrent write is in progress", utils.ErrDatabase)
-	}
-	return func() {
-		_ = unlockGraphWriteFile(f)
-		_ = f.Close()
-	}, nil
-}
-
 // runGraphWrite is the shared implementation for write subcommands
 // (create, update, delete). It opens the WAL store with retry,
 // runs the query in a transaction, and serialises the result.
@@ -807,14 +996,23 @@ func runGraphWrite(subcmd, allowed string, args []string) error {
 		return err
 	}
 
+	// Refused before the store is opened, like the clause-class guard rail, so
+	// a rejected query never reaches the graph (SPEC/GRAPH.md
+	// § Relationship Write Direction).
+	if err := validateRelationshipWriteDirection(subcmd, query); err != nil {
+		return err
+	}
+
 	graphDir, err := openGraphStore(roadmapName)
 	if err != nil {
 		return err
 	}
 
 	// Serialise concurrent writers to prevent the lost-write corruption
-	// described in acquireGraphWriteLock. Held until after the checkpoint.
-	releaseLock, err := acquireGraphWriteLock(graphDir)
+	// described in graphlock.AcquireExclusive, and shut out a reader that would
+	// otherwise run its recovery repair over this writer's checkpoint. Held for
+	// the whole sequence, until after the checkpoint.
+	releaseLock, err := graphlock.AcquireExclusive(graphDir)
 	if err != nil {
 		return err
 	}

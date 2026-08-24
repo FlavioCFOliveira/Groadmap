@@ -136,7 +136,7 @@ func buildTaskCommand() Command {
 				},
 				Flags:       append(append(append([]Flag{sharedRoadmapFlag()}, taskTextFlags(false)...), taskCommonOptionalFlags()...), helpFlag()),
 				Output:      SuccessOutput{Kind: "empty"},
-				SideEffects: SideEffects{Database: "UPDATE tasks and audit log; one transaction.", Filesystem: "None.", Network: "None."},
+				SideEffects: SideEffects{Database: "UPDATE tasks plus one audit entry per supplied field, all sharing one performed_at; one transaction. The operations are TASK_TITLE_CHANGE, TASK_TYPE_CHANGE, TASK_FUNCTIONAL_REQUIREMENTS_CHANGE, TASK_TECHNICAL_REQUIREMENTS_CHANGE, TASK_ACCEPTANCE_CRITERIA_CHANGE, TASK_PRIORITY_CHANGE and TASK_SEVERITY_CHANGE, each written only when its own flag is supplied. --priority and --severity reuse the operations of `task prio` and `task sev` rather than declaring their own, so a filter on TASK_PRIORITY_CHANGE sees both routes. Nothing writes the LEGACY TASK_UPDATE.", Filesystem: "None.", Network: "None."},
 				Idempotent:  true,
 				ExitCodes:   []int{0, 3, 4, 6},
 				Examples: []Example{
@@ -184,7 +184,7 @@ func buildTaskCommand() Command {
 					helpFlag(),
 				},
 				Output:      SuccessOutput{Kind: "empty"},
-				SideEffects: SideEffects{Database: "UPDATE tasks + audit log; one transaction. Entering DOING writes commit_open, entering COMPLETED writes commit_close, and returning to BACKLOG clears commit_close while preserving commit_open.", Filesystem: "None.", Network: "None."},
+				SideEffects: SideEffects{Database: "UPDATE tasks plus one audit entry per task named on the command line, all sharing one performed_at; one transaction. The operation names the DESTINATION status: TASK_STATUS_BACKLOG, TASK_STATUS_DOING, TASK_STATUS_TESTING or TASK_STATUS_COMPLETED. TASK_STATUS_SPRINT is never written here because the SPRINT target is rejected, and nothing writes the LEGACY TASK_STATUS_CHANGE. Entering DOING writes commit_open and records it on the entry, entering COMPLETED writes commit_close and records it on the entry, and returning to BACKLOG clears commit_close while preserving commit_open and names no counterpart entity.", Filesystem: "None.", Network: "None."},
 				Idempotent:  false,
 				ExitCodes:   []int{0, 2, 3, 4, 6},
 				Examples: []Example{
@@ -208,7 +208,7 @@ func buildTaskCommand() Command {
 				},
 				Flags:       []Flag{sharedRoadmapFlag(), helpFlag()},
 				Output:      SuccessOutput{Kind: "empty"},
-				SideEffects: SideEffects{Database: "UPDATE tasks + audit log per task; one transaction.", Filesystem: "None.", Network: "None."},
+				SideEffects: SideEffects{Database: "UPDATE tasks plus one audit entry per task actually returned to BACKLOG, all sharing one performed_at; one transaction. The same transaction also runs DELETE FROM sprint_tasks for every task whose source state is SPRINT, DOING or TESTING, so those tasks leave their sprint; a task reopened from COMPLETED keeps its sprint_tasks row and stays a member. A task already in BACKLOG is skipped entirely: no UPDATE, no audit entry, and its sprint membership untouched.", Filesystem: "None.", Network: "None."},
 				Idempotent:  true,
 				ExitCodes:   []int{0, 3, 4, 6},
 				Examples: []Example{

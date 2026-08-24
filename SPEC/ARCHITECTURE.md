@@ -77,7 +77,7 @@ transactions, or locks. The graph layer is specified in `GRAPH.md`.
 5. Each roadmap home directory is created if absent, is owned by the user only, and uses the same `0700` permissions as the data directory; its permissions are verified on access.
 6. The roadmap's SQLite database lives inside the roadmap home directory at `~/.roadmaps/<name>/project.db` with `0600` permissions, applied and verified every time `rmp` opens the database and not only when it creates it (see `ARCHITECTURE.md § Open-Time Permission Enforcement`). Its SQLite sidecars (`project.db-wal`, `project.db-shm`) live alongside it.
 7. A roadmap home directory holds the SQLite database and its sidecars, and, once the knowledge graph is used, the `graph/` subdirectory. The directory is the designated location for per-roadmap artefacts; additional file types may be added without changing this layout.
-8. The knowledge graph for a roadmap is stored in the subdirectory `~/.roadmaps/<name>/graph/` (mode `0700`), created on first use of any `rmp graph` subcommand. It is a directory because the GoGraph backing store persists through an on-disk snapshot plus a write-ahead log; after the first successful write subcommand the directory also contains a `snapshot/` subdirectory, produced by the synchronous checkpoint that runs after each write (see `GRAPH.md § Synchronous Checkpoint on Write`). Its internal layout is owned by GoGraph and is opaque to Groadmap. The graph store is the canonical subject of `GRAPH.md`; see `GRAPH.md § Persistence Layout`.
+8. The knowledge graph for a roadmap is stored in the subdirectory `~/.roadmaps/<name>/graph/` (mode `0700`), created on first use of any `rmp graph` subcommand. It is a directory because the GoGraph backing store persists through an on-disk snapshot plus a write-ahead log; after the first successful write subcommand the directory also contains a `snapshot/` subdirectory, produced by the synchronous checkpoint that runs after each write (see `GRAPH.md § Synchronous Checkpoint on Write`). The directory also holds `write.lock`, the advisory lock file Groadmap itself maintains to serialise access to the store (see `GRAPH.md § Concurrency and Recovery`). Apart from that lock file, the internal layout is owned by GoGraph and is opaque to Groadmap. The graph store is the canonical subject of `GRAPH.md`; see `GRAPH.md § Persistence Layout`.
 9. Roadmap enumeration considers the immediate **subdirectories** of `~/.roadmaps/` (one directory per roadmap), not files at the top level. A roadmap is identified by the presence of `project.db`; the optional `graph/` subdirectory does not by itself constitute a roadmap.
 10. **No symbolic links for the data directory or a roadmap home directory.** Neither the data directory `~/.roadmaps/` nor any roadmap home directory `~/.roadmaps/<name>/` may be a symbolic link. When creating, opening, or migrating a roadmap directory, `rmp` MUST refuse to follow a symbolic link: if `~/.roadmaps/` is a symlink, or if the resolved `~/.roadmaps/<name>/` path is a symlink (rather than a real directory), the operation fails with an error (`utils.ErrDatabase`, exit code 1) instead of following the link. This prevents an attacker from redirecting `project.db` writes outside the data directory and prevents `rmp` from applying its `0700`/`0600` permission changes to a directory or file outside `~/.roadmaps/` reached through a link (CWE-59, link following). The startup layout-migration sweep applies the same rule: a `.db`-named top-level symbolic link is never a migration candidate and is left untouched (see `ARCHITECTURE.md § Filesystem Layout Migration`, Edge Cases).
 
@@ -246,9 +246,12 @@ the same rule, with the sequence in step **B** followed exactly as written:
 - Restricting the mode is the only filesystem effect the read-only path may have.
   It creates no file and no directory, it never widens a mode, and it changes
   neither the contents nor the schema of the database.
-  `WEB.md § Security and Constraints` states that the web interface creates no new
-  on-disk artefact for a read and relaxes no permission; restricting a file that
-  is more permissive than `0600` is consistent with both statements.
+  `WEB.md § Security and Constraints` states that the web interface relaxes no
+  permission and creates no roadmap database, roadmap home directory, or graph
+  store directory for a read; restricting a file that is more permissive than
+  `0600` is consistent with both statements. This bullet is about the roadmap
+  database only: the graph store has its own read-path rules, and what a graph
+  read may change on disk is `GRAPH.md § What a Read Changes on Disk`.
 - The read-only path does not create, modify, or verify directories. The
   directory rule in step **A** is enforced by the writable open path and by the
   web server's startup sequence, which verifies `0700` on `~/.roadmaps/` before
@@ -422,9 +425,14 @@ pinning requirements are in `BUILD.md § Go Toolchain`.
 - Reads the same on-disk data the CLI reads: tasks and sprints from each
   roadmap's `project.db` (via the existing read queries in `DATABASE.md`) and the
   knowledge graph from each roadmap's `graph/` store (via the GoGraph engine's
-  read path, exactly as `graph query`/`search` open it). Every per-request handler
-  opens its data **read-only**: it performs **no** write to a roadmap database, no
-  audit entry, no schema change, and triggers **no** graph checkpoint.
+  read path, exactly as `graph query`/`search` open it, and under the same shared
+  lock, held across the open alone). Every per-request handler opens its data
+  **read-only**: it performs **no** write to a roadmap database, no audit entry,
+  no schema change, no write of
+  graph data, and triggers **no** graph checkpoint. Opening the graph store is the
+  one exception to "read-only" at the filesystem level: the engine's recovery
+  repairs an interrupted checkpoint on open, which is why a graph read takes a
+  lock. The exhaustive rule is `GRAPH.md § What a Read Changes on Disk`.
 - Performs one writing step, at startup only: before binding the listener it opens
   each existing roadmap's `project.db` through the normal writable open path to run
   the SQLite schema migrations (idempotent; automatic; no user input), then closes
@@ -533,7 +541,9 @@ Errors follow typical CLI conventions:
 - Plain text format (human-readable)
 - Uses standard Unix exit codes
 
-**Input-related errors** (missing parameters, invalid arguments, unknown commands/subcommands) additionally display the **specific help for the command or subcommand** that was invoked.
+A failing invocation writes **nothing to stdout**. The error line, the AI-agent hint, and any help that accompanies the error all go to stderr.
+
+Help follows an error in exactly one case: a **dispatch failure**, meaning the CLI cannot resolve the name it was given to a command (`rmp nadadisto`) or to a subcommand of a command (`rmp task nadadisto`). In that case the help for the level at which the name could not be resolved follows the error on stderr. No other error class appends help; a missing parameter, an unknown flag, an invalid value, a resource that does not exist, or a database failure each produce the error line and the hint alone. `HELP.md § Error message format` is the canonical specification of the error output: which parts appear, in which order, and on which stream.
 
 **Example - General error:**
 ```
@@ -541,13 +551,23 @@ $ rmp task get -r project1 999
 Error: Task with ID 999 not found in roadmap 'project1'
 ```
 
-**Example - Input error (shows help):**
+**Example - Missing parameter (no help is appended):**
 ```
 $ rmp task create -r project1
-Error: Missing required parameters: --functional-requirements, --technical-requirements, --acceptance-criteria
+Error: required parameter missing: --title
 
-Usage: rmp task create [OPTIONS]
-...
+AI agents: run `rmp --ai-help` for a machine-readable command contract.
+```
+
+**Example - Dispatch failure (family help follows the error, exit code 127):**
+```
+$ rmp task nadadisto -r project1
+Error: unknown task subcommand: nadadisto
+
+Usage: rmp task <subcommand> [options]
+...the remainder of the family help body...
+
+AI agents: run `rmp --ai-help` for a machine-readable command contract.
 ```
 
 ### Error Reuse Policy (Mandatory)
@@ -568,6 +588,9 @@ The canonical set of sentinel errors is defined exclusively in `internal/utils/e
 | `utils.ErrDatabase` | 1 | Any SQLite or I/O failure |
 | `utils.ErrValidation` | 6 | Value out of allowed range or invalid enum value |
 | `utils.ErrFieldTooLarge` | 6 | String field exceeds its maximum character limit |
+| `utils.ErrUnknownCommand` | 127 | Dispatch failure: the name given does not resolve to a command or to a subcommand of a command |
+
+A dispatch failure MUST be carried by `utils.ErrUnknownCommand` and MUST NOT be wrapped in `utils.ErrInvalidInput`. The two are distinct classes: `utils.ErrInvalidInput` covers a malformed flag or argument supplied to a command that was resolved, and exits `2`; `utils.ErrUnknownCommand` covers a command or subcommand name that could not be resolved at all, and exits `127`. Wrapping the second in the first is what makes an unresolved subcommand exit `2` instead of `127`, and it also prefixes the message with `invalid input: `, which misreports the class to the reader.
 
 #### Wrapping Rules
 
@@ -639,7 +662,7 @@ Groadmap follows standard Unix/Linux exit code conventions. Success output is JS
 | `5` | `EXIT_EXISTS` | Resource already exists | Duplicate roadmap/task names |
 | `6` | `EXIT_INVALID_DATA` | Invalid input data | Validation failures (dates, ranges) |
 | `126` | `EXIT_NOT_EXECUTABLE` | Command not executable | Permission issues |
-| `127` | `EXIT_CMD_NOT_FOUND` | Command not found | Unknown command/subcommand |
+| `127` | `EXIT_CMD_NOT_FOUND` | Command not found | Dispatch failure: an unresolved command name or an unresolved subcommand name |
 | `130` | `EXIT_SIGINT` | Interrupted by Ctrl+C | SIGINT received |
 
 ### Error Code Mapping
@@ -663,8 +686,8 @@ Internal error codes map to exit codes as follows:
 | `NO_ROADMAP` | 3 | No roadmap selected and none specified |
 | `DB_ERROR` | 1 | Database operation failed |
 | `SYSTEM_ERROR` | 1 | Internal system error |
-| `UNKNOWN_SUBCOMMAND` | 2 | Invalid subcommand specified |
-| `UNKNOWN_COMMAND` | 127 | Unknown command or subcommand |
+| `UNKNOWN_SUBCOMMAND` | 127 | Subcommand name does not resolve within the command that was given |
+| `UNKNOWN_COMMAND` | 127 | Command name does not resolve |
 | `UPDATE_FAILED` | 1 | Failed to update resource |
 | `DELETE_FAILED` | 1 | Failed to delete resource |
 
@@ -686,7 +709,7 @@ esac
 
 # Exit on any error (strict mode)
 set -e
-rmp task add -r myproject -d "New task"   # Exits 3 if no roadmap specified
+rmp task create -t "New task"   # Exits 3: no roadmap given, so set -e stops the script
 ```
 
 ## AI Agent Contract Generation
@@ -738,7 +761,13 @@ The contract emitter is in-process and reads no external state. The
 only runtime errors it can surface are I/O errors writing to stdout,
 which map to exit code 1 via the standard error-handling path. When
 `--ai-help` is combined with an unknown command or subcommand name
-preceding it, the CLI emits exit code 2 with the standard error format.
+preceding it, the CLI emits exit code 2 with the standard error format,
+and no help follows the error. This is a deliberate exception to the
+exit code `127` specified for a dispatch failure in
+`HELP.md § Exit code of a dispatch failure`: the name preceding
+`--ai-help` is a scope selector for the contract emitter, not a name
+being dispatched, so an unusable selector is an invalid argument to
+`--ai-help` rather than a command that could not be found.
 
 ## See Also
 

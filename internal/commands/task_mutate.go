@@ -98,12 +98,21 @@ func taskRemove(args []string) error {
 //
 // Valid manual status transitions (this command):
 //   - SPRINT → BACKLOG, DOING
-//   - DOING → SPRINT, TESTING
+//   - DOING → TESTING
 //   - TESTING → DOING, COMPLETED
 //   - COMPLETED → BACKLOG (reopen)
 //
 // BACKLOG → SPRINT is automatic only (via `sprint add-tasks`); manual
 // `task stat <ids> SPRINT` is rejected with exit code 6.
+//
+// DOING → SPRINT used to be listed above and never worked: the guard in
+// models.CanTransitionTo gives DOING the single target TESTING, and the SPRINT
+// rejection fifty lines below refuses that target from every source state. The
+// only command that returns a DOING or TESTING task to BACKLOG is `task reopen`
+// (SPEC/STATE_MACHINE.md § Valid Transitions). The list is pinned to the guard
+// by TestTaskStatDocComment_ListsExactlyTheTransitionsAccepted, which reads it
+// back out of this file and compares it against transitions the command was
+// observed to accept.
 //
 // Optional flags:
 //   - -r, --roadmap: Roadmap name (uses current if not specified)
@@ -148,8 +157,16 @@ func taskSetStatus(args []string) error {
 			if i+1 >= len(remaining) {
 				return fmt.Errorf("%w: --summary requires a value", utils.ErrRequired)
 			}
-			// Trim leading/trailing whitespace per SPEC/COMMANDS.md.
-			s := strings.TrimSpace(remaining[i+1])
+			// Recorded AS SUPPLIED. The trim belongs to the validation
+			// sequence further down, and it must not happen here: this site
+			// used to trim at extraction, so by the time the
+			// control-character rule ran a leading or trailing VT (0x0B) or
+			// FF (0x0C) had already been removed and the value was accepted
+			// with the forbidden character silently discarded (measured:
+			// `--summary $'\x0bDelivered.'` exited 0 and stored
+			// "Delivered."). SPEC/MODELS.md § Free-Text Emptiness and
+			// Trimming Constraint fixes the order that closes it.
+			s := remaining[i+1]
 			completionSummary = &s
 			i++ // consume the value
 		case "--commit-open", "-co":
@@ -199,15 +216,34 @@ func taskSetStatus(args []string) error {
 	if completionSummary != nil && newStatus != models.StatusCompleted {
 		return fmt.Errorf("%w: --summary is only valid when transitioning to COMPLETED", utils.ErrValidation)
 	}
-	if completionSummary != nil && len(*completionSummary) > models.MaxTaskCompletionSummary {
-		return fmt.Errorf("%w: completion_summary exceeds maximum length of %d characters", utils.ErrFieldTooLarge, models.MaxTaskCompletionSummary)
+	// The cap keeps the position SPEC/COMMANDS.md § Change Status (stat) step 3
+	// states for --summary — ahead of the content rules — and now measures the
+	// TRIMMED value, because that is the value stored (SPEC/MODELS.md §
+	// Free-Text Emptiness and Trimming Constraint, Rule 2). A summary of exactly
+	// the maximum length carrying surrounding whitespace is therefore accepted,
+	// and what was counted is what the column holds.
+	if completionSummary != nil && len(strings.TrimSpace(*completionSummary)) > models.MaxTaskCompletionSummary {
+		return utils.FieldTooLargeError(utils.FieldTaskCompletionSummary, models.MaxTaskCompletionSummary)
 	}
-	// Reject control / bidi / format code points (SPEC/MODELS.md § Free-Text
-	// Control-Character Constraint).
+	// The encoding rule and then the control-character rule, on the value AS
+	// SUPPLIED, and only then the trim (SPEC/MODELS.md § Free-Text UTF-8 Encoding
+	// Constraint, § Free-Text Control-Character Constraint, and § Free-Text
+	// Emptiness and Trimming Constraint, whose steps 1 and 2 utils.TrimFreeText
+	// owns). Trimming first would strip a leading or trailing VT or FF — both
+	// forbidden — before the check could see them.
+	//
+	// `completion_summary` is the one free-text field Rule 1 does NOT govern: it
+	// is optional, and `task stat` accepts a transition to COMPLETED that
+	// supplies no --summary at all, so a value that is empty once trimmed is a
+	// summary the caller chose not to write and not a violation. Rule 2 still
+	// applies, which is why the value is rebound to the trimmed form before it
+	// reaches the UPDATE.
 	if completionSummary != nil {
-		if err := utils.ValidateNoControlChars(*completionSummary, "completion_summary"); err != nil {
-			return err
+		stored, textErr := utils.TrimFreeText(*completionSummary, utils.FieldTaskCompletionSummary)
+		if textErr != nil {
+			return textErr
 		}
+		completionSummary = &stored
 	}
 
 	// Fail-fast validation for the commit flags (step 4: still before the
