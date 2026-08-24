@@ -141,6 +141,15 @@ non-zero.
   table must not name a module that is registered nowhere. `run_tests.py`
   holds names; only this table says what a module is for, so a row that goes
   missing takes that meaning with it.
+- **No class shortfall** (`assert_no_class_shortfall`): every `Test*`/`*Tests`
+  suite class a registered module defines must be referenced by that module's
+  own runner, or the runner must discover its classes dynamically by
+  introspecting the module's own namespace, as described above. A runner that
+  names its classes one at a time and is not updated when a class is appended
+  below it exits 0 while quietly never running that class (rmp task #303,
+  measured on `test_48_graph_clause_surface.py`: 32 passed before the fix, 39
+  after, with 7 tests that had never run); this gate reports the module and
+  the unwired class name instead of letting the smaller count pass silently.
 
 ## Test Design
 
