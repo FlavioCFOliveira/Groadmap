@@ -2,7 +2,9 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -175,6 +177,26 @@ func (db *DB) runMigration(migration Migration) error {
 	return nil
 }
 
+// safeTableIdentifier is the shape columnExists requires of a table name before
+// it will interpolate one into a statement: a plain lowercase SQL identifier,
+// which is what every table in this schema is (SPEC/DATABASE.md § Schema).
+//
+// The class is deliberately narrower than SQLite's own identifier rules. It
+// admits no quote of any kind, no semicolon, no whitespace, no hyphen and no
+// "--", so a name that satisfies it cannot terminate the single-quoted literal
+// it is placed inside, cannot append a second statement, and cannot open a
+// comment. It also rejects the empty string, which would otherwise ask
+// pragma_table_info about a table with no name — a well-formed query whose zero
+// answer would be read as "the column is absent" and would send an ALTER at a
+// table the caller never named.
+var safeTableIdentifier = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
+
+// errUnsafeTableIdentifier is what columnExists returns for a table name outside
+// safeTableIdentifier. It is a refusal, not a repair: the function does not
+// escape, quote or trim the name, because a caller passing such a name has a bug
+// that an accommodation would hide.
+var errUnsafeTableIdentifier = errors.New("table name is not a plain lowercase SQL identifier")
+
 // columnExists reports whether table already has a column named column.
 //
 // Neither `ALTER TABLE … ADD COLUMN` nor `ALTER TABLE … DROP COLUMN` is
@@ -185,11 +207,32 @@ func (db *DB) runMigration(migration Migration) error {
 // with this one check and reads it in the sense its own statement needs — an ADD
 // runs only when the column is ABSENT, a DROP only while it is still PRESENT
 // (SPEC/DATABASE.md § Migration Idempotency (ALTER TABLE ADD COLUMN) and
-// § Migration Idempotency (ALTER TABLE DROP COLUMN)). The query is parameterized;
-// table is a compile-time literal at every call site.
+// § Migration Idempotency (ALTER TABLE DROP COLUMN)).
+//
+// THE COLUMN IS BOUND AND THE TABLE CANNOT BE, which is why the table is
+// guarded. SQLite does not accept a bound parameter as a PRAGMA argument —
+// pragma_table_info(?) is a syntax error, not a parameterized call — so the table
+// name has to be interpolated into the statement text, and this is the only
+// place in the module where a value rather than a placeholder is. What makes
+// that safe is the guard below and NOT the call sites: every caller passes a
+// string literal today, but that is a property of today's callers rather than of
+// this function, and the #nosec on the interpolation is a permanent blindfold
+// that would keep the scanner silent about a caller that stopped doing so.
+//
+// So the name is refused unless it matches safeTableIdentifier, a class that
+// contains no quote, no semicolon, no whitespace, no comment introducer and no
+// empty string, and therefore nothing that could close the quoted literal, end
+// the statement or start another one. A name needing an escape is a caller bug,
+// and the answer to a caller bug is a refusal rather than an accommodation.
 func columnExists(tx *sql.Tx, table, column string) (bool, error) {
+	// BEFORE the interpolation, never after: the format string must never see a
+	// name outside the class.
+	if !safeTableIdentifier.MatchString(table) {
+		return false, fmt.Errorf("checking column %s.%s: %w", table, column, errUnsafeTableIdentifier)
+	}
+
 	var count int
-	query := fmt.Sprintf("SELECT COUNT(*) FROM pragma_table_info('%s') WHERE name = ?", table) // #nosec G201 -- table is a constant literal at every call site; column value is parameterized
+	query := fmt.Sprintf("SELECT COUNT(*) FROM pragma_table_info('%s') WHERE name = ?", table) // #nosec G201 -- safeTableIdentifier already refused everything that could close the quoted literal, so only ^[a-z_][a-z0-9_]*$ reaches this format string; the column value is bound
 	if err := tx.QueryRow(query, column).Scan(&count); err != nil {
 		return false, fmt.Errorf("checking column %s.%s: %w", table, column, err)
 	}
