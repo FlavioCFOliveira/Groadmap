@@ -181,8 +181,35 @@ Groadmap implements exponential backoff retry logic for database operations:
 
 - **Initial delay**: 100ms
 - **Maximum delay**: 1000ms
-- **Maximum retries**: 5
-- **Backoff pattern**: 100ms, 200ms, 400ms, 800ms, 1000ms
+- **Maximum retries**: 5 — retries only; the first attempt is not a retry
+- **Maximum attempts**: 6 — one initial attempt plus at most five retries
+- **Backoff pattern**: 100ms, 200ms, 400ms, 800ms, 1000ms — one wait before each retry
+- **Maximum total wait**: 2500ms — 100 + 200 + 400 + 800 + 1000
+
+**Attempts and Retries:**
+
+"Maximum retries" counts the attempts made after the first one, so the number of
+times the operation itself runs is one greater: at most six. This section states
+both figures rather than the retry count alone, because an attempt count left to
+the reader to derive is a figure that two implementations of the same policy can
+disagree on without either of them contradicting the text.
+
+**Wait Ordering:**
+
+The implementation waits before each retry, and never after an attempt it does
+not retry:
+
+1. The first attempt runs immediately, with no preceding wait.
+2. Each retry is preceded by the next delay of the backoff pattern: 100ms before
+   the first retry, then 200ms, 400ms, 800ms and 1000ms before the second, third,
+   fourth and fifth.
+3. An attempt that succeeds returns its result immediately; no further wait and
+   no further attempt happen.
+4. An attempt that fails with an error the Retry Conditions below exclude returns
+   that error immediately, without waiting.
+5. No wait follows the sixth attempt. An operation whose every attempt fails with
+   a retryable error waits 2500ms in total and then fails; it does not wait again
+   after its final failure.
 
 **Retry Conditions:**
 - Only retry on SQLite busy/locked errors (`database is locked`, `SQLITE_BUSY`)
@@ -395,8 +422,10 @@ state from the snapshot and log.
    first collision.
 4. A **read** waits, and waits a bounded time. It retries the shared lock under
    the **same** bounded exponential-backoff policy specified for SQLite in
-   [Concurrency Model](#concurrency-model) (initial delay 100 ms, doubling to a
-   maximum of 1000 ms, at most 5 retries), retrying only on lock/contention
+   [Retry Logic](#retry-logic): six attempts in all — one initial attempt plus at
+   most five retries — and 2500 ms of waiting in the worst case. That section
+   states the delay ladder and the wait ordering, and this rule does not restate
+   them, so the two cannot diverge. The read retries only on lock/contention
    conditions and never on parse or validation errors. The policy is sized against
    the **writer's** hold, which spans a full checkpoint and is unaffected by the
    reader releasing its own lock after the open; a shorter or more aggressive wait

@@ -25,6 +25,7 @@ import (
 	"github.com/FlavioCFOliveira/GoGraph/store/snapshot"
 	"github.com/FlavioCFOliveira/GoGraph/store/txn"
 	"github.com/FlavioCFOliveira/GoGraph/store/wal"
+	"github.com/FlavioCFOliveira/Groadmap/internal/backoff"
 	"github.com/FlavioCFOliveira/Groadmap/internal/cypherguard"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
 	"github.com/FlavioCFOliveira/Groadmap/internal/terminal"
@@ -872,35 +873,22 @@ var graphReadOpts = recovery.Options[string, float64]{
 	WeightCodec: txn.NewFloat64WeightCodec(),
 }
 
-// walRetryPolicy mirrors the SQLite bounded exponential-backoff specified
-// in IMPLEMENTATION.md § Concurrency Model (initial 100ms, max 1s, 5 attempts).
-const (
-	walRetryInitial  = 100 * time.Millisecond
-	walRetryMax      = 1000 * time.Millisecond
-	walRetryAttempts = 5
-)
-
-// openWALWriter opens the WAL writer at walPath with bounded
-// exponential backoff. A persistent failure is returned as
-// ErrDatabase; callers must close the returned Writer.
+// openWALWriter opens the WAL writer at walPath under the project's single
+// bounded backoff policy (internal/backoff), which owns the attempt count and
+// the delay ladder. This site used to keep its own constants and its own loop,
+// and the loop disagreed with them; it now has neither.
+//
+// Every failure is waited on, because the one this retry exists for is
+// contention — another process holding the WAL directory lock — and a WAL that
+// cannot be opened for any other reason is not distinguishable here anyway. A
+// persistent failure is returned as ErrDatabase; callers must close the
+// returned Writer.
 func openWALWriter(walPath string) (*wal.Writer, error) {
-	delay := walRetryInitial
-	var lastErr error
-	for attempt := 0; attempt < walRetryAttempts; attempt++ {
-		w, err := wal.Open(walPath)
-		if err == nil {
-			return w, nil
-		}
-		lastErr = err
-		if attempt < walRetryAttempts-1 {
-			time.Sleep(delay)
-			delay *= 2
-			if delay > walRetryMax {
-				delay = walRetryMax
-			}
-		}
+	w, err := backoff.Retry(func() (*wal.Writer, error) { return wal.Open(walPath) }, backoff.Always)
+	if err != nil {
+		return nil, fmt.Errorf("%w: graph store unavailable: %v", utils.ErrDatabase, err)
 	}
-	return nil, fmt.Errorf("%w: graph store unavailable: %v", utils.ErrDatabase, lastErr)
+	return w, nil
 }
 
 // runGraphCreate executes a CREATE/MERGE Cypher query.

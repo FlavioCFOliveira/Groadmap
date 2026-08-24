@@ -2012,9 +2012,11 @@ func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphV
 	// read-only operation on disk: recovery repairs an interrupted checkpoint
 	// first, so an unlocked request could delete or race the staging directory
 	// a concurrent `rmp graph` write is publishing its snapshot from. Waiting
-	// for the lock is bounded (at most 2.5 s) and is spent BEFORE the query
-	// starts, so it does not consume this endpoint's query time budget and
-	// stays well inside the server's write timeout. A wait that is exhausted
+	// for the lock is bounded by the project's single retry policy
+	// (internal/backoff) and is spent BEFORE the query starts, so it does not
+	// consume this endpoint's query time budget and stays well inside the
+	// server's write timeout; internal/graphlock's TestReaderWaitIsTheProjectPolicy
+	// is what holds that headroom. A wait that is exhausted
 	// returns a plain ErrDatabase, which handleGraphData answers with HTTP 500
 	// — the status it already returns for a store that cannot be opened
 	// (SPEC/WEB.md § Knowledge Graph from the GoGraph Store, rule 5).
