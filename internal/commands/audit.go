@@ -162,16 +162,25 @@ func auditList(args []string) error {
 	limit := models.DefaultTaskLimit
 
 	if op, ok := result.Flags["Operation"].(string); ok {
-		if !models.IsValidAuditOperation(op) {
-			return fmt.Errorf("%w: invalid operation: %s", utils.ErrValidation, op)
+		// The enum is owned by models.ParseAuditOperation, which is the single
+		// place that decides what a valid operation is and how a bad one reads.
+		// Its sentinel is model-level and the exit-code mapper does not know
+		// it, so wrap in utils.ErrValidation to land on exit 6 — the same shape
+		// every other enum filter uses (SPEC/COMMANDS.md § List Audit Log).
+		parsed, parseErr := models.ParseAuditOperation(op)
+		if parseErr != nil {
+			return fmt.Errorf("%w: %s", utils.ErrValidation, parseErr.Error())
 		}
-		operation = &op
+		normalized := string(parsed)
+		operation = &normalized
 	}
 	if et, ok := result.Flags["EntityType"].(string); ok {
-		if !models.IsValidEntityType(et) {
-			return fmt.Errorf("%w: invalid entity type: %s", utils.ErrValidation, et)
+		parsed, parseErr := models.ParseEntityType(et)
+		if parseErr != nil {
+			return fmt.Errorf("%w: %s", utils.ErrValidation, parseErr.Error())
 		}
-		entityType = &et
+		normalized := string(parsed)
+		entityType = &normalized
 	}
 	if id, ok := result.Flags["EntityID"].(int); ok {
 		entityID = &id
@@ -236,11 +245,13 @@ func auditHistory(args []string) error {
 		return fmt.Errorf("%w: entity type and ID required", utils.ErrRequired)
 	}
 
-	// Parse entity type
-	if !models.IsValidEntityType(remaining[0]) {
-		return fmt.Errorf("%w: invalid entity type: %s", utils.ErrValidation, remaining[0])
+	// Parse entity type through the enum's owner, so this positional and the
+	// `-e` flag of `audit list` refuse a bad value in exactly the same words.
+	parsedEntityType, parseErr := models.ParseEntityType(remaining[0])
+	if parseErr != nil {
+		return fmt.Errorf("%w: %s", utils.ErrValidation, parseErr.Error())
 	}
-	entityType := remaining[0]
+	entityType := string(parsedEntityType)
 
 	// Parse and validate entity ID as a positive int in 1..MaxInt32, consistent
 	// with `task get` (SPEC/COMMANDS.md § Entity History). Non-positive or

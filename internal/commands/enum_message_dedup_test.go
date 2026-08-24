@@ -27,13 +27,22 @@ import (
 // strings.Contains, which passes either way and is why the doubling survived so
 // long — is what makes a relapse fail.
 //
-// The `audit list` cases are deliberately included although they were never
-// doubled. That command validates its two enums inline instead of calling
-// models.ParseAuditOperation / models.ParseEntityType, so it built its message
-// from a literal and escaped the defect. Pinning it here keeps it that way, and
-// records that its wording differs from every other enum refusal: it names the
-// value unquoted, and calls the operation enum "operation" rather than "audit
-// operation".
+// The `audit` cases were never doubled, because that command used to validate
+// its two enums inline — calling models.IsValidAuditOperation /
+// models.IsValidEntityType and building the message from a literal — and so
+// escaped the defect by escaping the shared code path entirely. The cost was a
+// second convention: it named the rejected value unquoted and called the
+// operation enum "operation" rather than "audit operation", so a user met two
+// different renderings of the same class of mistake depending on which command
+// they had typed, and models.ParseAuditOperation / models.ParseEntityType sat
+// exported with no caller at all.
+//
+// `audit list` and `audit history` now reach their enums through those parsers
+// like every other command, so the audit cases below are no longer exceptions:
+// they carry the quoted value and the full enum name, and they are pinned here
+// on exactly the same terms as the rest. The structural guard that keeps them
+// there — rather than these literals alone — is
+// internal/commands/audit_enum_owner_test.go.
 
 // enumRejection is one command invocation that must be refused for an enum
 // value, together with the complete line the user sees.
@@ -117,22 +126,32 @@ func enumRejectionCases() []enumRejection {
 			wantPhrase: "invalid sprint status",
 		},
 		{
-			// Never doubled: validated inline, message built from a literal.
 			name: "audit list --entity-type",
 			run: func(r string) error {
 				return HandleAudit([]string{"list", "-r", r, "-e", "BOGUS"})
 			},
-			wantMsg:    "validation error: invalid entity type: BOGUS",
+			wantMsg:    `validation error: invalid entity type: "BOGUS"`,
 			wantPhrase: "invalid entity type",
 		},
 		{
-			// Never doubled: validated inline, message built from a literal.
 			name: "audit list --operation",
 			run: func(r string) error {
 				return HandleAudit([]string{"list", "-r", r, "-o", "BOGUS"})
 			},
-			wantMsg:    "validation error: invalid operation: BOGUS",
-			wantPhrase: "invalid operation",
+			wantMsg:    `validation error: invalid audit operation: "BOGUS"`,
+			wantPhrase: "invalid audit operation",
+		},
+		{
+			// The second audit surface: a positional, not a flag. It shares the
+			// entity-type enum with `audit list -e`, so it must share the
+			// wording too — that equality is what broke when the two paths
+			// validated independently.
+			name: "audit history <entity-type>",
+			run: func(r string) error {
+				return HandleAudit([]string{"history", "-r", r, "BOGUS", "1"})
+			},
+			wantMsg:    `validation error: invalid entity type: "BOGUS"`,
+			wantPhrase: "invalid entity type",
 		},
 	}
 }

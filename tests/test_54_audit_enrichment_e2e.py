@@ -714,7 +714,7 @@ class TestAuditListFiltersEveryOperationAndLegacyValues:
             ["audit", "list", "-r", self.roadmap, "-o", "TASK_TELEPORT"], check=False
         )
         assert exit_code == EXIT_INVALID, f"exit {exit_code}, want {EXIT_INVALID}"
-        assert _first_line(stderr) == "Error: validation error: invalid operation: TASK_TELEPORT", (
+        assert _first_line(stderr) == 'Error: validation error: invalid audit operation: "TASK_TELEPORT"', (
             f"got {_first_line(stderr)!r}"
         )
         assert stdout.strip() == "", "a rejected filter must write nothing to stdout"

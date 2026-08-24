@@ -348,7 +348,7 @@ func buildAuditCommand() Command {
 				Examples: []Example{
 					{Title: "All audit entries", Cmd: "rmp audit list -r myproject", Exit: 0},
 					{Title: "Filter by operation", Cmd: "rmp audit list -r myproject -o TASK_STATUS_DOING -e TASK", Exit: 0},
-					{Title: "Invalid operation filter", Cmd: "rmp audit list -r myproject -o BOGUS_OP", Stderr: "Error: validation error: invalid operation: BOGUS_OP", Exit: 6},
+					{Title: "Invalid operation filter", Cmd: "rmp audit list -r myproject -o BOGUS_OP", Stderr: `Error: validation error: invalid audit operation: "BOGUS_OP"`, Exit: 6},
 				},
 			},
 			{
@@ -374,7 +374,7 @@ func buildAuditCommand() Command {
 				Examples: []Example{
 					{Title: "Task history", Cmd: "rmp audit history -r myproject TASK 1", Exit: 0},
 					{Title: "Sprint history", Cmd: "rmp audit history -r myproject SPRINT 3", Exit: 0},
-					{Title: "Invalid entity type", Cmd: "rmp audit history -r myproject BOGUS 1", Stderr: "Error: validation error: invalid entity type: BOGUS", Exit: 6},
+					{Title: "Invalid entity type", Cmd: "rmp audit history -r myproject BOGUS 1", Stderr: `Error: validation error: invalid entity type: "BOGUS"`, Exit: 6},
 				},
 			},
 			{

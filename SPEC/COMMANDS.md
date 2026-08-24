@@ -2925,7 +2925,8 @@ rmp audit ls -r <name>
 | `--limit` non-integer | 2 | "Error: invalid input: invalid limit: X" |
 | `--entity-id` `< 1` or `> 2147483647` | 6 | "Error: validation error: --entity-id must be between 1 and 2147483647 (got N)" |
 | `--entity-id` non-integer | 2 | "Error: invalid input: invalid entity ID: X" |
-| `-e, --entity-type` not `TASK` or `SPRINT` | 6 | "Error: validation error: invalid entity type: X" |
+| `-o, --operation` not one of the catalogue operations | 6 | "Error: validation error: invalid audit operation: \"X\"" |
+| `-e, --entity-type` not `TASK` or `SPRINT` | 6 | "Error: validation error: invalid entity type: \"X\"" |
 
 A value out of range and a value that is not an integer at all are two conditions, not one: the first reaches the range check and is a validation failure (exit 6), while the second fails to parse and is malformed input (exit 2). The two messages differ accordingly.
 
@@ -2960,7 +2961,7 @@ reached with `audit history SPRINT <sprint-id>`. See
 - `<entity-type>` - First positional. MUST be `TASK` or `SPRINT`. Any other value
   is rejected with exit code 6. There is no `-e` flag form for this command: a
   leading `-e` is parsed as the entity-type value and fails with
-  `Error: validation error: invalid entity type: -e`.
+  `Error: validation error: invalid entity type: "-e"`.
 - `<entity-id>` - Second positional. Entity identifier. MUST be an integer in the
   range `1`-`2147483647` (`MaxInt32`).
 
@@ -2968,7 +2969,7 @@ reached with `audit history SPRINT <sprint-id>`. See
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
-| `<entity-type>` is not TASK or SPRINT | 6 | "Error: validation error: invalid entity type: X" |
+| `<entity-type>` is not TASK or SPRINT | 6 | "Error: validation error: invalid entity type: \"X\"" |
 | `<entity-id>` is not an integer | 2 | "Error: invalid input: invalid entity ID: \"X\" (must be a positive integer)" |
 | `<entity-id>` `< 1` | 6 | "Error: validation error: invalid entity ID: 0 (must be positive)" |
 | `<entity-id>` `> 2147483647` | 6 | "Error: validation error: invalid entity ID: N (exceeds maximum value 2147483647)" |

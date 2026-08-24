@@ -571,8 +571,8 @@ func TestSpecialistsRemoval_AuditOperationFilterRejectsRetiredNames(t *testing.T
 		if !errors.Is(err, utils.ErrValidation) {
 			t.Errorf("`audit list -o %s`: error = %v, want utils.ErrValidation (exit 6)", name, err)
 		}
-		if !strings.Contains(err.Error(), "invalid operation") {
-			t.Errorf("`audit list -o %s`: message = %q, want the generic invalid-operation rejection",
+		if !strings.Contains(err.Error(), "invalid audit operation") {
+			t.Errorf("`audit list -o %s`: message = %q, want the generic invalid-audit-operation rejection",
 				name, err.Error())
 		}
 	}

@@ -226,9 +226,9 @@ SUPPLEMENTAL_CORPUS = [
     ('Error: unknown task subcommand: X', 'Error: unknown task subcommand: assign'),
     ('Error: unknown task subcommand: X', 'Error: unknown task subcommand: unassign'),
     # A concrete instance of the -e/--entity-type template
-    # ("Error: validation error: invalid entity type: X"), naming the exact
+    # ('Error: validation error: invalid entity type: "X"'), naming the exact
     # literal value (-e) the prose describes.
-    ('Error: validation error: invalid entity type: -e', 'Error: validation error: invalid entity type: -e'),
+    ('Error: validation error: invalid entity type: "-e"', 'Error: validation error: invalid entity type: "-e"'),
 ]
 
 # Three prose spans that ARE complete, well-formed "Error:" strings but are
@@ -1526,10 +1526,24 @@ class TestErrorStringParity:
             note="audit list entity-id non-integer",
         )
         # #100: -e/--entity-type not TASK or SPRINT (generic X template).
+        # The same corpus key is published twice -- COMMANDS.md:2929 for the
+        # `audit list` flag and :2972 for the `audit history` positional -- so
+        # driving it once covers both, which is the point: the two surfaces
+        # share one enum owner and therefore one string (rmp task #289).
         self.check(
-            "Error: validation error: invalid entity type: X",
+            'Error: validation error: invalid entity type: "X"',
             ["audit", "list", "-r", r, "-e", "PROJECT"], 6, subs={"X": "PROJECT"},
             note="audit list invalid entity type",
+        )
+        # #100b: -o/--operation not in the catalogue. COMMANDS.md:2928
+        # publishes this row; before rmp task #289 the `-o` refusal had no
+        # published row at all, which is exactly why its divergent wording
+        # ("invalid operation: BOGUS", unquoted) survived unnoticed -- an
+        # unpublished string is invisible to this gate.
+        self.check(
+            'Error: validation error: invalid audit operation: "X"',
+            ["audit", "list", "-r", r, "-o", "TASK_TELEPORT"], 6,
+            subs={"X": "TASK_TELEPORT"}, note="audit list invalid operation",
         )
         # #101: <entity-id> positional is not an integer, on `audit history`.
         self.check(
@@ -1554,7 +1568,7 @@ class TestErrorStringParity:
         # names this exact scenario ("a leading -e is parsed as the
         # entity-type value"), so -e is the literal value under test.
         self.check(
-            "Error: validation error: invalid entity type: -e",
+            'Error: validation error: invalid entity type: "-e"',
             ["audit", "history", "-r", r, "-e", "1"], 6,
             note="audit history leading -e parsed as entity type",
         )
