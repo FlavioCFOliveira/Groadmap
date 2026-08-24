@@ -1,19 +1,14 @@
 package commands
 
 import (
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
-
-// ErrInvalidDateFormat indicates that a date string does not match any accepted format.
-var ErrInvalidDateFormat = errors.New("invalid date format: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01)")
 
 // validSortFields holds the accepted values for the --sort flag.
 var validSortFields = map[string]bool{
@@ -21,21 +16,6 @@ var validSortFields = map[string]bool{
 	"created":  true,
 	"status":   true,
 	"severity": true,
-}
-
-// parseFilterDate parses a date string for --created-since / --created-until.
-// Accepts full ISO 8601 / RFC3339 strings and date-only strings (YYYY-MM-DD).
-// Date-only values are interpreted as the start of that day in UTC.
-func parseFilterDate(s string) (time.Time, error) {
-	t, err := utils.ParseISO8601(s)
-	if err == nil {
-		return t, nil
-	}
-	t, dateErr := time.Parse("2006-01-02", s)
-	if dateErr != nil {
-		return time.Time{}, fmt.Errorf("%w: %q", ErrInvalidDateFormat, s)
-	}
-	return t.UTC(), nil
 }
 
 // taskList lists tasks with optional filters.
@@ -85,16 +65,16 @@ func taskList(args []string) error {
 		filter.TaskType = &tt
 	}
 	if sinceStr, ok := result.Flags["CreatedSince"].(string); ok {
-		t, parseErr := parseFilterDate(sinceStr)
+		t, parseErr := ParseDateFilter("--created-since", sinceStr)
 		if parseErr != nil {
-			return fmt.Errorf("%w: --created-since: %v", utils.ErrValidation, parseErr)
+			return parseErr
 		}
 		filter.CreatedSince = &t
 	}
 	if untilStr, ok := result.Flags["CreatedUntil"].(string); ok {
-		t, parseErr := parseFilterDate(untilStr)
+		t, parseErr := ParseDateFilter("--created-until", untilStr)
 		if parseErr != nil {
-			return fmt.Errorf("%w: --created-until: %v", utils.ErrValidation, parseErr)
+			return parseErr
 		}
 		filter.CreatedUntil = &t
 	}

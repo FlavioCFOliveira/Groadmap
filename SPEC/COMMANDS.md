@@ -2985,8 +2985,22 @@ rmp audit ls -r <name>
 - `--entity-id <id>` - Filter by specific entity ID. MUST be a positive integer in
   the range `1`-`2147483647` (`MaxInt32`). A value `< 1` or `> 2147483647` is
   rejected with exit code 6; a non-integer value is rejected with exit code 2.
-- `--since <date>` - ISO 8601 date
-- `--until <date>` - ISO 8601 date
+- `--since <date>` - Inclusive lower bound on `performed_at`. The value takes one
+  of two forms: a full RFC3339 timestamp, including its offset and sub-second
+  variants (`2026-01-01T00:00:00Z`, `2026-01-01T00:00:00.000Z`,
+  `2026-01-01T00:00:00+00:00`), or a bare calendar date `YYYY-MM-DD`
+  (`2026-01-01`), which denotes the **first instant of that day in UTC**. These
+  are the same two forms `task list --created-since` and
+  `task list --created-until` accept (see `§ List Tasks`): one acceptance rule
+  governs every date-range filter the CLI publishes, so no date-range filter
+  accepts a value another one refuses. A value in neither form is rejected with
+  exit code 6.
+- `--until <date>` - Inclusive upper bound on `performed_at`, in the same two
+  forms and under the same acceptance rule as `--since`. A bare calendar date on
+  this bound denotes the first instant of that day in UTC, not the last instant:
+  `--until 2026-01-01` selects entries performed at exactly
+  `2026-01-01T00:00:00.000Z` and nothing later in that day. To cover a whole day,
+  supply the explicit timestamp `2026-01-01T23:59:59.999Z`.
 - `-l, --limit <n>` - Limit the number of results. MUST be a positive integer in
   the range `1`-`500`. The maximum is the server-side cap `MaxAuditLimit` (500;
   see `DATABASE.md § Audit Result Limit`). A value `< 1` or `> 500` is rejected
@@ -3002,6 +3016,8 @@ rmp audit ls -r <name>
 | `--entity-id` non-integer | 2 | "Error: invalid input: invalid entity ID: X" |
 | `-o, --operation` not one of the catalogue operations | 6 | "Error: validation error: invalid audit operation: \"X\"" |
 | `-e, --entity-type` not `TASK` or `SPRINT` | 6 | "Error: validation error: invalid entity type: \"X\"" |
+| Invalid `--since` date format | 6 | "Error: validation error: --since: invalid date format: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01): \"X\"" |
+| Invalid `--until` date format | 6 | "Error: validation error: --until: invalid date format: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01): \"X\"" |
 
 A value out of range and a value that is not an integer at all are two conditions, not one: the first reaches the range check and is a validation failure (exit 6), while the second fails to parse and is malformed input (exit 2). The two messages differ accordingly.
 
@@ -3064,8 +3080,35 @@ rmp audit stats -r <name> [--since <date>] [--until <date>]
 **Description:** Returns aggregated statistics about audit log entries for the specified roadmap. Optional date filters allow narrowing the statistics to a specific time period.
 
 **Options:**
-- `--since <date>` - ISO 8601 date (inclusive). If omitted, includes all entries from the beginning.
-- `--until <date>` - ISO 8601 date (inclusive). If omitted, includes all entries up to now.
+- `--since <date>` - Inclusive lower bound on `performed_at`, in either of the two
+  forms every date-range filter the CLI accepts: a full RFC3339 timestamp,
+  including its offset and sub-second variants (`2026-01-01T00:00:00Z`,
+  `2026-01-01T00:00:00.000Z`, `2026-01-01T00:00:00+00:00`), or a bare calendar
+  date `YYYY-MM-DD` (`2026-01-01`), which denotes the **first instant of that day
+  in UTC**. These are the same two forms `audit list --since/--until` and
+  `task list --created-since/--created-until` accept: one acceptance rule governs
+  every date-range filter the CLI publishes. A value in neither form is rejected
+  with exit code 6. If omitted, includes all entries from the beginning.
+- `--until <date>` - Inclusive upper bound on `performed_at`, in the same two
+  forms and under the same acceptance rule. A bare calendar date on this bound
+  denotes the first instant of that day in UTC, not the last instant, so
+  `--until 2026-01-01` excludes every entry performed later in that day. If
+  omitted, includes all entries up to now.
+
+**Error Conditions:**
+
+| Scenario | Exit Code | stderr Output |
+|----------|-----------|---------------|
+| Roadmap not specified | 3 | "Error: no roadmap selected: use -r <name> or --roadmap <name>" |
+| Invalid `--since` date format | 6 | "Error: validation error: --since: invalid date format: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01): \"X\"" |
+| Invalid `--until` date format | 6 | "Error: validation error: --until: invalid date format: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01): \"X\"" |
+| Roadmap not found | 4 | "Error: resource not found: roadmap \"X\"" |
+
+The command checks these conditions in the order the table lists them: a missing
+`-r` is refused before any flag value is read, both date bounds are parsed before
+the roadmap database is opened, and `--since` is parsed before `--until`. An
+invocation that names a roadmap that does not exist and also supplies a value in
+neither accepted date form therefore exits 6, not 4.
 
 **JSON Output:**
 ```json

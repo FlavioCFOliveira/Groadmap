@@ -400,7 +400,7 @@ func buildAuditCommand() Command {
 				Examples: []Example{
 					{Title: "Aggregate stats", Cmd: "rmp audit stats -r myproject", Exit: 0},
 					{Title: "Bounded window", Cmd: "rmp audit stats -r myproject --since 2026-01-01 --until 2026-01-31", Exit: 0},
-					{Title: "Invalid date", Cmd: "rmp audit stats -r myproject --since not-a-date", Stderr: "Error: validation error: invalid date format: not-a-date", Exit: 6},
+					{Title: "Invalid date", Cmd: "rmp audit stats -r myproject --since not-a-date", Stderr: `Error: validation error: --since: invalid date format: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01): "not-a-date"`, Exit: 6},
 				},
 			},
 		},

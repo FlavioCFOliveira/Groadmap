@@ -120,6 +120,8 @@ Required:
 
 Optional:
   --since <date>                  Aggregation window start (inclusive)
+                                  (ISO 8601 with millisecond precision, e.g.
+                                  2026-01-01T00:00:00.000Z; date-only also accepted)
   --until <date>                  Aggregation window end (inclusive)
 
 Output (stdout JSON):
@@ -186,17 +188,20 @@ func auditList(args []string) error {
 		entityID = &id
 	}
 	if s, ok := result.Flags["Since"].(string); ok {
-		t, err := utils.ParseISO8601(s)
-		if err != nil {
-			return fmt.Errorf("%w: invalid date format: %s", utils.ErrValidation, s)
+		// One acceptance rule for every date-range filter the CLI publishes:
+		// the contract declares a single `date` flag type, so ParseDateFilter
+		// is the only place that decides what a date is (see filter_date.go).
+		t, parseErr := ParseDateFilter("--since", s)
+		if parseErr != nil {
+			return parseErr
 		}
 		normalized := utils.FormatISO8601(t)
 		since = &normalized
 	}
 	if u, ok := result.Flags["Until"].(string); ok {
-		t, err := utils.ParseISO8601(u)
-		if err != nil {
-			return fmt.Errorf("%w: invalid date format: %s", utils.ErrValidation, u)
+		t, parseErr := ParseDateFilter("--until", u)
+		if parseErr != nil {
+			return parseErr
 		}
 		normalized := utils.FormatISO8601(t)
 		until = &normalized
@@ -293,17 +298,17 @@ func auditStats(args []string) error {
 
 	var since, until *string
 	if s, ok := result.Flags["Since"].(string); ok {
-		t, err := utils.ParseISO8601(s)
-		if err != nil {
-			return fmt.Errorf("%w: invalid date format: %s", utils.ErrValidation, s)
+		t, parseErr := ParseDateFilter("--since", s)
+		if parseErr != nil {
+			return parseErr
 		}
 		normalized := utils.FormatISO8601(t)
 		since = &normalized
 	}
 	if u, ok := result.Flags["Until"].(string); ok {
-		t, err := utils.ParseISO8601(u)
-		if err != nil {
-			return fmt.Errorf("%w: invalid date format: %s", utils.ErrValidation, u)
+		t, parseErr := ParseDateFilter("--until", u)
+		if parseErr != nil {
+			return parseErr
 		}
 		normalized := utils.FormatISO8601(t)
 		until = &normalized
@@ -474,6 +479,9 @@ Date format (--since / --until):
   ISO 8601 with millisecond precision and UTC suffix:
   YYYY-MM-DDTHH:mm:ss.sssZ   (e.g. 2026-01-01T00:00:00.000Z)
   RFC 3339 variants are also accepted.
+  A bare calendar date, YYYY-MM-DD (e.g. 2026-01-01), is also accepted and
+  means the first instant of that day in UTC. These are the same two forms
+  'task list --created-since/--created-until' accepts.
 
 Commands:
   list, ls [OPTIONS]              List audit entries (newest first)

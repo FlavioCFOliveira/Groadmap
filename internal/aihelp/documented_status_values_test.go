@@ -56,8 +56,8 @@
 //
 // # What is checked, and what deliberately is not
 //
-// Two of the five types the contract publishes are checked, because for those
-// two — and only those two — legality is decidable here without restating
+// Three of the five types the contract publishes are checked, because for those
+// three — and only those three — legality is decidable here without restating
 // anything:
 //
 //	enum     CHECKED. The value must be accepted by the parser the binary itself
@@ -74,6 +74,10 @@
 //	         defect no exit code reveals. Where the contract publishes no range,
 //	         the parser is the whole check — that is the contract's own statement
 //	         that the flag is unbounded, not an omission here.
+//	date     CHECKED, since #324. The value must be accepted by
+//	         commands.ParseDateFilter, which is the single entry point every
+//	         date-range filter the CLI publishes now goes through, so the check
+//	         here is the rule the binary runs rather than a copy of it.
 //
 //	boolean  NOT CHECKED: it carries no value. There is nothing to judge.
 //	string   NOT CHECKED: the contract publishes no value domain for a title, a
@@ -81,30 +85,43 @@
 //	         not a restatement. Three of the 59 documented string values are
 //	         shell substitutions — `--commit-open "$(git rev-parse HEAD)"` — that
 //	         no static check can evaluate at all.
-//	date     NOT CHECKED, and this is the one exclusion that is a finding rather
-//	         than a principle. The contract publishes ONE `date` type over TWO
-//	         different acceptance rules: `task list --created-since/--created-
-//	         until` go through commands.parseFilterDate, which takes RFC3339 or
-//	         date-only, while `audit list --since/--until` and `audit stats
-//	         --since/--until` go through utils.ParseISO8601, which takes RFC3339
-//	         only. Type alone therefore does not determine legality, and a
-//	         type-derived check must either miss one surface or report the other
-//	         falsely.
 //
-//	         That is not hypothetical. Measured against the built binary:
-//	           README.md:517  rmp audit list -r <name> --since 2026-03-20
-//	           README.md:518  rmp audit list -r <name> --since 2026-03-01 --until 2026-03-31
-//	           README.md:525  rmp audit stats -r <name> --since 2026-03-01 --until 2026-03-31
-//	         each exit 6 with `Error: validation error: invalid date format: ...`,
-//	         while README.md:259's `task list --created-since 2026-03-01` exits 0.
-//	         The contract's own example for `audit stats` declares
-//	         `--since 2026-01-01 --until 2026-01-31` at exit 0, and
-//	         SPEC/COMMANDS.md § Audit Statistics calls the flag an "ISO 8601
-//	         date", which a bare calendar date is. Three documentation surfaces
-//	         say date-only works and the code says otherwise, so the correction
-//	         may belong to the code and not to README.md. That is a decision
-//	         about behaviour, so it is recorded here and left to the user rather
-//	         than taken. When it is taken, date joins the checked side.
+// # How `date` reached the checked side (#324), and why it could not before
+//
+// The `date` type was the one exclusion that was a finding rather than a
+// principle, and it is recorded here because the shape of the defect is the
+// argument for the shape of this gate.
+//
+// The contract published ONE `date` type over TWO acceptance rules:
+// `task list --created-since/--created-until` went through
+// commands.parseFilterDate, which took RFC3339 or a bare calendar date, while
+// `audit list --since/--until` and `audit stats --since/--until` went through
+// utils.ParseISO8601, which took RFC3339 only. Type alone did not determine
+// legality, so a type-derived check had to either miss one surface or report a
+// correct line on the other as broken — and either way it would have been
+// judging the flag, not the type.
+//
+// That was not hypothetical. Measured against the binary built at 8c3343c:
+//
+//	README.md:517  rmp audit list -r <name> --since 2026-03-20
+//	README.md:518  rmp audit list -r <name> --since 2026-03-01 --until 2026-03-31
+//	README.md:525  rmp audit stats -r <name> --since 2026-03-01 --until 2026-03-31
+//
+// each exited 6 with `Error: validation error: invalid date format: ...`, while
+// README.md:259's `task list --created-since 2026-03-01` exited 0. #323
+// therefore left the three lines alone: correcting them would have entrenched
+// the narrower rule, and the narrower rule was the outlier. SPEC/COMMANDS.md
+// § Audit Statistics calls the flag an "ISO 8601 date", which a bare calendar
+// date is; the contract's own `audit stats` example declares
+// `--since 2026-01-01 --until 2026-01-31` at exit 0; and `rmp audit list --help`
+// already printed "date-only also accepted". The code was the divergent party.
+//
+// #324 widened it: both audit subcommands now parse through the same
+// commands.ParseDateFilter that `task list` uses, so one published type has one
+// acceptance rule again and this gate can derive the check from the type the way
+// it derives every other one. The three README lines above are unchanged and now
+// run — which is the point, and TestDocumentedFlagValues_ParseAsTheBinaryParses-
+// Them would fail on them again if either audit filter narrowed back.
 //
 // Positional argument values are outside this gate for a structural reason:
 // attributing a bare token to a positional slot needs the arity resolution the
@@ -203,16 +220,14 @@ var (
 			"documentedEnumCheckers must be total over the contract's enums",
 		contractTypeInteger: "the binary's own FlagParser must accept the value, and the value must " +
 			"fall inside the range the contract publishes for the flag",
+		contractTypeDate: "commands.ParseDateFilter, the single entry point every date-range filter " +
+			"the CLI publishes goes through, must accept the value",
 	}
 
 	documentedUncheckedTypes = map[string]string{
 		contractTypeBoolean: "carries no value; there is nothing to judge",
 		contractTypeString: "the contract publishes no value domain for a title, a body or a Cypher " +
 			"query, and three documented values are shell substitutions no static check can evaluate",
-		contractTypeDate: "the contract publishes one date type over two different acceptance rules " +
-			"(commands.parseFilterDate for task list, utils.ParseISO8601 for audit), so type alone " +
-			"does not determine legality; three README lines are known to fail on it and the " +
-			"correction may belong to the code — see the package comment",
 	}
 )
 
@@ -254,14 +269,20 @@ var documentedEnumCheckers = map[string]func(string) error{
 // Reach floors. Their job is not to describe the documentation; it is to make a
 // gate that has stopped recognising values fail rather than pass with nothing to
 // do. Measured on this tree: 118 README invocations resolve to a command and a
-// subcommand, they write 98 values to contract-declared flags, 33 of those are
-// checkable (16 enum, 17 integer) and they land on 12 distinct surfaces.
+// subcommand, they write 98 values to contract-declared flags, 39 of those are
+// checkable (16 enum, 17 integer, 6 date) and they land on 13 distinct surfaces.
+//
+// minDocumentedDateValues is the newest of them and the one with the most to
+// hold up. Four of the six date values README writes are the `audit list` and
+// `audit stats` lines #324 fixed; a gate that stopped reading them would go back
+// to reporting a clean document over exactly the lines that were broken.
 const (
 	minDocumentedInvocations  = 90
 	minDocumentedValuesSeen   = 70
-	minDocumentedValuesTyped  = 25
+	minDocumentedValuesTyped  = 30
 	minDocumentedEnumValues   = 12
 	minDocumentedIntValues    = 12
+	minDocumentedDateValues   = 4
 	minDocumentedSurfaces     = 8
 	minDocumentedEnumCheckers = 8
 )
@@ -870,6 +891,11 @@ func TestDocumentedFlagValues_ParseAsTheBinaryParsesThem(t *testing.T) {
 		t.Errorf("only %d integer-typed values were checked, want at least %d; the integer side of the "+
 			"gate has gone quiet", byType[contractTypeInteger], minDocumentedIntValues)
 	}
+	if byType[contractTypeDate] < minDocumentedDateValues {
+		t.Errorf("only %d date-typed values were checked, want at least %d; the date side of the gate "+
+			"has gone quiet, and it is the side that watches the three README lines #324 fixed",
+			byType[contractTypeDate], minDocumentedDateValues)
+	}
 	if scan.proseSpans < minDocumentedProseSpans {
 		t.Errorf("only %d inline code spans were read from %s prose, want at least %d; the prose scan "+
 			"has stopped working, and the two filter ASSERTIONS #323 corrected live in prose rather "+
@@ -907,6 +933,8 @@ func checkDocumentedValue(t *testing.T, shape *documentedValueContract, v *docum
 		checkDocumentedEnumValue(t, shape, v)
 	case contractTypeInteger:
 		checkDocumentedIntegerValue(t, v)
+	case contractTypeDate:
+		checkDocumentedDateValue(t, v)
 	default:
 		t.Errorf("%s:%d writes %q to %s, whose type %q is listed as checked but has no check here; "+
 			"documentedCheckedTypes and this switch have diverged",
@@ -1009,6 +1037,36 @@ func checkDocumentedIntegerValue(t *testing.T, v *documentedFlagValue) {
 			"than an error, because no exit code reveals it.",
 			v.file, v.line, v.text, v.spelled, n,
 			renderRange(v.flag.Range.Min, v.flag.Range.Max), v.scope)
+	}
+}
+
+// checkDocumentedDateValue judges one date-typed value with the parser every
+// date-range filter in the CLI runs.
+//
+// There is exactly one such parser, and that is what makes this check possible:
+// commands.ParseDateFilter is the single entry point behind `task list
+// --created-since/--created-until` and `audit list`/`audit stats`
+// `--since/--until` alike. While the audit family had a parser of its own the
+// contract's one `date` type stood over two different acceptance rules, and no
+// check derived from the type could have been right on both surfaces (see the
+// package comment). A second parser reappearing anywhere is therefore not a
+// tidiness question: it would silently make this check wrong again.
+//
+// The flag name is passed through because ParseDateFilter names the refused flag
+// in its message, so a failure here reads exactly as the binary's own refusal
+// would.
+func checkDocumentedDateValue(t *testing.T, v *documentedFlagValue) {
+	t.Helper()
+
+	if _, err := commands.ParseDateFilter(v.spelled, v.value); err != nil {
+		t.Errorf("%s:%d writes a value the binary rejects to %s:\n"+
+			"    %s\n"+
+			"  commands.ParseDateFilter(%q, %q) = %v\n"+
+			"  A date-range filter takes a full RFC3339 timestamp (2026-01-01T00:00:00.000Z) or a "+
+			"bare calendar date (2026-01-01), which means the first instant of that day in UTC. The "+
+			"same two forms are accepted on every surface the contract types %q, on %s. Running the "+
+			"line as documented exits 6 and returns nothing.",
+			v.file, v.line, v.spelled, v.text, v.spelled, v.value, err, contractTypeDate, v.scope)
 	}
 }
 
@@ -1153,8 +1211,19 @@ type documentedFilterBlock struct {
 // Measured on this tree: § "What sprints exist?" writes OPEN and CLOSED to
 // `sprint list --status`; § "How do I filter and search tasks?" writes BACKLOG,
 // DOING and SPRINT to `task list --status`, one severity on the `--type BUG
-// --severity 8` line, and 7 to `--priority`; § "What is the difference between
-// sprint order and task priority?" writes 8 to `--priority`.
+// --severity 8` line, 7 to `--priority`, and 2026-03-01 to `--created-since`;
+// § "What is the difference between sprint order and task priority?" writes 8 to
+// `--priority`; § "What happened recently?" writes 2026-03-20 and 2026-03-01 to
+// `audit list --since` and 2026-03-31 to `--until`; § "How do I see audit
+// statistics?" writes 2026-03-01 and 2026-03-31 to `audit stats --since/--until`.
+//
+// The four audit blocks are #324's. They are the lines the narrower parser
+// refused, and #323 deliberately left them intact rather than rewrite them to
+// the form the code happened to accept, because the code was the party that had
+// diverged. Deleting one now would remove the evidence rather than the defect,
+// which is exactly what a floor is for. `task list --created-since` is here as
+// their counterpart: it is the surface whose rule was the correct one all along,
+// and the gate checks all five against the one parser they now share.
 var documentedFilterBlocks = []documentedFilterBlock{
 	{
 		surface:     documentedSurface{command: "sprint", subcommand: "list"},
@@ -1183,6 +1252,41 @@ var documentedFilterBlocks = []documentedFilterBlock{
 		section:     `README.md §§ "How do I filter and search tasks?" and "sprint order vs task priority" (#323)`,
 		minValues:   2,
 		minDistinct: 2,
+	},
+	{
+		surface:     documentedSurface{command: "task", subcommand: "list"},
+		flagLong:    "--created-since",
+		section:     `README.md § "How do I filter and search tasks?" (#324)`,
+		minValues:   1,
+		minDistinct: 0,
+	},
+	{
+		surface:     documentedSurface{command: "audit", subcommand: "list"},
+		flagLong:    "--since",
+		section:     `README.md § "What happened recently?" (#324)`,
+		minValues:   2,
+		minDistinct: 2,
+	},
+	{
+		surface:     documentedSurface{command: "audit", subcommand: "list"},
+		flagLong:    "--until",
+		section:     `README.md § "What happened recently?" (#324)`,
+		minValues:   1,
+		minDistinct: 0,
+	},
+	{
+		surface:     documentedSurface{command: "audit", subcommand: "stats"},
+		flagLong:    "--since",
+		section:     `README.md § "How do I see audit statistics?" (#324)`,
+		minValues:   1,
+		minDistinct: 0,
+	},
+	{
+		surface:     documentedSurface{command: "audit", subcommand: "stats"},
+		flagLong:    "--until",
+		section:     `README.md § "How do I see audit statistics?" (#324)`,
+		minValues:   1,
+		minDistinct: 0,
 	},
 }
 

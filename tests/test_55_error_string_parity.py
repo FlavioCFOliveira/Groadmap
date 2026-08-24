@@ -1819,6 +1819,22 @@ class TestErrorStringParity:
             ["audit", "history", "-r", r, "-e", "1"], 6,
             note="audit history leading -e parsed as entity type",
         )
+        # The audit date filters accept the same two forms `task list` does
+        # (rmp task 324). One pair drives both the `audit list` Bound Validation
+        # rows and the `audit stats` Error Conditions rows, since the corpus
+        # dedupes by content and the two tables publish the same strings.
+        self.check(
+            'Error: validation error: --since: invalid date format: expected RFC3339 '
+            '(2026-01-01T00:00:00Z) or date-only (2026-01-01): "X"',
+            ["audit", "list", "-r", r, "--since", "last-tuesday"], 6,
+            subs={"X": "last-tuesday"}, note="audit list invalid since",
+        )
+        self.check(
+            'Error: validation error: --until: invalid date format: expected RFC3339 '
+            '(2026-01-01T00:00:00Z) or date-only (2026-01-01): "X"',
+            ["audit", "list", "-r", r, "--until", "next-friday"], 6,
+            subs={"X": "next-friday"}, note="audit list invalid until",
+        )
 
     # ------------------------------------------------------------------
     # `backlog show-next` / `stats`

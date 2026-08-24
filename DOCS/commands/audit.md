@@ -33,8 +33,8 @@ Lists audit log entries with optional filters.
 | `-o` | `--operation` | string | - | Filter by operation type (see Operation Types below) |
 | `-e` | `--entity-type` | string | - | Filter by entity type: TASK, SPRINT |
 | N/A | `--entity-id` | int | - | Filter by specific entity numeric id (positive integer, range 1-2147483647). A non-integer value is rejected by the flag parser as misuse (exit code 2); an out-of-range value fails validation (exit code 6) |
-| N/A | `--since` | string | - | Lower bound on `performed_at`, inclusive (ISO 8601 UTC; RFC 3339 variants accepted) |
-| N/A | `--until` | string | - | Upper bound on `performed_at`, inclusive (ISO 8601 UTC; RFC 3339 variants accepted) |
+| N/A | `--since` | string | - | Lower bound on `performed_at`, inclusive (ISO 8601 UTC; RFC 3339 variants and the date-only `YYYY-MM-DD` form accepted) |
+| N/A | `--until` | string | - | Upper bound on `performed_at`, inclusive (ISO 8601 UTC; RFC 3339 variants and the date-only `YYYY-MM-DD` form accepted) |
 | `-l` | `--limit` | int | 100 | Maximum rows returned (range 1-500). A non-integer value is rejected as misuse (exit code 2); an out-of-range value fails validation (exit code 6) |
 
 **Operation Types:**
@@ -191,8 +191,8 @@ Shows audit statistics including operation counts and trends.
 | Short Flag | Long Flag | Type | Default | Description |
 |------------|------------|------|--------|-------------|
 | `-r` | `--roadmap` | string | - | Roadmap name (required) |
-| N/A | `--since` | string | - | Aggregation window start (ISO 8601 UTC; RFC 3339 variants accepted) |
-| N/A | `--until` | string | - | Aggregation window end (ISO 8601 UTC; RFC 3339 variants accepted) |
+| N/A | `--since` | string | - | Aggregation window start (ISO 8601 UTC; RFC 3339 variants and the date-only `YYYY-MM-DD` form accepted) |
+| N/A | `--until` | string | - | Aggregation window end (ISO 8601 UTC; RFC 3339 variants and the date-only `YYYY-MM-DD` form accepted) |
 
 **Output:** A single `AuditStats` JSON object with keys `total_entries`, `first_entry_at`, `last_entry_at`, `by_operation` (map of operation to count), and `by_entity_type` (map of entity type to count). On an empty result set (no matching entries), `first_entry_at` and `last_entry_at` are `null`.
 
