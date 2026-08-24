@@ -38,10 +38,43 @@ const MaxInt32 = math.MaxInt32 // 2,147,483,647
 // unicode.IsSpace is true, and no invalid byte decodes to one, so trimming can
 // neither introduce nor remove an encoding failure.
 func ValidateFreeText(value string, field Field) error {
-	if err := ValidateUTF8(value, field); err != nil {
-		return err
+	switch InspectFreeText(value) {
+	case FreeTextInvalidUTF8:
+		return InvalidUTF8Error(field)
+	case FreeTextControlChars:
+		return ControlCharError(field)
+	default:
+		return nil
 	}
-	return ValidateNoControlChars(value, field)
+}
+
+// InspectFreeText applies the same two content rules ValidateFreeText applies,
+// in the same order, and reports WHICH one the value breaks instead of building
+// a refusal from a Field. It is the single implementation of the ordered pair:
+// ValidateFreeText is this call plus the choice of constructor, so the order can
+// no longer be stated twice and drift.
+//
+// It exists because the graph write path applies the identical pair to Cypher
+// property values (SPEC/GRAPH.md § Cypher Query and Property Value Content Rules)
+// and has no
+// Field to name them by — a property key is chosen by the caller and is not one
+// of the eight published names. See FreeTextViolation for why that separation is
+// the reuse and not a second realisation of the policy.
+//
+// The order is not a preference and is documented on ValidateFreeText: the
+// control-character rule is defined over decoded CODE POINTS, and every byte
+// that is not valid UTF-8 decodes to U+FFFD, which is not a forbidden code
+// point. Running the encoding rule first is what makes the rule that follows it
+// meaningful.
+func InspectFreeText(value string) FreeTextViolation {
+	switch {
+	case !utf8.ValidString(value):
+		return FreeTextInvalidUTF8
+	case containsForbiddenControlChar(value):
+		return FreeTextControlChars
+	default:
+		return FreeTextValid
+	}
 }
 
 // TrimFreeText applies steps 1 and 2 of the sequence SPEC/MODELS.md § Free-Text
@@ -116,6 +149,16 @@ func RequireFreeText(value string, field Field) (string, error) {
 // because a caller that has already applied the control-character rule by
 // another route — the streaming comment-body reader does — needs the encoding
 // half alone.
+//
+// It calls utf8.ValidString directly rather than routing through
+// InspectFreeText, even though InspectFreeText answers FreeTextInvalidUTF8 on
+// exactly the same inputs. Routing it there would make every caller that wants
+// the encoding half ALONE also scan the value for control characters it is
+// deliberately not applying — an extra pass over the whole value on the
+// streaming comment path, bought to avoid repeating one standard-library call.
+// What must not be repeated is the POLICY, and the policy here is the choice of
+// definition (Unicode Table 3-7, which utf8.ValidString implements) and the
+// wording of the refusal; both are stated once, above and in freeTextReasons.
 func ValidateUTF8(value string, field Field) error {
 	if !utf8.ValidString(value) {
 		return InvalidUTF8Error(field)
@@ -141,12 +184,23 @@ func ValidateUTF8(value string, field Field) error {
 // the published name the SPEC assigns it: see the note on Field in fields.go for
 // why that parameter is not a string.
 func ValidateNoControlChars(value string, field Field) error {
-	for _, r := range value {
-		if IsForbiddenControlChar(r) {
-			return ControlCharError(field)
-		}
+	if containsForbiddenControlChar(value) {
+		return ControlCharError(field)
 	}
 	return nil
+}
+
+// containsForbiddenControlChar reports whether value carries any code point
+// IsForbiddenControlChar rejects. It is the whole-value form of the rule,
+// written once so ValidateNoControlChars and InspectFreeText scan for the same
+// set by construction rather than by two loops agreeing.
+func containsForbiddenControlChar(value string) bool {
+	for _, r := range value {
+		if IsForbiddenControlChar(r) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsForbiddenControlChar reports whether r is one of the code points

@@ -409,6 +409,32 @@ tripped by an input the application accepted: they are an independent backstop, 
 the operative check. Neither count is to be brought into line with the other on the
 strength of this rule.
 
+**Where the two constraints apply beyond the model's own fields:**
+
+The two constraints above are stated here for the free-text fields of the `Task`,
+`Sprint`, `TaskComment`, and `SprintComment` models, and this file stays canonical
+for what each rule forbids. They also bind one surface that is not a model field:
+the Cypher a `rmp graph` subcommand executes, and the property values that Cypher
+writes into a roadmap's knowledge graph.
+`GRAPH.md § Cypher Query and Property Value Content Rules` is canonical for how the
+two rules apply there, and it MUST be read for the detail, because on that surface
+the two rules do **not** have the same reach:
+
+- The Free-Text UTF-8 Encoding Constraint binds every `rmp graph` subcommand that
+  accepts a Cypher query — `create`, `query`, `update`, `delete`, and `search` —
+  and is applied to the raw bytes of the query.
+- The Free-Text Control-Character Constraint binds only the two subcommands that
+  write property values, `create` and `update`, and is applied to the values the
+  query writes.
+
+The statement above that the encoding rule governs exactly the fields the
+control-character rule governs is a statement about this model's free-text
+**fields**, and it stands unchanged. A Cypher property value is not a free-text
+field of the `Task` or `Sprint` model, which is why the rule for it lives in
+`GRAPH.md` and is only cross-referenced here. The order the two rules run in is the
+same on the graph surface as it is here: the encoding rule first, for the reason the
+Free-Text UTF-8 Encoding Constraint gives above.
+
 **Free-Text Emptiness and Trimming Constraint:**
 
 Two rules govern the whitespace at the edges of a free-text value. They answer

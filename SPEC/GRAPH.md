@@ -17,6 +17,7 @@
   - [Per-Subcommand Validation Rules](#per-subcommand-validation-rules)
   - [Relationship Write Direction](#relationship-write-direction)
   - [Relationship Read Direction](#relationship-read-direction)
+  - [Cypher Query and Property Value Content Rules](#cypher-query-and-property-value-content-rules)
   - [Cypher Input Source and Precedence](#cypher-input-source-and-precedence)
 - [Query Notifications as Diagnostics](#query-notifications-as-diagnostics)
 - [Error Handling and Exit Codes](#error-handling-and-exit-codes)
@@ -1093,6 +1094,180 @@ Notes:
    write rule gives: `FOREACH (x IN list | SET n.last_type = type(e))` reaches
    the same expression.
 
+### Cypher Query and Property Value Content Rules
+
+Two content rules govern what a Cypher query may **contain** and what a query may
+**write** into a knowledge-graph property value. They are the graph's instances of
+the two rules every other free-text value in Groadmap obeys — the Free-Text UTF-8
+Encoding Constraint and the Free-Text Control-Character Constraint, both defined
+in `MODELS.md § Task`, which stays canonical for what each rule forbids. This
+section is canonical for how the two apply to the graph.
+
+Both rules refuse with `utils.ErrValidation` (exit code 6), before the graph store
+is opened. A refused query returns nothing and changes nothing.
+
+The two rules **do not have the same reach**, because they object to different
+things. The encoding rule objects to a query the engine would silently rewrite,
+which is a fact about the statement. The control-character rule objects to a value
+that would be stored, and only a write stores one.
+
+| Rule | Decided on | `graph create` | `graph update` | `graph delete` | `graph query` | `graph search` |
+|------|------------|----------------|----------------|----------------|---------------|----------------|
+| Free-Text UTF-8 Encoding Constraint | The raw bytes of the query, before the parse | Binds | Binds | Binds | Binds | Binds |
+| Free-Text Control-Character Constraint | The property values the query will write | Binds | Binds | Does not bind | Does not bind | Does not bind |
+
+Like [Relationship Write Direction](#relationship-write-direction) and
+[Relationship Read Direction](#relationship-read-direction), these rules are a
+**separate contract from the clause-class guard rail**, not another operation
+class. What they refuse is the query's **content**; the clause-class
+classification is unaffected.
+
+**Precedence.** Both rules are applied after the clause-class guard rail and after
+both relationship-direction rules, and still before the graph store is opened. The
+rules that precede them decide what the query **is** — its operation class, and the
+orientation of the patterns it binds — while these decide what the query, or a
+value it carries, **contains**, which matters only once the statement is otherwise
+one that the subcommand would run.
+
+#### Why the encoding rule binds every subcommand
+
+The rule is decided on the raw query bytes, before the parse, because the parse
+destroys the evidence: the engine decodes the query to characters before its
+grammar runs, and replaces every byte that decodes to no character with `U+FFFD`
+(REPLACEMENT CHARACTER). No later point can see the byte the caller supplied.
+
+That substitution is a fact about the **statement**, not about storage, and it is
+indifferent to what the statement then does. The subcommand carrying the byte
+decides only what the damage looks like:
+
+- `graph create` and `graph update` store a value that was never supplied, and
+  report success.
+- `graph query` and `graph search` compare against a literal that was never
+  supplied, so a row that should have matched does not, and the command reports
+  success having found nothing.
+- `graph delete` gated by such a literal matches nothing, removes nothing, and
+  still reports success.
+
+The third is the worst of the three, and it is why the rule is keyed on the
+**cause** rather than on the command. A destructive statement that reports success
+having removed nothing is the failure shape the caller has no reason to check —
+the same judgement already recorded for `graph delete` in
+[Relationship Read Direction](#relationship-read-direction), note 3. Stated by
+command, one cause would have become three rules, and two of the three would never
+have been written.
+
+Because the rule is decided on the raw bytes, a query that carries an invalid byte
+**anywhere** is refused: in a label, in a match pattern, in a property key, or in a
+comment, and not only in a value the query writes. That widening is intended and is
+not a false positive. The engine replaces those bytes just the same, so the
+statement it would execute is not the statement the caller wrote.
+
+#### Why the control-character rule does not extend to the reads
+
+The control-character rule objects to what is **stored**, and a read stores
+nothing: a control character in a read literal is compared against what the graph
+already holds.
+
+The store can legitimately hold a value that carries a control character, from two
+ordinary sources: every value written before this rule existed, and any value a
+computed expression produces, which the rule cannot see (see
+[What the rules do not reach](#what-the-rules-do-not-reach) below). Refusing a read
+or a delete that named such a value would leave that data **unreadable** rather
+than merely unwritable, which is a loss of reach the rule never intended.
+`graph delete` is on the same side: it removes elements, it stores no value, and a
+predicate naming a control character is how an operator reaches the entry that
+carries one.
+
+#### Where each rule is decided
+
+The control-character rule applies to the value the engine **will write**, never to
+the query text. Cypher decodes escape sequences inside a string literal — among
+them `\b` (backspace), `\f` (form feed), and `\uXXXX`, a code point written as four
+hexadecimal digits — so a query whose own text is pure ASCII can write a value that
+carries a real control character, and a scan of the query string would admit it.
+`SET n.body = 'a\u001b[31mred'` is such a query: its text carries no control
+character, and the value it writes carries a real `ESC`. The escape sequences are
+those of `Cypher Query Language Reference, Version 9`, the openCypher 9 reference
+document, which states them under the heading "Note on string literals"; that
+document numbers no sections, so it is cited by heading and not by number.
+
+The encoding rule applies to the raw query bytes, for the reason given above. The
+two rules therefore read two different objects, and each reads the only object in
+which what it objects to can be seen.
+
+#### The order of the two rules
+
+Where both rules apply, the application applies the **encoding rule first**. This is
+the order `MODELS.md § Task` (Free-Text UTF-8 Encoding Constraint) fixes for the
+pair, and it is not a preference: an invalid byte decodes to `U+FFFD`, which is not
+a forbidden control character, so the control-character rule would report as
+acceptable a value that the encoding rule refuses.
+
+#### What the rules do not reach
+
+Both rules reach **literal** values only. A right-hand side that the statement
+computes at execution time is outside both, because the value does not exist until
+the statement runs and Groadmap never holds it. This is a **limit**, stated here
+rather than left to be discovered:
+
+- A function result, as in `SET n.last_type = type(e)` or `SET n.name = toUpper(x)`.
+  In the first example the relationship must be bound by an outgoing pattern; a
+  reverse binding is refused by
+  [Relationship Read Direction](#relationship-read-direction), which runs before
+  these rules.
+- Another element's property, as in `SET n.name = other.key`.
+- A parameter reference, as in `SET n.name = $value`.
+
+A value of any of those shapes is written unchecked, exactly as it was before these
+rules existed. Closing the limit means checking at the storage boundary, which is
+inside the engine and not in this repository.
+
+One computed shape **is** covered, and needs no treatment of its own: the
+concatenation of string literals, as in `SET n.name = 'a' + 'b'`. Both rules are
+closed under concatenation — two values free of forbidden code points concatenate to
+one, and two well-formed UTF-8 strings concatenate to one — so checking each literal
+operand decides the result. A list of string literals is covered element by element
+for the same kind of reason: each element is stored as a value in its own right.
+
+#### What a refusal names
+
+A refusal identifies what is wrong without ever echoing the offending bytes.
+Printing them would emit into the terminal exactly the characters the
+control-character rule exists to keep out of it, and for the encoding rule the value
+the caller supplied is no longer recoverable from the parsed query in any case. Each
+refusal therefore names the offending byte or code point in a written form, and
+reproduces none of the text around it.
+
+- A **control-character** refusal names the **property key** the value is assigned
+  to, and the first forbidden **code point**, written in the `U+001B` form. It also
+  states that the query text alone does not show the character, because Cypher
+  decodes escapes inside a string literal.
+- An **encoding** refusal names the offending **byte** and its **offset** in the
+  query, and states the consequence for the subcommand at hand: a stored value that
+  differs from the supplied one, a match against a literal that was never supplied,
+  or a deletion that removes nothing while reporting success.
+- An encoding refusal names the **property key** as well, where the byte falls
+  inside a value that the query writes. Where no property can be named, the message
+  says so, in terms that are true for the subcommand at hand: a subcommand that
+  writes no property value has none to name, and the message states instead that
+  the byte corrupts the literal the query matches on.
+
+Notes:
+
+1. Both rules run before the graph store is opened, so a refusal is the guard's own
+   and not the engine's. The exit code distinguishes the two: 6, and not the 1 an
+   engine failure carries.
+2. Neither rule uses the masked normalization that the clause-class guard rail
+   classifies on (see [Literal-Aware Normalization](#literal-aware-normalization)).
+   The encoding rule reads the raw query string, and the control-character rule
+   reads the values of the parsed query. Masking is a device for deciding a query's
+   operation class, and it answers neither of the questions these rules ask.
+3. A query the parser rejects is still refused by the encoding rule, which needs no
+   parse. It draws no control-character refusal: the values that rule inspects do
+   not exist for an unparseable query, so the syntax error is left to the engine to
+   report, exactly as the two direction rules leave it. An encoding refusal for such
+   a query names no property, because none can be attributed.
+
 ### Cypher Input Source and Precedence
 
 Each graph subcommand obtains its Cypher from one of two sources:
@@ -1331,6 +1506,8 @@ sentinel is introduced for the graph feature.
 | `graph update` writes a relationship bound by an incoming or undirected pattern (see [Relationship Write Direction](#relationship-write-direction)) | `utils.ErrValidation` | 6 |
 | Any graph subcommand — `graph query`, `graph search`, `graph create`, `graph update` or `graph delete` — uses a relationship variable bound by an incoming or undirected pattern in an expression; a bare `DELETE e` is not an expression use and stays accepted (see [Relationship Read Direction](#relationship-read-direction)) | `utils.ErrValidation` | 6 |
 | `graph query` or `graph search` receives a `SHOW INDEX(ES)` / `SHOW CONSTRAINT(S)` statement whose keyword spacing the engine does not accept (see [Keyword Spacing in a Schema-Introspection Command](#keyword-spacing-in-a-schema-introspection-command)) | `utils.ErrValidation` | 6 |
+| Any graph subcommand — `graph create`, `graph query`, `graph update`, `graph delete` or `graph search` — receives a query whose raw bytes are not valid UTF-8 (see [Cypher Query and Property Value Content Rules](#cypher-query-and-property-value-content-rules)) | `utils.ErrValidation` | 6 |
+| `graph create` or `graph update` would write a property value carrying a forbidden control character; the other three subcommands write no property value and are not bound by this rule (see [Cypher Query and Property Value Content Rules](#cypher-query-and-property-value-content-rules)) | `utils.ErrValidation` | 6 |
 | Cypher fails to parse or execute in the engine | `utils.ErrDatabase` | 1 |
 | Graph store cannot be opened, recovered, read, or written (I/O, corruption, lock) | `utils.ErrDatabase` | 1 |
 | Successful execution | — | 0 |
@@ -1340,9 +1517,11 @@ Rules:
 1. The guard-rail rejection (operation class mismatch) is detected before the
    graph store is opened for writing. A rejected query never mutates the graph.
    The relationship-write-direction rejection, the relationship-read-direction
-   rejection, and the introspection keyword-spacing rejection are detected at the
-   same point and carry the same guarantee; none of those statements is ever
-   handed to the engine. The two refusals
+   rejection, the introspection keyword-spacing rejection, and the two content
+   rejections of
+   [Cypher Query and Property Value Content Rules](#cypher-query-and-property-value-content-rules)
+   are detected at the same point and carry the same guarantee; none of those
+   statements is ever handed to the engine. The two refusals
    that belong to the query's source are detected earlier still, before the
    guard rail classifies anything: the missing-query refusal (exit code 2) and
    the maximum-length refusal (exit code 6), both stated in
@@ -1857,6 +2036,83 @@ Groadmap's usage model and expectations:
     reports no `Probe` node. The refusal is the guard's own and not the engine's,
     which the exit code distinguishes — 6, not the 1 an engine failure carries —
     and the graph store is never opened.
+
+49. A query whose raw bytes are not valid UTF-8 is refused by every graph
+    subcommand, and the write subcommands store nothing.
+    `rmp graph create -r <roadmap> --query "CREATE (m:Memory {key:'sprint-38-sco<0x80>pe'})"`
+    fails with exit code 6, stdout is empty, and a read-back reports no such node.
+    `rmp graph update` fails likewise on
+    `MATCH (m:Memory {key:'…'}) SET m.body = 'commit cf27c57<0x80>'`, and a
+    read-back reports `m.body` unchanged. Executed rather than refused, each of
+    those exits 0 reporting success while the store holds `U+FFFD` in place of the
+    byte supplied, so the refusal is what keeps the stored value equal to the
+    supplied one (see
+    [Cypher Query and Property Value Content Rules](#cypher-query-and-property-value-content-rules)).
+50. `graph create` and `graph update` refuse a written property value that carries
+    a forbidden control character, even when the query text is pure ASCII.
+    `rmp graph update -r <roadmap> --query "MATCH (m:Memory {key:'…'}) SET m.body = 'red\u001b[31m'"`
+    fails with exit code 6, and a read-back reports `m.body` unchanged. The
+    criterion MUST assert, before running the query, that the query text itself
+    carries no control character: that is what establishes that a check on the
+    query string could not have caught this case, because the character reaches
+    the value only through the escape sequence Cypher decodes. The refusal names
+    the property `body` and the code point `U+001B`.
+51. The encoding rule binds the read subcommands, and refusing costs no reach.
+    Against a stored node whose `key` is `sprint-38-scope`,
+    `rmp graph query -r <roadmap> --query "MATCH (m:Memory {key:'sprint-38-sco<0x80>pe'}) RETURN m.body"`
+    fails with exit code 6 and prints nothing on stdout, and `rmp graph search`
+    fails likewise. A query carrying the same byte in a label, in a property key,
+    or in a Cypher comment is refused as well, which is the intended widening. The
+    same queries with the byte removed match the node and exit 0. Executed rather
+    than refused, each of them exits 0 having found nothing, because the engine
+    matched on a literal that was never supplied.
+52. `graph delete` is bound by the encoding rule, and the exit code alone does
+    **not** establish this criterion and MUST NOT be the only assertion. With a
+    node whose `key` is `delete-target` and whose `body` holds a known value,
+    `rmp graph delete -r <roadmap> --query "MATCH (m:Memory {key:'delete-tar<0x80>get'}) DELETE m"`
+    fails with exit code 6, and a read-back MUST report that node still present
+    with its `body` unchanged; the same holds for the `WHERE`-predicate spelling
+    and for the `DETACH DELETE` spelling. Executed rather than refused, that
+    statement exits 0 reporting `{"ok": true}` having removed nothing at all,
+    which is the failure the caller has no reason to check. The criterion MUST
+    also delete the same node through a well-formed query and read back its
+    absence, without which it would pass equally well if `graph delete` had
+    stopped deleting altogether. The refusal names the consequence for a delete:
+    that the statement would have reported success having deleted nothing.
+53. The encoding rule is applied first. A value that is at once not valid UTF-8
+    and carrying a forbidden control character is refused as an **encoding**
+    failure — the message names the byte and its offset and carries the wording
+    `the value is not valid UTF-8` — and never as a control-character failure.
+    This ordering is load-bearing rather than cosmetic: an invalid byte decodes to
+    `U+FFFD`, which is not a forbidden control character, so the
+    control-character rule alone would report the value acceptable.
+54. The control-character rule does **not** extend to the subcommands that write
+    no property value. `rmp graph query`, `rmp graph search`, and
+    `rmp graph delete -r <roadmap> --query "MATCH (m:Memory {key:'legacy\u001b entry'}) DELETE m"`
+    each name a forbidden control character in a match literal, and each is
+    **accepted** and exits 0. In the same sequence, `graph update` still refuses
+    that character on the right-hand side of a `SET`, so the asymmetry is a
+    boundary of the rule and not an absence of it. Refusing the reads and the
+    delete would leave a value the store legitimately holds unreadable, and beyond
+    the reach of a delete, which is the loss of reach the rule never intended.
+55. The stated limit is measured rather than assumed. A property value that the
+    statement computes at execution time is written without inspection:
+    `rmp graph update -r <roadmap> --query "MATCH (m:Memory {key:'…'}) SET m.body = toUpper(m.key)"`
+    is accepted and exits 0, because the value does not exist until the engine
+    runs the statement and Groadmap never holds it. Concatenated string literals
+    are covered rather than exempt: `SET m.body = 'red' + '\u001b[31m'` is refused
+    with exit code 6, and so is a list of string literals one of whose elements
+    carries the character.
+56. No refusal echoes the offending bytes, and each names what it can. A
+    control-character refusal names the property key and the code point in the
+    `U+001B` form, and stderr carries neither the character itself nor the value.
+    An encoding refusal names the byte and its offset; it names the property key
+    where the byte falls inside a value the query writes, and where no property
+    can be named — which is always the case for `graph query`, `graph search`, and
+    `graph delete`, and also for a query the parser rejects — the message says so
+    in terms true for that subcommand instead of withholding the naming in
+    silence. Every one of these refusals is the guard's own and not the engine's,
+    which the exit code distinguishes: 6, and not the 1 an engine failure carries.
 
 ## See Also
 

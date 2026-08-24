@@ -103,6 +103,72 @@ func (f Field) String() string {
 	return "Field(" + strconv.Itoa(int(f)) + ")"
 }
 
+// FreeTextViolation names which of the two free-text CONTENT rules a value
+// breaks — the Free-Text UTF-8 Encoding Constraint or the Free-Text
+// Control-Character Constraint — for a caller whose value is not one of the
+// eight fields above and therefore has no Field to name it by.
+//
+// # Why this type exists
+//
+// The eight fields are addressed by FLAGS and their names are a closed table, so
+// Field can be a closed integer enum and the refusal can be built from it. A
+// Cypher property value written by `rmp graph create` / `graph update` is
+// subject to the very same two rules (SPEC/GRAPH.md § Property Value Content
+// Rules), but the name that identifies it — the property key — is chosen by the
+// caller at the keyboard. It is unbounded, so it cannot be a Field, and the type
+// note above says exactly why it must not become one: an untyped string that
+// converts to Field is the hole the integer base was chosen to close.
+//
+// Separating WHICH RULE BROKE from WHICH NAME TO PUBLISH is what lets both
+// callers share one implementation of the rules and one wording of each refusal,
+// while each publishes the name its own surface has. Without it the graph would
+// need its own copy of the pair — one policy realised twice, which is the defect
+// rmp task 294 removed elsewhere in this package.
+//
+// The zero value is the absence of a violation, so a FreeTextViolation that was
+// never assigned reads as "the value is fine" rather than as some rule.
+type FreeTextViolation uint8
+
+// The verdicts InspectFreeText returns, in the order the rules are applied.
+const (
+	// FreeTextValid is a value both content rules accept.
+	FreeTextValid FreeTextViolation = iota
+	// FreeTextInvalidUTF8 is a value whose bytes are not a well-formed UTF-8
+	// sequence (SPEC/MODELS.md § Free-Text UTF-8 Encoding Constraint).
+	FreeTextInvalidUTF8
+	// FreeTextControlChars is a value carrying a forbidden control or Unicode
+	// bidirectional/format code point (SPEC/MODELS.md § Free-Text
+	// Control-Character Constraint).
+	FreeTextControlChars
+)
+
+// freeTextReasons is the wording of each refusal, and the ONLY place either
+// wording is spelled. InvalidUTF8Error and ControlCharError below take their
+// text from here, so a caller that has a Field and a caller that has only a
+// property key publish the same sentence by construction rather than by two
+// authors agreeing.
+//
+// Index 0 is empty on purpose: FreeTextValid names no rule and has no refusal.
+var freeTextReasons = [...]string{
+	FreeTextInvalidUTF8:  "the value is not valid UTF-8",
+	FreeTextControlChars: "control characters are not allowed",
+}
+
+// Reason returns the governed wording of the rule this violation breaks, with no
+// field name and no sentinel attached, for a caller that must name the offending
+// value some other way. It returns "" for FreeTextValid, which breaks no rule.
+//
+// A caller that HAS a Field must not use this: InvalidUTF8Error and
+// ControlCharError build the whole message, including the published name, and
+// are what SPEC/COMMANDS.md § Published Field Names in Validation Messages
+// requires those call sites to use.
+func (v FreeTextViolation) Reason() string {
+	if int(v) < len(freeTextReasons) {
+		return freeTextReasons[v]
+	}
+	return ""
+}
+
 // InvalidUTF8Error is the refusal of a value whose bytes are not a well-formed
 // UTF-8 sequence (SPEC/MODELS.md § Free-Text UTF-8 Encoding Constraint). It
 // carries ErrValidation, so it is the same failure CLASS and the same exit code,
@@ -120,7 +186,7 @@ func (f Field) String() string {
 // three: rewording the message here without updating that list fails the gate,
 // and hand-building this message in any other file fails it too.
 func InvalidUTF8Error(field Field) error {
-	return fmt.Errorf("%w: %s: the value is not valid UTF-8", ErrValidation, field)
+	return fmt.Errorf("%w: %s: %s", ErrValidation, field, FreeTextInvalidUTF8.Reason())
 }
 
 // ControlCharError is the refusal a forbidden control character produces,
@@ -130,7 +196,7 @@ func InvalidUTF8Error(field Field) error {
 // rule one rune at a time through IsForbiddenControlChar and must not diverge
 // from it (internal/models/comment_read_test.go pins the agreement).
 func ControlCharError(field Field) error {
-	return fmt.Errorf("%w: %s: control characters are not allowed", ErrValidation, field)
+	return fmt.Errorf("%w: %s: %s", ErrValidation, field, FreeTextControlChars.Reason())
 }
 
 // FieldTooLargeError is the refusal of a value longer than the field's maximum,
