@@ -215,7 +215,7 @@ rmp backlog list -r <name> --priority 7  # Filter by minimum priority
 ```bash
 rmp sprint list -r <name>
 rmp sprint list -r <name> --status OPEN
-rmp sprint list -r <name> --status PENDING,CLOSED
+rmp sprint list -r <name> --status CLOSED
 ```
 
 ---
