@@ -162,7 +162,7 @@ func buildRoadmapCommand() Command {
 				ExitCodes:  []int{0, 5, 6},
 				Examples: []Example{
 					{Title: "Create a roadmap", Cmd: "rmp roadmap create mobile-app", Stdout: `{"name":"mobile-app"}`, Exit: 0},
-					{Title: "Roadmap already exists", Cmd: "rmp roadmap create existing", Stderr: "Error: roadmap \"existing\" already exists", Exit: 5},
+					{Title: "Roadmap already exists", Cmd: "rmp roadmap create existing", Stderr: "Error: resource already exists: roadmap \"existing\" already exists", Exit: 5},
 				},
 			},
 			{
@@ -190,7 +190,7 @@ func buildRoadmapCommand() Command {
 				ExitCodes:  []int{0, 4, 6},
 				Examples: []Example{
 					{Title: "Remove a roadmap", Cmd: "rmp roadmap remove mobile-app", Exit: 0},
-					{Title: "Roadmap not found", Cmd: "rmp roadmap remove missing", Stderr: "Error: roadmap \"missing\" not found", Exit: 4},
+					{Title: "Roadmap not found", Cmd: "rmp roadmap remove missing", Stderr: "Error: resource not found: roadmap \"missing\" not found", Exit: 4},
 				},
 			},
 		},
@@ -275,7 +275,7 @@ func buildBacklogCommand() Command {
 				Examples: []Example{
 					{Title: "List backlog", Cmd: "rmp backlog list -r myproject", Exit: 0},
 					{Title: "Filter by priority", Cmd: "rmp backlog list -r myproject --priority 7", Exit: 0},
-					{Title: "Invalid type", Cmd: "rmp backlog list -r myproject --type FOO", Stderr: "Error: invalid task type: FOO", Exit: 6},
+					{Title: "Invalid type", Cmd: "rmp backlog list -r myproject --type FOO", Stderr: "Error: validation error: invalid task type: \"FOO\"", Exit: 6},
 				},
 			},
 			{

@@ -77,6 +77,7 @@ TEST_MODULES = [
     "test_55_error_string_parity",
     "test_56_graph_read_direction",
     "test_57_positional_arity",
+    "test_58_ai_contract_error_parity",
 ]
 
 # Stress tests (run separately due to time/data volume)

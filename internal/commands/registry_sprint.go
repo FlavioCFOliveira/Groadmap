@@ -33,7 +33,7 @@ func buildSprintCommand() Command {
 				ExitCodes:   []int{0, 3, 6},
 				Examples: []Example{
 					{Title: "All sprints", Cmd: "rmp sprint list -r myproject", Exit: 0},
-					{Title: "Invalid status filter", Cmd: "rmp sprint list -r myproject --status INVALID", Stderr: "Error: validation error: invalid sprint status: \"INVALID\": invalid sprint status", Exit: 6},
+					{Title: "Invalid status filter", Cmd: "rmp sprint list -r myproject --status INVALID", Stderr: "Error: validation error: invalid sprint status: \"INVALID\"", Exit: 6},
 				},
 			},
 			{
@@ -235,7 +235,7 @@ func buildSprintCommand() Command {
 				Examples: []Example{
 					{Title: "All sprint tasks", Cmd: "rmp sprint tasks -r myproject 5", Exit: 0},
 					{Title: "Filter by status", Cmd: "rmp sprint tasks -r myproject 5 -s DOING", Exit: 0},
-					{Title: "Invalid status", Cmd: "rmp sprint tasks -r myproject 5 -s INVALID", Stderr: "Error: validation error: invalid task status: \"INVALID\": invalid task status", Exit: 6},
+					{Title: "Invalid status", Cmd: "rmp sprint tasks -r myproject 5 -s INVALID", Stderr: "Error: validation error: invalid task status: \"INVALID\"", Exit: 6},
 				},
 			},
 			{

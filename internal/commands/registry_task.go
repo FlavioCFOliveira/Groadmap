@@ -60,7 +60,7 @@ func buildTaskCommand() Command {
 				Examples: []Example{
 					{Title: "All tasks", Cmd: "rmp task list -r myproject", Exit: 0},
 					{Title: "Filter BACKLOG p>=7", Cmd: "rmp task list -r myproject --status BACKLOG --priority 7", Exit: 0},
-					{Title: "Bad sort", Cmd: "rmp task list -r myproject --sort foo", Stderr: "Error: --sort must be one of: priority, created, status, severity", Exit: 6},
+					{Title: "Bad sort", Cmd: "rmp task list -r myproject --sort foo", Stderr: "Error: validation error: --sort must be one of: priority, created, status, severity", Exit: 6},
 				},
 			},
 			{
@@ -162,7 +162,7 @@ func buildTaskCommand() Command {
 				ExitCodes:   []int{0, 3, 4, 6},
 				Examples: []Example{
 					{Title: "Remove one task", Cmd: "rmp task remove -r myproject 7", Exit: 0},
-					{Title: "Remove non-BACKLOG", Cmd: "rmp task remove -r myproject 3", Stderr: "Error: task #3 cannot be deleted — status is SPRINT, must be BACKLOG", Exit: 6},
+					{Title: "Remove non-BACKLOG", Cmd: "rmp task remove -r myproject 3", Stderr: "Error: validation error: task #3 cannot be deleted — status is SPRINT, must be BACKLOG", Exit: 6},
 				},
 			},
 			{
@@ -190,7 +190,7 @@ func buildTaskCommand() Command {
 				Examples: []Example{
 					{Title: "Move to DOING", Cmd: "rmp task stat -r myproject 1 DOING --commit-open 5f93b51", Exit: 0},
 					{Title: "Complete with summary", Cmd: `rmp task stat -r myproject 7 COMPLETED --commit-close 2578d18 --summary "Shipped"`, Exit: 0},
-					{Title: "Reject manual SPRINT", Cmd: "rmp task stat -r myproject 1 SPRINT", Stderr: "Error: status SPRINT can only be set automatically via 'sprint add-tasks'", Exit: 6},
+					{Title: "Reject manual SPRINT", Cmd: "rmp task stat -r myproject 1 SPRINT", Stderr: "Error: validation error: status SPRINT can only be set automatically via 'sprint add-tasks'", Exit: 6},
 					{Title: "Reject DOING without a commit hash", Cmd: "rmp task stat -r myproject 1 DOING", Stderr: "Error: --commit-open is required when transitioning to DOING", Exit: 6},
 					{Title: "Reject COMPLETED without a commit hash", Cmd: "rmp task stat -r myproject 7 COMPLETED", Stderr: "Error: --commit-close is required when transitioning to COMPLETED", Exit: 6},
 					{Title: "Reject a malformed commit hash", Cmd: "rmp task stat -r myproject 1 DOING --commit-open zzzzzzz", Stderr: `Error: invalid commit hash for --commit-open: "zzzzzzz" (expected 7 to 64 hexadecimal characters)`, Exit: 6},
