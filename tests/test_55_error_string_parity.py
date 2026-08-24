@@ -47,11 +47,29 @@ Because this module CHOOSES the offending value for every X/N/M/Y it drives,
 substitution is exact string replacement against a value fixed before the
 command runs, and the comparison is full string equality against the whole
 published line -- never a regex, never a prefix-only check -- except for the
-five entries EXEMPT_KEYS names, where the tail is genuinely outside this
-module's control (an OS-level diagnostic, a Cypher-engine diagnostic, or an
-internal failure with no deterministic trigger from the CLI); each is
-exempted by name with its reason in EXEMPT_KEYS, counted, and reported, never
-silently dropped.
+two kinds of narrowing named below. Both are declared by name with a reason,
+counted, and reported; nothing is ever silently dropped.
+
+  * EXEMPT_KEYS: the string is not driven at all, because no deterministic
+    trigger for it exists from the CLI in a hermetic environment.
+  * TAIL_EXEMPT_KEYS: the string IS driven against the binary, and the
+    comparison is exact up to the named placeholder and stops there. Only the
+    tail -- text produced by something outside this module (a SQLite
+    diagnostic, an OS diagnostic) -- goes unasserted; the head, which carries
+    the "Error: " prefix and the sentinel that determines the exit code, is
+    compared character for character, and the tail is still required to be
+    non-empty and to carry the operation context the wrap must preserve
+    (ARCHITECTURE.md § Wrapping Rules, rule 2). See check_head.
+
+The database-failure row of the four comment subcommands
+(`Error: database error: <detail>`) was a full EXEMPT_KEYS entry until rmp
+task #319. The reason recorded there -- that no hermetic trigger existed --
+was wrong in one direction and right in the other: dropping the comment table
+out of THIS module's own throwaway project.db, which is a file it created and
+deletes, is perfectly hermetic and touches no shared infrastructure, so the
+row is now driven; only the SQLite diagnostic in the tail stays unasserted.
+That mistake is why the defect #319 fixed went unnoticed -- the binary printed
+no sentinel at all on those six rows and this gate reported green over them.
 
 The module's own final test method (test_zz_coverage_report, alphabetically
 last so it runs after every other check has had the chance to mark its key
@@ -63,6 +81,7 @@ module does not know how to reach is a bug in this module, not a silent gap.
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import uuid
@@ -286,17 +305,6 @@ CORPUS = build_corpus()
 # ---------------------------------------------------------------------------
 
 EXEMPT_KEYS = {
-    "Error: database error: <detail>": (
-        "The generic database-failure row on the four comment subcommands "
-        "(COMMANDS.md:1553 and siblings) needs a genuine SQLite write "
-        "failure. Verified empirically (see this module's development "
-        "notes): chmod 0444 on project.db does NOT reproduce it -- rmp's "
-        "SQLite connection runs in WAL mode, so an INSERT is satisfied by "
-        "appending to the -wal file and never touches the read-only main "
-        "file at all. Reaching this row deterministically would require "
-        "corrupting or unmounting shared test infrastructure mid-write, "
-        "which is out of scope for a hermetic E2E gate."
-    ),
     "Error: database error: graph query failed: <engine diagnostic>": (
         "internal/commands/graph.go: the tail is text the Cypher engine "
         "itself produces for a parse/execution failure and is not "
@@ -319,6 +327,30 @@ EXEMPT_KEYS = {
         "row above, and binding a specific non-loopback, non-local address "
         "like 10.0.0.5 is itself environment-dependent (routable only on "
         "hosts that do not own that address)."
+    ),
+}
+
+
+# Strings this module DOES drive against the binary, but whose comparison
+# stops at the named placeholder because the text after it is produced by
+# something this module does not control. The head -- everything before the
+# placeholder, which is where the "Error: " prefix and the sentinel live -- is
+# still compared character for character, and check_head additionally requires
+# the tail to be non-empty and to carry the operation context. This is a
+# NARROWING, not an exemption: the key is marked reached, and the sentinel
+# half is asserted rather than skipped.
+TAIL_EXEMPT_KEYS = {
+    "Error: database error: <detail>": (
+        "<detail>",
+        "The six database-failure rows of the comment subcommands (three in "
+        "the task family, three in the sprint family). The head "
+        "\"Error: database error: \" is asserted exactly, and so is the "
+        "operation context that follows it (\"writing task comment: \", "
+        "\"querying task comment N: \", ...). What is left unasserted is only "
+        "the SQLite driver's own diagnostic at the end -- for a dropped "
+        "table, \"SQL logic error: no such table: task_comments (1)\" -- whose "
+        "exact wording belongs to modernc.org/sqlite and is not specified by "
+        "COMMANDS.md."
     ),
 }
 
@@ -429,6 +461,74 @@ class TestErrorStringParity:
             f"  args:      {args}\n"
             f"  full stderr: {err!r}"
         )
+        assert out == "", (
+            f"[{note or key}] a failing invocation wrote to stdout: {out!r}"
+        )
+        REACHED.add(key)
+
+    def check_head(self, key, args, exit_code, tail_contains, subs=None,
+                   stdin=None, note=""):
+        """The narrowed form of `check`, for the keys TAIL_EXEMPT_KEYS names.
+
+        Everything BEFORE the named placeholder is compared character for
+        character against captured stderr, exactly as `check` does -- so the
+        "Error: " prefix and the sentinel that determines the exit code are
+        asserted, never skipped. Only the text after the placeholder is
+        outside this module's control, and even that is not waved through:
+        it must be non-empty, and it must contain every fragment
+        `tail_contains` names (the operation context the wrap is required to
+        preserve, per ARCHITECTURE.md § Wrapping Rules rule 2).
+
+        `key` must be declared in TAIL_EXEMPT_KEYS: a string is never
+        compared by head alone unless the narrowing is declared and reasoned
+        there."""
+        assert key in CORPUS, (
+            f"case references a string extraction no longer finds in "
+            f"SPEC/COMMANDS.md: {key!r} ({note})"
+        )
+        assert key in TAIL_EXEMPT_KEYS, (
+            f"check_head used on a string that declares no tail narrowing: "
+            f"{key!r} -- add it to TAIL_EXEMPT_KEYS with its reason, or use "
+            f"check() for a full comparison"
+        )
+        token = TAIL_EXEMPT_KEYS[key][0]
+        head, sep, published_tail = subst(key, subs or {}).partition(token)
+        assert sep, (
+            f"TAIL_EXEMPT_KEYS declares placeholder {token!r} for {key!r}, "
+            f"but the published string does not contain it"
+        )
+        assert published_tail == "", (
+            f"check_head only supports a placeholder that ends the published "
+            f"string; {key!r} carries {published_tail!r} after {token!r}"
+        )
+        assert head.startswith("Error: ") and len(head) > len("Error: "), (
+            f"the asserted head of {key!r} is {head!r}, which carries no "
+            f"sentinel -- narrowing it would assert nothing of substance"
+        )
+
+        rc, out, err = self.run_stdin(args, stdin)
+        actual_line = err.splitlines()[0] if err else ""
+        assert rc == exit_code, (
+            f"[{note or key}] exit code: expected {exit_code}, got {rc}\n"
+            f"  args: {args}\n  stdout: {out!r}\n  stderr: {err!r}"
+        )
+        assert actual_line.startswith(head), (
+            f"[{note or key}] the published head does not match the binary\n"
+            f"  file:      {SPEC_PATH} line(s) {CORPUS[key]}\n"
+            f"  published: {head!r} (then {token})\n"
+            f"  captured:  {actual_line!r}\n"
+            f"  args:      {args}\n  full stderr: {err!r}"
+        )
+        actual_tail = actual_line[len(head):]
+        assert actual_tail, (
+            f"[{note or key}] the binary printed the head and nothing for "
+            f"{token}: {actual_line!r}"
+        )
+        for fragment in tail_contains:
+            assert fragment in actual_tail, (
+                f"[{note or key}] the {token} tail lost the operation "
+                f"context: expected {fragment!r} in {actual_tail!r}"
+            )
         assert out == "", (
             f"[{note or key}] a failing invocation wrote to stdout: {out!r}"
         )
@@ -1243,6 +1343,153 @@ class TestErrorStringParity:
         )
 
     # ------------------------------------------------------------------
+    # The database-failure row of the comment subcommands (rmp task #319).
+    #
+    # COMMANDS.md publishes `Error: database error: <detail>` six times: on
+    # `comment-add`, `comment-edit` and `comment-remove`, in the task family
+    # and again in the sprint family. Until #319 the binary printed those
+    # lines WITHOUT the sentinel ("Error: writing task comment: ..."), and
+    # this module reported green over all six because the string was a blanket
+    # EXEMPT_KEYS entry. It is now driven, with only the SQLite diagnostic in
+    # the tail left unasserted (TAIL_EXEMPT_KEYS).
+    #
+    # The failure is provoked by dropping the two comment tables out of THIS
+    # module's own throwaway project.db -- a file the fixture created under a
+    # temporary HOME and deletes in teardown. Nothing shared is touched.
+    # ------------------------------------------------------------------
+
+    DB_FAIL_KEY = "Error: database error: <detail>"
+
+    def drop_comment_tables(self):
+        """Remove both comment tables from this fixture's project.db, so every
+        comment statement fails for a reason that is neither a missing row nor
+        a constraint violation -- the third propagation row, and the only one
+        that must produce the database-error sentinel."""
+        db_path = self.test.roadmaps_dir / self.roadmap / "project.db"
+        assert db_path.exists(), f"fixture database not found at {db_path}"
+        con = sqlite3.connect(str(db_path))
+        try:
+            con.execute("DROP TABLE task_comments")
+            con.execute("DROP TABLE sprint_comments")
+            con.commit()
+        finally:
+            con.close()
+
+    def test_comment_database_failures(self):
+        r = self.roadmap
+        task_id = self.mk_task(
+            "Reconcile the comment write path with the propagation table",
+            "A database failure must reach the user as a classified failure, "
+            "not as an unlabelled message that exits 1 by accident.",
+            "Wrap at internal/db, after the constraint classifier, never before it.",
+            "The stderr line begins with the database-error sentinel and keeps "
+            "its operation context.",
+        )
+        sprint_id = self.mk_sprint(
+            "Error propagation hardening", self.SPRINT_DESC,
+        )
+        task_comment_id = self.test.run_cmd_json(
+            ["task", "comment-add", "-r", r, str(task_id), "--type", "FINDING",
+             "--body", "The write path names no sentinel, so the class is lost."]
+        )["id"]
+        sprint_comment_id = self.test.run_cmd_json(
+            ["sprint", "comment-add", "-r", r, str(sprint_id), "--type", "FINDING",
+             "--body", "The sprint family shares the same query layer."]
+        )["id"]
+
+        # --------------------------------------------------------------
+        # First, the two propagation rows that sit ABOVE the database row,
+        # asserted against an INTACT schema. A blanket wrap -- the obvious
+        # wrong fix, applied ahead of the classifier instead of after it --
+        # would turn both of these into "Error: database error: ..." with exit
+        # 1, so these two assertions are what makes the fix's placement
+        # observable from outside the binary.
+        # --------------------------------------------------------------
+
+        # Row 1: sql.ErrNoRows stays utils.ErrNotFound, exit 4. The wrapped
+        # return in getComment sits on the very next line after this branch.
+        self.check(
+            "Error: resource not found: task comment N not found",
+            ["task", "comment-remove", "-r", r, str(self.missing_id)], 4,
+            subs={"N": str(self.missing_id)},
+            note="ErrNoRows is not swallowed by the database sentinel",
+        )
+        # Row 2: a constraint violation stays utils.ErrAlreadyExists, exit 5.
+        # The seeded sprint above holds order 1; a second sprint claiming it
+        # collides on idx_sprints_order.
+        self.check(
+            "Error: resource already exists: sprint order N is already in use",
+            ["sprint", "create", "-r", r, "-t", "Checkout reliability",
+             "-d", self.SPRINT_DESC, "--order", "1"], 5, subs={"N": "1"},
+            note="a constraint violation is not swallowed by the database sentinel",
+        )
+
+        # --------------------------------------------------------------
+        # Now the database row itself, on all six published sites.
+        # --------------------------------------------------------------
+        self.drop_comment_tables()
+
+        self.check_head(
+            self.DB_FAIL_KEY,
+            ["task", "comment-add", "-r", r, str(task_id), "--type", "NOTE",
+             "--body", "This insert cannot reach a table that is gone."],
+            1, tail_contains=("writing task comment: ",),
+            note="task comment-add database failure",
+        )
+        self.check_head(
+            self.DB_FAIL_KEY,
+            ["task", "comment-edit", "-r", r, str(task_comment_id),
+             "--body", "This update cannot reach a table that is gone."],
+            1, tail_contains=(f"querying task comment {task_comment_id}: ",),
+            note="task comment-edit database failure",
+        )
+        self.check_head(
+            self.DB_FAIL_KEY,
+            ["task", "comment-remove", "-r", r, str(task_comment_id)],
+            1, tail_contains=(f"querying task comment {task_comment_id}: ",),
+            note="task comment-remove database failure",
+        )
+        self.check_head(
+            self.DB_FAIL_KEY,
+            ["sprint", "comment-add", "-r", r, str(sprint_id), "--type", "PROGRESS",
+             "--body", "This insert cannot reach a table that is gone."],
+            1, tail_contains=("writing sprint comment: ",),
+            note="sprint comment-add database failure",
+        )
+        self.check_head(
+            self.DB_FAIL_KEY,
+            ["sprint", "comment-edit", "-r", r, str(sprint_comment_id),
+             "--body", "This update cannot reach a table that is gone."],
+            1, tail_contains=(f"querying sprint comment {sprint_comment_id}: ",),
+            note="sprint comment-edit database failure",
+        )
+        self.check_head(
+            self.DB_FAIL_KEY,
+            ["sprint", "comment-remove", "-r", r, str(sprint_comment_id)],
+            1, tail_contains=(f"querying sprint comment {sprint_comment_id}: ",),
+            note="sprint comment-remove database failure",
+        )
+
+        # `comment-list` is asserted here too, and deliberately NOT through
+        # check_head: COMMANDS.md publishes no database-failure row for the
+        # listing subcommands, so claiming one would be a fiction. The listing
+        # nevertheless reaches the THIRD of the three sites #319 fixed
+        # (listComments), which none of the six published rows exercise, and
+        # ARCHITECTURE.md § Propagation Rules governs it in the same terms.
+        for args, context in (
+            (["task", "comment-list", "-r", r, str(task_id)], "querying task comments: "),
+            (["sprint", "comment-list", "-r", r, str(sprint_id)], "querying sprint comments: "),
+        ):
+            rc, out, err = self.run_stdin(args)
+            line = err.splitlines()[0] if err else ""
+            assert rc == 1, f"{args}: expected exit 1, got {rc}; stderr={err!r}"
+            assert line.startswith("Error: database error: " + context), (
+                f"{args}: the listing lost the sentinel or its operation "
+                f"context: {line!r}"
+            )
+            assert out == "", f"{args}: a failing invocation wrote to stdout: {out!r}"
+
+    # ------------------------------------------------------------------
     # `sprint create` / `sprint update`
     # ------------------------------------------------------------------
 
@@ -1789,28 +2036,69 @@ class TestErrorStringParity:
     # ------------------------------------------------------------------
 
     def test_yy_exemptions_are_named(self):
-        """Every exemption is declared by name with its reason (NON-VACUITY
-        requirement 3d): nothing is silently dropped from the corpus."""
+        """Every exemption and every tail narrowing is declared by name with
+        its reason (NON-VACUITY requirement 3d): nothing is silently dropped
+        from the corpus, and nothing is silently weakened either."""
         for key, reason in EXEMPT_KEYS.items():
             assert key in CORPUS, (
                 f"EXEMPT_KEYS names a string extraction no longer finds: {key!r}"
             )
             assert reason.strip(), f"exemption for {key!r} carries no reason"
+            assert key not in TAIL_EXEMPT_KEYS, (
+                f"{key!r} is declared both as a full exemption and as a tail "
+                f"narrowing; it must be one or the other"
+            )
             print(f"  EXEMPT: {key!r}\n    reason: {reason}")
+
+        for key, (token, reason) in TAIL_EXEMPT_KEYS.items():
+            assert key in CORPUS, (
+                f"TAIL_EXEMPT_KEYS names a string extraction no longer finds: {key!r}"
+            )
+            assert reason.strip(), f"tail narrowing for {key!r} carries no reason"
+            head, sep, tail = key.partition(token)
+            assert sep, (
+                f"TAIL_EXEMPT_KEYS declares placeholder {token!r} for {key!r}, "
+                f"which does not contain it"
+            )
+            assert tail == "", (
+                f"the narrowed placeholder must end the published string; "
+                f"{key!r} carries {tail!r} after {token!r}"
+            )
+            # The narrowing is only legitimate while the ASSERTED half still
+            # carries the sentinel: if a future edit moved the placeholder to
+            # the front, this entry would be asserting nothing but "Error: ".
+            assert head.startswith("Error: ") and len(head) > len("Error: "), (
+                f"the asserted head of {key!r} is {head!r}, which carries no "
+                f"sentinel -- the narrowing would assert nothing of substance"
+            )
+            assert key in REACHED, (
+                f"{key!r} declares a tail narrowing but was never driven "
+                f"against the binary; a narrowing is not an exemption -- the "
+                f"head must actually be asserted by some case in this module"
+            )
+            print(f"  TAIL-NARROWED at {token}: {key!r}\n    asserted head: "
+                  f"{head!r}\n    reason: {reason}")
 
     def test_zz_coverage_report(self):
         exempted = set(EXEMPT_KEYS.keys())
+        narrowed = set(TAIL_EXEMPT_KEYS.keys())
         accounted = REACHED | exempted
         missing = sorted(set(CORPUS.keys()) - accounted)
-        stale_exemptions = sorted(exempted - set(CORPUS.keys()))
+        stale_exemptions = sorted((exempted | narrowed) - set(CORPUS.keys()))
 
         print(f"\nSPEC/COMMANDS.md published-string corpus: {len(CORPUS)} distinct strings")
-        print(f"  reached (driven against the binary and matched exactly): {len(REACHED)}")
+        print(f"  reached (driven against the binary and matched exactly): {len(REACHED - narrowed)}")
+        print(f"  reached, compared by head only (tail narrowed):          {len(REACHED & narrowed)}")
         print(f"  exempted (named, reasoned, never executed):               {len(exempted)}")
         print(f"  accounted for:                                            {len(accounted)}")
 
         assert not stale_exemptions, (
-            f"EXEMPT_KEYS names strings no longer in CORPUS: {stale_exemptions}"
+            f"EXEMPT_KEYS/TAIL_EXEMPT_KEYS name strings no longer in CORPUS: "
+            f"{stale_exemptions}"
+        )
+        assert narrowed <= REACHED, (
+            f"tail-narrowed strings that were never driven: "
+            f"{sorted(narrowed - REACHED)}"
         )
         assert not missing, (
             f"{len(missing)} published string(s) are neither reached nor exempted "
