@@ -23,7 +23,7 @@ Before extracting anything, the script verifies the downloaded archive against t
 - **Sprint Reporting**: Comprehensive sprint reports with progress and distribution metrics
 - **Task Ordering**: Reorder, move-to-position, swap, top, and bottom commands for sprint task management
 - **Backlog and Statistics**: Backlog planning views and roadmap-wide statistics with velocity
-- **Audit Trail**: Automatic logging of all operations for traceability
+- **Audit Trail**: Automatic, append-only logging of every change to a task or a sprint, across a catalogue of 43 operations. Each entry names the operation, the entity it belongs to and when it happened, and, where the operation has one, the counterpart entity involved and the git commit that bracketed the work
 - **State Machine**: Validated task and sprint status transitions with automatic date tracking
 - **Bulk Operations**: Support for multiple task IDs in single commands
 - **Knowledge Graph**: Per-roadmap queryable graph (nodes, edges, Cypher) for capturing project elements and their relationships
@@ -524,6 +524,28 @@ rmp audit list -r <name> --entity-type SPRINT
 rmp audit stats -r <name>
 rmp audit stats -r <name> --since 2026-03-01 --until 2026-03-31
 ```
+
+**What does an audit entry contain?**
+
+Seven fields: `id`, `operation`, `entity_type`, `entity_id`, `performed_at`, and
+two that are filled in only where the operation has something to put in them:
+
+- `commit_hash` - the git commit that brackets a task's development work. Written
+  on exactly two operations: `TASK_STATUS_DOING` records the `--commit-open` value
+  and `TASK_STATUS_COMPLETED` records the `--commit-close` value. Entries are never
+  rewritten, so the audit log keeps the commit that concluded a task even after
+  `task reopen` clears it from the task itself.
+- `related_entity_id` - the counterpart entity of the operation, when it has one.
+  Adding a task to a sprint writes two mirrored entries, one against the sprint
+  naming the task and one against the task naming the sprint, so each side of the
+  operation is complete on its own. Removing a task from a sprint, moving one
+  between sprints, and adding or removing a dependency behave the same way.
+
+Four values in the catalogue are marked legacy: no command writes them any more,
+but `--operation` still accepts them so entries recorded before schema 1.12.0 stay
+reachable by name. [DOCS/commands/audit.md](DOCS/commands/audit.md) describes the
+whole catalogue, both fields, the legacy values, and the 1.11.0 to 1.12.0 migration
+that introduced the two columns.
 
 ---
 
