@@ -22,7 +22,7 @@
 - [Main SQL Queries](#main-sql-queries)
   - [Tasks](#tasks)
   - [Sprints](#sprints)
-  - [Audit](#audit)
+  - [Audit Queries](#audit-queries)
   - [Comments](#comments)
 - [Relationships](#relationships)
   - [Transactional Atomicity Guarantees](#transactional-atomicity-guarantees)
@@ -1510,7 +1510,7 @@ ORDER BY st.task_id ASC;
 
 **Use case:** the read-only web interface renders the roadmap's tasks as a Kanban board and shows on each card the sprint that task belongs to, so it MUST resolve the sprint of every rendered task with this single grouped query rather than one query per task or one query per board column (see `WEB.md § Roadmap Tasks Page`).
 
-### Audit
+### Audit Queries
 
 #### Log Operation
 
@@ -1952,7 +1952,7 @@ Fields are organized to match the optimized Go struct layout (Content, Tracking,
 
 **Note:** the positions of one sprint are also dense — a sprint with `N` members holds exactly `0` to `N-1` — so a member's stored `position` is its rank in the sprint's planned order. No column constraint states this and none can; the write paths uphold it and tests prove it. See `DATABASE.md § Position Density Within a Sprint`.
 
-### Audit
+### Audit Constraints
 
 | Column | Type | Constraints |
 |--------|------|-------------|

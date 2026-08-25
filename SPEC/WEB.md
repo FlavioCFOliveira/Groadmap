@@ -2053,7 +2053,7 @@ how the `rmp web` process itself terminates.
   timestamp **descending**, so the most recently performed operation appears first.
   `performed_at` is the audit entry's completion timestamp. This is the same
   ordering the existing audit data access uses (`ORDER BY performed_at DESC`; see
-  `DATABASE.md § Audit`); the page introduces no new ordering.
+  `DATABASE.md § Audit Queries`); the page introduces no new ordering.
 - **Pagination.** The table is paginated at a **fixed page size of 100 entries per
   page**. The page is selected by a `page` query parameter that is 1-based and
   defaults to `1` when absent. The total page count is `ceil(total_entries / 100)`,
@@ -3848,7 +3848,7 @@ re-presents an earlier, now-stale response in its place.
    audit log page reads the
    roadmap's audit entries ordered by `performed_at` descending, one fixed-size page
    at a time (see [Roadmap Audit Log Page](#roadmap-audit-log-page) and
-   `DATABASE.md § Audit`).
+   `DATABASE.md § Audit Queries`).
    The web interface adds no new schema, no new table, and no new write query.
    The data the task detail modal displays is **not** read while the page is
    rendered: the page carries one empty modal shell, and the task's fields and
@@ -6808,8 +6808,8 @@ Rules:
   and `COMMANDS.md § Sprint Comments`
 - `AuditEntry` fields, the audit read query and its `performed_at DESC` ordering,
   and the audit result-set hard cap presented on the audit log page →
-  `MODELS.md § Audit Entry`, `DATABASE.md § audit Table`, `DATABASE.md § Audit`,
-  and `DATABASE.md § Audit Result Limit`
+  `MODELS.md § Audit Entry`, `DATABASE.md § audit Table`,
+  `DATABASE.md § Audit Queries`, and `DATABASE.md § Audit Result Limit`
 - Sprint status enum and lifecycle that classify sprints into the sprints-page tabs
   → `MODELS.md § Enums` and `STATE_MACHINE.md § Sprint State Machine`
 - Task status enum and lifecycle that define the tasks-page board's five fixed
