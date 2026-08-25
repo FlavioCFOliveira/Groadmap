@@ -110,6 +110,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Audit help surfaces (operation list, LEGACY marking, output keys) | `HELP.md § Audit family help specifics` |
 | Audit operation entity type (which entity each operation is recorded against, why it is declared rather than read off the operation's name, and the gate that fails on an unclassified operation) | `HELP.md § Audit operation entity-type classification` |
 | Audit operation `entity_type` and `legacy` members of the AI Agent Contract enum | `DATA_FORMATS.md § enums map entry` |
+| Which enums of the AI Agent Contract carry a reference member (only the two with a state machine), and why `AuditOperation` carries none | `DATA_FORMATS.md § enums map entry` |
 | Concurrency (WAL, pool, retry) | `IMPLEMENTATION.md § Concurrency Model` |
 | Query caching | `IMPLEMENTATION.md § Query Caching` |
 | Performance practices | `IMPLEMENTATION.md § Performance Considerations` |

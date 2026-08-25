@@ -911,7 +911,7 @@ a sprint rejects (see `HELP.md § Comment subcommand help specifics`).
 "TaskStatus": {
   "values": [
     {"value": "BACKLOG",   "description": "Task is in backlog, not assigned to a sprint."},
-    {"value": "SPRINT",    "description": "Task is assigned to a sprint. Set automatically; do not set manually."},
+    {"value": "SPRINT",    "description": "Task is assigned to a sprint. Set automatically by `sprint add-tasks`; cannot be set manually via `task stat`."},
     {"value": "DOING",     "description": "Task is being worked on."},
     {"value": "TESTING",   "description": "Task is in testing phase."},
     {"value": "COMPLETED", "description": "Task is complete."}
@@ -1014,8 +1014,7 @@ a sprint rejects (see `HELP.md § Comment subcommand help specifics`).
     {"value": "SPRINT_ADD_TASK",       "entity_type": "SPRINT", "legacy": false, "description": "Task added to a sprint via `sprint add-tasks`; one row per task, against the sprint, naming the task in `related_entity_id`."},
     {"value": "TASK_COMMENT_CREATE",   "entity_type": "TASK",   "legacy": false, "description": "Comment added to a task via `task comment-add` (logged against the parent task). The audit entry names the parent entity; the comment's own id is never recorded."},
     {"value": "TASK_STATUS_CHANGE",    "entity_type": "TASK",   "legacy": true,  "description": "LEGACY. The single status-change operation the five `TASK_STATUS_*` operations above replace. It survives on rows the 1.11.0 to 1.12.0 migration could not reclassify (see `VERSION.md § Migration 1.11.0 to 1.12.0`)."}
-  ],
-  "catalogue_reference": "DATABASE.md § audit Table"
+  ]
 }
 ```
 
@@ -1041,6 +1040,46 @@ Adding these members widens a published contract, which is a deliberate change a
 not a detail. A consumer that reads the members it knows is unaffected; a consumer
 that enumerates members sees exactly two new keys, both on the values of exactly
 one enum.
+
+**An enum carries a reference member only when it has a state machine.** An enum
+definition has exactly two members. `values` is carried by every enum.
+`state_machine_reference` is carried by `TaskStatus` and `SprintStatus`, and by no
+other enum: `AuditOperation`, `AuditEntityType`, `TaskCommentType`,
+`SprintCommentType`, `TaskSort`, and `TaskType` each carry `values` alone.
+`state_machine_reference` is also the only reference member this contract defines,
+so an enum that carries no state-machine reference carries no reference of any kind.
+The two lists above are exhaustive on purpose. A member that is absent is
+indistinguishable, to the consumer reading it, from a member that was never
+specified, so a consumer cannot detect a reference this contract failed to publish;
+naming every enum on both sides of the rule is what lets that consumer stop looking.
+
+The asymmetry is deliberate, and `AuditOperation` is not an exception to a rule the
+other seven enums follow: six enums carry `values` alone and two carry a reference,
+and what separates them is the state machine, not the enum's subject matter. A
+reference is published when the values cannot be used correctly without the text it
+points at. The values of `TaskStatus` and `SprintStatus` are the states of a
+machine, and which value may follow which is not in the value list: an agent holding
+the list still cannot tell whether it may move a task from `BACKLOG` to `TESTING`,
+which is not a legal transition. `STATE_MACHINE.md § Valid Transitions`, inside the
+section this enum's `state_machine_reference` names, is where that answer is.
+`AuditOperation` has no such gap. Its values are the arguments
+`audit list --operation` accepts, and each value already carries what an agent
+needs in order to choose one: a `description`, which rule 5 above transcribes from
+the catalogue entry verbatim, an `entity_type`, and a `legacy` flag. A reference to
+`DATABASE.md § audit Table` would point the consumer at text this contract already
+carries value by value, wrapped in schema material — the DDL, the column list, the
+index rationale — that a consumer filtering audit entries has no use for at run
+time.
+
+**The asymmetry is not to be closed by adding a reference member.** Giving
+`AuditOperation`, or any other enum, a second kind of reference widens a published
+contract: every consumer that enumerates the members of an enum definition sees a
+new key. That is a change to be decided on its own terms, with a stated consumer
+that needs the referenced text at run time, and not a gap to be filled because two
+enums out of eight look different from the rest. This specification names the
+catalogue for its own reader — `The audit enums are published in full` above does
+exactly that, and so does rule 5 — and naming it in this document is not a statement
+that the contract carries the same reference as data.
 
 **Every published value carries a description.** Each element of `values` MUST
 carry a `description` that is not empty after trimming whitespace. The rule
