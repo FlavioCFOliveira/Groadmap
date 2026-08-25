@@ -1116,6 +1116,112 @@ class TestSprintTaskOrdering:
 
         print("task next order is total and repeatable test passed")
 
+    # ------------------------------------------------------------------
+    # Audit of the ordering commands (rmp task #320)
+    # ------------------------------------------------------------------
+
+    def _move_position_entries(self, roadmap: str) -> list:
+        """Return every SPRINT_TASK_MOVE_POSITION entry of a roadmap."""
+        return self.test.run_cmd_json([
+            "audit", "list", "-r", roadmap,
+            "-o", "SPRINT_TASK_MOVE_POSITION", "-l", "500"
+        ])
+
+    def test_every_ordering_invocation_writes_one_audit_entry(self):
+        """Each move-to/top/bottom invocation writes exactly one entry, no-op included.
+
+        SPEC/COMMANDS.md, "Audit of the ordering commands", states the rule
+        without qualification: the ordering commands "write one entry per
+        invocation, against the sprint, with NULL related_entity_id and NULL
+        commit_hash", and "A no-op move (moving a task to the position it
+        already holds) still writes its entry, on the same rule that governs
+        `task edit`: the audit log records the command issued, not the delta it
+        produced."
+
+        The measured defect was that a no-op move-to, top or bottom exited 0 and
+        printed a success payload while writing nothing at all, so a caller was
+        told the command had succeeded and the log held no trace of it having
+        been issued.
+
+        The sequence below is the reported reproduction, extended with the two
+        remaining no-op forms, and every step asserts the running total rather
+        than only the end state, so an implementation that skipped one form and
+        double-wrote another cannot pass on the final count.
+        """
+        roadmap = self.test.create_roadmap()
+        sprint_id = self.test.create_sprint(
+            roadmap, "Reconcile every acquirer batch before the ledger closes"
+        )
+        task_ids = self._create_test_tasks(roadmap, 3)
+        self.test.run_cmd([
+            "sprint", "add-tasks", "-r", roadmap, str(sprint_id),
+            ",".join(map(str, task_ids))
+        ])
+
+        moved = task_ids[0]
+        assert self._get_task_order(roadmap, sprint_id) == task_ids, (
+            "the fixture sprint does not hold the three tasks in creation order"
+        )
+        assert len(self._move_position_entries(roadmap)) == 0, (
+            "the fixture already holds SPRINT_TASK_MOVE_POSITION entries, so this "
+            "test cannot attribute the entries it counts to its own invocations"
+        )
+
+        # (invocation, expected running total, expected order afterwards).
+        steps = [
+            (["sprint", "move-to", "-r", roadmap, str(sprint_id), str(moved), "0"],
+             1, [task_ids[0], task_ids[1], task_ids[2]]),
+            (["sprint", "top", "-r", roadmap, str(sprint_id), str(moved)],
+             2, [task_ids[0], task_ids[1], task_ids[2]]),
+            (["sprint", "move-to", "-r", roadmap, str(sprint_id), str(moved), "1"],
+             3, [task_ids[1], task_ids[0], task_ids[2]]),
+            (["sprint", "move-to", "-r", roadmap, str(sprint_id), str(moved), "1"],
+             4, [task_ids[1], task_ids[0], task_ids[2]]),
+            (["sprint", "bottom", "-r", roadmap, str(sprint_id), str(moved)],
+             5, [task_ids[1], task_ids[2], task_ids[0]]),
+            (["sprint", "bottom", "-r", roadmap, str(sprint_id), str(moved)],
+             6, [task_ids[1], task_ids[2], task_ids[0]]),
+        ]
+
+        for args, want_total, want_order in steps:
+            invocation = " ".join(args[:2] + args[4:])
+            exit_code, stdout, _ = self.test.run_cmd(args)
+            assert exit_code == 0, f"`{invocation}` exited {exit_code}"
+            assert '"success"' in stdout, (
+                f"`{invocation}` printed no success payload: {stdout!r}"
+            )
+
+            entries = self._move_position_entries(roadmap)
+            assert len(entries) == want_total, (
+                f"after `{invocation}` the log holds {len(entries)} "
+                f"SPRINT_TASK_MOVE_POSITION entries, want {want_total}"
+            )
+
+            order = self._get_task_order(roadmap, sprint_id)
+            assert order == want_order, (
+                f"`{invocation}` left the sprint holding {order}, want {want_order}"
+            )
+
+        # Every entry carries the published shape, read back field by field
+        # rather than counted: against the sprint, with both nullable columns
+        # NULL and no entry recorded against any task.
+        for entry in self._move_position_entries(roadmap):
+            assert entry["entity_type"] == "SPRINT", (
+                f"entry {entry['id']} is recorded against {entry['entity_type']}, want SPRINT"
+            )
+            assert entry["entity_id"] == sprint_id, (
+                f"entry {entry['id']} names entity {entry['entity_id']}, want sprint {sprint_id}"
+            )
+            assert entry["related_entity_id"] is None, (
+                f"entry {entry['id']} carries related_entity_id "
+                f"{entry['related_entity_id']}, want null"
+            )
+            assert entry["commit_hash"] is None, (
+                f"entry {entry['id']} carries commit_hash {entry['commit_hash']}, want null"
+            )
+
+        print("every ordering invocation writes one audit entry test passed")
+
 
 
 def main():

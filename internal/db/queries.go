@@ -2539,6 +2539,10 @@ func (db *DB) ReorderSprintTasks(sprintID int, taskIDs []int) error {
 // slot, parks the whole sprint, and writes the resulting permutation: the same
 // final state, reached without ever presenting a duplicate (SPEC/DATABASE.md
 // § Move Task to Position).
+//
+// One SPRINT_TASK_MOVE_POSITION entry is written per call against the sprint,
+// including when the task already holds the target position and no row changes
+// (SPEC/COMMANDS.md § Audit of the ordering commands).
 func (db *DB) MoveTaskToPosition(sprintID, taskID, newPosition int) error {
 	return db.WithTransaction(func(tx *sql.Tx) error {
 		// Get current position of the task
@@ -2567,36 +2571,45 @@ func (db *DB) MoveTaskToPosition(sprintID, taskID, newPosition int) error {
 			newPosition = taskCount - 1
 		}
 
-		// If position unchanged, nothing to do — including no audit entry, since
-		// nothing happened for one to record.
-		if currentPos == newPosition {
-			return nil
-		}
-
-		// Lift the moved task out of the current order and re-insert it at the
-		// target slot. The result is a permutation of the sprint's members, which
-		// is what the assignment below writes as a dense 0..N-1 run.
-		ordered := make([]int, 0, taskCount)
-		for _, m := range members {
-			if m.taskID != taskID {
-				ordered = append(ordered, m.taskID)
+		// A NO-OP MOVE STILL WRITES ITS ENTRY. When the task already holds the
+		// target slot there is no permutation left to write, so the rewrite below
+		// is skipped -- but only the rewrite. The audit entry underneath it is
+		// written on every invocation that reaches here, because SPEC/COMMANDS.md
+		// § Audit of the ordering commands states the rule without qualification:
+		// "A no-op move (moving a task to the position it already holds) still
+		// writes its entry, on the same rule that governs `task edit`: the audit
+		// log records the command issued, not the delta it produced." A log that
+		// recorded only deltas could not answer who issued a command, which is the
+		// question an audit log exists to answer, and the sibling paths already
+		// answer it: `task edit -t` re-supplying the stored title writes
+		// TASK_TITLE_CHANGE, and an identical `sprint reorder` writes a second
+		// SPRINT_REORDER_TASKS.
+		if currentPos != newPosition {
+			// Lift the moved task out of the current order and re-insert it at the
+			// target slot. The result is a permutation of the sprint's members,
+			// which is what the assignment below writes as a dense 0..N-1 run.
+			ordered := make([]int, 0, taskCount)
+			for _, m := range members {
+				if m.taskID != taskID {
+					ordered = append(ordered, m.taskID)
+				}
 			}
-		}
-		if newPosition < 0 {
-			newPosition = 0
-		}
-		if newPosition > len(ordered) {
-			newPosition = len(ordered)
-		}
-		ordered = append(ordered, 0)
-		copy(ordered[newPosition+1:], ordered[newPosition:])
-		ordered[newPosition] = taskID
+			if newPosition < 0 {
+				newPosition = 0
+			}
+			if newPosition > len(ordered) {
+				newPosition = len(ordered)
+			}
+			ordered = append(ordered, 0)
+			copy(ordered[newPosition+1:], ordered[newPosition:])
+			ordered[newPosition] = taskID
 
-		if err := parkSprintPositionsTx(tx, sprintID); err != nil {
-			return err
-		}
-		if err := assignSprintPositionsTx(tx, sprintID, ordered); err != nil {
-			return err
+			if err := parkSprintPositionsTx(tx, sprintID); err != nil {
+				return err
+			}
+			if err := assignSprintPositionsTx(tx, sprintID, ordered); err != nil {
+				return err
+			}
 		}
 
 		// Log audit entry

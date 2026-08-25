@@ -622,6 +622,9 @@ rmp sprint mvto -r project1 1 10 5    # Move task 10 to position 5
 }
 ```
 
+
+**Audit:** one `SPRINT_TASK_MOVE_POSITION` entry per invocation, against the sprint, with NULL `related_entity_id` and NULL `commit_hash`. No `TASK_STATUS_*` entry and no entry against any task: ordering changes the `position` column of the membership rows, so the sprint is the only entity whose state changes. A no-op invocation — moving a task to the position it already holds — still writes its entry, on the same rule that governs `task edit`: the audit log records the command issued, not the delta it produced.
+
 ---
 
 ### swap
@@ -687,6 +690,9 @@ Moves a task to the top of the sprint (position 0).
 rmp sprint top -r project1 1 5    # Move task 5 to position 0
 ```
 
+
+**Audit:** one `SPRINT_TASK_MOVE_POSITION` entry per invocation, against the sprint, with NULL `related_entity_id` and NULL `commit_hash`. No `TASK_STATUS_*` entry and no entry against any task: ordering changes the `position` column of the membership rows, so the sprint is the only entity whose state changes. A no-op invocation — moving a task to the position it already holds — still writes its entry, on the same rule that governs `task edit`: the audit log records the command issued, not the delta it produced.
+
 ---
 
 ### bottom
@@ -713,6 +719,9 @@ Moves a task to the bottom of the sprint (last position).
 rmp sprint bottom -r project1 1 5    # Move task 5 to last position
 rmp sprint btm -r project1 1 10    # Move task 10 to last position
 ```
+
+
+**Audit:** one `SPRINT_TASK_MOVE_POSITION` entry per invocation, against the sprint, with NULL `related_entity_id` and NULL `commit_hash`. No `TASK_STATUS_*` entry and no entry against any task: ordering changes the `position` column of the membership rows, so the sprint is the only entity whose state changes. A no-op invocation — moving a task to the position it already holds — still writes its entry, on the same rule that governs `task edit`: the audit log records the command issued, not the delta it produced.
 
 ---
 
