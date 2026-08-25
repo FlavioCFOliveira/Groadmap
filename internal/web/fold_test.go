@@ -1008,7 +1008,7 @@ func serverClassSpans() []classSpan {
 // with it instead of leaving a second derivation to agree with the first by
 // coincidence.
 func serverComposeEntries() []composeEntry {
-	pairs := searchCompositions().pairs
+	pairs := searchCompositions().Pairs
 	entries := make([]composeEntry, 0, len(pairs))
 	for pair, composite := range pairs {
 		entries = append(entries, composeEntry{

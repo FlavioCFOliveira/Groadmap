@@ -12,6 +12,7 @@
   - [Synchronous Checkpoint on Write](#synchronous-checkpoint-on-write)
 - [Persistence Layout](#persistence-layout)
 - [Multi-Layer Modelling Conventions](#multi-layer-modelling-conventions)
+  - [Node Key Uniqueness](#node-key-uniqueness)
 - [Subcommands and Guard-Rail Validation](#subcommands-and-guard-rail-validation)
   - [Operation Classes](#operation-classes)
   - [Per-Subcommand Validation Rules](#per-subcommand-validation-rules)
@@ -483,6 +484,127 @@ Example layers and relationships (illustrative, not mandatory):
   `Spec` node and by `SUPERSEDES` to an earlier `Decision`.
 - A `Dependency` node for an external library linked by `REQUIRED_BY` to the
   `Code` node that imports it.
+
+### Node Key Uniqueness
+
+Convention 2 above recommends giving each node a stable identifier property. The
+project's own knowledge graph uses `key` for that purpose, and `knowledge-model.md`
+at the repository root states that every node carries one. This subsection is
+canonical for what the uniqueness of that property means, for which comparison
+decides that two keys are the same, and for who is responsible for holding the
+property true.
+
+**The invariant.** Within one knowledge graph, no two nodes carry the same `key`,
+so that `MATCH (n {key:'...'})` written without a label binds at most one node.
+Two keys are **the same key** when their **Unicode Normalization Form C** forms
+are equal — NFC, the canonical composition of the full canonical decomposition, as
+UAX #15 defines it. The comparison is defined on string values, which is what the
+identifier convention gives `key`.
+
+**Groadmap does not enforce this invariant. It is a convention the caller
+honours.** No `rmp` command rejects, rewrites, deduplicates, or reports a second
+node carrying a key that is already in use — neither under the NFC comparison
+above nor under byte equality. Three properties of the product produce that
+outcome together, and every one of them would have to change for enforcement to
+exist:
+
+1. **The graph carries no uniqueness constraint, and no `rmp` command can declare
+   one.** GoGraph supports `CREATE CONSTRAINT ... IS UNIQUE`, but constraint DDL
+   belongs to the DDL class in [Operation Classes](#operation-classes), and all
+   five subcommands reject that class (see the Rejects column of
+   [Per-Subcommand Validation Rules](#per-subcommand-validation-rules)). Groadmap
+   emits no constraint DDL of its own on any code path either, so nothing in the
+   product ever places a uniqueness constraint on a graph.
+2. **A node's identity in the store is not its `key`.** GoGraph identifies a node
+   by an internal `uint64`, which `DATA_FORMATS.md § Graph Query Result` describes
+   as ephemeral and explicitly not a stable business key. Two nodes carrying the
+   same `key` are two identities to the store, and nothing in the engine relates
+   one to the other.
+3. **Keys are compared only inside the caller's own Cypher.** A pattern such as
+   `MATCH (n:Spec {key:'...'})` compares the literal against the stored value as
+   strings, byte for byte. The engine performs no normalisation of its own and
+   offers the caller none: `normalize` is not in GoGraph's function registry, and a
+   query that calls it is refused as an unknown function.
+
+**Normalisation is for comparison only.** The `key` a node carries is exactly the
+bytes the caller supplied. Groadmap does not normalise a key on the way in, does
+not store a normalised form beside it, and does not normalise it on the way out;
+what `rmp` stores and renders is the caller's own text. NFC decides only whether
+two keys count as the same key when the convention is being judged. This is the
+same rule the board search already applies to task text
+(`WEB.md § Roadmap Tasks Page`), and it is stated the same way here so that the
+product does not hold two answers to one question.
+
+#### What the convention means in practice
+
+The consequence of enforcing nothing and comparing on NFC is that the two halves
+of the rule reach different things, and a reader has to be able to predict which:
+
+1. **`MATCH (n {key:'...'})` matches by bytes, not by NFC.** A caller who writes
+   one spelling of a key reaches only the node whose stored key is byte-for-byte
+   that spelling. NFC is the specification's comparison for judging the
+   convention; it is not the engine's comparison for binding a pattern, and no
+   part of the product makes it so.
+2. **Two spellings of one key under NFC are therefore two nodes**, indistinguishable
+   wherever `rmp` renders them, since each renders the text the caller supplied and
+   the two render identically. Either spelling binds exactly one of the two, and
+   neither binds both.
+3. **That is a caller error, and the product does not prevent it.** What the
+   product owes instead is that the error can be **found**: the condition is
+   detectable after the fact by the audit below. The state this specification
+   closes is not that the invariant can be broken — under a convention it always
+   can — but that breaking it used to leave no trace.
+4. **The byte-wise duplicate audit does not report this condition, by
+   construction.** `MATCH (n) WHERE n.key IS NOT NULL RETURN n.key, count(*)`
+   groups on the stored bytes, so two spellings of one key are two groups of one,
+   and the audit reports no duplicate while rendering its two rows identically.
+   That query remains correct for what it checks — nodes that repeat a key
+   byte-for-byte — and the audit below is its companion, not its replacement.
+
+Today every key in the project's own graph is a repository-relative path, a Go
+package path, or an ASCII slug, and NFC is the identity on ASCII text, so the
+condition is latent rather than present. It becomes reachable the first time a key
+carries a character outside ASCII.
+
+#### Auditing the convention
+
+Because the invariant is a convention, the specification owes a way to detect a
+violation rather than a rule that prevents one. **The audit runs in two steps, and
+the second is outside the engine**: GoGraph's function registry holds no
+normalising function, so no single Cypher query can group keys by their NFC form.
+A query that claimed to would not run.
+
+**Step 1 — read every key, with `rmp graph query`.** This query is read-only and
+is accepted by both read subcommands:
+
+```cypher
+MATCH (n) WHERE n.key IS NOT NULL
+RETURN id(n) AS id, labels(n) AS labels, n.key AS key
+ORDER BY key, id
+```
+
+**Step 2 — group the returned keys by their NFC form.** Report every group that
+holds more than one distinct byte sequence. Each such group is one violation of
+the invariant, and the `id` and `labels` columns of its rows identify the nodes
+that carry it. An audit that finds no such group has found no violation.
+
+Notes:
+
+1. Step 1 returns **every** keyed node, not a candidate subset. The audit is
+   therefore incapable of missing a violation by narrowing to the wrong candidates,
+   which is the failure a cleverer query would risk. The cost is the full key list,
+   which the graph of a single roadmap returns in one response.
+2. `ORDER BY key, id` orders by the stored bytes and not by the NFC form, so it
+   does **not** bring the members of a violating group together. It is there to make
+   the response deterministic for a given graph, so that the audit's output can be
+   compared across runs.
+3. `id` is GoGraph's internal identifier and is **ephemeral**, exactly as
+   `DATA_FORMATS.md § Graph Query Result` requires. The audit uses it to tell the
+   nodes of one group apart within a single response, and it MUST NOT be recorded
+   as the way to reach a node afterwards.
+4. The audit reads; it changes no node and no key. Resolving a violation it reports
+   is the caller's decision, because only the caller knows which of the two
+   spellings the artefact is meant to carry.
 
 ## Subcommands and Guard-Rail Validation
 
@@ -2236,6 +2358,18 @@ Groadmap's usage model and expectations:
     line without a hint (`COMMANDS.md § Comment Positional Argument Contract`). A
     test that asserts one family's wording MUST cite the other's, so that a change
     to either is made deliberately rather than by copying.
+
+61. The key-uniqueness convention is stated and its violation is detectable. On a
+    graph seeded with two nodes whose `key` values are equal under NFC and
+    different in bytes — a precomposed `U+00C9` against the decomposed
+    `U+0045 U+0301`, for example — each node's stored `key` is byte-for-byte the
+    value supplied, `MATCH` with either spelling binds exactly that one node and
+    never both, and the byte-wise duplicate audit reports the two as separate
+    single-count rows. The two-step audit of
+    [Auditing the convention](#auditing-the-convention) reports the pair: step 1
+    runs under `rmp graph query` and exits 0, and step 2 groups its rows by NFC
+    form and names the group holding both nodes. The same audit reports nothing on
+    a graph whose keys are all distinct under NFC.
 
 ## See Also
 
