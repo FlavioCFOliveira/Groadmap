@@ -103,7 +103,7 @@ type densityWritePath struct {
 func parseDensityWritePaths(t *testing.T) ([]densityWritePath, int) {
 	t.Helper()
 
-	content := readDensitySpec(t)
+	content := readSpecFile(t, densitySpecRelPath)
 	start := strings.Index(content, densitySectionHeading)
 	if start < 0 {
 		t.Fatalf("%s no longer contains the heading %q, so this gate cannot find the table it verifies",
@@ -183,9 +183,10 @@ func splitMarkdownRow(row string) []string {
 	return cells
 }
 
-// readDensitySpec returns the specification file's content, failing loudly if
-// it cannot be read: an unreadable file must never be mistaken for an empty one.
-func readDensitySpec(t *testing.T) string {
+// readSpecFile returns one specification file's content, failing loudly if it
+// cannot be read: an unreadable file must never be mistaken for an empty one.
+// rel is repository-relative and slash-separated.
+func readSpecFile(t *testing.T, rel string) string {
 	t.Helper()
 
 	root, err := filepath.Abs(filepath.Join("..", ".."))
@@ -195,10 +196,10 @@ func readDensitySpec(t *testing.T) string {
 	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
 		t.Fatalf("no go.mod at %s, so this gate is not looking where it assumes: %v", root, err)
 	}
-	path := filepath.Join(root, filepath.FromSlash(densitySpecRelPath))
+	path := filepath.Join(root, filepath.FromSlash(rel))
 	content, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
-		t.Fatalf("reading %s: %v", densitySpecRelPath, err)
+		t.Fatalf("reading %s: %v", rel, err)
 	}
 	return string(content)
 }

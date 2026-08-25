@@ -2337,10 +2337,23 @@ Unlike the task-family batch commands, which report only that the batch could no
 1. Validate sprint ID exists
 2. Parse all task IDs and validate format
 3. Verify all task IDs exist in the roadmap
-4. For `add-tasks`: verify tasks are not already in another sprint
+4. For `add-tasks`: nothing is verified about the sprint a task already belongs to (see Re-parenting on `add-tasks` below)
 5. For `remove-tasks`/`move-tasks`: verify tasks are currently in the specified sprint
 6. Only after full validation succeeds, execute the operation
 7. If any validation fails, exit immediately without making changes
+
+**Re-parenting on `add-tasks`:**
+
+`add-tasks` accepts a task that already belongs to another sprint and moves it. The
+task's single membership row is re-parented onto the sprint named on the command line
+and appended after that sprint's last member; the sprint the task came from no longer
+holds it; and the command exits 0, exactly as it does for a task that belonged to no
+sprint. Nothing is printed about the previous sprint, and the caller does not have to
+run `remove-tasks` against it first.
+
+The statement that performs this, and the repair the previous sprint's positions
+receive in the same transaction, are specified in
+`DATABASE.md § Add Task to Sprint with Position`.
 
 **Automatic Status Updates:**
 
