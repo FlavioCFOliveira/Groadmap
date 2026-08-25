@@ -592,6 +592,29 @@ The canonical set of sentinel errors is defined exclusively in `internal/utils/e
 
 A dispatch failure MUST be carried by `utils.ErrUnknownCommand` and MUST NOT be wrapped in `utils.ErrInvalidInput`. The two are distinct classes: `utils.ErrInvalidInput` covers a malformed flag or argument supplied to a command that was resolved, and exits `2`; `utils.ErrUnknownCommand` covers a command or subcommand name that could not be resolved at all, and exits `127`. Wrapping the second in the first is what makes an unresolved subcommand exit `2` instead of `127`, and it also prefixes the message with `invalid input: `, which misreports the class to the reader.
 
+Three failure conditions are classified in ways the one-line descriptions above
+do not settle on their own, so the specification fixes them here.
+
+1. **A date value that does not parse** is carried by `utils.ErrValidation` and
+   exits `6`. This holds for every date-range filter flag the CLI publishes:
+   `task list --created-since` and `--created-until`, and `audit list` and
+   `audit stats` `--since` and `--until`. The value is neither out of an allowed
+   range nor an invalid enum member, which are the two cases the table names, so
+   without this rule a reader could reasonably classify it as
+   `utils.ErrInvalidInput` and exit `2` instead.
+2. **A state transition the state machine rejects** is carried by
+   `utils.ErrValidation` and exits `6`. The status the caller asked for is a
+   valid enum member; what the CLI refuses is the move from the task's current
+   status to it. `STATE_MACHINE.md § Valid Transitions` defines the permitted
+   moves; an unknown status string is a separate failure, also
+   `utils.ErrValidation`, because the value itself is then invalid.
+3. **A multi-identifier operation in which any identifier does not exist** is
+   carried by `utils.ErrNotFound` and exits `4` as a whole. The rule is the same
+   whether none of the identifiers exists or only some do, and the operation is
+   refused in its entirety rather than applied to the identifiers that do exist.
+   The per-command error tables in `COMMANDS.md` publish the exact string and
+   restate that no change is made.
+
 #### Wrapping Rules
 
 1. **Always use `%w`**: Every `fmt.Errorf` call that produces or re-wraps an error MUST use the `%w` verb to preserve the error chain for `errors.Is()` inspection.
@@ -664,32 +687,6 @@ Groadmap follows standard Unix/Linux exit code conventions. Success output is JS
 | `126` | `EXIT_NOT_EXECUTABLE` | Command not executable | Permission issues |
 | `127` | `EXIT_CMD_NOT_FOUND` | Command not found | Dispatch failure: an unresolved command name or an unresolved subcommand name |
 | `130` | `EXIT_SIGINT` | Interrupted by Ctrl+C | SIGINT received |
-
-### Error Code Mapping
-
-Internal error codes map to exit codes as follows:
-
-| Error Code | Exit Code | Meaning |
-|------------|-----------|---------|
-| `INVALID_INPUT` | 2 | Bad command syntax or missing arguments |
-| `INVALID_DATE` | 6 | Date format or range validation failed |
-| `INVALID_DATE_RANGE` | 6 | Date range validation failed |
-| `INVALID_PRIORITY` | 6 | Priority out of range (0-9) |
-| `INVALID_SEVERITY` | 6 | Severity out of range (0-9) |
-| `INVALID_STATUS_TRANSITION` | 6 | Invalid task status transition (state-machine validation) |
-| `ROADMAP_NOT_FOUND` | 4 | Specified roadmap does not exist |
-| `ROADMAP_EXISTS` | 5 | Roadmap name already in use |
-| `TASK_NOT_FOUND` | 4 | Task ID does not exist |
-| `TASKS_NOT_FOUND` | 4 | None of the provided task IDs exist |
-| `SOME_TASKS_NOT_FOUND` | 4 | Some of the provided task IDs don't exist |
-| `SPRINT_NOT_FOUND` | 4 | Sprint ID does not exist |
-| `NO_ROADMAP` | 3 | No roadmap selected and none specified |
-| `DB_ERROR` | 1 | Database operation failed |
-| `SYSTEM_ERROR` | 1 | Internal system error |
-| `UNKNOWN_SUBCOMMAND` | 127 | Subcommand name does not resolve within the command that was given |
-| `UNKNOWN_COMMAND` | 127 | Command name does not resolve |
-| `UPDATE_FAILED` | 1 | Failed to update resource |
-| `DELETE_FAILED` | 1 | Failed to delete resource |
 
 ### Usage in Shell Scripts
 

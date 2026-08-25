@@ -307,10 +307,12 @@ func itoa(n int) string {
 }
 
 // sortedKeys returns the map's keys in a stable order so failures are
-// reproducible rather than dependent on map iteration.
-func sortedKeys(packages map[string]*testPackage) []string {
-	keys := make([]string, 0, len(packages))
-	for key := range packages {
+// reproducible rather than dependent on map iteration. It is generic in the
+// value type because the gates in this package key several different maps by
+// name and each one wants the same ordering guarantee.
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
