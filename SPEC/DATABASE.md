@@ -681,8 +681,36 @@ removal from a sprint has the sprint as its counterpart, while `task stat` chang
 task's status with no second entity party to the operation, so there is no
 counterpart to name. The field therefore means one thing everywhere — the
 counterpart, when the operation has one — and a reader never has to know which
-command wrote a row in order to interpret the column. A NULL says "this operation had
-no counterpart", never "this operation had one and it was not recorded".
+command wrote a row in order to interpret the column. On a database written only at
+schema 1.12.0 or later, a NULL therefore says "this operation had no counterpart" and
+never "this operation had one and it was not recorded". Acceptance criterion 7 below
+carries the same qualification, and carries it for the same reason.
+
+**On a migrated database a NULL means one of two things.** The governing rule and the
+table above say what a write records; neither says what every stored row holds. The
+`1.11.0` to `1.12.0` migration adds `related_entity_id` as a new column and backfills
+no row, so every row written before it carries NULL there whether or not its operation
+had a counterpart (see `VERSION.md § Migration 1.11.0 to 1.12.0`). A reader of such a
+database must allow both meanings below, because the row itself does not say which one
+applies:
+
+1. **The operation had no counterpart, so there was nothing to record.** This is the
+   meaning the governing rule assigns. It is possible on any database, and on a
+   database written only at schema 1.12.0 or later it is the only one possible.
+   `task stat <ids> BACKLOG` is the case worked through above, and every operation
+   outside the table above carries NULL for this reason.
+2. **The operation had a counterpart and it was not recorded.** `VERSION.md` states
+   this outright for `SPRINT_ADD_TASK`: a stored row of that operation names its
+   sprint and nothing else, so the task it refers to is not recoverable, and inferring
+   a task from current sprint membership would fabricate a fact, which is why the
+   migration does not attempt it. Only a row written before schema 1.12.0 can carry
+   this meaning.
+
+The `sprint remove-tasks` form of `TASK_STATUS_BACKLOG` cannot carry the second
+meaning: no version of Groadmap before schema 1.12.0 wrote the operation at all, so no
+stored row of it predates the migration (see
+`VERSION.md § Migration 1.11.0 to 1.12.0`). The paragraph below establishes the same
+for `TASK_STATUS_SPRINT`.
 
 `TASK_STATUS_SPRINT` has only one producing command, `sprint add-tasks`, so every row
 carrying that operation names a sprint. The invariant covers migrated databases as
