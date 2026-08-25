@@ -80,6 +80,7 @@ TEST_MODULES = [
     "test_58_ai_contract_error_parity",
     "test_59_graph_property_value_content",
     "test_60_docs_readme_contract_completeness",
+    "test_61_family_help_dispatch_exit_code",
 ]
 
 # Stress tests (run separately due to time/data volume)

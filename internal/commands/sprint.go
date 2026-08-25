@@ -168,6 +168,7 @@ Exit codes:
   6   Validation error (bad enum, --max-tasks outside 1-10000, close-without-force,
        attempting to open while another sprint is OPEN, --order on a CLOSED sprint,
        oversized or control-character comment body, etc.)
+  127 Unknown subcommand
 
 Examples:
   rmp sprint list -r myproject

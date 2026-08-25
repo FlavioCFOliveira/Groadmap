@@ -111,6 +111,7 @@ Exit codes:
   3   No roadmap selected
   4   Roadmap not found
   6   Query's operation class does not match the subcommand
+  127 Unknown subcommand
 
 Examples:
   rmp graph create -r myproject --query "CREATE (n:Spec {key:'auth'})"

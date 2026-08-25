@@ -167,6 +167,7 @@ Exit codes:
   4   Task or comment not found
   6   Validation error (bad enum, out-of-range number, oversized field,
        invalid state transition, subtask/dependency guard, etc.)
+  127 Unknown subcommand
 
 Examples:
   rmp task list -r myproject

@@ -232,6 +232,7 @@ Exit codes:
   3   No roadmap specified (-r missing)
   6   Validation error (bad --type/--sort, out-of-range --limit, or
        non-numeric/non-positive [count] on 'show-next')
+  127 Unknown subcommand
 
 Examples:
   rmp backlog list -r groadmap

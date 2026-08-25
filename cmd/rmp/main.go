@@ -25,6 +25,9 @@
 //	4   Resource not found
 //	5   Resource already exists
 //	6   Invalid data
+//	126 Command not executable
+//	127 Command not found (unresolved command or subcommand)
+//	130 Interrupted by SIGINT
 package main
 
 import (

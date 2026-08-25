@@ -534,6 +534,7 @@ Exit codes:
   3   No roadmap specified (-r missing)
   6   Validation error (bad operation/entity-type/date, --limit out of 1-500,
        or --entity-id out of 1-2147483647)
+  127 Unknown subcommand
 
 Examples:
   rmp audit list -r myproject
