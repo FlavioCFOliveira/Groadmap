@@ -407,19 +407,51 @@ shortcut, and there is no truthful backfill available for either:
   wrong in principle: the entry records a moment, and the task's current value is the
   result of every transition since.
 - **`related_entity_id`** records the counterpart entity of the operation that wrote
-  the entry. A stored `SPRINT_ADD_TASK` entry names its sprint and nothing else, so
-  the task it refers to is not recoverable. The `sprint_tasks` table shows which
-  tasks are members of that sprint **now**, which is a different question: it cannot
-  say which of them a given entry was about, it says nothing about tasks since
-  removed, and a sprint with N entries and N members offers no correspondence between
-  the two sets. Inferring a value from it would fabricate a fact, so the migration
-  does not attempt it.
+  the entry. Eight combinations of operation and producing command write a
+  counterpart at schema 1.12.0 or later (see
+  `DATABASE.md § The Two Entities of a Relational Operation`), and **Groadmap already
+  wrote exactly four of them before this migration**, so a database reaching the
+  migration can hold stored entries of those four with no counterpart recorded:
+  `SPRINT_ADD_TASK`, `SPRINT_REMOVE_TASK`, `TASK_ADD_DEP` and `TASK_REMOVE_DEP`. The
+  list is complete — the last paragraph of this bullet accounts for the other four —
+  and the migration recovers the counterpart of none of the four. The reason differs
+  between the two sprint operations and the two dependency operations.
 
-  The counterpart entries that would name a sprint, `TASK_STATUS_SPRINT` and the
-  `sprint remove-tasks` form of `TASK_STATUS_BACKLOG`, raise no backfill question at
-  all: no version of Groadmap before 1.12.0 wrote either operation, and the
-  reclassification below never produces one, so no stored entry carries either value
-  when the migration runs.
+  A stored `SPRINT_ADD_TASK` entry names its sprint and nothing else, and a stored
+  `SPRINT_REMOVE_TASK` entry does the same, so the task each refers to is not
+  recoverable. The `sprint_tasks` table shows which tasks are members of that sprint
+  **now**, which is a different question: it cannot say which of them a given entry
+  was about, it says nothing about tasks since removed, and a sprint with N entries
+  and N members offers no correspondence between the two sets. For
+  `SPRINT_REMOVE_TASK` the table is worse than silent, because the task such an entry
+  records is one that membership no longer lists, unless it was added back later.
+  Inferring a value from it would fabricate a fact, so the migration does not attempt
+  it.
+
+  A stored `TASK_ADD_DEP` or `TASK_REMOVE_DEP` entry names one task of the pair, and the
+  other task of the same pair is named by the sibling entry that the same invocation
+  wrote against it. Both ids therefore survive somewhere in the table, and this is what
+  separates the dependency pair from the sprint pair above. The counterpart is still not
+  recoverable, because nothing ties the two entries of one invocation together: they
+  share only `performed_at`, which no constraint makes unique, so two dependencies added
+  in the same millisecond leave four `TASK_ADD_DEP` entries and three ways to split them
+  into pairs, with nothing in the table saying which split happened. The
+  `task_dependencies` table answers the same different question that `sprint_tasks`
+  answers for the sprint pair: it holds the dependencies that exist **now**, it offers
+  no correspondence when a task has several, and the edge a `TASK_REMOVE_DEP` entry
+  records is by definition no longer there. Pairing entries on a non-unique timestamp,
+  or reading a pair off current dependencies, would each assert a fact the database does
+  not hold, so the migration attempts neither.
+
+  The other four combinations raise no backfill question at all. `TASK_STATUS_SPRINT`
+  and the `sprint remove-tasks` form of `TASK_STATUS_BACKLOG` are the counterpart
+  entries that would name a sprint: no version of Groadmap before schema 1.12.0 wrote
+  either operation, and the reclassification below never produces one, so no stored
+  entry carries either value when the migration runs. `SPRINT_MOVE_TASK_OUT` and
+  `SPRINT_MOVE_TASK_IN` arrived at schema 1.12.0 as well, replacing the legacy
+  `SPRINT_MOVE_TASK`, and the reclassification produces neither: it rewrites only
+  `TASK_STATUS_CHANGE` entries, and it leaves every `SPRINT_MOVE_TASK` entry as it
+  stands (see `DATABASE.md § audit Table`).
 
 #### Reclassifying `TASK_STATUS_CHANGE`
 

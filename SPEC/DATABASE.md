@@ -703,18 +703,24 @@ allow both meanings below, because the row itself does not say which one applies
    database written only at schema 1.12.0 or later it is the only one possible.
    `task stat <ids> BACKLOG` is the case worked through above, and every operation
    outside the table above carries NULL for this reason.
-2. **The operation had a counterpart and it was not recorded.** `VERSION.md` states
-   this outright for `SPRINT_ADD_TASK`: a stored row of that operation names its
-   sprint and nothing else, so the task it refers to is not recoverable, and inferring
-   a task from current sprint membership would fabricate a fact, which is why the
-   migration does not attempt it. Only a row written before schema 1.12.0 can carry
-   this meaning.
+2. **The operation had a counterpart and it was not recorded.** Only a row written
+   before schema 1.12.0 can carry this meaning, and only for one of the four cases in
+   the table above that Groadmap already wrote at that point.
+   `VERSION.md § Migration 1.11.0 to 1.12.0` names all four and states why the
+   migration recovers the counterpart of none of them. `SPRINT_ADD_TASK` is the case
+   `VERSION.md` works through: a stored row of that operation names its sprint and
+   nothing else, so the task it refers to is not recoverable, and inferring a task
+   from current sprint membership would fabricate a fact, which is why the migration
+   does not attempt it.
 
 The `sprint remove-tasks` form of `TASK_STATUS_BACKLOG` cannot carry the second
 meaning: no version of Groadmap before schema 1.12.0 wrote the operation at all, so no
 stored row of it predates the migration (see
-`VERSION.md § Migration 1.11.0 to 1.12.0`). The paragraph below establishes the same
-for `TASK_STATUS_SPRINT`.
+`VERSION.md § Migration 1.11.0 to 1.12.0`). `SPRINT_MOVE_TASK_OUT` and
+`SPRINT_MOVE_TASK_IN` cannot carry it either, and for the same reason: both arrived at
+schema 1.12.0, replacing the legacy `SPRINT_MOVE_TASK`, and the migration produces
+neither. The paragraph below establishes the same for `TASK_STATUS_SPRINT`, the
+fourth and last case of the table above that the second meaning never reaches.
 
 `TASK_STATUS_SPRINT` has only one producing command, `sprint add-tasks`, so every row
 carrying that operation names a sprint. The invariant covers migrated databases as
