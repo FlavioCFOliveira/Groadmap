@@ -433,7 +433,7 @@ func TestPositionalArity_FlagValuesAreNotPositional(t *testing.T) {
 			label:  "task prio with a negative priority",
 			family: "task",
 			args:   []string{"prio", "-r", r, id, "-1"},
-			want:   "validation error: invalid priority: must be 0-9 (got -1)",
+			want:   "validation error: priority must be between 0 and 9, got -1",
 		},
 		{
 			// An unknown flag with an empty-string value. "" is not

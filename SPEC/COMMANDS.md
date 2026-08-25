@@ -1001,7 +1001,7 @@ Each required free-text field fails in three distinct ways, and the binary print
 | `severity` | Outside 0-9 | 6 | "Error: validation error: severity must be between 0 and 9, got N" |
 | `parent_task_id` | `--parent` names a task that does not exist | 4 | "Error: resource not found: parent task N not found" |
 
-`task create` and the dedicated `task prio` / `task sev` commands word the range refusal differently, and each section publishes the wording its own command prints. The message above is the one `task create` emits; `Change Priority (prio)` and `Change Severity (sev)` below publish theirs.
+The two range refusals above have one wording each, whichever command applied the rule. `task create`, `task edit`, `task prio` and `task sev` all print the line shown here, with the offending value after `got`: the wording states the rule that was broken, and the rule belongs to the field rather than to the command that happened to check it. `Change Priority (prio)`, `Change Severity (sev)` and `Edit Task` below publish this same line, not one of their own.
 
 **Empty and whitespace-only values.** `--title`, `--functional-requirements`,
 `--technical-requirements`, and `--acceptance-criteria` are required parameters, and
@@ -1329,7 +1329,7 @@ Validates all IDs before updating any priorities. Follows same validation order 
 |----------|-----------|---------------|
 | All IDs valid | 0 | None |
 | Some IDs invalid | 4 | "Error: resource not found: some tasks not found" |
-| Priority out of range (0-9) | 6 | "Error: validation error: invalid priority: must be 0-9 (got N)" |
+| Priority out of range (0-9) | 6 | "Error: validation error: priority must be between 0 and 9, got N" |
 
 **Output (success):** No output, exit code 0.
 
@@ -1353,7 +1353,7 @@ Validates all IDs before updating any severities. Follows same validation order 
 |----------|-----------|---------------|
 | All IDs valid | 0 | None |
 | Some IDs invalid | 4 | "Error: resource not found: some tasks not found" |
-| Severity out of range (0-9) | 6 | "Error: validation error: invalid severity: must be 0-9 (got N)" |
+| Severity out of range (0-9) | 6 | "Error: validation error: severity must be between 0 and 9, got N" |
 
 **Output (success):** No output, exit code 0.
 
@@ -1400,9 +1400,9 @@ is the kebab-case name listed under **Options** above.
 | `technical_requirements` | Exceeds 4096 characters | "Error: field exceeds maximum size: technical_requirements exceeds maximum length of 4096 characters" | 6 |
 | `acceptance_criteria` | Empty, or empty once trimmed | "Error: validation error: acceptance_criteria cannot be empty" | 6 |
 | `acceptance_criteria` | Exceeds 4096 characters | "Error: field exceeds maximum size: acceptance_criteria exceeds maximum length of 4096 characters" | 6 |
-| `priority` | Integer outside 0-9 | "Error: validation error: invalid priority: must be 0-9 (got N)" | 6 |
+| `priority` | Integer outside 0-9 | "Error: validation error: priority must be between 0 and 9, got N" | 6 |
 | `priority` | Not an integer | "Error: invalid input: invalid value for --priority: strconv.Atoi: parsing \"X\": invalid syntax" | 2 |
-| `severity` | Integer outside 0-9 | "Error: validation error: invalid severity: must be 0-9 (got N)" | 6 |
+| `severity` | Integer outside 0-9 | "Error: validation error: severity must be between 0 and 9, got N" | 6 |
 | `severity` | Not an integer | "Error: invalid input: invalid value for --severity: strconv.Atoi: parsing \"X\": invalid syntax" | 2 |
 | `type` | Not one of the 10 valid values | "Error: validation error: invalid task type: \"X\"" | 6 |
 

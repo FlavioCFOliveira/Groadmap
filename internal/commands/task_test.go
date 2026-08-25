@@ -771,8 +771,8 @@ func TestTaskSetPriority_OutOfRange(t *testing.T) {
 	if err == nil {
 		t.Error("taskSetPriority with priority > 9 expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "must be 0-9") {
-		t.Errorf("expected 'must be 0-9' error, got: %v", err)
+	if !strings.Contains(err.Error(), "priority must be between 0 and 9, got 10") {
+		t.Errorf("expected the range refusal, got: %v", err)
 	}
 }
 
@@ -819,7 +819,7 @@ func TestTaskSetSeverity_OutOfRange(t *testing.T) {
 	if err == nil {
 		t.Error("taskSetSeverity with severity > 9 expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "must be 0-9") {
-		t.Errorf("expected 'must be 0-9' error, got: %v", err)
+	if !strings.Contains(err.Error(), "severity must be between 0 and 9, got 10") {
+		t.Errorf("expected the range refusal, got: %v", err)
 	}
 }

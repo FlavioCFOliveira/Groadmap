@@ -23,6 +23,76 @@ var declaredFields = []Field{
 	FieldCommentBody,
 }
 
+// declaredRangedFields is every RangedField constant, in declaration order, and
+// it plays the same part for the numeric range rule that declaredFields plays
+// for the free-text rules: the gate in published_field_names_test.go builds the
+// names it recognises from this table, so a field brought under the rule is
+// watched by adding it here and nothing else.
+var declaredRangedFields = []RangedField{
+	FieldTaskPriority,
+	FieldTaskSeverity,
+}
+
+// TestRangedFieldsPublishOneUsableNameEach is to RangedField what
+// TestPublishedNamesMatchTheSpecTable is to Field, minus the SPEC table: the
+// range rule is published inside each command's own section of SPEC/COMMANDS.md
+// rather than by a table of names, so there is no document column to compare
+// against and the assertion is on the property that matters instead — every
+// declared constant renders a real name, no two render the same one, and the
+// zero value renders none.
+//
+// The names themselves are pinned where they are actually published: the
+// rendered messages asserted in internal/models/error_message_dedup_test.go and
+// against the binary in tests/test_55_error_string_parity.py.
+func TestRangedFieldsPublishOneUsableNameEach(t *testing.T) {
+	seen := make(map[string]RangedField, len(declaredRangedFields))
+	for _, f := range declaredRangedFields {
+		name := f.String()
+		if name == "" || strings.HasPrefix(name, "RangedField(") {
+			t.Errorf("RangedField(%d) renders %q, which names no field", uint8(f), name)
+			continue
+		}
+		if first, dup := seen[name]; dup {
+			t.Errorf("RangedField(%d) and RangedField(%d) both publish %q",
+				uint8(first), uint8(f), name)
+			continue
+		}
+		seen[name] = f
+	}
+
+	// The zero value must not pass for a field: a RangedField nobody assigned
+	// would otherwise build a plausible-looking message about the wrong field.
+	if got := RangedField(0).String(); got != "RangedField(0)" {
+		t.Errorf("the zero RangedField renders %q, want %q", got, "RangedField(0)")
+	}
+}
+
+// TestNumericRangeMessageAndErrorAgree pins the two halves of the range refusal
+// to each other: NumericRangeMessage words the rule, NumericRangeError completes
+// it with the offending value, and the complete line must contain the wording
+// verbatim. A future edit that reworded one half alone would leave the sentinels
+// in internal/models saying one thing and the line the user reads saying
+// another, which is the split rmp task 318 removed.
+func TestNumericRangeMessageAndErrorAgree(t *testing.T) {
+	const (
+		low  = 0
+		high = 9
+		got  = 99
+	)
+	rule := NumericRangeMessage(FieldTaskPriority, low, high)
+	if want := "priority must be between 0 and 9"; rule != want {
+		t.Fatalf("NumericRangeMessage = %q, want %q", rule, want)
+	}
+
+	err := NumericRangeError(errors.New(rule), got)
+	if want := "validation error: priority must be between 0 and 9, got 99"; err.Error() != want {
+		t.Errorf("NumericRangeError = %q, want %q", err.Error(), want)
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Error("NumericRangeError does not chain ErrValidation, so it would not map to exit code 6")
+	}
+}
+
 // TestPublishedNamesMatchTheSpecTable reads the names out of the SPEC and
 // compares them with the ones this package publishes, in order.
 //

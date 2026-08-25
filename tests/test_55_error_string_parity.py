@@ -1052,15 +1052,18 @@ class TestErrorStringParity:
             "Cap retry backoff for the settlement webhook consumer",
             self.FR, self.TR, self.AC,
         )
-        # #58: task prio's own range wording.
+        # #58: the range refusal, reached through `task prio`. It is the
+        # same published string `task create` drives at #38 above, and driving
+        # it from both commands is what proves the two paths print one line
+        # (rmp task 318): before that task they printed two.
         self.check(
-            "Error: validation error: invalid priority: must be 0-9 (got N)",
+            "Error: validation error: priority must be between 0 and 9, got N",
             ["task", "prio", "-r", r, str(task_id), "15"], 6,
             subs={"N": "15"}, note="task prio out of range",
         )
-        # #59: task sev's own range wording.
+        # #59: the same, for `severity`, against #39 above.
         self.check(
-            "Error: validation error: invalid severity: must be 0-9 (got N)",
+            "Error: validation error: severity must be between 0 and 9, got N",
             ["task", "sev", "-r", r, str(task_id), "15"], 6,
             subs={"N": "15"}, note="task sev out of range",
         )

@@ -305,3 +305,125 @@ func FieldEmptyError(field Field) error {
 func RequiredFieldMessage(field Field) string {
 	return field.String() + " is required"
 }
+
+// ---------------------------------------------------------------------------
+// The numeric range rule.
+// ---------------------------------------------------------------------------
+
+// RangedField identifies one of the numeric task fields whose value must fall
+// inside a fixed inclusive range: `priority` and `severity`.
+//
+// # Why a second type instead of two more Field constants
+//
+// Field is the closed set of Groadmap's EIGHT FREE-TEXT fields, and
+// SPEC/COMMANDS.md § Published Field Names in Validation Messages is canonical
+// for it: that table has eight rows, and TestPublishedNamesMatchTheSpecTable
+// compares the constants against it row by row. `priority` and `severity` are
+// not free text, they are not in that table, and the rule that refuses them is
+// not one of the four that section governs. A ninth and tenth Field constant
+// would therefore put the type in contradiction with the specification that
+// defines it.
+//
+// What they DO share with Field is the reason the underlying type is an
+// integer. The name a range refusal publishes is reachable only through a
+// RangedField value, so a call site that goes back to spelling the name itself,
+//
+//	utils.NumericRangeMessage("priority", 0, 9)
+//
+// does not compile. Had this been declared `type RangedField string` that call
+// would have compiled in silence, and a second spelling of one field's name
+// would be back with nothing to report it.
+//
+// The zero value is deliberately not a field: a RangedField that was never
+// assigned must not pass for one.
+type RangedField uint8
+
+// The two numeric fields a range rule governs, one constant per field.
+const (
+	FieldTaskPriority RangedField = iota + 1
+	FieldTaskSeverity
+)
+
+// rangedNames maps each RangedField to the name its refusal publishes. As with
+// publishedNames above, that is the lowercase name of the database column which
+// stores the value (SPEC/DATABASE.md), and it is the same word the flag uses,
+// which is why no separate flag spelling is needed here.
+//
+// Index 0 is empty on purpose: it is the zero value of RangedField, which names
+// no field.
+var rangedNames = [...]string{
+	FieldTaskPriority: "priority",
+	FieldTaskSeverity: "severity",
+}
+
+// String returns the field's published name, so a RangedField can be written
+// straight into a message with %s and no call site ever holds the name as a
+// string.
+//
+// A value that names no field renders as "RangedField(N)" rather than as an
+// empty or invented name, so a message built from one is visibly wrong instead
+// of quietly plausible.
+func (f RangedField) String() string {
+	if int(f) < len(rangedNames) {
+		if name := rangedNames[f]; name != "" {
+			return name
+		}
+	}
+	return "RangedField(" + strconv.Itoa(int(f)) + ")"
+}
+
+// NumericRangeMessage is the wording of the rule "this field's value must fall
+// inside these bounds", and the ONLY place that wording is spelled.
+//
+// # Why it exists
+//
+// The rule that `priority` and `severity` must lie in 0-9 used to be realised
+// twice: once inline in package models, which announced it as
+// `priority must be between 0 and 9, got 99`, and once in a generic helper in
+// this package, which announced the identical verdict on the identical value as
+// `invalid priority: must be 0-9 (got 99)`. Both were true, both carried
+// ErrValidation and exit code 6, and which one a caller read depended on the
+// command that happened to apply the rule — `task create` printed the first,
+// `task prio`, `task sev` and `task edit` the second. The wording of a refusal
+// is a property of the RULE, not of the code path that reached it, so the
+// specification had begun to publish both, which is how such a split becomes
+// permanent (rmp task 318).
+//
+// The surviving wording is the one above, because it belongs with the sentinels
+// that own the rule (models.ErrPriorityOutOfRange, models.ErrSeverityOutOfRange)
+// and because it names the field the way every other validation message in
+// Groadmap names one: the published name first, then what is wrong with it.
+//
+// # Why the message and not the check
+//
+// This returns the SENTENCE and not an error, and it performs no comparison.
+// The bounds check belongs to the domain type that owns the field —
+// models.ValidatePriority and models.ValidateSeverity are the only two callers —
+// and this package must not import models. What is shared here is the one thing
+// that must not be written twice: the words. Compare RequiredFieldMessage above,
+// which exists for exactly the same reason.
+//
+// Its wording is listed in the gate in published_field_names_test.go, so a
+// second spelling introduced in any other production file is a test failure.
+func NumericRangeMessage(field RangedField, min, max int) string {
+	return fmt.Sprintf("%s must be between %d and %d", field, min, max)
+}
+
+// NumericRangeError completes the refusal NumericRangeMessage words: it chains
+// ErrValidation, so the failure maps to exit code 6 (SPEC/ARCHITECTURE.md), then
+// the rule that was broken, then the value that broke it.
+//
+// rule is the package-level sentinel that OWNS the rule and whose text is a
+// NumericRangeMessage. It is chained with %w rather than rendered with %s so
+// errors.Is can still tell which field was refused; both verbs render the same
+// bytes, and %s would silently discard the chain.
+//
+// Taking the sentinel as a parameter is what lets the assembly — the ", got N"
+// suffix included — be written once while each caller keeps a sentinel of its
+// own. Building the whole error here from a RangedField instead would have
+// forced every caller to share one sentinel, or forced the suffix to be spelled
+// a second time at the call site that needed its own; both are the defect this
+// function removes, in a smaller form.
+func NumericRangeError(rule error, got int) error {
+	return fmt.Errorf("%w: %w, got %d", ErrValidation, rule, got)
+}

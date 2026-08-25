@@ -138,14 +138,14 @@ func taskEdit(args []string) error {
 	// error (exit 6) per SPEC/COMMANDS.md § Edit Task (finding #46).
 	if v, ok := result.Flags["Priority"]; ok {
 		p := v.(int)
-		if err := utils.ValidateNumericRange(p, 0, 9, "priority"); err != nil {
+		if err := models.ValidatePriority(p); err != nil {
 			return err
 		}
 		updates["priority"] = p
 	}
 	if v, ok := result.Flags["Severity"]; ok {
 		s := v.(int)
-		if err := utils.ValidateNumericRange(s, 0, 9, "severity"); err != nil {
+		if err := models.ValidateSeverity(s); err != nil {
 			return err
 		}
 		updates["severity"] = s

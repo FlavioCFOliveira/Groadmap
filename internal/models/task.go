@@ -37,9 +37,17 @@ var (
 	ErrFuncReqRequired       = errors.New(utils.RequiredFieldMessage(utils.FieldTaskFunctionalRequirements))
 	ErrTechReqRequired       = errors.New(utils.RequiredFieldMessage(utils.FieldTaskTechnicalRequirements))
 	ErrAcceptanceCriteriaReq = errors.New(utils.RequiredFieldMessage(utils.FieldTaskAcceptanceCriteria))
-	ErrPriorityOutOfRange    = errors.New("priority must be between 0 and 9")
-	ErrSeverityOutOfRange    = errors.New("severity must be between 0 and 9")
-	ErrInvalidCommitHash     = errors.New("invalid commit hash")
+	// The two range sentinels take their text from the shared definition in
+	// internal/utils, so the rule "priority/severity must lie in 0-9" is worded
+	// in one place and cannot be announced in a second sentence by whichever
+	// command happens to apply it (rmp task 318). ValidatePriority and
+	// ValidateSeverity below are the only checks of these bounds in the
+	// application; every command routes through them.
+	ErrPriorityOutOfRange = errors.New(utils.NumericRangeMessage(
+		utils.FieldTaskPriority, MinPriority, MaxPriority))
+	ErrSeverityOutOfRange = errors.New(utils.NumericRangeMessage(
+		utils.FieldTaskSeverity, MinSeverity, MaxSeverity))
+	ErrInvalidCommitHash = errors.New("invalid commit hash")
 )
 
 // TaskStatus represents the current state of a task.
@@ -310,15 +318,11 @@ func (t *Task) Validate() error {
 	if err := utils.CheckFieldLength(t.AcceptanceCriteria, utils.FieldTaskAcceptanceCriteria, MaxTaskAcceptanceCriteria); err != nil {
 		return err
 	}
-	if t.Priority < 0 || t.Priority > 9 {
-		// Chain utils.ErrValidation so this maps to exit 6 (invalid data) per
-		// SPEC/ARCHITECTURE.md; the local ErrPriorityOutOfRange sentinel is kept
-		// for internal callers. Previously only the local sentinel was chained,
-		// so handleError fell through to exit 1 (finding #46).
-		return fmt.Errorf("%w: %w, got %d", utils.ErrValidation, ErrPriorityOutOfRange, t.Priority)
+	if err := ValidatePriority(t.Priority); err != nil {
+		return err
 	}
-	if t.Severity < 0 || t.Severity > 9 {
-		return fmt.Errorf("%w: %w, got %d", utils.ErrValidation, ErrSeverityOutOfRange, t.Severity)
+	if err := ValidateSeverity(t.Severity); err != nil {
+		return err
 	}
 	if !IsValidTaskStatus(string(t.Status)) {
 		return fmt.Errorf("%w: %q", ErrInvalidStatus, t.Status)
@@ -503,11 +507,49 @@ func (u *TaskUpdate) Validate() error {
 			return err
 		}
 	}
-	if u.Priority != nil && (*u.Priority < 0 || *u.Priority > 9) {
-		return fmt.Errorf("%w: %w, got %d", utils.ErrValidation, ErrPriorityOutOfRange, *u.Priority)
+	if u.Priority != nil {
+		if err := ValidatePriority(*u.Priority); err != nil {
+			return err
+		}
 	}
-	if u.Severity != nil && (*u.Severity < 0 || *u.Severity > 9) {
-		return fmt.Errorf("%w: %w, got %d", utils.ErrValidation, ErrSeverityOutOfRange, *u.Severity)
+	if u.Severity != nil {
+		if err := ValidateSeverity(*u.Severity); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ValidatePriority refuses a task priority outside MinPriority..MaxPriority and
+// is the ONLY place those bounds are compared.
+//
+// It chains utils.ErrValidation, so the failure maps to exit code 6 (invalid
+// data) per SPEC/ARCHITECTURE.md, and ErrPriorityOutOfRange, so errors.Is can
+// still tell which field was refused. Chaining only the local sentinel is what
+// once made this fall through to exit 1 (finding #46).
+//
+// # Why the rule lives here and not at the call sites
+//
+// `task create` reached these bounds through Task.Validate while `task prio`,
+// `task sev` and `task edit` reached a generic range helper in internal/utils,
+// so one rule refused the same value in two different sentences depending on
+// the command (rmp task 318). The bounds belong to the field, and the field
+// belongs to this package, so this is where the rule is applied; the four
+// commands call it instead of checking the bounds themselves. They do NOT call
+// each other, which would couple commands that are otherwise independent.
+func ValidatePriority(priority int) error {
+	if priority < MinPriority || priority > MaxPriority {
+		return utils.NumericRangeError(ErrPriorityOutOfRange, priority)
+	}
+	return nil
+}
+
+// ValidateSeverity refuses a task severity outside MinSeverity..MaxSeverity. It
+// is to `severity` exactly what ValidatePriority is to `priority`, including the
+// sentinels it chains and the reason it exists here.
+func ValidateSeverity(severity int) error {
+	if severity < MinSeverity || severity > MaxSeverity {
+		return utils.NumericRangeError(ErrSeverityOutOfRange, severity)
 	}
 	return nil
 }

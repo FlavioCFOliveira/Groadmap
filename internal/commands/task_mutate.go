@@ -657,9 +657,22 @@ func taskSetPriority(args []string) error {
 		// (exit 6 / ErrValidation per SPEC/ARCHITECTURE.md): priority is a
 		// 0-9 enum-like value, so any token that is not a valid value in
 		// that range — numeric out-of-range or non-numeric — is invalid data.
+		//
+		// This is NOT the range rule below, and its wording is deliberately
+		// left as it stands. The range rule refuses a well-formed integer for
+		// being outside the bounds; this refuses a token that is not an integer
+		// at all, so the two are different rules that happen to share an exit
+		// code. rmp task 318 converged the RANGE wording across the four
+		// commands that apply it; rewording this one alongside it would have
+		// changed a message no specification publishes and that no other call
+		// site emits.
 		return fmt.Errorf("%w: invalid priority: must be 0-9", utils.ErrValidation)
 	}
-	if err := utils.ValidateNumericRange(priority, 0, 9, "priority"); err != nil {
+	// The bounds and the wording of their refusal belong to the field, not to
+	// this command: models.ValidatePriority is the one place either is stated,
+	// and `task create` and `task edit` reach the same rule through it
+	// (rmp task 318).
+	if err := models.ValidatePriority(priority); err != nil {
 		return err
 	}
 
@@ -728,9 +741,19 @@ func taskSetSeverity(args []string) error {
 		// (exit 6 / ErrValidation per SPEC/ARCHITECTURE.md): severity is a
 		// 0-9 enum-like value, so any token that is not a valid value in
 		// that range — numeric out-of-range or non-numeric — is invalid data.
+		//
+		// This is NOT the range rule below, and its wording is deliberately
+		// left as it stands. The range rule refuses a well-formed integer for
+		// being outside the bounds; this refuses a token that is not an integer
+		// at all, so the two are different rules that happen to share an exit
+		// code. rmp task 318 converged the RANGE wording across the four
+		// commands that apply it; rewording this one alongside it would have
+		// changed a message no specification publishes and that no other call
+		// site emits.
 		return fmt.Errorf("%w: invalid severity: must be 0-9", utils.ErrValidation)
 	}
-	if err := utils.ValidateNumericRange(severity, 0, 9, "severity"); err != nil {
+	// One rule, one message: see the note in taskSetPriority above.
+	if err := models.ValidateSeverity(severity); err != nil {
 		return err
 	}
 
