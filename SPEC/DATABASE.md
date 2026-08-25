@@ -569,6 +569,48 @@ from the valid set.
 
 **Note:** Read operations (GET, STATS, LIST_TASKS) are NOT logged to audit as they do not modify state.
 
+#### The Catalogue Entry Is Also the Published Contract Description
+
+Each entry above is read by two consumers, not one. A human reads it here. An AI
+agent reads the same words on the machine-readable contract, because the
+`AuditOperation` enum that `rmp --ai-help` publishes carries the catalogue entry's
+own text as the `description` of every value (see
+`DATA_FORMATS.md § enums map entry`). This section is the single source of that
+text. The contract holds a transcription of it and never a second wording.
+
+**Editing an entry above edits the published contract.** This is the consequence a
+writer has to know before touching the list, and it is the reason the coupling is
+stated here rather than only where the contract is specified. The change does not
+stay in this document: it alters what every agent reading `rmp --ai-help` is told
+the operation means. A test re-derives every description from this section and
+compares it byte for byte against the transcription the binary ships, so an edit
+made here and nowhere else fails the test suite instead of shipping a
+contradiction between the two surfaces.
+
+**The transcription is mechanical.** `DATA_FORMATS.md § enums map entry` states the
+derivation the contract applies to an entry's text, and that derivation is the only
+licence to alter it. Nothing is reworded, shortened, or expanded on the way.
+
+**An entry is read once with this document around it and once without it.** A
+reference that resolves only here — the name of another section, or a word such as
+"above" that depends on where the entry sits in this list — travels to the contract
+intact and points at nothing for the agent reading it there. Four entries do this
+today, and they remain correct catalogue entries: each carries its operative fact
+in full, and what fails to travel is the pointer beside the fact rather than the
+fact itself. A writer adding or editing an entry should know that wording which
+stands on its own serves both readers, while wording that leans on this page serves
+only one.
+
+**Acceptance criteria:**
+
+1. Every description published on the `AuditOperation` enum of `rmp --ai-help` is
+   the text of the corresponding entry above, altered only by the derivation
+   `DATA_FORMATS.md § enums map entry` states.
+2. Editing the text of an entry above, without updating the transcription the
+   binary ships, fails the test suite.
+3. No operation's contract description is written independently of the entry above.
+   There is no second wording to keep in step.
+
 #### One Row per Thing That Happened
 
 The catalogue above rests on two rules that together decide how many rows an

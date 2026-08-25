@@ -100,6 +100,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Database schema (DDL) | `DATABASE.md § DDL - Table Creation` |
 | SQL queries | `DATABASE.md § Main SQL Queries` |
 | Audit operations catalogue (the canonical list, including the LEGACY values) | `DATABASE.md § audit Table` |
+| Audit operation descriptions on `rmp --ai-help` (that each is its catalogue entry verbatim, the two alterations the transcription makes, and what editing a catalogue entry therefore costs) | `DATABASE.md § The Catalogue Entry Is Also the Published Contract Description` and `DATA_FORMATS.md § enums map entry` |
 | Audit: how many entries an operation writes and what each says | `DATABASE.md § One Row per Thing That Happened` |
 | Audit entry `related_entity_id` (which operations write it, and what the counterpart is) | `DATABASE.md § The Two Entities of a Relational Operation` |
 | Audit entry `commit_hash` (which operations write it, and why a reopening does not clear it) | `DATABASE.md § The Commit Hash of an Audit Entry` |
@@ -168,6 +169,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Sprint state transitions | `STATE_MACHINE.md § Sprint State Machine` |
 | Sprint membership versus task status | `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` |
 | Audit operations catalogue | `DATABASE.md § audit Table` |
+| Audit operation description text, on the catalogue and on the `rmp --ai-help` contract alike | `DATABASE.md § audit Table` (the entry itself), with the coupling and its cost stated in `DATABASE.md § The Catalogue Entry Is Also the Published Contract Description` |
 | Audit operation entity-type classification and LEGACY marking (the single declaration both published help surfaces render from) | `HELP.md § Audit operation entity-type classification` |
 | SQL DDL (table definitions, indexes, constraints) | `DATABASE.md` |
 | In-sprint task order and the uniqueness of `sprint_tasks.position` | `DATABASE.md § Position Uniqueness Within a Sprint` |

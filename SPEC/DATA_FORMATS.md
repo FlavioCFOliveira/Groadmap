@@ -922,7 +922,7 @@ a sprint rejects (see `HELP.md § Comment subcommand help specifics`).
 
 **The audit enums are published in full.** `AuditOperation` carries every value in
 `ValidAuditOperations` — the canonical catalogue of `DATABASE.md § audit Table` — and
-`AuditEntityType` carries `TASK` and `SPRINT`. Four rules apply to
+`AuditEntityType` carries `TASK` and `SPRINT`. Five rules apply to
 `AuditOperation` specifically:
 
 1. **No value is omitted.** `audit list --operation` accepts exactly the values in
@@ -945,8 +945,9 @@ a sprint rejects (see `HELP.md § Comment subcommand help specifics`).
    inference is not permitted and what both published surfaces read instead.
 
    The entity type cannot travel inside `description`. That string carries the
-   catalogue entry's own text from `DATABASE.md § audit Table`, so it says what the
-   catalogue says and nothing more, and prose is not a member a consumer can read a
+   catalogue entry's own text from `DATABASE.md § audit Table`, which rule 5 below
+   alters in two mechanical ways and no others, so the string has no room for a fact
+   the catalogue does not state; and prose is not a member a consumer can read a
    value from without parsing it.
 
 4. **Every value states whether a command still writes it.** Each element of
@@ -970,16 +971,59 @@ a sprint rejects (see `HELP.md § Comment subcommand help specifics`).
    carries both facts. The contract derives neither of them from the value's name
    and neither of them from its `description`.
 
+5. **Every description is the catalogue entry's own text.** A value's `description`
+   is not composed here. It is transcribed from that operation's entry in the
+   canonical catalogue of `DATABASE.md § audit Table`, verbatim, backticks
+   included, and the transcription alters the entry in exactly two ways:
+
+   a. A full stop is appended when the catalogue entry does not already end in one.
+      A catalogue entry is a list item and most end without terminal punctuation,
+      while a `description` on the contract is a sentence.
+   b. The six comment operations — `TASK_COMMENT_CREATE`, `TASK_COMMENT_UPDATE`,
+      `TASK_COMMENT_DELETE`, `SPRINT_COMMENT_CREATE`, `SPRINT_COMMENT_UPDATE`, and
+      `SPRINT_COMMENT_DELETE` — additionally receive one fixed closing sentence,
+      the same sentence on each, stating that the audit entry names the parent
+      entity and that the comment's own id is never recorded. This is the fact an
+      operation name hides: `TASK_COMMENT_DELETE` reads as an operation on a
+      comment, and the entry is recorded against the task.
+
+   Nothing else is reworded, shortened, expanded, or reordered. The two surfaces
+   are tied byte for byte in both directions: rewriting a description on the
+   contract without making the same change to the catalogue fails the test suite,
+   and so does editing the catalogue alone. What this costs the writer of the
+   catalogue is stated at the catalogue itself (`DATABASE.md § The Catalogue Entry
+   Is Also the Published Contract Description`).
+
+   A single source for the text is the point of the rule. The catalogue and the
+   contract describe the same operations for two different readers, and a second
+   wording maintained independently of the first would be free to drift from it
+   without either surface looking wrong on its own. The text is nonetheless copied
+   rather than read from the markdown at run time, because the binary must describe
+   itself with no repository present; the copy is pinned by test rather than
+   avoided.
+
+   Rule 2's content requirement therefore lands on the catalogue entry. A LEGACY
+   value's `description` states what that rule demands because the entry it is
+   transcribed from states it, and it cannot be satisfied by wording introduced on
+   the contract alone.
+
 ```json
 "AuditOperation": {
   "values": [
-    {"value": "TASK_STATUS_DOING",     "entity_type": "TASK",   "legacy": false, "description": "A task entered DOING. The entry carries the commit the work started from."},
+    {"value": "TASK_STATUS_DOING",     "entity_type": "TASK",   "legacy": false, "description": "Task entered `DOING` via `task stat`, one row per task. The row carries the `commit_hash` supplied as `--commit-open`."},
     {"value": "SPRINT_ADD_TASK",       "entity_type": "SPRINT", "legacy": false, "description": "Task added to a sprint via `sprint add-tasks`; one row per task, against the sprint, naming the task in `related_entity_id`."},
-    {"value": "TASK_STATUS_CHANGE",    "entity_type": "TASK",   "legacy": true,  "description": "LEGACY. No command writes this. It survives on entries written before status operations named their destination; filter TASK_STATUS_BACKLOG, TASK_STATUS_SPRINT, TASK_STATUS_DOING, TASK_STATUS_TESTING, or TASK_STATUS_COMPLETED for current activity."}
+    {"value": "TASK_COMMENT_CREATE",   "entity_type": "TASK",   "legacy": false, "description": "Comment added to a task via `task comment-add` (logged against the parent task). The audit entry names the parent entity; the comment's own id is never recorded."},
+    {"value": "TASK_STATUS_CHANGE",    "entity_type": "TASK",   "legacy": true,  "description": "LEGACY. The single status-change operation the five `TASK_STATUS_*` operations above replace. It survives on rows the 1.11.0 to 1.12.0 migration could not reclassify (see `VERSION.md § Migration 1.11.0 to 1.12.0`)."}
   ],
   "catalogue_reference": "DATABASE.md § audit Table"
 }
 ```
+
+Every `description` above is the operation's catalogue entry from
+`DATABASE.md § audit Table`, and rule 5 is visible in the rows: each has gained the
+full stop its catalogue entry lacks, and `TASK_COMMENT_CREATE`, being one of the six
+comment operations, has gained the closing sentence about the parent entity as well.
+Nothing else separates these strings from the catalogue's.
 
 **`entity_type` and `legacy` appear only where they apply.** Each is a member of an
 `enums[].values[]` element, not a member every such element carries: each is present
