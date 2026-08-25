@@ -86,6 +86,62 @@ front of it emits -- and no module in the suite holds a second, hand-written
 list of dispatching families that could drift from the binary while staying
 green.
 
+DECISION: A CODE A SUBCOMMAND EMITS THAT ITS OWN ARRAY OMITS (rmp task #336)
+-----------------------------------------------------------------------------
+Section 2 and the dispatcher leg just described cover two of the three ways a
+DOCS "## Exit Codes" table can be incomplete. The third is this one: a
+subcommand emits a code, and the `exit_codes` array the contract publishes FOR
+THAT SUBCOMMAND does not carry it. `rmp roadmap create` with no name exits 2
+with "Error: required parameter missing: roadmap name required", raised by
+roadmapCreate itself and listed by that subcommand's own `--help`; the array
+`rmp --ai-help` publishes for it is [0, 5, 6]; DOCS/commands/roadmap.md's table
+lists 0, 4, 5, 6 and 127. Section 2 compared nothing here, because it demands of
+a page only what the UNION of that family's arrays contains, and 2 is in no
+array of the roadmap family. The dispatcher leg does not reach it either: 2 is
+raised inside the subcommand, after dispatch has already succeeded.
+
+That makes this a defect in the ORACLE, not in the comparison. Section 2 is
+correct and complete GIVEN a correct contract: the day `roadmap create`'s array
+carries 2 the family union becomes {0, 2, 4, 5, 6}, section 2 turns red on
+roadmap.md by itself, and this module needs no edit at all. A module whose
+oracle is the contract cannot detect the contract itself being wrong, however
+its comparison is rewritten -- so extending section 2 is not the remedy, and is
+not what is decided here.
+
+DECISION: this module does not close the third case, and the gate that would
+close it is not added here. Two reasons, in order.
+
+First, the gate belongs on the ORACLE, and a cheap total oracle for it already
+exists. It is not the obvious one -- probing every subcommand along every
+refusal path it can take, which is a far larger oracle than either leg above
+and the reason this case is easy to leave open. It is the per-subcommand
+`--help` "Exit codes:" block: 58 of the 59 subcommands print one, it is
+hand-written INDEPENDENTLY of the registry array, and holding array against
+block costs one subprocess per subcommand while deriving its subject list from
+the contract. Such a check would have failed on this defect the day it was
+written. `rmp ai-help` is the one subcommand that prints no such block, and
+giving it one is part of that work.
+
+Second, that gate cannot be landed green today, and the obstacle is not effort.
+Measured against the current tree it reports 17 code-level disagreements across
+15 subcommands: fifteen whose help block lists 2 while their array omits it
+(roadmap create and remove; task get, remove, reopen, prio, sev, subtasks,
+add-dep, remove-dep, blockers, blocking; backlog list; audit list and history),
+and two of those same fifteen whose array lists 6 while their help block omits
+it (task get, task reopen). Each is a disagreement between two published
+records, so each needs a ruling on WHICH record is wrong, and every ruling that
+lands on the array changes the published `rmp --ai-help` contract -- an owner
+decision, not a documentation fix. The measurement is recorded here so the next
+reader inherits the evidence instead of re-deriving it.
+
+What is NOT deferred is the sweep. All nine DOCS pages were checked for this
+shape against three records of what their commands emit -- the contract arrays,
+the per-subcommand help blocks, and the family help block -- and two pages omit
+a code their commands really emit: roadmap.md omits 2 (above), and stats.md
+omits 2, which `rmp stats -r <name> <surplus-token>` emits through the shared
+positional-arity check in internal/commands/positional_arity.go. The other
+seven pages carry every code all three of those records name.
+
 EXEMPTION: -h/--help
 ---------------------
 Every subcommand in the registry carries -h/--help through `helpFlag()`

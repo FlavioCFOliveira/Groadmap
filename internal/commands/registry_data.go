@@ -159,7 +159,7 @@ func buildRoadmapCommand() Command {
 					Network:    "None.",
 				},
 				Idempotent: false,
-				ExitCodes:  []int{0, 5, 6},
+				ExitCodes:  []int{0, 2, 5, 6},
 				Examples: []Example{
 					{Title: "Create a roadmap", Cmd: "rmp roadmap create mobile-app", Stdout: `{"name":"mobile-app"}`, Exit: 0},
 					{Title: "Roadmap already exists", Cmd: "rmp roadmap create existing", Stderr: "Error: resource already exists: roadmap \"existing\" already exists", Exit: 5},
@@ -187,7 +187,7 @@ func buildRoadmapCommand() Command {
 					Network:    "None.",
 				},
 				Idempotent: false,
-				ExitCodes:  []int{0, 4, 6},
+				ExitCodes:  []int{0, 2, 4, 6},
 				Examples: []Example{
 					{Title: "Remove a roadmap", Cmd: "rmp roadmap remove mobile-app", Exit: 0},
 					{Title: "Roadmap not found", Cmd: "rmp roadmap remove missing", Stderr: "Error: resource not found: roadmap \"missing\" not found", Exit: 4},
