@@ -516,7 +516,7 @@ extra guard on the matched timestamp, only on the two excluded ones.
 5. **It must not write an audit entry of its own.** A migration is not a roadmap
    operation.
 
-#### Consequence: three operations survive as LEGACY
+#### Consequence: four operations survive as LEGACY
 
 Because reclassification is deliberately incomplete, entries carrying
 `TASK_STATUS_CHANGE` remain in migrated databases, and entries carrying

@@ -685,11 +685,16 @@ command wrote a row in order to interpret the column. A NULL says "this operatio
 no counterpart", never "this operation had one and it was not recorded".
 
 `TASK_STATUS_SPRINT` has only one producing command, `sprint add-tasks`, so every row
-carrying that operation names a sprint. No version of Groadmap has ever written a
-`TASK_STATUS_SPRINT` row, and the `1.11.0` to `1.12.0` migration never produces one
-(it reclassifies only to `TASK_STATUS_DOING`, `TASK_STATUS_TESTING`, and
-`TASK_STATUS_COMPLETED`), so the invariant holds for migrated databases as well as
-fresh ones.
+carrying that operation names a sprint. The invariant covers migrated databases as
+well as fresh ones. The `1.11.0` to `1.12.0` migration adds `related_entity_id` as a
+new column and backfills no row, so every row that predates it carries NULL there; a
+`TASK_STATUS_SPRINT` row written before the migration would therefore be a row of
+this operation with no sprint named. No such row can exist: no version of Groadmap
+before schema 1.12.0 wrote the operation at all, and the migration produces none
+either, because it reclassifies only to `TASK_STATUS_DOING`, `TASK_STATUS_TESTING`,
+and `TASK_STATUS_COMPLETED` (see `VERSION.md § Migration 1.11.0 to 1.12.0`). Every
+`TASK_STATUS_SPRINT` row in any database is therefore one that `sprint add-tasks`
+wrote at schema 1.12.0 or later, naming the sprint the task entered.
 
 **A dependency writes two rows and each states its own direction.**
 `task add-dep <task-id> <dep-id>` writes one row against `<task-id>` naming
