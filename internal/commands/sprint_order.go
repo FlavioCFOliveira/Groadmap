@@ -166,7 +166,7 @@ func sprintMoveTo(args []string) error {
 		// invalid form — non-numeric, negative, or above the upper bound — is a
 		// value-validation failure (exit 6 / ErrValidation per
 		// SPEC/COMMANDS.md § Move Task to Position).
-		return fmt.Errorf("%w: Position must be an integer between 0 and %d", utils.ErrValidation, utils.MaxInt32)
+		return fmt.Errorf("%w: position must be an integer between 0 and %d", utils.ErrValidation, utils.MaxInt32)
 	}
 
 	database, err := db.OpenExisting(roadmapName)

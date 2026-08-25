@@ -2574,7 +2574,7 @@ rmp sprint mvto -r <name> <sprint-id> <task-id> <position>
 |----------|-----------|---------------|
 | Sprint not found | 4 | "Sprint not found" |
 | Task not in sprint | 6 | "Task N is not in sprint" |
-| Invalid position | 6 | "Position must be an integer between 0 and 2147483647" |
+| Invalid position | 6 | "Error: validation error: position must be an integer between 0 and 2147483647" |
 
 #### Swap Tasks
 

@@ -1759,6 +1759,48 @@ class TestErrorStringParity:
             subs={"N": str(self.missing_id)}, note="sprint remove not found",
         )
 
+        # #331: `sprint move-to` with a position that is not a valid rank.
+        #
+        # This row was INVISIBLE to this gate until #331. It published the
+        # message body alone ("Position must be an integer between 0 and
+        # 2147483647"), and extraction only collects quoted spans containing
+        # "Error:" -- so the string never entered CORPUS, and the fact that
+        # the binary prefixed it and lower-cased nothing went unnoticed. That
+        # is precisely how the divergence survived. Restoring the prefix puts
+        # the row IN the corpus, which is why this driver has to land in the
+        # same change as the SPEC line: without it, test_zz_coverage_report
+        # reports a published string nothing reaches.
+        #
+        # The invocation is otherwise VALID -- the sprint exists and the task
+        # is a member of it, so the identical call with position 0 succeeds --
+        # which is what isolates the position check as the only thing this
+        # case asserts. The membership call below is run with check=True, so
+        # a fixture that silently stopped being valid fails here rather than
+        # letting the assertion pass for the wrong reason.
+        self.test.run_cmd(
+            ["sprint", "add-tasks", "-r", r, str(sprint_id), str(task_id)]
+        )
+        # One published string serves THREE input forms: a negative position,
+        # a non-numeric token, and an integer above MaxInt32 all produce this
+        # same line and exit 6. That is consistent with `§ Published Error
+        # Strings Are Exact` rule 3, which requires a separate row only where
+        # the binary prints a DIFFERENT line -- and driving all three is what
+        # proves it does not. Should a later change ever split the format
+        # failure from the range failure, one of these three stops matching
+        # and this case fails instead of silently ratifying the split.
+        for position, form in (
+            ("-5", "negative"),
+            ("abc", "non-numeric"),
+            (str(2 ** 31), "above MaxInt32"),
+        ):
+            self.check(
+                "Error: validation error: position must be an integer "
+                "between 0 and 2147483647",
+                ["sprint", "move-to", "-r", r, str(sprint_id), str(task_id),
+                 position], 6,
+                note=f"sprint move-to invalid position ({form})",
+            )
+
     # ------------------------------------------------------------------
     # `sprint comment-add` / `comment-edit`
     # ------------------------------------------------------------------
