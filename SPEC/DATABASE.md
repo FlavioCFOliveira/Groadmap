@@ -650,8 +650,14 @@ every `SPRINT_ADD_TASK` row of a sprint reads identically and none of them says 
 task was added, and every `TASK_STATUS_SPRINT` row of a task says the task joined a
 sprint without saying which one.
 
-`related_entity_id` is non-NULL exactly in the eight cases below, and NULL for every
-other combination of operation and producing command in the catalogue:
+**The governing rule and the table below are canonical for what a write records, not
+for what every stored row holds.** On a database written only at schema `1.12.0` or
+later the two coincide, because every stored row is the record of such a write; a
+migrated database can also hold rows that predate the column, which no such write
+produced, and the block below states what a NULL in such a row can mean. For every
+write at schema `1.12.0` or later, `related_entity_id` is non-NULL exactly in the
+eight cases below, and NULL for every other combination of operation and producing
+command in the catalogue:
 
 | Operation | Written by | `entity_type` / `entity_id` | `related_entity_id` |
 |---|---|---|---|
@@ -686,13 +692,11 @@ schema 1.12.0 or later, a NULL therefore says "this operation had no counterpart
 never "this operation had one and it was not recorded". Acceptance criterion 7 below
 carries the same qualification, and carries it for the same reason.
 
-**On a migrated database a NULL means one of two things.** The governing rule and the
-table above say what a write records; neither says what every stored row holds. The
-`1.11.0` to `1.12.0` migration adds `related_entity_id` as a new column and backfills
-no row, so every row written before it carries NULL there whether or not its operation
-had a counterpart (see `VERSION.md § Migration 1.11.0 to 1.12.0`). A reader of such a
-database must allow both meanings below, because the row itself does not say which one
-applies:
+**On a migrated database a NULL means one of two things.** The `1.11.0` to `1.12.0`
+migration adds `related_entity_id` as a new column and backfills no row, so every row
+written before it carries NULL there whether or not its operation had a counterpart
+(see `VERSION.md § Migration 1.11.0 to 1.12.0`). A reader of such a database must
+allow both meanings below, because the row itself does not say which one applies:
 
 1. **The operation had no counterpart, so there was nothing to record.** This is the
    meaning the governing rule assigns. It is possible on any database, and on a
