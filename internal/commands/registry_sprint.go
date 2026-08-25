@@ -343,7 +343,8 @@ func buildSprintCommand() Command {
 				ExitCodes:   []int{0, 3, 4, 6},
 				Examples: []Example{
 					{Title: "Move", Cmd: "rmp sprint move-tasks -r myproject 5 8 3,7", Exit: 0},
-					{Title: "Source sprint not found", Cmd: "rmp sprint move-tasks -r myproject 99999 8 1", Stderr: "Error: resource not found: from sprint: resource not found: sprint 99999", Exit: 4},
+					{Title: "Source sprint not found", Cmd: "rmp sprint move-tasks -r myproject 99999 8 1", Stderr: "Error: resource not found: from sprint 99999", Exit: 4},
+					{Title: "Destination sprint not found", Cmd: "rmp sprint move-tasks -r myproject 5 99999 1", Stderr: "Error: resource not found: to sprint 99999", Exit: 4},
 				},
 			},
 			{

@@ -1,14 +1,17 @@
 package commands
 
 import (
+	"encoding/json"
 	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
@@ -354,6 +357,20 @@ func TestRefusalsStateTheirClassificationOnce(t *testing.T) {
 			check(t, tc.name, tc.run(roadmap))
 		}
 	})
+
+	// `sprint move-tasks` refusals (task #335). These live in their own subtest
+	// rather than in crossFamilyRefusalCases because they need a fixture: the
+	// destination lookup is only reachable once the SOURCE sprint resolves, so
+	// a sprint has to exist. That requirement is exactly why the corpus above,
+	// which is documented as writing nothing, could not hold this case — and so
+	// why the sweep had never read this line before. It runs last so the
+	// no-write property of the other corpora is unaffected by the fixture.
+	t.Run("sprint move-tasks refusals", func(t *testing.T) {
+		sprintID, taskID := sprintMoveTasksFixture(t, roadmap)
+		for _, tc := range sprintMoveTasksRoleRefusals(roadmap, sprintID, taskID, missingSprintID) {
+			check(t, "sprint move-tasks / "+tc.role+" sprint missing", tc.run())
+		}
+	})
 }
 
 // crossFamilyRefusalCases is a corpus of refusals reaching the exit-code mapper
@@ -484,5 +501,228 @@ func exprText(e ast.Expr) string {
 		return exprText(v.X) + "." + v.Sel.Name
 	default:
 		return "<expr>"
+	}
+}
+
+// ---------------------------------------------------------------------------
+// `sprint move-tasks`: the two-sprint case of the #325 defect class (task #335)
+// ---------------------------------------------------------------------------
+
+// The defect: verifySprintsExist wrapped db.GetSprint's refusal in
+// utils.ErrNotFound a second time, so `sprint move-tasks` printed
+//
+//	Error: resource not found: from sprint: resource not found: sprint 999
+//
+// with the class named twice, while `sprint add-tasks` and `sprint remove-tasks`
+// — the two subcommands the SAME SPEC/COMMANDS.md § Task Assignment row governs —
+// printed it once. BOTH ends were affected: the `to` sprint duplicated
+// identically, and only the `from` end was reported.
+//
+// Why TestRefusalsStateTheirClassificationOnce did not already catch it: nothing
+// was wrong with the sweep, and nothing about this refusal is invisible to it.
+// The sweep reads whatever refusals its corpus produces, and none of its three
+// corpora produced this one. enumRejectionCases covers enum values;
+// roadmapNameEntryPoints covers the roadmap-name refusal on six families;
+// crossFamilyRefusalCases reaches sprint only through `sprint get` and
+// `sprint create`, and is documented as writing nothing — while reaching the
+// `to` end at all REQUIRES a source sprint that resolves, which means creating
+// one. So the case was out of reach of the one corpus that could otherwise have
+// held it. The fix is therefore to extend the corpus, not the sweep: the
+// subtest added to TestRefusalsStateTheirClassificationOnce below builds that
+// fixture and drives both ends.
+
+// sprintMoveTasksFixture creates the sprint and task `sprint move-tasks` needs
+// in order to be refused for the RIGHT reason, and returns their ids.
+//
+// Both are built by running the real create commands, so the fixture cannot
+// drift from what the command family accepts. A task is created rather than a
+// plausible-looking literal id because the invocations below must differ from a
+// successful one in the sprint id alone.
+func sprintMoveTasksFixture(t *testing.T, roadmap string) (sprintID, taskID int) {
+	t.Helper()
+	sprintID = createdEntityID(t, "sprint create", func() error {
+		return HandleSprint([]string{"create", "-r", roadmap,
+			"-t", "Payment gateway resilience",
+			"-d", "Keep checkout serving orders through a provider outage."})
+	})
+	taskID = createdEntityID(t, "task create", func() error {
+		return HandleTask([]string{"create", "-r", roadmap,
+			"-t", "Retry provider webhooks with exponential backoff and a cap",
+			"-fr", "A webhook the provider retries must not be processed twice",
+			"-tr", "Key the retry ledger on the provider event id and cap attempts at six",
+			"-ac", "A replayed webhook leaves the order total unchanged"})
+	})
+	return sprintID, taskID
+}
+
+// createdEntityID runs a create command with stdout captured and returns the id
+// it reported, failing the test if the command did not succeed or printed no id.
+func createdEntityID(t *testing.T, label string, run func() error) int {
+	t.Helper()
+	var runErr error
+	out := captureStdout(t, func() { runErr = run() })
+	if runErr != nil {
+		t.Fatalf("%s: %v", label, runErr)
+	}
+	var created struct {
+		ID int `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(out), &created); err != nil {
+		t.Fatalf("%s: reading the created id out of %q: %v", label, out, err)
+	}
+	if created.ID <= 0 {
+		t.Fatalf("%s: reported id %d, want a positive id", label, created.ID)
+	}
+	return created.ID
+}
+
+// sprintRoleRefusal is one end of `sprint move-tasks`' two-sprint lookup: the
+// role word the line must carry, and an invocation that makes THAT end the one
+// which fails.
+type sprintRoleRefusal struct {
+	role string
+	run  func() error
+}
+
+// sprintMoveTasksRoleRefusals returns one case per end.
+//
+// The two are not interchangeable. verifySprintsExist resolves the source
+// sprint first, so an invocation naming two missing sprints can only ever reach
+// the `from` line; reaching the `to` line requires a source that resolves. A
+// corpus holding only the first would leave the second call site — which
+// carried the identical defect — undriven.
+func sprintMoveTasksRoleRefusals(roadmap string, sprintID, taskID, missingID int) []sprintRoleRefusal {
+	return []sprintRoleRefusal{
+		{role: "from", run: func() error {
+			return HandleSprint([]string{"move-tasks", "-r", roadmap,
+				strconv.Itoa(missingID), strconv.Itoa(missingID + 1), strconv.Itoa(taskID)})
+		}},
+		{role: "to", run: func() error {
+			return HandleSprint([]string{"move-tasks", "-r", roadmap,
+				strconv.Itoa(sprintID), strconv.Itoa(missingID), strconv.Itoa(taskID)})
+		}},
+	}
+}
+
+// missingSprintID is an id no fixture in these tests holds.
+const missingSprintID = 900000001
+
+// TestSprintMoveTasksNamesWhichSprintIsMissing is the behavioural pin for the
+// shape the refusal must have after #335: the class stated once, the
+// discriminator kept.
+//
+// Both halves are asserted RELATIONALLY against db.GetSprint, the producer of
+// the refusal, rather than against a pinned literal:
+//
+//   - `add-tasks` and `remove-tasks` must render exactly what the producer
+//     produced, since neither adds anything of its own;
+//   - `move-tasks` must render that same line with its role word inserted in
+//     front of the id, and nothing else changed.
+//
+// Stated that way the assertion survives a future rewording of GetSprint's
+// message and still fails the moment any of the three adds or drops a byte —
+// which is what restating a classification does.
+func TestSprintMoveTasksNamesWhichSprintIsMissing(t *testing.T) {
+	roadmap := "testsprintmovetasksrolewording"
+	database, cleanup := setupTestTaskRoadmap(t, roadmap)
+	defer cleanup()
+
+	sprintID, taskID := sprintMoveTasksFixture(t, roadmap)
+
+	ctx, cancel := db.WithQuickTimeout()
+	defer cancel()
+	_, refErr := database.GetSprint(ctx, missingSprintID)
+	if refErr == nil {
+		t.Fatalf("sprint %d exists; every case below would be vacuous", missingSprintID)
+	}
+	producer := refErr.Error()
+	if !strings.Contains(producer, "sprint ") {
+		t.Fatalf("the producer's refusal %q does not name the sprint; the "+
+			"role word has nothing to attach to", producer)
+	}
+
+	t.Run("siblings render the producer verbatim", func(t *testing.T) {
+		siblings := []struct {
+			name string
+			run  func() error
+		}{
+			{"sprint add-tasks", func() error {
+				return HandleSprint([]string{"add-tasks", "-r", roadmap,
+					strconv.Itoa(missingSprintID), strconv.Itoa(taskID)})
+			}},
+			{"sprint remove-tasks", func() error {
+				return HandleSprint([]string{"remove-tasks", "-r", roadmap,
+					strconv.Itoa(missingSprintID), strconv.Itoa(taskID)})
+			}},
+		}
+		for _, s := range siblings {
+			err := s.run()
+			if err == nil {
+				t.Fatalf("%s: want a refusal for sprint %d, got nil", s.name, missingSprintID)
+			}
+			if got := err.Error(); got != producer {
+				t.Errorf("%s renders the refusal differently from the producer\n"+
+					"        got: %q\n       want: %q", s.name, got, producer)
+			}
+		}
+	})
+
+	t.Run("move-tasks inserts the role word and changes nothing else", func(t *testing.T) {
+		for _, tc := range sprintMoveTasksRoleRefusals(roadmap, sprintID, taskID, missingSprintID) {
+			t.Run(tc.role, func(t *testing.T) {
+				// Both cases are driven at missingSprintID on the end under
+				// test, so the producer's line — read for that same id — is
+				// the right reference for either one.
+				want := strings.Replace(producer, "sprint ", tc.role+" sprint ", 1)
+				err := tc.run()
+				if err == nil {
+					t.Fatalf("want a refusal, got nil")
+				}
+				if got := err.Error(); got != want {
+					t.Errorf("the %s end does not read as the sibling line with its role word\n"+
+						"        got: %q\n       want: %q\n"+
+						"       note: state the class once and keep the discriminator "+
+						"(SPEC/COMMANDS.md § Task Assignment)", tc.role, got, want)
+				}
+			})
+		}
+	})
+}
+
+// TestSprintMoveTasksRefusalKeepsSentinelAndExitCode is the neutrality half of
+// #335: rebuilding the sentence must not change what the error IS.
+//
+// utils.ErrNotFound has to stay reachable through the chain — it is the only
+// sentinel db.GetSprint applies to a missing sprint, and the whole exit code
+// rests on it — and no other entry in the mapper's catalogue may become
+// reachable, which is the one way a rebuilt error could silently move the
+// refusal to a different exit code.
+func TestSprintMoveTasksRefusalKeepsSentinelAndExitCode(t *testing.T) {
+	roadmap := "testsprintmovetaskssentinel"
+	_, cleanup := setupTestTaskRoadmap(t, roadmap)
+	defer cleanup()
+
+	sprintID, taskID := sprintMoveTasksFixture(t, roadmap)
+
+	for _, tc := range sprintMoveTasksRoleRefusals(roadmap, sprintID, taskID, missingSprintID) {
+		t.Run(tc.role, func(t *testing.T) {
+			err := tc.run()
+			if err == nil {
+				t.Fatalf("want a refusal, got nil")
+			}
+			if !errors.Is(err, utils.ErrNotFound) {
+				t.Errorf("utils.ErrNotFound is unreachable through the rebuilt error: %q", err)
+			}
+			for _, s := range mapperSentinels {
+				want := s.err == utils.ErrNotFound
+				if got := errors.Is(err, s.err); got != want {
+					t.Errorf("classification changed: errors.Is(err, %s) = %v, want %v\n error: %q",
+						s.name, got, want, err)
+				}
+			}
+			if code := exitCodeFor(err); code != 4 {
+				t.Errorf("exit code = %d, want 4 (SPEC/ARCHITECTURE.md); error: %q", code, err)
+			}
+		})
 	}
 }

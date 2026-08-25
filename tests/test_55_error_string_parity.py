@@ -1667,7 +1667,8 @@ class TestErrorStringParity:
         )
 
     # ------------------------------------------------------------------
-    # `sprint open-tasks`, `sprint add-tasks`/`remove-tasks`, `sprint remove`
+    # `sprint open-tasks`, `sprint add-tasks`/`remove-tasks`/`move-tasks`,
+    # `sprint remove`
     # ------------------------------------------------------------------
 
     def test_sprint_task_management_errors(self):
@@ -1750,6 +1751,36 @@ class TestErrorStringParity:
             'Error: invalid input: invalid task ID: "X" (must be a positive integer)',
             ["sprint", "add-tasks", "-r", r, str(sprint_id), "abc"], 2,
             subs={"X": "abc"}, note="sprint add-tasks non-integer task id",
+        )
+
+        # #335: `move-tasks` names WHICH of its two sprints could not be
+        # resolved, so it publishes two strings of its own rather than
+        # sharing the #88 template with its two siblings.
+        #
+        # Both rows entered CORPUS in the same change that produced them, so
+        # both need a driver here or test_zz_coverage_report reports a
+        # published string nothing reaches -- the failure mode the module
+        # docstring calls out and that #331 already paid for once.
+        #
+        # The two cases are NOT interchangeable. `verifySprintsExist` checks
+        # the source sprint first, so an invocation naming two missing
+        # sprints can only ever reach the `from` line; reaching the `to` line
+        # requires a source sprint that RESOLVES. Driving only the first
+        # would leave the second call site unexercised while still marking a
+        # key reached, which is exactly how a divergence hides.
+        self.check(
+            "Error: resource not found: from sprint N",
+            ["sprint", "move-tasks", "-r", r, str(self.missing_id),
+             str(self.missing_id + 1), str(task_id)], 4,
+            subs={"N": str(self.missing_id)},
+            note="sprint move-tasks source sprint not found",
+        )
+        self.check(
+            "Error: resource not found: to sprint N",
+            ["sprint", "move-tasks", "-r", r, str(sprint_id),
+             str(self.missing_id), str(task_id)], 4,
+            subs={"N": str(self.missing_id)},
+            note="sprint move-tasks destination sprint not found",
         )
 
         # #93: `sprint remove`'s own not-found wording (WITH "not found").

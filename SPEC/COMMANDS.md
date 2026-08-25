@@ -2393,10 +2393,19 @@ All sprint task operations validate ALL IDs before making any changes.
 | All IDs valid | 0 | All tasks assigned/removed/moved | None |
 | One or more task IDs do not exist, on `add-tasks` | 4 | **No changes made** | "Error: resource not found: task(s) not found: [<ids>]" |
 | One or more task IDs are not members, on `remove-tasks` | 6 | **No changes made** | "Error: validation error: task(s) not in sprint #N: [<ids>]" |
-| Sprint ID does not exist | 4 | **No changes made** | "Error: resource not found: sprint N" |
+| Sprint ID does not exist, on `add-tasks` or `remove-tasks` | 4 | **No changes made** | "Error: resource not found: sprint N" |
+| The source sprint ID does not exist, on `move-tasks` | 4 | **No changes made** | "Error: resource not found: from sprint N" |
+| The destination sprint ID does not exist, on `move-tasks` | 4 | **No changes made** | "Error: resource not found: to sprint N" |
 | A task ID is not a positive integer | 2 | **No changes made** | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" |
 
 Unlike the task-family batch commands, which report only that the batch could not be satisfied, these three name the offending IDs: the list is rendered as Go renders a slice of integers, space-separated inside square brackets, in the order the IDs were supplied.
+
+`move-tasks` is the only one of the three that names two sprints, so its
+unresolvable-sprint line carries the word `from` or the word `to` in front of the
+id. That word is the only thing in the line that says which of the two arguments
+was wrong, and it is the sole respect in which the line differs from the one
+`add-tasks` and `remove-tasks` print: the classification is stated once, by the
+same sentinel, in all three.
 
 **Validation Order:**
 1. Validate sprint ID exists
