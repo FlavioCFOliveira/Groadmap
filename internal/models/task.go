@@ -463,63 +463,6 @@ func NormalizeCommitHash(hash string) (string, error) {
 	return string(lowered), nil
 }
 
-// TaskUpdate represents a type-safe update operation for tasks.
-// Use pointer fields to indicate which fields should be updated (nil = no change).
-// This provides compile-time type safety and deterministic SQL generation
-// compared to map[string]interface{}.
-type TaskUpdate struct {
-	Title                  *string
-	FunctionalRequirements *string
-	TechnicalRequirements  *string
-	AcceptanceCriteria     *string
-	Priority               *int
-	Severity               *int
-}
-
-// HasChanges returns true if any field is set to be updated.
-func (u *TaskUpdate) HasChanges() bool {
-	return u.Title != nil || u.FunctionalRequirements != nil || u.TechnicalRequirements != nil ||
-		u.AcceptanceCriteria != nil || u.Priority != nil || u.Severity != nil
-}
-
-// Validate checks if the update values are valid.
-//
-// The length caps measure CHARACTERS through utils.CheckFieldLength, the same
-// unit and the same helper Task.Validate uses, and they are applied in the order
-// SPEC/COMMANDS.md declares the fields — title, functional, technical,
-// acceptance — so an update that breaks the cap on two fields always names the
-// same one.
-func (u *TaskUpdate) Validate() error {
-	for _, f := range []struct {
-		value *string
-		field utils.Field
-		limit int
-	}{
-		{u.Title, utils.FieldTaskTitle, MaxTaskTitle},
-		{u.FunctionalRequirements, utils.FieldTaskFunctionalRequirements, MaxTaskFunctionalRequirements},
-		{u.TechnicalRequirements, utils.FieldTaskTechnicalRequirements, MaxTaskTechnicalRequirements},
-		{u.AcceptanceCriteria, utils.FieldTaskAcceptanceCriteria, MaxTaskAcceptanceCriteria},
-	} {
-		if f.value == nil {
-			continue
-		}
-		if err := utils.CheckFieldLength(*f.value, f.field, f.limit); err != nil {
-			return err
-		}
-	}
-	if u.Priority != nil {
-		if err := ValidatePriority(*u.Priority); err != nil {
-			return err
-		}
-	}
-	if u.Severity != nil {
-		if err := ValidateSeverity(*u.Severity); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // ValidatePriority refuses a task priority outside MinPriority..MaxPriority and
 // is the ONLY place those bounds are compared.
 //

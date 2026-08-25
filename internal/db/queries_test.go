@@ -338,8 +338,12 @@ func TestListTasks_NilFilterAndCallerStructUntouched(t *testing.T) {
 // through the compiled binary. What the deleted tests uniquely covered was the
 // second implementation itself.
 //
-// models.TaskUpdate.Validate, exercised here through UpdateTaskStruct, keeps
-// its own tests in internal/commands/boundary_test.go.
+// models.TaskUpdate — the parameter type of the deleted UpdateTaskStruct — has
+// since gone the same way (rmp task 332). Retiring UpdateTaskStruct left the
+// type and its Validate method with no production caller at all, while six
+// tests in internal/commands/boundary_test.go went on asserting against them;
+// this note used to point at both. The bounds they checked are pinned on the
+// live paths instead, as that file now records.
 
 // ==================== SPRINT TESTS ====================
 

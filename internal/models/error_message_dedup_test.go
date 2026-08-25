@@ -101,8 +101,6 @@ func dedupCases(t *testing.T) []dedupCase {
 	badType := validTask
 	badType.Type = "NOPE"
 
-	outOfRange := 42
-
 	validAuditOp := string(ValidAuditOperations[0])
 
 	return []dedupCase{
@@ -180,18 +178,6 @@ func dedupCases(t *testing.T) []dedupCase {
 			err:           mustErr("type", badType.Validate()),
 			wantMsg:       `invalid type: "NOPE"`,
 			wantSentinels: []error{ErrInvalidType},
-		},
-		{
-			name:          "TaskUpdate.Validate/priority",
-			err:           mustErr("update priority", (&TaskUpdate{Priority: &outOfRange}).Validate()),
-			wantMsg:       "validation error: priority must be between 0 and 9, got 42",
-			wantSentinels: []error{utils.ErrValidation, ErrPriorityOutOfRange},
-		},
-		{
-			name:          "TaskUpdate.Validate/severity",
-			err:           mustErr("update severity", (&TaskUpdate{Severity: &outOfRange}).Validate()),
-			wantMsg:       "validation error: severity must be between 0 and 9, got 42",
-			wantSentinels: []error{utils.ErrValidation, ErrSeverityOutOfRange},
 		},
 		{
 			// The `--limit` range rule, converged by rmp task 329. The two

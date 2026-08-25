@@ -303,71 +303,28 @@ func TestTaskEdit_SpecialistsFlag_EmptyValueRejectedToo(t *testing.T) {
 	}
 }
 
-// ==================== models.TaskUpdate.Validate — priority/severity boundary ====================
-
-func TestTaskUpdateValidate_Priority_MinBoundary(t *testing.T) {
-	p := 0
-	u := models.TaskUpdate{Priority: &p}
-	if err := u.Validate(); err != nil {
-		t.Errorf("TaskUpdate priority 0 should be valid, got: %v", err)
-	}
-}
-
-func TestTaskUpdateValidate_Priority_MaxBoundary(t *testing.T) {
-	p := 9
-	u := models.TaskUpdate{Priority: &p}
-	if err := u.Validate(); err != nil {
-		t.Errorf("TaskUpdate priority 9 should be valid, got: %v", err)
-	}
-}
-
-func TestTaskUpdateValidate_Priority_BelowMin(t *testing.T) {
-	p := -1
-	u := models.TaskUpdate{Priority: &p}
-	err := u.Validate()
-	if err == nil {
-		t.Error("TaskUpdate priority -1 should be invalid, got nil")
-	}
-	if !strings.Contains(err.Error(), "priority must be between 0 and 9") {
-		t.Errorf("unexpected error for TaskUpdate priority -1: %v", err)
-	}
-}
-
-func TestTaskUpdateValidate_Priority_AboveMax(t *testing.T) {
-	p := 10
-	u := models.TaskUpdate{Priority: &p}
-	err := u.Validate()
-	if err == nil {
-		t.Error("TaskUpdate priority 10 should be invalid, got nil")
-	}
-	if !strings.Contains(err.Error(), "priority must be between 0 and 9") {
-		t.Errorf("unexpected error for TaskUpdate priority 10: %v", err)
-	}
-}
-
-func TestTaskUpdateValidate_Severity_BelowMin(t *testing.T) {
-	s := -1
-	u := models.TaskUpdate{Severity: &s}
-	err := u.Validate()
-	if err == nil {
-		t.Error("TaskUpdate severity -1 should be invalid, got nil")
-	}
-	if !strings.Contains(err.Error(), "severity must be between 0 and 9") {
-		t.Errorf("unexpected error for TaskUpdate severity -1: %v", err)
-	}
-}
-
-func TestTaskUpdateValidate_Severity_AboveMax(t *testing.T) {
-	s := 10
-	u := models.TaskUpdate{Severity: &s}
-	err := u.Validate()
-	if err == nil {
-		t.Error("TaskUpdate severity 10 should be invalid, got nil")
-	}
-	if !strings.Contains(err.Error(), "severity must be between 0 and 9") {
-		t.Errorf("unexpected error for TaskUpdate severity 10: %v", err)
-	}
-}
+// ==================== models.TaskUpdate.Validate — removed with its subject ====================
+//
+// Six tests stood here, asserting the priority and severity bounds through
+// models.TaskUpdate.Validate. That method, and the TaskUpdate type it hung on,
+// were deleted (rmp task 332): their only production caller had been
+// db.UpdateTaskStruct, retired by task #188 when the command layer replaced the
+// generic task update with one audit operation per field.
+//
+// Nothing they covered went with them. Every bound they asserted is asserted
+// against a path the binary runs:
+//   - 0, 9, -1 and 10 through models.Task.Validate, the check `task create`
+//     reaches — TestTaskValidate_Priority_* and TestTaskValidate_Severity_*
+//     above;
+//   - the same four values through the CLI — TestHandleTask_Create_Priority_*
+//     and TestHandleTask_Create_Severity_* below;
+//   - 0 and 9 through `task prio` and `task sev` —
+//     TestBoundary_TaskPrioCommand_* and TestBoundary_TaskSevCommand_* below.
+//
+// All three routes compare the bounds in models.ValidatePriority /
+// models.ValidateSeverity, which is where the rule lives (rmp task 318), so the
+// deleted tests were a fourth pin on the same comparison — reached only by a
+// caller no invocation could produce.
 
 // ==================== Unicode input — model-level validation ====================
 
