@@ -132,7 +132,7 @@ An unresolved command or subcommand name is resolved before any of this and stay
 | `rmp graph <subcommand>` | `Error: invalid input: unexpected argument "X" (graph queries use --query or stdin)` |
 | `rmp ai-help` | `Error: ai-help accepts no positional arguments or flags other than --help` |
 
-The `graph` line is the canonical line with a hint appended naming the two sources a Cypher query may come from; the exit code and the rest of the line are unchanged. The `ai-help` line carries no sentinel and covers an unrecognised flag as well as a positional argument; `§ AI Help` is canonical for it. The third is `rmp web`, whose line writes the offending token after a colon and without quotes; `§ Web Interface` publishes it, in that command's own error table.
+The `graph` line is the canonical line with a hint appended naming the two sources a Cypher query may come from; the exit code and the rest of the line are unchanged. **The hint is part of the published line and not an incidental remark**: a caller matching that line matches it in full, for the reason `§ Published Error Strings Are Exact` gives for every other error line. It stays confined to the `graph` family, because it names the two sources of a Cypher query and no other family has them. `GRAPH.md § No Positional Query: A Stray Token Is Refused` is canonical for that family's whole rule — the line, the classification of a `-`-prefixed token, and where the refusal lands in the subcommand's order. The `ai-help` line carries no sentinel and covers an unrecognised flag as well as a positional argument; `§ AI Help` is canonical for it. The third is `rmp web`, whose line writes the offending token after a colon and without quotes; `§ Web Interface` publishes it, in that command's own error table.
 
 ### Positional Arity by Command
 
@@ -205,7 +205,7 @@ The table publishes the declared maximum for every command in the CLI. It is can
 Three consequences of the table are worth stating, because each is a case a reader may expect to behave differently:
 
 - **A maximum of zero is a contract, not an absence of one.** Every listing, statistics, and creation command that takes all of its input through flags accepts no positional argument at all, and refuses the first one it is given. `stats` and the five `graph` subcommands are in this class: their whole input is `-r` and, for `graph`, `--query` or standard input.
-- **The graph subcommands take no positional query.** A Cypher query reaches them through `--query` or through standard input and never as a positional argument, so a bare query on the command line is an excess positional argument and is refused (`GRAPH.md § Cypher Input Source and Precedence`).
+- **The graph subcommands take no positional query.** A Cypher query reaches them through `--query` or through standard input and never as a positional argument, so a bare query on the command line is an excess positional argument and is refused (`GRAPH.md § No Positional Query: A Stray Token Is Refused`).
 - **An arity above one is real and is not a licence for more.** `sprint move-tasks`, `sprint move-to`, and `sprint swap` each take three positional arguments; `task stat`, `task prio`, and `task sev` each take two. The rule refuses what exceeds a command's own maximum, never everything after the first argument.
 
 ### Acceptance Criteria
@@ -294,10 +294,17 @@ Each of the eight comment subcommands takes **exactly one** positional argument,
 A declared maximum of one is what `§ Positional Arity by Command` publishes for all eight, and the CLI-wide rule in `§ Positional Arguments` refuses a second positional argument with exit code 2 and the line `Error: invalid input: unexpected argument "X"`. This section is canonical for what the one id identifies on each subcommand, and for the three points on which these subcommands need a rule of their own:
 
 1. The positional id is required. An invocation that supplies none fails with exit code 2 and a message naming the id the subcommand expects, as each subcommand's own block below states.
-2. A leftover token that begins with `-` is a flag and not a positional argument, so it is reported as an unknown flag — `Error: invalid input: unknown flag: --foo` — and not as an unexpected argument. This holds for every `-`-prefixed token, digits included: on these subcommands `-1` is an unknown flag, unlike the `graph` subcommands, which do not classify a negative numeric token as a flag at all. The value of `--body` is the one exception, and it is not a leftover token at all: `--body -1` supplies the body `-1`, under rule 4 of `Comment Body Input Source and Precedence` above.
+2. A leftover token that begins with `-` is a flag and not a positional argument, so it is reported as an unknown flag — `Error: invalid input: unknown flag: --foo` — and not as an unexpected argument. This holds for every `-`-prefixed token, digits included: on these subcommands `-1` is an unknown flag, unlike the `graph` subcommands, which do not classify a negative numeric token as a flag at all and refuse a stray `-1` as an unexpected argument (`GRAPH.md § No Positional Query: A Stray Token Is Refused`, rule 1). The value of `--body` is the one exception, and it is not a leftover token at all: `--body -1` supplies the body `-1`, under rule 4 of `Comment Body Input Source and Precedence` above.
 3. The refusal lands at a defined point in the subcommand's own validation order: after the positional id has been parsed, before the `--type` value is validated, and before the body is resolved. An invocation carrying an extra positional argument is therefore refused with exit code 2 even when it also carries an invalid `--type` value, which on its own would be exit code 6, and it never leaves the command waiting on standard input for a body it is going to reject.
 
 What the general rule already settles for these subcommands, and what this section therefore does not restate: only the first extra token is named; the position of the extra token on the command line does not matter; and nothing happens before the refusal — standard input is not read, the roadmap database is not opened, no comment is added, changed, deleted, or listed, and stdout stays empty.
+
+**The other family that publishes this refusal.** The five `graph` subcommands refuse a stray positional argument under the same CLI-wide rule, with the same sentinel and the same exit code 2, and `GRAPH.md § No Positional Query: A Stray Token Is Refused` is canonical for them. The two families are one rule with two published lines, and they differ on exactly two points, both of them deliberate:
+
+- The `graph` line appends a hint that names the two sources of a Cypher query: `Error: invalid input: unexpected argument "X" (graph queries use --query or stdin)`. That hint is contractual on the `graph` family and is correctly absent here, because a comment body comes from `--body` or standard input and never from `--query` (`§ Positional Arguments`, "Commands that publish a different line").
+- The two families classify a `-`-prefixed token differently, as rule 2 above states.
+
+Neither section may be edited as though its wording were its own invention: a change to the shared part of the line is a change to both families, and a reader who finds one of these two sections must be able to reach the other from it.
 
 ### Validation Behavior
 
@@ -3348,11 +3355,12 @@ in `GRAPH.md § Subcommands and Guard-Rail Validation`.
 `--query` and standard input, and omitting `--query` selects the second. Every
 rule over those sources is specified in
 `GRAPH.md § Cypher Input Source and Precedence`, which is canonical for it: which
-source wins, the maximum query length and the bounded read that enforces it, and
-what happens when no query is supplied at all. This section does not restate
-those rules. It restated them once, and the copy contradicted the original the
-day the original changed, which is the outcome `README.md § 3. Canonical Sources`
-exists to prevent.
+source wins, the maximum query length and the bounded read that enforces it, what
+happens when no query is supplied at all, and the refusal of a query written as a
+positional argument instead of through either source. This section does not
+restate those rules. It restated them once, and the copy contradicted the
+original the day the original changed, which is the outcome
+`README.md § 3. Canonical Sources` exists to prevent.
 
 ### Output
 
@@ -3389,6 +3397,7 @@ exists to prevent.
 | 0 | Query executed successfully. |
 | 1 | Cypher failed to parse or execute, or the graph store could not be opened, read, or written (`utils.ErrDatabase`). |
 | 2 | No query supplied: `--query` absent and standard input empty, whitespace only, or a terminal; or `--query` present with an empty, whitespace-only, or absent value (`utils.ErrRequired`). |
+| 2 | A positional argument was supplied. The five subcommands accept none, so a bare Cypher query on the command line, or any other token that is neither a flag nor a flag's value, is refused (`utils.ErrInvalidInput`). See `GRAPH.md § No Positional Query: A Stray Token Is Refused`. |
 | 3 | No roadmap selected and none provided via `-r` (`utils.ErrNoRoadmap`). |
 | 4 | Selected roadmap does not exist (`utils.ErrNotFound`). |
 | 6 | The query's operation class does not match the subcommand (`utils.ErrValidation`). |
@@ -3512,6 +3521,7 @@ Output (success): JSON in the shape defined in
 | Roadmap not specified | 3 | "Error: no roadmap selected: use -r <name> or --roadmap <name>" |
 | Roadmap not found | 4 | "Error: resource not found: roadmap \"X\" not found" |
 | No query supplied | 2 | "Error: required parameter missing: no query supplied" |
+| Stray positional argument, such as a bare Cypher query written without `--query` | 2 | "Error: invalid input: unexpected argument \"X\" (graph queries use --query or stdin)" |
 | Query above the maximum length | 6 | "Error: validation error: query exceeds maximum length of 1048576 bytes" |
 | Operation-class mismatch on `graph create` | 6 | "Error: validation error: graph create accepts only CREATE/MERGE queries" |
 | Operation-class mismatch on `graph query` | 6 | "Error: validation error: graph query accepts only read-only queries" |

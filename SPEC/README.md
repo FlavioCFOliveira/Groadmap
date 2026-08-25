@@ -67,6 +67,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Graph query result JSON / property-type mapping | `DATA_FORMATS.md § Graph Query Result` |
 | Cypher input via flag or stdin | `GRAPH.md § Cypher Input Source and Precedence` |
 | Maximum Cypher query length (1 MiB, counted in bytes) and the exit code for exceeding it | `GRAPH.md § Maximum Query Length` |
+| A stray positional argument on a `graph` subcommand (the five accept none), the exact line it publishes, and where the refusal lands in the subcommand's order | `GRAPH.md § No Positional Query: A Stray Token Is Refused` |
 | Bounded standard-input read of a Cypher query, and the refusal of an empty, whitespace-only, or terminal standard input | `GRAPH.md § Bounded Standard-Input Read` and `GRAPH.md § Standard Input That Supplies No Query` |
 | Keyword spacing the guard rail requires in a `SHOW INDEX(ES)` / `SHOW CONSTRAINT(S)` command, and why the DDL class stays whitespace-tolerant | `GRAPH.md § Keyword Spacing in a Schema-Introspection Command` |
 | Which Cypher engine constructor each graph path uses (read vs transactional write) and why a read opens no store | `GRAPH.md § Engine Constructor by Path` |
@@ -155,7 +156,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Published field names in validation messages (field to published name, and when a message names the flag instead) | `COMMANDS.md § Published Field Names in Validation Messages` |
 | Which commands read standard input at all (exactly two flag values, and no other command) | `DATA_FORMATS.md § Input` |
 | Comment body input source and precedence (`--body` or stdin) | `COMMANDS.md § Comment Body Input Source and Precedence` |
-| Cypher query input source, maximum query length, and the bounded standard-input read | `GRAPH.md § Cypher Input Source and Precedence` |
+| Cypher query input source, maximum query length, the bounded standard-input read, and the refusal of a positional argument on any `graph` subcommand | `GRAPH.md § Cypher Input Source and Precedence` |
 | Cypher query and knowledge-graph property value content (the UTF-8 encoding rule on every graph subcommand, the control-character rule on the two that write, their order, and the limits of both) | `GRAPH.md § Cypher Query and Property Value Content Rules` |
 | Declared positional arity per command, and the refusal of an excess positional argument (exit code 2, the published line, no side effect) | `COMMANDS.md § Positional Arguments` |
 | Comment positional arguments (exactly one id per subcommand, and what that id identifies) | `COMMANDS.md § Comment Positional Argument Contract` |

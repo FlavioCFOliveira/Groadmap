@@ -56,7 +56,9 @@ engine, and durable on-disk persistence.
 2. Every graph subcommand requires a target roadmap, selected with the shared
    `-r` / `--roadmap` flag (see `COMMANDS.md § Roadmap Selection (Always Required)`).
 3. Each subcommand reads its Cypher from the `--query` flag, or from standard
-   input when the flag is absent (see [Cypher Input Source and Precedence](#cypher-input-source-and-precedence)).
+   input when the flag is absent, and never from a positional argument: a query
+   written bare on the command line is refused (see
+   [Cypher Input Source and Precedence](#cypher-input-source-and-precedence)).
 4. Read subcommands (`query`, `search`) return their result columns and rows as
    JSON to stdout, in the shape defined in `DATA_FORMATS.md § Graph Query Result`.
 5. Write subcommands (`create`, `update`, `delete`) execute inside a single
@@ -1329,6 +1331,87 @@ command that reads standard input: it lists the `--query` of the `graph`
 subcommands together with the `--body` of the comment subcommands of the `task`
 and `sprint` families.
 
+#### No Positional Query: A Stray Token Is Refused
+
+The two sources above are the only two. A `graph` subcommand accepts **no
+positional argument at all**: each of the five declares a maximum of zero, which
+is what `COMMANDS.md § Positional Arity by Command` publishes for `graph create`,
+`graph query`, `graph update`, `graph delete`, and `graph search`. A Cypher query
+written bare on the command line is therefore not a third source. It is an excess
+positional argument, and the subcommand refuses it.
+
+The rules are:
+
+1. **Which tokens are positional arguments at all.** This must be settled before
+   a token can be called unexpected, because it decides which of two errors a
+   `-`-prefixed token draws. Rule 4 of the precedence rules above is canonical
+   for the classification: a
+   token is flag-like when it begins with `--`, or with a single `-` immediately
+   followed by an ASCII letter. Every other token is a positional argument,
+   including a `-` followed by a digit or a decimal point (`-1`, `-0.5`) and a
+   bare `-`. A flag-like token that no `graph` subcommand defines is refused as an
+   unknown flag, under the CLI-wide wording `COMMANDS.md § Positional Arguments`
+   rule 5 publishes; every other stray token is refused by rule 2 below. This is
+   the one point on which the `graph` family and the comment subcommands classify
+   the same token differently, and each family states its own rule: on a comment
+   subcommand a stray `-1` is an unknown flag
+   (`COMMANDS.md § Comment Positional Argument Contract`, rule 2).
+2. **The refusal.** An invocation that supplies a positional argument is refused
+   with `utils.ErrInvalidInput` (exit code 2) and this line on stderr:
+
+   ```
+   Error: invalid input: unexpected argument "X" (graph queries use --query or stdin)
+   ```
+
+   `X` is the offending token, quoted and echoed exactly as the user supplied it.
+   All five subcommands emit this line, and they emit it identically: they share
+   one argument-parsing rule, so the family has one wording and not five.
+3. **Only the first offending token is named.** The tokens are examined left to
+   right and the first positional argument ends the invocation, so
+   `rmp graph query -r <roadmap> --query "<cypher>" alpha beta` names `alpha` and
+   never mentions `beta`.
+4. **The position of the offending token does not matter; the order of the
+   tokens decides which refusal is reached.** A stray token written before the
+   flags is refused exactly as one written after them. When an invocation carries
+   both a stray token and a `--query` whose value is absent (rule 4 of the
+   precedence rules above), the left-to-right examination settles it: whichever
+   comes first is the error reported. Both carry exit code 2.
+5. **Where the refusal lands in the subcommand's order.** Roadmap selection runs
+   first, so an invocation that names no roadmap and has none selected fails with
+   `utils.ErrNoRoadmap` (exit code 3) even when it also carries a stray token.
+   Everything else runs after the refusal. The stray token is refused:
+   - **before the graph store is opened**, so an invocation naming a roadmap that
+     does not exist exits 2 and not the 4 that roadmap would otherwise draw;
+   - **before standard input is read**, so a subcommand that was given no
+     `--query` never blocks on, and never consumes, a stream a producer is still
+     writing to;
+   - **before the maximum-length check**, so an over-long query offered alongside
+     a stray token exits 2 and not the 6 of
+     [Maximum Query Length](#maximum-query-length);
+   - **before the guard rail classifies anything**, so a query of the wrong
+     operation class supplied alongside a stray token exits 2 and not 6, and
+     before the two content rules of
+     [Cypher Query and Property Value Content Rules](#cypher-query-and-property-value-content-rules).
+
+   A refused invocation therefore does nothing: it opens no store, creates,
+   changes and deletes nothing, leaves the snapshot directory and the
+   write-ahead log untouched on disk, and writes zero bytes to stdout. An excess
+   positional argument is not a dispatch failure, so no help follows it: stderr
+   carries the error line and the AI-agent hint alone
+   (`HELP.md § Error message format`).
+6. **The parenthetical is part of the published line, not an incidental hint.**
+   ` (graph queries use --query or stdin)` is appended to the canonical CLI-wide
+   line, and a caller that matches the line matches it in full, hint included.
+   The reason is the one `COMMANDS.md § Published Error Strings Are Exact` gives
+   for every other error line: a reader must not have to work out which half of a
+   line is normative. Its absence on the comment subcommands is not a divergence
+   between two copies of one wording. The hint names the two sources of a
+   **Cypher query**, which only these five subcommands have; the comment
+   subcommands, whose body has two sources of its own, publish the canonical line
+   without it, and a hint naming `--query` would be false on them. An edit to
+   either family must therefore keep the shared part of the line shared and keep
+   this hint confined to the `graph` family.
+
 #### Maximum Query Length
 
 A Cypher query MUST NOT exceed **1 MiB, which is 1048576 bytes**. A query longer
@@ -1501,6 +1584,7 @@ sentinel is introduced for the graph feature.
 | No roadmap selected and none provided via `-r` | `utils.ErrNoRoadmap` | 3 |
 | Selected roadmap does not exist | `utils.ErrNotFound` | 4 |
 | No query supplied: `--query` absent and standard input empty, whitespace only, or a terminal; or `--query` present with an empty, whitespace-only, or absent value (see [Cypher Input Source and Precedence](#cypher-input-source-and-precedence)) | `utils.ErrRequired` | 2 |
+| Any graph subcommand — `graph create`, `graph query`, `graph update`, `graph delete` or `graph search` — receives a positional argument, a bare Cypher query included; the five accept none (see [No Positional Query: A Stray Token Is Refused](#no-positional-query-a-stray-token-is-refused)) | `utils.ErrInvalidInput` | 2 |
 | Query longer than the maximum query length of 1 MiB, from either source (see [Maximum Query Length](#maximum-query-length)) | `utils.ErrValidation` | 6 |
 | Query's operation class does not match the subcommand | `utils.ErrValidation` | 6 |
 | `graph update` writes a relationship bound by an incoming or undirected pattern (see [Relationship Write Direction](#relationship-write-direction)) | `utils.ErrValidation` | 6 |
@@ -1521,11 +1605,18 @@ Rules:
    rejections of
    [Cypher Query and Property Value Content Rules](#cypher-query-and-property-value-content-rules)
    are detected at the same point and carry the same guarantee; none of those
-   statements is ever handed to the engine. The two refusals
-   that belong to the query's source are detected earlier still, before the
-   guard rail classifies anything: the missing-query refusal (exit code 2) and
-   the maximum-length refusal (exit code 6), both stated in
+   statements is ever handed to the engine. The three refusals
+   that belong to the subcommand's arguments and to the query's source are
+   detected earlier still, before the guard rail classifies anything: the
+   stray-positional refusal (exit code 2), the missing-query refusal (exit
+   code 2) and the maximum-length refusal (exit code 6), all three stated in
    [Cypher Input Source and Precedence](#cypher-input-source-and-precedence).
+   The stray-positional refusal is settled while the arguments are still being
+   read, so it precedes the maximum-length refusal always; against the
+   missing-query refusal it does not, because a `--query` whose value is absent
+   is settled in the same left-to-right pass and the earlier token wins (see
+   [No Positional Query: A Stray Token Is Refused](#no-positional-query-a-stray-token-is-refused),
+   rule 4).
 2. A Cypher parse or execution failure reported by the engine is wrapped as
    `utils.ErrDatabase` (exit code 1), consistent with treating the graph store as
    a database-class dependency. The error message names the subcommand and
@@ -2113,6 +2204,38 @@ Groadmap's usage model and expectations:
     in terms true for that subcommand instead of withholding the naming in
     silence. Every one of these refusals is the guard's own and not the engine's,
     which the exit code distinguishes: 6, and not the 1 an engine failure carries.
+57. All five subcommands refuse a positional argument, with one wording. For each
+    of `create`, `query`, `update`, `delete`, and `search`,
+    `rmp graph <subcommand> -r <roadmap> --query "<a query of that subcommand's class>" stray`
+    exits 2, writes zero bytes to stdout, and writes to stderr the line
+    `Error: invalid input: unexpected argument "stray" (graph queries use --query or stdin)`.
+    The criterion MUST compare the whole line, the parenthetical included, and
+    MUST compare the five lines against each other: a wording that drifts on one
+    subcommand is the failure this criterion exists to catch.
+58. The classification of a `-`-prefixed token is asserted in both directions. On
+    each of the five subcommands, a stray `-1` and a stray bare `-` each exit 2
+    and are reported as an **unexpected argument**, while a stray `--foo` exits 2
+    and is reported as an **unknown flag**. Of several stray tokens only the first
+    is named: an invocation carrying `alpha beta` names `alpha`, and its stderr
+    does not contain `beta`.
+59. The refusal precedes every other check the subcommand performs, and roadmap
+    selection precedes the refusal. Measured against the built binary:
+    `rmp graph query stray -r <a roadmap that does not exist> --query "<cypher>"`
+    exits 2 and not 4; the same invocation with no `-r` and no roadmap selected
+    exits 3; a stray token supplied with a query of the wrong operation class
+    exits 2 and not 6; and `rmp graph query -r <roadmap> stray` with a producer
+    still writing to standard input exits 2 at once, reads nothing, and leaves the
+    producer to observe a broken pipe. In every case stdout is empty, stderr
+    carries the error line and the AI-agent hint and no help body, and the
+    roadmap's `graph/` directory — its snapshot directory and its write-ahead
+    log — is byte-identical before and after.
+60. The rule is one rule across the two families that publish it. The line the
+    `graph` subcommands emit is the line
+    `COMMANDS.md § Positional Arguments` publishes for the whole CLI with this
+    family's hint appended, and the line the comment subcommands emit is that same
+    line without a hint (`COMMANDS.md § Comment Positional Argument Contract`). A
+    test that asserts one family's wording MUST cite the other's, so that a change
+    to either is made deliberately rather than by copying.
 
 ## See Also
 

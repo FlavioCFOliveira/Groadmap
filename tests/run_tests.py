@@ -81,6 +81,7 @@ TEST_MODULES = [
     "test_59_graph_property_value_content",
     "test_60_docs_readme_contract_completeness",
     "test_61_family_help_dispatch_exit_code",
+    "test_62_graph_stray_positional_order",
 ]
 
 # Stress tests (run separately due to time/data volume)
