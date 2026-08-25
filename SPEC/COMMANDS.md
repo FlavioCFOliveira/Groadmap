@@ -2464,7 +2464,7 @@ rmp sprint mvto -r <name> <sprint-id> <task-id> <position>
 **Arguments:**
 - `sprint-id` - Sprint identifier
 - `task-id` - Task to move
-- `position` - Target position (0-based). Must be an integer between 0 and 2147483647 (MaxInt32) inclusive. If position >= task count, task is moved to the end.
+- `position` - Target position (0-based). Must be an integer between 0 and 2147483647 (MaxInt32) inclusive. If position >= task count, task is moved to the end. The value is a rank in the sprint's planned order, not a raw column value: it means "the *n*-th task of this sprint", counting from zero. It coincides with the `sprint_tasks.position` the command reads because a sprint's positions are dense (see `DATABASE.md § Position Density Within a Sprint`).
 
 **Behavior:**
 - Moving UP: Tasks between new position and current position-1 shift down by 1

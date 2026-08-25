@@ -58,6 +58,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Sprint membership read cost (one grouped read for the whole listing, no query per sprint) | `DATABASE.md § Read the Membership of Many Sprints (Grouped)` |
 | Sprint listing order (`sprint list` returns sprints by `order` ascending, the planned execution order) and how the web sprint tabs relate to it | `COMMANDS.md § List Sprints` and `WEB.md § Roadmap Sprints Page` |
 | In-sprint task order (`sprint_tasks.position` is unique within a sprint, why the order must be total, and what every write path must do to preserve it) | `DATABASE.md § Position Uniqueness Within a Sprint` |
+| In-sprint position density (a sprint holds exactly `0` to `N-1`, why the schema cannot enforce it, every write path that touches `position` and whether it preserves or repairs the run) | `DATABASE.md § Position Density Within a Sprint` |
 | Adding a `UNIQUE` index to a populated table (repair before create, why a repair must not read its own writes, the failure surface) | `DATABASE.md § Introducing a Uniqueness Constraint over Existing Rows` |
 | Audit result-set cap (`MaxAuditLimit`) | `DATABASE.md § Audit Result Limit` |
 | Migration idempotency (ALTER TABLE ADD COLUMN guard) | `DATABASE.md § Migration Idempotency (ALTER TABLE ADD COLUMN)` |
@@ -169,6 +170,7 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Audit operation entity-type classification and LEGACY marking (the single declaration both published help surfaces render from) | `HELP.md § Audit operation entity-type classification` |
 | SQL DDL (table definitions, indexes, constraints) | `DATABASE.md` |
 | In-sprint task order and the uniqueness of `sprint_tasks.position` | `DATABASE.md § Position Uniqueness Within a Sprint` |
+| In-sprint position density, and the compaction every removal owes | `DATABASE.md § Position Density Within a Sprint` and `DATABASE.md § Compact Sprint Positions` |
 | Introducing a uniqueness constraint over rows that already exist | `DATABASE.md § Introducing a Uniqueness Constraint over Existing Rows` |
 | Schema migrations | `VERSION.md § Migrations` |
 | Concurrency model (WAL, pool, retry) | `IMPLEMENTATION.md § Concurrency Model` |

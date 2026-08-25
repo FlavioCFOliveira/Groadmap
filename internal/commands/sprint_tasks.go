@@ -191,6 +191,9 @@ func sprintStats(args []string) error {
 //
 // Side effects:
 //   - Creates sprint_tasks junction records linking tasks to sprint
+//   - Re-parents the membership row of a task that already belonged to another
+//     sprint, and compacts that sprint's remaining positions in the same
+//     transaction (SPEC/DATABASE.md § Position Density Within a Sprint)
 //   - Updates task status from BACKLOG to SPRINT
 //   - Logs TASK_ADDED_TO_SPRINT audit entries for each task
 //   - Outputs added task IDs as JSON to stdout

@@ -295,7 +295,7 @@ func buildSprintCommand() Command {
 				},
 				Flags:       []Flag{sharedRoadmapFlag(), helpFlag()},
 				Output:      SuccessOutput{Kind: "empty"},
-				SideEffects: SideEffects{Database: "INSERT sprint_tasks + UPDATE tasks plus two mirrored audit entries per task, all sharing one performed_at; one transaction. SPRINT_ADD_TASK is written against the sprint and names the task in related_entity_id; TASK_STATUS_SPRINT is written against the task and names the sprint.", Filesystem: "None.", Network: "None."},
+				SideEffects: SideEffects{Database: "INSERT sprint_tasks + UPDATE tasks plus two mirrored audit entries per task, all sharing one performed_at; one transaction. A task that already belonged to a sprint keeps its single membership row and has it re-parented onto this one, so it LEAVES the other sprint; that sprint is renumbered in the same transaction, changing position values and never the order, so the members it keeps hold a gapless run from zero again. SPRINT_ADD_TASK is written against the sprint and names the task in related_entity_id; TASK_STATUS_SPRINT is written against the task and names the sprint.", Filesystem: "None.", Network: "None."},
 				Idempotent:  false,
 				ExitCodes:   []int{0, 3, 4, 6},
 				Examples: []Example{
@@ -338,7 +338,7 @@ func buildSprintCommand() Command {
 				},
 				Flags:       []Flag{sharedRoadmapFlag(), helpFlag()},
 				Output:      SuccessOutput{Kind: "empty"},
-				SideEffects: SideEffects{Database: "UPDATE sprint_tasks plus two audit entries per task, all sharing one performed_at; one transaction. SPRINT_MOVE_TASK_OUT is written against the source sprint and SPRINT_MOVE_TASK_IN against the destination, both naming the task in related_entity_id. No TASK_STATUS_* entry accompanies them because the move preserves each task status, and nothing writes the LEGACY SPRINT_MOVE_TASK.", Filesystem: "None.", Network: "None."},
+				SideEffects: SideEffects{Database: "UPDATE sprint_tasks plus two audit entries per task, all sharing one performed_at; one transaction. The moved rows are re-parented onto the destination and appended after its current highest position, and the SOURCE sprint is renumbered in the same transaction so the members it keeps hold a gapless run from zero again; the renumbering changes position values and never the order. SPRINT_MOVE_TASK_OUT is written against the source sprint and SPRINT_MOVE_TASK_IN against the destination, both naming the task in related_entity_id. No TASK_STATUS_* entry accompanies them because the move preserves each task status, and nothing writes the LEGACY SPRINT_MOVE_TASK.", Filesystem: "None.", Network: "None."},
 				Idempotent:  false,
 				ExitCodes:   []int{0, 3, 4, 6},
 				Examples: []Example{

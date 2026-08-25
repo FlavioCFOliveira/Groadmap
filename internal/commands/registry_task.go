@@ -157,7 +157,7 @@ func buildTaskCommand() Command {
 				},
 				Flags:       []Flag{sharedRoadmapFlag(), helpFlag()},
 				Output:      SuccessOutput{Kind: "empty"},
-				SideEffects: SideEffects{Database: "DELETE from tasks and audit log; one transaction.", Filesystem: "None.", Network: "None."},
+				SideEffects: SideEffects{Database: "DELETE from tasks and audit log; one transaction. A BACKLOG task may still be a sprint member, and the sprint_tasks foreign key cascades on delete, so the membership row goes with the task; each sprint that loses a row that way is renumbered in the same transaction, changing position values and never the order, so the members it keeps hold a gapless run from zero again.", Filesystem: "None.", Network: "None."},
 				Idempotent:  false,
 				ExitCodes:   []int{0, 3, 4, 6},
 				Examples: []Example{
@@ -208,7 +208,7 @@ func buildTaskCommand() Command {
 				},
 				Flags:       []Flag{sharedRoadmapFlag(), helpFlag()},
 				Output:      SuccessOutput{Kind: "empty"},
-				SideEffects: SideEffects{Database: "UPDATE tasks plus one audit entry per task actually returned to BACKLOG, all sharing one performed_at; one transaction. The same transaction also runs DELETE FROM sprint_tasks for every task whose source state is SPRINT, DOING or TESTING, so those tasks leave their sprint; a task reopened from COMPLETED keeps its sprint_tasks row and stays a member. A task already in BACKLOG is skipped entirely: no UPDATE, no audit entry, and its sprint membership untouched.", Filesystem: "None.", Network: "None."},
+				SideEffects: SideEffects{Database: "UPDATE tasks plus one audit entry per task actually returned to BACKLOG, all sharing one performed_at; one transaction. The same transaction also runs DELETE FROM sprint_tasks for every task whose source state is SPRINT, DOING or TESTING, so those tasks leave their sprint; a task reopened from COMPLETED keeps its sprint_tasks row and stays a member. Each sprint that loses a row is then renumbered inside that same transaction, changing position values and never the order, so the members it keeps hold a gapless run from zero again. A task already in BACKLOG is skipped entirely: no UPDATE, no audit entry, and its sprint membership untouched.", Filesystem: "None.", Network: "None."},
 				Idempotent:  true,
 				ExitCodes:   []int{0, 3, 4, 6},
 				Examples: []Example{

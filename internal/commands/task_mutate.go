@@ -13,6 +13,13 @@ import (
 )
 
 // taskRemove removes tasks.
+//
+// Every named task must be in BACKLOG, and a BACKLOG task may still be a sprint
+// member (SPEC/STATE_MACHINE.md § Sprint Membership and the BACKLOG Status). The
+// sprint_tasks foreign key cascades on delete, so removing such a task takes its
+// membership row with it and thins that sprint's run; each sprint that loses a
+// row is compacted inside the same transaction (SPEC/DATABASE.md § Position
+// Density Within a Sprint).
 func taskRemove(args []string) error {
 	roadmapName, remaining, err := requireRoadmap(args)
 	if err != nil {
@@ -64,6 +71,20 @@ func taskRemove(args []string) error {
 
 	// Delete within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
+		// A BACKLOG task can still be a sprint member (SPEC/STATE_MACHINE.md
+		// § Sprint Membership and the BACKLOG Status), and sprint_tasks declares
+		// ON DELETE CASCADE on task_id, so the DELETE below silently takes the
+		// membership row with the task and leaves a gap in that sprint's run.
+		// The sprint is never named on this command line, so it has to be read
+		// out of the membership rows while they still exist — after the delete
+		// there is nothing left to read (SPEC/DATABASE.md § Position Density
+		// Within a Sprint, `task remove` on a BACKLOG task that is still a
+		// sprint member).
+		losing, err := db.SprintsOfTasksTx(tx, ids)
+		if err != nil {
+			return err
+		}
+
 		for _, id := range ids {
 			// Delete task
 			result, err := tx.Exec("DELETE FROM tasks WHERE id = ?", id)
@@ -83,7 +104,10 @@ func taskRemove(args []string) error {
 				return err
 			}
 		}
-		return nil
+
+		// Close the gaps the cascade opened, in the same transaction as the
+		// deletion, so no committed state holds one.
+		return db.CompactSprintsTx(tx, losing)
 	})
 }
 
@@ -491,6 +515,11 @@ func normalizeCommitFlag(flag, value string) (string, error) {
 // commit_open.
 // Tasks already in BACKLOG are skipped with an informational message.
 // Accepts comma-separated IDs with fail-fast on any invalid ID.
+//
+// A task reopened from SPRINT, DOING or TESTING loses its sprint membership; one
+// reopened from COMPLETED keeps it. Each sprint that loses a row is compacted
+// inside the same transaction, so its remaining members hold a gapless 0..N-1
+// run (SPEC/DATABASE.md § Position Density Within a Sprint).
 func taskReopen(args []string) error {
 	roadmapName, remaining, err := requireRoadmap(args)
 	if err != nil {
@@ -560,7 +589,22 @@ func taskReopen(args []string) error {
 		}
 
 		// Remove sprint_tasks rows for tasks that were associated with a sprint.
+		//
+		// Which sprint each of those rows belongs to is read FIRST, because the
+		// DELETE destroys the evidence and the sprint is never named on this
+		// command line: `task reopen` takes task ids, so the sprint it damages
+		// is one the caller's arguments do not mention (SPEC/DATABASE.md
+		// § Position Density Within a Sprint, `task reopen` from SPRINT, DOING
+		// or TESTING). A task reopened from COMPLETED keeps its row and is
+		// absent from toRemoveFromSprint, so it contributes no sprint here.
+		var losing []int
 		if len(toRemoveFromSprint) > 0 {
+			owners, err := db.SprintsOfTasksTx(tx, toRemoveFromSprint)
+			if err != nil {
+				return err
+			}
+			losing = owners
+
 			delQuery := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
 				"DELETE FROM sprint_tasks WHERE task_id IN (%s)",
 				database.Placeholders(len(toRemoveFromSprint)),
@@ -575,7 +619,10 @@ func taskReopen(args []string) error {
 				return err
 			}
 		}
-		return nil
+
+		// Close the gaps the DELETE opened, in the same transaction as the
+		// removal, so no committed state holds one.
+		return db.CompactSprintsTx(tx, losing)
 	})
 }
 

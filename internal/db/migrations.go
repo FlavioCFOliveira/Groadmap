@@ -88,6 +88,11 @@ var migrations = []Migration{
 		Name:    "Make the sprint_tasks ordering index unique so a sprint's planned task order is total",
 		Apply:   migrateV1_12_0_toV1_13_0,
 	},
+	{
+		Version: "1.14.0",
+		Name:    "Densify sprint_tasks positions so every sprint holds exactly the run 0..N-1",
+		Apply:   migrateV1_13_0_toV1_14_0,
+	},
 }
 
 // RunMigrations executes all pending migrations in a transaction.
@@ -811,6 +816,118 @@ func migrateV1_12_0_toV1_13_0(tx *sql.Tx) error {
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_sprint_tasks_order ON sprint_tasks(sprint_id, position ASC)`,
 	); err != nil {
 		return fmt.Errorf("creating unique idx_sprint_tasks_order: %w", err)
+	}
+
+	return nil
+}
+
+// migrateV1_13_0_toV1_14_0 renumbers every sprint's task positions to the dense
+// run 0..N-1, closing the gaps that four write paths left behind before they
+// were taught to compact (SPEC/VERSION.md § Migration 1.13.0 → 1.14.0;
+// SPEC/DATABASE.md § Position Density Within a Sprint).
+//
+// WHY A MIGRATION AND NOT A REPAIR OF ONE MACHINE. Teaching the write paths to
+// compact stops new gaps; it does nothing about the ones already committed. The
+// measured instance was a sprint holding 39 members at positions 0..36, 53 and
+// 57, produced by the source side of `sprint move-tasks`, which re-parented rows
+// away without repairing the run it left. A gap is not cosmetic there: `sprint
+// move-to`, `sprint top` and `sprint bottom` decide whether they have work to do
+// by comparing the moved task's STORED position against the TARGET RANK, so over
+// a sparse run a real move is read as no move at all and still reported as a
+// success. Every installation that ever ran one of the four paths carries the
+// same damage, and only a migration reaches them.
+//
+// WHY THE UNIQUE INDEX COMES DOWN FIRST. This is the ONE structural difference
+// from migration 1.13.0, which ran the same repair without touching any index:
+// there the unique index did not exist yet, and here it already does. That
+// matters, and it was measured rather than assumed. The repair is a single
+// multi-row UPDATE, SQLite applies it row by row, checks the unique index as
+// each row is written, and offers no deferred check; the order in which it
+// visits the rows follows the physical layout, not the position order. Whenever
+// the two disagree, a row moving DOWN can land on a value a row not yet
+// rewritten still holds. Against the pinned driver, a sprint holding positions
+// 0, 2 and 5 whose rows sit in the reverse physical order failed with
+// "UNIQUE constraint failed: sprint_tasks.sprint_id, sprint_tasks.position",
+// leaving the run untouched; the same three rows in ascending physical order
+// succeeded. A migration that only works when the rows happen to be laid out
+// conveniently is not a migration, so the index is dropped for the duration of
+// the repair — which is exactly the sequence SPEC/DATABASE.md § Introducing a
+// Uniqueness Constraint over Existing Rows requires, and exactly the reason it
+// gives for it: with no unique index in force, the intermediate states of the
+// repair cannot violate one.
+//
+// Re-creating the index at the end is also what makes this migration FAIL
+// CLOSED. CREATE UNIQUE INDEX validates every existing row, so if the repair
+// ever left two members of one sprint sharing a position, the statement fails,
+// the single transaction runMigration opened is rolled back, the repair is undone
+// with it, and _metadata.schema_version keeps its previous value. The database is
+// left exactly as it was. The migration NEVER deletes a sprint_tasks row to make
+// the index succeed.
+//
+// The repair statement is transcribed rather than shared with
+// migrateV1_12_0_toV1_13_0, which runs the same SQL. A migration is a frozen
+// historical artefact: two of them reading one constant means a future edit to
+// either silently rewrites the other's recorded behaviour on databases that have
+// already applied it.
+//
+// Idempotent: on a sprint whose positions are already dense the UPDATE assigns
+// every row the value it already holds, and the index step is DROP … IF EXISTS
+// followed by CREATE … IF NOT EXISTS. Re-applying the migration is a no-op.
+func migrateV1_13_0_toV1_14_0(tx *sql.Tx) error {
+	// Step 1 — take the unique ordering index down for the duration of the
+	// repair. IF EXISTS rather than a bare DROP, because a database that has
+	// already been through this migration once is a database this must not fail
+	// on.
+	if _, err := tx.Exec(`DROP INDEX IF EXISTS idx_sprint_tasks_order`); err != nil {
+		return fmt.Errorf("dropping idx_sprint_tasks_order: %w", err)
+	}
+
+	// Step 2 — repair. Renumber every sprint's positions to a dense 0..N-1 run.
+	//
+	// The ranking is computed in a SUBQUERY that is evaluated as a unit and
+	// joined to the target, NOT by a correlated count over the table being
+	// written: SQLite applies an UPDATE row by row, and a correlated subquery in
+	// the SET clause observes rows the same statement has already rewritten, so
+	// ranking by the very column being written is wrong (SPEC/DATABASE.md
+	// § Introducing a Uniqueness Constraint over Existing Rows, The repair must
+	// not read its own writes).
+	//
+	// The ordering keys are what make the repair honest. position ASC keeps the
+	// order the roadmap's owner planned — this migration changes the VALUES a
+	// sprint's members hold and never their SEQUENCE — and task_id ASC breaks
+	// ties deterministically. Ranking by added_at would also produce a valid
+	// dense run while silently replacing the planned order with the order the
+	// tasks happened to be added in, which is data loss dressed up as a repair,
+	// so it is deliberately NOT used.
+	//
+	// The repair is unconditional rather than guarded by a gap count: a database
+	// that is already dense receives the value each row already holds. A
+	// measurement of one database establishes nothing about anyone else's, which
+	// is why the repair always runs.
+	if _, err := tx.Exec(`
+		UPDATE sprint_tasks
+		SET position = ranked.new_pos
+		FROM (
+			SELECT sprint_id, task_id,
+			       ROW_NUMBER() OVER (
+			           PARTITION BY sprint_id
+			           ORDER BY position ASC, task_id ASC
+			       ) - 1 AS new_pos
+			FROM sprint_tasks
+		) AS ranked
+		WHERE sprint_tasks.sprint_id = ranked.sprint_id
+		  AND sprint_tasks.task_id   = ranked.task_id
+	`); err != nil {
+		return fmt.Errorf("densifying sprint task positions: %w", err)
+	}
+
+	// Step 3 — put the constraint back, under the same name and over the same
+	// pair of columns, so the schema ends with exactly ONE index there serving
+	// both the ordering reads and the uniqueness constraint.
+	if _, err := tx.Exec(
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_sprint_tasks_order ON sprint_tasks(sprint_id, position ASC)`,
+	); err != nil {
+		return fmt.Errorf("recreating unique idx_sprint_tasks_order: %w", err)
 	}
 
 	return nil
