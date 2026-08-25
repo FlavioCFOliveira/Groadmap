@@ -1765,24 +1765,56 @@ class TestTaskAndSprintComments:
         assert self.bodies(log) == [BODY["FINDING"], BODY["FINDING"]]
         print("✓ a byte-identical add creates a second, distinct row")
 
-    def test_malformed_comment_ids_are_format_errors(self):
-        """Every malformed id is exit 2 with the format message, never exit 6.
+    def test_malformed_comment_ids_are_all_misuse(self):
+        """Every malformed id is exit 2 here, whichever of the two id rules it broke.
 
-        The comment subcommands deliberately re-classify what the shared id
-        validator would report as a validation error, because SPEC/COMMANDS.md
-        pins the whole "positive integer" constraint at exit code 2 here.
+        An id is subject to two separate rules (SPEC/COMMANDS.md
+        § Entity Identifier Range): a token that is not an integer at all
+        breaks the FORMAT rule, and an integer outside 1-2147483647 breaks the
+        RANGE rule. The two print different sentences everywhere in the CLI.
+
+        What these four subcommands do differently is the failure CLASS, not
+        the wording: every other surface reports the range half as a
+        validation error at exit 6, and here the whole "positive integer"
+        constraint is misuse at exit 2 (§ Comment Positional Argument
+        Contract, point 4). That is the property this test exists to pin, and
+        it is pinned for both halves.
+
+        Both halves are driven because pinning only one lets the other drift,
+        which is exactly what happened. Until rmp task 330 these subcommands
+        answered the range half with a sentence of their own invention --
+        'invalid comment ID: "0" (must be a positive integer no greater than
+        2147483647)' -- that SPEC published nowhere, and a test that asserted
+        no more than the substring "invalid comment ID" could not see it.
+        Each half therefore also asserts that it did NOT borrow the other
+        half's wording.
         """
-        for raw in ["0", "-1", "2147483648", "1.0", "+1", "1,2", "one", "1 2", "12abc"]:
-            for family, subcommand in [
-                ("task", "comment-edit"), ("task", "comment-remove"),
-                ("sprint", "comment-edit"), ("sprint", "comment-remove"),
-            ]:
-                args = [family, subcommand, "-r", ROADMAP, raw]
-                if subcommand == "comment-edit":
-                    args += ["--type", "FINDING"]
-                err = self.assert_failure(args, EXIT_MISUSE, "invalid comment ID")
-                assert "must be a positive integer" in err, err
-        print("✓ every malformed comment id is a format error at exit 2")
+        for family, subcommand in [
+            ("task", "comment-edit"), ("task", "comment-remove"),
+            ("sprint", "comment-edit"), ("sprint", "comment-remove"),
+        ]:
+            extra = ["--type", "FINDING"] if subcommand == "comment-edit" else []
+            # The RANGE rule, at the floor, below it, and above the ceiling.
+            for raw in ["0", "-1", "2147483648"]:
+                err = self.assert_failure(
+                    [family, subcommand, "-r", ROADMAP, raw] + extra,
+                    EXIT_MISUSE,
+                    f"comment_id must be between 1 and 2147483647, got {raw}",
+                )
+                assert "must be a positive integer" not in err, (
+                    f"the range refusal borrowed the format rule's wording: {err!r}"
+                )
+            # The FORMAT rule: a token that is not an integer at all.
+            for raw in ["1.0", "+1", "1,2", "one", "1 2", "12abc"]:
+                err = self.assert_failure(
+                    [family, subcommand, "-r", ROADMAP, raw] + extra,
+                    EXIT_MISUSE,
+                    f'invalid comment ID: "{raw}" (must be a positive integer)',
+                )
+                assert "must be between" not in err, (
+                    f"the format refusal borrowed the range rule's wording: {err!r}"
+                )
+        print("✓ every malformed comment id is exit 2, under the rule it broke")
 
     def test_surrounding_whitespace_in_an_id_is_tolerated(self):
         """An id is trimmed before parsing, as every id in the CLI is.
@@ -1799,20 +1831,42 @@ class TestTaskAndSprintComments:
         assert self.task_comments() == []
         print("✓ surrounding whitespace in a comment id is trimmed, not refused")
 
-    def test_malformed_parent_ids_are_format_errors(self):
-        """The parent id is validated the same way, under the parent's own name."""
-        for raw in ["0", "-1", "2147483648", "1.0"]:
+    def test_malformed_parent_ids_are_all_misuse(self):
+        """The parent id is validated the same way, under the parent's own name.
+
+        Same two rules and same exit code as the comment's own id above; only
+        the name changes, and it changes per family -- `task_id` / `task` on
+        the task side, `sprint_id` / `sprint` on the sprint side.
+        """
+        # The RANGE rule.
+        for raw in ["0", "-1", "2147483648"]:
             err = self.assert_failure(
                 ["task", "comment-add", "-r", ROADMAP, raw,
                  "--type", "FINDING", "--body", BODY["FINDING"]],
-                EXIT_MISUSE, "invalid task ID",
+                EXIT_MISUSE, f"task_id must be between 1 and 2147483647, got {raw}",
             )
-            assert "must be a positive integer" in err, err
+            assert "must be a positive integer" not in err, (
+                f"the range refusal borrowed the format rule's wording: {err!r}"
+            )
             self.assert_failure(
                 ["sprint", "comment-list", "-r", ROADMAP, raw],
-                EXIT_MISUSE, "invalid sprint ID",
+                EXIT_MISUSE, f"sprint_id must be between 1 and 2147483647, got {raw}",
             )
-        print("✓ a malformed parent id is a format error naming the parent")
+        # The FORMAT rule.
+        for raw in ["1.0", "one"]:
+            err = self.assert_failure(
+                ["task", "comment-add", "-r", ROADMAP, raw,
+                 "--type", "FINDING", "--body", BODY["FINDING"]],
+                EXIT_MISUSE, f'invalid task ID: "{raw}" (must be a positive integer)',
+            )
+            assert "must be between" not in err, (
+                f"the format refusal borrowed the range rule's wording: {err!r}"
+            )
+            self.assert_failure(
+                ["sprint", "comment-list", "-r", ROADMAP, raw],
+                EXIT_MISUSE, f'invalid sprint ID: "{raw}" (must be a positive integer)',
+            )
+        print("✓ a malformed parent id is exit 2, under the rule it broke")
 
     def test_the_two_missing_id_paths_report_differently(self):
         """Omitting the id and putting a flag where it belongs are distinct faults.

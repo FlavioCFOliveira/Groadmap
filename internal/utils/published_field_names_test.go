@@ -145,12 +145,26 @@ var freeTextFragments = []string{
 // unreported. governedRule.flagSpellingIsADefect turns the exemption off for this
 // class, and this class only, for the reason recorded there.
 //
+// It widened a second time, for the same reason and by the same one lever, in
+// rmp task 330. The rule that an entity id must lie in 1..MaxInt32 was announced
+// in three sentences across four sites — `--entity-id must be between 1 and
+// 2147483647 (got 0)` from the audit flag, `invalid entity ID: 0 (must be
+// positive)` and `invalid entity ID: N (exceeds maximum value 2147483647)` from
+// the shared id validator, which split ONE rule by which bound was crossed, and
+// `invalid comment ID: "0" (must be a positive integer no greater than
+// 2147483647)` from the four comment subcommands. The five id fields are in the
+// declared table now, so all four are one sentence and a fifth is a test failure.
+//
+// That widening is also what moved `--entity-id` from the must-PASS list below
+// to the must-FLAG list: it was a boundary case only while `entity-id` named
+// nothing this class governed.
+//
 // What is still outside the class is outside it for the same reason as before.
-// `--entity-id` and `--max-tasks` word their ranges their own way; `--order`
-// states its bound as prose rather than as a range at all; and the commit-hash
-// length rule words a range of its own. Each is a separate question with a task
-// of its own, and each is pinned as a must-PASS case below so that the boundary
-// is asserted rather than assumed.
+// `--max-tasks` words its range its own way and has a task of its own (rmp task
+// 338); `--order` states its bound as prose rather than as a range at all; and
+// the commit-hash length rule words a range of its own. Each is a separate
+// question, and each is pinned as a must-PASS case below so that the boundary is
+// asserted rather than assumed.
 const numericRangeFragment = "must be between"
 
 // governedRule is one message class this gate watches: the words that identify
@@ -334,6 +348,19 @@ func TestTheGateDetectsTheDefectItWatchesFor(t *testing.T) {
 		// hyphen exemption would otherwise wave through.
 		`%w: limit must be between 1 and %d`,
 		`%w: --limit must be between 1 and %d (got %d)`,
+		// The same class, widened again by rmp task 330 to the five id fields.
+		// The first is verbatim the literal `audit list` carried until the flag
+		// and the positional converged, and it is the case that proves
+		// flagSpellingIsADefect reaches this rule too: it was a must-PASS
+		// boundary case on the line above until `entity-id` became a subject.
+		// The rest are the shapes a call site would most plausibly reintroduce
+		// on each of the other four.
+		`%w: --entity-id must be between 1 and %d (got %d)`,
+		`%w: entity_id must be between 1 and %d, got %d`,
+		`%w: task_id must be between 1 and %d, got %d`,
+		`%w: invalid sprint_id: must be between 1 and %d (got %d)`,
+		`%w: --comment-id must be between 1 and %d (got %d)`,
+		`%w: dependency_task_id must be between 1 and %d, got %d`,
 	}
 	for _, text := range mustFlag {
 		if violation(text) == "" {
@@ -367,15 +394,22 @@ func TestTheGateDetectsTheDefectItWatchesFor(t *testing.T) {
 		// Note that the flag spellings here are NOT exempted by the hyphen rule
 		// — this class opts out of it — they simply name nothing this class
 		// governs, which is the boundary being asserted.
-		`%w: --entity-id must be between 1 and %d (got %d)`,
+		//
+		// `--max-tasks` is the last survivor of the prefixed, parenthesised form
+		// and has a task of its own (rmp task 338). `--entity-id` was on this
+		// list beside it until rmp task 330 converged the id rule; it is a
+		// must-FLAG case now.
 		`%w: --max-tasks must be between 1 and %d (got %d)`,
 		`%w: commit hash must be between %d and %d hexadecimal characters, got %d: %w`,
 		`%w: --port must be an integer between %d and %d (got %d)`,
-		// And the word boundary on the newest subject, in both directions: a
-		// longer word ENDING in `limit` is not `limit`, whether it is written
-		// with a hyphen or without.
+		// And the word boundary on the newest subjects, in both directions: a
+		// longer word ENDING in a subject is not that subject, whether it is
+		// written with a hyphen or without.
 		`%w: rate-limit must be between 1 and %d`,
 		`%w: sublimit must be between 1 and %d`,
+		`%w: subtask_id must be between 1 and %d`,
+		`%w: related-entity-id must be between 1 and %d`,
+		`%w: parent_task_id must be between 1 and %d`,
 		// And the two directions of the per-class subject sets: a free-text
 		// wording about a ranged field, and a range wording about a free-text
 		// field. Neither is a message this gate can reason about, and pairing

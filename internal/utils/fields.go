@@ -312,7 +312,8 @@ func RequiredFieldMessage(field Field) string {
 
 // RangedField identifies one of the numeric values Groadmap refuses when it
 // falls outside a fixed inclusive range: the task fields `priority` and
-// `severity`, and the `--limit` of a list command.
+// `severity`, the `--limit` of a list command, and the id of each entity a
+// command addresses.
 //
 // # Why a second type instead of more Field constants
 //
@@ -346,30 +347,107 @@ type RangedField uint8
 // name: NumericRangeMessage takes it as a parameter, so one constant words all
 // three sentences without pretending the caps are equal (rmp task 329).
 //
+// The five id fields are the subjects of the ID RANGE rule, which is the same
+// rule instantiated at the same two bounds for every one of them: an id must lie
+// in MinID..MaxInt32. They are five constants and not one because they name five
+// different fields — a comment id is not a task id — and because each already
+// has a name the specification publishes for it. What they share is the FORM of
+// the refusal, not its subject (rmp task 330).
+//
+// The one place two surfaces share a SUBJECT is FieldEntityID. The `--entity-id`
+// flag of `audit list` and the second positional of `audit history` address the
+// identical field: SPEC/COMMANDS.md § Entity History defines the second as
+// "Equivalent to `rmp audit list -r <name> -e <entity-type> --entity-id
+// <entity-id>`", and the value is the `entity_id` column of the audit table in
+// both cases (SPEC/DATABASE.md § audit Table). One field, one constant, therefore
+// one sentence — which is the half of rmp task 330 that converges a NAME rather
+// than a form.
+//
 // The zero value is deliberately not a field, as above.
 const (
 	FieldTaskPriority RangedField = iota + 1
 	FieldTaskSeverity
 	FieldListLimit
+	FieldTaskID
+	FieldSprintID
+	FieldEntityID
+	FieldCommentID
+	FieldDependencyTaskID
 )
 
 // rangedNames maps each RangedField to the name its refusal publishes. Each is
-// the lowercase word the flag uses with its leading `--` dropped, so a refusal
-// names the VALUE that broke the rule and never the flag that carried it — the
-// same boundary SPEC/COMMANDS.md § Published Field Names in Validation Messages
-// draws for the free-text fields, and the axis on which `audit list` used to
-// disagree with `task list` and `backlog list`.
+// the lowercase word the flag or positional uses, with its leading `--` dropped
+// and its hyphens written as underscores, so a refusal names the VALUE that
+// broke the rule and never the flag that carried it — the same boundary
+// SPEC/COMMANDS.md § Published Field Names in Validation Messages draws for the
+// free-text fields, and the axis on which `audit list` used to disagree with
+// `task list` and `backlog list`.
 //
 // For `priority` and `severity` the word is also the database column that stores
 // the value (SPEC/DATABASE.md). `limit` stores nothing — it bounds a result set
 // — so the flag's own word is the whole of its name.
 //
+// The five id names are not invented here either. Each is the argument's own
+// name in SPEC/COMMANDS.md — `task-id`, `sprint-id`, `entity-id`, `comment-id`,
+// and the dependency positional — written the way every other published field
+// name in this package is written. `entity_id` lands on the audit column of the
+// same name, and on the name internal/models already published for that field
+// before this rule reached it.
+//
 // Index 0 is empty on purpose: it is the zero value of RangedField, which names
 // no field.
 var rangedNames = [...]string{
-	FieldTaskPriority: "priority",
-	FieldTaskSeverity: "severity",
-	FieldListLimit:    "limit",
+	FieldTaskPriority:     "priority",
+	FieldTaskSeverity:     "severity",
+	FieldListLimit:        "limit",
+	FieldTaskID:           "task_id",
+	FieldSprintID:         "sprint_id",
+	FieldEntityID:         "entity_id",
+	FieldCommentID:        "comment_id",
+	FieldDependencyTaskID: "dependency_task_id",
+}
+
+// idEntityWords maps each id field to the word its FORMAT refusal publishes —
+// the `<entity>` of "invalid <entity> ID: \"X\" (must be a positive integer)".
+//
+// # Why the two names live in one table each and not in one string each
+//
+// An id is subject to TWO rules, and the two are deliberately not merged. The
+// FORMAT rule refuses a token that is not an integer at all and is exit code 2
+// misuse; the RANGE rule refuses an integer that fell outside MinID..MaxInt32
+// and is a validation failure. rmp task 318 left the format refusal alone for
+// exactly that reason, and rmp task 330 converged the range refusal without
+// disturbing it.
+//
+// Each rule therefore publishes its own name for the same argument, and the two
+// must be recognisably the same argument: `entity_id` for the range,
+// `entity` for the format. They are stored as two tables over ONE constant so a
+// call site can no more choose the format word than it can choose the range
+// name, and TestIDEntityWordAgreesWithThePublishedName pins the relationship —
+// the range name is the entity word with its spaces written as underscores and
+// `_id` appended — so neither can move without the other.
+//
+// A RangedField that is not an id has no entry: IDEntity returns "" for it, the
+// way FreeTextViolation.Reason returns "" for the violation that is not one.
+var idEntityWords = [...]string{
+	FieldTaskID:           "task",
+	FieldSprintID:         "sprint",
+	FieldEntityID:         "entity",
+	FieldCommentID:        "comment",
+	FieldDependencyTaskID: "dependency task",
+}
+
+// IDEntity returns the word this field's id FORMAT refusal names it by, and ""
+// for a RangedField that is not an id.
+//
+// It is also the word the surrounding prose of an id message uses — "task 42 not
+// found", "comment ID required" — so a command that holds the field holds every
+// spelling it needs and never carries a label of its own beside it.
+func (f RangedField) IDEntity() string {
+	if int(f) < len(idEntityWords) {
+		return idEntityWords[f]
+	}
+	return ""
 }
 
 // String returns the field's published name, so a RangedField can be written
@@ -453,5 +531,63 @@ func NumericRangeMessage(field RangedField, min, max int) string {
 // a second time at the call site that needed its own; both are the defect this
 // function removes, in a smaller form.
 func NumericRangeError(rule error, got int) error {
-	return fmt.Errorf("%w: %w, got %d", ErrValidation, rule, got)
+	return fmt.Errorf("%w: %w%s", ErrValidation, rule, offendingValue(strconv.Itoa(got)))
+}
+
+// offendingValue is the ONLY spelling of how a range refusal names the value
+// that broke the rule. Both assemblies below end with it, so the punctuation and
+// the wording of the echo cannot drift between them — which is one of the two
+// axes on which `audit list` used to disagree with `task list` before rmp task
+// 329, and one of the axes on which the id refusals disagreed with everything
+// before rmp task 330.
+//
+// It takes the value as TEXT rather than as an int because one caller has no int
+// to give: an all-digits token too large for the platform's int never reaches a
+// comparison, and echoing the token is the only way to name the value that was
+// actually refused. Every caller that does hold an int renders it with
+// strconv.Itoa, so the two paths produce the same bytes for the same value.
+func offendingValue(got string) string {
+	return ", got " + got
+}
+
+// IDRangeMessage is the wording of the ID RANGE rule for one id field: an id
+// must lie in MinID..MaxInt32, whichever entity it identifies and whichever
+// surface carried it.
+//
+// It exists so that the bounds of that rule are named in one place. Before rmp
+// task 330 they were written out at four sites, in three different sentences,
+// two of which stated only the bound that happened to be crossed — so an id of 0
+// was refused for not being "positive" without the reader ever learning what the
+// rule was. The rule has two bounds and the sentence now states both.
+//
+// The wording itself is not spelled here: it is NumericRangeMessage, so an id
+// range and a `--limit` range and a `priority` range are one sentence with
+// different subjects and different numbers, which is the whole point of that
+// function.
+func IDRangeMessage(field RangedField) string {
+	return NumericRangeMessage(field, MinID, MaxInt32)
+}
+
+// IDRangeError is the refusal of an id outside MinID..MaxInt32, in the form
+// NumericRangeError produces for every other range rule and with the offending
+// value echoed by the same suffix.
+//
+// # Why the failure class is a parameter
+//
+// Every other range refusal in Groadmap is an ErrValidation and exits 6. An id
+// range refusal is one too on the audit surfaces, and is deliberately NOT one on
+// the four comment subcommands, which publish the whole "positive integer"
+// constraint on their positional id as exit code 2 misuse
+// (SPEC/COMMANDS.md § Add Task Comment, § Edit Task Comment and their sprint
+// counterparts, validation order step 2). That difference is a published
+// contract and changing it would change an exit code, so rmp task 330 converged
+// the words and left it standing.
+//
+// Passing the class in is what makes that possible without a second wording: the
+// rule owns the sentence, the SURFACE owns the class. A caller that hand-built
+// its own message to get its own exit code is exactly what this replaces.
+//
+// got is the value that broke the rule, as text; see offendingValue.
+func IDRangeError(class error, field RangedField, got string) error {
+	return fmt.Errorf("%w: %s%s", class, IDRangeMessage(field), offendingValue(got))
 }

@@ -50,7 +50,7 @@ var allSentinels = []error{
 	ErrTaskLimitOutOfRange, ErrAuditLimitOutOfRange,
 	ErrInvalidSprintStatus, ErrInvalidSprintOrder,
 	ErrInvalidAuditOperation, ErrInvalidEntityType, ErrInvalidOperation,
-	ErrEntityIDNotPositive, ErrInvalidCommentType,
+	ErrEntityIDOutOfRange, ErrInvalidCommentType,
 	utils.ErrValidation, utils.ErrFieldTooLarge,
 }
 
@@ -230,8 +230,15 @@ func dedupCases(t *testing.T) []dedupCase {
 			err: mustErr("audit entity id", (&AuditEntry{
 				Operation: validAuditOp, EntityType: string(EntityTask), EntityID: 0, PerformedAt: dedupValidCreatedAt,
 			}).Validate()),
-			wantMsg:       "entity_id must be positive, got 0",
-			wantSentinels: []error{ErrEntityIDNotPositive},
+			// The id range rule, converged by rmp task 330. This sentinel
+			// used to word one of the rule's two bounds and name neither
+			// ("entity_id must be positive"), which made it a fourth wording
+			// of the very refusal `audit list --entity-id` and `audit history`
+			// print — over the identical field and under the identical name.
+			// It now takes the whole sentence from the shared definition, and
+			// chains utils.ErrValidation as every other range refusal does.
+			wantMsg:       "validation error: entity_id must be between 1 and 2147483647, got 0",
+			wantSentinels: []error{utils.ErrValidation, ErrEntityIDOutOfRange},
 		},
 	}
 }

@@ -20,12 +20,12 @@ func taskAddDep(args []string) error {
 		return fmt.Errorf("%w: task ID and dependency ID required", utils.ErrRequired)
 	}
 
-	taskID, err := utils.ValidateIDString(strings.TrimSpace(remaining[0]), "task")
+	taskID, err := utils.ValidateIDString(strings.TrimSpace(remaining[0]), utils.FieldTaskID)
 	if err != nil {
 		return err
 	}
 
-	depID, err := utils.ValidateIDString(strings.TrimSpace(remaining[1]), "dependency task")
+	depID, err := utils.ValidateIDString(strings.TrimSpace(remaining[1]), utils.FieldDependencyTaskID)
 	if err != nil {
 		return err
 	}
@@ -62,12 +62,12 @@ func taskRemoveDep(args []string) error {
 		return fmt.Errorf("%w: task ID and dependency ID required", utils.ErrRequired)
 	}
 
-	taskID, err := utils.ValidateIDString(strings.TrimSpace(remaining[0]), "task")
+	taskID, err := utils.ValidateIDString(strings.TrimSpace(remaining[0]), utils.FieldTaskID)
 	if err != nil {
 		return err
 	}
 
-	depID, err := utils.ValidateIDString(strings.TrimSpace(remaining[1]), "dependency task")
+	depID, err := utils.ValidateIDString(strings.TrimSpace(remaining[1]), utils.FieldDependencyTaskID)
 	if err != nil {
 		return err
 	}
@@ -97,7 +97,7 @@ func taskBlockers(args []string) error {
 		return fmt.Errorf("%w: task ID required", utils.ErrRequired)
 	}
 
-	taskID, err := utils.ValidateIDString(strings.TrimSpace(remaining[0]), "task")
+	taskID, err := utils.ValidateIDString(strings.TrimSpace(remaining[0]), utils.FieldTaskID)
 	if err != nil {
 		return err
 	}
@@ -136,7 +136,7 @@ func taskBlocking(args []string) error {
 		return fmt.Errorf("%w: task ID required", utils.ErrRequired)
 	}
 
-	taskID, err := utils.ValidateIDString(strings.TrimSpace(remaining[0]), "task")
+	taskID, err := utils.ValidateIDString(strings.TrimSpace(remaining[0]), utils.FieldTaskID)
 	if err != nil {
 		return err
 	}

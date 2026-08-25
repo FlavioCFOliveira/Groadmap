@@ -267,7 +267,7 @@ func auditHistory(args []string) error {
 	// Parse and validate entity ID as a positive int in 1..MaxInt32, consistent
 	// with `task get` (SPEC/COMMANDS.md § Entity History). Non-positive or
 	// out-of-range values are rejected with exit code 6.
-	entityID, err := utils.ValidateIDString(remaining[1], "entity")
+	entityID, err := utils.ValidateIDString(remaining[1], utils.FieldEntityID)
 	if err != nil {
 		return err
 	}

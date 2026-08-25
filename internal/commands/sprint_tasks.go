@@ -22,7 +22,7 @@ func sprintTasks(args []string) error {
 		return fmt.Errorf("%w: sprint ID required", utils.ErrRequired)
 	}
 
-	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
+	sprintID, err := utils.ValidateIDString(remaining[0], utils.FieldSprintID)
 	if err != nil {
 		return err
 	}
@@ -80,7 +80,7 @@ func sprintOpenTasks(args []string) error {
 		return fmt.Errorf("%w: sprint ID required", utils.ErrRequired)
 	}
 
-	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
+	sprintID, err := utils.ValidateIDString(remaining[0], utils.FieldSprintID)
 	if err != nil {
 		return err
 	}
@@ -130,7 +130,7 @@ func sprintStats(args []string) error {
 		return fmt.Errorf("%w: sprint ID required", utils.ErrRequired)
 	}
 
-	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
+	sprintID, err := utils.ValidateIDString(remaining[0], utils.FieldSprintID)
 	if err != nil {
 		return err
 	}
@@ -212,12 +212,12 @@ func sprintAddTasks(args []string) error {
 		return fmt.Errorf("%w: sprint ID and task ID(s) required", utils.ErrRequired)
 	}
 
-	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
+	sprintID, err := utils.ValidateIDString(remaining[0], utils.FieldSprintID)
 	if err != nil {
 		return err
 	}
 
-	taskIDs, err := utils.ParseCommaSeparatedIDs(strings.Join(remaining[1:], ","), "task")
+	taskIDs, err := utils.ParseCommaSeparatedIDs(strings.Join(remaining[1:], ","), utils.FieldTaskID)
 	if err != nil {
 		return err
 	}
@@ -296,12 +296,12 @@ func sprintRemoveTasks(args []string) error {
 		return fmt.Errorf("%w: sprint ID and task ID(s) required", utils.ErrRequired)
 	}
 
-	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
+	sprintID, err := utils.ValidateIDString(remaining[0], utils.FieldSprintID)
 	if err != nil {
 		return err
 	}
 
-	taskIDs, err := utils.ParseCommaSeparatedIDs(remaining[1], "task")
+	taskIDs, err := utils.ParseCommaSeparatedIDs(remaining[1], utils.FieldTaskID)
 	if err != nil {
 		return err
 	}
@@ -440,16 +440,16 @@ func sprintMoveTasks(args []string) error {
 		return fmt.Errorf("%w: from sprint ID, to sprint ID, and task ID(s) required", utils.ErrRequired)
 	}
 
-	fromID, err := utils.ValidateIDString(remaining[0], "sprint")
+	fromID, err := utils.ValidateIDString(remaining[0], utils.FieldSprintID)
 	if err != nil {
 		return err
 	}
-	toID, err := utils.ValidateIDString(remaining[1], "sprint")
+	toID, err := utils.ValidateIDString(remaining[1], utils.FieldSprintID)
 	if err != nil {
 		return err
 	}
 
-	taskIDs, err := utils.ParseCommaSeparatedIDs(remaining[2], "task")
+	taskIDs, err := utils.ParseCommaSeparatedIDs(remaining[2], utils.FieldTaskID)
 	if err != nil {
 		return err
 	}

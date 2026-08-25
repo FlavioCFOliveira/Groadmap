@@ -98,7 +98,7 @@ func taskEdit(args []string) error {
 		return fmt.Errorf("%w: task ID required", utils.ErrRequired)
 	}
 
-	taskID, err := utils.ValidateIDString(remaining[0], "task")
+	taskID, err := utils.ValidateIDString(remaining[0], utils.FieldTaskID)
 	if err != nil {
 		return err
 	}

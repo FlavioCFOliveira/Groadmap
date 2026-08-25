@@ -227,7 +227,7 @@ func sprintGet(args []string) error {
 		return fmt.Errorf("%w: sprint ID required", utils.ErrRequired)
 	}
 
-	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
+	sprintID, err := utils.ValidateIDString(remaining[0], utils.FieldSprintID)
 	if err != nil {
 		return err
 	}
@@ -276,7 +276,7 @@ func sprintShow(args []string) error {
 		return fmt.Errorf("%w: sprint ID required", utils.ErrRequired)
 	}
 
-	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
+	sprintID, err := utils.ValidateIDString(remaining[0], utils.FieldSprintID)
 	if err != nil {
 		return err
 	}
@@ -315,7 +315,7 @@ func sprintUpdate(args []string) error {
 		return fmt.Errorf("%w: sprint ID required", utils.ErrRequired)
 	}
 
-	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
+	sprintID, err := utils.ValidateIDString(remaining[0], utils.FieldSprintID)
 	if err != nil {
 		return err
 	}
@@ -492,7 +492,7 @@ func sprintRemove(args []string) error {
 		return fmt.Errorf("%w: sprint ID required", utils.ErrRequired)
 	}
 
-	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
+	sprintID, err := utils.ValidateIDString(remaining[0], utils.FieldSprintID)
 	if err != nil {
 		return err
 	}

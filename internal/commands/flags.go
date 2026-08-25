@@ -342,16 +342,23 @@ func isNegativeInteger(s string) bool {
 	return true
 }
 
-// validateAuditEntityID bounds the audit --entity-id flag to a positive integer
-// in 1..MaxInt32 (SPEC/COMMANDS.md § List Audit Log). A non-positive or out-of-range
+// validateAuditEntityID bounds the audit --entity-id flag to the range every
+// entity id must lie in (SPEC/COMMANDS.md § List Audit Log). An out-of-range
 // value is rejected with exit code 6 (ErrValidation).
+//
+// It performs no comparison and words no message of its own. This flag and the
+// second positional of `audit history` address the identical field — the SPEC
+// defines the second command as the first with this filter applied — so they now
+// reach one implementation and print one sentence. They did not: this site
+// compared the bounds itself and announced the verdict as
+// `--entity-id must be between 1 and 2147483647 (got 0)`, naming the FLAG rather
+// than the field and parenthesising the offending value, while the positional
+// announced the same verdict as `invalid entity ID: 0 (must be positive)`
+// (rmp task 330).
 func validateAuditEntityID(parsed any) error {
 	id, ok := parsed.(int)
 	if !ok {
 		return nil
 	}
-	if id < 1 || id > utils.MaxInt32 {
-		return fmt.Errorf("%w: --entity-id must be between 1 and %d (got %d)", utils.ErrValidation, utils.MaxInt32, id)
-	}
-	return nil
+	return utils.ValidateID(id, utils.FieldEntityID)
 }

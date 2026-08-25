@@ -3,6 +3,8 @@ package models
 import (
 	"errors"
 	"fmt"
+
+	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
 // Sentinel errors for audit validation.
@@ -10,8 +12,16 @@ var (
 	ErrInvalidAuditOperation = errors.New("invalid audit operation")
 	ErrInvalidEntityType     = errors.New("invalid entity type")
 	ErrInvalidOperation      = errors.New("invalid operation")
-	ErrEntityIDNotPositive   = errors.New("entity_id must be positive")
-	ErrPerformedAtRequired   = errors.New("performed_at is required")
+	// ErrEntityIDOutOfRange owns the ID RANGE rule for the audit entry's
+	// entity_id, and takes its whole wording from the shared definition.
+	//
+	// It used to spell a sentence of its own, "entity_id must be positive",
+	// which stated one of the rule's two bounds and named neither. That made it
+	// a fourth wording of the very rule `audit list --entity-id` and
+	// `audit history` announce, over the identical field and under the identical
+	// name (rmp task 330).
+	ErrEntityIDOutOfRange  = errors.New(utils.IDRangeMessage(utils.FieldEntityID))
+	ErrPerformedAtRequired = errors.New("performed_at is required")
 )
 
 // AuditOperation represents the type of operation logged.
@@ -436,8 +446,8 @@ func (a *AuditEntry) Validate() error {
 	if !IsValidEntityType(a.EntityType) {
 		return fmt.Errorf("%w: %q", ErrInvalidEntityType, a.EntityType)
 	}
-	if a.EntityID <= 0 {
-		return fmt.Errorf("%w, got %d", ErrEntityIDNotPositive, a.EntityID)
+	if !utils.IDInRange(a.EntityID) {
+		return utils.NumericRangeError(ErrEntityIDOutOfRange, a.EntityID)
 	}
 	if a.PerformedAt == "" {
 		return ErrPerformedAtRequired

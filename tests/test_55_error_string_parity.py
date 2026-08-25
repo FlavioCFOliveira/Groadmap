@@ -38,11 +38,19 @@ restate a rule already published concretely by a table row (the numbered
 list under "Messages this rule governs", COMMANDS.md:218-232) rather than
 naming a new condition; EXCLUDED_TEMPLATE_LINES documents each one.
 
-Placeholders are the closed set COMMANDS.md:54-66 publishes: X, N, M, Y,
-<field>, <flag>, <detail>, <engine diagnostic>, and
-<absolute path of ~/.roadmaps>; X/N/M/Y count only as whole words, and two
-messages print literal `<name>`/`<id>` that are NOT placeholders (the module
-proves both directions -- see test_placeholder_rule_both_directions below).
+Placeholders are the ones COMMANDS.md itself declares, and the table under
+"Published Error Strings Are Exact" declares all twelve: X, N, M, Y,
+<entity>, <field>, <flag>, <sentinel>, <detail>, <engine diagnostic>, <ids>
+and <absolute path of ~/.roadmaps>. That table states it is the complete
+set, so a placeholder published anywhere in the file and missing from it is
+a defect in the file rather than an omission here. Three of the rows carry
+no value enumeration of their own and point at the section that does:
+<field> at "Published Field Names in Validation Messages", <entity> and
+<sentinel> at "Entity Identifier Range (All Positional Ids and
+--entity-id)", which lists the five entity words and the two sentinels.
+X/N/M/Y count only as whole words, and two messages print literal
+`<name>`/`<id>` that are NOT placeholders (the module proves both directions
+-- see test_placeholder_rule_both_directions below).
 Because this module CHOOSES the offending value for every X/N/M/Y it drives,
 substitution is exact string replacement against a value fixed before the
 command runs, and the comparison is full string equality against the whole
@@ -903,11 +911,17 @@ class TestErrorStringParity:
             ["task", "get", "-r", r, "abc"], 2, subs={"X": "abc"},
             note="task get non-integer id",
         )
-        # #43: an ID is an integer but not positive.
+        # #43: an ID is an integer outside 1-2147483647. One sentence at either
+        # bound, so both are driven against the one published row (rmp task 330).
         self.check(
-            "Error: validation error: invalid task ID: N (must be positive)",
+            "Error: validation error: task_id must be between 1 and 2147483647, got N",
             ["task", "get", "-r", r, "0"], 6, subs={"N": "0"},
             note="task get zero id",
+        )
+        self.check(
+            "Error: validation error: task_id must be between 1 and 2147483647, got N",
+            ["task", "get", "-r", r, "2147483648"], 6, subs={"N": "2147483648"},
+            note="task get id above MaxInt32",
         )
 
     # ------------------------------------------------------------------
@@ -1353,6 +1367,33 @@ class TestErrorStringParity:
             ["task", "comment-edit", "-r", r, "abc", "--body", "Root cause confirmed: race in the retry path"],
             2, subs={"X": "abc"}, note="task comment-edit non-integer id",
         )
+        # The comment subcommands' own range refusal, published for the first
+        # time by rmp task 330 (`Comment Positional Argument Contract`, point 4).
+        # It was printed by the binary and published nowhere, which is exactly
+        # why its wording drifted from every other surface unnoticed: an
+        # unpublished string is invisible to this gate.
+        #
+        # All three of the group's published lines are driven here: the comment's
+        # own id on `comment-edit`, and the two parent ids, which reach the same
+        # rule through `comment-add`. The class is exit code 2 on all of them,
+        # which is the one thing these subcommands do differently.
+        self.check(
+            "Error: invalid input: comment_id must be between 1 and 2147483647, got N",
+            ["task", "comment-edit", "-r", r, "0", "--body", "Root cause confirmed: race in the retry path"],
+            2, subs={"N": "0"}, note="task comment-edit zero id",
+        )
+        self.check(
+            "Error: invalid input: task_id must be between 1 and 2147483647, got N",
+            ["task", "comment-add", "-r", r, "2147483648", "--type", "NOTE",
+             "--body", "Retry budget exhausted after three attempts"],
+            2, subs={"N": "2147483648"}, note="task comment-add parent id above MaxInt32",
+        )
+        self.check(
+            "Error: invalid input: sprint_id must be between 1 and 2147483647, got N",
+            ["sprint", "comment-add", "-r", r, "0", "--type", "DECISION",
+             "--body", "Carry the retry work into the next sprint"],
+            2, subs={"N": "0"}, note="sprint comment-add parent id zero",
+        )
         # #79: comment not found.
         self.check(
             "Error: resource not found: task comment N not found",
@@ -1795,7 +1836,7 @@ class TestErrorStringParity:
         )
         # #98: --entity-id out of range.
         self.check(
-            "Error: validation error: --entity-id must be between 1 and 2147483647 (got N)",
+            "Error: validation error: entity_id must be between 1 and 2147483647, got N",
             ["audit", "list", "-r", r, "--entity-id", "0"], 6, subs={"N": "0"},
             note="audit list entity-id out of range",
         )
@@ -1831,15 +1872,22 @@ class TestErrorStringParity:
             ["audit", "history", "-r", r, "TASK", "abc"], 2, subs={"X": "abc"},
             note="audit history non-integer entity id",
         )
-        # #102: <entity-id> is zero (literal "0" in the published text, not
-        # a placeholder -- the message states the exact rejected value).
+        # #102/#103: <entity-id> outside 1-2147483647. The two rows that used to
+        # publish this became one when the rule stopped splitting itself by the
+        # bound that was crossed, and the surviving row is driven at BOTH bounds
+        # so that a future re-split fails here (rmp task 330).
+        #
+        # It is also the same published string the `--entity-id` row above
+        # drives: the corpus dedupes by content, and the two commands address
+        # the same field, so one key covering both is the assertion that they
+        # have not drifted apart again.
         self.check(
-            "Error: validation error: invalid entity ID: 0 (must be positive)",
-            ["audit", "history", "-r", r, "TASK", "0"], 6, note="audit history entity id zero",
+            "Error: validation error: entity_id must be between 1 and 2147483647, got N",
+            ["audit", "history", "-r", r, "TASK", "0"], 6, subs={"N": "0"},
+            note="audit history entity id zero",
         )
-        # #103: <entity-id> exceeds MaxInt32.
         self.check(
-            "Error: validation error: invalid entity ID: N (exceeds maximum value 2147483647)",
+            "Error: validation error: entity_id must be between 1 and 2147483647, got N",
             ["audit", "history", "-r", r, "TASK", "2147483648"], 6,
             subs={"N": "2147483648"}, note="audit history entity id too large",
         )
@@ -2037,6 +2085,145 @@ class TestErrorStringParity:
             # Restore before teardown_method's shutil.rmtree walks this
             # directory, which an unreadable directory would make fail.
             os.chmod(roadmaps_dir, 0o700)
+
+    # ------------------------------------------------------------------
+    # The two generic templates of COMMANDS.md
+    # § "Entity Identifier Range (All Positional Ids and `--entity-id`)".
+    #
+    # Every CONCRETE instance of those two rules is already driven above by
+    # the command family that owns it -- `task get`, `sprint get`,
+    # `task add-dep`, `audit list` / `audit history`, and the comment
+    # subcommands. What no single family can assert is the claim the section
+    # actually makes: that all of them print ONE sentence per rule, differing
+    # only in the field named, in the value echoed, and in the sentinel
+    # (acceptance criteria 1 and 3 of that section). Five families agreeing
+    # is a property OF THE SET, so it is asserted over the set.
+    #
+    # A template driven once proves nothing about a template: a single
+    # substitution passes just as happily against five divergent sentences,
+    # which is exactly the state rmp task 330 found -- four sites wording one
+    # rule three different ways, two of them naming only the bound that
+    # happened to be crossed. So each template is driven once per surface it
+    # governs, and the substitutions vary precisely what the section says may
+    # vary and nothing else.
+    #
+    # The two rules are driven TOGETHER, from one table, because the third
+    # acceptance criterion is about their relationship: the format refusal
+    # and the range refusal must name the same argument. The `<field>` this
+    # module substitutes is therefore never written down -- it is DERIVED
+    # from the `<entity>` word by the section's own construction rule ("that
+    # same word with `_id` appended and any space written as an underscore"),
+    # so a binary whose two refusals ever drift apart fails one of the two
+    # checks in the same row.
+    # ------------------------------------------------------------------
+
+    def test_entity_identifier_range_templates(self):
+        r = self.roadmap
+        # No fixture is created. Both id rules are applied while the
+        # positional is being parsed -- before the roadmap database is
+        # opened -- so an id that no row holds reaches the refusal under
+        # test exactly as a real one would, and `task add-dep`, whose
+        # dependency positional is the second of two, is reached with a
+        # well-formed id in the first.
+        absent = str(self.missing_id)
+        body = "Root cause confirmed: the retry path reuses a stale nonce"
+
+        format_rule = 'Error: invalid input: invalid <entity> ID: "X" (must be a positive integer)'
+        range_rule = "Error: <sentinel>: <field> must be between 1 and 2147483647, got N"
+
+        # One row per published entity word. Each carries the two
+        # invocations that refuse the SAME argument on that surface, one per
+        # rule, plus the sentinel and exit code the surface publishes for the
+        # range half.
+        #
+        # The offending values are deliberately all different -- a plausible
+        # mistyped id on the format side, and on the range side the floor,
+        # the ceiling + 1, and a token too large for the platform's int type
+        # (echoed verbatim, because there is no parsed value to echo). A
+        # constant repeated five times would let a binary that ignores the
+        # supplied value pass; five distinct values cannot.
+        #
+        # (entity, format argv, bad token, range argv, offending value,
+        #  sentinel, range exit code)
+        surfaces = [
+            ("task",
+             ["task", "get", "-r", r, "seventeen"], "seventeen",
+             ["task", "get", "-r", r, "0"], "0",
+             "validation error", 6),
+            ("sprint",
+             ["sprint", "get", "-r", r, "Q3"], "Q3",
+             ["sprint", "get", "-r", r, "2147483648"], "2147483648",
+             "validation error", 6),
+            ("comment",
+             ["task", "comment-edit", "-r", r, "1a", "--body", body], "1a",
+             ["task", "comment-edit", "-r", r, "0", "--body", body], "0",
+             # The one surface that classifies the range half as misuse
+             # rather than as a validation failure. The sentence is the
+             # same one; only the sentinel and the exit code differ, which
+             # is the section's "the failure class is a property of the
+             # surface, not of the rule".
+             "invalid input", 2),
+            ("dependency task",
+             ["task", "add-dep", "-r", r, absent, "88x"], "88x",
+             ["task", "add-dep", "-r", r, absent, "-3"], "-3",
+             "validation error", 6),
+            ("entity",
+             ["audit", "history", "-r", r, "TASK", "3.5"], "3.5",
+             ["audit", "history", "-r", r, "TASK", "99999999999"], "99999999999",
+             "validation error", 6),
+        ]
+
+        driven_entities = []
+        driven_fields = []
+        for entity, fmt_argv, bad_token, rng_argv, offending, sentinel, rng_exit in surfaces:
+            # The section's own construction rule, applied rather than
+            # restated: this is the only place the range name is produced,
+            # so the two checks below cannot be given names that disagree.
+            field = entity.replace(" ", "_") + "_id"
+            driven_entities.append(entity)
+            driven_fields.append(field)
+
+            self.check(
+                format_rule, fmt_argv, 2,
+                subs={"<entity>": entity, "X": bad_token},
+                note=f"id format template, <entity>={entity}",
+            )
+            self.check(
+                range_rule, rng_argv, rng_exit,
+                subs={"<sentinel>": sentinel, "<field>": field, "N": offending},
+                note=f"id range template, <field>={field} <sentinel>={sentinel}",
+            )
+
+        # The set driven above is only the whole rule if it is the whole set
+        # the section publishes, so both lists are read back out of the file
+        # and required to match. Without this, a sixth entity added to the
+        # SPEC -- or a fifth quietly dropped -- would narrow this gate in
+        # silence, which is the failure mode the module exists to prevent.
+        # The anchors are prose, and a rewording that moves them fails here
+        # loudly, exactly as SUPPLEMENTAL_CORPUS's anchors do.
+        flat = re.sub(r"\s+", " ", SPEC_PATH.read_text(encoding="utf-8"))
+        entity_prose = re.search(
+            r"`<entity>` is (.*?), and `<field>` is that same word", flat)
+        field_prose = re.search(
+            r"underscore: (.*?)\. The two spellings name the same argument", flat)
+        assert entity_prose and field_prose, (
+            "SPEC/COMMANDS.md no longer carries the two sentences that "
+            "enumerate the entity words and the field names of "
+            "§ Entity Identifier Range -- re-anchor this test against the "
+            "new prose or drop it"
+        )
+        published_entities = _BACKTICK_RE.findall(entity_prose.group(1))
+        published_fields = _BACKTICK_RE.findall(field_prose.group(1))
+        assert sorted(driven_entities) == sorted(published_entities), (
+            f"the entity words driven here are not the ones "
+            f"SPEC/COMMANDS.md publishes: driven {sorted(driven_entities)}, "
+            f"published {sorted(published_entities)}"
+        )
+        assert sorted(driven_fields) == sorted(published_fields), (
+            f"the field names driven here are not the ones "
+            f"SPEC/COMMANDS.md publishes: driven {sorted(driven_fields)}, "
+            f"published {sorted(published_fields)}"
+        )
 
     # ------------------------------------------------------------------
     # Placeholder rule, proved in both directions (NON-VACUITY requirement

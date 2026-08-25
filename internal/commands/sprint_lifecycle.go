@@ -117,7 +117,7 @@ func sprintLifecycle(args []string, newStatus models.SprintStatus, op models.Aud
 		return fmt.Errorf("%w: sprint ID required", utils.ErrRequired)
 	}
 
-	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
+	sprintID, err := utils.ValidateIDString(remaining[0], utils.FieldSprintID)
 	if err != nil {
 		return err
 	}

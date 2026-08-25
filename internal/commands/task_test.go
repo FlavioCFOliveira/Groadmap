@@ -336,45 +336,33 @@ func TestTaskGet_InvalidID(t *testing.T) {
 	}
 }
 
-func TestTaskGet_ZeroID(t *testing.T) {
-	testName := "testtaskgetzeroid"
+// TestTaskGet_OutOfRangeID covers both bounds of the ID RANGE rule on one
+// command, and asserts the whole line rather than a fragment of it.
+//
+// The three cases used to be three tests asserting two different fragments,
+// "must be positive" at the floor and "exceeds maximum" at the ceiling, because
+// the validator produced two different sentences for one rule. It produces one
+// now, and the parameters that differ between these rows are the offending value
+// and nothing else (rmp task 330).
+func TestTaskGet_OutOfRangeID(t *testing.T) {
+	testName := "testtaskgetoutofrangeid"
 	_, cleanup := setupTestTaskRoadmap(t, testName)
 	defer cleanup()
 
-	err := HandleTask([]string{"get", "-r", testName, "0"})
-	if err == nil {
-		t.Error("taskGet with zero ID expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "must be positive") {
-		t.Errorf("expected 'must be positive' error, got: %v", err)
-	}
-}
-
-func TestTaskGet_NegativeID(t *testing.T) {
-	testName := "testtaskgetnegativeid"
-	_, cleanup := setupTestTaskRoadmap(t, testName)
-	defer cleanup()
-
-	err := HandleTask([]string{"get", "-r", testName, "-1"})
-	if err == nil {
-		t.Error("taskGet with negative ID expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "must be positive") {
-		t.Errorf("expected 'must be positive' error, got: %v", err)
-	}
-}
-
-func TestTaskGet_OverflowID(t *testing.T) {
-	testName := "testtaskgetoverflowid"
-	_, cleanup := setupTestTaskRoadmap(t, testName)
-	defer cleanup()
-
-	err := HandleTask([]string{"get", "-r", testName, "99999999999999999"})
-	if err == nil {
-		t.Error("taskGet with overflow ID expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "exceeds maximum") {
-		t.Errorf("expected 'exceeds maximum' error, got: %v", err)
+	for _, id := range []string{"0", "-1", "2147483648", "99999999999999999"} {
+		t.Run(id, func(t *testing.T) {
+			err := HandleTask([]string{"get", "-r", testName, id})
+			if err == nil {
+				t.Fatalf("taskGet with id %s expected an error, got nil", id)
+			}
+			want := "validation error: " + utils.IDRangeMessage(utils.FieldTaskID) + ", got " + id
+			if err.Error() != want {
+				t.Errorf("taskGet %s\n got: %q\nwant: %q", id, err.Error(), want)
+			}
+			if !errors.Is(err, utils.ErrValidation) {
+				t.Errorf("taskGet %s must chain ErrValidation (exit 6), got %v", id, err)
+			}
+		})
 	}
 }
 

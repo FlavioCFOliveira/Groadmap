@@ -35,10 +35,27 @@ var declaredFields = []Field{
 // (rmp task 329): the constant below is the whole of the gate's extension, and
 // the three commands that publish a `--limit` are now held to one sentence by
 // the same two tests that hold priority and severity to theirs.
+//
+// The five id fields are the proof a second time over. rmp task 330 brought the
+// ID RANGE rule under the same gate, and again the whole of the extension is the
+// list below: the five
+// constants make `task_id must be between …` — and, because the range class
+// treats a flag spelling as a defect of its own, `--entity-id must be between …`
+// — a failure everywhere outside the definition file.
+//
+// The `--entity-id` spelling is the one that proves the flag half is doing work.
+// It was a must-PASS boundary case in published_field_names_test.go until this
+// task, precisely because `entity-id` was not yet a subject; it is a must-FLAG
+// case now, and moving it is the visible record that the class widened.
 var declaredRangedFields = []RangedField{
 	FieldTaskPriority,
 	FieldTaskSeverity,
 	FieldListLimit,
+	FieldTaskID,
+	FieldSprintID,
+	FieldEntityID,
+	FieldCommentID,
+	FieldDependencyTaskID,
 }
 
 // TestRangedFieldsPublishOneUsableNameEach is to RangedField what
@@ -308,4 +325,91 @@ func repoRoot(t *testing.T) string {
 		t.Fatalf("no go.mod at %s, so the repository root is not where these gates assume it is: %v", root, err)
 	}
 	return root
+}
+
+// TestIDEntityWordAgreesWithThePublishedName pins the relationship between the
+// two names one id field carries, so that neither can be edited alone.
+//
+// An id is subject to two rules, and each publishes its own name for the same
+// argument: the FORMAT rule says `invalid task ID: "X" (must be a positive
+// integer)` and the ID RANGE rule says `task_id must be between 1 and
+// 2147483647, got 0`. The two must be recognisably the same argument, and the
+// derivation that makes them so is the one asserted here — the range name is the
+// entity word with its spaces written as underscores and `_id` appended.
+//
+// Without this, `dependency_task_id` could drift to `dep_id` while the format
+// refusal went on saying "dependency task", and a reader meeting both messages
+// would have no way to tell they were about the same positional.
+func TestIDEntityWordAgreesWithThePublishedName(t *testing.T) {
+	ids := 0
+	for _, f := range declaredRangedFields {
+		word := f.IDEntity()
+		if word == "" {
+			continue // not an id
+		}
+		ids++
+		want := strings.ReplaceAll(word, " ", "_") + "_id"
+		if got := f.String(); got != want {
+			t.Errorf("RangedField(%d) publishes the name %q and the entity word %q; "+
+				"the two must be the same argument, so the name must be %q",
+				uint8(f), got, word, want)
+		}
+	}
+	if ids != 5 {
+		t.Errorf("%d id fields carry an entity word, want 5; an id field was added or removed "+
+			"without its entry in idEntityWords", ids)
+	}
+}
+
+// TestOnlyIDFieldsCarryAnEntityWord is the other direction: a RangedField that
+// is not an id must publish no entity word at all, so a caller cannot build an
+// id-shaped message about `priority`.
+func TestOnlyIDFieldsCarryAnEntityWord(t *testing.T) {
+	for _, f := range []RangedField{FieldTaskPriority, FieldTaskSeverity, FieldListLimit, RangedField(0)} {
+		if word := f.IDEntity(); word != "" {
+			t.Errorf("RangedField(%d) is not an id but publishes the entity word %q", uint8(f), word)
+		}
+	}
+}
+
+// TestIDRangeMessageAndErrorAgree is to the id range rule what
+// TestNumericRangeMessageAndErrorAgree is to the bounded-field rule: the rule is
+// worded in one place, the refusal completes it with the offending value, and
+// the complete line must contain the wording verbatim.
+//
+// It also pins the axis that made this rule worth converging: the failure CLASS
+// is a parameter and the SENTENCE is not, because the four comment subcommands
+// publish exit code 2 for a condition every other surface publishes as exit code
+// 6 (SPEC/COMMANDS.md § Add Task Comment validation order, step 2).
+func TestIDRangeMessageAndErrorAgree(t *testing.T) {
+	rule := IDRangeMessage(FieldEntityID)
+	if want := "entity_id must be between 1 and 2147483647"; rule != want {
+		t.Fatalf("IDRangeMessage = %q, want %q", rule, want)
+	}
+
+	validation := IDRangeError(ErrValidation, FieldEntityID, "0")
+	if want := "validation error: entity_id must be between 1 and 2147483647, got 0"; validation.Error() != want {
+		t.Errorf("IDRangeError(ErrValidation) = %q, want %q", validation.Error(), want)
+	}
+	if !errors.Is(validation, ErrValidation) {
+		t.Error("the supplied class must survive, or the refusal would not map to exit code 6")
+	}
+
+	misuse := IDRangeError(ErrInvalidInput, FieldCommentID, "0")
+	if want := "invalid input: comment_id must be between 1 and 2147483647, got 0"; misuse.Error() != want {
+		t.Errorf("IDRangeError(ErrInvalidInput) = %q, want %q", misuse.Error(), want)
+	}
+	if !errors.Is(misuse, ErrInvalidInput) {
+		t.Error("the supplied class must survive, or the refusal would not map to exit code 2")
+	}
+	if errors.Is(misuse, ErrValidation) {
+		t.Error("the comment subcommands publish exit code 2 for this condition, never exit code 6")
+	}
+
+	// The two classes differ; the sentence about the rule does not.
+	if a, b := strings.TrimPrefix(validation.Error(), ErrValidation.Error()+": "),
+		strings.TrimPrefix(misuse.Error(), ErrInvalidInput.Error()+": "); //
+	strings.Replace(a, "entity_id", "", 1) != strings.Replace(b, "comment_id", "", 1) {
+		t.Errorf("one rule, two sentences\n exit 6: %q\n exit 2: %q", a, b)
+	}
 }

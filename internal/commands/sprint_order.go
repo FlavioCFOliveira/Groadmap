@@ -49,12 +49,12 @@ func sprintReorder(args []string) error {
 		return fmt.Errorf("%w: sprint ID and ordered task ID(s) required", utils.ErrRequired)
 	}
 
-	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
+	sprintID, err := utils.ValidateIDString(remaining[0], utils.FieldSprintID)
 	if err != nil {
 		return err
 	}
 
-	taskIDs, err := utils.ParseCommaSeparatedIDs(remaining[1], "task")
+	taskIDs, err := utils.ParseCommaSeparatedIDs(remaining[1], utils.FieldTaskID)
 	if err != nil {
 		return err
 	}
@@ -150,12 +150,12 @@ func sprintMoveTo(args []string) error {
 		return fmt.Errorf("%w: sprint ID, task ID, and position required", utils.ErrRequired)
 	}
 
-	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
+	sprintID, err := utils.ValidateIDString(remaining[0], utils.FieldSprintID)
 	if err != nil {
 		return err
 	}
 
-	taskID, err := utils.ValidateIDString(remaining[1], "task")
+	taskID, err := utils.ValidateIDString(remaining[1], utils.FieldTaskID)
 	if err != nil {
 		return err
 	}
@@ -255,17 +255,17 @@ func sprintSwap(args []string) error {
 		return fmt.Errorf("%w: sprint ID and two task IDs required", utils.ErrRequired)
 	}
 
-	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
+	sprintID, err := utils.ValidateIDString(remaining[0], utils.FieldSprintID)
 	if err != nil {
 		return err
 	}
 
-	taskID1, err := utils.ValidateIDString(remaining[1], "task")
+	taskID1, err := utils.ValidateIDString(remaining[1], utils.FieldTaskID)
 	if err != nil {
 		return err
 	}
 
-	taskID2, err := utils.ValidateIDString(remaining[2], "task")
+	taskID2, err := utils.ValidateIDString(remaining[2], utils.FieldTaskID)
 	if err != nil {
 		return err
 	}

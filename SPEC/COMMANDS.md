@@ -59,8 +59,10 @@ Three consequences follow, and they hold for every table and every code block in
 | `X` | An offending value, echoed as the user supplied it. Where the binary quotes it, the quotes are shown around the placeholder. |
 | `N`, `M` | A number the binary computes or echoes: an id, a length, a limit, a count. `M` appears only where one string carries two distinct numbers. |
 | `Y` | A second offending value, in the one message that names two. |
+| `<entity>` | The word that names the entity whose id a message refuses, resolved by `§ Entity Identifier Range (All Positional Ids and --entity-id)`. |
 | `<field>` | A published field name, resolved by `Published Field Names in Validation Messages` below. |
 | `<flag>` | A flag name, in its kebab-case spelling and without the leading dashes, which the string supplies. |
+| `<sentinel>` | The sentinel text of the failure class the surface reports, in the one published string whose sentinel varies by surface, resolved by `§ Entity Identifier Range (All Positional Ids and --entity-id)`. |
 | `<detail>`, `<engine diagnostic>` | Text produced by a component other than `rmp` — the operating system, or the Cypher engine. Not specified here. |
 | `<ids>` | One or more ids, space-separated, in the order the user supplied them, as Go renders a slice of integers. The square brackets that surround the list in the message are literal text and are shown outside the placeholder. |
 | `<absolute path of ~/.roadmaps>` | The resolved data-directory path. |
@@ -291,11 +293,20 @@ Each of the eight comment subcommands takes **exactly one** positional argument,
 | `sprint comment-edit` | `<comment-id>` | The comment itself, in `sprint_comments` |
 | `sprint comment-remove` | `<comment-id>` | The comment itself, in `sprint_comments` |
 
-A declared maximum of one is what `§ Positional Arity by Command` publishes for all eight, and the CLI-wide rule in `§ Positional Arguments` refuses a second positional argument with exit code 2 and the line `Error: invalid input: unexpected argument "X"`. This section is canonical for what the one id identifies on each subcommand, and for the three points on which these subcommands need a rule of their own:
+A declared maximum of one is what `§ Positional Arity by Command` publishes for all eight, and the CLI-wide rule in `§ Positional Arguments` refuses a second positional argument with exit code 2 and the line `Error: invalid input: unexpected argument "X"`. This section is canonical for what the one id identifies on each subcommand, and for the four points on which these subcommands need a rule of their own:
 
 1. The positional id is required. An invocation that supplies none fails with exit code 2 and a message naming the id the subcommand expects, as each subcommand's own block below states.
 2. A leftover token that begins with `-` is a flag and not a positional argument, so it is reported as an unknown flag — `Error: invalid input: unknown flag: --foo` — and not as an unexpected argument. This holds for every `-`-prefixed token, digits included: on these subcommands `-1` is an unknown flag, unlike the `graph` subcommands, which do not classify a negative numeric token as a flag at all and refuse a stray `-1` as an unexpected argument (`GRAPH.md § No Positional Query: A Stray Token Is Refused`, rule 1). The value of `--body` is the one exception, and it is not a leftover token at all: `--body -1` supplies the body `-1`, under rule 4 of `Comment Body Input Source and Precedence` above.
 3. The refusal lands at a defined point in the subcommand's own validation order: after the positional id has been parsed, before the `--type` value is validated, and before the body is resolved. An invocation carrying an extra positional argument is therefore refused with exit code 2 even when it also carries an invalid `--type` value, which on its own would be exit code 6, and it never leaves the command waiting on standard input for a body it is going to reject.
+4. The whole "positive integer" constraint on the positional id is **exit code 2** on all eight subcommands, including the range half of it. Every other surface in the CLI reports an out-of-range id as a validation failure with exit code 6 (`§ Entity Identifier Range (All Positional Ids and --entity-id)`); these eight report it as misuse, because on them a malformed positional argument is a malformed argument list. The sentence is the shared one and only the sentinel differs:
+
+| Subcommand group | Condition | Exit Code | stderr Output |
+|------------------|-----------|-----------|---------------|
+| `task comment-add`, `task comment-list` | `<task-id>` is an integer outside `1`-`2147483647` | 2 | `Error: invalid input: task_id must be between 1 and 2147483647, got N` |
+| `sprint comment-add`, `sprint comment-list` | `<sprint-id>` is an integer outside `1`-`2147483647` | 2 | `Error: invalid input: sprint_id must be between 1 and 2147483647, got N` |
+| `task comment-edit`, `task comment-remove`, `sprint comment-edit`, `sprint comment-remove` | `<comment-id>` is an integer outside `1`-`2147483647` | 2 | `Error: invalid input: comment_id must be between 1 and 2147483647, got N` |
+
+   A token that is not an integer at all is the format rule and keeps the wording each subcommand's own block publishes for it, also with exit code 2. A value too large for the platform's integer type is refused by the range rule with the token echoed in place of a parsed value, because there is no parsed value to echo.
 
 What the general rule already settles for these subcommands, and what this section therefore does not restate: only the first extra token is named; the position of the extra token on the command line does not matter; and nothing happens before the refusal — standard input is not read, the roadmap database is not opened, no comment is added, changed, deleted, or listed, and stdout stays empty.
 
@@ -423,6 +434,53 @@ section disagree about a field's name, this section is the canonical one.
    literal, or from a name the definition does not contain.
 7. The rule changes no message in which the field name already is the published
    name.
+
+### Entity Identifier Range (All Positional Ids and `--entity-id`)
+
+Every id the CLI accepts — a task id, a sprint id, a comment id, the dependency
+positional of `task add-dep` / `task remove-dep`, and the `--entity-id` filter of
+`audit list` — MUST be an integer in the inclusive range `1`-`2147483647`
+(`MaxInt32`).
+
+An id is subject to **two rules**, and they are separate. A token that is not an
+integer at all breaks the **format** rule; an integer that falls outside the
+range breaks the **range** rule. The two produce different messages and, on every
+surface, different exit codes.
+
+| Rule | Condition | Exit Code | stderr Output |
+|------|-----------|-----------|---------------|
+| Format | The token is not an integer | 2 | `Error: invalid input: invalid <entity> ID: "X" (must be a positive integer)` |
+| Range | The integer is `< 1` or `> 2147483647` | 6, or 2 on the eight comment subcommands | `Error: <sentinel>: <field> must be between 1 and 2147483647, got N` |
+
+`<entity>` is `task`, `sprint`, `comment`, `dependency task`, or `entity`, and
+`<field>` is that same word with `_id` appended and any space written as an
+underscore: `task_id`, `sprint_id`, `comment_id`, `dependency_task_id`,
+`entity_id`. The two spellings name the same argument by construction.
+
+**The range rule has one sentence.** It is worded by the same shared definition
+that words the `priority`, `severity` and `--limit` ranges (see
+`§ Published Field Names in Validation Messages` and `§ List Tasks`): the field is
+named without the flag's `--` prefix, the bounds are both stated, and the
+offending value is echoed after a comma. A refusal never states only the bound
+that was crossed, because the two bounds are one rule and the remedy for either
+is the same. In particular, `audit list --entity-id <n>` and the second
+positional of `audit history` address the identical field and therefore print the
+identical line.
+
+**The failure class is a property of the surface, not of the rule.** A range
+refusal is a validation failure with exit code 6 everywhere except the eight
+comment subcommands, which classify the whole "positive integer" constraint on
+their positional id as misuse with exit code 2 (see
+`§ Comment Positional Argument Contract`). That difference is deliberate and is
+the only difference between the two: the sentence is the same on both sides.
+
+**Acceptance criteria:**
+
+1. Every surface that refuses an out-of-range id prints one sentence, differing
+   only in the field named, in the value echoed, and in the sentinel that carries
+   the exit code.
+2. No refusal states one bound of the range without the other.
+3. The format refusal and the range refusal name the same argument.
 
 ### Control-Character Constraint (All Free-Text Fields)
 
@@ -1063,7 +1121,7 @@ All batch operations validate ALL IDs before executing any destructive operation
 | Some IDs do not exist | 4 | **No operation performed**, returns error | "Error: resource not found: some tasks not found" |
 | All IDs do not exist | 4 | **No operation performed**, returns error | "Error: resource not found: some tasks not found" |
 | An ID is not an integer | 2 | **No operation performed** | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" |
-| An ID is an integer but not positive | 6 | **No operation performed** | "Error: validation error: invalid task ID: N (must be positive)" |
+| An ID is an integer outside `1`-`2147483647` | 6 | **No operation performed** | "Error: validation error: task_id must be between 1 and 2147483647, got N" |
 
 The message does not name which IDs were missing, and it is the same whether one ID or every ID was missing: the command reports that the batch could not be satisfied, not which member failed. A caller that needs to know which ID is absent queries the IDs one at a time.
 
@@ -1241,7 +1299,7 @@ All batch operations validate ALL IDs and status transitions before applying any
 | All IDs valid | 0 | All tasks updated | None |
 | Some or all IDs do not exist | 4 | **No changes made** | "Error: resource not found: some tasks not found" |
 | An ID is not an integer | 2 | **No changes made** | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" |
-| An ID is an integer but not positive | 6 | **No changes made** | "Error: validation error: invalid task ID: N (must be positive)" |
+| An ID is an integer outside `1`-`2147483647` | 6 | **No changes made** | "Error: validation error: task_id must be between 1 and 2147483647, got N" |
 | Target state is not a recognised status | 6 | **No changes made** | "Error: validation error: invalid task status: \"X\"" |
 | Invalid status transition | 6 | **No changes made** | "Error: validation error: invalid status transition from X to Y for task N" |
 | Target state is `SPRINT` | 6 | **No changes made** | "Error: validation error: status SPRINT can only be set automatically via 'sprint add-tasks'" |
@@ -1739,7 +1797,7 @@ rmp task comment-add -r <name> <task-id> --type FINDING < finding.txt
 
 | Field | Constraint | Error Message (stderr) | Exit Code |
 |-------|------------|------------------------|-----------|
-| `task-id` | Positive integer | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" | 2 |
+| `task-id` | Integer in `1`-`2147483647` (see `Comment Positional Argument Contract`) | "Error: invalid input: invalid task ID: \"X\" (must be a positive integer)" | 2 |
 | `type` | Present | "Error: required parameter missing: --type" | 2 |
 | `type` | One of the seven task values | "Error: validation error: invalid comment type \"X\" for a task comment; valid types: FINDING, HYPOTHESIS, TEST, DECISION, PROGRESS, UPDATE, NOTE" | 6 |
 | `body` | Supplied via `--body` or stdin | "Error: required parameter missing: no comment body supplied" | 2 |
@@ -1844,7 +1902,7 @@ rmp task comment-edit -r <name> <comment-id> < revised.txt
 
 | Field | Constraint | Error Message (stderr) | Exit Code |
 |-------|------------|------------------------|-----------|
-| `comment-id` | Positive integer | "Error: invalid input: invalid comment ID: \"X\" (must be a positive integer)" | 2 |
+| `comment-id` | Integer in `1`-`2147483647` (see `Comment Positional Argument Contract`) | "Error: invalid input: invalid comment ID: \"X\" (must be a positive integer)" | 2 |
 | change | At least one change requested: a `--type` value, a `--body` value, or a body on standard input | "Error: required parameter missing: at least one of --type or --body is required" | 2 |
 | `type` | One of the seven task values | "Error: validation error: invalid comment type \"X\" for a task comment; valid types: FINDING, HYPOTHESIS, TEST, DECISION, PROGRESS, UPDATE, NOTE" | 6 |
 | `body` | `--body` present but empty or whitespace only | "Error: required parameter missing: no comment body supplied" | 2 |
@@ -2824,7 +2882,7 @@ rmp sprint comment-add -r <name> <sprint-id> --type DECISION < decision.txt
 
 | Field | Constraint | Error Message (stderr) | Exit Code |
 |-------|------------|------------------------|-----------|
-| `sprint-id` | Positive integer | "Error: invalid input: invalid sprint ID: \"X\" (must be a positive integer)" | 2 |
+| `sprint-id` | Integer in `1`-`2147483647` (see `Comment Positional Argument Contract`) | "Error: invalid input: invalid sprint ID: \"X\" (must be a positive integer)" | 2 |
 | `type` | Present | "Error: required parameter missing: --type" | 2 |
 | `type` | One of the four sprint values | "Error: validation error: invalid comment type \"X\" for a sprint comment; valid types: FINDING, DECISION, PROGRESS, UPDATE" | 6 |
 | `body` | Supplied via `--body` or stdin | "Error: required parameter missing: no comment body supplied" | 2 |
@@ -2918,7 +2976,7 @@ rmp sprint comment-edit -r <name> <comment-id> < revised.txt
 
 | Field | Constraint | Error Message (stderr) | Exit Code |
 |-------|------------|------------------------|-----------|
-| `comment-id` | Positive integer | "Error: invalid input: invalid comment ID: \"X\" (must be a positive integer)" | 2 |
+| `comment-id` | Integer in `1`-`2147483647` (see `Comment Positional Argument Contract`) | "Error: invalid input: invalid comment ID: \"X\" (must be a positive integer)" | 2 |
 | change | At least one change requested: a `--type` value, a `--body` value, or a body on standard input | "Error: required parameter missing: at least one of --type or --body is required" | 2 |
 | `type` | One of the four sprint values | "Error: validation error: invalid comment type \"X\" for a sprint comment; valid types: FINDING, DECISION, PROGRESS, UPDATE" | 6 |
 | `body` | `--body` present but empty or whitespace only | "Error: required parameter missing: no comment body supplied" | 2 |
@@ -3039,7 +3097,7 @@ rmp audit ls -r <name>
 |----------|-----------|---------------|
 | `--limit` `< 1` or `> 500` | 6 | "Error: validation error: limit must be between 1 and 500, got N" |
 | `--limit` non-integer | 2 | "Error: invalid input: invalid limit: X" |
-| `--entity-id` `< 1` or `> 2147483647` | 6 | "Error: validation error: --entity-id must be between 1 and 2147483647 (got N)" |
+| `--entity-id` `< 1` or `> 2147483647` | 6 | "Error: validation error: entity_id must be between 1 and 2147483647, got N" |
 | `--entity-id` non-integer | 2 | "Error: invalid input: invalid entity ID: X" |
 | `-o, --operation` not one of the catalogue operations | 6 | "Error: validation error: invalid audit operation: \"X\"" |
 | `-e, --entity-type` not `TASK` or `SPRINT` | 6 | "Error: validation error: invalid entity type: \"X\"" |
@@ -3089,11 +3147,14 @@ reached with `audit history SPRINT <sprint-id>`. See
 |----------|-----------|---------------|
 | `<entity-type>` is not TASK or SPRINT | 6 | "Error: validation error: invalid entity type: \"X\"" |
 | `<entity-id>` is not an integer | 2 | "Error: invalid input: invalid entity ID: \"X\" (must be a positive integer)" |
-| `<entity-id>` `< 1` | 6 | "Error: validation error: invalid entity ID: 0 (must be positive)" |
-| `<entity-id>` `> 2147483647` | 6 | "Error: validation error: invalid entity ID: N (exceeds maximum value 2147483647)" |
+| `<entity-id>` `< 1` or `> 2147483647` | 6 | "Error: validation error: entity_id must be between 1 and 2147483647, got N" |
 
 A non-integer entity id is a format/misuse error (exit code 2, `EXIT_MISUSE`); an
-integer that is out of the valid range is a validation error (exit code 6).
+integer that is out of the valid range is a validation error (exit code 6). Both
+bounds of the range are one rule and produce one sentence, and this positional and
+the `--entity-id` flag of `audit list` name the same field and print the same
+line — the two commands are the same query (see
+`§ Entity Identifier Range (All Positional Ids and --entity-id)`).
 
 **JSON Output:** Array of AuditEntry objects, with the same seven keys `audit list`
 returns.

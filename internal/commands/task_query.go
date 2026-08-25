@@ -180,7 +180,7 @@ func taskGet(args []string) error {
 		return fmt.Errorf("%w: task ID(s) required", utils.ErrRequired)
 	}
 
-	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], "task")
+	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], utils.FieldTaskID)
 	if err != nil {
 		return err
 	}
@@ -222,7 +222,7 @@ func taskSubtasks(args []string) error {
 		return fmt.Errorf("%w: task ID required", utils.ErrRequired)
 	}
 
-	id, err := utils.ValidateIDString(strings.TrimSpace(remaining[0]), "task")
+	id, err := utils.ValidateIDString(strings.TrimSpace(remaining[0]), utils.FieldTaskID)
 	if err != nil {
 		return err
 	}

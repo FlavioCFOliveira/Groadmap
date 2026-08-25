@@ -50,10 +50,14 @@ const (
 	commentBodyShort = "-b"
 )
 
-// commentEntity is the name the positional id of `comment-edit` and
-// `comment-remove` is reported under. Both subcommands take the COMMENT's own id
-// in both families, so unlike the parent's name this one is not per-family.
-const commentEntity = "comment"
+// commentIDField is the field the positional id of `comment-edit` and
+// `comment-remove` is reported as. Both subcommands take the COMMENT's own id in
+// both families, so unlike the parent's field this one is not per-family.
+//
+// It carries both spellings the subcommands need — `comment_id` for the range
+// refusal, `comment` for the format refusal and for the prose around it — so
+// neither is written out here.
+const commentIDField = utils.FieldCommentID
 
 // commentTypeFlagDefs is the flag set the comment subcommands hand to the shared
 // flag parser: `--type` only.
@@ -98,32 +102,34 @@ func errNoCommentChange() error {
 // requireCommentPositionalID parses the positional id of a comment subcommand and
 // returns it with the arguments that follow it.
 //
-// entity names what the id identifies, so the pinned messages name the right
-// thing: "task" / "sprint" for the parent id `comment-add` and `comment-list`
-// take, "comment" for the comment's own id `comment-edit` and `comment-remove`
-// take.
+// field names what the id identifies, so the pinned messages name the right
+// thing: utils.FieldTaskID / utils.FieldSprintID for the parent id `comment-add`
+// and `comment-list` take, utils.FieldCommentID for the comment's own id
+// `comment-edit` and `comment-remove` take.
 //
 // Every malformed id — non-numeric, non-positive, or beyond MaxInt32 — is exit
 // code 2 here. utils.ValidateIDString classifies a non-positive or oversized
 // value as a validation error (exit code 6); SPEC/COMMANDS.md pins exit code 2
-// for the whole "positive integer" constraint on these subcommands, so the
-// verdict is re-classified rather than the parsing re-implemented.
-func requireCommentPositionalID(args []string, entity string) (int, []string, error) {
+// for the whole "positive integer" constraint on these subcommands, so the range
+// class is supplied to the parser instead.
+//
+// It used to be re-classified by REBUILDING the message, and the rebuilt message
+// drifted: these four subcommands announced an out-of-range id as
+// `invalid comment ID: "0" (must be a positive integer no greater than
+// 2147483647)` while every other surface announced the same verdict in one of two
+// other sentences, and SPEC published neither of the comment ones. Handing the
+// class to utils.ValidateIDStringAs keeps the exit code these subcommands publish
+// and takes the sentence from the rule (rmp task 330).
+func requireCommentPositionalID(args []string, field utils.RangedField) (int, []string, error) {
 	if len(args) == 0 {
-		return 0, nil, fmt.Errorf("%w: %s ID required", utils.ErrRequired, entity)
+		return 0, nil, fmt.Errorf("%w: %s ID required", utils.ErrRequired, field.IDEntity())
 	}
 
-	raw := args[0]
-	id, err := utils.ValidateIDString(raw, entity)
-	if err == nil {
-		return id, args[1:], nil
-	}
-	if errors.Is(err, utils.ErrInvalidInput) {
-		// Non-numeric token: already the class and the wording SPEC pins.
+	id, err := utils.ValidateIDStringAs(args[0], field, utils.ErrInvalidInput)
+	if err != nil {
 		return 0, nil, err
 	}
-	return 0, nil, fmt.Errorf("%w: invalid %s ID: %q (must be a positive integer no greater than %d)",
-		utils.ErrInvalidInput, entity, raw, utils.MaxInt32)
+	return id, args[1:], nil
 }
 
 // extractCommentBody removes `-b` / `--body` and its value from args and reports
@@ -373,9 +379,13 @@ type commentFamily struct {
 	// own (SPEC/DATA_FORMATS.md § Audit Entry).
 	entityType models.EntityType
 
-	// parentLabel names the parent in the messages `comment-add` and
-	// `comment-list` report: "task" / "sprint".
-	parentLabel string
+	// parentIDField is the field the positional parent id of `comment-add` and
+	// `comment-list` is reported as: utils.FieldTaskID / utils.FieldSprintID.
+	//
+	// It replaces a bare label because it carries BOTH spellings the family
+	// needs — `task_id` for the range refusal, `task` for the format refusal and
+	// for the not-found prose — so the two can no longer be chosen separately.
+	parentIDField utils.RangedField
 }
 
 // requireParent reports a missing parent as the exit-4 condition
@@ -392,7 +402,7 @@ func (f *commentFamily) requireParent(database *db.DB, parentID int) error {
 
 	if err := f.parentExists(ctx, database, parentID); err != nil {
 		if errors.Is(err, utils.ErrNotFound) {
-			return fmt.Errorf("%w: %s %d not found", utils.ErrNotFound, f.parentLabel, parentID)
+			return fmt.Errorf("%w: %s %d not found", utils.ErrNotFound, f.parentIDField.IDEntity(), parentID)
 		}
 		return err
 	}
@@ -436,7 +446,7 @@ func commentAdd(f *commentFamily, args []string) error {
 		return err
 	}
 
-	parentID, rest, err := requireCommentPositionalID(remaining, f.parentLabel)
+	parentID, rest, err := requireCommentPositionalID(remaining, f.parentIDField)
 	if err != nil {
 		return err
 	}
@@ -522,7 +532,7 @@ func commentList(f *commentFamily, args []string) error {
 		return err
 	}
 
-	parentID, rest, err := requireCommentPositionalID(remaining, f.parentLabel)
+	parentID, rest, err := requireCommentPositionalID(remaining, f.parentIDField)
 	if err != nil {
 		return err
 	}
@@ -588,7 +598,7 @@ func commentEdit(f *commentFamily, args []string) error {
 		return err
 	}
 
-	commentID, rest, err := requireCommentPositionalID(remaining, commentEntity)
+	commentID, rest, err := requireCommentPositionalID(remaining, commentIDField)
 	if err != nil {
 		return err
 	}
@@ -671,7 +681,7 @@ func commentRemove(f *commentFamily, args []string) error {
 		return err
 	}
 
-	commentID, rest, err := requireCommentPositionalID(remaining, commentEntity)
+	commentID, rest, err := requireCommentPositionalID(remaining, commentIDField)
 	if err != nil {
 		return err
 	}

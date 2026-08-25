@@ -30,7 +30,7 @@ func taskRemove(args []string) error {
 		return fmt.Errorf("%w: task ID(s) required", utils.ErrRequired)
 	}
 
-	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], "task")
+	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], utils.FieldTaskID)
 	if err != nil {
 		return err
 	}
@@ -217,7 +217,7 @@ func taskSetStatus(args []string) error {
 		return fmt.Errorf("%w: task ID(s) and status required", utils.ErrRequired)
 	}
 
-	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], "task")
+	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], utils.FieldTaskID)
 	if err != nil {
 		return err
 	}
@@ -530,7 +530,7 @@ func taskReopen(args []string) error {
 		return fmt.Errorf("%w: task ID(s) required", utils.ErrRequired)
 	}
 
-	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], "task")
+	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], utils.FieldTaskID)
 	if err != nil {
 		return err
 	}
@@ -646,7 +646,7 @@ func taskSetPriority(args []string) error {
 		return fmt.Errorf("%w: task ID(s) and priority required", utils.ErrRequired)
 	}
 
-	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], "task")
+	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], utils.FieldTaskID)
 	if err != nil {
 		return err
 	}
@@ -730,7 +730,7 @@ func taskSetSeverity(args []string) error {
 		return fmt.Errorf("%w: task ID(s) and severity required", utils.ErrRequired)
 	}
 
-	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], "task")
+	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], utils.FieldTaskID)
 	if err != nil {
 		return err
 	}

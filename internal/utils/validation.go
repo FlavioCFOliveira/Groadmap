@@ -11,6 +11,11 @@ import (
 // MaxInt32 is the maximum valid ID value (prevents integer overflow).
 const MaxInt32 = math.MaxInt32 // 2,147,483,647
 
+// MinID is the smallest value any entity id may take. Together with MaxInt32 it
+// is the whole of the ID RANGE rule, and it is stated here once so that no
+// command, and no message, can carry a floor of its own.
+const MinID = 1
+
 // ValidateFreeText applies both content rules a free-text field is subject to,
 // in the one order SPEC/MODELS.md fixes for them: the Free-Text UTF-8 Encoding
 // Constraint first, then the Free-Text Control-Character Constraint. It returns
@@ -293,25 +298,52 @@ func isBidiOrFormatControl(r rune) bool {
 	return false
 }
 
-// ValidateID validates that an ID is positive and within safe limits.
-// Returns an error if the ID is invalid, nil otherwise.
+// IDInRange reports whether id satisfies the ID RANGE rule: an entity id must
+// lie in MinID..MaxInt32 inclusive.
 //
-// Validation rules:
-//   - ID must be > 0 (positive)
-//   - ID must be <= MaxInt32 (2,147,483,647) to prevent overflow
+// It is the ONLY comparison of an id against those bounds in the application.
+// Before rmp task 330 the same comparison was written out at three sites — here
+// as two separate branches, again in the audit flag validator, and a third time
+// implicitly in package models — and each site worded its verdict differently.
+// One comparison and one wording is what stops that recurring a site at a time.
+func IDInRange(id int) bool {
+	return id >= MinID && id <= MaxInt32
+}
+
+// ValidateID refuses an id outside the range every entity id must lie in,
+// MinID..MaxInt32, carrying ErrValidation and therefore exit code 6.
+//
+// # One rule, one sentence
+//
+// It used to answer for the same rule in two sentences, choosing between them by
+// which bound the value crossed:
+//
+//	invalid task ID: 0 (must be positive)
+//	invalid task ID: 99999999999 (exceeds maximum value 2147483647)
+//
+// Both are true and neither states the rule. The first in particular never names
+// a bound at all, so a caller refused at the floor learned nothing about the
+// ceiling, and a caller who met both messages had no way to tell that one check
+// had produced them. Naming the bound that was crossed would be worth a second
+// sentence only if the two failures had different remedies, and they do not: the
+// remedy for either is an id inside the range, which is what the one sentence now
+// states (rmp task 330).
 //
 // Example:
 //
-//	err := ValidateID(42, "task")
+//	err := ValidateID(42, utils.FieldTaskID)
 //	if err != nil {
 //	    return err
 //	}
-func ValidateID(id int, entity string) error {
-	if id <= 0 {
-		return fmt.Errorf("%w: invalid %s ID: %d (must be positive)", ErrValidation, entity, id)
-	}
-	if id > MaxInt32 {
-		return fmt.Errorf("%w: invalid %s ID: %d (exceeds maximum value %d)", ErrValidation, entity, id, MaxInt32)
+func ValidateID(id int, field RangedField) error {
+	return validateIDAs(id, field, ErrValidation)
+}
+
+// validateIDAs is ValidateID with the failure class supplied by the caller. See
+// IDRangeError for why the class is a parameter and the wording is not.
+func validateIDAs(id int, field RangedField, class error) error {
+	if !IDInRange(id) {
+		return IDRangeError(class, field, strconv.Itoa(id))
 	}
 	return nil
 }
@@ -322,10 +354,10 @@ func ValidateID(id int, entity string) error {
 // Example:
 //
 //	ids := []int{1, 2, 3}
-//	err := ValidateIDList(ids, "task")
-func ValidateIDList(ids []int, entity string) error {
+//	err := ValidateIDList(ids, utils.FieldTaskID)
+func ValidateIDList(ids []int, field RangedField) error {
 	for _, id := range ids {
-		if err := ValidateID(id, entity); err != nil {
+		if err := ValidateID(id, field); err != nil {
 			return err
 		}
 	}
@@ -338,16 +370,16 @@ func ValidateIDList(ids []int, entity string) error {
 //
 // Example:
 //
-//	ids, err := ParseCommaSeparatedIDs("1,2, 3", "task")
+//	ids, err := ParseCommaSeparatedIDs("1,2, 3", utils.FieldTaskID)
 //	// ids == []int{1, 2, 3}
-func ParseCommaSeparatedIDs(s string, entity string) ([]int, error) {
+func ParseCommaSeparatedIDs(s string, field RangedField) ([]int, error) {
 	if strings.TrimSpace(s) == "" {
-		return nil, fmt.Errorf("%w: %s ID(s) required", ErrRequired, entity)
+		return nil, fmt.Errorf("%w: %s ID(s) required", ErrRequired, field.IDEntity())
 	}
 	parts := strings.Split(s, ",")
 	ids := make([]int, 0, len(parts))
 	for _, p := range parts {
-		id, err := ValidateIDString(strings.TrimSpace(p), entity)
+		id, err := ValidateIDString(strings.TrimSpace(p), field)
 		if err != nil {
 			return nil, err
 		}
@@ -356,22 +388,45 @@ func ParseCommaSeparatedIDs(s string, entity string) ([]int, error) {
 	return ids, nil
 }
 
-// ValidateIDString parses and validates an ID from a string.
-// Returns the parsed ID if valid, or an error if invalid.
+// ValidateIDString parses and validates an ID from a string, classifying a RANGE
+// failure as ErrValidation (exit code 6). Returns the parsed ID if valid, or an
+// error if invalid.
 //
 // Example:
 //
-//	id, err := ValidateIDString("42", "task")
+//	id, err := ValidateIDString("42", utils.FieldTaskID)
 //	if err != nil {
 //	    return err
 //	}
-func ValidateIDString(s string, entity string) (int, error) {
+func ValidateIDString(s string, field RangedField) (int, error) {
+	return ValidateIDStringAs(s, field, ErrValidation)
+}
+
+// ValidateIDStringAs is ValidateIDString for a surface whose published exit code
+// for an out-of-range id is not 6.
+//
+// The FORMAT verdict is unaffected by rangeClass and is always ErrInvalidInput
+// (exit code 2): a token that is not an integer never reaches a comparison, so
+// there is no range to classify. Only the RANGE verdict takes the class, and the
+// four comment subcommands are the only callers that supply one — they publish
+// the whole "positive integer" constraint on their positional id as exit code 2
+// (SPEC/COMMANDS.md § Add Task Comment validation order, step 2), while every
+// other surface publishes exit code 6 for the same condition
+// (SPEC/COMMANDS.md § Entity History: "an integer that is out of the valid range
+// is a validation error").
+//
+// That divergence is a published contract and not an accident, which is why rmp
+// task 330 converged the two wordings onto one sentence and left the two classes
+// alone. Routing both through here is what keeps them one sentence: before, the
+// comment family re-classified the verdict by rebuilding the message, and the
+// rebuilt message drifted.
+func ValidateIDStringAs(s string, field RangedField, rangeClass error) (int, error) {
 	// Trim whitespace
 	s = strings.TrimSpace(s)
 
 	// Check for empty string
 	if s == "" {
-		return 0, fmt.Errorf("%w: invalid %s ID: %q (must be a positive integer)", ErrInvalidInput, entity, s)
+		return 0, idFormatError(field, s)
 	}
 
 	// Check for non-digit characters (except leading minus for negative)
@@ -381,22 +436,38 @@ func ValidateIDString(s string, entity string) (int, error) {
 			continue // Allow leading minus for negative detection
 		}
 		if r < '0' || r > '9' {
-			return 0, fmt.Errorf("%w: invalid %s ID: %q (must be a positive integer)", ErrInvalidInput, entity, s)
+			return 0, idFormatError(field, s)
 		}
 	}
 
 	// Parse the integer. The digit-only check above guarantees Atoi cannot
 	// fail on syntax, so any error here is an overflow: an all-digits value
 	// larger than the platform int range. That is a magnitude/range failure,
-	// NOT bad syntax, so it is classified as ErrValidation (exit 6) — the same
-	// class as ValidateID's "exceeds maximum value" case, keeping both
-	// out-of-range paths consistent (finding #58).
+	// NOT bad syntax, so it is classified with the range class — the same class
+	// and now the same sentence as the bounds check below, which is what makes
+	// a token beyond the platform's int and a token merely beyond MaxInt32 one
+	// verdict instead of two (finding #58; rmp task 330 converged the wording).
+	//
+	// The token itself is echoed rather than a parsed value, because there is no
+	// parsed value to echo.
 	id, err := strconv.Atoi(s)
 	if err != nil {
-		return 0, fmt.Errorf("%w: invalid %s ID: %q (exceeds maximum value %d)", ErrValidation, entity, s, MaxInt32)
+		return 0, IDRangeError(rangeClass, field, s)
 	}
-	if err := ValidateID(id, entity); err != nil {
+	if err := validateIDAs(id, field, rangeClass); err != nil {
 		return 0, err
 	}
 	return id, nil
+}
+
+// idFormatError is the refusal of a token that is not an integer at all: the ID
+// FORMAT rule, which is exit code 2 misuse on every surface and is a different
+// rule from the range the id must then fall inside.
+//
+// It is spelled once because the same sentence is published for five different
+// entities across roughly twenty rows of SPEC/COMMANDS.md, and because keeping
+// it beside the range refusal is what makes the boundary between the two rules
+// visible rather than incidental.
+func idFormatError(field RangedField, raw string) error {
+	return fmt.Errorf("%w: invalid %s ID: %q (must be a positive integer)", ErrInvalidInput, field.IDEntity(), raw)
 }
