@@ -125,42 +125,290 @@ func TestEnumRejectionsPreserveExitCode(t *testing.T) {
 	}
 }
 
-// TestGraphStoreRejectionCarriesRoadmapNameSentinel covers the site the sweep
-// for #290 found outside the enum table. openGraphStore validates the roadmap
-// name through utils.GetRoadmapDir, whose refusals carry a specific sentinel
-// (reserved name, bad characters, too long) on top of utils.ErrValidation. That
-// site flattened the chain with %v, which discards the specific sentinel in
-// exactly the way %s does.
-func TestGraphStoreRejectionCarriesRoadmapNameSentinel(t *testing.T) {
-	cases := []struct {
-		name         string
-		roadmap      string
-		wantSentinel error
-	}{
+// roadmapNameRejection is one roadmap name utils.ValidateRoadmapName refuses,
+// together with the sentinel naming WHICH of its rules the name broke.
+//
+// The four names cover the two shapes the refusal takes, because the fix for
+// #325 had to be right for both: "CON" and "-mobile-release" are built with
+// fmt.Errorf and so render the classification, while "UPPERCASE" and the
+// over-long name are utils.MessageError values whose Error() is the SPEC-pinned
+// sentence alone, with no classification in it at all. A wrap that restates the
+// classification doubles the prefix on the first pair and INVENTS one on the
+// second, so a table covering only the first pair would miss half the defect.
+type roadmapNameRejection struct {
+	name         string
+	roadmap      string
+	wantSentinel error
+}
+
+// roadmapNameRejectionCases is the shared table. The empty name is not listed:
+// `-r ""` is refused earlier, by requireRoadmap, as utils.ErrNoRoadmap (exit 3),
+// so it never reaches utils.GetRoadmapDir on any family.
+func roadmapNameRejectionCases() []roadmapNameRejection {
+	return []roadmapNameRejection{
 		{"reserved device name", "CON", utils.ErrRoadmapNameReserved},
+		{"leading hyphen", "-mobile-release", utils.ErrRoadmapNameStartsWithHyphen},
 		{"characters outside the regex", "UPPERCASE", utils.ErrInvalidRoadmapName},
 		{"longer than the maximum", strings.Repeat("a", utils.MaxRoadmapNameLength+1), utils.ErrRoadmapNameTooLong},
 	}
+}
 
-	for _, tc := range cases {
+// roadmapEntryPoint is one command path that resolves a roadmap by name and so
+// must surface utils.GetRoadmapDir's refusal.
+type roadmapEntryPoint struct {
+	name string
+	run  func(roadmap string) error
+}
+
+// roadmapNameEntryPoints spans the families that reach utils.GetRoadmapDir by
+// two different routes: the graph family calls it directly from openGraphStore,
+// while task, sprint, backlog and audit reach it through db.OpenExisting. Both
+// routes refuse the name before touching the filesystem, so these invocations
+// create nothing and need no roadmap to exist.
+func roadmapNameEntryPoints() []roadmapEntryPoint {
+	return []roadmapEntryPoint{
+		{"graph query", func(r string) error {
+			return runGraphQuery([]string{"-r", r, "--query", "MATCH (n) RETURN n"})
+		}},
+		{"graph search", func(r string) error {
+			return runGraphSearch([]string{"-r", r, "--query", "MATCH p=(a)-[*1..3]-(b) RETURN p"})
+		}},
+		{"task list", func(r string) error { return HandleTask([]string{"list", "-r", r}) }},
+		{"sprint list", func(r string) error { return HandleSprint([]string{"list", "-r", r}) }},
+		{"backlog list", func(r string) error { return backlogList([]string{"-r", r}) }},
+		{"audit list", func(r string) error { return HandleAudit([]string{"list", "-r", r}) }},
+	}
+}
+
+// TestGraphStoreRejectionCarriesRoadmapNameSentinel covers the site the sweep
+// for #290 found outside the enum table. openGraphStore validates the roadmap
+// name through utils.GetRoadmapDir, whose refusals carry a specific sentinel
+// (reserved name, leading hyphen, bad characters, too long) on top of
+// utils.ErrValidation. That site flattened the chain with %v, which discards the
+// specific sentinel in exactly the way %s does.
+//
+// This is the assertion the fix for #325 had to keep true while removing the
+// wrap that carried it: returning the inner error unchanged must leave BOTH
+// sentinels reachable, since both were applied by utils.ValidateRoadmapName with
+// %w in the first place.
+func TestGraphStoreRejectionCarriesRoadmapNameSentinel(t *testing.T) {
+	for _, tc := range roadmapNameRejectionCases() {
 		t.Run(tc.name, func(t *testing.T) {
-			err := runGraphQuery([]string{"-r", tc.roadmap, "--query", "MATCH (n) RETURN n"})
-			if err == nil {
-				t.Fatalf("want a rejection for roadmap name %q, got nil", tc.roadmap)
-			}
-			if !errors.Is(err, tc.wantSentinel) {
-				t.Errorf("the roadmap-name sentinel is unreachable through the wrap\n"+
-					"       error: %q\n"+
-					"        want: errors.Is(err, %v) == true", err, tc.wantSentinel)
-			}
-			// Same neutrality requirement as the enum sites: still exit 6.
-			if !errors.Is(err, utils.ErrValidation) {
-				t.Errorf("classification sentinel lost; error: %q", err)
-			}
-			if code := exitCodeFor(err); code != 6 {
-				t.Errorf("exit code = %d, want 6; error: %q", code, err)
+			for _, ep := range roadmapNameEntryPoints() {
+				err := ep.run(tc.roadmap)
+				if err == nil {
+					t.Fatalf("%s: want a rejection for roadmap name %q, got nil", ep.name, tc.roadmap)
+				}
+				if !errors.Is(err, tc.wantSentinel) {
+					t.Errorf("%s: the roadmap-name sentinel is unreachable through the wrap\n"+
+						"       error: %q\n"+
+						"        want: errors.Is(err, %v) == true", ep.name, err, tc.wantSentinel)
+				}
+				// Same neutrality requirement as the enum sites: still exit 6.
+				if !errors.Is(err, utils.ErrValidation) {
+					t.Errorf("%s: classification sentinel lost; error: %q", ep.name, err)
+				}
+				if code := exitCodeFor(err); code != 6 {
+					t.Errorf("%s: exit code = %d, want 6; error: %q", ep.name, code, err)
+				}
 			}
 		})
+	}
+}
+
+// TestRoadmapNameRefusalIsIdenticalAcrossFamilies is the regression test for
+// #325.
+//
+// The defect: openGraphStore restated utils.ErrValidation over an error
+// utils.GetRoadmapDir had already classified, so `rmp graph query -r CON` read
+//
+//	Error: validation error: validation error: "CON": roadmap name is a reserved system name
+//
+// with the class named twice, while every other family printed it once. The
+// same wrap also put a "validation error: " prefix in front of the two
+// roadmap-name sentences SPEC/COMMANDS.md § Roadmap Name Validation publishes
+// WITHOUT one, so the graph family printed three of the five refusals in words
+// the SPEC does not contain.
+//
+// The assertion is deliberately relational rather than a pinned literal: the
+// reference is the error utils.GetRoadmapDir itself returns, so what is proven
+// is "every family renders exactly what the producer produced". That survives a
+// future rewording of the messages, and it fails the moment any family adds or
+// removes a single byte — which is precisely what restating a classification
+// does.
+func TestRoadmapNameRefusalIsIdenticalAcrossFamilies(t *testing.T) {
+	for _, tc := range roadmapNameRejectionCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			_, refErr := utils.GetRoadmapDir(tc.roadmap)
+			if refErr == nil {
+				t.Fatalf("utils.GetRoadmapDir(%q) accepted the name; the case is vacuous", tc.roadmap)
+			}
+			want := refErr.Error()
+
+			for _, ep := range roadmapNameEntryPoints() {
+				err := ep.run(tc.roadmap)
+				if err == nil {
+					t.Fatalf("%s: want a rejection for roadmap name %q, got nil", ep.name, tc.roadmap)
+				}
+				if got := err.Error(); got != want {
+					t.Errorf("%s renders the refusal differently from the producer\n"+
+						"        got: %q\n"+
+						"       want: %q\n"+
+						"       note: a command must not restate a classification the error already carries",
+						ep.name, got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestRoadmapNameRefusalStatesItsClassOnce states the property behind the
+// equality above directly, so it keeps holding if the wording of any of the four
+// messages is later changed for an unrelated reason.
+//
+// It asserts two things: that the producer names the class at most once (no
+// message may be born doubled), and that no family changes that count on the way
+// out. The second half is what fails when the wrap is restored — for "CON" the
+// count goes 1 -> 2, and for "UPPERCASE" it goes 0 -> 1.
+func TestRoadmapNameRefusalStatesItsClassOnce(t *testing.T) {
+	class := utils.ErrValidation.Error()
+
+	for _, tc := range roadmapNameRejectionCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			_, refErr := utils.GetRoadmapDir(tc.roadmap)
+			if refErr == nil {
+				t.Fatalf("utils.GetRoadmapDir(%q) accepted the name; the case is vacuous", tc.roadmap)
+			}
+			wantCount := strings.Count(refErr.Error(), class)
+			if wantCount > 1 {
+				t.Fatalf("the producer already states %q %d times: %q", class, wantCount, refErr)
+			}
+
+			for _, ep := range roadmapNameEntryPoints() {
+				err := ep.run(tc.roadmap)
+				if err == nil {
+					t.Fatalf("%s: want a rejection for roadmap name %q, got nil", ep.name, tc.roadmap)
+				}
+				if got := strings.Count(err.Error(), class); got != wantCount {
+					t.Errorf("%s states %q %d time(s), the producer states it %d time(s)\n line: %q",
+						ep.name, class, got, wantCount, err)
+				}
+			}
+		})
+	}
+}
+
+// TestRefusalsStateTheirClassificationOnce is the standing behavioural sweep for
+// the #325 defect class: a command applying a classification sentinel to an
+// error that already carries one.
+//
+// It is the behavioural counterpart of TestNoFmtErrorfFlattensAnErrorChain
+// below. That one is structural and catches the #290 signature, which is
+// syntactic (X.Error() passed to fmt.Errorf). This one cannot be structural,
+// because whether an inner error already carries a classification is not
+// decidable from the wrap site's syntax — it depends on what the callee returns.
+// So it runs a corpus of real refusals and reads what the user would read: no
+// classification from the exit-code mapper's catalogue may be named twice in one
+// line.
+func TestRefusalsStateTheirClassificationOnce(t *testing.T) {
+	roadmap := "testclassificationstatedonce"
+	_, cleanup := setupTestTaskRoadmap(t, roadmap)
+	defer cleanup()
+
+	check := func(t *testing.T, label string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("%s: want a refusal, got nil; the case proves nothing", label)
+		}
+		msg := err.Error()
+		for _, s := range mapperSentinels {
+			if n := strings.Count(msg, s.err.Error()); n > 1 {
+				t.Errorf("%s names the %s classification %d times in one line\n"+
+					" line: %q\n"+
+					" note: the error being wrapped already carries the class; state it once, at its owner",
+					label, s.name, n, msg)
+			}
+		}
+	}
+
+	t.Run("enum refusals", func(t *testing.T) {
+		for _, tc := range enumRejectionCases() {
+			check(t, tc.name, tc.run(roadmap))
+		}
+	})
+
+	t.Run("roadmap-name refusals", func(t *testing.T) {
+		for _, tc := range roadmapNameRejectionCases() {
+			for _, ep := range roadmapNameEntryPoints() {
+				check(t, ep.name+" / "+tc.name, ep.run(tc.roadmap))
+			}
+		}
+	})
+
+	t.Run("other refusals", func(t *testing.T) {
+		cases := crossFamilyRefusalCases()
+		if len(cases) < 10 {
+			t.Fatalf("the corpus has shrunk to %d cases; the sweep is losing its reach", len(cases))
+		}
+		for _, tc := range cases {
+			check(t, tc.name, tc.run(roadmap))
+		}
+	})
+}
+
+// crossFamilyRefusalCases is a corpus of refusals reaching the exit-code mapper
+// through classifications other than the roadmap-name one, so the sweep above
+// covers more of the catalogue than utils.ErrValidation alone. Every entry must
+// fail; the sweep asserts that, so a case that silently starts succeeding is a
+// test failure rather than a hole.
+//
+// Nothing here writes: the graph entries are refused by the clause guard rail
+// before the store is opened, and the rest fail on missing or unresolvable
+// arguments. No entry reads standard input.
+func crossFamilyRefusalCases() []enumRejection {
+	return []enumRejection{
+		{name: "graph create given a read query", run: func(r string) error {
+			return runGraphCreate([]string{"-r", r, "--query", "MATCH (n) RETURN n"})
+		}},
+		{name: "graph query given a write query", run: func(r string) error {
+			return runGraphQuery([]string{"-r", r, "--query", "CREATE (s:Spec {key: 'SPEC/GRAPH.md'})"})
+		}},
+		{name: "graph update given a delete query", run: func(r string) error {
+			return runGraphUpdate([]string{"-r", r, "--query", "MATCH (s:Spec) DELETE s"})
+		}},
+		{name: "graph delete given a set query", run: func(r string) error {
+			return runGraphDelete([]string{"-r", r, "--query", "MATCH (s:Spec) SET s.key = 'x'"})
+		}},
+		{name: "graph query with an unknown flag", run: func(r string) error {
+			return runGraphQuery([]string{"-r", r, "--depth", "3", "--query", "MATCH (n) RETURN n"})
+		}},
+		{name: "task get with no id", run: func(r string) error {
+			return HandleTask([]string{"get", "-r", r})
+		}},
+		{name: "task get with an unknown id", run: func(r string) error {
+			return HandleTask([]string{"get", "-r", r, "424242"})
+		}},
+		{name: "task create with no title", run: func(r string) error {
+			return HandleTask([]string{"create", "-r", r, "-y", "BUG"})
+		}},
+		{name: "task list with an unparsable date", run: func(r string) error {
+			return HandleTask([]string{"list", "-r", r, "--created-since", "last Tuesday"})
+		}},
+		{name: "sprint get with an unknown id", run: func(r string) error {
+			return HandleSprint([]string{"get", "-r", r, "424242"})
+		}},
+		{name: "sprint create with no title", run: func(r string) error {
+			return HandleSprint([]string{"create", "-r", r})
+		}},
+		{name: "audit list with an out-of-range limit", run: func(r string) error {
+			return HandleAudit([]string{"list", "-r", r, "--limit", "0"})
+		}},
+		{name: "audit history with no id", run: func(r string) error {
+			return HandleAudit([]string{"history", "-r", r, "TASK"})
+		}},
+		{name: "roadmap create with no name", run: func(_ string) error {
+			return HandleRoadmap([]string{"create"})
+		}},
 	}
 }
 

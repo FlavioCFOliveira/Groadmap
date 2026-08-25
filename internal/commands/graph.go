@@ -295,11 +295,30 @@ Examples:
 func openGraphStore(roadmapName string) (graphDir string, err error) {
 	roadmapDir, valErr := utils.GetRoadmapDir(roadmapName)
 	if valErr != nil {
-		// Chained with a second %w, not rendered with %v: GetRoadmapDir names
-		// WHICH rule the name broke (reserved, too long, bad characters), and
-		// %v would flatten that sentinel away while rendering identical bytes.
-		// utils.ErrValidation is restated here because this function is also
-		// reached from paths that do not carry it (task #290).
+		// A classification is stated once, by whoever owns the failure.
+		//
+		// GetRoadmapDir refuses a name through utils.ValidateRoadmapName, and
+		// every branch of that function already carries utils.ErrValidation
+		// together with the sentinel naming WHICH rule the name broke
+		// (reserved, hyphen-leading, too long, bad characters). Restating the
+		// classification here therefore added nothing to the chain and cost the
+		// reader a second prefix: `rmp graph query -r CON` rendered
+		// "validation error: validation error: ...", and the roadmap-name
+		// messages SPEC/COMMANDS.md § Roadmap Name Validation publishes WITHOUT
+		// a sentinel gained one on the graph paths alone. Every other command
+		// family returns this error untouched, which is why only graph diverged
+		// (task #325).
+		//
+		// Returning it unchanged keeps both %w-carried sentinels reachable —
+		// the classification for the exit code, the specific rule for a caller
+		// that must discriminate — which is the property task #290 established
+		// here and which this must not undo.
+		if errors.Is(valErr, utils.ErrValidation) {
+			return "", valErr
+		}
+		// The other way GetRoadmapDir fails is an unresolvable home directory,
+		// which carries no classification at all. That one is still classified
+		// here, so its exit code is unchanged.
 		return "", fmt.Errorf("%w: %w", utils.ErrValidation, valErr)
 	}
 
