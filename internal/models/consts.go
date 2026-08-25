@@ -40,6 +40,16 @@ const (
 	// MaxAuditLimit is the maximum number of audit entries that may be requested
 	// in a single list operation. It bounds the CLI --limit flag (exit 6 when
 	// exceeded) and is reused as the server-side cap in the DB layer
-	// (SPEC/COMMANDS.md § Audit List, SPEC/DATABASE.md § Audit Result Limit).
+	// (SPEC/COMMANDS.md § List Audit Log, SPEC/DATABASE.md § Audit Result Limit).
 	MaxAuditLimit = 500
+)
+
+// The floor shared by every --limit
+const (
+	// MinListLimit is the smallest value `--limit` accepts, on every command
+	// that has one. The ceiling differs by command — MaxTaskLimit for
+	// `task list` and `backlog list`, MaxAuditLimit for `audit list` — but the
+	// floor does not, and stating it once is what stops the three refusals
+	// drifting apart about it again (see limit.go).
+	MinListLimit = 1
 )

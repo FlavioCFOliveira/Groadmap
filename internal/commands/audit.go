@@ -211,10 +211,12 @@ func auditList(args []string) error {
 		until = &normalized
 	}
 	if l, ok := result.Flags["Limit"].(int); ok {
-		// Bound the limit to 1..MaxAuditLimit (SPEC/COMMANDS.md § Audit List).
-		// Out-of-range values are rejected with exit code 6.
-		if l < 1 || l > models.MaxAuditLimit {
-			return fmt.Errorf("%w: --limit must be between 1 and %d (got %d)", utils.ErrValidation, models.MaxAuditLimit, l)
+		// Bound the limit to 1..MaxAuditLimit (SPEC/COMMANDS.md § List Audit
+		// Log). Out-of-range values are rejected with exit code 6. The bound is
+		// higher than the one on a task listing and the sentence is the same:
+		// models.ValidateAuditLimit owns both (rmp task 329).
+		if err := models.ValidateAuditLimit(l); err != nil {
+			return err
 		}
 		limit = l
 	}

@@ -56,8 +56,12 @@ func taskList(args []string) error {
 		filter.MinSeverity = &s
 	}
 	if l, ok := result.Flags["Limit"].(int); ok {
-		if l < 1 || l > models.MaxTaskLimit {
-			return fmt.Errorf("%w: limit must be between 1 and %d", utils.ErrValidation, models.MaxTaskLimit)
+		// The bound is not compared here. models.ValidateTaskLimit owns it and
+		// words the refusal, so this command, `backlog list` and `audit list`
+		// publish one sentence differing only in the maximum
+		// (SPEC/COMMANDS.md § List Tasks; rmp task 329).
+		if err := models.ValidateTaskLimit(l); err != nil {
+			return err
 		}
 		filter.Limit = l
 	}

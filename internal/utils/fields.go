@@ -310,19 +310,19 @@ func RequiredFieldMessage(field Field) string {
 // The numeric range rule.
 // ---------------------------------------------------------------------------
 
-// RangedField identifies one of the numeric task fields whose value must fall
-// inside a fixed inclusive range: `priority` and `severity`.
+// RangedField identifies one of the numeric values Groadmap refuses when it
+// falls outside a fixed inclusive range: the task fields `priority` and
+// `severity`, and the `--limit` of a list command.
 //
-// # Why a second type instead of two more Field constants
+// # Why a second type instead of more Field constants
 //
 // Field is the closed set of Groadmap's EIGHT FREE-TEXT fields, and
 // SPEC/COMMANDS.md § Published Field Names in Validation Messages is canonical
 // for it: that table has eight rows, and TestPublishedNamesMatchTheSpecTable
-// compares the constants against it row by row. `priority` and `severity` are
-// not free text, they are not in that table, and the rule that refuses them is
-// not one of the four that section governs. A ninth and tenth Field constant
-// would therefore put the type in contradiction with the specification that
-// defines it.
+// compares the constants against it row by row. None of the values here is free
+// text, none is in that table, and the rule that refuses them is not one of the
+// four that section governs. A ninth Field constant would therefore put the type
+// in contradiction with the specification that defines it.
 //
 // What they DO share with Field is the reason the underlying type is an
 // integer. The name a range refusal publishes is reachable only through a
@@ -338,22 +338,38 @@ func RequiredFieldMessage(field Field) string {
 // assigned must not pass for one.
 type RangedField uint8
 
-// The two numeric fields a range rule governs, one constant per field.
+// The values a range rule governs, one constant per name a refusal publishes.
+//
+// FieldListLimit serves all three commands that publish a `--limit`, because the
+// three publish one NAME. Their maxima genuinely differ — `task list` and
+// `backlog list` cap at 100, `audit list` at 500 — but a bound is not part of a
+// name: NumericRangeMessage takes it as a parameter, so one constant words all
+// three sentences without pretending the caps are equal (rmp task 329).
+//
+// The zero value is deliberately not a field, as above.
 const (
 	FieldTaskPriority RangedField = iota + 1
 	FieldTaskSeverity
+	FieldListLimit
 )
 
-// rangedNames maps each RangedField to the name its refusal publishes. As with
-// publishedNames above, that is the lowercase name of the database column which
-// stores the value (SPEC/DATABASE.md), and it is the same word the flag uses,
-// which is why no separate flag spelling is needed here.
+// rangedNames maps each RangedField to the name its refusal publishes. Each is
+// the lowercase word the flag uses with its leading `--` dropped, so a refusal
+// names the VALUE that broke the rule and never the flag that carried it — the
+// same boundary SPEC/COMMANDS.md § Published Field Names in Validation Messages
+// draws for the free-text fields, and the axis on which `audit list` used to
+// disagree with `task list` and `backlog list`.
+//
+// For `priority` and `severity` the word is also the database column that stores
+// the value (SPEC/DATABASE.md). `limit` stores nothing — it bounds a result set
+// — so the flag's own word is the whole of its name.
 //
 // Index 0 is empty on purpose: it is the zero value of RangedField, which names
 // no field.
 var rangedNames = [...]string{
 	FieldTaskPriority: "priority",
 	FieldTaskSeverity: "severity",
+	FieldListLimit:    "limit",
 }
 
 // String returns the field's published name, so a RangedField can be written
@@ -394,14 +410,26 @@ func (f RangedField) String() string {
 // and because it names the field the way every other validation message in
 // Groadmap names one: the published name first, then what is wrong with it.
 //
+// # The same split, a second time
+//
+// `--limit` had repeated it across three commands: `task list` and
+// `backlog list` refused an out-of-range value as
+// `limit must be between 1 and 100`, while `audit list` refused it as
+// `--limit must be between 1 and 500 (got 0)`. Two of those differences were
+// accidental — the `--` prefix, and whether the offending value was echoed —
+// and one, the maximum, is real, because the two caps are genuinely different
+// numbers. The three now take the sentence from here and differ in the bound
+// alone (rmp task 329).
+//
 // # Why the message and not the check
 //
 // This returns the SENTENCE and not an error, and it performs no comparison.
-// The bounds check belongs to the domain type that owns the field —
-// models.ValidatePriority and models.ValidateSeverity are the only two callers —
-// and this package must not import models. What is shared here is the one thing
-// that must not be written twice: the words. Compare RequiredFieldMessage above,
-// which exists for exactly the same reason.
+// The bounds check belongs to the package that owns the value, which is
+// internal/models: ValidatePriority, ValidateSeverity, ValidateTaskLimit and
+// ValidateAuditLimit are the callers, and this package must not import models.
+// What is shared here is the one thing that must not be written twice: the
+// words. Compare RequiredFieldMessage above, which exists for exactly the same
+// reason.
 //
 // Its wording is listed in the gate in published_field_names_test.go, so a
 // second spelling introduced in any other production file is a test failure.

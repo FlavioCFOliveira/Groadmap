@@ -47,6 +47,7 @@ var allSentinels = []error{
 	ErrInvalidTaskType, ErrInvalidTaskStatus, ErrInvalidStatus, ErrInvalidType,
 	ErrInvalidCurrentStatus, ErrInvalidTargetStatus, ErrCannotTransition,
 	ErrPriorityOutOfRange, ErrSeverityOutOfRange, ErrInvalidCommitHash,
+	ErrTaskLimitOutOfRange, ErrAuditLimitOutOfRange,
 	ErrInvalidSprintStatus, ErrInvalidSprintOrder,
 	ErrInvalidAuditOperation, ErrInvalidEntityType, ErrInvalidOperation,
 	ErrEntityIDNotPositive, ErrInvalidCommentType,
@@ -191,6 +192,22 @@ func dedupCases(t *testing.T) []dedupCase {
 			err:           mustErr("update severity", (&TaskUpdate{Severity: &outOfRange}).Validate()),
 			wantMsg:       "validation error: severity must be between 0 and 9, got 42",
 			wantSentinels: []error{utils.ErrValidation, ErrSeverityOutOfRange},
+		},
+		{
+			// The `--limit` range rule, converged by rmp task 329. The two
+			// bounds differ and the sentence does not: that is the whole of
+			// what the task fixed, and asserting both messages side by side is
+			// what keeps the difference confined to the number.
+			name:          "ValidateTaskLimit",
+			err:           mustErr("task limit", ValidateTaskLimit(0)),
+			wantMsg:       "validation error: limit must be between 1 and 100, got 0",
+			wantSentinels: []error{utils.ErrValidation, ErrTaskLimitOutOfRange},
+		},
+		{
+			name:          "ValidateAuditLimit",
+			err:           mustErr("audit limit", ValidateAuditLimit(501)),
+			wantMsg:       "validation error: limit must be between 1 and 500, got 501",
+			wantSentinels: []error{utils.ErrValidation, ErrAuditLimitOutOfRange},
 		},
 		{
 			name: "AuditEntry.Validate/operation",

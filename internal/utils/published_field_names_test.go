@@ -57,7 +57,9 @@ import (
 //
 // A name preceded by a hyphen is a FLAG and is left alone: a message about a
 // missing or unknown flag keeps the flag's spelling, which the SPEC states
-// explicitly and acceptance criterion 5 pins.
+// explicitly and acceptance criterion 5 pins. The one class that opts out of
+// that exemption is the numeric range rule, which has no missing-flag message
+// for the exemption to protect; see governedRule.flagSpellingIsADefect.
 
 // definitionFile is the one production file allowed to spell a governed message
 // template. It is the shared definition itself.
@@ -89,9 +91,10 @@ const definitionFile = "internal/utils/fields.go"
 // only worth the classes it is told about.
 //
 // One such rule has since arrived, and it is NOT in this list: the numeric range
-// rule governs `priority` and `severity`, which are not free-text fields and are
-// not in the SPEC table these five classes come from, so it carries its own
-// subject set. See numericRangeFragment below.
+// rule governs `priority`, `severity` and the `--limit` of a list command, none
+// of which is a free-text field and none of which is in the SPEC table these
+// five classes come from, so it carries its own subject set. See
+// numericRangeFragment below.
 var freeTextFragments = []string{
 	"the value is not valid UTF-8",
 	"control characters are not allowed",
@@ -120,27 +123,34 @@ var freeTextFragments = []string{
 // listing its distinguishing words here is what makes a THIRD spelling fail
 // instead of quietly joining the other two.
 //
-// # Why the scope is priority and severity, and nothing else
+// # The width of the class, and why it grew
 //
 // The subject set for this class comes from declaredRangedFields, so the gate
-// recognises `priority` and `severity` and no other name. That is deliberate and
-// it is not an oversight.
+// recognises exactly the names that table declares and no others. That is
+// deliberate, and it is the mechanism by which the class widens.
 //
-// Groadmap words several other numeric ranges, and they diverge among themselves
-// today: `--limit` is refused as `limit must be between 1 and N` by `task list`
-// and `backlog list` but as `--limit must be between 1 and N (got N)` by
-// `audit list`; `--entity-id` and `--max-tasks` word theirs a third way again;
-// `--order` states its bound as prose rather than as a range at all; and the
-// commit-hash length rule words a range of its own. Every one of those is a live
-// divergence with a task of its own. Widening this list to reach
-// them BEFORE those tasks converge them would not detect a new defect — it would
-// fail the build for defects this gate's own task did not fix, which is a broken
-// build, not a gate.
+// It was `priority` and `severity` alone until rmp task 329, and the note here
+// said so: `--limit` was then refused as `limit must be between 1 and N` by
+// `task list` and `backlog list` but as `--limit must be between 1 and N (got N)`
+// by `audit list`, a live divergence with a task of its own, and widening the
+// list to reach it before that task converged it would have failed the build for
+// a defect this gate's own task did not fix. Task 329 converged the three onto
+// utils.NumericRangeMessage, and the subject set widened exactly as promised: one
+// line, FieldListLimit in the declared table, with no fragment and no name
+// spelled here.
 //
-// So the class is watched at the width the rule it governs actually has today.
-// When `--limit` and the rest are converged onto utils.NumericRangeMessage, the
-// widening is one line: add their names to the declared table the subject set is
-// built from. Nothing here needs to change for that, which is the point.
+// One thing DID have to change, and it is the axis the promise did not cover.
+// Half of what `audit list` got wrong was the `--` prefix, and the hyphen
+// exemption this file applies everywhere else would have let that half back in
+// unreported. governedRule.flagSpellingIsADefect turns the exemption off for this
+// class, and this class only, for the reason recorded there.
+//
+// What is still outside the class is outside it for the same reason as before.
+// `--entity-id` and `--max-tasks` word their ranges their own way; `--order`
+// states its bound as prose rather than as a range at all; and the commit-hash
+// length rule words a range of its own. Each is a separate question with a task
+// of its own, and each is pinned as a must-PASS case below so that the boundary
+// is asserted rather than assumed.
 const numericRangeFragment = "must be between"
 
 // governedRule is one message class this gate watches: the words that identify
@@ -152,9 +162,30 @@ const numericRangeFragment = "must be between"
 // empty — and `title must be between 0 and 9` is not one either. Pairing each
 // wording with its own fields is what keeps the gate reporting only what it is
 // actually able to reason about.
+//
+// # flagSpellingIsADefect
+//
+// The general rule of this file is that a name preceded by a hyphen is a FLAG
+// and is left alone, because a message about a MISSING or UNKNOWN flag keeps the
+// flag's own spelling and SPEC/COMMANDS.md § Published Field Names in Validation
+// Messages says so explicitly.
+//
+// The range class has no such message. Its wording is only ever about a VALUE
+// that arrived and fell outside its bounds, so there is no legitimate refusal in
+// this class that names a flag, and `--limit must be between 1 and 500 (got 0)`
+// is not the flag spelling of a rule — it is the second wording of one, which is
+// the very defect rmp task 329 removed. For this class alone, therefore, the
+// flag spelling of a subject is itself a subject, so reintroducing it fails
+// instead of slipping through the hyphen exemption.
+//
+// The exemption still applies to every other name: `--entity-id must be between`
+// is not matched, because `entity-id` is not one of this class's subjects at all.
 type governedRule struct {
 	fragment string
 	subjects []string
+	// flagSpellingIsADefect adds the `--` spelling of every subject to the
+	// alternation, instead of exempting it as a flag name.
+	flagSpellingIsADefect bool
 }
 
 // governedRules is every class the gate watches, built from the declared field
@@ -177,7 +208,11 @@ func buildGovernedRules() []governedRule {
 	for _, fragment := range freeTextFragments {
 		rules = append(rules, governedRule{fragment: fragment, subjects: freeTextSubjects})
 	}
-	rules = append(rules, governedRule{fragment: numericRangeFragment, subjects: rangedSubjects})
+	rules = append(rules, governedRule{
+		fragment:              numericRangeFragment,
+		subjects:              rangedSubjects,
+		flagSpellingIsADefect: true,
+	})
 	return rules
 }
 
@@ -216,7 +251,8 @@ func TestNoValidationMessageIsBuiltFromAFieldNameLiteral(t *testing.T) {
 					"  utils.RequiredFieldMessage all take a utils.Field and spell the message once\n"+
 					"  (SPEC/COMMANDS.md § Published Field Names in Validation Messages, acceptance\n"+
 					"  criterion 6). utils.NumericRangeMessage does the same for the range rule on\n"+
-					"  priority and severity. A constructor added for a new class belongs here too.",
+					"  priority, severity and a list command's --limit. A constructor added for a\n"+
+					"  new class belongs here too.",
 					rel, lit.line, reason, lit.text)
 			}
 		}
@@ -291,6 +327,13 @@ func TestTheGateDetectsTheDefectItWatchesFor(t *testing.T) {
 		`severity must be between 0 and 9`,
 		`%w: invalid priority: must be between 0 and 9 (got %d)`,
 		`%w: %s must be between %d and %d, got %d`,
+		// The same class, widened by rmp task 329. These two are verbatim the
+		// literals `task list`/`backlog list` and `audit list` carried until the
+		// three converged, and they are the two shapes a call site would most
+		// plausibly reintroduce: the bare name, and the flag spelling that the
+		// hyphen exemption would otherwise wave through.
+		`%w: limit must be between 1 and %d`,
+		`%w: --limit must be between 1 and %d (got %d)`,
 	}
 	for _, text := range mustFlag {
 		if violation(text) == "" {
@@ -320,13 +363,19 @@ func TestTheGateDetectsTheDefectItWatchesFor(t *testing.T) {
 		// The boundaries of the fifth class. The first group is every OTHER
 		// numeric range the application words today: each is a live divergence
 		// with a task of its own, and this gate must not fail the build for it
-		// (see numericRangeFragment for why the scope stops here).
-		`%w: limit must be between 1 and %d`,
-		`%w: --limit must be between 1 and %d (got %d)`,
+		// (see numericRangeFragment for why the scope stops where it does).
+		// Note that the flag spellings here are NOT exempted by the hyphen rule
+		// — this class opts out of it — they simply name nothing this class
+		// governs, which is the boundary being asserted.
 		`%w: --entity-id must be between 1 and %d (got %d)`,
 		`%w: --max-tasks must be between 1 and %d (got %d)`,
 		`%w: commit hash must be between %d and %d hexadecimal characters, got %d: %w`,
 		`%w: --port must be an integer between %d and %d (got %d)`,
+		// And the word boundary on the newest subject, in both directions: a
+		// longer word ENDING in `limit` is not `limit`, whether it is written
+		// with a hyphen or without.
+		`%w: rate-limit must be between 1 and %d`,
+		`%w: sublimit must be between 1 and %d`,
 		// And the two directions of the per-class subject sets: a free-text
 		// wording about a ranged field, and a range wording about a free-text
 		// field. Neither is a message this gate can reason about, and pairing
@@ -414,8 +463,13 @@ var fieldNamingMatchers = buildFieldNamingMatchers()
 func buildFieldNamingMatchers() []fieldNamingMatcher {
 	matchers := make([]fieldNamingMatcher, 0, len(governedRules))
 	for _, rule := range governedRules {
-		quoted := make([]string, 0, len(rule.subjects)+1)
+		quoted := make([]string, 0, 2*len(rule.subjects)+1)
 		for _, name := range rule.subjects {
+			// The flag spelling first, so the alternation prefers the longer
+			// match and the failure message names what was actually written.
+			if rule.flagSpellingIsADefect {
+				quoted = append(quoted, regexp.QuoteMeta("--"+name))
+			}
 			quoted = append(quoted, regexp.QuoteMeta(name))
 		}
 		quoted = append(quoted, stringVerbPattern)
@@ -470,6 +524,10 @@ func violation(text string) string {
 		subject := hit[1]
 		if strings.HasPrefix(subject, "%") {
 			return "it interpolates the field name through " + subject + " in front of " + strconv.Quote(m.fragment)
+		}
+		if strings.HasPrefix(subject, "--") {
+			return "it names the flag " + strconv.Quote(subject) + " where the field name belongs, in front of " +
+				strconv.Quote(m.fragment)
 		}
 		return "it spells the field name " + strconv.Quote(subject) + " in front of " + strconv.Quote(m.fragment)
 	}

@@ -954,10 +954,17 @@ rmp task ls -r <name> [OPTIONS]
 **Error Conditions:**
 | Input | Exit Code | stderr |
 |-------|-----------|--------|
+| `--limit` `< 1` or `> 100` | 6 | `Error: validation error: limit must be between 1 and 100, got N` |
 | Invalid `--type` value | 6 | `Error: validation error: invalid task type: "X"` |
 | Invalid `--sort` value | 6 | `Error: validation error: --sort must be one of: priority, created, status, severity` |
 | Invalid `--created-since` format | 6 | `Error: validation error: --created-since: invalid date format: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01): "X"` |
 | Invalid `--created-until` format | 6 | `Error: validation error: --created-until: invalid date format: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01): "X"` |
+
+The `--limit` refusal is worded by the same rule that words it on
+`rmp backlog list` and `rmp audit list` (see `§ List Backlog Tasks` and
+`§ List Audit Log`): one sentence, naming the value and not the flag, echoing
+the value that was refused. The three differ in the maximum alone, because the
+audit log's cap is genuinely a different number.
 
 **JSON Output:** Array of Task objects.
 
@@ -3030,7 +3037,7 @@ rmp audit ls -r <name>
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
-| `--limit` `< 1` or `> 500` | 6 | "Error: validation error: --limit must be between 1 and 500 (got N)" |
+| `--limit` `< 1` or `> 500` | 6 | "Error: validation error: limit must be between 1 and 500, got N" |
 | `--limit` non-integer | 2 | "Error: invalid input: invalid limit: X" |
 | `--entity-id` `< 1` or `> 2147483647` | 6 | "Error: validation error: --entity-id must be between 1 and 2147483647 (got N)" |
 | `--entity-id` non-integer | 2 | "Error: invalid input: invalid entity ID: X" |
@@ -3197,11 +3204,15 @@ rmp backlog ls -r <name> [OPTIONS]
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
+| `--limit` `< 1` or `> 100` | 6 | `Error: validation error: limit must be between 1 and 100, got N` |
 | Invalid `--type` value | 6 | `Error: validation error: invalid task type: "X"` |
 
 An invalid `--type` value is a validation error and MUST exit with code 6,
 consistent with `rmp task list` (see List Tasks above). This is the canonical,
 required behaviour for the command.
+
+`--limit` carries the same bound and the same refusal as `rmp task list`,
+because a backlog listing is a task listing (see `§ List Tasks`).
 
 **Examples:**
 ```bash

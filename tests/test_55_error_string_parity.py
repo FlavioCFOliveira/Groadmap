@@ -787,6 +787,27 @@ class TestErrorStringParity:
             ["task", "list", "-r", r, "--created-until", "next-friday"], 6,
             subs={"X": "next-friday"}, note="task list invalid created-until",
         )
+        # #26b: --limit below the floor. COMMANDS.md § List Tasks publishes this
+        # row from rmp task #329 onwards; until then the section's error table
+        # omitted the --limit line entirely, so the wording `task list` and
+        # `backlog list` shared was invisible to this gate and drifted away from
+        # `audit list` unnoticed. The same key is published by § List Backlog
+        # Tasks and driven again there, for the same reason the generic
+        # invalid-type template is driven from more than one subcommand: the two
+        # commands share one rule and must therefore share one line.
+        self.check(
+            "Error: validation error: limit must be between 1 and 100, got N",
+            ["task", "list", "-r", r, "--limit", "0"], 6, subs={"N": "0"},
+            note="task list limit below floor",
+        )
+        # The ceiling, on the same key: floor and ceiling are one rule and the
+        # published row names both, so driving only one of them would leave half
+        # the row unasserted.
+        self.check(
+            "Error: validation error: limit must be between 1 and 100, got N",
+            ["task", "list", "-r", r, "--limit", "101"], 6, subs={"N": "101"},
+            note="task list limit above ceiling",
+        )
 
     # ------------------------------------------------------------------
     # `task edit`: the generic <field> UTF-8 / control-character templates,
@@ -1751,11 +1772,20 @@ class TestErrorStringParity:
 
     def test_audit_errors(self):
         r = self.roadmap
-        # #96: --limit out of range.
+        # #96: --limit out of range. One sentence with `task list` and
+        # `backlog list`, differing in the maximum alone -- 500 here against
+        # their 100, which is a real difference between the audit log and a task
+        # listing. The `--` prefix and the parenthesised value this row used to
+        # carry were not (rmp task #329).
         self.check(
-            "Error: validation error: --limit must be between 1 and 500 (got N)",
+            "Error: validation error: limit must be between 1 and 500, got N",
             ["audit", "list", "-r", r, "--limit", "501"], 6, subs={"N": "501"},
-            note="audit list limit out of range",
+            note="audit list limit above ceiling",
+        )
+        self.check(
+            "Error: validation error: limit must be between 1 and 500, got N",
+            ["audit", "list", "-r", r, "--limit", "0"], 6, subs={"N": "0"},
+            note="audit list limit below floor",
         )
         # #97: --limit non-integer.
         self.check(
@@ -1862,6 +1892,22 @@ class TestErrorStringParity:
         self.check(
             "Error: validation error: count must be a positive integer",
             ["backlog", "show-next", "0", "-r", r], 6, note="backlog show-next zero count",
+        )
+        # #105b: --limit out of range, the row § List Backlog Tasks publishes
+        # from rmp task #329 onwards. It is the SAME published string as
+        # `task list`'s, which is the point: a backlog listing is a task listing,
+        # so it carries the same ceiling and must carry the same sentence. Both
+        # commands are driven, because a shared corpus key proves the SPEC
+        # publishes one string and not that both binaries print it.
+        self.check(
+            "Error: validation error: limit must be between 1 and 100, got N",
+            ["backlog", "list", "-r", r, "--limit", "0"], 6, subs={"N": "0"},
+            note="backlog list limit below floor",
+        )
+        self.check(
+            "Error: validation error: limit must be between 1 and 100, got N",
+            ["backlog", "list", "-r", r, "--limit", "101"], 6, subs={"N": "101"},
+            note="backlog list limit above ceiling",
         )
 
     # ------------------------------------------------------------------

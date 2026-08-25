@@ -28,9 +28,17 @@ var declaredFields = []Field{
 // for the free-text rules: the gate in published_field_names_test.go builds the
 // names it recognises from this table, so a field brought under the rule is
 // watched by adding it here and nothing else.
+//
+// FieldListLimit is the proof of that claim. When rmp task 318 factored the rule
+// out it deliberately watched `priority` and `severity` alone, and recorded that
+// bringing `--limit` under the rule later would be one line here. It was
+// (rmp task 329): the constant below is the whole of the gate's extension, and
+// the three commands that publish a `--limit` are now held to one sentence by
+// the same two tests that hold priority and severity to theirs.
 var declaredRangedFields = []RangedField{
 	FieldTaskPriority,
 	FieldTaskSeverity,
+	FieldListLimit,
 }
 
 // TestRangedFieldsPublishOneUsableNameEach is to RangedField what

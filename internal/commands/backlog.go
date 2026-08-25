@@ -116,8 +116,10 @@ func backlogList(args []string) error {
 		filter.MinPriority = &p
 	}
 	if l, ok := result.Flags["Limit"].(int); ok {
-		if l < 1 || l > models.MaxTaskLimit {
-			return fmt.Errorf("%w: limit must be between 1 and %d", utils.ErrValidation, models.MaxTaskLimit)
+		// Same bound and same owner as `task list`: a backlog listing is a task
+		// listing (SPEC/COMMANDS.md § List Backlog Tasks; rmp task 329).
+		if err := models.ValidateTaskLimit(l); err != nil {
+			return err
 		}
 		filter.Limit = l
 	}

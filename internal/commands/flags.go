@@ -343,7 +343,7 @@ func isNegativeInteger(s string) bool {
 }
 
 // validateAuditEntityID bounds the audit --entity-id flag to a positive integer
-// in 1..MaxInt32 (SPEC/COMMANDS.md § Audit List). A non-positive or out-of-range
+// in 1..MaxInt32 (SPEC/COMMANDS.md § List Audit Log). A non-positive or out-of-range
 // value is rejected with exit code 6 (ErrValidation).
 func validateAuditEntityID(parsed any) error {
 	id, ok := parsed.(int)
