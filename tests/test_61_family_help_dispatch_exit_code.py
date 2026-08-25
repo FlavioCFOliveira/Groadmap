@@ -29,18 +29,24 @@ Two guards already cover the BEHAVIOUR half and neither covers the help text:
 
 And one guard covers a neighbouring documentation direction:
 
-  * tests/test_60_docs_readme_contract_completeness.py (rmp task #126) -- proves
-    nothing the AI contract publishes goes undocumented in DOCS/commands/*.md
-    and README.md. Its exit-code leg compares the UNION of a family's
-    per-subcommand `exit_codes` against that family's DOCS table. 127 is not in
-    that union: it is emitted by the family DISPATCHER, before any subcommand is
-    resolved, so no subcommand's `exit_codes` carries it and no directional
-    contract->DOCS check can ever demand it. Nor does #126 read plain-text
-    `--help` output at all; its corpora are the markdown pages.
+  * tests/test_60_docs_readme_contract_completeness.py -- proves nothing the AI
+    contract publishes goes undocumented in DOCS/commands/*.md and README.md.
+    Its ORIGINAL exit-code leg (rmp task #126) compares the UNION of a family's
+    per-subcommand `exit_codes` against that family's DOCS table, and 127 is not
+    in that union: it is emitted by the family DISPATCHER, before any subcommand
+    is resolved, so no subcommand's `exit_codes` carries it and no directional
+    contract->DOCS check can ever demand it. That blind spot is why the same
+    omission survived in the DOCS tables after this module had closed it in the
+    help screens; rmp task #326 closed it there too, by giving that module a
+    SECOND, observation-driven leg that consumes `dispatching_commands()` below.
+    Neither of its legs reads plain-text `--help` output: its corpora are the
+    markdown pages.
 
 What no guard held is the join between the two: that the code a command really
 emits appears in the block that command prints when asked for help. That is the
-single property this module adds.
+single property this module adds. The DOCS pages are the neighbouring surface
+and stay with test_60; what crosses the module boundary is the observation, not
+a copy of its result.
 
 DERIVED, NOT TRANSCRIBED
 ------------------------
@@ -58,6 +64,12 @@ source the dispatcher itself is built from:
     token as misuse instead, so it is excluded by observation rather than by an
     exemption list, and a future command that starts dispatching subcommands is
     picked up the day it does.
+
+That probe lives in `ContractProbeFixture.dispatching_commands()`, which is the
+single place in the whole suite where "which commands emit the dispatch code" is
+decided. Both classes here consume it, and so does test_60's dispatcher-level
+DOCS leg (rmp task #326), so no consumer can drift from another or from the
+binary.
 
 A test that repeated the constant would pass for the wrong reason the moment the
 catalogue moved; this one fails.
@@ -137,10 +149,15 @@ def parse_exit_codes_block(help_text, label):
     )
 
 
-class _ContractFixture:
+class ContractProbeFixture:
     """Loads the AI contract once per test method, under this module's own
     HOME so neither the contract nor any probe can touch the invoking user's
-    roadmaps."""
+    roadmaps.
+
+    Public because tests/test_60_docs_readme_contract_completeness.py builds
+    its dispatcher-level DOCS leg on the same fixture and the same probe
+    (rmp task #326), rather than re-deriving either.
+    """
 
     def setup_method(self):
         self.test = GroadmapTestBase()
@@ -193,13 +210,36 @@ class _ContractFixture:
         )
         return names
 
+    # -- the observation, made once and shared ------------------------------
+
+    def dispatching_commands(self):
+        """Probe every command the contract publishes with PROBE_TOKEN and
+        return an insertion-ordered {name: finished subprocess result} holding
+        only the commands OBSERVED to answer with the dispatch-failure code.
+
+        This method is the ONE place in the suite that decides which commands
+        emit that code, and it decides it by running them. Every consumer --
+        the two classes below, and the dispatcher-level DOCS leg in
+        tests/test_60_docs_readme_contract_completeness.py (rmp task #326) --
+        raises its requirement against exactly this set. A second, hand-written
+        list of families would stay green precisely when it drifted from the
+        binary, which is the drift these guards exist to catch.
+        """
+        expected = self.dispatch_failure_code()
+        observed = {}
+        for name in self.command_names():
+            result = self._run([name, PROBE_TOKEN])
+            if result.returncode == expected:
+                observed[name] = result
+        return observed
+
 
 # ---------------------------------------------------------------------------
 # 1. The probe is real: the token names nothing the CLI can resolve.
 # ---------------------------------------------------------------------------
 
 
-class TestProbeTokenIsUnresolvable(_ContractFixture):
+class TestProbeTokenIsUnresolvable(ContractProbeFixture):
 
     def test_probe_token_resolves_to_nothing(self):
         collisions = []
@@ -221,22 +261,18 @@ class TestProbeTokenIsUnresolvable(_ContractFixture):
 # ---------------------------------------------------------------------------
 
 
-class TestHelpListsTheDispatchFailureExitCode(_ContractFixture):
+class TestHelpListsTheDispatchFailureExitCode(ContractProbeFixture):
 
     def test_every_command_that_emits_it_documents_it(self):
         expected = self.dispatch_failure_code()
         problems = []
-        dispatching = []
+        # Observed, never listed: a leaf command (`stats`, `web`, `ai-help`)
+        # refuses the excess token as misuse and never appears here, so nothing
+        # is required of its help.
+        dispatching = list(self.dispatching_commands())
         blocks_parsed = 0
 
-        for name in self.command_names():
-            observed = self._run([name, PROBE_TOKEN]).returncode
-            if observed != expected:
-                # Not a dispatcher: a leaf command refuses the excess token as
-                # misuse. Nothing to require of its help.
-                continue
-            dispatching.append(name)
-
+        for name in dispatching:
             help_result = self._run([name, "--help"], expect_zero=True)
             codes = parse_exit_codes_block(help_result.stdout, f"rmp {name} --help")
             blocks_parsed += 1
@@ -284,18 +320,15 @@ class TestHelpListsTheDispatchFailureExitCode(_ContractFixture):
 # ---------------------------------------------------------------------------
 
 
-class TestUnresolvedSubcommandExitsWithCatalogueCode(_ContractFixture):
+class TestUnresolvedSubcommandExitsWithCatalogueCode(ContractProbeFixture):
 
     def test_probe_exit_code_and_message(self):
         expected = self.dispatch_failure_code()
-        dispatching = []
         problems = []
+        observed = self.dispatching_commands()
+        dispatching = list(observed)
 
-        for name in self.command_names():
-            result = self._run([name, PROBE_TOKEN])
-            if result.returncode != expected:
-                continue
-            dispatching.append(name)
+        for name, result in observed.items():
             wanted = f"unknown {name} subcommand: {PROBE_TOKEN}"
             if wanted not in result.stderr:
                 problems.append(

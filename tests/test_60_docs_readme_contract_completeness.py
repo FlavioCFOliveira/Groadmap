@@ -55,6 +55,37 @@ same as flags: every code the union contains must appear in the table.
 README.md publishes a single application-wide exit-code table, checked
 against the contract's top-level `exit_codes` catalogue the same way.
 
+DECISION: DISPATCHER-LEVEL EXIT CODES (rmp task #326)
+------------------------------------------------------
+The exit-code leg described above is directional AND per-subcommand: it demands
+of a family's DOCS table only what the UNION of that family's subcommand
+`exit_codes` arrays contains. Exit code 127 (`EXIT_CMD_NOT_FOUND`) falls outside
+that union by construction -- the family DISPATCHER emits it before any
+subcommand resolves, so no subcommand object in the contract can publish it.
+Six DOCS pages (task, sprint, backlog, audit, graph and roadmap) therefore
+omitted 127 while every one of those six families really exits 127 for an
+unresolved subcommand, and this module stayed green throughout: not because the
+pages were complete, but because the code was invisible to the only question it
+asked.
+
+The choice this leaves -- teach the guard about dispatcher-level codes, or
+declare in the guard why a DOCS table may carry a code the per-subcommand
+arrays do not publish -- is settled here, in favour of the first. A DOCS
+"## Exit Codes" table is a table of what the command can emit; a code the
+command emits belongs in it whatever layer of the binary emits it, and a guard
+that can never demand such a code is a guard the drift simply walks past.
+
+The gap is closed WITHOUT touching the published contract. `rmp --ai-help` is
+unchanged: the new leg (section 3 below) never asks the contract which commands
+dispatch subcommands, it asks the BINARY, by reusing the probe
+tests/test_61_family_help_dispatch_exit_code.py already performs
+(`ContractProbeFixture.dispatching_commands()`, imported below). So the two
+exit-code legs have two different oracles by design -- the contract for what a
+resolved subcommand can emit, observed behaviour for what the dispatcher in
+front of it emits -- and no module in the suite holds a second, hand-written
+list of dispatching families that could drift from the binary while staying
+green.
+
 EXEMPTION: -h/--help
 ---------------------
 Every subcommand in the registry carries -h/--help through `helpFlag()`
@@ -73,7 +104,8 @@ result set.
 NON-VACUITY
 -----------
 Every comparison asserts a FLOOR on how many items it actually compared
-(subcommand/flag pairs, per-family exit-code entries, README codes), mirroring
+(subcommand/flag pairs, per-family exit-code entries, dispatching families and
+the codes read from each of their tables, README codes), mirroring
 the coverage floors in test_55_error_string_parity.py and the
 minDocumented*/docsMinOperationsFloor floors in
 internal/aihelp/documented_status_values_test.go and
@@ -100,6 +132,14 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests.base_test import GroadmapTestBase, REPO_ROOT
+# The dispatcher-level leg (section 3) reuses test_61's probe rather than
+# repeating it. See "DECISION: DISPATCHER-LEVEL EXIT CODES" above.
+from tests.test_61_family_help_dispatch_exit_code import (
+    DISPATCH_FAILURE_CODE_NAME,
+    MIN_DISPATCHING_COMMANDS,
+    PROBE_TOKEN,
+    ContractProbeFixture,
+)
 
 
 DOCS_COMMANDS_DIR = REPO_ROOT / "DOCS" / "commands"
@@ -132,6 +172,12 @@ SELF_NAMED_SINGLE_SUBCOMMAND_FAMILIES = {"web", "stats", "ai-help"}
 EXEMPT_FLAGS = frozenset({("-h", "--help")})
 
 RUN_TIMEOUT_SECONDS = 30
+
+# The thinnest "## Exit Codes" table on any DOCS page today (roadmap.md) carries
+# five rows, and every one of the nine carries 0. Three is a deliberately slack
+# floor whose only job is to catch a table parser that matched nothing, mirroring
+# MIN_CODES_PER_BLOCK in test_61.
+MIN_CODES_PER_DOCS_TABLE = 3
 
 # ---------------------------------------------------------------------------
 # Extraction: the contract
@@ -454,7 +500,82 @@ class TestContractExitCodesAreFullyDocumentedPerFamily(_ContractFixture):
 
 
 # ---------------------------------------------------------------------------
-# 3. README.md's application-wide Exit Codes table vs. the contract's
+# 3. Dispatcher-level exit codes: a family OBSERVED to emit the dispatch-failure
+#    code for an unresolved subcommand must carry that code in its DOCS table.
+#    See "DECISION: DISPATCHER-LEVEL EXIT CODES" in the module docstring for
+#    why this leg exists and why its oracle is the binary, not the contract.
+# ---------------------------------------------------------------------------
+
+
+class TestDispatcherExitCodeIsDocumentedPerFamily(ContractProbeFixture):
+    """The set of families checked here is DERIVED, never transcribed: it is
+    whatever `ContractProbeFixture.dispatching_commands()` observes when it
+    probes every command the contract publishes with an unresolved token. A
+    family that stops dispatching drops out of the requirement on its own, and
+    a family that starts dispatching is picked up the day it does."""
+
+    def test_every_dispatching_family_documents_the_dispatch_code(self):
+        expected = self.dispatch_failure_code()
+        # Observed by running the binary. A leaf command (`stats`, `web`,
+        # `ai-help`) refuses the excess token as misuse instead of failing to
+        # dispatch, so it never appears here and nothing is required of its
+        # page -- an exclusion by observation, not by an exemption list.
+        dispatching = list(self.dispatching_commands())
+        problems = []
+        tables_read = 0
+
+        for family in dispatching:
+            assert family in FAMILY_DOC_FILE, (
+                f"`rmp {family} {PROBE_TOKEN}` exits {expected} "
+                f"({DISPATCH_FAILURE_CODE_NAME}) but FAMILY_DOC_FILE in "
+                f"{os.path.basename(__file__)} maps no DOCS page to "
+                f"{family!r}, so its table cannot be checked -- add an entry"
+            )
+            doc_file = FAMILY_DOC_FILE[family]
+            text = (DOCS_COMMANDS_DIR / doc_file).read_text(encoding="utf-8")
+            documented = parse_exit_code_table(text, f"DOCS/commands/{doc_file}")
+            tables_read += 1
+
+            assert len(documented) >= MIN_CODES_PER_DOCS_TABLE, (
+                f"DOCS/commands/{doc_file}: only {len(documented)} code(s) "
+                f"parsed from the '## Exit Codes' table ({sorted(documented)}); "
+                f"expected at least {MIN_CODES_PER_DOCS_TABLE} -- the table "
+                f"parser is broken, which would make this comparison vacuous"
+            )
+            assert 0 in documented, (
+                f"DOCS/commands/{doc_file}: the parsed '## Exit Codes' table "
+                f"{sorted(documented)} omits 0, which every command page "
+                f"documents -- the parser is reading the wrong table"
+            )
+
+            if expected not in documented:
+                problems.append(
+                    f"DOCS/commands/{doc_file}: the `{family}` family's Exit "
+                    f"Codes table lists {sorted(documented)} and omits "
+                    f"{expected} ({DISPATCH_FAILURE_CODE_NAME}), yet "
+                    f"`rmp {family} {PROBE_TOKEN}` exits {expected}"
+                )
+
+        assert len(dispatching) >= MIN_DISPATCHING_COMMANDS, (
+            f"only {len(dispatching)} command(s) ({dispatching}) were observed "
+            f"exiting {expected} for an unresolved subcommand; expected at "
+            f"least {MIN_DISPATCHING_COMMANDS} -- either dispatch stopped "
+            f"producing {DISPATCH_FAILURE_CODE_NAME} or the probe stopped "
+            f"reaching the dispatcher, and this check has gone vacuous"
+        )
+        assert tables_read == len(dispatching), (
+            f"read {tables_read} '## Exit Codes' table(s) for "
+            f"{len(dispatching)} dispatching command(s)"
+        )
+        assert not problems, (
+            f"{len(problems)} DOCS command page(s) omit the exit code their "
+            f"family actually emits for an unresolved subcommand:\n  "
+            + "\n  ".join(problems)
+        )
+
+
+# ---------------------------------------------------------------------------
+# 4. README.md's application-wide Exit Codes table vs. the contract's
 #    top-level `exit_codes` catalogue.
 # ---------------------------------------------------------------------------
 

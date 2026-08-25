@@ -982,5 +982,6 @@ All commands follow these conventions:
 | 4 | Sprint or comment not found |
 | 5 | `--order` value already used by another sprint (`create` / `update`) |
 | 6 | Validation error: bad enum; `--max-tasks` outside 1-10000; closing while SPRINT/DOING/TESTING tasks remain without `--force`; opening while another sprint is OPEN; changing `--order` on a CLOSED sprint; a comment type outside the four sprint values; a comment body over 4096 characters or containing control characters |
+| 127 | Unknown subcommand |
 
 The comment subcommands split the two failure kinds along a consistent line. A missing or unusable **body** is a misuse error (exit 2), because the command was invoked without the input it needs; an **oversized or control-character** body is a validation error (exit 6), because the input arrived and was rejected on its content.

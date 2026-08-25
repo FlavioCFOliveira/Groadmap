@@ -422,3 +422,4 @@ All commands follow these conventions:
 | 3 | No roadmap selected (`-r` missing/required) |
 | 4 | Roadmap not found |
 | 6 | Validation error: invalid operation, entity-type, or date format; `--limit` out of range 1-500; `--entity-id` out of range 1-2147483647 |
+| 127 | Unknown subcommand |

@@ -118,6 +118,7 @@ Both subcommands write a JSON array of task objects to stdout. Every returned ta
 | 2 | Misuse: non-integer `--limit` on `list` (rejected by the flag parser) |
 | 3 | No roadmap specified (`-r` / `--roadmap` missing) |
 | 6 | Validation error: bad `--type` or `--sort` value; out-of-range `--limit`; non-positive or non-numeric `count` on `show-next` |
+| 127 | Unknown subcommand |
 
 ## See Also
 
