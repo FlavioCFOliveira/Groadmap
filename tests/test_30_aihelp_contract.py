@@ -467,6 +467,88 @@ class TestAIHelpHintDeduplication:
         assert text.startswith(HINT_LINE + "\n"), "with AI_AGENT=1, env hint must come first"
         print("✓ AI_AGENT=1 + error: hint emitted exactly once at top")
 
+    def test_suppressed_hint_leaves_no_trailing_blank_line(self):
+        """Suppressing the hint suppresses the blank line that introduced it.
+
+        SPEC/HELP.md § Stderr part order defines part 4 as "One blank line,
+        then the AI-agent hint line", present "unless a suppression rule
+        below applies". The blank line and the hint are one part, so under
+        the deduplication rule both go.
+
+        This asserts the whole of stderr byte for byte. The orphan blank
+        line this guards against carries no text of its own, so a substring
+        check cannot see it: only the exact final bytes can.
+        """
+        code, _, err = _run_raw(
+            self.cli,
+            ["task", "get", "99999", "-r", "nonexistent_roadmap"],
+            env_overrides={"HOME": str(self.test.home_dir), "AI_AGENT": "1"},
+        )
+        assert code == 4, f"expected exit 4 (not found), got {code}"
+
+        expected = (
+            HINT_LINE.encode("utf-8") + b"\n\n"
+            + b'Error: resource not found: roadmap "nonexistent_roadmap"\n'
+        )
+        assert err == expected, (
+            "AI_AGENT=1 + not-found: stderr must end at the error line, with no orphan "
+            f"blank line where the suppressed hint would have been.\n got: {err!r}\nwant: {expected!r}"
+        )
+        print("✓ AI_AGENT=1 + error: stderr ends at the error line, no trailing blank line")
+
+    def test_suppressed_hint_on_dispatch_failure_leaves_no_trailing_blank_line(self):
+        """Same rule on the layout that also carries the recovery help.
+
+        A dispatch failure inserts part 3 (a blank line and the recovery
+        help) between the error line and the suppressed part 4, so the last
+        thing on stderr must be the help body's own final line.
+        """
+        code, out, err = _run_raw(
+            self.cli,
+            ["nadadisto"],
+            env_overrides={"HOME": str(self.test.home_dir), "AI_AGENT": "1"},
+        )
+        assert code == 127, f"expected exit 127 (unresolved command), got {code}"
+        assert out == b"", f"a failing invocation must write nothing to stdout; got {out!r}"
+
+        assert err.startswith(HINT_LINE.encode("utf-8") + b"\n\n"), (
+            f"with AI_AGENT=1 the hint must open stderr; got {err[:120]!r}"
+        )
+        assert err.count(HINT_LINE.encode("utf-8")) == 1, (
+            "the hint must appear exactly once; the recovery help carries no banner"
+        )
+        expected_tail = b'Use "rmp [command] --help" for more information about a command.\n'
+        assert err.endswith(expected_tail), (
+            "AI_AGENT=1 + dispatch failure: stderr must end on the recovery help's last line, "
+            f"with no orphan blank line after it.\n final 80 bytes: {err[-80:]!r}"
+        )
+        print("✓ AI_AGENT=1 + dispatch failure: stderr ends at the recovery help, no trailing blank line")
+
+    def test_unsuppressed_hint_keeps_its_leading_blank_line(self):
+        """The control: when no suppression rule applies, part 4 is whole.
+
+        Without this, deleting the separating blank line outright would
+        satisfy the two assertions above. Here AI_AGENT is unset, so the
+        trailing hint is the one that fires and it must still be introduced
+        by exactly one blank line.
+        """
+        code, _, err = _run_raw(
+            self.cli,
+            ["task", "get", "99999", "-r", "nonexistent_roadmap"],
+            env_overrides={"HOME": str(self.test.home_dir)},
+        )
+        assert code == 4, f"expected exit 4 (not found), got {code}"
+
+        expected = (
+            b'Error: resource not found: roadmap "nonexistent_roadmap"\n'
+            + b"\n" + HINT_LINE.encode("utf-8") + b"\n\n"
+        )
+        assert err == expected, (
+            "AI_AGENT unset + not-found: the trailing hint must be preceded by one blank line.\n"
+            f" got: {err!r}\nwant: {expected!r}"
+        )
+        print("✓ AI_AGENT unset + error: the trailing hint keeps its leading blank line")
+
 
 class TestAIHelpFlagPrecedence:
     """--ai-help wins over action flags and other arguments."""

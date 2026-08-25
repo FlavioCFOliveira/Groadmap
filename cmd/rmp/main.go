@@ -235,8 +235,17 @@ func handleError(err error) int {
 //     contract; pointing them at it again would be recursive noise.
 //
 //  2. When the AI_AGENT=1 env-var path already wrote the hint at the
-//     top of stderr (handled implicitly by EmitHintOnce's sync.Once:
+//     top of stderr (handled implicitly by the emitter's sync.Once:
 //     the second call here becomes a no-op).
+//
+// Under either rule, part 4 disappears WHOLE — the blank line that
+// introduces the hint goes with it, because SPEC/HELP.md § Stderr
+// part order defines part 4 as "One blank line, then the AI-agent
+// hint line", a single unit. Rule (1) returns before writing
+// anything; rule (2) is enforced inside aihelp.EmitTrailingHintOnce,
+// which writes the separator inside the guarded closure alongside the
+// hint. Neither the separator nor the hint is written by this
+// function directly, so the two cannot drift apart.
 //
 // Note: case (1) covers `rmp --ai-help` / `rmp ai-help` etc., where
 // markInvoked() flipped the sentinel inside aihelp.Generate. For
@@ -266,17 +275,17 @@ func writeFailureReport(w io.Writer, err error) {
 		}
 	}
 
-	// Part 4. The hint stays last on every error path.
+	// Part 4. The hint stays last on every error path that keeps it.
 	if aihelp.WasInvoked() {
 		return
 	}
-	// EmitHintOnce internally writes the hint plus a trailing newline
-	// pair. To get the SPEC shape "…, blank line, hint" we prepend the
-	// separating blank line here. Subsequent callers in the same
-	// invocation (rare — handleError runs at most once) are deduped by
-	// sync.Once and produce nothing.
-	fmt.Fprintln(w)
-	aihelp.EmitHintOnce(w, commands.AIBannerLine)
+	// EmitTrailingHintOnce writes the separating blank line, the hint
+	// and the trailing newline as one guarded unit, so the "…, blank
+	// line, hint" shape the SPEC asks for is produced in full or not at
+	// all. Subsequent callers in the same invocation (rare — handleError
+	// runs at most once) are deduped by sync.Once and produce nothing,
+	// not even the separator.
+	aihelp.EmitTrailingHintOnce(w, commands.AIBannerLine)
 }
 
 // printHelp prints the main help text.

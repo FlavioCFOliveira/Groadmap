@@ -12,7 +12,11 @@
 //
 //  2. Error-path trailing hint (SPEC/HELP.md § Error message format):
 //     every "Error: ..." line written to stderr is followed by one
-//     blank line and the hint.
+//     blank line and the hint, unless a suppression rule removes
+//     them. The blank line and the hint are ONE unit: SPEC/HELP.md
+//     § Stderr part order lists them together as part 4 ("One blank
+//     line, then the AI-agent hint line"), so a suppressed hint takes
+//     its separator with it.
 //
 // The two situations share text but must coordinate so that, in the
 // invocation where BOTH would fire (AI_AGENT=1 + failure), the hint is
@@ -23,11 +27,25 @@
 //
 // Design:
 //
-//   - A package-level sync.Once guards the EmitHintOnce helper. After
-//     the first successful Write, every subsequent call is a no-op.
-//     This is the deduplication primitive: both wiring sites call
-//     EmitHintOnce unconditionally (within their own SPEC gates), and
-//     the second caller naturally elides its output.
+//   - A package-level sync.Once guards both emitters. After the first
+//     successful Write, every subsequent call is a no-op. This is the
+//     deduplication primitive: the wiring sites call an emitter
+//     unconditionally (within their own SPEC gates), and the second
+//     caller naturally elides its output.
+//
+//   - There are two emitters because the hint appears in two
+//     positions, and each owns the separator its position needs.
+//     EmitHintOnce writes the hint at the top of stderr (part 1 of
+//     SPEC/HELP.md § Stderr part order), where nothing precedes it
+//     and no separator is wanted. EmitTrailingHintOnce writes one
+//     blank line and then the hint (part 4), where the blank line
+//     separates it from the error line or the recovery help above.
+//
+//     The separator belongs to the emitter and not to the caller,
+//     because it must be governed by the same condition as the hint.
+//     A caller that wrote its own separator before calling would
+//     still write it when the Once had already been consumed,
+//     leaving stderr ending on a blank line that separates nothing.
 //
 //   - The Once is reset between tests via ResetHintForTesting (used in
 //     the same way as ResetForTesting clears the invocation sentinel).
@@ -72,14 +90,24 @@ import (
 	"sync"
 )
 
-// hintOnce guards EmitHintOnce so the hint is written at most once
+// hintOnce guards both emitters so the hint is written at most once
 // per process. The zero value is ready to use.
+//
+// It is the SINGLE condition that governs the hint AND the blank line
+// that separates it from whatever precedes it, because both are
+// written inside the closure it guards.
 var hintOnce sync.Once
 
 // EmitHintOnce writes hintText followed by a newline and a blank line
 // (a single "\n" after the hint, then one more "\n") to w, but only
-// the first time it is called in the current process. Subsequent
-// calls are no-ops regardless of which goroutine invokes them.
+// the first time an emitter in this package is called in the current
+// process. Subsequent calls — to this function or to
+// EmitTrailingHintOnce — are no-ops regardless of which goroutine
+// invokes them.
+//
+// This is the leading form, part 1 of SPEC/HELP.md § Stderr part
+// order: the env-var hint that opens stderr under AI_AGENT=1. It
+// takes no separator because nothing precedes it.
 //
 // The output shape is exactly two lines (the hint line itself plus
 // the trailing blank line):
@@ -89,29 +117,73 @@ var hintOnce sync.Once
 //
 // The blank line is intentional: SPEC/HELP.md § AI_AGENT environment
 // variable mandates one blank line between the hint and any
-// subsequent stderr content (Error: lines, warnings). The error-path
-// caller (which writes the hint AFTER an error line) similarly
-// benefits from a trailing blank: it is the last thing on stderr and
-// terminal users see a clean newline before the shell prompt.
+// subsequent stderr content (Error: lines, warnings).
+func EmitHintOnce(w io.Writer, hintText string) {
+	emitHintOnce(w, "", hintText)
+}
+
+// EmitTrailingHintOnce writes one blank line, then hintText, then a
+// newline and a blank line, to w — but only the first time an emitter
+// in this package is called in the current process. Subsequent calls
+// — to this function or to EmitHintOnce — write NOTHING AT ALL, the
+// separating blank line included.
+//
+// This is the trailing form, part 4 of SPEC/HELP.md § Stderr part
+// order: the hint that closes stderr on a failing invocation, after
+// the "Error: " line and after the recovery help when there is one.
+// The leading blank line separates it from that preceding content.
+//
+// That separator is written here, inside the same sync.Once as the
+// hint, rather than by the caller. SPEC part 4 is one unit that is
+// present or absent as a whole, and only a shared guard can deliver
+// that: a caller that prepended the blank line itself would emit it
+// even when the deduplication rule elides the hint, leaving stderr
+// ending on a blank line the contract does not account for.
+//
+// The output shape is exactly three lines:
+//
+//	<blank line>
+//	AI agents: run `rmp --ai-help` for a machine-readable command contract.
+//	<blank line>
+//
+// The trailing blank line matches the leading form's, so an agent
+// splitting stderr sees the same two-line hint block in both
+// positions; terminal users also get a clean newline before the
+// shell prompt.
+func EmitTrailingHintOnce(w io.Writer, hintText string) {
+	emitHintOnce(w, "\n", hintText)
+}
+
+// emitHintOnce is the one guarded write both exported emitters share.
+//
+// lead is the text that precedes the hint line: empty for the leading
+// form, a single newline (that is, the separating blank line) for the
+// trailing form. Keeping lead inside the closure is the entire point
+// of this helper — it makes the separator and the hint one indivisible
+// unit under one condition.
+//
+// A nil writer is rejected before the Once is consulted, so a caller
+// with nowhere to write cannot silently spend the process's single
+// emission and mute a later caller that does have a writer.
 //
 // Write errors are silently ignored: stderr is best-effort. A failure
 // here cannot be reported anywhere (we are already the diagnostic
 // channel) and aborting the process for a broken-pipe stderr would
 // turn a cosmetic problem into a behavioural one.
-func EmitHintOnce(w io.Writer, hintText string) {
+func emitHintOnce(w io.Writer, lead, hintText string) {
 	if w == nil {
 		return
 	}
 	hintOnce.Do(func() {
 		// Single Fprintf to minimise the chance of interleaving with
-		// concurrent stderr writers; the cost over Fprintln+Fprintln
-		// is one allocation in exchange for atomicity.
-		fmt.Fprintf(w, "%s\n\n", hintText)
+		// concurrent stderr writers; the cost over separate calls is
+		// one allocation in exchange for atomicity.
+		fmt.Fprintf(w, "%s%s\n\n", lead, hintText)
 	})
 }
 
-// ResetHintForTesting resets the EmitHintOnce sentinel so the next
-// call writes again. Intended only for unit tests that need to verify
+// ResetHintForTesting resets the shared emitter sentinel so the next
+// call to either emitter writes again. Intended only for unit tests that need to verify
 // multiple emission cycles within one process. Production code MUST
 // NOT call this function.
 //
@@ -122,8 +194,8 @@ func EmitHintOnce(w io.Writer, hintText string) {
 // single package unless t.Parallel is called).
 func ResetHintForTesting() { hintOnce = sync.Once{} }
 
-// HintWasEmitted reports whether EmitHintOnce has performed its
-// single write. Useful for tests that want to verify the dedup gate
+// HintWasEmitted reports whether an emitter has performed the
+// process's single write. Useful for tests that want to verify the dedup gate
 // without re-reading the writer.
 //
 // Implementation note: sync.Once does not expose a "done" predicate
