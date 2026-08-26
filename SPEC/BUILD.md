@@ -8,20 +8,38 @@ This specification defines the build system, cross-compilation targets, and CI/C
 
 ### Minimum Go Version
 
-Groadmap requires **Go 1.26.6** (or later). This section is the authoritative
+Groadmap requires **Go 1.27.0** (or later). This section is the authoritative
 statement of the required Go version; other specification files point here rather
-than restate it. Two independent constraints set this floor:
+than restate it. Three constraints bear on this floor, and only the third of them
+sets it:
 
 1. **Minor floor (Go 1.26), set by the GoGraph dependency.** GoGraph declares Go
    1.26 as its minimum, so Groadmap cannot build on an earlier minor version. See
-   `GRAPH.md § Dependency Maturity Risk` for the dependency itself.
-2. **Patch floor (Go 1.26.6), set by a security requirement.** Four Go standard
-   library advisories are reachable from Groadmap's own code — the vulnerable
-   functions are called, not merely present in the module graph — and Go 1.26.6
-   is the release on the 1.26 line that fixes all four:
+   `GRAPH.md § Dependency Maturity Risk` for the dependency itself. The required
+   version satisfies this floor without being set by it: 1.27 is the later line.
+2. **Security floor (Go 1.27.0), set by a reachable-advisory requirement.** Four
+   Go standard library advisories are reachable from Groadmap's own code — the
+   vulnerable functions are called, not merely present in the module graph. Each
+   of the four is fixed on the 1.26 line and on the 1.27 line alike, and
+   Go 1.27.0-rc.3 is the release on the 1.27 line that fixes them, so every
+   stable release of that line carries all four. On the line item 3 selects, this
+   floor therefore sits at Go 1.27.0, the release the line opens with, and it
+   raises the required version no further.
+3. **Line currency, and the Unicode data it selects — a deliberate decision.**
+   Neither constraint above reaches past Go 1.26: GoGraph asks for 1.26, and the
+   four advisories are fixed on that line too. The third reason is therefore the
+   one that sets the floor, and it is a decision rather than a consequence.
+   Groadmap builds on the current Go release line, and moving onto 1.27 is also
+   what makes the board search read Unicode 17.0.0 rather than Unicode 15.0.0,
+   because `golang.org/x/text/unicode/norm` selects its character data by
+   toolchain (see `Unicode Data Rules`, Rule 5). That adoption is chosen and not
+   inherited, and Rule 5 requires such a change to be treated as a change to the
+   board search.
 
-| Advisory | Package | Defect fixed in Go 1.26.6 |
-|----------|---------|---------------------------|
+The four advisories item 2 names:
+
+| Advisory | Package | Defect |
+|----------|---------|--------|
 | GO-2026-6091 | `html/template` | JavaScript regexp context tracking |
 | GO-2026-6090 | `crypto/tls` | Post-handshake handshake messages accepted without limit |
 | GO-2026-6089 | `net/http` | `ReadHeaderTimeout` not applied to the unencrypted HTTP/2 check |
@@ -37,9 +55,10 @@ required version is a security floor, not routine version currency. It moves by
 this rule:
 
 - An advisory against the Go standard library that is **reachable** from
-  Groadmap's own code raises the floor to the release on the current minor line
-  that fixes it. This section is updated to name that release, and `go.mod` with
-  it.
+  Groadmap's own code raises the floor to the earliest **stable** release on the
+  current minor line that carries the fix. A release candidate that carries it is
+  not that release: Groadmap is neither built nor released from one. This section
+  is updated to name the stable release, and `go.mod` with it.
 - An advisory that is reported but **not** called does not, by itself, raise the
   floor. That distinction is what keeps the rule workable: without it, every
   advisory anywhere in the module graph would move the floor.
@@ -54,9 +73,9 @@ advisory MUST raise the floor before the release is published. That step, and
 what the release engineer does with each kind of result, is specified in
 `VERSION.md § Pre-Release Vulnerability Check`.
 
-The `go` directive in `go.mod` MUST declare `go 1.26.6` (or later), and the CI and
+The `go` directive in `go.mod` MUST declare `go 1.27.0` (or later), and the CI and
 release toolchains MUST use the Go version that matches the `go` directive (Go
-1.26.6 or later). The CI and release workflows obtain that version from `go.mod`
+1.27.0 or later). The CI and release workflows obtain that version from `go.mod`
 via `go-version-file: go.mod`, so they track the directive automatically and
 `go.mod` is the only place a pipeline reads it from. This specification and
 `go.mod` MUST agree.
@@ -67,7 +86,7 @@ is older downloads and uses the required toolchain instead of building with the
 wrong one, and a `GOTOOLCHAIN` pinned to an older release fails with an explicit
 error instead of building. The floor therefore needs no manual installation step.
 
-Groadmap MUST NOT be built or released with a toolchain older than Go 1.26.6.
+Groadmap MUST NOT be built or released with a toolchain older than Go 1.27.0.
 
 ### External Dependencies
 
@@ -85,7 +104,7 @@ this section, and so is a row naming a module that block does not require.
 | GoGraph | `github.com/FlavioCFOliveira/GoGraph` | Exact tag **v0.11.0** | Labelled property graph, Cypher engine, and durable store backing the `graph` command. See `GRAPH.md`. |
 | System calls | `golang.org/x/sys` | Exact version **v0.47.0** | The operating-system calls the Go standard library does not publish. Groadmap imports the module at four sites, and each of the four compiles for one platform family only. `golang.org/x/sys/unix` is imported by `internal/terminal/terminal_unix.go`, for the `TIOCGWINSZ` ioctl that decides whether a stream is a terminal, and by `internal/testenv/pty_linux.go`, for the `/dev/ptmx` sequence that opens a pseudo-terminal pair. `golang.org/x/sys/windows` is imported by `internal/terminal/terminal_windows.go`, for the `GetConsoleMode` call that asks the console subsystem that same terminal question, and by `internal/graphlock/graphlock_windows.go`, for the `LockFileEx` and `UnlockFileEx` calls that are the graph store's mutual exclusion on that platform. See `GRAPH.md § Concurrency and Recovery` for the lock the last of those four implements. |
 | Unicode data | `golang.org/x/text` | Exact version **v0.41.0** | The Unicode character data the roadmap tasks board's search normalises a term and a task's searchable text by. `internal/unicodenorm` imports `golang.org/x/text/unicode/norm` — the Go project's own implementation of the normalisation forms UAX #15 defines — and no other package of the module. See `WEB.md § Roadmap Tasks Page` for the rule that normalisation serves and for the check that holds the client's copy of it equal to the server's. |
-| SQLite driver | `modernc.org/sqlite` | Exact version **v1.56.0** | Pure-Go SQLite driver backing every roadmap database (`~/.roadmaps/<name>/project.db`). It is the storage engine for all task, sprint, and audit data: `internal/db` registers it under the driver name `sqlite` and opens every database connection through it. Being pure Go, it needs no C toolchain and builds under `CGO_ENABLED=0`. See `DATABASE.md` for the schema it stores, `ARCHITECTURE.md § 3. internal/db/` for the layer that opens it, and `IMPLEMENTATION.md § Database Connections` for the entry point and DSN form that layer must use. |
+| SQLite driver | `modernc.org/sqlite` | Exact version **v1.57.0** | Pure-Go SQLite driver backing every roadmap database (`~/.roadmaps/<name>/project.db`). It is the storage engine for all task, sprint, and audit data: `internal/db` registers it under the driver name `sqlite` and opens every database connection through it. Being pure Go, it needs no C toolchain and builds under `CGO_ENABLED=0`. See `DATABASE.md` for the schema it stores, `ARCHITECTURE.md § 3. internal/db/` for the layer that opens it, and `IMPLEMENTATION.md § Database Connections` for the entry point and DSN form that layer must use. |
 
 #### GoGraph Rules
 
@@ -171,19 +190,54 @@ this section, and so is a row naming a module that block does not require.
    is, NFD — from `golang.org/x/text/unicode/norm`, and performs the composition
    step itself, from a table it generates and ships to the browser (see
    `WEB.md § Roadmap Tasks Page`). **`norm.NFC.String`, `norm.NFC.Bytes`, and every
-   part of `norm.NFKC` MUST NOT be called anywhere in Groadmap.** Those are the
-   entry points that compose, and composing through them is what this rule forbids.
+   part of `norm.NFKC` MUST NOT be called anywhere in Groadmap's own code.** Those
+   are the entry points that compose, and composing through them is what this rule
+   forbids.
 
-   **Exactly one use of `norm.NFC` is admitted: the NFC_Quick_Check property
-   lookup that derives the composition exclusions.** `norm.NFC.QuickSpanString`
-   reports how much of a string is already in Normalization Form C, which for a
-   single code point is all of it or none of it. That answer is the code point's
-   NFC_Quick_Check value, and a code point carrying a canonical decomposition is
-   NFC_QC=No exactly when Full_Composition_Exclusion is true of it, so the call is
-   how Groadmap reads which code points Unicode excludes from composition.
+   **The tests of `internal/unicodenorm` are the single exception, and only as a
+   measuring standard.** A test in that package MAY call `norm.NFC.String` as the
+   reference a result of Groadmap's own is compared against — never as a value any
+   caller receives, and in no other package and no non-test file. The exception is
+   required rather than tolerated: this rule asserts that Groadmap's composition
+   agrees with the module over every single code point and departs from it only
+   where the module is wrong, and an assertion no test is allowed to measure is one
+   no reader can falsify.
 
-   The admission rests on the exclusions **not being derivable from the
-   decomposition data**. A script exclusion such as `U+0958`, and a
+   **Exactly one use of `norm.NFC` is admitted in the rule itself: the
+   Full_Composition_Exclusion lookup that derives the composition exclusions.**
+   `norm.NFC.IsNormalString` reports whether a string is already in Normalization
+   Form C. For a single code point carrying a canonical decomposition, that is
+   false exactly when Full_Composition_Exclusion is true of it, so the call is how
+   Groadmap reads which code points Unicode excludes from composition. It returns
+   a property of its argument and never a transformed string, so the composition
+   defect described below cannot reach a value any caller receives; and it runs in
+   the one-time derivation of the composition table — once per process on the
+   server, and once per run of the generator — never on a search.
+
+   **`norm.NFC.QuickSpanString` is NOT that lookup, and MUST NOT be used as one.**
+   It reports a boundary up to which a string is *quick-checked* to be in
+   Normalization Form C, and its own documentation states that the boundary is not
+   guaranteed to be the largest such. For a single code point the boundary is
+   therefore the whole of it or none of it, and none of it means NFC_QC **is not
+   Yes** — `No` **or** `Maybe` — where the property this lookup needs is `No`
+   alone. NFC_QC=Maybe is carried by every code point that can be the second
+   element of a primary composite, and such a code point is not excluded from
+   composition; it is the reason the composition table has any entries at all.
+
+   The two questions had the same answer under Unicode 15.0.0, because no code
+   point then carried both a canonical decomposition and NFC_QC=Maybe, and the
+   distinction was invisible for exactly that reason. Unicode 16.0.0 introduced
+   twelve that do — `U+113C5`, `U+113C7` and `U+113C8`, `U+16121` through
+   `U+16128`, and `U+16D68` — and the quick-check form reported all twelve as
+   excluded, dropping their composites from the table and leaving Groadmap's NFC
+   returning the decomposition of a code point that composes, which is not
+   Normalization Form C. The two forms disagree on **132** code points in all; the
+   other 120 carry no canonical decomposition, and the derivation never asks the
+   question of a code point that carries none, so those never reached the table.
+   Twelve was the symptom; the predicate was the fault.
+
+   **The exclusions are not derivable from the decomposition data, which is what
+   the admission rests on.** A script exclusion such as `U+0958`, and a
    post-composition-version exclusion such as `U+2ADC`, decompose exactly as an
    ordinary composite does, so no inspection of the decompositions can separate
    them; the exclusions have to be read from somewhere. Reading the property from
@@ -195,16 +249,39 @@ this section, and so is a row naming a module that block does not require.
    silence the day the Unicode version changed, in the one document a reader
    trusts.
 
-   **Three properties keep the admission narrow, and all three are required.** The
-   call is a property query; it composes nothing, so the composition defect
-   described below cannot reach it; and it runs in the one-time derivation of the
-   composition table — once per process on the server, and once per run of the
-   generator — never on a search.
+   **A test MAY hold the derived exclusions to a transcribed copy of the property,
+   and the transcription is deliberate.** The reference the test in
+   `internal/unicodenorm` compares against is copied from
+   `DerivedNormalizationProps.txt` of the Unicode Character Database. It is
+   neither derived nor fetched, and three reasons rule out the alternatives:
+
+   - **The property has four sources, and two of them cannot be derived at all.**
+     UAX #15, under *Composition Exclusion Types*, names four: script-specific
+     exclusions, post composition version exclusions, singleton decompositions,
+     and non-starter decompositions. Of the first two it states that the list
+     "cannot be computed from the decomposition mappings in the Unicode Character
+     Database, and must instead be explicitly listed".
+   - **The last two are not derivable from this module either.**
+     `norm.NFD.Properties(b).Decomposition()` returns the FULL, recursive
+     canonical decomposition, so a singleton such as `U+212B` — whose one-step
+     mapping is `U+00C5` — is indistinguishable from an ordinary two-character
+     composite. Deriving them would mean transcribing `UnicodeData.txt` instead,
+     which is larger and no more authoritative.
+   - **Asking the module is what the test exists to check.** A reference has to
+     come from outside the thing measured, so the module cannot be it.
+
+   Admitting a stored copy here does not contradict what the paragraph above
+   refuses for this specification and for the code. That refusal is of a stored
+   copy the rule is READ from; this is a reference the rule is HELD to, and when
+   the Unicode version moves it fails the test and names the code points rather
+   than going stale in silence. Fetching the file at test time is forbidden for
+   the same reason: a test that reached the network would fail offline, and would
+   follow a property that had moved instead of reporting it.
 
    Groadmap declines to cross that boundary even where crossing would pay, and
    declining is what keeps the boundary meaningful rather than nominal. Gating the
-   server's own normalisation on `norm.NFC.QuickSpanString`, so that text already
-   in Normalization Form C skips the work, is a correct and tempting optimisation;
+   server's own normalisation on a `norm.NFC` check, so that text already in
+   Normalization Form C skips the work, is a correct and tempting optimisation;
    **it is declined**, because it would put a `norm.NFC` call on the search path
    itself, where the next reader would find a precedent instead of a boundary.
 
@@ -219,12 +296,15 @@ this section, and so is a row naming a module that block does not require.
    | `U+10041` `U+0301` | `U+00C1` | unchanged | `U+10041` masked to 16 bits is `U+0041` |
    | `U+1042B` `U+0308` | `U+04F8` | unchanged | `U+1042B` masked to 16 bits is `U+042B` |
 
-   The defect spans **15,041** pairs over **6,021** distinct leading code points.
-   The decomposition Groadmap does use is unaffected by it, and Groadmap's own
-   composition agrees with the module on all **1,112,064** single code points while
-   still composing the 13 legitimate supplementary composites — `U+11935` followed
-   by `U+11930` gives `U+11938`. It is therefore NFC where the module is right and
-   NFC where the module is wrong, not a private variant of it.
+   Measured over every supplementary starter against each of the 72 code points a
+   composition can consume, the defect spans **15,342** pairs over **6,232**
+   distinct leading code points. The decomposition Groadmap does use is unaffected
+   by it. Groadmap's own composition agrees with the module on all **1,112,064**
+   single code points, which is the claim the test the exception above admits
+   measures directly, and it still composes the 33 legitimate supplementary
+   composites: `U+11935` followed by `U+11930` gives `U+11938`. It is therefore
+   NFC where the module is right and NFC where the module is wrong, not a private
+   variant of it.
 
    **A later simplification that replaces the composition step with a call to
    `norm.NFC.String` would reintroduce the defect silently**, because the shipped
@@ -242,42 +322,60 @@ this section, and so is a row naming a module that block does not require.
    No third module's version is constrained by this one either: the coupling
    `SQLite Driver Rules`, Rule 2 imposes on `modernc.org/libc` and
    `modernc.org/memory` has **no analogue here**, and MUST NOT be invented for it.
-5. **This module's version does not by itself fix the Unicode version. The Go
-   toolchain fixes it too.** Inside `golang.org/x/text` v0.41.0,
-   `unicode/norm` selects its character data with a build constraint on the
-   toolchain: `tables15.0.0.go` is compiled under `//go:build !go1.27` and
-   `tables17.0.0.go` under `//go:build go1.27`. With the `go 1.26.6` directive that
-   `Go Toolchain` fixes, the server normalises against Unicode 15.0.0; the first
-   build made with Go 1.27 or later normalises against Unicode 17.0.0, with no
-   change to the `golang.org/x/text` line of `go.mod` and no other signal of its
-   own.
+5. **Neither this module's version nor the `go` directive fixes the Unicode
+   version. The toolchain that runs the build does.** Inside `golang.org/x/text`
+   v0.41.0, `unicode/norm` selects its character data with a build constraint on
+   the toolchain: `tables15.0.0.go` is compiled under `//go:build !go1.27` and
+   `tables17.0.0.go` under `//go:build go1.27`. Built with the Go version that
+   `Go Toolchain` requires, the server normalises against Unicode 17.0.0, with no
+   mention of a Unicode version on the `golang.org/x/text` line of `go.mod` and no
+   other signal of its own.
 
-   The Unicode version of the server's rule is therefore a function of **two**
-   pins, not one. The other half of that rule is already in the same position: the
-   case fold reads the standard library's own tables, so its Unicode version comes
-   from the toolchain alone. **Raising the Go floor in `Go Toolchain` is
-   consequently also a change to the board search, and MUST be treated as one.**
+   **No line of `go.mod` pins that version, and the `go` directive MUST NOT be
+   read as pinning it.** The directive is a floor, and `toolchain` is a floor too;
+   neither is a ceiling. A machine whose installed Go is newer than the floor
+   builds with the newer release, and the constraint above resolves against that
+   release rather than against the directive. Measured: a build whose directive
+   read `go 1.26.6`, made on a machine running Go 1.27.0, already normalised
+   against Unicode 17.0.0. The Unicode version of the server's rule is therefore a
+   property of the **toolchain that ran** — which `Go Toolchain` constrains from
+   below and nothing constrains from above — and not of any pin.
+
+   The other half of that rule is already in the same position: the case fold
+   reads the standard library's own tables, so its Unicode version comes from the
+   toolchain alone. **Raising the Go floor in `Go Toolchain` is consequently also a
+   change to the board search, and MUST be treated as one.** So is a build made
+   with a toolchain newer than that floor, which no pin can prevent and which
+   Rule 6 is what catches.
 6. **Unlike the driver's coupling, a drift here IS caught, and by an ordinary
    test.** `SQLite Driver Rules`, Rule 3 records that no gate can detect a
    mismatched `modernc.org/libc`. The opposite holds for this module. The copy of
    the rule the binary ships to the browser is generated from the server's own
    normalisation, and a guard test compares the two over the whole of Unicode, so a
-   change of Unicode version — whichever of the two pins in Rule 5 produced it —
-   fails the `test` gate until that shipped copy is regenerated from the new data.
-   A server whose rule moved is **caught**, never silently followed. The check
-   itself is specified in `WEB.md § Roadmap Tasks Page`.
+   change of Unicode version — whether the module version or the toolchain that ran
+   produced it — fails the `test` gate until that shipped copy is regenerated from
+   the new data. A server whose rule moved is **caught**, never silently followed.
+   The check itself is specified in `WEB.md § Roadmap Tasks Page`.
 
    What that gate does not do is decide whether the new Unicode version is wanted.
    It reports that the rule moved; regenerating is a deliberate act, taken with the
-   change to the pin that caused it and never as a way of making a failing test
-   pass.
+   change that caused it — a new module version, or a new toolchain — and never as
+   a way of making a failing test pass.
+
+   A second test, in `internal/unicodenorm`, covers the other direction. It holds
+   the composition exclusions this package derives to a transcribed copy of
+   Full_Composition_Exclusion over the whole of Unicode, in both directions, and
+   holds this package's Normalization Form C equal to the module's over every
+   single code point. The first guard catches a client and a server that have
+   drifted apart; this one catches a server that has drifted away from Unicode
+   while the client faithfully follows it.
 
 #### SQLite Driver Rules
 
 1. `modernc.org/sqlite` MUST be pinned to an exact, immutable version in `go.mod`,
    not a floating reference, so that builds are reproducible and every build of a
    given commit runs the same storage engine against the same on-disk database
-   format. The driver is consumed at the exact version **v1.56.0**. `go.sum` MUST
+   format. The driver is consumed at the exact version **v1.57.0**. `go.sum` MUST
    record the checksum of that version, and the build MUST fail if the checksum
    does not match.
 2. **`modernc.org/libc` and `modernc.org/memory` MUST be pinned to exactly the
@@ -550,7 +648,7 @@ Two tools implement two of the validation gates: `golangci-lint` implements
 three rules in this preamble govern both of them.
 
 **Both tools are pinned to an exact version.** The pinned versions are
-`golangci-lint v2.12.2` and `gosec v2.28.0`. A tool's version is part of its
+`golangci-lint v2.13.1` and `gosec v2.28.0`. A tool's version is part of its
 gate's meaning, so the pin is what makes the gate mean the same thing in the
 three places that enforce it (see `Validation Gates`). Three reasons set this
 rule:
@@ -587,11 +685,11 @@ source that no commit modified.
 
 The project uses [golangci-lint](https://golangci-lint.run) for static analysis.
 Configuration is in `.golangci.yml`, which declares `version: "2"` and therefore
-requires a golangci-lint v2 release. The pinned version is **v2.12.2**.
+requires a golangci-lint v2 release. The pinned version is **v2.13.1**.
 
 **Install:**
 ```bash
-go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
 ```
 
 The module path MUST include the `/v2` suffix. The v1 path
@@ -600,12 +698,22 @@ still installs, but it resolves to the final v1 release, and a v1 binary cannot
 read this project's `version: "2"` configuration.
 
 A package manager may be used instead, provided it installs exactly the pinned
-version. `golangci-lint --version` reports the version it was built from, so it
-confirms which binary is on `PATH`.
+version.
+
+**Verifying the installed version.** `golangci-lint --version` reports the
+version the binary was built from, but it answers for whichever binary `PATH`
+resolves first, which is not necessarily the one `go install` wrote. A packaged
+linter earlier on `PATH` — a snap in `/snap/bin`, for example — shadows that
+one, and because such packages track the latest release, the shadow can report
+the pinned version itself. The check then passes while `make lint` runs a binary
+the pin never installed. Run `which -a golangci-lint` first: it lists every
+match in `PATH` order, so it reveals a shadow that `--version` alone cannot.
+Read the version of the entry it lists first, because that is the one the gate
+runs.
 
 In the workflows, the pinned version is the `version` input passed to the
-`golangci-lint` GitHub Action: `version: v2.12.2`. This is separate from the pin
-on the action itself (`golangci/golangci-lint-action@v9.2.1`), which selects the
+`golangci-lint` GitHub Action: `version: v2.13.1`. This is separate from the pin
+on the action itself (`golangci/golangci-lint-action@v9.3.0`), which selects the
 action's code rather than the linter's. Both are exact, and neither substitutes
 for the other.
 
@@ -982,7 +1090,7 @@ separate published asset, not a fourth entry inside the archive.
 - [ ] The gate set in each workflow file matches the `check` target of the `Makefile` gate for gate: no gate is present in one and absent from the other
 - [ ] Each workflow installs `golangci-lint` and `gosec` in the job that runs those gates. No step tests whether a tool is present and continues without it, and no gate step carries `continue-on-error`
 - [ ] Both workflows pin `gosec` to the exact version this specification names, installing it with the command the specification gives (`go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0`), and that version is one and the same in `.github/workflows/ci.yml`, in `.github/workflows/release.yml`, and in Security Scan: gosec. Confirm an installed scanner with `go version -m "$(which gosec)"`, whose `mod` line names the version; `gosec --version` prints `dev` for a `go install` build and proves nothing
-- [ ] Both workflows pin `golangci-lint` to the exact version this specification names, passing `version: v2.12.2` to the `golangci-lint` action, and that version is one and the same in `.github/workflows/ci.yml`, in `.github/workflows/release.yml`, and in Linter: golangci-lint. The action itself stays pinned to its own exact version, which is a separate pin. Confirm an installed linter with `golangci-lint --version`
+- [ ] Both workflows pin `golangci-lint` to the exact version this specification names, passing `version: v2.13.1` to the `golangci-lint` action, and that version is one and the same in `.github/workflows/ci.yml`, in `.github/workflows/release.yml`, and in Linter: golangci-lint. The action itself stays pinned to its own exact version, which is a separate pin. Confirm an installed linter with `which -a golangci-lint` and then `golangci-lint --version`; `--version` alone answers for whichever binary `PATH` resolves first, and a shadowing package that tracks the latest release can report the pinned version itself
 - [ ] The documented local install command for each tool installs the pinned version, and the linter it installs can actually run this project: the golangci-lint module path carries the `/v2` suffix, so `golangci-lint run ./...` reads `.golangci.yml` (`version: "2"`) instead of rejecting it
 - [ ] `gosec` runs in both workflows with the invocation the `security` gate defines (`gosec -exclude-dir=.claude/worktrees ./...`), so the scanned scope and the accepted `#nosec` suppressions are the same everywhere
 - [ ] Every gate fails its job when it fails: introducing one violation at a time — an unformatted file, a `go vet` finding, a failing test, a `golangci-lint` violation, and an unsuppressed `gosec` finding — fails the workflow run in each case, in both workflows
