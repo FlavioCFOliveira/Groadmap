@@ -98,7 +98,7 @@ func taskEdit(args []string) error {
 		return fmt.Errorf("%w: task ID required", utils.ErrRequired)
 	}
 
-	taskID, err := utils.ValidateIDString(remaining[0], "task")
+	taskID, err := utils.ValidateIDString(remaining[0], utils.FieldTaskID)
 	if err != nil {
 		return err
 	}
@@ -115,7 +115,7 @@ func taskEdit(args []string) error {
 	// on this line now happens inside utils.RequireFreeText below, once the
 	// encoding and control-character rules have seen the value the caller
 	// actually sent (SPEC/MODELS.md § Free-Text Emptiness and Trimming
-	// Constraint, step 1 before step 2). Trimming here is what let a leading or
+	// Constraint, step 2 before step 3). Trimming here is what let a leading or
 	// trailing VT or FF through with the character silently discarded: both are
 	// forbidden control characters AND whitespace to strings.TrimSpace, so the
 	// check that ran later examined a value they had already vanished from
@@ -138,14 +138,14 @@ func taskEdit(args []string) error {
 	// error (exit 6) per SPEC/COMMANDS.md § Edit Task (finding #46).
 	if v, ok := result.Flags["Priority"]; ok {
 		p := v.(int)
-		if err := utils.ValidateNumericRange(p, 0, 9, "priority"); err != nil {
+		if err := models.ValidatePriority(p); err != nil {
 			return err
 		}
 		updates["priority"] = p
 	}
 	if v, ok := result.Flags["Severity"]; ok {
 		s := v.(int)
-		if err := utils.ValidateNumericRange(s, 0, 9, "severity"); err != nil {
+		if err := models.ValidateSeverity(s); err != nil {
 			return err
 		}
 		updates["severity"] = s
@@ -153,7 +153,7 @@ func taskEdit(args []string) error {
 	if typeStr, ok := result.Flags["Type"].(string); ok {
 		parsed, parseErr := models.ParseTaskType(typeStr)
 		if parseErr != nil {
-			return fmt.Errorf("%w: %s", utils.ErrValidation, parseErr.Error())
+			return fmt.Errorf("%w: %w", utils.ErrValidation, parseErr)
 		}
 		updates["type"] = string(parsed)
 	}
@@ -166,36 +166,22 @@ func taskEdit(args []string) error {
 		return nil
 	}
 
-	// Validate that text fields stay within their documented maximums.
-	// Without this, oversized values reach SQLite and surface as a generic
-	// "constraint failed" error (exit 1) instead of the documented
-	// utils.ErrFieldTooLarge (exit 6) per SPEC/COMMANDS.md.
+	// The whole free-text sequence, through the one helper that owns its order
+	// (rmp task 302): the LENGTH cap on the value as it will be stored, then the
+	// encoding rule and then the control-character rule on the value AS
+	// SUPPLIED, then the trim, then the emptiness judgement on the TRIMMED
+	// value. The map entry is rebound to the trimmed value, so it is also what
+	// the UPDATE below writes (SPEC/MODELS.md § Free-Text Emptiness and Trimming
+	// Constraint, Rule 2).
 	//
 	// The cap keeps the position it has always had on this command — ahead of
-	// the content rules, which is what rmp task 302 measures and this task does
-	// not move — and it measures strings.TrimSpace of the value because that is
-	// the value stored (SPEC/MODELS.md § Free-Text Emptiness and Trimming
-	// Constraint, Rule 2). It used to measure the map entry, which was already
-	// trimmed, so what it counts is unchanged.
-	for _, f := range taskEditTextFields {
-		if str, ok := updates[f.column].(string); ok && len(strings.TrimSpace(str)) > f.limit {
-			return utils.FieldTooLargeError(f.field, f.limit)
-		}
-	}
-
-	// The whole of SPEC/MODELS.md § Free-Text Emptiness and Trimming Constraint,
-	// through the one helper that owns its order: the encoding rule and then the
-	// control-character rule on the value AS SUPPLIED, then the trim, then the
-	// emptiness judgement on the TRIMMED value. The map entry is rebound to the
-	// trimmed value, so it is also what the UPDATE below writes (Rule 2).
-	//
-	// The emptiness judgement used to be a sweep of its own AHEAD of the cap.
-	// Moving it here is not a change of verdict: a value that trims to nothing
-	// is zero characters long, so no input exists for which the cap could answer
-	// first. What the move does settle is the order this task exists for —
-	// step 1 now runs before step 3 on this command as it already did on the
-	// nine writers rmp task 278 aligned, so a value made only of VT is refused
-	// as a CONTROL CHARACTER and never as an empty one.
+	// the content rules — but it no longer runs as a sweep of its own with its
+	// own strings.TrimSpace. That sweep was one of the seven statements of the
+	// order the codebase carried, and having seven is how two of them came to
+	// disagree; the cap is now the first rule inside utils.RequireFreeText and
+	// this command states nothing about the order at all. Without this cap an
+	// oversized value would reach SQLite and surface as a generic "constraint
+	// failed" (exit 1) instead of the documented utils.ErrFieldTooLarge (exit 6).
 	//
 	// The refusal names the FIELD, by its published name (SPEC/COMMANDS.md
 	// § Published Field Names in Validation Messages); utils.Field is what makes
@@ -205,7 +191,7 @@ func taskEdit(args []string) error {
 		if !ok {
 			continue
 		}
-		stored, textErr := utils.RequireFreeText(str, f.field)
+		stored, textErr := utils.RequireFreeText(str, f.field, f.limit)
 		if textErr != nil {
 			return textErr
 		}

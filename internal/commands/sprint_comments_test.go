@@ -28,6 +28,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -715,47 +716,59 @@ func TestSprintCommentAdd_UnknownSprint(t *testing.T) {
 }
 
 // TestSprintComment_PositionalIDClassification pins the exit-code class of every
-// malformed positional id on all four subcommands, and the entity each names:
-// "sprint" on comment-add / comment-list, "comment" on comment-edit /
-// comment-remove.
+// malformed positional id on all four subcommands, and the sentence each of the
+// two rules produces.
 //
-// SPEC/COMMANDS.md classifies the whole "positive integer" constraint as exit code
-// 2 (invalid input) for these subcommands, including a non-positive or oversized
-// value that utils.ValidateIDString would otherwise report as a validation error
-// (exit code 6). The assertion is deliberately two-sided: it requires
-// ErrInvalidInput AND rejects ErrValidation.
+// SPEC/COMMANDS.md classifies the whole "positive integer" constraint as exit
+// code 2 (invalid input) for these subcommands, including a non-positive or
+// oversized value that utils.ValidateIDString would otherwise report as a
+// validation error (exit code 6). The assertion is deliberately two-sided: it
+// requires ErrInvalidInput AND rejects ErrValidation.
+//
+// The two rules are asserted apart because they ARE apart (rmp task 330). A
+// token that is not an integer breaks the FORMAT rule and keeps the wording
+// SPEC publishes for it; an integer outside 1..MaxInt32 breaks the ID RANGE
+// rule and now states that rule in the one sentence every other surface states
+// it in. Only the failure CLASS is this family's own, and that is the
+// difference these subcommands publish.
 func TestSprintComment_PositionalIDClassification(t *testing.T) {
 	const roadmap = "sprint-comment-positional-ids"
 	setupSprintCommentRoadmap(t, roadmap)
 
 	handlers := map[string]struct {
-		run    func([]string) error
-		entity string
-		extra  []string
+		run   func([]string) error
+		field utils.RangedField
+		extra []string
 	}{
-		"comment-add":    {sprintCommentAdd, "sprint", []string{"--type", "UPDATE", "--body", "text"}},
-		"comment-list":   {sprintCommentList, "sprint", nil},
-		"comment-edit":   {sprintCommentEdit, "comment", []string{"--type", "UPDATE"}},
-		"comment-remove": {sprintCommentRemove, "comment", nil},
+		"comment-add":    {sprintCommentAdd, utils.FieldSprintID, []string{"--type", "DECISION", "--body", "Scope agreed with the platform team."}},
+		"comment-list":   {sprintCommentList, utils.FieldSprintID, nil},
+		"comment-edit":   {sprintCommentEdit, utils.FieldCommentID, []string{"--type", "DECISION"}},
+		"comment-remove": {sprintCommentRemove, utils.FieldCommentID, nil},
 	}
 
 	for name, h := range handlers {
 		t.Run(name, func(t *testing.T) {
-			for _, bad := range []string{"abc", "1.5", "0", "-7", "2147483648", "99999999999999999999"} {
-				args := append([]string{"-r", roadmap, bad}, h.extra...)
-				err := h.run(args)
-				if err == nil {
-					t.Errorf("id %q: want an error, got nil", bad)
-					continue
+			// The FORMAT rule: not an integer at all.
+			for _, bad := range []string{"abc", "1.5"} {
+				err := h.run(append([]string{"-r", roadmap, bad}, h.extra...))
+				assertCommentIDRefusalClass(t, err, bad)
+				want := fmt.Sprintf("invalid input: invalid %s ID: %q (must be a positive integer)",
+					h.field.IDEntity(), bad)
+				if err.Error() != want {
+					t.Errorf("id %q\n got: %q\nwant: %q", bad, err.Error(), want)
 				}
-				if !errors.Is(err, utils.ErrInvalidInput) {
-					t.Errorf("id %q: error must wrap utils.ErrInvalidInput (exit 2); got %v", bad, err)
-				}
-				if errors.Is(err, utils.ErrValidation) {
-					t.Errorf("id %q: a malformed id is exit 2 here, never exit 6; got %v", bad, err)
-				}
-				if want := "invalid " + h.entity + " ID"; !strings.Contains(err.Error(), want) {
-					t.Errorf("id %q: message must name the %s id\n got: %q", bad, h.entity, err.Error())
+			}
+
+			// The ID RANGE rule: an integer outside the range. One sentence at
+			// either bound, and the same sentence a token beyond the platform's
+			// int produces.
+			for _, bad := range []string{"0", "-7", "2147483648", "99999999999999999999"} {
+				err := h.run(append([]string{"-r", roadmap, bad}, h.extra...))
+				assertCommentIDRefusalClass(t, err, bad)
+				want := fmt.Sprintf("invalid input: %s, got %s",
+					utils.IDRangeMessage(h.field), bad)
+				if err.Error() != want {
+					t.Errorf("id %q\n got: %q\nwant: %q", bad, err.Error(), want)
 				}
 			}
 
@@ -764,7 +777,7 @@ func TestSprintComment_PositionalIDClassification(t *testing.T) {
 			if !errors.Is(err, utils.ErrRequired) {
 				t.Errorf("missing id: error must wrap utils.ErrRequired (exit 2); got %v", err)
 			}
-			if want := h.entity + " ID required"; err == nil || !strings.Contains(err.Error(), want) {
+			if want := h.field.IDEntity() + " ID required"; err == nil || !strings.Contains(err.Error(), want) {
 				t.Errorf("missing id: message\n got: %v\nwant substring: %q", err, want)
 			}
 		})
@@ -1450,8 +1463,14 @@ func TestCommentFamilies_ShareOneImplementation(t *testing.T) {
 	if sprintCommentFamily.entityType == taskCommentFamily.entityType {
 		t.Errorf("both families audit against entity_type %q", sprintCommentFamily.entityType)
 	}
-	if sprintCommentFamily.parentLabel == taskCommentFamily.parentLabel {
-		t.Errorf("both families name their parent %q", sprintCommentFamily.parentLabel)
+	if sprintCommentFamily.parentIDField == taskCommentFamily.parentIDField {
+		t.Errorf("both families report their parent id as %q", sprintCommentFamily.parentIDField)
+	}
+	// The field carries BOTH spellings the family publishes, so both must
+	// differ: the range refusal names `sprint_id` against `task_id`, and the
+	// format refusal and the not-found prose name `sprint` against `task`.
+	if sprintCommentFamily.parentIDField.IDEntity() == taskCommentFamily.parentIDField.IDEntity() {
+		t.Errorf("both families name their parent %q", sprintCommentFamily.parentIDField.IDEntity())
 	}
 	ops := map[models.AuditOperation]string{
 		taskCommentFamily.opCreate:   "task create",
@@ -1473,7 +1492,7 @@ func TestCommentFamilies_ShareOneImplementation(t *testing.T) {
 			f.insert == nil || f.update == nil || f.remove == nil || f.list == nil {
 			t.Errorf("%s family has an unset behaviour: %+v", name, f)
 		}
-		if f.entityType == "" || f.parentLabel == "" ||
+		if f.entityType == "" || f.parentIDField.IDEntity() == "" ||
 			f.opCreate == "" || f.opUpdate == "" || f.opDelete == "" {
 			t.Errorf("%s family has an unset field: %+v", name, f)
 		}

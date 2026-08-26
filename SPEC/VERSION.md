@@ -14,7 +14,7 @@ const version = "X.Y.Z"
 
 This version is:
 - Compiled into the binary at build time
-- Displayed via `rmp --version`
+- Displayed via `rmp version`, `rmp --version`, and `rmp -v`, which are three equivalent forms of the same request (`COMMANDS.md § Version`)
 - Used for release artefact naming (e.g., `rmp-v1.2.1-linux-amd64.tar.gz`)
 
 ### Database Schema Version
@@ -61,7 +61,7 @@ The `_metadata` table records the active schema version. Migration steps and the
 
 ### Current Schema Version
 
-`SchemaVersion = "1.13.0"` (defined in `internal/db/schema.go`).
+`SchemaVersion = "1.14.0"` (defined in `internal/db/schema.go`).
 
 ### Migration Commands
 
@@ -407,19 +407,51 @@ shortcut, and there is no truthful backfill available for either:
   wrong in principle: the entry records a moment, and the task's current value is the
   result of every transition since.
 - **`related_entity_id`** records the counterpart entity of the operation that wrote
-  the entry. A stored `SPRINT_ADD_TASK` entry names its sprint and nothing else, so
-  the task it refers to is not recoverable. The `sprint_tasks` table shows which
-  tasks are members of that sprint **now**, which is a different question: it cannot
-  say which of them a given entry was about, it says nothing about tasks since
-  removed, and a sprint with N entries and N members offers no correspondence between
-  the two sets. Inferring a value from it would fabricate a fact, so the migration
-  does not attempt it.
+  the entry. Eight combinations of operation and producing command write a
+  counterpart at schema 1.12.0 or later (see
+  `DATABASE.md § The Two Entities of a Relational Operation`), and **Groadmap already
+  wrote exactly four of them before this migration**, so a database reaching the
+  migration can hold stored entries of those four with no counterpart recorded:
+  `SPRINT_ADD_TASK`, `SPRINT_REMOVE_TASK`, `TASK_ADD_DEP` and `TASK_REMOVE_DEP`. The
+  list is complete — the last paragraph of this bullet accounts for the other four —
+  and the migration recovers the counterpart of none of the four. The reason differs
+  between the two sprint operations and the two dependency operations.
 
-  The counterpart entries that would name a sprint, `TASK_STATUS_SPRINT` and the
-  `sprint remove-tasks` form of `TASK_STATUS_BACKLOG`, raise no backfill question at
-  all: no version of Groadmap before 1.12.0 wrote either operation, and the
-  reclassification below never produces one, so no stored entry carries either value
-  when the migration runs.
+  A stored `SPRINT_ADD_TASK` entry names its sprint and nothing else, and a stored
+  `SPRINT_REMOVE_TASK` entry does the same, so the task each refers to is not
+  recoverable. The `sprint_tasks` table shows which tasks are members of that sprint
+  **now**, which is a different question: it cannot say which of them a given entry
+  was about, it says nothing about tasks since removed, and a sprint with N entries
+  and N members offers no correspondence between the two sets. For
+  `SPRINT_REMOVE_TASK` the table is worse than silent, because the task such an entry
+  records is one that membership no longer lists, unless it was added back later.
+  Inferring a value from it would fabricate a fact, so the migration does not attempt
+  it.
+
+  A stored `TASK_ADD_DEP` or `TASK_REMOVE_DEP` entry names one task of the pair, and the
+  other task of the same pair is named by the sibling entry that the same invocation
+  wrote against it. Both ids therefore survive somewhere in the table, and this is what
+  separates the dependency pair from the sprint pair above. The counterpart is still not
+  recoverable, because nothing ties the two entries of one invocation together: they
+  share only `performed_at`, which no constraint makes unique, so two dependencies added
+  in the same millisecond leave four `TASK_ADD_DEP` entries and three ways to split them
+  into pairs, with nothing in the table saying which split happened. The
+  `task_dependencies` table answers the same different question that `sprint_tasks`
+  answers for the sprint pair: it holds the dependencies that exist **now**, it offers
+  no correspondence when a task has several, and the edge a `TASK_REMOVE_DEP` entry
+  records is by definition no longer there. Pairing entries on a non-unique timestamp,
+  or reading a pair off current dependencies, would each assert a fact the database does
+  not hold, so the migration attempts neither.
+
+  The other four combinations raise no backfill question at all. `TASK_STATUS_SPRINT`
+  and the `sprint remove-tasks` form of `TASK_STATUS_BACKLOG` are the counterpart
+  entries that would name a sprint: no version of Groadmap before schema 1.12.0 wrote
+  either operation, and the reclassification below never produces one, so no stored
+  entry carries either value when the migration runs. `SPRINT_MOVE_TASK_OUT` and
+  `SPRINT_MOVE_TASK_IN` arrived at schema 1.12.0 as well, replacing the legacy
+  `SPRINT_MOVE_TASK`, and the reclassification produces neither: it rewrites only
+  `TASK_STATUS_CHANGE` entries, and it leaves every `SPRINT_MOVE_TASK` entry as it
+  stands (see `DATABASE.md § audit Table`).
 
 #### Reclassifying `TASK_STATUS_CHANGE`
 
@@ -516,7 +548,7 @@ extra guard on the matched timestamp, only on the two excluded ones.
 5. **It must not write an audit entry of its own.** A migration is not a roadmap
    operation.
 
-#### Consequence: three operations survive as LEGACY
+#### Consequence: four operations survive as LEGACY
 
 Because reclassification is deliberately incomplete, entries carrying
 `TASK_STATUS_CHANGE` remain in migrated databases, and entries carrying
@@ -638,6 +670,155 @@ added in.
 10. After the migration, `SELECT value FROM _metadata WHERE key = 'schema_version'` returns `1.13.0`.
 11. A fresh database created at 1.13.0 receives the unique `idx_sprint_tasks_order` directly from the `sprint_tasks` schema definition and requires no repair.
 12. `sprint reorder`, `sprint move-to`, `sprint top`, `sprint bottom` and `sprint swap` all succeed against a migrated database, including on a full reversal of a sprint's order and on a swap of two adjacent tasks.
+
+### Migration 1.13.0 → 1.14.0
+
+Renumbers the task positions of every sprint to the dense run `0..N-1`, closing the
+gaps that four write paths left behind before they were taught to compact. The
+invariant this repairs, the behaviours that are wrong without it, and the write paths
+that must uphold it from now on are specified in
+`DATABASE.md § Position Density Within a Sprint`. The general rules this migration
+follows are specified in
+`DATABASE.md § Introducing a Uniqueness Constraint over Existing Rows`.
+
+The migration adds no column, so the `ALTER TABLE ADD COLUMN` guard specified in
+`DATABASE.md § Migration Idempotency (ALTER TABLE ADD COLUMN)` does not apply, and it
+rebuilds no table. It changes no table definition and no index definition either: the
+schema after the migration is the schema before it, and only the values held in
+`sprint_tasks.position` change.
+
+#### Why the repair is a migration and not the repair of one database
+
+Teaching the write paths to compact stops new gaps from appearing; it does nothing
+about the gaps already committed. The measured instance was a sprint holding 39
+members at the positions `0` to `36`, `53` and `57`, produced by the source side of
+`sprint move-tasks`, which re-parents rows away from a sprint without repairing the
+run it leaves behind.
+
+The gap is not cosmetic. `sprint move-to`, `sprint top` and `sprint bottom` decide
+whether they have work to do by comparing the moved task's **stored** position against
+the **target rank**, so over a sparse run a real move is read as no move at all and is
+still reported as a success. Every installation that has ever run one of the four
+paths carries the same damage, and only a migration reaches those installations.
+
+#### The unique index comes down before the repair runs
+
+This is the one structural difference from `Migration 1.12.0 → 1.13.0`, which runs the
+same repair without touching any index: there the unique index did not yet exist, and
+here it already does.
+
+The repair is a single multi-row `UPDATE`. SQLite applies such a statement row by row,
+checks the unique index as each row is written, and offers no deferred check, and the
+order in which it visits the rows follows the physical layout rather than the position
+order. Whenever the two disagree, a row moving down can land on a value that a row not
+yet rewritten still holds.
+
+This was measured rather than assumed. Against the pinned driver, a sprint holding the
+positions `0`, `2` and `5` whose rows sat in the reverse physical order failed with
+`UNIQUE constraint failed: sprint_tasks.sprint_id, sprint_tasks.position` and left the
+run untouched, while the same three rows in ascending physical order succeeded. A
+migration that works only when the rows happen to be laid out conveniently is not a
+migration, so the index is dropped for the duration of the repair. That is exactly the
+sequence `DATABASE.md § Introducing a Uniqueness Constraint over Existing Rows` (The
+required sequence) requires, and exactly the reason that section gives for it: with no
+unique index in force, the intermediate states of the repair cannot violate one.
+
+#### Recreating the index is what makes the migration fail closed
+
+`CREATE UNIQUE INDEX` validates every existing row, so if the repair ever left two
+members of one sprint sharing a position, the statement fails, the single transaction
+the migration runs in is rolled back, the repair is undone with it, and
+`_metadata.schema_version` keeps its previous value. The database is left exactly as it
+was. The failure surface — exit code `1`, empty stdout, and the message shape on
+stderr — is specified in
+`DATABASE.md § Introducing a Uniqueness Constraint over Existing Rows` (The failure
+surface).
+
+#### The ordering keys are what make the repair honest
+
+The repair ranks each sprint's rows by `position` ascending, with `task_id` ascending
+as the tie-breaker. `position ASC` keeps the order the roadmap's owner planned: this
+migration changes the **values** a sprint's members hold and never their **sequence**.
+`task_id ASC` settles deterministically the cases that `position` alone leaves
+undecided.
+
+The ranking is computed in a subquery that is evaluated as a unit and joined to the
+target, rather than by a correlated count over the table being written, because a
+correlated count observes rows the same statement has already rewritten; see
+`DATABASE.md § Introducing a Uniqueness Constraint over Existing Rows` (The repair must
+not read its own writes).
+
+#### The repair is unconditional, and the migration is idempotent
+
+The repair is not guarded by a count of gaps. A database whose sprints are already
+dense receives, in every row, the value that row already holds. A measurement of one
+database establishes nothing about anyone else's, which is why the repair always runs.
+
+The index step is a `DROP INDEX IF EXISTS` followed by a `CREATE UNIQUE INDEX IF NOT
+EXISTS`, and the repair assigns an already dense sprint the values it already holds, so
+re-applying the whole migration is a no-op.
+
+```sql
+-- 1. Take the unique ordering index down for the duration of the repair, so that the
+--    intermediate states of the multi-row UPDATE cannot violate it.
+DROP INDEX IF EXISTS idx_sprint_tasks_order;
+
+-- 2. Repair: renumber each sprint's positions to a dense 0..N-1 run, preserving the
+--    planned order and breaking ties by task_id. The ranking is computed over the
+--    whole table before any row is written, so no row is ranked against a value this
+--    statement has already changed.
+UPDATE sprint_tasks
+SET position = ranked.new_pos
+FROM (
+    SELECT sprint_id, task_id,
+           ROW_NUMBER() OVER (
+               PARTITION BY sprint_id
+               ORDER BY position ASC, task_id ASC
+           ) - 1 AS new_pos
+    FROM sprint_tasks
+) AS ranked
+WHERE sprint_tasks.sprint_id = ranked.sprint_id
+  AND sprint_tasks.task_id   = ranked.task_id;
+
+-- 3. Put the constraint back, under the same name and over the same columns, so the
+--    schema ends with exactly one index there, serving both the ordering reads and
+--    the uniqueness constraint.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sprint_tasks_order ON sprint_tasks(sprint_id, position ASC);
+
+-- Update schema version
+UPDATE _metadata SET value = '1.14.0' WHERE key = 'schema_version';
+```
+
+#### What the migration must not do
+
+It MUST NOT delete, truncate, or otherwise discard a `sprint_tasks` row in order to
+make the index succeed. Every membership row that existed before the migration exists
+after it, attached to the same sprint and the same task.
+
+It MUST NOT rank the repair by `added_at`. That would produce a valid dense run while
+silently replacing each sprint's planned order with the order its tasks happened to be
+added in, which is data loss dressed up as a repair.
+
+It MUST NOT share its repair statement with `Migration 1.12.0 → 1.13.0`, which runs the
+same SQL. A migration is a frozen historical artefact, so two migrations reading one
+shared definition would mean that a future edit to either one silently rewrites the
+recorded behaviour of the other on the databases that have already applied it. The
+statement is transcribed in each migration instead.
+
+#### Acceptance criteria
+
+1. Applying the migration to a database at 1.13.0 leaves `SELECT COUNT(*) FROM sprint_tasks` unchanged, and leaves the set of `(sprint_id, task_id)` pairs unchanged.
+2. After the migration, every sprint's positions are a dense `0..N-1` run: for every `sprint_id`, `MIN(position)` is 0 and `MAX(position)` is `COUNT(*) - 1`.
+3. For every sprint, the relative order of its member tasks by `position` is the same after the migration as before it.
+4. A sprint holding 39 members at the positions `0` to `36`, `53` and `57` before the migration holds the positions `0` to `38` after it, with its members in the same relative order.
+5. A sprint whose rows sit in a physical order that disagrees with their position order is renumbered successfully, and the migration raises no `UNIQUE` constraint error.
+6. After the migration, `PRAGMA index_list('sprint_tasks')` reports `idx_sprint_tasks_order` with `unique = 1`, and reports no second index over `(sprint_id, position)`.
+7. A database whose sprints are already dense reads back from `sprint_tasks` exactly the values it held before the migration.
+8. Running the migration set twice against the same database produces the same result as running it once, and raises no error.
+9. If the index creation fails, `_metadata.schema_version` remains `1.13.0` and `sprint_tasks` holds exactly the rows and values it held before the migration.
+10. After the migration, `SELECT value FROM _metadata WHERE key = 'schema_version'` returns `1.14.0`.
+11. A fresh database created at 1.14.0 receives its positions from the write paths alone and requires no repair.
+12. Against a migrated database, `sprint move-to`, `sprint top` and `sprint bottom` move a member that previously sat above a gap, instead of reporting success without moving it.
 
 ## Release Process
 

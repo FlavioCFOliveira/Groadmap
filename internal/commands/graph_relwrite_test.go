@@ -224,25 +224,43 @@ func TestGraphUpdate_RefusalNamesTheUnmatchedDirection(t *testing.T) {
 }
 
 // TestGraphUpdate_DirectionCheckLeavesOtherSubcommandsAlone pins the scope of the
-// refusal. It is a write-path rule for `update` alone: `delete` removes a
-// relationship bound by a reverse traversal correctly (the engine resolves the
-// edge itself rather than through the endpoint columns), and the read
-// subcommands must keep answering undirected patterns, which is precisely the
-// half of the defect that always worked.
+// WRITE-path refusal. It is a rule for `update` alone: `delete` removes a
+// relationship bound by a reverse traversal correctly, because the engine
+// resolves the edge itself rather than through the endpoint columns.
+//
+// The read half of this test's original claim — that an undirected READ keeps
+// being answered — was withdrawn by rmp task #288, which measured that read
+// returning the wrong relationship on a node pair carrying edges both ways. The
+// subtest below now pins the refusal that replaced it, and shows the outgoing
+// rewrite still reaching the same edge, so this test keeps proving that the two
+// direction rules stay separate without asserting behaviour that is no longer
+// true. The read rule has its own regressions in graph_relread_test.go.
 func TestGraphUpdate_DirectionCheckLeavesOtherSubcommandsAlone(t *testing.T) {
 	const roadmap = "graph-relwrite-scope"
 	defer setupTestGraphRoadmap(t, roadmap)()
 	seedProvenanceEdge(t, roadmap)
 
-	t.Run("an undirected read is still answered", func(t *testing.T) {
+	t.Run("an undirected read is refused by the read rule, and its outgoing rewrite answers", func(t *testing.T) {
+		err := runGraphQuery([]string{"-r", roadmap, "--query",
+			"MATCH (v:Test {key:'graph_relwrite_test.go'})-[e]-(x) RETURN type(e), x.key"})
+		if !errors.Is(err, utils.ErrValidation) {
+			t.Fatalf("an undirected read must be refused as a validation error, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "cannot read relationship") {
+			t.Errorf("refusal did not come from the READ rule: %v", err)
+		}
+
+		// The rewrite the refusal names reaches the very same edge, which is
+		// what makes the refusal cost no reach: anchoring the OUTGOING pattern
+		// on this node reports the relationship arriving at it.
 		stdout, _ := captureStdStreams(t, func() {
 			if err := runGraphQuery([]string{"-r", roadmap, "--query",
-				"MATCH (v:Test {key:'graph_relwrite_test.go'})-[e]-(x) RETURN type(e), x.key"}); err != nil {
-				t.Fatalf("undirected read was refused: %v", err)
+				"MATCH (x)-[e]->(v:Test {key:'graph_relwrite_test.go'}) RETURN type(e), x.key"}); err != nil {
+				t.Fatalf("the outgoing rewrite was refused: %v", err)
 			}
 		})
 		if !strings.Contains(stdout, "VERIFIED_BY") {
-			t.Errorf("undirected read did not report the incoming edge:\n%s", stdout)
+			t.Errorf("the outgoing rewrite did not report the incoming edge:\n%s", stdout)
 		}
 	})
 

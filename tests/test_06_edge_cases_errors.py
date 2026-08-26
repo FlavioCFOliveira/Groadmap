@@ -6,9 +6,147 @@ Tests error conditions, edge cases, and boundary values.
 
 import sys
 import os
+import re
+from pathlib import Path
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests.base_test import GroadmapTestBase
+
+
+# --------------------------------------------------------------------------
+# The validation order SPEC/COMMANDS.md publishes for the three Task Assignment
+# subcommands (rmp task #337).
+#
+# The Go gate internal/commands/sprint_assignment_validation_order_test.go
+# drives the same orderings, but it reads exit codes through a COPY of the
+# sentinel switch in cmd/rmp/main.go: it proves the error chain, not the number
+# the shell reports. That number is the whole point of the ordering -- it is
+# what a caller branches on -- so it is asserted here, against the process, from
+# the same published list. Two observers, one oracle.
+#
+# The order is read out of the document rather than typed in here. Swapping two
+# items in COMMANDS.md swaps the expectation; changing the binary while the
+# document stands fails the same assertion from the other side.
+# --------------------------------------------------------------------------
+
+_SPEC_PATH = Path(__file__).resolve().parent.parent / "SPEC" / "COMMANDS.md"
+_ASSIGNMENT_HEADING = "### Task Assignment"
+_VALIDATION_ORDER_LABEL = "**Validation Order:**"
+
+# Floors under the two scans. The extracted section runs to some nine thousand
+# bytes and the list is longer than eight items; anything smaller means a scan
+# stopped matching, and an expectation derived from a fragment is unsound.
+_MIN_SECTION_BYTES = 3000
+_MIN_VALIDATION_STEPS = 8
+_MAX_LINES_BEFORE_FIRST_STEP = 24
+
+_SECTION_END = re.compile(r"^#{1,3} \S", re.MULTILINE)
+_NUMBERED_ITEM = re.compile(r"^(\d+)\. (.+)$")
+
+# Each step is recognised by a narrow phrase, never by its ordinal: the list is
+# renumbered whenever a step is published or removed.
+_STEP_MARKERS = [
+    ("sprint-id lexical", re.compile(r"format and range of every sprint id", re.I)),
+    ("task-id lexical", re.compile(r"parse all task IDs and validate their format", re.I)),
+    ("roadmap open", re.compile(r"open the roadmap", re.I)),
+    ("sprint existence", re.compile(r"verify the sprint exists", re.I)),
+    ("CLOSED sprint", re.compile(r"reject a CLOSED sprint", re.I)),
+    ("task existence", re.compile(r"verify all task IDs exist in the roadmap", re.I)),
+    ("capacity", re.compile(r"max_tasks")),
+    ("membership", re.compile(r"currently a member of the sprint", re.I)),
+    ("re-parenting", re.compile(
+        r"nothing is verified about the sprint a task already belongs to", re.I)),
+    ("execute", re.compile(r"execute the operation", re.I)),
+    ("fail fast", re.compile(r"exit immediately without making changes", re.I)),
+]
+
+
+def _task_assignment_section() -> str:
+    """Return the body of SPEC/COMMANDS.md section Task Assignment."""
+    content = _SPEC_PATH.read_text(encoding="utf-8")
+    start = content.find(_ASSIGNMENT_HEADING + "\n")
+    assert start >= 0, (
+        f"{_SPEC_PATH} declares no {_ASSIGNMENT_HEADING!r} heading, so this gate is not "
+        f"reading the section it names"
+    )
+    body = content[start + len(_ASSIGNMENT_HEADING):]
+    end = _SECTION_END.search(body)
+    if end:
+        body = body[:end.start()]
+    assert len(body) >= _MIN_SECTION_BYTES, (
+        f"extracted {len(body)} bytes for {_ASSIGNMENT_HEADING}, want at least "
+        f"{_MIN_SECTION_BYTES}: the section scan has stopped matching"
+    )
+    return body
+
+
+def _published_validation_order() -> list:
+    """Return the published validation order as a list of step names.
+
+    Three phases, each failing loudly: locate the label; consume a CONTIGUOUS
+    run of numbered lines whose numbers are exactly 1, 2, 3, ...; classify each
+    item by exactly one marker. The contiguity requirement is what keeps the
+    scan off the two other numbered lists in the same section -- the four rules
+    governing the audit entries, and the acceptance criteria.
+    """
+    section = _task_assignment_section()
+
+    at = section.find(_VALIDATION_ORDER_LABEL)
+    assert at >= 0, f"{_ASSIGNMENT_HEADING} carries no {_VALIDATION_ORDER_LABEL!r} label"
+    lines = section[at + len(_VALIDATION_ORDER_LABEL):].split("\n")
+
+    head = -1
+    for i, line in enumerate(lines):
+        if i > _MAX_LINES_BEFORE_FIRST_STEP:
+            break
+        match = _NUMBERED_ITEM.match(line)
+        if match:
+            assert match.group(1) == "1", (
+                f"the first numbered line after {_VALIDATION_ORDER_LABEL!r} is {line!r}, so the "
+                f"list does not start at 1 and is not the run this gate can read"
+            )
+            head = i
+            break
+        assert not line.startswith("#") and not line.startswith("**"), (
+            f"the next thing after {_VALIDATION_ORDER_LABEL!r} is {line!r}, not an ordered list"
+        )
+    assert head >= 0, (
+        f"no ordered list starts within {_MAX_LINES_BEFORE_FIRST_STEP} lines of "
+        f"{_VALIDATION_ORDER_LABEL!r}"
+    )
+
+    items = []
+    for line in lines[head:]:
+        match = _NUMBERED_ITEM.match(line)
+        if not match or int(match.group(1)) != len(items) + 1:
+            break
+        items.append(match.group(2))
+    assert len(items) >= _MIN_VALIDATION_STEPS, (
+        f"the run after {_VALIDATION_ORDER_LABEL!r} holds {len(items)} items, want at least "
+        f"{_MIN_VALIDATION_STEPS}: the scan has stopped matching the published list"
+    )
+
+    order = []
+    for position, item in enumerate(items, start=1):
+        matched = [name for name, marker in _STEP_MARKERS if marker.search(item)]
+        assert len(matched) == 1, (
+            f"{_ASSIGNMENT_HEADING} validation order item {position} matches {len(matched)} of "
+            f"this gate's step markers ({matched}); exactly one must match. The item is:\n"
+            f"  {item!r}"
+        )
+        order.append(matched[0])
+    return order
+
+
+def _step_that_runs_first(order: list, left: str, right: str) -> str:
+    """Return whichever of two published steps the document puts first."""
+    for name in (left, right):
+        assert name in order, (
+            f"{_ASSIGNMENT_HEADING} publishes no step this gate reads as {name!r}, so the pair "
+            f"it belongs to cannot be driven and this test would assert nothing"
+        )
+    return left if order.index(left) < order.index(right) else right
 
 
 class TestEdgeCasesErrors:
@@ -398,6 +536,79 @@ class TestEdgeCasesErrors:
         assert "Usage:" in stdout
 
         print("✓ Help commands test passed")
+
+    def test_sprint_add_tasks_reports_the_step_the_spec_puts_first(self):
+        """`sprint add-tasks` must refuse with the code of the step that runs first.
+
+        SPEC/COMMANDS.md, section Task Assignment, publishes a validation order.
+        Two of its steps can both fail on one command line: the task-id lexical
+        step, which refuses a token that is not a positive integer with exit 2,
+        and the sprint-existence step, which refuses an unresolvable sprint with
+        exit 4. Naming an absent sprint AND a malformed task id puts both on the
+        table, and the exit code says which one ran.
+
+        The expected code is derived from the published list, not typed in, so
+        this test and the Go gate that drives the same pair cannot drift apart:
+        editing the document moves both.
+        """
+        order = _published_validation_order()
+        first = _step_that_runs_first(order, "task-id lexical", "sprint existence")
+        expected = 2 if first == "task-id lexical" else 4
+
+        roadmap = self.test.create_roadmap()
+
+        # An id past every sprint the roadmap holds, confirmed absent rather
+        # than assumed free.
+        existing = [sprint["id"] for sprint in self.test.list_sprints(roadmap)]
+        absent_sprint = max(existing, default=0) + 1000
+        assert absent_sprint not in existing, (
+            f"sprint {absent_sprint} exists in {roadmap}, and this test needs it absent"
+        )
+
+        exit_code, _, stderr = self.test.run_cmd(
+            ["sprint", "add-tasks", "-r", roadmap, str(absent_sprint), "abc"],
+            check=False,
+        )
+        assert exit_code == expected, (
+            f"SPEC/COMMANDS.md, section Task Assignment, puts the {first} step first, so "
+            f"`sprint add-tasks {absent_sprint} abc` must exit {expected}; got {exit_code}, "
+            f"stderr={stderr!r}"
+        )
+        if expected == 2:
+            assert 'invalid task ID: "abc"' in stderr, (
+                f"the lexical step runs first, so the refusal must name the malformed token; "
+                f"got {stderr!r}"
+            )
+        else:
+            assert f"sprint {absent_sprint}" in stderr, (
+                f"the existence step runs first, so the refusal must name the sprint; "
+                f"got {stderr!r}"
+            )
+
+        # Control. Without it, the assertion above would also pass if the sprint
+        # lookup simply never refused this id -- there would then be no
+        # suppressed failure and no ordering on show. Driving the same absent
+        # sprint with a well-formed task id proves the second failure was real.
+        task_id = self.test.create_task(
+            roadmap,
+            "Replay the acquirer batch against the ledger",
+            "Every settlement batch reconciles to the cent before the ledger closes.",
+            "Replay the batch against the acquirer file and report the first divergence.",
+            "A deliberately corrupted batch is reported, not silently accepted.",
+        )
+        exit_code, _, stderr = self.test.run_cmd(
+            ["sprint", "add-tasks", "-r", roadmap, str(absent_sprint), str(task_id)],
+            check=False,
+        )
+        assert exit_code == 4, (
+            f"control: the sprint-existence step must refuse sprint {absent_sprint} on its own "
+            f"with exit 4; got {exit_code}, stderr={stderr!r}"
+        )
+        assert f"sprint {absent_sprint}" in stderr, (
+            f"control: the refusal must name the sprint; got {stderr!r}"
+        )
+
+        print("\u2713 sprint add-tasks reports the validation step SPEC/COMMANDS.md puts first")
 
     def test_version_command(self):
         """Test version command."""

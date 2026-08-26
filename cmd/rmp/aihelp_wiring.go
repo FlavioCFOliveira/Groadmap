@@ -71,18 +71,23 @@ func isAIHelpInvocation(args []string) bool {
 }
 
 // writeAIHelpError emits a SPEC-shaped error from the AI-help wiring
-// layer. It mirrors cmd/rmp/main.go's printError but writes to an
-// arbitrary io.Writer (the wiring path is unit-tested with a buffer
+// layer. It mirrors cmd/rmp/main.go's writeFailureReport but writes to
+// an arbitrary io.Writer (the wiring path is unit-tested with a buffer
 // instead of os.Stderr).
 //
-// The trailing AI-agent hint is appended exactly like printError
-// does, with the same suppression rules:
+// The trailing AI-agent hint is appended exactly like
+// writeFailureReport does, with the same suppression rules:
 //
 //   - If aihelp.WasInvoked() is true, the contract has already been
-//     delivered and the hint is suppressed (no recursion).
-//   - The dedup with the env-var hint is implicit: aihelp.EmitHintOnce
-//     uses a single sync.Once for the whole process, so if the env-var
-//     path already fired, this call is a no-op.
+//     delivered and the hint is suppressed (no recursion). The return
+//     happens before any part of the trailer is written, so the blank
+//     line that would introduce the hint is suppressed with it.
+//   - The dedup with the env-var hint is implicit:
+//     aihelp.EmitTrailingHintOnce uses a single sync.Once for the whole
+//     process, so if the env-var path already fired, this call is a
+//     no-op — and because that emitter writes the separating blank line
+//     inside the guarded closure, the no-op produces zero bytes rather
+//     than an orphan blank line.
 //
 // In practice WasInvoked() is always false here because the only
 // caller is the scope-rejection branch of maybeHandleAIHelp, which
@@ -94,8 +99,7 @@ func writeAIHelpError(w io.Writer, msg string) {
 	if aihelp.WasInvoked() {
 		return
 	}
-	fmt.Fprintln(w)
-	aihelp.EmitHintOnce(w, commands.AIBannerLine)
+	aihelp.EmitTrailingHintOnce(w, commands.AIBannerLine)
 }
 
 // aiHelpFlagToken is the literal flag string the early-pass scan

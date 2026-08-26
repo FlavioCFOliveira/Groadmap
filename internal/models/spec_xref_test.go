@@ -8,22 +8,33 @@
 // that orphans a reference is caught by `make check` instead of by the next
 // person to follow the link.
 //
-// The defect class this closes has been found twice by hand. A SPEC file cites a
-// section of another SPEC file by name — "DATABASE.md § `audit` Table" — the
-// section is later renamed, and the citation is left pointing at a heading no
-// document declares. Nothing in the build noticed, because until now nothing in
-// the build read a cross-reference.
+// Two defect classes are closed here, and each was found by hand first.
+//
+// The first is a citation with no target. A SPEC file cites a section of another
+// SPEC file by name — "DATABASE.md § `audit` Table" — the section is later
+// renamed, and the citation is left pointing at a heading no document declares.
+//
+// The second is a citation with too many targets. DATABASE.md declared "Audit"
+// twice, once for the SQL statements over the audit table and once for that
+// table's column constraints, and three references in WEB.md cited
+// `DATABASE.md § Audit`. Each of those references existed, so the existence half
+// of this gate passed them, and each still sent a reader to whichever of the two
+// sections came first rather than to the one its own sentence meant.
 //
 // What the gate checks, and what it deliberately does not.
 //
-// It checks EXISTENCE: the cited heading must be declared by the cited document.
-// It does NOT check uniqueness. Eleven heading names are declared more than once
-// inside their own file today — "Exit Codes" three times in COMMANDS.md, "Audit"
-// twice in DATABASE.md, and so on — and three references in WEB.md cite
-// `DATABASE.md § Audit`, which therefore resolves to either of two sections. Those
-// references resolve; they are simply not unique, and disambiguating them is a
-// separate piece of work. Making this gate demand uniqueness would fail the tree
-// today for a reason the acceptance criterion does not ask about.
+// It checks RESOLUTION, which is existence and uniqueness together: the cited
+// heading must be declared by the cited document, and declared exactly once. A
+// citation that names a heading the document declares twice fails as loudly as
+// one that names a heading it never declared, because a reader following either
+// one does not arrive where the citing sentence intended.
+//
+// It does NOT demand that heading names be unique in themselves. A name two
+// sections share and no citation names is latent, not broken, and this gate
+// stays silent about it: the failure is attached to the citation, so the tree is
+// never asked to rename sections nobody cites. The count of such names is
+// reported in the test log, and it becomes a failure the moment something cites
+// one.
 //
 // It does not require a citation to be written in any particular form either.
 // Five forms exist in the tree; all five are recognised, and no new policy is
@@ -70,6 +81,12 @@
 // scanner dies, the prose fallback absorbs its marks and the code-span floor
 // fails; if the prose scanner dies, totality fails; if the section-mark search
 // itself dies, the floors fail.
+//
+// The uniqueness half needs a third guard, because it fires on nothing while
+// every cited name is unique and is therefore invisible when it stops working.
+// TestSpecXref_HeadingIndexCountsEveryDeclaration supplies it, against a
+// synthetic document rather than the corpus, so that proving the mechanism works
+// never becomes a reason to keep a duplicated name in SPEC/.
 //
 // Why this file lives in internal/models: the same reason the other two do. It
 // needs no unexported access to anything, only files on disk, and it sits beside
@@ -143,7 +160,7 @@ type xrefDoc struct {
 	raw      string
 	body     string
 	headings []xrefHeading
-	names    map[string]bool
+	names    map[string]int // comparison form -> how many headings declare it
 	anchors  map[string]bool
 }
 
@@ -181,10 +198,12 @@ func loadXrefCorpus(t *testing.T) ([]*xrefDoc, map[string]*xrefDoc) {
 func newXrefDoc(name, rel, raw string) *xrefDoc {
 	doc := &xrefDoc{name: name, rel: rel, raw: raw, body: blankFencedBlocks(raw)}
 	doc.headings = atxHeadings(doc.body)
-	doc.names = make(map[string]bool, len(doc.headings))
+	doc.names = make(map[string]int, len(doc.headings))
 	doc.anchors = make(map[string]bool, len(doc.headings))
 	for _, h := range doc.headings {
-		doc.names[h.name] = true
+		// Counted, not flagged: a name two headings declare resolves a citation
+		// to neither of them in particular, and the count is what says so.
+		doc.names[h.name]++
 		doc.anchors[uniqueAnchor(doc.anchors, headingAnchor(h.text))] = true
 	}
 	return doc
@@ -592,7 +611,7 @@ func submatch(text string, m []int, n int) string {
 // in half, so a citation of a heading that does not exist still fails.
 func resolveHeading(ref *xrefRef, target *xrefDoc) (string, bool) {
 	if ref.exact {
-		return ref.heading, target.names[ref.heading]
+		return ref.heading, target.names[ref.heading] > 0
 	}
 	runes := []rune(ref.heading)
 	for n := len(runes); n > 0; n-- {
@@ -600,7 +619,7 @@ func resolveHeading(ref *xrefRef, target *xrefDoc) (string, bool) {
 			continue
 		}
 		candidate := strings.TrimRight(string(runes[:n]), " ")
-		if candidate != "" && target.names[candidate] {
+		if candidate != "" && target.names[candidate] > 0 {
 			return candidate, true
 		}
 	}
@@ -654,14 +673,15 @@ func editDistance(a, b string) int {
 }
 
 // ---------------------------------------------------------------------------
-// 1. Every section cross-reference names a heading that exists.
+// 1. Every section cross-reference resolves to exactly one heading.
 // ---------------------------------------------------------------------------
 
-// TestSpecXref_EverySectionReferenceNamesAnExistingHeading is the gate proper.
-// It resolves every "FILE.md § Heading" citation in SPEC/ against the headings
-// the cited document declares, and fails naming the citing file and line, the
-// target, and the heading that is not there.
-func TestSpecXref_EverySectionReferenceNamesAnExistingHeading(t *testing.T) {
+// TestSpecXref_EverySectionReferenceResolvesToExactlyOneHeading is the gate
+// proper. It resolves every "FILE.md § Heading" citation in SPEC/ against the
+// headings the cited document declares, and fails naming the citing file and
+// line, the target, and the heading that is not there — or the several headings
+// that are.
+func TestSpecXref_EverySectionReferenceResolvesToExactlyOneHeading(t *testing.T) {
 	citing, targets := loadXrefCorpus(t)
 
 	headings := 0
@@ -681,6 +701,7 @@ func TestSpecXref_EverySectionReferenceNamesAnExistingHeading(t *testing.T) {
 
 	byKind := make(map[xrefKind]int, 3)
 	total, parenthesised := 0, 0
+	unresolved, ambiguous := 0, 0
 	for _, doc := range citing {
 		refs := scanSectionRefs(doc)
 		assertSectionMarksAccountedFor(t, doc, refs)
@@ -708,11 +729,23 @@ func TestSpecXref_EverySectionReferenceNamesAnExistingHeading(t *testing.T) {
 
 			name, ok := resolveHeading(ref, target)
 			if !ok {
+				unresolved++
 				t.Errorf("%s:%d cites a heading that %s does not declare.\n  citation : %s\n  target   : "+
 					"%s\n  heading  : %q\n%s%sA cross-reference must name a heading that exists, so a "+
 					"rename has to carry its citations with it. Fix the citation, or restore the heading.",
 					ref.from.rel, ref.line, ref.target, ref.text, target.rel, ref.heading,
 					boundaryNote(ref), nearestHeadingHint(target, ref.heading))
+				continue
+			}
+			if n := target.names[name]; n > 1 {
+				ambiguous++
+				t.Errorf("%s:%d cites a heading that %s declares %d times, so the citation resolves to "+
+					"none of them in particular.\n  citation : %s\n  target   : %s\n  heading  : %q\n%s"+
+					"A cross-reference must identify exactly one section. Give the colliding sections "+
+					"names that each state their own subject, and carry every existing citation with "+
+					"them; qualifying this one citation leaves the next one to fall into the same hole.",
+					ref.from.rel, ref.line, ref.target, n, ref.text, target.rel, name,
+					headingDeclarations(target, name))
 				continue
 			}
 			if strings.HasSuffix(name, ")") {
@@ -745,8 +778,39 @@ func TestSpecXref_EverySectionReferenceNamesAnExistingHeading(t *testing.T) {
 			minParenthesisedHeadings)
 	}
 
-	t.Logf("resolved %d cross-references (%v) over %d headings in %d documents",
-		total, byKind, headings, len(targets))
+	t.Logf("resolved %d cross-references (%v) over %d headings in %d documents; %d unresolved, "+
+		"%d ambiguous; %d heading names are declared more than once in their own file, latent until "+
+		"something cites one",
+		total, byKind, headings, len(targets), unresolved, ambiguous, duplicatedHeadingNames(targets))
+}
+
+// headingDeclarations renders every place one document declares one heading
+// name. An ambiguity failure has to show the sections that collide, not only the
+// name they share, because the fix is a decision about those sections.
+func headingDeclarations(target *xrefDoc, name string) string {
+	var b strings.Builder
+	for _, h := range target.headings {
+		if h.name == name {
+			b.WriteString("  declared: " + target.rel + ":" + strconv.Itoa(h.line) + "\n")
+		}
+	}
+	return b.String()
+}
+
+// duplicatedHeadingNames counts the heading names a document declares more than
+// once, over the whole corpus. It is reported, never enforced: a duplicated name
+// nothing cites is latent, and renaming sections no citation names would be
+// churn. The gate fails on the citation, not on the collision.
+func duplicatedHeadingNames(targets map[string]*xrefDoc) int {
+	n := 0
+	for _, doc := range targets {
+		for _, count := range doc.names {
+			if count > 1 {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 // assertSectionMarksAccountedFor is the totality reconciliation: every section
@@ -1038,4 +1102,81 @@ func intrawordUnderscores(s string) int {
 		}
 	}
 	return n
+}
+
+// ---------------------------------------------------------------------------
+// 4. The heading index counts declarations rather than merely recording them.
+// ---------------------------------------------------------------------------
+
+// TestSpecXref_HeadingIndexCountsEveryDeclaration pins the mechanism the
+// uniqueness half of the gate rests on.
+//
+// That half fires only on a citation of a name two headings declare, so on a
+// tree where every cited name resolves uniquely it never fires at all — and an
+// index that went back to recording presence instead of counting declarations
+// would look exactly the same from the outside. This test is what makes the
+// difference visible: it builds a document that declares one name twice and
+// asserts the index says two, that the failure text names both colliding
+// sections, and that the latent-duplicate report counts names rather than
+// headings.
+//
+// It runs against a synthetic document on purpose. Pinning it to the real corpus
+// would make the gate require SPEC/ to keep a duplicated heading name forever,
+// which is the opposite of what the gate is for.
+func TestSpecXref_HeadingIndexCountsEveryDeclaration(t *testing.T) {
+	// The shape DATABASE.md actually had: one name over two subjects, one
+	// section per parent, with a marked-up sibling to keep normalisation in the
+	// picture.
+	const source = "# Database Schema\n" +
+		"\n" +
+		"## Main SQL Queries\n" +
+		"\n" +
+		"### Audit\n" +
+		"\n" +
+		"The statements that write and read the audit table.\n" +
+		"\n" +
+		"## Data Constraints\n" +
+		"\n" +
+		"### Audit\n" +
+		"\n" +
+		"The columns of the audit table and the values they admit.\n" +
+		"\n" +
+		"### `sprint_tasks` Table\n"
+
+	doc := newXrefDoc("DATABASE.md", "SPEC/DATABASE.md", source)
+
+	for _, tc := range []struct {
+		name string
+		want int
+	}{
+		{name: "Audit", want: 2},
+		{name: "Main SQL Queries", want: 1},
+		{name: "Data Constraints", want: 1},
+		{name: "sprint_tasks Table", want: 1},
+		{name: "Audit Queries", want: 0},
+	} {
+		if got := doc.names[tc.name]; got != tc.want {
+			t.Errorf("the heading index records %d declarations of %q, want %d. The uniqueness half of "+
+				"this gate reads exactly this number, so an index that stops counting stops checking, "+
+				"and it does so without failing anything.", got, tc.name, tc.want)
+		}
+	}
+
+	// The two colliding sections must both be named. A failure that prints only
+	// the shared name tells a reader what is wrong and nothing about where.
+	declared := headingDeclarations(doc, "Audit")
+	for _, want := range []string{"SPEC/DATABASE.md:5", "SPEC/DATABASE.md:11"} {
+		if !strings.Contains(declared, want) {
+			t.Errorf("the ambiguity report for %q does not name %s; it reads:\n%s"+
+				"Both declarations have to appear, because the fix is a decision about the two sections "+
+				"that collide, not about the citation that stumbled over them.", "Audit", want, declared)
+		}
+	}
+
+	// One name declared twice is one duplicated name, not two.
+	if got := duplicatedHeadingNames(map[string]*xrefDoc{doc.name: doc}); got != 1 {
+		t.Errorf("duplicatedHeadingNames reports %d, want 1; the figure counts names that more than one "+
+			"heading declares, and the log line that carries it would otherwise misdescribe how much "+
+			"latent ambiguity the tree still holds", got)
+	}
 }

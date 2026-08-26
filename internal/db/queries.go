@@ -1535,14 +1535,23 @@ func assignSprintPositionsTx(tx *sql.Tx, sprintID int, ordered []int) error {
 // removal, so any operation that deletes sprint_tasks rows compacts afterwards.
 // Runs inside an existing transaction.
 //
+// This is THE repair routine of the density invariant, and it is the only one
+// (SPEC/DATABASE.md § Position Density Within a Sprint, "The repair").
+//
 // MoveTaskToPosition no longer needs density for its OWN correctness -- it writes
 // a permutation rather than shifting a range -- but the CALLER-FACING meaning of
 // a position value still rests on it: `sprint bottom` derives its target from the
 // member count, and MoveTaskToPosition's no-op guard compares the moved task's
 // STORED position against the TARGET RANK, so the two mean the same thing only
-// while the run is dense. That assumption is not specified anywhere and remains
-// unspecified: it is recorded as rmp task #304 and is deliberately NOT settled
-// here, which closes only the uniqueness of position, not its density.
+// while the run is dense. Over a run with a gap they are two different
+// quantities, so a real move is read as no move at all and still reported as a
+// success. That is not an unstated assumption: density is specified in
+// SPEC/DATABASE.md § Position Density Within a Sprint, which enumerates every
+// write path that touches position and states, for each, whether it preserves
+// the run or must repair it. The schema cannot carry the invariant -- SQLite has
+// no constraint form that ranges over a whole set of rows -- so the write paths
+// listed there carry it, by calling this routine inside the same transaction as
+// the removal that opened the gap.
 //
 // This routine needs NO parking step, and the reason is no longer that position
 // is unconstrained: since schema 1.13.0 the pair (sprint_id, position) is unique
@@ -1568,6 +1577,85 @@ func CompactSprintPositionsTx(tx *sql.Tx, sprintID int) error {
 		ordered[i] = m.taskID
 	}
 	return assignSprintPositionsTx(tx, sprintID, ordered)
+}
+
+// SprintsOfTasksTx reads which sprints the given tasks belong to RIGHT NOW,
+// inside an existing transaction, and returns those sprint ids once each in
+// ascending order. Tasks that belong to no sprint contribute nothing.
+//
+// IT MUST BE CALLED BEFORE THE REMOVAL, and that is the whole point of its
+// existing. Three of the four write paths that take a row out of a sprint's run
+// must compact a sprint the caller's arguments never name -- the re-parenting
+// form of `sprint add-tasks`, `task reopen` from a sprint-associated state, and
+// the cascade behind `task remove` -- so each must first learn which sprint the
+// row it is about to remove belonged to. Once the removal has run, the rows that
+// carried that answer are gone (SPEC/DATABASE.md § Position Density Within a
+// Sprint, "Every path that can leave a gap is a removal, and every removal owes
+// the same repair").
+//
+// ONE QUERY PER TASK RATHER THAN ONE `IN (...)` OVER THE BATCH. sprint_tasks
+// declares task_id UNIQUE, so a task has at most one membership row and each
+// lookup is a single index seek that returns at most one row: QueryRow says
+// exactly that, needs no cursor to close, and binds no interpolated placeholder
+// list. The batched form would have to build its placeholders into the statement
+// text and chunk them under SQLITE_LIMIT_VARIABLE_NUMBER, to save round trips
+// that cost microseconds in an in-process engine — and every caller here already
+// loops over the same ids to write the audit entries the operation owes.
+//
+// The ids come back sorted so that a caller compacting them writes in a
+// deterministic order, which keeps two concurrent transactions from taking the
+// same sprints' row locks in opposite orders.
+func SprintsOfTasksTx(tx *sql.Tx, taskIDs []int) ([]int, error) {
+	if len(taskIDs) == 0 {
+		return nil, nil
+	}
+
+	seen := make(map[int]struct{}, len(taskIDs))
+	for _, taskID := range taskIDs {
+		var sprintID int
+		err := tx.QueryRow(
+			"SELECT sprint_id FROM sprint_tasks WHERE task_id = ?",
+			taskID,
+		).Scan(&sprintID)
+		if errors.Is(err, sql.ErrNoRows) {
+			// The task belongs to no sprint, so its removal opens no gap.
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("reading the sprint of task %d: %w", taskID, err)
+		}
+		seen[sprintID] = struct{}{}
+	}
+
+	sprintIDs := make([]int, 0, len(seen))
+	for id := range seen {
+		sprintIDs = append(sprintIDs, id)
+	}
+	sort.Ints(sprintIDs)
+	return sprintIDs, nil
+}
+
+// CompactSprintsTx repairs the run of every named sprint, inside an existing
+// transaction, by calling CompactSprintPositionsTx on each.
+//
+// It is the counterpart of SprintsOfTasksTx: the pair turns "read which sprints
+// this removal is about to damage, then repair exactly those" into two calls
+// that cannot be transposed, because the read returns the list the repair
+// consumes.
+//
+// No sprint is exempt, CLOSED ones included. A removal that reaches a closed
+// sprint has already changed that sprint's membership, so leaving the survivors
+// with a gap preserves nothing; the compaction renumbers them and never reorders
+// them, so the sprint's recorded plan is unchanged (SPEC/DATABASE.md § Position
+// Density Within a Sprint, "The obligation is not suspended for a CLOSED
+// sprint").
+func CompactSprintsTx(tx *sql.Tx, sprintIDs []int) error {
+	for _, sprintID := range sprintIDs {
+		if err := CompactSprintPositionsTx(tx, sprintID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // GetSprintTasksFull retrieves full task objects for a sprint, ordered by position or priority.
@@ -1636,6 +1724,13 @@ func (db *DB) GetOpenSprintTasks(ctx context.Context, sprintID int, orderByPrior
 
 // AddTasksToSprint adds tasks to a sprint with automatic position assignment.
 // Tasks are added at the end of the sprint task list (highest position + 1).
+//
+// A task that already belonged to a sprint is RE-PARENTED rather than
+// duplicated: sprint_tasks declares task_id UNIQUE, so the ON CONFLICT clause
+// below moves that task's single row onto this sprint. The sprint it leaves is
+// renumbered before this transaction commits, which is why the sprint ids of the
+// batch are read before the insert (SPEC/DATABASE.md § Position Density Within a
+// Sprint).
 func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int) error {
 	if len(taskIDs) == 0 {
 		return nil
@@ -1681,13 +1776,31 @@ func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int)
 			}
 		}
 
+		// Which sprint each task belongs to must be read BEFORE the insert
+		// below, because the ON CONFLICT(task_id) clause rewrites the very rows
+		// that hold the answer. A task already in another sprint keeps its
+		// single membership row and has that row re-parented here, which takes
+		// it out of the other sprint's run and leaves a gap there — in a sprint
+		// this command's arguments never name (SPEC/DATABASE.md § Position
+		// Density Within a Sprint, `sprint add-tasks` for a task that already
+		// belonged to another sprint).
+		//
+		// A task already in THIS sprint is the same case seen from closer up:
+		// the conflicting row is re-parented onto sprintID again, appended after
+		// the sprint's own maximum, and the position it vacated becomes a gap in
+		// this sprint. That sprint is then among the ids below and gets the same
+		// repair; a task that belonged to no sprint contributes no id at all.
+		previousOwners, err := SprintsOfTasksTx(tx, taskIDs)
+		if err != nil {
+			return err
+		}
+
 		// Get current max position for this sprint within the transaction
 		var maxPos sql.NullInt64
-		err := tx.QueryRow(
+		if err := tx.QueryRow(
 			"SELECT MAX(position) FROM sprint_tasks WHERE sprint_id = ?",
 			sprintID,
-		).Scan(&maxPos)
-		if err != nil {
+		).Scan(&maxPos); err != nil {
 			return fmt.Errorf("querying max position: %w", err)
 		}
 
@@ -1756,7 +1869,11 @@ func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int)
 				return err
 			}
 		}
-		return nil
+
+		// Repair every sprint a re-parented task left, inside this same
+		// transaction as the insert that emptied its slot, so no committed state
+		// holds the gap and no reader ever observes one.
+		return CompactSprintsTx(tx, previousOwners)
 	})
 }
 
@@ -1769,12 +1886,15 @@ func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int)
 // task between sprints is a re-parenting of work, not a re-admission to the
 // sprint backlog, so the lifecycle state must be carried over unchanged.
 //
-// Validation (SPEC/COMMANDS.md validation step 5): every task in taskIDs must
-// currently be a member of fromID (a row in sprint_tasks with sprint_id =
-// fromID). If any task is not a member of the source sprint, no rows are moved
-// and the call returns ErrTasksNotInSprint wrapped with utils.ErrValidation so
-// the CLI maps it to exit code 6 ("task not in sprint"), matching the
-// task-ordering error contract. The membership check and the re-parenting run
+// Validation, the membership step of SPEC/COMMANDS.md § Task Assignment: every
+// task in taskIDs must currently be a member of fromID (a row in sprint_tasks
+// with sprint_id = fromID). The step is named by what it does rather than by
+// its ordinal, because that list is renumbered whenever a step is published or
+// removed and COMMANDS.md carries several Validation Orders whose step 5 says
+// different things. If any task is not a member of the source sprint, no rows
+// are moved and the call returns ErrTasksNotInSprint wrapped with
+// utils.ErrValidation so the CLI maps it to exit code 6, the code that step
+// publishes for a non-member. The membership check and the re-parenting run
 // in the same transaction, so the move is all-or-nothing.
 //
 // Re-parenting (mirrors AddTasksToSprint's position/added_at conventions):
@@ -1782,6 +1902,9 @@ func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int)
 //   - added_at is refreshed to now
 //   - position values are appended after the current max position in toID,
 //     preserving the relative order of the moved tasks (taskIDs order)
+//   - the SOURCE sprint is compacted before the transaction commits, so the
+//     members it keeps hold a gapless 0..N-1 run again (SPEC/DATABASE.md
+//     § Position Density Within a Sprint)
 //
 // No capacity (max_tasks) check is applied: relocating existing work must not
 // be blocked by the destination sprint's cap (SPEC requires the cap only for
@@ -1810,8 +1933,9 @@ func (db *DB) MoveTasksBetweenSprints(ctx context.Context, fromID, toID int, tas
 			return fmt.Errorf("verifying task membership: %w", err)
 		}
 		if count != len(taskIDs) {
-			// Wrap with utils.ErrValidation so the CLI maps this to exit 6
-			// (SPEC/COMMANDS.md: "Task ID not in sprint" -> exit 6).
+			// Wrap with utils.ErrValidation so the CLI maps this to exit 6,
+			// the code the membership step of SPEC/COMMANDS.md
+			// § Task Assignment publishes for a non-member.
 			return fmt.Errorf("%w: %w: one or more tasks are not in sprint #%d",
 				utils.ErrValidation, ErrTasksNotInSprint, fromID)
 		}
@@ -1839,6 +1963,27 @@ func (db *DB) MoveTasksBetweenSprints(ctx context.Context, fromID, toID int, tas
 			); err != nil {
 				return fmt.Errorf("moving task %d: %w", taskID, err)
 			}
+		}
+
+		// The source sprint has just lost every moved row, so the values its
+		// SURVIVING members hold are no longer the dense 0..N-1 run the
+		// invariant requires: moving the task at position 2 out of a run of
+		// five leaves 0, 1, 3, 4. Compacting here, inside the same transaction
+		// as the re-parenting, is what keeps the gap out of every committed
+		// state, so no reader ever observes one (SPEC/DATABASE.md § Position
+		// Density Within a Sprint, `sprint move-tasks`, source sprint).
+		//
+		// This is the ONE of the four gap-opening removals whose caller already
+		// names the sprint to repair, so it needs no lookup: fromID is an
+		// argument. It is also correct when fromID == toID, which the command
+		// does not reject: the re-parenting then appends the named tasks after
+		// the sprint's own maximum and leaves the gap they came from, and this
+		// call closes it.
+		//
+		// The destination needs nothing: it appended after its own MAX(position),
+		// which continues a dense run.
+		if err := CompactSprintPositionsTx(tx, fromID); err != nil {
+			return err
 		}
 
 		// Intentionally NOT updating tasks.status: the task keeps whatever
@@ -2398,6 +2543,10 @@ func (db *DB) ReorderSprintTasks(sprintID int, taskIDs []int) error {
 // slot, parks the whole sprint, and writes the resulting permutation: the same
 // final state, reached without ever presenting a duplicate (SPEC/DATABASE.md
 // § Move Task to Position).
+//
+// One SPRINT_TASK_MOVE_POSITION entry is written per call against the sprint,
+// including when the task already holds the target position and no row changes
+// (SPEC/COMMANDS.md § Audit of the ordering commands).
 func (db *DB) MoveTaskToPosition(sprintID, taskID, newPosition int) error {
 	return db.WithTransaction(func(tx *sql.Tx) error {
 		// Get current position of the task
@@ -2426,36 +2575,45 @@ func (db *DB) MoveTaskToPosition(sprintID, taskID, newPosition int) error {
 			newPosition = taskCount - 1
 		}
 
-		// If position unchanged, nothing to do — including no audit entry, since
-		// nothing happened for one to record.
-		if currentPos == newPosition {
-			return nil
-		}
-
-		// Lift the moved task out of the current order and re-insert it at the
-		// target slot. The result is a permutation of the sprint's members, which
-		// is what the assignment below writes as a dense 0..N-1 run.
-		ordered := make([]int, 0, taskCount)
-		for _, m := range members {
-			if m.taskID != taskID {
-				ordered = append(ordered, m.taskID)
+		// A NO-OP MOVE STILL WRITES ITS ENTRY. When the task already holds the
+		// target slot there is no permutation left to write, so the rewrite below
+		// is skipped -- but only the rewrite. The audit entry underneath it is
+		// written on every invocation that reaches here, because SPEC/COMMANDS.md
+		// § Audit of the ordering commands states the rule without qualification:
+		// "A no-op move (moving a task to the position it already holds) still
+		// writes its entry, on the same rule that governs `task edit`: the audit
+		// log records the command issued, not the delta it produced." A log that
+		// recorded only deltas could not answer who issued a command, which is the
+		// question an audit log exists to answer, and the sibling paths already
+		// answer it: `task edit -t` re-supplying the stored title writes
+		// TASK_TITLE_CHANGE, and an identical `sprint reorder` writes a second
+		// SPRINT_REORDER_TASKS.
+		if currentPos != newPosition {
+			// Lift the moved task out of the current order and re-insert it at the
+			// target slot. The result is a permutation of the sprint's members,
+			// which is what the assignment below writes as a dense 0..N-1 run.
+			ordered := make([]int, 0, taskCount)
+			for _, m := range members {
+				if m.taskID != taskID {
+					ordered = append(ordered, m.taskID)
+				}
 			}
-		}
-		if newPosition < 0 {
-			newPosition = 0
-		}
-		if newPosition > len(ordered) {
-			newPosition = len(ordered)
-		}
-		ordered = append(ordered, 0)
-		copy(ordered[newPosition+1:], ordered[newPosition:])
-		ordered[newPosition] = taskID
+			if newPosition < 0 {
+				newPosition = 0
+			}
+			if newPosition > len(ordered) {
+				newPosition = len(ordered)
+			}
+			ordered = append(ordered, 0)
+			copy(ordered[newPosition+1:], ordered[newPosition:])
+			ordered[newPosition] = taskID
 
-		if err := parkSprintPositionsTx(tx, sprintID); err != nil {
-			return err
-		}
-		if err := assignSprintPositionsTx(tx, sprintID, ordered); err != nil {
-			return err
+			if err := parkSprintPositionsTx(tx, sprintID); err != nil {
+				return err
+			}
+			if err := assignSprintPositionsTx(tx, sprintID, ordered); err != nil {
+				return err
+			}
 		}
 
 		// Log audit entry

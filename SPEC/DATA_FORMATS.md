@@ -621,7 +621,7 @@ Rules:
 
 A request the graph data endpoint refuses, and a query that fails, are answered
 with this object in place of the node-and-edge object above. The endpoint returns
-it for each of the four query-bar failures, always with HTTP `400 Bad Request`.
+it for each of the five query-bar failures, always with HTTP `400 Bad Request`.
 The status, the failure classes, and the rules that select between them are
 specified in `WEB.md § Query-Bar Error Handling`, which is canonical for them; this
 section is canonical for the shape.
@@ -638,20 +638,24 @@ Field reference:
 | Field | Type | Description |
 |-------|------|-------------|
 | `error` | string | The human-readable reason. The graph page shows it in place as its failure message. |
-| `kind` | string | The machine-readable failure class: `not_read_only`, `invalid_limit`, `invalid_keyword_spacing`, or `execution`. |
+| `kind` | string | The machine-readable failure class: `not_read_only`, `invalid_limit`, `invalid_keyword_spacing`, `relationship_read_direction`, or `execution`. |
 
 Rules:
 
 1. Both fields are always present and both are always strings. The object carries
    these two fields and no others, and it carries neither `nodes` nor `edges`.
-2. `kind` takes exactly four values, one per failure class in
+2. `kind` takes exactly five values, one per failure class in
    `WEB.md § Query-Bar Error Handling`: `not_read_only` for a query the read-only
    guard-rail rejected before execution, `invalid_limit` for a `limit` that is not
    one of the six allowed values, `invalid_keyword_spacing` for a
    schema-introspection command the guard rail rejected before execution because
    its keyword spacing is not the one the engine accepts (see
-   `GRAPH.md § Keyword Spacing in a Schema-Introspection Command`), and `execution`
-   for a query that was accepted as read-only and then failed once running. A query
+   `GRAPH.md § Keyword Spacing in a Schema-Introspection Command`),
+   `relationship_read_direction` for a query the guard rail rejected before
+   execution because it reads a relationship bound by an incoming or undirected
+   fixed-length pattern (see `GRAPH.md § Relationship Read Direction`), and
+   `execution` for a query that was accepted as read-only and then failed once
+   running. A query
    cancelled for exhausting the endpoint's query time budget is an execution
    failure and carries `execution`; the budget adds no value of its own (see
    `WEB.md § Graph Query Time Budget`).
@@ -661,12 +665,16 @@ Rules:
    `GRAPH.md § Error Handling and Exit Codes`, rule 2). For an invalid limit it
    names the rejected value. For a keyword-spacing rejection it names the spacing
    and the accepted spelling, and never describes the query as not read-only: a
-   schema-introspection command reads and writes nothing whatever its spacing.
+   schema-introspection command reads and writes nothing whatever its spacing. For
+   a relationship-read-direction rejection it names the relationship variable, the
+   direction of the pattern that bound it, and the outgoing rewrite, and likewise
+   never describes the query as not read-only: such a query carries no writing
+   clause and no DDL clause, and only the orientation of its pattern is refused.
 4. The object is serialized exactly as every other response of this endpoint is:
    HTML-safe, so `<`, `>`, and `&` are escaped (see `WEB.md § Graph Data Endpoint`),
    pretty-printed with two-space indentation, and terminated by a newline (see
    [Implementation Notes](#implementation-notes)).
-5. This is the endpoint's error contract for the four query-bar failures only. An
+5. This is the endpoint's error contract for the five query-bar failures only. An
    internal read error — a graph store that cannot be opened, for example — is
    answered HTTP `500` as on every other route of the web interface and does not
    carry this shape (see `WEB.md § Query-Bar Error Handling`, rule 7).
@@ -903,7 +911,7 @@ a sprint rejects (see `HELP.md § Comment subcommand help specifics`).
 "TaskStatus": {
   "values": [
     {"value": "BACKLOG",   "description": "Task is in backlog, not assigned to a sprint."},
-    {"value": "SPRINT",    "description": "Task is assigned to a sprint. Set automatically; do not set manually."},
+    {"value": "SPRINT",    "description": "Task is assigned to a sprint. Set automatically by `sprint add-tasks`; cannot be set manually via `task stat`."},
     {"value": "DOING",     "description": "Task is being worked on."},
     {"value": "TESTING",   "description": "Task is in testing phase."},
     {"value": "COMPLETED", "description": "Task is complete."}
@@ -914,7 +922,7 @@ a sprint rejects (see `HELP.md § Comment subcommand help specifics`).
 
 **The audit enums are published in full.** `AuditOperation` carries every value in
 `ValidAuditOperations` — the canonical catalogue of `DATABASE.md § audit Table` — and
-`AuditEntityType` carries `TASK` and `SPRINT`. Four rules apply to
+`AuditEntityType` carries `TASK` and `SPRINT`. Five rules apply to
 `AuditOperation` specifically:
 
 1. **No value is omitted.** `audit list --operation` accepts exactly the values in
@@ -937,8 +945,9 @@ a sprint rejects (see `HELP.md § Comment subcommand help specifics`).
    inference is not permitted and what both published surfaces read instead.
 
    The entity type cannot travel inside `description`. That string carries the
-   catalogue entry's own text from `DATABASE.md § audit Table`, so it says what the
-   catalogue says and nothing more, and prose is not a member a consumer can read a
+   catalogue entry's own text from `DATABASE.md § audit Table`, which rule 5 below
+   alters in two mechanical ways and no others, so the string has no room for a fact
+   the catalogue does not state; and prose is not a member a consumer can read a
    value from without parsing it.
 
 4. **Every value states whether a command still writes it.** Each element of
@@ -962,16 +971,58 @@ a sprint rejects (see `HELP.md § Comment subcommand help specifics`).
    carries both facts. The contract derives neither of them from the value's name
    and neither of them from its `description`.
 
+5. **Every description is the catalogue entry's own text.** A value's `description`
+   is not composed here. It is transcribed from that operation's entry in the
+   canonical catalogue of `DATABASE.md § audit Table`, verbatim, backticks
+   included, and the transcription alters the entry in exactly two ways:
+
+   a. A full stop is appended when the catalogue entry does not already end in one.
+      A catalogue entry is a list item and most end without terminal punctuation,
+      while a `description` on the contract is a sentence.
+   b. The six comment operations — `TASK_COMMENT_CREATE`, `TASK_COMMENT_UPDATE`,
+      `TASK_COMMENT_DELETE`, `SPRINT_COMMENT_CREATE`, `SPRINT_COMMENT_UPDATE`, and
+      `SPRINT_COMMENT_DELETE` — additionally receive one fixed closing sentence,
+      the same sentence on each, stating that the audit entry names the parent
+      entity and that the comment's own id is never recorded. This is the fact an
+      operation name hides: `TASK_COMMENT_DELETE` reads as an operation on a
+      comment, and the entry is recorded against the task.
+
+   Nothing else is reworded, shortened, expanded, or reordered. The two surfaces
+   are tied byte for byte in both directions: rewriting a description on the
+   contract without making the same change to the catalogue fails the test suite,
+   and so does editing the catalogue alone. What this costs the writer of the
+   catalogue is stated at the catalogue itself (`DATABASE.md § The Catalogue Entry
+   Is Also the Published Contract Description`).
+
+   A single source for the text is the point of the rule. The catalogue and the
+   contract describe the same operations for two different readers, and a second
+   wording maintained independently of the first would be free to drift from it
+   without either surface looking wrong on its own. The text is nonetheless copied
+   rather than read from the markdown at run time, because the binary must describe
+   itself with no repository present; the copy is pinned by test rather than
+   avoided.
+
+   Rule 2's content requirement therefore lands on the catalogue entry. A LEGACY
+   value's `description` states what that rule demands because the entry it is
+   transcribed from states it, and it cannot be satisfied by wording introduced on
+   the contract alone.
+
 ```json
 "AuditOperation": {
   "values": [
-    {"value": "TASK_STATUS_DOING",     "entity_type": "TASK",   "legacy": false, "description": "A task entered DOING. The entry carries the commit the work started from."},
+    {"value": "TASK_STATUS_DOING",     "entity_type": "TASK",   "legacy": false, "description": "Task entered `DOING` via `task stat`, one row per task. The row carries the `commit_hash` supplied as `--commit-open`."},
     {"value": "SPRINT_ADD_TASK",       "entity_type": "SPRINT", "legacy": false, "description": "Task added to a sprint via `sprint add-tasks`; one row per task, against the sprint, naming the task in `related_entity_id`."},
-    {"value": "TASK_STATUS_CHANGE",    "entity_type": "TASK",   "legacy": true,  "description": "LEGACY. No command writes this. It survives on entries written before status operations named their destination; filter TASK_STATUS_BACKLOG, TASK_STATUS_SPRINT, TASK_STATUS_DOING, TASK_STATUS_TESTING, or TASK_STATUS_COMPLETED for current activity."}
-  ],
-  "catalogue_reference": "DATABASE.md § audit Table"
+    {"value": "TASK_COMMENT_CREATE",   "entity_type": "TASK",   "legacy": false, "description": "Comment added to a task via `task comment-add` (logged against the parent task). The audit entry names the parent entity; the comment's own id is never recorded."},
+    {"value": "TASK_STATUS_CHANGE",    "entity_type": "TASK",   "legacy": true,  "description": "LEGACY. The single status-change operation the five `TASK_STATUS_*` operations above replace. It survives on rows the 1.11.0 to 1.12.0 migration could not reclassify (see `VERSION.md § Migration 1.11.0 to 1.12.0`)."}
+  ]
 }
 ```
+
+Every `description` above is the operation's catalogue entry from
+`DATABASE.md § audit Table`, and rule 5 is visible in the rows: each has gained the
+full stop its catalogue entry lacks, and `TASK_COMMENT_CREATE`, being one of the six
+comment operations, has gained the closing sentence about the parent entity as well.
+Nothing else separates these strings from the catalogue's.
 
 **`entity_type` and `legacy` appear only where they apply.** Each is a member of an
 `enums[].values[]` element, not a member every such element carries: each is present
@@ -989,6 +1040,46 @@ Adding these members widens a published contract, which is a deliberate change a
 not a detail. A consumer that reads the members it knows is unaffected; a consumer
 that enumerates members sees exactly two new keys, both on the values of exactly
 one enum.
+
+**An enum carries a reference member only when it has a state machine.** An enum
+definition has exactly two members. `values` is carried by every enum.
+`state_machine_reference` is carried by `TaskStatus` and `SprintStatus`, and by no
+other enum: `AuditOperation`, `AuditEntityType`, `TaskCommentType`,
+`SprintCommentType`, `TaskSort`, and `TaskType` each carry `values` alone.
+`state_machine_reference` is also the only reference member this contract defines,
+so an enum that carries no state-machine reference carries no reference of any kind.
+The two lists above are exhaustive on purpose. A member that is absent is
+indistinguishable, to the consumer reading it, from a member that was never
+specified, so a consumer cannot detect a reference this contract failed to publish;
+naming every enum on both sides of the rule is what lets that consumer stop looking.
+
+The asymmetry is deliberate, and `AuditOperation` is not an exception to a rule the
+other seven enums follow: six enums carry `values` alone and two carry a reference,
+and what separates them is the state machine, not the enum's subject matter. A
+reference is published when the values cannot be used correctly without the text it
+points at. The values of `TaskStatus` and `SprintStatus` are the states of a
+machine, and which value may follow which is not in the value list: an agent holding
+the list still cannot tell whether it may move a task from `BACKLOG` to `TESTING`,
+which is not a legal transition. `STATE_MACHINE.md § Valid Transitions`, inside the
+section this enum's `state_machine_reference` names, is where that answer is.
+`AuditOperation` has no such gap. Its values are the arguments
+`audit list --operation` accepts, and each value already carries what an agent
+needs in order to choose one: a `description`, which rule 5 above transcribes from
+the catalogue entry verbatim, an `entity_type`, and a `legacy` flag. A reference to
+`DATABASE.md § audit Table` would point the consumer at text this contract already
+carries value by value, wrapped in schema material — the DDL, the column list, the
+index rationale — that a consumer filtering audit entries has no use for at run
+time.
+
+**The asymmetry is not to be closed by adding a reference member.** Giving
+`AuditOperation`, or any other enum, a second kind of reference widens a published
+contract: every consumer that enumerates the members of an enum definition sees a
+new key. That is a change to be decided on its own terms, with a stated consumer
+that needs the referenced text at run time, and not a gap to be filled because two
+enums out of eight look different from the rest. This specification names the
+catalogue for its own reader — `The audit enums are published in full` above does
+exactly that, and so does rule 5 — and naming it in this document is not a statement
+that the contract carries the same reference as data.
 
 **Every published value carries a description.** Each element of `values` MUST
 carry a `description` that is not empty after trimming whitespace. The rule

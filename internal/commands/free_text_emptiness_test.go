@@ -363,7 +363,7 @@ func TestLiteralEmptyStringKeepsItsOwnRefusal(t *testing.T) {
 
 // alignedFreeTextWriters lists every (command, field) pair whose refusal is exit
 // code 6 and names the field. Every one of them refuses a value made only of VT
-// as a CONTROL-CHARACTER violation, which is the observable signature of step 1
+// as a CONTROL-CHARACTER violation, which is the observable signature of step 2
 // running on the value as supplied.
 //
 // It is the whole of that population: `task edit` was the one residual and rmp

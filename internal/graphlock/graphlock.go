@@ -39,18 +39,24 @@
 // implementations of the same lock file in the binary.
 //
 // This file owns the whole contract — the lock-file path, the file handle's
-// lifetime, the retry policy, the error mapping, and the release closure. Only
-// the lock and unlock system calls are platform-specific, because no single
-// call provides them everywhere; they live in graphlock_unix.go (flock(2)) and
+// lifetime, the error mapping, and the release closure. Only the lock and
+// unlock system calls are platform-specific, because no single call provides
+// them everywhere; they live in graphlock_unix.go (flock(2)) and
 // graphlock_windows.go (LockFileEx / UnlockFileEx).
+//
+// What this file does NOT own is the bounded wait a reader performs. That is
+// the project's single retry policy; it lives in internal/backoff and this
+// package consumes it. It used to be restated here, in constants and prose of
+// this package's own, which is how two other copies of the same policy drifted
+// unnoticed (task #294).
 package graphlock
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
+	"github.com/FlavioCFOliveira/Groadmap/internal/backoff"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
@@ -59,24 +65,6 @@ import (
 // maintains it, its contents are never read or written, and only the advisory
 // lock on it carries meaning (SPEC/GRAPH.md § Persistence Layout, rule 5).
 const LockFileName = "write.lock"
-
-// The reader's bounded exponential backoff. These mirror the single retry
-// policy SPEC/IMPLEMENTATION.md § Concurrency Model defines for the SQLite
-// layer and § Graph Store Concurrency rule 4 reuses verbatim for the shared
-// graph lock: initial delay 100 ms, doubling to a maximum of 1000 ms, at most 5
-// retries. One initial attempt plus five retries sleeps 100+200+400+800+1000 ms,
-// so the worst-case wait is 2.5 s — a small fraction of the web server's 30 s
-// write timeout, and spent before the query starts rather than inside the graph
-// data endpoint's own query budget (SPEC/WEB.md § Graph Query Time Budget).
-//
-// The policy is sized against the WRITER's hold, which spans a full checkpoint
-// whose cost grows with the live graph size, not against the reader's own. That
-// is why narrowing the reader's hold does not narrow the wait a reader may face.
-const (
-	retryInitialDelay = 100 * time.Millisecond
-	retryMaxDelay     = 1000 * time.Millisecond
-	retryMaxRetries   = 5
-)
 
 // AcquireExclusive takes an exclusive, non-blocking advisory lock on the graph
 // store for the duration of a write, and returns a closure that releases it.
@@ -119,40 +107,43 @@ func AcquireExclusive(graphDir string) (func(), error) {
 // Several readers may hold the shared lock at the same time, so reads never
 // serialise against one another; only a writer's exclusive hold conflicts. Per
 // SPEC/GRAPH.md § Lock Contention rule 2 a read does not fail on the first
-// collision and does not block indefinitely: it retries under the bounded
-// backoff above and then fails with utils.ErrDatabase. Callers map that to exit
-// code 1 for the CLI and HTTP 500 for the web graph data endpoint.
+// collision and does not block indefinitely: it retries under the project's
+// bounded backoff policy (internal/backoff, specified by
+// SPEC/IMPLEMENTATION.md § Graph Store Concurrency rule 4, which reuses the
+// SQLite policy verbatim) and then fails with utils.ErrDatabase. Callers map
+// that to exit code 1 for the CLI and HTTP 500 for the web graph data endpoint.
 //
 // A read waits where a write fails at once because the two are not symmetrical.
 // What a read waits for is a writer's hold, which spans a whole checkpoint; and
 // reads are by far the more frequent operation, so failing one on the first
-// collision would make ordinary reads intermittently unavailable.
+// collision would make ordinary reads intermittently unavailable. The wait is
+// therefore sized against the WRITER's hold, whose cost grows with the live
+// graph size, not against the reader's own — which is why narrowing the reader's
+// hold does not narrow the wait a reader may face. Its worst case stays a small
+// fraction of the web server's 30 s write timeout, and is spent before the query
+// starts rather than inside the graph data endpoint's own query budget
+// (SPEC/WEB.md § Graph Query Time Budget).
 func AcquireShared(graphDir string) (func(), error) {
 	f, err := openLockFile(graphDir)
 	if err != nil {
 		return nil, err
 	}
 
-	// One initial attempt, then at most retryMaxRetries retries. The lock is
-	// taken non-blocking on every attempt so the wait is this loop's, and
-	// therefore bounded and observable, rather than the kernel's and unbounded.
-	delay := retryInitialDelay
-	for attempt := 0; ; attempt++ {
-		if lockErr := lockSharedNB(f); lockErr == nil {
-			return releaseFunc(f), nil
+	// The lock is taken NON-BLOCKING on every attempt, so the wait is
+	// backoff.Retry's — bounded, observable, and identical to the wait the
+	// SQLite layer performs — rather than the kernel's, which is unbounded.
+	// Every failure of lockSharedNB is contention, so every one is retried.
+	release, err := backoff.Retry(func() (func(), error) {
+		if lockErr := lockSharedNB(f); lockErr != nil {
+			return nil, lockErr
 		}
-		if attempt == retryMaxRetries {
-			break
-		}
-		time.Sleep(delay)
-		delay *= 2
-		if delay > retryMaxDelay {
-			delay = retryMaxDelay
-		}
+		return releaseFunc(f), nil
+	}, backoff.Always)
+	if err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("%w: graph store is busy: a concurrent write is still in progress after the bounded wait", utils.ErrDatabase)
 	}
-
-	_ = f.Close()
-	return nil, fmt.Errorf("%w: graph store is busy: a concurrent write is still in progress after the bounded wait", utils.ErrDatabase)
+	return release, nil
 }
 
 // openLockFile opens (creating on first use) the lock file inside graphDir.

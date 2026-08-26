@@ -501,7 +501,7 @@ class TestWritePersistenceFidelity:
         sid = self.test.create_sprint(r, "S")
         self.test.run_cmd(["sprint", "start", "-r", r, str(sid)])
         a = self._mk(r, "A"); b = self._mk(r, "B")
-        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(sid), str(a), str(b)])
+        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(sid), f"{a},{b}"])
         assert self._get(r, a)["status"] == "SPRINT" and self._get(r, b)["status"] == "SPRINT"
         assert self._order(r, sid) == [a, b], self._order(r, sid)
         self.test.run_cmd(["sprint", "remove-tasks", "-r", r, str(sid), str(a)])
@@ -516,7 +516,7 @@ class TestWritePersistenceFidelity:
         s2 = self.test.create_sprint(r, "S2")  # stays PENDING
         self.test.run_cmd(["sprint", "start", "-r", r, str(s1)])
         a = self._mk(r, "A"); b = self._mk(r, "B"); c = self._mk(r, "C")
-        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(s1), str(a), str(b), str(c)])
+        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(s1), f"{a},{b},{c}"])
         self.test.run_cmd(["task", "stat", "-r", r, str(b), "DOING", "--commit-open", "021fa2f"])
         self.test.run_cmd(["task", "stat", "-r", r, str(c), "DOING", "--commit-open", "abd481c"])
         self.test.run_cmd(["task", "stat", "-r", r, str(c), "TESTING"])
@@ -544,7 +544,7 @@ class TestWritePersistenceFidelity:
         sid = self.test.create_sprint(r, "S")
         self.test.run_cmd(["sprint", "start", "-r", r, str(sid)])
         ids = [self._mk(r, f"T{i}") for i in range(5)]
-        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(sid)] + [str(i) for i in ids])
+        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(sid), ",".join(str(i) for i in ids)])
         assert self._order(r, sid) == ids
         # reorder (CSV) to reverse
         self.test.run_cmd(["sprint", "reorder", "-r", r, str(sid), ",".join(str(i) for i in reversed(ids))])
@@ -586,7 +586,7 @@ class TestWritePersistenceFidelity:
                                       "--max-tasks", "2"])["id"]
         self.test.run_cmd(["sprint", "start", "-r", r, str(sid)])
         ids = [self._mk(r, f"C{i}") for i in range(3)]
-        rc, _, _ = self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(sid)] + [str(i) for i in ids],
+        rc, _, _ = self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(sid), ",".join(str(i) for i in ids)],
                                      check=False)
         assert rc == 6, f"over-capacity add must exit 6, got {rc}"
         assert self._order(r, sid) == [], "rejected add must be atomic (no partial membership)"

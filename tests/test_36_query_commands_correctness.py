@@ -106,7 +106,7 @@ class TestQueryCommandsCorrectness:
 
         # Sprint 1: 5 tasks; complete 3 (distinct timestamps), t1 -> DOING, close.
         self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(s1),
-                            str(t["t1"]), str(t["t3"]), str(t["t4"]), str(t["t11"]), str(t["t12"])])
+                            ",".join(str(t[k]) for k in ("t1", "t3", "t4", "t11", "t12"))])
         self.test.run_cmd(["sprint", "start", "-r", r, str(s1)])
         self._complete(r, t["t3"], settle=0.05)
         self._complete(r, t["t4"], settle=0.05)
@@ -116,7 +116,7 @@ class TestQueryCommandsCorrectness:
 
         # Sprint 2: 4 tasks; complete 2, t7 -> DOING, t8 -> TESTING, stay OPEN.
         self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(s2),
-                            str(t["t6"]), str(t["t7"]), str(t["t8"]), str(t["t14"])])
+                            ",".join(str(t[k]) for k in ("t6", "t7", "t8", "t14"))])
         self.test.run_cmd(["sprint", "start", "-r", r, str(s2)])
         self._complete(r, t["t6"], settle=0.05)
         self._complete(r, t["t14"], settle=0.05)
@@ -125,7 +125,7 @@ class TestQueryCommandsCorrectness:
         self.test.run_cmd(["task", "stat", "-r", r, str(t["t8"]), "TESTING"])
 
         # Sprint 3: PENDING with 2 tasks (move BACKLOG -> SPRINT). Sprint 4: PENDING empty.
-        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(s3), str(t["t9"]), str(t["t10"])])
+        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(s3), ",".join(str(t[k]) for k in ("t9", "t10"))])
 
         ids = {"s1": s1, "s2": s2, "s3": s3, "s4": s4}
         ids.update(t)
@@ -273,7 +273,7 @@ class TestQueryCommandsCorrectness:
         # OPEN yet (only one sprint may be OPEN at a time).
         medium_order = [t["t6"], t["t3"], t["t5"], t["t4"]]
         self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(s_medium),
-                            str(t["t3"]), str(t["t4"]), str(t["t5"]), str(t["t6"])])
+                            ",".join(str(t[k]) for k in ("t3", "t4", "t5", "t6"))])
         self.test.run_cmd(["sprint", "reorder", "-r", r, str(s_medium),
                             ",".join(str(i) for i in medium_order)])
         self.test.run_cmd(["task", "stat", "-r", r, str(t["t4"]), "BACKLOG"])
@@ -284,13 +284,12 @@ class TestQueryCommandsCorrectness:
 
         # s_small: 2 members, started last so it is the sprint left OPEN.
         self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(s_small),
-                            str(t["t1"]), str(t["t2"])])
+                            ",".join(str(t[k]) for k in ("t1", "t2"))])
         self.test.run_cmd(["sprint", "start", "-r", r, str(s_small)])
 
         # s_large: 6 members, default (ascending) order, left PENDING.
         self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(s_large),
-                            str(t["t7"]), str(t["t8"]), str(t["t9"]),
-                            str(t["t10"]), str(t["t11"]), str(t["t12"])])
+                            ",".join(str(t[k]) for k in ("t7", "t8", "t9", "t10", "t11", "t12"))])
 
         # s_empty: no operations at all -- created and left untouched.
 
@@ -696,7 +695,7 @@ class TestQueryCommandsCorrectness:
         r = self.test.create_roadmap("velocity_check")
         s = self.test.create_sprint(r, "Same-day sprint")
         ids = [self._mk_task(r, f"Task {i}", "TASK", 5, 3) for i in range(4)]
-        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(s)] + [str(i) for i in ids])
+        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(s), ",".join(str(i) for i in ids)])
         self.test.run_cmd(["sprint", "start", "-r", r, str(s)])
         for tid in ids:  # complete all 4 quickly (sub-day)
             self._complete(r, tid)

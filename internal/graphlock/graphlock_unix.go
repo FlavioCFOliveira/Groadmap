@@ -2,14 +2,15 @@
 
 // Package graphlock — Unix half of the graph store lock primitive.
 //
-// The lock contract, the lock-file path, the handle lifetime, the retry policy,
-// and the error mapping all live in graphlock.go; this file supplies only the
+// The lock contract, the lock-file path, the handle lifetime and the error
+// mapping all live in graphlock.go, and the bounded wait a reader performs is
+// the project-wide policy in internal/backoff; this file supplies only the
 // system calls that differ per platform. The Windows half is in
 // graphlock_windows.go and MUST honour the same contract: an exclusive mode and
 // a shared mode that are mutually exclusive with each other, shared holders
 // that do not exclude one another, and BOTH modes failing immediately on
-// contention rather than waiting — the bounded wait a reader performs is the
-// retry loop in graphlock.go, not a blocking system call.
+// contention rather than waiting — a reader waits in AcquireShared, not in a
+// blocking system call.
 package graphlock
 
 import (
@@ -33,7 +34,7 @@ func lockExclusiveNB(f *os.File) error {
 // them out.
 //
 // LOCK_NB is not optional here either, even though a reader is allowed to wait:
-// the wait must be the bounded retry loop in AcquireShared, so that it can end
+// the wait must be the bounded one AcquireShared performs, so that it can end
 // in a diagnosed failure. Dropping LOCK_NB would turn it into an unbounded
 // kernel block, which SPEC/GRAPH.md § Lock Contention rule 2 forbids because one
 // of the two readers is an HTTP request handler.

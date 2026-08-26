@@ -10,6 +10,7 @@ Usage:
     python run_tests.py --all        # Run all tests including stress
 """
 
+import ast
 import sys
 import os
 import re
@@ -74,6 +75,14 @@ TEST_MODULES = [
     "test_53_e2e_harness_binary_staleness",
     "test_54_audit_enrichment_e2e",
     "test_55_error_string_parity",
+    "test_56_graph_read_direction",
+    "test_57_positional_arity",
+    "test_58_ai_contract_error_parity",
+    "test_59_graph_property_value_content",
+    "test_60_docs_readme_contract_completeness",
+    "test_61_family_help_dispatch_exit_code",
+    "test_62_graph_stray_positional_order",
+    "test_63_roadmap_name_refusal_parity",
 ]
 
 # Stress tests (run separately due to time/data volume)
@@ -95,6 +104,105 @@ def assert_no_dormant_modules() -> list[str]:
         for p in Path(__file__).parent.glob("test_*.py")
     }
     return sorted(on_disk - registered)
+
+
+# Two idiom families let a module enumerate its own `Test*`/`*Tests` suite
+# classes by introspecting its own module object at run time, instead of
+# naming them in a fixed list: `inspect.getmembers`/`vars`/`dir` or `globals()`
+# over the module's own namespace (`sys.modules[__name__]`, or `globals()`
+# called from inside the module itself), filtered down to classes with
+# `isinstance(obj, type)` / `inspect.isclass`. A runner built on either idiom
+# picks up a class the moment it is defined, so it cannot go stale the way
+# rmp task #303 describes -- see test_48_graph_clause_surface.py's `_run_all`
+# for the canonical shape.
+_DISCOVERY_NAMESPACE_MARKERS = ("sys.modules[__name__]", "globals()")
+_DISCOVERY_CLASS_FILTER_MARKERS = ("isinstance(obj, type)", "inspect.isclass")
+
+
+def _module_defines_dynamic_class_discovery(source: str) -> bool:
+    """True when `source` enumerates its own test classes by introspecting
+    its own module namespace rather than naming them in a fixed list."""
+    return (
+        any(marker in source for marker in _DISCOVERY_NAMESPACE_MARKERS)
+        and any(marker in source for marker in _DISCOVERY_CLASS_FILTER_MARKERS)
+    )
+
+
+def _module_suite_classes(tree: ast.Module) -> list[str]:
+    """Top-level classes in `tree` that look like test suites under this
+    repository's two naming conventions (`Test...` / `...Tests`) and carry at
+    least one `test_*` method -- a class matching the name convention with no
+    test method is a fixture/helper, not a suite, and is not counted."""
+    names = []
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        if not (node.name.startswith("Test") or node.name.endswith("Tests")):
+            continue
+        has_test_method = any(
+            isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and item.name.startswith("test_")
+            for item in node.body
+        )
+        if has_test_method:
+            names.append(node.name)
+    return names
+
+
+def _referenced_names(tree: ast.Module) -> set[str]:
+    """Every bare identifier loaded anywhere in `tree`. Catches a class named
+    in a hardcoded runner list in any shape this suite uses (a flat tuple, a
+    list, a list of (label, class) pairs, ...) without needing to parse the
+    exact shape of the loop that walks it."""
+    return {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+    }
+
+
+def assert_no_class_shortfall() -> list[str]:
+    """Guard against a module executing fewer test classes than it defines
+    (rmp task #303): a `Test*`/`*Tests` class appended to a registered module
+    without also being wired into that module's runner never runs, yet the
+    module still exits 0 with a smaller, misleadingly "passing" count -- see
+    test_48_graph_clause_surface.py's docstring for the measured example (32
+    passed before the fix, 39 after, with 7 tests that had never run before).
+
+    A module built on the dynamic-discovery idiom (see
+    `_module_defines_dynamic_class_discovery`) is exempt: it has no fixed list
+    to fall behind the classes actually defined. Every other registered module
+    must reference each of its own suite classes somewhere in its own source
+    (its runner's list/tuple, however shaped) -- a class satisfying neither
+    guarantee is reported here.
+
+    Returns a list of "<module>: <ClassName>[, ClassName...]" strings, one per
+    registered module with at least one apparently-unwired suite class (empty
+    when every registered module accounts for all the classes it defines).
+    """
+    problems = []
+    for module_name in TEST_MODULES + STRESS_TEST_MODULES:
+        path = Path(__file__).parent / f"{module_name}.py"
+        try:
+            source = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        try:
+            tree = ast.parse(source, filename=str(path))
+        except SyntaxError:
+            continue
+
+        defined = _module_suite_classes(tree)
+        if not defined:
+            continue
+        if _module_defines_dynamic_class_discovery(source):
+            continue
+
+        referenced = _referenced_names(tree)
+        missing = [name for name in defined if name not in referenced]
+        if missing:
+            problems.append(f"{module_name}: {', '.join(missing)}")
+    return problems
 
 
 # A module row in the tests/README.md table:
@@ -249,6 +357,21 @@ def main():
         for name in dormant:
             print(f"  - {name}")
         print("Add them to TEST_MODULES or STRESS_TEST_MODULES in run_tests.py.")
+        print("=" * 60)
+        return False
+
+    # Fail fast on a class shortfall: a module that defines a suite class its
+    # own runner never mentions would exit 0 while quietly never running that
+    # class's tests (rmp task #303).
+    shortfall = assert_no_class_shortfall()
+    if shortfall:
+        print("=" * 60)
+        print("ERROR: a module defines test classes its runner never wires in:")
+        for entry in shortfall:
+            print(f"  - {entry}")
+        print("Wire every Test*/*Tests class into the module's runner, or switch the")
+        print("runner to introspect its own module's namespace (see")
+        print("test_48_graph_clause_surface.py's _run_all for the model).")
         print("=" * 60)
         return False
 

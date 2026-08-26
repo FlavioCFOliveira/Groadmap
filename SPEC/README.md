@@ -38,6 +38,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Vendored web assets / embedded Tabler framework and D3.js (with d3-sankey) | `BUILD.md § Vendored Web Assets` |
 | Free-text control-character constraint (CWE-150 / Trojan Source) | `MODELS.md § Task` (Free-Text Control-Character Constraint) |
 | Free-text UTF-8 encoding constraint (only valid UTF-8 is accepted and stored) | `MODELS.md § Task` (Free-Text UTF-8 Encoding Constraint) |
+| The two free-text content rules applied to Cypher and to knowledge-graph property values (which `rmp graph` subcommand each rule binds, and why the two reaches differ) | `GRAPH.md § Cypher Query and Property Value Content Rules` |
 | Published field name in a validation error message (one name per field, underscored; how it differs from the flag name) | `COMMANDS.md § Published Field Names in Validation Messages` |
 | Task commit-hash format (7-64 hexadecimal characters, lowercase on storage, no git invocation) | `MODELS.md § Task` (Commit Hash Constraint) |
 | Task commit-hash `CHECK` constraints and why `GLOB` is case-sensitive | `DATABASE.md § Commit Hash Format Constraint` |
@@ -47,7 +48,8 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Task comment / sprint comment models and field constraints | `MODELS.md § Task Comment` and `MODELS.md § Sprint Comment` |
 | Comment subcommand syntax / flags (`comment-add`, `comment-list`, `comment-edit`, `comment-remove`) | `COMMANDS.md § Task Comments` and `COMMANDS.md § Sprint Comments` |
 | Comment body input via flag or stdin | `COMMANDS.md § Comment Body Input Source and Precedence` |
-| Comment positional argument count, and the refusal of a stray extra argument | `COMMANDS.md § Comment Positional Argument Contract` |
+| Positional argument count of any command, and the refusal of an invocation that supplies more than the command declares | `COMMANDS.md § Positional Arguments` |
+| Comment positional argument count, and what the one id identifies on each comment subcommand | `COMMANDS.md § Comment Positional Argument Contract` |
 | Comment JSON shape | `DATA_FORMATS.md § Task Comment` and `DATA_FORMATS.md § Sprint Comment` |
 | Comment tables, DDL, and cascade rules | `DATABASE.md § task_comments Table` and `DATABASE.md § sprint_comments Table` |
 | Web comment presentation (task modal timeline, sprint Comments card) | `WEB.md § Task Detail Modal` and `WEB.md § Sprint Detail Sub-Template` |
@@ -56,14 +58,17 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Sprint membership read cost (one grouped read for the whole listing, no query per sprint) | `DATABASE.md § Read the Membership of Many Sprints (Grouped)` |
 | Sprint listing order (`sprint list` returns sprints by `order` ascending, the planned execution order) and how the web sprint tabs relate to it | `COMMANDS.md § List Sprints` and `WEB.md § Roadmap Sprints Page` |
 | In-sprint task order (`sprint_tasks.position` is unique within a sprint, why the order must be total, and what every write path must do to preserve it) | `DATABASE.md § Position Uniqueness Within a Sprint` |
+| In-sprint position density (a sprint holds exactly `0` to `N-1`, why the schema cannot enforce it, every write path that touches `position` and whether it preserves or repairs the run) | `DATABASE.md § Position Density Within a Sprint` |
 | Adding a `UNIQUE` index to a populated table (repair before create, why a repair must not read its own writes, the failure surface) | `DATABASE.md § Introducing a Uniqueness Constraint over Existing Rows` |
 | Audit result-set cap (`MaxAuditLimit`) | `DATABASE.md § Audit Result Limit` |
 | Migration idempotency (ALTER TABLE ADD COLUMN guard) | `DATABASE.md § Migration Idempotency (ALTER TABLE ADD COLUMN)` |
 | Migration idempotency (ALTER TABLE DROP COLUMN guard, what a drop preserves and discards) | `DATABASE.md § Migration Idempotency (ALTER TABLE DROP COLUMN)` |
 | `graph` command syntax / subcommands | `COMMANDS.md § Graph Management` |
 | Graph query result JSON / property-type mapping | `DATA_FORMATS.md § Graph Query Result` |
+| Node `key` uniqueness in the knowledge graph (a convention the caller honours, judged on the NFC form, and the two-step audit that detects a violation) | `GRAPH.md § Node Key Uniqueness` |
 | Cypher input via flag or stdin | `GRAPH.md § Cypher Input Source and Precedence` |
 | Maximum Cypher query length (1 MiB, counted in bytes) and the exit code for exceeding it | `GRAPH.md § Maximum Query Length` |
+| A stray positional argument on a `graph` subcommand (the five accept none), the exact line it publishes, and where the refusal lands in the subcommand's order | `GRAPH.md § No Positional Query: A Stray Token Is Refused` |
 | Bounded standard-input read of a Cypher query, and the refusal of an empty, whitespace-only, or terminal standard input | `GRAPH.md § Bounded Standard-Input Read` and `GRAPH.md § Standard Input That Supplies No Query` |
 | Keyword spacing the guard rail requires in a `SHOW INDEX(ES)` / `SHOW CONSTRAINT(S)` command, and why the DDL class stays whitespace-tolerant | `GRAPH.md § Keyword Spacing in a Schema-Introspection Command` |
 | Which Cypher engine constructor each graph path uses (read vs transactional write) and why a read opens no store | `GRAPH.md § Engine Constructor by Path` |
@@ -96,6 +101,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Database schema (DDL) | `DATABASE.md § DDL - Table Creation` |
 | SQL queries | `DATABASE.md § Main SQL Queries` |
 | Audit operations catalogue (the canonical list, including the LEGACY values) | `DATABASE.md § audit Table` |
+| Audit operation descriptions on `rmp --ai-help` (that each is its catalogue entry verbatim, the two alterations the transcription makes, and what editing a catalogue entry therefore costs) | `DATABASE.md § The Catalogue Entry Is Also the Published Contract Description` and `DATA_FORMATS.md § enums map entry` |
 | Audit: how many entries an operation writes and what each says | `DATABASE.md § One Row per Thing That Happened` |
 | Audit entry `related_entity_id` (which operations write it, and what the counterpart is) | `DATABASE.md § The Two Entities of a Relational Operation` |
 | Audit entry `commit_hash` (which operations write it, and why a reopening does not clear it) | `DATABASE.md § The Commit Hash of an Audit Entry` |
@@ -105,6 +111,7 @@ The SPEC is unversioned. Git is the source of truth for its evolution — recove
 | Audit help surfaces (operation list, LEGACY marking, output keys) | `HELP.md § Audit family help specifics` |
 | Audit operation entity type (which entity each operation is recorded against, why it is declared rather than read off the operation's name, and the gate that fails on an unclassified operation) | `HELP.md § Audit operation entity-type classification` |
 | Audit operation `entity_type` and `legacy` members of the AI Agent Contract enum | `DATA_FORMATS.md § enums map entry` |
+| Which enums of the AI Agent Contract carry a reference member (only the two with a state machine), and why `AuditOperation` carries none | `DATA_FORMATS.md § enums map entry` |
 | Concurrency (WAL, pool, retry) | `IMPLEMENTATION.md § Concurrency Model` |
 | Query caching | `IMPLEMENTATION.md § Query Caching` |
 | Performance practices | `IMPLEMENTATION.md § Performance Considerations` |
@@ -152,8 +159,11 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Published field names in validation messages (field to published name, and when a message names the flag instead) | `COMMANDS.md § Published Field Names in Validation Messages` |
 | Which commands read standard input at all (exactly two flag values, and no other command) | `DATA_FORMATS.md § Input` |
 | Comment body input source and precedence (`--body` or stdin) | `COMMANDS.md § Comment Body Input Source and Precedence` |
-| Cypher query input source, maximum query length, and the bounded standard-input read | `GRAPH.md § Cypher Input Source and Precedence` |
-| Comment positional arguments (exactly one id per subcommand; an extra one is exit code 2) | `COMMANDS.md § Comment Positional Argument Contract` |
+| Cypher query input source, maximum query length, the bounded standard-input read, and the refusal of a positional argument on any `graph` subcommand | `GRAPH.md § Cypher Input Source and Precedence` |
+| Cypher query and knowledge-graph property value content (the UTF-8 encoding rule on every graph subcommand, the control-character rule on the two that write, their order, and the limits of both) | `GRAPH.md § Cypher Query and Property Value Content Rules` |
+| Knowledge-graph node `key` uniqueness (what the invariant is, which comparison decides that two keys are the same, that the product does not enforce it, and the audit that detects a violation) | `GRAPH.md § Node Key Uniqueness` |
+| Declared positional arity per command, and the refusal of an excess positional argument (exit code 2, the published line, no side effect) | `COMMANDS.md § Positional Arguments` |
+| Comment positional arguments (exactly one id per subcommand, and what that id identifies) | `COMMANDS.md § Comment Positional Argument Contract` |
 | Memory layout / struct field ordering | `MODELS.md § Memory Layout Optimization` |
 | Task state transitions | `STATE_MACHINE.md § Task State Machine` |
 | Task commit-hash format (character set, length bounds, lowercase normalisation) | `MODELS.md § Task` (Commit Hash Constraint) |
@@ -162,9 +172,11 @@ To prevent drift across SPEC files, the following topics have a single authorita
 | Sprint state transitions | `STATE_MACHINE.md § Sprint State Machine` |
 | Sprint membership versus task status | `STATE_MACHINE.md § Sprint Membership and the BACKLOG Status` |
 | Audit operations catalogue | `DATABASE.md § audit Table` |
+| Audit operation description text, on the catalogue and on the `rmp --ai-help` contract alike | `DATABASE.md § audit Table` (the entry itself), with the coupling and its cost stated in `DATABASE.md § The Catalogue Entry Is Also the Published Contract Description` |
 | Audit operation entity-type classification and LEGACY marking (the single declaration both published help surfaces render from) | `HELP.md § Audit operation entity-type classification` |
 | SQL DDL (table definitions, indexes, constraints) | `DATABASE.md` |
 | In-sprint task order and the uniqueness of `sprint_tasks.position` | `DATABASE.md § Position Uniqueness Within a Sprint` |
+| In-sprint position density, and the compaction every removal owes | `DATABASE.md § Position Density Within a Sprint` and `DATABASE.md § Compact Sprint Positions` |
 | Introducing a uniqueness constraint over rows that already exist | `DATABASE.md § Introducing a Uniqueness Constraint over Existing Rows` |
 | Schema migrations | `VERSION.md § Migrations` |
 | Concurrency model (WAL, pool, retry) | `IMPLEMENTATION.md § Concurrency Model` |

@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/FlavioCFOliveira/Groadmap/internal/backoff"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
@@ -38,42 +39,37 @@ const busyWriteMessage = "graph store is busy: a concurrent write is in progress
 // wait is exhausted (SPEC/GRAPH.md § Lock Contention rule 2).
 const busyReadMessage = "graph store is busy: a concurrent write is still in progress after the bounded wait"
 
-// boundedWait is the worst-case total sleep AcquireShared performs: one initial
-// attempt plus retryMaxRetries retries at 100+200+400+800+1000 ms. It is
-// derived from the constants rather than written out, so a change to the policy
-// moves the assertions with it instead of silently invalidating them.
-var boundedWait = func() time.Duration {
-	var total time.Duration
-	delay := retryInitialDelay
-	for range retryMaxRetries {
-		total += delay
-		delay *= 2
-		if delay > retryMaxDelay {
-			delay = retryMaxDelay
-		}
-	}
-	return total
-}()
+// boundedWait is the worst-case total sleep AcquireShared performs. It is the
+// project-wide policy's own figure, not a local restatement of it: this package
+// used to derive it from three constants of its own, and those constants agreed
+// with the SPEC while two other copies of the same policy quietly did not
+// (task #294). The figures themselves are asserted once, in
+// internal/backoff's TestPolicyMatchesTheSpecification.
+var boundedWait = backoff.Total()
 
-// TestBoundedWaitMatchesTheSpecifiedPolicy pins the reader's wait budget to the
-// figure the SPEC and the web timeout reasoning depend on. SPEC/IMPLEMENTATION.md
-// § Graph Store Concurrency rule 4 specifies initial delay 100 ms doubling to a
-// maximum of 1000 ms with at most 5 retries, and SPEC/WEB.md § Knowledge Graph
-// from the GoGraph Store rule 5 relies on the resulting worst case staying well
-// inside the server's 30 s write timeout. A silent change to any of the three
-// constants would move that worst case without any other test noticing.
-func TestBoundedWaitMatchesTheSpecifiedPolicy(t *testing.T) {
-	if got, want := retryInitialDelay, 100*time.Millisecond; got != want {
-		t.Errorf("initial delay = %v, want %v", got, want)
+// firstRung is the ladder's first delay, used by the assertions that an
+// acquisition did NOT wait. Like boundedWait it comes from the policy, so no
+// test in this package names a figure of the policy's own.
+const firstRung = backoff.FirstDelay
+
+// TestReaderWaitIsTheProjectPolicy pins the reader's wait budget to the shared
+// policy rather than to a number. SPEC/IMPLEMENTATION.md § Graph Store
+// Concurrency rule 4 says the graph read lock retries under the SAME policy
+// specified for SQLite in § Concurrency Model, so the only thing this package
+// can get wrong is using a different one — which is what this asserts.
+//
+// SPEC/WEB.md § Knowledge Graph from the GoGraph Store rule 5 relies on the
+// resulting worst case staying well inside the server's 30 s write timeout, so
+// the headroom is checked here too: it is this package's caller that depends on
+// it, not internal/backoff's.
+func TestReaderWaitIsTheProjectPolicy(t *testing.T) {
+	if boundedWait != backoff.Total() {
+		t.Errorf("the reader's bounded wait is %v but the project policy is %v; "+
+			"this package must consume the shared policy, never restate it", boundedWait, backoff.Total())
 	}
-	if got, want := retryMaxDelay, 1000*time.Millisecond; got != want {
-		t.Errorf("maximum delay = %v, want %v", got, want)
-	}
-	if got, want := retryMaxRetries, 5; got != want {
-		t.Errorf("maximum retries = %d, want %d", got, want)
-	}
-	if got, want := boundedWait, 2500*time.Millisecond; got != want {
-		t.Errorf("worst-case bounded wait = %v, want %v (100+200+400+800+1000 ms)", got, want)
+	if const30s := 30 * time.Second; boundedWait >= const30s/10 {
+		t.Errorf("the reader's bounded wait is %v, which is no longer a small fraction of the "+
+			"web server's %v write timeout (SPEC/WEB.md § HTTP Server Timeouts)", boundedWait, const30s)
 	}
 }
 
@@ -231,7 +227,7 @@ func TestAcquireShared_ReadersDoNotExcludeReaders(t *testing.T) {
 	}
 	defer release2()
 
-	if elapsed >= retryInitialDelay {
+	if elapsed >= firstRung {
 		t.Errorf("second shared acquisition took %v; it must succeed at once, not after a retry, "+
 			"which would mean the shared mode is really exclusive", elapsed)
 	}
@@ -283,7 +279,7 @@ func TestAcquireShared_ExcludedByAWriter(t *testing.T) {
 		releaseWriter()
 		t.Fatalf("the reader gave up after the first collision; it must retry under the "+
 			"bounded backoff (SPEC/GRAPH.md § Lock Contention rule 2), got: %v", got.err)
-	case <-time.After(retryInitialDelay + retryInitialDelay/2):
+	case <-time.After(firstRung + firstRung/2):
 	}
 
 	releaseWriter()

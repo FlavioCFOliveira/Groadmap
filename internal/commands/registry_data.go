@@ -159,10 +159,10 @@ func buildRoadmapCommand() Command {
 					Network:    "None.",
 				},
 				Idempotent: false,
-				ExitCodes:  []int{0, 5, 6},
+				ExitCodes:  []int{0, 2, 5, 6},
 				Examples: []Example{
 					{Title: "Create a roadmap", Cmd: "rmp roadmap create mobile-app", Stdout: `{"name":"mobile-app"}`, Exit: 0},
-					{Title: "Roadmap already exists", Cmd: "rmp roadmap create existing", Stderr: "Error: roadmap \"existing\" already exists", Exit: 5},
+					{Title: "Roadmap already exists", Cmd: "rmp roadmap create existing", Stderr: "Error: resource already exists: roadmap \"existing\" already exists", Exit: 5},
 				},
 			},
 			{
@@ -187,10 +187,10 @@ func buildRoadmapCommand() Command {
 					Network:    "None.",
 				},
 				Idempotent: false,
-				ExitCodes:  []int{0, 4, 6},
+				ExitCodes:  []int{0, 2, 4, 6},
 				Examples: []Example{
 					{Title: "Remove a roadmap", Cmd: "rmp roadmap remove mobile-app", Exit: 0},
-					{Title: "Roadmap not found", Cmd: "rmp roadmap remove missing", Stderr: "Error: roadmap \"missing\" not found", Exit: 4},
+					{Title: "Roadmap not found", Cmd: "rmp roadmap remove missing", Stderr: "Error: resource not found: roadmap \"missing\" not found", Exit: 4},
 				},
 			},
 		},
@@ -275,7 +275,7 @@ func buildBacklogCommand() Command {
 				Examples: []Example{
 					{Title: "List backlog", Cmd: "rmp backlog list -r myproject", Exit: 0},
 					{Title: "Filter by priority", Cmd: "rmp backlog list -r myproject --priority 7", Exit: 0},
-					{Title: "Invalid type", Cmd: "rmp backlog list -r myproject --type FOO", Stderr: "Error: invalid task type: FOO", Exit: 6},
+					{Title: "Invalid type", Cmd: "rmp backlog list -r myproject --type FOO", Stderr: "Error: validation error: invalid task type: \"FOO\"", Exit: 6},
 				},
 			},
 			{
@@ -348,7 +348,7 @@ func buildAuditCommand() Command {
 				Examples: []Example{
 					{Title: "All audit entries", Cmd: "rmp audit list -r myproject", Exit: 0},
 					{Title: "Filter by operation", Cmd: "rmp audit list -r myproject -o TASK_STATUS_DOING -e TASK", Exit: 0},
-					{Title: "Invalid operation filter", Cmd: "rmp audit list -r myproject -o BOGUS_OP", Stderr: "Error: validation error: invalid operation: BOGUS_OP", Exit: 6},
+					{Title: "Invalid operation filter", Cmd: "rmp audit list -r myproject -o BOGUS_OP", Stderr: `Error: validation error: invalid audit operation: "BOGUS_OP"`, Exit: 6},
 				},
 			},
 			{
@@ -374,7 +374,7 @@ func buildAuditCommand() Command {
 				Examples: []Example{
 					{Title: "Task history", Cmd: "rmp audit history -r myproject TASK 1", Exit: 0},
 					{Title: "Sprint history", Cmd: "rmp audit history -r myproject SPRINT 3", Exit: 0},
-					{Title: "Invalid entity type", Cmd: "rmp audit history -r myproject BOGUS 1", Stderr: "Error: validation error: invalid entity type: BOGUS", Exit: 6},
+					{Title: "Invalid entity type", Cmd: "rmp audit history -r myproject BOGUS 1", Stderr: `Error: validation error: invalid entity type: "BOGUS"`, Exit: 6},
 				},
 			},
 			{
@@ -400,7 +400,7 @@ func buildAuditCommand() Command {
 				Examples: []Example{
 					{Title: "Aggregate stats", Cmd: "rmp audit stats -r myproject", Exit: 0},
 					{Title: "Bounded window", Cmd: "rmp audit stats -r myproject --since 2026-01-01 --until 2026-01-31", Exit: 0},
-					{Title: "Invalid date", Cmd: "rmp audit stats -r myproject --since not-a-date", Stderr: "Error: validation error: invalid date format: not-a-date", Exit: 6},
+					{Title: "Invalid date", Cmd: "rmp audit stats -r myproject --since not-a-date", Stderr: `Error: validation error: --since: invalid date format: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01): "not-a-date"`, Exit: 6},
 				},
 			},
 		},

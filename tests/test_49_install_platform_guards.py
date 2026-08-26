@@ -63,6 +63,13 @@ REQUIRED_TOOLS = [
     # cases assert on. The sandbox provides the tool; the refusal itself is
     # driven by test_47's InstallScriptChecksumTests.
     "sha256sum",
+    # Same shape, same reason: install.sh stages every download in a directory
+    # mktemp creates and reads that directory's permissions back with `ls -ld`
+    # (rmp task #309), and a host without mktemp stops at a guard of its own
+    # before the download. The sandbox provides both; the refusal is driven by
+    # test_47's InstallScriptStagingTests.
+    "mktemp",
+    "ls",
 ]
 
 UNAME_SHIM = """#!/usr/bin/env bash

@@ -189,7 +189,7 @@ If a change to the SPEC needs a narrative beyond the diff, write it in the commi
 │                                └─────────────┘                  │
 │                                                                 │
 │   Supporting: knowledge-authority, exhaustive-qa-engineer,      │
-│   release-manager, doc-manager, security-review, review,        │
+│   release-manager, doc-manager, security-review, code-review,   │
 │   simplify                                                      │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -206,7 +206,7 @@ If a change to the SPEC needs a narrative beyond the diff, write it in the commi
 | **release-manager** | agent | Release coordination, version bump, CHANGELOG | Triggered by release requests. Runs full validation gates. |
 | **doc-manager** | skill | Documentation (README, command docs) | Sync docs with code. Go CLI projects only. |
 | **security-review** | skill | Security review of pending changes | Trigger before merging security-sensitive changes. |
-| **review** | skill | Pull request review | Code review on PRs. |
+| **code-review** | skill | Pull request review | Code review on PRs. |
 | **simplify** | skill | Review changes for reuse/quality and fix issues | Post-implementation cleanup. |
 
 ### Task/Sprint Creation Flow
@@ -359,7 +359,7 @@ your ability to understand the project is preserved.
 | Testing | `exhaustive-qa-engineer` |
 | Security audit | `security-review` skill |
 | Documentation | `doc-manager` |
-| PR review | `review` skill |
+| PR review | `code-review` skill |
 | Code cleanup / simplification | `simplify` skill |
 
 ### Rule 2: Validation Gates
@@ -443,7 +443,7 @@ type(scope): subject
 Project-local skill set is intentionally minimal; most agents/skills used in
 this project (e.g., `specification-manager`, `roadmap-manager`,
 `knowledge-authority`, `go-developer`, `exhaustive-qa-engineer`,
-`release-manager`, `review`, `security-review`, `simplify`) are provided by the
+`release-manager`, `code-review`, `security-review`, `simplify`) are provided by the
 global Claude Code configuration.
 
 ---
@@ -465,7 +465,7 @@ global Claude Code configuration.
 | Performance analysis | `go-developer` (covers performance) |
 | Documentation needed | `doc-manager` |
 | SPEC exists, implement | `go-developer` |
-| PR review | `review` skill |
+| PR review | `code-review` skill |
 | Requirements unclear / ambiguous / contradictory | ASK the user — provide options (a, b, c) with a recommendation; one question at a time |
 | Change to scope, behavior, architecture, or requirements | ASK the user BEFORE acting |
 | Obvious, low-risk fix (e.g. unambiguous bug) | Proceed immediately; no need to ask |

@@ -38,20 +38,46 @@ restate a rule already published concretely by a table row (the numbered
 list under "Messages this rule governs", COMMANDS.md:218-232) rather than
 naming a new condition; EXCLUDED_TEMPLATE_LINES documents each one.
 
-Placeholders are the closed set COMMANDS.md:54-66 publishes: X, N, M, Y,
-<field>, <flag>, <detail>, <engine diagnostic>, and
-<absolute path of ~/.roadmaps>; X/N/M/Y count only as whole words, and two
-messages print literal `<name>`/`<id>` that are NOT placeholders (the module
-proves both directions -- see test_placeholder_rule_both_directions below).
+Placeholders are the ones COMMANDS.md itself declares, and the table under
+"Published Error Strings Are Exact" declares all twelve: X, N, M, Y,
+<entity>, <field>, <flag>, <sentinel>, <detail>, <engine diagnostic>, <ids>
+and <absolute path of ~/.roadmaps>. That table states it is the complete
+set, so a placeholder published anywhere in the file and missing from it is
+a defect in the file rather than an omission here. Three of the rows carry
+no value enumeration of their own and point at the section that does:
+<field> at "Published Field Names in Validation Messages", <entity> and
+<sentinel> at "Entity Identifier Range (All Positional Ids and
+--entity-id)", which lists the five entity words and the two sentinels.
+X/N/M/Y count only as whole words, and two messages print literal
+`<name>`/`<id>` that are NOT placeholders (the module proves both directions
+-- see test_placeholder_rule_both_directions below).
 Because this module CHOOSES the offending value for every X/N/M/Y it drives,
 substitution is exact string replacement against a value fixed before the
 command runs, and the comparison is full string equality against the whole
 published line -- never a regex, never a prefix-only check -- except for the
-five entries EXEMPT_KEYS names, where the tail is genuinely outside this
-module's control (an OS-level diagnostic, a Cypher-engine diagnostic, or an
-internal failure with no deterministic trigger from the CLI); each is
-exempted by name with its reason in EXEMPT_KEYS, counted, and reported, never
-silently dropped.
+two kinds of narrowing named below. Both are declared by name with a reason,
+counted, and reported; nothing is ever silently dropped.
+
+  * EXEMPT_KEYS: the string is not driven at all, because no deterministic
+    trigger for it exists from the CLI in a hermetic environment.
+  * TAIL_EXEMPT_KEYS: the string IS driven against the binary, and the
+    comparison is exact up to the named placeholder and stops there. Only the
+    tail -- text produced by something outside this module (a SQLite
+    diagnostic, an OS diagnostic) -- goes unasserted; the head, which carries
+    the "Error: " prefix and the sentinel that determines the exit code, is
+    compared character for character, and the tail is still required to be
+    non-empty and to carry the operation context the wrap must preserve
+    (ARCHITECTURE.md § Wrapping Rules, rule 2). See check_head.
+
+The database-failure row of the four comment subcommands
+(`Error: database error: <detail>`) was a full EXEMPT_KEYS entry until rmp
+task #319. The reason recorded there -- that no hermetic trigger existed --
+was wrong in one direction and right in the other: dropping the comment table
+out of THIS module's own throwaway project.db, which is a file it created and
+deletes, is perfectly hermetic and touches no shared infrastructure, so the
+row is now driven; only the SQLite diagnostic in the tail stays unasserted.
+That mistake is why the defect #319 fixed went unnoticed -- the binary printed
+no sentinel at all on those six rows and this gate reported green over them.
 
 The module's own final test method (test_zz_coverage_report, alphabetically
 last so it runs after every other check has had the chance to mark its key
@@ -63,6 +89,7 @@ module does not know how to reach is a bug in this module, not a silent gap.
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import uuid
@@ -226,9 +253,9 @@ SUPPLEMENTAL_CORPUS = [
     ('Error: unknown task subcommand: X', 'Error: unknown task subcommand: assign'),
     ('Error: unknown task subcommand: X', 'Error: unknown task subcommand: unassign'),
     # A concrete instance of the -e/--entity-type template
-    # ("Error: validation error: invalid entity type: X"), naming the exact
+    # ('Error: validation error: invalid entity type: "X"'), naming the exact
     # literal value (-e) the prose describes.
-    ('Error: validation error: invalid entity type: -e', 'Error: validation error: invalid entity type: -e'),
+    ('Error: validation error: invalid entity type: "-e"', 'Error: validation error: invalid entity type: "-e"'),
 ]
 
 # Three prose spans that ARE complete, well-formed "Error:" strings but are
@@ -286,17 +313,6 @@ CORPUS = build_corpus()
 # ---------------------------------------------------------------------------
 
 EXEMPT_KEYS = {
-    "Error: database error: <detail>": (
-        "The generic database-failure row on the four comment subcommands "
-        "(COMMANDS.md:1553 and siblings) needs a genuine SQLite write "
-        "failure. Verified empirically (see this module's development "
-        "notes): chmod 0444 on project.db does NOT reproduce it -- rmp's "
-        "SQLite connection runs in WAL mode, so an INSERT is satisfied by "
-        "appending to the -wal file and never touches the read-only main "
-        "file at all. Reaching this row deterministically would require "
-        "corrupting or unmounting shared test infrastructure mid-write, "
-        "which is out of scope for a hermetic E2E gate."
-    ),
     "Error: database error: graph query failed: <engine diagnostic>": (
         "internal/commands/graph.go: the tail is text the Cypher engine "
         "itself produces for a parse/execution failure and is not "
@@ -319,6 +335,30 @@ EXEMPT_KEYS = {
         "row above, and binding a specific non-loopback, non-local address "
         "like 10.0.0.5 is itself environment-dependent (routable only on "
         "hosts that do not own that address)."
+    ),
+}
+
+
+# Strings this module DOES drive against the binary, but whose comparison
+# stops at the named placeholder because the text after it is produced by
+# something this module does not control. The head -- everything before the
+# placeholder, which is where the "Error: " prefix and the sentinel live -- is
+# still compared character for character, and check_head additionally requires
+# the tail to be non-empty and to carry the operation context. This is a
+# NARROWING, not an exemption: the key is marked reached, and the sentinel
+# half is asserted rather than skipped.
+TAIL_EXEMPT_KEYS = {
+    "Error: database error: <detail>": (
+        "<detail>",
+        "The six database-failure rows of the comment subcommands (three in "
+        "the task family, three in the sprint family). The head "
+        "\"Error: database error: \" is asserted exactly, and so is the "
+        "operation context that follows it (\"writing task comment: \", "
+        "\"querying task comment N: \", ...). What is left unasserted is only "
+        "the SQLite driver's own diagnostic at the end -- for a dropped "
+        "table, \"SQL logic error: no such table: task_comments (1)\" -- whose "
+        "exact wording belongs to modernc.org/sqlite and is not specified by "
+        "COMMANDS.md."
     ),
 }
 
@@ -429,6 +469,74 @@ class TestErrorStringParity:
             f"  args:      {args}\n"
             f"  full stderr: {err!r}"
         )
+        assert out == "", (
+            f"[{note or key}] a failing invocation wrote to stdout: {out!r}"
+        )
+        REACHED.add(key)
+
+    def check_head(self, key, args, exit_code, tail_contains, subs=None,
+                   stdin=None, note=""):
+        """The narrowed form of `check`, for the keys TAIL_EXEMPT_KEYS names.
+
+        Everything BEFORE the named placeholder is compared character for
+        character against captured stderr, exactly as `check` does -- so the
+        "Error: " prefix and the sentinel that determines the exit code are
+        asserted, never skipped. Only the text after the placeholder is
+        outside this module's control, and even that is not waved through:
+        it must be non-empty, and it must contain every fragment
+        `tail_contains` names (the operation context the wrap is required to
+        preserve, per ARCHITECTURE.md § Wrapping Rules rule 2).
+
+        `key` must be declared in TAIL_EXEMPT_KEYS: a string is never
+        compared by head alone unless the narrowing is declared and reasoned
+        there."""
+        assert key in CORPUS, (
+            f"case references a string extraction no longer finds in "
+            f"SPEC/COMMANDS.md: {key!r} ({note})"
+        )
+        assert key in TAIL_EXEMPT_KEYS, (
+            f"check_head used on a string that declares no tail narrowing: "
+            f"{key!r} -- add it to TAIL_EXEMPT_KEYS with its reason, or use "
+            f"check() for a full comparison"
+        )
+        token = TAIL_EXEMPT_KEYS[key][0]
+        head, sep, published_tail = subst(key, subs or {}).partition(token)
+        assert sep, (
+            f"TAIL_EXEMPT_KEYS declares placeholder {token!r} for {key!r}, "
+            f"but the published string does not contain it"
+        )
+        assert published_tail == "", (
+            f"check_head only supports a placeholder that ends the published "
+            f"string; {key!r} carries {published_tail!r} after {token!r}"
+        )
+        assert head.startswith("Error: ") and len(head) > len("Error: "), (
+            f"the asserted head of {key!r} is {head!r}, which carries no "
+            f"sentinel -- narrowing it would assert nothing of substance"
+        )
+
+        rc, out, err = self.run_stdin(args, stdin)
+        actual_line = err.splitlines()[0] if err else ""
+        assert rc == exit_code, (
+            f"[{note or key}] exit code: expected {exit_code}, got {rc}\n"
+            f"  args: {args}\n  stdout: {out!r}\n  stderr: {err!r}"
+        )
+        assert actual_line.startswith(head), (
+            f"[{note or key}] the published head does not match the binary\n"
+            f"  file:      {SPEC_PATH} line(s) {CORPUS[key]}\n"
+            f"  published: {head!r} (then {token})\n"
+            f"  captured:  {actual_line!r}\n"
+            f"  args:      {args}\n  full stderr: {err!r}"
+        )
+        actual_tail = actual_line[len(head):]
+        assert actual_tail, (
+            f"[{note or key}] the binary printed the head and nothing for "
+            f"{token}: {actual_line!r}"
+        )
+        for fragment in tail_contains:
+            assert fragment in actual_tail, (
+                f"[{note or key}] the {token} tail lost the operation "
+                f"context: expected {fragment!r} in {actual_tail!r}"
+            )
         assert out == "", (
             f"[{note or key}] a failing invocation wrote to stdout: {out!r}"
         )
@@ -687,6 +795,27 @@ class TestErrorStringParity:
             ["task", "list", "-r", r, "--created-until", "next-friday"], 6,
             subs={"X": "next-friday"}, note="task list invalid created-until",
         )
+        # #26b: --limit below the floor. COMMANDS.md § List Tasks publishes this
+        # row from rmp task #329 onwards; until then the section's error table
+        # omitted the --limit line entirely, so the wording `task list` and
+        # `backlog list` shared was invisible to this gate and drifted away from
+        # `audit list` unnoticed. The same key is published by § List Backlog
+        # Tasks and driven again there, for the same reason the generic
+        # invalid-type template is driven from more than one subcommand: the two
+        # commands share one rule and must therefore share one line.
+        self.check(
+            "Error: validation error: limit must be between 1 and 100, got N",
+            ["task", "list", "-r", r, "--limit", "0"], 6, subs={"N": "0"},
+            note="task list limit below floor",
+        )
+        # The ceiling, on the same key: floor and ceiling are one rule and the
+        # published row names both, so driving only one of them would leave half
+        # the row unasserted.
+        self.check(
+            "Error: validation error: limit must be between 1 and 100, got N",
+            ["task", "list", "-r", r, "--limit", "101"], 6, subs={"N": "101"},
+            note="task list limit above ceiling",
+        )
 
     # ------------------------------------------------------------------
     # `task edit`: the generic <field> UTF-8 / control-character templates,
@@ -782,11 +911,17 @@ class TestErrorStringParity:
             ["task", "get", "-r", r, "abc"], 2, subs={"X": "abc"},
             note="task get non-integer id",
         )
-        # #43: an ID is an integer but not positive.
+        # #43: an ID is an integer outside 1-2147483647. One sentence at either
+        # bound, so both are driven against the one published row (rmp task 330).
         self.check(
-            "Error: validation error: invalid task ID: N (must be positive)",
+            "Error: validation error: task_id must be between 1 and 2147483647, got N",
             ["task", "get", "-r", r, "0"], 6, subs={"N": "0"},
             note="task get zero id",
+        )
+        self.check(
+            "Error: validation error: task_id must be between 1 and 2147483647, got N",
+            ["task", "get", "-r", r, "2147483648"], 6, subs={"N": "2147483648"},
+            note="task get id above MaxInt32",
         )
 
     # ------------------------------------------------------------------
@@ -952,15 +1087,18 @@ class TestErrorStringParity:
             "Cap retry backoff for the settlement webhook consumer",
             self.FR, self.TR, self.AC,
         )
-        # #58: task prio's own range wording.
+        # #58: the range refusal, reached through `task prio`. It is the
+        # same published string `task create` drives at #38 above, and driving
+        # it from both commands is what proves the two paths print one line
+        # (rmp task 318): before that task they printed two.
         self.check(
-            "Error: validation error: invalid priority: must be 0-9 (got N)",
+            "Error: validation error: priority must be between 0 and 9, got N",
             ["task", "prio", "-r", r, str(task_id), "15"], 6,
             subs={"N": "15"}, note="task prio out of range",
         )
-        # #59: task sev's own range wording.
+        # #59: the same, for `severity`, against #39 above.
         self.check(
-            "Error: validation error: invalid severity: must be 0-9 (got N)",
+            "Error: validation error: severity must be between 0 and 9, got N",
             ["task", "sev", "-r", r, str(task_id), "15"], 6,
             subs={"N": "15"}, note="task sev out of range",
         )
@@ -1229,6 +1367,33 @@ class TestErrorStringParity:
             ["task", "comment-edit", "-r", r, "abc", "--body", "Root cause confirmed: race in the retry path"],
             2, subs={"X": "abc"}, note="task comment-edit non-integer id",
         )
+        # The comment subcommands' own range refusal, published for the first
+        # time by rmp task 330 (`Comment Positional Argument Contract`, point 4).
+        # It was printed by the binary and published nowhere, which is exactly
+        # why its wording drifted from every other surface unnoticed: an
+        # unpublished string is invisible to this gate.
+        #
+        # All three of the group's published lines are driven here: the comment's
+        # own id on `comment-edit`, and the two parent ids, which reach the same
+        # rule through `comment-add`. The class is exit code 2 on all of them,
+        # which is the one thing these subcommands do differently.
+        self.check(
+            "Error: invalid input: comment_id must be between 1 and 2147483647, got N",
+            ["task", "comment-edit", "-r", r, "0", "--body", "Root cause confirmed: race in the retry path"],
+            2, subs={"N": "0"}, note="task comment-edit zero id",
+        )
+        self.check(
+            "Error: invalid input: task_id must be between 1 and 2147483647, got N",
+            ["task", "comment-add", "-r", r, "2147483648", "--type", "NOTE",
+             "--body", "Retry budget exhausted after three attempts"],
+            2, subs={"N": "2147483648"}, note="task comment-add parent id above MaxInt32",
+        )
+        self.check(
+            "Error: invalid input: sprint_id must be between 1 and 2147483647, got N",
+            ["sprint", "comment-add", "-r", r, "0", "--type", "DECISION",
+             "--body", "Carry the retry work into the next sprint"],
+            2, subs={"N": "0"}, note="sprint comment-add parent id zero",
+        )
         # #79: comment not found.
         self.check(
             "Error: resource not found: task comment N not found",
@@ -1241,6 +1406,153 @@ class TestErrorStringParity:
             "Error: required parameter missing: comment ID required",
             ["task", "comment-remove", "-r", r], 2, note="task comment-remove missing id",
         )
+
+    # ------------------------------------------------------------------
+    # The database-failure row of the comment subcommands (rmp task #319).
+    #
+    # COMMANDS.md publishes `Error: database error: <detail>` six times: on
+    # `comment-add`, `comment-edit` and `comment-remove`, in the task family
+    # and again in the sprint family. Until #319 the binary printed those
+    # lines WITHOUT the sentinel ("Error: writing task comment: ..."), and
+    # this module reported green over all six because the string was a blanket
+    # EXEMPT_KEYS entry. It is now driven, with only the SQLite diagnostic in
+    # the tail left unasserted (TAIL_EXEMPT_KEYS).
+    #
+    # The failure is provoked by dropping the two comment tables out of THIS
+    # module's own throwaway project.db -- a file the fixture created under a
+    # temporary HOME and deletes in teardown. Nothing shared is touched.
+    # ------------------------------------------------------------------
+
+    DB_FAIL_KEY = "Error: database error: <detail>"
+
+    def drop_comment_tables(self):
+        """Remove both comment tables from this fixture's project.db, so every
+        comment statement fails for a reason that is neither a missing row nor
+        a constraint violation -- the third propagation row, and the only one
+        that must produce the database-error sentinel."""
+        db_path = self.test.roadmaps_dir / self.roadmap / "project.db"
+        assert db_path.exists(), f"fixture database not found at {db_path}"
+        con = sqlite3.connect(str(db_path))
+        try:
+            con.execute("DROP TABLE task_comments")
+            con.execute("DROP TABLE sprint_comments")
+            con.commit()
+        finally:
+            con.close()
+
+    def test_comment_database_failures(self):
+        r = self.roadmap
+        task_id = self.mk_task(
+            "Reconcile the comment write path with the propagation table",
+            "A database failure must reach the user as a classified failure, "
+            "not as an unlabelled message that exits 1 by accident.",
+            "Wrap at internal/db, after the constraint classifier, never before it.",
+            "The stderr line begins with the database-error sentinel and keeps "
+            "its operation context.",
+        )
+        sprint_id = self.mk_sprint(
+            "Error propagation hardening", self.SPRINT_DESC,
+        )
+        task_comment_id = self.test.run_cmd_json(
+            ["task", "comment-add", "-r", r, str(task_id), "--type", "FINDING",
+             "--body", "The write path names no sentinel, so the class is lost."]
+        )["id"]
+        sprint_comment_id = self.test.run_cmd_json(
+            ["sprint", "comment-add", "-r", r, str(sprint_id), "--type", "FINDING",
+             "--body", "The sprint family shares the same query layer."]
+        )["id"]
+
+        # --------------------------------------------------------------
+        # First, the two propagation rows that sit ABOVE the database row,
+        # asserted against an INTACT schema. A blanket wrap -- the obvious
+        # wrong fix, applied ahead of the classifier instead of after it --
+        # would turn both of these into "Error: database error: ..." with exit
+        # 1, so these two assertions are what makes the fix's placement
+        # observable from outside the binary.
+        # --------------------------------------------------------------
+
+        # Row 1: sql.ErrNoRows stays utils.ErrNotFound, exit 4. The wrapped
+        # return in getComment sits on the very next line after this branch.
+        self.check(
+            "Error: resource not found: task comment N not found",
+            ["task", "comment-remove", "-r", r, str(self.missing_id)], 4,
+            subs={"N": str(self.missing_id)},
+            note="ErrNoRows is not swallowed by the database sentinel",
+        )
+        # Row 2: a constraint violation stays utils.ErrAlreadyExists, exit 5.
+        # The seeded sprint above holds order 1; a second sprint claiming it
+        # collides on idx_sprints_order.
+        self.check(
+            "Error: resource already exists: sprint order N is already in use",
+            ["sprint", "create", "-r", r, "-t", "Checkout reliability",
+             "-d", self.SPRINT_DESC, "--order", "1"], 5, subs={"N": "1"},
+            note="a constraint violation is not swallowed by the database sentinel",
+        )
+
+        # --------------------------------------------------------------
+        # Now the database row itself, on all six published sites.
+        # --------------------------------------------------------------
+        self.drop_comment_tables()
+
+        self.check_head(
+            self.DB_FAIL_KEY,
+            ["task", "comment-add", "-r", r, str(task_id), "--type", "NOTE",
+             "--body", "This insert cannot reach a table that is gone."],
+            1, tail_contains=("writing task comment: ",),
+            note="task comment-add database failure",
+        )
+        self.check_head(
+            self.DB_FAIL_KEY,
+            ["task", "comment-edit", "-r", r, str(task_comment_id),
+             "--body", "This update cannot reach a table that is gone."],
+            1, tail_contains=(f"querying task comment {task_comment_id}: ",),
+            note="task comment-edit database failure",
+        )
+        self.check_head(
+            self.DB_FAIL_KEY,
+            ["task", "comment-remove", "-r", r, str(task_comment_id)],
+            1, tail_contains=(f"querying task comment {task_comment_id}: ",),
+            note="task comment-remove database failure",
+        )
+        self.check_head(
+            self.DB_FAIL_KEY,
+            ["sprint", "comment-add", "-r", r, str(sprint_id), "--type", "PROGRESS",
+             "--body", "This insert cannot reach a table that is gone."],
+            1, tail_contains=("writing sprint comment: ",),
+            note="sprint comment-add database failure",
+        )
+        self.check_head(
+            self.DB_FAIL_KEY,
+            ["sprint", "comment-edit", "-r", r, str(sprint_comment_id),
+             "--body", "This update cannot reach a table that is gone."],
+            1, tail_contains=(f"querying sprint comment {sprint_comment_id}: ",),
+            note="sprint comment-edit database failure",
+        )
+        self.check_head(
+            self.DB_FAIL_KEY,
+            ["sprint", "comment-remove", "-r", r, str(sprint_comment_id)],
+            1, tail_contains=(f"querying sprint comment {sprint_comment_id}: ",),
+            note="sprint comment-remove database failure",
+        )
+
+        # `comment-list` is asserted here too, and deliberately NOT through
+        # check_head: COMMANDS.md publishes no database-failure row for the
+        # listing subcommands, so claiming one would be a fiction. The listing
+        # nevertheless reaches the THIRD of the three sites #319 fixed
+        # (listComments), which none of the six published rows exercise, and
+        # ARCHITECTURE.md § Propagation Rules governs it in the same terms.
+        for args, context in (
+            (["task", "comment-list", "-r", r, str(task_id)], "querying task comments: "),
+            (["sprint", "comment-list", "-r", r, str(sprint_id)], "querying sprint comments: "),
+        ):
+            rc, out, err = self.run_stdin(args)
+            line = err.splitlines()[0] if err else ""
+            assert rc == 1, f"{args}: expected exit 1, got {rc}; stderr={err!r}"
+            assert line.startswith("Error: database error: " + context), (
+                f"{args}: the listing lost the sentinel or its operation "
+                f"context: {line!r}"
+            )
+            assert out == "", f"{args}: a failing invocation wrote to stdout: {out!r}"
 
     # ------------------------------------------------------------------
     # `sprint create` / `sprint update`
@@ -1280,7 +1592,7 @@ class TestErrorStringParity:
         )
         # #83: --max-tasks out of the 1-10000 range.
         self.check(
-            "Error: validation error: --max-tasks must be between 1 and 10000 (got N)",
+            "Error: validation error: max_tasks must be between 1 and 10000, got N",
             ["sprint", "create", "-r", r, "-t", "Observability hardening", "-d", self.SPRINT_DESC,
              "--max-tasks", "10001"], 6, subs={"N": "10001"},
             note="sprint create max-tasks out of range",
@@ -1339,6 +1651,19 @@ class TestErrorStringParity:
             ["sprint", "update", "-r", r, str(sprint_id), "-t", "x" * 256], 6,
             note="sprint update title too long",
         )
+        # #83 reached a second time, on the OTHER command that publishes it
+        # and at the OTHER bound. SPEC/COMMANDS.md states this row identically
+        # under `sprint create` and `sprint update`, and the corpus dedupes by
+        # content, so one driver would satisfy the gate -- but the defect rmp
+        # task 338 fixed was precisely a wording the two sites agreed on while
+        # agreeing with nothing else, and only driving both proves they still
+        # say the same thing after the rule moved behind
+        # models.ValidateSprintMaxTasks.
+        self.check(
+            "Error: validation error: max_tasks must be between 1 and 10000, got N",
+            ["sprint", "update", "-r", r, str(sprint_id), "--max-tasks", "0"], 6,
+            subs={"N": "0"}, note="sprint update max-tasks below the floor",
+        )
 
         # #92: --order rejected once the sprint is CLOSED.
         closed_id = self.mk_sprint(
@@ -1355,7 +1680,8 @@ class TestErrorStringParity:
         )
 
     # ------------------------------------------------------------------
-    # `sprint open-tasks`, `sprint add-tasks`/`remove-tasks`, `sprint remove`
+    # `sprint open-tasks`, `sprint add-tasks`/`remove-tasks`/`move-tasks`,
+    # `sprint remove`
     # ------------------------------------------------------------------
 
     def test_sprint_task_management_errors(self):
@@ -1440,12 +1766,84 @@ class TestErrorStringParity:
             subs={"X": "abc"}, note="sprint add-tasks non-integer task id",
         )
 
+        # #335: `move-tasks` names WHICH of its two sprints could not be
+        # resolved, so it publishes two strings of its own rather than
+        # sharing the #88 template with its two siblings.
+        #
+        # Both rows entered CORPUS in the same change that produced them, so
+        # both need a driver here or test_zz_coverage_report reports a
+        # published string nothing reaches -- the failure mode the module
+        # docstring calls out and that #331 already paid for once.
+        #
+        # The two cases are NOT interchangeable. `verifySprintsExist` checks
+        # the source sprint first, so an invocation naming two missing
+        # sprints can only ever reach the `from` line; reaching the `to` line
+        # requires a source sprint that RESOLVES. Driving only the first
+        # would leave the second call site unexercised while still marking a
+        # key reached, which is exactly how a divergence hides.
+        self.check(
+            "Error: resource not found: from sprint N",
+            ["sprint", "move-tasks", "-r", r, str(self.missing_id),
+             str(self.missing_id + 1), str(task_id)], 4,
+            subs={"N": str(self.missing_id)},
+            note="sprint move-tasks source sprint not found",
+        )
+        self.check(
+            "Error: resource not found: to sprint N",
+            ["sprint", "move-tasks", "-r", r, str(sprint_id),
+             str(self.missing_id), str(task_id)], 4,
+            subs={"N": str(self.missing_id)},
+            note="sprint move-tasks destination sprint not found",
+        )
+
         # #93: `sprint remove`'s own not-found wording (WITH "not found").
         self.check(
             "Error: resource not found: sprint N not found",
             ["sprint", "remove", "-r", r, str(self.missing_id)], 4,
             subs={"N": str(self.missing_id)}, note="sprint remove not found",
         )
+
+        # #331: `sprint move-to` with a position that is not a valid rank.
+        #
+        # This row was INVISIBLE to this gate until #331. It published the
+        # message body alone ("Position must be an integer between 0 and
+        # 2147483647"), and extraction only collects quoted spans containing
+        # "Error:" -- so the string never entered CORPUS, and the fact that
+        # the binary prefixed it and lower-cased nothing went unnoticed. That
+        # is precisely how the divergence survived. Restoring the prefix puts
+        # the row IN the corpus, which is why this driver has to land in the
+        # same change as the SPEC line: without it, test_zz_coverage_report
+        # reports a published string nothing reaches.
+        #
+        # The invocation is otherwise VALID -- the sprint exists and the task
+        # is a member of it, so the identical call with position 0 succeeds --
+        # which is what isolates the position check as the only thing this
+        # case asserts. The membership call below is run with check=True, so
+        # a fixture that silently stopped being valid fails here rather than
+        # letting the assertion pass for the wrong reason.
+        self.test.run_cmd(
+            ["sprint", "add-tasks", "-r", r, str(sprint_id), str(task_id)]
+        )
+        # One published string serves THREE input forms: a negative position,
+        # a non-numeric token, and an integer above MaxInt32 all produce this
+        # same line and exit 6. That is consistent with `§ Published Error
+        # Strings Are Exact` rule 3, which requires a separate row only where
+        # the binary prints a DIFFERENT line -- and driving all three is what
+        # proves it does not. Should a later change ever split the format
+        # failure from the range failure, one of these three stops matching
+        # and this case fails instead of silently ratifying the split.
+        for position, form in (
+            ("-5", "negative"),
+            ("abc", "non-numeric"),
+            (str(2 ** 31), "above MaxInt32"),
+        ):
+            self.check(
+                "Error: validation error: position must be an integer "
+                "between 0 and 2147483647",
+                ["sprint", "move-to", "-r", r, str(sprint_id), str(task_id),
+                 position], 6,
+                note=f"sprint move-to invalid position ({form})",
+            )
 
     # ------------------------------------------------------------------
     # `sprint comment-add` / `comment-edit`
@@ -1501,11 +1899,20 @@ class TestErrorStringParity:
 
     def test_audit_errors(self):
         r = self.roadmap
-        # #96: --limit out of range.
+        # #96: --limit out of range. One sentence with `task list` and
+        # `backlog list`, differing in the maximum alone -- 500 here against
+        # their 100, which is a real difference between the audit log and a task
+        # listing. The `--` prefix and the parenthesised value this row used to
+        # carry were not (rmp task #329).
         self.check(
-            "Error: validation error: --limit must be between 1 and 500 (got N)",
+            "Error: validation error: limit must be between 1 and 500, got N",
             ["audit", "list", "-r", r, "--limit", "501"], 6, subs={"N": "501"},
-            note="audit list limit out of range",
+            note="audit list limit above ceiling",
+        )
+        self.check(
+            "Error: validation error: limit must be between 1 and 500, got N",
+            ["audit", "list", "-r", r, "--limit", "0"], 6, subs={"N": "0"},
+            note="audit list limit below floor",
         )
         # #97: --limit non-integer.
         self.check(
@@ -1515,7 +1922,7 @@ class TestErrorStringParity:
         )
         # #98: --entity-id out of range.
         self.check(
-            "Error: validation error: --entity-id must be between 1 and 2147483647 (got N)",
+            "Error: validation error: entity_id must be between 1 and 2147483647, got N",
             ["audit", "list", "-r", r, "--entity-id", "0"], 6, subs={"N": "0"},
             note="audit list entity-id out of range",
         )
@@ -1526,10 +1933,24 @@ class TestErrorStringParity:
             note="audit list entity-id non-integer",
         )
         # #100: -e/--entity-type not TASK or SPRINT (generic X template).
+        # The same corpus key is published twice -- COMMANDS.md:2929 for the
+        # `audit list` flag and :2972 for the `audit history` positional -- so
+        # driving it once covers both, which is the point: the two surfaces
+        # share one enum owner and therefore one string (rmp task #289).
         self.check(
-            "Error: validation error: invalid entity type: X",
+            'Error: validation error: invalid entity type: "X"',
             ["audit", "list", "-r", r, "-e", "PROJECT"], 6, subs={"X": "PROJECT"},
             note="audit list invalid entity type",
+        )
+        # #100b: -o/--operation not in the catalogue. COMMANDS.md:2928
+        # publishes this row; before rmp task #289 the `-o` refusal had no
+        # published row at all, which is exactly why its divergent wording
+        # ("invalid operation: BOGUS", unquoted) survived unnoticed -- an
+        # unpublished string is invisible to this gate.
+        self.check(
+            'Error: validation error: invalid audit operation: "X"',
+            ["audit", "list", "-r", r, "-o", "TASK_TELEPORT"], 6,
+            subs={"X": "TASK_TELEPORT"}, note="audit list invalid operation",
         )
         # #101: <entity-id> positional is not an integer, on `audit history`.
         self.check(
@@ -1537,15 +1958,22 @@ class TestErrorStringParity:
             ["audit", "history", "-r", r, "TASK", "abc"], 2, subs={"X": "abc"},
             note="audit history non-integer entity id",
         )
-        # #102: <entity-id> is zero (literal "0" in the published text, not
-        # a placeholder -- the message states the exact rejected value).
+        # #102/#103: <entity-id> outside 1-2147483647. The two rows that used to
+        # publish this became one when the rule stopped splitting itself by the
+        # bound that was crossed, and the surviving row is driven at BOTH bounds
+        # so that a future re-split fails here (rmp task 330).
+        #
+        # It is also the same published string the `--entity-id` row above
+        # drives: the corpus dedupes by content, and the two commands address
+        # the same field, so one key covering both is the assertion that they
+        # have not drifted apart again.
         self.check(
-            "Error: validation error: invalid entity ID: 0 (must be positive)",
-            ["audit", "history", "-r", r, "TASK", "0"], 6, note="audit history entity id zero",
+            "Error: validation error: entity_id must be between 1 and 2147483647, got N",
+            ["audit", "history", "-r", r, "TASK", "0"], 6, subs={"N": "0"},
+            note="audit history entity id zero",
         )
-        # #103: <entity-id> exceeds MaxInt32.
         self.check(
-            "Error: validation error: invalid entity ID: N (exceeds maximum value 2147483647)",
+            "Error: validation error: entity_id must be between 1 and 2147483647, got N",
             ["audit", "history", "-r", r, "TASK", "2147483648"], 6,
             subs={"N": "2147483648"}, note="audit history entity id too large",
         )
@@ -1554,9 +1982,25 @@ class TestErrorStringParity:
         # names this exact scenario ("a leading -e is parsed as the
         # entity-type value"), so -e is the literal value under test.
         self.check(
-            "Error: validation error: invalid entity type: -e",
+            'Error: validation error: invalid entity type: "-e"',
             ["audit", "history", "-r", r, "-e", "1"], 6,
             note="audit history leading -e parsed as entity type",
+        )
+        # The audit date filters accept the same two forms `task list` does
+        # (rmp task 324). One pair drives both the `audit list` Bound Validation
+        # rows and the `audit stats` Error Conditions rows, since the corpus
+        # dedupes by content and the two tables publish the same strings.
+        self.check(
+            'Error: validation error: --since: invalid date format: expected RFC3339 '
+            '(2026-01-01T00:00:00Z) or date-only (2026-01-01): "X"',
+            ["audit", "list", "-r", r, "--since", "last-tuesday"], 6,
+            subs={"X": "last-tuesday"}, note="audit list invalid since",
+        )
+        self.check(
+            'Error: validation error: --until: invalid date format: expected RFC3339 '
+            '(2026-01-01T00:00:00Z) or date-only (2026-01-01): "X"',
+            ["audit", "list", "-r", r, "--until", "next-friday"], 6,
+            subs={"X": "next-friday"}, note="audit list invalid until",
         )
 
     # ------------------------------------------------------------------
@@ -1582,6 +2026,22 @@ class TestErrorStringParity:
         self.check(
             "Error: validation error: count must be a positive integer",
             ["backlog", "show-next", "0", "-r", r], 6, note="backlog show-next zero count",
+        )
+        # #105b: --limit out of range, the row § List Backlog Tasks publishes
+        # from rmp task #329 onwards. It is the SAME published string as
+        # `task list`'s, which is the point: a backlog listing is a task listing,
+        # so it carries the same ceiling and must carry the same sentence. Both
+        # commands are driven, because a shared corpus key proves the SPEC
+        # publishes one string and not that both binaries print it.
+        self.check(
+            "Error: validation error: limit must be between 1 and 100, got N",
+            ["backlog", "list", "-r", r, "--limit", "0"], 6, subs={"N": "0"},
+            note="backlog list limit below floor",
+        )
+        self.check(
+            "Error: validation error: limit must be between 1 and 100, got N",
+            ["backlog", "list", "-r", r, "--limit", "101"], 6, subs={"N": "101"},
+            note="backlog list limit above ceiling",
         )
 
     # ------------------------------------------------------------------
@@ -1646,6 +2106,20 @@ class TestErrorStringParity:
             ["graph", "query", "-r", "ghost-roadmap-9182", "--query", "MATCH (n) RETURN n"], 4,
             subs={"X": "ghost-roadmap-9182"}, note="graph query roadmap not found",
         )
+        # A Cypher query written as a positional argument. The graph family
+        # declares a maximum of zero positional arguments (COMMANDS.md
+        # § Positional Arity by Command), and it is one of the three commands
+        # that publish a line of their own for the refusal: the canonical
+        # wording with a parenthetical naming the two sources a query may
+        # come from. The roadmap named here EXISTS, so the exit code proves
+        # the refusal precedes opening the graph store rather than following
+        # a lookup failure.
+        self.check(
+            'Error: invalid input: unexpected argument "X" (graph queries use --query or stdin)',
+            ["graph", "query", "-r", r, "MATCH (n:Incident) RETURN n"], 2,
+            subs={"X": "MATCH (n:Incident) RETURN n"},
+            note="graph query bare positional query",
+        )
 
     # ------------------------------------------------------------------
     # `rmp web`
@@ -1667,6 +2141,16 @@ class TestErrorStringParity:
             "Error: invalid input: unknown flag: --foo",
             ["web", "--foo", "--no-open"], 2, note="web unknown flag",
         )
+        # A positional argument on `rmp web`. The command declares a maximum
+        # of zero (COMMANDS.md § Positional Arity by Command) and is the
+        # third command that publishes a line of its own for the refusal:
+        # the offending token follows a colon and carries no quotes. The
+        # refusal precedes binding the listener, so no server is started.
+        self.check(
+            "Error: invalid input: unexpected argument: X",
+            ["web", "monitoring-dashboard", "--no-open"], 2,
+            subs={"X": "monitoring-dashboard"}, note="web positional argument",
+        )
 
     # ------------------------------------------------------------------
     # #119: the data directory itself is unreadable.
@@ -1687,6 +2171,145 @@ class TestErrorStringParity:
             # Restore before teardown_method's shutil.rmtree walks this
             # directory, which an unreadable directory would make fail.
             os.chmod(roadmaps_dir, 0o700)
+
+    # ------------------------------------------------------------------
+    # The two generic templates of COMMANDS.md
+    # § "Entity Identifier Range (All Positional Ids and `--entity-id`)".
+    #
+    # Every CONCRETE instance of those two rules is already driven above by
+    # the command family that owns it -- `task get`, `sprint get`,
+    # `task add-dep`, `audit list` / `audit history`, and the comment
+    # subcommands. What no single family can assert is the claim the section
+    # actually makes: that all of them print ONE sentence per rule, differing
+    # only in the field named, in the value echoed, and in the sentinel
+    # (acceptance criteria 1 and 3 of that section). Five families agreeing
+    # is a property OF THE SET, so it is asserted over the set.
+    #
+    # A template driven once proves nothing about a template: a single
+    # substitution passes just as happily against five divergent sentences,
+    # which is exactly the state rmp task 330 found -- four sites wording one
+    # rule three different ways, two of them naming only the bound that
+    # happened to be crossed. So each template is driven once per surface it
+    # governs, and the substitutions vary precisely what the section says may
+    # vary and nothing else.
+    #
+    # The two rules are driven TOGETHER, from one table, because the third
+    # acceptance criterion is about their relationship: the format refusal
+    # and the range refusal must name the same argument. The `<field>` this
+    # module substitutes is therefore never written down -- it is DERIVED
+    # from the `<entity>` word by the section's own construction rule ("that
+    # same word with `_id` appended and any space written as an underscore"),
+    # so a binary whose two refusals ever drift apart fails one of the two
+    # checks in the same row.
+    # ------------------------------------------------------------------
+
+    def test_entity_identifier_range_templates(self):
+        r = self.roadmap
+        # No fixture is created. Both id rules are applied while the
+        # positional is being parsed -- before the roadmap database is
+        # opened -- so an id that no row holds reaches the refusal under
+        # test exactly as a real one would, and `task add-dep`, whose
+        # dependency positional is the second of two, is reached with a
+        # well-formed id in the first.
+        absent = str(self.missing_id)
+        body = "Root cause confirmed: the retry path reuses a stale nonce"
+
+        format_rule = 'Error: invalid input: invalid <entity> ID: "X" (must be a positive integer)'
+        range_rule = "Error: <sentinel>: <field> must be between 1 and 2147483647, got N"
+
+        # One row per published entity word. Each carries the two
+        # invocations that refuse the SAME argument on that surface, one per
+        # rule, plus the sentinel and exit code the surface publishes for the
+        # range half.
+        #
+        # The offending values are deliberately all different -- a plausible
+        # mistyped id on the format side, and on the range side the floor,
+        # the ceiling + 1, and a token too large for the platform's int type
+        # (echoed verbatim, because there is no parsed value to echo). A
+        # constant repeated five times would let a binary that ignores the
+        # supplied value pass; five distinct values cannot.
+        #
+        # (entity, format argv, bad token, range argv, offending value,
+        #  sentinel, range exit code)
+        surfaces = [
+            ("task",
+             ["task", "get", "-r", r, "seventeen"], "seventeen",
+             ["task", "get", "-r", r, "0"], "0",
+             "validation error", 6),
+            ("sprint",
+             ["sprint", "get", "-r", r, "Q3"], "Q3",
+             ["sprint", "get", "-r", r, "2147483648"], "2147483648",
+             "validation error", 6),
+            ("comment",
+             ["task", "comment-edit", "-r", r, "1a", "--body", body], "1a",
+             ["task", "comment-edit", "-r", r, "0", "--body", body], "0",
+             # The one surface that classifies the range half as misuse
+             # rather than as a validation failure. The sentence is the
+             # same one; only the sentinel and the exit code differ, which
+             # is the section's "the failure class is a property of the
+             # surface, not of the rule".
+             "invalid input", 2),
+            ("dependency task",
+             ["task", "add-dep", "-r", r, absent, "88x"], "88x",
+             ["task", "add-dep", "-r", r, absent, "-3"], "-3",
+             "validation error", 6),
+            ("entity",
+             ["audit", "history", "-r", r, "TASK", "3.5"], "3.5",
+             ["audit", "history", "-r", r, "TASK", "99999999999"], "99999999999",
+             "validation error", 6),
+        ]
+
+        driven_entities = []
+        driven_fields = []
+        for entity, fmt_argv, bad_token, rng_argv, offending, sentinel, rng_exit in surfaces:
+            # The section's own construction rule, applied rather than
+            # restated: this is the only place the range name is produced,
+            # so the two checks below cannot be given names that disagree.
+            field = entity.replace(" ", "_") + "_id"
+            driven_entities.append(entity)
+            driven_fields.append(field)
+
+            self.check(
+                format_rule, fmt_argv, 2,
+                subs={"<entity>": entity, "X": bad_token},
+                note=f"id format template, <entity>={entity}",
+            )
+            self.check(
+                range_rule, rng_argv, rng_exit,
+                subs={"<sentinel>": sentinel, "<field>": field, "N": offending},
+                note=f"id range template, <field>={field} <sentinel>={sentinel}",
+            )
+
+        # The set driven above is only the whole rule if it is the whole set
+        # the section publishes, so both lists are read back out of the file
+        # and required to match. Without this, a sixth entity added to the
+        # SPEC -- or a fifth quietly dropped -- would narrow this gate in
+        # silence, which is the failure mode the module exists to prevent.
+        # The anchors are prose, and a rewording that moves them fails here
+        # loudly, exactly as SUPPLEMENTAL_CORPUS's anchors do.
+        flat = re.sub(r"\s+", " ", SPEC_PATH.read_text(encoding="utf-8"))
+        entity_prose = re.search(
+            r"`<entity>` is (.*?), and `<field>` is that same word", flat)
+        field_prose = re.search(
+            r"underscore: (.*?)\. The two spellings name the same argument", flat)
+        assert entity_prose and field_prose, (
+            "SPEC/COMMANDS.md no longer carries the two sentences that "
+            "enumerate the entity words and the field names of "
+            "§ Entity Identifier Range -- re-anchor this test against the "
+            "new prose or drop it"
+        )
+        published_entities = _BACKTICK_RE.findall(entity_prose.group(1))
+        published_fields = _BACKTICK_RE.findall(field_prose.group(1))
+        assert sorted(driven_entities) == sorted(published_entities), (
+            f"the entity words driven here are not the ones "
+            f"SPEC/COMMANDS.md publishes: driven {sorted(driven_entities)}, "
+            f"published {sorted(published_entities)}"
+        )
+        assert sorted(driven_fields) == sorted(published_fields), (
+            f"the field names driven here are not the ones "
+            f"SPEC/COMMANDS.md publishes: driven {sorted(driven_fields)}, "
+            f"published {sorted(published_fields)}"
+        )
 
     # ------------------------------------------------------------------
     # Placeholder rule, proved in both directions (NON-VACUITY requirement
@@ -1751,28 +2374,69 @@ class TestErrorStringParity:
     # ------------------------------------------------------------------
 
     def test_yy_exemptions_are_named(self):
-        """Every exemption is declared by name with its reason (NON-VACUITY
-        requirement 3d): nothing is silently dropped from the corpus."""
+        """Every exemption and every tail narrowing is declared by name with
+        its reason (NON-VACUITY requirement 3d): nothing is silently dropped
+        from the corpus, and nothing is silently weakened either."""
         for key, reason in EXEMPT_KEYS.items():
             assert key in CORPUS, (
                 f"EXEMPT_KEYS names a string extraction no longer finds: {key!r}"
             )
             assert reason.strip(), f"exemption for {key!r} carries no reason"
+            assert key not in TAIL_EXEMPT_KEYS, (
+                f"{key!r} is declared both as a full exemption and as a tail "
+                f"narrowing; it must be one or the other"
+            )
             print(f"  EXEMPT: {key!r}\n    reason: {reason}")
+
+        for key, (token, reason) in TAIL_EXEMPT_KEYS.items():
+            assert key in CORPUS, (
+                f"TAIL_EXEMPT_KEYS names a string extraction no longer finds: {key!r}"
+            )
+            assert reason.strip(), f"tail narrowing for {key!r} carries no reason"
+            head, sep, tail = key.partition(token)
+            assert sep, (
+                f"TAIL_EXEMPT_KEYS declares placeholder {token!r} for {key!r}, "
+                f"which does not contain it"
+            )
+            assert tail == "", (
+                f"the narrowed placeholder must end the published string; "
+                f"{key!r} carries {tail!r} after {token!r}"
+            )
+            # The narrowing is only legitimate while the ASSERTED half still
+            # carries the sentinel: if a future edit moved the placeholder to
+            # the front, this entry would be asserting nothing but "Error: ".
+            assert head.startswith("Error: ") and len(head) > len("Error: "), (
+                f"the asserted head of {key!r} is {head!r}, which carries no "
+                f"sentinel -- the narrowing would assert nothing of substance"
+            )
+            assert key in REACHED, (
+                f"{key!r} declares a tail narrowing but was never driven "
+                f"against the binary; a narrowing is not an exemption -- the "
+                f"head must actually be asserted by some case in this module"
+            )
+            print(f"  TAIL-NARROWED at {token}: {key!r}\n    asserted head: "
+                  f"{head!r}\n    reason: {reason}")
 
     def test_zz_coverage_report(self):
         exempted = set(EXEMPT_KEYS.keys())
+        narrowed = set(TAIL_EXEMPT_KEYS.keys())
         accounted = REACHED | exempted
         missing = sorted(set(CORPUS.keys()) - accounted)
-        stale_exemptions = sorted(exempted - set(CORPUS.keys()))
+        stale_exemptions = sorted((exempted | narrowed) - set(CORPUS.keys()))
 
         print(f"\nSPEC/COMMANDS.md published-string corpus: {len(CORPUS)} distinct strings")
-        print(f"  reached (driven against the binary and matched exactly): {len(REACHED)}")
+        print(f"  reached (driven against the binary and matched exactly): {len(REACHED - narrowed)}")
+        print(f"  reached, compared by head only (tail narrowed):          {len(REACHED & narrowed)}")
         print(f"  exempted (named, reasoned, never executed):               {len(exempted)}")
         print(f"  accounted for:                                            {len(accounted)}")
 
         assert not stale_exemptions, (
-            f"EXEMPT_KEYS names strings no longer in CORPUS: {stale_exemptions}"
+            f"EXEMPT_KEYS/TAIL_EXEMPT_KEYS name strings no longer in CORPUS: "
+            f"{stale_exemptions}"
+        )
+        assert narrowed <= REACHED, (
+            f"tail-narrowed strings that were never driven: "
+            f"{sorted(narrowed - REACHED)}"
         )
         assert not missing, (
             f"{len(missing)} published string(s) are neither reached nor exempted "

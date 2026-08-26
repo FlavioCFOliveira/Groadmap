@@ -116,15 +116,17 @@ func backlogList(args []string) error {
 		filter.MinPriority = &p
 	}
 	if l, ok := result.Flags["Limit"].(int); ok {
-		if l < 1 || l > models.MaxTaskLimit {
-			return fmt.Errorf("%w: limit must be between 1 and %d", utils.ErrValidation, models.MaxTaskLimit)
+		// Same bound and same owner as `task list`: a backlog listing is a task
+		// listing (SPEC/COMMANDS.md § List Backlog Tasks; rmp task 329).
+		if err := models.ValidateTaskLimit(l); err != nil {
+			return err
 		}
 		filter.Limit = l
 	}
 	if typeStr, ok := result.Flags["Type"].(string); ok {
 		tt, parseErr := models.ParseTaskType(typeStr)
 		if parseErr != nil {
-			return fmt.Errorf("%w: %s", utils.ErrValidation, parseErr.Error())
+			return fmt.Errorf("%w: %w", utils.ErrValidation, parseErr)
 		}
 		filter.TaskType = &tt
 	}
@@ -232,6 +234,7 @@ Exit codes:
   3   No roadmap specified (-r missing)
   6   Validation error (bad --type/--sort, out-of-range --limit, or
        non-numeric/non-positive [count] on 'show-next')
+  127 Unknown subcommand
 
 Examples:
   rmp backlog list -r groadmap

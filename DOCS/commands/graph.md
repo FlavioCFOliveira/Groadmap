@@ -212,3 +212,4 @@ All subcommands follow these conventions:
 | 3 | No roadmap selected (`-r` missing/required) |
 | 4 | Roadmap not found (the roadmap given via `-r` does not exist) |
 | 6 | The query's operation class does not match the subcommand; or `query`/`search` received a schema-introspection command written with anything other than exactly one space between its two keywords |
+| 127 | Unknown subcommand |

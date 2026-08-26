@@ -21,6 +21,7 @@ import (
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
+	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
 // taskCommentFamily binds the shared subcommand bodies to task_comments.
@@ -63,8 +64,8 @@ var taskCommentFamily = commentFamily{
 	opUpdate: models.OpTaskCommentUpdate,
 	opDelete: models.OpTaskCommentDelete,
 
-	entityType:  models.EntityTask,
-	parentLabel: "task",
+	entityType:    models.EntityTask,
+	parentIDField: utils.FieldTaskID,
 }
 
 // taskCommentAdd adds one comment to a task.

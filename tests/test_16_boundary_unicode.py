@@ -3,6 +3,19 @@
 Test 16: Boundary Values and Unicode
 Exhaustive tests for numeric field boundaries, max-length strings, Unicode
 round-trips, and SQL-injection resilience.
+
+The length caps are measured in CHARACTERS — Unicode code points — which is what
+SPEC/MODELS.md states, what the refusal message names, and what
+CHECK(length(<column>) <= N) enforces on the column. Two groups of tests cover
+them, and the distinction matters:
+
+  * TestBoundaryUnicode drives each cap with ASCII. Those cases pin the NUMBER
+    (255, 4096, 2048) and nothing about the unit, because for ASCII the byte
+    count and the character count are the same. They passed unchanged while the
+    application counted bytes and refused a 102-character CJK title.
+  * TestLengthCapsCountCharacters drives every cap in four scripts of one, two,
+    three and four bytes per code point. Those cases pin the UNIT, and they are
+    the regression test for rmp task 296.
 """
 
 import sys
@@ -186,14 +199,19 @@ class TestBoundaryUnicode:
     # ==================== Max-length string limits ====================
 
     def test_title_at_exact_max_length_accepted(self):
-        """Task title at exactly 255 bytes must be accepted."""
+        """Task title at exactly 255 ASCII characters must be accepted.
+
+        ASCII only, so this case says nothing about the UNIT the cap measures in:
+        255 ASCII characters are also 255 bytes. The cases that separate the two
+        are in TestLengthCapsCountCharacters below.
+        """
         roadmap = self.test.create_roadmap()
         exact_title = "x" * 255
         task_id = self.test.create_task(
             roadmap,
             title=exact_title,
-            functional_requirements="Title at exact byte boundary must be stored without truncation",
-            technical_requirements="Validation uses len() which returns byte count in Go",
+            functional_requirements="A title at the exact maximum must be stored without truncation",
+            technical_requirements="The cap counts Unicode code points, matching CHECK(length(title) <= 255)",
             acceptance_criteria="Stored title matches input verbatim with no truncation",
         )
         result = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])
@@ -203,30 +221,30 @@ class TestBoundaryUnicode:
         )
 
     def test_title_one_beyond_max_length_rejected(self):
-        """Task title at 256 bytes (max+1) must be rejected."""
+        """Task title at 256 ASCII characters (max+1) must be rejected."""
         roadmap = self.test.create_roadmap()
         over_title = "x" * 256
         exit_code, _, stderr = self.test.run_cmd(
             [
                 "task", "create", "-r", roadmap,
                 "-t", over_title,
-                "-fr", "Title one byte over max must be rejected",
-                "-tr", "Validation enforces 255-byte limit",
+                "-fr", "A title one character over the maximum must be rejected",
+                "-tr", "The create path enforces the 255-character title cap",
                 "-ac", "Error returned and no task created",
             ],
             check=False,
         )
-        assert exit_code != 0, "Title of 256 bytes should be rejected"
+        assert exit_code != 0, "Title of 256 characters should be rejected"
 
     def test_functional_requirements_at_exact_max_length_accepted(self):
-        """Functional requirements at exactly 4096 bytes must be accepted."""
+        """Functional requirements at exactly 4096 ASCII characters must be accepted."""
         roadmap = self.test.create_roadmap()
         exact_fr = "f" * 4096
         task_id = self.test.create_task(
             roadmap,
             title="Verify functional requirements max-length boundary",
             functional_requirements=exact_fr,
-            technical_requirements="Validation uses len() which returns byte count in Go",
+            technical_requirements="The cap counts Unicode code points, not UTF-8 bytes",
             acceptance_criteria="Stored functional requirements match input verbatim",
         )
         result = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])
@@ -236,7 +254,7 @@ class TestBoundaryUnicode:
         )
 
     def test_functional_requirements_one_beyond_max_rejected(self):
-        """Functional requirements at 4097 bytes (max+1) must be rejected."""
+        """Functional requirements at 4097 ASCII characters (max+1) must be rejected."""
         roadmap = self.test.create_roadmap()
         over_fr = "f" * 4097
         exit_code, _, _ = self.test.run_cmd(
@@ -244,15 +262,15 @@ class TestBoundaryUnicode:
                 "task", "create", "-r", roadmap,
                 "-t", "Verify functional requirements over-max rejection",
                 "-fr", over_fr,
-                "-tr", "Validation enforces 4096-byte limit",
+                "-tr", "The create path enforces the 4096-character requirement cap",
                 "-ac", "Error returned and no task created",
             ],
             check=False,
         )
-        assert exit_code != 0, "Functional requirements of 4097 bytes should be rejected"
+        assert exit_code != 0, "Functional requirements of 4097 characters should be rejected"
 
     def test_technical_requirements_at_exact_max_length_accepted(self):
-        """Technical requirements at exactly 4096 bytes must be accepted."""
+        """Technical requirements at exactly 4096 ASCII characters must be accepted."""
         roadmap = self.test.create_roadmap()
         exact_tr = "t" * 4096
         task_id = self.test.create_task(
@@ -269,14 +287,14 @@ class TestBoundaryUnicode:
         )
 
     def test_acceptance_criteria_at_exact_max_length_accepted(self):
-        """Acceptance criteria at exactly 4096 bytes must be accepted."""
+        """Acceptance criteria at exactly 4096 ASCII characters must be accepted."""
         roadmap = self.test.create_roadmap()
         exact_ac = "c" * 4096
         task_id = self.test.create_task(
             roadmap,
             title="Verify acceptance criteria max-length boundary",
             functional_requirements="Max-length acceptance criteria boundary test",
-            technical_requirements="Validation uses len() which returns byte count in Go",
+            technical_requirements="The cap counts Unicode code points, not UTF-8 bytes",
             acceptance_criteria=exact_ac,
         )
         result = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])
@@ -286,21 +304,21 @@ class TestBoundaryUnicode:
         )
 
     def test_technical_requirements_one_beyond_max_rejected(self):
-        """Technical requirements at 4097 bytes (max+1) must be rejected."""
+        """Technical requirements at 4097 ASCII characters (max+1) must be rejected."""
         roadmap = self.test.create_roadmap()
         over_tr = "t" * 4097
         exit_code, _, stderr = self.test.run_cmd(
             [
                 "task", "create", "-r", roadmap,
                 "-t", "Verify technical requirements over-max rejection",
-                "-fr", "Validation should enforce the 4096-byte limit",
+                "-fr", "Validation should enforce the 4096-character limit",
                 "-tr", over_tr,
                 "-ac", "Error returned and no task created",
             ],
             check=False,
         )
         assert exit_code == 6, (
-            f"TR of 4097 bytes must exit 6 (validation); got {exit_code}, stderr={stderr}"
+            f"TR of 4097 characters must exit 6 (validation); got {exit_code}, stderr={stderr}"
         )
         # stderr should reference the field or 4096 limit
         assert "technical" in stderr.lower() or "4096" in stderr, (
@@ -308,28 +326,28 @@ class TestBoundaryUnicode:
         )
 
     def test_acceptance_criteria_one_beyond_max_rejected(self):
-        """Acceptance criteria at 4097 bytes (max+1) must be rejected."""
+        """Acceptance criteria at 4097 ASCII characters (max+1) must be rejected."""
         roadmap = self.test.create_roadmap()
         over_ac = "c" * 4097
         exit_code, _, stderr = self.test.run_cmd(
             [
                 "task", "create", "-r", roadmap,
                 "-t", "Verify acceptance criteria over-max rejection",
-                "-fr", "Validation should enforce the 4096-byte limit",
+                "-fr", "Validation should enforce the 4096-character limit",
                 "-tr", "AC oversize boundary test",
                 "-ac", over_ac,
             ],
             check=False,
         )
         assert exit_code == 6, (
-            f"AC of 4097 bytes must exit 6 (validation); got {exit_code}, stderr={stderr}"
+            f"AC of 4097 characters must exit 6 (validation); got {exit_code}, stderr={stderr}"
         )
         assert "acceptance" in stderr.lower() or "4096" in stderr, (
             f"stderr must reference the field or its limit; got {stderr!r}"
         )
 
     def test_fr_tr_ac_at_4095_accepted(self):
-        """Each text field at 4095 bytes (one below max) must be accepted."""
+        """Each text field at 4095 ASCII characters (one below max) must be accepted."""
         roadmap = self.test.create_roadmap()
         under = "x" * 4095
         task_id = self.test.create_task(
@@ -365,12 +383,12 @@ class TestBoundaryUnicode:
         )
 
     def test_completion_summary_at_exact_max_accepted(self):
-        """completion_summary at exactly 4096 bytes must be accepted on COMPLETED transition."""
+        """completion_summary at exactly 4096 ASCII characters must be accepted on COMPLETED transition."""
         roadmap = self.test.create_roadmap()
         task_id = self.test.create_task(
             roadmap,
             title="Boundary check for completion_summary max length",
-            functional_requirements="The summary field has its own 4096-byte ceiling",
+            functional_requirements="The summary field has its own 4096-character ceiling",
             technical_requirements="The set-status path accepts --summary at the limit",
             acceptance_criteria="Stored completion_summary length matches input verbatim",
         )
@@ -393,7 +411,8 @@ class TestBoundaryUnicode:
     def test_unicode_cjk_title_round_trip(self):
         """CJK characters in task title must be stored and retrieved verbatim."""
         roadmap = self.test.create_roadmap()
-        # 50 CJK chars = 150 UTF-8 bytes — well within 255-byte limit
+        # 50 CJK characters, well within the 255-CHARACTER title cap. The
+        # boundary itself is exercised by TestLengthCapsCountCharacters.
         cjk_title = "実装" * 25
         task_id = self.test.create_task(
             roadmap,
@@ -873,24 +892,387 @@ class TestBoundaryUnicode:
             f"a well-formed value must not be reported as an encoding failure: {text!r}")
 
 
+class TestLengthCapsCountCharacters:
+    """The unit every free-text length cap measures in: Unicode code points.
+
+    The defect this class exists against (rmp task 296), reproduced against the
+    compiled binary:
+
+        rmp task create --title <102 CJK characters> ...
+        Error: field exceeds maximum size: title exceeds maximum length of 255 characters
+
+    The title was 102 characters. The cap measured its 306 BYTES while the
+    message, SPEC/MODELS.md § Task Field Constraints and
+    CHECK(length(title) <= 255) all named CHARACTERS, so every non-ASCII value
+    was refused at roughly a third of its documented maximum. The comment body,
+    alone among the eight fields, already counted characters: one codebase, two
+    units, and which one applied depended on the field.
+
+    An ASCII-only suite cannot see this. Every case below therefore runs in four
+    scripts of one, two, three and four bytes per code point, and asserts the
+    same two things of each cap: a value of exactly the maximum is accepted, and
+    a value one code point over it is refused with exit 6 and the published
+    message.
+    """
+
+    # The maximums, from SPEC/MODELS.md. They are spelled here rather than read
+    # from the binary because a test that took the number from the thing under
+    # test could not detect the number changing.
+    TITLE_MAX = 255
+    REQUIREMENT_MAX = 4096
+    SPRINT_DESCRIPTION_MAX = 2048
+    COMMENT_BODY_MAX = 4096
+
+    # One seed per script, mirroring internal/testenv/lengthprobes.go so the Go
+    # suite and this one exercise the same boundary. Each seed is free of
+    # whitespace at either edge, so a cap measured on the trimmed value and one
+    # measured on the value as supplied count the same thing.
+    #
+    # (name, bytes per code point, seed)
+    SCRIPTS = [
+        ("ascii", 1, "refuse-the-token-whose-expiry-is-the-current-second-"),
+        ("accented latin", 2, "çãõáéíóúâêôàüñ"),
+        ("cjk", 3, "資料庫遷移驗證任務標題"),
+        ("emoji beyond the BMP", 4, "\U0001F680\U0001F5C4\U0001F9EA\U0001F9F1\U0001F52D"),
+    ]
+
+    def setup_method(self):
+        self.test = GroadmapTestBase()
+        self.test.setup()
+
+    def teardown_method(self):
+        self.test.teardown()
+
+    # ---------------- probe construction ----------------
+
+    @classmethod
+    def probe(cls, seed, n):
+        """Return exactly n code points of seed, repeated and cut on a boundary.
+
+        Python strings are sequences of code points, so len() here is the same
+        count the application must make. That is what lets this module state the
+        boundary in the unit under test without computing it a second way.
+        """
+        assert n > 0
+        repeated = seed * (n // len(seed) + 1)
+        value = repeated[:n]
+        assert len(value) == n, f"probe is {len(value)} code points, want {n}"
+        return value
+
+    def probes(self, limit):
+        """Yield (script_name, at_limit, one_over) for each of the four scripts.
+
+        Each tuple is checked for the two properties that make the case
+        non-vacuous before it is handed out: the value is exactly `limit` code
+        points, and outside ASCII its byte count differs from its character
+        count, so a byte-counting cap would behave differently on it.
+        """
+        for name, bytes_per_rune, seed in self.SCRIPTS:
+            at = self.probe(seed, limit)
+            over = self.probe(seed, limit + 1)
+            encoded = len(at.encode("utf-8"))
+            assert encoded == limit * bytes_per_rune, (
+                f"the {name} probe is {encoded} bytes for {limit} characters, "
+                f"want {limit * bytes_per_rune}")
+            if bytes_per_rune > 1:
+                assert encoded != len(at), (
+                    f"the {name} probe counts the same in bytes and characters; "
+                    "it cannot tell the two units apart")
+            yield name, at, over
+
+    # ---------------- shared assertions ----------------
+
+    def assert_refused_for_length(self, args, field, limit, script, what):
+        """The invocation is refused with exit 6 and the published message.
+
+        SPEC/COMMANDS.md § Published Error Strings Are Exact publishes the line
+        verbatim, so it is compared verbatim.
+        """
+        exit_code, stdout, stderr = self.test.run_cmd(args, check=False)
+        expected = (f"Error: field exceeds maximum size: {field} exceeds "
+                    f"maximum length of {limit} characters")
+        assert exit_code == 6, (
+            f"{what} with {limit + 1} {script} characters must exit 6; "
+            f"got {exit_code}, stderr={stderr!r}")
+        assert expected in stderr, (
+            f"{what} with {limit + 1} {script} characters must report\n  {expected}\n"
+            f"got\n  {stderr!r}")
+        assert stdout == "", (
+            f"{what} failed and still wrote to stdout: {stdout!r}")
+
+    def assert_not_refused_for_length(self, args, field, limit, script, what):
+        """The invocation is not refused for the field's LENGTH.
+
+        The claim is deliberately narrower than "it succeeded": a command may
+        decline for a reason of its own that has nothing to do with this rule.
+        Refusal for length is exactly what the defect produced, so that is what
+        is refused here.
+        """
+        _, _, stderr = self.test.run_cmd(args, check=False)
+        refusal = f"{field} exceeds maximum length of {limit} characters"
+        assert refusal not in stderr, (
+            f"{what} refused a value of exactly {limit} {script} characters, "
+            f"which is the documented maximum: {stderr!r}")
+
+    # ---------------- task create: the four required fields ----------------
+
+    def test_task_create_caps_every_field_in_characters(self):
+        """`task create` accepts each field at its maximum and refuses one over.
+
+        All four fields, all four scripts. Before rmp task 296 the CJK and emoji
+        cases at the maximum were refused, because 255 CJK characters are 765
+        bytes and 4096 emoji are 16384.
+        """
+        roadmap = self.test.create_roadmap()
+        fields = [
+            ("-t", "title", self.TITLE_MAX),
+            ("-fr", "functional_requirements", self.REQUIREMENT_MAX),
+            ("-tr", "technical_requirements", self.REQUIREMENT_MAX),
+            ("-ac", "acceptance_criteria", self.REQUIREMENT_MAX),
+        ]
+        filler = {
+            "-t": "Reconcile the settlement ledger against the clearing file",
+            "-fr": "Every settlement line must match a clearing line or be reported",
+            "-tr": "Match on the end-to-end identifier, then on amount and value date",
+            "-ac": "A mismatched batch is reported and no partial reconciliation is written",
+        }
+
+        for flag, field, limit in fields:
+            for script, at, over in self.probes(limit):
+                args = ["task", "create", "-r", roadmap]
+                for f, v in filler.items():
+                    args.extend([f, at if f == flag else v])
+                self.assert_not_refused_for_length(
+                    args, field, limit, script, f"task create {flag}")
+
+                args = ["task", "create", "-r", roadmap]
+                for f, v in filler.items():
+                    args.extend([f, over if f == flag else v])
+                self.assert_refused_for_length(
+                    args, field, limit, script, f"task create {flag}")
+
+    def test_task_edit_caps_every_field_in_characters(self):
+        """`task edit` measures the same unit as `task create` on all four fields."""
+        roadmap = self.test.create_roadmap()
+        task_id = self.test.create_task(
+            roadmap,
+            title="Reconcile the settlement ledger against the clearing file",
+            functional_requirements="Every settlement line must match a clearing line",
+            technical_requirements="Match on the end-to-end identifier, then on amount",
+            acceptance_criteria="A mismatched batch is reported and nothing partial is written",
+        )
+        for flag, field, limit in [
+            ("-t", "title", self.TITLE_MAX),
+            ("-fr", "functional_requirements", self.REQUIREMENT_MAX),
+            ("-tr", "technical_requirements", self.REQUIREMENT_MAX),
+            ("-ac", "acceptance_criteria", self.REQUIREMENT_MAX),
+        ]:
+            for script, at, over in self.probes(limit):
+                base = ["task", "edit", "-r", roadmap, str(task_id), flag]
+                self.assert_not_refused_for_length(
+                    base + [at], field, limit, script, f"task edit {flag}")
+                self.assert_refused_for_length(
+                    base + [over], field, limit, script, f"task edit {flag}")
+
+                stored = self.test.run_cmd_json(
+                    ["task", "get", "-r", roadmap, str(task_id)])[0]
+                column = {"-t": "title", "-fr": "functional_requirements",
+                          "-tr": "technical_requirements",
+                          "-ac": "acceptance_criteria"}[flag]
+                assert stored[column] == at, (
+                    f"task edit {flag} stored {len(stored[column])} characters "
+                    f"after writing {limit} {script} ones, and the refused value "
+                    "must have changed nothing")
+
+    def test_completion_summary_caps_in_characters(self):
+        """`task stat COMPLETED --summary` measures characters on every script."""
+        roadmap = self.test.create_roadmap()
+        for script, at, over in self.probes(self.REQUIREMENT_MAX):
+            task_id = self.test.create_task(
+                roadmap,
+                title=f"Close the reconciliation run for the {script} ledger",
+                functional_requirements="The completion summary records what was reconciled",
+                technical_requirements="The summary is capped at 4096 characters",
+                acceptance_criteria="A summary at the maximum is stored verbatim",
+            )
+            sprint_id = self.test.create_sprint(
+                roadmap, f"Settlement reconciliation sprint for {script}")
+            self.test.move_task_to_sprint(roadmap, task_id, sprint_id)
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id),
+                               "DOING", "--commit-open", "6c8064a"])
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "TESTING"])
+
+            self.assert_refused_for_length(
+                ["task", "stat", "-r", roadmap, str(task_id), "COMPLETED",
+                 "--commit-close", "4c4ccea", "--summary", over],
+                "completion_summary", self.REQUIREMENT_MAX, script, "task stat --summary")
+            self.test.assert_task_status(roadmap, task_id, "TESTING")
+
+            self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id), "COMPLETED",
+                               "--commit-close", "4c4ccea", "--summary", at])
+            stored = self.test.run_cmd_json(
+                ["task", "get", "-r", roadmap, str(task_id)])[0]
+            assert stored["completion_summary"] == at, (
+                f"a summary of {self.REQUIREMENT_MAX} {script} characters did not "
+                "round-trip verbatim")
+
+    def test_sprint_create_and_update_cap_in_characters(self):
+        """Both sprint free-text fields, on both writers, in all four scripts."""
+        roadmap = self.test.create_roadmap()
+        sprint_id = self.test.create_sprint(
+            roadmap, "Settlement reconciliation hardening",
+            title="Settlement reconciliation")
+
+        for flag, field, limit in [
+            ("-t", "title", self.TITLE_MAX),
+            ("-d", "description", self.SPRINT_DESCRIPTION_MAX),
+        ]:
+            other = "-d" if flag == "-t" else "-t"
+            other_value = ("Close every open reconciliation finding"
+                           if other == "-d" else "Reconciliation hardening")
+            for script, at, over in self.probes(limit):
+                self.assert_refused_for_length(
+                    ["sprint", "create", "-r", roadmap, flag, over, other, other_value],
+                    field, limit, script, f"sprint create {flag}")
+                self.assert_not_refused_for_length(
+                    ["sprint", "create", "-r", roadmap, flag, at, other, other_value],
+                    field, limit, script, f"sprint create {flag}")
+
+                self.assert_refused_for_length(
+                    ["sprint", "update", "-r", roadmap, str(sprint_id), flag, over],
+                    field, limit, script, f"sprint update {flag}")
+                self.test.run_cmd(
+                    ["sprint", "update", "-r", roadmap, str(sprint_id), flag, at])
+                # `sprint get` returns the sprint object itself, not a list
+                # (SPEC/COMMANDS.md § Get Sprint), unlike `task get`.
+                stored = self.test.run_cmd_json(
+                    ["sprint", "get", "-r", roadmap, str(sprint_id)])
+                column = "title" if flag == "-t" else "description"
+                assert stored[column] == at, (
+                    f"sprint update {flag} did not store {limit} {script} characters verbatim")
+
+    def test_comment_body_caps_in_characters(self):
+        """The comment body, the one field that always counted characters.
+
+        It is swept with the other seven so the whole set is proved together: the
+        agreement between them is the property rmp task 296 delivered, and a
+        sweep that left out the field that was already right would not notice the
+        other seven drifting back.
+        """
+        roadmap = self.test.create_roadmap()
+        task_id = self.test.create_task(
+            roadmap,
+            title="Reconcile the settlement ledger against the clearing file",
+            functional_requirements="Every settlement line must match a clearing line",
+            technical_requirements="Match on the end-to-end identifier, then on amount",
+            acceptance_criteria="A mismatched batch is reported",
+        )
+        sprint_id = self.test.create_sprint(roadmap, "Settlement reconciliation sprint")
+
+        for script, at, over in self.probes(self.COMMENT_BODY_MAX):
+            for args_prefix, what in [
+                (["task", "comment-add", "-r", roadmap, str(task_id),
+                  "--type", "DECISION", "--body"], "task comment-add"),
+                (["sprint", "comment-add", "-r", roadmap, str(sprint_id),
+                  "--type", "DECISION", "--body"], "sprint comment-add"),
+            ]:
+                self.assert_refused_for_length(
+                    args_prefix + [over], "body", self.COMMENT_BODY_MAX, script, what)
+                self.assert_not_refused_for_length(
+                    args_prefix + [at], "body", self.COMMENT_BODY_MAX, script, what)
+
+    # ---------------- the defect's own boundary ----------------
+
+    def test_cjk_title_of_255_characters_accepted_and_256_refused(self):
+        """A title of 255 CJK characters is accepted; 256 is refused.
+
+        This is the acceptance criterion stated as the report stated it. 255 CJK
+        characters occupy 765 bytes, so a byte-counting cap refuses them; the
+        stored value is read back and compared, which also shows
+        CHECK(length(title) <= 255) accepted those 765 bytes.
+        """
+        roadmap = self.test.create_roadmap()
+        cjk_seed = next(seed for name, _, seed in self.SCRIPTS if name == "cjk")
+
+        at = self.probe(cjk_seed, self.TITLE_MAX)
+        assert len(at.encode("utf-8")) == 3 * self.TITLE_MAX, (
+            "the probe is not three bytes per character; it cannot catch a byte-counting cap")
+
+        task_id = self.test.create_task(
+            roadmap,
+            title=at,
+            functional_requirements="A title at the documented maximum must be accepted",
+            technical_requirements="The cap counts code points, so 255 CJK characters fit",
+            acceptance_criteria="The stored title matches the supplied one exactly",
+        )
+        stored = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])[0]
+        assert stored["title"] == at, (
+            f"the stored title is {len(stored['title'])} characters, want {self.TITLE_MAX}")
+
+        self.assert_refused_for_length(
+            ["task", "create", "-r", roadmap,
+             "-t", self.probe(cjk_seed, self.TITLE_MAX + 1),
+             "-fr", "A title one character over the maximum must be refused",
+             "-tr", "The cap counts code points",
+             "-ac", "No task row is written"],
+            "title", self.TITLE_MAX, "cjk", "task create -t")
+
+    def test_the_refusal_names_the_unit_it_measured(self):
+        """The number in the refusal is a number of CHARACTERS, in every script.
+
+        The message is taken from the binary and its maximum parsed out of it,
+        then a value of exactly that many characters is submitted. If the cap
+        measured bytes, the message would name 255 while refusing anything past
+        85 CJK characters, and this would fail.
+        """
+        roadmap = self.test.create_roadmap()
+        for script, _, over in self.probes(self.TITLE_MAX):
+            _, _, stderr = self.test.run_cmd(
+                ["task", "create", "-r", roadmap, "-t", over,
+                 "-fr", "Probe the published maximum",
+                 "-tr", "Parse the number out of the refusal",
+                 "-ac", "The number is a count of characters"],
+                check=False)
+            marker = "exceeds maximum length of "
+            assert marker in stderr, f"not a too-large refusal: {stderr!r}"
+            tail = stderr[stderr.index(marker) + len(marker):].split()
+            assert len(tail) >= 2, f"the refusal names no maximum and no unit: {stderr!r}"
+            assert tail[1].startswith("characters"), (
+                f"the refusal names the unit {tail[1]!r}, but the cap measures characters: {stderr!r}")
+            limit = int(tail[0])
+
+            seed = next(s for name, _, s in self.SCRIPTS if name == script)
+            accepted = self.probe(seed, limit)
+            exit_code, _, err = self.test.run_cmd(
+                ["task", "create", "-r", roadmap, "-t", accepted,
+                 "-fr", "A title of exactly the published maximum must be accepted",
+                 "-tr", "The published number is a count of characters",
+                 "-ac", "The task is created"],
+                check=False)
+            assert exit_code == 0, (
+                f"the refusal names a maximum of {limit} CHARACTERS, but a title of "
+                f"exactly {limit} {script} characters ({len(accepted.encode('utf-8'))} bytes) "
+                f"is refused: {err!r}")
+
+
 def main():
     """Run all tests directly."""
-    test = TestBoundaryUnicode()
-    methods = [m for m in dir(test) if m.startswith("test_")]
     passed = 0
     failed = 0
 
-    for method_name in methods:
-        test.setup_method()
-        try:
-            getattr(test, method_name)()
-            print(f"PASS  {method_name}")
-            passed += 1
-        except Exception as e:
-            print(f"FAIL  {method_name}: {e}")
-            failed += 1
-        finally:
-            test.teardown_method()
+    for cls in (TestBoundaryUnicode, TestLengthCapsCountCharacters):
+        test = cls()
+        for method_name in [m for m in dir(test) if m.startswith("test_")]:
+            test.setup_method()
+            try:
+                getattr(test, method_name)()
+                print(f"PASS  {method_name}")
+                passed += 1
+            except Exception as e:
+                print(f"FAIL  {method_name}: {e}")
+                failed += 1
+            finally:
+                test.teardown_method()
 
     print(f"\n{passed} passed, {failed} failed")
     return failed == 0

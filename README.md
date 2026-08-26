@@ -160,7 +160,9 @@ rmp graph query -r myproject \
 | 4 | Not found | Roadmap/task/sprint/comment doesn't exist |
 | 5 | Already exists | Duplicate name or duplicate sprint order |
 | 6 | Invalid data | Validation failed (dates, ranges) |
+| 126 | Not executable | Filesystem permission issue prevented execution |
 | 127 | Unknown command | Unknown command or subcommand |
+| 130 | Interrupted | Interrupted by SIGINT (Ctrl+C) |
 
 ## Technical Documentation
 
@@ -215,7 +217,7 @@ rmp backlog list -r <name> --priority 7  # Filter by minimum priority
 ```bash
 rmp sprint list -r <name>
 rmp sprint list -r <name> --status OPEN
-rmp sprint list -r <name> --status PENDING,CLOSED
+rmp sprint list -r <name> --status CLOSED
 ```
 
 ---
@@ -253,8 +255,8 @@ rmp task get -r <name> 1,2,3             # Bulk fetch
 **How do I filter and search tasks?**
 ```bash
 rmp task list -r <name> --status BACKLOG
-rmp task list -r <name> --status DOING,TESTING
-rmp task list -r <name> --type BUG --severity 8,9
+rmp task list -r <name> --status DOING
+rmp task list -r <name> --type BUG --severity 8
 rmp task list -r <name> --priority 7 --status SPRINT
 rmp task list -r <name> --created-since 2026-03-01
 rmp task list -r <name> --sort created --limit 50
@@ -643,9 +645,9 @@ See [DOCS/commands/web.md](DOCS/commands/web.md) for the full route list, the ta
 **What is the difference between Priority and Severity?**
 
 - **Priority (0-9)**: business urgency, set by the Product Owner.
-  - `rmp task prio -r <name> <id> 9` / filter: `--priority 8,9`
+  - `rmp task prio -r <name> <id> 9` / filter: `--priority 8` (threshold: 8 and above)
 - **Severity (0-9)**: technical impact, set by the engineering team.
-  - `rmp task sev -r <name> <id> 8` / filter: `--severity 8,9`
+  - `rmp task sev -r <name> <id> 8` / filter: `--severity 8` (threshold: 8 and above)
 
 Both scales run 0 (lowest) to 9 (highest). Use them independently.
 
@@ -665,7 +667,7 @@ rmp task next -r <name>                   # Returns task 5 first
 **Priority** is a planning attribute for filtering and backlog grooming:
 ```bash
 rmp backlog show-next -r <name> 5         # Top 5 by priority for sprint planning
-rmp task list -r <name> --priority 8,9
+rmp task list -r <name> --priority 8      # Priority 8 and above
 ```
 
 (Distinct from both is a sprint's own `--order`, which sequences the sprints themselves across the roadmap.)

@@ -271,8 +271,11 @@ func indexesOverSprintPosition(t *testing.T, database *DB) map[string]bool {
 }
 
 // assertDenseAndDistinct checks that every sprint's positions are a dense
-// 0..N-1 run, which is acceptance criteria 2 and 3 of SPEC/VERSION.md
-// § Migration 1.12.0 → 1.13.0 read row by row rather than in aggregate.
+// 0..N-1 run, read row by row rather than in aggregate. That is the invariant
+// SPEC/DATABASE.md § Position Density Within a Sprint states, and it is what
+// acceptance criteria 2 and 3 of both SPEC/VERSION.md § Migration 1.12.0 →
+// 1.13.0 and § Migration 1.13.0 → 1.14.0 require of the databases those
+// migrations leave behind.
 func assertDenseAndDistinct(t *testing.T, stored map[int]map[int]int) {
 	t.Helper()
 
@@ -288,9 +291,9 @@ func assertDenseAndDistinct(t *testing.T, stored map[int]map[int]int) {
 		}
 		for want := 0; want < len(positions); want++ {
 			if !seen[want] {
-				t.Errorf("sprint %d holds %d tasks but no task at position %d; SPEC/VERSION.md "+
-					"§ Migration 1.12.0 → 1.13.0 acceptance criterion 3 requires a dense 0..N-1 run",
-					sprintID, len(positions), want)
+				t.Errorf("sprint %d holds %d tasks but no task at position %d; SPEC/DATABASE.md "+
+					"§ Position Density Within a Sprint requires exactly the run 0..%d",
+					sprintID, len(positions), want, len(positions)-1)
 			}
 		}
 	}
@@ -350,12 +353,19 @@ func TestMigrateV1_12_0_toV1_13_0_OnNextOpen(t *testing.T) {
 	defer database.Close() //nolint:errcheck // test cleanup
 
 	// Acceptance criterion 10: the recorded version advances.
+	//
+	// The literal is the CURRENT schema version, not 1.13.0, because opening a
+	// 1.12.0 database applies every pending migration rather than only the one
+	// this file is about: the run passes THROUGH 1.13.0 and continues to the
+	// newest registered migration. What criterion 10 is really asserting — that
+	// the recorded version left 1.12.0 behind and landed where a fresh database
+	// is created — is what the two checks below say between them.
 	version, err := database.GetSchemaVersion()
 	if err != nil {
 		t.Fatalf("reading schema version after open: %v", err)
 	}
-	if version != "1.13.0" {
-		t.Fatalf("schema_version after open = %q, want 1.13.0 (SPEC/VERSION.md § Current Schema Version)", version)
+	if version != "1.14.0" {
+		t.Fatalf("schema_version after open = %q, want 1.14.0 (SPEC/VERSION.md § Current Schema Version)", version)
 	}
 	if version != SchemaVersion {
 		t.Errorf("schema_version after open = %q but the SchemaVersion constant is %q; a migrated "+

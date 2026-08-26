@@ -47,6 +47,6 @@ func BenchmarkSearchableText(b *testing.B) {
 func BenchmarkSearchCompositionDerivation(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		benchSink = string(rune(len(buildSearchComposition().pairs)))
+		benchSink = string(rune(len(buildSearchComposition().Pairs)))
 	}
 }

@@ -256,3 +256,140 @@ func TestColumnExists(t *testing.T) {
 		t.Error("expected sprints.no_such_column to be absent")
 	}
 }
+
+// ==================== rmp task #305: columnExists table-name shape guard ====
+
+// TestColumnExistsRefusesUnsafeTableIdentifier is the regression test for rmp
+// task #305 (CWE-89).
+//
+// columnExists INTERPOLATES its table argument, because SQLite does not accept a
+// bound parameter as a PRAGMA argument. It was safe only because all of its
+// callers happen to pass string literals — a property of the callers, which no
+// caller is obliged to preserve and which the #nosec at the interpolation would
+// have kept the scanner quiet about. The guard makes the safety a property of
+// the FUNCTION, and this test is what holds the guard in place.
+//
+// The cases are the ones that discriminate. A test that only exercised valid
+// names would pass against the unguarded code and would prove nothing, so every
+// case here is a name the unguarded function would have interpolated: one
+// carrying a quote (which closes the literal), one carrying a semicolon (which
+// ends the statement and starts another), one carrying whitespace (which is not
+// an identifier at all), and the empty string (which asks about a table with no
+// name and answers "the column is absent" for every column, sending an ALTER at
+// a table nobody named).
+func TestColumnExistsRefusesUnsafeTableIdentifier(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // read-only probe; the deferred rollback is the cleanup
+
+	cases := []struct {
+		name  string
+		table string
+	}{
+		{
+			name:  "quote closes the literal",
+			table: `sprints') AND 1=1 --`,
+		},
+		{
+			name:  "semicolon appends a second statement",
+			table: `sprints'); DROP TABLE sprints; --`,
+		},
+		{
+			name:  "whitespace is not an identifier",
+			table: "sprint tasks",
+		},
+		{
+			name:  "empty string names no table",
+			table: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			exists, err := columnExists(tx, tc.table, "max_tasks")
+			if err == nil {
+				t.Fatalf("columnExists(%q) returned no error; the name reached the statement", tc.table)
+			}
+			if !errors.Is(err, errUnsafeTableIdentifier) {
+				t.Fatalf("columnExists(%q) failed with %v; expected the shape guard's refusal, "+
+					"which means the name reached SQLite instead of being refused before the interpolation",
+					tc.table, err)
+			}
+			if exists {
+				t.Errorf("columnExists(%q) reported the column present while refusing the name", tc.table)
+			}
+		})
+	}
+
+	// The refusals changed nothing. sprints is still there, still carries
+	// max_tasks, and is still readable on the same transaction — so neither the
+	// DROP payload nor the refusals themselves left the schema or the
+	// transaction damaged.
+	present, err := columnExists(tx, "sprints", "max_tasks")
+	if err != nil {
+		t.Fatalf("columnExists after the refusals: %v", err)
+	}
+	if !present {
+		t.Error("sprints.max_tasks is gone after the refused names; the guard did not hold")
+	}
+	var count int
+	if err := tx.QueryRow("SELECT COUNT(*) FROM sprints").Scan(&count); err != nil {
+		t.Fatalf("reading sprints after the refused names: %v", err)
+	}
+}
+
+// TestColumnExistsAdmitsEveryTableTheMigrationsName is the guard's other half:
+// the class has to admit every name the migrations actually pass, or the guard
+// would break the idempotency checks it sits inside.
+//
+// The four names are the complete set the ten call sites in migrations.go use,
+// and each is probed with a column that exists on it and one that does not, so
+// the test proves the guard passes the name THROUGH rather than merely not
+// erroring on it.
+func TestColumnExistsAdmitsEveryTableTheMigrationsName(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // read-only probe; the deferred rollback is the cleanup
+
+	cases := []struct {
+		table   string
+		present string
+	}{
+		{table: "tasks", present: "completion_summary"},
+		{table: "sprints", present: "order_index"},
+		{table: "sprint_tasks", present: "position"},
+		{table: "audit", present: "related_entity_id"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.table, func(t *testing.T) {
+			if !safeTableIdentifier.MatchString(tc.table) {
+				t.Fatalf("%s is a name the migrations pass and the guard rejects", tc.table)
+			}
+			exists, err := columnExists(tx, tc.table, tc.present)
+			if err != nil {
+				t.Fatalf("columnExists(%s, %s): %v", tc.table, tc.present, err)
+			}
+			if !exists {
+				t.Errorf("expected %s.%s to exist", tc.table, tc.present)
+			}
+			absent, err := columnExists(tx, tc.table, "no_such_column")
+			if err != nil {
+				t.Fatalf("columnExists(%s, no_such_column): %v", tc.table, err)
+			}
+			if absent {
+				t.Errorf("expected %s.no_such_column to be absent", tc.table)
+			}
+		})
+	}
+}

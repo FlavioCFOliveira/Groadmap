@@ -779,6 +779,7 @@ All commands follow these conventions:
 | 3 | No roadmap specified (`-r` missing) |
 | 4 | Task or comment not found (a syntactically valid id that does not exist) |
 | 6 | Validation error: bad `--type`/`--status`/enum value, out-of-range number, oversized field, invalid state transition (including `stat SPRINT`), subtask/dependency guard, or dependency cycle. On `stat` it also covers a missing, misplaced, or malformed `--commit-open`/`--commit-close`. On the comment subcommands it covers a comment type outside the seven task values, a body over 4096 characters, and a body containing control characters |
+| 127 | Unknown subcommand |
 
 Note the distinction: an id that is not a positive integer (for example `abc` or `0`) is an exit-code-2 syntax error, whereas a well-formed id for a task or a comment that does not exist is an exit-code-4 not-found error. An invalid `--type` or target status value is an exit-code-6 validation error.
 

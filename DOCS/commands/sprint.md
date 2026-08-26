@@ -622,6 +622,9 @@ rmp sprint mvto -r project1 1 10 5    # Move task 10 to position 5
 }
 ```
 
+
+**Audit:** one `SPRINT_TASK_MOVE_POSITION` entry per invocation, against the sprint, with NULL `related_entity_id` and NULL `commit_hash`. No `TASK_STATUS_*` entry and no entry against any task: ordering changes the `position` column of the membership rows, so the sprint is the only entity whose state changes. A no-op invocation — moving a task to the position it already holds — still writes its entry, on the same rule that governs `task edit`: the audit log records the command issued, not the delta it produced.
+
 ---
 
 ### swap
@@ -687,6 +690,9 @@ Moves a task to the top of the sprint (position 0).
 rmp sprint top -r project1 1 5    # Move task 5 to position 0
 ```
 
+
+**Audit:** one `SPRINT_TASK_MOVE_POSITION` entry per invocation, against the sprint, with NULL `related_entity_id` and NULL `commit_hash`. No `TASK_STATUS_*` entry and no entry against any task: ordering changes the `position` column of the membership rows, so the sprint is the only entity whose state changes. A no-op invocation — moving a task to the position it already holds — still writes its entry, on the same rule that governs `task edit`: the audit log records the command issued, not the delta it produced.
+
 ---
 
 ### bottom
@@ -713,6 +719,9 @@ Moves a task to the bottom of the sprint (last position).
 rmp sprint bottom -r project1 1 5    # Move task 5 to last position
 rmp sprint btm -r project1 1 10    # Move task 10 to last position
 ```
+
+
+**Audit:** one `SPRINT_TASK_MOVE_POSITION` entry per invocation, against the sprint, with NULL `related_entity_id` and NULL `commit_hash`. No `TASK_STATUS_*` entry and no entry against any task: ordering changes the `position` column of the membership rows, so the sprint is the only entity whose state changes. A no-op invocation — moving a task to the position it already holds — still writes its entry, on the same rule that governs `task edit`: the audit log records the command issued, not the delta it produced.
 
 ---
 
@@ -973,5 +982,6 @@ All commands follow these conventions:
 | 4 | Sprint or comment not found |
 | 5 | `--order` value already used by another sprint (`create` / `update`) |
 | 6 | Validation error: bad enum; `--max-tasks` outside 1-10000; closing while SPRINT/DOING/TESTING tasks remain without `--force`; opening while another sprint is OPEN; changing `--order` on a CLOSED sprint; a comment type outside the four sprint values; a comment body over 4096 characters or containing control characters |
+| 127 | Unknown subcommand |
 
 The comment subcommands split the two failure kinds along a consistent line. A missing or unusable **body** is a misuse error (exit 2), because the command was invoked without the input it needs; an **oversized or control-character** body is a validation error (exit 6), because the input arrived and was rejected on its content.

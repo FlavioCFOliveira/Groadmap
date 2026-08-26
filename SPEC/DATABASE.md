@@ -10,6 +10,7 @@
   - [`sprints` Table](#sprints-table)
   - [`sprint_tasks` Table (1:N Relationship)](#sprint_tasks-table-1n-relationship)
     - [Position Uniqueness Within a Sprint](#position-uniqueness-within-a-sprint)
+    - [Position Density Within a Sprint](#position-density-within-a-sprint)
   - [`audit` Table](#audit-table)
     - [One Row per Thing That Happened](#one-row-per-thing-that-happened)
     - [The Two Entities of a Relational Operation](#the-two-entities-of-a-relational-operation)
@@ -21,7 +22,7 @@
 - [Main SQL Queries](#main-sql-queries)
   - [Tasks](#tasks)
   - [Sprints](#sprints)
-  - [Audit](#audit)
+  - [Audit Queries](#audit-queries)
   - [Comments](#comments)
 - [Relationships](#relationships)
   - [Transactional Atomicity Guarantees](#transactional-atomicity-guarantees)
@@ -212,7 +213,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_sprints_order ON sprints(order_index);
 
 ### `sprint_tasks` Table (1:N Relationship)
 
-Junction table linking sprints to their tasks. The relationship is one-sprint-to-many-tasks: a sprint contains many tasks, but each task belongs to at most one sprint at any given time. This 1:N constraint is enforced at the schema level by the `UNIQUE` constraint on `task_id`. The table also stores the sprint's planned execution order in `position`, and that order is total: no two member tasks of one sprint may hold the same `position`, and the schema enforces it (see `Position Uniqueness Within a Sprint` below).
+Junction table linking sprints to their tasks. The relationship is one-sprint-to-many-tasks: a sprint contains many tasks, but each task belongs to at most one sprint at any given time. This 1:N constraint is enforced at the schema level by the `UNIQUE` constraint on `task_id`. The table also stores the sprint's planned execution order in `position`, and that order is total: no two member tasks of one sprint may hold the same `position`, and the schema enforces it (see `Position Uniqueness Within a Sprint` below). The order is also dense: the members of a sprint hold exactly the values `0` to `N-1`, so a member's stored `position` is its rank in that order. The schema cannot enforce density and the write paths uphold it instead (see `Position Density Within a Sprint` below).
 
 ```sql
 CREATE TABLE IF NOT EXISTS sprint_tasks (
@@ -319,6 +320,154 @@ and `Move Task to Top/Bottom` statements below all permute existing positions an
 all use the parking form for this reason. `Add Task to Sprint with Position` and
 `Add Tasks to Sprint` append beyond `MAX(position)` and need no parking.
 
+#### Position Density Within a Sprint
+
+**The invariant.** The positions held by the member tasks of one sprint form a dense
+run from zero: a sprint with *N* member tasks holds exactly the values `0, 1, ...,
+N-1`, one value per task. No value inside that range is missing, and no value outside
+it is held. A sprint with no member task holds no position and satisfies the invariant
+trivially.
+
+Density and the uniqueness stated above are two different properties, and together
+they say something neither says alone: **the `position` stored for a member task is
+that task's rank in the sprint's planned order.** Uniqueness makes the order total.
+Density makes the stored number and the rank the same number.
+
+**The schema cannot enforce density, and this is not an omission.** Uniqueness is
+declared in the DDL because SQLite has a constraint form for it. Density has no such
+form, for three reasons that together exhaust the options:
+
+1. A `CHECK` constraint is evaluated over the single row being written, and its
+   expression may not contain a subquery, so it cannot read the other rows of the same
+   sprint. Density is a property of the whole set of rows sharing a `sprint_id` — how
+   many there are and which values they hold — and no expression confined to one row
+   can state it.
+2. `UNIQUE` is the only constraint SQLite offers that ranges over more than one row,
+   and all it can state is that two values differ. It cannot state that a collection
+   of values is a complete run from zero.
+3. A trigger cannot stand in for them. SQLite implements `FOR EACH ROW` triggers
+   only, so a trigger would judge each row of a multi-row renumbering on its own, and
+   every operation that reaches a dense final state passes through intermediate states
+   that are not dense — the parked negative range described above is the clearest
+   case. A trigger enforcing density would reject the correct write paths.
+
+**Density is therefore upheld by the write paths and proved by tests, and by nothing
+else.** The DDL says only that positions do not collide; it says nothing about their
+being a complete run, and a reader who takes the stored data to be dense because the
+schema declares it is mistaken. The whole weight of the guarantee rests on the
+enumeration below, which is why a new write path that touches `position` is not
+finished until it appears there with its effect on the run stated.
+
+**Why the invariant is required.** It is not a tidiness rule. Three published
+behaviours are wrong without it:
+
+1. **The caller names a rank, and the column stores a value.** `sprint move-to` takes
+   a zero-based target index as its third argument (`COMMANDS.md § Move Task to
+   Position`), and `sprint bottom` derives its target from the sprint's member count.
+   The stored `position` is never handed back to a caller: `List Sprint Tasks Ordered
+   by Position` below orders on it without selecting it, and it is not a field of the
+   `Task` object (`MODELS.md § Task`). The index the caller names and the value the
+   column holds are the same number only while the run is dense.
+2. **`Move Task to Position` decides whether it has work to do by comparing the moved
+   task's stored position against the target rank.** Over a run with a gap those are
+   two different quantities, so a real move can be read as no move at all. In a sprint
+   holding the positions `0, 1, 3, 4`, the member stored at position `3` sits at rank
+   2; a request to move it to index 3 compares 3 against 3, changes nothing, and still
+   reports success. The task the caller asked to move stays where it was, and nothing
+   in the output says so.
+3. **`sprint bottom` derives its target from the sprint's member count** and hands it
+   to that same comparison, so the sprint above answers `sprint bottom` on that member
+   by doing nothing at all, while reporting the position it did not move the task to.
+
+**Every write path that touches `position`.** Each one either leaves a dense run by
+construction or repairs the run before its transaction commits. There is no third
+category, and the table below is the complete list of the application's write paths.
+The other writers of the column are the two schema migrations that renumber every
+sprint to a dense `0..N-1` run, both following the sequence in `Introducing a
+Uniqueness Constraint over Existing Rows` below. The first runs that repair before it
+creates the unique index, and so makes the order total
+(`VERSION.md § Migration 1.12.0 → 1.13.0`). The second drops that index, runs the same
+repair, and recreates the index, and so closes the gaps that the removals had already
+committed before they compacted (`VERSION.md § Migration 1.13.0 → 1.14.0`). Each of
+them establishes the invariant over rows that already exist; neither maintains it, and
+each runs once.
+
+| Write path | What it does to `position` | Effect on the run |
+|------------|---------------------------|-------------------|
+| `sprint add-tasks`, for a task that belonged to no sprint | Appends one value per task after the sprint's current `MAX(position)` (`Add Tasks to Sprint` below) | **Preserves.** Over a dense run `MAX(position)` is `N-1`, so the appended values continue it |
+| `sprint add-tasks`, for a task that already belonged to another sprint | The `ON CONFLICT(task_id)` clause re-parents the task's single row, which leaves the other sprint's run | **Leaves a gap**, in the sprint the task left — a sprint the command does not name. That sprint MUST be compacted in the same transaction |
+| `sprint move-tasks`, destination sprint | Appends after the destination's current `MAX(position)`, preserving the relative order of the moved tasks | **Preserves**, for the same reason as `sprint add-tasks` |
+| `sprint move-tasks`, source sprint | Re-parents the moved rows away from it | **Leaves a gap.** The source sprint MUST be compacted in the same transaction |
+| `sprint reorder` | Parks the whole sprint and writes `0..N-1` (`Reorder Sprint Tasks (Set Exact Order)` below) | **Repairs.** The result is dense whatever the run was before |
+| `sprint move-to`, `sprint top`, `sprint bottom` | Park the whole sprint and write `0..N-1` (`Move Task to Position` below) | **Repairs the run, but reads it first.** The written run is dense, yet these three decide what to write from the run they find, so over a sparse run they can decide to do nothing at all (reason 2 above). Repairing afterwards is not a substitute for the removals compacting |
+| `sprint swap` | Exchanges the two values the two named tasks already hold (`Swap Tasks` below) | **Preserves.** It opens no gap and closes none |
+| `sprint remove-tasks` | Deletes the named membership rows, then compacts (`Remove from Sprint` below) | **Repairs** |
+| `sprint remove` | Deletes every membership row of the sprint, then the sprint itself (`Clear All Tasks from Sprint` below) | **Trivially satisfied**: neither member nor sprint remains |
+| `task reopen`, from `SPRINT`, `DOING` or `TESTING` | Deletes the task's membership row (`STATE_MACHINE.md § Valid Transitions`) | **Leaves a gap.** The sprint MUST be compacted in the same transaction |
+| `task reopen`, from `COMPLETED` | Keeps the membership row and the position it holds | **Preserves** |
+| `task remove`, on a `BACKLOG` task that is still a sprint member | Deletes the task row; `ON DELETE CASCADE` on `task_id` takes the membership row with it | **Leaves a gap.** The sprint MUST be compacted in the same transaction |
+| `task stat <ids> BACKLOG` | Does not touch the `sprint_tasks` table (`STATE_MACHINE.md § Sprint Membership and the BACKLOG Status`) | **Preserves** |
+
+**Every path that can leave a gap is a removal, and every removal owes the same
+repair.** Four entries above take a row out of a sprint's run: the re-parenting form
+of `sprint add-tasks`, the source side of `sprint move-tasks`, `task reopen` from the
+three sprint-associated states, and the cascade behind `task remove`. Each MUST
+compact the sprint it took the row out of, inside the same transaction as the removal,
+so that no committed state holds a gap and no reader ever observes one. The obligation
+follows the row, not the command: only the source side of `sprint move-tasks` names the
+sprint it must repair. The other three repair a sprint the caller's arguments do not
+mention at all, so each of them must first read which sprint the row it is removing
+belonged to.
+
+**The obligation is not suspended for a `CLOSED` sprint.** A removal that reaches a
+closed sprint has already changed that sprint's membership; leaving the survivors with
+a gap preserves nothing, it only leaves the sprint in a state the invariant forbids.
+The compaction renumbers the surviving members and never reorders them, so the
+sprint's recorded plan is unchanged.
+
+**The repair: `CompactSprintPositionsTx`.** This is the routine that makes the
+invariant true again, and it is the only one. It renumbers a sprint's surviving
+members to `0..N-1` in their current order, inside a transaction the caller has
+already opened. Its two statements are `Compact Sprint Positions` below.
+
+Four properties define it:
+
+- **It changes values, never the sequence.** The read that feeds it is the sprint's
+  own order, so the *i*-th member of that order receives position *i*. A compaction
+  can never reorder a sprint; a caller that wants a different order calls `sprint
+  reorder`.
+- **It needs no parking step**, unlike every permuting statement described under
+  `Position Uniqueness Within a Sprint` above. It renumbers downwards over an
+  ascending read, and the *i*-th member in ascending order holds a position of at
+  least *i*, because the *i* members ranked before it hold *i* distinct smaller
+  non-negative values. Every member not yet written therefore still holds a value
+  strictly greater than *i*, and every member already written holds one strictly
+  below *i*, so no assignment can land on a value another row of the same sprint still
+  holds.
+- **It runs inside the caller's transaction**, so the removal and its repair commit
+  together. A separate transaction would leave a window in which the removal is
+  durable and the gap is visible.
+- **It is idempotent.** Run against a sprint that is already dense, it assigns every
+  member the value it already holds. A write path may therefore call it
+  unconditionally rather than first testing whether a gap exists.
+
+**What a test must show.** The guarantee lives in the write paths, so the tests are
+where it is verified:
+
+- For every entry of the table above, the sprint's positions read back as a dense
+  `0..N-1` run once the operation's transaction has committed.
+- The removal of a task from the **middle** of a sprint leaves a dense run, not only
+  the removal of the last one. A test that removes the last member proves nothing:
+  removing the last member of a dense run leaves a dense run whether or not anything
+  compacted it.
+- `Move Task to Position` reaches the correct order over a run that starts at zero and
+  has no gap, for a move up, a move down, a move to the first slot, a move to the last
+  slot, and a target beyond the member count.
+- A regression test fails if any write path leaves a sprint with a gap. A gap planted
+  by hand is a legitimate fixture only for the repair itself: it proves
+  `CompactSprintPositionsTx` closes the gap, and it must never be used to argue that a
+  sparse run is an acceptable resting state.
+
 ### `audit` Table
 
 Logs all operations that change task or sprint state, enabling complete audit history.
@@ -420,6 +569,48 @@ from the valid set.
 
 **Note:** Read operations (GET, STATS, LIST_TASKS) are NOT logged to audit as they do not modify state.
 
+#### The Catalogue Entry Is Also the Published Contract Description
+
+Each entry above is read by two consumers, not one. A human reads it here. An AI
+agent reads the same words on the machine-readable contract, because the
+`AuditOperation` enum that `rmp --ai-help` publishes carries the catalogue entry's
+own text as the `description` of every value (see
+`DATA_FORMATS.md § enums map entry`). This section is the single source of that
+text. The contract holds a transcription of it and never a second wording.
+
+**Editing an entry above edits the published contract.** This is the consequence a
+writer has to know before touching the list, and it is the reason the coupling is
+stated here rather than only where the contract is specified. The change does not
+stay in this document: it alters what every agent reading `rmp --ai-help` is told
+the operation means. A test re-derives every description from this section and
+compares it byte for byte against the transcription the binary ships, so an edit
+made here and nowhere else fails the test suite instead of shipping a
+contradiction between the two surfaces.
+
+**The transcription is mechanical.** `DATA_FORMATS.md § enums map entry` states the
+derivation the contract applies to an entry's text, and that derivation is the only
+licence to alter it. Nothing is reworded, shortened, or expanded on the way.
+
+**An entry is read once with this document around it and once without it.** A
+reference that resolves only here — the name of another section, or a word such as
+"above" that depends on where the entry sits in this list — travels to the contract
+intact and points at nothing for the agent reading it there. Four entries do this
+today, and they remain correct catalogue entries: each carries its operative fact
+in full, and what fails to travel is the pointer beside the fact rather than the
+fact itself. A writer adding or editing an entry should know that wording which
+stands on its own serves both readers, while wording that leans on this page serves
+only one.
+
+**Acceptance criteria:**
+
+1. Every description published on the `AuditOperation` enum of `rmp --ai-help` is
+   the text of the corresponding entry above, altered only by the derivation
+   `DATA_FORMATS.md § enums map entry` states.
+2. Editing the text of an entry above, without updating the transcription the
+   binary ships, fails the test suite.
+3. No operation's contract description is written independently of the entry above.
+   There is no second wording to keep in step.
+
 #### One Row per Thing That Happened
 
 The catalogue above rests on two rules that together decide how many rows an
@@ -459,8 +650,14 @@ every `SPRINT_ADD_TASK` row of a sprint reads identically and none of them says 
 task was added, and every `TASK_STATUS_SPRINT` row of a task says the task joined a
 sprint without saying which one.
 
-`related_entity_id` is non-NULL exactly in the eight cases below, and NULL for every
-other combination of operation and producing command in the catalogue:
+**The governing rule and the table below are canonical for what a write records, not
+for what every stored row holds.** On a database written only at schema `1.12.0` or
+later the two coincide, because every stored row is the record of such a write; a
+migrated database can also hold rows that predate the column, which no such write
+produced, and the block below states what a NULL in such a row can mean. For every
+write at schema `1.12.0` or later, `related_entity_id` is non-NULL exactly in the
+eight cases below, and NULL for every other combination of operation and producing
+command in the catalogue:
 
 | Operation | Written by | `entity_type` / `entity_id` | `related_entity_id` |
 |---|---|---|---|
@@ -490,15 +687,52 @@ removal from a sprint has the sprint as its counterpart, while `task stat` chang
 task's status with no second entity party to the operation, so there is no
 counterpart to name. The field therefore means one thing everywhere — the
 counterpart, when the operation has one — and a reader never has to know which
-command wrote a row in order to interpret the column. A NULL says "this operation had
-no counterpart", never "this operation had one and it was not recorded".
+command wrote a row in order to interpret the column. On a database written only at
+schema 1.12.0 or later, a NULL therefore says "this operation had no counterpart" and
+never "this operation had one and it was not recorded". Acceptance criterion 7 below
+carries the same qualification, and carries it for the same reason.
+
+**On a migrated database a NULL means one of two things.** The `1.11.0` to `1.12.0`
+migration adds `related_entity_id` as a new column and backfills no row, so every row
+written before it carries NULL there whether or not its operation had a counterpart
+(see `VERSION.md § Migration 1.11.0 to 1.12.0`). A reader of such a database must
+allow both meanings below, because the row itself does not say which one applies:
+
+1. **The operation had no counterpart, so there was nothing to record.** This is the
+   meaning the governing rule assigns. It is possible on any database, and on a
+   database written only at schema 1.12.0 or later it is the only one possible.
+   `task stat <ids> BACKLOG` is the case worked through above, and every operation
+   outside the table above carries NULL for this reason.
+2. **The operation had a counterpart and it was not recorded.** Only a row written
+   before schema 1.12.0 can carry this meaning, and only for one of the four cases in
+   the table above that Groadmap already wrote at that point.
+   `VERSION.md § Migration 1.11.0 to 1.12.0` names all four and states why the
+   migration recovers the counterpart of none of them. `SPRINT_ADD_TASK` is the case
+   `VERSION.md` works through: a stored row of that operation names its sprint and
+   nothing else, so the task it refers to is not recoverable, and inferring a task
+   from current sprint membership would fabricate a fact, which is why the migration
+   does not attempt it.
+
+The `sprint remove-tasks` form of `TASK_STATUS_BACKLOG` cannot carry the second
+meaning: no version of Groadmap before schema 1.12.0 wrote the operation at all, so no
+stored row of it predates the migration (see
+`VERSION.md § Migration 1.11.0 to 1.12.0`). `SPRINT_MOVE_TASK_OUT` and
+`SPRINT_MOVE_TASK_IN` cannot carry it either, and for the same reason: both arrived at
+schema 1.12.0, replacing the legacy `SPRINT_MOVE_TASK`, and the migration produces
+neither. The paragraph below establishes the same for `TASK_STATUS_SPRINT`, the
+fourth and last case of the table above that the second meaning never reaches.
 
 `TASK_STATUS_SPRINT` has only one producing command, `sprint add-tasks`, so every row
-carrying that operation names a sprint. No version of Groadmap has ever written a
-`TASK_STATUS_SPRINT` row, and the `1.11.0` to `1.12.0` migration never produces one
-(it reclassifies only to `TASK_STATUS_DOING`, `TASK_STATUS_TESTING`, and
-`TASK_STATUS_COMPLETED`), so the invariant holds for migrated databases as well as
-fresh ones.
+carrying that operation names a sprint. The invariant covers migrated databases as
+well as fresh ones. The `1.11.0` to `1.12.0` migration adds `related_entity_id` as a
+new column and backfills no row, so every row that predates it carries NULL there; a
+`TASK_STATUS_SPRINT` row written before the migration would therefore be a row of
+this operation with no sprint named. No such row can exist: no version of Groadmap
+before schema 1.12.0 wrote the operation at all, and the migration produces none
+either, because it reclassifies only to `TASK_STATUS_DOING`, `TASK_STATUS_TESTING`,
+and `TASK_STATUS_COMPLETED` (see `VERSION.md § Migration 1.11.0 to 1.12.0`). Every
+`TASK_STATUS_SPRINT` row in any database is therefore one that `sprint add-tasks`
+wrote at schema 1.12.0 or later, naming the sprint the task entered.
 
 **A dependency writes two rows and each states its own direction.**
 `task add-dep <task-id> <dep-id>` writes one row against `<task-id>` naming
@@ -697,12 +931,21 @@ CREATE TABLE IF NOT EXISTS _metadata (
     value TEXT NOT NULL
 );
 
--- Insert schema version on creation
+-- Insert metadata on creation. The two values that vary are supplied by the
+-- application, in the placeholder notation used throughout Main SQL Queries below.
 INSERT INTO _metadata (key, value) VALUES
-    ('schema_version', '1.11.0'),
-    ('created_at', '2026-03-20T00:00:00.000Z'),
+    ('schema_version', ?),
+    ('created_at', ?),
     ('application', 'Groadmap');
 ```
+
+**The stored `schema_version` is the `SchemaVersion` constant**, which is defined in
+`internal/db/schema.go` and named in `VERSION.md § Current Schema Version`. No literal
+version is written here, because a literal would be falsified by the next migration: a
+database records the schema version of the binary that created it, and every migration
+applied afterwards advances the stored value (`VERSION.md § Migrations`). `created_at`
+receives the creation instant in ISO 8601 UTC, and `application` is always the literal
+`Groadmap`.
 
 ---
 
@@ -888,6 +1131,12 @@ one row it already has: the task moves to the named sprint and takes the appende
 position. This is what keeps a task in exactly one sprint without the caller having
 to remove it from the previous one first.
 
+**Re-parenting is a removal as far as the previous sprint is concerned.** The row
+leaves that sprint's run and opens a hole in it, even though the command names only
+the destination. The previous sprint MUST therefore be compacted in the same
+transaction (`Compact Sprint Positions` below), one compaction per distinct sprint the
+batch drew a task out of. See `Position Density Within a Sprint` above.
+
 **Use case:** New tasks are added to the end of the sprint task list (highest position).
 
 #### Update Status
@@ -952,7 +1201,16 @@ UPDATE tasks
 SET status = 'BACKLOG', started_at = NULL, tested_at = NULL, closed_at = NULL,
     completion_summary = NULL, commit_close = NULL
 WHERE id = ?;
+
+-- Then close the gap the DELETE opened: Compact Sprint Positions below, in this
+-- same transaction.
 ```
+
+**The removal is not complete until the sprint is compacted.** Deleting a member from
+the middle of a sprint leaves the survivors holding a run with a hole in it, and a
+hole makes a stored position stop meaning the rank the caller names (see `Position
+Density Within a Sprint` above). The compaction runs in the same transaction as the
+`DELETE`, so no committed state and no reader ever sees the hole.
 
 #### Clear All Tasks from Sprint
 
@@ -984,6 +1242,34 @@ WHERE sprint_id = ?;
 ```
 
 **Note:** Returns -1 if sprint has no tasks, meaning first task gets position 0.
+
+**Over a dense run this is the member count minus one.** Appending at `MAX(position) + 1`
+therefore continues the run rather than jumping past a hole, which is why every appending
+write path preserves density without doing anything about it (see `Position Density
+Within a Sprint` above).
+
+#### Compact Sprint Positions
+
+Renumbers a sprint's members to a dense `0..N-1` run in their current order, closing any
+gap a removal opened. Every write path that takes a membership row out of a sprint runs
+it, in the same transaction as the removal (see `Position Density Within a Sprint` above,
+which owns the invariant, the list of write paths that owe this repair, and the four
+properties of the routine).
+
+```sql
+-- 1. Read the sprint's surviving members in their current order.
+SELECT task_id, position FROM sprint_tasks WHERE sprint_id = ? ORDER BY position ASC, task_id ASC;
+
+-- 2. Assign the dense run. For the member at index i of that sequence:
+UPDATE sprint_tasks SET position = ? WHERE sprint_id = ? AND task_id = ?;
+```
+
+**This sequence needs no parking step**, and it is the only position-writing sequence in
+this document that does not. It renumbers downwards over an ascending read, so the value
+it assigns to a member is never greater than the value that member already holds, and no
+assignment can land on a value another row of the same sprint still holds. The argument in
+full is under `Position Density Within a Sprint` above; the parking rule it is the
+exception to is under `Position Uniqueness Within a Sprint`.
 
 #### Reorder Sprint Tasks (Set Exact Order)
 
@@ -1047,6 +1333,14 @@ presents a duplicate.
 - Moving to position 0 places the task at the beginning
 - Moving to a position >= task count places the task at the end
 - Positions of other tasks are automatically adjusted to maintain continuity
+
+**The target is a rank, and the statement compares it against a stored value.** The
+caller names a zero-based index into the sprint's planned order; step 1 above reads
+the value the column holds. The two are the same number only while the sprint's run is
+dense, and the comparison that decides this statement has nothing to do — the move to
+the position the task already occupies — is a comparison between them. Over a run with
+a hole that comparison can call a real move a no-op, so this statement depends on
+`Position Density Within a Sprint` above and does not establish it for itself.
 
 #### Swap Tasks
 
@@ -1157,6 +1451,13 @@ UPDATE tasks SET status = 'SPRINT' WHERE id IN (?, ?, ...);
 sprint's current maximum, and the values within one batch are consecutive, so no
 assigned value is ever held by another row at the moment it is written.
 
+**The batch preserves the destination's density and can break another sprint's.** The
+appended values continue the destination's run, because over a dense run
+`MAX(position)` is the member count minus one. Any task in the batch that already
+belonged to a different sprint is re-parented out of that sprint by the `ON CONFLICT`
+clause, which leaves a hole there; every such sprint MUST be compacted in this same
+transaction (`Compact Sprint Positions` above).
+
 #### Start Sprint
 
 ```sql
@@ -1252,7 +1553,7 @@ ORDER BY st.task_id ASC;
 
 **Use case:** the read-only web interface renders the roadmap's tasks as a Kanban board and shows on each card the sprint that task belongs to, so it MUST resolve the sprint of every rendered task with this single grouped query rather than one query per task or one query per board column (see `WEB.md § Roadmap Tasks Page`).
 
-### Audit
+### Audit Queries
 
 #### Log Operation
 
@@ -1692,7 +1993,9 @@ Fields are organized to match the optimized Go struct layout (Content, Tracking,
 
 **Note:** `position` is unique per sprint, not globally: the unique index is over the pair `(sprint_id, position)`, so two tasks in two different sprints may both hold position 0. See `DATABASE.md § Position Uniqueness Within a Sprint` for the invariant and what every write path must do to preserve it.
 
-### Audit
+**Note:** the positions of one sprint are also dense — a sprint with `N` members holds exactly `0` to `N-1` — so a member's stored `position` is its rank in the sprint's planned order. No column constraint states this and none can; the write paths uphold it and tests prove it. See `DATABASE.md § Position Density Within a Sprint`.
+
+### Audit Constraints
 
 | Column | Type | Constraints |
 |--------|------|-------------|

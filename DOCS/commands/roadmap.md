@@ -107,6 +107,8 @@ All commands follow these conventions:
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
+| 2 | Required roadmap-name argument missing |
 | 4 | Roadmap not found (`remove` only) |
 | 5 | Roadmap already exists (`create` only) |
 | 6 | Invalid roadmap name (regex, length, or reserved word) |
+| 127 | Unknown subcommand |

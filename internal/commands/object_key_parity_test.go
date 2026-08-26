@@ -39,9 +39,13 @@
 // bare map literal, so there is nothing to hold them in parity WITH.
 //
 // The `Schema` strings of the machine-readable contract
-// (internal/commands/registry_*.go) are also out of scope: they are deliberately
-// heterogeneous free-text sketches — "Array of task objects.", "Single sprint
-// object.", "{sprint_id, ...}" — so there is no uniform enumeration there.
+// (internal/commands/registry_*.go) are held in parity too, but not here:
+// registry_schema_parity_test.go covers them. They are deliberately
+// heterogeneous — some name the object without enumerating it ("Array of task
+// objects."), some spell its keys out ("{sprint_id, ...}") — so they are read
+// from the registry against a classification of every entry in it, rather than
+// from the help printers this file walks. The two files share the jsonObjectKeys
+// authority and the extractor pattern, and neither restates a key set.
 package commands
 
 import (

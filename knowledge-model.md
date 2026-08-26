@@ -11,10 +11,25 @@ Groadmap models itself: the project described by the graph is this repository.
 
 ## Conventions
 
-**Keys.** Every node carries a `key` property that is globally unique across the whole
-graph, so `MATCH (n {key:'...'})` without a label is unambiguous. The key is the natural
-identifier of the artefact: a repository-relative file path for code, tests and specs, a
-package path for components, a slug for requirements, releases and memories.
+**Keys.** Every node carries a `key` property. The key is the natural identifier of the
+artefact: a repository-relative file path for code, tests and specs, a package path for
+components, a slug for requirements, releases and memories.
+
+Every node's `key` is unique across the whole graph, so that `MATCH (n {key:'...'})`
+without a label is unambiguous. That uniqueness is a **convention whoever writes to this
+graph must honour, not a rule the product enforces**: no `rmp` command rejects, rewrites,
+or reports a second node carrying a key that is already in use. `SPEC/GRAPH.md` section
+Node Key Uniqueness is canonical for the invariant, for the comparison that decides it,
+and for the audit that detects a violation; this file does not restate it. Two of its
+consequences bear directly on writing a key here:
+
+- Two keys are the same key when their Unicode NFC forms are equal, and the stored key is
+  exactly the bytes supplied — normalisation is for comparison only. Writing one key in
+  two normalisation forms therefore creates two nodes that render identically, and
+  `MATCH (n {key:'...'})` binds whichever of the two the caller happened to spell.
+- Because nothing enforces the convention, `MATCH (n {key:'...'})` is unambiguous only
+  while the convention holds. Checking that it still holds is the audit's job, not the
+  product's.
 
 **Provenance.** Every node and every edge carries the commit at which it was last
 confirmed to be true:
@@ -76,8 +91,8 @@ A non-test source file authored by the project. Test sources are `Test` nodes, n
 `CodeFile`; vendored third-party files are `Component`s, never `CodeFile`.
 
 Build and deployment artefacts are `CodeFile`s on the same terms as program source. The
-`Makefile`, `install.sh`, and the workflow files under `.github/workflows/` are each a
-file the project authored and maintains, each realises a requirement the SPEC states, and
+`Makefile`, `install.sh`, the workflow files under `.github/workflows/`, and `.gitignore`
+are each a file the project authored and maintains, each realises a requirement the SPEC states, and
 each is verified by a test; nothing about them justifies a label of their own. Their
 `package` is the directory that owns them -- `.` for a repository-root file, and
 `.github/workflows` for a workflow -- rather than a Go import path, because `package` on
@@ -89,7 +104,7 @@ this label means "the component this file belongs to" and not "a compilation uni
 | `path` | yes | Same as `key`. |
 | `file` | yes | Base name. |
 | `package` | yes | Owning component's path. |
-| `language` | yes | `Go`, `Python`, `HTML`, `CSS`, `JavaScript`, `SVG`, `Bash`, `YAML` or `Make`. The last three are the build and deployment artefacts described above. |
+| `language` | yes | `Go`, `Python`, `HTML`, `CSS`, `JavaScript`, `SVG`, `Bash`, `YAML`, `Make` or `Gitignore`. The last four are the build and deployment artefacts described above. |
 | `last_commit`, `last_commit_date` | yes | Provenance. |
 
 ### Spec

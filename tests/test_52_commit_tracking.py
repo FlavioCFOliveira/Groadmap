@@ -69,6 +69,7 @@ reaches a reader of the shipped binary:
       commits the work started from and the task column holds only the latest
 """
 
+import inspect
 import os
 import sqlite3
 import sys
@@ -998,11 +999,20 @@ def _run_all():
     passed = 0
     failed = 0
     failures = []
-    # Every class in the module, so a suite added below the runner is not
-    # silently skipped — which is exactly what happened when the migration and
-    # hash-shape suites were first appended.
-    for cls in (TestCommitTracking, TestAuditCommitHash, TestCommitHashShapes,
-                TestCommitColumnsMigration):
+    # Classes are DISCOVERED by inspecting this module, never listed. A listed
+    # tuple silently skips any suite added below the runner and was not caught
+    # when the migration and hash-shape suites were first appended -- the
+    # runner still exits 0 and the new class simply never runs (rmp task
+    # #303). The count is printed so a class that stops being discovered is
+    # visible in the output rather than inferred from a total that quietly
+    # shrank.
+    classes = [
+        obj for _name, obj in sorted(inspect.getmembers(sys.modules[__name__], inspect.isclass))
+        if obj.__module__ == __name__ and _name.startswith("Test")
+    ]
+    print(f"Discovered {len(classes)} test classes: "
+          f"{', '.join(cls.__name__ for cls in classes)}")
+    for cls in classes:
         for name in sorted(m for m in dir(cls) if m.startswith("test_")):
             label = f"{cls.__name__}.{name}"
             instance = cls()

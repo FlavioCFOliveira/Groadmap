@@ -25,6 +25,7 @@ import (
 	"github.com/FlavioCFOliveira/GoGraph/store/snapshot"
 	"github.com/FlavioCFOliveira/GoGraph/store/txn"
 	"github.com/FlavioCFOliveira/GoGraph/store/wal"
+	"github.com/FlavioCFOliveira/Groadmap/internal/backoff"
 	"github.com/FlavioCFOliveira/Groadmap/internal/cypherguard"
 	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
 	"github.com/FlavioCFOliveira/Groadmap/internal/terminal"
@@ -110,6 +111,7 @@ Exit codes:
   3   No roadmap selected
   4   Roadmap not found
   6   Query's operation class does not match the subcommand
+  127 Unknown subcommand
 
 Examples:
   rmp graph create -r myproject --query "CREATE (n:Spec {key:'auth'})"
@@ -293,7 +295,31 @@ Examples:
 func openGraphStore(roadmapName string) (graphDir string, err error) {
 	roadmapDir, valErr := utils.GetRoadmapDir(roadmapName)
 	if valErr != nil {
-		return "", fmt.Errorf("%w: %v", utils.ErrValidation, valErr)
+		// A classification is stated once, by whoever owns the failure.
+		//
+		// GetRoadmapDir refuses a name through utils.ValidateRoadmapName, and
+		// every branch of that function already carries utils.ErrValidation
+		// together with the sentinel naming WHICH rule the name broke
+		// (reserved, hyphen-leading, too long, bad characters). Restating the
+		// classification here therefore added nothing to the chain and cost the
+		// reader a second prefix: `rmp graph query -r CON` rendered
+		// "validation error: validation error: ...", and the roadmap-name
+		// messages SPEC/COMMANDS.md § Roadmap Name Validation publishes WITHOUT
+		// a sentinel gained one on the graph paths alone. Every other command
+		// family returns this error untouched, which is why only graph diverged
+		// (task #325).
+		//
+		// Returning it unchanged keeps both %w-carried sentinels reachable —
+		// the classification for the exit code, the specific rule for a caller
+		// that must discriminate — which is the property task #290 established
+		// here and which this must not undo.
+		if errors.Is(valErr, utils.ErrValidation) {
+			return "", valErr
+		}
+		// The other way GetRoadmapDir fails is an unresolvable home directory,
+		// which carries no classification at all. That one is still classified
+		// here, so its exit code is unchanged.
+		return "", fmt.Errorf("%w: %w", utils.ErrValidation, valErr)
 	}
 
 	dbPath := filepath.Join(roadmapDir, utils.DBFileName)
@@ -646,6 +672,211 @@ func skippedLegOf(d cypherguard.Direction) string {
 	return "the incoming direction"
 }
 
+// validateQueryEncoding rejects a query carrying a byte that begins no valid
+// UTF-8 sequence, on EVERY graph subcommand (SPEC/GRAPH.md § Cypher Query and
+// Property Value Content Rules; SPEC/MODELS.md § Free-Text UTF-8 Encoding
+// Constraint, which defines the rule).
+//
+// It takes no subcommand filter because the rule has none. The engine decodes
+// the query to runes before its grammar runs and replaces every byte that
+// decodes to no character with U+FFFD, so the statement it executes is not the
+// statement the caller wrote — a fact about the QUERY, indifferent to what the
+// statement then does. `create` and `update` store a value that was never
+// supplied; `query` and `search` compare against a literal that was never
+// supplied and report success having matched nothing; and `delete` gated by such
+// a literal removes nothing and still reports success. That last one is the
+// worst of the three and is why the rule is not confined to the writers: a
+// destructive command reporting success having removed nothing is the failure
+// shape the caller has no reason to check.
+//
+// The refusal names the byte and its offset rather than echoing any of the
+// query, because the bytes at fault are exactly the ones that must not be
+// emitted. Where the byte falls inside a value the query WRITES, it also names
+// the property; where it does not — which is always the case for a subcommand
+// that writes none — it says so, rather than withholding the naming in silence.
+func validateQueryEncoding(subcmd, query string) error {
+	r, refused := cypherguard.RefusedQueryEncoding(query)
+	if !refused {
+		return nil
+	}
+
+	const cause = ". The byte %#02x at offset %d of the query begins no valid UTF-8 sequence, " +
+		"and the engine replaces every such byte with U+FFFD before it parses the query, so %s"
+	if r.Attributed() {
+		return fmt.Errorf(
+			"%w: graph %s cannot write property %q: %s"+cause+". Supply the query as well-formed UTF-8",
+			utils.ErrValidation, subcmd, r.Property, r.Violation.Reason(),
+			r.Byte, r.Offset, encodingConsequenceOf(subcmd))
+	}
+	return fmt.Errorf(
+		"%w: graph %s cannot run this query: %s"+cause+". %s. Supply the query as well-formed UTF-8",
+		utils.ErrValidation, subcmd, r.Violation.Reason(),
+		r.Byte, r.Offset, encodingConsequenceOf(subcmd), unattributedReasonOf(subcmd))
+}
+
+// encodingConsequenceOf names what the engine would do with the rewritten
+// statement, for the message validateQueryEncoding builds. The consequence is
+// what makes the objection concrete, and it differs by subcommand even though
+// the rule does not.
+func encodingConsequenceOf(subcmd string) string {
+	switch subcmd {
+	case "delete":
+		return "the statement would match on a literal that was never supplied and would report " +
+			"success having deleted nothing"
+	case "query", "search":
+		return "the statement would match on a literal that was never supplied and would report " +
+			"success having found nothing"
+	default:
+		return "the store would hold a value different from the one supplied while the command " +
+			"still reported success"
+	}
+}
+
+// unattributedReasonOf explains why no property is named, in the terms that are
+// true for the subcommand at hand. For a subcommand that writes no property
+// value there is simply none to name, and saying so is more useful than the
+// writer's explanation, which would imply the query had written values the byte
+// merely missed.
+func unattributedReasonOf(subcmd string) string {
+	if writesPropertyValues(subcmd) {
+		return "No property value could be attributed to that byte: it falls outside the values " +
+			"this query writes, or the query does not parse"
+	}
+	return "This subcommand writes no property value, so there is no property to name: the byte " +
+		"corrupts the literal the query matches on"
+}
+
+// writesPropertyValues reports whether subcmd is one of the two that write
+// property values, and therefore whether the control-character rule reaches it.
+// It is one predicate rather than a condition spelled at each site, so the two
+// rules cannot drift apart on which subcommands write.
+func writesPropertyValues(subcmd string) bool {
+	return subcmd == "create" || subcmd == "update"
+}
+
+// validateWrittenPropertyValues rejects a `graph create` or `graph update` query
+// that would write a property value carrying a forbidden control character
+// (SPEC/GRAPH.md § Cypher Query and Property Value Content Rules;
+// SPEC/MODELS.md § Free-Text Control-Character Constraint, which defines it).
+//
+// # Why this rule stops where validateQueryEncoding does not
+//
+// The asymmetry is deliberate. The encoding rule objects to a query the engine
+// would silently REWRITE, which is a fact about the statement. This one objects
+// to a value that would be STORED, and only a write stores one.
+//
+// The substantive reason is about READS. A control character in a read literal
+// is compared against what the graph already holds, and the store can
+// legitimately hold one — everything written before this rule existed, and
+// anything a computed expression produces, which is outside what any of this can
+// see. Refusing such a read would leave that data unreadable rather than merely
+// unwritable, which is a loss of reach the rule was never meant to impose.
+// `graph delete` is on the same side: it removes nodes and edges, it stores no
+// value, and a predicate that names a control character is how an operator
+// reaches the entry that carries one.
+//
+// # The subcommand filter is a SECOND line, and is deliberately redundant today
+//
+// cypherguard.RefusedWrittenPropertyValue already walks only the positions a
+// query WRITES, so on a read or a delete it finds nothing and would refuse
+// nothing even without the filter below — the clause-class guard rail admits no
+// CREATE/MERGE/SET to any of those three subcommands in the first place. Removing
+// the filter would therefore change no behaviour today, which is exactly why it
+// is kept and why that is stated here rather than left for someone to discover:
+// it puts the boundary on record as a DECISION at the site that enforces it,
+// instead of leaving it as a consequence of two other rules that could each
+// change on their own. writesPropertyValues is pinned directly by
+// TestWritesPropertyValuesNamesOnlyTheTwoWritingSubcommands, so it cannot be
+// deleted as dead code without that test being confronted.
+//
+// The refusal NAMES the offending value by the property it is assigned to, and
+// says which rule it breaks in the words every other value in the application is
+// refused with — the wording comes from internal/utils, which owns it, rather
+// than being spelled again here. The offending bytes are never echoed: the
+// refusal names the CODE POINT, which is bounded and safe to print, because
+// printing the character itself would emit it into the terminal the rule exists
+// to protect.
+//
+// The caller applies validateQueryEncoding FIRST. That is the order
+// SPEC/MODELS.md fixes for the pair and it is not a preference: an invalid byte
+// decodes to U+FFFD, which is not a forbidden code point, so this rule would
+// answer "fine" for a value the encoding rule refuses.
+func validateWrittenPropertyValues(subcmd, query string) error {
+	if !writesPropertyValues(subcmd) {
+		return nil
+	}
+	r, refused := cypherguard.RefusedWrittenPropertyValue(query)
+	if !refused {
+		return nil
+	}
+	return fmt.Errorf(
+		"%w: graph %s cannot write property %q: %s. The value carries %s, which the store would "+
+			"hold verbatim and every surface that renders it would carry unchanged - the terminal "+
+			"escape-sequence injection (CWE-150) and Trojan Source (CVE-2021-42574) exposure the "+
+			"free-text rules close for every other value Groadmap stores, and a Cypher property "+
+			"value is subject to the same two rules. Note that the query text alone does not show "+
+			"it: Cypher decodes \\b, \\f and \\uXXXX inside a string literal, so a value written "+
+			"with an escape carries the character even though the query is pure ASCII. Remove the "+
+			"character from the value",
+		utils.ErrValidation, subcmd, r.Property, r.Violation.Reason(), r.CodePoint)
+}
+
+// validateRelationshipReadDirection rejects a query that READS the value of a
+// relationship variable bound by a pattern the engine does not resolve reliably
+// (SPEC/GRAPH.md § Relationship Read Direction).
+//
+// It is the read-side counterpart of validateRelationshipWriteDirection above,
+// and the two share one doctrine: whether an undirected or incoming pattern
+// behaves correctly depends on the data it meets, not on the query, and that
+// cannot be the guarantee. The engine recovers a bound relationship's type and
+// endpoints by probing the stored topology, so on a node pair carrying edges in
+// BOTH directions the reverse leg of the traversal is hydrated from the forward
+// pair — reporting the wrong type, the reversed orientation, dropping rows whose
+// WHERE predicate reads that type, and persisting the wrong value when a node
+// write derives from it.
+//
+// It applies to EVERY graph subcommand, because the corrupted value is harmful
+// wherever it is read: `query` and `search` deliver it to the caller, `update`'s
+// SET right-hand side persists it, and a `delete` whose WHERE predicate reads it
+// removes the wrong edges — or, as measured, none at all while reporting
+// success.
+//
+// The exemption is of the DELETE CLAUSE, not of the delete COMMAND. A bare
+// `DELETE e` names the relationship as a delete target rather than as an
+// expression, and the engine resolves that edge itself rather than through the
+// endpoint columns, so it removes the right one and stays accepted. The moment a
+// predicate over `type(e)` decides WHICH edges are deleted, the engine evaluates
+// the corrupted type, drops the row, and the destructive command reports
+// `{"ok": true}` having removed nothing — the worst symptom in this family,
+// because the caller has no reason to check. That case is an ordinary expression
+// use and is refused like any other; cypherguard draws the line by clause.
+//
+// Detection runs on the parsed query rather than on the masked text, so a
+// relationship arrow inside a string literal or a comment cannot trip it, and
+// the refusal happens before the graph store is opened.
+func validateRelationshipReadDirection(subcmd, query string) error {
+	misread := cypherguard.MisreadRelationshipReferences(query)
+	if len(misread) == 0 {
+		return nil
+	}
+	v := misread[0].Variable
+	return fmt.Errorf(
+		"%w: graph %s cannot read relationship %q: it is bound by an %s pattern, and the engine "+
+			"resolves a relationship's type and endpoints by probing the stored direction, so on a "+
+			"node pair that carries edges in BOTH directions it reports the forward edge's type and "+
+			"orientation for the reverse one: type(%s) names the wrong relationship, "+
+			"startNode(%s)/endNode(%s) reverse it, and a predicate over either silently drops the row. "+
+			"Rewrite the traversal as outgoing, which resolves correctly whatever the data: anchor it "+
+			"on the source with MATCH (source)-[%s]->(target) ... RETURN type(%s), or, to reach the "+
+			"edges arriving AT a node, on that node with MATCH (other)-[%s]->(target {key:'...'}) ... "+
+			"RETURN type(%s) - do not reverse the arrow. To cover both directions in one read, take "+
+			"the union of the two outgoing legs: MATCH (a {key:'...'})-[%s]->(x) RETURN type(%s) AS t, "+
+			"x.key AS k UNION ALL MATCH (x)-[%s]->(a {key:'...'}) RETURN type(%s) AS t, x.key AS k",
+		utils.ErrValidation, subcmd, v, misread[0].Direction,
+		v, v, v, v, v, v, v, v, v, v, v,
+	)
+}
+
 // serializeValue converts a single expr.Value into a JSON-compatible
 // Go value for inclusion in a graphQueryResult row.
 func serializeValue(v expr.Value) any {
@@ -816,35 +1047,22 @@ var graphReadOpts = recovery.Options[string, float64]{
 	WeightCodec: txn.NewFloat64WeightCodec(),
 }
 
-// walRetryPolicy mirrors the SQLite bounded exponential-backoff specified
-// in IMPLEMENTATION.md § Concurrency Model (initial 100ms, max 1s, 5 attempts).
-const (
-	walRetryInitial  = 100 * time.Millisecond
-	walRetryMax      = 1000 * time.Millisecond
-	walRetryAttempts = 5
-)
-
-// openWALWriter opens the WAL writer at walPath with bounded
-// exponential backoff. A persistent failure is returned as
-// ErrDatabase; callers must close the returned Writer.
+// openWALWriter opens the WAL writer at walPath under the project's single
+// bounded backoff policy (internal/backoff), which owns the attempt count and
+// the delay ladder. This site used to keep its own constants and its own loop,
+// and the loop disagreed with them; it now has neither.
+//
+// Every failure is waited on, because the one this retry exists for is
+// contention — another process holding the WAL directory lock — and a WAL that
+// cannot be opened for any other reason is not distinguishable here anyway. A
+// persistent failure is returned as ErrDatabase; callers must close the
+// returned Writer.
 func openWALWriter(walPath string) (*wal.Writer, error) {
-	delay := walRetryInitial
-	var lastErr error
-	for attempt := 0; attempt < walRetryAttempts; attempt++ {
-		w, err := wal.Open(walPath)
-		if err == nil {
-			return w, nil
-		}
-		lastErr = err
-		if attempt < walRetryAttempts-1 {
-			time.Sleep(delay)
-			delay *= 2
-			if delay > walRetryMax {
-				delay = walRetryMax
-			}
-		}
+	w, err := backoff.Retry(func() (*wal.Writer, error) { return wal.Open(walPath) }, backoff.Always)
+	if err != nil {
+		return nil, fmt.Errorf("%w: graph store unavailable: %v", utils.ErrDatabase, err)
 	}
-	return nil, fmt.Errorf("%w: graph store unavailable: %v", utils.ErrDatabase, lastErr)
+	return w, nil
 }
 
 // runGraphCreate executes a CREATE/MERGE Cypher query.
@@ -896,6 +1114,28 @@ func runGraphRead(subcmd, allowed string, args []string) error {
 	}
 
 	if err := validateGuardRail(subcmd, allowed, query); err != nil {
+		return err
+	}
+
+	// Refused before the store is opened, like the clause-class guard rail and
+	// its write-side sibling, so a rejected query never reaches the graph
+	// (SPEC/GRAPH.md § Relationship Read Direction).
+	if err := validateRelationshipReadDirection(subcmd, query); err != nil {
+		return err
+	}
+
+	// The encoding rule, which binds the reading subcommands exactly as it binds
+	// the writing ones (SPEC/GRAPH.md § Cypher Query and Property Value Content
+	// Rules). A byte the engine replaces with U+FFFD changes the statement, not
+	// only a value it stores: the literal this query matches on is not the
+	// literal supplied, so the row that should have matched does not and the
+	// command reports success having found nothing.
+	//
+	// The control-character rule is deliberately NOT applied here. It governs
+	// values that are STORED, and a read stores none; refusing a read that names
+	// a control character would deny reach to data the store legitimately holds.
+	// See validateWrittenPropertyValues for the whole of that reasoning.
+	if err := validateQueryEncoding(subcmd, query); err != nil {
 		return err
 	}
 
@@ -1000,6 +1240,40 @@ func runGraphWrite(subcmd, allowed string, args []string) error {
 	// a rejected query never reaches the graph (SPEC/GRAPH.md
 	// § Relationship Write Direction).
 	if err := validateRelationshipWriteDirection(subcmd, query); err != nil {
+		return err
+	}
+
+	// The write-direction rule owns the SET/REMOVE TARGET; this one owns every
+	// relationship VALUE the statement reads — a SET right-hand side such as
+	// `SET n.p = type(e)`, which would otherwise persist a misresolved type, and
+	// a DELETE gated by `WHERE type(e) = ...`, which would otherwise delete the
+	// wrong edges or silently none. Ordered after the write rule so a query that
+	// trips both keeps the write-side message, which names the write the caller
+	// actually asked for.
+	if err := validateRelationshipReadDirection(subcmd, query); err != nil {
+		return err
+	}
+
+	// Content, decided last among the guard-rail rules and still before the store
+	// is opened, so a refused query writes nothing. It is last because the
+	// objections above are about what the query IS - its clause class, and the
+	// orientation of the patterns it binds - while these are about what the query
+	// or a value it carries CONTAINS, which only matters once the statement is
+	// otherwise one this subcommand would run (SPEC/GRAPH.md § Cypher Query and
+	// Property Value Content Rules).
+	//
+	// The two calls are in the order SPEC/MODELS.md fixes for the pair, and the
+	// order is load-bearing: an invalid byte decodes to U+FFFD, which is not a
+	// forbidden code point, so the control-character rule would answer "fine" for
+	// a value the encoding rule refuses. They are two calls rather than one
+	// because their REACH differs - the encoding rule binds all three write
+	// subcommands including `delete`, the control-character rule only the two
+	// that write property values - and separate calls put each reach where it is
+	// enforced instead of inside a shared helper.
+	if err := validateQueryEncoding(subcmd, query); err != nil {
+		return err
+	}
+	if err := validateWrittenPropertyValues(subcmd, query); err != nil {
 		return err
 	}
 

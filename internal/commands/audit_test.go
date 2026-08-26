@@ -91,8 +91,8 @@ func TestAuditList_InvalidOperation(t *testing.T) {
 	if err == nil {
 		t.Error("auditList with invalid operation expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "invalid operation") {
-		t.Errorf("expected 'invalid operation' error, got: %v", err)
+	if !strings.Contains(err.Error(), "invalid audit operation") {
+		t.Errorf("expected 'invalid audit operation' error, got: %v", err)
 	}
 }
 

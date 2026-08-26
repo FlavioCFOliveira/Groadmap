@@ -138,12 +138,21 @@
 #     package-level taskEditFieldOperations map or the whole edit is refused
 #     before the statement is built, which makes the "internal constants" claim
 #     enforced rather than asserted. (c) A table name inside pragma_table_info()
-#     in db/migrations.go columnExists, which is the one site where a value is
-#     interpolated into SQL rather than a placeholder; every call site passes a
-#     string literal (see the call-site list in that function's comment) and the
-#     column being looked for is bound. This is the site to re-examine first if a
-#     caller ever passes a variable. (d) A column name in one test helper,
-#     literal at both call sites.
+#     in db/migrations.go columnExists, the one site in the module where a value
+#     rather than a placeholder is interpolated, because SQLite does not accept a
+#     bound parameter as a PRAGMA argument. WHAT MAKES IT SAFE IS A SHAPE GUARD
+#     INSIDE THE FUNCTION, not the call sites: the name is matched against
+#     ^[a-z_][a-z0-9_]*$ and refused BEFORE the format string sees it, so a name
+#     carrying a quote, a semicolon, whitespace or a comment introducer, or an
+#     empty one, never reaches the statement, and nothing the class admits can
+#     close the quoted literal or extend the statement. The reason names the
+#     guard rather than the callers on purpose (rmp task #305): every caller
+#     passes a literal today, but that is a property of the callers, and this
+#     suppression is precisely what would keep the scanner silent about a caller
+#     that stopped. The refusal is held in place by
+#     TestColumnExistsRefusesUnsafeTableIdentifier, which fails on all four
+#     shapes when the guard is removed, and the column being looked for is bound.
+#     (d) A column name in one test helper, literal at both call sites.
 #
 # G204 Audit use of command execution (CWE-78)  [3]
 #   internal/web/server.go                             3
@@ -223,3 +232,10 @@
 # instead of a placeholder, the scanner will not say so. That is the cost being
 # accepted, and it is the reason each entry names what makes it safe rather than
 # only asserting that it is.
+#
+# One entry goes further, and it is the model for the rest. db/migrations.go
+# columnExists is the only site that interpolates a value, and its reason names a
+# guard in the code instead of a habit of its callers. That is a reason a
+# reviewer can CHECK — read the guard, read the test that removes it — rather
+# than one they must take on trust. Where a suppression can be backed that way,
+# it should be.

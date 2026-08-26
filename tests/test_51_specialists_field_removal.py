@@ -41,6 +41,7 @@ _build_1_9_0_fixture):
   11. A second migrated open is a clean, idempotent no-op.
 """
 
+import inspect
 import os
 import sqlite3
 import sys
@@ -556,9 +557,19 @@ def _run_all():
     passed = 0
     failed = 0
     failures = []
-    for cls in (TestSpecialistsFieldRemoved, TestSpecialistsMigration1_9_0_to_1_10_0):
-        method_names = [m for m in dir(cls) if m.startswith("test_")]
-        for m in method_names:
+    # Classes are DISCOVERED by inspecting this module, never listed. A listed
+    # tuple silently skips any suite added after it was written -- the runner
+    # still exits 0 and the new class simply never runs (rmp task #303). The
+    # count is printed so a class that stops being discovered is visible in
+    # the output rather than inferred from a total that quietly shrank.
+    classes = [
+        obj for _name, obj in sorted(inspect.getmembers(sys.modules[__name__], inspect.isclass))
+        if obj.__module__ == __name__ and _name.startswith("Test")
+    ]
+    print(f"Discovered {len(classes)} test classes: "
+          f"{', '.join(cls.__name__ for cls in classes)}")
+    for cls in classes:
+        for m in sorted(name for name in dir(cls) if name.startswith("test_")):
             instance = cls()
             instance.setup_method()
             try:

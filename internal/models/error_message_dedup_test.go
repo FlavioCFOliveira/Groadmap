@@ -47,9 +47,10 @@ var allSentinels = []error{
 	ErrInvalidTaskType, ErrInvalidTaskStatus, ErrInvalidStatus, ErrInvalidType,
 	ErrInvalidCurrentStatus, ErrInvalidTargetStatus, ErrCannotTransition,
 	ErrPriorityOutOfRange, ErrSeverityOutOfRange, ErrInvalidCommitHash,
-	ErrInvalidSprintStatus, ErrInvalidSprintOrder,
+	ErrTaskLimitOutOfRange, ErrAuditLimitOutOfRange,
+	ErrInvalidSprintStatus, ErrInvalidSprintOrder, ErrSprintMaxTasksOutOfRange,
 	ErrInvalidAuditOperation, ErrInvalidEntityType, ErrInvalidOperation,
-	ErrEntityIDNotPositive, ErrInvalidCommentType,
+	ErrEntityIDOutOfRange, ErrInvalidCommentType,
 	utils.ErrValidation, utils.ErrFieldTooLarge,
 }
 
@@ -99,8 +100,6 @@ func dedupCases(t *testing.T) []dedupCase {
 
 	badType := validTask
 	badType.Type = "NOPE"
-
-	outOfRange := 42
 
 	validAuditOp := string(ValidAuditOperations[0])
 
@@ -181,16 +180,37 @@ func dedupCases(t *testing.T) []dedupCase {
 			wantSentinels: []error{ErrInvalidType},
 		},
 		{
-			name:          "TaskUpdate.Validate/priority",
-			err:           mustErr("update priority", (&TaskUpdate{Priority: &outOfRange}).Validate()),
-			wantMsg:       "validation error: priority must be between 0 and 9, got 42",
-			wantSentinels: []error{utils.ErrValidation, ErrPriorityOutOfRange},
+			// The `--limit` range rule, converged by rmp task 329. The two
+			// bounds differ and the sentence does not: that is the whole of
+			// what the task fixed, and asserting both messages side by side is
+			// what keeps the difference confined to the number.
+			name:          "ValidateTaskLimit",
+			err:           mustErr("task limit", ValidateTaskLimit(0)),
+			wantMsg:       "validation error: limit must be between 1 and 100, got 0",
+			wantSentinels: []error{utils.ErrValidation, ErrTaskLimitOutOfRange},
 		},
 		{
-			name:          "TaskUpdate.Validate/severity",
-			err:           mustErr("update severity", (&TaskUpdate{Severity: &outOfRange}).Validate()),
-			wantMsg:       "validation error: severity must be between 0 and 9, got 42",
-			wantSentinels: []error{utils.ErrValidation, ErrSeverityOutOfRange},
+			name:          "ValidateAuditLimit",
+			err:           mustErr("audit limit", ValidateAuditLimit(501)),
+			wantMsg:       "validation error: limit must be between 1 and 500, got 501",
+			wantSentinels: []error{utils.ErrValidation, ErrAuditLimitOutOfRange},
+		},
+		{
+			// The capacity-cap range rule, converged by rmp task 338. Both
+			// bounds are asserted because the two sprint commands agreed with
+			// each other on the wording they got wrong, so the property worth
+			// pinning is not that they agree — it is that the sentence they
+			// now produce is the one every other range produces.
+			name:          "ValidateSprintMaxTasks/below",
+			err:           mustErr("sprint max tasks below", ValidateSprintMaxTasks(0)),
+			wantMsg:       "validation error: max_tasks must be between 1 and 10000, got 0",
+			wantSentinels: []error{utils.ErrValidation, ErrSprintMaxTasksOutOfRange},
+		},
+		{
+			name:          "ValidateSprintMaxTasks/above",
+			err:           mustErr("sprint max tasks above", ValidateSprintMaxTasks(10001)),
+			wantMsg:       "validation error: max_tasks must be between 1 and 10000, got 10001",
+			wantSentinels: []error{utils.ErrValidation, ErrSprintMaxTasksOutOfRange},
 		},
 		{
 			name: "AuditEntry.Validate/operation",
@@ -213,8 +233,15 @@ func dedupCases(t *testing.T) []dedupCase {
 			err: mustErr("audit entity id", (&AuditEntry{
 				Operation: validAuditOp, EntityType: string(EntityTask), EntityID: 0, PerformedAt: dedupValidCreatedAt,
 			}).Validate()),
-			wantMsg:       "entity_id must be positive, got 0",
-			wantSentinels: []error{ErrEntityIDNotPositive},
+			// The id range rule, converged by rmp task 330. This sentinel
+			// used to word one of the rule's two bounds and name neither
+			// ("entity_id must be positive"), which made it a fourth wording
+			// of the very refusal `audit list --entity-id` and `audit history`
+			// print — over the identical field and under the identical name.
+			// It now takes the whole sentence from the shared definition, and
+			// chains utils.ErrValidation as every other range refusal does.
+			wantMsg:       "validation error: entity_id must be between 1 and 2147483647, got 0",
+			wantSentinels: []error{utils.ErrValidation, ErrEntityIDOutOfRange},
 		},
 	}
 }

@@ -127,7 +127,7 @@ class TestStressLoad:
         # Add all 50 tasks
         start_time = time.time()
         self.test.run_cmd(
-            ["sprint", "add-tasks", "-r", roadmap, str(sprint)] + [str(t) for t in task_ids]
+            ["sprint", "add-tasks", "-r", roadmap, str(sprint), ",".join(str(t) for t in task_ids)]
         )
         elapsed = time.time() - start_time
         print(f"  Added 50 tasks to sprint in {elapsed:.2f}s")
@@ -189,7 +189,7 @@ class TestStressLoad:
 
             sprint = self.test.create_sprint(roadmap, f"Release Train Sprint {sprint_num:02d}")
             self.test.run_cmd(
-                ["sprint", "add-tasks", "-r", roadmap, str(sprint)] + [str(t) for t in task_ids]
+                ["sprint", "add-tasks", "-r", roadmap, str(sprint), ",".join(str(t) for t in task_ids)]
             )
             self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint)])
 
@@ -345,7 +345,7 @@ class TestStressLoad:
 
         sprint = self.test.create_sprint(roadmap, "Scale Test Sprint")
         self.test.run_cmd(
-            ["sprint", "add-tasks", "-r", roadmap, str(sprint)] + [str(t) for t in task_ids[:150]]
+            ["sprint", "add-tasks", "-r", roadmap, str(sprint), ",".join(str(t) for t in task_ids[:150])]
         )
         self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint)])
 

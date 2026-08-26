@@ -29,6 +29,7 @@ import (
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
+	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
 // sprintCommentFamily binds the shared subcommand bodies to sprint_comments.
@@ -71,8 +72,8 @@ var sprintCommentFamily = commentFamily{
 	opUpdate: models.OpSprintCommentUpdate,
 	opDelete: models.OpSprintCommentDelete,
 
-	entityType:  models.EntitySprint,
-	parentLabel: "sprint",
+	entityType:    models.EntitySprint,
+	parentIDField: utils.FieldSprintID,
 }
 
 // sprintCommentAdd adds one comment to a sprint.

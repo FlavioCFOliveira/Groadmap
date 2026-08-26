@@ -120,6 +120,8 @@ Required:
 
 Optional:
   --since <date>                  Aggregation window start (inclusive)
+                                  (ISO 8601 with millisecond precision, e.g.
+                                  2026-01-01T00:00:00.000Z; date-only also accepted)
   --until <date>                  Aggregation window end (inclusive)
 
 Output (stdout JSON):
@@ -162,41 +164,59 @@ func auditList(args []string) error {
 	limit := models.DefaultTaskLimit
 
 	if op, ok := result.Flags["Operation"].(string); ok {
-		if !models.IsValidAuditOperation(op) {
-			return fmt.Errorf("%w: invalid operation: %s", utils.ErrValidation, op)
+		// The enum is owned by models.ParseAuditOperation, which is the single
+		// place that decides what a valid operation is and how a bad one reads.
+		// Its sentinel is model-level and the exit-code mapper does not know
+		// it, so wrap in utils.ErrValidation to land on exit 6 — the same shape
+		// every other enum filter uses (SPEC/COMMANDS.md § List Audit Log).
+		// The model sentinel is chained with a SECOND %w, not rendered with %s,
+		// so errors.Is can still tell WHICH enum was rejected. Both verbs render
+		// the same bytes, so only the chain distinguishes them, and %s silently
+		// discards it (task #290).
+		parsed, parseErr := models.ParseAuditOperation(op)
+		if parseErr != nil {
+			return fmt.Errorf("%w: %w", utils.ErrValidation, parseErr)
 		}
-		operation = &op
+		normalized := string(parsed)
+		operation = &normalized
 	}
 	if et, ok := result.Flags["EntityType"].(string); ok {
-		if !models.IsValidEntityType(et) {
-			return fmt.Errorf("%w: invalid entity type: %s", utils.ErrValidation, et)
+		parsed, parseErr := models.ParseEntityType(et)
+		if parseErr != nil {
+			return fmt.Errorf("%w: %w", utils.ErrValidation, parseErr)
 		}
-		entityType = &et
+		normalized := string(parsed)
+		entityType = &normalized
 	}
 	if id, ok := result.Flags["EntityID"].(int); ok {
 		entityID = &id
 	}
 	if s, ok := result.Flags["Since"].(string); ok {
-		t, err := utils.ParseISO8601(s)
-		if err != nil {
-			return fmt.Errorf("%w: invalid date format: %s", utils.ErrValidation, s)
+		// One acceptance rule for every date-range filter the CLI publishes:
+		// the contract declares a single `date` flag type, so ParseDateFilter
+		// is the only place that decides what a date is (see filter_date.go).
+		t, parseErr := ParseDateFilter("--since", s)
+		if parseErr != nil {
+			return parseErr
 		}
 		normalized := utils.FormatISO8601(t)
 		since = &normalized
 	}
 	if u, ok := result.Flags["Until"].(string); ok {
-		t, err := utils.ParseISO8601(u)
-		if err != nil {
-			return fmt.Errorf("%w: invalid date format: %s", utils.ErrValidation, u)
+		t, parseErr := ParseDateFilter("--until", u)
+		if parseErr != nil {
+			return parseErr
 		}
 		normalized := utils.FormatISO8601(t)
 		until = &normalized
 	}
 	if l, ok := result.Flags["Limit"].(int); ok {
-		// Bound the limit to 1..MaxAuditLimit (SPEC/COMMANDS.md § Audit List).
-		// Out-of-range values are rejected with exit code 6.
-		if l < 1 || l > models.MaxAuditLimit {
-			return fmt.Errorf("%w: --limit must be between 1 and %d (got %d)", utils.ErrValidation, models.MaxAuditLimit, l)
+		// Bound the limit to 1..MaxAuditLimit (SPEC/COMMANDS.md § List Audit
+		// Log). Out-of-range values are rejected with exit code 6. The bound is
+		// higher than the one on a task listing and the sentence is the same:
+		// models.ValidateAuditLimit owns both (rmp task 329).
+		if err := models.ValidateAuditLimit(l); err != nil {
+			return err
 		}
 		limit = l
 	}
@@ -236,16 +256,18 @@ func auditHistory(args []string) error {
 		return fmt.Errorf("%w: entity type and ID required", utils.ErrRequired)
 	}
 
-	// Parse entity type
-	if !models.IsValidEntityType(remaining[0]) {
-		return fmt.Errorf("%w: invalid entity type: %s", utils.ErrValidation, remaining[0])
+	// Parse entity type through the enum's owner, so this positional and the
+	// `-e` flag of `audit list` refuse a bad value in exactly the same words.
+	parsedEntityType, parseErr := models.ParseEntityType(remaining[0])
+	if parseErr != nil {
+		return fmt.Errorf("%w: %w", utils.ErrValidation, parseErr)
 	}
-	entityType := remaining[0]
+	entityType := string(parsedEntityType)
 
 	// Parse and validate entity ID as a positive int in 1..MaxInt32, consistent
 	// with `task get` (SPEC/COMMANDS.md § Entity History). Non-positive or
 	// out-of-range values are rejected with exit code 6.
-	entityID, err := utils.ValidateIDString(remaining[1], "entity")
+	entityID, err := utils.ValidateIDString(remaining[1], utils.FieldEntityID)
 	if err != nil {
 		return err
 	}
@@ -282,17 +304,17 @@ func auditStats(args []string) error {
 
 	var since, until *string
 	if s, ok := result.Flags["Since"].(string); ok {
-		t, err := utils.ParseISO8601(s)
-		if err != nil {
-			return fmt.Errorf("%w: invalid date format: %s", utils.ErrValidation, s)
+		t, parseErr := ParseDateFilter("--since", s)
+		if parseErr != nil {
+			return parseErr
 		}
 		normalized := utils.FormatISO8601(t)
 		since = &normalized
 	}
 	if u, ok := result.Flags["Until"].(string); ok {
-		t, err := utils.ParseISO8601(u)
-		if err != nil {
-			return fmt.Errorf("%w: invalid date format: %s", utils.ErrValidation, u)
+		t, parseErr := ParseDateFilter("--until", u)
+		if parseErr != nil {
+			return parseErr
 		}
 		normalized := utils.FormatISO8601(t)
 		until = &normalized
@@ -463,6 +485,9 @@ Date format (--since / --until):
   ISO 8601 with millisecond precision and UTC suffix:
   YYYY-MM-DDTHH:mm:ss.sssZ   (e.g. 2026-01-01T00:00:00.000Z)
   RFC 3339 variants are also accepted.
+  A bare calendar date, YYYY-MM-DD (e.g. 2026-01-01), is also accepted and
+  means the first instant of that day in UTC. These are the same two forms
+  'task list --created-since/--created-until' accepts.
 
 Commands:
   list, ls [OPTIONS]              List audit entries (newest first)
@@ -511,6 +536,7 @@ Exit codes:
   3   No roadmap specified (-r missing)
   6   Validation error (bad operation/entity-type/date, --limit out of 1-500,
        or --entity-id out of 1-2147483647)
+  127 Unknown subcommand
 
 Examples:
   rmp audit list -r myproject
