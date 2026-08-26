@@ -981,12 +981,28 @@ narrows it.
    formatted file in place. Both workflows run `go fmt ./...` and then
    `git diff --exit-code`, so unformatted source fails the job instead of being
    silently corrected inside the runner.
-2. **`test` runs with the race detector, and CI also measures coverage.** Locally
-   the gate is `go test ./...`. Both workflows run the suite verbosely and with
-   the race detector (`go test -v -race ./...`); the CI workflow additionally
-   writes a coverage profile (`-coverprofile=coverage.out`) and uploads it. The
+2. **`test` runs with the race detector and an explicit timeout, and CI also
+   measures coverage.** Locally the gate is `go test ./...`. Both workflows run
+   the suite verbosely, with the race detector, and under an explicit timeout
+   (`go test -v -race -timeout=30m ./...`); the CI workflow additionally writes
+   a coverage profile (`-coverprofile=coverage.out`) and uploads it. The
    coverage upload is reporting, not a gate, and its failure does not fail the
-   job.
+   job. As with the linter's timeout below, the timeout a workflow passes to
+   `go test` is an execution limit, not a change of scope: the suite it runs is
+   the same `./...` the local gate runs, with the same tests in it.
+
+   **The timeout is explicit because the default one is easy to exceed without
+   noticing.** `go test` applies its timeout to each package separately, never
+   to the run as a whole, and the default is ten minutes per package. A package
+   that reaches the limit does not report a failing test: it panics with
+   `test timed out` and takes the whole job down. The tests under
+   `internal/commands/` already run for close to 400 seconds under the race
+   detector on a development machine, and a slower CI runner crosses the
+   ten-minute ceiling outright. `-timeout=30m` is per package in the same way,
+   and it makes that margin a decision this specification records rather than
+   one inherited silently from the toolchain: a suite that grows into the limit
+   has to raise this number deliberately, instead of failing a run that has
+   nothing wrong with it.
 3. **`build` is a host build locally and a matrix build in the workflows.**
    `make check` builds the binary for the host platform only. The CI workflow
    builds a four-target fast-feedback subset — `linux/amd64`, `linux/arm64`,
