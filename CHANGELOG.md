@@ -589,6 +589,20 @@ Neither of these can break a caller; both change what the binary accepts.
 
 ### Internal
 
+- **The tool-exclusion gate stopped reporting its own precondition as a defect.**
+  `TestPathsExcludedFromAToolAreIgnoredOrDeliberatelyTracked` pairs every path a tool is
+  configured to skip against a `.gitignore` rule, and it counted an exclusion as checked
+  only when the path was **present on disk**. Every one of them is absent from a clean
+  checkout, so the non-vacuity floor fired and the suite failed in CI while passing on a
+  working machine, where an earlier test had left `.claude/worktrees` behind. It fired on
+  the first build of this release. An exclusion now counts as checked when the tree can
+  decide it — the path is present, **or** git already carries a rule naming it — which is
+  true in a fresh clone and leaves untouched the four exclusions that are golangci-lint's
+  inherited defaults, naming directories this project does not have and should not be
+  asked to ignore. Verified in a fresh clone, and both failure directions were reproduced:
+  dropping the `.gitignore` rule with the directory present still names the real defect,
+  and dropping both still fires the floor.
+
 - **All fifteen unreached exports of `internal/db` were retired** and the allow-list
   emptied: two promoted onto the command layer's transaction, thirteen deleted. Three of
   the thirteen had already drifted from the shipped path with nothing reporting it — one
