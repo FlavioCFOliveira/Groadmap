@@ -149,35 +149,58 @@ func TestPathsExcludedFromAToolAreIgnoredOrDeliberatelyTracked(t *testing.T) {
 			toolConfigFiles)
 	}
 
+	// An exclusion counts as evaluated when the tree can decide it: either the
+	// path is present, or git already carries a rule for it. Those are the two
+	// ways the tool's claim and git's claim can be compared.
+	//
+	// An absent path that git does not mention is the third case and is
+	// deliberately skipped. Four of the swept exclusions are golangci-lint's
+	// inherited defaults - builtin, examples, third_party and vendor - which
+	// name no directory this project has and which nothing should be asked to
+	// ignore. Failing on those would be demanding .gitignore entries for
+	// directories that will never exist.
+	//
+	// PRESENCE ALONE IS NOT THE TEST, and assuming it was is what broke the
+	// v1.15.1 release build. Every excluded path is absent from a fresh clone,
+	// so the floor below fired in CI while the gate passed on a working machine
+	// where an earlier test had left .claude/worktrees behind. The gate was
+	// reporting its own precondition as a defect, on the one tree - a clean
+	// checkout - where its subject matters most.
 	evaluated := 0
 	for _, exclusion := range exclusions {
-		info, err := os.Stat(filepath.Join(root, filepath.FromSlash(exclusion.path)))
-		if err != nil {
-			// Absent from the tree: it can be neither tracked nor untracked
-			// noise, so there is nothing to decide yet.
-			continue
-		}
 		if _, exempt := deliberatelyTracked[exclusion.path]; exempt {
 			continue
 		}
-		evaluated++
 
 		probe := exclusion.path
-		if info.IsDir() {
+		info, statErr := os.Stat(filepath.Join(root, filepath.FromSlash(exclusion.path)))
+		present := statErr == nil
+		if present && info.IsDir() {
+			probe += "/"
+		} else if !present {
+			// git check-ignore answers for a path, not for a file on disk, and
+			// the rules these exclusions pair with are directory rules.
 			probe += "/"
 		}
-		if source, _ := gitCheckIgnore(t, root, probe); source == "" {
+
+		source, _ := gitCheckIgnore(t, root, probe)
+		if source == "" {
+			if !present {
+				continue
+			}
 			t.Errorf("%s is excluded from a tool (%s) but git does not ignore it, "+
 				"so it is reported as untracked and `git add -A` would stage it. "+
 				"Add %s to .gitignore, or record it in deliberatelyTracked with the reason it is versioned.",
 				exclusion.path, exclusion.source, probe)
 		}
+		evaluated++
 	}
 
 	if evaluated == 0 {
-		t.Fatalf("of the %d swept exclusions, not one names a path that both exists in the tree and "+
-			"is outside deliberatelyTracked, so this gate checked nothing. Either the sweep stopped "+
-			"finding the directives, or every exclusion has been exempted", len(exclusions))
+		t.Fatalf("of the %d swept exclusions, not one is present in the tree and not one is named by "+
+			"a git rule, so this gate checked nothing. Either the sweep stopped finding the "+
+			"directives, every exclusion has been exempted, or .gitignore lost the entries that "+
+			"pair with them", len(exclusions))
 	}
 }
 
