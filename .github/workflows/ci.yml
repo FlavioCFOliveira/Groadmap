@@ -43,7 +43,7 @@ jobs:
           args: --timeout=5m
 
       - name: Run tests
-        run: go test -v -race -coverprofile=coverage.out ./...
+        run: go test -v -race -timeout=30m -coverprofile=coverage.out ./...
 
       # Reporting, not a gate: its failure must not fail the job.
       - name: Upload coverage

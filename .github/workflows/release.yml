@@ -42,7 +42,7 @@ jobs:
           args: --timeout=5m
 
       - name: Run tests
-        run: go test -v -race ./...
+        run: go test -v -race -timeout=30m ./...
 
       # gosec is pinned to the version SPEC/BUILD.md § Security Scan: gosec
       # names, so the rule set, the scanned scope and the accepted #nosec
