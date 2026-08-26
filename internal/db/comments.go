@@ -213,7 +213,7 @@ func groupedTaskCommentCountsQuery(placeholders string) string {
 // transaction and returns the new comment's id.
 //
 // created_at is taken from the comment (the caller stamps it, as with
-// CreateTask); updated_at starts NULL and is written only by a later edit. The
+// InsertTaskTx); updated_at starts NULL and is written only by a later edit. The
 // body is stored in its canonical form: NormalizeCommentBody trims it, which is
 // the form SPEC/COMMANDS.md validates and SPEC/DATABASE.md stores, so the value
 // measured against the 4096-character cap and the value written are the same one.
@@ -411,7 +411,17 @@ func (st *commentStatements) writeError(err error, parentID int, commentType *mo
 		return fmt.Errorf("%w: %s: a required column was NULL", utils.ErrValidation, st.commentLabel)
 	}
 
-	return fmt.Errorf("writing %s: %w", st.commentLabel, err)
+	// Anything the classifier above did not recognise is "any other
+	// database/sql error", which SPEC/ARCHITECTURE.md § Propagation Rules
+	// assigns to utils.ErrDatabase (exit code 1) at THIS layer. The sentinel
+	// is added here and nowhere earlier: the switch above owns the two rows
+	// that sit ABOVE utils.ErrDatabase in that table (a foreign-key failure
+	// is utils.ErrNotFound, exit code 4, and a uniqueness collision would be
+	// utils.ErrAlreadyExists, exit code 5), so classifying first and wrapping
+	// only what falls through is what keeps those exit codes intact. The
+	// underlying error stays wrapped with %w as well, so the driver's own
+	// error remains inspectable through the chain.
+	return fmt.Errorf("%w: writing %s: %w", utils.ErrDatabase, st.commentLabel, err)
 }
 
 // ==================== COMMENT READS ====================
@@ -513,7 +523,11 @@ func getComment[T any](ctx context.Context, db *DB, st *commentStatements, id in
 		return nil, fmt.Errorf("%w: %s %d not found", utils.ErrNotFound, st.commentLabel, id)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("querying %s %d: %w", st.commentLabel, id, err)
+		// Reached only once sql.ErrNoRows has been ruled out just above, so
+		// the not-found row of SPEC/ARCHITECTURE.md § Propagation Rules still
+		// resolves to utils.ErrNotFound (exit code 4) and only a genuine
+		// database failure lands on utils.ErrDatabase (exit code 1).
+		return nil, fmt.Errorf("%w: querying %s %d: %w", utils.ErrDatabase, st.commentLabel, id, err)
 	}
 
 	comment := convert(&row)
@@ -532,7 +546,10 @@ func listComments[T any](ctx context.Context, db *DB, st *commentStatements, par
 
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("querying %ss: %w", st.commentLabel, err)
+		// A listing has no not-found and no conflict row: an empty result is
+		// an empty slice (see collectComments), so every failure here is
+		// "any other database/sql error" and carries utils.ErrDatabase.
+		return nil, fmt.Errorf("%w: querying %ss: %w", utils.ErrDatabase, st.commentLabel, err)
 	}
 	defer rows.Close()
 

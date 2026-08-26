@@ -102,9 +102,9 @@ func TestRunMigrations_UpToDate(t *testing.T) {
 		Description: "Test Sprint",
 		Status:      models.SprintPending,
 	}
-	sprintID, err := db.CreateSprint(ctx, sprint)
+	sprintID, err := seedSprint(db, sprint)
 	if err != nil {
-		t.Fatalf("CreateSprint failed: %v", err)
+		t.Fatalf("seeding the sprint: %v", err)
 	}
 
 	task := &models.Task{
@@ -115,9 +115,9 @@ func TestRunMigrations_UpToDate(t *testing.T) {
 		Type:                   models.TypeTask,
 		Status:                 models.StatusBacklog,
 	}
-	taskID, err := db.CreateTask(ctx, task)
+	taskID, err := seedTask(db, task)
 	if err != nil {
-		t.Fatalf("CreateTask failed: %v", err)
+		t.Fatalf("seeding the task: %v", err)
 	}
 
 	// Add task to sprint
@@ -159,9 +159,9 @@ func TestMigrateV1_0_0_toV1_1_0(t *testing.T) {
 		Description: "Test Sprint",
 		Status:      models.SprintPending,
 	}
-	sprintID, err := db.CreateSprint(ctx, sprint)
+	sprintID, err := seedSprint(db, sprint)
 	if err != nil {
-		t.Fatalf("CreateSprint failed: %v", err)
+		t.Fatalf("seeding the sprint: %v", err)
 	}
 
 	taskIDs := make([]int, 0, 3)
@@ -174,9 +174,9 @@ func TestMigrateV1_0_0_toV1_1_0(t *testing.T) {
 			Type:                   models.TypeTask,
 			Status:                 models.StatusBacklog,
 		}
-		taskID, err := db.CreateTask(ctx, task)
+		taskID, err := seedTask(db, task)
 		if err != nil {
-			t.Fatalf("CreateTask failed: %v", err)
+			t.Fatalf("seeding the task: %v", err)
 		}
 		taskIDs = append(taskIDs, taskID)
 	}

@@ -189,6 +189,16 @@ type Subcommand struct {
 	// standard input (in addition to, or instead of, a flag). Used by
 	// the AI contract emitter to annotate subcommands with stdin fallback.
 	ReadsStdin bool
+	// PublishesOwnArityRefusal, when true, means this subcommand refuses
+	// an excess positional argument itself, with wording of its own that
+	// SPEC/COMMANDS.md § Positional Arguments publishes separately from
+	// the canonical line. The shared enforcement point (checkPositionalArity,
+	// positional_arity.go) defers to it so that wording survives; the
+	// subcommand is NOT thereby exempt from the rule, only from the
+	// message. It is set on the five `graph` subcommands, on `web`, and on
+	// `ai-help`, and on nothing else: every other subcommand takes the
+	// canonical refusal from the shared point.
+	PublishesOwnArityRefusal bool
 }
 
 // Command is a top-level command family (roadmap, task, sprint, ...).
@@ -267,8 +277,9 @@ func (c *Command) FindSubcommand(name string) *Subcommand {
 // the registry-driven replacement for the per-family Handle* switches.
 // When args is empty, the family help is printed. When the first arg
 // is a help token, the family help is printed. When the first arg is
-// an unknown subcommand, an ErrInvalidInput error is returned so the
-// top-level error handler can render it.
+// an unresolved subcommand name, a *DispatchError is returned so the
+// top-level error handler can render the error, the family help as
+// recovery help, and exit 127.
 //
 // The caller is the leaf command's Handle* function; the registry is
 // queried via the embedding *Command. This indirection means
@@ -280,6 +291,9 @@ func (c *Command) DispatchFamily(args []string) error {
 		// itself, so we pass the full args through unchanged.
 		if len(c.Subcommands) != 1 {
 			return fmt.Errorf("%w: command %q has no subcommand dispatcher", utils.ErrInvalidInput, c.Name)
+		}
+		if err := checkPositionalArity(&c.Subcommands[0], args); err != nil {
+			return err
 		}
 		return c.Subcommands[0].Handler(args)
 	}
@@ -303,7 +317,14 @@ func (c *Command) DispatchFamily(args []string) error {
 
 	sub := c.FindSubcommand(subToken)
 	if sub == nil {
-		return fmt.Errorf("%w: unknown %s subcommand: %s", utils.ErrInvalidInput, c.Name, subToken)
+		// Dispatch failure, not a malformed argument: the token names no
+		// subcommand of this family. It is carried by
+		// utils.ErrUnknownCommand (exit 127) and NOT by
+		// utils.ErrInvalidInput (exit 2), and it carries the family so
+		// the error path can render that family's help as recovery help
+		// (SPEC/HELP.md § Recovery help after a dispatch failure,
+		// SPEC/ARCHITECTURE.md § Sentinel Error Catalogue).
+		return newUnknownSubcommandError(c, subToken)
 	}
 
 	// Subcommand-level help: `rmp <family> <sub> --help` (or `help` /
@@ -315,6 +336,18 @@ func (c *Command) DispatchFamily(args []string) error {
 			invokeHelpPrinter(sub.HelpPrinter)
 			return nil
 		}
+	}
+
+	// The single shared enforcement point for positional arity
+	// (SPEC/COMMANDS.md § Positional Arguments). It sits here, on the only
+	// path that reaches a subcommand handler, so every command is covered
+	// by construction from its own registry declaration rather than by a
+	// check each handler must remember to perform. It runs after the help
+	// short-circuit above — a help request is served, not refused — and
+	// before the handler, so the refusal precedes opening the roadmap
+	// database or the graph store and reading standard input.
+	if err := checkPositionalArity(sub, args[1:]); err != nil {
+		return err
 	}
 
 	return sub.Handler(args[1:])

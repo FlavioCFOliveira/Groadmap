@@ -334,8 +334,8 @@ func TestMigrateV1_10_0_toV1_11_0_OnNextOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading schema version after open: %v", err)
 	}
-	if version != "1.12.0" {
-		t.Fatalf("schema_version after open = %q, want 1.12.0 (SPEC/VERSION.md § Current Schema Version)", version)
+	if version != "1.14.0" {
+		t.Fatalf("schema_version after open = %q, want 1.14.0 (SPEC/VERSION.md § Current Schema Version)", version)
 	}
 	if version != SchemaVersion {
 		t.Errorf("schema_version after open = %q but the SchemaVersion constant is %q; a migrated "+
@@ -451,7 +451,7 @@ func TestCommitColumnCheckConstraintOnAFreshSchema(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	taskID, err := database.CreateTask(testContext(), &models.Task{
+	taskID, err := seedTask(database, &models.Task{
 		Title:                  "Settle the acquirer reconciliation window",
 		Type:                   models.TypeTask,
 		Status:                 models.StatusBacklog,
@@ -572,7 +572,7 @@ func commitColumnInfo(t *testing.T, database *DB, column string) commitColumnDes
 // returns its id.
 func seedCommitCheckTask(t *testing.T, database *DB) int {
 	t.Helper()
-	id, err := database.CreateTask(testContext(), &models.Task{
+	id, err := seedTask(database, &models.Task{
 		Title:                  "Replay the failed settlement batch",
 		Type:                   models.TypeTask,
 		Status:                 models.StatusBacklog,
@@ -689,7 +689,7 @@ func TestCommitHashesRoundTripThroughEveryTaskReadPath(t *testing.T) {
 
 	// A sprint, opened, so the sprint-scoped and "next" read paths have
 	// something to return.
-	sprintID, err := database.CreateSprint(ctx, &models.Sprint{
+	sprintID, err := seedSprint(database, &models.Sprint{
 		Title:       "Acquirer failover hardening",
 		Description: "Keep settlements clearing while an acquirer is unavailable.",
 		Status:      models.SprintPending,
@@ -698,13 +698,11 @@ func TestCommitHashesRoundTripThroughEveryTaskReadPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating the sprint: %v", err)
 	}
-	if err := database.UpdateSprintStatus(ctx, sprintID, models.SprintOpen); err != nil {
-		t.Fatalf("opening the sprint: %v", err)
-	}
+	forceSprintOpen(t, database, sprintID)
 
 	newTask := func(title string, parent *int) int {
 		t.Helper()
-		id, err := database.CreateTask(ctx, &models.Task{
+		id, err := seedTask(database, &models.Task{
 			Title:                  title,
 			Type:                   models.TypeTask,
 			Status:                 models.StatusBacklog,
@@ -862,7 +860,7 @@ func TestCommitHashesReadBackIndependentlyPerRow(t *testing.T) {
 	}
 
 	for i := range rows {
-		id, err := database.CreateTask(ctx, &models.Task{
+		id, err := seedTask(database, &models.Task{
 			Title:                  "Reconcile settlement window " + string(rune('A'+i)),
 			Type:                   models.TypeTask,
 			Status:                 models.StatusBacklog,
@@ -885,7 +883,7 @@ func TestCommitHashesReadBackIndependentlyPerRow(t *testing.T) {
 
 	// One task deliberately left with NULL in both, so a scan that reused the
 	// previous row's value would be caught here too.
-	nullID, err := database.CreateTask(ctx, &models.Task{
+	nullID, err := seedTask(database, &models.Task{
 		Title:                  "Archive the reconciled windows",
 		Type:                   models.TypeTask,
 		Status:                 models.StatusBacklog,

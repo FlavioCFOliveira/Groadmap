@@ -65,48 +65,42 @@ var (
 
 // ==================== TASK QUERIES ====================
 
-// CreateTask inserts a new task and returns its ID.
-func (db *DB) CreateTask(ctx context.Context, task *models.Task) (int, error) {
-	var taskID int
-	err := retryWithBackoff("create task", func() error {
-		// Default type to TASK if not specified
-		taskType := task.Type
-		if taskType == "" {
-			taskType = models.TypeTask
-		}
-
-		result, err := db.ExecContext(ctx,
-			`INSERT INTO tasks (title, status, type, functional_requirements, technical_requirements, acceptance_criteria, created_at, priority, severity, completion_summary, parent_task_id)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
-			task.Title,
-			task.Status,
-			taskType,
-			task.FunctionalRequirements,
-			task.TechnicalRequirements,
-			task.AcceptanceCriteria,
-			task.CreatedAt,
-			task.Priority,
-			task.Severity,
-			task.ParentTaskID,
-		)
-		if err != nil {
-			return fmt.Errorf("inserting task: %w", err)
-		}
-
-		id, err := result.LastInsertId()
-		if err != nil {
-			return fmt.Errorf("getting last insert id: %w", err)
-		}
-
-		taskID = int(id)
-		return nil
-	})
-
+// InsertTaskTx inserts one task row inside an existing transaction and returns
+// its id.
+//
+// This is the only implementation of the task INSERT. `task create` runs it
+// inside the transaction that also writes the TASK_CREATE audit entry
+// (SPEC/DATABASE.md § Transactional Atomicity Guarantees), and this package's
+// fixtures seed through it, so no test can be built on SQL the binary does not
+// run. The connection-scoped CreateTask that used to sit here was a second
+// INSERT with no audit entry and no transaction to share; no command could use
+// it, and only tests ever did (task #188).
+//
+// Only the columns a task is born with are written. The lifecycle columns —
+// started_at, tested_at, closed_at, completion_summary, commit_open,
+// commit_close — are left to the schema, because a new task is in BACKLOG and
+// reaches them only through a transition.
+//
+// Errors are returned unwrapped: the caller owns the message, because the same
+// failure means different things to `task create` and to a fixture.
+func InsertTaskTx(tx *sql.Tx, task *models.Task) (int, error) {
+	result, err := tx.Exec(
+		`INSERT INTO tasks (title, status, type, functional_requirements, technical_requirements, acceptance_criteria, created_at, priority, severity, parent_task_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		task.Title, task.Status, task.Type, task.FunctionalRequirements, task.TechnicalRequirements,
+		task.AcceptanceCriteria, task.CreatedAt, task.Priority, task.Severity,
+		task.ParentTaskID,
+	)
 	if err != nil {
 		return 0, err
 	}
 
-	return taskID, nil
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+
+	return int(id), nil
 }
 
 // GetTask retrieves a task by ID, including dependencies and subtask_count.
@@ -313,304 +307,27 @@ func (db *DB) ListAllTasks(ctx context.Context) ([]models.Task, error) {
 	return scanTasksWithDeps(rows)
 }
 
-// UpdateTask updates a task's fields with the provided values.
-// Uses hardcoded field names to prevent SQL injection - no dynamic field names in SQL.
+// Task mutation has no method here on purpose, and neither have the field
+// edit, the status transition, the priority and severity changes, nor the
+// delete. Each is one indivisible operation with its audit entries, and each
+// is decided by rules the database layer is the wrong place to hold: the state
+// machine and its lifecycle timestamps and commit hashes for a transition
+// (SPEC/STATE_MACHINE.md), the per-field audit operation for an edit, the
+// fail-fast existence check for a batch, and the BACKLOG-only rule plus the
+// subtask guard for a delete. They live in internal/commands, next to the
+// validation that decides them, in the transaction that also writes what
+// happened.
 //
-// Parameters:
-//   - ctx: Context for timeout and cancellation
-//   - id: The unique identifier of the task to update
-//   - updates: A map of field names to new values. Only whitelisted fields can be updated.
+// A second copy here would be unreachable from the binary and therefore
+// ungated, which is not a hypothetical: the copy of the status update that used
+// to sit at this spot never wrote an audit entry, never touched commit_open or
+// commit_close, and cleared started_at/tested_at/closed_at on a reopening while
+// leaving completion_summary behind — three ways of being wrong that nothing
+// reported, because only the shipped copy was ever exercised (task #188, after
+// the same finding closed sprint deletion in task #176).
 //
-// Allowed fields (whitelisted):
-//   - "title": Task title (string, max 255 chars)
-//   - "functional_requirements": Functional requirements (string, max 4096 chars)
-//   - "technical_requirements": Technical requirements (string, max 4096 chars)
-//   - "acceptance_criteria": Acceptance criteria (string, max 4096 chars)
-//   - "priority": Task priority 0-9 (int)
-//   - "severity": Task severity 0-9 (int)
-//
-// Error conditions:
-//   - Returns utils.ErrInvalidUpdate if a non-whitelisted field is specified
-//   - Returns utils.ErrNotFound if task with given ID doesn't exist
-//   - Returns wrapped database errors for connection/query failures
-//
-// Side effects:
-//   - Updates task record in database
-//   - Does NOT update status (use UpdateTaskStatus for that)
-//   - Does NOT create audit entries (caller should log changes)
-//
-// Security: Uses hardcoded field names in SQL to prevent injection attacks.
-func (db *DB) UpdateTask(ctx context.Context, id int, updates map[string]any) error {
-	if len(updates) == 0 {
-		return nil
-	}
-
-	return retryWithBackoff("update task", func() error {
-		setParts := make([]string, 0, len(updates))
-		args := make([]any, 0, len(updates)+1)
-
-		// Iterate updates in a deterministic order so the generated SQL is
-		// stable across runs — required for SQLite's prepared-statement
-		// cache and for reproducible behaviour in tests.
-		fields := make([]string, 0, len(updates))
-		for f := range updates {
-			fields = append(fields, f)
-		}
-		sort.Strings(fields)
-
-		// Use hardcoded field names to prevent SQL injection
-		// Field names are never dynamically inserted into SQL
-		for _, field := range fields {
-			value := updates[field]
-			switch field {
-			case "title":
-				setParts = append(setParts, "title = ?")
-				args = append(args, value)
-			case "functional_requirements":
-				setParts = append(setParts, "functional_requirements = ?")
-				args = append(args, value)
-			case "technical_requirements":
-				setParts = append(setParts, "technical_requirements = ?")
-				args = append(args, value)
-			case "acceptance_criteria":
-				setParts = append(setParts, "acceptance_criteria = ?")
-				args = append(args, value)
-			case "priority":
-				setParts = append(setParts, "priority = ?")
-				args = append(args, value)
-			case "severity":
-				setParts = append(setParts, "severity = ?")
-				args = append(args, value)
-			default:
-				return fmt.Errorf("%w: field %q cannot be updated via UpdateTask (use dedicated method)", utils.ErrInvalidUpdate, field)
-			}
-		}
-
-		if len(setParts) == 0 {
-			return fmt.Errorf("%w: no valid fields to update", utils.ErrInvalidUpdate)
-		}
-
-		args = append(args, id)
-		query := fmt.Sprintf("UPDATE tasks SET %s WHERE id = ?", strings.Join(setParts, ", "))
-
-		result, err := db.ExecContext(ctx, query, args...)
-		if err != nil {
-			return fmt.Errorf("updating task: %w", err)
-		}
-
-		affected, err := result.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("checking rows affected: %w", err)
-		}
-		if affected == 0 {
-			return fmt.Errorf("%w: task %d", utils.ErrNotFound, id)
-		}
-
-		return nil
-	})
-}
-
-// UpdateTaskStruct updates a task using the type-safe TaskUpdate struct.
-// This is the recommended approach over UpdateTask (map-based) as it provides:
-// - Compile-time type safety
-// - Deterministic SQL generation (fields always in same order)
-// - No interface{} boxing overhead
-// - Clear intent through pointer fields (nil = no change)
-//
-// Parameters:
-//   - ctx: Context for timeout and cancellation
-//   - id: The unique identifier of the task to update
-//   - update: TaskUpdate struct with pointer fields indicating which values to update
-//
-// Returns:
-//   - nil on success
-//   - utils.ErrNotFound if task doesn't exist
-//   - utils.ErrInvalidUpdate if no fields are set to update
-//   - Validation error if field values exceed limits
-//   - Wrapped database errors for connection/query failures
-func (db *DB) UpdateTaskStruct(ctx context.Context, id int, update *models.TaskUpdate) error {
-	if update == nil || !update.HasChanges() {
-		return fmt.Errorf("%w: no fields specified for update", utils.ErrInvalidUpdate)
-	}
-
-	if err := update.Validate(); err != nil {
-		return fmt.Errorf("%w: %v", utils.ErrInvalidUpdate, err)
-	}
-
-	return retryWithBackoff("update task struct", func() error {
-		// Build SQL with deterministic field ordering
-		// Fields are always in the same order: title, functional_requirements, technical_requirements, acceptance_criteria, priority, severity
-		var setParts []string
-		var args []any
-
-		if update.Title != nil {
-			setParts = append(setParts, "title = ?")
-			args = append(args, *update.Title)
-		}
-		if update.FunctionalRequirements != nil {
-			setParts = append(setParts, "functional_requirements = ?")
-			args = append(args, *update.FunctionalRequirements)
-		}
-		if update.TechnicalRequirements != nil {
-			setParts = append(setParts, "technical_requirements = ?")
-			args = append(args, *update.TechnicalRequirements)
-		}
-		if update.AcceptanceCriteria != nil {
-			setParts = append(setParts, "acceptance_criteria = ?")
-			args = append(args, *update.AcceptanceCriteria)
-		}
-		if update.Priority != nil {
-			setParts = append(setParts, "priority = ?")
-			args = append(args, *update.Priority)
-		}
-		if update.Severity != nil {
-			setParts = append(setParts, "severity = ?")
-			args = append(args, *update.Severity)
-		}
-
-		args = append(args, id)
-		query := fmt.Sprintf("UPDATE tasks SET %s WHERE id = ?", strings.Join(setParts, ", "))
-
-		result, err := db.ExecContext(ctx, query, args...)
-		if err != nil {
-			return fmt.Errorf("updating task: %w", err)
-		}
-
-		affected, err := result.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("checking rows affected: %w", err)
-		}
-		if affected == 0 {
-			return fmt.Errorf("%w: task %d", utils.ErrNotFound, id)
-		}
-
-		return nil
-	})
-}
-
-// UpdateTaskStatus updates task status and manages lifecycle timestamps.
-// Per SPEC/STATE_MACHINE.md:
-// - SPRINT → DOING: set started_at
-// - DOING → TESTING: set tested_at
-// - TESTING → COMPLETED: set closed_at
-// - COMPLETED → BACKLOG: clear started_at, tested_at, closed_at
-func (db *DB) UpdateTaskStatus(ctx context.Context, ids []int, status models.TaskStatus) error {
-	if len(ids) == 0 {
-		return nil
-	}
-
-	return retryWithBackoff("update task status", func() error {
-		now := utils.NowISO8601()
-
-		// Select the cached operation key and the leading bound parameters
-		// (those that precede the IN-clause ids) for the target status. The
-		// lifecycle variants set a timestamp column per SPEC/STATE_MACHINE.md;
-		// each has its own cached template so every transition reuses a plan.
-		var op string
-		var leadArgs []any
-		switch status {
-		case models.StatusDoing:
-			op = OpUpdateTaskStatusDoing // SET status, started_at
-			leadArgs = []any{status, now}
-		case models.StatusTesting:
-			op = OpUpdateTaskStatusTesting // SET status, tested_at
-			leadArgs = []any{status, now}
-		case models.StatusCompleted:
-			op = OpUpdateTaskStatusCompleted // SET status, closed_at
-			leadArgs = []any{status, now}
-		case models.StatusBacklog:
-			op = OpUpdateTaskStatusBacklog // SET status, clear timestamps
-			leadArgs = []any{status}
-		default:
-			op = OpUpdateTaskStatus // SET status only
-			leadArgs = []any{status}
-		}
-
-		// Chunk the id set so a large update is split into batches that stay
-		// within SQLite's variable limit (SQLITE_LIMIT_VARIABLE_NUMBER, ~999).
-		// Each chunk fetches its own cached template sized to the chunk.
-		return db.batchProc.ProcessChunks(ids, func(chunk []int) error {
-			query := db.queryCache.GetQuery(op, len(chunk))
-			args := make([]any, 0, len(leadArgs)+len(chunk))
-			args = append(args, leadArgs...)
-			for _, id := range chunk {
-				args = append(args, id)
-			}
-			if _, err := db.ExecContext(ctx, query, args...); err != nil {
-				return fmt.Errorf("updating task status: %w", err)
-			}
-			return nil
-		})
-	})
-}
-
-// UpdateTaskPriority updates task priority.
-func (db *DB) UpdateTaskPriority(ctx context.Context, ids []int, priority int) error {
-	if len(ids) == 0 {
-		return nil
-	}
-
-	return retryWithBackoff("update task priority", func() error {
-		// Cached template (OpUpdateTaskPriority) + batch chunking so large id
-		// sets stay within SQLite's variable limit.
-		return db.batchProc.ProcessChunks(ids, func(chunk []int) error {
-			query := db.queryCache.GetQuery(OpUpdateTaskPriority, len(chunk))
-			args := make([]any, 0, len(chunk)+1)
-			args = append(args, priority)
-			for _, id := range chunk {
-				args = append(args, id)
-			}
-			if _, err := db.ExecContext(ctx, query, args...); err != nil {
-				return fmt.Errorf("updating task priority: %w", err)
-			}
-			return nil
-		})
-	})
-}
-
-// UpdateTaskSeverity updates task severity.
-func (db *DB) UpdateTaskSeverity(ctx context.Context, ids []int, severity int) error {
-	if len(ids) == 0 {
-		return nil
-	}
-
-	return retryWithBackoff("update task severity", func() error {
-		// Cached template (OpUpdateTaskSeverity) + batch chunking so large id
-		// sets stay within SQLite's variable limit.
-		return db.batchProc.ProcessChunks(ids, func(chunk []int) error {
-			query := db.queryCache.GetQuery(OpUpdateTaskSeverity, len(chunk))
-			args := make([]any, 0, len(chunk)+1)
-			args = append(args, severity)
-			for _, id := range chunk {
-				args = append(args, id)
-			}
-			if _, err := db.ExecContext(ctx, query, args...); err != nil {
-				return fmt.Errorf("updating task severity: %w", err)
-			}
-			return nil
-		})
-	})
-}
-
-// DeleteTask deletes a task by ID.
-func (db *DB) DeleteTask(ctx context.Context, id int) error {
-	return retryWithBackoff("delete task", func() error {
-		result, err := db.ExecContext(ctx, "DELETE FROM tasks WHERE id = ?", id)
-		if err != nil {
-			return fmt.Errorf("deleting task: %w", err)
-		}
-
-		affected, err := result.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("checking rows affected: %w", err)
-		}
-		if affected == 0 {
-			return fmt.Errorf("%w: task %d", utils.ErrNotFound, id)
-		}
-
-		return nil
-	})
-}
+// The one part that is pure persistence — the INSERT itself — did move here,
+// as InsertTaskTx, and `task create` runs it.
 
 // GetSubTasks retrieves all direct subtasks of the given parent task ID.
 // Tasks are ordered by priority descending, then created_at ascending.
@@ -834,8 +551,19 @@ func scanTasksWithDeps(rows *sql.Rows) ([]models.Task, error) {
 	return tasks, nil
 }
 
-// GetOpenSprint retrieves the currently open sprint (status = OPEN).
-// Returns ErrNotFound if no sprint is currently open.
+// GetOpenSprint retrieves the currently open sprint (status = OPEN), with its
+// membership resolved. Returns ErrNotFound if no sprint is currently open.
+//
+// It is the third read of this package that returns a models.Sprint, and it
+// answers to the same two rules as the other two: both computed fields are
+// populated, and the ids are published in ASCENDING TASK ID, fixed by the
+// aggregate's own ORDER BY rather than by the plan that feeds it
+// (SPEC/MODELS.md § Sprint Field Constraints). The statement is deliberately the
+// same shape as GetSprint's, differing only in its predicate, so the two cannot
+// drift apart into two different answers about one sprint.
+//
+// Only one sprint can be OPEN at a time, which the command layer enforces; the
+// LIMIT 1 here is the read's own guard rather than the rule itself.
 func (db *DB) GetOpenSprint(ctx context.Context) (*models.Sprint, error) {
 	var sprint models.Sprint
 	var startedAt sql.NullString
@@ -843,11 +571,14 @@ func (db *DB) GetOpenSprint(ctx context.Context) (*models.Sprint, error) {
 	var tasksJSON sql.NullString
 	var maxTasks sql.NullInt64
 
-	// Single query using JSON aggregation to get sprint data and task IDs
+	// Single query using JSON aggregation to get sprint data and task IDs, in the
+	// order the aggregate states. A sprint with no member task yields '[null]'
+	// from the outer join's single NULL row, which parseJSONIntArray reads as the
+	// empty set, so the empty case stays [] and never null.
 	err := db.QueryRowContext(ctx,
 		`SELECT
 			s.id, s.status, s.title, s.description, s.created_at, s.started_at, s.closed_at, s.max_tasks, s.order_index,
-			COALESCE(json_group_array(DISTINCT st.task_id), '[]') as tasks
+			COALESCE(json_group_array(DISTINCT st.task_id ORDER BY st.task_id), '[]') as tasks
 		 FROM sprints s
 		 LEFT JOIN sprint_tasks st ON s.id = st.sprint_id
 		 WHERE s.status = ?
@@ -902,8 +633,18 @@ func (db *DB) GetOpenSprint(ctx context.Context) (*models.Sprint, error) {
 }
 
 // GetNextTasks retrieves the next N open tasks from the currently open sprint.
-// Tasks are ordered by sprint task position (task_order) with priority as a tiebreaker.
+// Tasks are ordered by sprint task position (task_order) alone.
 // Only returns tasks with status SPRINT, DOING, or TESTING.
+//
+// THERE IS NO TIEBREAKER, because there are no ties. The query reads a single
+// sprint and position is unique within one sprint (SPEC/DATABASE.md § Position
+// Uniqueness Within a Sprint), so ORDER BY st.position ASC already places every
+// row at exactly one rank and repeating the call over unchanged data returns the
+// same tasks in the same sequence. The t.priority DESC key this ORDER BY used to
+// carry could never fire once the order became total, and carrying it implied a
+// promotion rule that does not exist: the planned order is the answer to "what
+// do I do next", and a task's priority is what the plan was built from, not a
+// second chance to override it (SPEC/COMMANDS.md § Get Next Tasks (next)).
 func (db *DB) GetNextTasks(ctx context.Context, limit int) ([]models.Task, error) {
 	if limit < 1 {
 		limit = 1
@@ -937,7 +678,7 @@ func (db *DB) GetNextTasks(ctx context.Context, limit int) ([]models.Task, error
 		      INNER JOIN sprint_tasks st ON t.id = st.task_id
 		      WHERE st.sprint_id = ?
 		        AND t.status IN ` + sqlActiveTaskStatuses + `
-		      ORDER BY st.position ASC, t.priority DESC
+		      ORDER BY st.position ASC
 		      LIMIT ?`
 
 	rows, err := db.QueryContext(ctx, query, sprintID, limit)
@@ -1155,63 +896,70 @@ func (db *DB) hasTransitiveDependency(ctx context.Context, fromID, targetID int)
 
 // ==================== SPRINT QUERIES ====================
 
-// CreateSprint inserts a new sprint and returns its ID.
+// NextSprintOrderTx returns the execution order a sprint created without
+// --order takes: MAX(order_index)+1, so the first sprint of an empty roadmap
+// gets 1.
 //
-// The execution order is taken from sprint.Order when it is a positive value;
-// otherwise the next available value MAX(order_index)+1 is auto-assigned (the
-// first sprint in an empty roadmap gets 1). The SELECT next_order and the INSERT
-// run inside the same transaction so two concurrent creations cannot compute the
-// same value; the idx_sprints_order unique index is the final backstop and a
-// collision surfaces as utils.ErrAlreadyExists (exit code 5). See
-// SPEC/DATABASE.md § Create Sprint and § Transactional Atomicity Guarantees #6.
-func (db *DB) CreateSprint(ctx context.Context, sprint *models.Sprint) (int, error) {
-	var sprintID int
-	err := db.WithTransaction(func(tx *sql.Tx) error {
-		orderIndex := sprint.Order
-		if orderIndex <= 0 {
-			if err := tx.QueryRow(
-				`SELECT COALESCE(MAX(order_index), 0) + 1 FROM sprints`,
-			).Scan(&orderIndex); err != nil {
-				return fmt.Errorf("computing next sprint order: %w", err)
-			}
-		}
+// It takes a transaction rather than a connection on purpose. The read and the
+// INSERT that consumes it must be one atomic step, or two concurrent creations
+// read the same MAX and both try to write it; the idx_sprints_order unique
+// index is only the final backstop, and a collision there surfaces as
+// utils.ErrAlreadyExists (exit code 5). See SPEC/DATABASE.md § Create Sprint
+// and § Transactional Atomicity Guarantees #6.
+func NextSprintOrderTx(tx *sql.Tx) (int, error) {
+	var next int
+	if err := tx.QueryRow(
+		`SELECT COALESCE(MAX(order_index), 0) + 1 FROM sprints`,
+	).Scan(&next); err != nil {
+		return 0, fmt.Errorf("computing next sprint order: %w", err)
+	}
+	return next, nil
+}
 
-		result, err := tx.Exec(
-			`INSERT INTO sprints (title, status, description, created_at, max_tasks, order_index) VALUES (?, ?, ?, ?, ?, ?)`,
-			sprint.Title,
-			sprint.Status,
-			sprint.Description,
-			sprint.CreatedAt,
-			sprint.MaxTasks,
-			orderIndex,
-		)
-		if err != nil {
-			if IsUniqueConstraintErr(err) {
-				return fmt.Errorf("%w: sprint order %d is already in use", utils.ErrAlreadyExists, orderIndex)
-			}
-			return fmt.Errorf("inserting sprint: %w", err)
-		}
-
-		id, err := result.LastInsertId()
-		if err != nil {
-			return fmt.Errorf("getting last insert id: %w", err)
-		}
-
-		sprintID = int(id)
-		sprint.Order = orderIndex
-		return nil
-	})
-
+// InsertSprintTx inserts one sprint row inside an existing transaction and
+// returns its id. sprint.Order must already hold the execution order, whether
+// the caller was given one or took it from NextSprintOrderTx.
+//
+// This is the only implementation of the sprint INSERT, for the reason recorded
+// on InsertTaskTx. The error is returned unwrapped so the caller can recognise
+// an idx_sprints_order collision with IsUniqueConstraintErr and name the order
+// that collided.
+func InsertSprintTx(tx *sql.Tx, sprint *models.Sprint) (int, error) {
+	result, err := tx.Exec(
+		`INSERT INTO sprints (status, title, description, created_at, max_tasks, order_index) VALUES (?, ?, ?, ?, ?, ?)`,
+		sprint.Status, sprint.Title, sprint.Description, sprint.CreatedAt, sprint.MaxTasks, sprint.Order,
+	)
 	if err != nil {
 		return 0, err
 	}
 
-	return sprintID, nil
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+
+	return int(id), nil
 }
 
-// GetSprint retrieves a sprint by ID.
-// Optimized to use a single query with JSON aggregation for tasks (SQLite 3.38+).
-// This eliminates the N+1 query pattern by fetching sprint and task IDs in one round-trip.
+// GetSprint retrieves a sprint by ID, with its membership resolved.
+//
+// One round trip: the sprint row and its member task ids come back together,
+// the ids aggregated into a JSON array, so reading a sprint never costs a
+// second statement and never one per member task.
+//
+// The id order is ASCENDING TASK ID, and it is the aggregate's own ORDER BY
+// that fixes it. That is the order SPEC/MODELS.md § Sprint Field Constraints
+// requires of the Tasks field, and stating it here is not decoration: without
+// it the result would still arrive sorted, but only because DISTINCT dedupes
+// through a sorted ephemeral index and because the join happens to walk
+// idx_sprint_tasks_lookup in (sprint_id, task_id) order. Both are properties of
+// the current query plan, not of the statement, and a specified order may not
+// rest on either. The grouped listing read states the same order for the same
+// reason (see groupedSprintMembershipQuery).
+//
+// Ascending id is deliberately NOT the sprint's planned execution order: that
+// one is sprint_tasks.position and is published by the sprint task listings
+// (SPEC/DATABASE.md § List by Sprint).
 func (db *DB) GetSprint(ctx context.Context, id int) (*models.Sprint, error) {
 	var sprint models.Sprint
 	var startedAt sql.NullString
@@ -1219,12 +967,15 @@ func (db *DB) GetSprint(ctx context.Context, id int) (*models.Sprint, error) {
 	var tasksJSON sql.NullString
 	var maxTasks sql.NullInt64
 
-	// Single query using JSON aggregation to get sprint data and task IDs
-	// json_group_array returns a JSON array of task IDs
+	// Single query using JSON aggregation to get sprint data and task IDs.
+	// json_group_array returns a JSON array of task IDs, ordered by the
+	// aggregate's own ORDER BY rather than by the plan that feeds it. A sprint
+	// with no member task yields '[null]' from the outer join's single NULL row,
+	// which parseJSONIntArray reads as the empty set.
 	err := db.QueryRowContext(ctx,
 		`SELECT
 			s.id, s.status, s.title, s.description, s.created_at, s.started_at, s.closed_at, s.max_tasks, s.order_index,
-			COALESCE(json_group_array(DISTINCT st.task_id), '[]') as tasks
+			COALESCE(json_group_array(DISTINCT st.task_id ORDER BY st.task_id), '[]') as tasks
 		 FROM sprints s
 		 LEFT JOIN sprint_tasks st ON s.id = st.sprint_id
 		 WHERE s.id = ?
@@ -1293,7 +1044,147 @@ func parseJSONIntArray(jsonStr string) ([]int, error) {
 	return result, nil
 }
 
-// ListSprints retrieves all sprints with optional status filter.
+// groupedSprintMembershipQuery returns the grouped membership read of
+// SPEC/DATABASE.md § Read the Membership of Many Sprints (Grouped) for an IN
+// list of the given placeholders: the member task ids of several sprints at
+// once, so a listing resolves every sprint it returns in ONE statement instead
+// of one per sprint.
+//
+// It reads sprint_tasks alone and joins nothing, because membership is a
+// sprint_tasks row: the answer is a set of ids per sprint, so no tasks row is
+// fetched to produce it. It applies no predicate on task status either, for the
+// same reason — status is a tasks column — so a member task in BACKLOG status
+// is included and counted (SPEC/STATE_MACHINE.md § Sprint Membership and the
+// BACKLOG Status).
+//
+// The ORDER BY is stated, not inherited from the plan: sprint_id ascending
+// groups each sprint's rows together so the result is walkable in one pass, and
+// task_id ascending fixes the order the Tasks field publishes
+// (SPEC/MODELS.md § Sprint Field Constraints). Neither column is the sprint's
+// planned execution order, which is sprint_tasks.position.
+//
+// idx_sprint_tasks_lookup covers the statement exactly — (sprint_id, task_id),
+// the leading column for the IN lookup and the pair for the ordering — so it
+// plans as a covering index search with no sort step and no table row read.
+//
+// It is a function rather than a constant because the IN list has one
+// placeholder per id. Assembly is separated from execution so the index tests
+// can plan the exact SQL production runs, rather than a lookalike.
+func groupedSprintMembershipQuery(placeholders string) string {
+	return fmt.Sprintf( // #nosec G201 -- only ? placeholders are interpolated; every id is bound
+		`SELECT sprint_id, task_id
+	 FROM sprint_tasks
+	 WHERE sprint_id IN (%s)
+	 ORDER BY sprint_id ASC, task_id ASC`,
+		placeholders,
+	)
+}
+
+// tasksBySprints returns the member task ids of each of the given sprints, keyed
+// by sprint id, in ONE statement whatever the number of sprints.
+//
+// A sprint that holds no task is ABSENT from the map, exactly as in
+// GetSprintsByTasks and CountTaskCommentsByTasks: it has no sprint_tasks row, so
+// the absence of an entry is the answer, and the caller reads a missing key as
+// the empty set. Callers publishing the value MUST turn that nil into an empty
+// slice, never a JSON null (SPEC/DATA_FORMATS.md § Implementation Notes, Empty
+// arrays); resolveSprintMembership below is where that happens.
+//
+// An empty id set issues no statement at all and returns an empty map. The id
+// set is bound as one placeholder per id in a single statement, so it carries
+// the same bind-variable ceiling as the sibling grouped reads and, for the same
+// reason, applies no chunking.
+func (db *DB) tasksBySprints(ctx context.Context, sprintIDs []int) (map[int][]int, error) {
+	membership := make(map[int][]int, len(sprintIDs))
+	if len(sprintIDs) == 0 {
+		return membership, nil
+	}
+
+	args := make([]any, len(sprintIDs))
+	for i, id := range sprintIDs {
+		args[i] = id
+	}
+
+	rows, err := db.QueryContext(ctx, groupedSprintMembershipQuery(db.Placeholders(len(sprintIDs))), args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying sprint membership: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var sprintID, taskID int
+		if err := rows.Scan(&sprintID, &taskID); err != nil {
+			return nil, fmt.Errorf("scanning sprint membership: %w", err)
+		}
+		membership[sprintID] = append(membership[sprintID], taskID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating sprint membership rows: %w", err)
+	}
+	return membership, nil
+}
+
+// resolveSprintMembership fills in the two computed fields of every sprint of a
+// listing — Tasks and TaskCount — from ONE grouped read over the sprint ids the
+// listing already holds.
+//
+// Both fields are populated for every sprint, because SPEC/MODELS.md § Sprint
+// requires it of every read that returns a Sprint object: a listing that left
+// them at their zero values would report `"tasks": null` and `"task_count": 0`
+// for sprints that hold work, and would disagree with GetSprint about the same
+// sprint read at the same moment.
+//
+// TaskCount is the length of the ids just read, never a COUNT(*) of its own, so
+// the two fields are two readings of one result and cannot diverge. A sprint
+// with no member task gets the empty slice and zero, and the empty slice is
+// allocated rather than left nil so it marshals as `[]` and not `null`.
+func (db *DB) resolveSprintMembership(ctx context.Context, sprints []models.Sprint) error {
+	if len(sprints) == 0 {
+		return nil
+	}
+
+	ids := make([]int, len(sprints))
+	for i := range sprints {
+		ids[i] = sprints[i].ID
+	}
+
+	membership, err := db.tasksBySprints(ctx, ids)
+	if err != nil {
+		return err
+	}
+
+	for i := range sprints {
+		tasks := membership[sprints[i].ID]
+		if tasks == nil {
+			tasks = []int{}
+		}
+		sprints[i].Tasks = tasks
+		sprints[i].TaskCount = len(tasks)
+	}
+	return nil
+}
+
+// ListSprints retrieves all sprints, optionally narrowed to one status, with the
+// membership of every returned sprint resolved.
+//
+// The result is ordered by Order ascending — the roadmap's planned execution
+// order, lowest first (SPEC/COMMANDS.md § List Sprints, Result Ordering). Order
+// is unique and NOT NULL across the roadmap, so the sequence is total: every
+// sprint sits at exactly one position, and repeating the read over unchanged
+// data returns the same sequence. The --status filter narrows WHICH sprints the
+// slice contains and never reorders the ones it keeps.
+//
+// Every Sprint object it returns carries Tasks and TaskCount populated, exactly
+// as GetSprint returns them for the same sprint: same ids, same ascending order,
+// same count (SPEC/COMMANDS.md § List Sprints). The --status filter selects which
+// SPRINTS the array contains and never touches the membership of the sprints it
+// keeps.
+//
+// The cost is TWO statements whatever the number of sprints: one read of
+// sprints, then one grouped read of the membership of all of them. No statement
+// is issued per sprint and none per returned id; a roadmap with no sprint (or
+// none matching the filter) costs one, because the grouped read is skipped
+// outright rather than sent with an empty IN list.
 func (db *DB) ListSprints(ctx context.Context, status *models.SprintStatus) ([]models.Sprint, error) {
 	query := `SELECT id, status, title, description, created_at, started_at, closed_at, max_tasks, order_index FROM sprints WHERE 1=1`
 	args := []any{}
@@ -1303,7 +1194,22 @@ func (db *DB) ListSprints(ctx context.Context, status *models.SprintStatus) ([]m
 		args = append(args, string(*status))
 	}
 
-	query += " ORDER BY created_at DESC"
+	// Sprints come back in the roadmap's PLANNED execution order: order_index
+	// ascending, lowest first (SPEC/COMMANDS.md § List Sprints, Result Ordering).
+	// order_index is the field a sprint carries for exactly that purpose, and it
+	// is the published order of this command, not an incidental property of the
+	// query — a caller may rely on it.
+	//
+	// The ordering is TOTAL, so no tie-break is needed and none is specified:
+	// order_index is NOT NULL and unique across the roadmap (idx_sprints_order,
+	// SPEC/DATABASE.md § sprints Table), so no two sprints can share a position
+	// and none can lack one.
+	//
+	// The clause sits AFTER the optional status predicate on purpose: --status
+	// narrows WHICH sprints the result contains and never reorders the ones it
+	// keeps, which are returned in the same relative sequence they hold in the
+	// unfiltered listing.
+	query += " ORDER BY order_index ASC"
 
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -1354,69 +1260,31 @@ func (db *DB) ListSprints(ctx context.Context, status *models.SprintStatus) ([]m
 		return nil, fmt.Errorf("iterating sprint rows: %w", err)
 	}
 
+	// The rows are closed before the second statement is issued, so the two reads
+	// never hold two connections of the pool at once.
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("closing sprint rows: %w", err)
+	}
+
+	if err := db.resolveSprintMembership(ctx, sprints); err != nil {
+		return nil, err
+	}
+
 	return sprints, nil
 }
 
-// UpdateSprint updates a sprint's description.
-func (db *DB) UpdateSprint(ctx context.Context, id int, description string) error {
-	return retryWithBackoff("update sprint", func() error {
-		result, err := db.ExecContext(ctx,
-			"UPDATE sprints SET description = ? WHERE id = ?",
-			description, id,
-		)
-		if err != nil {
-			return fmt.Errorf("updating sprint: %w", err)
-		}
-
-		affected, err := result.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("checking rows affected: %w", err)
-		}
-		if affected == 0 {
-			return fmt.Errorf("%w: sprint %d", utils.ErrNotFound, id)
-		}
-
-		return nil
-	})
-}
-
-// UpdateSprintStatus updates sprint status and timestamps.
-func (db *DB) UpdateSprintStatus(ctx context.Context, id int, status models.SprintStatus) error {
-	return retryWithBackoff("update sprint status", func() error {
-		var query string
-		var args []any
-
-		switch status {
-		case models.SprintOpen:
-			// Starting sprint
-			query = "UPDATE sprints SET status = ?, started_at = ? WHERE id = ?"
-			args = []any{status, utils.NowISO8601(), id}
-		case models.SprintClosed:
-			// Closing sprint
-			query = "UPDATE sprints SET status = ?, closed_at = ? WHERE id = ?"
-			args = []any{status, utils.NowISO8601(), id}
-		default:
-			// Other status changes
-			query = "UPDATE sprints SET status = ? WHERE id = ?"
-			args = []any{status, id}
-		}
-
-		result, err := db.ExecContext(ctx, query, args...)
-		if err != nil {
-			return fmt.Errorf("updating sprint status: %w", err)
-		}
-
-		affected, err := result.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("checking rows affected: %w", err)
-		}
-		if affected == 0 {
-			return fmt.Errorf("%w: sprint %d", utils.ErrNotFound, id)
-		}
-
-		return nil
-	})
-}
+// Sprint mutation has no method here on purpose, for the reason recorded above
+// InsertTaskTx: the update of a sprint's fields and the transitions of its
+// status are inseparable from the rules that admit them — the CLOSED-order
+// immutability check, the --order collision mapped to exit code 5, the
+// one-open-sprint rule, the active-task check behind --force — and from the
+// audit entries they owe. They live in sprintUpdate, sprintStart, sprintClose
+// and sprintReopen in internal/commands.
+//
+// The copy of the field update that used to sit here reached sprints.description
+// with no validation at all, below every free-text rule the command layer
+// enforces, and no caller: it was a route around those rules waiting for one
+// (task #188, finding recorded on it).
 
 // Sprint deletion has no method here on purpose. The whole operation — the
 // member tasks' reset to BACKLOG, the removal of the sprint_tasks rows, the
@@ -1577,41 +1445,214 @@ func (db *DB) GetActiveSprintTasks(ctx context.Context, sprintID int) ([]models.
 	return scanTasksWithDeps(rows)
 }
 
-// CompactSprintPositionsTx renumbers a sprint's task positions to a contiguous
-// 0..N-1 sequence (preserving the current order), eliminating gaps left by a
-// removal. MoveTaskToPosition's shift arithmetic assumes contiguous positions,
-// so any operation that deletes sprint_tasks rows must compact afterwards.
-// Runs inside an existing transaction. Position carries no UNIQUE constraint,
-// so the sequential re-assignment cannot collide.
-func CompactSprintPositionsTx(tx *sql.Tx, sprintID int) error {
+// sprintMember is one row of sprint_tasks as the ordering routines read it: a
+// member task and the position it currently holds.
+type sprintMember struct {
+	taskID   int
+	position int
+}
+
+// sprintMembersInOrderTx reads a sprint's members in the sprint's planned order,
+// each with the position it currently holds, inside an existing transaction.
+//
+// position is unique within one sprint (SPEC/DATABASE.md § Position Uniqueness
+// Within a Sprint), so position ASC alone already places every member at exactly
+// one rank; task_id ASC is kept as a second key so the read is total by its own
+// terms rather than by relying on the index for it, which is what makes every
+// routine built on this read deterministic on its face.
+//
+// The rows are fully consumed and closed before the function returns, so a
+// caller may issue writes on the same transaction with no open cursor over the
+// table it is writing.
+func sprintMembersInOrderTx(tx *sql.Tx, sprintID int) ([]sprintMember, error) {
 	rows, err := tx.Query(
-		"SELECT task_id FROM sprint_tasks WHERE sprint_id = ? ORDER BY position ASC, task_id ASC",
+		"SELECT task_id, position FROM sprint_tasks WHERE sprint_id = ? ORDER BY position ASC, task_id ASC",
 		sprintID,
 	)
 	if err != nil {
-		return fmt.Errorf("reading sprint positions: %w", err)
+		return nil, fmt.Errorf("reading sprint positions: %w", err)
 	}
-	var ordered []int
+	defer rows.Close() // #nosec G104 -- rows are fully consumed; close error is not actionable
+
+	var members []sprintMember
 	for rows.Next() {
-		var id int
-		if err := rows.Scan(&id); err != nil {
-			rows.Close() // #nosec G104 -- best-effort close in error path
-			return fmt.Errorf("scanning sprint position: %w", err)
+		var m sprintMember
+		if err := rows.Scan(&m.taskID, &m.position); err != nil {
+			return nil, fmt.Errorf("scanning sprint position: %w", err)
 		}
-		ordered = append(ordered, id)
+		members = append(members, m)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close() // #nosec G104 -- best-effort close in error path
-		return fmt.Errorf("iterating sprint positions: %w", err)
+		return nil, fmt.Errorf("iterating sprint positions: %w", err)
 	}
-	rows.Close() // #nosec G104 -- explicit close before issuing writes on the same tx
+	return members, nil
+}
 
-	for i, id := range ordered {
+// parkSprintPositionsTx moves every member of one sprint into the negative
+// range, out of the range the assignment that follows writes into.
+//
+// SQLite checks a unique index per row as each row is written and has no
+// deferred constraint check, so a statement sequence with a legal final state
+// can still fail partway through if an intermediate state holds two equal
+// positions in one sprint. Parking is what removes that possibility for any
+// operation that PERMUTES existing positions: -1 - position maps distinct
+// non-negative values to distinct negative ones, so the parked state satisfies
+// the unique index as well, and every value the assignment then writes is
+// non-negative and therefore held by nobody. Parked values never escape the
+// transaction, so no reader observes one (SPEC/DATABASE.md § Position Uniqueness
+// Within a Sprint, "Every write path must reach its result without a transient
+// collision").
+func parkSprintPositionsTx(tx *sql.Tx, sprintID int) error {
+	if _, err := tx.Exec(
+		"UPDATE sprint_tasks SET position = -1 - position WHERE sprint_id = ?",
+		sprintID,
+	); err != nil {
+		return fmt.Errorf("parking sprint positions: %w", err)
+	}
+	return nil
+}
+
+// assignSprintPositionsTx writes the dense 0..N-1 run that puts the sprint's
+// members in the sequence ordered gives, one row per member.
+//
+// It assumes the values it writes are free, which a caller establishes either by
+// parking first (parkSprintPositionsTx) or by renumbering downwards over an
+// ascending read (see CompactSprintPositionsTx).
+func assignSprintPositionsTx(tx *sql.Tx, sprintID int, ordered []int) error {
+	for i, taskID := range ordered {
 		if _, err := tx.Exec(
 			"UPDATE sprint_tasks SET position = ? WHERE sprint_id = ? AND task_id = ?",
-			i, sprintID, id,
+			i, sprintID, taskID,
 		); err != nil {
-			return fmt.Errorf("compacting sprint positions: %w", err)
+			return fmt.Errorf("updating position for task %d: %w", taskID, err)
+		}
+	}
+	return nil
+}
+
+// CompactSprintPositionsTx renumbers a sprint's task positions to a contiguous
+// 0..N-1 sequence (preserving the current order), eliminating gaps left by a
+// removal, so any operation that deletes sprint_tasks rows compacts afterwards.
+// Runs inside an existing transaction.
+//
+// This is THE repair routine of the density invariant, and it is the only one
+// (SPEC/DATABASE.md § Position Density Within a Sprint, "The repair").
+//
+// MoveTaskToPosition no longer needs density for its OWN correctness -- it writes
+// a permutation rather than shifting a range -- but the CALLER-FACING meaning of
+// a position value still rests on it: `sprint bottom` derives its target from the
+// member count, and MoveTaskToPosition's no-op guard compares the moved task's
+// STORED position against the TARGET RANK, so the two mean the same thing only
+// while the run is dense. Over a run with a gap they are two different
+// quantities, so a real move is read as no move at all and still reported as a
+// success. That is not an unstated assumption: density is specified in
+// SPEC/DATABASE.md § Position Density Within a Sprint, which enumerates every
+// write path that touches position and states, for each, whether it preserves
+// the run or must repair it. The schema cannot carry the invariant -- SQLite has
+// no constraint form that ranges over a whole set of rows -- so the write paths
+// listed there carry it, by calling this routine inside the same transaction as
+// the removal that opened the gap.
+//
+// This routine needs NO parking step, and the reason is no longer that position
+// is unconstrained: since schema 1.13.0 the pair (sprint_id, position) is unique
+// (SPEC/DATABASE.md § Position Uniqueness Within a Sprint). It is safe because it
+// renumbers DOWNWARDS over an ascending read. The members are read in ascending
+// position order and the i-th of them is assigned i, which is never greater than
+// the position that row already holds: the i rows ranked before it hold i
+// distinct smaller non-negative positions, so its own position is at least i.
+// Every row not yet written therefore still holds a position strictly greater
+// than the current row's — hence strictly greater than i — and every row already
+// written holds a value strictly below i, so no write can land on a value another
+// row of the same sprint still holds (SPEC/DATABASE.md § Position Uniqueness
+// Within a Sprint, first alternative of "Every write path must reach its result
+// without a transient collision").
+func CompactSprintPositionsTx(tx *sql.Tx, sprintID int) error {
+	members, err := sprintMembersInOrderTx(tx, sprintID)
+	if err != nil {
+		return err
+	}
+
+	ordered := make([]int, len(members))
+	for i, m := range members {
+		ordered[i] = m.taskID
+	}
+	return assignSprintPositionsTx(tx, sprintID, ordered)
+}
+
+// SprintsOfTasksTx reads which sprints the given tasks belong to RIGHT NOW,
+// inside an existing transaction, and returns those sprint ids once each in
+// ascending order. Tasks that belong to no sprint contribute nothing.
+//
+// IT MUST BE CALLED BEFORE THE REMOVAL, and that is the whole point of its
+// existing. Three of the four write paths that take a row out of a sprint's run
+// must compact a sprint the caller's arguments never name -- the re-parenting
+// form of `sprint add-tasks`, `task reopen` from a sprint-associated state, and
+// the cascade behind `task remove` -- so each must first learn which sprint the
+// row it is about to remove belonged to. Once the removal has run, the rows that
+// carried that answer are gone (SPEC/DATABASE.md § Position Density Within a
+// Sprint, "Every path that can leave a gap is a removal, and every removal owes
+// the same repair").
+//
+// ONE QUERY PER TASK RATHER THAN ONE `IN (...)` OVER THE BATCH. sprint_tasks
+// declares task_id UNIQUE, so a task has at most one membership row and each
+// lookup is a single index seek that returns at most one row: QueryRow says
+// exactly that, needs no cursor to close, and binds no interpolated placeholder
+// list. The batched form would have to build its placeholders into the statement
+// text and chunk them under SQLITE_LIMIT_VARIABLE_NUMBER, to save round trips
+// that cost microseconds in an in-process engine — and every caller here already
+// loops over the same ids to write the audit entries the operation owes.
+//
+// The ids come back sorted so that a caller compacting them writes in a
+// deterministic order, which keeps two concurrent transactions from taking the
+// same sprints' row locks in opposite orders.
+func SprintsOfTasksTx(tx *sql.Tx, taskIDs []int) ([]int, error) {
+	if len(taskIDs) == 0 {
+		return nil, nil
+	}
+
+	seen := make(map[int]struct{}, len(taskIDs))
+	for _, taskID := range taskIDs {
+		var sprintID int
+		err := tx.QueryRow(
+			"SELECT sprint_id FROM sprint_tasks WHERE task_id = ?",
+			taskID,
+		).Scan(&sprintID)
+		if errors.Is(err, sql.ErrNoRows) {
+			// The task belongs to no sprint, so its removal opens no gap.
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("reading the sprint of task %d: %w", taskID, err)
+		}
+		seen[sprintID] = struct{}{}
+	}
+
+	sprintIDs := make([]int, 0, len(seen))
+	for id := range seen {
+		sprintIDs = append(sprintIDs, id)
+	}
+	sort.Ints(sprintIDs)
+	return sprintIDs, nil
+}
+
+// CompactSprintsTx repairs the run of every named sprint, inside an existing
+// transaction, by calling CompactSprintPositionsTx on each.
+//
+// It is the counterpart of SprintsOfTasksTx: the pair turns "read which sprints
+// this removal is about to damage, then repair exactly those" into two calls
+// that cannot be transposed, because the read returns the list the repair
+// consumes.
+//
+// No sprint is exempt, CLOSED ones included. A removal that reaches a closed
+// sprint has already changed that sprint's membership, so leaving the survivors
+// with a gap preserves nothing; the compaction renumbers them and never reorders
+// them, so the sprint's recorded plan is unchanged (SPEC/DATABASE.md § Position
+// Density Within a Sprint, "The obligation is not suspended for a CLOSED
+// sprint").
+func CompactSprintsTx(tx *sql.Tx, sprintIDs []int) error {
+	for _, sprintID := range sprintIDs {
+		if err := CompactSprintPositionsTx(tx, sprintID); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -1683,6 +1724,13 @@ func (db *DB) GetOpenSprintTasks(ctx context.Context, sprintID int, orderByPrior
 
 // AddTasksToSprint adds tasks to a sprint with automatic position assignment.
 // Tasks are added at the end of the sprint task list (highest position + 1).
+//
+// A task that already belonged to a sprint is RE-PARENTED rather than
+// duplicated: sprint_tasks declares task_id UNIQUE, so the ON CONFLICT clause
+// below moves that task's single row onto this sprint. The sprint it leaves is
+// renumbered before this transaction commits, which is why the sprint ids of the
+// batch are read before the insert (SPEC/DATABASE.md § Position Density Within a
+// Sprint).
 func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int) error {
 	if len(taskIDs) == 0 {
 		return nil
@@ -1728,13 +1776,31 @@ func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int)
 			}
 		}
 
+		// Which sprint each task belongs to must be read BEFORE the insert
+		// below, because the ON CONFLICT(task_id) clause rewrites the very rows
+		// that hold the answer. A task already in another sprint keeps its
+		// single membership row and has that row re-parented here, which takes
+		// it out of the other sprint's run and leaves a gap there — in a sprint
+		// this command's arguments never name (SPEC/DATABASE.md § Position
+		// Density Within a Sprint, `sprint add-tasks` for a task that already
+		// belonged to another sprint).
+		//
+		// A task already in THIS sprint is the same case seen from closer up:
+		// the conflicting row is re-parented onto sprintID again, appended after
+		// the sprint's own maximum, and the position it vacated becomes a gap in
+		// this sprint. That sprint is then among the ids below and gets the same
+		// repair; a task that belonged to no sprint contributes no id at all.
+		previousOwners, err := SprintsOfTasksTx(tx, taskIDs)
+		if err != nil {
+			return err
+		}
+
 		// Get current max position for this sprint within the transaction
 		var maxPos sql.NullInt64
-		err := tx.QueryRow(
+		if err := tx.QueryRow(
 			"SELECT MAX(position) FROM sprint_tasks WHERE sprint_id = ?",
 			sprintID,
-		).Scan(&maxPos)
-		if err != nil {
+		).Scan(&maxPos); err != nil {
 			return fmt.Errorf("querying max position: %w", err)
 		}
 
@@ -1803,7 +1869,11 @@ func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int)
 				return err
 			}
 		}
-		return nil
+
+		// Repair every sprint a re-parented task left, inside this same
+		// transaction as the insert that emptied its slot, so no committed state
+		// holds the gap and no reader ever observes one.
+		return CompactSprintsTx(tx, previousOwners)
 	})
 }
 
@@ -1816,12 +1886,15 @@ func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int)
 // task between sprints is a re-parenting of work, not a re-admission to the
 // sprint backlog, so the lifecycle state must be carried over unchanged.
 //
-// Validation (SPEC/COMMANDS.md validation step 5): every task in taskIDs must
-// currently be a member of fromID (a row in sprint_tasks with sprint_id =
-// fromID). If any task is not a member of the source sprint, no rows are moved
-// and the call returns ErrTasksNotInSprint wrapped with utils.ErrValidation so
-// the CLI maps it to exit code 6 ("task not in sprint"), matching the
-// task-ordering error contract. The membership check and the re-parenting run
+// Validation, the membership step of SPEC/COMMANDS.md § Task Assignment: every
+// task in taskIDs must currently be a member of fromID (a row in sprint_tasks
+// with sprint_id = fromID). The step is named by what it does rather than by
+// its ordinal, because that list is renumbered whenever a step is published or
+// removed and COMMANDS.md carries several Validation Orders whose step 5 says
+// different things. If any task is not a member of the source sprint, no rows
+// are moved and the call returns ErrTasksNotInSprint wrapped with
+// utils.ErrValidation so the CLI maps it to exit code 6, the code that step
+// publishes for a non-member. The membership check and the re-parenting run
 // in the same transaction, so the move is all-or-nothing.
 //
 // Re-parenting (mirrors AddTasksToSprint's position/added_at conventions):
@@ -1829,6 +1902,9 @@ func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int)
 //   - added_at is refreshed to now
 //   - position values are appended after the current max position in toID,
 //     preserving the relative order of the moved tasks (taskIDs order)
+//   - the SOURCE sprint is compacted before the transaction commits, so the
+//     members it keeps hold a gapless 0..N-1 run again (SPEC/DATABASE.md
+//     § Position Density Within a Sprint)
 //
 // No capacity (max_tasks) check is applied: relocating existing work must not
 // be blocked by the destination sprint's cap (SPEC requires the cap only for
@@ -1857,8 +1933,9 @@ func (db *DB) MoveTasksBetweenSprints(ctx context.Context, fromID, toID int, tas
 			return fmt.Errorf("verifying task membership: %w", err)
 		}
 		if count != len(taskIDs) {
-			// Wrap with utils.ErrValidation so the CLI maps this to exit 6
-			// (SPEC/COMMANDS.md: "Task ID not in sprint" -> exit 6).
+			// Wrap with utils.ErrValidation so the CLI maps this to exit 6,
+			// the code the membership step of SPEC/COMMANDS.md
+			// § Task Assignment publishes for a non-member.
 			return fmt.Errorf("%w: %w: one or more tasks are not in sprint #%d",
 				utils.ErrValidation, ErrTasksNotInSprint, fromID)
 		}
@@ -1886,6 +1963,27 @@ func (db *DB) MoveTasksBetweenSprints(ctx context.Context, fromID, toID int, tas
 			); err != nil {
 				return fmt.Errorf("moving task %d: %w", taskID, err)
 			}
+		}
+
+		// The source sprint has just lost every moved row, so the values its
+		// SURVIVING members hold are no longer the dense 0..N-1 run the
+		// invariant requires: moving the task at position 2 out of a run of
+		// five leaves 0, 1, 3, 4. Compacting here, inside the same transaction
+		// as the re-parenting, is what keeps the gap out of every committed
+		// state, so no reader ever observes one (SPEC/DATABASE.md § Position
+		// Density Within a Sprint, `sprint move-tasks`, source sprint).
+		//
+		// This is the ONE of the four gap-opening removals whose caller already
+		// names the sprint to repair, so it needs no lookup: fromID is an
+		// argument. It is also correct when fromID == toID, which the command
+		// does not reject: the re-parenting then appends the named tasks after
+		// the sprint's own maximum and leaves the gap they came from, and this
+		// call closes it.
+		//
+		// The destination needs nothing: it appended after its own MAX(position),
+		// which continues a dense run.
+		if err := CompactSprintPositionsTx(tx, fromID); err != nil {
+			return err
 		}
 
 		// Intentionally NOT updating tasks.status: the task keeps whatever
@@ -1922,56 +2020,19 @@ func (db *DB) MoveTasksBetweenSprints(ctx context.Context, fromID, toID int, tas
 	})
 }
 
-// RemoveTasksFromSprint removes tasks from a sprint.
+// Removing tasks from a sprint has no method here on purpose, for the reason
+// recorded above InsertTaskTx. It is sprintRemoveTasks in internal/commands,
+// which deletes the sprint_tasks row scoped to the named sprint, resets the
+// task with every lifecycle field it may have acquired, compacts the remaining
+// positions, and writes the two audit entries the removal owes
+// (SPEC/DATABASE.md § Transactional Atomicity Guarantees #2).
 //
-// Deleting the affected sprint_tasks rows and resetting those tasks' status to
-// BACKLOG run inside a single transaction so sprint_tasks membership and
-// tasks.status can never diverge at any committed state (SPEC/DATABASE.md §
-// Transactional Atomicity Guarantees, finding #66). WithTransaction already
-// provides lock-retry, so no outer retryWithBackoff is needed.
-func (db *DB) RemoveTasksFromSprint(ctx context.Context, taskIDs []int) error {
-	if len(taskIDs) == 0 {
-		return nil
-	}
-
-	return db.WithTransaction(func(tx *sql.Tx) error {
-		// Batch both writes so large id sets stay within SQLite's variable
-		// limit. Delete the sprint membership first, then reset task status to
-		// BACKLOG via the cached template (OpRemoveTasksFromSprint). Both passes
-		// run through the same tx so they commit or roll back together.
-
-		// Delete from sprint_tasks. The membership DELETE is not one of the
-		// cached operations, so build its IN-clause from cached placeholders.
-		if err := db.batchProc.ProcessChunks(taskIDs, func(chunk []int) error {
-			placeholders := db.queryCache.GetPlaceholders(len(chunk))
-			query := fmt.Sprintf("DELETE FROM sprint_tasks WHERE task_id IN (%s)", placeholders) // #nosec G201 -- only ? placeholders interpolated
-			args := make([]any, 0, len(chunk))
-			for _, id := range chunk {
-				args = append(args, id)
-			}
-			if _, err := tx.Exec(query, args...); err != nil {
-				return fmt.Errorf("removing tasks from sprint: %w", err)
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
-
-		// Update task status to BACKLOG. status is a bound parameter.
-		return db.batchProc.ProcessChunks(taskIDs, func(chunk []int) error {
-			query := db.queryCache.GetQuery(OpRemoveTasksFromSprint, len(chunk))
-			args := make([]any, 0, len(chunk)+1)
-			args = append(args, models.StatusBacklog)
-			for _, id := range chunk {
-				args = append(args, id)
-			}
-			if _, err := tx.Exec(query, args...); err != nil {
-				return fmt.Errorf("updating task statuses: %w", err)
-			}
-			return nil
-		})
-	})
-}
+// The copy that used to sit here had drifted from all four: it deleted by
+// task_id alone, so it yanked a task out of whatever sprint it was actually in
+// — the corruption finding #40 fixed in the shipped path — and it set status
+// to BACKLOG without clearing started_at, tested_at, closed_at,
+// completion_summary or commit_close, which is finding #49. Nothing reported
+// either, because no command reached it (task #188).
 
 // ==================== AUDIT QUERIES ====================
 
@@ -2383,13 +2444,55 @@ func (db *DB) GetAuditStats(ctx context.Context, since, until *string) (*models.
 // ReorderSprintTasks sets the exact order of tasks in a sprint.
 // All task IDs must belong to the sprint, and the list must be complete.
 // Positions are assigned sequentially starting from 0.
+//
+// THE THREE VALIDATIONS RUN INSIDE THE WRITE TRANSACTION, and that is the point
+// of them being here at all: the CLI performs the same three checks first for a
+// friendly error message, but it performs them in a SEPARATE read. Checking
+// completeness in an earlier, separate read leaves a window in which another
+// process adds a task to the sprint — the list is then complete when it is read
+// and partial when it is applied, and a partial assignment leaves the omitted
+// tasks holding positions this reorder also assigns. That race was reproduced,
+// not hypothesised. Moving the checks inside follows the precedent of the
+// max_tasks capacity check in AddTasksToSprint: the single SQLite writer
+// serialises these transactions, so a committed reorder can only ever be a
+// permutation of the sprint's membership as it stood when the reorder ran.
+//
+// Together the three establish exactly that: no duplicate in the list, one list
+// entry per member of the sprint, and every entry a member.
 func (db *DB) ReorderSprintTasks(sprintID int, taskIDs []int) error {
 	if len(taskIDs) == 0 {
 		return nil
 	}
 
 	return db.WithTransaction(func(tx *sql.Tx) error {
-		// Verify all task IDs belong to this sprint
+		// 1. No duplicate task ID. Costs no I/O and is what makes the two counts
+		// below add up to a permutation rather than merely to a total.
+		seen := make(map[int]struct{}, len(taskIDs))
+		for _, id := range taskIDs {
+			if _, dup := seen[id]; dup {
+				return fmt.Errorf("%w: duplicate task ID %d", utils.ErrValidation, id)
+			}
+			seen[id] = struct{}{}
+		}
+
+		// 2. The list names EVERY member of the sprint. A partial reorder is not
+		// supported (SPEC/COMMANDS.md § Reorder Tasks (Set Exact Order)).
+		var memberCount int
+		if err := tx.QueryRow(
+			"SELECT COUNT(*) FROM sprint_tasks WHERE sprint_id = ?",
+			sprintID,
+		).Scan(&memberCount); err != nil {
+			return fmt.Errorf("counting sprint members: %w", err)
+		}
+		if memberCount != len(taskIDs) {
+			return fmt.Errorf("%w: expected %d task IDs, got %d (must include all sprint tasks)",
+				utils.ErrValidation, memberCount, len(taskIDs))
+		}
+
+		// 3. Every task ID belongs to this sprint. Wrapped with utils.ErrValidation
+		// so a list invalidated by a concurrent removal maps to exit 6, the code
+		// SPEC/COMMANDS.md § Reorder Tasks gives "Task ID not in sprint", and
+		// matching the identical guard in MoveTasksBetweenSprints.
 		args := make([]any, 0, len(taskIDs)+1)
 		args = append(args, sprintID)
 		for _, id := range taskIDs {
@@ -2405,17 +2508,17 @@ func (db *DB) ReorderSprintTasks(sprintID int, taskIDs []int) error {
 			return fmt.Errorf("verifying task membership: %w", err)
 		}
 		if count != len(taskIDs) {
-			return fmt.Errorf("%w: sprint %d", ErrTasksNotInSprint, sprintID)
+			return fmt.Errorf("%w: %w: sprint %d", utils.ErrValidation, ErrTasksNotInSprint, sprintID)
 		}
 
-		// Update positions
-		for i, taskID := range taskIDs {
-			if _, err := tx.Exec(
-				"UPDATE sprint_tasks SET position = ? WHERE sprint_id = ? AND task_id = ?",
-				i, sprintID, taskID,
-			); err != nil {
-				return fmt.Errorf("updating position for task %d: %w", taskID, err)
-			}
+		// A reorder is a permutation, so assigning the final positions directly
+		// makes the first task of the new order claim a position another task
+		// still holds and the unique index rejects the statement. Park first.
+		if err := parkSprintPositionsTx(tx, sprintID); err != nil {
+			return err
+		}
+		if err := assignSprintPositionsTx(tx, sprintID, taskIDs); err != nil {
+			return err
 		}
 
 		// Log audit entry
@@ -2430,6 +2533,20 @@ func (db *DB) ReorderSprintTasks(sprintID int, taskIDs []int) error {
 // MoveTaskToPosition moves a single task to a specific position within a sprint,
 // shifting other tasks to maintain continuous positions (0, 1, 2...).
 // If position >= task count, the task is moved to the end.
+//
+// A RANGE SHIFT CANNOT EXPRESS THIS MOVE. The shift form —
+// UPDATE ... SET position = position + 1 WHERE position >= ? AND position < ? —
+// walks a contiguous run of rows and moves each onto the value its neighbour
+// still holds, so the unique index over (sprint_id, position) rejects it on the
+// first row, and it does so in BOTH directions. This routine therefore lifts the
+// moved task out of the sprint's current order, re-inserts it at the target
+// slot, parks the whole sprint, and writes the resulting permutation: the same
+// final state, reached without ever presenting a duplicate (SPEC/DATABASE.md
+// § Move Task to Position).
+//
+// One SPRINT_TASK_MOVE_POSITION entry is written per call against the sprint,
+// including when the task already holds the target position and no row changes
+// (SPEC/COMMANDS.md § Audit of the ordering commands).
 func (db *DB) MoveTaskToPosition(sprintID, taskID, newPosition int) error {
 	return db.WithTransaction(func(tx *sql.Tx) error {
 		// Get current position of the task
@@ -2445,50 +2562,58 @@ func (db *DB) MoveTaskToPosition(sprintID, taskID, newPosition int) error {
 			return fmt.Errorf("getting current position: %w", err)
 		}
 
-		// Get task count to handle position beyond range
-		var taskCount int
-		if err := tx.QueryRow(
-			"SELECT COUNT(*) FROM sprint_tasks WHERE sprint_id = ?",
-			sprintID,
-		).Scan(&taskCount); err != nil {
-			return fmt.Errorf("getting task count: %w", err)
+		// Read the sprint's current order. It doubles as the task count, so no
+		// separate COUNT(*) is issued.
+		members, err := sprintMembersInOrderTx(tx, sprintID)
+		if err != nil {
+			return err
 		}
+		taskCount := len(members)
 
 		// If position >= task count, move to end
 		if newPosition >= taskCount {
 			newPosition = taskCount - 1
 		}
 
-		// If position unchanged, nothing to do
-		if currentPos == newPosition {
-			return nil
-		}
+		// A NO-OP MOVE STILL WRITES ITS ENTRY. When the task already holds the
+		// target slot there is no permutation left to write, so the rewrite below
+		// is skipped -- but only the rewrite. The audit entry underneath it is
+		// written on every invocation that reaches here, because SPEC/COMMANDS.md
+		// § Audit of the ordering commands states the rule without qualification:
+		// "A no-op move (moving a task to the position it already holds) still
+		// writes its entry, on the same rule that governs `task edit`: the audit
+		// log records the command issued, not the delta it produced." A log that
+		// recorded only deltas could not answer who issued a command, which is the
+		// question an audit log exists to answer, and the sibling paths already
+		// answer it: `task edit -t` re-supplying the stored title writes
+		// TASK_TITLE_CHANGE, and an identical `sprint reorder` writes a second
+		// SPRINT_REORDER_TASKS.
+		if currentPos != newPosition {
+			// Lift the moved task out of the current order and re-insert it at the
+			// target slot. The result is a permutation of the sprint's members,
+			// which is what the assignment below writes as a dense 0..N-1 run.
+			ordered := make([]int, 0, taskCount)
+			for _, m := range members {
+				if m.taskID != taskID {
+					ordered = append(ordered, m.taskID)
+				}
+			}
+			if newPosition < 0 {
+				newPosition = 0
+			}
+			if newPosition > len(ordered) {
+				newPosition = len(ordered)
+			}
+			ordered = append(ordered, 0)
+			copy(ordered[newPosition+1:], ordered[newPosition:])
+			ordered[newPosition] = taskID
 
-		if newPosition < currentPos {
-			// Moving UP: shift tasks between new_position and current_position-1 down by 1
-			_, err = tx.Exec(
-				`UPDATE sprint_tasks SET position = position + 1
-				 WHERE sprint_id = ? AND position >= ? AND position < ?`,
-				sprintID, newPosition, currentPos,
-			)
-		} else {
-			// Moving DOWN: shift tasks between current_position+1 and new_position up by 1
-			_, err = tx.Exec(
-				`UPDATE sprint_tasks SET position = position - 1
-				 WHERE sprint_id = ? AND position > ? AND position <= ?`,
-				sprintID, currentPos, newPosition,
-			)
-		}
-		if err != nil {
-			return fmt.Errorf("shifting task positions: %w", err)
-		}
-
-		// Update the moved task to the new position
-		if _, err := tx.Exec(
-			"UPDATE sprint_tasks SET position = ? WHERE sprint_id = ? AND task_id = ?",
-			newPosition, sprintID, taskID,
-		); err != nil {
-			return fmt.Errorf("updating task position: %w", err)
+			if err := parkSprintPositionsTx(tx, sprintID); err != nil {
+				return err
+			}
+			if err := assignSprintPositionsTx(tx, sprintID, ordered); err != nil {
+				return err
+			}
 		}
 
 		// Log audit entry
@@ -2542,12 +2667,17 @@ func (db *DB) SwapTasks(sprintID, taskID1, taskID2 int) error {
 			return fmt.Errorf("%w: sprint %d", ErrSwapTasksNotFound, sprintID)
 		}
 
-		// Swap positions
+		// ONLY ONE ROW NEEDS PARKING HERE. A swap touches exactly two rows, and
+		// once the first has left its position the second can take it, so these
+		// three statements are the cheapest form that never presents a duplicate.
+		// Writing the two positions directly fails on the first statement,
+		// because the position it assigns is the one the other task still holds
+		// (SPEC/DATABASE.md § Swap Tasks).
 		if _, err := tx.Exec(
-			"UPDATE sprint_tasks SET position = ? WHERE sprint_id = ? AND task_id = ?",
-			pos2, sprintID, taskID1,
+			"UPDATE sprint_tasks SET position = -1 - position WHERE sprint_id = ? AND task_id = ?",
+			sprintID, taskID1,
 		); err != nil {
-			return fmt.Errorf("updating position for task %d: %w", taskID1, err)
+			return fmt.Errorf("parking position for task %d: %w", taskID1, err)
 		}
 
 		if _, err := tx.Exec(
@@ -2555,6 +2685,13 @@ func (db *DB) SwapTasks(sprintID, taskID1, taskID2 int) error {
 			pos1, sprintID, taskID2,
 		); err != nil {
 			return fmt.Errorf("updating position for task %d: %w", taskID2, err)
+		}
+
+		if _, err := tx.Exec(
+			"UPDATE sprint_tasks SET position = ? WHERE sprint_id = ? AND task_id = ?",
+			pos2, sprintID, taskID1,
+		); err != nil {
+			return fmt.Errorf("updating position for task %d: %w", taskID1, err)
 		}
 
 		// Log audit entry

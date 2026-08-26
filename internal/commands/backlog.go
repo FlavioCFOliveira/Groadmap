@@ -19,7 +19,7 @@ var BacklogListFlags = []FlagDef{
 
 // printBacklogListHelp — `rmp backlog list`.
 func printBacklogListHelp() {
-	fmt.Print(`Usage: rmp backlog list -r <roadmap> [filters]
+	fmt.Fprint(helpDst(), `Usage: rmp backlog list -r <roadmap> [filters]
 
 Lists every task currently in BACKLOG status. Equivalent to
 'rmp task list -r <roadmap> --status BACKLOG' but with a focused option
@@ -62,7 +62,7 @@ Examples:
 
 // printBacklogShowNextHelp — `rmp backlog show-next`.
 func printBacklogShowNextHelp() {
-	fmt.Print(`Usage: rmp backlog show-next -r <roadmap> [count]
+	fmt.Fprint(helpDst(), `Usage: rmp backlog show-next -r <roadmap> [count]
 
 Returns the top-<count> BACKLOG tasks by priority DESC, then created_at
 ASC for ties. Designed for sprint planning ("what should we pull in next?").
@@ -116,15 +116,17 @@ func backlogList(args []string) error {
 		filter.MinPriority = &p
 	}
 	if l, ok := result.Flags["Limit"].(int); ok {
-		if l < 1 || l > models.MaxTaskLimit {
-			return fmt.Errorf("%w: limit must be between 1 and %d", utils.ErrValidation, models.MaxTaskLimit)
+		// Same bound and same owner as `task list`: a backlog listing is a task
+		// listing (SPEC/COMMANDS.md § List Backlog Tasks; rmp task 329).
+		if err := models.ValidateTaskLimit(l); err != nil {
+			return err
 		}
 		filter.Limit = l
 	}
 	if typeStr, ok := result.Flags["Type"].(string); ok {
 		tt, parseErr := models.ParseTaskType(typeStr)
 		if parseErr != nil {
-			return fmt.Errorf("%w: %s", utils.ErrValidation, parseErr.Error())
+			return fmt.Errorf("%w: %w", utils.ErrValidation, parseErr)
 		}
 		filter.TaskType = &tt
 	}
@@ -201,7 +203,7 @@ func backlogShowNext(args []string) error {
 
 // printBacklogHelp prints backlog command help.
 func printBacklogHelp() {
-	fmt.Print(`Usage: rmp backlog [command] [arguments] [options]
+	fmt.Fprint(helpDst(), `Usage: rmp backlog [command] [arguments] [options]
 
 Aliases: bl.
 
@@ -232,6 +234,7 @@ Exit codes:
   3   No roadmap specified (-r missing)
   6   Validation error (bad --type/--sort, out-of-range --limit, or
        non-numeric/non-positive [count] on 'show-next')
+  127 Unknown subcommand
 
 Examples:
   rmp backlog list -r groadmap

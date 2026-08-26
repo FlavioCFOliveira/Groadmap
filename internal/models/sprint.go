@@ -8,13 +8,23 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
-// Sentinel errors for sprint validation.
+// Sentinel errors for sprint validation. Each supplies the opening clause of
+// the message it is returned in; see the note on the task sentinels in task.go.
 var (
 	ErrInvalidSprintStatus = errors.New("invalid sprint status")
-	ErrDescriptionRequired = errors.New("description is required")
+	// The field name comes from the shared definition in internal/utils, not
+	// from a literal here (SPEC/COMMANDS.md § Published Field Names in
+	// Validation Messages).
+	ErrDescriptionRequired = errors.New(utils.RequiredFieldMessage(utils.FieldSprintDescription))
 	// ErrInvalidSprintOrder indicates a sprint execution order that is not a
 	// positive integer greater than zero.
 	ErrInvalidSprintOrder = errors.New("invalid sprint order")
+	// ErrSprintMaxTasksOutOfRange is the capacity cap's range rule. Like the
+	// `--limit` sentinels in limit.go it carries the whole wording of its own
+	// refusal, taken from the shared definition, so errors.Is identifies the
+	// rule while nothing here can word it differently from the other ranges.
+	ErrSprintMaxTasksOutOfRange = errors.New(utils.NumericRangeMessage(
+		utils.FieldSprintMaxTasks, MinSprintMaxTasks, MaxSprintMaxTasks))
 	// ErrTitleRequired ("title is required") is shared with task validation and
 	// declared in task.go; sprint Validate reuses it for the required Title field.
 )
@@ -56,7 +66,7 @@ func ParseSprintStatus(s string) (SprintStatus, error) {
 	if status, ok := validSprintStatusMap[s]; ok {
 		return status, nil
 	}
-	return "", fmt.Errorf("invalid sprint status: %q: %w", s, ErrInvalidSprintStatus)
+	return "", fmt.Errorf("%w: %q", ErrInvalidSprintStatus, s)
 }
 
 // CanStart checks if a sprint can be started (PENDING -> OPEN).
@@ -101,18 +111,25 @@ type Sprint struct {
 }
 
 // Validate checks if the sprint data is valid.
+//
+// Both length caps measure CHARACTERS — Unicode code points — through
+// utils.CheckFieldLength, the one place the unit is defined, and the same unit
+// SPEC/MODELS.md § Sprint Field Constraints states and the CHECK constraint on
+// sprints.title enforces. They used to measure bytes with len() (rmp task 296).
+// The value reaching this method is the trimmed one `sprint create` stores, so
+// the cap measures what the column holds.
 func (s *Sprint) Validate() error {
 	if s.Title == "" {
 		return ErrTitleRequired
 	}
-	if len(s.Title) > MaxSprintTitle {
-		return fmt.Errorf("%w: title exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxSprintTitle)
+	if err := utils.CheckFieldLength(s.Title, utils.FieldSprintTitle, MaxSprintTitle); err != nil {
+		return err
 	}
 	if s.Description == "" {
 		return ErrDescriptionRequired
 	}
-	if len(s.Description) > MaxSprintDescription {
-		return fmt.Errorf("%w: description exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxSprintDescription)
+	if err := utils.CheckFieldLength(s.Description, utils.FieldSprintDescription, MaxSprintDescription); err != nil {
+		return err
 	}
 	if !IsValidSprintStatus(string(s.Status)) {
 		return fmt.Errorf("invalid status: %q: %w", s.Status, ErrInvalidSprintStatus)
@@ -130,6 +147,40 @@ func (s *Sprint) Validate() error {
 		return err
 	}
 
+	return nil
+}
+
+// ValidateSprintMaxTasks refuses a `--max-tasks` outside
+// MinSprintMaxTasks..MaxSprintMaxTasks. It is the ONLY comparison of that bound
+// in the application: `sprint create` and `sprint update` both call it, and
+// neither compares the bound itself.
+//
+// # Why the rule moved here
+//
+// It used to live at those two call sites, written out twice, and — unlike the
+// `--limit` rule that rmp task 329 converged — the two copies agreed with each
+// other. What they did not agree with was every other range rule in Groadmap.
+// Both refused an out-of-range cap as
+//
+//	Error: validation error: --max-tasks must be between 1 and 10000 (got 0)
+//
+// naming the FLAG rather than the value and parenthesising what every other
+// range echoes after a comma. Tasks 318, 329, 330 and 331 retired that form
+// wherever they reached; this one survived only because no task had reached it
+// (rmp task 338).
+//
+// Agreement between a rule's own two sites is not the property the shared
+// definition exists for. The property is that ONE rule announces itself with ONE
+// sentence whatever call site applied it, and a rule left spelling its own
+// wording is free to drift again the moment a third site appears. So the wording
+// is not spelled here either: utils.NumericRangeMessage is the only place the
+// sentence exists and utils.NumericRangeError the only place the ", got N"
+// suffix and the utils.ErrValidation chain — and therefore exit code 6 — are
+// assembled.
+func ValidateSprintMaxTasks(maxTasks int) error {
+	if maxTasks < MinSprintMaxTasks || maxTasks > MaxSprintMaxTasks {
+		return utils.NumericRangeError(ErrSprintMaxTasksOutOfRange, maxTasks)
+	}
 	return nil
 }
 

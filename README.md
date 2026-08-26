@@ -10,6 +10,8 @@ curl -fsSL https://raw.githubusercontent.com/FlavioCFOliveira/Groadmap/main/inst
 
 This will detect your OS and architecture, download the latest release from GitHub, and install the `rmp` binary to `/usr/local/bin`. If `rmp` is already installed, it will be updated to the latest version.
 
+Before extracting anything, the script verifies the downloaded archive against the SHA-256 checksum published beside it in the same release, and refuses to install if the two differ, if the checksum is missing, or if the host has no SHA-256 tool. This detects a corrupted or truncated download and an archive replaced without its checksum; it is not a signature, so it cannot detect a release replaced at its source. `SPEC/DEPLOY.md` states the boundary in full.
+
 ## Features
 
 - **Roadmap Management**: Create, list, and remove roadmaps
@@ -21,7 +23,7 @@ This will detect your OS and architecture, download the latest release from GitH
 - **Sprint Reporting**: Comprehensive sprint reports with progress and distribution metrics
 - **Task Ordering**: Reorder, move-to-position, swap, top, and bottom commands for sprint task management
 - **Backlog and Statistics**: Backlog planning views and roadmap-wide statistics with velocity
-- **Audit Trail**: Automatic logging of all operations for traceability
+- **Audit Trail**: Automatic, append-only logging of every change to a task or a sprint, across a catalogue of 43 operations. Each entry names the operation, the entity it belongs to and when it happened, and, where the operation has one, the counterpart entity involved and the git commit that bracketed the work
 - **State Machine**: Validated task and sprint status transitions with automatic date tracking
 - **Bulk Operations**: Support for multiple task IDs in single commands
 - **Knowledge Graph**: Per-roadmap queryable graph (nodes, edges, Cypher) for capturing project elements and their relationships
@@ -158,7 +160,9 @@ rmp graph query -r myproject \
 | 4 | Not found | Roadmap/task/sprint/comment doesn't exist |
 | 5 | Already exists | Duplicate name or duplicate sprint order |
 | 6 | Invalid data | Validation failed (dates, ranges) |
+| 126 | Not executable | Filesystem permission issue prevented execution |
 | 127 | Unknown command | Unknown command or subcommand |
+| 130 | Interrupted | Interrupted by SIGINT (Ctrl+C) |
 
 ## Technical Documentation
 
@@ -213,7 +217,7 @@ rmp backlog list -r <name> --priority 7  # Filter by minimum priority
 ```bash
 rmp sprint list -r <name>
 rmp sprint list -r <name> --status OPEN
-rmp sprint list -r <name> --status PENDING,CLOSED
+rmp sprint list -r <name> --status CLOSED
 ```
 
 ---
@@ -227,7 +231,7 @@ rmp task create -r <name> \
   -fr "Functional requirements - Why build it?" \
   -tr "Technical requirements - How to build it?" \
   -ac "Acceptance criteria - How to verify it?" \
-  --type USER_STORY --priority 7 --severity 3 \
+  --type USER_STORY --priority 7 --severity 3
 ```
 
 **What task types are available?**
@@ -251,8 +255,8 @@ rmp task get -r <name> 1,2,3             # Bulk fetch
 **How do I filter and search tasks?**
 ```bash
 rmp task list -r <name> --status BACKLOG
-rmp task list -r <name> --status DOING,TESTING
-rmp task list -r <name> --type BUG --severity 8,9
+rmp task list -r <name> --status DOING
+rmp task list -r <name> --type BUG --severity 8
 rmp task list -r <name> --priority 7 --status SPRINT
 rmp task list -r <name> --created-since 2026-03-01
 rmp task list -r <name> --sort created --limit 50
@@ -523,6 +527,28 @@ rmp audit stats -r <name>
 rmp audit stats -r <name> --since 2026-03-01 --until 2026-03-31
 ```
 
+**What does an audit entry contain?**
+
+Seven fields: `id`, `operation`, `entity_type`, `entity_id`, `performed_at`, and
+two that are filled in only where the operation has something to put in them:
+
+- `commit_hash` - the git commit that brackets a task's development work. Written
+  on exactly two operations: `TASK_STATUS_DOING` records the `--commit-open` value
+  and `TASK_STATUS_COMPLETED` records the `--commit-close` value. Entries are never
+  rewritten, so the audit log keeps the commit that concluded a task even after
+  `task reopen` clears it from the task itself.
+- `related_entity_id` - the counterpart entity of the operation, when it has one.
+  Adding a task to a sprint writes two mirrored entries, one against the sprint
+  naming the task and one against the task naming the sprint, so each side of the
+  operation is complete on its own. Removing a task from a sprint, moving one
+  between sprints, and adding or removing a dependency behave the same way.
+
+Four values in the catalogue are marked legacy: no command writes them any more,
+but `--operation` still accepts them so entries recorded before schema 1.12.0 stay
+reachable by name. [DOCS/commands/audit.md](DOCS/commands/audit.md) describes the
+whole catalogue, both fields, the legacy values, and the 1.11.0 to 1.12.0 migration
+that introduced the two columns.
+
 ---
 
 ### Knowledge Graph
@@ -619,9 +645,9 @@ See [DOCS/commands/web.md](DOCS/commands/web.md) for the full route list, the ta
 **What is the difference between Priority and Severity?**
 
 - **Priority (0-9)**: business urgency, set by the Product Owner.
-  - `rmp task prio -r <name> <id> 9` / filter: `--priority 8,9`
+  - `rmp task prio -r <name> <id> 9` / filter: `--priority 8` (threshold: 8 and above)
 - **Severity (0-9)**: technical impact, set by the engineering team.
-  - `rmp task sev -r <name> <id> 8` / filter: `--severity 8,9`
+  - `rmp task sev -r <name> <id> 8` / filter: `--severity 8` (threshold: 8 and above)
 
 Both scales run 0 (lowest) to 9 (highest). Use them independently.
 
@@ -641,7 +667,7 @@ rmp task next -r <name>                   # Returns task 5 first
 **Priority** is a planning attribute for filtering and backlog grooming:
 ```bash
 rmp backlog show-next -r <name> 5         # Top 5 by priority for sprint planning
-rmp task list -r <name> --priority 8,9
+rmp task list -r <name> --priority 8      # Priority 8 and above
 ```
 
 (Distinct from both is a sprint's own `--order`, which sequences the sprints themselves across the roadmap.)

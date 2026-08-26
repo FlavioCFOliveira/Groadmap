@@ -13,6 +13,11 @@ Regression guards for write-side defects:
   - sprint move-tasks must PRESERVE task status (it used to reset to SPRINT)
   - capacity / membership / BACKLOG-only guards must reject atomically and
     leave state unchanged
+  - sprint update must key every decision on flag PRESENCE, not on whether the
+    supplied value is empty (rmp task #270): `-t ""` / `-d ""` are rejected
+    values (exit 6), not a missing parameter, they mutate nothing and write no
+    audit entry, the rejection happens before the sprint is even looked up,
+    and `sprint update` agrees with `task edit` on the identical input shape
 
 The specialists field and the `task assign` / `task unassign` subcommands were
 removed from the task entity (rmp task #246; SPEC/VERSION.md § Migration
@@ -187,8 +192,9 @@ class TestWritePersistenceFidelity:
     def test_task_assign_and_unassign_subcommands_are_gone(self):
         """`task assign` and `task unassign` were removed together with the
         specialists field (rmp task #246; SPEC/VERSION.md § Migration 1.9.0 ->
-        1.10.0). Both names must now be rejected as unknown task subcommands
-        (exit 2), and the rejection must be a pure no-op: the task's state is
+        1.10.0). Both names must now be rejected as unresolved task subcommands
+        (exit 127 — a dispatch failure, see SPEC/COMMANDS.md § Dispatch
+        Failures), and the rejection must be a pure no-op: the task's state is
         read back unchanged and no audit entry is written for the attempt."""
         r = self.test.create_roadmap("assign_removed")
         tid = self._mk(r, "Provision the on-call escalation webhook")
@@ -197,13 +203,13 @@ class TestWritePersistenceFidelity:
 
         code, out, err = self.test.run_cmd(
             ["task", "assign", "-r", r, str(tid), "Dev One"], check=False)
-        assert code == 2, f"task assign must exit 2 (unknown subcommand), got {code}: {err}"
+        assert code == 127, f"task assign must exit 127 (dispatch failure), got {code}: {err}"
         assert out == "", f"task assign must write nothing to stdout on rejection: {out!r}"
         assert "assign" in err.lower(), f"stderr must name the unknown subcommand: {err!r}"
 
         code2, out2, err2 = self.test.run_cmd(
             ["task", "unassign", "-r", r, str(tid), "Dev One"], check=False)
-        assert code2 == 2, f"task unassign must exit 2 (unknown subcommand), got {code2}: {err2}"
+        assert code2 == 127, f"task unassign must exit 127 (dispatch failure), got {code2}: {err2}"
         assert out2 == "", f"task unassign must write nothing to stdout on rejection: {out2!r}"
         assert "unassign" in err2.lower(), f"stderr must name the unknown subcommand: {err2!r}"
 
@@ -214,7 +220,7 @@ class TestWritePersistenceFidelity:
             "a rejected unknown subcommand must write no audit entry: "
             f"{before_audit_count} -> {after_audit_count}"
         )
-        print("✓ task assign / task unassign are gone: exit 2, no stdout, no state or audit change")
+        print("✓ task assign / task unassign are gone: exit 127, no stdout, no state or audit change")
 
     # ---- dependencies ------------------------------------------------------
 
@@ -268,6 +274,209 @@ class TestWritePersistenceFidelity:
         assert s["description"] == "Sprint Alpha (revised)" and s["max_tasks"] == 15, s
         print("✓ sprint create/update persist description and capacity")
 
+    # ---- sprint update: flag-presence sentinel (rmp task #270) ------------
+    #
+    # `sprint update` used to read the empty string as its flag-absent
+    # sentinel, so it could not tell a flag that was not supplied from one
+    # supplied empty. `-t ""` was read as "no title given" — reported as a
+    # missing parameter when it was the only flag, and silently dropped when a
+    # second, valid flag kept the update alive. Fixed in sprint_crud.go; the
+    # contract is SPEC/COMMANDS.md § Update Sprint, acceptance criteria 5-7.
+
+    def _sprint_audit(self, roadmap, sprint_id):
+        """Audit entries for one sprint, newest first (server-side filter)."""
+        return self.test.run_cmd_json(
+            ["audit", "list", "-r", roadmap, "--entity-id", str(sprint_id), "-e", "SPRINT"]
+        )
+
+    def test_sprint_update_empty_title_rejected_mutates_nothing(self):
+        r = self.test.create_roadmap("sprint_upd_empty_title")
+        sid = self.test.run_cmd_json(["sprint", "create", "-r", r,
+                                      "-t", "Checkout latency remediation",
+                                      "-d", "Cut p95 checkout latency below 400ms before peak traffic."])["id"]
+        before = self._sprint(r, sid)
+        before_audit = self._sprint_audit(r, sid)
+
+        code, out, err = self.test.run_cmd(
+            ["sprint", "update", "-r", r, str(sid), "-t", ""], check=False)
+        assert code == 6, f"empty --title must exit 6 (invalid data), got {code}: {err}"
+        assert "title cannot be empty" in err.lower(), f"stderr must name the empty title: {err!r}"
+        assert out == "", f"a rejected update must write nothing to stdout: {out!r}"
+
+        after = self._sprint(r, sid)
+        assert after["title"] == before["title"], "rejected -t \"\" must leave title unchanged"
+        assert after["description"] == before["description"]
+        after_audit = self._sprint_audit(r, sid)
+        assert after_audit == before_audit, (
+            f"a rejected update must write no audit entry: {before_audit} -> {after_audit}"
+        )
+        print("✓ sprint update -t \"\" exits 6 and mutates nothing")
+
+    def test_sprint_update_empty_description_rejected_mutates_nothing(self):
+        r = self.test.create_roadmap("sprint_upd_empty_desc")
+        sid = self.test.run_cmd_json(["sprint", "create", "-r", r,
+                                      "-t", "Warehouse pick-path optimisation",
+                                      "-d", "Shorten average pick-path distance in the east fulfilment center."])["id"]
+        before = self._sprint(r, sid)
+        before_audit = self._sprint_audit(r, sid)
+
+        code, out, err = self.test.run_cmd(
+            ["sprint", "update", "-r", r, str(sid), "-d", ""], check=False)
+        assert code == 6, f"empty --description must exit 6 (invalid data), got {code}: {err}"
+        assert "description cannot be empty" in err.lower(), f"stderr must name the empty description: {err!r}"
+        assert out == "", f"a rejected update must write nothing to stdout: {out!r}"
+
+        after = self._sprint(r, sid)
+        assert after["description"] == before["description"], "rejected -d \"\" must leave description unchanged"
+        assert after["title"] == before["title"]
+        after_audit = self._sprint_audit(r, sid)
+        assert after_audit == before_audit, "a rejected update must write no audit entry"
+        print("✓ sprint update -d \"\" exits 6 and mutates nothing")
+
+    def test_sprint_update_empty_title_beside_valid_description_mutates_neither(self):
+        """Reported case #2 of task #270: the old sentinel treated an empty
+        --title as absent and let a valid --description carry the update
+        through, silently dropping the title and writing one audit entry for
+        an invocation that supplied two flags."""
+        r = self.test.create_roadmap("sprint_upd_pair")
+        sid = self.test.run_cmd_json(["sprint", "create", "-r", r,
+                                      "-t", "Refund processing SLA",
+                                      "-d", "Bring refund confirmation under 24 hours for card payments."])["id"]
+        before = self._sprint(r, sid)
+        before_audit = self._sprint_audit(r, sid)
+
+        code, out, err = self.test.run_cmd(
+            ["sprint", "update", "-r", r, str(sid),
+             "-t", "", "-d", "Bring refund confirmation under 12 hours for card payments."],
+            check=False)
+        assert code == 6, f"expected exit 6, got {code}: {err}"
+        assert "title cannot be empty" in err.lower(), f"stderr must name the empty title: {err!r}"
+
+        after = self._sprint(r, sid)
+        assert after["title"] == before["title"], "the empty title must not overwrite the stored one"
+        assert after["description"] == before["description"], (
+            "the valid description travelling with the rejected title must not be written either"
+        )
+        after_audit = self._sprint_audit(r, sid)
+        assert after_audit == before_audit, (
+            f"a rejected update must write zero entries, not one: {before_audit} -> {after_audit}"
+        )
+        print("✓ sprint update -t \"\" -d <valid> rejects both fields and writes zero entries")
+
+    def test_sprint_update_no_flags_still_reports_missing_parameter(self):
+        r = self.test.create_roadmap("sprint_upd_noflag")
+        sid = self.test.create_sprint(r, "Ledger reconciliation batch window")
+        before = self._sprint(r, sid)
+        before_audit = self._sprint_audit(r, sid)
+
+        code, out, err = self.test.run_cmd(["sprint", "update", "-r", r, str(sid)], check=False)
+        assert code == 2, f"a flagless sprint update must exit 2 (misuse), got {code}: {err}"
+        assert "at least one of --title, --description, --max-tasks or --order is required" in err, (
+            f"stderr must carry the documented message: {err!r}"
+        )
+        assert out == "", f"a rejected update must write nothing to stdout: {out!r}"
+
+        assert self._sprint(r, sid) == before, "a rejected update must leave the sprint unchanged"
+        assert self._sprint_audit(r, sid) == before_audit
+        print("✓ sprint update with no flags still exits 2 with the missing-parameter message")
+
+    def test_sprint_update_flag_spellings_agree_on_empty_value(self):
+        """`-t`, `--title` and the inline `--title=` form (and their `-d` /
+        `--description` counterparts) must all reject an empty value
+        identically."""
+        r = self.test.create_roadmap("sprint_upd_spellings")
+        sid = self.test.create_sprint(r, "Search relevance re-ranking rollout")
+
+        for flag in (["-t", ""], ["--title", ""], ["--title="]):
+            code, out, err = self.test.run_cmd(
+                ["sprint", "update", "-r", r, str(sid)] + flag, check=False)
+            assert code == 6, f"{flag} must exit 6, got {code}: {err}"
+            assert "title cannot be empty" in err.lower(), f"{flag}: stderr must name the empty title: {err!r}"
+            assert out == "", f"{flag}: a rejected update must write nothing to stdout: {out!r}"
+
+        for flag in (["-d", ""], ["--description", ""], ["--description="]):
+            code, out, err = self.test.run_cmd(
+                ["sprint", "update", "-r", r, str(sid)] + flag, check=False)
+            assert code == 6, f"{flag} must exit 6, got {code}: {err}"
+            assert "description cannot be empty" in err.lower(), (
+                f"{flag}: stderr must name the empty description: {err!r}"
+            )
+            assert out == "", f"{flag}: a rejected update must write nothing to stdout: {out!r}"
+
+        print("✓ -t/--title/--title= and -d/--description/--description= agree on rejecting an empty value")
+
+    def test_sprint_update_and_task_edit_agree_on_empty_title(self):
+        """Reported case #3 of task #270: the two commands must answer the
+        identical `-t ""` input shape with the identical verdict."""
+        r = self.test.create_roadmap("sprint_upd_vs_task_edit")
+        sid = self.test.create_sprint(r, "Onboarding funnel drop-off analysis")
+        tid = self._mk(r, "Instrument the onboarding funnel drop-off events")
+
+        s_code, s_out, s_err = self.test.run_cmd(
+            ["sprint", "update", "-r", r, str(sid), "-t", ""], check=False)
+        t_code, t_out, t_err = self.test.run_cmd(
+            ["task", "edit", "-r", r, str(tid), "-t", ""], check=False)
+
+        assert s_code == t_code == 6, f"both must exit 6: sprint={s_code}, task={t_code}"
+        assert "title cannot be empty" in s_err.lower() and "title cannot be empty" in t_err.lower(), (
+            f"both must name the empty title: sprint={s_err!r}, task={t_err!r}"
+        )
+        assert s_out == "" and t_out == "", "both rejections must write nothing to stdout"
+        print("✓ sprint update -t \"\" and task edit -t \"\" agree: exit 6, same stderr substring")
+
+    def test_sprint_update_success_writes_matching_audit_entries(self):
+        r = self.test.create_roadmap("sprint_upd_audit")
+        sid = self.test.run_cmd_json(["sprint", "create", "-r", r,
+                                      "-t", "Inventory sync latency reduction",
+                                      "-d", "Reduce warehouse-to-storefront stock sync lag below one minute."])["id"]
+
+        # a single supplied field writes exactly one entry
+        self.test.run_cmd(["sprint", "update", "-r", r, str(sid),
+                           "-t", "Inventory sync latency reduction (phase 2)"])
+        entries = self._sprint_audit(r, sid)
+        title_entries = [e for e in entries if e["operation"] == "SPRINT_TITLE_CHANGE"]
+        assert len(title_entries) == 1, f"expected exactly one SPRINT_TITLE_CHANGE entry: {entries}"
+        assert not any(e["operation"] == "SPRINT_DESCRIPTION_CHANGE" for e in entries)
+
+        # two fields supplied together write two entries sharing one performed_at
+        new_desc = "Reduce warehouse-to-storefront stock sync lag below thirty seconds."
+        self.test.run_cmd(["sprint", "update", "-r", r, str(sid),
+                           "-t", "Inventory sync latency reduction (phase 3)",
+                           "-d", new_desc])
+        entries2 = self._sprint_audit(r, sid)
+        latest_two = [e for e in entries2 if e["performed_at"] == entries2[0]["performed_at"]]
+        assert len(latest_two) == 2, f"the paired update must write exactly two entries: {latest_two}"
+        ops = {e["operation"] for e in latest_two}
+        assert ops == {"SPRINT_TITLE_CHANGE", "SPRINT_DESCRIPTION_CHANGE"}, ops
+        assert len({e["performed_at"] for e in latest_two}) == 1, "both entries must share one performed_at"
+
+        s = self._sprint(r, sid)
+        assert s["title"] == "Inventory sync latency reduction (phase 3)"
+        assert s["description"] == new_desc
+        print("✓ sprint update writes exactly one audit entry per supplied field, sharing performed_at")
+
+    def test_sprint_update_validates_before_opening_database(self):
+        """Validation runs before the sprint is even resolved: an empty
+        --title on a nonexistent sprint id exits 6 (validation), not 4 (not
+        found), which is what proves the rejection happens ahead of the
+        write transaction rather than inside one that is rolled back."""
+        r = self.test.create_roadmap("sprint_upd_precheck")
+
+        code_empty, _, err_empty = self.test.run_cmd(
+            ["sprint", "update", "-r", r, "99999", "-t", ""], check=False)
+        assert code_empty == 6, (
+            f"an empty title on a nonexistent sprint must still exit 6 (validated before lookup), "
+            f"got {code_empty}: {err_empty}"
+        )
+        assert "title cannot be empty" in err_empty.lower(), err_empty
+
+        code_valid, _, err_valid = self.test.run_cmd(
+            ["sprint", "update", "-r", r, "99999", "-t", "A perfectly valid sprint title"], check=False)
+        assert code_valid == 4, (
+            f"a valid title on a nonexistent sprint must exit 4 (not found), got {code_valid}: {err_valid}"
+        )
+        print("✓ sprint update validates the value before opening the database (exit 6, not 4, on empty+missing)")
+
     def test_sprint_lifecycle_timestamps(self):
         r = self.test.create_roadmap("sprint_life")
         sid = self.test.create_sprint(r, "S")
@@ -292,7 +501,7 @@ class TestWritePersistenceFidelity:
         sid = self.test.create_sprint(r, "S")
         self.test.run_cmd(["sprint", "start", "-r", r, str(sid)])
         a = self._mk(r, "A"); b = self._mk(r, "B")
-        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(sid), str(a), str(b)])
+        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(sid), f"{a},{b}"])
         assert self._get(r, a)["status"] == "SPRINT" and self._get(r, b)["status"] == "SPRINT"
         assert self._order(r, sid) == [a, b], self._order(r, sid)
         self.test.run_cmd(["sprint", "remove-tasks", "-r", r, str(sid), str(a)])
@@ -307,7 +516,7 @@ class TestWritePersistenceFidelity:
         s2 = self.test.create_sprint(r, "S2")  # stays PENDING
         self.test.run_cmd(["sprint", "start", "-r", r, str(s1)])
         a = self._mk(r, "A"); b = self._mk(r, "B"); c = self._mk(r, "C")
-        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(s1), str(a), str(b), str(c)])
+        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(s1), f"{a},{b},{c}"])
         self.test.run_cmd(["task", "stat", "-r", r, str(b), "DOING", "--commit-open", "021fa2f"])
         self.test.run_cmd(["task", "stat", "-r", r, str(c), "DOING", "--commit-open", "abd481c"])
         self.test.run_cmd(["task", "stat", "-r", r, str(c), "TESTING"])
@@ -335,7 +544,7 @@ class TestWritePersistenceFidelity:
         sid = self.test.create_sprint(r, "S")
         self.test.run_cmd(["sprint", "start", "-r", r, str(sid)])
         ids = [self._mk(r, f"T{i}") for i in range(5)]
-        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(sid)] + [str(i) for i in ids])
+        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(sid), ",".join(str(i) for i in ids)])
         assert self._order(r, sid) == ids
         # reorder (CSV) to reverse
         self.test.run_cmd(["sprint", "reorder", "-r", r, str(sid), ",".join(str(i) for i in reversed(ids))])
@@ -377,7 +586,7 @@ class TestWritePersistenceFidelity:
                                       "--max-tasks", "2"])["id"]
         self.test.run_cmd(["sprint", "start", "-r", r, str(sid)])
         ids = [self._mk(r, f"C{i}") for i in range(3)]
-        rc, _, _ = self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(sid)] + [str(i) for i in ids],
+        rc, _, _ = self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(sid), ",".join(str(i) for i in ids)],
                                      check=False)
         assert rc == 6, f"over-capacity add must exit 6, got {rc}"
         assert self._order(r, sid) == [], "rejected add must be atomic (no partial membership)"

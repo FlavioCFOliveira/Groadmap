@@ -14,7 +14,7 @@ func BenchmarkScanTasksAllocations(b *testing.B) {
 	defer cleanup()
 
 	// Create wrapper DB with schema
-	db := &DB{DB: sqlDB, roadmapName: "bench"}
+	db := &DB{DB: sqlDB}
 	if err := db.CreateSchema(); err != nil {
 		b.Fatalf("Failed to create schema: %v", err)
 	}
@@ -32,7 +32,7 @@ func BenchmarkScanTasksAllocations(b *testing.B) {
 			AcceptanceCriteria:     "Test acceptance criteria",
 			CreatedAt:              "2026-03-18T10:00:00.000Z",
 		}
-		_, err := db.CreateTask(ctx, task)
+		_, err := seedTask(db, task)
 		if err != nil {
 			b.Fatalf("Failed to create task: %v", err)
 		}
@@ -60,7 +60,7 @@ func BenchmarkScanTasksMemoryProfile(b *testing.B) {
 			sqlDB, cleanup := setupBenchDB(b)
 			defer cleanup()
 
-			db := &DB{DB: sqlDB, roadmapName: "bench"}
+			db := &DB{DB: sqlDB}
 			if err := db.CreateSchema(); err != nil {
 				b.Fatalf("Failed to create schema: %v", err)
 			}
@@ -77,7 +77,7 @@ func BenchmarkScanTasksMemoryProfile(b *testing.B) {
 					AcceptanceCriteria:     "Test acceptance criteria",
 					CreatedAt:              "2026-03-18T10:00:00.000Z",
 				}
-				_, err := db.CreateTask(ctx, task)
+				_, err := seedTask(db, task)
 				if err != nil {
 					b.Fatalf("Failed to create task: %v", err)
 				}

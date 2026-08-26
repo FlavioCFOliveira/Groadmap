@@ -21,6 +21,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -557,54 +558,68 @@ func TestTaskCommentAdd_UnknownTask(t *testing.T) {
 }
 
 // TestTaskComment_PositionalIDClassification pins the exit-code class of every
-// malformed positional id on all four subcommands.
+// malformed positional id on all four subcommands, and the sentence each of the
+// two rules produces.
 //
 // SPEC/COMMANDS.md classifies the whole "positive integer" constraint as exit
 // code 2 (invalid input) for these subcommands, including a non-positive or
 // oversized value that utils.ValidateIDString would otherwise report as a
 // validation error (exit code 6). The assertion is deliberately two-sided: it
 // requires ErrInvalidInput AND rejects ErrValidation.
+//
+// The two rules are asserted apart because they ARE apart (rmp task 330). A
+// token that is not an integer breaks the FORMAT rule and keeps the wording
+// SPEC publishes for it; an integer outside 1..MaxInt32 breaks the ID RANGE
+// rule and now states that rule in the one sentence every other surface states
+// it in. Only the failure CLASS is this family's own, and that is the
+// difference these subcommands publish.
 func TestTaskComment_PositionalIDClassification(t *testing.T) {
-	const roadmap = "comment-positional-ids"
+	const roadmap = "task-comment-positional-ids"
 	setupCommentRoadmap(t, roadmap)
 
 	handlers := map[string]struct {
-		run    func([]string) error
-		entity string
-		extra  []string
+		run   func([]string) error
+		field utils.RangedField
+		extra []string
 	}{
-		"comment-add":    {taskCommentAdd, "task", []string{"--type", "NOTE", "--body", "text"}},
-		"comment-list":   {taskCommentList, "task", nil},
-		"comment-edit":   {taskCommentEdit, "comment", []string{"--type", "NOTE"}},
-		"comment-remove": {taskCommentRemove, "comment", nil},
+		"comment-add":    {taskCommentAdd, utils.FieldTaskID, []string{"--type", "NOTE", "--body", "Reconciliation window confirmed."}},
+		"comment-list":   {taskCommentList, utils.FieldTaskID, nil},
+		"comment-edit":   {taskCommentEdit, utils.FieldCommentID, []string{"--type", "NOTE"}},
+		"comment-remove": {taskCommentRemove, utils.FieldCommentID, nil},
 	}
 
 	for name, h := range handlers {
 		t.Run(name, func(t *testing.T) {
-			for _, bad := range []string{"abc", "1.5", "0", "-7", "2147483648", "99999999999999999999"} {
-				args := append([]string{"-r", roadmap, bad}, h.extra...)
-				err := h.run(args)
-				if err == nil {
-					t.Errorf("id %q: want an error, got nil", bad)
-					continue
+			// The FORMAT rule: not an integer at all.
+			for _, bad := range []string{"abc", "1.5"} {
+				err := h.run(append([]string{"-r", roadmap, bad}, h.extra...))
+				assertCommentIDRefusalClass(t, err, bad)
+				want := fmt.Sprintf("invalid input: invalid %s ID: %q (must be a positive integer)",
+					h.field.IDEntity(), bad)
+				if err.Error() != want {
+					t.Errorf("id %q\n got: %q\nwant: %q", bad, err.Error(), want)
 				}
-				if !errors.Is(err, utils.ErrInvalidInput) {
-					t.Errorf("id %q: error must wrap utils.ErrInvalidInput (exit 2); got %v", bad, err)
-				}
-				if errors.Is(err, utils.ErrValidation) {
-					t.Errorf("id %q: a malformed id is exit 2 here, never exit 6; got %v", bad, err)
-				}
-				if want := "invalid " + h.entity + " ID"; !strings.Contains(err.Error(), want) {
-					t.Errorf("id %q: message must name the %s id\n got: %q", bad, h.entity, err.Error())
+			}
+
+			// The ID RANGE rule: an integer outside the range. One sentence at
+			// either bound, and the same sentence a token beyond the platform's
+			// int produces.
+			for _, bad := range []string{"0", "-7", "2147483648", "99999999999999999999"} {
+				err := h.run(append([]string{"-r", roadmap, bad}, h.extra...))
+				assertCommentIDRefusalClass(t, err, bad)
+				want := fmt.Sprintf("invalid input: %s, got %s",
+					utils.IDRangeMessage(h.field), bad)
+				if err.Error() != want {
+					t.Errorf("id %q\n got: %q\nwant: %q", bad, err.Error(), want)
 				}
 			}
 
 			// A wholly absent id is a missing parameter, with its own message.
-			err := h.run(append([]string{"-r", roadmap}, nil...))
+			err := h.run([]string{"-r", roadmap})
 			if !errors.Is(err, utils.ErrRequired) {
 				t.Errorf("missing id: error must wrap utils.ErrRequired (exit 2); got %v", err)
 			}
-			if want := h.entity + " ID required"; err == nil || !strings.Contains(err.Error(), want) {
+			if want := h.field.IDEntity() + " ID required"; err == nil || !strings.Contains(err.Error(), want) {
 				t.Errorf("missing id: message\n got: %v\nwant substring: %q", err, want)
 			}
 		})
@@ -988,14 +1003,18 @@ func TestTaskCommentEdit_UnknownCommentAndIDSpaces(t *testing.T) {
 func seedSprintComment(t *testing.T, database *db.DB) (sprintID, commentID int) {
 	t.Helper()
 
-	ctx := context.Background()
-	sprintID, err := database.CreateSprint(ctx, &models.Sprint{
+	sprint := &models.Sprint{
 		Title:       "Expiry hardening",
 		Description: "Close the JWT boundary-second defect and lock it behind a regression test.",
 		Status:      models.SprintPending,
 		CreatedAt:   utils.NowISO8601(),
-	})
-	if err != nil {
+		Order:       1,
+	}
+	if err := database.WithTransaction(func(tx *sql.Tx) error {
+		id, insertErr := db.InsertSprintTx(tx, sprint)
+		sprintID = id
+		return insertErr
+	}); err != nil {
 		t.Fatalf("creating the sprint fixture: %v", err)
 	}
 
@@ -1201,5 +1220,29 @@ func TestTaskComment_AcceptedInEveryStatus(t *testing.T) {
 
 	if n := len(listComments(t, database, 1)); n != len(steps) {
 		t.Errorf("stored comments = %d, want %d (one per status)", n, len(steps))
+	}
+}
+
+// assertCommentIDRefusalClass pins the half of the comment positional-id
+// contract that is the SAME for both of its rules: the refusal is exit code 2
+// misuse and never exit code 6, whichever rule the id broke.
+//
+// The class is the one thing these four subcommands do differently from every
+// other surface, and it is a published contract rather than an accident
+// (SPEC/COMMANDS.md § Add Task Comment validation order, step 2). rmp task 330
+// converged the WORDS of the range rule across all surfaces and deliberately
+// left this class where the specification puts it; this helper is what would
+// notice it moving.
+func assertCommentIDRefusalClass(t *testing.T, err error, id string) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatalf("id %q: want an error, got nil", id)
+	}
+	if !errors.Is(err, utils.ErrInvalidInput) {
+		t.Errorf("id %q: error must wrap utils.ErrInvalidInput (exit 2); got %v", id, err)
+	}
+	if errors.Is(err, utils.ErrValidation) {
+		t.Errorf("id %q: a malformed id is exit 2 here, never exit 6; got %v", id, err)
 	}
 }

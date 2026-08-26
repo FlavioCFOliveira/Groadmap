@@ -5,8 +5,9 @@ Test 43: Sprint `order` field — exhaustive E2E coverage.
 The sprint `order` field (JSON key "order"; DB column "order_index") is a
 positive integer (> 0), unique across all sprints in a roadmap, that records
 the intended execution sequence. This test module validates every path
-specified in SPEC/COMMANDS.md § Create Sprint / § Update Sprint and
-SPEC/STATE_MACHINE.md § Sprint Order Immutability.
+specified in SPEC/COMMANDS.md § Create Sprint / § Update Sprint /
+§ List Sprints (Result Ordering) and SPEC/STATE_MACHINE.md § Sprint Order
+Immutability.
 
 Coverage matrix
 ---------------
@@ -22,6 +23,12 @@ Coverage matrix
 10. audit history shows SPRINT_ORDER_CHANGE after an order change.
 11. Help text: sprint create --help and sprint update --help mention --order;
     sprint create --ai-help flags array contains --order.
+12. `sprint list` result ordering (rmp task #281): the array is ordered by
+    `order` ASCENDING even when creation order disagrees with it; `--status`
+    narrows the array as a subsequence without reordering it; two
+    consecutive reads over unchanged data are identical; both help surfaces
+    (`sprint list --help` and its `--ai-help` contract entry) state the
+    guarantee.
 """
 
 import json
@@ -68,8 +75,11 @@ class TestSprintOrderField:
     def _get_sprint(self, sprint_id: int) -> dict:
         return self.test.run_cmd_json(["sprint", "get", "-r", self.roadmap, str(sprint_id)])
 
-    def _list_sprints(self) -> list:
-        return self.test.run_cmd_json(["sprint", "list", "-r", self.roadmap])
+    def _list_sprints(self, status: str = None) -> list:
+        cmd = ["sprint", "list", "-r", self.roadmap]
+        if status is not None:
+            cmd.extend(["--status", status])
+        return self.test.run_cmd_json(cmd)
 
     def _update_sprint(self, sprint_id: int, **flags):
         """Run sprint update with arbitrary flags; returns (exit_code, stdout, stderr)."""
@@ -548,6 +558,274 @@ class TestSprintOrderField:
             f"order changed after title-only update; expected 3, got {sprint['order']}"
         )
         assert sprint["title"] == "Revised Observability Sprint", "title not updated"
+
+
+    # ================================================================ Result Ordering (rmp task #281)
+    #
+    # SPEC/COMMANDS.md § List Sprints "Result Ordering" makes the following
+    # a published guarantee, not an artefact of the query plan:
+    #   - the array is ordered by `order` ASCENDING (lowest first);
+    #   - the ordering is TOTAL (order is NOT NULL and unique per roadmap),
+    #     so the sequence is deterministic and needs no tie-break;
+    #   - `--status` narrows the array; it never reorders it.
+
+    def test_list_returns_ascending_order_when_creation_order_disagrees(self):
+        """`sprint list` must return sprints ordered by ascending `order`, not
+        by creation order. The fixture creates four sprints whose creation
+        sequence deliberately DISAGREES with their `order` values, so a
+        listing that (incorrectly) fell back to creation order — e.g. the
+        prior `created_at DESC` behaviour, or plain insertion order — would
+        produce a visibly different sequence and this test would catch it,
+        rather than passing by accident."""
+        # Created 1st, but given the HIGHEST order (40) — must land LAST.
+        id_zeta = self._create_sprint(
+            "Zeta Release Hardening",
+            "Stabilise the release pipeline ahead of the v4 cut",
+            order=40,
+        )
+        # Created 2nd, but given the LOWEST order (10) — must land FIRST.
+        id_alpha = self._create_sprint(
+            "Alpha Authentication Rework",
+            "Replace session cookies with rotating short-lived tokens",
+            order=10,
+        )
+        # Created 3rd, given order 30 — must land 3rd.
+        id_gamma = self._create_sprint(
+            "Gamma Data Warehouse Sync",
+            "Build the incremental CDC pipeline into the analytics warehouse",
+            order=30,
+        )
+        # Created 4th, given order 20 — must land 2nd.
+        id_beta = self._create_sprint(
+            "Beta Checkout Latency",
+            "Cut p99 checkout latency below 300ms under Black Friday load",
+            order=20,
+        )
+
+        creation_sequence = [id_zeta, id_alpha, id_gamma, id_beta]
+        expected_order_sequence = [id_alpha, id_beta, id_gamma, id_zeta]
+
+        # Fixture sanity: creation order and order-value order must genuinely
+        # disagree, otherwise the assertion below would pass whether or not
+        # `sprint list` actually honours `order`, proving nothing.
+        assert creation_sequence != expected_order_sequence, (
+            "fixture bug: creation sequence accidentally matches the expected "
+            f"order-ascending sequence ({creation_sequence}); this test would "
+            "be vacuous — scramble the --order values relative to creation "
+            "order so the two disagree"
+        )
+
+        sprints = self._list_sprints()
+        returned_sequence = [s["id"] for s in sprints]
+
+        assert returned_sequence == expected_order_sequence, (
+            "sprint list must return sprints ordered by 'order' ascending "
+            f"({expected_order_sequence}, i.e. order 10, 20, 30, 40); got "
+            f"{returned_sequence} (creation sequence was {creation_sequence})"
+        )
+        # And, explicitly, the listing must NOT merely coincide with
+        # creation order — the two sequences are different by construction,
+        # so recovering creation order here would itself be a failure.
+        assert returned_sequence != creation_sequence, (
+            f"sprint list returned creation order {returned_sequence} instead "
+            "of order-ascending order — it is ignoring the 'order' field"
+        )
+
+    def test_status_filter_narrows_without_reordering(self):
+        """`--status` must narrow the array without changing the relative
+        sequence of the sprints it keeps: the filtered sequence must be the
+        unfiltered sequence with non-matching sprints simply removed, checked
+        as a subsequence rather than merely as a set (so a filter that
+        happened to also re-sort its matches would still be caught).
+
+        Only one sprint per roadmap may be OPEN at a time (task #77), so the
+        fixture drives S1 and S5 through OPEN and back to CLOSED before
+        opening S2 (which is left OPEN), giving a two-member CLOSED group,
+        a two-member PENDING group, and a one-member OPEN group — enough
+        for the subsequence check to be meaningful on the multi-member
+        groups while still covering the single-member case."""
+        # Creation order deliberately disagrees with `order` here too, so
+        # this fixture also cannot pass by falling back to insertion order.
+        id_s1 = self._create_sprint(
+            "S1 Legacy API Sunset",
+            "Retire the v1 REST endpoints after the v2 migration completes",
+            order=50,
+        )
+        id_s2 = self._create_sprint(
+            "S2 Real-Time Notifications",
+            "Move push notifications from polling to a WebSocket channel",
+            order=10,
+        )
+        id_s3 = self._create_sprint(
+            "S3 Onboarding Funnel Redesign",
+            "Rebuild the first-run onboarding flow to cut drop-off by half",
+            order=40,
+        )
+        id_s4 = self._create_sprint(
+            "S4 Billing Reconciliation",
+            "Automate nightly reconciliation between Stripe and the ledger",
+            order=20,
+        )
+        id_s5 = self._create_sprint(
+            "S5 Search Relevance Tuning",
+            "Retrain the ranking model on six months of click-through data",
+            order=30,
+        )
+
+        # S1 and S5 pass through OPEN and land on CLOSED; S3 and S4 stay
+        # PENDING (auto-assigned status on create); S2 is opened last and
+        # left OPEN — never more than one sprint OPEN at once.
+        self._start_sprint(id_s1)
+        self._close_sprint(id_s1)
+        self._start_sprint(id_s5)
+        self._close_sprint(id_s5)
+        self._start_sprint(id_s2)
+
+        # Order-ascending across ALL statuses: S2(10), S4(20), S5(30), S3(40), S1(50).
+        expected_unfiltered = [id_s2, id_s4, id_s5, id_s3, id_s1]
+
+        unfiltered = self._list_sprints()
+        unfiltered_sequence = [s["id"] for s in unfiltered]
+        assert unfiltered_sequence == expected_unfiltered, (
+            f"unfiltered listing expected {expected_unfiltered} (order-ascending), "
+            f"got {unfiltered_sequence}"
+        )
+
+        for status, expected_members in (
+            ("OPEN", [id_s2]),
+            ("CLOSED", [id_s5, id_s1]),
+            ("PENDING", [id_s4, id_s3]),
+        ):
+            filtered = self._list_sprints(status=status)
+            filtered_sequence = [s["id"] for s in filtered]
+
+            assert set(filtered_sequence) == set(expected_members), (
+                f"--status {status} must select exactly {expected_members}, "
+                f"got {filtered_sequence}"
+            )
+
+            # Subsequence check: the filtered sequence must equal the
+            # unfiltered sequence with non-matching ids simply dropped, so
+            # the relative order among the survivors is provably unchanged
+            # rather than merely coincidentally right for a 2-element result.
+            subsequence_of_unfiltered = [
+                sid for sid in unfiltered_sequence if sid in expected_members
+            ]
+            assert filtered_sequence == subsequence_of_unfiltered, (
+                f"--status {status} must narrow without reordering: expected "
+                f"the unfiltered sequence with non-matches removed "
+                f"({subsequence_of_unfiltered}), got {filtered_sequence}"
+            )
+
+    def test_list_is_deterministic_across_repeated_reads(self):
+        """Two consecutive `sprint list` reads over unchanged data must
+        return the identical sequence: the ordering is total (order is
+        NOT NULL and unique per roadmap), so repeating the read cannot
+        change the result. The fixture again scrambles creation order
+        against `order` so the query's ORDER BY is genuinely exercised
+        rather than the check happening to hold under insertion order too."""
+        id_first_created = self._create_sprint(
+            "Edge Caching Rollout",
+            "Push static asset caching to the CDN edge in every region",
+            order=25,
+        )
+        id_second_created = self._create_sprint(
+            "Feature Flag Consolidation",
+            "Collapse three competing flagging systems into one service",
+            order=5,
+        )
+        id_third_created = self._create_sprint(
+            "Mobile Crash Rate Reduction",
+            "Drive the iOS crash-free-sessions rate above 99.7 percent",
+            order=15,
+        )
+
+        creation_sequence = [id_first_created, id_second_created, id_third_created]
+        expected_order_sequence = [id_second_created, id_third_created, id_first_created]
+        assert creation_sequence != expected_order_sequence, (
+            "fixture bug: creation sequence accidentally matches the expected "
+            "order-ascending sequence; this determinism test would then hold "
+            "trivially under insertion order too, whether or not the query "
+            "sorts by 'order' at all"
+        )
+
+        first_read = self._list_sprints()
+        second_read = self._list_sprints()
+
+        first_sequence = [s["id"] for s in first_read]
+        second_sequence = [s["id"] for s in second_read]
+
+        assert first_sequence == expected_order_sequence, (
+            f"first read expected order-ascending sequence {expected_order_sequence}, "
+            f"got {first_sequence}"
+        )
+        assert first_sequence == second_sequence, (
+            "two consecutive 'sprint list' reads over unchanged data must "
+            f"return the same id sequence; got {first_sequence} then "
+            f"{second_sequence}"
+        )
+        assert first_read == second_read, (
+            "two consecutive 'sprint list' reads over unchanged data must "
+            "return identical Sprint objects, not merely the same ids in the "
+            f"same order; first={first_read!r}\nsecond={second_read!r}"
+        )
+
+    def test_sprint_list_help_documents_ascending_order_guarantee(self):
+        """`sprint list --help` must state the ascending-`order` guarantee and
+        that --status narrows without reordering, so the help cannot drift
+        from the published contract in SPEC/COMMANDS.md § List Sprints."""
+        _, stdout, stderr = self.test.run_cmd(["sprint", "list", "--help"], check=False)
+        combined = (stdout + stderr).lower()
+
+        assert "order" in combined, (
+            f"'sprint list --help' does not mention 'order' at all;\n  stdout={stdout!r}"
+        )
+        assert "asc" in combined, (
+            f"'sprint list --help' does not state the ascending direction;\n  stdout={stdout!r}"
+        )
+        assert "lowest" in combined, (
+            f"'sprint list --help' does not state that the lowest 'order' value comes first;\n  stdout={stdout!r}"
+        )
+        assert "reorder" in combined, (
+            f"'sprint list --help' does not state that --status never reorders the result;\n  stdout={stdout!r}"
+        )
+
+    def test_sprint_list_ai_help_describes_ascending_order_guarantee(self):
+        """The machine-readable `sprint list` contract entry (`--ai-help`)
+        must describe the same ascending-`order` guarantee as the human help
+        and SPEC/COMMANDS.md, so an AI agent driving the CLI can rely on it
+        without reading the SPEC."""
+        _, stdout, _ = self.test.run_cmd(["sprint", "list", "--ai-help"], check=False)
+        try:
+            contract = json.loads(stdout)
+        except json.JSONDecodeError as exc:
+            raise AssertionError(
+                f"sprint list --ai-help did not return valid JSON: {exc}\n  stdout={stdout[:400]!r}"
+            ) from exc
+
+        sprint_list_cmd = None
+        for cmd in contract.get("commands", []):
+            if cmd.get("name") == "sprint":
+                for sub in cmd.get("subcommands", []):
+                    if sub.get("name") == "list":
+                        sprint_list_cmd = sub
+                        break
+
+        assert sprint_list_cmd is not None, "Could not find sprint > list in --ai-help JSON"
+
+        description = sprint_list_cmd.get("description", "").lower()
+        assert "order asc" in description, (
+            f"sprint list --ai-help description does not state ascending 'order' "
+            f"ordering; got: {description!r}"
+        )
+        assert "lowest" in description, (
+            f"sprint list --ai-help description does not state the lowest-order-first "
+            f"rule; got: {description!r}"
+        )
+        assert "never reorders" in description, (
+            f"sprint list --ai-help description does not state that --status never "
+            f"reorders the result; got: {description!r}"
+        )
 
 
 # ------------------------------------------------------------------- runner

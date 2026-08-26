@@ -24,7 +24,10 @@ var (
 	// nothing but whitespace. The database accepts an empty body by design (no
 	// CHECK forbids it, see SPEC/DATABASE.md), so this rule is enforced here and
 	// nowhere else.
-	ErrCommentBodyRequired = errors.New("body is required")
+	// The field name comes from the shared definition in internal/utils, not
+	// from a literal here (SPEC/COMMANDS.md § Published Field Names in
+	// Validation Messages).
+	ErrCommentBodyRequired = errors.New(utils.RequiredFieldMessage(utils.FieldCommentBody))
 )
 
 // CommentType classifies a comment. There is one enum with seven values; each
@@ -232,31 +235,86 @@ func NormalizeCommentBody(body string) string {
 // canonical form to store. It owns every rule the body is subject to, so both
 // entities and every command that writes a comment share one implementation.
 //
-// The rules, in the order SPEC/COMMANDS.md pins them, are: non-empty after
-// trimming, at most MaxCommentBody characters, and no forbidden control
-// character. Each failure chains a utils sentinel that maps to exit code 6.
+// The rules are the cap, then the encoding rule, then the control-character
+// rule, then the emptiness judgement. Each failure chains a utils sentinel that
+// maps to exit code 6.
+//
+// # The order, and where it is stated
+//
+// The first three are utils.TrimFreeText, which is the one statement of that
+// order in the application: every write path on every command runs it, and the
+// comment body is what fixed its shape. SPEC/COMMANDS.md § Add Task Comment
+// states the sequence as "the body's length, then its encoding, then its control
+// characters", and rmp task 302 moved the other six write paths onto it rather
+// than the reverse — because the bounded standard-input reader below settles the
+// length verdict without buffering the whole value, and no order that judged the
+// encoding first could leave that possible.
+//
+// The emptiness judgement is step 4 of SPEC/MODELS.md § Free-Text Emptiness and
+// Trimming Constraint and runs last, on the TRIMMED value. Judging it first —
+// which this function used to do — is the CWE-150 reordering that constraint
+// forbids: strings.TrimSpace removes VT (0x0B) and FF (0x0C), both forbidden
+// control characters, so a body made only of VT trimmed away to nothing and was
+// reported as an absent body instead of as the forbidden character it was. Its
+// position relative to the cap changes no verdict, because a body that trims to
+// nothing is zero characters long and the cap can never answer for it.
+//
+// It does NOT reach utils.RequireFreeText, which welds that same judgement on,
+// because the comment body's refusal for an empty value is its own:
+// ErrCommentBodyRequired, and not the FieldEmptyError the other seven fields
+// carry. What is shared is the order; what differs is one wording, and only that
+// wording is spelled here.
 func ValidateCommentBody(body string) (string, error) {
-	stored := NormalizeCommentBody(body)
+	// The cap on the stored form, then the encoding rule, then the
+	// control-character rule on the body AS SUPPLIED, then the trim — one call,
+	// so this field cannot drift from the other seven. utils.CheckFieldLength
+	// inside it is the single definition of the unit the cap counts in: this
+	// field counted characters while the other seven counted bytes until rmp
+	// task 296.
+	stored, err := utils.TrimFreeText(body, utils.FieldCommentBody, MaxCommentBody)
+	if err != nil {
+		return "", err
+	}
+
 	if stored == "" {
 		return "", fmt.Errorf("%w: %w", utils.ErrValidation, ErrCommentBodyRequired)
 	}
 
-	// Characters, not bytes: see MaxCommentBody. The cap applies to the stored
-	// form, because trimming happens before validation and before storage.
-	if utf8.RuneCountInString(stored) > MaxCommentBody {
-		return "", fmt.Errorf("%w: body exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxCommentBody)
-	}
-
-	// The control-character rule is checked against the body as supplied, not
-	// against the trimmed form. strings.TrimSpace strips VT (0x0B) and FF
-	// (0x0C), both of which the SPEC forbids, so validating the trimmed form
-	// would let a leading or trailing VT or FF pass unreported instead of
-	// rejecting the input that contains it.
-	if err := utils.ValidateNoControlChars(body, "body"); err != nil {
-		return "", err
-	}
-
 	return stored, nil
+}
+
+// CommentBodyIsAbsent reports whether body counts as no body at all: the
+// condition the command layer turns into the missing-parameter refusal
+// SPEC/COMMANDS.md § Comment Body Input Source and Precedence pins (exit code 2,
+// "no comment body supplied"), rather than into a validation failure.
+//
+// A body is absent when nothing survives the trim. That judgement is step 4 of
+// SPEC/MODELS.md § Free-Text Emptiness and Trimming Constraint, so step 2 — the
+// encoding rule and the control-character rule, on the value AS SUPPLIED — has
+// to have answered first, and this function is where that happens. A body made
+// only of VT or FF is therefore refused as a forbidden control character (exit
+// code 6) and never reported as a body that never arrived: the trim removes both
+// characters, so deciding absence without consulting step 1 discarded them in
+// silence, which is the CWE-150 hole the constraint exists to close.
+//
+// Step 1 is consulted only on the values that would be judged absent, and that is
+// deliberate rather than incidental. Such a value is zero characters long once
+// trimmed, so the cap ValidateCommentBody applies first can never answer for it
+// and the cap's position — which rmp task 302 settles, and which this does not
+// move — stays unobservable here. A body that survives the trim is handed on
+// untouched, and ValidateCommentBody applies the cap to it before the same two
+// content rules, exactly as it did.
+//
+// The value is passed AS SUPPLIED. Trimming before the call would defeat the
+// whole purpose.
+func CommentBodyIsAbsent(body string) (bool, error) {
+	if NormalizeCommentBody(body) != "" {
+		return false, nil
+	}
+	if err := utils.ValidateFreeText(body, utils.FieldCommentBody); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // commentBodyReadChunk is the size of one read from the body stream. It bounds
@@ -311,10 +369,34 @@ const commentBodyReadChunk = 4096
 //     inside ValidateCommentBody, so it cannot affect the length verdict or the
 //     stored text, and it is only ever appended to a value that is about to be
 //     refused.
-//   - A body whose content is empty returns "" with no error even when its
-//     whitespace held a forbidden control character: TrimSpace strips VT and FF,
-//     so such a body counts as absent (exit code 2), which is what the
-//     read-everything-then-TrimSpace implementation did.
+//   - A body with no content at all returns that carried rune ALONE when its
+//     whitespace held a forbidden control character, and "" when it did not. The
+//     first case is the one this function must not decide: TrimSpace strips VT
+//     and FF, so returning "" would have handed the caller a body that looked
+//     absent and let the forbidden character through in silence (CWE-150).
+//     CommentBodyIsAbsent is what separates the two, on the value as supplied,
+//     and it refuses the first with exit code 6 while the second remains an
+//     absent body (exit code 2).
+//
+// # Invalid UTF-8 is carried, not repaired and not refused here
+//
+// The first clause above — invalid bytes retained exactly as supplied — is a
+// REQUIREMENT of this function, not an incidental property, and it is what lets
+// SPEC/MODELS.md § Free-Text UTF-8 Encoding Constraint reach the same verdict on
+// a body read from standard input as on one supplied through --body.
+//
+// Two tempting shortcuts are both forbidden by that. Substituting U+FFFD for an
+// invalid byte would hand ValidateCommentBody a well-formed string to inspect
+// and nothing left to refuse, which is the very defect the constraint exists
+// against. Refusing the stream at the first invalid byte would move the encoding
+// verdict ahead of the cap, so a body carrying an invalid byte at offset 3 and
+// 5000 characters would report an encoding failure here while the flag path
+// reported `field exceeds maximum size` — and the length verdict is the one the
+// SPEC fixes for that body on both paths alike.
+//
+// Every verdict therefore stays where it already was: this function decides
+// nothing, and ValidateCommentBody applies the cap, then the encoding rule, then
+// the control-character rule, to whatever it is handed.
 func ReadCommentBody(src io.Reader) (string, error) {
 	var (
 		s     commentBodyScanner
@@ -428,10 +510,14 @@ func (s *commentBodyScanner) space(r rune, raw []byte) {
 
 // result returns the value the body rules are applied to, per the contract
 // documented on ReadCommentBody.
+//
+// The carried forbidden rune is appended whatever the content is, INCLUDING when
+// there is none. A stream of nothing but whitespace that held a VT or an FF then
+// returns that one rune rather than the empty string, which is what lets
+// CommentBodyIsAbsent see the character and refuse it instead of reporting a
+// body that never arrived. Returning "" here would have been this function
+// deciding a verdict, and it decides none.
 func (s *commentBodyScanner) result() string {
-	if s.contentRunes == 0 {
-		return ""
-	}
 	if s.ctrlWS != nil {
 		return string(s.content) + string(s.ctrlWS)
 	}

@@ -23,7 +23,7 @@ func HandleSprint(args []string) error {
 // rendered from models.ValidSprintCommentTypes rather than typed out, so it cannot
 // go stale and cannot accidentally show the seven task values.
 func printSprintHelp() {
-	fmt.Printf(`Usage: rmp sprint [command] [arguments] [options]
+	fmt.Fprintf(helpDst(), `Usage: rmp sprint [command] [arguments] [options]
 
 Valid sprint status values (for --status filter):
   PENDING (never started), OPEN (active), CLOSED
@@ -135,8 +135,9 @@ Comment rules (per SPEC/COMMANDS.md § Sprint Comments):
 Output (stdout JSON):
   list                                     Array of sprint objects.
   get                                      Single sprint object.
-  show                                     Flat object: sprint_id, sprint_description, status,
-                                           max_tasks, capacity_pct, current_load, task_order,
+  show                                     Flat object: sprint_id, sprint_title,
+                                           sprint_description, status, max_tasks,
+                                           capacity_pct, current_load, task_order,
                                            summary, progress, severity_distribution,
                                            criticality_distribution.
                                            NOTE: does NOT include the task list.
@@ -152,8 +153,8 @@ Output (stdout JSON):
   comment-add                              {"id": <int>}
   comment-list                             Array of comment objects.
   comment-edit, comment-remove             Empty (exit 0 on success).
-  Sprint object keys: id, status, description, created_at, started_at, closed_at,
-  max_tasks, tasks (array of int), task_count.
+  Sprint object keys: id, title, status, description, order, created_at,
+  started_at, closed_at, max_tasks, tasks (array of int), task_count.
   Comment object keys: id, sprint_id, type, body, created_at, updated_at
   (updated_at is null until the comment is first edited).
 
@@ -167,6 +168,7 @@ Exit codes:
   6   Validation error (bad enum, --max-tasks outside 1-10000, close-without-force,
        attempting to open while another sprint is OPEN, --order on a CLOSED sprint,
        oversized or control-character comment body, etc.)
+  127 Unknown subcommand
 
 Examples:
   rmp sprint list -r myproject

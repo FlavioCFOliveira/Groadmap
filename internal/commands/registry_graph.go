@@ -26,7 +26,14 @@ func buildGraphCommand() Command {
 				Usage:       "rmp graph create -r <roadmap> [--query <cypher>]",
 				HelpPrinter: printGraphCreateHelp,
 				Handler:     runGraphCreate,
-				ReadsStdin:  true,
+				// `graph` publishes its own refusal for an excess positional
+				// argument — the canonical line with a hint naming the two
+				// sources a Cypher query may come from (SPEC/COMMANDS.md
+				// § Positional Arguments; SPEC/GRAPH.md § Cypher Input Source
+				// and Precedence). The shared enforcement point defers so that
+				// wording survives.
+				PublishesOwnArityRefusal: true,
+				ReadsStdin:               true,
 				Flags: []Flag{
 					sharedRoadmapFlag(),
 					queryFlag,
@@ -73,11 +80,18 @@ func buildGraphCommand() Command {
 			{
 				Name:        "query",
 				Summary:     "Read nodes or edges (MATCH ... RETURN, read-only), or introspect the schema.",
-				Description: "Executes a read-only Cypher query. Any query containing a writing clause (CREATE, MERGE, SET, REMOVE, DELETE, DETACH DELETE) is rejected by the guard rail, as is any schema-mutating DDL clause (CREATE INDEX, DROP INDEX, CREATE CONSTRAINT, DROP CONSTRAINT). Schema introspection is accepted: SHOW INDEXES, SHOW CONSTRAINTS, and their singular aliases SHOW INDEX and SHOW CONSTRAINT, each optionally followed by a YIELD / WHERE / RETURN projection. Introspection lists the registered schema and alters nothing, so it is read-only; the write subcommands reject it.",
+				Description: "Executes a read-only Cypher query. Any query containing a writing clause (CREATE, MERGE, SET, REMOVE, DELETE, DETACH DELETE) is rejected by the guard rail, as is any schema-mutating DDL clause (CREATE INDEX, DROP INDEX, CREATE CONSTRAINT, DROP CONSTRAINT). Schema introspection is accepted: SHOW INDEXES, SHOW CONSTRAINTS, and their singular aliases SHOW INDEX and SHOW CONSTRAINT, each optionally followed by a YIELD / WHERE / RETURN projection. Introspection lists the registered schema and alters nothing, so it is read-only; the write subcommands reject it. The two keywords must be separated by exactly one space, which is the only spelling the engine parses: SHOW  INDEXES with two spaces, with a tab or with a line break is rejected with exit code 6 before the query runs.",
 				Usage:       "rmp graph query -r <roadmap> [--query <cypher>]",
 				HelpPrinter: printGraphQueryHelp,
 				Handler:     runGraphQuery,
-				ReadsStdin:  true,
+				// `graph` publishes its own refusal for an excess positional
+				// argument — the canonical line with a hint naming the two
+				// sources a Cypher query may come from (SPEC/COMMANDS.md
+				// § Positional Arguments; SPEC/GRAPH.md § Cypher Input Source
+				// and Precedence). The shared enforcement point defers so that
+				// wording survives.
+				PublishesOwnArityRefusal: true,
+				ReadsStdin:               true,
 				Flags: []Flag{
 					sharedRoadmapFlag(),
 					queryFlag,
@@ -134,7 +148,14 @@ func buildGraphCommand() Command {
 				Usage:       "rmp graph update -r <roadmap> [--query <cypher>]",
 				HelpPrinter: printGraphUpdateHelp,
 				Handler:     runGraphUpdate,
-				ReadsStdin:  true,
+				// `graph` publishes its own refusal for an excess positional
+				// argument — the canonical line with a hint naming the two
+				// sources a Cypher query may come from (SPEC/COMMANDS.md
+				// § Positional Arguments; SPEC/GRAPH.md § Cypher Input Source
+				// and Precedence). The shared enforcement point defers so that
+				// wording survives.
+				PublishesOwnArityRefusal: true,
+				ReadsStdin:               true,
 				Flags: []Flag{
 					sharedRoadmapFlag(),
 					queryFlag,
@@ -174,7 +195,14 @@ func buildGraphCommand() Command {
 				Usage:       "rmp graph delete -r <roadmap> [--query <cypher>]",
 				HelpPrinter: printGraphDeleteHelp,
 				Handler:     runGraphDelete,
-				ReadsStdin:  true,
+				// `graph` publishes its own refusal for an excess positional
+				// argument — the canonical line with a hint naming the two
+				// sources a Cypher query may come from (SPEC/COMMANDS.md
+				// § Positional Arguments; SPEC/GRAPH.md § Cypher Input Source
+				// and Precedence). The shared enforcement point defers so that
+				// wording survives.
+				PublishesOwnArityRefusal: true,
+				ReadsStdin:               true,
 				Flags: []Flag{
 					sharedRoadmapFlag(),
 					queryFlag,
@@ -210,11 +238,18 @@ func buildGraphCommand() Command {
 			{
 				Name:        "search",
 				Summary:     "Traverse the graph (variable-length paths, read-only), or introspect the schema.",
-				Description: "Executes a read-only traversal query, including variable-length path patterns such as -[*1..3]-. Any writing clause is rejected by the guard rail, as is any schema-mutating DDL clause. Schema introspection is accepted on the same terms as on `graph query`: SHOW INDEXES, SHOW CONSTRAINTS, and their singular aliases, each optionally followed by a YIELD / WHERE / RETURN projection.",
+				Description: "Executes a read-only traversal query, including variable-length path patterns such as -[*1..3]-. Any writing clause is rejected by the guard rail, as is any schema-mutating DDL clause. Schema introspection is accepted on the same terms as on `graph query`: SHOW INDEXES, SHOW CONSTRAINTS, and their singular aliases, each optionally followed by a YIELD / WHERE / RETURN projection, and each written with exactly one space between the two keywords.",
 				Usage:       "rmp graph search -r <roadmap> [--query <cypher>]",
 				HelpPrinter: printGraphSearchHelp,
 				Handler:     runGraphSearch,
-				ReadsStdin:  true,
+				// `graph` publishes its own refusal for an excess positional
+				// argument — the canonical line with a hint naming the two
+				// sources a Cypher query may come from (SPEC/COMMANDS.md
+				// § Positional Arguments; SPEC/GRAPH.md § Cypher Input Source
+				// and Precedence). The shared enforcement point defers so that
+				// wording survives.
+				PublishesOwnArityRefusal: true,
+				ReadsStdin:               true,
 				Flags: []Flag{
 					sharedRoadmapFlag(),
 					queryFlag,

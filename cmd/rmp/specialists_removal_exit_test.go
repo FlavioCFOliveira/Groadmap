@@ -13,22 +13,28 @@ import (
 	"github.com/FlavioCFOliveira/Groadmap/internal/commands"
 )
 
-// TestSpecialistsRemoval_AssignUnassignExitMisuse is the end-to-end half of the
-// exit-code claim in SPEC/COMMANDS.md § Command Aliases Reference: `rmp task
-// assign` and `rmp task unassign` are rejected by the SAME unknown-subcommand
-// path as any other unrecognised name, at exit code 2, with no reserved code of
+// TestSpecialistsRemoval_AssignUnassignExitCmdNotFound is the end-to-end half
+// of the exit-code claim in SPEC/COMMANDS.md § Command Aliases Reference: `rmp
+// task assign` and `rmp task unassign` are rejected by the SAME dispatch-failure
+// path as any other unresolved name, at exit code 127, with no reserved code of
 // their own.
+//
+// The code changed from 2 to 127 when the dispatch failure stopped being
+// carried by utils.ErrInvalidInput. The two names never had a code of their own
+// and still do not; what moved is the shared path they ride on
+// (SPEC/COMMANDS.md § Dispatch Failures, SPEC/HELP.md § Exit code of a dispatch
+// failure).
 //
 // internal/commands can only assert which sentinel the error carries; the
 // sentinel-to-code mapping lives here, in handleError. This test closes the gap
 // by running the real registry dispatch main() runs and feeding the resulting
-// error to the real handleError, so the literal 2 is observed rather than
+// error to the real handleError, so the literal 127 is observed rather than
 // inferred.
 //
 // The control case is what makes it more than a tautology: `nonexistent-sub`, a
 // name that was never a subcommand, must produce the identical code. Equality
 // between the two is the actual claim — "assign" is not special.
-func TestSpecialistsRemoval_AssignUnassignExitMisuse(t *testing.T) {
+func TestSpecialistsRemoval_AssignUnassignExitCmdNotFound(t *testing.T) {
 	taskCmd := commands.AppRegistry().FindCommand("task")
 	if taskCmd == nil {
 		t.Fatal("task command missing from registry")
@@ -46,17 +52,17 @@ func TestSpecialistsRemoval_AssignUnassignExitMisuse(t *testing.T) {
 	}
 
 	controlCode, controlStderr := run("nonexistent-sub")
-	if controlCode != ExitMisuse {
-		t.Fatalf("control: `rmp task nonexistent-sub` exited %d, want %d (ExitMisuse); the "+
-			"unknown-subcommand path itself is broken, so the comparisons below prove nothing (stderr: %s)",
-			controlCode, ExitMisuse, controlStderr)
+	if controlCode != ExitCmdNotFound {
+		t.Fatalf("control: `rmp task nonexistent-sub` exited %d, want %d (ExitCmdNotFound); the "+
+			"dispatch-failure path itself is broken, so the comparisons below prove nothing (stderr: %s)",
+			controlCode, ExitCmdNotFound, controlStderr)
 	}
 
 	for _, sub := range []string{"assign", "unassign"} {
 		code, stderr := run(sub)
-		if code != ExitMisuse {
-			t.Errorf("`rmp task %s` exited %d, want %d (ExitMisuse); stderr: %s",
-				sub, code, ExitMisuse, stderr)
+		if code != ExitCmdNotFound {
+			t.Errorf("`rmp task %s` exited %d, want %d (ExitCmdNotFound); stderr: %s",
+				sub, code, ExitCmdNotFound, stderr)
 		}
 		if code != controlCode {
 			t.Errorf("`rmp task %s` exited %d but the never-registered control exited %d; the two "+
@@ -69,6 +75,12 @@ func TestSpecialistsRemoval_AssignUnassignExitMisuse(t *testing.T) {
 		if !strings.HasPrefix(stderr, "Error:") {
 			t.Errorf("`rmp task %s`: stderr = %q, want it to start with \"Error:\" "+
 				"(SPEC/HELP.md § Error message format)", sub, stderr)
+		}
+		// The recovery help rides on the same path: a dispatch failure
+		// writes the invoked family's help to stderr after the error
+		// (SPEC/HELP.md § Recovery help after a dispatch failure).
+		if !strings.Contains(stderr, "Usage: rmp task [command] [arguments] [options]") {
+			t.Errorf("`rmp task %s`: stderr = %q, want the task family help after the error line", sub, stderr)
 		}
 	}
 }
@@ -149,8 +161,8 @@ func TestSpecialistsRemoval_NoNewExitCodeExists(t *testing.T) {
 }
 
 // captureStderrForExitTest redirects os.Stderr for the duration of fn.
-// handleError writes through printError, which targets os.Stderr directly, so
-// the redirect is the only way to observe it.
+// handleError writes through writeFailureReport, which targets os.Stderr
+// directly, so the redirect is the only way to observe it.
 func captureStderrForExitTest(t *testing.T, fn func()) string {
 	t.Helper()
 	old := os.Stderr

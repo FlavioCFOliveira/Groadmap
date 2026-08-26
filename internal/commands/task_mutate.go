@@ -13,6 +13,13 @@ import (
 )
 
 // taskRemove removes tasks.
+//
+// Every named task must be in BACKLOG, and a BACKLOG task may still be a sprint
+// member (SPEC/STATE_MACHINE.md § Sprint Membership and the BACKLOG Status). The
+// sprint_tasks foreign key cascades on delete, so removing such a task takes its
+// membership row with it and thins that sprint's run; each sprint that loses a
+// row is compacted inside the same transaction (SPEC/DATABASE.md § Position
+// Density Within a Sprint).
 func taskRemove(args []string) error {
 	roadmapName, remaining, err := requireRoadmap(args)
 	if err != nil {
@@ -23,7 +30,7 @@ func taskRemove(args []string) error {
 		return fmt.Errorf("%w: task ID(s) required", utils.ErrRequired)
 	}
 
-	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], "task")
+	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], utils.FieldTaskID)
 	if err != nil {
 		return err
 	}
@@ -64,6 +71,20 @@ func taskRemove(args []string) error {
 
 	// Delete within transaction with audit
 	return database.WithTransaction(func(tx *sql.Tx) error {
+		// A BACKLOG task can still be a sprint member (SPEC/STATE_MACHINE.md
+		// § Sprint Membership and the BACKLOG Status), and sprint_tasks declares
+		// ON DELETE CASCADE on task_id, so the DELETE below silently takes the
+		// membership row with the task and leaves a gap in that sprint's run.
+		// The sprint is never named on this command line, so it has to be read
+		// out of the membership rows while they still exist — after the delete
+		// there is nothing left to read (SPEC/DATABASE.md § Position Density
+		// Within a Sprint, `task remove` on a BACKLOG task that is still a
+		// sprint member).
+		losing, err := db.SprintsOfTasksTx(tx, ids)
+		if err != nil {
+			return err
+		}
+
 		for _, id := range ids {
 			// Delete task
 			result, err := tx.Exec("DELETE FROM tasks WHERE id = ?", id)
@@ -83,7 +104,10 @@ func taskRemove(args []string) error {
 				return err
 			}
 		}
-		return nil
+
+		// Close the gaps the cascade opened, in the same transaction as the
+		// deletion, so no committed state holds one.
+		return db.CompactSprintsTx(tx, losing)
 	})
 }
 
@@ -98,12 +122,21 @@ func taskRemove(args []string) error {
 //
 // Valid manual status transitions (this command):
 //   - SPRINT → BACKLOG, DOING
-//   - DOING → SPRINT, TESTING
+//   - DOING → TESTING
 //   - TESTING → DOING, COMPLETED
 //   - COMPLETED → BACKLOG (reopen)
 //
 // BACKLOG → SPRINT is automatic only (via `sprint add-tasks`); manual
 // `task stat <ids> SPRINT` is rejected with exit code 6.
+//
+// DOING → SPRINT used to be listed above and never worked: the guard in
+// models.CanTransitionTo gives DOING the single target TESTING, and the SPRINT
+// rejection fifty lines below refuses that target from every source state. The
+// only command that returns a DOING or TESTING task to BACKLOG is `task reopen`
+// (SPEC/STATE_MACHINE.md § Valid Transitions). The list is pinned to the guard
+// by TestTaskStatDocComment_ListsExactlyTheTransitionsAccepted, which reads it
+// back out of this file and compares it against transitions the command was
+// observed to accept.
 //
 // Optional flags:
 //   - -r, --roadmap: Roadmap name (uses current if not specified)
@@ -148,8 +181,16 @@ func taskSetStatus(args []string) error {
 			if i+1 >= len(remaining) {
 				return fmt.Errorf("%w: --summary requires a value", utils.ErrRequired)
 			}
-			// Trim leading/trailing whitespace per SPEC/COMMANDS.md.
-			s := strings.TrimSpace(remaining[i+1])
+			// Recorded AS SUPPLIED. The trim belongs to the validation
+			// sequence further down, and it must not happen here: this site
+			// used to trim at extraction, so by the time the
+			// control-character rule ran a leading or trailing VT (0x0B) or
+			// FF (0x0C) had already been removed and the value was accepted
+			// with the forbidden character silently discarded (measured:
+			// `--summary $'\x0bDelivered.'` exited 0 and stored
+			// "Delivered."). SPEC/MODELS.md § Free-Text Emptiness and
+			// Trimming Constraint fixes the order that closes it.
+			s := remaining[i+1]
 			completionSummary = &s
 			i++ // consume the value
 		case "--commit-open", "-co":
@@ -176,7 +217,7 @@ func taskSetStatus(args []string) error {
 		return fmt.Errorf("%w: task ID(s) and status required", utils.ErrRequired)
 	}
 
-	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], "task")
+	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], utils.FieldTaskID)
 	if err != nil {
 		return err
 	}
@@ -199,15 +240,33 @@ func taskSetStatus(args []string) error {
 	if completionSummary != nil && newStatus != models.StatusCompleted {
 		return fmt.Errorf("%w: --summary is only valid when transitioning to COMPLETED", utils.ErrValidation)
 	}
-	if completionSummary != nil && len(*completionSummary) > models.MaxTaskCompletionSummary {
-		return fmt.Errorf("%w: completion_summary exceeds maximum length of %d characters", utils.ErrFieldTooLarge, models.MaxTaskCompletionSummary)
-	}
-	// Reject control / bidi / format code points (SPEC/MODELS.md § Free-Text
-	// Control-Character Constraint).
+	// The whole free-text sequence for --summary, through the one helper that
+	// owns its order (rmp task 302): the LENGTH cap on the value as it will be
+	// stored, then the encoding rule and then the control-character rule on the
+	// value AS SUPPLIED, and only then the trim (SPEC/MODELS.md § Free-Text UTF-8
+	// Encoding Constraint, § Free-Text Control-Character Constraint, and
+	// § Free-Text Emptiness and Trimming Constraint).
+	//
+	// The cap keeps the position SPEC/COMMANDS.md § Change Status (stat) step 3
+	// states for --summary — ahead of the content rules — and still measures the
+	// TRIMMED value, because that is the value stored (Rule 2): a summary of
+	// exactly the maximum length carrying surrounding whitespace is accepted,
+	// and what is counted is what the column holds. What changed is only that
+	// this command no longer says so itself; the sequence is stated once, in
+	// utils.TrimFreeText, so it cannot drift from the six other write paths.
+	//
+	// `completion_summary` is the one free-text field Rule 1 does NOT govern: it
+	// is optional, and `task stat` accepts a transition to COMPLETED that
+	// supplies no --summary at all, so a value that is empty once trimmed is a
+	// summary the caller chose not to write and not a violation — which is why
+	// this is TrimFreeText and not RequireFreeText.
 	if completionSummary != nil {
-		if err := utils.ValidateNoControlChars(*completionSummary, "completion_summary"); err != nil {
-			return err
+		stored, textErr := utils.TrimFreeText(*completionSummary,
+			utils.FieldTaskCompletionSummary, models.MaxTaskCompletionSummary)
+		if textErr != nil {
+			return textErr
 		}
+		completionSummary = &stored
 	}
 
 	// Fail-fast validation for the commit flags (step 4: still before the
@@ -456,6 +515,11 @@ func normalizeCommitFlag(flag, value string) (string, error) {
 // commit_open.
 // Tasks already in BACKLOG are skipped with an informational message.
 // Accepts comma-separated IDs with fail-fast on any invalid ID.
+//
+// A task reopened from SPRINT, DOING or TESTING loses its sprint membership; one
+// reopened from COMPLETED keeps it. Each sprint that loses a row is compacted
+// inside the same transaction, so its remaining members hold a gapless 0..N-1
+// run (SPEC/DATABASE.md § Position Density Within a Sprint).
 func taskReopen(args []string) error {
 	roadmapName, remaining, err := requireRoadmap(args)
 	if err != nil {
@@ -466,7 +530,7 @@ func taskReopen(args []string) error {
 		return fmt.Errorf("%w: task ID(s) required", utils.ErrRequired)
 	}
 
-	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], "task")
+	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], utils.FieldTaskID)
 	if err != nil {
 		return err
 	}
@@ -525,7 +589,22 @@ func taskReopen(args []string) error {
 		}
 
 		// Remove sprint_tasks rows for tasks that were associated with a sprint.
+		//
+		// Which sprint each of those rows belongs to is read FIRST, because the
+		// DELETE destroys the evidence and the sprint is never named on this
+		// command line: `task reopen` takes task ids, so the sprint it damages
+		// is one the caller's arguments do not mention (SPEC/DATABASE.md
+		// § Position Density Within a Sprint, `task reopen` from SPRINT, DOING
+		// or TESTING). A task reopened from COMPLETED keeps its row and is
+		// absent from toRemoveFromSprint, so it contributes no sprint here.
+		var losing []int
 		if len(toRemoveFromSprint) > 0 {
+			owners, err := db.SprintsOfTasksTx(tx, toRemoveFromSprint)
+			if err != nil {
+				return err
+			}
+			losing = owners
+
 			delQuery := fmt.Sprintf( // #nosec G201 -- only ? placeholders interpolated, values are parameterized
 				"DELETE FROM sprint_tasks WHERE task_id IN (%s)",
 				database.Placeholders(len(toRemoveFromSprint)),
@@ -540,7 +619,10 @@ func taskReopen(args []string) error {
 				return err
 			}
 		}
-		return nil
+
+		// Close the gaps the DELETE opened, in the same transaction as the
+		// removal, so no committed state holds one.
+		return db.CompactSprintsTx(tx, losing)
 	})
 }
 
@@ -564,7 +646,7 @@ func taskSetPriority(args []string) error {
 		return fmt.Errorf("%w: task ID(s) and priority required", utils.ErrRequired)
 	}
 
-	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], "task")
+	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], utils.FieldTaskID)
 	if err != nil {
 		return err
 	}
@@ -575,9 +657,22 @@ func taskSetPriority(args []string) error {
 		// (exit 6 / ErrValidation per SPEC/ARCHITECTURE.md): priority is a
 		// 0-9 enum-like value, so any token that is not a valid value in
 		// that range — numeric out-of-range or non-numeric — is invalid data.
+		//
+		// This is NOT the range rule below, and its wording is deliberately
+		// left as it stands. The range rule refuses a well-formed integer for
+		// being outside the bounds; this refuses a token that is not an integer
+		// at all, so the two are different rules that happen to share an exit
+		// code. rmp task 318 converged the RANGE wording across the four
+		// commands that apply it; rewording this one alongside it would have
+		// changed a message no specification publishes and that no other call
+		// site emits.
 		return fmt.Errorf("%w: invalid priority: must be 0-9", utils.ErrValidation)
 	}
-	if err := utils.ValidateNumericRange(priority, 0, 9, "priority"); err != nil {
+	// The bounds and the wording of their refusal belong to the field, not to
+	// this command: models.ValidatePriority is the one place either is stated,
+	// and `task create` and `task edit` reach the same rule through it
+	// (rmp task 318).
+	if err := models.ValidatePriority(priority); err != nil {
 		return err
 	}
 
@@ -635,7 +730,7 @@ func taskSetSeverity(args []string) error {
 		return fmt.Errorf("%w: task ID(s) and severity required", utils.ErrRequired)
 	}
 
-	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], "task")
+	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], utils.FieldTaskID)
 	if err != nil {
 		return err
 	}
@@ -646,9 +741,19 @@ func taskSetSeverity(args []string) error {
 		// (exit 6 / ErrValidation per SPEC/ARCHITECTURE.md): severity is a
 		// 0-9 enum-like value, so any token that is not a valid value in
 		// that range — numeric out-of-range or non-numeric — is invalid data.
+		//
+		// This is NOT the range rule below, and its wording is deliberately
+		// left as it stands. The range rule refuses a well-formed integer for
+		// being outside the bounds; this refuses a token that is not an integer
+		// at all, so the two are different rules that happen to share an exit
+		// code. rmp task 318 converged the RANGE wording across the four
+		// commands that apply it; rewording this one alongside it would have
+		// changed a message no specification publishes and that no other call
+		// site emits.
 		return fmt.Errorf("%w: invalid severity: must be 0-9", utils.ErrValidation)
 	}
-	if err := utils.ValidateNumericRange(severity, 0, 9, "severity"); err != nil {
+	// One rule, one message: see the note in taskSetPriority above.
+	if err := models.ValidateSeverity(severity); err != nil {
 		return err
 	}
 

@@ -49,11 +49,28 @@ func init() {
 	}
 	staticSubFS = sub
 
-	// The badge FuncMap MUST be registered before parsing so the templates can
-	// call the semantic colour helpers (taskStatusBadge, sprintStatusBadge,
-	// priorityBadge, severityBadge) at execution time (SPEC/WEB.md § Status,
-	// Priority, and Severity Badge Colours; see badge.go).
+	// The FuncMap MUST be registered before parsing: html/template resolves a
+	// function name at PARSE time, so a template calling a helper that is not in
+	// the map fails to parse rather than failing to render.
 	pageTemplates = template.Must(
-		template.New("").Funcs(badgeFuncMap).ParseFS(templatesFS, "templates/*.html"),
+		template.New("").Funcs(templateFuncs()).ParseFS(templatesFS, "templates/*.html"),
 	)
+}
+
+// templateFuncs is the complete FuncMap the page templates are parsed with: the
+// semantic badge colour helpers (see badge.go) and the audit-cell helpers (see
+// audit.go).
+//
+// It is a function returning a fresh map rather than a package-level variable so
+// a test can take the real set, replace one entry with a probe, and re-parse the
+// templates against it without mutating the map the server uses.
+func templateFuncs() template.FuncMap {
+	funcs := make(template.FuncMap, len(badgeFuncMap)+len(auditFuncMap))
+	for name, fn := range badgeFuncMap {
+		funcs[name] = fn
+	}
+	for name, fn := range auditFuncMap {
+		funcs[name] = fn
+	}
+	return funcs
 }

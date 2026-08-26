@@ -103,14 +103,14 @@ func seedCommentFixture(t *testing.T, name string) commentFixture {
 	const now = "2026-08-10T08:00:00Z"
 
 	mkTask := func(title string) int {
-		id, terr := database.CreateTask(ctx, seededTask(now, title))
+		id, terr := seedTask(database, seededTask(now, title))
 		if terr != nil {
 			t.Fatalf("creating task %q: %v", title, terr)
 		}
 		return id
 	}
 	mkSprint := func(title string, order int) int {
-		id, serr := database.CreateSprint(ctx, &models.Sprint{
+		id, serr := seedSprint(database, &models.Sprint{
 			Status:      models.SprintPending,
 			Title:       title,
 			Description: title,
@@ -133,9 +133,7 @@ func seedCommentFixture(t *testing.T, name string) commentFixture {
 		[]int{f.loggedTaskID, f.markupTaskID, f.quietTaskID}); aerr != nil {
 		t.Fatalf("adding tasks to sprint: %v", aerr)
 	}
-	if serr := database.UpdateSprintStatus(ctx, f.sprintID, models.SprintOpen); serr != nil {
-		t.Fatalf("opening sprint: %v", serr)
-	}
+	forceSprintOpen(t, database, f.sprintID)
 
 	f.quietSprintID = mkSprint("Refresh the currency table from the reference feed", 20)
 	f.looseTaskID = mkTask("Retire the legacy settlement importer")
@@ -803,6 +801,15 @@ func TestCommentTypeBadge_NeutralForEveryType(t *testing.T) {
 // resolution, and lastSprintIDs records the id set it was given, so Acceptance
 // Criterion 92 is measured on the same instrument as Criterion 70: one query for
 // the whole set of rendered task ids, and none for a page that renders no task.
+//
+// sprintListings counts the sprints page's ONLY read, the sprint listing, and
+// sprintTasks counts the per-sprint member-task read that page must never take:
+// it renders every sprint as a card with no member tasks on it, and the footer
+// count it shows is carried by the sprint record the listing already returned
+// (SPEC/WEB.md § Tasks and Sprints from SQLite). The member read is unreachable
+// through the sprintsSource interface, so sprintTasks is the falsifiable guard
+// that the seam still holds if that interface is ever widened — the sprints-page
+// read-cost test exercises it directly to prove it counts.
 type countingSource struct {
 	*db.DB
 	lastGroupedIDs       []int
@@ -811,9 +818,19 @@ type countingSource struct {
 	groupedTaskSprints   int
 	perTaskComments      int
 	sprintComments       int
+	sprintListings       int
 	taskList             int
 	boundedTaskList      int
 	sprintTasks          int
+}
+
+// ListSprints is the read the sprints page performs: the roadmap's sprints, with
+// the membership of every one of them resolved in the same bounded number of
+// statements whatever the number of sprints (SPEC/COMMANDS.md § List Sprints).
+func (c *countingSource) ListSprints(ctx context.Context,
+	status *models.SprintStatus) ([]models.Sprint, error) {
+	c.sprintListings++
+	return c.DB.ListSprints(ctx, status)
 }
 
 // ListAllTasks is the read the board performs: unbounded, every task of the
@@ -897,8 +914,7 @@ func seedTasksWithComments(t *testing.T, name string, n int) []int {
 	const now = "2026-08-10T08:00:00Z"
 	ids := make([]int, 0, n)
 	for i := 0; i < n; i++ {
-		id, terr := database.CreateTask(context.Background(),
-			seededTask(now, "Balance settlement window "+itoa(i+1)))
+		id, terr := seedTask(database, seededTask(now, "Balance settlement window "+itoa(i+1)))
 		if terr != nil {
 			t.Fatalf("creating task %d: %v", i+1, terr)
 		}

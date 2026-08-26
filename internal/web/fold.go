@@ -3,6 +3,38 @@ package web
 import (
 	"strings"
 	"unicode"
+
+	"github.com/FlavioCFOliveira/Groadmap/internal/unicodenorm"
+)
+
+// The whole of Unicode, as every rule in this file is stated over and as the
+// tables generated from them sweep it.
+//
+// Surrogates are not scalar values: they carry no case mapping, no White_Space
+// property, no canonical decomposition and no combining class, so no shipped
+// entry may cover one and every sweep skips them.
+const (
+	unicodeMaxCodePoint = unicodenorm.MaxCodePoint
+	surrogateFirst      = unicodenorm.SurrogateFirst
+	surrogateLast       = unicodenorm.SurrogateLast
+)
+
+// The Hangul syllables and jamo of UAX #15's algorithmic decomposition and
+// composition, which no shipped table holds a single entry for: a few lines of
+// arithmetic give their decomposition and their composition exactly, so
+// DECOMP_TABLE holds 2,081 entries rather than 13,253 and COMPOSE_TABLE 961
+// rather than 12,133 (SPEC/WEB.md § Roadmap Tasks Page, What keeps the shipped
+// rule equal to the server's; Acceptance Criterion 155).
+const (
+	hangulSBase  = unicodenorm.HangulSBase
+	hangulLBase  = unicodenorm.HangulLBase
+	hangulVBase  = unicodenorm.HangulVBase
+	hangulTBase  = unicodenorm.HangulTBase
+	hangulLCount = unicodenorm.HangulLCount
+	hangulVCount = unicodenorm.HangulVCount
+	hangulTCount = unicodenorm.HangulTCount
+	hangulNCount = unicodenorm.HangulNCount
+	hangulSCount = unicodenorm.HangulSCount
 )
 
 //go:generate go run searchtables_gen.go
@@ -92,15 +124,103 @@ func trimSearchTerm(raw string) string {
 	return strings.TrimFunc(raw, isSearchSpace)
 }
 
-// foldSearchTerm normalises a raw search term into the form the matching rule
-// compares with: trimmed by trimSearchTerm, THEN folded by foldSearch.
+// foldSearchTerm prepares a raw search term for the matching rule: trimmed by
+// trimSearchTerm, THEN normalised and folded by searchableText.
 //
-// The order is fixed, and the client performs the same two steps in the same
-// order. It is not observable under the Unicode version in force — no code point
-// carrying White_Space folds to anything but itself, and none outside the property
-// folds into it, so the two steps commute — but fixing it is what keeps the
-// contract from resting on that coincidence (SPEC/WEB.md § Roadmap Tasks Page,
-// Trim first, then fold).
+// The order is fixed, and the client performs the same steps in the same order.
+// The TRIM's place in it is not observable under the Unicode version in force —
+// no code point carrying White_Space folds to anything but itself, none outside
+// the property folds into it, and normalisation neither gives the property to a
+// code point that lacked it nor takes it from one that had it, the two code
+// points it does rewrite (U+2000 to U+2002 and U+2001 to U+2003) carrying it
+// before and after — so the trim commutes with both later steps. Fixing it is
+// what keeps the contract from resting on that coincidence.
+//
+// The place of the NORMALISATION relative to the fold is a different matter: it
+// IS observable, and searchableText says why normalising first is the only order
+// that closes the defect this rule exists for (SPEC/WEB.md § Roadmap Tasks Page,
+// Trim first, then normalise, then fold).
 func foldSearchTerm(raw string) string {
-	return foldSearch(trimSearchTerm(raw))
+	return searchableText(trimSearchTerm(raw))
+}
+
+// ==================== THE NORMALISATION RULE ====================
+
+// The normalisation rule itself lives in internal/unicodenorm. It moved there
+// when it gained a second consumer on the other side of an import edge — the
+// knowledge-graph key audit in internal/graphkeys, which judges two keys the same
+// key when their NFC forms are equal (SPEC/GRAPH.md § Node Key Uniqueness). Since
+// internal/commands imports this package, a leaf cannot import it back, and a
+// second copy of NFC in one binary is what internal/graphlock and internal/backoff
+// were each extracted to prevent.
+//
+// WHAT REMAINS HERE ARE DELEGATIONS, AND THAT IS THE POINT. Each name below is
+// still the server's subject for the rule it names, so the guard that holds the
+// SHIPPED client tables equal to the server's rule
+// (TestTaskSearchScript_ShippedRuleIsTheServerRule) still compares the tables
+// against these functions, and still fails if the Unicode data underneath them
+// moves. What changed is where the body lives, not which function the board
+// search calls or which function the guard measures. Adding a rule of this
+// package's own here — rather than delegating — would put a second answer to one
+// question back into the binary.
+
+// searchDecompose returns the FULL canonical decomposition of ONE code point,
+// canonically ordered: Normalization Form D of that code point.
+func searchDecompose(r rune) []rune { return unicodenorm.Decompose(r) }
+
+// searchCombiningClass returns the canonical combining class of ONE code point.
+func searchCombiningClass(r rune) uint8 { return unicodenorm.CombiningClass(r) }
+
+// searchCompositions is the primary-composite data, derived once per process.
+func searchCompositions() *unicodenorm.Composition { return unicodenorm.Compositions() }
+
+// buildSearchComposition derives the primary composites from the Unicode
+// character data. It is the one-time work searchCompositions memoises, exposed
+// so the derivation can be benchmarked on its own.
+func buildSearchComposition() *unicodenorm.Composition { return unicodenorm.BuildComposition() }
+
+// searchCompose returns the primary composite of two code points, if there is
+// one. It is Groadmap's own composition, deliberately not the module's; the
+// reason is in unicodenorm.Compose.
+func searchCompose(lead, trail rune) (rune, bool) { return unicodenorm.Compose(lead, trail) }
+
+// searchNFC normalises text to Unicode's Normalization Form C.
+//
+// It is the server's subject for the normalisation rule: a task's searchable text
+// and a search term are both normalised through THIS function, so the corpus and
+// the term cannot drift apart (SPEC/WEB.md § Roadmap Tasks Page, One rule, and
+// only one implementation of it).
+func searchNFC(text string) string { return unicodenorm.NFC(text) }
+
+// isSurrogateRune reports whether r is one of the 2048 surrogate code points,
+// which are not scalar values.
+func isSurrogateRune(r rune) bool { return unicodenorm.IsSurrogate(r) }
+
+// searchableText is the WHOLE preparation of a text for the board search, and the
+// one place its four steps are stated in their order: normalise, fold, normalise
+// again.
+//
+// A task's searchable text (taskView.SearchText) and a search term
+// (foldSearchTerm, after its trim) both go through THIS function, so the corpus
+// and the term are one rule rather than two implementations of one description.
+//
+// NORMALISE BEFORE FOLDING. The order is observable, and normalising first is the
+// only order that closes the defect this rule exists for: the canonical
+// decomposition of U+0130 is U+0049 U+0307, so a title written with U+0130 and a
+// title written as U+0049 followed by U+0307 are the same text by Unicode's own
+// definition, and normalising first gives both one searchable text. Folding first
+// would give U+0069 for one and U+0069 U+0307 for the other.
+//
+// AND NORMALISE AGAIN AFTERWARDS. The second pass is not decoration: the fold can
+// produce a sequence that composes where the unfolded one did not. Unicode has no
+// precomposed capital for H with a line below, so the first pass leaves U+0048
+// U+0331 as two code points; the fold lowers the H, and U+0068 U+0331 DOES have a
+// precomposed form, U+1E96. Without the second pass a task titled "H̱ydro" would
+// carry a two-code-point searchable text while a term typed as the single
+// character U+1E96 stayed one, and the term would not occur in the text it plainly
+// spells. U+1E97, U+1E98, U+1E99 and U+01F0 behave the same way. A third pass
+// would change nothing (SPEC/WEB.md § Roadmap Tasks Page, The normalisation rule;
+// Acceptance Criterion 152).
+func searchableText(text string) string {
+	return searchNFC(foldSearch(searchNFC(text)))
 }

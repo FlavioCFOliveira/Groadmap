@@ -98,9 +98,12 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 
 // handleSprints renders a roadmap's sprints landing page: the roadmap's
 // sprints grouped into the three tabs (Próximos / Actual / Concluídos), with
-// the Actual tab active by default and the OPEN sprints expanded with their
-// member tasks. It does NOT render the full tasks table (SPEC/WEB.md § Roadmap
-// Sprints Page). The {name} is validated and confirmed to exist before any
+// the Actual tab active by default. Every sprint, the OPEN one included, is
+// rendered through the shared sprintCard partial as a card with NO member tasks
+// on it; the full sprint detail block, with the member-tasks board, lives only
+// on the single Roadmap Sprint Page. It does NOT render the full tasks table
+// either (SPEC/WEB.md § Roadmap Sprints Page; § Shared Sprint-Card Partial).
+// The {name} is validated and confirmed to exist before any
 // data read; an invalid or unknown name yields 404 (handled by
 // resolveRoadmap), an internal read error yields 500.
 func handleSprints(w http.ResponseWriter, r *http.Request) {

@@ -14,9 +14,9 @@ import (
 // through os.UserHomeDir, so tests that call them without redirecting HOME
 // created real roadmaps in the home directory of whoever ran `go test ./...`.
 // TestOpen_ValidRoadmap, TestOpenExisting, TestConfigureConnection,
-// TestPerConnectionPragmas, TestDBClose, TestRoadmapName,
-// TestWithTransaction_Success, TestWithTransaction_RollbackOnError,
-// TestGetSchemaVersion and TestGetEntityHistory each left one behind;
+// TestPerConnectionPragmas, TestDBClose, TestWithTransaction_Success,
+// TestWithTransaction_RollbackOnError, TestGetSchemaVersion and
+// TestGetEntityHistory each left one behind;
 // TestOpenReadOnly_NoMigrationNoWrites went further and ran os.RemoveAll
 // against a path inside that real home.
 //

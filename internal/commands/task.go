@@ -27,7 +27,7 @@ func HandleTask(args []string) error {
 // specifics item 1). The comment-type list is rendered from
 // models.ValidTaskCommentTypes rather than typed out, so it cannot go stale.
 func printTaskHelp() {
-	fmt.Printf(`Usage: rmp task [command] [arguments] [options]
+	fmt.Fprintf(helpDst(), `Usage: rmp task [command] [arguments] [options]
 
 Valid status values (for --status filter and 'stat' setter):
   BACKLOG, SPRINT, DOING, TESTING, COMPLETED
@@ -167,6 +167,7 @@ Exit codes:
   4   Task or comment not found
   6   Validation error (bad enum, out-of-range number, oversized field,
        invalid state transition, subtask/dependency guard, etc.)
+  127 Unknown subcommand
 
 Examples:
   rmp task list -r myproject

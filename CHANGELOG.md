@@ -7,6 +7,704 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.15.1] - 2026-08-26
+
+A correctness release, and nothing else. Two sprints — **90 completed tasks across 87
+commits** — land together under one exclusive rule: fix the defects Groadmap has today;
+do not hunt for features, and do not complete features that were never built. A defect
+was defined, and enforced, as a divergence between what the software **does** and what
+it is **specified** to do, reproducible against the built binary. Ninety times over,
+that test was applied before any code was written. Mid-sprint, eighteen members were
+returned to the backlog for failing it; fourteen were later readmitted by explicit
+decision, and four are still there.
+
+**The number is `1.15.1` and the release is not backward-compatible.**
+`SPEC/VERSION.md` defines `PATCH` as "Bug fixes, backward compatible"; this release
+contains a dozen changes that make an invocation which succeeded on `1.15.0` fail on
+`1.15.1`. Under a strict reading of Semantic Versioning 2.0.0 that is a `MAJOR` change.
+The project publishes it as `1.15.1` by the owner's explicit decision, on the ground
+that every change is the correction of a divergence from a contract that was **already
+published** — the exit code `127`, the comma-separated id list, the "255 characters"
+cap, the date-only filter form, the published error strings — so a caller relying on
+the old behaviour was relying on a defect. **That does not soften the incompatibility,
+and the version number does not warn anyone.** Read **Changed — BREAKING** below, and
+`release-notes/v1.15.1-20260826.md`, before upgrading any automation.
+
+**The CLI now enforces its own argument contract.** A stray positional argument was
+**ignored across the whole CLI** — and on `task remove` that silence deleted some of
+the tasks you named and reported success. Every command declares its maximum positional
+count, and one shared enforcement point refuses the excess with exit `2` before the
+database is opened. An unresolved subcommand exits **127**. A failing top-level
+invocation writes **zero bytes to stdout**, where an unknown command used to print 2091
+bytes of help there.
+
+**Free text is validated the same way everywhere.** Length cap, UTF-8 encoding, control
+characters, trim, emptiness — one order, seven write paths, eight fields, by flag and on
+standard input. Bytes that are not valid UTF-8 are refused rather than stored; a leading
+or trailing vertical tab or form feed no longer slips past the control-character rule; a
+whitespace-only value is refused and stored values are trimmed; and the caps count
+**Unicode code points instead of bytes**, so 255 four-byte emoji — 1020 bytes — is now
+accepted.
+
+**The knowledge graph stops answering the wrong question.** A relationship read bound by
+a reverse or undirected pattern returned the **wrong edge** when a node pair carried
+edges in both directions; a write bound by such a pattern was silently discarded and
+reported success. Both are refused with exit `6` before the store is opened. Graph reads
+also take a shared advisory lock, because opening the store is not a read-only operation
+on disk.
+
+The database schema advances **two migrations, `1.12.0` → `1.14.0`**, applied
+automatically and in order. They make each sprint's task order **total and dense** and
+repair gaps already committed on every installation. Neither deletes a row, a column, or
+a table. See **Notes** for the migration path and the one-way consequence for sprint
+ordering.
+
+**The release grew after the two sprints closed.** The Go floor moves from 1.26.6 to
+**1.27.0** and the pinned linter to **`golangci-lint` v2.13.1**. The Go move is not a
+version bump: `golang.org/x/text`'s `unicode/norm` picks its character data by build
+constraint on the toolchain, so the board search now normalises against **Unicode
+17.0.0**. The five shipped tables grew strictly additively and exactly **two** searches
+stop matching, both named below. Raising the floor also exposed a latent correctness
+defect that had made **Groadmap's NFC stop being NFC** for twelve code points; fixing it
+is the most consequential change in the release.
+
+### Changed — BREAKING
+
+- **A stray positional argument is refused across the whole CLI.** Twenty paths were
+  measured as changing from silently ignored (exit `0`) to refused (exit `2`), across
+  the `task`, `sprint`, `audit`, `backlog`, `roadmap` and `stats` families and the six
+  global forms. The line is `Error: invalid input: unexpected argument "X"`, with `X`
+  echoed as supplied.
+
+  | Invocation | On `1.15.0` | On `1.15.1` |
+  |------------|-------------|-------------|
+  | `rmp task remove 2 3` | Exit **0**; task `2` deleted, `3` discarded in silence | Exit **2**; **nothing deleted** |
+  | `rmp roadmap create alpha beta` | Exit 0; `alpha` created, `beta` ignored | Exit **2**; **neither created** |
+  | `rmp backlog show-next 5 10` | Exit 0; trailing token tolerated | Exit **2** |
+  | `rmp version check`, `rmp --help sprint` | Exit 0 | Exit **2** |
+  | `rmp task get 1 2` | Exit 0 | Exit **2** |
+
+  Enforcement is reached **by construction** from each command's own declaration, in the
+  only place in the binary that invokes a subcommand handler, so it covers every command
+  that exists and every command that will be added. The refusal precedes the store:
+  `rmp task remove -r <missing-roadmap> 3 4` exits `2`, not the `4` a missing roadmap
+  gives. The comma-separated form is untouched — `rmp task remove 2,3` still removes
+  both — and `SPEC/COMMANDS.md § Remove Task` always said the separator exists precisely
+  so that a mistyped list loses no data. The contract was correct and simply unenforced.
+
+  The `graph` family already refused a stray token on `1.15.0` and its line, hint
+  included, is byte-identical. The other three families that had their own wording —
+  `web`, `ai-help`, and the comment subcommands — keep theirs, exempted by a declaration
+  field rather than by a name list inside the dispatcher.
+
+- **An unresolved subcommand exits `127`, not `2`.** `rmp task bogus`, and the same for
+  `sprint`, `backlog`, `audit`, `graph`, and `roadmap`. An unresolved **top-level**
+  command already exited `127` and is unchanged. The binary moved to the contract, not
+  the contract to the binary: two tables in `SPEC/ARCHITECTURE.md` and the
+  machine-readable AI contract had published `127` for this case all along. The line
+  changes with the exit code, because the classification sentinel that mapped the case
+  to `2` went with it: `Error: invalid input: unknown task subcommand: bogus` becomes
+  `Error: unknown task subcommand: bogus`. The top-level `Error: unknown command: bogus`
+  is unchanged, and a bare family still exits `0` with its help on stdout. One
+  carve-out stays at exit `2` and is documented in two places — an unrecognised scope
+  selector on `--ai-help`, where the name selects a contract section rather than being
+  dispatched. All five family help screens that lacked it now list `127`, as `roadmap`
+  already did, and so do the six corresponding `DOCS/commands/*.md` pages.
+
+- **A failing invocation writes nothing to stdout.** `rmp bogus` wrote **2091 bytes** of
+  general help to stdout, prefixed by a second copy of the AI-agent hint, so the hint
+  appeared once per channel in one run; it now writes **0 bytes** there and 2190 bytes
+  to stderr, the growth being the family help now appended after the error. `rmp` and
+  `rmp --help` are unchanged at 2090 bytes on stdout. The leak was confined to the
+  unresolved top-level command; an unresolved subcommand already wrote nothing there.
+
+  The invoked family's help now follows the error on **stderr**, which settled a
+  contradiction inside the specification — `SPEC/COMMANDS.md` said the help is displayed
+  after the error and `SPEC/HELP.md` said help is never auto-appended — in favour of
+  `COMMANDS.md`. The scope is deliberately narrow: only a dispatch failure appends help.
+  A missing parameter, an unknown flag, a bad enum value, a not-found resource, and a
+  database error keep the error line and the hint alone.
+
+- **Free text that is not valid UTF-8 is refused.** Eight fields — the four on `task`,
+  the two on `sprint`, the comment body, and `completion_summary` — accepted and stored
+  the bytes, which JSON then rendered as U+FFFD, so the output disagreed with the store.
+  They now exit `6` with
+  `Error: validation error: <field>: the value is not valid UTF-8`, on both the flag and
+  the standard-input path.
+
+  **Knowledge-graph property values are covered by the same rule, on all five `graph`
+  subcommands**, reads included. There the consequence was worse: the engine replaces
+  every invalid byte with U+FFFD before its grammar runs, so a write stored a value
+  nobody supplied, and a read or a `DELETE` matched a literal that was never supplied and
+  reported success having found or removed nothing. The control-character rule
+  deliberately does **not** extend to graph reads, because it objects to what is stored
+  and refusing a read that names one would make existing data unreadable rather than
+  merely unwritable.
+
+- **A leading or trailing VT or FF no longer evades the control-character rule.** Both
+  are whitespace to `strings.TrimSpace`, which ran first, so an edge-positioned one was
+  stripped before the check saw it and a body made only of a VT was reported as never
+  having arrived. An interior VT or FF was already refused, with the identical message,
+  so **only the edge positions change**. A 655-probe differential sweep against the
+  previous binary returned 599 identical results, 56 changed, and **zero cases that went
+  from refused to accepted**.
+
+- **A whitespace-only value in a required free-text field is refused, and stored values
+  are trimmed.**
+
+  | Invocation | On `1.15.0` | On `1.15.1` |
+  |------------|-------------|-------------|
+  | `rmp task create -t "   " ...` | Exit **2**, `Error: required parameter missing: --title` | Exit **6**, `Error: validation error: title cannot be empty` |
+  | `rmp sprint create -t "   " -d "   "` | Exit **0**; both stored verbatim | Exit **6** |
+  | `rmp sprint create -t "  Padded Title  " ...` | Stored **with** the padding | Stored as `Padded Title` |
+
+  The counter-intuitive fact that made this dangerous: `sprint create` was correct before
+  the change **only because it did not trim at all**. The mandatory sequence is content
+  rules on the raw value, then the trim, then the emptiness judgement on the trimmed
+  value; adding the trim without that ordering would have reproduced the hole
+  `task edit` already carried. The observable signature of the correct order is that a
+  value made only of VT is refused as a **control character** and never as empty.
+
+- **Reverse and undirected relationship patterns are refused in the graph family.** Two
+  defects, one root, both upstream in GoGraph v0.11.0 and both reproduced against the
+  engine directly with no Groadmap code in the path.
+
+  On a node pair carrying `gateway-[:CALLS]->authstore` and
+  `authstore-[:REPLIES_TO]->gateway`, `1.15.0` answered
+  `MATCH (gateway)<-[e]-(b) RETURN type(e), e.weight` with exit `0` and `CALLS, 1` — the
+  **forward** edge, where the correct answer is `REPLIES_TO, 2`; the undirected form
+  returned two rows, both `CALLS, 1`. On the write side, an undirected
+  `SET e.weight = 7` returned `{"ok": true}` at exit `0` having written only the
+  outgoing edge, and a purely reverse `SET` wrote nothing while reporting the same
+  success.
+
+  Both now exit `6`, raised **before the store is opened**, and the web query bar answers
+  HTTP `400` with the new kind `relationship_read_direction`. Correction was investigated
+  first and is impossible: the consumer receives a bare scalar with no relationship
+  identity, and a `WHERE` over the corrupted value drops the row inside the engine.
+
+  What triggers the refusal is an **expression use** of the relationship variable, which
+  is narrower than "any reverse pattern": `graph query` and `graph search` are refused;
+  `graph update` and `graph delete` are refused when the variable is read or written; a
+  plain `DELETE e` that never reads `e` still succeeds; and `graph create` never reaches
+  the guard, its clause-class check refusing a `MATCH` query first. Detection runs over
+  the engine's own parsed AST rather than the query text, so an arrow inside a string
+  literal cannot trip it and each `UNION` branch is scanned in its own scope.
+
+  **If you write Cypher against `rmp graph`, the undirected cross-reference idiom must be
+  rewritten** as the union of two outgoing legs.
+
+- **A schema-introspection query with irregular keyword spacing is refused, and its exit
+  code moves from `1` to `6`.** `SHOW  INDEXES` with two spaces passed the guard rail,
+  was admitted as an ordinary read, and died in the engine parser with a diagnostic
+  listing every clause keyword except `SHOW` — reading as though `SHOW` were unsupported
+  when the identical query with one space worked. It is now refused by the guard rail
+  with the accepted spelling, rebuilt from the canonical uppercased keyword so no user
+  byte reaches stderr. The web endpoint answers HTTP `400` with a kind of its own,
+  `invalid_keyword_spacing`, rather than reusing `not_read_only`, which would publish a
+  false classification: a `SHOW` is read-only whatever its spacing.
+
+- **An over-long Cypher query is refused by Groadmap rather than by the engine.** The
+  limit is unchanged at 1 048 576 bytes and now applies at **both** doors, `--query` and
+  standard input. Exit `1` and
+  `Error: database error: graph query failed: cypher: parse: ... query too large` become
+  exit `6` and `Error: validation error: query exceeds maximum length of 1048576 bytes`,
+  and the input is no longer buffered in full first. A `graph` subcommand invoked with no
+  query and a terminal on standard input now exits `2` immediately instead of waiting
+  forever for input that will never arrive.
+
+- **`sprint update` no longer discards a flag supplied empty.** It treated the empty
+  string as its flag-absent sentinel, so it could not tell a flag that was not supplied
+  from one supplied empty.
+
+  | Invocation | On `1.15.0` | On `1.15.1` |
+  |------------|-------------|-------------|
+  | `rmp sprint update 1 -t ""` | Exit **2**, "at least one of ... is required" — false, a flag *was* supplied | Exit **6**, `Error: validation error: title cannot be empty` |
+  | `rmp sprint update 1 -t "" -d "text"` | Exit **0**; title silently discarded, description applied | Exit **6**; **nothing mutated** |
+
+  Validation runs before the database is opened, so a rejected update mutates nothing by
+  construction rather than by rollback. `sprint update` and `task edit` now agree on both
+  exit code and wording for the identical input shape.
+
+- **`sprint list` changes its result order and fills two fields.** The order moves from
+  `created_at DESC` to `order_index` ascending — the planned execution order the field
+  exists for — so a script reading the first element gets a different sprint. No order
+  was previously published, so nothing documented breaks; the ascending order is now a
+  published guarantee and is stated on both help surfaces. Separately, `task_count` was
+  `0` and `tasks` was `null` for every sprint on every call; both are now populated,
+  `task_count` being `len(tasks)` so the two cannot disagree, and an empty sprint
+  yielding `[]` rather than `null`. `tasks` carries ids, not objects.
+
+- **Dozens of error messages were rewritten.** If you match `rmp` stderr by string,
+  assume every match needs re-checking; at least 35 distinct before/after pairs were
+  measured by driving both binaries, and the true figure is higher. Four kinds of change:
+
+  | Kind | On `1.15.0` | On `1.15.1` |
+  |------|-------------|-------------|
+  | A sentinel printed twice | `validation error: invalid task type: "NOPE": invalid task type` | `validation error: invalid task type: "NOPE"` |
+  | A range rule spelled per call site | `validation error: invalid priority: must be 0-9 (got 99)` | `validation error: priority must be between 0 and 9, got 99` |
+  | | `validation error: --max-tasks must be between 1 and 10000 (got 0)` | `validation error: max_tasks must be between 1 and 10000, got 0` |
+  | | `validation error: --entity-id must be between 1 and 2147483647 (got 0)` | `validation error: entity_id must be between 1 and 2147483647, got 0` |
+  | | `validation error: limit must be between 1 and 100` | `validation error: limit must be between 1 and 100, got 0` |
+  | | `validation error: Position must be an integer between 0 and 2147483647` | `validation error: position must be an integer between 0 and 2147483647` |
+  | | `validation error: invalid task ID: 0 (must be positive)` | `validation error: task_id must be between 1 and 2147483647, got 0` |
+  | A field named two ways | `validation error: functional-requirements: control characters ...` | `validation error: functional_requirements: control characters ...` |
+  | A class stated twice | `resource not found: from sprint: resource not found: sprint 999` | `resource not found: from sprint 999` |
+  | | `Error: validation error: validation error: "CON": ...` (graph only) | `Error: validation error: "CON": ...` |
+
+  A **seventeen-site** sweep found the doubled sentinel, not the one site reported. The
+  entity-id rule keeps its deliberate, published exit-code split: the eight comment
+  subcommands classify an out-of-range positional id as exit `2` misuse, every other
+  surface as exit `6`; the class became a parameter and the wording did not. The
+  date-filter refusal now names the flag and both accepted forms. And a value that breaks
+  two rules at once resolves differently: a 300-character title carrying a BEL reported
+  `title: control characters are not allowed` and now reports
+  `field exceeds maximum size: title exceeds maximum length of 255 characters`.
+
+- **Smaller observable changes.** A no-op `sprint move-to`, `top` or `bottom` now writes
+  its audit entry, as the specification always required and both siblings already did, so
+  `audit list` counts change. Database failures from the comment subcommands now carry
+  the `database error:` sentinel the specification publishes in six rows. The retry
+  policy runs six attempts rather than five, so `failed after 5 attempts` becomes
+  `failed after 6 attempts` and the worst-case wait moves from about 1500 ms to 2500 ms.
+  A graph **read** can now wait under that backoff and fail with exit `1` and
+  `graph store is busy` while a writer holds the lock. Under `AI_AGENT=1` a suppressed
+  AI-agent hint no longer leaves its separator behind, each suppressed path losing exactly
+  one byte. `rmp version` is a documented invocation form and all six global forms take
+  arity `0`. And `task next` no longer applies a priority tiebreaker that
+  `SPEC/COMMANDS.md` already said does not order that listing.
+
+- **The board search reads Unicode 17.0.0, and exactly two searches stop matching.**
+  The Go floor moves to **1.27.0**, and inside `golang.org/x/text` v0.41.0
+  `unicode/norm` selects its character data with a build constraint on the toolchain
+  (`tables15.0.0.go` under `!go1.27`, `tables17.0.0.go` under `go1.27`). The module
+  version did not move and no line of `go.mod` names a Unicode version, so the toolchain
+  that runs the build decides; `SPEC/BUILD.md § Unicode Data Rules`, Rule 5 requires that
+  to be treated as a change to the board search rather than as a toolchain bump.
+
+  The five shipped tables changed **additively** — zero existing values changed, nothing
+  removed: `FOLD_TABLE` 1433 → 1488 code points (+55), `DECOMP_TABLE` 2061 → 2081 entries
+  (+20), `CCC_TABLE` 922 → 968 code points (+46), `COMPOSE_TABLE` 941 → 961 entries (+20),
+  `SPACE_TABLE` unchanged. Eight of the twenty new composites come from the new character
+  data; the other twelve were always in it and were being discarded by the NFC defect
+  fixed below. Everything added belongs to a script Unicode 16.0 or 17.0 introduced —
+  Garay, Todhri, Tulu-Tigalari, Gurung Khema, Kirat Rai, Ol Onal, Beria Erfe and Tai Yo —
+  plus eight Latin and Cyrillic letters that gained a case fold. **No term in ASCII,
+  Latin-1, Greek, or any script the board already searched changes result.**
+
+  **Two searches do stop matching**, and both are Todhri titles that now compose to a
+  single code point: `U+105D2 U+0307` becomes `U+105C9` and `U+105DA U+0307` becomes
+  `U+105E4`. Because the search is substring containment over the normalised text, a term
+  consisting of the bare combining mark `U+0307` no longer occurs in such a title.
+  `U+0307` is the one second element among the twenty that already existed under Unicode
+  15.0.0 and that a `1.15.0` user could therefore have typed. Stored bytes are untouched:
+  normalisation is for comparison only.
+
+### Changed — widenings
+
+Neither of these can break a caller; both change what the binary accepts.
+
+- **Length caps count Unicode code points, not bytes.** All eight capped fields counted
+  `len()` in Go while `SPEC/MODELS.md` said "255 characters" and the SQLite `CHECK`
+  counted characters in TEXT semantics: two of the three authorities already agreed and
+  the Go layer was the dissenter. 255 accented Latin characters (510 bytes) and 255
+  four-byte emoji (1020 bytes) are now accepted; 256 code points is still refused. The
+  message needed no rewording — it always read
+  `exceeds maximum length of N characters` and has simply become true — and no schema
+  change was required. Graphemes are deliberately not the unit and no normalisation is
+  introduced.
+- **The audit date filters accept the date-only form** that `SPEC/COMMANDS.md`, the AI
+  contract and the README all published while the binary exited `6`. Both `audit`
+  subcommands now accept the date-only and full RFC 3339 forms through the same entry
+  point `task list` uses. **A bare date means the first instant of its day in UTC**, so
+  `--until` excludes the day it names: measured against 19 entries all timestamped
+  `2026-08-26T07:3x`, `--until 2026-08-26` returns 0 rows and `--until 2026-08-27`
+  returns all 19. That reading is load-bearing and is now specified. The shared
+  `ParseISO8601` was deliberately **not** widened: its thirteen remaining callers parse
+  stored timestamps the code itself wrote.
+
+### Changed — toolchain and dependencies
+
+- **The required Go version moves from 1.26.6 to 1.27.0**, and
+  `SPEC/BUILD.md § Minimum Go Version` was restructured to say why. Three constraints now
+  bear on the floor and only the third sets it: GoGraph contributes a minor floor of 1.26;
+  the four reachable standard-library advisories are fixed on the 1.26 and 1.27 lines
+  alike, so neither reaches past 1.26; and the third reason is a decision rather than a
+  consequence — the project builds on the current Go release line, and moving onto it is
+  also what makes the board search read Unicode 17.0.0. One `MUST` was disambiguated in
+  passing: an advisory raises the floor to the earliest **stable** release carrying the
+  fix, since the section otherwise contradicted itself by naming a release candidate.
+
+- **`modernc.org/sqlite` moves from v1.56.0 to v1.57.0, and its coupling holds without
+  moving.** v1.57.0 requires exactly the `modernc.org/libc` v1.74.4 and
+  `modernc.org/memory` v1.11.0 that v1.56.0 required; the two `go.mod` files hash
+  identically, which proves the require blocks are byte-for-byte equal rather than merely
+  compatible. No gate can detect a mismatch here, which is why it was checked by hand.
+  GoGraph v0.11.0, `golang.org/x/sys` v0.47.0 and `golang.org/x/text` v0.41.0 were checked
+  and are already at their latest.
+
+- **The pinned linter moves from `golangci-lint` v2.12.2 to v2.13.1.** The version is
+  named in four places and all four move together: `SPEC/BUILD.md`, the
+  `golangci-lint-action` invocation in `.github/workflows/ci.yml` and in
+  `.github/workflows/release.yml`, and the install comment in the `Makefile`. The new
+  linter was run against the tree **before** the pin was touched and reports **0 issues**,
+  so nothing is suppressed and nothing new is accommodated.
+
+  It also changes the shape of a hazard the `v1.15.0` notes recorded as a Known Issue: on
+  a machine where a snap-installed `golangci-lint` precedes `~/go/bin` on `PATH`,
+  `make lint` runs the snap's build rather than the pinned one **and still exits 0**. That
+  snap is v2.13.1, so the two version numbers now agree — which removes the discrepancy
+  that exposed the shadow while leaving the shadow itself. `SPEC/BUILD.md § Linter`
+  previously said `--version` "confirms which binary is on `PATH`", which was already
+  false; it now requires `which -a golangci-lint` first, because `--version` answers
+  truthfully about whichever binary `PATH` resolves first. The release checklist item that
+  repeated the same false claim moved with it.
+
+- **`govulncheck` moves from v1.3.0 to v1.7.0.** It is deliberately not pinned —
+  `SPEC/BUILD.md` requires `@latest` so the check reflects the vulnerability database as it
+  stands at release time — so this is a toolchain refresh rather than a specification
+  change. It reports no vulnerabilities. `gosec` was checked and is already at its pinned
+  v2.28.0.
+
+- **Five GitHub Actions move, three of them across a major version:**
+  `actions/checkout` v6.0.2 → **v7.0.1**, `actions/setup-go` v6.4.0 → **v7.0.0**,
+  `golangci/golangci-lint-action` v9.2.1 → **v9.3.0**, `codecov/codecov-action` v6.0.1 →
+  **v7.0.0**, and `softprops/action-gh-release` v3.0.0 → **v3.0.2**. The three majors were
+  read before they were taken: `checkout` v7 blocks fork checkouts on
+  `pull_request_target` and `workflow_run`, and this project uses neither trigger;
+  `setup-go` v7 and `codecov` v7 are an ESM migration and a signing-key change, with no
+  movement in the interface either workflow uses.
+
+### Added
+
+- **Two schema migrations, `1.12.0` → `1.14.0`.** `1.12.0` → `1.13.0` makes each
+  sprint's task order **total**, renumbering positions to a dense `0..N-1` run and
+  replacing `idx_sprint_tasks_order` with its `UNIQUE` form under the same name.
+  `1.13.0` → `1.14.0` makes the order **dense**, repairing gaps already committed, and
+  drops the unique index for the duration of the repair. Neither adds a column, rebuilds
+  a table, or deletes a row. Both are idempotent and both fail closed.
+- **The full audit operation catalogue on both help surfaces and in the AI contract.**
+  Every one of the 43 operations is published with the entity type it is written against
+  and a `legacy` flag marking the four retained for reading historical rows only. The
+  classification is **declared and never inferred from the name**: prefix and entity type
+  agree on all 39 operations written today, but labelling a group by prefix turns a
+  presentation grouping into a factual claim that becomes wrong the day a `TASK_*`
+  operation is written against a sprint. `legacy` is a pointer to a boolean so that it
+  publishes `false` and omits absent. The six mutating subcommands name the operations
+  each writes. Additive: no existing key changed.
+- **`commit_hash` and `related_entity_id` on the read-only web audit log page**, so the
+  interface no longer shows less than the log holds. The presentation is **bound** to the
+  task detail modal's rather than reimplemented: a test extracts the relevant function
+  body from the served JavaScript and fails if the placeholder or either class set
+  diverges, in both directions. The hash renders verbatim; abbreviation is the
+  stylesheet's and never the renderer's.
+- **Five new Go packages**, taking the module from 9 to 14: `internal/backoff` (the single
+  retry loop), `internal/graphlock` (the graph store's advisory lock), `internal/graphkeys`
+  (the executable form of the key-uniqueness audit), `internal/terminal` (the one `ioctl`
+  that answers whether a stream is a terminal), and `internal/unicodenorm` (the NFC rule).
+- **Eleven new end-to-end modules**, taking the registered suite from 51 to 62:
+  `test_53_e2e_harness_binary_staleness`, `test_54_audit_enrichment_e2e`,
+  `test_55_error_string_parity`, `test_56_graph_read_direction`, `test_57_positional_arity`,
+  `test_58_ai_contract_error_parity`, `test_59_graph_property_value_content`,
+  `test_60_docs_readme_contract_completeness`, `test_61_family_help_dispatch_exit_code`,
+  `test_62_graph_stray_positional_order`, and `test_63_roadmap_name_refusal_parity`.
+- **`golang.org/x/text` v0.41.0** as the fourth direct module dependency, pinned to an
+  exact version, used only for canonical decomposition and canonical ordering.
+- **Three tests for `internal/unicodenorm`, which shipped `1.15.0` with none.**
+  `TestIsCompositionExcluded_IsFullCompositionExclusion` holds the exclusion predicate to
+  `Full_Composition_Exclusion` over the whole of Unicode **in both directions**, because a
+  false positive drops a composite Unicode composes, a false negative admits one it
+  excludes, and a single total would let the two cancel.
+  `TestNFC_AgreesWithTheModuleOnEverySingleCodePoint` requires the package's NFC to equal
+  `golang.org/x/text/unicode/norm`'s over all 1 112 064 single code points — the direct
+  assertion that Groadmap's NFC is NFC, and stronger than counting exclusions.
+  `TestNFC_ComposesTheQuickCheckMaybeCodePoints` is the named regression for the twelve,
+  written as a statement about NFC's **output** so that it keeps testing what matters
+  however the predicate is later spelled. The reference is the Unicode Character Database
+  transcribed into the test, neither derived nor fetched: UAX #15 states that two of the
+  property's four sources cannot be computed from the decomposition mappings, the module
+  cannot supply the other two because `Properties.Decomposition` returns the full
+  recursive decomposition, asking the module would make the test measure itself, and a
+  network fetch would follow a moved property in silence.
+
+### Fixed
+
+- **Groadmap's Normalization Form C had stopped being Normalization Form C, and raising
+  the Go floor is what exposed it.** `internal/unicodenorm.IsCompositionExcluded` read
+  `norm.NFC.QuickSpanString(s) != len(s)`, which `SPEC/BUILD.md` described as the
+  `NFC_QC=No` lookup. It is not: it answers `NFC_QC != Yes`, which is `No` **or**
+  `Maybe`, and `NFC_QC=Maybe` is carried by every code point that can be the second
+  element of a primary composite — precisely the code points that are *not* excluded from
+  composition. Under Unicode 15.0.0 the two questions had one answer, because no code
+  point then carried both a canonical decomposition and `NFC_QC=Maybe`, so the confusion
+  was invisible. Unicode 16.0.0 introduced twelve that do — `U+113C5`, `U+113C7`,
+  `U+113C8`, `U+16121` through `U+16128`, and `U+16D68` — and for those the package
+  decomposed and never recomposed.
+
+  **The predicate was wrong on 132 code points, not twelve**; the other 120 are combining
+  marks that `BuildComposition` filters downstream, so they never reached the table.
+  Twelve was the symptom and 132 was the defect. It now reads
+  `!norm.NFC.IsNormalString(string(r))`, which is exact set equality with
+  `Full_Composition_Exclusion` as the Unicode Character Database publishes it, in **both**
+  Unicode versions, and which returns a property of its argument rather than a transformed
+  string. Two figures `SPEC/WEB.md` publishes about the rule — **1117** code points
+  changed and **0** disagreements with the reference module — were false under the
+  defective predicate and are true again, and they now survive a change of Unicode version
+  instead of being pinned to one. `SPEC/BUILD.md § Unicode Data Rules`, Rule 3 is rewritten
+  to name `IsNormalString`, to forbid `QuickSpanString` as that lookup, and to record the
+  twelve code points as the evidence.
+
+- **The end-to-end harness ran against any binary it found**, with no staleness check
+  against the source, and two of its four candidate paths were under the current working
+  directory — so a run from the wrong directory drove a foreign binary and nothing said
+  so. **A green run was not evidence.** The harness now restricts candidates to the
+  repository root, compares the binary's mtime against the newest file compiled into it
+  (including the directories pulled in by `//go:embed`, which closed a blind spot on the
+  web assets), and rebuilds or refuses with the compiler's own error.
+- **A test class added to a registered module was silently skipped.** Three modules named
+  their suite classes in a fixed tuple. The dangerous part was not the tuple but the
+  comment above it, which promised the opposite of what the code did. The runner now
+  fails when a registered module defines a suite class it never references; 41 of the
+  registered modules are non-exempt and genuinely covered.
+- **Five tests had never executed on any run the suite has ever made.**
+  `tests/test_49_install_platform_guards.py` had no runner and no main block, so running
+  it the way the suite runs it defined the classes, executed nothing, and exited `0`. The
+  suite counted it as passed every time.
+- **Sprint task positions were neither unique nor dense.** `position` is now `UNIQUE`
+  within a sprint, enforced by the schema, and every member holds exactly one of
+  `0..N-1`. A plain unique index **breaks three commands** — `reorder`, `swap` and
+  `move-to` all assigned sequentially over values still occupied — so they now park into
+  a disjoint negative range before assigning, and `MoveTaskToPosition` stopped shifting
+  ranges altogether. The four write paths that opened a gap are all removals and now
+  compact in the same transaction, and the obligation follows the row rather than the
+  command, since three of the four repair a sprint the caller never names.
+
+  The gap was never cosmetic: `sprint move-to`, `top` and `bottom` compare the moved
+  task's **stored** position against the **target rank**, so over a sparse run a real
+  move was read as no move at all and still reported as a success.
+
+  A live TOCTOU was found and closed in the same cycle: `ReorderSprintTasks` checked list
+  completeness in a read **outside** its write transaction. Reproduced under a concurrent
+  add, not hypothesised.
+- **`sprint add-tasks` re-parents a task that already belongs to another sprint**, and
+  `SPEC/COMMANDS.md` now says so. Two specification files contradicted each other and the
+  owner ratified what ships, so no behaviour changed.
+- **The published validation order for sprint task assignment was the reverse of what the
+  binary applies**, and the exit code is contract, so a caller branching on `4` versus `2`
+  was branching on which document it had read. Established by measurement: eighteen
+  sibling invocations report the lexical fault and suppress the existence one, 18 of 18,
+  with no counter-example in the CLI. Correcting the code was declined — it would change a
+  shipped exit code. The reported pair was a lower bound; the whole list, now eleven
+  steps, was corrected.
+- **`audit list` validated its enums a second time, in different words**, leaving the
+  model parsers with no caller at all. `invalid operation` was published **nowhere**,
+  which is exactly why its divergence survived while its sibling's did not: an unpublished
+  string is invisible to the only gate that catches this class of drift.
+- **The bounded backoff slept four times where the specification, and the code's own
+  comment, promised five.** Four sites stated the policy and a fifth was found in the web
+  layer, correct then and due to go stale. `internal/backoff` owns the **loop**, not the
+  constants: sharing constants would not have caught this defect, because the constants
+  agreed all along and the loop bodies did not. Statements of these numbers in production
+  Go drop from four to one, and a structural gate holds that only `internal/backoff` may
+  block on a duration in production code.
+- **The board search missed a task whose title is stored in a different Unicode
+  normalisation form.** A term and a task's searchable text are both normalised to NFC
+  before folding, for comparison only — the bytes `rmp` stores and renders are untouched.
+  NFC and not NFD, because the search performs substring containment; two passes and not
+  one, because one pass leaves the result outside NFC on 70 of 1 440 384 sequences;
+  normalisation before the fold, because the two orders differ on 74 of them. The
+  behaviour delta is exactly 1117 of 1 112 064 code points, none of them ASCII. That
+  sequence count is sized by the Unicode version and moved with it: it is the product of
+  1488 folding code points and 968 non-starters, where `1.15.0` had 1433 against 922 for
+  1 321 226, and the old value was reproduced exactly before the new one was computed.
+- **Roughly thirty published statements that execution refuted.** All 128 error strings
+  `SPEC/COMMANDS.md` publishes were driven against the binary and compared character for
+  character, and every one of the 234 rows carrying both a string and an exit code had its
+  exit code driven too: nine rows were wrong and are fixed. The whole `Example.Stderr`
+  surface of the AI contract — 68 strings — is now driven against the compiled binary;
+  eight were stale, two of them publishing a **longer** line than the binary. The
+  `Error Code Mapping` table was removed from `SPEC/ARCHITECTURE.md`, all nineteen
+  symbolic identifiers it published existing nowhere in the Go source. `SPEC/BUILD.md`
+  counted two direct dependencies where `go.mod` carries four, which is why
+  `golang.org/x/sys` was subject to no pinning rule and no release-gate check. Six README
+  filter examples published a comma-separated value the binary rejects. Six
+  `DOCS/commands/*.md` pages omitted exit code `127` and one omitted `2`. Three
+  cross-references named a heading that occurs twice in `SPEC/DATABASE.md`.
+  `SPEC/ARCHITECTURE.md`'s `SPEC/` tree omitted `GRAPH.md`.
+
+### Security
+
+- **`install.sh` verifies the archive against its published SHA-256 before extracting.**
+  The mitigation already existed and was already published by the release pipeline; it was
+  simply never used. Two judgements were made rather than defaulted: the script **aborts**
+  rather than warning when no hashing tool exists, because the documented invocation is
+  `curl` piped into `bash` and whoever benefits from a control that fails open is exactly
+  whoever replaced the archive; and there is **no opt-out flag**. `SPEC/DEPLOY.md` states
+  what the check does **not** protect against, which was a requirement rather than a
+  courtesy.
+- **`install.sh` no longer stages in a predictable temporary directory.** Every download
+  lands in a directory created by `mktemp -d`, mode `0700`, verified after creation and
+  failing closed. The previous `mkdir -p /tmp/rmp_install_$$` succeeds on an existing
+  directory, so a local user could pre-create all 32768 PIDs and swap the archive between
+  the verification and the extraction — CWE-367 and CWE-377, defeating the checksum gate
+  that had just been added. The non-obvious check: the parent is refused when
+  world-writable **without** the sticky bit, because there a local user can rename the
+  `0700` directory away after creation.
+- **Reading the knowledge graph no longer mutates its on-disk store.** Graph reads take a
+  **shared** advisory lock across the store open alone, because GoGraph's recovery removes
+  a stale staging directory and can promote a backup snapshot — both repairing the very
+  directory a concurrent writer publishes into. Measured with a writer holding for four
+  seconds and a marker planted in the staging directory: before, the CLI read returned in
+  15 ms and the HTTP `GET` in 13 ms and **both destroyed the marker**; after, both wait
+  2512 ms and refuse, and the marker survives.
+- **`columnExists` no longer interpolates an unguarded table name into SQL.** The safety
+  was a property of the call sites, not of the function, and the `#nosec` that documented
+  it is the same annotation that would have kept the scanner silent about a future caller
+  passing a variable: a suppression is a permanent blindfold, and it does not expire when
+  its reason does. The empty string is a correctness argument independent of any attacker:
+  `pragma_table_info('')` is valid SQL returning zero rows, so an unguarded empty name
+  reports every column absent and the caller then runs an `ALTER TABLE` at a table nobody
+  named.
+- **The `.gosec.yaml` register of accepted findings is gated, not merely refreshed.** The
+  proof that the gate was the point came from the repository's own history: `v1.15.0`
+  brought the register up to date and added no check, and within the day five suppression
+  sites moved without it. The gate parses with `go/ast`, because the rule that a `#nosec`
+  counts only at the head of a comment group is not expressible in `grep`, and because
+  `grep` is blind to the `//gosec:disable` syntax.
+- **Agent worktrees are gitignored.** The `security` target already excluded
+  `.claude/worktrees` from the scanner while git was never told to ignore it, leaving a
+  full second checkout one `git add -A` away from the repository.
+
+### Performance
+
+- **The web sprints page no longer reads any sprint's member tasks.** It paid a full
+  member-task read per sprint to produce one integer. The new `sprintsSource` interface
+  carries `ListSprints` alone, so **the N+1 is not expressible on this path** rather than
+  merely absent from it. Member-task reads go from one per sprint to zero at 0, 1, 3, 5
+  and 12 sprints, and median page time over 200 sprints went from **38.5 ms, linear in
+  sprint count, to 10.9 ms, flat**. The rendered page is byte-identical before and after.
+- **`sprint list` resolves the whole listing in one grouped read.** Measured at the driver
+  boundary: 2 statements for 1, 2, 3, 4, 5 and 50 sprints alike, against 2+N for the
+  per-sprint alternative on the same instrument.
+
+### Internal
+
+- **All fifteen unreached exports of `internal/db` were retired** and the allow-list
+  emptied: two promoted onto the command layer's transaction, thirteen deleted. Three of
+  the thirteen had already drifted from the shipped path with nothing reporting it — one
+  wrote no audit entry and left `completion_summary` behind on a reopening, one reproduced
+  a data-corruption defect the shipped path had already fixed, and one wrote a governed
+  field underneath every free-text rule. Observable behaviour was proved unchanged by
+  comparing 27 command invocations byte for byte — exit codes, stdout, stderr and the
+  resulting databases row by row — against a binary built from the previous commit.
+- **Eleven error-wrapping sites moved from `%s`/`%v` to `%w`**, so the chain carries both
+  the classification sentinel and the specific one. Seventeen residual `%v` sites are named
+  and left, because none discards a project-owned sentinel. Proved behaviour-neutral by
+  capturing thirteen refusals as exit code plus SHA-256 of stderr before and after: all
+  thirteen byte-identical.
+- **`TaskUpdate.Validate` had no production caller** and eight assertions were pinned to
+  it. The verdict — dead residue rather than missing wiring — was established from git in
+  three links before anything was removed, and every deleted assertion was checked against
+  live coverage before it went.
+- **Structural and specification-parsing gates** were added throughout, each deriving its
+  expectation rather than restating it, and each proved non-vacuous by reintroducing the
+  defect: the cross-reference resolver (978 references over 683 headings in 15 documents,
+  0 unresolved, 0 ambiguous); the example-invocation validator (409 invocations over 24
+  files, all 59 subcommands reached); the `SPEC/` directory-listing parser; the
+  SCREAMING_SNAKE symbol gate; the positional-arity parity gate; the object-key parity
+  gates, which reflect over each struct's JSON tags so the expected set cannot itself go
+  stale; the engine-constructor gate; the `.gosec.yaml` register gate; the `.gitignore`
+  gate; the backoff singleton gate; and the range-rule caller register.
+
+### Notes
+
+- **On the Semantic Versioning classification.** `SPEC/VERSION.md` defines `PATCH` as
+  "Bug fixes, backward compatible", and this release is not backward compatible. Under a
+  strict reading of Semantic Versioning 2.0.0 the changes above are `MAJOR` changes. The
+  project publishes them as `1.15.1` by the owner's explicit decision, taken after the
+  objection was raised and answered, on the ground that every one is the correction of a
+  divergence from a contract that was already published, that the surface is the
+  roadmap-authoring CLI rather than a linked library API, and that every incompatibility
+  fails loudly and immediately rather than silently altering a result — in several cases
+  the *old* behaviour being the silent one. **This does not soften the incompatibility.**
+  Treat the release as breaking if you drive `rmp` from automation.
+
+  The two commits that landed after the version was set do not change that reasoning. The
+  NFC fix is the correction of a divergence in its purest form: the specification said the
+  package read `Full_Composition_Exclusion` and it did not. The Unicode data move is the
+  one addition that is *not* a correction — it is a deliberate adoption of the current Go
+  release line — and it is published as a breaking change for that reason. Neither turns a
+  previously successful invocation into a failing one, so the count of changes that do is
+  unchanged.
+
+- **The two migrations are forward-only, and neither deletes anything.** They run
+  automatically and in order on the first command against an existing roadmap. Both rank
+  each sprint's rows by `position` ascending with `task_id` ascending as the tie-breaker,
+  so **the values change and the sequence never does**: an unambiguous planned order is
+  preserved exactly, and an ambiguous one — two members sharing a position — is settled
+  deterministically. Both run the repair with no unique index in force, which was measured
+  rather than assumed: against the pinned driver, a sprint holding positions `0`, `2` and
+  `5` whose rows sat in reverse physical order failed with
+  `UNIQUE constraint failed: sprint_tasks.sprint_id, sprint_tasks.position` when the index
+  was left in place. Recreating the index is what makes each migration fail closed: if a
+  repair ever left two members sharing a position, the statement fails and the whole
+  transaction rolls back.
+
+- **Do not run a `1.15.0` binary against a migrated roadmap.** Once a roadmap reaches
+  schema `1.14.0` its ordering index is `UNIQUE`, and a `1.15.0` binary's
+  `sprint reorder`, `sprint move-to` and `sprint swap` assign positions sequentially over
+  values still occupied, because the parking step arrived in this release. Measured on
+  both binaries against the same migrated database: exit **1** with
+  `Error: updating position for task 4: constraint failed: UNIQUE constraint failed: sprint_tasks.sprint_id, sprint_tasks.position (2067)`.
+  Reads are unaffected — no column was added or removed — so it is the three ordering
+  commands that break. Replace the binary on `PATH` first.
+
+- **Build this release with Go 1.27.0 or later; an older toolchain is a second downgrade
+  risk.** `go.mod` declares `go 1.27.0`, so under the default `GOTOOLCHAIN=auto` there is
+  nothing to install by hand and a `GOTOOLCHAIN` pinned lower fails instead of building:
+  `go: go.mod requires go >= 1.27.0 (running go 1.26.6; GOTOOLCHAIN=go1.26.6)`. The
+  refusal is the point. The Unicode version the board search reads is a property of the
+  toolchain that ran the build and of nothing else — no line of `go.mod` pins it, and the
+  `go` directive is a floor, not a ceiling — so a build made on Go 1.26.x reads Unicode
+  15.0.0 while the JavaScript tables this release ships were generated from Unicode
+  17.0.0. The two would disagree on 55 folds, 20 decompositions, 46 combining classes and
+  20 composites, and the guard test that holds the client's copy of the rule equal to the
+  server's fails for exactly that reason. The floor was raised to 1.27.0 to make that
+  combination unreachable rather than merely inadvisable.
+
+- **The installer is now hard-fail on integrity.** Every archive must have its
+  `<archive>.sha256` published beside it, which the release workflow does, and the
+  installing host must have `sha256sum`, `shasum`, or `openssl`, and `mktemp`. Missing any
+  of them, the script exits `1` before requesting a single release asset, with a message
+  naming the tool. There is no opt-out flag and none will be added.
+
+- **No JSON key changed, and no default moved.** Verified by key-set diff against the
+  `1.15.0` binary across the task, sprint, comment, audit-entry, `sprint show`,
+  `sprint stats`, `stats`, and `roadmap list` objects, and by running all 52 happy-path
+  command invocations on both binaries: identical exit codes throughout.
+
+- **The pre-release vulnerability check was run and is clean.** `govulncheck ./...`
+  reports `No vulnerabilities found` at exit `0` against the exact tree being released.
+  Nothing is reported, called or otherwise, so nothing needed recording or deciding.
+
+- **Known issues were rebuilt from scratch for this release** and are listed in
+  `release-notes/v1.15.1-20260826.md`. Items earlier releases recorded were re-verified by
+  execution rather than copied forward: two are fixed by this release and have been
+  dropped, one is confirmed still live by reproducing it, one is reframed as the
+  environment hazard it really is, and six are new.
+
+- See `SPEC/COMMANDS.md § Positional Arguments`, `§ Positional Arity by Command`,
+  `§ Published Error Strings Are Exact`, `§ Published Field Names in Validation Messages`
+  and `§ Entity Identifier Range`; `SPEC/GRAPH.md § Relationship Read Direction`,
+  `§ Node Key Uniqueness`, `§ Engine Constructor by Path` and `§ Concurrency and
+  Recovery`; `SPEC/DATABASE.md § Position Uniqueness Within a Sprint`, `§ Position Density
+  Within a Sprint` and `§ Introducing a Uniqueness Constraint over Existing Rows`;
+  `SPEC/VERSION.md § Migration 1.12.0 → 1.13.0` and `§ Migration 1.13.0 → 1.14.0`;
+  `SPEC/DEPLOY.md § Checksum Verification` and `§ Staging Directory`; and
+  `SPEC/BUILD.md § Minimum Go Version`, `§ External Dependencies`, `§ Unicode Data Rules`
+  (Rules 3, 5 and 6), `§ SQLite Driver Rules` and `§ Linter`; and
+  `SPEC/WEB.md § Roadmap Tasks Page`.
+
 ## [1.15.0] - 2026-08-21
 
 The release in which a task stops being a status and starts being a record. Three
@@ -1402,6 +2100,7 @@ behaviour.
   AI-contract E2E suite (`tests/test_30_aihelp_contract.py`) to lock in the
   revised help text and contract invariants.
 
+[1.15.1]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.15.0...v1.15.1
 [1.15.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.14.0...v1.15.0
 [1.14.0]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.13.3...v1.14.0
 [1.13.3]: https://github.com/FlavioCFOliveira/Groadmap/compare/v1.13.2...v1.13.3

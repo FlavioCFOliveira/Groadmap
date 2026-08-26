@@ -22,9 +22,12 @@
 //     decides nothing, and resolveCommentBody runs later, after the type verdict.
 //  2. A body that never arrived is a MISSING PARAMETER (exit code 2), not a
 //     validation failure (exit code 6). models.ValidateCommentBody reports an
-//     empty body as the latter, so this layer decides emptiness itself with
-//     models.NormalizeCommentBody and keeps the domain's exit-6 verdict
-//     unreachable from the command line.
+//     empty body as the latter, so this layer decides absence itself, through
+//     models.CommentBodyIsAbsent, and keeps the domain's exit-6 empty verdict
+//     unreachable from the command line. It decides absence and nothing else:
+//     the content rules that must run before that judgement stay in the domain,
+//     which is what stops the trim from silently swallowing a leading or
+//     trailing VT or FF.
 package commands
 
 import (
@@ -47,10 +50,14 @@ const (
 	commentBodyShort = "-b"
 )
 
-// commentEntity is the name the positional id of `comment-edit` and
-// `comment-remove` is reported under. Both subcommands take the COMMENT's own id
-// in both families, so unlike the parent's name this one is not per-family.
-const commentEntity = "comment"
+// commentIDField is the field the positional id of `comment-edit` and
+// `comment-remove` is reported as. Both subcommands take the COMMENT's own id in
+// both families, so unlike the parent's field this one is not per-family.
+//
+// It carries both spellings the subcommands need — `comment_id` for the range
+// refusal, `comment` for the format refusal and for the prose around it — so
+// neither is written out here.
+const commentIDField = utils.FieldCommentID
 
 // commentTypeFlagDefs is the flag set the comment subcommands hand to the shared
 // flag parser: `--type` only.
@@ -95,32 +102,34 @@ func errNoCommentChange() error {
 // requireCommentPositionalID parses the positional id of a comment subcommand and
 // returns it with the arguments that follow it.
 //
-// entity names what the id identifies, so the pinned messages name the right
-// thing: "task" / "sprint" for the parent id `comment-add` and `comment-list`
-// take, "comment" for the comment's own id `comment-edit` and `comment-remove`
-// take.
+// field names what the id identifies, so the pinned messages name the right
+// thing: utils.FieldTaskID / utils.FieldSprintID for the parent id `comment-add`
+// and `comment-list` take, utils.FieldCommentID for the comment's own id
+// `comment-edit` and `comment-remove` take.
 //
 // Every malformed id — non-numeric, non-positive, or beyond MaxInt32 — is exit
 // code 2 here. utils.ValidateIDString classifies a non-positive or oversized
 // value as a validation error (exit code 6); SPEC/COMMANDS.md pins exit code 2
-// for the whole "positive integer" constraint on these subcommands, so the
-// verdict is re-classified rather than the parsing re-implemented.
-func requireCommentPositionalID(args []string, entity string) (int, []string, error) {
+// for the whole "positive integer" constraint on these subcommands, so the range
+// class is supplied to the parser instead.
+//
+// It used to be re-classified by REBUILDING the message, and the rebuilt message
+// drifted: these four subcommands announced an out-of-range id as
+// `invalid comment ID: "0" (must be a positive integer no greater than
+// 2147483647)` while every other surface announced the same verdict in one of two
+// other sentences, and SPEC published neither of the comment ones. Handing the
+// class to utils.ValidateIDStringAs keeps the exit code these subcommands publish
+// and takes the sentence from the rule (rmp task 330).
+func requireCommentPositionalID(args []string, field utils.RangedField) (int, []string, error) {
 	if len(args) == 0 {
-		return 0, nil, fmt.Errorf("%w: %s ID required", utils.ErrRequired, entity)
+		return 0, nil, fmt.Errorf("%w: %s ID required", utils.ErrRequired, field.IDEntity())
 	}
 
-	raw := args[0]
-	id, err := utils.ValidateIDString(raw, entity)
-	if err == nil {
-		return id, args[1:], nil
-	}
-	if errors.Is(err, utils.ErrInvalidInput) {
-		// Non-numeric token: already the class and the wording SPEC pins.
+	id, err := utils.ValidateIDStringAs(args[0], field, utils.ErrInvalidInput)
+	if err != nil {
 		return 0, nil, err
 	}
-	return 0, nil, fmt.Errorf("%w: invalid %s ID: %q (must be a positive integer no greater than %d)",
-		utils.ErrInvalidInput, entity, raw, utils.MaxInt32)
+	return id, args[1:], nil
 }
 
 // extractCommentBody removes `-b` / `--body` and its value from args and reports
@@ -180,9 +189,26 @@ func extractCommentBody(args []string) ([]string, commentBody) {
 // subcommands, so it is reported as (_, false, nil) and the caller supplies the
 // pinned message: "no comment body supplied" on `comment-add`, "at least one of
 // --type or --body is required" on `comment-edit`.
+//
+// Whether a body is absent is asked of models.CommentBodyIsAbsent rather than of
+// models.NormalizeCommentBody, and on the value AS SUPPLIED, on both input paths
+// alike. The difference is the ORDER SPEC/MODELS.md § Free-Text Emptiness and
+// Trimming Constraint fixes: a body made only of VT or FF trims away to nothing,
+// so asking the trim alone reported it as a body that never arrived and
+// discarded the forbidden character in silence (CWE-150). Asking the domain
+// makes the content rules answer first, so such a body is refused as a control
+// character with exit code 6 and only genuinely empty whitespace reaches the
+// missing-parameter verdict.
 func resolveCommentBody(body commentBody, stdinFallback bool) (string, bool, error) {
 	if body.present {
-		if body.valueMissing || models.NormalizeCommentBody(body.value) == "" {
+		if body.valueMissing {
+			return "", false, errNoCommentBody()
+		}
+		absent, err := models.CommentBodyIsAbsent(body.value)
+		if err != nil {
+			return "", false, err
+		}
+		if absent {
 			return "", false, errNoCommentBody()
 		}
 		return body.value, true, nil
@@ -196,7 +222,11 @@ func resolveCommentBody(body commentBody, stdinFallback bool) (string, bool, err
 	if err != nil {
 		return "", false, err
 	}
-	if models.NormalizeCommentBody(raw) == "" {
+	absent, err := models.CommentBodyIsAbsent(raw)
+	if err != nil {
+		return "", false, err
+	}
+	if absent {
 		return "", false, nil
 	}
 	return raw, true, nil
@@ -208,9 +238,12 @@ func resolveCommentBody(body commentBody, stdinFallback bool) (string, bool, err
 // The bound is the point: models.ReadCommentBody applies the length rule as the
 // stream arrives and refuses the body the moment it cannot fit, instead of
 // buffering everything a writer chooses to send and only then measuring it. The
-// value it returns is already the canonical stored form, and the callers still
-// hand it to models.ValidateCommentBody, which is idempotent on that form — the
-// domain, not this layer, remains the single owner of the rules.
+// value it returns is the canonical stored form, plus the one forbidden
+// whitespace rune it carries back when the body held one, and the callers still
+// hand it to the domain — models.CommentBodyIsAbsent and then
+// models.ValidateCommentBody — which reaches the same verdict on that form as on
+// the whole stream. The domain, not this layer, remains the single owner of the
+// rules.
 //
 // A read failure is an I/O failure of the process, not bad user input, so it maps
 // to exit code 1 exactly as the graph subcommands' stdin read does.
@@ -218,14 +251,63 @@ func readCommentBodyStdin() (string, error) {
 	return models.ReadCommentBody(os.Stdin)
 }
 
-// parseCommentTypeFlag runs the shared flag parser over what is left after the
+// parseCommentArgs runs the shared flag parser over what is left of a comment
+// subcommand's argument list once the positional id — and, where the subcommand
+// accepts one, the body flag — have been consumed, and refuses everything that
+// remains.
+//
+// This is the ONE place the Comment Positional Argument Contract
+// (SPEC/COMMANDS.md) is enforced. All eight comment subcommands reach it,
+// because the four shared bodies below are the only callers and each family
+// supplies data alone: there is no second copy of the rule to drift from this
+// one.
+//
+// Two refusals live here, both exit code 2 (utils.ErrInvalidInput):
+//
+//   - An unrecognised FLAG, reported by the parser itself. This already worked:
+//     the parser refuses a token it cannot match to a definition.
+//   - A leftover POSITIONAL argument, reported here. The parser COLLECTS
+//     positionals into ParseResult.Args and returns them without complaint, so a
+//     caller that ignored that slice silently ignored the extra token — which is
+//     what `comment-remove <id> <stray>` did, deleting the comment named by the
+//     id and exiting 0 (task #184).
+//
+// Only the FIRST leftover is named, in command-line order, and the parser
+// preserves that order. The refusal is position-independent for the same reason:
+// what is refused is whatever remains once the flags have been consumed, not a
+// particular slot on the command line.
+//
+// A leftover beginning with "-" never reaches this check. The parser classifies
+// every "-"-prefixed token as a flag, so "-1" here is an unknown flag and not an
+// unexpected argument — deliberately unlike the graph family, which reads a
+// negative numeric literal as a query value (SPEC/COMMANDS.md § Comment
+// Positional Argument Contract rule 5). The one "-"-prefixed token that is a
+// value, `--body -1`, is consumed by extractCommentBody before the parser runs.
+func parseCommentArgs(defs []FlagDef, args []string) (*ParseResult, error) {
+	result, err := NewFlagParser(defs).Parse(args)
+	if err != nil {
+		return nil, err
+	}
+	if len(result.Args) > 0 {
+		return nil, fmt.Errorf("%w: unexpected argument %q", utils.ErrInvalidInput, result.Args[0])
+	}
+	return result, nil
+}
+
+// parseCommentTypeFlag runs the shared parse over what is left after the
 // positional id and the body flag have been consumed, and reports the raw
 // `--type` value together with whether the flag was present at all.
 //
 // The value is returned unparsed: the accepted set depends on the family, so the
 // caller applies models.ParseTaskCommentType or models.ParseSprintCommentType.
+//
+// Every caller invokes this BEFORE validating the type value, before resolving
+// the body, and before opening the database, so a malformed argument list is
+// refused with exit code 2 ahead of the exit-6 type verdict, ahead of any wait
+// on standard input, and ahead of the exit-4 not-found verdict. That order is
+// behaviour the SPEC pins, not style.
 func parseCommentTypeFlag(args []string) (string, bool, error) {
-	result, err := NewFlagParser(commentTypeFlagDefs).Parse(args)
+	result, err := parseCommentArgs(commentTypeFlagDefs, args)
 	if err != nil {
 		return "", false, err
 	}
@@ -233,12 +315,13 @@ func parseCommentTypeFlag(args []string) (string, bool, error) {
 	return raw, ok, nil
 }
 
-// rejectUnknownFlags refuses any flag left in args. It serves `comment-remove`,
-// which takes no flag beyond the shared -r / -h, and it runs the shared flag
-// parser with an empty definition set so the "unknown flag" wording is the one
-// every other subcommand produces rather than a second copy of it.
-func rejectUnknownFlags(args []string) error {
-	_, err := NewFlagParser(nil).Parse(args)
+// rejectCommentLeftovers refuses any flag AND any positional argument left in
+// args. It serves `comment-remove`, which takes no flag beyond the shared
+// -r / -h and no positional beyond the comment id, and it goes through
+// parseCommentArgs with an empty definition set so both refusals are worded by
+// the same code every other subcommand uses rather than by a second copy of it.
+func rejectCommentLeftovers(args []string) error {
+	_, err := parseCommentArgs(nil, args)
 	return err
 }
 
@@ -296,9 +379,13 @@ type commentFamily struct {
 	// own (SPEC/DATA_FORMATS.md § Audit Entry).
 	entityType models.EntityType
 
-	// parentLabel names the parent in the messages `comment-add` and
-	// `comment-list` report: "task" / "sprint".
-	parentLabel string
+	// parentIDField is the field the positional parent id of `comment-add` and
+	// `comment-list` is reported as: utils.FieldTaskID / utils.FieldSprintID.
+	//
+	// It replaces a bare label because it carries BOTH spellings the family
+	// needs — `task_id` for the range refusal, `task` for the format refusal and
+	// for the not-found prose — so the two can no longer be chosen separately.
+	parentIDField utils.RangedField
 }
 
 // requireParent reports a missing parent as the exit-4 condition
@@ -315,7 +402,7 @@ func (f *commentFamily) requireParent(database *db.DB, parentID int) error {
 
 	if err := f.parentExists(ctx, database, parentID); err != nil {
 		if errors.Is(err, utils.ErrNotFound) {
-			return fmt.Errorf("%w: %s %d not found", utils.ErrNotFound, f.parentLabel, parentID)
+			return fmt.Errorf("%w: %s %d not found", utils.ErrNotFound, f.parentIDField.IDEntity(), parentID)
 		}
 		return err
 	}
@@ -359,7 +446,7 @@ func commentAdd(f *commentFamily, args []string) error {
 		return err
 	}
 
-	parentID, rest, err := requireCommentPositionalID(remaining, f.parentLabel)
+	parentID, rest, err := requireCommentPositionalID(remaining, f.parentIDField)
 	if err != nil {
 		return err
 	}
@@ -445,7 +532,7 @@ func commentList(f *commentFamily, args []string) error {
 		return err
 	}
 
-	parentID, rest, err := requireCommentPositionalID(remaining, f.parentLabel)
+	parentID, rest, err := requireCommentPositionalID(remaining, f.parentIDField)
 	if err != nil {
 		return err
 	}
@@ -511,7 +598,7 @@ func commentEdit(f *commentFamily, args []string) error {
 		return err
 	}
 
-	commentID, rest, err := requireCommentPositionalID(remaining, commentEntity)
+	commentID, rest, err := requireCommentPositionalID(remaining, commentIDField)
 	if err != nil {
 		return err
 	}
@@ -594,11 +681,11 @@ func commentRemove(f *commentFamily, args []string) error {
 		return err
 	}
 
-	commentID, rest, err := requireCommentPositionalID(remaining, commentEntity)
+	commentID, rest, err := requireCommentPositionalID(remaining, commentIDField)
 	if err != nil {
 		return err
 	}
-	if err := rejectUnknownFlags(rest); err != nil {
+	if err := rejectCommentLeftovers(rest); err != nil {
 		return err
 	}
 

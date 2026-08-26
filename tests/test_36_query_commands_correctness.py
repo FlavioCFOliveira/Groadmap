@@ -25,10 +25,15 @@ Regression guards for defects found during the query-command evaluation:
   - velocity must be floored at a 1-day denominator (sub-day sprints must not
     report inflated tasks/day)
   - stats.sprints.pending must count PENDING (never-started) sprints
+  - sprint list must populate task_count/tasks for EVERY sprint it returns
+    exactly as sprint get does for the same sprint (rmp task #233: ListSprints
+    used to leave both fields at their zero value for every row while
+    GetSprint resolved them correctly for the same sprint)
 """
 
 import sys
 import os
+import json
 import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -101,7 +106,7 @@ class TestQueryCommandsCorrectness:
 
         # Sprint 1: 5 tasks; complete 3 (distinct timestamps), t1 -> DOING, close.
         self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(s1),
-                            str(t["t1"]), str(t["t3"]), str(t["t4"]), str(t["t11"]), str(t["t12"])])
+                            ",".join(str(t[k]) for k in ("t1", "t3", "t4", "t11", "t12"))])
         self.test.run_cmd(["sprint", "start", "-r", r, str(s1)])
         self._complete(r, t["t3"], settle=0.05)
         self._complete(r, t["t4"], settle=0.05)
@@ -111,7 +116,7 @@ class TestQueryCommandsCorrectness:
 
         # Sprint 2: 4 tasks; complete 2, t7 -> DOING, t8 -> TESTING, stay OPEN.
         self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(s2),
-                            str(t["t6"]), str(t["t7"]), str(t["t8"]), str(t["t14"])])
+                            ",".join(str(t[k]) for k in ("t6", "t7", "t8", "t14"))])
         self.test.run_cmd(["sprint", "start", "-r", r, str(s2)])
         self._complete(r, t["t6"], settle=0.05)
         self._complete(r, t["t14"], settle=0.05)
@@ -120,7 +125,7 @@ class TestQueryCommandsCorrectness:
         self.test.run_cmd(["task", "stat", "-r", r, str(t["t8"]), "TESTING"])
 
         # Sprint 3: PENDING with 2 tasks (move BACKLOG -> SPRINT). Sprint 4: PENDING empty.
-        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(s3), str(t["t9"]), str(t["t10"])])
+        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(s3), ",".join(str(t[k]) for k in ("t9", "t10"))])
 
         ids = {"s1": s1, "s2": s2, "s3": s3, "s4": s4}
         ids.update(t)
@@ -193,6 +198,307 @@ class TestQueryCommandsCorrectness:
             assert f in sh, f"sprint show must include {f}"
         assert set(sh["task_order"]) == {ids["t6"], ids["t7"], ids["t8"], ids["t14"]}, sh["task_order"]
         print("✓ sprint show correctness")
+
+    # ---- sprint list/get/tasks membership agreement (rmp task #233) -------
+    #
+    # ListSprints used to leave task_count at 0 and tasks at nil for every
+    # sprint it returned, whatever the sprint held, because it never resolved
+    # membership the way GetSprint did for the same sprint. These tests build
+    # an independently-computed ground truth for several sprints of different
+    # sizes -- including one that is genuinely empty -- and check that
+    # `sprint list`, `sprint get` and `sprint tasks` never disagree about it.
+
+    def _build_membership_scenario(self):
+        """Fleet-telematics roadmap with sprints of different sizes,
+        including an empty one, built so the assertions in this section are
+        non-vacuous:
+
+        - s_medium's planned in-sprint position order (set via `sprint
+          reorder`) is deliberately NOT ascending task-id order, so a test
+          that asserts "list/get return ascending ids while sprint tasks
+          returns the planned order" cannot pass by accident.
+        - s_medium also parks one member (t4) back in BACKLOG status while it
+          stays a sprint member, so membership counting can be shown to be
+          status-independent.
+        - Sprints end in different statuses (PENDING x2, OPEN, CLOSED) so the
+          --status filter has something real to narrow.
+
+        Returns (roadmap, ids, medium_position_order): ids maps mnemonic
+        sprint/task keys to their integer ids, and medium_position_order is
+        the exact scrambled task-id sequence s_medium was reordered to.
+        """
+        r = self.test.create_roadmap("fleet_telematics_platform")
+
+        s_empty = self.test.create_sprint(
+            r,
+            "Reserved swing capacity for the on-call rotation; deliberately "
+            "holds no work until an incident pulls engineers off their sprint.",
+            title="Sprint 4 - Swing capacity (empty)")
+        s_small = self.test.create_sprint(
+            r,
+            "Stand up the raw ingestion path for vehicle telemetry pings.",
+            title="Sprint 1 - Ingestion foundations")
+        s_medium = self.test.create_sprint(
+            r,
+            "Ship geofence breach alerting and fuel-consumption analytics on "
+            "top of the ingested telemetry.",
+            title="Sprint 2 - Alerting and fuel analytics")
+        s_large = self.test.create_sprint(
+            r,
+            "Roll out the fleet visibility surface: route replay, firmware "
+            "OTA, cold-chain audit, fatigue detection, sensor calibration "
+            "and utilization reporting.",
+            title="Sprint 3 - Fleet visibility rollout")
+
+        t = {}
+        # (key, title, type, priority, severity)
+        spec = [
+            ("t1", "Vehicle GPS ping ingestion service", "TASK", 5, 3),
+            ("t2", "Driver behavior scoring model", "USER_STORY", 7, 4),
+            ("t3", "Truck geofence breach alerting", "BUG", 8, 7),
+            ("t4", "Fuel consumption analytics dashboard", "TASK", 6, 5),
+            ("t5", "Route replay viewer", "USER_STORY", 5, 3),
+            ("t6", "Device firmware OTA rollout", "TASK", 7, 6),
+            ("t7", "Cold-chain temperature audit trail", "USER_STORY", 8, 8),
+            ("t8", "Maintenance schedule predictor", "TASK", 4, 2),
+            ("t9", "Driver fatigue detection alerts", "USER_STORY", 6, 6),
+            ("t10", "Trailer weight sensor calibration", "TASK", 3, 4),
+            ("t11", "Fleet utilization report export", "TASK", 5, 3),
+            ("t12", "Depot yard camera integration", "USER_STORY", 6, 5),
+        ]
+        for key, title, ty, pr, sv in spec:
+            t[key] = self._mk_task(r, title, ty, pr, sv)
+
+        # s_medium first, and fully cycled to CLOSED, while no other sprint is
+        # OPEN yet (only one sprint may be OPEN at a time).
+        medium_order = [t["t6"], t["t3"], t["t5"], t["t4"]]
+        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(s_medium),
+                            ",".join(str(t[k]) for k in ("t3", "t4", "t5", "t6"))])
+        self.test.run_cmd(["sprint", "reorder", "-r", r, str(s_medium),
+                            ",".join(str(i) for i in medium_order)])
+        self.test.run_cmd(["task", "stat", "-r", r, str(t["t4"]), "BACKLOG"])
+        self.test.run_cmd(["sprint", "start", "-r", r, str(s_medium)])
+        # t3/t5/t6 are still SPRINT (only t4 was parked in BACKLOG), so
+        # closing requires --force.
+        self.test.run_cmd(["sprint", "close", "-r", r, str(s_medium), "--force"])
+
+        # s_small: 2 members, started last so it is the sprint left OPEN.
+        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(s_small),
+                            ",".join(str(t[k]) for k in ("t1", "t2"))])
+        self.test.run_cmd(["sprint", "start", "-r", r, str(s_small)])
+
+        # s_large: 6 members, default (ascending) order, left PENDING.
+        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(s_large),
+                            ",".join(str(t[k]) for k in ("t7", "t8", "t9", "t10", "t11", "t12"))])
+
+        # s_empty: no operations at all -- created and left untouched.
+
+        ids = {"s_empty": s_empty, "s_small": s_small, "s_medium": s_medium,
+               "s_large": s_large}
+        ids.update(t)
+        return r, ids, medium_order
+
+    def test_sprint_membership_varied_sizes_task_count_matches_tasks(self):
+        """task_count equals len(tasks) for every sprint `sprint list`
+        returns, across sprints of genuinely different sizes (0, 2, 4, 6),
+        and the ids in `tasks` are ascending task-id order."""
+        r, ids, _ = self._build_membership_scenario()
+        listing = self.test.run_cmd_json(["sprint", "list", "-r", r])
+        by_id = {s["id"]: s for s in listing}
+
+        expected_members = {
+            ids["s_empty"]: set(),
+            ids["s_small"]: {ids["t1"], ids["t2"]},
+            ids["s_medium"]: {ids["t3"], ids["t4"], ids["t5"], ids["t6"]},
+            ids["s_large"]: {ids["t7"], ids["t8"], ids["t9"],
+                              ids["t10"], ids["t11"], ids["t12"]},
+        }
+        for sid, expected in expected_members.items():
+            entry = by_id[sid]
+            assert entry["task_count"] == len(entry["tasks"]), (
+                f"sprint {sid}: task_count {entry['task_count']} != "
+                f"len(tasks) {len(entry['tasks'])}"
+            )
+            assert entry["task_count"] == len(expected), (
+                f"sprint {sid}: expected {len(expected)} members, "
+                f"got task_count={entry['task_count']}"
+            )
+            assert set(entry["tasks"]) == expected, (
+                f"sprint {sid}: tasks {entry['tasks']} != expected {expected}"
+            )
+            assert entry["tasks"] == sorted(entry["tasks"]), (
+                f"sprint {sid}: tasks must be in ascending task-id order, "
+                f"got {entry['tasks']}"
+            )
+        print("✓ sprint list: task_count == len(tasks) across differently sized sprints")
+
+    def test_sprint_membership_three_way_agreement_list_get_tasks(self):
+        """`sprint list`, `sprint get` and `sprint tasks` never disagree about
+        the same sprint's membership, for sprints of every size in the
+        fixture (the empty one is checked on its own in a dedicated test)."""
+        r, ids, _ = self._build_membership_scenario()
+        listing = self.test.run_cmd_json(["sprint", "list", "-r", r])
+        by_id = {s["id"]: s for s in listing}
+
+        for key in ("s_small", "s_medium", "s_large"):
+            sid = ids[key]
+            list_entry = by_id[sid]
+            get_entry = self.test.run_cmd_json(["sprint", "get", "-r", r, str(sid)])
+            tasks_rows = self.test.run_cmd_json(["sprint", "tasks", "-r", r, str(sid)])
+
+            assert list_entry["task_count"] == get_entry["task_count"], (
+                f"sprint {sid}: list task_count {list_entry['task_count']} != "
+                f"get task_count {get_entry['task_count']}"
+            )
+            assert list_entry["tasks"] == get_entry["tasks"], (
+                f"sprint {sid}: list tasks {list_entry['tasks']} != "
+                f"get tasks {get_entry['tasks']}"
+            )
+            assert len(tasks_rows) == list_entry["task_count"], (
+                f"sprint {sid}: sprint tasks returned {len(tasks_rows)} rows "
+                f"but task_count is {list_entry['task_count']}"
+            )
+            assert {row["id"] for row in tasks_rows} == set(list_entry["tasks"]), (
+                f"sprint {sid}: sprint tasks ids {[row['id'] for row in tasks_rows]} "
+                f"!= list/get tasks {list_entry['tasks']}"
+            )
+        print("✓ sprint list / get / tasks agree on membership for every sprint size")
+
+    def test_sprint_membership_empty_sprint_zero_and_empty_array_never_null(self):
+        """An empty sprint reports task_count 0 and tasks [] -- an empty JSON
+        array -- in BOTH sprint list and sprint get, never null."""
+        r, ids, _ = self._build_membership_scenario()
+        sid = ids["s_empty"]
+
+        listing = self.test.run_cmd_json(["sprint", "list", "-r", r])
+        list_entry = next(s for s in listing if s["id"] == sid)
+        assert list_entry["task_count"] == 0, list_entry["task_count"]
+        assert list_entry["tasks"] is not None, "sprint list: tasks must not be null"
+        assert list_entry["tasks"] == [], list_entry["tasks"]
+
+        get_entry = self.test.run_cmd_json(["sprint", "get", "-r", r, str(sid)])
+        assert get_entry["task_count"] == 0, get_entry["task_count"]
+        assert get_entry["tasks"] is not None, "sprint get: tasks must not be null"
+        assert get_entry["tasks"] == [], get_entry["tasks"]
+
+        # Raw-text proof, independent of any JSON-decoding convenience in the
+        # test harness: the bytes on the wire must literally say "tasks": []
+        # and never "tasks": null, for both commands.
+        _, get_stdout, _ = self.test.run_cmd(["sprint", "get", "-r", r, str(sid)])
+        assert '"tasks": null' not in get_stdout, get_stdout
+        assert '"tasks": []' in get_stdout, get_stdout
+
+        _, list_stdout, _ = self.test.run_cmd(["sprint", "list", "-r", r])
+        assert '"tasks": null' not in list_stdout, "sprint list must never emit tasks: null"
+        print("✓ empty sprint reports 0 / [] (never null) in both sprint list and sprint get")
+
+    def test_sprint_membership_ascending_order_differs_from_planned_position(self):
+        """`tasks` (list/get) is ascending task-id order; `sprint tasks`
+        (no filter) is the planned in-sprint position order. The fixture's
+        s_medium is reordered so the two are provably different sequences,
+        so this assertion cannot pass by coincidence."""
+        r, ids, medium_order = self._build_membership_scenario()
+        sid = ids["s_medium"]
+        ascending = sorted([ids["t3"], ids["t4"], ids["t5"], ids["t6"]])
+
+        # Sanity: the fixture's planned order really is not ascending id
+        # order, otherwise the assertions below would be vacuous.
+        assert medium_order != ascending, (
+            "fixture bug: medium_order must differ from ascending id order "
+            f"for this test to be meaningful, got {medium_order}"
+        )
+
+        get_entry = self.test.run_cmd_json(["sprint", "get", "-r", r, str(sid)])
+        assert get_entry["tasks"] == ascending, (
+            f"sprint get tasks must be ascending id order: {get_entry['tasks']} != {ascending}"
+        )
+
+        listing = self.test.run_cmd_json(["sprint", "list", "-r", r])
+        list_entry = next(s for s in listing if s["id"] == sid)
+        assert list_entry["tasks"] == ascending, (
+            f"sprint list tasks must be ascending id order: {list_entry['tasks']} != {ascending}"
+        )
+
+        tasks_rows = self.test.run_cmd_json(["sprint", "tasks", "-r", r, str(sid)])
+        position_order = [row["id"] for row in tasks_rows]
+        assert position_order == medium_order, (
+            f"sprint tasks must return the planned position order {medium_order}, "
+            f"got {position_order}"
+        )
+        assert position_order != ascending, (
+            "sprint tasks position order accidentally matches ascending id "
+            "order; the fixture must scramble it for this test to be non-vacuous"
+        )
+        print("✓ tasks (ascending id order) genuinely differs from sprint tasks (planned position order)")
+
+    def test_sprint_membership_backlog_member_counted_and_listed(self):
+        """A member task parked in BACKLOG status stays counted in
+        task_count and listed in tasks -- membership is status-independent."""
+        r, ids, _ = self._build_membership_scenario()
+        sid = ids["s_medium"]
+        t4 = ids["t4"]
+
+        # Ground truth: t4 really is BACKLOG while remaining a sprint member.
+        t4_task = self._as_task(self.test.run_cmd_json(["task", "get", "-r", r, str(t4)]))
+        assert t4_task["status"] == "BACKLOG", t4_task["status"]
+
+        get_entry = self.test.run_cmd_json(["sprint", "get", "-r", r, str(sid)])
+        assert t4 in get_entry["tasks"], f"BACKLOG member {t4} missing from tasks: {get_entry['tasks']}"
+        assert get_entry["task_count"] == 4, get_entry["task_count"]
+
+        listing = self.test.run_cmd_json(["sprint", "list", "-r", r])
+        list_entry = next(s for s in listing if s["id"] == sid)
+        assert t4 in list_entry["tasks"], f"BACKLOG member {t4} missing from list tasks: {list_entry['tasks']}"
+        assert list_entry["task_count"] == 4, list_entry["task_count"]
+
+        # sprint tasks (unfiltered) still surfaces it, with its real status.
+        unfiltered = self.test.run_cmd_json(["sprint", "tasks", "-r", r, str(sid)])
+        row = next((x for x in unfiltered if x["id"] == t4), None)
+        assert row is not None, "sprint tasks (unfiltered) must include the BACKLOG member"
+        assert row["status"] == "BACKLOG", row["status"]
+
+        # Status-filtered sprint tasks: BACKLOG isolates it, SPRINT excludes it,
+        # neither changes task_count on a later membership read.
+        backlog_only = self.test.run_cmd_json(["sprint", "tasks", "-r", r, str(sid), "-s", "BACKLOG"])
+        assert {x["id"] for x in backlog_only} == {t4}, backlog_only
+
+        sprint_only = self.test.run_cmd_json(["sprint", "tasks", "-r", r, str(sid), "-s", "SPRINT"])
+        assert {x["id"] for x in sprint_only} == {ids["t3"], ids["t5"], ids["t6"]}, sprint_only
+
+        recheck = self.test.run_cmd_json(["sprint", "get", "-r", r, str(sid)])
+        assert recheck["task_count"] == 4, "status-filtered reads must not change task_count"
+        print("✓ a BACKLOG member is still counted and listed as sprint membership")
+
+    def test_sprint_membership_status_filter_does_not_alter_membership(self):
+        """`--status` on `sprint list` narrows which SPRINTS are returned; it
+        never changes the task_count/tasks a returned sprint carries."""
+        r, ids, _ = self._build_membership_scenario()
+        truth = {s["id"]: (s["task_count"], s["tasks"])
+                 for s in self.test.run_cmd_json(["sprint", "list", "-r", r])}
+
+        expected_by_status = {
+            "PENDING": {ids["s_empty"], ids["s_large"]},
+            "OPEN": {ids["s_small"]},
+            "CLOSED": {ids["s_medium"]},
+        }
+        for status, expected_ids in expected_by_status.items():
+            filtered = self.test.run_cmd_json(["sprint", "list", "-r", r, "--status", status])
+            got_ids = {s["id"] for s in filtered}
+            assert got_ids == expected_ids, (
+                f"--status {status}: expected sprints {expected_ids}, got {got_ids}"
+            )
+            for entry in filtered:
+                assert entry["status"] == status, entry
+                exp_count, exp_tasks = truth[entry["id"]]
+                assert entry["task_count"] == exp_count, (
+                    f"--status {status}: sprint {entry['id']} task_count changed "
+                    f"from {exp_count} to {entry['task_count']}"
+                )
+                assert entry["tasks"] == exp_tasks, (
+                    f"--status {status}: sprint {entry['id']} tasks changed "
+                    f"from {exp_tasks} to {entry['tasks']}"
+                )
+        print("✓ --status narrows the sprint listing without altering any returned sprint's membership")
 
     # ---- aliasing regression ----------------------------------------------
 
@@ -389,7 +695,7 @@ class TestQueryCommandsCorrectness:
         r = self.test.create_roadmap("velocity_check")
         s = self.test.create_sprint(r, "Same-day sprint")
         ids = [self._mk_task(r, f"Task {i}", "TASK", 5, 3) for i in range(4)]
-        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(s)] + [str(i) for i in ids])
+        self.test.run_cmd(["sprint", "add-tasks", "-r", r, str(s), ",".join(str(i) for i in ids)])
         self.test.run_cmd(["sprint", "start", "-r", r, str(s)])
         for tid in ids:  # complete all 4 quickly (sub-day)
             self._complete(r, tid)

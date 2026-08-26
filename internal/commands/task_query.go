@@ -1,19 +1,14 @@
 package commands
 
 import (
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
-
-// ErrInvalidDateFormat indicates that a date string does not match any accepted format.
-var ErrInvalidDateFormat = errors.New("invalid date format: expected RFC3339 (2026-01-01T00:00:00Z) or date-only (2026-01-01)")
 
 // validSortFields holds the accepted values for the --sort flag.
 var validSortFields = map[string]bool{
@@ -21,21 +16,6 @@ var validSortFields = map[string]bool{
 	"created":  true,
 	"status":   true,
 	"severity": true,
-}
-
-// parseFilterDate parses a date string for --created-since / --created-until.
-// Accepts full ISO 8601 / RFC3339 strings and date-only strings (YYYY-MM-DD).
-// Date-only values are interpreted as the start of that day in UTC.
-func parseFilterDate(s string) (time.Time, error) {
-	t, err := utils.ParseISO8601(s)
-	if err == nil {
-		return t, nil
-	}
-	t, dateErr := time.Parse("2006-01-02", s)
-	if dateErr != nil {
-		return time.Time{}, fmt.Errorf("%w: %q", ErrInvalidDateFormat, s)
-	}
-	return t.UTC(), nil
 }
 
 // taskList lists tasks with optional filters.
@@ -61,7 +41,11 @@ func taskList(args []string) error {
 			// model-level sentinel the exit-code mapper does not recognise, so
 			// wrap it in utils.ErrValidation to land on exit 6, matching every
 			// other enum filter (e.g. --type) and SPEC/COMMANDS.md.
-			return fmt.Errorf("%w: %s", utils.ErrValidation, parseErr.Error())
+			// The model sentinel is chained with a SECOND %w, not rendered with
+			// %s, so errors.Is can still tell WHICH enum was rejected. Both verbs
+			// render the same bytes, so only the chain distinguishes them, and
+			// %s silently discards it (task #290).
+			return fmt.Errorf("%w: %w", utils.ErrValidation, parseErr)
 		}
 		filter.Status = &s
 	}
@@ -72,29 +56,33 @@ func taskList(args []string) error {
 		filter.MinSeverity = &s
 	}
 	if l, ok := result.Flags["Limit"].(int); ok {
-		if l < 1 || l > models.MaxTaskLimit {
-			return fmt.Errorf("%w: limit must be between 1 and %d", utils.ErrValidation, models.MaxTaskLimit)
+		// The bound is not compared here. models.ValidateTaskLimit owns it and
+		// words the refusal, so this command, `backlog list` and `audit list`
+		// publish one sentence differing only in the maximum
+		// (SPEC/COMMANDS.md § List Tasks; rmp task 329).
+		if err := models.ValidateTaskLimit(l); err != nil {
+			return err
 		}
 		filter.Limit = l
 	}
 	if typeStr, ok := result.Flags["Type"].(string); ok {
 		tt, parseErr := models.ParseTaskType(typeStr)
 		if parseErr != nil {
-			return fmt.Errorf("%w: %s", utils.ErrValidation, parseErr.Error())
+			return fmt.Errorf("%w: %w", utils.ErrValidation, parseErr)
 		}
 		filter.TaskType = &tt
 	}
 	if sinceStr, ok := result.Flags["CreatedSince"].(string); ok {
-		t, parseErr := parseFilterDate(sinceStr)
+		t, parseErr := ParseDateFilter("--created-since", sinceStr)
 		if parseErr != nil {
-			return fmt.Errorf("%w: --created-since: %v", utils.ErrValidation, parseErr)
+			return parseErr
 		}
 		filter.CreatedSince = &t
 	}
 	if untilStr, ok := result.Flags["CreatedUntil"].(string); ok {
-		t, parseErr := parseFilterDate(untilStr)
+		t, parseErr := ParseDateFilter("--created-until", untilStr)
 		if parseErr != nil {
-			return fmt.Errorf("%w: --created-until: %v", utils.ErrValidation, parseErr)
+			return parseErr
 		}
 		filter.CreatedUntil = &t
 	}
@@ -192,7 +180,7 @@ func taskGet(args []string) error {
 		return fmt.Errorf("%w: task ID(s) required", utils.ErrRequired)
 	}
 
-	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], "task")
+	ids, err := utils.ParseCommaSeparatedIDs(remaining[0], utils.FieldTaskID)
 	if err != nil {
 		return err
 	}
@@ -234,7 +222,7 @@ func taskSubtasks(args []string) error {
 		return fmt.Errorf("%w: task ID required", utils.ErrRequired)
 	}
 
-	id, err := utils.ValidateIDString(strings.TrimSpace(remaining[0]), "task")
+	id, err := utils.ValidateIDString(strings.TrimSpace(remaining[0]), utils.FieldTaskID)
 	if err != nil {
 		return err
 	}

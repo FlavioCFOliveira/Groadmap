@@ -335,6 +335,68 @@ func auditOperationEnumDescriptions() map[string]string {
 	return out
 }
 
+// auditOperationEntityTypes renders the entity-type member for the
+// AuditOperation enum: one entry per catalogue value, holding the entity the
+// operation is recorded against.
+//
+// It reads models.ClassifyAuditOperation rather than restating the mapping, so
+// the contract and the audit family help publish one classification and cannot
+// disagree about it (SPEC/HELP.md § Audit operation entity-type classification
+// rule 2). An unclassified operation renders as the empty string, which
+// omitempty drops from the JSON and TestGenerate_AuditOperationValuesCarryTheir
+// EntityType reports, rather than being silently given a default entity.
+func auditOperationEntityTypes() map[string]string {
+	out := make(map[string]string, len(models.ValidAuditOperations))
+	for _, op := range models.ValidAuditOperations {
+		if class, declared := models.ClassifyAuditOperation(op); declared {
+			out[string(op)] = string(class.EntityType)
+		}
+	}
+	return out
+}
+
+// auditOperationLegacyFlags renders the legacy member for the AuditOperation
+// enum: one entry per catalogue value, true where no command writes the
+// operation any more.
+//
+// Like auditOperationEntityTypes above it reads models.ClassifyAuditOperation
+// rather than restating the set, so the plain-text help and the contract publish
+// one LEGACY marking and cannot disagree about it (SPEC/HELP.md § Audit
+// operation entity-type classification rule 2). In particular it does NOT
+// recover the marking by searching the description for the word LEGACY: that
+// string is written for a reader, this specification is free to reword it, and
+// reading a fact out of it would be the same inference rule 1 forbids for the
+// entity type.
+//
+// An unclassified operation is absent from the returned map, so its member is
+// omitted rather than defaulting to false — publishing "still written" about an
+// operation nobody classified would be an assertion nothing supports.
+// TestGenerate_AuditOperationValuesPublishTheirLegacyFlag reports the omission.
+func auditOperationLegacyFlags() map[string]bool {
+	out := make(map[string]bool, len(models.ValidAuditOperations))
+	for _, op := range models.ValidAuditOperations {
+		if class, declared := models.ClassifyAuditOperation(op); declared {
+			out[string(op)] = class.Legacy
+		}
+	}
+	return out
+}
+
+// enumEntityTypes holds the per-enum entity-type members. Only AuditOperation
+// has one; every other enum is absent from this map, so buildEnumValues leaves
+// the member off its values entirely.
+var enumEntityTypes = map[string]map[string]string{
+	"AuditOperation": auditOperationEntityTypes(),
+}
+
+// enumLegacyFlags holds the per-enum legacy members, on the same terms as
+// enumEntityTypes: only AuditOperation appears, so no other enum's values carry
+// the key. A bare map read cannot serve here — false is a value this map
+// publishes, not an absence — so buildEnumValues uses the two-value form.
+var enumLegacyFlags = map[string]map[string]bool{
+	"AuditOperation": auditOperationLegacyFlags(),
+}
+
 // stateMachineRefs maps an enum name to the SPEC reference for its
 // state machine, when one exists. Absent entries serialise as no
 // state_machine_reference field on the enum (omitempty).

@@ -544,6 +544,218 @@ class TestHelpContentBinary:
         print("✓ every sampled help output contains an exit-codes block with code 0")
 
 
+class TestAuditHelpClassificationBinary:
+    """Binary-level checks on the two audit help surfaces.
+
+    SPEC/HELP.md § Audit family help specifics binds exactly two surfaces, the
+    `audit` family help and the `audit list` subcommand help, and
+    § Audit operation entity-type classification rules 5(b) and 6 fix the shape
+    of the operation block on the first of them. The Go gates in
+    internal/commands render the block through a function call; these run the
+    compiled binary, which is what a reader and an agent actually see.
+    """
+
+    # The four values the catalogue accepts but no command writes.
+    LEGACY_OPERATIONS = ["TASK_STATUS_CHANGE", "TASK_UPDATE", "SPRINT_UPDATE", "SPRINT_MOVE_TASK"]
+
+    def setup_method(self):
+        self.test = GroadmapTestBase()
+        self.test.setup()
+        self.cli = self.test.cli_path
+        self.home = str(self.test.home_dir)
+
+    def teardown_method(self):
+        self.test.teardown()
+
+    def _help(self, args):
+        _, out, _ = _run(self.cli, args, {"HOME": self.home})
+        return out
+
+    def _operation_block(self, out):
+        """Return the lines of the 'Valid operations' block, label lines included."""
+        heading = "Valid operations (for --operation filter):"
+        assert heading in out, f"`rmp audit --help` has no {heading!r} block"
+        rest = out.split(heading, 1)[1].lstrip("\n")
+        return [line for line in rest.split("\n\n", 1)[0].split("\n") if line.strip()]
+
+    def _valid_operations(self):
+        """Every value the contract publishes for the AuditOperation enum."""
+        _, out, _ = _run(self.cli, ["--ai-help"], {"HOME": self.home})
+        contract = json.loads(out)
+        values = contract["enums"]["AuditOperation"]["values"]
+        assert len(values) >= 40, f"the contract publishes only {len(values)} audit operations"
+        return [v["value"] for v in values]
+
+    def test_operation_block_groups_every_operation_under_an_entity_type(self):
+        """Every group label names an entity type; every operation sits under one.
+
+        Rule 5(b) forbids a catch-all group. A catch-all is what lets an
+        operation nobody classified still be printed, under a heading that
+        asserts nothing about it, while the block still lists everything the
+        command accepts.
+        """
+        out = self._help(["audit", "--help"])
+        lines = self._operation_block(out)
+
+        labels = []
+        placed = {}
+        current = None
+        for line in lines:
+            stripped = line.strip()
+            if ":" in stripped:
+                label = stripped.split(":", 1)[0].strip()
+                current = label
+                if label not in labels:
+                    labels.append(label)
+            assert current is not None, (
+                f"the block opens with a line under no group label: {line!r}"
+            )
+            column = line
+            if ":" in column:
+                column = column.rsplit(":", 1)[1]
+            for token in column.replace(",", " ").split():
+                placed[token] = current
+
+        assert labels, "the 'Valid operations' block carries no group label at all"
+        for label in labels:
+            head = label.split(",")[0].strip()
+            assert head in ("TASK", "SPRINT"), (
+                f"group label {label!r} does not name an entity type. A group whose heading names no "
+                f"entity is a catch-all wearing a name, and it is what rule 5(b) forbids"
+            )
+
+        published = self._valid_operations()
+        for op in published:
+            assert op in placed, (
+                f"{op} is a published filter value but no group of `rmp audit --help` lists it; the "
+                f"help publishes a subset of the catalogue"
+            )
+        for token in placed:
+            assert token in published, (
+                f"the block lists {token!r}, which `audit list --operation` does not accept"
+            )
+        assert len(placed) == len(published), (
+            f"{len(placed)} tokens were attributed but {len(published)} operations are published; the "
+            f"block scan has stopped matching and this check is measuring less than the catalogue"
+        )
+        print(f"✓ audit --help: {len(published)} operations grouped under {len(labels)} entity-type labels")
+
+    def test_legacy_operations_are_grouped_and_explained(self):
+        """The LEGACY values sit in their own labelled group, and the help says why.
+
+        Rule 6 puts the marking on the GROUP LABEL and not beside each name: the
+        list column of the block is checked on the basis that everything in it
+        is a value the command accepts, and an inline `(LEGACY)` marker would
+        put a token there that is not an operation.
+        """
+        out = self._help(["audit", "--help"])
+        lines = self._operation_block(out)
+
+        legacy_seen = {}
+        current = None
+        for line in lines:
+            stripped = line.strip()
+            if ":" in stripped:
+                current = stripped.split(":", 1)[0].strip()
+            column = line
+            if ":" in column:
+                column = column.rsplit(":", 1)[1]
+            for token in column.replace(",", " ").split():
+                if token in self.LEGACY_OPERATIONS:
+                    legacy_seen[token] = current
+
+        for op in self.LEGACY_OPERATIONS:
+            assert op in legacy_seen, f"{op} is not listed in the operation block at all"
+            assert "LEGACY" in legacy_seen[op], (
+                f"{op} is printed under {legacy_seen[op]!r}, a label that does not say LEGACY, so a "
+                f"reader cannot tell it from the operations still in use"
+            )
+
+        # Nothing else may be under a LEGACY label.
+        current = None
+        for line in lines:
+            stripped = line.strip()
+            if ":" in stripped:
+                current = stripped.split(":", 1)[0].strip()
+            if current is None or "LEGACY" not in current:
+                continue
+            column = line.rsplit(":", 1)[1] if ":" in line else line
+            for token in column.replace(",", " ").split():
+                assert token in self.LEGACY_OPERATIONS, (
+                    f"{token} is printed under the LEGACY label {current!r} but a command still writes "
+                    f"it, so the help tells readers to stop filtering on a live operation"
+                )
+
+        lowered = " ".join(out.split()).lower()
+        assert "no command writes a legacy operation" in lowered, (
+            "audit --help never states that no command writes the LEGACY values"
+        )
+        assert "remain filterable" in lowered, (
+            "audit --help never states that the LEGACY values stay accepted so the older entries "
+            "carrying them remain filterable"
+        )
+        print("✓ audit --help: LEGACY values grouped under their own label and explained")
+
+    def test_both_bound_surfaces_explain_related_entity_id(self):
+        """Rule 5 on both surfaces: the key names the operation's counterpart."""
+        surfaces = {
+            "rmp audit --help": self._help(["audit", "--help"]),
+            "rmp audit list --help": self._help(["audit", "list", "--help"]),
+        }
+        assert surfaces["rmp audit --help"] != surfaces["rmp audit list --help"], (
+            "the two surfaces produced identical output, so only one is being exercised"
+        )
+        for label, out in surfaces.items():
+            flat = " ".join(out.split()).lower()
+            assert "related_entity_id" in flat, f"{label}: never names related_entity_id"
+            assert "counterpart" in flat, (
+                f"{label}: explains related_entity_id without saying it names the COUNTERPART entity "
+                f"of the operation, so the key reads as a duplicate of entity_id"
+            )
+            assert "null when the operation has no" in flat, (
+                f"{label}: does not say the key is null when the operation has no counterpart"
+            )
+            assert "task_status_backlog" in flat and "sprint remove-tasks" in flat and "task stat" in flat, (
+                f"{label}: omits the counter-example rule 5 requires, so the help still lets a reader "
+                f"conclude that the operation name decides whether the key is set"
+            )
+            assert "legacy" in flat, f"{label}: no occurrence of LEGACY (rule 2)"
+        print("✓ both audit help surfaces explain related_entity_id as the counterpart entity")
+
+    def test_audit_list_schema_publishes_all_seven_keys(self):
+        """The machine-readable schema of `audit list` names every audit-entry key.
+
+        An agent reads stdout_on_success.schema instead of the help. Publishing
+        five of the seven keys leaves commit_hash and related_entity_id
+        undiscoverable from the contract.
+        """
+        _, out, _ = _run(self.cli, ["--ai-help"], {"HOME": self.home})
+        contract = json.loads(out)
+        keys = ["id", "operation", "entity_type", "entity_id", "performed_at",
+                "related_entity_id", "commit_hash"]
+
+        found = 0
+        for cmd in contract["commands"]:
+            if cmd["name"] != "audit":
+                continue
+            for sub in cmd["subcommands"]:
+                if sub["name"] not in ("list", "history"):
+                    continue
+                found += 1
+                schema = sub["stdout_on_success"]["schema"]
+                if sub["name"] == "history" and "same shape as audit list" in schema:
+                    # history publishes the shape by reference to list, which is
+                    # checked in full on the very next iteration of this loop.
+                    continue
+                for k in keys:
+                    assert k in schema, (
+                        f"audit {sub['name']}: stdout_on_success.schema omits the key {k!r}, which is "
+                        f"the only description of the response shape an agent gets.\n  schema: {schema}"
+                    )
+        assert found == 2, f"{found} of the 2 entry-returning audit subcommands were examined"
+        print("✓ audit list/history publish all seven audit-entry keys in their schema")
+
+
 def _run_all():
     import inspect
 
@@ -551,6 +763,7 @@ def _run_all():
         TestBannerInvariantsBinary,
         TestEmpiricalExitCodes,
         TestHelpContentBinary,
+        TestAuditHelpClassificationBinary,
     ]
     passed = 0
     failed = 0

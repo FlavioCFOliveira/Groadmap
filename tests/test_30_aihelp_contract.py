@@ -28,10 +28,15 @@ Scenarios:
   (top), not twice.
 - --ai-help mixed with action flags wins (no mutation occurs).
 - --ai-help with an unknown command name exits 2.
+- The SPRINT -> BACKLOG route as three published texts describe it:
+  the `task reopen` side effects, the `backlog` family summary, and
+  the `delete_non_backlog_task` pitfall, each read back against the
+  behaviour of the compiled binary.
 """
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -42,6 +47,23 @@ from tests.base_test import GroadmapTestBase
 
 
 HINT_LINE = "AI agents: run `rmp --ai-help` for a machine-readable command contract."
+
+# Task-status words inside published prose, and the sentence boundary used to
+# read them. The semicolon matters: a clause joined that way carries its own
+# status words, and folding it into its neighbour would let one sentence's
+# states be read as another's.
+_STATUS_WORD = re.compile(r"\b(BACKLOG|SPRINT|DOING|TESTING|COMPLETED)\b")
+_SENTENCE_SPLIT = re.compile(r"(?:\.\s+|;\s+)")
+
+# The phrase the `backlog` summary must carry while both its subcommands filter
+# on the status alone, and the ways a summary can claim the opposite.
+_BACKLOG_STATUS_ONLY_MARKER = "status alone"
+_BACKLOG_EXCLUSION_CLAIMS = (
+    "not yet in a sprint",
+    "not in a sprint",
+    "outside a sprint",
+    "never in a sprint",
+)
 
 REQUIRED_TOP_LEVEL_KEYS = frozenset([
     "schema_version",
@@ -444,6 +466,88 @@ class TestAIHelpHintDeduplication:
         # And the env-var path wins: hint at the top.
         assert text.startswith(HINT_LINE + "\n"), "with AI_AGENT=1, env hint must come first"
         print("✓ AI_AGENT=1 + error: hint emitted exactly once at top")
+
+    def test_suppressed_hint_leaves_no_trailing_blank_line(self):
+        """Suppressing the hint suppresses the blank line that introduced it.
+
+        SPEC/HELP.md § Stderr part order defines part 4 as "One blank line,
+        then the AI-agent hint line", present "unless a suppression rule
+        below applies". The blank line and the hint are one part, so under
+        the deduplication rule both go.
+
+        This asserts the whole of stderr byte for byte. The orphan blank
+        line this guards against carries no text of its own, so a substring
+        check cannot see it: only the exact final bytes can.
+        """
+        code, _, err = _run_raw(
+            self.cli,
+            ["task", "get", "99999", "-r", "nonexistent_roadmap"],
+            env_overrides={"HOME": str(self.test.home_dir), "AI_AGENT": "1"},
+        )
+        assert code == 4, f"expected exit 4 (not found), got {code}"
+
+        expected = (
+            HINT_LINE.encode("utf-8") + b"\n\n"
+            + b'Error: resource not found: roadmap "nonexistent_roadmap"\n'
+        )
+        assert err == expected, (
+            "AI_AGENT=1 + not-found: stderr must end at the error line, with no orphan "
+            f"blank line where the suppressed hint would have been.\n got: {err!r}\nwant: {expected!r}"
+        )
+        print("✓ AI_AGENT=1 + error: stderr ends at the error line, no trailing blank line")
+
+    def test_suppressed_hint_on_dispatch_failure_leaves_no_trailing_blank_line(self):
+        """Same rule on the layout that also carries the recovery help.
+
+        A dispatch failure inserts part 3 (a blank line and the recovery
+        help) between the error line and the suppressed part 4, so the last
+        thing on stderr must be the help body's own final line.
+        """
+        code, out, err = _run_raw(
+            self.cli,
+            ["nadadisto"],
+            env_overrides={"HOME": str(self.test.home_dir), "AI_AGENT": "1"},
+        )
+        assert code == 127, f"expected exit 127 (unresolved command), got {code}"
+        assert out == b"", f"a failing invocation must write nothing to stdout; got {out!r}"
+
+        assert err.startswith(HINT_LINE.encode("utf-8") + b"\n\n"), (
+            f"with AI_AGENT=1 the hint must open stderr; got {err[:120]!r}"
+        )
+        assert err.count(HINT_LINE.encode("utf-8")) == 1, (
+            "the hint must appear exactly once; the recovery help carries no banner"
+        )
+        expected_tail = b'Use "rmp [command] --help" for more information about a command.\n'
+        assert err.endswith(expected_tail), (
+            "AI_AGENT=1 + dispatch failure: stderr must end on the recovery help's last line, "
+            f"with no orphan blank line after it.\n final 80 bytes: {err[-80:]!r}"
+        )
+        print("✓ AI_AGENT=1 + dispatch failure: stderr ends at the recovery help, no trailing blank line")
+
+    def test_unsuppressed_hint_keeps_its_leading_blank_line(self):
+        """The control: when no suppression rule applies, part 4 is whole.
+
+        Without this, deleting the separating blank line outright would
+        satisfy the two assertions above. Here AI_AGENT is unset, so the
+        trailing hint is the one that fires and it must still be introduced
+        by exactly one blank line.
+        """
+        code, _, err = _run_raw(
+            self.cli,
+            ["task", "get", "99999", "-r", "nonexistent_roadmap"],
+            env_overrides={"HOME": str(self.test.home_dir)},
+        )
+        assert code == 4, f"expected exit 4 (not found), got {code}"
+
+        expected = (
+            b'Error: resource not found: roadmap "nonexistent_roadmap"\n'
+            + b"\n" + HINT_LINE.encode("utf-8") + b"\n\n"
+        )
+        assert err == expected, (
+            "AI_AGENT unset + not-found: the trailing hint must be preceded by one blank line.\n"
+            f" got: {err!r}\nwant: {expected!r}"
+        )
+        print("✓ AI_AGENT unset + error: the trailing hint keeps its leading blank line")
 
 
 class TestAIHelpFlagPrecedence:
@@ -934,6 +1038,595 @@ class TestAIHelpContractExitExamples:
         )
 
 
+class TestAIHelpAuditOperationMembers:
+    """Rules 3 and 4 of SPEC/DATA_FORMATS.md § enums map entry, at binary level.
+
+    Every value of the AuditOperation enum carries an `entity_type` member
+    holding TASK or SPRINT: the value an audit entry's own entity_type field
+    holds on a row carrying that operation. Without it an agent composing an
+    `audit list` filter cannot tell whose history the filter returns, and the
+    only thing left to infer it from is the operation's name.
+
+    Every value also carries a `legacy` boolean: true on the four values no
+    command writes, false on every other value. Both members appear ONLY where
+    they apply: both are absent from the values of every other enum, following
+    the convention the contract already uses where `commands[].flags[]` omits
+    `range`, `min_length` and `max_length` rather than publishing them as null.
+    """
+
+    # The four values the catalogue accepts but no command writes.
+    LEGACY_OPERATIONS = {"TASK_STATUS_CHANGE", "TASK_UPDATE", "SPRINT_UPDATE", "SPRINT_MOVE_TASK"}
+
+    # The marking rule 2 puts at the head of a LEGACY value's own description.
+    LEGACY_DESCRIPTION_PREFIX = "LEGACY."
+
+    def setup_method(self):
+        self.test = GroadmapTestBase()
+        self.test.setup()
+        self.cli = self.test.cli_path
+
+    def teardown_method(self):
+        self.test.teardown()
+
+    def _enums(self):
+        _, out, _ = _run_raw(self.cli, ["--ai-help"])
+        doc = json.loads(out)
+        enums = doc["enums"]
+        assert isinstance(enums, dict) and enums, "the contract publishes no enums map"
+        return enums
+
+    def test_every_audit_operation_value_carries_an_entity_type(self):
+        """Present on every value, never null, never empty, always TASK or SPRINT."""
+        enums = self._enums()
+        values = enums["AuditOperation"]["values"]
+        assert len(values) >= 40, f"only {len(values)} audit operations published"
+
+        checked = 0
+        for entry in values:
+            name = entry["value"]
+            assert "entity_type" in entry, (
+                f"enums.AuditOperation {name} carries no entity_type member; an agent cannot tell "
+                f"whose history `audit list --operation {name}` returns"
+            )
+            got = entry["entity_type"]
+            assert got in ("TASK", "SPRINT"), (
+                f"enums.AuditOperation {name} publishes entity_type {got!r}; the audit table's CHECK "
+                f"admits exactly TASK and SPRINT"
+            )
+            checked += 1
+
+        assert checked == len(values), (
+            f"only {checked} of {len(values)} values were checked; a loop that stops matching reports "
+            f"success while measuring nothing"
+        )
+        print(f"✓ all {checked} AuditOperation values publish an entity_type of TASK or SPRINT")
+
+    def test_entity_type_appears_on_no_other_enum(self):
+        """A TaskStatus value is not recorded against an entity at all.
+
+        Absent is the right form rather than null: a key that was null on every
+        enum but this one would suggest the contract has a general notion of an
+        enum value's entity, which it does not.
+        """
+        enums = self._enums()
+        others = 0
+        for name, definition in enums.items():
+            if name == "AuditOperation":
+                continue
+            others += 1
+            for entry in definition["values"]:
+                assert "entity_type" not in entry, (
+                    f"enums.{name} value {entry['value']!r} carries an entity_type member; the member "
+                    f"belongs to AuditOperation alone"
+                )
+        assert others >= 5, (
+            f"only {others} enums other than AuditOperation were examined, so the 'appears only where "
+            f"it applies' half of rule 3 measured almost nothing"
+        )
+        print(f"✓ entity_type is absent from the values of all {others} other enums")
+
+    def test_entity_type_agrees_with_the_audit_rows_actually_written(self):
+        """Rule 4: a declaration states what the writer writes, observed on a row.
+
+        The classification is a claim about stored data. This drives a spread of
+        mutating commands, reads the rows back out of the audit log, and
+        requires the entity_type of every row to equal the entity_type the
+        contract publishes for that row's operation.
+        """
+        enums = self._enums()
+        declared = {v["value"]: v["entity_type"] for v in enums["AuditOperation"]["values"]}
+
+        roadmap = self.test.create_roadmap()
+        task = self.test.create_task(
+            roadmap, "Prove the classification against real rows",
+            "A declared entity type must match the writer",
+            "Drive the writers and read the rows back",
+            "Every observed row agrees with the contract",
+        )
+        blocker = self.test.create_task(
+            roadmap, "Land the shared declaration first",
+            "The classification has one home",
+            "Declare it beside the operation constants",
+            "Both surfaces render from it",
+        )
+        sprint_a = self.test.create_sprint(roadmap, "Classification rollout")
+        sprint_b = self.test.create_sprint(roadmap, "Classification follow-up")
+
+        self.test.run_cmd(["task", "edit", "-r", roadmap, str(task), "-t", "Prove it against real rows"])
+        self.test.run_cmd(["task", "add-dep", "-r", roadmap, str(task), str(blocker)])
+        self.test.run_cmd(["task", "remove-dep", "-r", roadmap, str(task), str(blocker)])
+        self.test.run_cmd(["sprint", "update", "-r", roadmap, str(sprint_a), "-d", "Classification rollout, restated"])
+        self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint_a), str(task)])
+        self.test.run_cmd(["sprint", "move-tasks", "-r", roadmap, str(sprint_a), str(sprint_b), str(task)])
+        self.test.run_cmd(["sprint", "remove-tasks", "-r", roadmap, str(sprint_b), str(task)])
+        self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint_a)])
+        self.test.run_cmd([
+            "task", "comment-add", "-r", roadmap, str(task),
+            "--type", "NOTE", "-b", "Observed against a real audit row.",
+        ])
+
+        rows = self.test.run_cmd_json(["audit", "list", "-r", roadmap, "-l", "500"])
+        assert len(rows) >= 12, f"only {len(rows)} audit rows were written, so the sweep did not run"
+
+        seen = set()
+        for row in rows:
+            op = row["operation"]
+            assert op in declared, f"the audit log holds {op}, which the contract does not publish"
+            assert row["entity_type"] == declared[op], (
+                f"a real audit row carrying {op} holds entity_type {row['entity_type']!r} but the "
+                f"contract declares {declared[op]!r}; the declaration is a claim about stored data "
+                f"and this row falsifies it"
+            )
+            seen.add(op)
+
+        assert len(seen) >= 10, (
+            f"only {len(seen)} distinct operations were observed; the sweep is no longer exercising a "
+            f"spread of writers and this check has stopped proving much"
+        )
+        # Both entity types must be represented, or the check could pass with a
+        # classification that collapsed onto one of them.
+        entities = {row["entity_type"] for row in rows}
+        assert entities == {"TASK", "SPRINT"}, (
+            f"the observed rows cover {sorted(entities)}; a sweep that reaches only one entity cannot "
+            f"detect a classification collapsed onto it"
+        )
+        print(f"✓ {len(seen)} operations observed on real rows agree with the published entity_type")
+
+
+    def test_every_audit_operation_value_publishes_a_legacy_flag(self):
+        """Rule 4: present on every value, a real boolean, never null.
+
+        The false half is the one worth stating. The member is published from a
+        pointer precisely so that false survives serialisation; a plain boolean
+        with `omitempty` would drop the key from all 39 operations still in use
+        and leave their status to be inferred from an absence, which is the
+        inference the member exists to remove.
+        """
+        enums = self._enums()
+        values = enums["AuditOperation"]["values"]
+
+        trues, falses = set(), set()
+        for entry in values:
+            name = entry["value"]
+            assert "legacy" in entry, (
+                f"enums.AuditOperation {name} carries no legacy member; a consumer filtering for the "
+                f"operations still in use would have to search the description prose for the word LEGACY"
+            )
+            got = entry["legacy"]
+            assert isinstance(got, bool), (
+                f"enums.AuditOperation {name} publishes legacy={got!r} ({type(got).__name__}); the "
+                f"member is a boolean and is never null"
+            )
+            (trues if got else falses).add(name)
+
+        assert trues == self.LEGACY_OPERATIONS, (
+            f"the contract marks {sorted(trues)} as legacy; the four values no command writes are "
+            f"{sorted(self.LEGACY_OPERATIONS)}"
+        )
+        assert falses, (
+            "no value published legacy=false, so the member is being omitted on the operations still "
+            "in use — exactly what a boolean with omitempty would do"
+        )
+        assert len(trues) + len(falses) == len(values), (
+            f"{len(trues) + len(falses)} of {len(values)} values were classified"
+        )
+        print(f"✓ legacy published on all {len(values)} values: {len(trues)} true, {len(falses)} false")
+
+    def test_legacy_flag_agrees_with_the_description_marking(self):
+        """Rule 4: the member and the description state the same fact and must agree.
+
+        They exist for different readers — the prefix is prose for a human, the
+        member is a field for a machine — which is exactly why they can drift. A
+        value marked in one and not the other tells a person and a program
+        opposite things about whether the operation is still being recorded.
+        """
+        enums = self._enums()
+        values = enums["AuditOperation"]["values"]
+
+        compared = 0
+        marked = 0
+        for entry in values:
+            name, flag, desc = entry["value"], entry["legacy"], entry["description"]
+            has_prefix = desc.startswith(self.LEGACY_DESCRIPTION_PREFIX)
+            if has_prefix:
+                marked += 1
+            assert flag == has_prefix, (
+                f"enums.AuditOperation {name}: legacy={flag} but the description "
+                f"{'opens' if has_prefix else 'does not open'} with "
+                f"{self.LEGACY_DESCRIPTION_PREFIX!r}. One of the two is wrong, and a consumer reading "
+                f"the other one is being misled.\n  description: {desc}"
+            )
+            compared += 1
+
+        assert compared == len(values), f"{compared} of {len(values)} values were compared"
+        assert 0 < marked < len(values), (
+            f"{marked} of {len(values)} descriptions carry the LEGACY marking; with none or all of "
+            f"them marked the agreement above holds without ever comparing both branches"
+        )
+        print(f"✓ the legacy member agrees with the description marking on all {compared} values")
+
+    def test_legacy_flag_agrees_with_what_the_audit_log_records(self):
+        """Rule 4 against real rows: nothing marked legacy is actually written.
+
+        The two checks above compare the contract with itself. This one drives a
+        spread of mutating commands and reads the audit log back: an operation
+        published as legacy must not appear among the rows, and operations
+        published as not legacy must. Without this half, a contract could be
+        perfectly self-consistent and still describe a catalogue that moved on.
+        """
+        enums = self._enums()
+        legacy_flags = {v["value"]: v["legacy"] for v in enums["AuditOperation"]["values"]}
+
+        roadmap = self.test.create_roadmap()
+        task = self.test.create_task(
+            roadmap, "Publish the LEGACY marking as a field",
+            "Agents should test a field, not grep a sentence",
+            "Carry the marking in the same declaration as the entity type",
+            "The member and the description agree",
+        )
+        sprint_a = self.test.create_sprint(roadmap, "Legacy marking rollout")
+        sprint_b = self.test.create_sprint(roadmap, "Legacy marking follow-up")
+
+        self.test.run_cmd(["task", "edit", "-r", roadmap, str(task), "-t", "Publish LEGACY as a field", "-p", "6"])
+        self.test.run_cmd(["sprint", "update", "-r", roadmap, str(sprint_a), "-d", "Legacy marking rollout, restated"])
+        self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint_a), str(task)])
+        self.test.run_cmd(["sprint", "move-tasks", "-r", roadmap, str(sprint_a), str(sprint_b), str(task)])
+        self.test.run_cmd(["sprint", "remove-tasks", "-r", roadmap, str(sprint_b), str(task)])
+
+        rows = self.test.run_cmd_json(["audit", "list", "-r", roadmap, "-l", "500"])
+        assert len(rows) >= 10, f"only {len(rows)} audit rows were written, so the sweep did not run"
+
+        written = {row["operation"] for row in rows}
+        for op in sorted(written):
+            assert op in legacy_flags, f"the audit log holds {op}, which the contract does not publish"
+            assert legacy_flags[op] is False, (
+                f"the sweep recorded {op}, which the contract publishes as legacy=true. A command writes "
+                f"it again, so every consumer filtering for current activity is now skipping live rows"
+            )
+
+        assert len(written) >= 8, (
+            f"only {len(written)} distinct operations were observed; the sweep is no longer exercising a "
+            f"spread of writers"
+        )
+
+        # The other direction of the same fact: a legacy value stays an ACCEPTED
+        # filter, which is the whole reason it is still published.
+        for op in sorted(self.LEGACY_OPERATIONS):
+            code, _, _ = self.test.run_cmd(["audit", "list", "-r", roadmap, "-o", op], check=False)
+            assert code == 0, (
+                f"`audit list --operation {op}` exited {code}; a value published as legacy is still an "
+                f"accepted filter, so the older entries carrying it stay reachable"
+            )
+        print(f"✓ {len(written)} operations recorded by real commands, none of them published as legacy")
+
+    def test_legacy_appears_on_no_other_enum(self):
+        """The converse half of rule 4: no TaskStatus value is LEGACY.
+
+        Publishing "legacy": false there would suggest the contract has a general
+        notion of an enum value's LEGACY status, which it has not.
+        """
+        enums = self._enums()
+        others = 0
+        for name, definition in enums.items():
+            if name == "AuditOperation":
+                continue
+            others += 1
+            for entry in definition["values"]:
+                assert "legacy" not in entry, (
+                    f"enums.{name} value {entry['value']!r} carries a legacy member; the member belongs "
+                    f"to AuditOperation alone"
+                )
+        assert others >= 5, f"only {others} other enums were examined"
+        print(f"✓ legacy is absent from the values of all {others} other enums")
+
+
+class TestAIHelpSprintToBacklogContract:
+    """The contract's account of the SPRINT -> BACKLOG route (rmp task #232).
+
+    SPEC/STATE_MACHINE.md § Sprint Membership and the BACKLOG Status describes a
+    state three published texts used to deny existed: a task reading BACKLOG
+    while still a member of a sprint. Each of the three is checked here against
+    the behaviour of the compiled binary, observed first and read second, so a
+    text and the code it describes cannot drift apart again without this class
+    going red.
+
+    The unit-level half of these gates lives in internal/commands and
+    internal/aihelp; neither half subsumes the other. Those cannot see the
+    published JSON, and this one cannot fail at `go test` time.
+    """
+
+    NON_BACKLOG_STATES = ("SPRINT", "DOING", "TESTING", "COMPLETED")
+
+    # Real short hashes from this repository's history, so the fixture reads
+    # like a roadmap someone worked through.
+    COMMIT_OPEN = "5f93b51"
+    COMMIT_CLOSE = "391cff7"
+
+    def setup_method(self):
+        self.test = GroadmapTestBase()
+        self.test.setup()
+        self.cli = self.test.cli_path
+        self.seq = 0
+
+    def teardown_method(self):
+        self.test.teardown()
+
+    # -- fixture ---------------------------------------------------------
+
+    def _seed(self):
+        """A roadmap with one OPEN sprint and no tasks yet."""
+        roadmap = self.test.create_roadmap()
+        sprint = self.test.create_sprint(
+            roadmap,
+            "Persist sessions to the shared store so a node restart keeps every live session.",
+            title="Session store hardening",
+        )
+        self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint)])
+        return roadmap, sprint
+
+    def _task_in_state(self, roadmap, sprint, state):
+        """Manufacture a task and walk it, through the CLI, into `state`."""
+        self.seq += 1
+        titles = [
+            "Rotate the JWT signing key without downtime",
+            "Move session tokens to the encrypted store",
+            "Rate-limit the password reset endpoint",
+            "Record the audit row inside the mutation transaction",
+        ]
+        task_id = self.test.create_task(
+            roadmap,
+            f"{titles[self.seq % len(titles)]} ({self.seq})",
+            "The behaviour survives a restart of every node in the pool.",
+            "Route the write through the shared store and migrate the existing rows.",
+            "A restart leaves every live session usable.",
+        )
+        if state != "BACKLOG":
+            self.test.run_cmd(["sprint", "add-tasks", "-r", roadmap, str(sprint), str(task_id)])
+            walk = {
+                "SPRINT": [],
+                "DOING": [["DOING", "--commit-open", self.COMMIT_OPEN]],
+                "TESTING": [["DOING", "--commit-open", self.COMMIT_OPEN], ["TESTING"]],
+                "COMPLETED": [
+                    ["DOING", "--commit-open", self.COMMIT_OPEN],
+                    ["TESTING"],
+                    ["COMPLETED", "--commit-close", self.COMMIT_CLOSE],
+                ],
+            }[state]
+            for step in walk:
+                self.test.run_cmd(["task", "stat", "-r", roadmap, str(task_id)] + step)
+
+        reached = self._status_of(roadmap, task_id)
+        assert reached == state, f"task #{task_id} was walked to {state} but reads {reached}"
+        return task_id
+
+    def _status_of(self, roadmap, task_id):
+        rows = self.test.run_cmd_json(["task", "get", "-r", roadmap, str(task_id)])
+        assert len(rows) == 1, f"`task get {task_id}` returned {len(rows)} tasks"
+        return rows[0]["status"]
+
+    def _members(self, roadmap, sprint):
+        rows = self.test.run_cmd_json(["sprint", "tasks", "-r", roadmap, str(sprint)])
+        return {row["id"] for row in rows}
+
+    def _contract(self):
+        return self.test.run_cmd_json(["--ai-help"])
+
+    def _subcommand(self, family, sub):
+        for command in self._contract()["commands"]:
+            if command["name"] != family:
+                continue
+            for entry in command["subcommands"]:
+                if entry["name"] == sub:
+                    return entry
+            raise AssertionError(f"`{family} {sub}` is absent from the published contract")
+        raise AssertionError(f"the `{family}` family is absent from the published contract")
+
+    @staticmethod
+    def _source_states(text):
+        """The task-status words of a fragment, minus BACKLOG.
+
+        BACKLOG is the destination of every route this class is about, never
+        the source of one, so counting it would make every set equal.
+        """
+        return {word for word in _STATUS_WORD.findall(text)} - {"BACKLOG"}
+
+    # -- the three published texts ---------------------------------------
+
+    def test_reopen_side_effects_name_the_sprint_tasks_delete(self):
+        """`task reopen` side effects name exactly the states that lose the row.
+
+        The contract used to read "UPDATE tasks + audit log per task; one
+        transaction", which omits the DELETE FROM sprint_tasks the command runs
+        from SPRINT, DOING and TESTING. An agent believing it would expect a
+        reopened task to keep its place in the sprint -- true only from
+        COMPLETED.
+        """
+        roadmap, sprint = self._seed()
+
+        detaching, keeping = set(), set()
+        for state in self.NON_BACKLOG_STATES:
+            task_id = self._task_in_state(roadmap, sprint, state)
+            assert task_id in self._members(roadmap, sprint), (
+                f"task #{task_id} walked to {state} is not a sprint member; "
+                f"the observation below would be vacuous"
+            )
+            self.test.run_cmd(["task", "reopen", "-r", roadmap, str(task_id)])
+            assert self._status_of(roadmap, task_id) == "BACKLOG", (
+                f"`task reopen` left task #{task_id} out of BACKLOG"
+            )
+            if task_id in self._members(roadmap, sprint):
+                keeping.add(state)
+            else:
+                detaching.add(state)
+
+        assert detaching, (
+            "`task reopen` detached nothing from any source state; either the fixture "
+            "never produced a member or the command stopped writing sprint_tasks"
+        )
+
+        text = self._subcommand("task", "reopen")["side_effects"]["database"]
+        assert "sprint_tasks" in text, (
+            f"`task reopen` removed the sprint_tasks row from {sorted(detaching)}, but the "
+            f"published side effects never name the table: {text!r}"
+        )
+
+        delete_sentences = [s for s in _SENTENCE_SPLIT.split(text) if "DELETE FROM sprint_tasks" in s]
+        assert len(delete_sentences) == 1, (
+            f"the published side effects should name DELETE FROM sprint_tasks in exactly one "
+            f"sentence, found {len(delete_sentences)}: {text!r}"
+        )
+        declared = self._source_states(delete_sentences[0])
+        assert declared == detaching, (
+            f"the published side effects say DELETE FROM sprint_tasks runs for {sorted(declared)}, "
+            f"but it was observed to run for {sorted(detaching)}\n  sentence: {delete_sentences[0]!r}"
+        )
+
+        for state in keeping:
+            survives = [
+                s for s in _SENTENCE_SPLIT.split(text)
+                if "sprint_tasks" in s and s != delete_sentences[0] and state in s
+            ]
+            assert survives, (
+                f"a task reopened from {state} keeps its sprint_tasks row, but no other sentence "
+                f"of the published side effects says so: {text!r}"
+            )
+
+        print(f"✓ task reopen side effects name the sprint_tasks DELETE for {sorted(detaching)} "
+              f"and its survival from {sorted(keeping)}")
+
+    def test_backlog_summary_matches_what_the_subcommands_return(self):
+        """The `backlog` family summary matches what its subcommands return.
+
+        The summary used to call the family "a planning view for tasks not yet
+        in a sprint". Both subcommands filter on the status alone, so a task
+        moved to BACKLOG by `task stat` keeps its sprint_tasks row and is listed
+        all the same.
+        """
+        roadmap, sprint = self._seed()
+
+        member = self._task_in_state(roadmap, sprint, "SPRINT")
+        self.test.run_cmd(["task", "stat", "-r", roadmap, str(member), "BACKLOG"])
+        loner = self._task_in_state(roadmap, sprint, "BACKLOG")
+
+        assert self._status_of(roadmap, member) == "BACKLOG"
+        assert member in self._members(roadmap, sprint), (
+            "`task stat <id> BACKLOG` detached the task from its sprint; SPEC/STATE_MACHINE.md "
+            "§ Sprint Membership and the BACKLOG Status says the row survives, and every claim "
+            "in this test is built on that"
+        )
+
+        listed = {t["id"] for t in self.test.run_cmd_json(["backlog", "list", "-r", roadmap])}
+        next_listed = {t["id"] for t in self.test.run_cmd_json(
+            ["backlog", "show-next", "-r", roadmap, "100"])}
+
+        assert loner in listed and loner in next_listed, (
+            f"the never-in-a-sprint task #{loner} is missing from the listings "
+            f"(list={sorted(listed)} show-next={sorted(next_listed)}); the observation would be vacuous"
+        )
+        assert (member in listed) == (member in next_listed), (
+            f"`backlog list` and `backlog show-next` disagree about the sprint-member BACKLOG task "
+            f"#{member}; one summary describes both"
+        )
+
+        lists_sprint_members = member in listed
+
+        summary = None
+        for command in self._contract()["commands"]:
+            if command["name"] == "backlog":
+                summary = command["summary"]
+        assert summary is not None, "the `backlog` family is absent from the published contract"
+
+        if lists_sprint_members:
+            assert _BACKLOG_STATUS_ONLY_MARKER in summary, (
+                f"both backlog subcommands returned the sprint-member BACKLOG task #{member}, but "
+                f"the published summary does not say the filter is the "
+                f"{_BACKLOG_STATUS_ONLY_MARKER!r}: {summary!r}"
+            )
+            for claim in _BACKLOG_EXCLUSION_CLAIMS:
+                assert claim not in summary.lower(), (
+                    f"the published summary claims {claim!r}, but both backlog subcommands returned "
+                    f"the sprint-member BACKLOG task #{member}: {summary!r}"
+                )
+        else:
+            assert _BACKLOG_STATUS_ONLY_MARKER not in summary, (
+                f"the backlog subcommands excluded the sprint-member BACKLOG task #{member}, but the "
+                f"published summary still says the filter is the "
+                f"{_BACKLOG_STATUS_ONLY_MARKER!r}: {summary!r}"
+            )
+
+        print(f"✓ the backlog summary matches the listing "
+              f"(sprint-member BACKLOG task listed: {lists_sprint_members})")
+
+    def test_delete_non_backlog_pitfall_names_the_task_stat_route(self):
+        """The `delete_non_backlog_task` pitfall names every route that works.
+
+        It used to name `sprint remove-tasks` and `task reopen` only, omitting
+        `task stat <ids> BACKLOG` -- the only route back that leaves the task in
+        its sprint, and therefore the one an agent should reach for first.
+        """
+        roadmap, sprint = self._seed()
+
+        accepted = set()
+        for state in self.NON_BACKLOG_STATES:
+            task_id = self._task_in_state(roadmap, sprint, state)
+            exit_code, _, _ = self.test.run_cmd(
+                ["task", "stat", "-r", roadmap, str(task_id), "BACKLOG"], check=False)
+            after = self._status_of(roadmap, task_id)
+            if exit_code == 0:
+                assert after == "BACKLOG", (
+                    f"`task stat {task_id} BACKLOG` from {state} exited 0 but left the task in {after}"
+                )
+                accepted.add(state)
+            else:
+                assert exit_code == 6, (
+                    f"`task stat {task_id} BACKLOG` from {state} was refused with exit {exit_code}; "
+                    f"SPEC/ARCHITECTURE.md makes a rejected transition exit 6"
+                )
+                assert after == state, (
+                    f"`task stat {task_id} BACKLOG` from {state} was refused but moved the task to {after}"
+                )
+
+        assert accepted, "`task stat <id> BACKLOG` worked from no source state at all"
+
+        pitfalls = {p["id"]: p for p in self._contract()["pitfalls"]}
+        description = pitfalls["delete_non_backlog_task"]["description"]
+
+        marker = "`task stat <ids> BACKLOG` from "
+        fragments = re.findall(re.escape(marker) + r"([^;.]*)", description)
+        assert len(fragments) == 1, (
+            f"the pitfall should name the {marker!r} route exactly once and say which source states "
+            f"it works from; found {len(fragments)}:\n{description}"
+        )
+        declared = self._source_states(fragments[0])
+        assert declared == accepted, (
+            f"the pitfall says `task stat <ids> BACKLOG` works from {sorted(declared)}, but it was "
+            f"observed to work from {sorted(accepted)}\n  description: {description}"
+        )
+
+        print(f"✓ the delete_non_backlog_task pitfall names `task stat <ids> BACKLOG` "
+              f"from exactly {sorted(accepted)}")
+
+
 def _run_all():
     """Run every test class sequentially and report a summary."""
     suites = [
@@ -952,6 +1645,8 @@ def _run_all():
         TestAIHelpContractRanges,
         TestAIHelpContractConventions,
         TestAIHelpContractExitExamples,
+        TestAIHelpAuditOperationMembers,
+        TestAIHelpSprintToBacklogContract,
     ]
     passed = 0
     failed = 0

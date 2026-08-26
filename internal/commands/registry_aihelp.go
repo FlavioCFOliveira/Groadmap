@@ -60,12 +60,18 @@ func buildAIHelpCommand() Command {
 				// token before the dispatcher reaches this entry. If
 				// this Handler is ever called it means the wiring was
 				// removed or the scan misclassified an argv shape.
-				Handler:     aiHelpHandlerUnreachable,
-				Flags:       []Flag{helpFlag()},
-				Output:      SuccessOutput{Kind: "object", Schema: "AI Agent Contract — see DATA_FORMATS.md § AI Agent Contract."},
-				SideEffects: SideEffects{Database: "Read-only.", Filesystem: "None.", Network: "None."},
-				Idempotent:  true,
-				ExitCodes:   []int{0, 2},
+				Handler: aiHelpHandlerUnreachable,
+				// `ai-help` publishes its own refusal for an excess positional
+				// argument, from the early-pass scan in cmd/rmp/main.go that
+				// intercepts the token long before dispatch:
+				// "Error: ai-help accepts no positional arguments or flags
+				// other than --help" (SPEC/COMMANDS.md § AI Help).
+				PublishesOwnArityRefusal: true,
+				Flags:                    []Flag{helpFlag()},
+				Output:                   SuccessOutput{Kind: "object", Schema: "AI Agent Contract — see DATA_FORMATS.md § AI Agent Contract."},
+				SideEffects:              SideEffects{Database: "Read-only.", Filesystem: "None.", Network: "None."},
+				Idempotent:               true,
+				ExitCodes:                []int{0, 2},
 				Examples: []Example{
 					{Title: "Emit the whole-CLI contract", Cmd: "rmp ai-help", Exit: 0},
 					{Title: "Same payload via the global flag", Cmd: "rmp --ai-help", Exit: 0},
@@ -95,7 +101,7 @@ func aiHelpHandlerUnreachable(_ []string) error {
 // surface for AI consumers; the human-help text only needs to tell a
 // person how to invoke it and where the JSON shape is defined.
 func printAIHelpHelp() {
-	fmt.Println(`rmp ai-help - Emit the AI Agent Contract (JSON)
+	fmt.Fprintln(helpDst(), `rmp ai-help - Emit the AI Agent Contract (JSON)
 
 Usage:
   rmp ai-help

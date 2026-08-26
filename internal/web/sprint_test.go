@@ -78,7 +78,7 @@ func seedSprintFixture(t *testing.T, name string) sprintFixture {
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	mkTask := func(title string) int {
-		id, terr := database.CreateTask(ctx, seededTask(now, title))
+		id, terr := seedTask(database, seededTask(now, title))
 		if terr != nil {
 			t.Fatalf("creating task %q: %v", title, terr)
 		}
@@ -89,7 +89,7 @@ func seedSprintFixture(t *testing.T, name string) sprintFixture {
 	// (and therefore from id order), so the sprints-page ordering assertions
 	// prove the sort is driven by Sprint.Order, not by id.
 	mkSprint := func(desc string, order int) int {
-		id, serr := database.CreateSprint(ctx, &models.Sprint{
+		id, serr := seedSprint(database, &models.Sprint{
 			Status:      models.SprintPending,
 			Title:       desc,
 			Description: desc,
@@ -131,9 +131,7 @@ func seedSprintFixture(t *testing.T, name string) sprintFixture {
 	if aerr := database.AddTasksToSprint(ctx, f.openID, []int{f.openTaskID, f.openTaskID2}); aerr != nil {
 		t.Fatalf("adding tasks to open sprint: %v", aerr)
 	}
-	if serr := database.UpdateSprintStatus(ctx, f.openID, models.SprintOpen); serr != nil {
-		t.Fatalf("opening sprint: %v", serr)
-	}
+	forceSprintOpen(t, database, f.openID)
 
 	// 5) A CLOSED sprint (highest id) with the HIGHER Order (40) and the EARLIER
 	//    closed_at: Order-descending ranks it FIRST in Concluídos, while id and
@@ -145,8 +143,9 @@ func seedSprintFixture(t *testing.T, name string) sprintFixture {
 }
 
 // setClosed marks a sprint CLOSED with a specific closed_at timestamp, writing
-// directly through the embedded *sql.DB so the test controls the value (the
-// db.UpdateSprintStatus helper always stamps "now").
+// directly through the embedded *sql.DB so the test controls the value: the
+// transition itself is `sprint close`, which always stamps "now", and this
+// fixture ranks sprints by closed_at.
 func setClosed(t *testing.T, database *db.DB, id int, closedAt string) {
 	t.Helper()
 	if _, err := database.ExecContext(context.Background(),

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
+	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
 // TestBatchProcessorDefaults verifies the constructor's zero/negative guard and
@@ -19,31 +20,6 @@ func TestBatchProcessorDefaults(t *testing.T) {
 	}
 	if bp := NewBatchProcessor(250); bp.BatchSize() != 250 {
 		t.Errorf("NewBatchProcessor(250).BatchSize() = %d, want 250", bp.BatchSize())
-	}
-}
-
-// TestCalculateBatches verifies batch-count arithmetic across exact multiples,
-// remainders, the empty set, and a single item.
-func TestCalculateBatches(t *testing.T) {
-	bp := NewBatchProcessor(100)
-	cases := []struct {
-		total int
-		want  int
-	}{
-		{0, 0},
-		{1, 1},
-		{99, 1},
-		{100, 1},
-		{101, 2},
-		{200, 2},
-		{201, 3},
-		{1000, 10},
-		{1001, 11},
-	}
-	for _, c := range cases {
-		if got := bp.CalculateBatches(c.total); got != c.want {
-			t.Errorf("CalculateBatches(%d) = %d, want %d", c.total, got, c.want)
-		}
 	}
 }
 
@@ -74,8 +50,9 @@ func TestProcessChunksPartitioning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProcessChunks returned error: %v", err)
 	}
-	if chunkCount != bp.CalculateBatches(total) {
-		t.Errorf("visited %d chunks, want %d", chunkCount, bp.CalculateBatches(total))
+	wantChunks := (total + bp.BatchSize() - 1) / bp.BatchSize()
+	if chunkCount != wantChunks {
+		t.Errorf("visited %d chunks, want %d", chunkCount, wantChunks)
 	}
 	if len(seen) != total {
 		t.Fatalf("visited %d ids, want %d", len(seen), total)
@@ -169,22 +146,45 @@ func TestProcessChunksWithResultError(t *testing.T) {
 	}
 }
 
-// TestUpdateTaskStatusBatchesBeyondVariableLimit is the end-to-end proof that
-// batching keeps large id sets within SQLite's variable limit
-// (SQLITE_LIMIT_VARIABLE_NUMBER, default 999). It creates more than 999 tasks
-// and updates them in a single UpdateTaskStatus call; without the BatchProcessor
-// chunking the IN clause this would exceed the limit and fail.
-func TestUpdateTaskStatusBatchesBeyondVariableLimit(t *testing.T) {
+// TestAddTasksToSprintChunksALargeIDSet is the end-to-end proof that the
+// chunked write path stays correct when a batch spans several chunks: it adds
+// more tasks to one sprint than the BatchProcessor's chunk size, so the status
+// update behind the membership change runs as several statements, and every
+// task must still arrive in SPRINT with a membership row.
+//
+// The chunk size is the query cache's bucket size, not a limit workaround. The
+// name this test used to carry said "beyond the variable limit" and the comment
+// beneath it said 999; measured against the driver this module uses
+// (modernc.org/sqlite), a statement takes 32766 bound parameters and refuses the
+// 32767th, and an argv large enough to name that many ids does not fit in
+// MAX_ARG_STRLEN. What chunking buys is a cached template per chunk size, which
+// is what GetQuery can only answer for sizes it holds.
+//
+// It used to drive the property through UpdateTaskStatus, UpdateTaskPriority and
+// UpdateTaskSeverity. Those were db-layer methods the command layer had replaced
+// with its own single-statement transactions, so the batching they proved was
+// batching nothing the binary runs; they are gone with them (task #188).
+// AddTasksToSprint is the write path that still chunks, and this is the test of
+// it.
+func TestAddTasksToSprintChunksALargeIDSet(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	const n = 1500 // comfortably above the 999 variable limit
+	// Comfortably more than one chunk (the processor's batch size is 100), so
+	// the status update is split and every chunk must execute for the
+	// assertions below to hold.
+	const n = 350
 	ids := createBenchmarkTasks(t, db, n)
 
-	// A lifecycle transition (DOING) so the batched path also exercises a
-	// template with a leading bound parameter beyond the ids.
-	if err := db.UpdateTaskStatus(context.Background(), ids, models.StatusDoing); err != nil {
-		t.Fatalf("UpdateTaskStatus over %d ids failed (batching broken?): %v", n, err)
+	sprintID := mustSeedSprint(t, db, &models.Sprint{
+		Title:       "Absorb the March reconciliation backlog",
+		Description: "One sprint holding every outstanding reconciliation task.",
+		Status:      models.SprintPending,
+		CreatedAt:   utils.NowISO8601(),
+	})
+
+	if err := db.AddTasksToSprint(context.Background(), sprintID, ids); err != nil {
+		t.Fatalf("AddTasksToSprint over %d ids failed (chunking broken?): %v", n, err)
 	}
 
 	// Verify every task actually transitioned — proves all chunks executed.
@@ -196,41 +196,16 @@ func TestUpdateTaskStatusBatchesBeyondVariableLimit(t *testing.T) {
 		t.Fatalf("GetTasks returned %d tasks, want %d", len(tasks), n)
 	}
 	for _, task := range tasks {
-		if task.Status != models.StatusDoing {
-			t.Fatalf("task %d status = %q, want DOING", task.ID, task.Status)
-		}
-		if task.StartedAt == nil {
-			t.Errorf("task %d: started_at not set on DOING transition", task.ID)
+		if task.Status != models.StatusSprint {
+			t.Fatalf("task %d status = %q, want SPRINT", task.ID, task.Status)
 		}
 	}
-}
 
-// TestUpdateTaskPriorityAndSeverityBatch confirms the priority/severity batch
-// paths also chunk correctly beyond the variable limit and apply to every task.
-func TestUpdateTaskPriorityAndSeverityBatch(t *testing.T) {
-	db, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	const n = 1200
-	ids := createBenchmarkTasks(t, db, n)
-
-	if err := db.UpdateTaskPriority(context.Background(), ids, 7); err != nil {
-		t.Fatalf("UpdateTaskPriority over %d ids failed: %v", n, err)
-	}
-	if err := db.UpdateTaskSeverity(context.Background(), ids, 4); err != nil {
-		t.Fatalf("UpdateTaskSeverity over %d ids failed: %v", n, err)
-	}
-
-	tasks, err := db.GetTasks(context.Background(), ids)
+	members, err := db.GetSprintTasks(context.Background(), sprintID)
 	if err != nil {
-		t.Fatalf("GetTasks failed: %v", err)
+		t.Fatalf("GetSprintTasks: %v", err)
 	}
-	for _, task := range tasks {
-		if task.Priority != 7 {
-			t.Fatalf("task %d priority = %d, want 7", task.ID, task.Priority)
-		}
-		if task.Severity != 4 {
-			t.Fatalf("task %d severity = %d, want 4", task.ID, task.Severity)
-		}
+	if len(members) != n {
+		t.Fatalf("sprint holds %d members, want %d", len(members), n)
 	}
 }

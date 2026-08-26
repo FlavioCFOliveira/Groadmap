@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -22,7 +23,7 @@ func sprintTasks(args []string) error {
 		return fmt.Errorf("%w: sprint ID required", utils.ErrRequired)
 	}
 
-	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
+	sprintID, err := utils.ValidateIDString(remaining[0], utils.FieldSprintID)
 	if err != nil {
 		return err
 	}
@@ -42,7 +43,11 @@ func sprintTasks(args []string) error {
 			// model-level sentinel that the exit-code mapper does not recognise,
 			// so wrap it in utils.ErrValidation to land on exit 6, matching every
 			// other enum filter (e.g. backlog --type) and SPEC/COMMANDS.md.
-			return fmt.Errorf("%w: %s", utils.ErrValidation, parseErr.Error())
+			// The model sentinel is chained with a SECOND %w, not rendered with
+			// %s, so errors.Is can still tell WHICH enum was rejected. Both verbs
+			// render the same bytes, so only the chain distinguishes them, and
+			// %s silently discards it (task #290).
+			return fmt.Errorf("%w: %w", utils.ErrValidation, parseErr)
 		}
 		status = &s
 	}
@@ -76,7 +81,7 @@ func sprintOpenTasks(args []string) error {
 		return fmt.Errorf("%w: sprint ID required", utils.ErrRequired)
 	}
 
-	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
+	sprintID, err := utils.ValidateIDString(remaining[0], utils.FieldSprintID)
 	if err != nil {
 		return err
 	}
@@ -126,7 +131,7 @@ func sprintStats(args []string) error {
 		return fmt.Errorf("%w: sprint ID required", utils.ErrRequired)
 	}
 
-	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
+	sprintID, err := utils.ValidateIDString(remaining[0], utils.FieldSprintID)
 	if err != nil {
 		return err
 	}
@@ -187,6 +192,9 @@ func sprintStats(args []string) error {
 //
 // Side effects:
 //   - Creates sprint_tasks junction records linking tasks to sprint
+//   - Re-parents the membership row of a task that already belonged to another
+//     sprint, and compacts that sprint's remaining positions in the same
+//     transaction (SPEC/DATABASE.md § Position Density Within a Sprint)
 //   - Updates task status from BACKLOG to SPRINT
 //   - Logs TASK_ADDED_TO_SPRINT audit entries for each task
 //   - Outputs added task IDs as JSON to stdout
@@ -205,12 +213,12 @@ func sprintAddTasks(args []string) error {
 		return fmt.Errorf("%w: sprint ID and task ID(s) required", utils.ErrRequired)
 	}
 
-	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
+	sprintID, err := utils.ValidateIDString(remaining[0], utils.FieldSprintID)
 	if err != nil {
 		return err
 	}
 
-	taskIDs, err := utils.ParseCommaSeparatedIDs(strings.Join(remaining[1:], ","), "task")
+	taskIDs, err := utils.ParseCommaSeparatedIDs(strings.Join(remaining[1:], ","), utils.FieldTaskID)
 	if err != nil {
 		return err
 	}
@@ -289,12 +297,12 @@ func sprintRemoveTasks(args []string) error {
 		return fmt.Errorf("%w: sprint ID and task ID(s) required", utils.ErrRequired)
 	}
 
-	sprintID, err := utils.ValidateIDString(remaining[0], "sprint")
+	sprintID, err := utils.ValidateIDString(remaining[0], utils.FieldSprintID)
 	if err != nil {
 		return err
 	}
 
-	taskIDs, err := utils.ParseCommaSeparatedIDs(remaining[1], "task")
+	taskIDs, err := utils.ParseCommaSeparatedIDs(remaining[1], utils.FieldTaskID)
 	if err != nil {
 		return err
 	}
@@ -320,8 +328,15 @@ func sprintRemoveTasks(args []string) error {
 	// Fail-fast membership check: every task must currently belong to THIS
 	// sprint. Previously the DELETE ignored the sprint argument and removed by
 	// task_id alone, silently yanking a task out of whatever sprint it was
-	// actually in (data corruption). SPEC/COMMANDS.md § Sprint Task Management
-	// validation step 5 ("Task ID not in sprint -> exit 6"); finding #40.
+	// actually in (data corruption). This is the membership step of
+	// SPEC/COMMANDS.md § Task Assignment, which refuses a non-member with
+	// utils.ErrValidation (exit 6); finding #40.
+	//
+	// The step is cited by what it does rather than by its ordinal. That
+	// section's Validation Order is renumbered whenever a step is published or
+	// removed, and COMMANDS.md carries several such lists whose step 5 says
+	// different things, so an ordinal here goes silently wrong on an edit made
+	// somewhere else.
 	members, err := database.GetSprintTasks(ctx, sprintID)
 	if err != nil {
 		return err
@@ -403,19 +418,52 @@ func sprintRemoveTasks(args []string) error {
 	})
 }
 
+// sprintRoleLookupFailure reports a GetSprint failure for one of the two
+// sprints `move-tasks` names, saying WHICH of them failed without restating a
+// classification the error already carries.
+//
+// GetSprint's not-found refusal already reads "resource not found: sprint N",
+// so wrapping it in utils.ErrNotFound a second time printed the class twice and
+// left `move-tasks` the only one of the three Task Assignment subcommands whose
+// missing-sprint line did not read like its siblings' (task #335). Simply
+// returning the inner error would align them, but `move-tasks` is also the only
+// one of the three that takes TWO sprints, and the role word is the only thing
+// in the line that says which of the two ids was unresolvable. So the sentence
+// is rebuilt from the same sentinel instead of being nested inside a second
+// one: the class is stated once and the discriminator survives
+// (SPEC/COMMANDS.md § Task Assignment).
+//
+// Rebuilding rather than wrapping loses no sentinel. GetSprint applies exactly
+// one to a missing sprint — utils.ErrNotFound — and that is the one re-applied
+// here with %w, so errors.Is still reaches it and the refusal still maps to
+// exit 4.
+//
+// Any other failure is NOT a missing sprint: GetSprint returns
+// "querying sprint: %w" for a genuine database fault. Such an error keeps its
+// own classification and merely gains the role as context, per
+// SPEC/ARCHITECTURE.md § Wrapping Rules rule 2. The unconditional wrap this
+// replaces relabelled every one of those as a missing resource and sent it to
+// exit 4.
+func sprintRoleLookupFailure(err error, role string, id int) error {
+	if errors.Is(err, utils.ErrNotFound) {
+		return fmt.Errorf("%w: %s sprint %d", utils.ErrNotFound, role, id)
+	}
+	return fmt.Errorf("%s sprint: %w", role, err)
+}
+
 // verifySprintsExist checks that both source and destination sprints exist and are not CLOSED.
 // Moving tasks to or from a CLOSED sprint would corrupt historical sprint data.
 func verifySprintsExist(ctx context.Context, database *db.DB, fromID, toID int) error {
 	from, err := database.GetSprint(ctx, fromID)
 	if err != nil {
-		return fmt.Errorf("%w: from sprint: %v", utils.ErrNotFound, err)
+		return sprintRoleLookupFailure(err, "from", fromID)
 	}
 	if from.Status == models.SprintClosed {
 		return fmt.Errorf("%w: cannot move tasks from sprint #%d: sprint is CLOSED", utils.ErrValidation, fromID)
 	}
 	to, err := database.GetSprint(ctx, toID)
 	if err != nil {
-		return fmt.Errorf("%w: to sprint: %v", utils.ErrNotFound, err)
+		return sprintRoleLookupFailure(err, "to", toID)
 	}
 	if to.Status == models.SprintClosed {
 		return fmt.Errorf("%w: cannot move tasks to sprint #%d: sprint is CLOSED", utils.ErrValidation, toID)
@@ -433,16 +481,16 @@ func sprintMoveTasks(args []string) error {
 		return fmt.Errorf("%w: from sprint ID, to sprint ID, and task ID(s) required", utils.ErrRequired)
 	}
 
-	fromID, err := utils.ValidateIDString(remaining[0], "sprint")
+	fromID, err := utils.ValidateIDString(remaining[0], utils.FieldSprintID)
 	if err != nil {
 		return err
 	}
-	toID, err := utils.ValidateIDString(remaining[1], "sprint")
+	toID, err := utils.ValidateIDString(remaining[1], utils.FieldSprintID)
 	if err != nil {
 		return err
 	}
 
-	taskIDs, err := utils.ParseCommaSeparatedIDs(remaining[2], "task")
+	taskIDs, err := utils.ParseCommaSeparatedIDs(remaining[2], utils.FieldTaskID)
 	if err != nil {
 		return err
 	}

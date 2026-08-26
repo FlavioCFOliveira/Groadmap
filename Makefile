@@ -20,7 +20,7 @@ vet:
 # pin binds local installations too: these targets run whatever is on PATH, so a
 # different version is not the gate SPEC/BUILD.md defines. The module path needs
 # the /v2 suffix -- a v1 binary cannot read .golangci.yml (version: "2").
-# install: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+# install: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
 lint:
 	golangci-lint run ./...
 

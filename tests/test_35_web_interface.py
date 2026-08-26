@@ -188,7 +188,7 @@ class TestWebInterface:
 
         # OPEN sprint: the current/Actual sprint, started with two tasks.
         open_sid = self.test.create_sprint(ROADMAP, "Authentication hardening sprint")
-        self._run(["sprint", "add-tasks", "-r", ROADMAP, str(open_sid), str(t1), str(t2)])
+        self._run(["sprint", "add-tasks", "-r", ROADMAP, str(open_sid), f"{t1},{t2}"])
         self._run(["sprint", "start", "-r", ROADMAP, str(open_sid)])
 
         # PENDING sprint: planned, not started, under Próximos.
@@ -925,7 +925,7 @@ class TestWebInterface:
             priority=9,
         )
         sprint_id = self.test.create_sprint(roadmap, "Settlement reconciliation sprint")
-        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id), str(sprinted), str(doing)])
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id), f"{sprinted},{doing}"])
         self._run(["sprint", "start", "-r", roadmap, str(sprint_id)])
         self._run(["task", "stat", "-r", roadmap, str(doing), "DOING", "--commit-open", "24262f0"])
 
@@ -2565,6 +2565,33 @@ class TestWebInterface:
             "the Actual tab pane must be the active/shown pane by default"
         )
 
+    @staticmethod
+    def _card_task_count(markup, roadmap, sprint_id):
+        """Return the task-count footer number the shared sprint-card partial
+        shows for ONE sprint, read from that sprint's own card and no other.
+
+        The card is a single, non-nested <a> element per sprint (SPEC/WEB.md
+        § Shared Sprint-Card Partial), so slicing from that sprint's own
+        opening href to its closing </a> isolates its footer from every other
+        card in the same markup, and a transposed count on a neighbouring
+        card cannot be mistaken for this sprint's own. `markup` may be a full
+        page body or a single tab's pane.
+        """
+        pattern = re.compile(
+            rf'<a href="/roadmaps/{re.escape(roadmap)}/sprints/{sprint_id}" '
+            r'class="card card-sm card-link text-reset">(.*?)</a>',
+            re.S,
+        )
+        card = pattern.search(markup)
+        assert card, (
+            f"no sprint card for sprint #{sprint_id} found in the given markup"
+        )
+        count = re.search(
+            r'<span class="text-secondary">(\d+) task\(s\)</span>', card.group(1)
+        )
+        assert count, f"sprint #{sprint_id} card carries no task-count footer"
+        return int(count.group(1))
+
     def test_detail_sprint_classification_and_links(self):
         """AC11/AC12: sprints are classified by status into the right tab and
         each links to its own page."""
@@ -2606,7 +2633,139 @@ class TestWebInterface:
         assert "data-bs-target=\"#task-modal-" not in current, (
             "Actual tab must render no per-task modal trigger"
         )
-        assert "task(s)" in current, "Actual tab card must show the sprint's task count"
+        open_footer_count = self._card_task_count(current, ROADMAP, self.open_sid)
+        assert open_footer_count == len(self.open_task_ids), (
+            f"Actual tab card for sprint #{self.open_sid} must show its real "
+            f"member-task count {len(self.open_task_ids)}, got {open_footer_count}"
+        )
+
+    def test_sprint_card_footer_counts_match_real_membership_across_tabs(self):
+        """Task #280: the shared sprint-card footer shown on every tab of the
+        Roadmap Sprints Page must be each sprint's OWN, real member-task
+        count — never a constant, never a transposed neighbour's number, and
+        never zero for a sprint that actually holds tasks (SPEC/WEB.md §
+        Shared Sprint-Card Partial; SPEC/MODELS.md § Sprint).
+
+        The fixture gives every sprint under test a DIFFERENT member-task
+        count (0, 1, 3, 5), so a constant or a transposed value cannot
+        coincidentally satisfy every assertion, and it seeds one sprint per
+        tab plus a second Próximos sprint that holds no task at all — an
+        empty sprint is the case a hardcoded non-zero placeholder, or a
+        footer that silently reads 0 for every sprint, would each fail
+        differently against. One member of the OPEN sprint is manually
+        walked back to BACKLOG status (still a sprint member per
+        SPEC/STATE_MACHINE.md § Sprint Membership and the BACKLOG Status) to
+        prove membership, not status, drives the count. Every footer is
+        finally cross-checked against `rmp sprint get`'s own task_count for
+        the identical sprint, so the web surface and the CLI cannot silently
+        drift apart.
+        """
+        roadmap = "release_train_demo"
+        self._run(["roadmap", "create", roadmap])
+
+        def task(title, priority):
+            return self.test.create_task(
+                roadmap, title,
+                "Release trains must ship without manual sign-off delays",
+                "Automate the pre-flight checklist and gate promotion on it",
+                "A train carrying a red checklist item cannot be promoted",
+                priority=priority,
+            )
+
+        # Próximos: a 3-task PENDING sprint, and a second PENDING sprint left
+        # genuinely empty (no `sprint add-tasks` call at all).
+        upcoming_tasks = [
+            task(f"Automate pre-flight check #{n}", 4 + n) for n in range(3)
+        ]
+        upcoming_sid = self.test.create_sprint(roadmap, "Pre-flight automation sprint")
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(upcoming_sid), ",".join(str(i) for i in upcoming_tasks)])
+        empty_sid = self.test.create_sprint(roadmap, "Rollback tooling sprint")
+
+        # Concluídos: a 1-task sprint, started then force-closed.
+        closed_task = task("Wire the canary-deploy health check", 6)
+        closed_sid = self.test.create_sprint(roadmap, "Canary health-check sprint")
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(closed_sid), str(closed_task)])
+        self._run(["sprint", "start", "-r", roadmap, str(closed_sid)])
+        self._run(["sprint", "close", "-r", roadmap, str(closed_sid), "--force"])
+
+        # Actual: a 5-task OPEN sprint (only one sprint may be OPEN at a
+        # time, so this is started last). One member is then walked back to
+        # BACKLOG, staying a sprint member throughout.
+        open_tasks = [
+            task(f"Gate merge on checklist item #{n}", 5 + n) for n in range(5)
+        ]
+        open_sid = self.test.create_sprint(roadmap, "Merge-gate rollout sprint")
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(open_sid), ",".join(str(i) for i in open_tasks)])
+        self._run(["sprint", "start", "-r", roadmap, str(open_sid)])
+        self._run(["task", "stat", "-r", roadmap, str(open_tasks[0]), "BACKLOG"])
+        self.test.assert_task_status(roadmap, open_tasks[0], "BACKLOG")
+
+        expected = {
+            upcoming_sid: 3,
+            empty_sid: 0,
+            closed_sid: 1,
+            open_sid: 5,
+        }
+
+        proc, port = self._start(["--port", "0"])
+        status, _, body = self._req(port, f"/roadmaps/{roadmap}")
+        assert status == 200
+
+        def pane(marker):
+            start = body.index(marker)
+            rest = body[start + len(marker):]
+            nxt = rest.find('<div id="tab-')
+            return rest if nxt < 0 else rest[:nxt]
+
+        upcoming_pane = pane('<div id="tab-upcoming"')
+        current_pane = pane('<div id="tab-current"')
+        closed_pane = pane('<div id="tab-closed"')
+
+        tab_of = {
+            upcoming_sid: upcoming_pane,
+            empty_sid: upcoming_pane,
+            open_sid: current_pane,
+            closed_sid: closed_pane,
+        }
+
+        # Each sprint's footer, checked in ITS OWN tab, against the fixture's
+        # independently known truth. All four expected values are distinct,
+        # so no constant and no transposition between sprints can pass here.
+        for sid, want in expected.items():
+            got = self._card_task_count(tab_of[sid], roadmap, sid)
+            assert got == want, (
+                f"sprint #{sid} footer shows {got} task(s) on the sprints "
+                f"page, want its real member-task count {want}"
+            )
+
+        # The empty sprint's card is present (not omitted) and reads exactly
+        # 0, never absent and never defaulting to a non-zero placeholder.
+        assert f"/roadmaps/{roadmap}/sprints/{empty_sid}" in upcoming_pane, (
+            "the empty sprint must still render its own card under Próximos"
+        )
+
+        # The BACKLOG member is still counted: the OPEN sprint's footer stays
+        # 5, not 4, after one member's STATUS (not membership) changed.
+        still_open_count = self._card_task_count(current_pane, roadmap, open_sid)
+        assert still_open_count == 5, (
+            "a member task returned to BACKLOG status must still be counted "
+            f"in its sprint's footer; got {still_open_count}, want 5"
+        )
+
+        # Cross-check against the CLI: the web footer and `rmp sprint get`
+        # must report the IDENTICAL count for every sprint, so the two
+        # surfaces cannot silently drift apart.
+        for sid, want in expected.items():
+            cli_sprint = self.test.run_cmd_json(["sprint", "get", "-r", roadmap, str(sid)])
+            assert cli_sprint["task_count"] == want, (
+                f"rmp sprint get #{sid} reports task_count="
+                f"{cli_sprint['task_count']}, want {want} (fixture truth)"
+            )
+            web_count = self._card_task_count(tab_of[sid], roadmap, sid)
+            assert web_count == cli_sprint["task_count"], (
+                f"web footer ({web_count}) and `rmp sprint get` task_count "
+                f"({cli_sprint['task_count']}) disagree for sprint #{sid}"
+            )
 
     # ====================================================================
     # AC13: sprint page — all details, task order, 404/405 rules
@@ -2833,8 +2992,7 @@ class TestWebInterface:
         all_ids = [t_backlog, t_sprint, t_doing, t_testing, t_completed]
 
         sprint_id = self.test.create_sprint(roadmap, "Webhook reliability sprint")
-        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id)]
-                  + [str(i) for i in all_ids])
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id), ",".join(str(i) for i in all_ids)])
         self._run(["sprint", "start", "-r", roadmap, str(sprint_id)])
 
         # BACKLOG: a completed pipeline run reopened straight back to BACKLOG,
@@ -2988,8 +3146,7 @@ class TestWebInterface:
         # id order and, in DOING and CLOSED, no column's timestamp order.
         members = [w_gamma, d_delta, c_beta, w_alpha, d_beta, c_delta,
                    w_beta, d_alpha, c_alpha, d_gamma, c_gamma]
-        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id)]
-                  + [str(i) for i in members])
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id), ",".join(str(i) for i in members)])
         self._run(["sprint", "start", "-r", roadmap, str(sprint_id)])
 
         def stat(ids, status):
@@ -3470,7 +3627,7 @@ class TestWebInterface:
 
         sprint_id = self.test.create_sprint(roadmap, "Device trust maintenance sprint")
         self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id),
-                   str(bare), str(counted)])
+                   f"{bare},{counted}"])
 
         proc, port = self._start(["--port", "0"])
         _, _, body = self._req(port, f"/roadmaps/{roadmap}/sprints/{sprint_id}")
@@ -3566,8 +3723,7 @@ class TestWebInterface:
         all_ids = [t_backlog, t_sprint, t_doing, t_testing, t_completed]
 
         sprint_id = self.test.create_sprint(roadmap, "Settlement reconciliation sprint")
-        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id)]
-                  + [str(i) for i in all_ids])
+        self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id), ",".join(str(i) for i in all_ids)])
         self._run(["sprint", "start", "-r", roadmap, str(sprint_id)])
 
         self._run(["task", "stat", "-r", roadmap, str(t_backlog), "BACKLOG"])
@@ -3830,7 +3986,7 @@ class TestWebInterface:
 
         sprint_id = self.test.create_sprint(roadmap, "Checkout latency sprint")
         self._run(["sprint", "add-tasks", "-r", roadmap, str(sprint_id),
-                   str(t1), str(t2), str(t3)])
+                   f"{t1},{t2},{t3}"])
         self._run(["sprint", "start", "-r", roadmap, str(sprint_id)])
         for t in (t1, t2, t3):
             self._run(["task", "stat", "-r", roadmap, str(t), "DOING", "--commit-open", "391cff7"])
@@ -4688,6 +4844,179 @@ class TestWebInterface:
             assert n["properties"].get("key") != "injected-by-web", (
                 "a rejected CREATE must not have inserted a node"
             )
+
+    def test_query_bar_rejects_misspaced_introspection_with_its_own_kind(self):
+        """AC151: a schema-introspection command whose keyword spacing the
+        engine does not accept is rejected by the shared guard rail before
+        execution, answered HTTP 400 with kind invalid_keyword_spacing, and
+        never reported as not_read_only.
+
+        The kind is its own, and deliberately not not_read_only: a SHOW
+        statement reads the schema and writes nothing whatever its spacing, so
+        not_read_only would publish a classification the message printed beside
+        it contradicts, and would tell a client the query writes when it does
+        not (SPEC/WEB.md § Query-Bar Error Handling, case 10).
+
+        Each misspaced statement is paired with the identical statement carrying
+        one space, which must return the normal graph shape with HTTP 200, so
+        the two differ in the separator and in nothing else. Without that
+        control a server that had dropped schema introspection altogether would
+        satisfy every rejection assertion here.
+        """
+        proc, port = self._start(["--port", "0"])
+
+        for query, accepted in (
+            ("SHOW  INDEXES", "SHOW INDEXES"),
+            ("SHOW\tINDEX", "SHOW INDEX"),
+            ("SHOW\nCONSTRAINTS", "SHOW CONSTRAINTS"),
+            ("show  constraint", "SHOW CONSTRAINT"),
+        ):
+            status, _, body = self._req(port, self._graph_data(port, q=query))
+            assert status == 400, (
+                f"misspaced introspection {query!r} not rejected with 400; "
+                f"got {status} {body!r}"
+            )
+            err = json.loads(body)
+            assert err.get("kind") == "invalid_keyword_spacing", (
+                f"query {query!r} must carry its own failure class, not "
+                f"{err.get('kind')!r}: {err}"
+            )
+            # The query was never run: the failure body carries no graph.
+            assert set(err) == {"error", "kind"}, (
+                f"the failure body must carry exactly error and kind; got {err!r}"
+            )
+            reason = err["error"]
+            for fragment in ("schema-introspection command", "exactly one space",
+                             "keyword spacing", accepted):
+                assert fragment in reason, (
+                    f"the message for {query!r} must name {fragment!r}; got {reason!r}"
+                )
+            for forbidden in ("not read-only", "cypher: parse", 'unexpected "SHOW"'):
+                assert forbidden not in reason, (
+                    f"the message for {query!r} must never carry {forbidden!r}: "
+                    f"it is neither a write nor the engine's parse diagnostic; "
+                    f"got {reason!r}"
+                )
+
+            # The control: one space, same statement, accepted and executed.
+            status, _, body = self._req(port, self._graph_data(port, q=accepted))
+            assert status == 200, (
+                f"the single-space spelling {accepted!r} must be accepted; "
+                f"got {status} {body!r}"
+            )
+            assert json.loads(body) == {"nodes": [], "edges": []}, (
+                f"{accepted!r} is a tabular result carrying no graph elements, "
+                f"so the response is the empty graph shape; got {body!r}"
+            )
+
+        # The two guard-rail rejections stay distinct in both directions: a
+        # genuine write still answers not_read_only, so the new kind did not
+        # swallow the old one.
+        status, _, body = self._req(
+            port, self._graph_data(port, q="MATCH (n) DELETE n"))
+        assert status == 400
+        assert json.loads(body).get("kind") == "not_read_only", (
+            "a writing query must still be classified not_read_only"
+        )
+
+        # Precedence (SPEC/WEB.md § Query-Bar Error Handling, rule 6): the limit
+        # is resolved before the query is classified, so an invalid limit
+        # outranks the spacing objection.
+        status, _, body = self._req(
+            port, self._graph_data(port, q="SHOW  INDEXES", limit="7"))
+        assert status == 400
+        assert json.loads(body).get("kind") == "invalid_limit", (
+            "an invalid limit is resolved before the query is classified, so it "
+            "outranks the keyword-spacing objection"
+        )
+
+    def test_query_bar_refuses_a_misresolved_relationship_read(self):
+        """rmp task #288: the endpoint runs caller-supplied Cypher through its
+        own engine, so the relationship-read direction rule
+        (SPEC/GRAPH.md) applies here exactly as it does to `rmp graph query`.
+        A read of a relationship bound by an incoming or undirected pattern is
+        refused with HTTP 400 and the kind relationship_read_direction, before
+        the store is opened.
+
+        The fixture is its own roadmap carrying a node pair with edges BOTH
+        ways and DIFFERENT types each way, because that is the only shape the
+        engine misresolves: a one-way pair reads back correctly with or without
+        the rule and could not tell them apart.
+        """
+        name = "identity-platform"
+        self._run(["roadmap", "create", name])
+        for query in [
+            "CREATE (s:Spec {key:'session-revocation'}), (v:Test {key:'revoke-on-logout'})",
+            "MATCH (s:Spec {key:'session-revocation'}), (v:Test {key:'revoke-on-logout'}) "
+            "MERGE (s)-[:VERIFIED_BY]->(v)",
+            "MATCH (s:Spec {key:'session-revocation'}), (v:Test {key:'revoke-on-logout'}) "
+            "MERGE (v)-[:COVERS]->(s)",
+        ]:
+            self._run(["graph", "create", "-r", name, "--query", query])
+
+        proc, port = self._start(["--port", "0"])
+
+        refused = [
+            "MATCH (s:Spec)-[e]-(x) RETURN type(e), x.key",
+            "MATCH (s:Spec)<-[e]-(x) RETURN type(e)",
+            "MATCH (s:Spec)-[e]-(x) RETURN startNode(e).key, endNode(e).key",
+            "MATCH (s:Spec)-[e]-(x) WHERE type(e) = 'COVERS' RETURN x.key",
+            "MATCH (s:Spec)-[e]-(x) RETURN *",
+        ]
+        for query in refused:
+            status, _, body = self._req(
+                port, self._graph_data(port, q=query, roadmap=name))
+            assert status == 400, (
+                f"{query!r} must be refused with 400; got {status} {body!r}")
+            err = json.loads(body)
+            assert err.get("kind") == "relationship_read_direction", (
+                f"{query!r} must carry its own kind; got {err!r}")
+            assert set(err) == {"error", "kind"}, (
+                f"the error body must carry exactly error and kind, never the "
+                f"success shape; got {err!r}")
+            for fragment in ('"e"', "outgoing", "UNION ALL"):
+                assert fragment in err["error"], (
+                    f"the message for {query!r} must name {fragment!r} so the "
+                    f"caller can act on it; got {err['error']!r}")
+
+        # The other half: every shape the engine resolves correctly is still
+        # answered, so the refusal cost no reach. The default query is the one
+        # that matters most — it binds a relationship variable through an
+        # OPTIONAL MATCH, and a rule keyed on the variable rather than on the
+        # direction would have broken the graph page outright.
+        for query in [
+            None,  # the endpoint default
+            "MATCH (s:Spec)-[e]->(x) RETURN type(e), x.key",
+            "MATCH (x)-[e]->(s:Spec) RETURN type(e), x.key",
+            "MATCH (s:Spec)-[:COVERS]-(x) RETURN x.key",
+            "MATCH (s:Spec)-[e]-(x) RETURN x.key",
+            "MATCH p=(s:Spec)-[e]-(x:Test) RETURN p",
+        ]:
+            status, _, body = self._req(
+                port, self._graph_data(port, q=query, roadmap=name))
+            assert status == 200, (
+                f"{query!r} resolves correctly and must not be refused; "
+                f"got {status} {body!r}")
+
+        # Precedence (SPEC/WEB.md § Query-Bar Error Handling): every earlier
+        # objection outranks this one. The two controls are what make the
+        # assertion non-vacuous — without them an endpoint that never reached
+        # the new kind at all would pass.
+        status, _, body = self._req(
+            port, self._graph_data(
+                port, q="MATCH (s:Spec)-[e]-(x) RETURN type(e)", limit="7",
+                roadmap=name))
+        assert status == 400 and json.loads(body).get("kind") == "invalid_limit", (
+            "an invalid limit is resolved first, so it outranks the "
+            f"relationship-direction objection; got {status} {body!r}")
+
+        status, _, body = self._req(
+            port, self._graph_data(
+                port, q="MATCH (s:Spec)-[e]-(x) SET x.seen = type(e)",
+                roadmap=name))
+        assert status == 400 and json.loads(body).get("kind") == "not_read_only", (
+            "the objection that a query writes outranks the objection that its "
+            f"traversal is misoriented; got {status} {body!r}")
 
     def test_query_bar_literal_masking_not_falsely_rejected(self):
         """AC47: write keywords only inside a string literal are accepted as

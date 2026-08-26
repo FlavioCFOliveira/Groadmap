@@ -3,6 +3,8 @@ package models
 import (
 	"errors"
 	"fmt"
+
+	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
 // Sentinel errors for audit validation.
@@ -10,8 +12,16 @@ var (
 	ErrInvalidAuditOperation = errors.New("invalid audit operation")
 	ErrInvalidEntityType     = errors.New("invalid entity type")
 	ErrInvalidOperation      = errors.New("invalid operation")
-	ErrEntityIDNotPositive   = errors.New("entity_id must be positive")
-	ErrPerformedAtRequired   = errors.New("performed_at is required")
+	// ErrEntityIDOutOfRange owns the ID RANGE rule for the audit entry's
+	// entity_id, and takes its whole wording from the shared definition.
+	//
+	// It used to spell a sentence of its own, "entity_id must be positive",
+	// which stated one of the rule's two bounds and named neither. That made it
+	// a fourth wording of the very rule `audit list --entity-id` and
+	// `audit history` announce, over the identical field and under the identical
+	// name (rmp task 330).
+	ErrEntityIDOutOfRange  = errors.New(utils.IDRangeMessage(utils.FieldEntityID))
+	ErrPerformedAtRequired = errors.New("performed_at is required")
 )
 
 // AuditOperation represents the type of operation logged.
@@ -236,6 +246,129 @@ var ValidAuditOperations = []AuditOperation{
 	OpSprintMoveTask,
 }
 
+// AuditOperationClass is the declared classification of one audit operation:
+// the entity type its rows are recorded against, and whether any command still
+// writes it.
+//
+// Both facts are declared, never inferred. SPEC/HELP.md § Audit operation
+// entity-type classification rule 1 forbids reading the entity type off the
+// operation's name. Today every operation is recorded against the entity its
+// name begins with, but that is a property the catalogue happens to have rather
+// than a rule it is held to. Printing an operation under a heading that names
+// TASK asserts that the rows carrying it hold entity_type = 'TASK', which is a
+// claim about stored data; the day one operation is recorded against the entity
+// its name does not begin with, an inferred claim becomes false silently,
+// because a prefix match has no way to notice it now disagrees with the writer.
+// A declared claim sits beside the operation it describes, so a writer that
+// changes while its declaration does not is a contradiction the gates surface.
+//
+// Legacy travels here for the same reason (rule 2 of the same section). Whether
+// an operation is still written is equally a fact about the code, and a surface
+// that recovers it by searching a description for the word LEGACY is inferring
+// again, from text written for a reader rather than for a parser.
+type AuditOperationClass struct {
+	// EntityType is the value the audit entry's own entity_type column holds
+	// on every row carrying this operation.
+	EntityType EntityType
+	// Legacy reports that no command writes the operation any more. A legacy
+	// value stays in ValidAuditOperations and stays accepted by
+	// `audit list --operation`, so the rows already carrying it stay reachable.
+	Legacy bool
+}
+
+// auditOperationClasses declares one class per catalogue value. It is keyed by
+// the operation constants rather than by bare strings, so renaming or removing
+// a constant is a compile error here instead of a silently absent entry.
+//
+// The classification is total: every value of ValidAuditOperations appears, the
+// four LEGACY ones included, because entity_type is NOT NULL on the audit table
+// and its CHECK admits exactly TASK and SPRINT, so an operation with no entity
+// type would describe rows that cannot exist (SPEC/HELP.md § Audit operation
+// entity-type classification rule 3). TestAuditOperationClassification_IsTotal
+// is the gate that keeps it total.
+//
+// Rule 4 requires each entry to state what the writer writes, established by
+// observing a row rather than by reading the name. For the 39 operations a
+// command still writes, the observation is a live one: driving every mutating
+// subcommand and reading back the audit table yields exactly these 39 pairs.
+// The four LEGACY operations have no writer left to observe, so each rests on
+// recorded evidence instead:
+//
+//   - TASK_STATUS_CHANGE: the 1.11.0 to 1.12.0 migration reclassifies these
+//     rows under the predicate `AND entity_type = 'TASK'`, so the rows it reads
+//     are TASK rows (internal/db/migrations.go, reclassifyStatusChangeSteps).
+//   - TASK_UPDATE: its retired writer was task_edit.go, which passed
+//     models.EntityTask.
+//   - SPRINT_UPDATE: its retired writer was sprint_crud.go, which passed
+//     models.EntitySprint.
+//   - SPRINT_MOVE_TASK: its retired writer was queries.go, which passed
+//     models.EntitySprint against the destination sprint.
+//
+// The three retired writers are preserved in git history; none was classified
+// from its name, which is what rule 4 forbids for a value nothing writes.
+var auditOperationClasses = map[AuditOperation]AuditOperationClass{
+	OpTaskCreate:                       {EntityType: EntityTask},
+	OpTaskDelete:                       {EntityType: EntityTask},
+	OpTaskStatusBacklog:                {EntityType: EntityTask},
+	OpTaskStatusSprint:                 {EntityType: EntityTask},
+	OpTaskStatusDoing:                  {EntityType: EntityTask},
+	OpTaskStatusTesting:                {EntityType: EntityTask},
+	OpTaskStatusCompleted:              {EntityType: EntityTask},
+	OpTaskTitleChange:                  {EntityType: EntityTask},
+	OpTaskTypeChange:                   {EntityType: EntityTask},
+	OpTaskFunctionalRequirementsChange: {EntityType: EntityTask},
+	OpTaskTechnicalRequirementsChange:  {EntityType: EntityTask},
+	OpTaskAcceptanceCriteriaChange:     {EntityType: EntityTask},
+	OpTaskPriorityChange:               {EntityType: EntityTask},
+	OpTaskSeverityChange:               {EntityType: EntityTask},
+	OpTaskReopen:                       {EntityType: EntityTask},
+	OpTaskAddDep:                       {EntityType: EntityTask},
+	OpTaskRemoveDep:                    {EntityType: EntityTask},
+	OpTaskCommentCreate:                {EntityType: EntityTask},
+	OpTaskCommentUpdate:                {EntityType: EntityTask},
+	OpTaskCommentDelete:                {EntityType: EntityTask},
+
+	OpSprintCreate:            {EntityType: EntitySprint},
+	OpSprintDelete:            {EntityType: EntitySprint},
+	OpSprintStart:             {EntityType: EntitySprint},
+	OpSprintClose:             {EntityType: EntitySprint},
+	OpSprintReopen:            {EntityType: EntitySprint},
+	OpSprintTitleChange:       {EntityType: EntitySprint},
+	OpSprintDescriptionChange: {EntityType: EntitySprint},
+	OpSprintMaxTasksChange:    {EntityType: EntitySprint},
+	OpSprintOrderChange:       {EntityType: EntitySprint},
+	OpSprintAddTask:           {EntityType: EntitySprint},
+	OpSprintRemoveTask:        {EntityType: EntitySprint},
+	OpSprintMoveTaskOut:       {EntityType: EntitySprint},
+	OpSprintMoveTaskIn:        {EntityType: EntitySprint},
+	OpSprintReorderTasks:      {EntityType: EntitySprint},
+	OpSprintTaskMovePosition:  {EntityType: EntitySprint},
+	OpSprintTaskSwap:          {EntityType: EntitySprint},
+	OpSprintCommentCreate:     {EntityType: EntitySprint},
+	OpSprintCommentUpdate:     {EntityType: EntitySprint},
+	OpSprintCommentDelete:     {EntityType: EntitySprint},
+
+	// LEGACY: readable, never written. See the evidence per entry above.
+	OpTaskStatusChange: {EntityType: EntityTask, Legacy: true},
+	OpTaskUpdate:       {EntityType: EntityTask, Legacy: true},
+	OpSprintUpdate:     {EntityType: EntitySprint, Legacy: true},
+	OpSprintMoveTask:   {EntityType: EntitySprint, Legacy: true},
+}
+
+// ClassifyAuditOperation returns the declared classification of op and whether
+// one is declared at all.
+//
+// The boolean is the honest answer for an operation nobody classified, and it
+// exists so a caller can fail loudly rather than render an unclassified value
+// under a heading that asserts something untrue about it. Callers that render a
+// published surface MUST NOT substitute a default entity type for a false
+// second return; the classification is required to be total, and the gate in
+// this package is what keeps it so.
+func ClassifyAuditOperation(op AuditOperation) (AuditOperationClass, bool) {
+	class, declared := auditOperationClasses[op]
+	return class, declared
+}
+
 // IsValidAuditOperation checks if a string is a valid audit operation.
 func IsValidAuditOperation(s string) bool {
 	for _, op := range ValidAuditOperations {
@@ -249,7 +382,7 @@ func IsValidAuditOperation(s string) bool {
 // ParseAuditOperation parses a string into an AuditOperation.
 func ParseAuditOperation(s string) (AuditOperation, error) {
 	if !IsValidAuditOperation(s) {
-		return "", fmt.Errorf("invalid audit operation: %q: %w", s, ErrInvalidAuditOperation)
+		return "", fmt.Errorf("%w: %q", ErrInvalidAuditOperation, s)
 	}
 	return AuditOperation(s), nil
 }
@@ -271,7 +404,7 @@ func IsValidEntityType(s string) bool {
 // ParseEntityType parses a string into an EntityType.
 func ParseEntityType(s string) (EntityType, error) {
 	if !IsValidEntityType(s) {
-		return "", fmt.Errorf("invalid entity type: %q: %w", s, ErrInvalidEntityType)
+		return "", fmt.Errorf("%w: %q", ErrInvalidEntityType, s)
 	}
 	return EntityType(s), nil
 }
@@ -308,13 +441,13 @@ type AuditEntry struct {
 // Validate checks if the audit entry data is valid.
 func (a *AuditEntry) Validate() error {
 	if !IsValidAuditOperation(a.Operation) {
-		return fmt.Errorf("invalid operation: %q: %w", a.Operation, ErrInvalidOperation)
+		return fmt.Errorf("%w: %q", ErrInvalidOperation, a.Operation)
 	}
 	if !IsValidEntityType(a.EntityType) {
-		return fmt.Errorf("invalid entity type: %q: %w", a.EntityType, ErrInvalidEntityType)
+		return fmt.Errorf("%w: %q", ErrInvalidEntityType, a.EntityType)
 	}
-	if a.EntityID <= 0 {
-		return fmt.Errorf("entity_id must be positive, got %d: %w", a.EntityID, ErrEntityIDNotPositive)
+	if !utils.IDInRange(a.EntityID) {
+		return utils.NumericRangeError(ErrEntityIDOutOfRange, a.EntityID)
 	}
 	if a.PerformedAt == "" {
 		return ErrPerformedAtRequired

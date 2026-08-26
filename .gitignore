@@ -34,9 +34,19 @@ go.work.sum
 
 bin/
 
-# Python test runtime artifacts
+# Python test runtime artifacts. pytest writes its own .gitignore inside
+# .pytest_cache/, but that file is the tool's own artefact rather than a rule
+# this repository owns, so the directory is named here as well.
 __pycache__/
 *.pyc
+.pytest_cache/
 
-# Claude Code agent-local memory (not versioned)
+# Agent-local scratch, never versioned.
+#
+# .claude/worktrees/ holds temporary agent worktrees, and each one is a full
+# second checkout of this repository: left untracked, its whole content is one
+# `git add -A` away from entering the repository. The security gate is already
+# told to skip that directory (see the `security` target in the Makefile and
+# SPEC/BUILD.md); this is the matching instruction to git.
 .claude/agent-memory/
+.claude/worktrees/

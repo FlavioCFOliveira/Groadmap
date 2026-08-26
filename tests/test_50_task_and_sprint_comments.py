@@ -1083,6 +1083,267 @@ class TestTaskAndSprintComments:
         print("✓ trojan-source bodies (U+202E, U+FEFF) are refused")
 
     # ==================================================================
+    # D2. the UTF-8 encoding constraint, on BOTH input paths
+    #
+    # SPEC/MODELS.md § Free-Text UTF-8 Encoding Constraint and
+    # SPEC/COMMANDS.md § UTF-8 Encoding Constraint (All Free-Text Fields).
+    #
+    # The comment `body` is the only one of the eight free-text fields with a
+    # standard-input source, so it is the only one where the rule has to hold on
+    # a value the application deliberately never holds in full. The property
+    # SPEC/COMMANDS.md § Comment Body Input Source and Precedence fixes for that
+    # bounded read — "the verdict the user sees is exactly the verdict a
+    # read-to-EOF implementation would reach" — is what these tests exercise:
+    # every case below is driven through the flag AND through standard input, and
+    # the two must answer identically.
+    # ==================================================================
+
+    # The malformed shapes SPEC/MODELS.md enumerates, as the raw bytes that reach
+    # the process. They are bytes and not text on purpose: `\x80` alone is not a
+    # character, and writing it as one would be writing a different fixture.
+    MALFORMED_UTF8 = [
+        ("lone continuation byte", b"Ledger batch SEPA-20260815-004 \x80 failed to reconcile"),
+        ("lone 0xFF", b"Settlement window closed at 17:00\xff before the last file arrived"),
+        ("overlong encoding", b"Traversal probe in the upload path: ..\xc0\xaf..\xc0\xafetc/passwd"),
+        ("lone surrogate", b"Imported from a UTF-16 feed carrying an unpaired \xed\xa0\x80 surrogate"),
+        ("truncated sequence", b"Reconciliation summary for the medi\xc3"),
+    ]
+
+    UTF8_REFUSAL = "Error: validation error: body: the value is not valid UTF-8"
+    LENGTH_REFUSAL = "Error: field exceeds maximum size: body exceeds maximum length of 4096 characters"
+
+    def run_bytes(self, args, stdin_bytes=None):
+        """Run rmp with argv entries and/or stdin that need not be valid UTF-8.
+
+        Python places arbitrary bytes in a child's argv through the
+        surrogateescape convention: os.fsencode, which subprocess applies to
+        every argument, turns the lone surrogates back into the original bytes.
+        That reproduces from Python exactly what a shell does natively with
+        `printf 'a\x80b'`, which is how this defect was first reported.
+
+        Nothing is decoded on the way out: a decode with a replacement policy
+        would hide the very bytes under test.
+        """
+        env = os.environ.copy()
+        env["HOME"] = str(self.test.home_dir)
+        argv = [self.cli]
+        for a in args:
+            argv.append(a.decode("utf-8", "surrogateescape") if isinstance(a, bytes) else str(a))
+        result = subprocess.run(argv, capture_output=True, env=env, input=stdin_bytes)
+        return result.returncode, result.stdout, result.stderr
+
+    def assert_bytes_failure(self, args, expected_line, label, stdin_bytes=None):
+        """Assert a refusal of a value carrying bytes that are not valid UTF-8.
+
+        Four things are asserted, and each closes a different way of being wrong:
+        exit 6 (the validation class), nothing on stdout (a machine consumer
+        parses stdout and must never find a half-written object there), the exact
+        pinned line, and — the constraint's own point — that the refusal the
+        process wrote back is ITSELF valid UTF-8. A message that echoed the
+        offending bytes would put them straight onto the caller's terminal, which
+        is the class of defect this rule closes.
+        """
+        code, out, err = self.run_bytes(args, stdin_bytes=stdin_bytes)
+        assert code == EXIT_VALIDATION, (
+            f"{label}: expected exit {EXIT_VALIDATION}, got {code}\n  stderr: {err!r}")
+        assert out == b"", f"{label}: a failing command wrote to stdout: {out!r}"
+        try:
+            text = err.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise AssertionError(
+                f"{label}: the refusal is not valid UTF-8 ({exc}); it echoed the "
+                f"malformed bytes back: {err!r}") from None
+        assert expected_line in text, (
+            f"{label}: stderr does not carry the pinned refusal\n"
+            f"  expected: {expected_line!r}\n  got: {text!r}")
+
+    def test_malformed_utf8_body_is_refused_through_the_flag(self):
+        """--body carrying bytes that are not valid UTF-8 is refused, exit 6.
+
+        Before this rule the bytes went straight into the TEXT column: the
+        control-character check decodes rune by rune and an invalid byte decodes
+        to U+FFFD, which is not a forbidden code point. Every reader then saw
+        something else, because Go's JSON encoder substitutes U+FFFD for each
+        invalid byte, so `comment-list` reported a body that matched neither what
+        was stored nor what was supplied.
+        """
+        for label, bad in self.MALFORMED_UTF8:
+            for subcommand, entity, target in (
+                ("task", "task", self.task),
+                ("sprint", "sprint", self.sprint),
+            ):
+                ctype = "FINDING" if entity == "task" else "DECISION"
+                self.assert_bytes_failure(
+                    [subcommand, "comment-add", "-r", ROADMAP, str(target),
+                     "--type", ctype, "--body", bad],
+                    self.UTF8_REFUSAL, f"{subcommand} comment-add --body / {label}")
+        assert self.task_comments() == [], "nothing may be stored"
+        assert self.sprint_comments() == [], "nothing may be stored"
+        print("✓ a malformed --body is refused on both comment families")
+
+    def test_malformed_utf8_body_is_refused_through_standard_input(self):
+        """The same bytes on standard input reach the same verdict.
+
+        This is the path the rule was hardest to get right on. The reader is
+        bounded and never holds the whole stream, so it has to carry the bytes it
+        read forward EXACTLY as they arrived — repairing an invalid byte into
+        U+FFFD would leave the check that follows nothing to refuse.
+        """
+        for label, bad in self.MALFORMED_UTF8:
+            self.assert_bytes_failure(
+                ["task", "comment-add", "-r", ROADMAP, str(self.task), "--type", "FINDING"],
+                self.UTF8_REFUSAL, f"task comment-add stdin / {label}", stdin_bytes=bad)
+            self.assert_bytes_failure(
+                ["sprint", "comment-add", "-r", ROADMAP, str(self.sprint), "--type", "DECISION"],
+                self.UTF8_REFUSAL, f"sprint comment-add stdin / {label}", stdin_bytes=bad)
+        assert self.task_comments() == [], "nothing may be stored"
+        assert self.sprint_comments() == [], "nothing may be stored"
+        print("✓ a malformed body on standard input is refused on both comment families")
+
+    def test_malformed_utf8_body_is_refused_on_comment_edit_both_paths(self):
+        """comment-edit refuses the same bytes and leaves the comment as it was.
+
+        An edit is the case where accepting malformed bytes would destroy
+        something: the previous body is not retained anywhere, so a bad write is
+        not recoverable.
+        """
+        task_cid = self.add_task_comment("FINDING")
+        sprint_cid = self.add_sprint_comment("DECISION", SPRINT_DECISION_BODY)
+        before_task = self.task_comments()[0]
+        before_sprint = self.sprint_comments()[0]
+
+        for label, bad in self.MALFORMED_UTF8:
+            self.assert_bytes_failure(
+                ["task", "comment-edit", "-r", ROADMAP, str(task_cid), "--body", bad],
+                self.UTF8_REFUSAL, f"task comment-edit --body / {label}")
+            self.assert_bytes_failure(
+                ["task", "comment-edit", "-r", ROADMAP, str(task_cid)],
+                self.UTF8_REFUSAL, f"task comment-edit stdin / {label}", stdin_bytes=bad)
+            self.assert_bytes_failure(
+                ["sprint", "comment-edit", "-r", ROADMAP, str(sprint_cid), "--body", bad],
+                self.UTF8_REFUSAL, f"sprint comment-edit --body / {label}")
+            self.assert_bytes_failure(
+                ["sprint", "comment-edit", "-r", ROADMAP, str(sprint_cid)],
+                self.UTF8_REFUSAL, f"sprint comment-edit stdin / {label}", stdin_bytes=bad)
+
+        after_task = self.task_comments()[0]
+        after_sprint = self.sprint_comments()[0]
+        assert after_task == before_task, (
+            f"a refused task comment-edit changed the comment:\n {before_task!r}\n {after_task!r}")
+        assert after_sprint == before_sprint, (
+            f"a refused sprint comment-edit changed the comment:\n {before_sprint!r}\n {after_sprint!r}")
+        assert after_task["updated_at"] is None, "a refused edit must not stamp updated_at"
+        assert after_sprint["updated_at"] is None, "a refused edit must not stamp updated_at"
+        print("✓ a malformed body is refused on comment-edit and nothing is overwritten")
+
+    def test_oversized_malformed_body_is_refused_for_its_length_on_both_paths(self):
+        """A body that is BOTH malformed and oversized reports its LENGTH.
+
+        This is the order decision of rmp task 180, and the one place where the
+        bounded standard-input read could have broken it. The invalid byte sits
+        at offset 3, thousands of characters ahead of the cap; a reader that
+        refused at the first malformed byte would report an encoding failure here
+        while the flag path reported `field exceeds maximum size`, and the two
+        input paths would no longer agree.
+
+        The cap keeps its position because the encoding check takes the
+        control-character check's place and moves no other check
+        (SPEC/MODELS.md, "Order").
+        """
+        for label, bad in self.MALFORMED_UTF8:
+            oversized = b"abc" + bad + b"x" * 4096
+            self.assert_bytes_failure(
+                ["task", "comment-add", "-r", ROADMAP, str(self.task), "--type", "FINDING"],
+                self.LENGTH_REFUSAL, f"stdin, oversized and malformed / {label}",
+                stdin_bytes=oversized)
+            self.assert_bytes_failure(
+                ["task", "comment-add", "-r", ROADMAP, str(self.task),
+                 "--type", "FINDING", "--body", oversized],
+                self.LENGTH_REFUSAL, f"--body, oversized and malformed / {label}")
+
+        # And below the cap the encoding rule is the one that answers, on both
+        # paths: without this the test above would also pass against a build that
+        # never applied the encoding rule at all.
+        for label, bad in self.MALFORMED_UTF8:
+            within = b"abc" + bad + b"x" * 100
+            self.assert_bytes_failure(
+                ["task", "comment-add", "-r", ROADMAP, str(self.task), "--type", "FINDING"],
+                self.UTF8_REFUSAL, f"stdin, malformed within the cap / {label}",
+                stdin_bytes=within)
+            self.assert_bytes_failure(
+                ["task", "comment-add", "-r", ROADMAP, str(self.task),
+                 "--type", "FINDING", "--body", within],
+                self.UTF8_REFUSAL, f"--body, malformed within the cap / {label}")
+
+        assert self.task_comments() == [], "nothing may be stored"
+        print("✓ oversized-and-malformed reports its length; malformed within the cap "
+              "reports its encoding; both paths agree")
+
+    def test_encoding_refusal_precedes_the_control_character_refusal(self):
+        """A body breaking BOTH content rules reports the encoding one.
+
+        Both refusals are exit 6 and both open with `validation error:`, so only
+        the wording can show which rule answered. The check is run on both input
+        paths because SPEC/MODELS.md fixes the order "on every command and for
+        every field the two rules govern", not merely on the flag path.
+        """
+        for label, bad in self.MALFORMED_UTF8:
+            both = bad + b" \x1b[31m"
+            self.assert_bytes_failure(
+                ["task", "comment-add", "-r", ROADMAP, str(self.task),
+                 "--type", "FINDING", "--body", both],
+                self.UTF8_REFUSAL, f"--body, both rules broken / {label}")
+            self.assert_bytes_failure(
+                ["task", "comment-add", "-r", ROADMAP, str(self.task), "--type", "FINDING"],
+                self.UTF8_REFUSAL, f"stdin, both rules broken / {label}", stdin_bytes=both)
+
+        # The control-character rule still answers for a WELL-FORMED body that
+        # carries a forbidden code point, so the pairing did not swallow it.
+        self.assert_failure(
+            ["task", "comment-add", "-r", ROADMAP, str(self.task),
+             "--type", "FINDING", "--body", "Ledger \x1b[31mbatch\x1b[0m reversed"],
+            EXIT_VALIDATION, "body: control characters are not allowed")
+
+        assert self.task_comments() == [], "nothing may be stored"
+        print("✓ the encoding refusal precedes the control-character refusal on both paths")
+
+    def test_malformed_body_through_a_real_pipe_is_refused(self):
+        """The same verdict when standard input is a pipe from a sibling process.
+
+        A parent-created pipe is only one of the descriptor kinds standard input
+        can be. Here `printf` on the other end of a shell pipeline writes the
+        bytes, which is both how the defect was first reproduced and the shape
+        where the reader's chunking is decided by the pipe rather than by Python.
+        """
+        script = (
+            'printf "Ledger batch SEPA-20260815-004 \\200 failed to reconcile" | '
+            '"$RMP" task comment-add -r "$1" "$2" --type FINDING'
+        )
+        code, out, err = self.run_shell(script, [ROADMAP, self.task])
+        assert code == EXIT_VALIDATION, f"expected exit {EXIT_VALIDATION}, got {code}; stderr={err!r}"
+        assert out == "", f"a failing command wrote to stdout: {out!r}"
+        assert self.UTF8_REFUSAL in err, err
+        assert self.task_comments() == [], "nothing may be stored"
+        print("✓ a malformed body arriving through a real pipe is refused")
+
+    def test_well_formed_multibyte_body_still_round_trips(self):
+        """The rule refuses malformed BYTES, never unfamiliar characters.
+
+        Non-vacuity guard for every test above: a body of accented Latin, CJK and
+        a four-byte emoji must still be stored and read back byte for byte, on
+        both input paths.
+        """
+        body = "Reconciliação da medição: 監査ログ verificado \U0001F680"
+        self.run(["task", "comment-add", "-r", ROADMAP, str(self.task),
+                  "--type", "FINDING", "--body", body])
+        assert self.task_comments()[0]["body"] == body
+
+        self.run(["sprint", "comment-add", "-r", ROADMAP, str(self.sprint), "--type", "DECISION"],
+                 stdin_bytes=body.encode("utf-8"))
+        assert self.sprint_comments()[0]["body"] == body
+        print("✓ well-formed multi-byte bodies still round-trip on both paths")
+
+    # ==================================================================
     # E. comment-edit semantics
     # ==================================================================
 
@@ -1504,24 +1765,56 @@ class TestTaskAndSprintComments:
         assert self.bodies(log) == [BODY["FINDING"], BODY["FINDING"]]
         print("✓ a byte-identical add creates a second, distinct row")
 
-    def test_malformed_comment_ids_are_format_errors(self):
-        """Every malformed id is exit 2 with the format message, never exit 6.
+    def test_malformed_comment_ids_are_all_misuse(self):
+        """Every malformed id is exit 2 here, whichever of the two id rules it broke.
 
-        The comment subcommands deliberately re-classify what the shared id
-        validator would report as a validation error, because SPEC/COMMANDS.md
-        pins the whole "positive integer" constraint at exit code 2 here.
+        An id is subject to two separate rules (SPEC/COMMANDS.md
+        § Entity Identifier Range): a token that is not an integer at all
+        breaks the FORMAT rule, and an integer outside 1-2147483647 breaks the
+        RANGE rule. The two print different sentences everywhere in the CLI.
+
+        What these four subcommands do differently is the failure CLASS, not
+        the wording: every other surface reports the range half as a
+        validation error at exit 6, and here the whole "positive integer"
+        constraint is misuse at exit 2 (§ Comment Positional Argument
+        Contract, point 4). That is the property this test exists to pin, and
+        it is pinned for both halves.
+
+        Both halves are driven because pinning only one lets the other drift,
+        which is exactly what happened. Until rmp task 330 these subcommands
+        answered the range half with a sentence of their own invention --
+        'invalid comment ID: "0" (must be a positive integer no greater than
+        2147483647)' -- that SPEC published nowhere, and a test that asserted
+        no more than the substring "invalid comment ID" could not see it.
+        Each half therefore also asserts that it did NOT borrow the other
+        half's wording.
         """
-        for raw in ["0", "-1", "2147483648", "1.0", "+1", "1,2", "one", "1 2", "12abc"]:
-            for family, subcommand in [
-                ("task", "comment-edit"), ("task", "comment-remove"),
-                ("sprint", "comment-edit"), ("sprint", "comment-remove"),
-            ]:
-                args = [family, subcommand, "-r", ROADMAP, raw]
-                if subcommand == "comment-edit":
-                    args += ["--type", "FINDING"]
-                err = self.assert_failure(args, EXIT_MISUSE, "invalid comment ID")
-                assert "must be a positive integer" in err, err
-        print("✓ every malformed comment id is a format error at exit 2")
+        for family, subcommand in [
+            ("task", "comment-edit"), ("task", "comment-remove"),
+            ("sprint", "comment-edit"), ("sprint", "comment-remove"),
+        ]:
+            extra = ["--type", "FINDING"] if subcommand == "comment-edit" else []
+            # The RANGE rule, at the floor, below it, and above the ceiling.
+            for raw in ["0", "-1", "2147483648"]:
+                err = self.assert_failure(
+                    [family, subcommand, "-r", ROADMAP, raw] + extra,
+                    EXIT_MISUSE,
+                    f"comment_id must be between 1 and 2147483647, got {raw}",
+                )
+                assert "must be a positive integer" not in err, (
+                    f"the range refusal borrowed the format rule's wording: {err!r}"
+                )
+            # The FORMAT rule: a token that is not an integer at all.
+            for raw in ["1.0", "+1", "1,2", "one", "1 2", "12abc"]:
+                err = self.assert_failure(
+                    [family, subcommand, "-r", ROADMAP, raw] + extra,
+                    EXIT_MISUSE,
+                    f'invalid comment ID: "{raw}" (must be a positive integer)',
+                )
+                assert "must be between" not in err, (
+                    f"the format refusal borrowed the range rule's wording: {err!r}"
+                )
+        print("✓ every malformed comment id is exit 2, under the rule it broke")
 
     def test_surrounding_whitespace_in_an_id_is_tolerated(self):
         """An id is trimmed before parsing, as every id in the CLI is.
@@ -1538,20 +1831,42 @@ class TestTaskAndSprintComments:
         assert self.task_comments() == []
         print("✓ surrounding whitespace in a comment id is trimmed, not refused")
 
-    def test_malformed_parent_ids_are_format_errors(self):
-        """The parent id is validated the same way, under the parent's own name."""
-        for raw in ["0", "-1", "2147483648", "1.0"]:
+    def test_malformed_parent_ids_are_all_misuse(self):
+        """The parent id is validated the same way, under the parent's own name.
+
+        Same two rules and same exit code as the comment's own id above; only
+        the name changes, and it changes per family -- `task_id` / `task` on
+        the task side, `sprint_id` / `sprint` on the sprint side.
+        """
+        # The RANGE rule.
+        for raw in ["0", "-1", "2147483648"]:
             err = self.assert_failure(
                 ["task", "comment-add", "-r", ROADMAP, raw,
                  "--type", "FINDING", "--body", BODY["FINDING"]],
-                EXIT_MISUSE, "invalid task ID",
+                EXIT_MISUSE, f"task_id must be between 1 and 2147483647, got {raw}",
             )
-            assert "must be a positive integer" in err, err
+            assert "must be a positive integer" not in err, (
+                f"the range refusal borrowed the format rule's wording: {err!r}"
+            )
             self.assert_failure(
                 ["sprint", "comment-list", "-r", ROADMAP, raw],
-                EXIT_MISUSE, "invalid sprint ID",
+                EXIT_MISUSE, f"sprint_id must be between 1 and 2147483647, got {raw}",
             )
-        print("✓ a malformed parent id is a format error naming the parent")
+        # The FORMAT rule.
+        for raw in ["1.0", "one"]:
+            err = self.assert_failure(
+                ["task", "comment-add", "-r", ROADMAP, raw,
+                 "--type", "FINDING", "--body", BODY["FINDING"]],
+                EXIT_MISUSE, f'invalid task ID: "{raw}" (must be a positive integer)',
+            )
+            assert "must be between" not in err, (
+                f"the format refusal borrowed the range rule's wording: {err!r}"
+            )
+            self.assert_failure(
+                ["sprint", "comment-list", "-r", ROADMAP, raw],
+                EXIT_MISUSE, f'invalid sprint ID: "{raw}" (must be a positive integer)',
+            )
+        print("✓ a malformed parent id is exit 2, under the rule it broke")
 
     def test_the_two_missing_id_paths_report_differently(self):
         """Omitting the id and putting a flag where it belongs are distinct faults.

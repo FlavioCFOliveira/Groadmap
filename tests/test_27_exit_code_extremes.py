@@ -5,7 +5,8 @@ Covers the two corners of the exit-code contract that are easy to
 overlook because the rest of the suite focuses on the [0,6] range.
 
 SPEC/ARCHITECTURE.md § Exit Codes mandates:
-  - 127 EXIT_CMD_NOT_FOUND   — unknown command/subcommand
+  - 127 EXIT_CMD_NOT_FOUND   — dispatch failure: an unresolved command name
+                               or an unresolved subcommand name
   - 130 EXIT_SIGINT          — process interrupted by SIGINT (Ctrl+C)
 """
 
@@ -31,25 +32,34 @@ class TestUnknownCommandExit127:
         self.test.teardown()
 
     def test_unknown_top_level_command(self):
-        """`rmp notacommand` exits 127 and prints usage."""
+        """`rmp notacommand` exits 127 and writes the error, the recovery help
+        and nothing else to stderr.
+
+        Every part of the failure report is on stderr. The general help used to
+        go to stdout, which both broke the stdout-silence rule and printed the
+        AI-agent sentence a second time (once as the help body's banner, once as
+        the trailing hint). See SPEC/HELP.md § Error message format."""
         exit_code, stdout, stderr = self.test.run_cmd(["notacommand"], check=False)
         assert exit_code == 127, (
             f"unknown command must exit 127 per SPEC/ARCHITECTURE.md; got {exit_code}"
         )
-        assert "unknown command" in stderr.lower() or "unknown command" in stdout.lower(), (
-            f"output must say 'Unknown command'; stderr={stderr!r}, stdout={stdout[:100]!r}"
+        assert "unknown command" in stderr.lower(), (
+            f"stderr must say 'unknown command'; stderr={stderr!r}"
         )
-        # Help should be printed alongside the error so the user can recover.
-        assert "Usage:" in stdout, "usage block must follow the error"
+        # The recovery help follows the error, on stderr.
+        assert "Usage:" in stderr, f"usage block must follow the error on stderr; stderr={stderr!r}"
+        # A failing invocation writes zero bytes to stdout.
+        assert stdout == "", f"a failing invocation must write nothing to stdout; got {stdout[:200]!r}"
 
-        print("✓ unknown command returns exit 127 and prints usage")
+        print("✓ unknown command returns exit 127, help on stderr, stdout empty")
 
     def test_unknown_command_with_args(self):
         """Garbage that looks like 'cmd subcmd ...' still exits 127."""
-        exit_code, _, _ = self.test.run_cmd(["foo", "bar", "baz"], check=False)
+        exit_code, stdout, _ = self.test.run_cmd(["foo", "bar", "baz"], check=False)
         assert exit_code == 127, (
             f"unknown nested command must still exit 127; got {exit_code}"
         )
+        assert stdout == "", f"a failing invocation must write nothing to stdout; got {stdout[:200]!r}"
 
         print("✓ unknown command with arbitrary args still exits 127")
 

@@ -317,7 +317,7 @@ func TestOutputValidation_TaskList_JSONArray(t *testing.T) {
 
 func TestOutputValidation_TaskList_StatusFilter(t *testing.T) {
 	const roadmap = "outputval-tasklistfilter"
-	database, cleanup := setupTestTaskRoadmap(t, roadmap)
+	_, cleanup := setupTestTaskRoadmap(t, roadmap)
 	defer cleanup()
 
 	// Create 3 tasks via CLI
@@ -335,11 +335,14 @@ func TestOutputValidation_TaskList_StatusFilter(t *testing.T) {
 		taskIDs[i] = extractIntID(t, out)
 	}
 
-	// Manually advance one task to DOING via DB (simulates sprint add + start)
-	doingStatus := models.StatusDoing
-	if err := database.UpdateTaskStatus(context.Background(), []int{taskIDs[0]}, doingStatus); err != nil {
-		t.Fatalf("UpdateTaskStatus error = %v", err)
-	}
+	// Advance one task to DOING the way the CLI does it: sprint membership,
+	// then the transition that records the commit it started from. It used to
+	// be a db-layer UpdateTaskStatus call annotated "simulates sprint add +
+	// start" — a simulation is what the command layer is for (task #188).
+	sprintID := createSprintViaCommand(t, roadmap,
+		"Microservice rollout",
+		"Carry the deployment tasks whose status this listing filters on.")
+	driveTaskToStatus(t, roadmap, sprintID, taskIDs[0], models.StatusDoing)
 
 	// List with DOING filter
 	output := captureOutput(t, func() {
@@ -537,11 +540,17 @@ func TestOutputValidation_SprintShow_JSONStructure(t *testing.T) {
 		taskIDs[i] = extractIntID(t, out)
 	}
 
+	// The task ids are supplied as ONE comma-separated token, which is the
+	// only form the contract publishes: `sprint add-tasks` declares two
+	// positional arguments, <sprint-id> and <task-ids>, and a list of ids is
+	// a single token without spaces (SPEC/COMMANDS.md § Positional
+	// Arguments, rule 4). Written as separate tokens the invocation supplies
+	// three positional arguments against a declared maximum of two and is
+	// refused with exit code 2.
 	if err := HandleSprint([]string{
 		"add-tasks", "-r", roadmap,
 		strconv.Itoa(sprintID),
-		strconv.Itoa(taskIDs[0]),
-		strconv.Itoa(taskIDs[1]),
+		fmt.Sprintf("%d,%d", taskIDs[0], taskIDs[1]),
 	}); err != nil {
 		t.Fatalf("add-tasks error = %v", err)
 	}

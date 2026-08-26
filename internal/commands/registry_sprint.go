@@ -14,8 +14,11 @@ func buildSprintCommand() Command {
 		Subcommands: []Subcommand{
 			{
 				Name: "list", Aliases: []string{"ls"},
-				Summary:     "List sprints.",
-				Description: "Lists every sprint in the roadmap, optionally filtered by status.",
+				Summary: "List sprints.",
+				Description: "Lists every sprint in the roadmap, optionally filtered by status. Results are ordered by " +
+					"sprint order ASC: the sprint with the lowest `order` value first, which is the roadmap's planned " +
+					"execution order. `order` is unique across the roadmap, so the sequence is total and repeatable. " +
+					"The --status filter narrows the result and never reorders it.",
 				Usage:       "rmp sprint list -r <roadmap> [--status <state>]",
 				HelpPrinter: printSprintListHelp,
 				Handler:     sprintList,
@@ -30,7 +33,7 @@ func buildSprintCommand() Command {
 				ExitCodes:   []int{0, 3, 6},
 				Examples: []Example{
 					{Title: "All sprints", Cmd: "rmp sprint list -r myproject", Exit: 0},
-					{Title: "Invalid status filter", Cmd: "rmp sprint list -r myproject --status INVALID", Stderr: "Error: validation error: invalid sprint status: \"INVALID\": invalid sprint status", Exit: 6},
+					{Title: "Invalid status filter", Cmd: "rmp sprint list -r myproject --status INVALID", Stderr: "Error: validation error: invalid sprint status: \"INVALID\"", Exit: 6},
 				},
 			},
 			{
@@ -116,7 +119,7 @@ func buildSprintCommand() Command {
 					helpFlag(),
 				},
 				Output:      SuccessOutput{Kind: "empty"},
-				SideEffects: SideEffects{Database: "UPDATE sprints + audit log.", Filesystem: "None.", Network: "None."},
+				SideEffects: SideEffects{Database: "UPDATE sprints plus one audit entry per supplied field, all sharing one performed_at; one transaction. The operations are SPRINT_TITLE_CHANGE, SPRINT_DESCRIPTION_CHANGE, SPRINT_MAX_TASKS_CHANGE and SPRINT_ORDER_CHANGE, each written only when its own flag is supplied. A rejected update - an out-of-range bound, a CLOSED sprint, an order collision - writes no entry at all, and nothing writes the LEGACY SPRINT_UPDATE.", Filesystem: "None.", Network: "None."},
 				Idempotent:  true,
 				ExitCodes:   []int{0, 2, 3, 4, 5, 6},
 				Examples: []Example{
@@ -232,7 +235,7 @@ func buildSprintCommand() Command {
 				Examples: []Example{
 					{Title: "All sprint tasks", Cmd: "rmp sprint tasks -r myproject 5", Exit: 0},
 					{Title: "Filter by status", Cmd: "rmp sprint tasks -r myproject 5 -s DOING", Exit: 0},
-					{Title: "Invalid status", Cmd: "rmp sprint tasks -r myproject 5 -s INVALID", Stderr: "Error: validation error: invalid task status: \"INVALID\": invalid task status", Exit: 6},
+					{Title: "Invalid status", Cmd: "rmp sprint tasks -r myproject 5 -s INVALID", Stderr: "Error: validation error: invalid task status: \"INVALID\"", Exit: 6},
 				},
 			},
 			{
@@ -292,7 +295,7 @@ func buildSprintCommand() Command {
 				},
 				Flags:       []Flag{sharedRoadmapFlag(), helpFlag()},
 				Output:      SuccessOutput{Kind: "empty"},
-				SideEffects: SideEffects{Database: "INSERT sprint_tasks + UPDATE tasks + audit log; one transaction.", Filesystem: "None.", Network: "None."},
+				SideEffects: SideEffects{Database: "INSERT sprint_tasks + UPDATE tasks plus two mirrored audit entries per task, all sharing one performed_at; one transaction. A task that already belonged to a sprint keeps its single membership row and has it re-parented onto this one, so it LEAVES the other sprint; that sprint is renumbered in the same transaction, changing position values and never the order, so the members it keeps hold a gapless run from zero again. SPRINT_ADD_TASK is written against the sprint and names the task in related_entity_id; TASK_STATUS_SPRINT is written against the task and names the sprint.", Filesystem: "None.", Network: "None."},
 				Idempotent:  false,
 				ExitCodes:   []int{0, 3, 4, 6},
 				Examples: []Example{
@@ -313,7 +316,7 @@ func buildSprintCommand() Command {
 				},
 				Flags:       []Flag{sharedRoadmapFlag(), helpFlag()},
 				Output:      SuccessOutput{Kind: "empty"},
-				SideEffects: SideEffects{Database: "DELETE sprint_tasks + UPDATE tasks + audit log.", Filesystem: "None.", Network: "None."},
+				SideEffects: SideEffects{Database: "DELETE sprint_tasks + UPDATE tasks plus two mirrored audit entries per task, all sharing one performed_at; one transaction. SPRINT_REMOVE_TASK is written against the sprint and names the task in related_entity_id; TASK_STATUS_BACKLOG is written against the task and names the sprint it left, which is what distinguishes it from the counterpart-less TASK_STATUS_BACKLOG that `task stat` writes.", Filesystem: "None.", Network: "None."},
 				Idempotent:  false,
 				ExitCodes:   []int{0, 3, 4},
 				Examples: []Example{
@@ -335,12 +338,13 @@ func buildSprintCommand() Command {
 				},
 				Flags:       []Flag{sharedRoadmapFlag(), helpFlag()},
 				Output:      SuccessOutput{Kind: "empty"},
-				SideEffects: SideEffects{Database: "UPDATE sprint_tasks + audit log; one transaction.", Filesystem: "None.", Network: "None."},
+				SideEffects: SideEffects{Database: "UPDATE sprint_tasks plus two audit entries per task, all sharing one performed_at; one transaction. The moved rows are re-parented onto the destination and appended after its current highest position, and the SOURCE sprint is renumbered in the same transaction so the members it keeps hold a gapless run from zero again; the renumbering changes position values and never the order. SPRINT_MOVE_TASK_OUT is written against the source sprint and SPRINT_MOVE_TASK_IN against the destination, both naming the task in related_entity_id. No TASK_STATUS_* entry accompanies them because the move preserves each task status, and nothing writes the LEGACY SPRINT_MOVE_TASK.", Filesystem: "None.", Network: "None."},
 				Idempotent:  false,
 				ExitCodes:   []int{0, 3, 4, 6},
 				Examples: []Example{
 					{Title: "Move", Cmd: "rmp sprint move-tasks -r myproject 5 8 3,7", Exit: 0},
-					{Title: "Source sprint not found", Cmd: "rmp sprint move-tasks -r myproject 99999 8 1", Stderr: "Error: resource not found: from sprint: resource not found: sprint 99999", Exit: 4},
+					{Title: "Source sprint not found", Cmd: "rmp sprint move-tasks -r myproject 99999 8 1", Stderr: "Error: resource not found: from sprint 99999", Exit: 4},
+					{Title: "Destination sprint not found", Cmd: "rmp sprint move-tasks -r myproject 5 99999 1", Stderr: "Error: resource not found: to sprint 99999", Exit: 4},
 				},
 			},
 			{

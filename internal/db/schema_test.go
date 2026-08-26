@@ -16,7 +16,7 @@ func TestCreateSchema(t *testing.T) {
 		t.Fatalf("failed to enable foreign keys: %v", err)
 	}
 
-	db := &DB{DB: sqlDB, roadmapName: "test"}
+	db := &DB{DB: sqlDB}
 
 	// Test creating schema
 	err = db.CreateSchema()
@@ -45,7 +45,7 @@ func TestCreateSchema(t *testing.T) {
 // SPEC/VERSION.md § Current Schema Version declares. Bumping the constant
 // without the corresponding migration (or the reverse) fails here.
 func TestSchemaVersionConstant(t *testing.T) {
-	const want = "1.12.0"
+	const want = "1.14.0"
 	if SchemaVersion != want {
 		t.Errorf("SchemaVersion = %q, want %q (SPEC/VERSION.md § Current Schema Version)", SchemaVersion, want)
 	}
@@ -72,7 +72,7 @@ func TestSchemaVersion(t *testing.T) {
 		t.Fatalf("failed to enable foreign keys: %v", err)
 	}
 
-	db := &DB{DB: sqlDB, roadmapName: "test"}
+	db := &DB{DB: sqlDB}
 
 	// Create schema
 	if err := db.CreateSchema(); err != nil {
@@ -102,7 +102,7 @@ func TestForeignKeyConstraints(t *testing.T) {
 		t.Fatalf("failed to enable foreign keys: %v", err)
 	}
 
-	db := &DB{DB: sqlDB, roadmapName: "test"}
+	db := &DB{DB: sqlDB}
 
 	// Create schema
 	if err := db.CreateSchema(); err != nil {
@@ -184,7 +184,7 @@ func TestAuditEntityTypeConstraint(t *testing.T) {
 		t.Fatalf("failed to enable foreign keys: %v", err)
 	}
 
-	db := &DB{DB: sqlDB, roadmapName: "test"}
+	db := &DB{DB: sqlDB}
 
 	// Create schema
 	if err := db.CreateSchema(); err != nil {

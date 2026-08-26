@@ -9,21 +9,45 @@ import (
 )
 
 // Sentinel errors for task validation.
+//
+// Each of these supplies the OPENING CLAUSE of the message it is returned in,
+// through a %w verb at the front of the format string:
+//
+//	fmt.Errorf("%w: %q", ErrInvalidTaskType, s)  ->  invalid task type: "BOGUS"
+//
+// The literal must never restate the sentinel's own text. Building the same
+// rejection as fmt.Errorf("invalid task type: %q: %w", s, ErrInvalidTaskType)
+// renders that text twice, which is what users saw until this was corrected.
+// internal/models/error_message_dedup_test.go pins every rendered message.
 var (
-	ErrInvalidTaskType       = errors.New("invalid task type")
-	ErrInvalidTaskStatus     = errors.New("invalid task status")
-	ErrInvalidStatus         = errors.New("invalid status")
-	ErrInvalidType           = errors.New("invalid type")
-	ErrInvalidCurrentStatus  = errors.New("invalid current status")
-	ErrInvalidTargetStatus   = errors.New("invalid target status")
-	ErrCannotTransition      = errors.New("cannot transition")
-	ErrTitleRequired         = errors.New("title is required")
-	ErrFuncReqRequired       = errors.New("functional_requirements is required")
-	ErrTechReqRequired       = errors.New("technical_requirements is required")
-	ErrAcceptanceCriteriaReq = errors.New("acceptance_criteria is required")
-	ErrPriorityOutOfRange    = errors.New("priority must be between 0 and 9")
-	ErrSeverityOutOfRange    = errors.New("severity must be between 0 and 9")
-	ErrInvalidCommitHash     = errors.New("invalid commit hash")
+	ErrInvalidTaskType      = errors.New("invalid task type")
+	ErrInvalidTaskStatus    = errors.New("invalid task status")
+	ErrInvalidStatus        = errors.New("invalid status")
+	ErrInvalidType          = errors.New("invalid type")
+	ErrInvalidCurrentStatus = errors.New("invalid current status")
+	ErrInvalidTargetStatus  = errors.New("invalid target status")
+	ErrCannotTransition     = errors.New("cannot transition")
+	// The four field names below come from the shared definition in
+	// internal/utils, not from a literal here, so a task's "is required" refusal
+	// and its control-character and length refusals cannot end up calling one
+	// field two things (SPEC/COMMANDS.md § Published Field Names in Validation
+	// Messages). ErrTitleRequired is shared with sprint validation, which is
+	// sound because the two entities publish the same name for their title.
+	ErrTitleRequired         = errors.New(utils.RequiredFieldMessage(utils.FieldTaskTitle))
+	ErrFuncReqRequired       = errors.New(utils.RequiredFieldMessage(utils.FieldTaskFunctionalRequirements))
+	ErrTechReqRequired       = errors.New(utils.RequiredFieldMessage(utils.FieldTaskTechnicalRequirements))
+	ErrAcceptanceCriteriaReq = errors.New(utils.RequiredFieldMessage(utils.FieldTaskAcceptanceCriteria))
+	// The two range sentinels take their text from the shared definition in
+	// internal/utils, so the rule "priority/severity must lie in 0-9" is worded
+	// in one place and cannot be announced in a second sentence by whichever
+	// command happens to apply it (rmp task 318). ValidatePriority and
+	// ValidateSeverity below are the only checks of these bounds in the
+	// application; every command routes through them.
+	ErrPriorityOutOfRange = errors.New(utils.NumericRangeMessage(
+		utils.FieldTaskPriority, MinPriority, MaxPriority))
+	ErrSeverityOutOfRange = errors.New(utils.NumericRangeMessage(
+		utils.FieldTaskSeverity, MinSeverity, MaxSeverity))
+	ErrInvalidCommitHash = errors.New("invalid commit hash")
 )
 
 // TaskStatus represents the current state of a task.
@@ -94,7 +118,7 @@ func ParseTaskType(s string) (TaskType, error) {
 	if taskType, ok := validTypeMap[s]; ok {
 		return taskType, nil
 	}
-	return "", fmt.Errorf("invalid task type: %q: %w", s, ErrInvalidTaskType)
+	return "", fmt.Errorf("%w: %q", ErrInvalidTaskType, s)
 }
 
 // ValidTaskStatuses contains all valid task statuses.
@@ -129,7 +153,7 @@ func ParseTaskStatus(s string) (TaskStatus, error) {
 	if status, ok := validStatusMap[s]; ok {
 		return status, nil
 	}
-	return "", fmt.Errorf("invalid task status: %q: %w", s, ErrInvalidTaskStatus)
+	return "", fmt.Errorf("%w: %q", ErrInvalidTaskStatus, s)
 }
 
 // CanTransitionTo checks if a status transition is valid according to the state machine.
@@ -178,19 +202,19 @@ func (ts TaskStatus) CanTransitionTo(newStatus TaskStatus) bool {
 func ValidateStatusTransition(currentStatus, newStatus string) error {
 	// Validate current status
 	if !IsValidTaskStatus(currentStatus) {
-		return fmt.Errorf("invalid current status: %q: %w", currentStatus, ErrInvalidCurrentStatus)
+		return fmt.Errorf("%w: %q", ErrInvalidCurrentStatus, currentStatus)
 	}
 
 	// Validate new status
 	if !IsValidTaskStatus(newStatus) {
-		return fmt.Errorf("invalid target status: %q: %w", newStatus, ErrInvalidTargetStatus)
+		return fmt.Errorf("%w: %q", ErrInvalidTargetStatus, newStatus)
 	}
 
 	current := TaskStatus(currentStatus)
 	target := TaskStatus(newStatus)
 
 	if !current.CanTransitionTo(target) {
-		return fmt.Errorf("cannot transition from %q to %q: %w", currentStatus, newStatus, ErrCannotTransition)
+		return fmt.Errorf("%w from %q to %q", ErrCannotTransition, currentStatus, newStatus)
 	}
 
 	return nil
@@ -262,46 +286,49 @@ type Task struct {
 }
 
 // Validate checks if the task data is valid.
+//
+// Every length cap below measures CHARACTERS — Unicode code points — through
+// utils.CheckFieldLength, which is the one place the unit is defined. These caps
+// used to measure bytes with len(), which refused a title of 102 CJK characters
+// for exceeding "255 characters" (rmp task 296). The value reaching this method
+// is the trimmed one every writer stores, so the cap measures what the column
+// holds.
 func (t *Task) Validate() error {
 	if t.Title == "" {
 		return ErrTitleRequired
 	}
-	if len(t.Title) > MaxTaskTitle {
-		return fmt.Errorf("%w: title exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskTitle)
+	if err := utils.CheckFieldLength(t.Title, utils.FieldTaskTitle, MaxTaskTitle); err != nil {
+		return err
 	}
 	if t.FunctionalRequirements == "" {
 		return ErrFuncReqRequired
 	}
-	if len(t.FunctionalRequirements) > MaxTaskFunctionalRequirements {
-		return fmt.Errorf("%w: functional_requirements exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskFunctionalRequirements)
+	if err := utils.CheckFieldLength(t.FunctionalRequirements, utils.FieldTaskFunctionalRequirements, MaxTaskFunctionalRequirements); err != nil {
+		return err
 	}
 	if t.TechnicalRequirements == "" {
 		return ErrTechReqRequired
 	}
-	if len(t.TechnicalRequirements) > MaxTaskTechnicalRequirements {
-		return fmt.Errorf("%w: technical_requirements exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskTechnicalRequirements)
+	if err := utils.CheckFieldLength(t.TechnicalRequirements, utils.FieldTaskTechnicalRequirements, MaxTaskTechnicalRequirements); err != nil {
+		return err
 	}
 	if t.AcceptanceCriteria == "" {
 		return ErrAcceptanceCriteriaReq
 	}
-	if len(t.AcceptanceCriteria) > MaxTaskAcceptanceCriteria {
-		return fmt.Errorf("%w: acceptance_criteria exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskAcceptanceCriteria)
+	if err := utils.CheckFieldLength(t.AcceptanceCriteria, utils.FieldTaskAcceptanceCriteria, MaxTaskAcceptanceCriteria); err != nil {
+		return err
 	}
-	if t.Priority < 0 || t.Priority > 9 {
-		// Chain utils.ErrValidation so this maps to exit 6 (invalid data) per
-		// SPEC/ARCHITECTURE.md; the local ErrPriorityOutOfRange sentinel is kept
-		// for internal callers. Previously only the local sentinel was chained,
-		// so handleError fell through to exit 1 (finding #46).
-		return fmt.Errorf("%w: priority must be between 0 and 9, got %d: %w", utils.ErrValidation, t.Priority, ErrPriorityOutOfRange)
+	if err := ValidatePriority(t.Priority); err != nil {
+		return err
 	}
-	if t.Severity < 0 || t.Severity > 9 {
-		return fmt.Errorf("%w: severity must be between 0 and 9, got %d: %w", utils.ErrValidation, t.Severity, ErrSeverityOutOfRange)
+	if err := ValidateSeverity(t.Severity); err != nil {
+		return err
 	}
 	if !IsValidTaskStatus(string(t.Status)) {
-		return fmt.Errorf("invalid status: %q: %w", t.Status, ErrInvalidStatus)
+		return fmt.Errorf("%w: %q", ErrInvalidStatus, t.Status)
 	}
 	if !IsValidTaskType(string(t.Type)) {
-		return fmt.Errorf("invalid type: %q: %w", t.Type, ErrInvalidType)
+		return fmt.Errorf("%w: %q", ErrInvalidType, t.Type)
 	}
 
 	// Validate dates
@@ -436,44 +463,36 @@ func NormalizeCommitHash(hash string) (string, error) {
 	return string(lowered), nil
 }
 
-// TaskUpdate represents a type-safe update operation for tasks.
-// Use pointer fields to indicate which fields should be updated (nil = no change).
-// This provides compile-time type safety and deterministic SQL generation
-// compared to map[string]interface{}.
-type TaskUpdate struct {
-	Title                  *string
-	FunctionalRequirements *string
-	TechnicalRequirements  *string
-	AcceptanceCriteria     *string
-	Priority               *int
-	Severity               *int
+// ValidatePriority refuses a task priority outside MinPriority..MaxPriority and
+// is the ONLY place those bounds are compared.
+//
+// It chains utils.ErrValidation, so the failure maps to exit code 6 (invalid
+// data) per SPEC/ARCHITECTURE.md, and ErrPriorityOutOfRange, so errors.Is can
+// still tell which field was refused. Chaining only the local sentinel is what
+// once made this fall through to exit 1 (finding #46).
+//
+// # Why the rule lives here and not at the call sites
+//
+// `task create` reached these bounds through Task.Validate while `task prio`,
+// `task sev` and `task edit` reached a generic range helper in internal/utils,
+// so one rule refused the same value in two different sentences depending on
+// the command (rmp task 318). The bounds belong to the field, and the field
+// belongs to this package, so this is where the rule is applied; the four
+// commands call it instead of checking the bounds themselves. They do NOT call
+// each other, which would couple commands that are otherwise independent.
+func ValidatePriority(priority int) error {
+	if priority < MinPriority || priority > MaxPriority {
+		return utils.NumericRangeError(ErrPriorityOutOfRange, priority)
+	}
+	return nil
 }
 
-// HasChanges returns true if any field is set to be updated.
-func (u *TaskUpdate) HasChanges() bool {
-	return u.Title != nil || u.FunctionalRequirements != nil || u.TechnicalRequirements != nil ||
-		u.AcceptanceCriteria != nil || u.Priority != nil || u.Severity != nil
-}
-
-// Validate checks if the update values are valid.
-func (u *TaskUpdate) Validate() error {
-	if u.Title != nil && len(*u.Title) > MaxTaskTitle {
-		return fmt.Errorf("%w: title exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskTitle)
-	}
-	if u.FunctionalRequirements != nil && len(*u.FunctionalRequirements) > MaxTaskFunctionalRequirements {
-		return fmt.Errorf("%w: functional_requirements exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskFunctionalRequirements)
-	}
-	if u.TechnicalRequirements != nil && len(*u.TechnicalRequirements) > MaxTaskTechnicalRequirements {
-		return fmt.Errorf("%w: technical_requirements exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskTechnicalRequirements)
-	}
-	if u.AcceptanceCriteria != nil && len(*u.AcceptanceCriteria) > MaxTaskAcceptanceCriteria {
-		return fmt.Errorf("%w: acceptance_criteria exceeds maximum length of %d characters", utils.ErrFieldTooLarge, MaxTaskAcceptanceCriteria)
-	}
-	if u.Priority != nil && (*u.Priority < 0 || *u.Priority > 9) {
-		return fmt.Errorf("%w: priority must be between 0 and 9, got %d: %w", utils.ErrValidation, *u.Priority, ErrPriorityOutOfRange)
-	}
-	if u.Severity != nil && (*u.Severity < 0 || *u.Severity > 9) {
-		return fmt.Errorf("%w: severity must be between 0 and 9, got %d: %w", utils.ErrValidation, *u.Severity, ErrSeverityOutOfRange)
+// ValidateSeverity refuses a task severity outside MinSeverity..MaxSeverity. It
+// is to `severity` exactly what ValidatePriority is to `priority`, including the
+// sentinels it chains and the reason it exists here.
+func ValidateSeverity(severity int) error {
+	if severity < MinSeverity || severity > MaxSeverity {
+		return utils.NumericRangeError(ErrSeverityOutOfRange, severity)
 	}
 	return nil
 }

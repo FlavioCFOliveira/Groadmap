@@ -21,6 +21,7 @@ import (
 
 	"github.com/FlavioCFOliveira/Groadmap/internal/cypherguard"
 	"github.com/FlavioCFOliveira/Groadmap/internal/db"
+	"github.com/FlavioCFOliveira/Groadmap/internal/graphlock"
 	"github.com/FlavioCFOliveira/Groadmap/internal/models"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
@@ -137,9 +138,10 @@ var (
 
 // graphQueryError classifies a query-bar failure so the handler can map it to a
 // distinct, in-page, read-only message (SPEC/WEB.md § Query-Bar Error Handling).
-// The three kinds are kept separate so the user understands what to fix: a
-// rejection (the query is not read-only), an invalid limit, or an execution
-// failure in the engine.
+// The four kinds are kept separate so the user understands what to fix: a
+// rejection (the query is not read-only), an invalid limit, a schema-
+// introspection command whose keyword spacing the engine does not accept, or an
+// execution failure in the engine.
 type graphQueryError struct {
 	// Reason is the user-facing message shown in place on the page.
 	Reason string
@@ -149,12 +151,33 @@ type graphQueryError struct {
 
 func (e *graphQueryError) Error() string { return e.Reason }
 
-// Query-bar failure kinds. They map 1:1 to the three distinct cases in
+// Query-bar failure kinds. They map 1:1 to the distinct cases in
 // SPEC/WEB.md § Query-Bar Error Handling.
+//
+// Every one of them is answered with HTTP 400 and told apart by this field, not
+// by the status: RFC 9110 section 15.5 puts the explanation of an error in the
+// response representation, so one status serves them all and the kind carries
+// the class. Splitting them across different statuses would assert a distinction
+// HTTP does not carry, while the body already carries it precisely.
+//
+// A kind exists per distinct FIX the caller must make, which is why
+// graphErrRelationshipDirection is its own kind rather than a variant of
+// graphErrNotReadOnly: such a query IS read-only and IS well formed, and what it
+// needs is the traversal rewritten as outgoing.
+//
+// graphErrInvalidKeywordSpacing is deliberately NOT folded into
+// graphErrNotReadOnly. A SHOW statement reads the schema and writes nothing
+// whatever its spacing, so answering not_read_only would publish a
+// classification the message printed beside it contradicts, and would tell a
+// client the query writes when it does not. The two failures also have different
+// fixes — one query must be rewritten to stop writing, the other only to close a
+// gap between two keywords (SPEC/WEB.md § Query-Bar Error Handling, case 10).
 const (
-	graphErrNotReadOnly  = "not_read_only" // query contains a writing or DDL clause
-	graphErrInvalidLimit = "invalid_limit" // limit not one of the six allowed values
-	graphErrExecution    = "execution"     // accepted as read-only but failed in the engine
+	graphErrNotReadOnly           = "not_read_only"               // query contains a writing or DDL clause
+	graphErrInvalidLimit          = "invalid_limit"               // limit not one of the six allowed values
+	graphErrInvalidKeywordSpacing = "invalid_keyword_spacing"     // SHOW INDEX(ES)/CONSTRAINT(S) spelled with a separator the engine does not accept
+	graphErrRelationshipDirection = "relationship_read_direction" // reads a relationship bound by an incoming or undirected pattern
+	graphErrExecution             = "execution"                   // accepted as read-only but failed in the engine
 )
 
 // newGraphQueryError builds a classified query-bar error.
@@ -162,12 +185,38 @@ func newGraphQueryError(kind, reason string) *graphQueryError {
 	return &graphQueryError{Kind: kind, Reason: reason}
 }
 
+// graphRelationshipDirectionReason words the in-place message for a query that
+// reads a relationship the engine would misresolve.
+//
+// It is deliberately shorter than the CLI's refusal: this text is rendered in
+// the query bar rather than read in a terminal, so it states the objection and
+// the shape of the rewrite, and leaves the full treatment to the SPEC. The two
+// wordings are separate for the same reason every other kind's is — the CLI and
+// this endpoint address different readers — while the CLASSIFICATION behind them
+// is shared, which is what must not diverge.
+//
+// The variable name is caller-derived text (Cypher admits a backtick-quoted
+// identifier holding arbitrary characters), so it reaches the response body as
+// untrusted input. renderJSONStatus keeps encoding/json's HTML escaping ON, which
+// is what makes that echo safe; see the graph query-bar body tests, which assert
+// no raw angle bracket survives while the decoded value stays the original text.
+func graphRelationshipDirectionReason(ref cypherguard.RelReadReference) string {
+	return fmt.Sprintf(
+		"query rejected: relationship %q is bound by an %s pattern, and on a node pair carrying "+
+			"edges in both directions the engine reports the forward edge's type and orientation "+
+			"for the reverse one. Rewrite the traversal as outgoing, anchoring it on either "+
+			"endpoint: MATCH (x)-[%s]->(target {key:'...'}). To cover both directions, take the "+
+			"union of the two outgoing legs with UNION ALL.",
+		ref.Variable, ref.Direction, ref.Variable)
+}
+
 // sprintsData is the view model handed to the roadmap sprints template (the
 // roadmap's landing page). It presents the roadmap's sprints grouped into the
-// three tabs (Próximos / Actual / Concluídos), plus the relationships modelled
-// in the data: sprint membership with in-sprint order. It is read-only;
-// nothing here is persisted. The sprints page does NOT render the full tasks
-// table (SPEC/WEB.md § Roadmap Sprints Page).
+// three tabs (Próximos / Actual / Concluídos). It is read-only; nothing here is
+// persisted. The sprints page does NOT render the full tasks table, and it
+// carries no member task: every sprint is a card whose only derived value is the
+// footer's total task count, which the sprint record itself already carries
+// (SPEC/WEB.md § Roadmap Sprints Page).
 //
 // The three sprint slices are disjoint partitions of the roadmap's sprints by
 // status (SPEC/WEB.md § Roadmap Sprints Page):
@@ -234,21 +283,28 @@ type taskView struct {
 	Match        bool
 }
 
-// SearchText is the task's title folded by the board search's folding rule, which
-// the card carries so the browser matches against the SAME text the server
-// matched against.
+// SearchText is the task's title normalised and folded by the board search's
+// rules, which the card carries so the browser matches against the SAME text the
+// server matched against.
 //
-// Folding the corpus once, here, is what keeps the two paths equivalent: the
-// script folds only the term the user typed, never the task text, so nothing
-// about a task's text is ever transformed twice (SPEC/WEB.md § Roadmap Tasks
-// Page, One rule, and only one implementation of it; Server and client produce
-// the same board).
+// Transforming the corpus once, here, is what keeps the two paths equivalent: the
+// script normalises and folds only the term the user typed, never the task text,
+// so nothing about a task's text is ever transformed twice (SPEC/WEB.md § Roadmap
+// Tasks Page, One rule, and only one implementation of it; Server and client
+// produce the same board).
 //
-// The fold is foldSearch, the same function foldSearchTerm folds a term with, so
-// the corpus and the term are folded by one implementation of one rule rather
-// than by two implementations of one description (see fold.go).
+// The transformation is searchableText, the same function foldSearchTerm prepares
+// a term with, so the corpus and the term are one implementation of one rule
+// rather than two implementations of one description (see fold.go). The title is
+// NOT trimmed: the trim is the term's alone, so a task's own leading or trailing
+// whitespace is part of its text.
+//
+// It is a DERIVED form and nothing else. The bytes rmp stores are untouched, and
+// the card renders v.Title itself, so normalisation reaches the comparison and
+// neither storage nor display (SPEC/WEB.md § Roadmap Tasks Page, The
+// normalisation rule; Acceptance Criterion 152).
 func (v *taskView) SearchText() string {
-	return foldSearch(v.Title)
+	return searchableText(v.Title)
 }
 
 // HasMeta reports whether the card has at least one metadata indicator to show:
@@ -661,24 +717,32 @@ func (c sprintCompletion) Line() string {
 		c.Pct, c.Pending, c.InProgress, c.Completed, c.Total)
 }
 
-// sprintView pairs a sprint with its ordered member tasks. Tasks preserves
-// the planned in-sprint execution order (sprint_tasks position order) and
-// carries each task's full record, so the Actual tab and the sprint page can
-// show every task's status without a second lookup. Summary is the precomputed
-// completion summary the Actual tab's shared sub-template renders. Field order
-// places the slice header before the embedded Sprint value to keep the
-// pointer-scan prefix minimal (govet fieldalignment).
+// sprintView is one sprint as the Roadmap Sprints Page presents it: the sprint
+// record and nothing else. The page renders every sprint as a card with no
+// member tasks on it, so it holds no member-task slice and no completion
+// summary — the card's only derived value is the footer count, and the sprint
+// record already carries it as TaskCount (SPEC/WEB.md § Roadmap Sprints Page;
+// § Tasks and Sprints from SQLite).
+//
+// The member tasks and the completion summary belong to the single Roadmap
+// Sprint Page, which loads them into sprintPageData and renders them through the
+// sprintDetail sub-template.
 type sprintView struct {
-	Tasks   []models.Task
-	Sprint  models.Sprint
-	Summary sprintCompletion
+	Sprint models.Sprint
 }
 
 // Card returns the context object the shared "sprintCard" partial consumes for
 // one sprint on any tab of the Roadmap Sprints Page (SPEC/WEB.md § Shared
 // Sprint-Card Partial). The roadmap Name is threaded through so the partial can
-// build the card's link to the sprint's own page, and TaskCount is the loaded
-// member-task count rendered in the card footer.
+// build the card's link to the sprint's own page, and TaskCount is the sprint's
+// own total member-task count rendered in the card footer.
+//
+// TaskCount is read from the sprint record rather than counted from a loaded
+// member-task slice: every read that returns a Sprint populates it, the listing
+// included, resolving the membership of all sprints in ONE grouped read
+// (SPEC/MODELS.md § Sprint; SPEC/DATABASE.md § Read the Membership of Many
+// Sprints (Grouped)). The page therefore pays nothing per sprint for the number
+// its footer shows.
 //
 // The value receiver is deliberate: html/template invokes this method on a
 // (copied) range element, and a pointer receiver would not be in the value's
@@ -686,7 +750,7 @@ type sprintView struct {
 //
 //nolint:gocritic // value receiver required by html/template (see comment above)
 func (v sprintView) Card(name string) sprintCard {
-	return sprintCard{Name: name, Sprint: v.Sprint, TaskCount: len(v.Tasks)}
+	return sprintCard{Name: name, Sprint: v.Sprint, TaskCount: v.Sprint.TaskCount}
 }
 
 // sprintCard is the single context shape the shared "sprintCard" partial
@@ -917,10 +981,31 @@ type tasksSource interface {
 }
 
 // sprintTaskSource resolves a sprint's member tasks in the planned in-sprint
-// execution order. Both the sprints landing page and the single sprint page read
-// through it.
+// execution order. It is the read surface of the single Roadmap Sprint Page,
+// which is the only page that renders member tasks.
 type sprintTaskSource interface {
 	GetSprintTasksFull(ctx context.Context, sprintID int, status *models.TaskStatus, orderByPriority bool) ([]models.Task, error)
+}
+
+// sprintsSource is the complete read surface of the Roadmap Sprints Page: the
+// roadmap's sprint listing, and nothing else. Naming it separates opening the
+// database (loadSprints) from reading it (readSprints), so the page's queries
+// can be counted against a real database.
+//
+// The listing alone is the whole surface because it already carries every value
+// the page renders, the card footer's task count included: ListSprints resolves
+// the membership of all the sprints it returns in ONE grouped read, so TaskCount
+// is populated on every sprint it hands back (SPEC/MODELS.md § Sprint;
+// SPEC/COMMANDS.md § List Sprints).
+//
+// The member-task read (db.GetSprintTasksFull) is deliberately absent, exactly
+// as the per-task comment listing is absent from tasksSource: it is the read
+// that would make the page's cost grow with the number of sprints, and the page
+// renders no member task at all (SPEC/WEB.md § Tasks and Sprints from SQLite).
+// Its absence means the sprints page cannot express that pattern through the
+// dependency it is handed.
+type sprintsSource interface {
+	ListSprints(ctx context.Context, status *models.SprintStatus) ([]models.Sprint, error)
 }
 
 // sprintSource is the complete read surface of the single Roadmap Sprint Page:
@@ -960,18 +1045,11 @@ func loadRoadmapNames() ([]string, error) {
 	return utils.ListRoadmaps()
 }
 
-// loadSprints reads a roadmap's sprints read-only for the sprints landing
-// page. It opens the roadmap database, reads every sprint, resolves each
-// sprint's ordered member tasks, and classifies the sprints into the three
-// tabs. It does NOT read the full task table — the sprints page does not
-// render it (SPEC/WEB.md § Roadmap Sprints Page). The database handle is
-// released before the function returns; no row is written and no audit entry
-// is produced (SPEC/WEB.md § Tasks and Sprints from SQLite).
-//
-// Every sprint is rendered as a compact card through the shared sprintCard
-// partial; the sprints page opens no task detail modal, so the member tasks are
-// loaded only to compute each card's footer task count (SPEC/WEB.md § Shared
-// Sprint-Card Partial).
+// loadSprints reads a roadmap's sprints read-only for the sprints landing page.
+// It opens the roadmap database and hands it to readSprints, which performs the
+// whole read. The database handle is released before the function returns; no
+// row is written and no audit entry is produced (SPEC/WEB.md § Tasks and Sprints
+// from SQLite).
 //
 // The caller is responsible for the {name} validation and existence check
 // (resolveRoadmap); this function trusts name is a validated, existing
@@ -983,22 +1061,40 @@ func loadSprints(ctx context.Context, name string) (sprintsData, error) {
 	}
 	defer database.Close() //nolint:errcheck // read-only handle; close error is non-actionable
 
-	sprints, err := database.ListSprints(ctx, nil)
+	return readSprints(ctx, database, name)
+}
+
+// readSprints is the sprints page's entire read, expressed against the page's
+// read surface rather than a concrete connection. It is ONE read and no more:
+// the roadmap's sprint listing (SPEC/WEB.md § Tasks and Sprints from SQLite).
+//
+// The page reads no member task. Every sprint is rendered as a compact card with
+// no member tasks on it, and the one derived value a card shows — the footer's
+// total task count — comes from the sprint record the listing already returned,
+// because ListSprints populates TaskCount for every sprint it returns, resolving
+// the membership of all of them in ONE grouped read (SPEC/MODELS.md § Sprint;
+// SPEC/DATABASE.md § Read the Membership of Many Sprints (Grouped)). Nothing is
+// computed here that the sprints template does not render: the member tasks and
+// the completion summary belong to the single Roadmap Sprint Page.
+//
+// Classifying the sprints into the three tabs is done here, in memory, over the
+// values already read: no query is issued per tab and none per card, so the
+// page's query count is independent of the number of sprints. It does NOT read
+// the full task table either — the sprints page does not render it
+// (SPEC/WEB.md § Roadmap Sprints Page).
+//
+// Separating it from loadSprints is what makes the query count of a page render
+// measurable against a real database: the caller supplies the source, so a test
+// can count what a render costs on a real roadmap.
+func readSprints(ctx context.Context, src sprintsSource, name string) (sprintsData, error) {
+	sprints, err := src.ListSprints(ctx, nil)
 	if err != nil {
 		return sprintsData{}, err
 	}
 
 	views := make([]sprintView, 0, len(sprints))
 	for i := range sprints {
-		orderedTasks, terr := sprintOrderedTasks(ctx, database, sprints[i].ID)
-		if terr != nil {
-			return sprintsData{}, terr
-		}
-		views = append(views, sprintView{
-			Sprint:  sprints[i],
-			Tasks:   orderedTasks,
-			Summary: newSprintCompletion(orderedTasks),
-		})
+		views = append(views, sprintView{Sprint: sprints[i]})
 	}
 
 	upcoming, current, closed := classifySprints(views)
@@ -1627,8 +1723,13 @@ func sprintBoardColumnOf(category models.TaskStatusCategory) (int, bool) {
 // idx_sprint_tasks_order index). db.GetSprintTasksFull with a nil status
 // filter and orderByPriority=false returns the full task records ordered by
 // st.position ASC, so each task carries its status, depends_on, blocks, and
-// the rest of its fields for the Actual tab, the sprint page, and the task
-// detail modal — all without a second per-task query.
+// the rest of its fields for the sprint page and the task detail modal — all
+// without a second per-task query.
+//
+// Only the single Roadmap Sprint Page reads through it. The sprints landing page
+// does not: it renders every sprint as a card with no member tasks on it, so it
+// would be paying a full member-task read per sprint for a number the sprint
+// record already carries (SPEC/WEB.md § Tasks and Sprints from SQLite).
 func sprintOrderedTasks(ctx context.Context, src sprintTaskSource, sprintID int) ([]models.Task, error) {
 	return src.GetSprintTasksFull(ctx, sprintID, nil, false)
 }
@@ -1782,7 +1883,11 @@ func applyGraphLimit(query string, limit int) string {
 //     which is exactly this class and nothing wider: every other SHOW the guard
 //     rail sees (SHOW DATABASES, SHOW FUNCTIONS, SHOW PROCEDURES, ...) is not
 //     part of it, and the engine rejects those at the parser whether or not a
-//     LIMIT is appended, so leaving them out changes nothing for them.
+//     LIMIT is appended, so leaving them out changes nothing for them. A SHOW
+//     command whose keyword spacing the engine does not accept is not part of
+//     the class either, and never reaches here: loadGraphView refuses it before
+//     the store is opened, so the question of whether it admits a LIMIT never
+//     arises (SPEC/GRAPH.md § Keyword Spacing in a Schema-Introspection Command).
 //  2. A standalone procedure call — first clause CALL, no top-level RETURN.
 //     See reLeadingCall and reTopLevelReturn for why the top-level RETURN is the
 //     whole of the boundary.
@@ -1796,26 +1901,32 @@ func admitsLimitClause(query, masked string) bool {
 	return true
 }
 
-// loadGraphView reads a roadmap's knowledge graph read-only and returns its
-// nodes and edges in the Graph View Data shape. It mirrors the read path of
-// commands/graph.go runGraphRead: it opens the store via recovery and runs a
-// single read-only Cypher query through the engine's read path. It MUST NOT run
-// any writing clause and MUST NOT checkpoint or truncate the WAL (SPEC/WEB.md
-// § Graph Data Endpoint, read-only guard-rail).
+// loadGraphView reads a roadmap's knowledge graph and returns its nodes and
+// edges in the Graph View Data shape. It mirrors the read path of
+// commands/graph.go runGraphRead exactly, down to the lock: it takes the graph
+// store's SHARED lock, opens the store via recovery, releases the lock as soon
+// as the open returns, and runs a single read-only Cypher query through the
+// engine's read path with no lock held. It MUST NOT run any writing clause and
+// MUST NOT checkpoint or truncate the WAL (SPEC/WEB.md § Graph Data Endpoint,
+// read-only guard-rail).
 //
 // rawQuery and rawLimit are the request's q and limit URL parameters (empty
 // when absent). The query is resolved (default when absent), validated as
 // read-only via the shared cypherguard guard-rail BEFORE execution, and has a
 // LIMIT injected only when it has no top-level LIMIT of its own AND is a
 // statement form that admits a LIMIT clause. A query that contains any
-// writing or DDL clause, or an invalid limit, is returned as a classified
-// graphQueryError and is never executed; the store is not opened for it when
-// the failure is detectable before opening.
+// writing or DDL clause, a query that is a schema-introspection command whose
+// keyword spacing the engine does not accept, or an invalid limit, is returned
+// as a classified graphQueryError and is never executed; the store is not opened
+// for it when the failure is detectable before opening.
 //
 // A roadmap that has never used the graph command (no graph/ directory) is an
 // empty graph, not an error: loadGraphView returns empty arrays WITHOUT creating
-// the directory, so a web read leaves the store's on-disk files untouched
-// (SPEC/WEB.md § Roadmap Knowledge-Graph Page, empty graph).
+// the directory (SPEC/WEB.md § Roadmap Knowledge-Graph Page, empty graph). When
+// the directory does exist, a read changes no graph DATA but is not free of
+// on-disk effect: it may create the lock file, and the recovery that opening
+// runs may complete an interrupted checkpoint. The exhaustive list is
+// SPEC/GRAPH.md § What a Read Changes on Disk.
 func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphView, error) {
 	empty := graphView{Nodes: []map[string]any{}, Edges: []map[string]any{}}
 
@@ -1835,6 +1946,42 @@ func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphV
 	query := resolveGraphQuery(rawQuery)
 	if !cypherguard.IsReadOnly(query) {
 		return graphView{}, newGraphQueryError(graphErrNotReadOnly, "query rejected: not read-only")
+	}
+
+	// Keyword-spacing rejection, third and last in the precedence order the
+	// endpoint publishes (invalid_limit, then not_read_only, then
+	// invalid_keyword_spacing; SPEC/WEB.md § Query-Bar Error Handling, rule 6).
+	// It is decided AFTER the read-only check because the objection that a query
+	// writes outranks the objection that it is misspelled, and it carries its own
+	// kind because a SHOW statement is read-only at any spacing — reporting it as
+	// not read-only would be a false classification.
+	//
+	// The rejection precedes execution and precedes the node-limit injection, so
+	// applyGraphLimit is never reached for such a statement and the question of
+	// whether it admits a LIMIT clause never arises (see admitsLimitClause).
+	if reason, misspaced := cypherguard.IntrospectSpacingRejection(query); misspaced {
+		return graphView{}, newGraphQueryError(graphErrInvalidKeywordSpacing, "query rejected: "+reason)
+	}
+
+	// Relationship-read direction, last in the precedence order and, like the
+	// three above, decided before the store is opened and before the query ever
+	// reaches the engine (SPEC/GRAPH.md § Relationship Read Direction, which owns
+	// the rule; SPEC/WEB.md § Query-Bar Error Handling).
+	//
+	// It is decided LAST because every earlier objection outranks it: a query
+	// that writes must be told that it writes, and a schema-introspection command
+	// the engine cannot parse has no pattern to orient. The check runs on the
+	// query the caller supplied, before applyGraphLimit injects the node limit,
+	// because injecting a LIMIT changes no relationship pattern.
+	//
+	// The classifier is the SAME one the CLI subcommands use. There is one
+	// classification of pattern direction in this project, not a second copy that
+	// could drift: this endpoint executes caller-supplied Cypher through its own
+	// engine instance, so without it the identical misresolved read would remain
+	// reachable from the query bar after the CLI had been closed off.
+	if misread := cypherguard.MisreadRelationshipReferences(query); len(misread) > 0 {
+		return graphView{}, newGraphQueryError(
+			graphErrRelationshipDirection, graphRelationshipDirectionReason(misread[0]))
 	}
 
 	roadmapDir, err := utils.GetRoadmapDir(name)
@@ -1860,12 +2007,35 @@ func loadGraphView(ctx context.Context, name, rawQuery, rawLimit string) (graphV
 		return empty, nil
 	}
 
-	res, err := recovery.Open[string, float64](graphDir, recovery.Options[string, float64]{
+	// Shared store lock, held across the store open ALONE, exactly as the CLI
+	// read subcommands hold it. It is taken because opening the store is not a
+	// read-only operation on disk: recovery repairs an interrupted checkpoint
+	// first, so an unlocked request could delete or race the staging directory
+	// a concurrent `rmp graph` write is publishing its snapshot from. Waiting
+	// for the lock is bounded by the project's single retry policy
+	// (internal/backoff) and is spent BEFORE the query starts, so it does not
+	// consume this endpoint's query time budget and stays well inside the
+	// server's write timeout; internal/graphlock's TestReaderWaitIsTheProjectPolicy
+	// is what holds that headroom. A wait that is exhausted
+	// returns a plain ErrDatabase, which handleGraphData answers with HTTP 500
+	// — the status it already returns for a store that cannot be opened
+	// (SPEC/WEB.md § Knowledge Graph from the GoGraph Store, rule 5).
+	//
+	// It is released with an explicit call rather than a defer, on both the
+	// success and the failure path, so the hold cannot be silently widened to
+	// the query by a later edit: the server must not hold the lock for the
+	// duration of a request, or a slow query would fail a concurrent CLI write.
+	releaseLock, err := graphlock.AcquireShared(graphDir)
+	if err != nil {
+		return graphView{}, err
+	}
+	res, openErr := recovery.Open[string, float64](graphDir, recovery.Options[string, float64]{
 		Codec:       txn.NewStringCodec(),
 		WeightCodec: txn.NewFloat64WeightCodec(),
 	})
-	if err != nil {
-		return graphView{}, fmt.Errorf("%w: graph store unavailable: %v", utils.ErrDatabase, err)
+	releaseLock()
+	if openErr != nil {
+		return graphView{}, fmt.Errorf("%w: graph store unavailable: %v", utils.ErrDatabase, openErr)
 	}
 
 	engine := cypher.NewEngine(res.Graph)

@@ -14,26 +14,14 @@ import (
 
 	"modernc.org/sqlite"
 
+	"github.com/FlavioCFOliveira/Groadmap/internal/backoff"
 	"github.com/FlavioCFOliveira/Groadmap/internal/utils"
 )
 
 const (
-	// maxRetries is the maximum number of retry attempts for database operations.
-	// Limited to 5 attempts as per SPEC requirements.
-	maxRetries = 5
-	// initialRetryDelay is the initial delay between retries (100ms).
-	// Subsequent delays follow exponential backoff: 100ms, 200ms, 400ms, 800ms, 1000ms.
-	initialRetryDelay = 100 * time.Millisecond
-	// maxRetryDelay is the maximum delay between retries (1000ms).
-	maxRetryDelay = 1000 * time.Millisecond
-
 	// DefaultBusyTimeout is the SQLite busy timeout in milliseconds.
 	// This prevents "database is locked" errors by waiting up to this duration.
 	DefaultBusyTimeout = 10000 // 10 seconds
-
-	// QueryTimeout is the default timeout for database queries.
-	// Note: SQLite busy_timeout handles most locking scenarios.
-	QueryTimeout = 30 * time.Second
 )
 
 // SQLite result codes. See https://www.sqlite.org/rescode.html.
@@ -104,43 +92,43 @@ func isLockedError(err error) bool {
 	return false
 }
 
-// retryWithBackoff executes a function with exponential backoff retry logic
+// retryWithBackoff runs fn under the project's single bounded backoff policy
+// (internal/backoff), which owns the attempt count and the delay ladder so that
+// this site cannot hold a different opinion of them. SPEC/IMPLEMENTATION.md
+// § Retry Logic is the specification; the policy is stated there and in
+// internal/backoff, and nowhere else.
+//
+// Only SQLite busy/locked failures are waited on, per that section's Retry
+// Conditions. Anything else — a constraint violation, a schema error, bad input
+// — is returned unchanged and at once: waiting on it would delay a failure that
+// cannot become a success, and wrapping it would hide the result code callers
+// such as IsUniqueConstraintErr classify.
 func retryWithBackoff(operation string, fn func() error) error {
-	var lastErr error
-	delay := initialRetryDelay
-
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		err := fn()
-		if err == nil {
-			return nil
-		}
-
-		lastErr = err
-
-		// Only retry on locked errors
-		if !isLockedError(err) {
-			return err
-		}
-
-		if attempt < maxRetries-1 {
-			time.Sleep(delay)
-			// Exponential backoff with cap
-			delay *= 2
-			if delay > maxRetryDelay {
-				delay = maxRetryDelay
-			}
-		}
+	// backoff.Retry is value-returning because two of its three callers produce
+	// a value; this one produces only an error, so the value carries nothing.
+	_, err := backoff.Retry(func() (struct{}, error) { return struct{}{}, fn() }, isLockedError)
+	if err == nil {
+		return nil
 	}
-
-	return fmt.Errorf("%s: failed after %d attempts: %w", operation, maxRetries, lastErr)
+	if !isLockedError(err) {
+		// Retry stops early only on an error it was told not to retry, so this
+		// branch is exactly the non-retryable case: return it as fn produced it.
+		return err
+	}
+	return fmt.Errorf("%s: failed after %d attempts: %w", operation, backoff.Attempts, err)
 }
 
 // DB wraps sql.DB with roadmap-specific operations.
+//
+// The connection does not carry the roadmap's name. It used to, behind a
+// RoadmapName accessor, and nothing ever asked: every caller opens a roadmap
+// by name and still holds that name, so the field was written twice and read
+// only by tests (task #188). A name stored here would also be a second answer
+// to "which roadmap is this", next to the path the connection was opened from.
 type DB struct {
 	*sql.DB
-	queryCache  *QueryCache
-	batchProc   *BatchProcessor
-	roadmapName string
+	queryCache *QueryCache
+	batchProc  *BatchProcessor
 }
 
 // Placeholders returns a comma-separated string of n SQL "?" placeholders,
@@ -388,10 +376,9 @@ func openRoadmap(roadmapName string, chmod chmodFunc) (*DB, error) {
 	}
 
 	db := &DB{
-		DB:          sqlDB,
-		roadmapName: roadmapName,
-		queryCache:  NewQueryCache(),
-		batchProc:   NewBatchProcessor(100),
+		DB:         sqlDB,
+		queryCache: NewQueryCache(),
+		batchProc:  NewBatchProcessor(100),
 	}
 
 	// Create schema if new database with retry logic
@@ -508,10 +495,9 @@ func openRoadmapReadOnly(roadmapName string, chmod chmodFunc) (*DB, error) {
 	restrictSidecars(dbPath, chmod)
 
 	return &DB{
-		DB:          sqlDB,
-		roadmapName: roadmapName,
-		queryCache:  NewQueryCache(),
-		batchProc:   NewBatchProcessor(100),
+		DB:         sqlDB,
+		queryCache: NewQueryCache(),
+		batchProc:  NewBatchProcessor(100),
 	}, nil
 }
 
@@ -615,11 +601,6 @@ func (db *DB) Close() error {
 	return nil
 }
 
-// RoadmapName returns the name of the connected roadmap.
-func (db *DB) RoadmapName() string {
-	return db.roadmapName
-}
-
 // WithTransaction executes a function within a database transaction.
 // Automatically commits on success or rolls back on error.
 // Uses retry logic for handling database locked errors.
@@ -670,9 +651,4 @@ func WithDefaultTimeout() (context.Context, context.CancelFunc) {
 // WithQuickTimeout returns a context with the quick query timeout.
 func WithQuickTimeout() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), QuickQueryTimeout)
-}
-
-// WithCustomTimeout returns a context with a custom timeout.
-func WithCustomTimeout(timeout time.Duration) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), timeout)
 }

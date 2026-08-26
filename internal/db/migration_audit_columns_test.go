@@ -154,9 +154,7 @@ func buildRoadmapAtSchema1110(t *testing.T, roadmapName string) auditFixture {
 		t.Fatalf("creating roadmap %q: %v", roadmapName, err)
 	}
 
-	ctx := testContext()
-
-	sprintID, err := database.CreateSprint(ctx, &models.Sprint{
+	sprintID, err := seedSprint(database, &models.Sprint{
 		Title:       "Settlement resilience",
 		Description: "Keep card settlements clearing while an acquirer is unavailable.",
 		Status:      models.SprintPending,
@@ -168,7 +166,7 @@ func buildRoadmapAtSchema1110(t *testing.T, roadmapName string) auditFixture {
 
 	newTask := func(title, functional string) int {
 		t.Helper()
-		id, err := database.CreateTask(ctx, &models.Task{
+		id, err := seedTask(database, &models.Task{
 			Title:                  title,
 			Type:                   models.TypeTask,
 			Status:                 models.StatusBacklog,
@@ -564,8 +562,8 @@ func TestMigrateV1_11_0_toV1_12_0_OnNextOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading schema version after open: %v", err)
 	}
-	if version != "1.12.0" {
-		t.Fatalf("schema_version after open = %q, want 1.12.0 (SPEC/VERSION.md § Current Schema Version)", version)
+	if version != "1.14.0" {
+		t.Fatalf("schema_version after open = %q, want 1.14.0 (SPEC/VERSION.md § Current Schema Version)", version)
 	}
 	if version != SchemaVersion {
 		t.Errorf("schema_version after open = %q but the SchemaVersion constant is %q; a migrated "+

@@ -25,11 +25,15 @@
 //	4   Resource not found
 //	5   Resource already exists
 //	6   Invalid data
+//	126 Command not executable
+//	127 Command not found (unresolved command or subcommand)
+//	130 Interrupted by SIGINT
 package main
 
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -41,7 +45,7 @@ import (
 )
 
 const (
-	version = "1.15.0"
+	version = "1.15.1"
 	appName = "Groadmap"
 )
 
@@ -114,11 +118,24 @@ func main() {
 	// Global flags are handled here, before any command lookup. They
 	// are intentionally NOT in the command registry because their
 	// effect is on the binary itself, not on any single command family.
+	//
+	// Because they resolve here, these six forms are NOT covered by the
+	// shared positional-arity enforcement point that every registered
+	// command reaches through Command.DispatchFamily. Each declares a
+	// maximum of zero positional arguments (SPEC/COMMANDS.md § Positional
+	// Arity by Command) and each enforces that declaration itself, through
+	// refuseGlobalPositional in global_arity.go, before writing anything.
 	switch arg {
 	case "-h", "--help", "help":
+		if err := refuseGlobalPositional(os.Args[2:]); err != nil {
+			os.Exit(handleError(err))
+		}
 		printHelp()
 		os.Exit(ExitSuccess)
 	case "-v", "--version", "version":
+		if err := refuseGlobalPositional(os.Args[2:]); err != nil {
+			os.Exit(handleError(err))
+		}
 		fmt.Printf("%s version %s\n", appName, version)
 		os.Exit(ExitSuccess)
 	}
@@ -142,9 +159,13 @@ func main() {
 	reg := commands.AppRegistry()
 	cmd := reg.FindCommand(arg)
 	if cmd == nil {
-		printError("Unknown command: " + arg)
-		printHelp()
-		os.Exit(ExitCmdNotFound)
+		// Dispatch failure at the top level. It is routed through the
+		// same handleError path as every other error so the stderr
+		// shape, the stdout silence, and the exit code all come from a
+		// single place: the general help that follows the error is the
+		// recovery help, written to stderr by writeFailureReport
+		// (SPEC/HELP.md § Recovery help after a dispatch failure).
+		os.Exit(handleError(commands.NewUnknownCommandError(arg)))
 	}
 
 	err := cmd.DispatchFamily(os.Args[2:])
@@ -157,18 +178,26 @@ func main() {
 	os.Exit(exitCode)
 }
 
-// handleError maps errors to appropriate exit codes.
+// handleError writes the failure report for err to stderr and maps it to
+// the exit code SPEC/ARCHITECTURE.md § Exit Codes assigns to its class.
 func handleError(err error) int {
 	if err == nil {
 		return ExitSuccess
 	}
 
-	printError(err.Error())
+	writeFailureReport(os.Stderr, err)
 
 	// Map sentinel errors to exit codes using errors.Is.
 	// All errors raised by internal packages go through utils.Err* sentinels
 	// with %w wrapping, so this switch is exhaustive in practice.
 	switch {
+	case errors.Is(err, utils.ErrUnknownCommand):
+		// A dispatch failure: an unresolved command name or an
+		// unresolved subcommand name. Listed first so it can never be
+		// shadowed by a broader class; it deliberately does NOT wrap
+		// utils.ErrInvalidInput, which would land it on 2
+		// (SPEC/ARCHITECTURE.md § Sentinel Error Catalogue).
+		return ExitCmdNotFound
 	case errors.Is(err, utils.ErrNotFound):
 		return ExitNotFound
 	case errors.Is(err, utils.ErrAlreadyExists):
@@ -185,12 +214,19 @@ func handleError(err error) int {
 	return ExitFailure
 }
 
-// printError prints an error message to stderr in the SPEC-mandated
-// shape (SPEC/HELP.md § Error message format):
+// writeFailureReport writes the complete stderr report for a failing
+// invocation, in the part order pinned by SPEC/HELP.md § Stderr part
+// order:
 //
-//	Error: <msg>
-//	<blank line>
-//	AI agents: run `rmp --ai-help` for a machine-readable command contract.
+//  1. the AI_AGENT=1 hint plus a blank line, when that env var is
+//     active — already written at the top of main() before this runs;
+//  2. the "Error: " line;
+//  3. a blank line then the recovery help, on a dispatch failure only;
+//  4. a blank line then the AI-agent hint, unless suppressed.
+//
+// Nothing here touches stdout: a failing invocation writes zero bytes to
+// it (SPEC/HELP.md § Stdout silence on failure), which is why the
+// recovery help goes to w rather than through the ordinary help path.
 //
 // The trailing AI-agent hint is suppressed in two situations:
 //
@@ -199,8 +235,17 @@ func handleError(err error) int {
 //     contract; pointing them at it again would be recursive noise.
 //
 //  2. When the AI_AGENT=1 env-var path already wrote the hint at the
-//     top of stderr (handled implicitly by EmitHintOnce's sync.Once:
+//     top of stderr (handled implicitly by the emitter's sync.Once:
 //     the second call here becomes a no-op).
+//
+// Under either rule, part 4 disappears WHOLE — the blank line that
+// introduces the hint goes with it, because SPEC/HELP.md § Stderr
+// part order defines part 4 as "One blank line, then the AI-agent
+// hint line", a single unit. Rule (1) returns before writing
+// anything; rule (2) is enforced inside aihelp.EmitTrailingHintOnce,
+// which writes the separator inside the guarded closure alongside the
+// hint. Neither the separator nor the hint is written by this
+// function directly, so the two cannot drift apart.
 //
 // Note: case (1) covers `rmp --ai-help` / `rmp ai-help` etc., where
 // markInvoked() flipped the sentinel inside aihelp.Generate. For
@@ -208,19 +253,39 @@ func handleError(err error) int {
 // `rmp invalidcmd --ai-help`), markInvoked() is NOT called because
 // Generate returns before it — so WasInvoked() stays false and the
 // agent gets the hint, helping it discover the contract entry point.
-func printError(msg string) {
-	fmt.Fprintf(os.Stderr, "Error: %s\n", msg)
+func writeFailureReport(w io.Writer, err error) {
+	fmt.Fprintf(w, "Error: %s\n", err.Error())
+
+	// Part 3. Recovery help follows a dispatch failure and nothing else.
+	// A missing parameter, an unknown flag, an invalid enum value, a
+	// not-found, a conflict and a database failure each get the error
+	// line and the hint alone: the error line already names the
+	// offending flag or value, so the reader recovers by running
+	// --help explicitly (SPEC/HELP.md § Recovery help after a dispatch
+	// failure).
+	var dispatch *commands.DispatchError
+	if errors.As(err, &dispatch) {
+		fmt.Fprintln(w)
+		// RecoveryHelp renders the family help body for an unresolved
+		// subcommand. It reports false for an unresolved top-level
+		// command, whose recovery help is the global help body — owned
+		// by this package, so it is written here.
+		if !dispatch.RecoveryHelp(w) {
+			writeGlobalHelpBody(w)
+		}
+	}
+
+	// Part 4. The hint stays last on every error path that keeps it.
 	if aihelp.WasInvoked() {
 		return
 	}
-	// EmitHintOnce internally writes the hint plus a leading newline
-	// pair (the "blank line" before it). To get the SPEC shape
-	// "Error line, blank line, hint, blank line" we prepend the
-	// separating blank line here. Subsequent callers in the same
-	// invocation (rare — handleError runs at most once) are deduped
-	// by sync.Once and produce nothing.
-	fmt.Fprintln(os.Stderr)
-	aihelp.EmitHintOnce(os.Stderr, commands.AIBannerLine)
+	// EmitTrailingHintOnce writes the separating blank line, the hint
+	// and the trailing newline as one guarded unit, so the "…, blank
+	// line, hint" shape the SPEC asks for is produced in full or not at
+	// all. Subsequent callers in the same invocation (rare — handleError
+	// runs at most once) are deduped by sync.Once and produce nothing,
+	// not even the separator.
+	aihelp.EmitTrailingHintOnce(w, commands.AIBannerLine)
 }
 
 // printHelp prints the main help text.
@@ -234,7 +299,22 @@ func printError(msg string) {
 // so this binary cannot drift from the SPEC text.
 func printHelp() {
 	commands.WriteAIBanner(os.Stdout)
-	fmt.Printf(`%s - A CLI tool for managing technical roadmaps
+	writeGlobalHelpBody(os.Stdout)
+}
+
+// writeGlobalHelpBody writes the global help body WITHOUT the AI-agent
+// banner, to an arbitrary writer.
+//
+// Two callers need it on two different streams: printHelp writes it to
+// stdout under the banner for a help request the reader asked for, and
+// writeFailureReport writes it to stderr as the recovery help for an
+// unresolved command name. The recovery help must omit the banner:
+// the banner and the trailing hint carry the same sentence, and the
+// failing invocation already ends with the hint, so emitting both would
+// put that sentence on stderr twice (SPEC/HELP.md § Recovery help after
+// a dispatch failure).
+func writeGlobalHelpBody(w io.Writer) {
+	fmt.Fprintf(w, `%s - A CLI tool for managing technical roadmaps
 
 Usage: rmp [command] [subcommand] [arguments] [options]
 

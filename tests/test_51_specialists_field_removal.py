@@ -16,8 +16,8 @@ enacts it.
 Coverage matrix
 ----------------
 Route removal (each checks the EXACT documented exit code):
-  1.  `task assign` / `task unassign`             -> exit 2 (unknown subcommand)
-  2.  `task assign --help` / `task unassign --help` -> exit 2 (not resurrected by --help)
+  1.  `task assign` / `task unassign`             -> exit 127 (dispatch failure)
+  2.  `task assign --help` / `task unassign --help` -> exit 127 (not resurrected by --help)
   3.  `task create -sp/--specialists`              -> exit 2 (unknown flag)
   4.  `task edit -sp/--specialists`                -> exit 2 (unknown flag)
   5.  `task list -sp/--specialists`                -> exit 2 (unknown flag)
@@ -41,6 +41,7 @@ _build_1_9_0_fixture):
   11. A second migrated open is a clean, idempotent no-op.
 """
 
+import inspect
 import os
 import sqlite3
 import sys
@@ -50,7 +51,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tests.base_test import GroadmapTestBase  # noqa: E402
 
 
-EXIT_MISUSE = 2      # unknown subcommand / unknown flag
+EXIT_MISUSE = 2      # unknown flag (a malformed argument to a resolved command)
+EXIT_CMD_NOT_FOUND = 127  # dispatch failure: an unresolved subcommand name
 EXIT_INVALID = 6      # validation error (unknown audit operation)
 
 # The exact 20 keys a task JSON object must carry post-removal
@@ -144,17 +146,24 @@ class TestSpecialistsFieldRemoved:
     def teardown_method(self):
         self.test.teardown()
 
-    # ---- 1. task assign / task unassign : unknown subcommand, exit 2 ------
+    # ---- 1. task assign / task unassign : dispatch failure, exit 127 ------
+    #
+    # A retired SUBCOMMAND name and a retired FLAG are different failure
+    # classes and no longer share an exit code. An unresolved name never
+    # reaches a command, so it is a dispatch failure (127); a rejected flag is
+    # a malformed argument to a command that did resolve (2). See
+    # SPEC/COMMANDS.md § Dispatch Failures.
 
     def test_task_assign_subcommand_rejected(self):
         code, out, err = self.test.run_cmd(
             ["task", "assign", "-r", self.roadmap, str(self.task_id), "Dev One"],
             check=False,
         )
-        assert code == EXIT_MISUSE, f"task assign must exit {EXIT_MISUSE}, got {code}: {err}"
+        assert code == EXIT_CMD_NOT_FOUND, (
+            f"task assign must exit {EXIT_CMD_NOT_FOUND}, got {code}: {err}")
         assert out == "", f"rejected subcommand must write nothing to stdout: {out!r}"
         assert "unknown" in err.lower() and "assign" in err.lower(), (
-            f"stderr must name the unknown subcommand: {err!r}"
+            f"stderr must name the unresolved subcommand: {err!r}"
         )
         # No state change: the task the attempt targeted reads back unchanged.
         after = self.test.run_cmd_json(["task", "get", "-r", self.roadmap, str(self.task_id)])[0]
@@ -166,21 +175,22 @@ class TestSpecialistsFieldRemoved:
             ["task", "unassign", "-r", self.roadmap, str(self.task_id), "Dev One"],
             check=False,
         )
-        assert code == EXIT_MISUSE, f"task unassign must exit {EXIT_MISUSE}, got {code}: {err}"
+        assert code == EXIT_CMD_NOT_FOUND, (
+            f"task unassign must exit {EXIT_CMD_NOT_FOUND}, got {code}: {err}")
         assert out == "", f"rejected subcommand must write nothing to stdout: {out!r}"
         assert "unknown" in err.lower() and "unassign" in err.lower(), (
-            f"stderr must name the unknown subcommand: {err!r}"
+            f"stderr must name the unresolved subcommand: {err!r}"
         )
 
     def test_task_assign_help_does_not_resurrect_the_subcommand(self):
         """`--help` must not be a backdoor: `task assign --help` is still an
-        unknown subcommand, not a rendered help screen."""
+        unresolved subcommand, not a rendered help screen."""
         for sub in ("assign", "unassign"):
             code, out, err = self.test.run_cmd(
                 ["task", sub, "--help", "-r", self.roadmap], check=False)
-            assert code == EXIT_MISUSE, (
-                f"task {sub} --help must exit {EXIT_MISUSE} like any other unknown "
-                f"subcommand, got {code}: {err}"
+            assert code == EXIT_CMD_NOT_FOUND, (
+                f"task {sub} --help must exit {EXIT_CMD_NOT_FOUND} like any other "
+                f"unresolved subcommand, got {code}: {err}"
             )
             assert out == "", f"task {sub} --help must write nothing to stdout: {out!r}"
 
@@ -547,9 +557,19 @@ def _run_all():
     passed = 0
     failed = 0
     failures = []
-    for cls in (TestSpecialistsFieldRemoved, TestSpecialistsMigration1_9_0_to_1_10_0):
-        method_names = [m for m in dir(cls) if m.startswith("test_")]
-        for m in method_names:
+    # Classes are DISCOVERED by inspecting this module, never listed. A listed
+    # tuple silently skips any suite added after it was written -- the runner
+    # still exits 0 and the new class simply never runs (rmp task #303). The
+    # count is printed so a class that stops being discovered is visible in
+    # the output rather than inferred from a total that quietly shrank.
+    classes = [
+        obj for _name, obj in sorted(inspect.getmembers(sys.modules[__name__], inspect.isclass))
+        if obj.__module__ == __name__ and _name.startswith("Test")
+    ]
+    print(f"Discovered {len(classes)} test classes: "
+          f"{', '.join(cls.__name__ for cls in classes)}")
+    for cls in classes:
+        for m in sorted(name for name in dir(cls) if name.startswith("test_")):
             instance = cls()
             instance.setup_method()
             try:

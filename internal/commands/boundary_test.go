@@ -126,7 +126,7 @@ func TestTaskValidate_Title_ExactMaxLength(t *testing.T) {
 	task := baseValidTask()
 	task.Title = repeatByte('a', models.MaxTaskTitle)
 	if err := task.Validate(); err != nil {
-		t.Errorf("title at exact max (%d bytes) should be valid, got: %v", models.MaxTaskTitle, err)
+		t.Errorf("title at exact max (%d characters) should be valid, got: %v", models.MaxTaskTitle, err)
 	}
 }
 
@@ -135,7 +135,7 @@ func TestTaskValidate_Title_OneBeyondMaxLength(t *testing.T) {
 	task.Title = repeatByte('a', models.MaxTaskTitle+1)
 	err := task.Validate()
 	if err == nil {
-		t.Errorf("title at max+1 (%d bytes) should be invalid, got nil", models.MaxTaskTitle+1)
+		t.Errorf("title at max+1 (%d characters) should be invalid, got nil", models.MaxTaskTitle+1)
 	}
 	if !utils.IsFieldTooLarge(err) {
 		t.Errorf("expected ErrFieldTooLarge for over-length title, got: %v", err)
@@ -164,7 +164,7 @@ func TestTaskValidate_FunctionalRequirements_ExactMaxLength(t *testing.T) {
 	task := baseValidTask()
 	task.FunctionalRequirements = repeatByte('f', models.MaxTaskFunctionalRequirements)
 	if err := task.Validate(); err != nil {
-		t.Errorf("functional_requirements at exact max (%d bytes) should be valid, got: %v",
+		t.Errorf("functional_requirements at exact max (%d characters) should be valid, got: %v",
 			models.MaxTaskFunctionalRequirements, err)
 	}
 }
@@ -174,7 +174,7 @@ func TestTaskValidate_FunctionalRequirements_OneBeyondMaxLength(t *testing.T) {
 	task.FunctionalRequirements = repeatByte('f', models.MaxTaskFunctionalRequirements+1)
 	err := task.Validate()
 	if err == nil {
-		t.Errorf("functional_requirements at max+1 (%d bytes) should be invalid, got nil",
+		t.Errorf("functional_requirements at max+1 (%d characters) should be invalid, got nil",
 			models.MaxTaskFunctionalRequirements+1)
 	}
 	if !utils.IsFieldTooLarge(err) {
@@ -188,7 +188,7 @@ func TestTaskValidate_TechnicalRequirements_ExactMaxLength(t *testing.T) {
 	task := baseValidTask()
 	task.TechnicalRequirements = repeatByte('t', models.MaxTaskTechnicalRequirements)
 	if err := task.Validate(); err != nil {
-		t.Errorf("technical_requirements at exact max (%d bytes) should be valid, got: %v",
+		t.Errorf("technical_requirements at exact max (%d characters) should be valid, got: %v",
 			models.MaxTaskTechnicalRequirements, err)
 	}
 }
@@ -198,7 +198,7 @@ func TestTaskValidate_TechnicalRequirements_OneBeyondMaxLength(t *testing.T) {
 	task.TechnicalRequirements = repeatByte('t', models.MaxTaskTechnicalRequirements+1)
 	err := task.Validate()
 	if err == nil {
-		t.Errorf("technical_requirements at max+1 (%d bytes) should be invalid, got nil",
+		t.Errorf("technical_requirements at max+1 (%d characters) should be invalid, got nil",
 			models.MaxTaskTechnicalRequirements+1)
 	}
 	if !utils.IsFieldTooLarge(err) {
@@ -212,7 +212,7 @@ func TestTaskValidate_AcceptanceCriteria_ExactMaxLength(t *testing.T) {
 	task := baseValidTask()
 	task.AcceptanceCriteria = repeatByte('c', models.MaxTaskAcceptanceCriteria)
 	if err := task.Validate(); err != nil {
-		t.Errorf("acceptance_criteria at exact max (%d bytes) should be valid, got: %v",
+		t.Errorf("acceptance_criteria at exact max (%d characters) should be valid, got: %v",
 			models.MaxTaskAcceptanceCriteria, err)
 	}
 }
@@ -222,7 +222,7 @@ func TestTaskValidate_AcceptanceCriteria_OneBeyondMaxLength(t *testing.T) {
 	task.AcceptanceCriteria = repeatByte('c', models.MaxTaskAcceptanceCriteria+1)
 	err := task.Validate()
 	if err == nil {
-		t.Errorf("acceptance_criteria at max+1 (%d bytes) should be invalid, got nil",
+		t.Errorf("acceptance_criteria at max+1 (%d characters) should be invalid, got nil",
 			models.MaxTaskAcceptanceCriteria+1)
 	}
 	if !utils.IsFieldTooLarge(err) {
@@ -303,80 +303,49 @@ func TestTaskEdit_SpecialistsFlag_EmptyValueRejectedToo(t *testing.T) {
 	}
 }
 
-// ==================== models.TaskUpdate.Validate — priority/severity boundary ====================
-
-func TestTaskUpdateValidate_Priority_MinBoundary(t *testing.T) {
-	p := 0
-	u := models.TaskUpdate{Priority: &p}
-	if err := u.Validate(); err != nil {
-		t.Errorf("TaskUpdate priority 0 should be valid, got: %v", err)
-	}
-}
-
-func TestTaskUpdateValidate_Priority_MaxBoundary(t *testing.T) {
-	p := 9
-	u := models.TaskUpdate{Priority: &p}
-	if err := u.Validate(); err != nil {
-		t.Errorf("TaskUpdate priority 9 should be valid, got: %v", err)
-	}
-}
-
-func TestTaskUpdateValidate_Priority_BelowMin(t *testing.T) {
-	p := -1
-	u := models.TaskUpdate{Priority: &p}
-	err := u.Validate()
-	if err == nil {
-		t.Error("TaskUpdate priority -1 should be invalid, got nil")
-	}
-	if !strings.Contains(err.Error(), "priority must be between 0 and 9") {
-		t.Errorf("unexpected error for TaskUpdate priority -1: %v", err)
-	}
-}
-
-func TestTaskUpdateValidate_Priority_AboveMax(t *testing.T) {
-	p := 10
-	u := models.TaskUpdate{Priority: &p}
-	err := u.Validate()
-	if err == nil {
-		t.Error("TaskUpdate priority 10 should be invalid, got nil")
-	}
-	if !strings.Contains(err.Error(), "priority must be between 0 and 9") {
-		t.Errorf("unexpected error for TaskUpdate priority 10: %v", err)
-	}
-}
-
-func TestTaskUpdateValidate_Severity_BelowMin(t *testing.T) {
-	s := -1
-	u := models.TaskUpdate{Severity: &s}
-	err := u.Validate()
-	if err == nil {
-		t.Error("TaskUpdate severity -1 should be invalid, got nil")
-	}
-	if !strings.Contains(err.Error(), "severity must be between 0 and 9") {
-		t.Errorf("unexpected error for TaskUpdate severity -1: %v", err)
-	}
-}
-
-func TestTaskUpdateValidate_Severity_AboveMax(t *testing.T) {
-	s := 10
-	u := models.TaskUpdate{Severity: &s}
-	err := u.Validate()
-	if err == nil {
-		t.Error("TaskUpdate severity 10 should be invalid, got nil")
-	}
-	if !strings.Contains(err.Error(), "severity must be between 0 and 9") {
-		t.Errorf("unexpected error for TaskUpdate severity 10: %v", err)
-	}
-}
+// ==================== models.TaskUpdate.Validate — removed with its subject ====================
+//
+// Six tests stood here, asserting the priority and severity bounds through
+// models.TaskUpdate.Validate. That method, and the TaskUpdate type it hung on,
+// were deleted (rmp task 332): their only production caller had been
+// db.UpdateTaskStruct, retired by task #188 when the command layer replaced the
+// generic task update with one audit operation per field.
+//
+// Nothing they covered went with them. Every bound they asserted is asserted
+// against a path the binary runs:
+//   - 0, 9, -1 and 10 through models.Task.Validate, the check `task create`
+//     reaches — TestTaskValidate_Priority_* and TestTaskValidate_Severity_*
+//     above;
+//   - the same four values through the CLI — TestHandleTask_Create_Priority_*
+//     and TestHandleTask_Create_Severity_* below;
+//   - 0 and 9 through `task prio` and `task sev` —
+//     TestBoundary_TaskPrioCommand_* and TestBoundary_TaskSevCommand_* below.
+//
+// All three routes compare the bounds in models.ValidatePriority /
+// models.ValidateSeverity, which is where the rule lives (rmp task 318), so the
+// deleted tests were a fourth pin on the same comparison — reached only by a
+// caller no invocation could produce.
 
 // ==================== Unicode input — model-level validation ====================
 
 func TestTaskValidate_Unicode_TitleCJK(t *testing.T) {
 	task := baseValidTask()
-	// CJK characters — each is 3 UTF-8 bytes; 85 chars = 255 bytes = MaxTaskTitle.
-	task.Title = strings.Repeat("中", 85)
+	// The cap counts CHARACTERS, so the boundary is MaxTaskTitle CJK characters —
+	// 765 UTF-8 bytes, three times the number a byte-counting cap would admit.
+	//
+	// This case used to sit at 85 characters, which is where 255 BYTES falls, and
+	// called that "the exact byte boundary": it passed under either unit and so
+	// said nothing about which one was in force (rmp task 296).
+	task.Title = strings.Repeat("中", models.MaxTaskTitle)
 	if err := task.Validate(); err != nil {
-		t.Errorf("CJK title at exact byte boundary should be valid, got: %v", err)
+		t.Errorf("a CJK title of %d characters (%d bytes) is the documented maximum and must be valid, got: %v",
+			models.MaxTaskTitle, len(task.Title), err)
+	}
+
+	task.Title = strings.Repeat("中", models.MaxTaskTitle+1)
+	if err := task.Validate(); err == nil {
+		t.Errorf("a CJK title of %d characters is one over the maximum and must be refused, got nil",
+			models.MaxTaskTitle+1)
 	}
 }
 
@@ -606,8 +575,8 @@ func TestHandleTask_Create_Title_ExactMaxLength(t *testing.T) {
 			"create",
 			"-r", roadmap,
 			"-t", exactTitle,
-			"-fr", "Title at exact maximum byte boundary must be accepted",
-			"-tr", "String length validation uses byte count consistent with len() in Go",
+			"-fr", "Title at the exact maximum length must be accepted",
+			"-tr", "Length validation counts Unicode code points, matching CHECK(length(title) <= 255)",
 			"-ac", "Task is created and title stored verbatim",
 		}); err != nil {
 			t.Errorf("taskCreate with exact-max title error = %v", err)
@@ -619,7 +588,7 @@ func TestHandleTask_Create_Title_ExactMaxLength(t *testing.T) {
 		t.Fatalf("GetTask for exact-max-length title: %v", err)
 	}
 	if len(task.Title) != models.MaxTaskTitle {
-		t.Errorf("stored title byte length = %d, want %d", len(task.Title), models.MaxTaskTitle)
+		t.Errorf("stored title length = %d characters, want %d", utils.FieldLength(task.Title), models.MaxTaskTitle)
 	}
 }
 
@@ -632,12 +601,12 @@ func TestHandleTask_Create_Title_OneBeyondMaxLength(t *testing.T) {
 		"create",
 		"-r", roadmap,
 		"-t", overTitle,
-		"-fr", "Title one byte over maximum must be rejected",
+		"-fr", "Title one character over the maximum must be rejected",
 		"-tr", "Validation rejects the payload before reaching the database",
 		"-ac", "Error returned and no task row inserted",
 	})
 	if err == nil {
-		t.Errorf("title of %d bytes (max+1) should be rejected, got nil", models.MaxTaskTitle+1)
+		t.Errorf("title of %d characters (max+1) should be rejected, got nil", models.MaxTaskTitle+1)
 	}
 }
 
@@ -647,7 +616,9 @@ func TestHandleTask_Create_Unicode_CJKTitle_RoundTrip(t *testing.T) {
 	const roadmap = "boundary-unicode-cjk"
 	database, cleanup := setupTestTaskRoadmap(t, roadmap)
 	defer cleanup()
-	// 50 CJK characters = 150 UTF-8 bytes — well within 255-byte limit.
+	// 50 CJK characters, well within the 255-CHARACTER title cap. Their 150 UTF-8
+	// bytes are irrelevant to the cap; the boundary itself is exercised by
+	// TestATitleOf255CJKCharactersIsAcceptedAndOneOf256IsRefused.
 	unicodeTitle := strings.Repeat("実装", 25)
 	unicodeFR := "実装チームによる認証サービスのデプロイメント要件"
 	out := captureOutput(t, func() {
@@ -777,7 +748,7 @@ func TestHandleTask_Create_LongFunctionalRequirements_OneBeyondMax(t *testing.T)
 		"-ac", "Error returned and no task row inserted",
 	})
 	if err == nil {
-		t.Errorf("FR of %d bytes (max+1) should be rejected, got nil",
+		t.Errorf("FR of %d characters (max+1) should be rejected, got nil",
 			models.MaxTaskFunctionalRequirements+1)
 	}
 }
@@ -892,9 +863,16 @@ func TestBoundary_DB_Severity_MaxBoundary(t *testing.T) {
 	}
 }
 
-// ==================== DB-level UpdateTaskPriority/UpdateTaskSeverity boundary ====================
+// ==================== `task prio` / `task sev` boundary ====================
+//
+// These four drove the boundary through db-layer UpdateTaskPriority and
+// UpdateTaskSeverity methods, which the command layer had replaced with its own
+// transactions: the values 0 and 9 were being pushed through SQL `task prio`
+// and `task sev` never ran, so the commands' own boundary behaviour was
+// untested while these passed. The methods are gone (task #188) and the tests
+// now run the commands.
 
-func TestBoundary_DB_UpdateTaskPriority_MinBoundary(t *testing.T) {
+func TestBoundary_TaskPrioCommand_MinBoundary(t *testing.T) {
 	const roadmap = "boundary-db-upd-prio-min"
 	database, cleanup := setupTestTaskRoadmap(t, roadmap)
 	defer cleanup()
@@ -902,9 +880,9 @@ func TestBoundary_DB_UpdateTaskPriority_MinBoundary(t *testing.T) {
 		if err := HandleTask([]string{
 			"create",
 			"-r", roadmap,
-			"-t", "Verify UpdateTaskPriority accepts minimum value 0",
+			"-t", "Verify `task prio` accepts the minimum value 0",
 			"-fr", "Priority can be updated to 0 after task creation",
-			"-tr", "UpdateTaskPriority issues parameterized SQL UPDATE",
+			"-tr", "`task prio` issues one parameterised UPDATE inside its transaction",
 			"-ac", "Subsequent GetTask returns priority == 0",
 			"-p", "5",
 		}); err != nil {
@@ -912,9 +890,9 @@ func TestBoundary_DB_UpdateTaskPriority_MinBoundary(t *testing.T) {
 		}
 	})
 	taskID := extractIntID(t, out)
-	if err := database.UpdateTaskPriority(context.Background(), []int{taskID}, 0); err != nil {
-		t.Fatalf("UpdateTaskPriority(0) error = %v", err)
-	}
+	run(t, func() error {
+		return taskSetPriority([]string{"-r", roadmap, itoa(taskID), "0"})
+	})
 	task, err := database.GetTask(context.Background(), taskID)
 	if err != nil {
 		t.Fatalf("GetTask after priority update: %v", err)
@@ -924,7 +902,7 @@ func TestBoundary_DB_UpdateTaskPriority_MinBoundary(t *testing.T) {
 	}
 }
 
-func TestBoundary_DB_UpdateTaskPriority_MaxBoundary(t *testing.T) {
+func TestBoundary_TaskPrioCommand_MaxBoundary(t *testing.T) {
 	const roadmap = "boundary-db-upd-prio-max"
 	database, cleanup := setupTestTaskRoadmap(t, roadmap)
 	defer cleanup()
@@ -932,9 +910,9 @@ func TestBoundary_DB_UpdateTaskPriority_MaxBoundary(t *testing.T) {
 		if err := HandleTask([]string{
 			"create",
 			"-r", roadmap,
-			"-t", "Verify UpdateTaskPriority accepts maximum value 9",
+			"-t", "Verify `task prio` accepts the maximum value 9",
 			"-fr", "Priority can be updated to 9 after task creation",
-			"-tr", "UpdateTaskPriority issues parameterized SQL UPDATE",
+			"-tr", "`task prio` issues one parameterised UPDATE inside its transaction",
 			"-ac", "Subsequent GetTask returns priority == 9",
 			"-p", "0",
 		}); err != nil {
@@ -942,9 +920,9 @@ func TestBoundary_DB_UpdateTaskPriority_MaxBoundary(t *testing.T) {
 		}
 	})
 	taskID := extractIntID(t, out)
-	if err := database.UpdateTaskPriority(context.Background(), []int{taskID}, 9); err != nil {
-		t.Fatalf("UpdateTaskPriority(9) error = %v", err)
-	}
+	run(t, func() error {
+		return taskSetPriority([]string{"-r", roadmap, itoa(taskID), "9"})
+	})
 	task, err := database.GetTask(context.Background(), taskID)
 	if err != nil {
 		t.Fatalf("GetTask after priority update: %v", err)
@@ -954,7 +932,7 @@ func TestBoundary_DB_UpdateTaskPriority_MaxBoundary(t *testing.T) {
 	}
 }
 
-func TestBoundary_DB_UpdateTaskSeverity_MinBoundary(t *testing.T) {
+func TestBoundary_TaskSevCommand_MinBoundary(t *testing.T) {
 	const roadmap = "boundary-db-upd-sev-min"
 	database, cleanup := setupTestTaskRoadmap(t, roadmap)
 	defer cleanup()
@@ -962,9 +940,9 @@ func TestBoundary_DB_UpdateTaskSeverity_MinBoundary(t *testing.T) {
 		if err := HandleTask([]string{
 			"create",
 			"-r", roadmap,
-			"-t", "Verify UpdateTaskSeverity accepts minimum value 0",
+			"-t", "Verify `task sev` accepts the minimum value 0",
 			"-fr", "Severity can be updated to 0 after task creation",
-			"-tr", "UpdateTaskSeverity issues parameterized SQL UPDATE",
+			"-tr", "`task sev` issues one parameterised UPDATE inside its transaction",
 			"-ac", "Subsequent GetTask returns severity == 0",
 			"--severity", "5",
 		}); err != nil {
@@ -972,9 +950,9 @@ func TestBoundary_DB_UpdateTaskSeverity_MinBoundary(t *testing.T) {
 		}
 	})
 	taskID := extractIntID(t, out)
-	if err := database.UpdateTaskSeverity(context.Background(), []int{taskID}, 0); err != nil {
-		t.Fatalf("UpdateTaskSeverity(0) error = %v", err)
-	}
+	run(t, func() error {
+		return taskSetSeverity([]string{"-r", roadmap, itoa(taskID), "0"})
+	})
 	task, err := database.GetTask(context.Background(), taskID)
 	if err != nil {
 		t.Fatalf("GetTask after severity update: %v", err)
@@ -984,7 +962,7 @@ func TestBoundary_DB_UpdateTaskSeverity_MinBoundary(t *testing.T) {
 	}
 }
 
-func TestBoundary_DB_UpdateTaskSeverity_MaxBoundary(t *testing.T) {
+func TestBoundary_TaskSevCommand_MaxBoundary(t *testing.T) {
 	const roadmap = "boundary-db-upd-sev-max"
 	database, cleanup := setupTestTaskRoadmap(t, roadmap)
 	defer cleanup()
@@ -992,9 +970,9 @@ func TestBoundary_DB_UpdateTaskSeverity_MaxBoundary(t *testing.T) {
 		if err := HandleTask([]string{
 			"create",
 			"-r", roadmap,
-			"-t", "Verify UpdateTaskSeverity accepts maximum value 9",
+			"-t", "Verify `task sev` accepts the maximum value 9",
 			"-fr", "Severity can be updated to 9 after task creation",
-			"-tr", "UpdateTaskSeverity issues parameterized SQL UPDATE",
+			"-tr", "`task sev` issues one parameterised UPDATE inside its transaction",
 			"-ac", "Subsequent GetTask returns severity == 9",
 			"--severity", "0",
 		}); err != nil {
@@ -1002,9 +980,9 @@ func TestBoundary_DB_UpdateTaskSeverity_MaxBoundary(t *testing.T) {
 		}
 	})
 	taskID := extractIntID(t, out)
-	if err := database.UpdateTaskSeverity(context.Background(), []int{taskID}, 9); err != nil {
-		t.Fatalf("UpdateTaskSeverity(9) error = %v", err)
-	}
+	run(t, func() error {
+		return taskSetSeverity([]string{"-r", roadmap, itoa(taskID), "9"})
+	})
 	task, err := database.GetTask(context.Background(), taskID)
 	if err != nil {
 		t.Fatalf("GetTask after severity update: %v", err)

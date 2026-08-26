@@ -176,7 +176,7 @@ func seedBadgeRoadmap(t *testing.T, name string) (roadmap string, sprintID int) 
 		AcceptanceCriteria:     "Every badge uses the SPEC colour for its value",
 		CreatedAt:              now,
 	}
-	taskID, err := database.CreateTask(context.Background(), task)
+	taskID, err := seedTask(database, task)
 	if err != nil {
 		t.Fatalf("creating task: %v", err)
 	}
@@ -190,7 +190,7 @@ func seedBadgeRoadmap(t *testing.T, name string) (roadmap string, sprintID int) 
 		StartedAt:   &now,
 		CreatedAt:   now,
 	}
-	sprintID, err = database.CreateSprint(context.Background(), sprint)
+	sprintID, err = seedSprint(database, sprint)
 	if err != nil {
 		t.Fatalf("creating sprint: %v", err)
 	}
@@ -437,10 +437,7 @@ func TestSprintsPage_EmptyTabKeepsItsStatusColour(t *testing.T) {
 // The view model is the zero value, so every tab holds no sprint and shows 0 —
 // which also proves the colour is chosen with no sprint to read a status from.
 func TestSprintsTemplate_TabBadgeClassComesFromTheHelper(t *testing.T) {
-	funcs := make(map[string]any, len(badgeFuncMap))
-	for name, fn := range badgeFuncMap {
-		funcs[name] = fn
-	}
+	funcs := templateFuncs()
 	funcs["sprintStatusBadge"] = func(s models.SprintStatus) string { return "probe-" + string(s) }
 
 	tmpl, err := template.New("").Funcs(funcs).ParseFS(templatesFS, "templates/*.html")

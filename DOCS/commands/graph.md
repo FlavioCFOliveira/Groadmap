@@ -50,6 +50,8 @@ Reads from the graph and returns the result columns and rows. Read-only: any que
 
 Schema introspection is accepted: `SHOW INDEXES` and `SHOW CONSTRAINTS`, their singular aliases `SHOW INDEX` and `SHOW CONSTRAINT`, and any of them followed by a `YIELD` / `WHERE` / `RETURN` projection. These list the registered schema without altering it, so they are read-only; the write subcommands reject them.
 
+Write the command with **exactly one space between its two keywords**. The engine recognises `SHOW INDEXES` only in that spelling, so `SHOW  INDEXES` with two spaces, with a tab, or with a line break is rejected by the guard rail with exit code 6 and a message naming the spacing, before the query reaches the engine. Whitespace and comments *before* the statement are fine, and so is any amount of whitespace *after* the target keyword: `SHOW INDEXES   YIELD name` is accepted.
+
 **Usage:** `rmp graph query -r <roadmap> [--query <cypher>]`
 
 **Flags:**
@@ -161,6 +163,7 @@ Each subcommand accepts only Cypher whose operation class matches it; everything
 Two clause families are worth naming explicitly:
 
 - **Schema introspection** (`SHOW INDEXES`, `SHOW INDEX`, `SHOW CONSTRAINTS`, `SHOW CONSTRAINT`, each with an optional `YIELD` / `WHERE` / `RETURN` tail) lists the registered schema without altering it, so it is read-only. It is distinct from **DDL** (`CREATE INDEX`, `DROP INDEX`, `CREATE CONSTRAINT`, `DROP CONSTRAINT`), which mutates the schema and is rejected by every subcommand.
+  Only the single-space spelling is accepted, because it is the only one the engine parses; any other separator between the two keywords is rejected with exit code 6 under `query` and `search`. The DDL forms above, by contrast, are rejected at any spacing — `CREATE   INDEX` is refused exactly as `CREATE INDEX` is. The difference is deliberate: the DDL match exists to refuse, so a wider match only refuses more, while the introspection match exists to accept, so a wider match would accept statements the engine then rejects.
 - **`FOREACH`** is a writing clause, classified by the clauses its body contains. `FOREACH (x IN list | SET ...)` is a mutating write valid only under `update`; `FOREACH (x IN list | CREATE ...)` is a creating write valid only under `create`; every `FOREACH` is rejected by `query` and `search`.
 
 ## Query Input Source and Precedence
@@ -208,4 +211,5 @@ All subcommands follow these conventions:
 | 2 | No query supplied (`--query` absent and stdin empty, or `--query` empty/whitespace) |
 | 3 | No roadmap selected (`-r` missing/required) |
 | 4 | Roadmap not found (the roadmap given via `-r` does not exist) |
-| 6 | The query's operation class does not match the subcommand |
+| 6 | The query's operation class does not match the subcommand; or `query`/`search` received a schema-introspection command written with anything other than exactly one space between its two keywords |
+| 127 | Unknown subcommand |

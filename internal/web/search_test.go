@@ -838,29 +838,42 @@ func TestTaskSearch_TermIsEscapedWhereverItIsEchoed(t *testing.T) {
 func TestTaskSearchScript_ImplementsTheSameMatchingRule(t *testing.T) {
 	script := stripJSComments(readEmbeddedAsset(t, "static/task-search.js"))
 
-	// The term is normalised exactly as the server normalises it, and by the
-	// server's own two tables: its ends stripped through the shipped SPACE_TABLE,
-	// THEN every CODE POINT walked through the shipped FOLD_TABLE. Neither step
-	// is the platform's — its case conversion is Unicode's Default Case
-	// Conversion rather than the folding rule, its trimming removes a different
-	// set from the White_Space property, and both read tables of whatever Unicode
-	// version the browser ships (SPEC/WEB.md Acceptance Criteria 118, 119, 121
-	// and 122; the tables themselves are checked against the server's foldSearch
-	// and isSearchSpace over the whole of Unicode by
-	// TestTaskSearchScript_ShippedRuleIsTheServerRule, which also asserts that no
-	// trimming function of the platform is named anywhere in the asset).
+	// The term is prepared exactly as the server prepares it, and from the
+	// server's own five tables: its ends stripped through the shipped SPACE_TABLE,
+	// THEN put into Normalization Form C through the shipped DECOMP_TABLE,
+	// CCC_TABLE and COMPOSE_TABLE, THEN every CODE POINT walked through the
+	// shipped FOLD_TABLE, and into Form C once more. Not one step is the
+	// platform's — its case conversion is Unicode's Default Case Conversion rather
+	// than the folding rule, its trimming removes a different set from the
+	// White_Space property, its own normalisation would have to agree about the
+	// composition its module gets wrong, and all three read tables of whatever
+	// Unicode version the browser ships (SPEC/WEB.md Acceptance Criteria 118, 119,
+	// 121, 122, 152 and 155; the tables themselves are checked against the
+	// server's foldSearch, isSearchSpace, searchDecompose, searchCombiningClass
+	// and composition data over the whole of Unicode by
+	// TestTaskSearchScript_ShippedRuleIsTheServerRule, which also asserts that
+	// neither a trimming function of the platform nor its own normalisation is
+	// named anywhere in the asset).
 	for _, fragment := range []string{
 		"var FOLD_TABLE = [",
 		"var SPACE_TABLE = [",
+		"var DECOMP_TABLE = [",
+		"var CCC_TABLE = [",
+		"var COMPOSE_TABLE = [",
 		"function foldCodePoint(",
 		"function isSpaceCodePoint(",
+		"function decomposeCodePoint(",
+		"function combiningClassOf(",
+		"function composePair(",
+		"function toNFC(",
 		"function trimTerm(",
-		"var trimmed = trimTerm(raw);",
-		"trimmed.codePointAt(i)",
+		"var normalised = toNFC(trimTerm(raw));",
+		"normalised.codePointAt(i)",
 		"String.fromCodePoint(foldCodePoint(cp))",
+		"return toNFC(folded);",
 	} {
 		if !strings.Contains(script, fragment) {
-			t.Errorf("the script does not normalise the term through the server's shipped "+
+			t.Errorf("the script does not prepare the term through the server's shipped "+
 				"tables: no %q", fragment)
 		}
 	}

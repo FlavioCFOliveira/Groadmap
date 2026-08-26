@@ -33,8 +33,26 @@ compiled ./bin/rmp:
 The schema-MUTATING DDL forms must stay rejected everywhere, in any case and
 with any spacing between the two keywords — adding an introspection class must
 not loosen the DDL rejection.
+
+A third family belongs here for the same reason: the relationship-write-
+direction check (SPEC/GRAPH.md § Relationship Write Direction, Acceptance
+Criteria 28-30, rmp task #193) is, like the two above, a rule about the
+pinned GoGraph engine's own behaviour rather than about Groadmap's clause
+grammar. `graph update` accepted a SET or REMOVE whose relationship target
+was bound by an incoming or undirected pattern, and reported unqualified
+success while GoGraph's write path silently dropped the change — the
+engine's own write-effect counters cannot detect the drop, so there is no
+post-hoc signal to test and the shape is refused before the store is opened.
+The check also treats a FOREACH body exactly as the clause-class rule above
+does — `FOREACH (x IN list | SET e.k = …)` is inspected like a top-level
+SET, for the same containment reason. `TestGraphRelationshipWriteDirection`
+below pins that a reverse-bound SET/REMOVE is refused (exit 6) and writes
+nothing, that the outgoing form and node writes reached through a reverse
+traversal keep working, and that the refusal message names the offending
+direction and the outgoing rewrite.
 """
 
+import inspect
 import os
 import sys
 
@@ -390,34 +408,651 @@ class TestGraphClauseSurface:
                 f"exit={code} stderr={stderr!r}")
 
 
+# ---- Schema-introspection keyword spacing (SPEC/GRAPH.md § Keyword Spacing
+# in a Schema-Introspection Command, Acceptance Criterion 39, rmp task #275) --
+
+# The four target keywords the schema-introspection class covers. Both
+# singulars appear beside both plurals because the guard rail spells the two
+# plurals with different patterns -- INDEX(ES)? against CONSTRAINTS? -- so a
+# regression in either spelling would drop one form while the other kept
+# working.
+INTROSPECT_KEYWORDS = ("INDEXES", "INDEX", "CONSTRAINTS", "CONSTRAINT")
+
+# Every separator that is not exactly one space, each of which the engine's
+# prefix test misses and its general grammar then refuses.
+MISSPACED_SEPARATORS = (
+    ("two spaces", "  "),
+    ("a tab", "\t"),
+    ("a line break", "\n"),
+    ("four spaces", "    "),
+)
+
+# The four fragments the guard rail's own refusal must carry: the class it read
+# the statement as, the rule, the name of the rule, and the accepted spelling
+# (appended per case, since it varies with the keyword).
+SPACING_MESSAGE_FRAGMENTS = (
+    "validation error",
+    "schema-introspection command",
+    "exactly one space",
+    "keyword spacing",
+)
+
+# Fragments the refusal must NEVER carry. The first three are the engine's own
+# parse diagnostic -- the misdiagnosis this criterion exists to remove, which
+# lists every clause keyword EXCEPT SHOW and so reads as though schema
+# introspection were unsupported. The fourth is the false classification: a SHOW
+# statement reads the schema and writes nothing whatever its spacing.
+FORBIDDEN_MESSAGE_FRAGMENTS = (
+    "cypher: parse",
+    'unexpected "SHOW"',
+    "database error",
+    "not read-only",
+)
+
+
+class TestGraphIntrospectionKeywordSpacing:
+    """SPEC/GRAPH.md § Keyword Spacing in a Schema-Introspection Command.
+
+    End-to-end half of Acceptance Criterion 39, against the compiled ./bin/rmp.
+
+    The defect (rmp task #275): `rmp graph query --query "SHOW  INDEXES"` --
+    two spaces -- exited 1 with
+
+        Error: database error: graph query failed: cypher: parse: unexpected
+        "SHOW" at 1:0, expected one of {CALL, YIELD, CREATE, DELETE, ...}
+
+    a list naming every clause keyword EXCEPT SHOW, while the identical
+    statement with one space returned its result set. The guard rail admitted
+    the statement because its introspection matcher tolerated arbitrary
+    whitespace between the two keywords, whereas GoGraph routes a statement to
+    its introspection parser by testing it against the literal prefixes
+    "SHOW INDEX" and "SHOW CONSTRAINT", each carrying exactly one space. The two
+    disagreed about the same input, and the user was handed a diagnostic that
+    named the wrong problem and offered no route to the real cause.
+
+    Why this belongs in THIS module rather than in a module of its own: the rule
+    narrows the very class Acceptance Criteria 23-25 establish here. It is the
+    same integration surface -- what the pinned engine accepts -- and the
+    boundary being asserted is the boundary between AC23 (one space: accepted,
+    executes, returns columns/rows) and AC39 (any other separator: refused by
+    the guard rail before the engine sees it).
+
+    The claim is a PAIRING, and each test asserts both halves against the same
+    keyword, because either half alone is satisfiable by a broken binary: a
+    build that had dropped schema introspection altogether would pass every
+    rejection assertion, and the pre-fix build passed every acceptance one.
+    """
+
+    def setup_method(self):
+        self.test = GroadmapTestBase()
+        self.test.setup()
+        self.roadmap = self.test.create_roadmap()
+        # A real store, so the accepted spelling genuinely executes against a
+        # graph rather than being accepted for the want of one.
+        self.test.run_cmd([
+            "graph", "create", "-r", self.roadmap, "--query",
+            "CREATE (:Spec {key:'schema-introspection-spacing', status:'draft'})",
+        ])
+
+    def teardown_method(self):
+        self.test.teardown()
+
+    # ---- helpers -----------------------------------------------------
+
+    def run(self, subcmd, query):
+        return self.test.run_cmd(
+            ["graph", subcmd, "-r", self.roadmap, "--query", query], check=False)
+
+    def assert_guard_rail_refusal(self, subcmd, query, accepted):
+        """Assert the guard rail itself refused query, with its own message."""
+        code, stdout, stderr = self.run(subcmd, query)
+        assert code == EXIT_GUARD_RAIL, (
+            f"AC39: `graph {subcmd}` must refuse {query!r} with exit "
+            f"{EXIT_GUARD_RAIL}; exit={code} stdout={stdout!r} stderr={stderr!r}")
+        # Exit 1 is the engine's (SPEC/GRAPH.md AC11) and is NOT this failure:
+        # a statement refused here never reaches the parser.
+        assert code != 1, (
+            f"AC39: {query!r} must not carry the exit code of an engine parse "
+            f"failure; the guard rail refuses it first")
+        for fragment in SPACING_MESSAGE_FRAGMENTS + (accepted,):
+            assert fragment in stderr, (
+                f"AC39: the refusal of {query!r} must name {fragment!r}; "
+                f"got {stderr!r}")
+        for fragment in FORBIDDEN_MESSAGE_FRAGMENTS:
+            assert fragment not in stderr, (
+                f"AC39: the refusal of {query!r} must never carry {fragment!r} "
+                f"-- that is the engine's misdiagnosis this criterion removes; "
+                f"got {stderr!r}")
+        # Refused before execution, so the command produced no result.
+        assert stdout.strip() == "", (
+            f"AC39: a refused query must write nothing to stdout; got {stdout!r}")
+
+    def assert_accepted_and_executed(self, subcmd, query):
+        """Assert query was accepted AND actually ran, returning a result set."""
+        code, stdout, stderr = self.run(subcmd, query)
+        assert code == EXIT_OK, (
+            f"AC39: `graph {subcmd}` must accept the single-space spelling "
+            f"{query!r}; exit={code} stderr={stderr!r}")
+        assert '"columns"' in stdout and '"rows"' in stdout, (
+            f"AC39: `graph {subcmd}` on {query!r} must return the columns/rows "
+            f"result shape, so the acceptance is not merely a zero exit; "
+            f"got {stdout!r}")
+
+    # ---- AC 39: one space accepted, every other separator refused ----
+
+    def test_ac39_one_space_accepted_every_other_separator_refused(self):
+        """The core criterion, for all four keywords under both read
+        subcommands: exactly one space executes, and two spaces, a tab and a
+        line break are each refused with exit 6 and the guard rail's message.
+
+        Both halves are asserted against the SAME keyword and the SAME
+        subcommand, so the pair differs in the separator and in nothing else.
+        """
+        for subcmd in ("query", "search"):
+            for keyword in INTROSPECT_KEYWORDS:
+                accepted = f"SHOW {keyword}"
+                self.assert_accepted_and_executed(subcmd, accepted)
+                for _label, sep in MISSPACED_SEPARATORS:
+                    self.assert_guard_rail_refusal(
+                        subcmd, f"SHOW{sep}{keyword}", accepted)
+
+    def test_ac39_refusal_folds_keyword_case(self):
+        """The rule folds case exactly as the engine's prefix test does, so a
+        lowercase or mixed-case statement is refused for its spacing rather than
+        admitted by a case accident -- and the message names the CANONICAL
+        spelling whatever case was typed, because it is built from the keywords
+        and never echoed back from the query.
+        """
+        cases = (
+            ("show  indexes", "SHOW INDEXES"),
+            ("Show\tIndex", "SHOW INDEX"),
+            ("sHoW\ncOnStRaInTs", "SHOW CONSTRAINTS"),
+            ("SHOW    constraint", "SHOW CONSTRAINT"),
+        )
+        for subcmd in ("query", "search"):
+            for query, accepted in cases:
+                self.assert_guard_rail_refusal(subcmd, query, accepted)
+
+    def test_ac39_only_the_keyword_separator_is_strict(self):
+        """The rule governs the separator between the two keywords and nothing
+        else about the statement's spacing.
+
+        The engine trims leading whitespace and leading comments before its
+        prefix test, and its SHOW parser is itself whitespace-tolerant once
+        reached, so whitespace BEFORE the statement and whitespace AFTER the
+        target keyword are both accepted. Refusing more than that separator
+        would be Groadmap inventing a grammar of its own, which the
+        specification forbids -- and would break spellings that work today.
+        """
+        for query in (
+            "   SHOW INDEXES",
+            "\n\t  SHOW CONSTRAINTS",
+            "// which indexes exist?\nSHOW INDEXES",
+            "/* schema check */ SHOW CONSTRAINTS",
+            "SHOW INDEXES   YIELD name",
+            "SHOW INDEXES YIELD name, type WHERE type = 'RANGE' RETURN name",
+        ):
+            for subcmd in ("query", "search"):
+                self.assert_accepted_and_executed(subcmd, query)
+
+    def test_ac39_a_comment_between_the_keywords_is_spacing(self):
+        """Classification runs on the masked normalization, which neutralizes a
+        comment to spaces, so a comment BETWEEN the two keywords reads as
+        spacing rather than as an absent separator -- and spacing is what the
+        engine refuses.
+        """
+        for subcmd in ("query", "search"):
+            self.assert_guard_rail_refusal(
+                subcmd, "SHOW /* which ones? */ INDEXES", "SHOW INDEXES")
+
+    def test_ac39_write_subcommands_still_object_on_class(self):
+        """The rule changed nothing for the write subcommands.
+
+        Their objection to a SHOW statement is that it carries none of the
+        data-writing clauses they accept, that objection is decided first, and
+        it holds at every spacing (AC24). Implementing the spacing rule in the
+        shared code path would have replaced each subcommand's own contract
+        message with a spacing complaint that says nothing about why
+        `graph create` refused a SHOW.
+        """
+        for subcmd, message in WRITE_SUBCOMMAND_MESSAGE.items():
+            for query in ("SHOW INDEXES", "SHOW  INDEXES", "SHOW\tCONSTRAINT",
+                          "SHOW\nINDEX"):
+                code, _stdout, stderr = self.run(subcmd, query)
+                assert code == EXIT_GUARD_RAIL, (
+                    f"AC39: `graph {subcmd}` must reject {query!r} with exit "
+                    f"{EXIT_GUARD_RAIL}; exit={code} stderr={stderr!r}")
+                assert message in stderr, (
+                    f"AC39: `graph {subcmd}` must reject {query!r} on its "
+                    f"operation class with {message!r}, at any spacing; "
+                    f"got {stderr!r}")
+                assert "keyword spacing" not in stderr, (
+                    f"AC39: `graph {subcmd}` must not answer a class objection "
+                    f"with a spacing complaint; got {stderr!r}")
+
+    def test_ac39_non_introspection_show_still_reaches_the_engine(self):
+        """The refusal is confined to statements that ARE schema-introspection
+        commands under some spacing.
+
+        A near miss on the keyword and a SHOW family the engine does not
+        implement must keep reaching the engine, which already names the real
+        problem for them (SPEC/GRAPH.md § Per-Subcommand Validation Rules note
+        3). A guard rail that started answering for those too would be inventing
+        a grammar, and would hide the engine's correct diagnostic behind an
+        incorrect one.
+        """
+        for query in ("SHOW  INDEXER", "SHOW  DATABASES", "SHOW  CONSTRAINTX"):
+            for subcmd in ("query", "search"):
+                code, _stdout, stderr = self.run(subcmd, query)
+                assert code == 1, (
+                    f"AC39: {query!r} is not a schema-introspection command "
+                    f"under any spacing, so it must reach the engine and carry "
+                    f"its exit code 1; exit={code} stderr={stderr!r}")
+                assert "keyword spacing" not in stderr, (
+                    f"AC39: the guard rail must not claim a spacing problem for "
+                    f"{query!r}; got {stderr!r}")
+
+    def test_ac39_refused_statement_never_reaches_the_engine(self):
+        """The refusal precedes execution and precedes the store open.
+
+        Asserted by observation rather than by inference: a misspaced SHOW
+        CONSTRAINTS is refused, and the store it would have read is afterwards
+        still readable and unchanged -- the seeded Spec node is still there and
+        the schema is still empty.
+        """
+        self.assert_guard_rail_refusal(
+            "query", "SHOW  CONSTRAINTS", "SHOW CONSTRAINTS")
+
+        result = self.test.run_cmd_json([
+            "graph", "query", "-r", self.roadmap, "--query",
+            "MATCH (s:Spec) RETURN s.key AS k"])
+        assert [row[0] for row in result["rows"]] == [
+            "schema-introspection-spacing"], (
+            f"AC39: a refused statement must leave the store untouched; "
+            f"got {result!r}")
+
+        result = self.test.run_cmd_json([
+            "graph", "query", "-r", self.roadmap, "--query", "SHOW CONSTRAINTS"])
+        assert result["rows"] == [], (
+            f"AC39: the refused statement must not have reached the engine; "
+            f"SHOW CONSTRAINTS lists {result['rows']!r}")
+
+
+# ---- Relationship Write Direction (SPEC/GRAPH.md § Relationship Write
+# Direction, Acceptance Criteria 28-30, rmp task #193) ---------------------
+
+# `graph update` cannot write relationship "e" — the exact phrase every
+# refusal in this section carries, whatever direction bound it.
+REFUSAL_PREFIX = 'graph update cannot write relationship "e"'
+OUTGOING_REWRITE_RECIPE = "anchor the outgoing pattern on that node instead of reversing the arrow"
+
+# The read-direction rule (SPEC/GRAPH.md § Relationship Read Direction, rmp task
+# #288) carries its own phrase, and the subcommand name varies because the rule
+# covers `query`, `search` and `update`'s right-hand side alike. Matching on the
+# verb keeps the two rules' refusals distinguishable: a test that expects a READ
+# refusal must not pass on a WRITE refusal that happened to fire first.
+READ_REFUSAL_PREFIX = 'cannot read relationship "e"' 
+
+
+class TestGraphRelationshipWriteDirection:
+    """SPEC/GRAPH.md § Relationship Write Direction fixes rmp task #193:
+    `graph update` accepted a SET/REMOVE whose relationship target was bound
+    by an incoming or undirected pattern, and reported `{"ok": true}` while
+    GoGraph's write path silently dropped the change (its own write-effect
+    counters cannot see the drop, so there is no post-hoc signal — the shape
+    is refused before the graph store is opened at all).
+
+    The fixture mirrors the one the Go regression suite
+    (internal/commands/graph_relwrite_test.go) already pins at the unit
+    level: a Spec node for this very rule and a Test node for the Go file
+    that verifies it, joined by a single VERIFIED_BY edge running
+    spec -> test, which is the literal example SPEC/GRAPH.md's Acceptance
+    Criteria 28-30 use. What is new here is proving the same contract
+    end-to-end against the compiled binary and a real graph store: every
+    refused shape is confirmed to write NOTHING by reading the property back,
+    and every shape that must keep working (the outgoing form from both
+    endpoints, a node write reached through a reverse traversal, a
+    relationship read only on the right-hand side of an assignment, and
+    `graph delete`/`graph query` through an undirected pattern) is confirmed
+    to keep working by reading its result back too — so a fix that refused
+    too much, as well as one that refused too little, would fail this suite.
+    """
+
+    SPEC_KEY = "graph-write-direction"
+    TEST_KEY = "graph_relwrite_test.go"
+
+    def setup_method(self):
+        self.test = GroadmapTestBase()
+        self.test.setup()
+        self.roadmap = self.test.create_roadmap()
+        self.test.run_cmd([
+            "graph", "create", "-r", self.roadmap, "--query",
+            f"CREATE (:Spec {{key:'{self.SPEC_KEY}'}}), (:Test {{key:'{self.TEST_KEY}'}})",
+        ])
+        self.test.run_cmd([
+            "graph", "create", "-r", self.roadmap, "--query",
+            f"MATCH (s:Spec {{key:'{self.SPEC_KEY}'}}), (v:Test {{key:'{self.TEST_KEY}'}}) "
+            "MERGE (s)-[:VERIFIED_BY]->(v)",
+        ])
+
+    def teardown_method(self):
+        self.test.teardown()
+
+    # ---- helpers -----------------------------------------------------
+
+    def run(self, subcmd, query, check=False):
+        return self.test.run_cmd(
+            ["graph", subcmd, "-r", self.roadmap, "--query", query], check=check)
+
+    def json(self, subcmd, query):
+        return self.test.run_cmd_json(
+            ["graph", subcmd, "-r", self.roadmap, "--query", query])
+
+    def edge_property(self, name):
+        """The value of `name` on the seeded VERIFIED_BY edge, read through
+        the OUTGOING pattern that matches how it is actually stored — never
+        through the undirected pattern the write side refuses, since the
+        point of the read-back is to observe storage independently of it."""
+        result = self.json(
+            "query",
+            f"MATCH (s:Spec {{key:'{self.SPEC_KEY}'}})-[e:VERIFIED_BY]->(v) RETURN e.{name}",
+        )
+        assert result["rows"], f"the seeded edge itself is missing: {result!r}"
+        return result["rows"][0][0]
+
+    def node_property(self, label, key, name):
+        result = self.json(
+            "query", f"MATCH (n:{label} {{key:'{key}'}}) RETURN n.{name}")
+        assert result["rows"], f"node {label}:{key!r} not found: {result!r}"
+        return result["rows"][0][0]
+
+    # ---- AC 29 / the recorded reproduction: reverse SET is refused ---
+
+    def test_undirected_set_from_the_target_is_refused_and_writes_nothing(self):
+        # The recorded reproduction, restated on this fixture: an undirected
+        # pattern anchored on the relationship's TARGET.
+        code, stdout, stderr = self.run(
+            "update",
+            f"MATCH (v:Test {{key:'{self.TEST_KEY}'}})-[e]-(x) "
+            "SET e.last_commit = '4f5ba9b'")
+        assert code == 6, (
+            f"AC29: an undirected SET on a relationship must be refused with "
+            f"exit 6; exit={code} stdout={stdout!r} stderr={stderr!r}")
+        assert REFUSAL_PREFIX in stderr and "undirected pattern" in stderr, (
+            f"AC29: expected the undirected-pattern refusal; got {stderr!r}")
+        assert self.edge_property("last_commit") is None, (
+            "AC29: a refused undirected SET must not have reached storage")
+
+    def test_undirected_set_from_the_source_is_refused_although_it_would_have_written(self):
+        # AC29's sharper case: anchored on the SOURCE, every row this
+        # traversal matches runs forwards, so the write would in fact have
+        # landed — and it is refused all the same, because whether an
+        # undirected pattern writes depends on the data it meets, not on the
+        # query, and that cannot be the guarantee.
+        code, stdout, stderr = self.run(
+            "update",
+            f"MATCH (s:Spec {{key:'{self.SPEC_KEY}'}})-[e]-(x) "
+            "SET e.last_commit = '2c9f4b1'")
+        assert code == 6, (
+            f"AC29: an undirected SET anchored on the source must still be "
+            f"refused; exit={code} stdout={stdout!r} stderr={stderr!r}")
+        assert "undirected pattern" in stderr, (
+            f"AC29: expected the undirected-pattern refusal; got {stderr!r}")
+        assert self.edge_property("last_commit") is None, (
+            "AC29: the refusal must hold even though this traversal's rows "
+            "would all have run forwards")
+
+    def test_incoming_set_is_refused_from_the_target_anchor(self):
+        code, stdout, stderr = self.run(
+            "update",
+            f"MATCH (v:Test {{key:'{self.TEST_KEY}'}})<-[e:VERIFIED_BY]-(s) "
+            "SET e.last_commit = 'a83e716'")
+        assert code == 6, (
+            f"AC29: an incoming SET anchored on the target must be refused; "
+            f"exit={code} stdout={stdout!r} stderr={stderr!r}")
+        assert REFUSAL_PREFIX in stderr and "incoming pattern" in stderr, (
+            f"AC29: expected the incoming-pattern refusal; got {stderr!r}")
+        assert self.edge_property("last_commit") is None, (
+            "AC29: a refused incoming SET must not have reached storage")
+
+    def test_incoming_set_is_refused_from_the_source_anchor_too(self):
+        # The trigger is the pattern's DIRECTION, not which endpoint anchors
+        # it: this traversal starts at the SOURCE node and still uses the
+        # `<-[e]-` arrow, so it is refused exactly like the target-anchored
+        # form above.
+        code, stdout, stderr = self.run(
+            "update",
+            f"MATCH (x)<-[e:VERIFIED_BY]-(s:Spec {{key:'{self.SPEC_KEY}'}}) "
+            "SET e.last_commit = 'f01d922'")
+        assert code == 6, (
+            f"AC29: an incoming SET anchored on the source must be refused "
+            f"too; exit={code} stdout={stdout!r} stderr={stderr!r}")
+        assert "incoming pattern" in stderr, (
+            f"AC29: expected the incoming-pattern refusal; got {stderr!r}")
+        assert self.edge_property("last_commit") is None, (
+            "AC29: a refused incoming SET must not have reached storage "
+            "regardless of which endpoint anchors the traversal")
+
+    # ---- REMOVE is affected exactly as SET is -------------------------
+
+    def test_remove_through_an_undirected_pattern_is_refused_and_removes_nothing(self):
+        # Seed a real property through the one form that writes, so a
+        # refused REMOVE has something it could wrongly have deleted.
+        self.run(
+            "update",
+            f"MATCH (s:Spec {{key:'{self.SPEC_KEY}'}})-[e:VERIFIED_BY]->(v) "
+            "SET e.last_commit = 'b6d40ce'", check=True)
+
+        code, stdout, stderr = self.run(
+            "update",
+            f"MATCH (v:Test {{key:'{self.TEST_KEY}'}})-[e]-(x) "
+            "REMOVE e.last_commit")
+        assert code == 6, (
+            f"REMOVE through an undirected pattern must be refused exactly "
+            f"as SET is; exit={code} stdout={stdout!r} stderr={stderr!r}")
+        assert REFUSAL_PREFIX in stderr and "undirected pattern" in stderr, (
+            f"expected the undirected-pattern refusal on REMOVE; got {stderr!r}")
+        assert self.edge_property("last_commit") == "b6d40ce", (
+            "a refused REMOVE must leave the previously-set property intact")
+
+    def test_remove_through_an_incoming_pattern_is_refused_and_removes_nothing(self):
+        self.run(
+            "update",
+            f"MATCH (s:Spec {{key:'{self.SPEC_KEY}'}})-[e:VERIFIED_BY]->(v) "
+            "SET e.last_commit = '9a2eb54'", check=True)
+
+        code, stdout, stderr = self.run(
+            "update",
+            f"MATCH (v:Test {{key:'{self.TEST_KEY}'}})<-[e:VERIFIED_BY]-(s) "
+            "REMOVE e.last_commit")
+        assert code == 6, (
+            f"REMOVE through an incoming pattern must be refused exactly as "
+            f"SET is; exit={code} stdout={stdout!r} stderr={stderr!r}")
+        assert REFUSAL_PREFIX in stderr and "incoming pattern" in stderr, (
+            f"expected the incoming-pattern refusal on REMOVE; got {stderr!r}")
+        assert self.edge_property("last_commit") == "9a2eb54", (
+            "a refused REMOVE must leave the previously-set property intact")
+
+    # ---- AC 30 / DELETE is NOT affected --------------------------------
+
+    def test_delete_through_an_undirected_pattern_still_succeeds(self):
+        # DELETE resolves the relationship itself rather than through the
+        # endpoint columns the write path mishandles, so it must keep working
+        # through the very shape SET and REMOVE just had refused.
+        code, stdout, stderr = self.run(
+            "delete", f"MATCH (v:Test {{key:'{self.TEST_KEY}'}})-[e]-(x) DELETE e")
+        assert code == 0, (
+            f"AC30: DELETE through an undirected pattern must still succeed; "
+            f"exit={code} stdout={stdout!r} stderr={stderr!r}")
+        assert '"ok": true' in stdout, f"AC30: expected ok JSON, got {stdout!r}"
+
+        result = self.json(
+            "query",
+            f"MATCH (s:Spec {{key:'{self.SPEC_KEY}'}})-[e:VERIFIED_BY]->(v) RETURN e")
+        assert result["rows"] == [], (
+            f"AC30: the undirected DELETE must have removed the edge; "
+            f"got {result!r}")
+        # Only the relationship is gone; DELETE (not DETACH DELETE) leaves
+        # both nodes standing.
+        assert self.node_property("Spec", self.SPEC_KEY, "key") == self.SPEC_KEY
+        assert self.node_property("Test", self.TEST_KEY, "key") == self.TEST_KEY
+
+    # ---- AC 28: the outgoing form keeps writing from either endpoint --
+
+    def test_outgoing_set_writes_and_reads_back_from_either_endpoint(self):
+        code, stdout, stderr = self.run(
+            "update",
+            f"MATCH (s:Spec {{key:'{self.SPEC_KEY}'}})-[e:VERIFIED_BY]->(v) "
+            "SET e.from_source = 'c77e410'")
+        assert code == 0, (
+            f"AC28: an outgoing SET anchored on the source must be accepted; "
+            f"exit={code} stdout={stdout!r} stderr={stderr!r}")
+        assert self.edge_property("from_source") == "c77e410", (
+            "AC28: the property set from the source anchor must read back")
+
+        # The documented repair for an incoming edge: keep the arrow outgoing
+        # and anchor on the node the edge arrives at instead.
+        code, stdout, stderr = self.run(
+            "update",
+            f"MATCH (other)-[e:VERIFIED_BY]->(v:Test {{key:'{self.TEST_KEY}'}}) "
+            "SET e.from_target = '15af8bc'")
+        assert code == 0, (
+            f"AC28: an outgoing SET anchored on the target must be accepted; "
+            f"exit={code} stdout={stdout!r} stderr={stderr!r}")
+        assert self.edge_property("from_target") == "15af8bc", (
+            "AC28: the property set from the target anchor must read back")
+
+    # ---- AC 30: the rejection does not spread beyond the relationship
+    #      write target ---------------------------------------------------
+
+    def test_node_write_reached_through_an_undirected_traversal_is_accepted(self):
+        # The SET target is x (a node), resolved by identifier rather than by
+        # endpoint pair, so this must be admitted even though e is bound by
+        # the very undirected pattern SET/REMOVE on e refuse.
+        code, stdout, stderr = self.run(
+            "update",
+            f"MATCH (v:Test {{key:'{self.TEST_KEY}'}})-[e]-(x) "
+            "SET x.reviewed = true")
+        assert code == 0, (
+            f"AC30: a node write reached through an undirected traversal "
+            f"must be accepted; exit={code} stdout={stdout!r} stderr={stderr!r}")
+        assert '"ok": true' in stdout, f"AC30: expected ok JSON, got {stdout!r}"
+        assert self.node_property("Spec", self.SPEC_KEY, "reviewed") is True, (
+            "AC30: the node write must genuinely have reached the source node")
+
+    def test_relationship_read_through_an_undirected_traversal_is_refused(self):
+        # This test asserted the opposite until rmp task #288. The undirected
+        # READ was the escape hatch that made the write refusal cost no reach,
+        # and it was measured returning the WRONG relationship on a node pair
+        # carrying edges both ways. It is now refused by the read-direction
+        # rule, and the reach it used to provide comes from the outgoing
+        # rewrite asserted below instead.
+        code, stdout, stderr = self.run(
+            "query", f"MATCH (v:Test {{key:'{self.TEST_KEY}'}})-[e]-(x) RETURN type(e), x.key")
+        assert code == 6, (
+            f"an undirected READ of a relationship value must be refused; "
+            f"exit={code} stdout={stdout!r} stderr={stderr!r}")
+        assert READ_REFUSAL_PREFIX in stderr and "undirected pattern" in stderr, (
+            f"expected the undirected read refusal; got {stderr!r}")
+
+        # The rewrite the refusal names reaches the very same edge.
+        result = self.json(
+            "query", f"MATCH (x)-[e]->(v:Test {{key:'{self.TEST_KEY}'}}) RETURN type(e), x.key")
+        assert result["rows"] == [["VERIFIED_BY", self.SPEC_KEY]], (
+            f"the outgoing rewrite must report the true relationship and the "
+            f"source node it reaches; got {result!r}")
+
+    def test_relationship_bound_only_as_a_read_reference_is_refused(self):
+        # `e` is bound by an INCOMING pattern and appears only on the RIGHT-HAND
+        # SIDE of a node write. The write-direction rule inspects the write
+        # TARGET alone, so it admitted this shape — and rmp task #288 measured
+        # the consequence: the misresolved type is PERSISTED to disk while the
+        # command reports success. The read-direction rule owns the right-hand
+        # side, and refuses it.
+        code, stdout, stderr = self.run(
+            "update",
+            f"MATCH (v:Test {{key:'{self.TEST_KEY}'}})<-[e:VERIFIED_BY]-(x) "
+            "SET x.last_edge_type = type(e)")
+        assert code == 6, (
+            f"a relationship VALUE read on the right-hand side of a node SET "
+            f"must be refused when it is incoming-bound; "
+            f"exit={code} stdout={stdout!r} stderr={stderr!r}")
+        assert READ_REFUSAL_PREFIX in stderr, (
+            f"the refusal must come from the read rule; got {stderr!r}")
+        assert self.node_property("Spec", self.SPEC_KEY, "last_edge_type") is None, (
+            "the refused write must not have reached storage")
+
+    # ---- the refusal names the direction and the outgoing rewrite -----
+
+    def test_refusal_message_names_the_variable_direction_and_rewrite(self):
+        cases = [
+            (
+                f"MATCH (v:Test {{key:'{self.TEST_KEY}'}})-[e]-(x) "
+                "SET e.last_commit = '7be3aa0'",
+                "undirected pattern",
+            ),
+            (
+                f"MATCH (v:Test {{key:'{self.TEST_KEY}'}})<-[e:VERIFIED_BY]-(s) "
+                "SET e.last_commit = '7be3aa0'",
+                "incoming pattern",
+            ),
+        ]
+        for query, want_direction in cases:
+            code, stdout, stderr = self.run("update", query)
+            assert code == 6, (
+                f"expected a refusal for {query!r}; "
+                f"exit={code} stdout={stdout!r} stderr={stderr!r}")
+            assert REFUSAL_PREFIX in stderr, (
+                f"the message must name the relationship variable; got {stderr!r}")
+            assert want_direction in stderr, (
+                f"the message must name the offending direction ({want_direction!r}); "
+                f"got {stderr!r}")
+            assert OUTGOING_REWRITE_RECIPE in stderr, (
+                f"the message must give the outgoing-anchor rewrite recipe; "
+                f"got {stderr!r}")
+            assert "MATCH (source)-[e]->(target)" in stderr, (
+                f"the message must show the outgoing rewrite shape; got {stderr!r}")
+
+
 def _run_all():
-    instance_cls = TestGraphClauseSurface
-    method_names = [m for m in dir(instance_cls) if m.startswith("test_")]
     passed = 0
     failed = 0
     failures = []
-    for m in method_names:
-        instance = instance_cls()
-        instance.setup_method()
-        try:
-            getattr(instance, m)()
-            passed += 1
-            print(f"✓ {m}")
-        except AssertionError as exc:
-            failed += 1
-            failures.append((m, exc))
-            print(f"✗ {m}")
-        except Exception as exc:  # noqa: BLE001
-            failed += 1
-            failures.append((m, exc))
-            print(f"✗ {m} (error)")
-        finally:
-            instance.teardown_method()
+    # Classes are DISCOVERED by inspecting this module, never listed. A listed
+    # tuple silently skips any suite added after it was written — the runner
+    # still exits 0 and the new class simply never runs (rmp task #303). The
+    # count is printed so a class that stops being discovered is visible in the
+    # output rather than inferred from a total that quietly shrank.
+    classes = [
+        obj for _name, obj in sorted(inspect.getmembers(sys.modules[__name__], inspect.isclass))
+        if obj.__module__ == __name__ and _name.startswith("Test")
+    ]
+    print(f"Discovered {len(classes)} test classes: "
+          f"{', '.join(cls.__name__ for cls in classes)}")
+    for cls in classes:
+        for m in sorted(name for name in dir(cls) if name.startswith("test_")):
+            label = f"{cls.__name__}.{m}"
+            instance = cls()
+            instance.setup_method()
+            try:
+                getattr(instance, m)()
+                passed += 1
+                print(f"✓ {label}")
+            except AssertionError as exc:
+                failed += 1
+                failures.append((label, exc))
+                print(f"✗ {label}")
+            except Exception as exc:  # noqa: BLE001
+                failed += 1
+                failures.append((label, exc))
+                print(f"✗ {label} (error)")
+            finally:
+                instance.teardown_method()
     print("\n" + "=" * 60)
     print(f"Graph clause-surface tests: {passed} passed, {failed} failed")
     print("=" * 60)
-    for name, exc in failures:
-        print(f"\n✗ {name}\n  {exc}")
+    for label, exc in failures:
+        print(f"\n✗ {label}\n  {exc}")
     return failed == 0
 
 

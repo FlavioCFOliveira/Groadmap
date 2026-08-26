@@ -7,9 +7,19 @@ Validates actual task positions after each operation.
 
 import sys
 import os
+import sqlite3
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests.base_test import GroadmapTestBase
+
+
+# The ordering index exactly as schema 1.12.0 declared it: same pair of columns,
+# NOT unique. Transcribed rather than derived, because a fixture for a historical
+# schema must not follow later changes to the shipped DDL, or the migration it
+# exercises stops being the migration that ships.
+SPRINT_TASKS_ORDER_INDEX_1_12_0 = (
+    "CREATE INDEX idx_sprint_tasks_order ON sprint_tasks(sprint_id, position ASC)"
+)
 
 
 class TestSprintTaskOrdering:
@@ -679,6 +689,539 @@ class TestSprintTaskOrdering:
         assert final_order == reorder_sequence, f"Final reorder failed: expected {reorder_sequence}, got {final_order}"
 
         print("Combined ordering operations test passed")
+
+    # ================= POSITION UNIQUENESS (rmp task #236) =================
+    #
+    # sprint_tasks.position is unique within one sprint and the SCHEMA is what
+    # holds it that way (SPEC/DATABASE.md § Position Uniqueness Within a Sprint,
+    # SPEC/VERSION.md § Migration 1.12.0 → 1.13.0). The tests above exercise the
+    # ordering commands; these prove the invariant behind them -- that the
+    # constraint exists, that it is enforced against a hand-written insert the
+    # CLI can never produce, that a database predating it is repaired rather than
+    # refused or truncated, and that the commands a plain unique index breaks
+    # still work.
+
+    def _db_path(self, roadmap: str):
+        """The SQLite file the CLI created for this roadmap."""
+        return self.test.roadmaps_dir / roadmap / "project.db"
+
+    def _query(self, roadmap: str, sql: str, params=()):
+        """Read the roadmap database directly, outside the CLI.
+
+        Direct reads are what make these assertions about STORED STATE rather
+        than about what a command chose to print, and direct WRITES are the only
+        way to produce a colliding position at all: no shipped write path can.
+        """
+        con = sqlite3.connect(str(self._db_path(roadmap)))
+        try:
+            return con.execute(sql, params).fetchall()
+        finally:
+            con.close()
+
+    def _positions(self, roadmap: str, sprint_id: int) -> dict:
+        """task id -> stored position, for one sprint."""
+        rows = self._query(
+            roadmap,
+            "SELECT task_id, position FROM sprint_tasks WHERE sprint_id = ?",
+            (sprint_id,),
+        )
+        return {task_id: position for task_id, position in rows}
+
+    def _colliding_groups(self, roadmap: str) -> int:
+        """The check SPEC/DATABASE.md states verbatim: how many (sprint_id,
+        position) groups hold more than one row."""
+        return self._query(roadmap, """
+            SELECT COUNT(*) FROM (
+                SELECT sprint_id, position
+                FROM sprint_tasks
+                GROUP BY sprint_id, position
+                HAVING COUNT(*) > 1
+            )""")[0][0]
+
+    def _schema_version(self, roadmap: str) -> str:
+        return self._query(
+            roadmap, "SELECT value FROM _metadata WHERE key = 'schema_version'")[0][0]
+
+    def _order_indexes(self, roadmap: str) -> dict:
+        """Every index on sprint_tasks whose columns are exactly
+        (sprint_id, position), mapped to whether it is UNIQUE.
+
+        Read through PRAGMA rather than by matching the SQL text, so a UNIQUE
+        spelled any other way is still detected and a second index over the same
+        pair cannot hide.
+        """
+        con = sqlite3.connect(str(self._db_path(roadmap)))
+        try:
+            found = {}
+            for row in con.execute("PRAGMA index_list('sprint_tasks')").fetchall():
+                name, unique = row[1], row[2]
+                columns = [r[2] for r in
+                           con.execute(f"PRAGMA index_info('{name}')").fetchall()]
+                if columns == ["sprint_id", "position"]:
+                    found[name] = bool(unique)
+            return found
+        finally:
+            con.close()
+
+    def _seed_sprint(self, roadmap: str, title: str, count: int):
+        """Create a sprint with `count` tasks added through the CLI."""
+        sprint_id = self.test.create_sprint(roadmap, title)
+        task_ids = self._create_test_tasks(roadmap, count)
+        self.test.run_cmd([
+            "sprint", "add-tasks", "-r", roadmap, str(sprint_id),
+            ",".join(map(str, task_ids))
+        ])
+        return sprint_id, task_ids
+
+    def test_position_uniqueness_is_enforced_by_the_schema(self):
+        """A colliding position is refused by the database itself.
+
+        The CLI cannot be asked for one -- every ordering command produces a
+        permutation or an append past MAX(position) -- so the collision is
+        written by hand, which is precisely the write path the constraint exists
+        to catch. Three directions are checked: an UPDATE onto a taken position,
+        an INSERT at one, and the same position in a DIFFERENT sprint, which must
+        be ACCEPTED because the constraint is over the pair and not over position
+        alone.
+        """
+        roadmap = self.test.create_roadmap()
+        sprint_id, task_ids = self._seed_sprint(roadmap, "Settlement reconciliation", 3)
+        other_sprint, other_tasks = self._seed_sprint(roadmap, "Acquirer failover", 2)
+
+        indexes = self._order_indexes(roadmap)
+        assert indexes == {"idx_sprint_tasks_order": True}, (
+            f"indexes over (sprint_id, position) = {indexes}; expected exactly one, "
+            f"idx_sprint_tasks_order, and it must be UNIQUE"
+        )
+
+        con = sqlite3.connect(str(self._db_path(roadmap)))
+        try:
+            try:
+                con.execute(
+                    "UPDATE sprint_tasks SET position = 0 WHERE sprint_id = ? AND task_id = ?",
+                    (sprint_id, task_ids[1]),
+                )
+                con.commit()
+                raise AssertionError(
+                    "UPDATE moving a task onto position 0, already held by another task of the "
+                    "same sprint, SUCCEEDED; the unique index must reject it"
+                )
+            except sqlite3.IntegrityError as exc:
+                assert "UNIQUE" in str(exc).upper(), f"unexpected rejection: {exc}"
+                con.rollback()
+
+            try:
+                con.execute(
+                    "INSERT INTO sprint_tasks (sprint_id, task_id, added_at, position) "
+                    "VALUES (?, ?, ?, ?)",
+                    (sprint_id, other_tasks[0], "2026-08-01T09:00:00.000Z", 0),
+                )
+                con.commit()
+                raise AssertionError(
+                    "INSERT of a membership at a position the sprint already uses SUCCEEDED; "
+                    "the unique index must reject it"
+                )
+            except sqlite3.IntegrityError as exc:
+                assert "UNIQUE" in str(exc).upper(), f"unexpected rejection: {exc}"
+                con.rollback()
+        finally:
+            con.close()
+
+        # Two different sprints legitimately both hold position 0.
+        assert self._positions(roadmap, sprint_id)[task_ids[0]] == 0
+        assert self._positions(roadmap, other_sprint)[other_tasks[0]] == 0, (
+            "two different sprints must both be able to use position 0: the constraint is "
+            "over (sprint_id, position), not over position alone"
+        )
+        assert self._colliding_groups(roadmap) == 0
+
+        print("Position uniqueness enforced by the schema test passed")
+
+    def _downgrade_to_1_12_0(self, roadmap: str, seeds):
+        """Take a CLI-created roadmap back to schema 1.12.0 and overwrite its
+        sprint_tasks positions with `seeds` ((sprint_id, task_id, position)).
+
+        Only the ordering index changed between 1.12.0 and 1.13.0, so restoring
+        its non-unique form is enough to produce a faithful 1.12.0 database while
+        every other table stays correct by construction. Until that index is
+        downgraded the colliding seeds cannot be written at all, which is itself
+        the point of the constraint.
+        """
+        con = sqlite3.connect(str(self._db_path(roadmap)))
+        try:
+            con.execute("DROP INDEX IF EXISTS idx_sprint_tasks_order")
+            con.execute(SPRINT_TASKS_ORDER_INDEX_1_12_0)
+            for sprint_id, task_id, position in seeds:
+                con.execute(
+                    "UPDATE sprint_tasks SET position = ? WHERE sprint_id = ? AND task_id = ?",
+                    (position, sprint_id, task_id),
+                )
+            con.execute("UPDATE _metadata SET value = '1.12.0' WHERE key = 'schema_version'")
+            con.commit()
+        finally:
+            con.close()
+
+    def test_migration_repairs_a_database_that_violates_the_constraint(self):
+        """A 1.12.0 database whose positions collide is REPAIRED, not refused
+        and not truncated, on the next command that opens it.
+
+        The fixture is the hard case: two colliding pairs in one sprint, which is
+        the input on which a repair that reads its own writes was measured to
+        trade one collision for another, plus a second sprint that is distinct
+        but gappy. A duplicate position is an ambiguous order and not a redundant
+        membership, so every row must survive (SPEC/VERSION.md § Migration
+        1.12.0 → 1.13.0).
+        """
+        roadmap = self.test.create_roadmap()
+        sprint_id, task_ids = self._seed_sprint(roadmap, "Settlement reconciliation", 4)
+        gappy_sprint, gappy_tasks = self._seed_sprint(roadmap, "Ledger migration", 3)
+
+        # Sprint 1: tasks 0,1 both at position 0; tasks 2,3 both at position 1.
+        # Sprint 2: distinct, but 0/3/7 rather than 0/1/2.
+        self._downgrade_to_1_12_0(roadmap, [
+            (sprint_id, task_ids[0], 0),
+            (sprint_id, task_ids[1], 0),
+            (sprint_id, task_ids[2], 1),
+            (sprint_id, task_ids[3], 1),
+            (gappy_sprint, gappy_tasks[0], 0),
+            (gappy_sprint, gappy_tasks[1], 3),
+            (gappy_sprint, gappy_tasks[2], 7),
+        ])
+
+        before_rows = self._query(roadmap, "SELECT COUNT(*) FROM sprint_tasks")[0][0]
+        before_pairs = set(self._query(roadmap, "SELECT sprint_id, task_id FROM sprint_tasks"))
+        assert self._colliding_groups(roadmap) == 2, (
+            "precondition: the fixture must actually violate the constraint"
+        )
+        assert self._schema_version(roadmap) == "1.12.0"
+
+        # Any command opens the database, and opening it is what runs the
+        # migration. A read is used deliberately: the repair must not need a
+        # write to be triggered.
+        exit_code, stdout, stderr = self.test.run_cmd(
+            ["sprint", "list", "-r", roadmap], check=False)
+        assert exit_code == 0, f"migration failed: exit {exit_code}, stderr={stderr}"
+
+        fresh = self.test.create_roadmap()
+        assert self._schema_version(roadmap) == self._schema_version(fresh), (
+            "a migrated database must land on the same schema_version a fresh one is created at"
+        )
+
+        assert self._query(roadmap, "SELECT COUNT(*) FROM sprint_tasks")[0][0] == before_rows, (
+            "the migration discarded a sprint_tasks row; a duplicate position is an ambiguous "
+            "order, not a redundant membership, so both tasks must survive"
+        )
+        assert set(self._query(roadmap, "SELECT sprint_id, task_id FROM sprint_tasks")) == before_pairs
+        assert self._colliding_groups(roadmap) == 0, "positions still collide after the migration"
+
+        repaired = self._positions(roadmap, sprint_id)
+        assert sorted(repaired.values()) == [0, 1, 2, 3], (
+            f"sprint positions after the migration = {repaired}; a dense 0..N-1 run is required"
+        )
+        # The lower task id takes the lower position WITHIN a colliding pair, and
+        # the pair that shared position 0 stays ahead of the pair that shared 1.
+        assert [repaired[t] for t in task_ids] == [0, 1, 2, 3], (
+            f"repaired order = {repaired}; the repair ranks by position first and breaks ties by "
+            f"task_id, so {task_ids} must come out in that order"
+        )
+
+        gappy = self._positions(roadmap, gappy_sprint)
+        assert [gappy[t] for t in gappy_tasks] == [0, 1, 2], (
+            f"gappy sprint after the migration = {gappy}; a sprint whose positions were already "
+            f"distinct must keep its relative order and lose its gaps"
+        )
+
+        assert self._order_indexes(roadmap) == {"idx_sprint_tasks_order": True}
+
+        print("Migration repairs a violating database test passed")
+
+    def test_migration_leaves_a_conforming_database_untouched(self):
+        """The second data state: a 1.12.0 database that ALREADY satisfies the
+        constraint and is already dense comes out of the repair holding exactly
+        the values it went in with.
+
+        The check is value by value rather than a row count, because a repair
+        ranking by added_at would also produce a valid dense run while silently
+        replacing the planned order with the order the tasks were added in. The
+        fixture's stored order is deliberately the REVERSE of its insertion
+        order, and `sprint add-tasks` stamps one added_at on the whole batch, so
+        an added_at-ranked repair falls through to its task_id tie-breaker and
+        restores exactly the insertion order this test reversed. Either way it
+        fails here.
+        """
+        roadmap = self.test.create_roadmap()
+        sprint_id, task_ids = self._seed_sprint(roadmap, "Chargeback automation", 4)
+
+        # Reverse the order through the CLI, so position order and added_at order
+        # disagree, then take the database back to 1.12.0 without touching the
+        # positions themselves.
+        reversed_ids = list(reversed(task_ids))
+        self.test.run_cmd([
+            "sprint", "reorder", "-r", roadmap, str(sprint_id),
+            ",".join(map(str, reversed_ids))
+        ])
+        before = self._positions(roadmap, sprint_id)
+        assert [before[t] for t in reversed_ids] == [0, 1, 2, 3], (
+            "precondition: the fixture must be dense and in reverse insertion order"
+        )
+
+        self._downgrade_to_1_12_0(roadmap, [])
+        assert self._schema_version(roadmap) == "1.12.0"
+
+        exit_code, _, stderr = self.test.run_cmd(
+            ["sprint", "list", "-r", roadmap], check=False)
+        assert exit_code == 0, f"migration failed: exit {exit_code}, stderr={stderr}"
+
+        after = self._positions(roadmap, sprint_id)
+        assert after == before, (
+            f"positions changed from {before} to {after}; the repair must be a no-op on a database "
+            f"that already satisfies the constraint and is already dense. Ranking by added_at "
+            f"instead of position would restore the insertion order here"
+        )
+        assert self._order_indexes(roadmap) == {"idx_sprint_tasks_order": True}
+
+        # Idempotency at the command level: opening it again changes nothing.
+        self.test.run_cmd(["sprint", "list", "-r", roadmap])
+        assert self._positions(roadmap, sprint_id) == before
+
+        print("Migration leaves conforming data untouched test passed")
+
+    def test_ordering_commands_survive_the_unique_constraint(self):
+        """The five commands a plain unique index breaks, driven end to end.
+
+        Each of reorder, move-to, top, bottom and swap assigns positions
+        SEQUENTIALLY over values another row of the same sprint still holds, so
+        without a parking step the very first write fails with
+        "UNIQUE constraint failed: sprint_tasks.sprint_id, sprint_tasks.position".
+        The inputs are the worst cases: a FULL REVERSAL (every position occupied
+        by the wrong task) and an ADJACENT swap (the two rows directly contend).
+        """
+        roadmap = self.test.create_roadmap()
+        sprint_id, task_ids = self._seed_sprint(roadmap, "Ordering under constraint", 6)
+
+        reversed_ids = list(reversed(task_ids))
+        exit_code, _, stderr = self.test.run_cmd([
+            "sprint", "reorder", "-r", roadmap, str(sprint_id),
+            ",".join(map(str, reversed_ids))
+        ], check=False)
+        assert exit_code == 0, f"full reversal reorder failed: exit {exit_code}, stderr={stderr}"
+        assert self._get_task_order(roadmap, sprint_id) == reversed_ids
+        assert self._colliding_groups(roadmap) == 0
+
+        # Adjacent swap: the two rows contend for each other's position.
+        current = self._get_task_order(roadmap, sprint_id)
+        exit_code, _, stderr = self.test.run_cmd([
+            "sprint", "swap", "-r", roadmap, str(sprint_id),
+            str(current[2]), str(current[3])
+        ], check=False)
+        assert exit_code == 0, f"adjacent swap failed: exit {exit_code}, stderr={stderr}"
+        expected = current[:2] + [current[3], current[2]] + current[4:]
+        assert self._get_task_order(roadmap, sprint_id) == expected, (
+            f"order after the adjacent swap = {self._get_task_order(roadmap, sprint_id)}, "
+            f"want {expected}"
+        )
+        assert self._colliding_groups(roadmap) == 0
+
+        # move-to in both directions: the shift form collides going up AND down.
+        current = self._get_task_order(roadmap, sprint_id)
+        moved = current[5]
+        exit_code, _, stderr = self.test.run_cmd([
+            "sprint", "move-to", "-r", roadmap, str(sprint_id), str(moved), "1"
+        ], check=False)
+        assert exit_code == 0, f"move-to (upwards) failed: exit {exit_code}, stderr={stderr}"
+        expected = [current[0], moved] + current[1:5]
+        assert self._get_task_order(roadmap, sprint_id) == expected
+
+        exit_code, _, stderr = self.test.run_cmd([
+            "sprint", "move-to", "-r", roadmap, str(sprint_id), str(moved), "4"
+        ], check=False)
+        assert exit_code == 0, f"move-to (downwards) failed: exit {exit_code}, stderr={stderr}"
+        after_down = self._get_task_order(roadmap, sprint_id)
+        assert after_down.index(moved) == 4, f"move-to 4 left {moved} at {after_down.index(moved)}"
+        assert self._colliding_groups(roadmap) == 0
+
+        # top and bottom reuse move-to in full, parking step included.
+        exit_code, _, stderr = self.test.run_cmd([
+            "sprint", "top", "-r", roadmap, str(sprint_id), str(task_ids[0])
+        ], check=False)
+        assert exit_code == 0, f"top failed: exit {exit_code}, stderr={stderr}"
+        assert self._get_task_order(roadmap, sprint_id)[0] == task_ids[0]
+
+        exit_code, _, stderr = self.test.run_cmd([
+            "sprint", "bottom", "-r", roadmap, str(sprint_id), str(task_ids[0])
+        ], check=False)
+        assert exit_code == 0, f"bottom failed: exit {exit_code}, stderr={stderr}"
+        assert self._get_task_order(roadmap, sprint_id)[-1] == task_ids[0]
+        assert self._colliding_groups(roadmap) == 0
+
+        # Every command left the sprint holding a permutation of 0..N-1.
+        positions = self._positions(roadmap, sprint_id)
+        assert sorted(positions.values()) == list(range(len(task_ids))), (
+            f"positions after the ordering commands = {positions}; each command must leave the "
+            f"sprint holding a permutation of its positions"
+        )
+
+        print("Ordering commands survive the unique constraint test passed")
+
+    def test_task_next_order_is_total_and_repeatable(self):
+        """`task next` publishes the planned order as a guarantee.
+
+        Position is unique within a sprint, so ordering on it alone already
+        places every task at exactly one rank: two calls over unchanged data
+        return the same tasks in the same sequence. Priority does NOT order this
+        listing and cannot promote a task above another, so the fixture puts the
+        HIGHEST priority task LAST in the planned order and requires it to stay
+        there (SPEC/COMMANDS.md § Get Next Tasks (next)).
+        """
+        roadmap = self.test.create_roadmap()
+        sprint_id = self.test.create_sprint(roadmap, "Next-task ordering")
+
+        # Ascending priority, so the last task planned is the most urgent one.
+        task_ids = []
+        for i, priority in enumerate([1, 4, 7, 9], start=1):
+            task_ids.append(self.test.create_task(
+                roadmap,
+                f"Reconcile settlement window {i}",
+                "Each settlement window must reconcile before the ledger closes.",
+                "Replay the window against the acquirer file and report divergences.",
+                "A corrupted window is reported rather than silently accepted.",
+                priority=priority,
+            ))
+        self.test.run_cmd([
+            "sprint", "add-tasks", "-r", roadmap, str(sprint_id),
+            ",".join(map(str, task_ids))
+        ])
+        self.test.run_cmd(["sprint", "start", "-r", roadmap, str(sprint_id)])
+
+        first = [t["id"] for t in self.test.run_cmd_json(["task", "next", "-r", roadmap, "10"])]
+        assert first == task_ids, (
+            f"task next returned {first}, want the planned order {task_ids}: priority must not "
+            f"promote the priority-9 task above the priority-1 one"
+        )
+
+        second = [t["id"] for t in self.test.run_cmd_json(["task", "next", "-r", roadmap, "10"])]
+        assert second == first, (
+            f"two calls over unchanged data returned {first} then {second}; the order is total, "
+            f"so it must be repeatable"
+        )
+
+        # And it follows the plan when the plan changes.
+        replanned = [task_ids[3], task_ids[1], task_ids[0], task_ids[2]]
+        self.test.run_cmd([
+            "sprint", "reorder", "-r", roadmap, str(sprint_id),
+            ",".join(map(str, replanned))
+        ])
+        after = [t["id"] for t in self.test.run_cmd_json(["task", "next", "-r", roadmap, "10"])]
+        assert after == replanned, f"task next returned {after}, want the new plan {replanned}"
+
+        print("task next order is total and repeatable test passed")
+
+    # ------------------------------------------------------------------
+    # Audit of the ordering commands (rmp task #320)
+    # ------------------------------------------------------------------
+
+    def _move_position_entries(self, roadmap: str) -> list:
+        """Return every SPRINT_TASK_MOVE_POSITION entry of a roadmap."""
+        return self.test.run_cmd_json([
+            "audit", "list", "-r", roadmap,
+            "-o", "SPRINT_TASK_MOVE_POSITION", "-l", "500"
+        ])
+
+    def test_every_ordering_invocation_writes_one_audit_entry(self):
+        """Each move-to/top/bottom invocation writes exactly one entry, no-op included.
+
+        SPEC/COMMANDS.md, "Audit of the ordering commands", states the rule
+        without qualification: the ordering commands "write one entry per
+        invocation, against the sprint, with NULL related_entity_id and NULL
+        commit_hash", and "A no-op move (moving a task to the position it
+        already holds) still writes its entry, on the same rule that governs
+        `task edit`: the audit log records the command issued, not the delta it
+        produced."
+
+        The measured defect was that a no-op move-to, top or bottom exited 0 and
+        printed a success payload while writing nothing at all, so a caller was
+        told the command had succeeded and the log held no trace of it having
+        been issued.
+
+        The sequence below is the reported reproduction, extended with the two
+        remaining no-op forms, and every step asserts the running total rather
+        than only the end state, so an implementation that skipped one form and
+        double-wrote another cannot pass on the final count.
+        """
+        roadmap = self.test.create_roadmap()
+        sprint_id = self.test.create_sprint(
+            roadmap, "Reconcile every acquirer batch before the ledger closes"
+        )
+        task_ids = self._create_test_tasks(roadmap, 3)
+        self.test.run_cmd([
+            "sprint", "add-tasks", "-r", roadmap, str(sprint_id),
+            ",".join(map(str, task_ids))
+        ])
+
+        moved = task_ids[0]
+        assert self._get_task_order(roadmap, sprint_id) == task_ids, (
+            "the fixture sprint does not hold the three tasks in creation order"
+        )
+        assert len(self._move_position_entries(roadmap)) == 0, (
+            "the fixture already holds SPRINT_TASK_MOVE_POSITION entries, so this "
+            "test cannot attribute the entries it counts to its own invocations"
+        )
+
+        # (invocation, expected running total, expected order afterwards).
+        steps = [
+            (["sprint", "move-to", "-r", roadmap, str(sprint_id), str(moved), "0"],
+             1, [task_ids[0], task_ids[1], task_ids[2]]),
+            (["sprint", "top", "-r", roadmap, str(sprint_id), str(moved)],
+             2, [task_ids[0], task_ids[1], task_ids[2]]),
+            (["sprint", "move-to", "-r", roadmap, str(sprint_id), str(moved), "1"],
+             3, [task_ids[1], task_ids[0], task_ids[2]]),
+            (["sprint", "move-to", "-r", roadmap, str(sprint_id), str(moved), "1"],
+             4, [task_ids[1], task_ids[0], task_ids[2]]),
+            (["sprint", "bottom", "-r", roadmap, str(sprint_id), str(moved)],
+             5, [task_ids[1], task_ids[2], task_ids[0]]),
+            (["sprint", "bottom", "-r", roadmap, str(sprint_id), str(moved)],
+             6, [task_ids[1], task_ids[2], task_ids[0]]),
+        ]
+
+        for args, want_total, want_order in steps:
+            invocation = " ".join(args[:2] + args[4:])
+            exit_code, stdout, _ = self.test.run_cmd(args)
+            assert exit_code == 0, f"`{invocation}` exited {exit_code}"
+            assert '"success"' in stdout, (
+                f"`{invocation}` printed no success payload: {stdout!r}"
+            )
+
+            entries = self._move_position_entries(roadmap)
+            assert len(entries) == want_total, (
+                f"after `{invocation}` the log holds {len(entries)} "
+                f"SPRINT_TASK_MOVE_POSITION entries, want {want_total}"
+            )
+
+            order = self._get_task_order(roadmap, sprint_id)
+            assert order == want_order, (
+                f"`{invocation}` left the sprint holding {order}, want {want_order}"
+            )
+
+        # Every entry carries the published shape, read back field by field
+        # rather than counted: against the sprint, with both nullable columns
+        # NULL and no entry recorded against any task.
+        for entry in self._move_position_entries(roadmap):
+            assert entry["entity_type"] == "SPRINT", (
+                f"entry {entry['id']} is recorded against {entry['entity_type']}, want SPRINT"
+            )
+            assert entry["entity_id"] == sprint_id, (
+                f"entry {entry['id']} names entity {entry['entity_id']}, want sprint {sprint_id}"
+            )
+            assert entry["related_entity_id"] is None, (
+                f"entry {entry['id']} carries related_entity_id "
+                f"{entry['related_entity_id']}, want null"
+            )
+            assert entry["commit_hash"] is None, (
+                f"entry {entry['id']} carries commit_hash {entry['commit_hash']}, want null"
+            )
+
+        print("every ordering invocation writes one audit entry test passed")
+
 
 
 def main():

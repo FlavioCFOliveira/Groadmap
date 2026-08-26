@@ -32,7 +32,6 @@ var paddingFreeStructs = []struct {
 	value any
 }{
 	{"Task", Task{}},
-	{"TaskUpdate", TaskUpdate{}},
 	{"Sprint", Sprint{}},
 	{"SprintStats", SprintStats{}},
 	{"AuditEntry", AuditEntry{}},

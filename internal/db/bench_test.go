@@ -240,10 +240,9 @@ func BenchmarkBatchUpdate_CachedVsUncached(b *testing.B) {
 	b.Run("Cached_WithBatching", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			err := bp.ProcessChunks(ids, func(chunk []int) error {
-				// OpUpdateTaskStatus default shape: a single status parameter
-				// precedes the IN-clause ids (mirrors (*DB).UpdateTaskStatus
-				// for non-lifecycle transitions).
-				query := qc.GetQuery(OpUpdateTaskStatus, len(chunk))
+				// OpAddTasksToSprint shape: a single status parameter precedes
+				// the IN-clause ids, exactly as (*DB).AddTasksToSprint binds it.
+				query := qc.GetQuery(OpAddTasksToSprint, len(chunk))
 
 				args := make([]any, len(chunk)+1)
 				args[0] = "DOING"

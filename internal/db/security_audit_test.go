@@ -13,7 +13,7 @@ import (
 // newTestTask inserts a minimal BACKLOG task and returns its id.
 func newTestTask(t *testing.T, db *DB, title string) int {
 	t.Helper()
-	id, err := db.CreateTask(testContext(), &models.Task{
+	id, err := seedTask(db, &models.Task{
 		Priority:               1,
 		Severity:               1,
 		Status:                 models.StatusBacklog,
@@ -32,7 +32,7 @@ func newTestTask(t *testing.T, db *DB, title string) int {
 // newTestSprintWithCap inserts a sprint and, when cap > 0, sets its max_tasks.
 func newTestSprintWithCap(t *testing.T, db *DB, desc string, cap int) int {
 	t.Helper()
-	id, err := db.CreateSprint(testContext(), &models.Sprint{
+	id, err := seedSprint(db, &models.Sprint{
 		Status:      models.SprintPending,
 		Title:       desc,
 		Description: desc,
@@ -106,66 +106,12 @@ func TestGetAuditEntriesHardCap(t *testing.T) {
 
 // ==================== #66: RemoveTasksFromSprint atomicity ====================
 
-// TestRemoveTasksFromSprintAtomic verifies that after RemoveTasksFromSprint the
-// removed tasks have no sprint_tasks membership AND are reset to BACKLOG, while
-// untouched tasks keep their SPRINT membership/status. Membership and
-// tasks.status never diverge (finding #66).
-func TestRemoveTasksFromSprintAtomic(t *testing.T) {
-	db, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	sprintID := newTestSprintWithCap(t, db, "Active sprint", 0)
-	taskIDs := []int{
-		newTestTask(t, db, "Build API"),
-		newTestTask(t, db, "Add cache"),
-		newTestTask(t, db, "Tune index"),
-	}
-	if err := db.AddTasksToSprint(testContext(), sprintID, taskIDs); err != nil {
-		t.Fatalf("adding tasks: %v", err)
-	}
-
-	removed := taskIDs[:2]
-	if err := db.RemoveTasksFromSprint(testContext(), removed); err != nil {
-		t.Fatalf("RemoveTasksFromSprint: %v", err)
-	}
-
-	// Removed tasks: BACKLOG status AND no membership row.
-	for _, id := range removed {
-		task, err := db.GetTask(testContext(), id)
-		if err != nil {
-			t.Fatalf("getting task %d: %v", id, err)
-		}
-		if task.Status != models.StatusBacklog {
-			t.Errorf("removed task %d: expected BACKLOG, got %q", id, task.Status)
-		}
-		var member int
-		if err := db.QueryRowContext(testContext(),
-			"SELECT COUNT(*) FROM sprint_tasks WHERE task_id = ?", id).Scan(&member); err != nil {
-			t.Fatalf("counting membership for %d: %v", id, err)
-		}
-		if member != 0 {
-			t.Errorf("removed task %d: expected no membership, got %d rows", id, member)
-		}
-	}
-
-	// Remaining task keeps SPRINT status and membership.
-	remaining := taskIDs[2]
-	task, err := db.GetTask(testContext(), remaining)
-	if err != nil {
-		t.Fatalf("getting remaining task: %v", err)
-	}
-	if task.Status != models.StatusSprint {
-		t.Errorf("remaining task %d: expected SPRINT, got %q", remaining, task.Status)
-	}
-	var member int
-	if err := db.QueryRowContext(testContext(),
-		"SELECT COUNT(*) FROM sprint_tasks WHERE task_id = ?", remaining).Scan(&member); err != nil {
-		t.Fatalf("counting membership: %v", err)
-	}
-	if member != 1 {
-		t.Errorf("remaining task %d: expected 1 membership row, got %d", remaining, member)
-	}
-}
+// The finding-#66 gate that stood here — after removing tasks from a sprint,
+// membership and status agree — moved to internal/commands, because the method
+// it drove (RemoveTasksFromSprint) was a copy the binary never ran and is gone
+// (task #188). It is now
+// TestSprintRemoveTasksKeepsMembershipAndStatusInAgreement in
+// internal/commands/sprint_remove_tasks_atomicity_test.go, driving the command.
 
 // ==================== #67: capacity enforced inside the tx ====================
 
@@ -308,5 +254,142 @@ func TestColumnExists(t *testing.T) {
 	}
 	if absent {
 		t.Error("expected sprints.no_such_column to be absent")
+	}
+}
+
+// ==================== rmp task #305: columnExists table-name shape guard ====
+
+// TestColumnExistsRefusesUnsafeTableIdentifier is the regression test for rmp
+// task #305 (CWE-89).
+//
+// columnExists INTERPOLATES its table argument, because SQLite does not accept a
+// bound parameter as a PRAGMA argument. It was safe only because all of its
+// callers happen to pass string literals — a property of the callers, which no
+// caller is obliged to preserve and which the #nosec at the interpolation would
+// have kept the scanner quiet about. The guard makes the safety a property of
+// the FUNCTION, and this test is what holds the guard in place.
+//
+// The cases are the ones that discriminate. A test that only exercised valid
+// names would pass against the unguarded code and would prove nothing, so every
+// case here is a name the unguarded function would have interpolated: one
+// carrying a quote (which closes the literal), one carrying a semicolon (which
+// ends the statement and starts another), one carrying whitespace (which is not
+// an identifier at all), and the empty string (which asks about a table with no
+// name and answers "the column is absent" for every column, sending an ALTER at
+// a table nobody named).
+func TestColumnExistsRefusesUnsafeTableIdentifier(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // read-only probe; the deferred rollback is the cleanup
+
+	cases := []struct {
+		name  string
+		table string
+	}{
+		{
+			name:  "quote closes the literal",
+			table: `sprints') AND 1=1 --`,
+		},
+		{
+			name:  "semicolon appends a second statement",
+			table: `sprints'); DROP TABLE sprints; --`,
+		},
+		{
+			name:  "whitespace is not an identifier",
+			table: "sprint tasks",
+		},
+		{
+			name:  "empty string names no table",
+			table: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			exists, err := columnExists(tx, tc.table, "max_tasks")
+			if err == nil {
+				t.Fatalf("columnExists(%q) returned no error; the name reached the statement", tc.table)
+			}
+			if !errors.Is(err, errUnsafeTableIdentifier) {
+				t.Fatalf("columnExists(%q) failed with %v; expected the shape guard's refusal, "+
+					"which means the name reached SQLite instead of being refused before the interpolation",
+					tc.table, err)
+			}
+			if exists {
+				t.Errorf("columnExists(%q) reported the column present while refusing the name", tc.table)
+			}
+		})
+	}
+
+	// The refusals changed nothing. sprints is still there, still carries
+	// max_tasks, and is still readable on the same transaction — so neither the
+	// DROP payload nor the refusals themselves left the schema or the
+	// transaction damaged.
+	present, err := columnExists(tx, "sprints", "max_tasks")
+	if err != nil {
+		t.Fatalf("columnExists after the refusals: %v", err)
+	}
+	if !present {
+		t.Error("sprints.max_tasks is gone after the refused names; the guard did not hold")
+	}
+	var count int
+	if err := tx.QueryRow("SELECT COUNT(*) FROM sprints").Scan(&count); err != nil {
+		t.Fatalf("reading sprints after the refused names: %v", err)
+	}
+}
+
+// TestColumnExistsAdmitsEveryTableTheMigrationsName is the guard's other half:
+// the class has to admit every name the migrations actually pass, or the guard
+// would break the idempotency checks it sits inside.
+//
+// The four names are the complete set the ten call sites in migrations.go use,
+// and each is probed with a column that exists on it and one that does not, so
+// the test proves the guard passes the name THROUGH rather than merely not
+// erroring on it.
+func TestColumnExistsAdmitsEveryTableTheMigrationsName(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // read-only probe; the deferred rollback is the cleanup
+
+	cases := []struct {
+		table   string
+		present string
+	}{
+		{table: "tasks", present: "completion_summary"},
+		{table: "sprints", present: "order_index"},
+		{table: "sprint_tasks", present: "position"},
+		{table: "audit", present: "related_entity_id"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.table, func(t *testing.T) {
+			if !safeTableIdentifier.MatchString(tc.table) {
+				t.Fatalf("%s is a name the migrations pass and the guard rejects", tc.table)
+			}
+			exists, err := columnExists(tx, tc.table, tc.present)
+			if err != nil {
+				t.Fatalf("columnExists(%s, %s): %v", tc.table, tc.present, err)
+			}
+			if !exists {
+				t.Errorf("expected %s.%s to exist", tc.table, tc.present)
+			}
+			absent, err := columnExists(tx, tc.table, "no_such_column")
+			if err != nil {
+				t.Fatalf("columnExists(%s, no_such_column): %v", tc.table, err)
+			}
+			if absent {
+				t.Errorf("expected %s.no_such_column to be absent", tc.table)
+			}
+		})
 	}
 }

@@ -41,6 +41,11 @@ func buildWebCommand() Command {
 				Usage:       "rmp web [--host <address>] [--port <number>] [--no-open]",
 				HelpPrinter: web.PrintHelp,
 				Handler:     runWeb,
+				// `rmp web` publishes its own refusal for an excess positional
+				// argument — "unexpected argument: X", with a colon and no
+				// quotes (SPEC/COMMANDS.md § Web Interface). The shared
+				// enforcement point defers so that wording survives.
+				PublishesOwnArityRefusal: true,
 				Flags: []Flag{
 					{Long: "--host", Type: "string", Default: "127.0.0.1", Description: "Bind host. Default 127.0.0.1 (loopback only), reachable solely from the local machine. Use --host 0.0.0.0 to bind all interfaces and expose the read-only interface on the network (which prints a network-exposure warning to stderr)."},
 					{Long: "--port", Type: "integer", HasRange: true, RangeMin: 0, RangeMax: 65535, Default: "8787", Description: "Bind port 0-65535. Default 8787; falls back to an ephemeral port if 8787 is in use and --port is not set."},

@@ -223,7 +223,7 @@ func seedIndexFixture(t *testing.T, db *DB) indexFixtureIDs {
 	t.Helper()
 	ctx := testContext()
 
-	sprintID, err := db.CreateSprint(ctx, &models.Sprint{
+	sprintID, err := seedSprint(db, &models.Sprint{
 		Title:       "Audit retention hardening",
 		Description: "Retain and index a full year of audit history.",
 		Status:      models.SprintPending,
@@ -236,7 +236,7 @@ func seedIndexFixture(t *testing.T, db *DB) indexFixtureIDs {
 	statuses := []models.TaskStatus{models.StatusBacklog, models.StatusCompleted}
 	var backlogIDs []int
 	for i := range 60 {
-		id, err := db.CreateTask(ctx, &models.Task{
+		id, err := seedTask(db, &models.Task{
 			Title:                  fmt.Sprintf("Harden the audit retention policy, part %d", i+1),
 			Type:                   models.TypeTask,
 			Status:                 statuses[i%len(statuses)],
@@ -258,8 +258,8 @@ func seedIndexFixture(t *testing.T, db *DB) indexFixtureIDs {
 		t.Fatalf("adding tasks to sprint: %v", err)
 	}
 
-	// CreateTask and AddTasksToSprint already write audit rows; add a spread of
-	// timestamps so the date-range plan has something to range over.
+	// AddTasksToSprint already writes audit rows; add a spread of timestamps so
+	// the date-range plan has something to range over.
 	now := time.Now().UTC()
 	for i := range 40 {
 		entry := &models.AuditEntry{
@@ -377,5 +377,55 @@ func TestGroupedSprintResolutionNeedsNoNewIndex(t *testing.T) {
 		t.Errorf("sprint_tasks carries the indexes %v, want exactly %v; the grouped sprint read "+
 			"adds none (SPEC/DATABASE.md § Resolve the Sprint of Many Tasks (Grouped), Index)",
 			indexes, want)
+	}
+}
+
+// TestGroupedSprintMembershipReadIsCoveredByTheLookupIndex asserts the claim
+// SPEC/DATABASE.md § Read the Membership of Many Sprints (Grouped) makes about
+// the read that resolves the membership of every sprint the listing returns:
+// idx_sprint_tasks_lookup covers it exactly — its columns are (sprint_id,
+// task_id), the leading column serving the IN lookup and the pair serving the
+// ordering — so the statement needs no sort step and reads no table row.
+//
+// The SQL is the production builder's, planned with the placeholder count
+// production builds for the ids it is given, so a statement that drifts away from
+// its index fails here rather than in a benchmark nobody runs.
+func TestGroupedSprintMembershipReadIsCoveredByTheLookupIndex(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+	fixture := seedSprintMembershipFixture(t, db)
+
+	args := make([]any, len(fixture.sprintIDs))
+	for i, id := range fixture.sprintIDs {
+		args[i] = id
+	}
+	plan := queryPlan(t, db, groupedSprintMembershipQuery(db.Placeholders(len(args))), args...)
+
+	// A COVERING index search is the whole claim: the pair (sprint_id, task_id)
+	// is everything the statement selects, so it answers from the index and
+	// touches no sprint_tasks row. A plain "SEARCH ... USING INDEX" would mean
+	// every matched row is fetched from the table for a value the index already
+	// holds.
+	if !strings.Contains(plan, "COVERING INDEX idx_sprint_tasks_lookup") {
+		t.Errorf("the grouped membership read is not served as a covering index search on "+
+			"idx_sprint_tasks_lookup.\nplan: %s", plan)
+	}
+	if strings.Contains(plan, "SCAN sprint_tasks") {
+		t.Errorf("the grouped membership read falls back to a full scan of sprint_tasks.\nplan: %s", plan)
+	}
+	// The index supplies both ordering columns in the order the statement asks
+	// for, so there is no sort step. A temporary B-tree here would mean the
+	// index shape earns nothing over one on sprint_id alone.
+	if strings.Contains(plan, "TEMP B-TREE") {
+		t.Errorf("the grouped membership read sorts in a temporary B-tree; the index must supply "+
+			"the (sprint_id, task_id) order.\nplan: %s", plan)
+	}
+	// It reads sprint_tasks and nothing else: the answer is a set of ids, so no
+	// tasks row and no sprints row is fetched to produce it.
+	for _, table := range []string{"tasks", "sprints"} {
+		if strings.Contains(plan, " "+table+" ") {
+			t.Errorf("the grouped membership read touches %s; it must read sprint_tasks alone.\nplan: %s",
+				table, plan)
+		}
 	}
 }

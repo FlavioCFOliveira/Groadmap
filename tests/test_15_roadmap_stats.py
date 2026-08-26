@@ -136,8 +136,7 @@ class TestRoadmapStats:
         # Add tasks to sprint
         self.test.run_cmd([
             "sprint", "add-tasks", "-r", roadmap,
-            str(sprint_id), str(task_ids[0]), str(task_ids[1]),
-            str(task_ids[2]), str(task_ids[3])
+            str(sprint_id), ",".join(str(i) for i in task_ids[:4])
         ])
 
         # After add-tasks, tasks 0-3 are in SPRINT status. Task 4 remains BACKLOG.

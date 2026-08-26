@@ -181,8 +181,35 @@ Groadmap implements exponential backoff retry logic for database operations:
 
 - **Initial delay**: 100ms
 - **Maximum delay**: 1000ms
-- **Maximum retries**: 5
-- **Backoff pattern**: 100ms, 200ms, 400ms, 800ms, 1000ms
+- **Maximum retries**: 5 — retries only; the first attempt is not a retry
+- **Maximum attempts**: 6 — one initial attempt plus at most five retries
+- **Backoff pattern**: 100ms, 200ms, 400ms, 800ms, 1000ms — one wait before each retry
+- **Maximum total wait**: 2500ms — 100 + 200 + 400 + 800 + 1000
+
+**Attempts and Retries:**
+
+"Maximum retries" counts the attempts made after the first one, so the number of
+times the operation itself runs is one greater: at most six. This section states
+both figures rather than the retry count alone, because an attempt count left to
+the reader to derive is a figure that two implementations of the same policy can
+disagree on without either of them contradicting the text.
+
+**Wait Ordering:**
+
+The implementation waits before each retry, and never after an attempt it does
+not retry:
+
+1. The first attempt runs immediately, with no preceding wait.
+2. Each retry is preceded by the next delay of the backoff pattern: 100ms before
+   the first retry, then 200ms, 400ms, 800ms and 1000ms before the second, third,
+   fourth and fifth.
+3. An attempt that succeeds returns its result immediately; no further wait and
+   no further attempt happen.
+4. An attempt that fails with an error the Retry Conditions below exclude returns
+   that error immediately, without waiting.
+5. No wait follows the sixth attempt. An operation whose every attempt fails with
+   a retryable error waits 2500ms in total and then fails; it does not wait again
+   after its final failure.
 
 **Retry Conditions:**
 - Only retry on SQLite busy/locked errors (`database is locked`, `SQLITE_BUSY`)
@@ -332,17 +359,22 @@ model is why the conflict path is not reachable today. Groadmap likewise uses no
 of the engine's MVCC-specific entry points and issues no `MERGE` of its own, so the
 engine's concurrency semantics are not observable through the CLI as it stands.
 
-Groadmap does not depend on the engine to serialise its writers. It serialises them
-itself, at the process level: a write invocation acquires an exclusive, non-blocking
-advisory lock on a lock file that Groadmap maintains in the roadmap's graph
-directory, before the store is opened, and holds it until after the checkpoint. A
-second write invocation that finds the lock held fails immediately rather than
-waiting, and the operating system releases the lock when the holding process exits,
-so a crashed invocation does not strand it. Read invocations do not take this lock.
-This is the lock referred to throughout
-[Write Contention and Recovery](#write-contention-and-recovery).
+Groadmap does not depend on the engine to serialise access to the store. It
+serialises it itself, at the process level, on a lock file that Groadmap maintains
+in the roadmap's graph directory (`write.lock`). Every invocation takes that lock
+before the store is opened. A write invocation takes it **exclusively** and holds
+it until after the checkpoint; a second write invocation that finds it held fails
+immediately rather than waiting. A read invocation takes the **same** lock in
+**shared** mode, but holds it across the **store open alone**, releasing it as
+soon as the open returns, so a read's on-disk repair and a writer's checkpoint
+can never overlap; readers do not exclude one another. The
+operating system releases the lock when the holding process exits, so a crashed
+invocation does not strand it. This is the lock referred to throughout
+[Write Contention and Recovery](#write-contention-and-recovery); the contract it
+implements is specified in `GRAPH.md § Concurrency and Recovery`, which is
+canonical.
 
-The lock deliberately spans the whole open, commit, checkpoint, and
+The **exclusive** lock deliberately spans the whole open, commit, checkpoint, and
 write-ahead-log truncation sequence rather than the transaction alone. That is the
 span that must not interleave: a second writer that had loaded the graph before the
 first writer's commit would checkpoint a full snapshot of its own stale in-memory
@@ -363,26 +395,50 @@ state from the snapshot and log.
    closes the store, and exits. The store is **not** held open across invocations,
    and it shares no connections, locks, or transactions with the SQLite layer.
    The two persistence mechanisms are fully independent.
-2. Read subcommands open the store, run the query through the engine's read path,
-   stream the result to stdout, and close. Write subcommands run the query through
-   the engine's transactional path so the change is committed atomically, then
-   checkpoint synchronously before closing.
+2. Read subcommands take the shared store lock, open the store, release the lock,
+   then run the query through the engine's read path and stream the result to
+   stdout. Write subcommands take the lock exclusively, run the query through the
+   engine's transactional path so the change is committed atomically, then
+   checkpoint synchronously, and release the lock only after that. Opening the
+   store is not a read-only operation on disk for either of them: recovery repairs
+   an interrupted checkpoint on open, which is why a read takes a lock at all, and
+   why it needs the lock for no longer than the open (see
+   `GRAPH.md § What a Read Changes on Disk`).
 
 ### Write Contention and Recovery
 
-1. Because a write invocation acquires Groadmap's exclusive graph write lock
+1. Because a write invocation acquires Groadmap's graph store lock exclusively
    before opening the store, two concurrent `rmp graph` write invocations against
-   the **same** roadmap contend for that lock. The losing invocation MUST fail fast
-   rather than hang indefinitely or corrupt the store.
+   the **same** roadmap contend for that lock, and so do a write and a read, in
+   both directions. The losing invocation MUST fail fast or wait a bounded time,
+   as the mode-specific rules below require; it MUST never hang indefinitely and
+   MUST never corrupt the store.
 2. The contention/lock failure surfaces as `utils.ErrDatabase` (exit code 1),
-   consistent with treating the graph store as a database-class dependency.
-3. A bounded retry on a graph-store lock uses the **same** bounded
-   exponential-backoff policy specified for SQLite in
-   [Concurrency Model](#concurrency-model) (a small bounded number of attempts,
-   exponential backoff, retrying only on lock/contention conditions and never on
-   parse or validation errors). The contract is fail-fast with a bounded wait,
-   not an unbounded block.
-4. Recovery on open is expected to be transparent for a consistently committed
+   consistent with treating the graph store as a database-class dependency. For a
+   graph read served by the web interface, it surfaces as an internal read error
+   (HTTP 500), the status that endpoint already returns for a graph store that
+   cannot be opened.
+3. A **write** does not wait: it takes the lock non-blocking and fails on the
+   first collision.
+4. A **read** waits, and waits a bounded time. It retries the shared lock under
+   the **same** bounded exponential-backoff policy specified for SQLite in
+   [Retry Logic](#retry-logic): six attempts in all — one initial attempt plus at
+   most five retries — and 2500 ms of waiting in the worst case. That section
+   states the delay ladder and the wait ordering, and this rule does not restate
+   them, so the two cannot diverge. The read retries only on lock/contention
+   conditions and never on parse or validation errors. The policy is sized against
+   the **writer's** hold, which spans a full checkpoint and is unaffected by the
+   reader releasing its own lock after the open; a shorter or more aggressive wait
+   would fail reads that a writer was about to release. When the bounded wait is
+   exhausted the read fails as rule 2 describes. The contract for a read is a
+   bounded wait and then failure, never an unbounded block: a read that blocked
+   without a bound would let a long write hang a web request until the server's
+   write timeout fired (see `WEB.md § HTTP Server Timeouts`). The worst-case wait
+   is a fraction of that timeout, and it is spent before the query starts, so it
+   does not consume the graph data endpoint's own query time budget (see
+   `WEB.md § Graph Query Time Budget`). The reasoning behind the asymmetry between
+   rules 3 and 4 is in `GRAPH.md § Lock Contention`.
+5. Recovery on open is expected to be transparent for a consistently committed
    store. A corrupt or unreadable store surfaces as `utils.ErrDatabase` (exit code
    1); there is no automatic graph-store repair in this version.
 
@@ -436,9 +492,29 @@ implications.
 
 ### Reads During Writes
 
-A read invocation observes the last committed snapshot. It does not block on, and
-is not blocked by, an in-flight writer in a different process, subject to the
-store's own consistency guarantees. Groadmap does not add a separate read lock.
+A read invocation observes the last committed state, reconstructed from the
+snapshot plus the write-ahead-log tail.
+
+A read is **not** independent of an in-flight writer in a different process while
+it is opening the store. Groadmap adds no *separate* read lock, but a read does
+take the one graph store lock, in shared mode, across the store open (see
+[Transactional Model and Writer Serialisation](#transactional-model-and-writer-serialisation)).
+A read therefore waits, for a bounded time, on a writer that holds the store when
+the read tries to open it. This is not an optimisation the implementation may
+skip: opening the store runs recovery, recovery repairs an interrupted checkpoint
+on disk, and an unlocked read could delete or race the staging directory a
+concurrent writer is publishing from. The full contract, including what a read
+does and does not change on disk, is `GRAPH.md § Concurrency and Recovery`.
+
+Once the open returns, the read is independent again. The lock is released, and
+the read runs entirely against the in-memory graph the recovery produced:
+iterating and serialising a result touches no file in the store. Two consequences
+follow, and both are intended. A read's query, however long it runs, blocks no
+writer — a writer can start, commit, and checkpoint while an earlier read is
+still producing its output. And that read continues to serve the state it loaded
+at open time, which is the last committed state as of that moment, not as of the
+moment its output is written; a read is a snapshot of the store as it was when
+the read opened it.
 
 ## Performance Considerations
 
@@ -452,7 +528,7 @@ store's own consistency guarantees. Groadmap does not add a separate read lock.
 
 ## See Also
 
-- `ARCHITECTURE.md` § System design and module boundaries
-- `DATABASE.md` § Schema, queries, and indexes
-- `MODELS.md` § Memory Layout Optimization
-- `GRAPH.md` § Knowledge graph feature, persistence, and guard rails
+- System design and module boundaries → `ARCHITECTURE.md`
+- Schema, queries, and indexes → `DATABASE.md`
+- Memory Layout Optimization → `MODELS.md § Memory Layout Optimization`
+- Knowledge graph feature, persistence, and guard rails → `GRAPH.md`

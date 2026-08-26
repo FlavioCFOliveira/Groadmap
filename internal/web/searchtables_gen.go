@@ -1,19 +1,28 @@
 //go:build ignore
 
-// Command searchtables_gen writes the two halves of the board search's term
-// normalisation into the script the binary serves: the run-encoded FOLD_TABLE
-// carrying the folding rule's mapping, and the run-encoded SPACE_TABLE carrying
-// the trim rule's whitespace set, both in static/task-search.js.
+// Command searchtables_gen writes everything a term's preparation is made of into
+// the script the binary serves, all of it in static/task-search.js: the
+// run-encoded FOLD_TABLE carrying the folding rule's mapping, the run-encoded
+// SPACE_TABLE carrying the trim rule's whitespace set, and the three tables the
+// normalisation rule is made of — DECOMP_TABLE, the full canonical
+// decompositions; CCC_TABLE, the canonical combining classes; and COMPOSE_TABLE,
+// the primary composites.
 //
-// The client MUST NOT normalise a term with the JavaScript platform's own
+// The client MUST NOT prepare a term with the JavaScript platform's own
 // functions. Its case conversion is Unicode's Default Case Conversion rather than
-// the simple mapping the folding rule fixes, and its trimming removes a different
-// set from the White_Space property the trim rule fixes — it keeps U+0085, which
-// carries the property, and removes U+FEFF, which does not. Both functions read
+// the simple mapping the folding rule fixes; its trimming removes a different set
+// from the White_Space property the trim rule fixes — it keeps U+0085, which
+// carries the property, and removes U+FEFF, which does not; and its
+// String.prototype.normalize reads normalisation tables of its own. All three read
 // tables of whatever Unicode version the browser ships. Shipping the server's own
-// mapping and the server's own set removes the platform and the browser's Unicode
-// version from the answer on both counts (SPEC/WEB.md § Roadmap Tasks Page, One
-// rule, and only one implementation of it; The trim rule).
+// mapping, the server's own set and the server's own normalisation data removes
+// the platform and the browser's Unicode version from the answer on all three
+// counts (SPEC/WEB.md § Roadmap Tasks Page, One rule, and only one implementation
+// of it; The trim rule; The normalisation rule).
+//
+// Hangul is deliberately NOT tabulated: UAX #15 decomposes and composes the 11,172
+// Hangul syllables arithmetically, so both sides compute them and DECOMP_TABLE
+// holds 2,081 entries rather than 13,253 and COMPOSE_TABLE 961 rather than 12,133.
 //
 // Run it with `go generate ./internal/web/` and commit the result: the tables are
 // generated but COMMITTED artefacts, so `go build` stays a plain Go build with no
@@ -30,9 +39,12 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // scriptPath is the served asset the tables are written into, relative to
@@ -43,6 +55,28 @@ const scriptPath = "static/task-search.js"
 // not scalar values, carry no case mapping and no property, so no span may cover
 // them.
 const maxCodePoint = 0x10FFFF
+
+// The Hangul syllables and jamo of UAX #15's algorithmic decomposition and
+// composition, which no table below holds a single entry for.
+const (
+	hangulSBase  = 0xAC00
+	hangulLBase  = 0x1100
+	hangulVBase  = 0x1161
+	hangulTBase  = 0x11A7
+	hangulLCount = 19
+	hangulVCount = 21
+	hangulTCount = 28
+	hangulNCount = hangulVCount * hangulTCount
+	hangulSCount = hangulLCount * hangulNCount
+)
+
+// maxDecomposition is the longest full canonical decomposition in Unicode, which
+// DECOMP_TABLE's fixed entry width is built from: U+1F82 decomposes to the four
+// code points U+03B1 U+0313 U+0300 U+0345. A fixed width is what lets the client
+// binary-search the table by index, exactly as it searches the other four; the
+// unused slots of a shorter decomposition carry 0, which no decomposition
+// element can be.
+const maxDecomposition = 4
 
 // lineWidth caps the emitted lines' length so the asset stays reviewable in an
 // ordinary diff.
@@ -85,6 +119,19 @@ func main() {
 		log.Fatal("the trim rule matches nothing; SPACE_TABLE would be empty")
 	}
 
+	decompositions := decompositionEntries()
+	if len(decompositions) == 0 {
+		log.Fatal("nothing decomposes; DECOMP_TABLE would be empty")
+	}
+	classes := combiningClassSpans()
+	if len(classes) == 0 {
+		log.Fatal("no code point carries a combining class; CCC_TABLE would be empty")
+	}
+	compositions := compositionEntries(decompositions)
+	if len(compositions) == 0 {
+		log.Fatal("nothing composes; COMPOSE_TABLE would be empty")
+	}
+
 	regions := []region{
 		{
 			begin: "  /* BEGIN GENERATED FOLD TABLE */",
@@ -95,6 +142,21 @@ func main() {
 			begin: "  /* BEGIN GENERATED SPACE TABLE */",
 			end:   "  /* END GENERATED SPACE TABLE */",
 			body:  emit("SPACE_TABLE", spaceNumbers(spaces), 2),
+		},
+		{
+			begin: "  /* BEGIN GENERATED DECOMP TABLE */",
+			end:   "  /* END GENERATED DECOMP TABLE */",
+			body:  emit("DECOMP_TABLE", decompositionNumbers(decompositions), 1+maxDecomposition),
+		},
+		{
+			begin: "  /* BEGIN GENERATED CCC TABLE */",
+			end:   "  /* END GENERATED CCC TABLE */",
+			body:  emit("CCC_TABLE", combiningClassNumbers(classes), 3),
+		},
+		{
+			begin: "  /* BEGIN GENERATED COMPOSE TABLE */",
+			end:   "  /* END GENERATED COMPOSE TABLE */",
+			body:  emit("COMPOSE_TABLE", compositionNumbers(compositions), 3),
 		},
 	}
 
@@ -109,16 +171,18 @@ func main() {
 			log.Fatalf("rewriting %s: %v", scriptPath, err)
 		}
 	}
+	summary := fmt.Sprintf("%d fold runs covering %d code points, %d whitespace spans covering "+
+		"%d, %d decompositions, %d combining-class spans, %d primary composites",
+		len(folds), coveredRuns(folds), len(spaces), coveredSpans(spaces),
+		len(decompositions), len(classes), len(compositions))
 	if updated == string(script) {
-		fmt.Printf("%s is already up to date (%d fold runs, %d whitespace spans)\n",
-			scriptPath, len(folds), len(spaces))
+		fmt.Printf("%s is already up to date (%s)\n", scriptPath, summary)
 		return
 	}
 	if err := os.WriteFile(scriptPath, []byte(updated), 0o600); err != nil {
 		log.Fatalf("writing %s: %v", scriptPath, err)
 	}
-	fmt.Printf("%s: wrote %d fold runs covering %d code points, and %d whitespace spans "+
-		"covering %d\n", scriptPath, len(folds), coveredRuns(folds), len(spaces), coveredSpans(spaces))
+	fmt.Printf("%s: wrote %s\n", scriptPath, summary)
 }
 
 // foldRuns run-encodes the folding rule over every code point of Unicode.
@@ -273,4 +337,203 @@ func replaceRegion(script string, r region) (string, error) {
 			strings.TrimSpace(r.begin))
 	}
 	return script[:begin] + r.begin + "\n" + r.body + script[end:], nil
+}
+
+// decomposition is one entry of DECOMP_TABLE: a code point and its FULL canonical
+// decomposition, canonically ordered, at most maxDecomposition code points long.
+type decomposition struct {
+	codePoint int
+	runes     []rune
+}
+
+// composition is one entry of COMPOSE_TABLE: the primary composite two code
+// points make.
+type composition struct {
+	lead      int
+	trail     int
+	composite int
+}
+
+// classSpan is one entry of CCC_TABLE: a maximal range of consecutive code points
+// that all carry the same NON-ZERO canonical combining class. A code point in no
+// span carries class 0, which is the default and needs no entry.
+type classSpan struct {
+	span
+	class int
+}
+
+// decompositionEntries tabulates the FULL canonical decomposition of every code
+// point that has one, over the whole of Unicode.
+//
+// The data is applied here exactly as internal/web/fold.go's searchDecompose
+// applies it — norm.NFD of the single code point — so the generator and the
+// server express one rule, and the guard test proves the two agree against
+// searchDecompose itself, over every code point, on every test run.
+//
+// The 11,172 Hangul syllables are skipped: UAX #15 decomposes them
+// arithmetically, both sides compute them, and the guard sweeps them too — so an
+// arithmetic that disagreed with the server would fail there rather than pass
+// unnoticed for want of an entry.
+func decompositionEntries() []decomposition {
+	var entries []decomposition
+	for cp := 0; cp <= maxCodePoint; cp++ {
+		if isSurrogate(cp) || isHangulSyllable(cp) {
+			continue
+		}
+		runes := []rune(norm.NFD.String(string(rune(cp))))
+		if len(runes) == 1 && runes[0] == rune(cp) {
+			continue // decomposes to itself: the client's default, and no entry
+		}
+		if len(runes) > maxDecomposition {
+			log.Fatalf("U+%04X decomposes to %d code points; DECOMP_TABLE holds at most %d",
+				cp, len(runes), maxDecomposition)
+		}
+		entries = append(entries, decomposition{codePoint: cp, runes: runes})
+	}
+	return entries
+}
+
+// combiningClassSpans run-encodes the canonical combining classes over the whole
+// of Unicode, one span per maximal range sharing a class.
+//
+// The data is applied here exactly as internal/web/fold.go's
+// searchCombiningClass applies it, for the same reason foldRuns re-expresses the
+// fold and with the same guarantee.
+func combiningClassSpans() []classSpan {
+	var spans []classSpan
+	for cp := 0; cp <= maxCodePoint; cp++ {
+		if isSurrogate(cp) {
+			continue
+		}
+		class := int(combiningClass(rune(cp)))
+		if class == 0 {
+			continue // the default, and no entry
+		}
+		if n := len(spans); n > 0 && spans[n-1].class == class &&
+			spans[n-1].start+spans[n-1].length == cp {
+			spans[n-1].length++
+			continue
+		}
+		spans = append(spans, classSpan{span: span{start: cp, length: 1}, class: class})
+	}
+	return spans
+}
+
+// compositionEntries derives the primary composites from the decompositions,
+// which is what a primary composite IS: a code point whose canonical
+// decomposition is two characters, the first of them a starter, that Unicode does
+// not exclude from composition.
+//
+// It re-expresses internal/web/fold.go's buildSearchComposition step for step,
+// down to reading the exclusion from the NFC_Quick_Check property — which is
+// DATA and not the composing transform — and to entering only COMPOSABLE code
+// points into the prefix lookup, so that U+01FA pairs with U+00C5 rather than
+// with the canonically equivalent but excluded U+212B. The reason the module's
+// own composition is not used at all is in that function's comment: at the pinned
+// version it composes a supplementary starter as though the starter were its low
+// 16 bits.
+//
+// Hangul is skipped here as it is in decompositionEntries, and for the same
+// reason.
+func compositionEntries(decompositions []decomposition) []composition {
+	composable := make([]decomposition, 0, len(decompositions))
+	byDecomposition := make(map[string]int, len(decompositions))
+	for _, d := range decompositions {
+		if len(d.runes) < 2 || combiningClass(d.runes[0]) != 0 || isCompositionExcluded(rune(d.codePoint)) {
+			continue
+		}
+		composable = append(composable, d)
+		byDecomposition[string(d.runes)] = d.codePoint
+	}
+
+	entries := make([]composition, 0, len(composable))
+	for _, d := range composable {
+		lead := int(d.runes[0])
+		if len(d.runes) > 2 {
+			prefix, ok := byDecomposition[string(d.runes[:len(d.runes)-1])]
+			if !ok {
+				continue // no composable prefix: no pair can reach this code point
+			}
+			lead = prefix
+		}
+		entries = append(entries, composition{
+			lead:      lead,
+			trail:     int(d.runes[len(d.runes)-1]),
+			composite: d.codePoint,
+		})
+	}
+	// Ordered by the PAIR, because the pair is what the client binary-searches.
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].lead != entries[j].lead {
+			return entries[i].lead < entries[j].lead
+		}
+		return entries[i].trail < entries[j].trail
+	})
+	return entries
+}
+
+// combiningClass returns the canonical combining class of one code point.
+func combiningClass(r rune) uint8 {
+	var buf [utf8.UTFMax]byte
+	n := utf8.EncodeRune(buf[:], r)
+	return norm.NFD.Properties(buf[:n]).CCC()
+}
+
+// isCompositionExcluded reports whether a code point carrying a canonical
+// decomposition is excluded from composition, by reading Unicode's
+// Full_Composition_Exclusion property. IsNormalString answers from the property
+// data and returns a property of its argument, never a transformed string.
+//
+// It re-expresses internal/unicodenorm.IsCompositionExcluded, deliberately rather
+// than by importing it, for the same reason foldRuns re-expresses the fold: the
+// generator and the server are two expressions of one rule, and the guard test
+// proves they agree instead of assuming it. That function's comment says why the
+// very similar QuickSpanString form is NOT this property, and which twelve code
+// points Unicode 16.0.0 introduced to prove it.
+func isCompositionExcluded(r rune) bool {
+	return !norm.NFC.IsNormalString(string(r))
+}
+
+// isHangulSyllable reports whether cp is one of the 11,172 Hangul syllables,
+// which no generated table holds an entry for.
+func isHangulSyllable(cp int) bool {
+	return cp >= hangulSBase && cp < hangulSBase+hangulSCount
+}
+
+// decompositionNumbers flattens the decompositions into the fixed-width entries
+// the script binary searches: the code point followed by maxDecomposition slots,
+// the unused ones carrying 0.
+func decompositionNumbers(entries []decomposition) []int {
+	numbers := make([]int, 0, (1+maxDecomposition)*len(entries))
+	for _, e := range entries {
+		numbers = append(numbers, e.codePoint)
+		for i := 0; i < maxDecomposition; i++ {
+			if i < len(e.runes) {
+				numbers = append(numbers, int(e.runes[i]))
+				continue
+			}
+			numbers = append(numbers, 0)
+		}
+	}
+	return numbers
+}
+
+// combiningClassNumbers flattens the class spans into the start, length, class
+// triples the script binary searches.
+func combiningClassNumbers(spans []classSpan) []int {
+	numbers := make([]int, 0, 3*len(spans))
+	for _, s := range spans {
+		numbers = append(numbers, s.start, s.length, s.class)
+	}
+	return numbers
+}
+
+// compositionNumbers flattens the primary composites into the lead, trail,
+// composite triples the script binary searches.
+func compositionNumbers(entries []composition) []int {
+	numbers := make([]int, 0, 3*len(entries))
+	for _, e := range entries {
+		numbers = append(numbers, e.lead, e.trail, e.composite)
+	}
+	return numbers
 }

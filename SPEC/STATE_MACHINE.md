@@ -108,9 +108,9 @@ sprint a task belongs to.
    does not renumber the positions of the other member tasks. The task keeps its
    place in the sprint's planned execution order.
 3. **Commands that read sprint membership still see the task.** `sprint tasks`
-   returns it, `sprint get` lists it in `tasks` and counts it in `task_count`, and
-   `sprint show` lists it in `task_order` and counts it in `summary.total_tasks`
-   and `summary.pending`. Commands that select only the non-terminal in-sprint
+   returns it, `sprint get` and `sprint list` both list it in `tasks` and count it
+   in `task_count`, and `sprint show` lists it in `task_order` and counts it in
+   `summary.total_tasks` and `summary.pending`. Commands that select only the non-terminal in-sprint
    statuses do not see it: `sprint open-tasks` and the `max_tasks` capacity check
    both restrict themselves to the `SPRINT`, `DOING`, and `TESTING` statuses, so
    the task is neither returned by the first nor charged against the sprint's

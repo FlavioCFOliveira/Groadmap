@@ -38,7 +38,7 @@ func seedCommitFixture(t *testing.T, name string) (untouched, completed, reopene
 	const now = "2026-08-14T09:30:00Z"
 
 	mk := func(title string) int {
-		id, cerr := database.CreateTask(ctx, seededTask(now, title))
+		id, cerr := seedTask(database, seededTask(now, title))
 		if cerr != nil {
 			t.Fatalf("creating task %q: %v", title, cerr)
 		}
