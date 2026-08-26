@@ -2408,13 +2408,25 @@ was wrong, and it is the sole respect in which the line differs from the one
 same sentinel, in all three.
 
 **Validation Order:**
-1. Validate sprint ID exists
-2. Parse all task IDs and validate format
-3. Verify all task IDs exist in the roadmap
-4. For `add-tasks`: nothing is verified about the sprint a task already belongs to (see Re-parenting on `add-tasks` below)
-5. For `remove-tasks`/`move-tasks`: verify tasks are currently in the specified sprint
-6. Only after full validation succeeds, execute the operation
-7. If any validation fails, exit immediately without making changes
+
+The order below is normative and is the order the three commands apply. The two
+lexical steps need no database and MUST run before it is opened; the roadmap is
+opened next; every step from there to the last validation reads the database and
+writes nothing; the execution step is the only one that writes. Each step names
+the subcommands that perform it, and a step that names fewer than all three is
+not performed by the others at all.
+
+1. Validate the format and range of every sprint id on the command line: `<sprint-id>` for `add-tasks` and `remove-tasks`, `<from-id>` and then `<to-id>` for `move-tasks`. This reads the argument text alone; no sprint is looked up here (all three)
+2. Parse all task IDs and validate their format and range (all three)
+3. Open the roadmap, which refuses a roadmap that does not exist before any sprint or task is resolved (all three)
+4. Verify the sprint exists: `<sprint-id>` for `add-tasks` and `remove-tasks`; `move-tasks` resolves its two sprints one at a time, source before destination, each lookup immediately followed by the CLOSED check below (all three)
+5. Reject a CLOSED sprint: `add-tasks` refuses a CLOSED `<sprint-id>`, and `move-tasks` refuses a CLOSED `<from-id>` or `<to-id>`. `remove-tasks` deliberately does not, because taking tasks out of a closed sprint is the carry-over workflow (`add-tasks`, `move-tasks`)
+6. Verify all task IDs exist in the roadmap (`add-tasks` only). The other two run no existence check of their own: the membership step below refuses an id the sprint does not hold, and an id that names no task cannot be held by one
+7. Verify that the batch does not exceed the sprint's `max_tasks` capacity, when the sprint sets one (`add-tasks` only). This read is a fast-feedback path; the authoritative, race-free enforcement runs inside the transaction of the execution step (see `DATABASE.md § Transactional Atomicity Guarantees`)
+8. Verify that every task is currently a member of the sprint it is being taken out of: `<sprint-id>` for `remove-tasks`, `<from-id>` for `move-tasks` (`remove-tasks`, `move-tasks`)
+9. For `add-tasks`: nothing is verified about the sprint a task already belongs to (see Re-parenting on `add-tasks` below). This item has no failure mode; it records a check the command does not perform
+10. Only after full validation succeeds, execute the operation
+11. If any validation fails, exit immediately without making changes
 
 **Re-parenting on `add-tasks`:**
 

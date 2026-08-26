@@ -1886,12 +1886,15 @@ func (db *DB) AddTasksToSprint(ctx context.Context, sprintID int, taskIDs []int)
 // task between sprints is a re-parenting of work, not a re-admission to the
 // sprint backlog, so the lifecycle state must be carried over unchanged.
 //
-// Validation (SPEC/COMMANDS.md validation step 5): every task in taskIDs must
-// currently be a member of fromID (a row in sprint_tasks with sprint_id =
-// fromID). If any task is not a member of the source sprint, no rows are moved
-// and the call returns ErrTasksNotInSprint wrapped with utils.ErrValidation so
-// the CLI maps it to exit code 6 ("task not in sprint"), matching the
-// task-ordering error contract. The membership check and the re-parenting run
+// Validation, the membership step of SPEC/COMMANDS.md § Task Assignment: every
+// task in taskIDs must currently be a member of fromID (a row in sprint_tasks
+// with sprint_id = fromID). The step is named by what it does rather than by
+// its ordinal, because that list is renumbered whenever a step is published or
+// removed and COMMANDS.md carries several Validation Orders whose step 5 says
+// different things. If any task is not a member of the source sprint, no rows
+// are moved and the call returns ErrTasksNotInSprint wrapped with
+// utils.ErrValidation so the CLI maps it to exit code 6, the code that step
+// publishes for a non-member. The membership check and the re-parenting run
 // in the same transaction, so the move is all-or-nothing.
 //
 // Re-parenting (mirrors AddTasksToSprint's position/added_at conventions):
@@ -1930,8 +1933,9 @@ func (db *DB) MoveTasksBetweenSprints(ctx context.Context, fromID, toID int, tas
 			return fmt.Errorf("verifying task membership: %w", err)
 		}
 		if count != len(taskIDs) {
-			// Wrap with utils.ErrValidation so the CLI maps this to exit 6
-			// (SPEC/COMMANDS.md: "Task ID not in sprint" -> exit 6).
+			// Wrap with utils.ErrValidation so the CLI maps this to exit 6,
+			// the code the membership step of SPEC/COMMANDS.md
+			// § Task Assignment publishes for a non-member.
 			return fmt.Errorf("%w: %w: one or more tasks are not in sprint #%d",
 				utils.ErrValidation, ErrTasksNotInSprint, fromID)
 		}

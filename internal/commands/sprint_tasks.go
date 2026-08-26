@@ -328,8 +328,15 @@ func sprintRemoveTasks(args []string) error {
 	// Fail-fast membership check: every task must currently belong to THIS
 	// sprint. Previously the DELETE ignored the sprint argument and removed by
 	// task_id alone, silently yanking a task out of whatever sprint it was
-	// actually in (data corruption). SPEC/COMMANDS.md § Sprint Task Management
-	// validation step 5 ("Task ID not in sprint -> exit 6"); finding #40.
+	// actually in (data corruption). This is the membership step of
+	// SPEC/COMMANDS.md § Task Assignment, which refuses a non-member with
+	// utils.ErrValidation (exit 6); finding #40.
+	//
+	// The step is cited by what it does rather than by its ordinal. That
+	// section's Validation Order is renumbered whenever a step is published or
+	// removed, and COMMANDS.md carries several such lists whose step 5 says
+	// different things, so an ordinal here goes silently wrong on an edit made
+	// somewhere else.
 	members, err := database.GetSprintTasks(ctx, sprintID)
 	if err != nil {
 		return err
