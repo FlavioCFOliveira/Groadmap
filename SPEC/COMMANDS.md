@@ -2129,7 +2129,7 @@ accepted and stored trimmed.
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
-| `--max-tasks` `< 1` or `> 10000` | 6 | "Error: validation error: --max-tasks must be between 1 and 10000 (got N)" |
+| `--max-tasks` `< 1` or `> 10000` | 6 | "Error: validation error: max_tasks must be between 1 and 10000, got N" |
 | `--max-tasks` non-integer | 2 | "Error: invalid input: invalid value for --max-tasks: strconv.Atoi: parsing \"X\": invalid syntax" |
 | `--order` `<= 0` | 6 | "Error: validation error: --order must be a positive integer greater than zero (got N)" |
 | `--order` non-integer | 6 | "Error: validation error: --order must be a positive integer greater than zero" |
@@ -2761,7 +2761,7 @@ above.
 
 | Scenario | Exit Code | stderr Output |
 |----------|-----------|---------------|
-| `--max-tasks` `< 1` or `> 10000` | 6 | "Error: validation error: --max-tasks must be between 1 and 10000 (got N)" |
+| `--max-tasks` `< 1` or `> 10000` | 6 | "Error: validation error: max_tasks must be between 1 and 10000, got N" |
 | `--max-tasks` non-integer | 2 | "Error: invalid input: invalid value for --max-tasks: strconv.Atoi: parsing \"X\": invalid syntax" |
 | `--order` `<= 0` | 6 | "Error: validation error: --order must be a positive integer greater than zero (got N)" |
 | `--order` non-integer | 6 | "Error: validation error: --order must be a positive integer greater than zero" |

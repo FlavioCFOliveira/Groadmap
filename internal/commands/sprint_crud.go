@@ -142,8 +142,11 @@ func sprintCreate(args []string) error {
 
 	var maxTasks *int
 	if mt, ok := result.Flags["MaxTasks"].(int); ok {
-		if mt < 1 || mt > models.MaxSprintMaxTasks {
-			return fmt.Errorf("%w: --max-tasks must be between 1 and %d (got %d)", utils.ErrValidation, models.MaxSprintMaxTasks, mt)
+		// The bound is not compared here: models.ValidateSprintMaxTasks owns
+		// both the comparison and the sentence, so this command and
+		// `sprint update` cannot word one rule two ways (rmp task 338).
+		if err := models.ValidateSprintMaxTasks(mt); err != nil {
+			return err
 		}
 		maxTasks = &mt
 	}
@@ -383,8 +386,8 @@ func sprintUpdate(args []string) error {
 	var maxTasks *int
 	if hasMaxTasks {
 		mt := result.Flags["MaxTasks"].(int)
-		if mt < 1 || mt > models.MaxSprintMaxTasks {
-			return fmt.Errorf("%w: --max-tasks must be between 1 and %d (got %d)", utils.ErrValidation, models.MaxSprintMaxTasks, mt)
+		if err := models.ValidateSprintMaxTasks(mt); err != nil {
+			return err
 		}
 		maxTasks = &mt
 	}

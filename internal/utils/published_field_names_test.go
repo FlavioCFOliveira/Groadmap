@@ -91,10 +91,9 @@ const definitionFile = "internal/utils/fields.go"
 // only worth the classes it is told about.
 //
 // One such rule has since arrived, and it is NOT in this list: the numeric range
-// rule governs `priority`, `severity` and the `--limit` of a list command, none
-// of which is a free-text field and none of which is in the SPEC table these
-// five classes come from, so it carries its own subject set. See
-// numericRangeFragment below.
+// rule governs the values declaredRangedFields names, not one of which is a
+// free-text field and not one of which is in the SPEC table these five classes
+// come from, so it carries its own subject set. See numericRangeFragment below.
 var freeTextFragments = []string{
 	"the value is not valid UTF-8",
 	"control characters are not allowed",
@@ -159,12 +158,22 @@ var freeTextFragments = []string{
 // to the must-FLAG list: it was a boundary case only while `entity-id` named
 // nothing this class governed.
 //
-// What is still outside the class is outside it for the same reason as before.
-// `--max-tasks` words its range its own way and has a task of its own (rmp task
-// 338); `--order` states its bound as prose rather than as a range at all; and
-// the commit-hash length rule words a range of its own. Each is a separate
-// question, and each is pinned as a must-PASS case below so that the boundary is
-// asserted rather than assumed.
+// It widened a THIRD time, by the same one lever, in rmp task 338, and that one
+// is the clearest statement of what the lever is for. A sprint's `--max-tasks`
+// was refused identically by `sprint create` and by `sprint update`, so it was
+// never the two-wordings defect tasks 318 and 329 fixed; what it was, was the
+// last site still saying `--max-tasks must be between 1 and 10000 (got 0)` after
+// every other range had retired the flag prefix and the parentheses. A wording
+// that survives only where no task has reached is not a second contract, and
+// bringing it under the class is one line in declaredRangedFields.
+//
+// What is still outside the class is outside it for a reason of its own, and
+// neither reason is "no task has reached it yet". `--order` states its bound as
+// prose rather than as a range at all; the commit-hash rule words a range over a
+// LENGTH in hexadecimal characters, not over the value that broke it; and
+// `--port` bounds a flag of `rmp web` that no field of any entity supplies. Each
+// is pinned as a must-PASS case below so that the boundary is asserted rather
+// than assumed.
 const numericRangeFragment = "must be between"
 
 // governedRule is one message class this gate watches: the words that identify
@@ -264,9 +273,9 @@ func TestNoValidationMessageIsBuiltFromAFieldNameLiteral(t *testing.T) {
 					"  utils.ControlCharError, utils.FieldTooLargeError, utils.FieldEmptyError and\n"+
 					"  utils.RequiredFieldMessage all take a utils.Field and spell the message once\n"+
 					"  (SPEC/COMMANDS.md § Published Field Names in Validation Messages, acceptance\n"+
-					"  criterion 6). utils.NumericRangeMessage does the same for the range rule on\n"+
-					"  priority, severity and a list command's --limit. A constructor added for a\n"+
-					"  new class belongs here too.",
+					"  criterion 6). utils.NumericRangeMessage does the same for the numeric range\n"+
+					"  rule over every subject declaredRangedFields names. A constructor added for\n"+
+					"  a new class belongs here too.",
 					rel, lit.line, reason, lit.text)
 			}
 		}
@@ -361,6 +370,17 @@ func TestTheGateDetectsTheDefectItWatchesFor(t *testing.T) {
 		`%w: invalid sprint_id: must be between 1 and %d (got %d)`,
 		`%w: --comment-id must be between 1 and %d (got %d)`,
 		`%w: dependency_task_id must be between 1 and %d, got %d`,
+		// The same class, widened a third time by rmp task 338 to a sprint's
+		// capacity cap. These are the two directions the task requires proven.
+		// The first is VERBATIM the literal both `sprint create` and
+		// `sprint update` carried until the rule moved to
+		// models.ValidateSprintMaxTasks: the last survivor of the prefixed,
+		// parenthesised form, and, like `--entity-id` before it, a must-PASS
+		// boundary case on the list below until `max_tasks` became a subject.
+		// The second is the bare wording a call site would most plausibly
+		// reintroduce having got the prefix right and the sentence wrong.
+		`%w: --max-tasks must be between 1 and %d (got %d)`,
+		`%w: max_tasks must be between 1 and %d, got %d`,
 	}
 	for _, text := range mustFlag {
 		if violation(text) == "" {
@@ -395,11 +415,12 @@ func TestTheGateDetectsTheDefectItWatchesFor(t *testing.T) {
 		// — this class opts out of it — they simply name nothing this class
 		// governs, which is the boundary being asserted.
 		//
-		// `--max-tasks` is the last survivor of the prefixed, parenthesised form
-		// and has a task of its own (rmp task 338). `--entity-id` was on this
-		// list beside it until rmp task 330 converged the id rule; it is a
-		// must-FLAG case now.
-		`%w: --max-tasks must be between 1 and %d (got %d)`,
+		// `--entity-id` was on this list until rmp task 330 converged the id
+		// rule, and `--max-tasks` until rmp task 338 converged the capacity
+		// cap; both are must-FLAG cases now. What is left is the two rules that
+		// are NOT instances of this class: the commit-hash rule words a range
+		// over a LENGTH in characters rather than over the value, and `--port`
+		// names a flag of `rmp web` that no field of any entity supplies.
 		`%w: commit hash must be between %d and %d hexadecimal characters, got %d: %w`,
 		`%w: --port must be an integer between %d and %d (got %d)`,
 		// And the word boundary on the newest subjects, in both directions: a
@@ -410,6 +431,8 @@ func TestTheGateDetectsTheDefectItWatchesFor(t *testing.T) {
 		`%w: subtask_id must be between 1 and %d`,
 		`%w: related-entity-id must be between 1 and %d`,
 		`%w: parent_task_id must be between 1 and %d`,
+		`%w: sprint_max_tasks must be between 1 and %d`,
+		`%w: soft-max-tasks must be between 1 and %d`,
 		// And the two directions of the per-class subject sets: a free-text
 		// wording about a ranged field, and a range wording about a free-text
 		// field. Neither is a message this gate can reason about, and pairing

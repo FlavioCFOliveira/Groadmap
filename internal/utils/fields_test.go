@@ -47,6 +47,16 @@ var declaredFields = []Field{
 // It was a must-PASS boundary case in published_field_names_test.go until this
 // task, precisely because `entity-id` was not yet a subject; it is a must-FLAG
 // case now, and moving it is the visible record that the class widened.
+//
+// FieldSprintMaxTasks is the proof a fourth time, and the one that shows the
+// lever is now the WHOLE extension. rmp task 338 brought a sprint's capacity cap
+// under the rule, and the flag half was already in place from task 329: the
+// single line below is what turns `--max-tasks must be between 1 and 10000
+// (got 0)` — a form the two sprint commands agreed on with each other and with
+// nothing else — into a failure, and it moved `--max-tasks` out of the must-PASS
+// list exactly as `--entity-id` moved before it. The line was NECESSARY and, on
+// its own, not sufficient: until the boundary case moved with it, the gate's own
+// corpus went on asserting that the retired form must pass.
 var declaredRangedFields = []RangedField{
 	FieldTaskPriority,
 	FieldTaskSeverity,
@@ -56,6 +66,7 @@ var declaredRangedFields = []RangedField{
 	FieldEntityID,
 	FieldCommentID,
 	FieldDependencyTaskID,
+	FieldSprintMaxTasks,
 }
 
 // TestRangedFieldsPublishOneUsableNameEach is to RangedField what
@@ -365,7 +376,9 @@ func TestIDEntityWordAgreesWithThePublishedName(t *testing.T) {
 // is not an id must publish no entity word at all, so a caller cannot build an
 // id-shaped message about `priority`.
 func TestOnlyIDFieldsCarryAnEntityWord(t *testing.T) {
-	for _, f := range []RangedField{FieldTaskPriority, FieldTaskSeverity, FieldListLimit, RangedField(0)} {
+	for _, f := range []RangedField{
+		FieldTaskPriority, FieldTaskSeverity, FieldListLimit, FieldSprintMaxTasks, RangedField(0),
+	} {
 		if word := f.IDEntity(); word != "" {
 			t.Errorf("RangedField(%d) is not an id but publishes the entity word %q", uint8(f), word)
 		}

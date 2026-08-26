@@ -48,7 +48,7 @@ var allSentinels = []error{
 	ErrInvalidCurrentStatus, ErrInvalidTargetStatus, ErrCannotTransition,
 	ErrPriorityOutOfRange, ErrSeverityOutOfRange, ErrInvalidCommitHash,
 	ErrTaskLimitOutOfRange, ErrAuditLimitOutOfRange,
-	ErrInvalidSprintStatus, ErrInvalidSprintOrder,
+	ErrInvalidSprintStatus, ErrInvalidSprintOrder, ErrSprintMaxTasksOutOfRange,
 	ErrInvalidAuditOperation, ErrInvalidEntityType, ErrInvalidOperation,
 	ErrEntityIDOutOfRange, ErrInvalidCommentType,
 	utils.ErrValidation, utils.ErrFieldTooLarge,
@@ -194,6 +194,23 @@ func dedupCases(t *testing.T) []dedupCase {
 			err:           mustErr("audit limit", ValidateAuditLimit(501)),
 			wantMsg:       "validation error: limit must be between 1 and 500, got 501",
 			wantSentinels: []error{utils.ErrValidation, ErrAuditLimitOutOfRange},
+		},
+		{
+			// The capacity-cap range rule, converged by rmp task 338. Both
+			// bounds are asserted because the two sprint commands agreed with
+			// each other on the wording they got wrong, so the property worth
+			// pinning is not that they agree — it is that the sentence they
+			// now produce is the one every other range produces.
+			name:          "ValidateSprintMaxTasks/below",
+			err:           mustErr("sprint max tasks below", ValidateSprintMaxTasks(0)),
+			wantMsg:       "validation error: max_tasks must be between 1 and 10000, got 0",
+			wantSentinels: []error{utils.ErrValidation, ErrSprintMaxTasksOutOfRange},
+		},
+		{
+			name:          "ValidateSprintMaxTasks/above",
+			err:           mustErr("sprint max tasks above", ValidateSprintMaxTasks(10001)),
+			wantMsg:       "validation error: max_tasks must be between 1 and 10000, got 10001",
+			wantSentinels: []error{utils.ErrValidation, ErrSprintMaxTasksOutOfRange},
 		},
 		{
 			name: "AuditEntry.Validate/operation",

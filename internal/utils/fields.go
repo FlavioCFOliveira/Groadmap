@@ -312,8 +312,8 @@ func RequiredFieldMessage(field Field) string {
 
 // RangedField identifies one of the numeric values Groadmap refuses when it
 // falls outside a fixed inclusive range: the task fields `priority` and
-// `severity`, the `--limit` of a list command, and the id of each entity a
-// command addresses.
+// `severity`, the `--limit` of a list command, the id of each entity a command
+// addresses, and a sprint's `--max-tasks` capacity cap.
 //
 // # Why a second type instead of more Field constants
 //
@@ -363,6 +363,16 @@ type RangedField uint8
 // one sentence — which is the half of rmp task 330 that converges a NAME rather
 // than a form.
 //
+// FieldSprintMaxTasks is the last of the ranged values to arrive, and it is one
+// constant for TWO call sites rather than two: `sprint create` and `sprint
+// update` bound the identical field of the identical entity at the identical
+// bounds. They already agreed with each other — which is why this was never the
+// defect tasks 318 and 329 fixed — and disagreed with everything else, keeping
+// the prefixed, parenthesised `--max-tasks must be between 1 and 10000 (got 0)`
+// after every other range rule had retired that form. A form that survives only
+// where no task has reached is not a second contract, it is the absence of one
+// (rmp task 338).
+//
 // The zero value is deliberately not a field, as above.
 const (
 	FieldTaskPriority RangedField = iota + 1
@@ -373,6 +383,7 @@ const (
 	FieldEntityID
 	FieldCommentID
 	FieldDependencyTaskID
+	FieldSprintMaxTasks
 )
 
 // rangedNames maps each RangedField to the name its refusal publishes. Each is
@@ -385,7 +396,11 @@ const (
 //
 // For `priority` and `severity` the word is also the database column that stores
 // the value (SPEC/DATABASE.md). `limit` stores nothing — it bounds a result set
-// — so the flag's own word is the whole of its name.
+// — so the flag's own word is the whole of its name. `max_tasks` is a column
+// too: it is the `max_tasks` column of the sprints table, and the key the sprint
+// JSON already publishes it under, so dropping the `--` and writing the hyphen
+// as an underscore lands on the name the rest of the application uses for the
+// value rather than on a name invented for the refusal.
 //
 // The five id names are not invented here either. Each is the argument's own
 // name in SPEC/COMMANDS.md — `task-id`, `sprint-id`, `entity-id`, `comment-id`,
@@ -405,6 +420,7 @@ var rangedNames = [...]string{
 	FieldEntityID:         "entity_id",
 	FieldCommentID:        "comment_id",
 	FieldDependencyTaskID: "dependency_task_id",
+	FieldSprintMaxTasks:   "max_tasks",
 }
 
 // idEntityWords maps each id field to the word its FORMAT refusal publishes —

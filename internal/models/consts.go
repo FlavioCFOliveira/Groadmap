@@ -29,6 +29,12 @@ const (
 	// MaxSprintDescriptionLength is the maximum length for sprint descriptions
 	MaxSprintDescriptionLength = 2048
 
+	// MinSprintMaxTasks is the smallest value a sprint's --max-tasks capacity cap
+	// accepts. A cap of zero would admit no task at all, which is not a capacity
+	// but a closed sprint, so the floor is one member
+	// (SPEC/COMMANDS.md § Create/Update Sprint).
+	MinSprintMaxTasks = 1
+
 	// MaxSprintMaxTasks is the maximum value accepted for a sprint's --max-tasks
 	// capacity cap. A value above this is rejected with exit code 6
 	// (SPEC/COMMANDS.md § Create/Update Sprint).

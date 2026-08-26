@@ -19,6 +19,12 @@ var (
 	// ErrInvalidSprintOrder indicates a sprint execution order that is not a
 	// positive integer greater than zero.
 	ErrInvalidSprintOrder = errors.New("invalid sprint order")
+	// ErrSprintMaxTasksOutOfRange is the capacity cap's range rule. Like the
+	// `--limit` sentinels in limit.go it carries the whole wording of its own
+	// refusal, taken from the shared definition, so errors.Is identifies the
+	// rule while nothing here can word it differently from the other ranges.
+	ErrSprintMaxTasksOutOfRange = errors.New(utils.NumericRangeMessage(
+		utils.FieldSprintMaxTasks, MinSprintMaxTasks, MaxSprintMaxTasks))
 	// ErrTitleRequired ("title is required") is shared with task validation and
 	// declared in task.go; sprint Validate reuses it for the required Title field.
 )
@@ -141,6 +147,40 @@ func (s *Sprint) Validate() error {
 		return err
 	}
 
+	return nil
+}
+
+// ValidateSprintMaxTasks refuses a `--max-tasks` outside
+// MinSprintMaxTasks..MaxSprintMaxTasks. It is the ONLY comparison of that bound
+// in the application: `sprint create` and `sprint update` both call it, and
+// neither compares the bound itself.
+//
+// # Why the rule moved here
+//
+// It used to live at those two call sites, written out twice, and — unlike the
+// `--limit` rule that rmp task 329 converged — the two copies agreed with each
+// other. What they did not agree with was every other range rule in Groadmap.
+// Both refused an out-of-range cap as
+//
+//	Error: validation error: --max-tasks must be between 1 and 10000 (got 0)
+//
+// naming the FLAG rather than the value and parenthesising what every other
+// range echoes after a comma. Tasks 318, 329, 330 and 331 retired that form
+// wherever they reached; this one survived only because no task had reached it
+// (rmp task 338).
+//
+// Agreement between a rule's own two sites is not the property the shared
+// definition exists for. The property is that ONE rule announces itself with ONE
+// sentence whatever call site applied it, and a rule left spelling its own
+// wording is free to drift again the moment a third site appears. So the wording
+// is not spelled here either: utils.NumericRangeMessage is the only place the
+// sentence exists and utils.NumericRangeError the only place the ", got N"
+// suffix and the utils.ErrValidation chain — and therefore exit code 6 — are
+// assembled.
+func ValidateSprintMaxTasks(maxTasks int) error {
+	if maxTasks < MinSprintMaxTasks || maxTasks > MaxSprintMaxTasks {
+		return utils.NumericRangeError(ErrSprintMaxTasksOutOfRange, maxTasks)
+	}
 	return nil
 }
 

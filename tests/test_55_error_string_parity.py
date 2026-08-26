@@ -1592,7 +1592,7 @@ class TestErrorStringParity:
         )
         # #83: --max-tasks out of the 1-10000 range.
         self.check(
-            "Error: validation error: --max-tasks must be between 1 and 10000 (got N)",
+            "Error: validation error: max_tasks must be between 1 and 10000, got N",
             ["sprint", "create", "-r", r, "-t", "Observability hardening", "-d", self.SPRINT_DESC,
              "--max-tasks", "10001"], 6, subs={"N": "10001"},
             note="sprint create max-tasks out of range",
@@ -1650,6 +1650,19 @@ class TestErrorStringParity:
             "Error: field exceeds maximum size: title exceeds maximum length of 255 characters",
             ["sprint", "update", "-r", r, str(sprint_id), "-t", "x" * 256], 6,
             note="sprint update title too long",
+        )
+        # #83 reached a second time, on the OTHER command that publishes it
+        # and at the OTHER bound. SPEC/COMMANDS.md states this row identically
+        # under `sprint create` and `sprint update`, and the corpus dedupes by
+        # content, so one driver would satisfy the gate -- but the defect rmp
+        # task 338 fixed was precisely a wording the two sites agreed on while
+        # agreeing with nothing else, and only driving both proves they still
+        # say the same thing after the rule moved behind
+        # models.ValidateSprintMaxTasks.
+        self.check(
+            "Error: validation error: max_tasks must be between 1 and 10000, got N",
+            ["sprint", "update", "-r", r, str(sprint_id), "--max-tasks", "0"], 6,
+            subs={"N": "0"}, note="sprint update max-tasks below the floor",
         )
 
         # #92: --order rejected once the sprint is CLOSED.
