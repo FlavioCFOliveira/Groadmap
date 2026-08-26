@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The pinned linter moves from `golangci-lint` v2.12.2 to v2.13.1.** The version
+  is named in four places and all four move together: `SPEC/BUILD.md`, the
+  `golangci-lint-action` invocation in `.github/workflows/ci.yml` and in
+  `.github/workflows/release.yml`, and the install comment in the `Makefile`. The
+  new linter was run against the tree before the pin was touched and reports
+  **0 issues**, so nothing is suppressed and nothing new is accommodated.
+
+  This also closes a hazard the `v1.15.0` release notes recorded as a Known Issue
+  and the `v1.15.1` notes carried forward: on a machine where a snap-installed
+  `golangci-lint` precedes `~/go/bin` on `PATH`, `make lint` ran the snap's build
+  rather than the pinned one **and still exited 0**, so the substitution was
+  silent. That snap is v2.13.1, so the two now agree — but the shadow itself
+  remains, and the durable check is `which -a golangci-lint`, since
+  `golangci-lint --version` answers truthfully about the wrong binary.
+
+- **`govulncheck` updated from `v1.3.0` to `v1.7.0`.** It is
+  deliberately not pinned — `SPEC/BUILD.md` requires `@latest` so the check
+  reflects the vulnerability database as it stands at release time — so this is a
+  local toolchain refresh rather than a specification change. It reports no
+  vulnerabilities.
+
+- `gosec` was checked and is already at its pinned `v2.28.0`. The Go floor stays at
+  **1.26.6**: raising it to 1.27 would switch `golang.org/x/text`'s `unicode/norm`
+  from the Unicode 15.0.0 tables to the 17.0.0 ones through a build constraint, and
+  `SPEC/BUILD.md` requires that be treated as a change to the board search rather
+  than as a toolchain bump.
+
 ## [1.15.1] - 2026-08-26
 
 A correctness release, and nothing else. Two sprints — **90 completed tasks across 87

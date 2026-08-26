@@ -550,7 +550,7 @@ Two tools implement two of the validation gates: `golangci-lint` implements
 three rules in this preamble govern both of them.
 
 **Both tools are pinned to an exact version.** The pinned versions are
-`golangci-lint v2.12.2` and `gosec v2.28.0`. A tool's version is part of its
+`golangci-lint v2.13.1` and `gosec v2.28.0`. A tool's version is part of its
 gate's meaning, so the pin is what makes the gate mean the same thing in the
 three places that enforce it (see `Validation Gates`). Three reasons set this
 rule:
@@ -587,11 +587,11 @@ source that no commit modified.
 
 The project uses [golangci-lint](https://golangci-lint.run) for static analysis.
 Configuration is in `.golangci.yml`, which declares `version: "2"` and therefore
-requires a golangci-lint v2 release. The pinned version is **v2.12.2**.
+requires a golangci-lint v2 release. The pinned version is **v2.13.1**.
 
 **Install:**
 ```bash
-go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
 ```
 
 The module path MUST include the `/v2` suffix. The v1 path
@@ -600,11 +600,21 @@ still installs, but it resolves to the final v1 release, and a v1 binary cannot
 read this project's `version: "2"` configuration.
 
 A package manager may be used instead, provided it installs exactly the pinned
-version. `golangci-lint --version` reports the version it was built from, so it
-confirms which binary is on `PATH`.
+version.
+
+**Verifying the installed version.** `golangci-lint --version` reports the
+version the binary was built from, but it answers for whichever binary `PATH`
+resolves first, which is not necessarily the one `go install` wrote. A packaged
+linter earlier on `PATH` — a snap in `/snap/bin`, for example — shadows that
+one, and because such packages track the latest release, the shadow can report
+the pinned version itself. The check then passes while `make lint` runs a binary
+the pin never installed. Run `which -a golangci-lint` first: it lists every
+match in `PATH` order, so it reveals a shadow that `--version` alone cannot.
+Read the version of the entry it lists first, because that is the one the gate
+runs.
 
 In the workflows, the pinned version is the `version` input passed to the
-`golangci-lint` GitHub Action: `version: v2.12.2`. This is separate from the pin
+`golangci-lint` GitHub Action: `version: v2.13.1`. This is separate from the pin
 on the action itself (`golangci/golangci-lint-action@v9.2.1`), which selects the
 action's code rather than the linter's. Both are exact, and neither substitutes
 for the other.
@@ -982,7 +992,7 @@ separate published asset, not a fourth entry inside the archive.
 - [ ] The gate set in each workflow file matches the `check` target of the `Makefile` gate for gate: no gate is present in one and absent from the other
 - [ ] Each workflow installs `golangci-lint` and `gosec` in the job that runs those gates. No step tests whether a tool is present and continues without it, and no gate step carries `continue-on-error`
 - [ ] Both workflows pin `gosec` to the exact version this specification names, installing it with the command the specification gives (`go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0`), and that version is one and the same in `.github/workflows/ci.yml`, in `.github/workflows/release.yml`, and in Security Scan: gosec. Confirm an installed scanner with `go version -m "$(which gosec)"`, whose `mod` line names the version; `gosec --version` prints `dev` for a `go install` build and proves nothing
-- [ ] Both workflows pin `golangci-lint` to the exact version this specification names, passing `version: v2.12.2` to the `golangci-lint` action, and that version is one and the same in `.github/workflows/ci.yml`, in `.github/workflows/release.yml`, and in Linter: golangci-lint. The action itself stays pinned to its own exact version, which is a separate pin. Confirm an installed linter with `golangci-lint --version`
+- [ ] Both workflows pin `golangci-lint` to the exact version this specification names, passing `version: v2.13.1` to the `golangci-lint` action, and that version is one and the same in `.github/workflows/ci.yml`, in `.github/workflows/release.yml`, and in Linter: golangci-lint. The action itself stays pinned to its own exact version, which is a separate pin. Confirm an installed linter with `which -a golangci-lint` and then `golangci-lint --version`; `--version` alone answers for whichever binary `PATH` resolves first, and a shadowing package that tracks the latest release can report the pinned version itself
 - [ ] The documented local install command for each tool installs the pinned version, and the linter it installs can actually run this project: the golangci-lint module path carries the `/v2` suffix, so `golangci-lint run ./...` reads `.golangci.yml` (`version: "2"`) instead of rejecting it
 - [ ] `gosec` runs in both workflows with the invocation the `security` gate defines (`gosec -exclude-dir=.claude/worktrees ./...`), so the scanned scope and the accepted `#nosec` suppressions are the same everywhere
 - [ ] Every gate fails its job when it fails: introducing one violation at a time — an unformatted file, a `go vet` finding, a failing test, a `golangci-lint` violation, and an unsuppressed `gosec` finding — fails the workflow run in each case, in both workflows
