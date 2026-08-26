@@ -22,8 +22,8 @@ const (
 // The Hangul syllables and jamo of UAX #15's algorithmic decomposition and
 // composition, which no shipped table holds a single entry for: a few lines of
 // arithmetic give their decomposition and their composition exactly, so
-// DECOMP_TABLE holds 2,061 entries rather than 13,233 and COMPOSE_TABLE 941
-// rather than 12,113 (SPEC/WEB.md § Roadmap Tasks Page, What keeps the shipped
+// DECOMP_TABLE holds 2,081 entries rather than 13,253 and COMPOSE_TABLE 961
+// rather than 12,133 (SPEC/WEB.md § Roadmap Tasks Page, What keeps the shipped
 // rule equal to the server's; Acceptance Criterion 155).
 const (
 	hangulSBase  = unicodenorm.HangulSBase

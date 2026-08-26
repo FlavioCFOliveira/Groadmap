@@ -3,6 +3,7 @@ package web
 import (
 	"fmt"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -124,6 +125,32 @@ const maxDecomposition = 4
 //     rather than the detection.
 func TestTaskSearchScript_ShippedRuleIsTheServerRule(t *testing.T) {
 	script := readEmbeddedAsset(t, "static/task-search.js")
+
+	// WHAT A FAILURE HERE USUALLY MEANS, said once at the end rather than left for
+	// the reader to infer from a list of code points.
+	//
+	// Every rule this test compares is read from Unicode character data, and the
+	// version of that data is fixed by the TOOLCHAIN and not by go.mod: the fold
+	// and the whitespace set come from the standard library's own tables, and
+	// golang.org/x/text/unicode/norm selects tables15.0.0.go under !go1.27 and
+	// tables17.0.0.go under go1.27. A machine whose Go is newer than the last one
+	// to run `go generate` therefore fails here with the shipped tables intact and
+	// the server moved underneath them — which reads as a broken test and is not
+	// one. Naming that cause costs a Cleanup and saves the next reader the search.
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		t.Logf("the server's rule and the tables shipped in static/task-search.js disagree. "+
+			"This is what a change of UNICODE VERSION looks like: the data behind foldSearch, "+
+			"isSearchSpace, searchDecompose, searchCombiningClass and the composition comes "+
+			"from the running toolchain (this run: %s), not from go.mod. If the toolchain or "+
+			"golang.org/x/text moved, `go generate ./internal/web/` is the fix and the "+
+			"behaviour change it records must be reviewed, not waved through "+
+			"(SPEC/BUILD.md § External Dependencies, Unicode Data Rules 5 and 6). If neither "+
+			"moved, a shipped table was edited by hand and must be regenerated instead.",
+			runtime.Version())
+	})
 
 	// AC 119, the absence: the served script calls no case conversion of the
 	// platform at all. Asserted on the RAW asset, comments included, the way

@@ -22,7 +22,7 @@
 //
 // Hangul is deliberately NOT tabulated: UAX #15 decomposes and composes the 11,172
 // Hangul syllables arithmetically, so both sides compute them and DECOMP_TABLE
-// holds 2,061 entries rather than 13,233 and COMPOSE_TABLE 941 rather than 12,113.
+// holds 2,081 entries rather than 13,253 and COMPOSE_TABLE 961 rather than 12,133.
 //
 // Run it with `go generate ./internal/web/` and commit the result: the tables are
 // generated but COMMITTED artefacts, so `go build` stays a plain Go build with no
@@ -480,12 +480,18 @@ func combiningClass(r rune) uint8 {
 }
 
 // isCompositionExcluded reports whether a code point carrying a canonical
-// decomposition is excluded from composition, by reading its NFC_Quick_Check
-// property. QuickSpanString answers from the property table alone and composes
-// nothing.
+// decomposition is excluded from composition, by reading Unicode's
+// Full_Composition_Exclusion property. IsNormalString answers from the property
+// data and returns a property of its argument, never a transformed string.
+//
+// It re-expresses internal/unicodenorm.IsCompositionExcluded, deliberately rather
+// than by importing it, for the same reason foldRuns re-expresses the fold: the
+// generator and the server are two expressions of one rule, and the guard test
+// proves they agree instead of assuming it. That function's comment says why the
+// very similar QuickSpanString form is NOT this property, and which twelve code
+// points Unicode 16.0.0 introduced to prove it.
 func isCompositionExcluded(r rune) bool {
-	s := string(r)
-	return norm.NFC.QuickSpanString(s) != len(s)
+	return !norm.NFC.IsNormalString(string(r))
 }
 
 // isHangulSyllable reports whether cp is one of the 11,172 Hangul syllables,

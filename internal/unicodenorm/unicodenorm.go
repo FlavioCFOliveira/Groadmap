@@ -17,12 +17,14 @@
 // golang.org/x/text/unicode/norm, which is the Go project's own implementation of
 // UAX #15 and the only place that data is published for Go. Its COMPOSITION is
 // not used and MUST NOT be: at the pinned version it composes a supplementary
-// starter as though the starter were its low 16 bits, over 15,041 pairs. Compose
+// starter as though the starter were its low 16 bits, over 15,342 pairs. Compose
 // below says the whole of it, and SPEC/BUILD.md § External Dependencies, Unicode
 // Data Rules 3 states the prohibition that follows from it — norm.NFC.String,
 // norm.NFC.Bytes and every part of norm.NFKC MUST NOT be called anywhere in
-// Groadmap, and the one admitted use of norm.NFC is the property lookup in
-// IsCompositionExcluded.
+// Groadmap's own code, and the one admitted use of norm.NFC is the property
+// lookup in IsCompositionExcluded. The tests of this package are the single
+// exception, and only as a REFERENCE to measure Groadmap's own rule against;
+// TestNFC_AgreesWithTheModuleOnEverySingleCodePoint says why.
 //
 // NORMALISATION IS FOR COMPARISON ONLY. Nothing here rewrites what rmp stores or
 // what a page renders. Every caller normalises a DERIVED value — a searchable
@@ -52,8 +54,8 @@ const (
 // The Hangul syllables and jamo of UAX #15's algorithmic decomposition and
 // composition. The 11,172 syllables are NOT tabulated on either side: a few
 // lines of arithmetic give their decomposition and their composition exactly,
-// so DECOMP_TABLE holds 2,061 entries rather than 13,233 and COMPOSE_TABLE 941
-// rather than 12,113 (SPEC/WEB.md § Roadmap Tasks Page, What keeps the shipped
+// so DECOMP_TABLE holds 2,081 entries rather than 13,253 and COMPOSE_TABLE 961
+// rather than 12,133 (SPEC/WEB.md § Roadmap Tasks Page, What keeps the shipped
 // rule equal to the server's; Acceptance Criterion 155).
 const (
 	HangulSBase  = 0xAC00
@@ -112,7 +114,7 @@ func CombiningClass(r rune) uint8 {
 //
 // seconds exists so that a text carrying none of them can be returned untouched
 // without composing anything, which is what keeps an ordinary Latin title off the
-// composition path entirely. It holds the 63 second elements of the table plus
+// composition path entirely. It holds the 72 second elements of the table plus
 // the Hangul V and T jamo, which compose arithmetically rather than through it.
 type Composition struct {
 	Pairs   map[[2]rune]rune
@@ -140,14 +142,15 @@ var Compositions = sync.OnceValue(BuildComposition)
 // canonical decomposition is two characters, the first of them a starter, that
 // Unicode does not exclude from composition.
 //
-// The exclusion is read from the NFC_Quick_Check character property, which is the
-// published form of Full_Composition_Exclusion and is DATA rather than the
-// composing transform: composition exclusions cannot be derived from the
-// decompositions themselves, because a script exclusion such as U+0958 and a
-// post-composition-version exclusion such as U+2ADC decompose exactly as an
-// ordinary composite does. norm.NFC.String, norm.NFC.Bytes, norm.NFKC and every
-// other composing entry point of that module are NOT called here or anywhere else
-// in this package, for the reason Compose gives.
+// The exclusion is read from the Full_Composition_Exclusion character property,
+// which is DATA rather than the composing transform: composition exclusions
+// cannot be derived from the decompositions themselves, because a script
+// exclusion such as U+0958 and a post-composition-version exclusion such as
+// U+2ADC decompose exactly as an ordinary composite does. IsCompositionExcluded
+// says which query reads that property and which very similar one does not.
+// norm.NFC.String, norm.NFC.Bytes, norm.NFKC and every other composing entry
+// point of that module are NOT called here or anywhere else in this package, for
+// the reason Compose gives.
 //
 // The prefix lookup handles a decomposition longer than two: U+1E14 fully
 // decomposes to U+0045 U+0304 U+0300, and its pair is (U+0112, U+0300), U+0112
@@ -207,17 +210,36 @@ func BuildComposition() *Composition {
 }
 
 // IsCompositionExcluded reports whether a code point carrying a canonical
-// decomposition is excluded from composition, by reading its NFC_Quick_Check
-// property: a code point with a canonical decomposition is NFC_QC=No exactly when
-// Full_Composition_Exclusion is true of it, and NFC_QC=Yes otherwise.
+// decomposition is excluded from composition — that is, whether Unicode's
+// Full_Composition_Exclusion property is true of it. A code point carrying a
+// canonical decomposition is NFC_QC=No exactly when that property holds, so the
+// question is equivalently "is this code point already in Normalization Form C?",
+// and IsNormalString is the module's answer to it.
 //
-// QuickSpanString answers that question from the property table alone — it
-// reports how much of the string is already in Normalization Form C, which for a
-// single code point is all of it or none of it — and composes nothing, so the
-// composition defect Compose describes cannot reach it.
+// IT IS DELIBERATELY NOT norm.NFC.QuickSpanString(s) != len(s), WHICH IS A
+// DIFFERENT QUESTION. QuickSpanString reports how much of a string is
+// *quick-checked* to be in Normalization Form C, so for a single code point it
+// answers NFC_QC != Yes — that is, No **or Maybe**. NFC_QC=Maybe is carried by
+// every code point that can be the SECOND element of a primary composite, and
+// such a code point is not excluded from composition; it is the reason the
+// composition table has any entries at all.
+//
+// Under Unicode 15.0.0 the two questions happened to have the same answer,
+// because no code point then carried both a canonical decomposition and
+// NFC_QC=Maybe. Unicode 16.0.0 introduced twelve that do — U+113C5, U+113C7 and
+// U+113C8 (Tulu-Tigalari), U+16121 to U+16128 (Gurung Khema) and U+16D68 (Kirat
+// Rai) — and the quick-check form silently reported all twelve as excluded. That
+// dropped their composites from the table and left NFC returning the
+// decomposition of a code point that composes, which is not Normalization Form C.
+// TestIsCompositionExcluded_IsFullCompositionExclusion holds this function to the
+// property as the Unicode Character Database publishes it, in both directions.
+//
+// IsNormalString composes nothing that a caller can observe: it returns a
+// property of the argument, never a transformed string, so the composition defect
+// Compose describes cannot reach a result of Groadmap's. It runs only in the
+// one-time derivation of the composition table, never on a search.
 func IsCompositionExcluded(r rune) bool {
-	s := string(r)
-	return norm.NFC.QuickSpanString(s) != len(s)
+	return !norm.NFC.IsNormalString(string(r))
 }
 
 // Compose returns the primary composite of two code points, if there is
@@ -230,14 +252,14 @@ func IsCompositionExcluded(r rune) bool {
 // U+1003C followed by U+0338 into U+226E (U+1003C masked to 16 bits is U+003C,
 // and less-than plus U+0338 is not-less-than), U+10041 followed by U+0301 into
 // U+00C1, and U+1042B followed by U+0308 into U+04F8. Measured over every
-// supplementary starter against each of the 63 code points a composition can
-// consume, the defect spans 15,041 pairs over 6,021 distinct leading code points.
+// supplementary starter against each of the 72 code points a composition can
+// consume, the defect spans 15,342 pairs over 6,232 distinct leading code points.
 // The platform's own normalisation leaves all three witnesses unchanged, and so
 // does this function.
 //
 // Composing from the derived table is not a private dialect of NFC: it is NFC
 // where that module is right and NFC where that module is wrong. The two agree on
-// all 1,112,064 single code points, and the table still composes the 13
+// all 1,112,064 single code points, and the table still composes the 33
 // legitimate supplementary composites, U+11935 followed by U+11930 giving
 // U+11938 among them (SPEC/BUILD.md § External Dependencies, Unicode Data
 // Rules 3; SPEC/WEB.md § Roadmap Tasks Page, The normalisation rule).

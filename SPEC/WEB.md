@@ -1265,13 +1265,13 @@ how the `rmp web` process itself terminates.
   carry a two-code-point searchable text while a term typed as the single character
   `ẖ` normalised to `U+1E96`, and the term would not occur in the text it plainly
   spells. `U+1E97`, `U+1E98`, `U+1E99` and `U+01F0` behave the same way. Measured
-  over the 1,321,226 sequences of a folding code point followed by a non-starter,
+  over the 1,440,384 sequences of a folding code point followed by a non-starter,
   one pass leaves the result outside NFC on **70** of them; two passes leave it in
-  NFC on **all 1,321,226**, so a third pass would change nothing and is not
+  NFC on **all 1,440,384**, so a third pass would change nothing and is not
   performed.
 
   **Normalise before folding, not after.** The order is observable: on **0** single
-  code points, but on **74** of those 1,321,226 sequences, over **32** distinct
+  code points, but on **74** of those 1,440,384 sequences, over **32** distinct
   leading code points. Normalising first is chosen because it is the only order that
   closes this defect for `U+0130` (LATIN CAPITAL LETTER I WITH DOT ABOVE), the code
   point **The folding rule** below already names. A title written with `U+0130` and a
@@ -1290,13 +1290,13 @@ how the `rmp web` process itself terminates.
   `U+1003C` followed by `U+0338` becomes `U+226E` (because `U+1003C` masked to 16
   bits is `U+003C`), `U+10041` followed by `U+0301` becomes `U+00C1`, and `U+1042B`
   followed by `U+0308` becomes `U+04F8`. The platform's own normalisation leaves all
-  three unchanged, and so does Groadmap's. The defect spans **15,041** pairs over
-  **6,021** distinct leading code points; the decomposition the server does use is
+  three unchanged, and so does Groadmap's. The defect spans **15,342** pairs over
+  **6,232** distinct leading code points; the decomposition the server does use is
   unaffected by it.
 
   Composing from the table is not a private dialect of NFC. It is NFC where that
   module is right and NFC where that module is wrong: the two agree on **all
-  1,112,064** single code points, and the table still composes the 13 legitimate
+  1,112,064** single code points, and the table still composes the 33 legitimate
   supplementary composites, `U+11935` followed by `U+11930` giving `U+11938` among
   them. This is why the server takes the client's table rather than the client
   taking the server's answer — the alternative would mean generating a table that
@@ -1427,15 +1427,15 @@ how the `rmp web` process itself terminates.
 
   The normalisation data is **three generated tables**, shipped in
   `static/task-search.js` exactly as `FOLD_TABLE` and `SPACE_TABLE` already are:
-  `DECOMP_TABLE`, the full canonical decompositions, **2,061** entries;
-  `CCC_TABLE`, the canonical combining classes, **388** spans; and `COMPOSE_TABLE`,
-  the primary composites, **941** entries. Together the three are the largest part
+  `DECOMP_TABLE`, the full canonical decompositions, **2,081** entries;
+  `CCC_TABLE`, the canonical combining classes, **403** spans; and `COMPOSE_TABLE`,
+  the primary composites, **961** entries. Together the three are the largest part
   of the script the binary serves — on the order of 60 KB, well over half of it.
   They are that small only because Hangul is **not** tabulated: UAX #15 decomposes
   and composes Hangul arithmetically, so the 11,172
   Hangul syllables are computed on both sides rather than stored. Tabulating them
-  would take `DECOMP_TABLE` from 2,061 entries to 13,233 and `COMPOSE_TABLE` from
-  941 to 12,113, for data that a few lines of arithmetic already give exactly.
+  would take `DECOMP_TABLE` from 2,081 entries to 13,253 and `COMPOSE_TABLE` from
+  961 to 12,133, for data that a few lines of arithmetic already give exactly.
 
   **That size is an order of magnitude and not a byte count, deliberately.** The
   three entry counts above are backed: the check described below reads the shipped
@@ -1466,18 +1466,39 @@ how the `rmp web` process itself terminates.
   conversion of the platform, nor a trimming function of the platform, nor the
   platform's own normalisation.
 
-  **The table's composition was proven correct before it was specified.** The
-  shipped `COMPOSE_TABLE` is not merely equal to the server's data — it is equal to
-  the rule Unicode defines, which is what makes the server adopting it a correction
-  rather than a divergence. A prototype driven by these tables was checked against
-  the platform's own normalisation over **69,956,194** inputs with **0** failures:
-  all 1,112,064 single code points, 850,084 starter-plus-two-mark sequences,
-  1,900,242 decomposing-starter-plus-mark pairs, 33,516 Hangul cases, and
-  66,060,288 supplementary-starter pairs — every supplementary starter against each
-  of the 63 marks a composition can consume, which is precisely the domain in which
-  the server's own module is wrong.
+  **The table's composition is proven correct on every run.** The shipped
+  `COMPOSE_TABLE` is not merely equal to the server's data — it is equal to the
+  rule Unicode defines, which is what makes the server adopting it a correction
+  rather than a divergence. Three checks establish that, and each of them
+  re-establishes it whenever the `test` gate runs. Two live in
+  `internal/unicodenorm`. The first requires the server's Normalization Form C to
+  equal `golang.org/x/text/unicode/norm`'s over **all 1,112,064** single code
+  points, which is the one domain in which that module is a valid reference: the
+  truncation defect **The normalisation rule** describes needs a pair to arise, so
+  over longer inputs the two forms differ by design. The second requires the
+  composition exclusions the server derives to equal Full_Composition_Exclusion as
+  the Unicode Character Database publishes it, over the whole of Unicode and in
+  **both** directions — a false positive drops a composite Unicode composes, a
+  false negative admits one Unicode excludes, and a single total would let the two
+  cancel. The third is the check this section already describes: the shipped
+  tables against the server's own functions, every code point and not a sample.
 
-  The check is an ordinary Go test. It runs no JavaScript and requires no
+  **A count of inputs stood here, and it was withdrawn rather than updated.** It
+  reported that a prototype driven by these tables had been checked against the
+  platform's own normalisation over 69,956,194 inputs with 0 failures, broken into
+  five domains. Three reasons removed it. The prototype no longer exists, so the
+  run cannot be repeated. Four of the five domains are sized by the Unicode
+  version, so the total moved the day the toolchain moved and nothing reported
+  that it had. And re-deriving the domain sizes would have restated a proven
+  result over inputs no measurement ever visited, which is worse than an obsolete
+  figure and not better. This is **That size is an order of magnitude and not a
+  byte count, deliberately**, above, applied to this paragraph: a figure a reviewer
+  trusts and no gate checks is worse than no figure at all. What stands in its
+  place is the stronger claim rather than the smaller one, because the count
+  recorded that the rule had been correct once and the three checks require it to
+  be correct now.
+
+  That third check is an ordinary Go test. It runs no JavaScript and requires no
   JavaScript engine, no Node.js, no network access, and no module beyond the direct dependencies
   `BUILD.md § External Dependencies` names, so it holds within the constraints
   already fixed in that section and in `BUILD.md § Vendored Web Assets`,
@@ -6671,11 +6692,11 @@ Rules:
     get` returns the same bytes it returned before this rule existed, and the card
     renders the stored title, so no stored value and no rendered value is normalised
     (Acceptance Criterion 121 fixes the trim, 118 the fold). The second NFC pass is
-    required and is proven so: over the 1,321,226 sequences of a folding code point
+    required and is proven so: over the 1,440,384 sequences of a folding code point
     followed by a non-starter, one pass leaves the result outside NFC on **70** of
     them — `H` followed by `U+0331` folds to `h` followed by `U+0331`, which
     composes to `U+1E96`, and `U+1E97`, `U+1E98`, `U+1E99` and `U+01F0` behave the
-    same way — while two passes leave it in NFC on **all 1,321,226**, so a third
+    same way — while two passes leave it in NFC on **all 1,440,384**, so a third
     pass changes nothing and is not performed. Normalising **before** folding is
     likewise required rather than incidental: the two orders differ on 0 single code
     points but on **74** of those sequences, over **32** distinct leading code
@@ -6709,8 +6730,8 @@ Rules:
     appears in the narrowing script, asserted as an absence in the script the binary
     serves, the way Acceptance Criterion 119 asserts the platform's case conversions
     and 122 its trimming functions. The shipped data is three generated tables —
-    `DECOMP_TABLE` with 2,061 entries, `CCC_TABLE` with 388 spans, and
-    `COMPOSE_TABLE` with 941 entries — and the 11,172 Hangul
+    `DECOMP_TABLE` with 2,081 entries, `CCC_TABLE` with 403 spans, and
+    `COMPOSE_TABLE` with 961 entries — and the 11,172 Hangul
     syllables appear in none of them, being decomposed and composed arithmetically
     per UAX #15 on both sides. All three are covered by the **same** check that
     Acceptance Criteria 119 and 122 fix and not by a further check beside it, with
@@ -6728,10 +6749,10 @@ Rules:
     `golang.org/x/text/unicode/norm`: at the pinned version that module composes a
     supplementary starter as though it were its low 16 bits, turning `U+1003C`
     followed by `U+0338` into `U+226E`, `U+10041` followed by `U+0301` into `U+00C1`,
-    and `U+1042B` followed by `U+0308` into `U+04F8`, across 15,041 pairs over 6,021
+    and `U+1042B` followed by `U+0308` into `U+04F8`, across 15,342 pairs over 6,232
     leading code points, while the platform's normalisation and Groadmap's leave all
     three unchanged. The table's composition agrees with that module on all 1,112,064
-    single code points and still composes the 13 supplementary composites, `U+11935`
+    single code points and still composes the 33 supplementary composites, `U+11935`
     followed by `U+11930` giving `U+11938` among them. The check remains an ordinary
     Go test, on the terms Acceptance Criteria 119 and 122 already state (see
     [Roadmap Tasks Page](#roadmap-tasks-page), **One rule, and only one

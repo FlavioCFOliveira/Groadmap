@@ -2378,7 +2378,7 @@ Groadmap's usage model and expectations:
 - Standard input as a Cypher source → `DATA_FORMATS.md § Input`
 - The sibling standard-input rule for the comment body, whose cap counts characters rather than bytes → `COMMANDS.md § Comment Body Input Source and Precedence`
 - GoGraph integration, directory layout, error handling → `ARCHITECTURE.md`
-- Go 1.26 toolchain bump and the GoGraph dependency → `BUILD.md § Go Toolchain`
+- The required Go version, and the minor-version floor the GoGraph dependency contributes to it → `BUILD.md § Go Toolchain`
 - Writer serialisation, reader locking, recovery, lock contention, and the synchronous checkpoint trade-off → `IMPLEMENTATION.md § Graph Store Concurrency`
 - Graph reads through the web interface, and the HTTP consequences of the read lock → `WEB.md § Knowledge Graph from the GoGraph Store`
 - Help skeleton and AI-help entry for `graph` → `HELP.md`
