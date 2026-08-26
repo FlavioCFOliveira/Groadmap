@@ -7,35 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- **The pinned linter moves from `golangci-lint` v2.12.2 to v2.13.1.** The version
-  is named in four places and all four move together: `SPEC/BUILD.md`, the
-  `golangci-lint-action` invocation in `.github/workflows/ci.yml` and in
-  `.github/workflows/release.yml`, and the install comment in the `Makefile`. The
-  new linter was run against the tree before the pin was touched and reports
-  **0 issues**, so nothing is suppressed and nothing new is accommodated.
-
-  This also closes a hazard the `v1.15.0` release notes recorded as a Known Issue
-  and the `v1.15.1` notes carried forward: on a machine where a snap-installed
-  `golangci-lint` precedes `~/go/bin` on `PATH`, `make lint` ran the snap's build
-  rather than the pinned one **and still exited 0**, so the substitution was
-  silent. That snap is v2.13.1, so the two now agree — but the shadow itself
-  remains, and the durable check is `which -a golangci-lint`, since
-  `golangci-lint --version` answers truthfully about the wrong binary.
-
-- **`govulncheck` updated from `v1.3.0` to `v1.7.0`.** It is
-  deliberately not pinned — `SPEC/BUILD.md` requires `@latest` so the check
-  reflects the vulnerability database as it stands at release time — so this is a
-  local toolchain refresh rather than a specification change. It reports no
-  vulnerabilities.
-
-- `gosec` was checked and is already at its pinned `v2.28.0`. The Go floor stays at
-  **1.26.6**: raising it to 1.27 would switch `golang.org/x/text`'s `unicode/norm`
-  from the Unicode 15.0.0 tables to the 17.0.0 ones through a build constraint, and
-  `SPEC/BUILD.md` requires that be treated as a change to the board search rather
-  than as a toolchain bump.
-
 ## [1.15.1] - 2026-08-26
 
 A correctness release, and nothing else. Two sprints — **90 completed tasks across 87
@@ -87,6 +58,15 @@ automatically and in order. They make each sprint's task order **total and dense
 repair gaps already committed on every installation. Neither deletes a row, a column, or
 a table. See **Notes** for the migration path and the one-way consequence for sprint
 ordering.
+
+**The release grew after the two sprints closed.** The Go floor moves from 1.26.6 to
+**1.27.0** and the pinned linter to **`golangci-lint` v2.13.1**. The Go move is not a
+version bump: `golang.org/x/text`'s `unicode/norm` picks its character data by build
+constraint on the toolchain, so the board search now normalises against **Unicode
+17.0.0**. The five shipped tables grew strictly additively and exactly **two** searches
+stop matching, both named below. Raising the floor also exposed a latent correctness
+defect that had made **Groadmap's NFC stop being NFC** for twelve code points; fixing it
+is the most consequential change in the release.
 
 ### Changed — BREAKING
 
@@ -294,6 +274,32 @@ ordering.
   arity `0`. And `task next` no longer applies a priority tiebreaker that
   `SPEC/COMMANDS.md` already said does not order that listing.
 
+- **The board search reads Unicode 17.0.0, and exactly two searches stop matching.**
+  The Go floor moves to **1.27.0**, and inside `golang.org/x/text` v0.41.0
+  `unicode/norm` selects its character data with a build constraint on the toolchain
+  (`tables15.0.0.go` under `!go1.27`, `tables17.0.0.go` under `go1.27`). The module
+  version did not move and no line of `go.mod` names a Unicode version, so the toolchain
+  that runs the build decides; `SPEC/BUILD.md § Unicode Data Rules`, Rule 5 requires that
+  to be treated as a change to the board search rather than as a toolchain bump.
+
+  The five shipped tables changed **additively** — zero existing values changed, nothing
+  removed: `FOLD_TABLE` 1433 → 1488 code points (+55), `DECOMP_TABLE` 2061 → 2081 entries
+  (+20), `CCC_TABLE` 922 → 968 code points (+46), `COMPOSE_TABLE` 941 → 961 entries (+20),
+  `SPACE_TABLE` unchanged. Eight of the twenty new composites come from the new character
+  data; the other twelve were always in it and were being discarded by the NFC defect
+  fixed below. Everything added belongs to a script Unicode 16.0 or 17.0 introduced —
+  Garay, Todhri, Tulu-Tigalari, Gurung Khema, Kirat Rai, Ol Onal, Beria Erfe and Tai Yo —
+  plus eight Latin and Cyrillic letters that gained a case fold. **No term in ASCII,
+  Latin-1, Greek, or any script the board already searched changes result.**
+
+  **Two searches do stop matching**, and both are Todhri titles that now compose to a
+  single code point: `U+105D2 U+0307` becomes `U+105C9` and `U+105DA U+0307` becomes
+  `U+105E4`. Because the search is substring containment over the normalised text, a term
+  consisting of the bare combining mark `U+0307` no longer occurs in such a title.
+  `U+0307` is the one second element among the twenty that already existed under Unicode
+  15.0.0 and that a `1.15.0` user could therefore have typed. Stored bytes are untouched:
+  normalisation is for comparison only.
+
 ### Changed — widenings
 
 Neither of these can break a caller; both change what the binary accepts.
@@ -316,6 +322,58 @@ Neither of these can break a caller; both change what the binary accepts.
   returns all 19. That reading is load-bearing and is now specified. The shared
   `ParseISO8601` was deliberately **not** widened: its thirteen remaining callers parse
   stored timestamps the code itself wrote.
+
+### Changed — toolchain and dependencies
+
+- **The required Go version moves from 1.26.6 to 1.27.0**, and
+  `SPEC/BUILD.md § Minimum Go Version` was restructured to say why. Three constraints now
+  bear on the floor and only the third sets it: GoGraph contributes a minor floor of 1.26;
+  the four reachable standard-library advisories are fixed on the 1.26 and 1.27 lines
+  alike, so neither reaches past 1.26; and the third reason is a decision rather than a
+  consequence — the project builds on the current Go release line, and moving onto it is
+  also what makes the board search read Unicode 17.0.0. One `MUST` was disambiguated in
+  passing: an advisory raises the floor to the earliest **stable** release carrying the
+  fix, since the section otherwise contradicted itself by naming a release candidate.
+
+- **`modernc.org/sqlite` moves from v1.56.0 to v1.57.0, and its coupling holds without
+  moving.** v1.57.0 requires exactly the `modernc.org/libc` v1.74.4 and
+  `modernc.org/memory` v1.11.0 that v1.56.0 required; the two `go.mod` files hash
+  identically, which proves the require blocks are byte-for-byte equal rather than merely
+  compatible. No gate can detect a mismatch here, which is why it was checked by hand.
+  GoGraph v0.11.0, `golang.org/x/sys` v0.47.0 and `golang.org/x/text` v0.41.0 were checked
+  and are already at their latest.
+
+- **The pinned linter moves from `golangci-lint` v2.12.2 to v2.13.1.** The version is
+  named in four places and all four move together: `SPEC/BUILD.md`, the
+  `golangci-lint-action` invocation in `.github/workflows/ci.yml` and in
+  `.github/workflows/release.yml`, and the install comment in the `Makefile`. The new
+  linter was run against the tree **before** the pin was touched and reports **0 issues**,
+  so nothing is suppressed and nothing new is accommodated.
+
+  It also changes the shape of a hazard the `v1.15.0` notes recorded as a Known Issue: on
+  a machine where a snap-installed `golangci-lint` precedes `~/go/bin` on `PATH`,
+  `make lint` runs the snap's build rather than the pinned one **and still exits 0**. That
+  snap is v2.13.1, so the two version numbers now agree — which removes the discrepancy
+  that exposed the shadow while leaving the shadow itself. `SPEC/BUILD.md § Linter`
+  previously said `--version` "confirms which binary is on `PATH`", which was already
+  false; it now requires `which -a golangci-lint` first, because `--version` answers
+  truthfully about whichever binary `PATH` resolves first. The release checklist item that
+  repeated the same false claim moved with it.
+
+- **`govulncheck` moves from v1.3.0 to v1.7.0.** It is deliberately not pinned —
+  `SPEC/BUILD.md` requires `@latest` so the check reflects the vulnerability database as it
+  stands at release time — so this is a toolchain refresh rather than a specification
+  change. It reports no vulnerabilities. `gosec` was checked and is already at its pinned
+  v2.28.0.
+
+- **Five GitHub Actions move, three of them across a major version:**
+  `actions/checkout` v6.0.2 → **v7.0.1**, `actions/setup-go` v6.4.0 → **v7.0.0**,
+  `golangci/golangci-lint-action` v9.2.1 → **v9.3.0**, `codecov/codecov-action` v6.0.1 →
+  **v7.0.0**, and `softprops/action-gh-release` v3.0.0 → **v3.0.2**. The three majors were
+  read before they were taken: `checkout` v7 blocks fork checkouts on
+  `pull_request_target` and `workflow_run`, and this project uses neither trigger;
+  `setup-go` v7 and `codecov` v7 are an ESM migration and a signing-key change, with no
+  movement in the interface either workflow uses.
 
 ### Added
 
@@ -352,8 +410,49 @@ Neither of these can break a caller; both change what the binary accepts.
   `test_62_graph_stray_positional_order`, and `test_63_roadmap_name_refusal_parity`.
 - **`golang.org/x/text` v0.41.0** as the fourth direct module dependency, pinned to an
   exact version, used only for canonical decomposition and canonical ordering.
+- **Three tests for `internal/unicodenorm`, which shipped `1.15.0` with none.**
+  `TestIsCompositionExcluded_IsFullCompositionExclusion` holds the exclusion predicate to
+  `Full_Composition_Exclusion` over the whole of Unicode **in both directions**, because a
+  false positive drops a composite Unicode composes, a false negative admits one it
+  excludes, and a single total would let the two cancel.
+  `TestNFC_AgreesWithTheModuleOnEverySingleCodePoint` requires the package's NFC to equal
+  `golang.org/x/text/unicode/norm`'s over all 1 112 064 single code points — the direct
+  assertion that Groadmap's NFC is NFC, and stronger than counting exclusions.
+  `TestNFC_ComposesTheQuickCheckMaybeCodePoints` is the named regression for the twelve,
+  written as a statement about NFC's **output** so that it keeps testing what matters
+  however the predicate is later spelled. The reference is the Unicode Character Database
+  transcribed into the test, neither derived nor fetched: UAX #15 states that two of the
+  property's four sources cannot be computed from the decomposition mappings, the module
+  cannot supply the other two because `Properties.Decomposition` returns the full
+  recursive decomposition, asking the module would make the test measure itself, and a
+  network fetch would follow a moved property in silence.
 
 ### Fixed
+
+- **Groadmap's Normalization Form C had stopped being Normalization Form C, and raising
+  the Go floor is what exposed it.** `internal/unicodenorm.IsCompositionExcluded` read
+  `norm.NFC.QuickSpanString(s) != len(s)`, which `SPEC/BUILD.md` described as the
+  `NFC_QC=No` lookup. It is not: it answers `NFC_QC != Yes`, which is `No` **or**
+  `Maybe`, and `NFC_QC=Maybe` is carried by every code point that can be the second
+  element of a primary composite — precisely the code points that are *not* excluded from
+  composition. Under Unicode 15.0.0 the two questions had one answer, because no code
+  point then carried both a canonical decomposition and `NFC_QC=Maybe`, so the confusion
+  was invisible. Unicode 16.0.0 introduced twelve that do — `U+113C5`, `U+113C7`,
+  `U+113C8`, `U+16121` through `U+16128`, and `U+16D68` — and for those the package
+  decomposed and never recomposed.
+
+  **The predicate was wrong on 132 code points, not twelve**; the other 120 are combining
+  marks that `BuildComposition` filters downstream, so they never reached the table.
+  Twelve was the symptom and 132 was the defect. It now reads
+  `!norm.NFC.IsNormalString(string(r))`, which is exact set equality with
+  `Full_Composition_Exclusion` as the Unicode Character Database publishes it, in **both**
+  Unicode versions, and which returns a property of its argument rather than a transformed
+  string. Two figures `SPEC/WEB.md` publishes about the rule — **1117** code points
+  changed and **0** disagreements with the reference module — were false under the
+  defective predicate and are true again, and they now survive a change of Unicode version
+  instead of being pinned to one. `SPEC/BUILD.md § Unicode Data Rules`, Rule 3 is rewritten
+  to name `IsNormalString`, to forbid `QuickSpanString` as that lookup, and to record the
+  twelve code points as the evidence.
 
 - **The end-to-end harness ran against any binary it found**, with no staleness check
   against the source, and two of its four candidate paths were under the current working
@@ -412,9 +511,12 @@ Neither of these can break a caller; both change what the binary accepts.
   normalisation form.** A term and a task's searchable text are both normalised to NFC
   before folding, for comparison only — the bytes `rmp` stores and renders are untouched.
   NFC and not NFD, because the search performs substring containment; two passes and not
-  one, because one pass leaves the result outside NFC on 70 of 1 321 226 sequences;
+  one, because one pass leaves the result outside NFC on 70 of 1 440 384 sequences;
   normalisation before the fold, because the two orders differ on 74 of them. The
-  behaviour delta is exactly 1117 of 1 112 064 code points, none of them ASCII.
+  behaviour delta is exactly 1117 of 1 112 064 code points, none of them ASCII. That
+  sequence count is sized by the Unicode version and moved with it: it is the product of
+  1488 folding code points and 968 non-starters, where `1.15.0` had 1433 against 922 for
+  1 321 226, and the old value was reproduced exactly before the new one was computed.
 - **Roughly thirty published statements that execution refuted.** All 128 error strings
   `SPEC/COMMANDS.md` publishes were driven against the binary and compared character for
   character, and every one of the 234 rows carrying both a string and an exit code had its
@@ -527,6 +629,14 @@ Neither of these can break a caller; both change what the binary accepts.
   the *old* behaviour being the silent one. **This does not soften the incompatibility.**
   Treat the release as breaking if you drive `rmp` from automation.
 
+  The two commits that landed after the version was set do not change that reasoning. The
+  NFC fix is the correction of a divergence in its purest form: the specification said the
+  package read `Full_Composition_Exclusion` and it did not. The Unicode data move is the
+  one addition that is *not* a correction — it is a deliberate adoption of the current Go
+  release line — and it is published as a breaking change for that reason. Neither turns a
+  previously successful invocation into a failing one, so the count of changes that do is
+  unchanged.
+
 - **The two migrations are forward-only, and neither deletes anything.** They run
   automatically and in order on the first command against an existing roadmap. Both rank
   each sprint's rows by `position` ascending with `task_id` ascending as the tie-breaker,
@@ -548,6 +658,19 @@ Neither of these can break a caller; both change what the binary accepts.
   `Error: updating position for task 4: constraint failed: UNIQUE constraint failed: sprint_tasks.sprint_id, sprint_tasks.position (2067)`.
   Reads are unaffected — no column was added or removed — so it is the three ordering
   commands that break. Replace the binary on `PATH` first.
+
+- **Build this release with Go 1.27.0 or later; an older toolchain is a second downgrade
+  risk.** `go.mod` declares `go 1.27.0`, so under the default `GOTOOLCHAIN=auto` there is
+  nothing to install by hand and a `GOTOOLCHAIN` pinned lower fails instead of building:
+  `go: go.mod requires go >= 1.27.0 (running go 1.26.6; GOTOOLCHAIN=go1.26.6)`. The
+  refusal is the point. The Unicode version the board search reads is a property of the
+  toolchain that ran the build and of nothing else — no line of `go.mod` pins it, and the
+  `go` directive is a floor, not a ceiling — so a build made on Go 1.26.x reads Unicode
+  15.0.0 while the JavaScript tables this release ships were generated from Unicode
+  17.0.0. The two would disagree on 55 folds, 20 decompositions, 46 combining classes and
+  20 composites, and the guard test that holds the client's copy of the rule equal to the
+  server's fails for exactly that reason. The floor was raised to 1.27.0 to make that
+  combination unreachable rather than merely inadvisable.
 
 - **The installer is now hard-fail on integrity.** Every archive must have its
   `<archive>.sha256` published beside it, which the release workflow does, and the
@@ -578,7 +701,9 @@ Neither of these can break a caller; both change what the binary accepts.
   Within a Sprint` and `§ Introducing a Uniqueness Constraint over Existing Rows`;
   `SPEC/VERSION.md § Migration 1.12.0 → 1.13.0` and `§ Migration 1.13.0 → 1.14.0`;
   `SPEC/DEPLOY.md § Checksum Verification` and `§ Staging Directory`; and
-  `SPEC/BUILD.md § External Dependencies`.
+  `SPEC/BUILD.md § Minimum Go Version`, `§ External Dependencies`, `§ Unicode Data Rules`
+  (Rules 3, 5 and 6), `§ SQLite Driver Rules` and `§ Linter`; and
+  `SPEC/WEB.md § Roadmap Tasks Page`.
 
 ## [1.15.0] - 2026-08-21
 
